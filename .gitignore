@@ -1,0 +1,7 @@
+# Real environment files with secrets — never commit these.
+# The committed template is `.env.example`.
+.env
+.env.*
+!.env.example
+
+.DS_Store

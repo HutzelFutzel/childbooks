@@ -1,0 +1,147 @@
+@import "tailwindcss";
+
+/*
+  Design tokens for the Childbook Generator.
+  A warm, playful-but-modern palette. Colors are exposed as Tailwind
+  utilities via @theme (e.g. bg-brand-500, text-ink-700).
+*/
+@theme {
+  --font-sans: "Inter", "Avenir", "Helvetica", "Arial", sans-serif;
+  --font-display: "Inter", "Avenir", sans-serif;
+
+  --color-brand-50: #f5f3ff;
+  --color-brand-100: #ede9fe;
+  --color-brand-200: #ddd6fe;
+  --color-brand-300: #c4b5fd;
+  --color-brand-400: #a78bfa;
+  --color-brand-500: #8b5cf6;
+  --color-brand-600: #7c3aed;
+  --color-brand-700: #6d28d9;
+  --color-brand-800: #5b21b6;
+  --color-brand-900: #4c1d95;
+
+  --color-accent-50: #fff7ed;
+  --color-accent-100: #ffedd5;
+  --color-accent-200: #fed7aa;
+  --color-accent-300: #fdba74;
+  --color-accent-400: #fb923c;
+  --color-accent-500: #f97316;
+  --color-accent-600: #ea580c;
+
+  --color-ink-50: #f8fafc;
+  --color-ink-100: #f1f5f9;
+  --color-ink-200: #e2e8f0;
+  --color-ink-300: #cbd5e1;
+  --color-ink-400: #94a3b8;
+  --color-ink-500: #64748b;
+  --color-ink-600: #475569;
+  --color-ink-700: #334155;
+  --color-ink-800: #1e293b;
+  --color-ink-900: #0f172a;
+
+  --color-surface: #ffffff;
+  --color-canvas: #f6f5fb;
+
+  --radius-xl2: 1.25rem;
+
+  --shadow-soft: 0 1px 2px rgba(15, 23, 42, 0.04),
+    0 8px 24px -8px rgba(76, 29, 149, 0.12);
+  --shadow-lifted: 0 12px 40px -12px rgba(76, 29, 149, 0.28);
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font-sans);
+    background-color: var(--color-canvas);
+    color: var(--color-ink-800);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Thin, modern scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-ink-300) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: var(--color-ink-300);
+    border-radius: 9999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+}
+
+@layer utilities {
+  .bg-grid {
+    background-image: radial-gradient(
+      circle at 1px 1px,
+      rgba(124, 58, 237, 0.08) 1px,
+      transparent 0
+    );
+    background-size: 24px 24px;
+  }
+}
+
+/* Print: show only the rendered book, one page per sheet. */
+.print-root {
+  position: absolute;
+  left: -10000px;
+  top: 0;
+}
+.print-page {
+  margin: 0 auto;
+}
+
+/* Export: offscreen, full-resolution stage used to rasterize each page. */
+.export-root {
+  position: fixed;
+  left: -100000px;
+  top: 0;
+  pointer-events: none;
+  z-index: -1;
+}
+.export-page {
+  margin: 0;
+}
+
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-root,
+  .print-root * {
+    visibility: visible;
+  }
+  .print-root {
+    position: absolute;
+    left: 0;
+    top: 0;
+  }
+  .print-page {
+    page-break-after: always;
+    break-after: page;
+    /* Pages must fill the full sheet with no browser margins. */
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+  /* Default margin reset; an injected @page rule sets the exact trim size. */
+  @page {
+    margin: 0;
+  }
+}

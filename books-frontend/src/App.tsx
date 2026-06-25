@@ -1,50 +1,58 @@
-import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { useEffect, useState } from "react";
+import { ArrowLeft } from "lucide-react";
+import { Button } from "./ui/components/Button";
+import { Toaster } from "./ui/components/Toaster";
+import { Dashboard } from "./ui/dashboard/Dashboard";
+import { TopBar } from "./ui/layout/TopBar";
+import { ProjectWorkspace } from "./ui/project/ProjectWorkspace";
+import { SettingsPanel } from "./ui/settings/SettingsPanel";
+import { useProjectsStore } from "./state/projectsStore";
+import { useSettingsStore } from "./state/settingsStore";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  const loadProjects = useProjectsStore((s) => s.load);
+  const loadSettings = useSettingsStore((s) => s.load);
+  const currentId = useProjectsStore((s) => s.currentId);
+  const closeProject = useProjectsStore((s) => s.closeProject);
+
+  useEffect(() => {
+    void loadProjects();
+    void loadSettings();
+  }, [loadProjects, loadSettings]);
+
+  const inProject = currentId !== null;
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+    <div className="flex h-screen flex-col overflow-hidden bg-canvas">
+      <TopBar
+        onOpenSettings={() => setSettingsOpen(true)}
+        left={
+          inProject ? (
+            <Button
+              variant="ghost"
+              size="sm"
+              leftIcon={<ArrowLeft className="size-4" />}
+              onClick={() => closeProject()}
+            >
+              Library
+            </Button>
+          ) : null
+        }
+      />
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
+      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-grid">
+        {inProject ? (
+          <ProjectWorkspace />
+        ) : (
+          <Dashboard onOpenSettings={() => setSettingsOpen(true)} />
+        )}
+      </main>
 
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <Toaster />
+    </div>
   );
 }
 
