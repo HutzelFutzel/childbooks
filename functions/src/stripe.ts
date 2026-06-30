@@ -65,6 +65,7 @@ import { getSparksConfig } from "./appConfig";
 import { grantSparks } from "./sparks";
 import {
   intervalForPriceId,
+  priceIdForEnv,
   resolvePlanByPriceId,
   type BillingInterval,
 } from "../../books-frontend/src/core/config/plans";
@@ -401,7 +402,8 @@ export function registerStripeUserRoutes(app: Express): void {
         const pp =
           plan.billing.prices[currency]?.[interval] ??
           plan.billing.prices[Object.keys(plan.billing.prices)[0] ?? ""]?.[interval];
-        priceId = pp?.active && pp.stripePriceId ? pp.stripePriceId : "";
+        const envPriceId = priceIdForEnv(pp, isSandbox() ? "sandbox" : "live");
+        priceId = pp?.active && envPriceId ? envPriceId : "";
       }
       if (!priceId) {
         clientError(res, "A plan price is required.");

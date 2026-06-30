@@ -23,6 +23,7 @@ import { registerLuluRoutes, registerPrintWebhookRoute } from "./lulu";
 import { registerAiRoutes } from "./ai";
 import { registerAdminRoutes } from "./admin";
 import { registerHealthRoutes } from "./health";
+import { registerRuntimeRoutes } from "./readiness";
 import { registerAnalyticsRoutes } from "./analytics";
 import {
   registerStripeAdminRoutes,
@@ -70,6 +71,7 @@ export function createApp(): Express {
   registerAiRoutes(app);
   registerAdminRoutes(app);
   registerHealthRoutes(app);
+  registerRuntimeRoutes(app);
   registerAnalyticsRoutes(app);
   registerStripeUserRoutes(app);
   registerStripeAdminRoutes(app);

@@ -10,7 +10,7 @@ import { onRequest } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2";
 import { createApp } from "./app";
 import { ensureAdmin } from "./storage";
-import { ALL_SECRETS } from "./secrets";
+import { boundSecrets } from "./secrets";
 
 // Initialize the Admin SDK at module load (cold start), BEFORE any function
 // runs. Firestore triggers (onGenerationJob) need an initialized default app to
@@ -36,7 +36,7 @@ export const api = onRequest(
     // Image generation can take a while; allow generous time + memory.
     timeoutSeconds: 300,
     memory: "1GiB",
-    secrets: ALL_SECRETS,
+    secrets: boundSecrets(),
     cors: true,
   },
   createApp(),

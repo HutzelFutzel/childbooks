@@ -8,7 +8,9 @@
  * `functions/.secret.local`.
  */
 import { loadServerConfig, type ServerConfig } from "../../books-frontend/src/core/config/serverEnv";
+import { cachedRuntimeEnv } from "./runtimeConfig";
 
 export function serverConfig(): ServerConfig {
-  return loadServerConfig(process.env as Record<string, string | undefined>);
+  const override = cachedRuntimeEnv();
+  return loadServerConfig(process.env as Record<string, string | undefined>, override ? { envOverride: override } : {});
 }

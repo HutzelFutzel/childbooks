@@ -19,8 +19,11 @@
     "build": "yarn build:functions && yarn build:web",
     "emulators": "node scripts/dev-emulators.mjs",
     "emulators:clear": "node scripts/dev-emulators.mjs --clear",
+    "deploy": "node scripts/deploy.mjs",
+    "setSecrets": "node scripts/set-secrets.mjs",
+    "setSecrets:status": "node scripts/set-secrets.mjs status",
     "deploy:functions": "yarn build:functions && firebase deploy --only functions",
-    "deploy:rules": "firebase deploy --only firestore:rules,storage:rules,firestore:indexes"
+    "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes,storage"
   },
   "devDependencies": {
     "@ngrok/ngrok": "^1.7.0",

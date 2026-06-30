@@ -70,6 +70,6 @@ jobs:
       - name: Deploy functions, rules & indexes
         run: >-
           yarn firebase deploy
-          --only functions,firestore:rules,firestore:indexes,storage:rules
+          --only functions,firestore:rules,firestore:indexes,storage
           --project childbook-60f89
           --non-interactive

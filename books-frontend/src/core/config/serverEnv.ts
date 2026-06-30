@@ -160,12 +160,22 @@ function parseAssetHost(env: EnvBag): AssetHostConfig {
   return { kind: "manual" };
 }
 
+/** Options for {@link loadServerConfig}. */
+export interface LoadServerConfigOptions {
+  /**
+   * Force BOTH Lulu and Stripe to this environment, overriding the `LULU_ENV` /
+   * `STRIPE_ENV` env vars. Used by the admin sandbox↔live toggle, which stores
+   * the active environment at runtime (Firestore) rather than at deploy time.
+   */
+  envOverride?: FulfillmentEnv;
+}
+
 /**
  * Build a {@link ServerConfig} from environment variables. Missing values fall
  * back to safe defaults (empty keys, sandbox env, manual asset host).
  */
-export function loadServerConfig(env: EnvBag): ServerConfig {
-  const luluEnv = parseEnv(env[SERVER_ENV_VARS.luluEnv]);
+export function loadServerConfig(env: EnvBag, opts: LoadServerConfigOptions = {}): ServerConfig {
+  const luluEnv = opts.envOverride ?? parseEnv(env[SERVER_ENV_VARS.luluEnv]);
   const luluCreds = selectLuluCreds(env, luluEnv);
   const fulfillment: FulfillmentConfig = {
     ...createDefaultFulfillmentConfig(),
@@ -180,7 +190,8 @@ export function loadServerConfig(env: EnvBag): ServerConfig {
   // Stripe defaults to its own env, but in practice it should track the same
   // environment as fulfillment (sandbox in dev, live in prod). If STRIPE_ENV is
   // unset we mirror LULU_ENV so a single switch flips the whole backend.
-  const stripeEnv = env[SERVER_ENV_VARS.stripeEnv] ? parseEnv(env[SERVER_ENV_VARS.stripeEnv]) : luluEnv;
+  const stripeEnv =
+    opts.envOverride ?? (env[SERVER_ENV_VARS.stripeEnv] ? parseEnv(env[SERVER_ENV_VARS.stripeEnv]) : luluEnv);
   const stripeCreds = selectStripe(env, stripeEnv);
 
   return {

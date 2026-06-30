@@ -17,6 +17,7 @@
 import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { getStripe, stripeConfigured } from "./stripeClient";
+import { serverConfig } from "./config";
 import {
   BILLING_INTERVALS,
   createDefaultPlansConfig,
@@ -25,8 +26,11 @@ import {
   normalizePlansConfig,
   planSchema,
   plansConfigSchema,
+  priceIdForEnv,
+  productIdForEnv,
   resolvePlanByPriceId,
   toPublicPlan,
+  type BillingEnv,
   type PlanDefinition,
   type PlansConfig,
   type PublicPlansConfig,
@@ -59,14 +63,19 @@ async function readConfig(): Promise<PlansConfig> {
   return value;
 }
 
-function projectPublic(config: PlansConfig): PublicPlansConfig {
+function projectPublic(config: PlansConfig, env: BillingEnv): PublicPlansConfig {
   return {
     version: 1,
     plans: config.plans
       .filter((p) => p.status !== "retired")
-      .map(toPublicPlan)
+      .map((p) => toPublicPlan(p, env))
       .sort((a, b) => a.sortOrder - b.sortOrder),
   };
+}
+
+/** The active billing environment (honors the runtime sandbox↔live toggle). */
+function activeEnv(): BillingEnv {
+  return serverConfig().stripe.env;
 }
 
 /** Deep-strip `undefined` (Firestore rejects it) without changing array shape. */
@@ -78,13 +87,26 @@ async function writeConfig(config: PlansConfig): Promise<PlansConfig> {
   ensureAdmin();
   const db = getFirestore();
   await db.doc(PRIVATE_DOC).set(clean(config) as unknown as Record<string, unknown>, { merge: false });
-  await db.doc(PUBLIC_DOC).set(clean(projectPublic(config)) as unknown as Record<string, unknown>, { merge: false });
+  await db.doc(PUBLIC_DOC).set(clean(projectPublic(config, activeEnv())) as unknown as Record<string, unknown>, { merge: false });
   cache = { value: config, at: Date.now() };
   return config;
 }
 
 export function getPlansConfig(): Promise<PlansConfig> {
   return readConfig();
+}
+
+/**
+ * Re-derive the PUBLIC plans doc for the current active environment. Called
+ * after the sandbox↔live toggle flips so the storefront immediately starts
+ * checkout against the right (test vs live) Stripe price ids.
+ */
+export async function reprojectPublicPlans(): Promise<void> {
+  ensureAdmin();
+  const config = await readConfig();
+  await getFirestore()
+    .doc(PUBLIC_DOC)
+    .set(clean(projectPublic(config, activeEnv())) as unknown as Record<string, unknown>, { merge: false });
 }
 
 export function defaultPlansConfig(): PlansConfig {
@@ -101,11 +123,14 @@ export function defaultPlansConfig(): PlansConfig {
 export async function syncPlanToStripe(plan: PlanDefinition): Promise<PlanDefinition> {
   if (plan.isFree || !stripeConfigured()) return plan;
   const stripe = getStripe();
+  // Stripe test and live are separate ledgers, so we reconcile against the
+  // ACTIVE environment and store the resulting ids in that env's slot only.
+  const env = activeEnv();
 
   const name = plan.presentation.name || "Subscription plan";
   const description = plan.presentation.tagline || plan.presentation.description || undefined;
 
-  let productId = plan.billing.stripeProductId;
+  let productId = productIdForEnv(plan.billing, env);
   if (!productId) {
     const product = await stripe.products.create({ name, description, metadata: { planId: plan.id } });
     productId = product.id;
@@ -113,7 +138,7 @@ export async function syncPlanToStripe(plan: PlanDefinition): Promise<PlanDefini
     try {
       await stripe.products.update(productId, { name, description, metadata: { planId: plan.id } });
     } catch {
-      // Product was deleted in Stripe — recreate it.
+      // Product was deleted in Stripe (or belongs to the other env) — recreate it.
       const product = await stripe.products.create({ name, description, metadata: { planId: plan.id } });
       productId = product.id;
     }
@@ -125,10 +150,11 @@ export async function syncPlanToStripe(plan: PlanDefinition): Promise<PlanDefini
       const pp = byInterval?.[interval];
       if (!pp || pp.amount <= 0) continue;
       const desiredMinor = toMinor(pp.amount, currency);
-      let needNew = !pp.stripePriceId;
-      if (pp.stripePriceId) {
+      const currentId = priceIdForEnv(pp, env);
+      let needNew = !currentId;
+      if (currentId) {
         try {
-          const existing = await stripe.prices.retrieve(pp.stripePriceId);
+          const existing = await stripe.prices.retrieve(currentId);
           if (
             existing.unit_amount !== desiredMinor ||
             existing.currency !== currency.toLowerCase() ||
@@ -142,9 +168,9 @@ export async function syncPlanToStripe(plan: PlanDefinition): Promise<PlanDefini
         }
       }
       if (needNew) {
-        if (pp.stripePriceId) {
+        if (currentId) {
           try {
-            await stripe.prices.update(pp.stripePriceId, { active: false });
+            await stripe.prices.update(currentId, { active: false });
           } catch {
             // ignore — archiving a missing price is fine
           }
@@ -157,6 +183,7 @@ export async function syncPlanToStripe(plan: PlanDefinition): Promise<PlanDefini
           tax_behavior: plan.billing.taxBehavior,
           metadata: { planId: plan.id },
         });
+        pp.stripePriceIds = { ...(pp.stripePriceIds ?? {}), [env]: created.id };
         pp.stripePriceId = created.id;
         pp.active = true;
       } else {
@@ -165,7 +192,15 @@ export async function syncPlanToStripe(plan: PlanDefinition): Promise<PlanDefini
     }
   }
 
-  return { ...plan, billing: { ...plan.billing, stripeProductId: productId, prices } };
+  return {
+    ...plan,
+    billing: {
+      ...plan.billing,
+      stripeProductId: productId,
+      stripeProductIds: { ...(plan.billing.stripeProductIds ?? {}), [env]: productId },
+      prices,
+    },
+  };
 }
 
 /** Replace the whole plans config (validated, no Stripe sync). */

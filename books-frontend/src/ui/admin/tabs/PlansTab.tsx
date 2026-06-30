@@ -165,7 +165,7 @@ function PlanCard({
   const setPrice = (currency: string, interval: "month" | "year", amount: number) => {
     const prices = { ...plan.billing.prices };
     const byInterval = { ...(prices[currency] ?? {}) };
-    byInterval[interval] = { amount, stripePriceId: byInterval[interval]?.stripePriceId ?? null, active: true };
+    byInterval[interval] = { ...byInterval[interval], amount, stripePriceId: byInterval[interval]?.stripePriceId ?? null, active: true };
     prices[currency] = byInterval;
     onChange({ billing: { ...plan.billing, prices } });
   };

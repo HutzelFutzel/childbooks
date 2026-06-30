@@ -14,6 +14,7 @@ import { getAuth, type DecodedIdToken } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 import type { NextFunction, Request, Response } from "express";
 import { ensureAdmin } from "./storage";
+import { refreshRuntimeEnv } from "./runtimeConfig";
 
 export interface AuthedRequest extends Request {
   uid?: string;
@@ -38,6 +39,9 @@ export async function attachUser(
   next: NextFunction,
 ): Promise<void> {
   ensureAdmin();
+  // Warm the sandbox↔live override cache (TTL-throttled) so the synchronous
+  // serverConfig() consulted by downstream handlers reflects the active env.
+  await refreshRuntimeEnv().catch(() => {});
   const token = extractToken(req);
   if (token) {
     try {

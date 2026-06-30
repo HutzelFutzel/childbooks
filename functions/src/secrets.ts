@@ -31,15 +31,42 @@ export const STRIPE_SANDBOX_WEBHOOK_SECRET = defineSecret("STRIPE_SANDBOX_WEBHOO
 export const STRIPE_LIVE_SECRET_KEY = defineSecret("STRIPE_LIVE_SECRET_KEY");
 export const STRIPE_LIVE_WEBHOOK_SECRET = defineSecret("STRIPE_LIVE_WEBHOOK_SECRET");
 
-export const ALL_SECRETS = [
-  OPENAI_API_KEY,
-  GOOGLE_API_KEY,
+const BASE_SECRETS = [OPENAI_API_KEY, GOOGLE_API_KEY];
+const SANDBOX_SECRETS = [
   LULU_SANDBOX_CLIENT_KEY,
   LULU_SANDBOX_CLIENT_SECRET,
-  LULU_LIVE_CLIENT_KEY,
-  LULU_LIVE_CLIENT_SECRET,
   STRIPE_SANDBOX_SECRET_KEY,
   STRIPE_SANDBOX_WEBHOOK_SECRET,
+];
+const LIVE_SECRETS = [
+  LULU_LIVE_CLIENT_KEY,
+  LULU_LIVE_CLIENT_SECRET,
   STRIPE_LIVE_SECRET_KEY,
   STRIPE_LIVE_WEBHOOK_SECRET,
 ];
+
+/** Every secret the backend can use, regardless of environment (for tooling). */
+export const ALL_SECRETS = [...BASE_SECRETS, ...SANDBOX_SECRETS, ...LIVE_SECRETS];
+
+/**
+ * The secrets actually BOUND to the `api` function at deploy time.
+ *
+ * Firebase requires every bound secret to exist in Secret Manager, so binding
+ * the live pair would force you to create live keys even while running sandbox.
+ * We therefore bind the live secrets only when `LIVE_ENABLED=true` (set in
+ * `functions/.env.<projectId>` once you've added the live keys). This value is
+ * read at deploy "discovery" time, where the project env file is loaded.
+ *
+ * Consequence: to use live mode at runtime (incl. the admin sandbox↔live
+ * toggle) you must have deployed with `LIVE_ENABLED=true` so the live secrets
+ * are injected. The go-live readiness check enforces this before letting you flip.
+ */
+export function boundSecrets() {
+  const liveEnabled = process.env.LIVE_ENABLED === "true";
+  return liveEnabled ? ALL_SECRETS : [...BASE_SECRETS, ...SANDBOX_SECRETS];
+}
+
+/** Whether the live secrets are bound in this deployment. */
+export function liveSecretsBound(): boolean {
+  return process.env.LIVE_ENABLED === "true";
+}

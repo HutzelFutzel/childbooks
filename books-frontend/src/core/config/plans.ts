@@ -22,21 +22,35 @@ import { z } from "zod";
 export type PlanStatus = "draft" | "active" | "retired";
 export type BillingInterval = "month" | "year";
 
+/** Stripe operates two fully separate ledgers — test (sandbox) and live — with
+ *  DIFFERENT product/price ids. We store ids per environment so the same plan
+ *  works in both and the admin sandbox↔live toggle never points checkout at an
+ *  id that doesn't exist in the active mode. */
+export type BillingEnv = "sandbox" | "live";
+
 export const BILLING_INTERVALS: BillingInterval[] = ["month", "year"];
 
 /** One concrete Stripe price for a (currency, interval) combination. */
 export interface PlanPricePoint {
   /** Major-unit amount, e.g. 8 or 80. */
   amount: number;
-  /** The Stripe Price id once synced (null until reconciled). */
+  /**
+   * Legacy / most-recently-synced Stripe Price id (kept for back-compat and so
+   * existing subscribers on an archived price still resolve). Prefer
+   * {@link priceIdForEnv} which reads the per-environment id.
+   */
   stripePriceId: string | null;
+  /** Per-environment Stripe Price ids (test vs live are entirely separate). */
+  stripePriceIds?: Partial<Record<BillingEnv, string | null>>;
   /** False once superseded/archived in Stripe (kept so old subs still resolve). */
   active: boolean;
 }
 
 export interface PlanBilling {
-  /** The Stripe Product id once synced (null until reconciled). */
+  /** Legacy / most-recently-synced Stripe Product id (see {@link productIdForEnv}). */
   stripeProductId: string | null;
+  /** Per-environment Stripe Product ids (test vs live are separate). */
+  stripeProductIds?: Partial<Record<BillingEnv, string | null>>;
   /** prices[currency][interval] — the per-currency monthly/annual price points. */
   prices: Record<string, Partial<Record<BillingInterval, PlanPricePoint>>>;
   /** Tax behavior for the subscription line (mirrors the catalog's tax model). */
@@ -268,13 +282,28 @@ export function createDefaultPlan(overrides: Partial<PlanDefinition> = {}): Plan
 
 // ---- Normalization ---------------------------------------------------------
 
+/** Normalize a per-environment id map ({ sandbox?, live? }), dropping junk. */
+function normalizeEnvIds(raw: unknown): Partial<Record<BillingEnv, string | null>> | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  const out: Partial<Record<BillingEnv, string | null>> = {};
+  for (const env of ["sandbox", "live"] as BillingEnv[]) {
+    if (typeof r[env] === "string") out[env] = r[env] as string;
+    else if (r[env] === null) out[env] = null;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function normalizePricePoint(raw: unknown): PlanPricePoint {
   const p = (raw ?? {}) as Partial<PlanPricePoint>;
-  return {
+  const point: PlanPricePoint = {
     amount: typeof p.amount === "number" && p.amount >= 0 ? p.amount : 0,
     stripePriceId: typeof p.stripePriceId === "string" ? p.stripePriceId : null,
     active: p.active !== false,
   };
+  const envIds = normalizeEnvIds(p.stripePriceIds);
+  if (envIds) point.stripePriceIds = envIds;
+  return point;
 }
 
 function normalizePrices(raw: unknown): PlanBilling["prices"] {
@@ -338,6 +367,9 @@ export function normalizePlan(input: unknown): PlanDefinition {
     presentation: { ...def.presentation, ...p.presentation, badges: p.presentation?.badges ?? [] },
     billing: {
       stripeProductId: typeof p.billing?.stripeProductId === "string" ? p.billing.stripeProductId : null,
+      ...(normalizeEnvIds(p.billing?.stripeProductIds)
+        ? { stripeProductIds: normalizeEnvIds(p.billing?.stripeProductIds) }
+        : {}),
       prices: normalizePrices(p.billing?.prices),
       taxBehavior: p.billing?.taxBehavior === "exclusive" ? "exclusive" : "inclusive",
     },
@@ -362,14 +394,18 @@ export function normalizePublicPlansConfig(input: unknown): PublicPlansConfig {
 
 // ---- Public projection -----------------------------------------------------
 
-/** Strip internals; expose only the active price id + amount per currency/interval. */
-export function toPublicPlan(plan: PlanDefinition): PublicPlan {
+/**
+ * Strip internals; expose only the active price id + amount per currency/interval.
+ * The price id is resolved for the given environment so the storefront starts
+ * checkout against the right (test vs live) Stripe price.
+ */
+export function toPublicPlan(plan: PlanDefinition, env: BillingEnv = "sandbox"): PublicPlan {
   const prices: PublicPlan["prices"] = {};
   for (const [currency, byInterval] of Object.entries(plan.billing.prices)) {
     const entry: Partial<Record<BillingInterval, PublicPlanPrice>> = {};
     for (const interval of BILLING_INTERVALS) {
       const pp = byInterval?.[interval];
-      if (pp && pp.active) entry[interval] = { amount: pp.amount, priceId: pp.stripePriceId };
+      if (pp && pp.active) entry[interval] = { amount: pp.amount, priceId: priceIdForEnv(pp, env) };
     }
     if (Object.keys(entry).length > 0) prices[currency] = entry;
   }
@@ -396,6 +432,33 @@ export function freePlan(config: PlansConfig): PlanDefinition | null {
 }
 
 /**
+ * The Stripe Price id to use for a price point in a given environment. Falls
+ * back to the legacy single id ONLY for sandbox — a legacy id was created in
+ * test mode during development, so it must never be used as a live price id.
+ */
+export function priceIdForEnv(pp: PlanPricePoint | undefined, env: BillingEnv): string | null {
+  if (!pp) return null;
+  const byEnv = pp.stripePriceIds?.[env];
+  if (byEnv) return byEnv;
+  return env === "sandbox" ? (pp.stripePriceId ?? null) : null;
+}
+
+/** The Stripe Product id for a plan in a given environment (sandbox-only legacy fallback). */
+export function productIdForEnv(billing: PlanBilling, env: BillingEnv): string | null {
+  const byEnv = billing.stripeProductIds?.[env];
+  if (byEnv) return byEnv;
+  return env === "sandbox" ? (billing.stripeProductId ?? null) : null;
+}
+
+/** Whether a price point references a given Stripe price id in ANY environment. */
+function pricePointHasId(pp: PlanPricePoint | undefined, priceId: string): boolean {
+  if (!pp) return false;
+  if (pp.stripePriceId === priceId) return true;
+  const ids = pp.stripePriceIds;
+  return Boolean(ids && (ids.sandbox === priceId || ids.live === priceId));
+}
+
+/**
  * Find the plan that owns a Stripe price id — scanning ALL price points
  * including archived (`active:false`) ones, so a subscriber on a superseded
  * price still resolves to their plan and keeps their entitlements/grant.
@@ -405,7 +468,7 @@ export function resolvePlanByPriceId(config: PlansConfig, priceId: string | null
   for (const plan of config.plans) {
     for (const byInterval of Object.values(plan.billing.prices)) {
       for (const interval of BILLING_INTERVALS) {
-        if (byInterval?.[interval]?.stripePriceId === priceId) return plan;
+        if (pricePointHasId(byInterval?.[interval], priceId)) return plan;
       }
     }
   }
@@ -416,7 +479,7 @@ export function resolvePlanByPriceId(config: PlansConfig, priceId: string | null
 export function intervalForPriceId(plan: PlanDefinition, priceId: string): BillingInterval | null {
   for (const byInterval of Object.values(plan.billing.prices)) {
     for (const interval of BILLING_INTERVALS) {
-      if (byInterval?.[interval]?.stripePriceId === priceId) return interval;
+      if (pricePointHasId(byInterval?.[interval], priceId)) return interval;
     }
   }
   return null;
@@ -446,14 +509,20 @@ export function findPublicPlanByPriceId(plans: PublicPlan[], priceId: string | n
 
 // ---- Validation (used by the backend before persisting) --------------------
 
+const envIdsSchema = z
+  .object({ sandbox: z.string().nullable().optional(), live: z.string().nullable().optional() })
+  .optional();
+
 const pricePointSchema = z.object({
   amount: z.number().min(0),
   stripePriceId: z.string().nullable(),
+  stripePriceIds: envIdsSchema,
   active: z.boolean(),
 });
 
 const billingSchema = z.object({
   stripeProductId: z.string().nullable(),
+  stripeProductIds: envIdsSchema,
   prices: z.record(
     z.string(),
     z.object({ month: pricePointSchema.optional(), year: pricePointSchema.optional() }),
