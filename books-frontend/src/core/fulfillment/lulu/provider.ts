@@ -30,10 +30,12 @@ import {
   mapCostToQuote,
   mapCoverDimensionsMm,
   mapOrder,
+  mapWebhook,
   type LuluCostRequest,
   type LuluPrintJobRequest,
   type LuluShippingAddress,
   type LuluSourceFile,
+  type LuluWebhook,
 } from "./wire";
 
 export type LuluEnv = "sandbox" | "live";
@@ -151,7 +153,8 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
     return cachedToken.value;
   }
 
-  async function request<T>(path: string, init: RequestInit): Promise<T> {
+  /** Authenticated fetch that throws a typed error on a non-2xx response. */
+  async function fetchOk(path: string, init: RequestInit): Promise<Response> {
     const token = await getToken();
     let res: Response;
     try {
@@ -185,6 +188,11 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
         details,
       });
     }
+    return res;
+  }
+
+  async function request<T>(path: string, init: RequestInit): Promise<T> {
+    const res = await fetchOk(path, init);
     try {
       return (await res.json()) as T;
     } catch (err) {
@@ -194,6 +202,11 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
         cause: err,
       });
     }
+  }
+
+  /** Like {@link request} but for endpoints that return no/empty body (e.g. DELETE). */
+  async function requestVoid(path: string, init: RequestInit): Promise<void> {
+    await fetchOk(path, init);
   }
 
   /** Upload the draft's print assets and return them keyed by print area. */
@@ -218,12 +231,14 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
     },
 
     async getCoverDimensionsMm(sku, pages) {
-      // NOTE: confirm endpoint path against current Lulu API docs.
+      // Cover dimensions live at the API root (NOT under /print-jobs/, which only
+      // serves list/create + GET /{id}/ — POSTing there returns 405). The body
+      // uses `interior_page_count`; the response is decimal strings in points.
       const json = await request<Parameters<typeof mapCoverDimensionsMm>[0]>(
-        "/print-jobs/cover-dimensions/",
+        "/cover-dimensions/",
         {
           method: "POST",
-          body: JSON.stringify({ pod_package_id: sku, page_count: pages, unit: "mm" }),
+          body: JSON.stringify({ pod_package_id: sku, interior_page_count: pages }),
         },
       );
       return mapCoverDimensionsMm(json);
@@ -231,8 +246,26 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
 
     async quote(req: QuoteRequest): Promise<Quote[]> {
       const product = LULU_BOOK_PRODUCTS.find((p) => p.sku === req.productSku);
-      const pageCount = product?.minPages ?? 32;
-      const shippingAddress: LuluShippingAddress = { country_code: req.destinationCountry };
+      // Price the real (normalized) page count when the caller provides it;
+      // otherwise fall back to the product minimum as a coarse estimate.
+      const pageCount = Math.max(
+        product?.minPages ?? 4,
+        Math.round(req.pageCount ?? product?.minPages ?? 32),
+      );
+
+      // Lulu's cost endpoint validates the FULL shipping address (street, city,
+      // state, postcode, phone) even for a price check. Fields that don't affect
+      // the quote (name, street, phone) are filled with placeholders; the ones
+      // that do (country/state/postcode/city) use the caller's values.
+      const shippingAddress: LuluShippingAddress = {
+        name: "Shipping Estimate",
+        street1: req.destinationLine1?.trim() || "1 Main St",
+        city: req.destinationCity?.trim() || "City",
+        state_code: req.destinationState?.trim() || undefined,
+        postcode: req.destinationPostalCode?.trim() || undefined,
+        country_code: req.destinationCountry,
+        phone_number: "0000000000",
+      };
 
       // If the caller pinned a method, quote just that; otherwise enumerate.
       const levels = req.shippingMethod
@@ -240,6 +273,7 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
         : [...QUOTE_LEVELS];
 
       const quotes: Quote[] = [];
+      let lastError: unknown;
       for (const level of levels) {
         const body: LuluCostRequest = {
           line_items: [
@@ -254,15 +288,28 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
             { method: "POST", body: JSON.stringify(body) },
           );
           quotes.push(mapCostToQuote(json, level));
-        } catch {
-          // Level not available for this destination — skip it.
+        } catch (err) {
+          // A level may legitimately be unavailable for a destination; remember
+          // the error so a total failure is reported rather than silently empty.
+          lastError = err;
         }
       }
+      if (quotes.length === 0 && lastError) throw lastError;
       return quotes;
     },
 
     async createOrder(draft: OrderDraft): Promise<FulfillmentOrder> {
-      const files = await uploadAssets(draft.assets);
+      // Prefer already-hosted files (payment-gated checkout uploaded them up
+      // front); otherwise upload the in-memory assets now.
+      const files =
+        draft.sourceFileUrls?.interior || draft.sourceFileUrls?.cover
+          ? {
+              interior: draft.sourceFileUrls.interior
+                ? { source_url: draft.sourceFileUrls.interior }
+                : undefined,
+              cover: draft.sourceFileUrls.cover ? { source_url: draft.sourceFileUrls.cover } : undefined,
+            }
+          : await uploadAssets(draft.assets);
       if (!files.interior || !files.cover) {
         throw new FulfillmentError(
           "Lulu orders require both an interior and a cover print file.",
@@ -303,7 +350,13 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
         method: "POST",
         body: JSON.stringify(body),
       });
-      return mapOrder(json);
+      return {
+        ...mapOrder(json),
+        printFiles: {
+          interior: files.interior.source_url,
+          cover: files.cover.source_url,
+        },
+      };
     },
 
     async getOrder(id: string): Promise<FulfillmentOrder> {
@@ -321,6 +374,35 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
         { method: "PUT", body: JSON.stringify({ name: "CANCELED" }) },
       );
       return mapOrder(json);
+    },
+
+    // ---- Status webhooks (backend only) -----------------------------------
+    // Lulu pushes order-status updates to a registered URL for the
+    // PRINT_JOB_STATUS_CHANGED topic. The URL must be publicly reachable.
+
+    async registerStatusWebhook(url: string) {
+      const json = await request<LuluWebhook>("/webhooks/", {
+        method: "POST",
+        body: JSON.stringify({ topics: ["PRINT_JOB_STATUS_CHANGED"], url }),
+      });
+      return mapWebhook(json);
+    },
+
+    async listStatusWebhooks() {
+      const json = await request<{ results?: LuluWebhook[] }>("/webhooks/", { method: "GET" });
+      return (json.results ?? []).map(mapWebhook);
+    },
+
+    async deleteStatusWebhook(id: string) {
+      await requestVoid(`/webhooks/${encodeURIComponent(id)}/`, { method: "DELETE" });
+    },
+
+    async testStatusWebhook(id: string) {
+      // Sends a dummy PRINT_JOB_STATUS_CHANGED submission to the registered URL.
+      await requestVoid(`/webhooks/${encodeURIComponent(id)}/test-submission/`, {
+        method: "POST",
+        body: JSON.stringify({ topic: "PRINT_JOB_STATUS_CHANGED" }),
+      });
     },
   };
 }

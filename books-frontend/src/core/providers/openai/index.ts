@@ -3,7 +3,7 @@
  */
 import { z } from "zod";
 import { ProviderError } from "../../errors";
-import { providerBaseUrl } from "../../../platform/http";
+import { providerHttp } from "../httpContext";
 import { requestJson } from "../http-helpers";
 import type {
   ImageProvider,
@@ -25,7 +25,7 @@ function headers(creds: ProviderCredentials): Record<string, string> {
 }
 
 function base(): string {
-  return providerBaseUrl("openai");
+  return providerHttp().baseUrl("openai");
 }
 
 interface OpenAIModelList {

@@ -1,0 +1,11 @@
+node_modules/
+lib/
+*.local
+.env
+.env.*
+!.env.example
+# Project-specific NON-SECRET runtime config, committed on purpose (loaded by
+# `firebase deploy` for this project id). Never put secrets here — those go in
+# Cloud Secret Manager via `firebase functions:secrets:set`.
+!.env.childbook-60f89
+.secret.local

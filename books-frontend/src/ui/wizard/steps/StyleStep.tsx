@@ -1,4 +1,5 @@
 import { ART_STYLE_PRESETS } from "../../../core/config/options";
+import { useAppConfigStore } from "../../../state/appConfigStore";
 import { Field, Textarea } from "../../components/Input";
 import { OptionCard } from "../../components/OptionCard";
 import { StyleSwatch } from "../visuals";
@@ -6,6 +7,7 @@ import type { StepProps } from "./types";
 
 export function StyleStep({ config, update }: StepProps) {
   const { artStyle } = config;
+  const examples = useAppConfigStore((s) => s.artStyles.examples);
 
   return (
     <div className="space-y-6">
@@ -24,7 +26,7 @@ export function StyleStep({ config, update }: StepProps) {
             onSelect={() => update({ artStyle: { ...artStyle, presetId: style.id } })}
             title={style.label}
             description={style.description}
-            visual={<StyleSwatch swatch={style.swatch} />}
+            visual={<StyleSwatch swatch={style.swatch} imageUrl={examples[style.id]?.imageUrl} />}
           />
         ))}
       </div>

@@ -23,9 +23,34 @@ import {
 export const SERVER_ENV_VARS = {
   openaiApiKey: "OPENAI_API_KEY",
   googleApiKey: "GOOGLE_API_KEY",
+  /**
+   * Lulu issues SEPARATE OAuth client credentials per environment (the sandbox
+   * pair only works against api.sandbox.lulu.com, the live pair only against
+   * api.lulu.com). We hold both and select by `LULU_ENV`. The legacy
+   * `LULU_CLIENT_KEY`/`LULU_CLIENT_SECRET` names are still honored as a fallback
+   * for whichever env is active.
+   */
   luluClientKey: "LULU_CLIENT_KEY",
   luluClientSecret: "LULU_CLIENT_SECRET",
+  luluSandboxClientKey: "LULU_SANDBOX_CLIENT_KEY",
+  luluSandboxClientSecret: "LULU_SANDBOX_CLIENT_SECRET",
+  luluLiveClientKey: "LULU_LIVE_CLIENT_KEY",
+  luluLiveClientSecret: "LULU_LIVE_CLIENT_SECRET",
   luluEnv: "LULU_ENV",
+  /**
+   * Stripe uses separate keys per environment (test/sandbox vs live). We hold
+   * both and select by `STRIPE_ENV` (mirrors `LULU_ENV`). The legacy single
+   * `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` names are honored as a fallback.
+   */
+  stripeEnv: "STRIPE_ENV",
+  stripeSecretKey: "STRIPE_SECRET_KEY",
+  stripeWebhookSecret: "STRIPE_WEBHOOK_SECRET",
+  stripeSandboxSecretKey: "STRIPE_SANDBOX_SECRET_KEY",
+  stripeSandboxWebhookSecret: "STRIPE_SANDBOX_WEBHOOK_SECRET",
+  stripeLiveSecretKey: "STRIPE_LIVE_SECRET_KEY",
+  stripeLiveWebhookSecret: "STRIPE_LIVE_WEBHOOK_SECRET",
+  /** Public base URL of the storefront, for Checkout success/cancel redirects. */
+  publicAppUrl: "PUBLIC_APP_URL",
   assetHostKind: "ASSET_HOST_KIND",
   assetUploadBaseUrl: "ASSET_UPLOAD_BASE_URL",
   assetPublicBaseUrl: "ASSET_PUBLIC_BASE_URL",
@@ -40,6 +65,15 @@ export const SERVER_ENV_VARS = {
   firebasePrivateKey: "FIREBASE_PRIVATE_KEY",
 } as const;
 
+/** Stripe runtime configuration (selected per environment). */
+export interface StripeConfig {
+  env: FulfillmentEnv;
+  secretKey: string;
+  webhookSecret: string;
+  /** Public storefront base URL for Checkout success/cancel redirects. */
+  appUrl: string;
+}
+
 /** Everything the backend needs at runtime, in domain terms. */
 export interface ServerConfig {
   /** AI provider keys (text + image generation). */
@@ -47,6 +81,8 @@ export interface ServerConfig {
   googleApiKey: string;
   /** Print-on-demand fulfillment (reuses the same shape the adapters consume). */
   fulfillment: FulfillmentConfig;
+  /** Payments (Stripe). */
+  stripe: StripeConfig;
 }
 
 /** A bag of environment variables (e.g. `process.env`). */
@@ -54,6 +90,48 @@ export type EnvBag = Record<string, string | undefined>;
 
 function parseEnv(value: string | undefined): FulfillmentEnv {
   return value === "live" ? "live" : "sandbox";
+}
+
+/**
+ * Pick the Lulu OAuth credentials matching the active environment, falling back
+ * to the legacy single-pair env vars when the env-specific ones are unset.
+ */
+function selectLuluCreds(
+  env: EnvBag,
+  luluEnv: FulfillmentEnv,
+): { clientKey: string; clientSecret: string } {
+  const legacyKey = env[SERVER_ENV_VARS.luluClientKey] ?? "";
+  const legacySecret = env[SERVER_ENV_VARS.luluClientSecret] ?? "";
+  if (luluEnv === "live") {
+    return {
+      clientKey: env[SERVER_ENV_VARS.luluLiveClientKey] || legacyKey,
+      clientSecret: env[SERVER_ENV_VARS.luluLiveClientSecret] || legacySecret,
+    };
+  }
+  return {
+    clientKey: env[SERVER_ENV_VARS.luluSandboxClientKey] || legacyKey,
+    clientSecret: env[SERVER_ENV_VARS.luluSandboxClientSecret] || legacySecret,
+  };
+}
+
+/**
+ * Pick the Stripe secret + webhook secret matching the active environment,
+ * falling back to the legacy single-pair env vars when the env-specific ones
+ * are unset.
+ */
+function selectStripe(env: EnvBag, stripeEnv: FulfillmentEnv): { secretKey: string; webhookSecret: string } {
+  const legacySecret = env[SERVER_ENV_VARS.stripeSecretKey] ?? "";
+  const legacyWebhook = env[SERVER_ENV_VARS.stripeWebhookSecret] ?? "";
+  if (stripeEnv === "live") {
+    return {
+      secretKey: env[SERVER_ENV_VARS.stripeLiveSecretKey] || legacySecret,
+      webhookSecret: env[SERVER_ENV_VARS.stripeLiveWebhookSecret] || legacyWebhook,
+    };
+  }
+  return {
+    secretKey: env[SERVER_ENV_VARS.stripeSandboxSecretKey] || legacySecret,
+    webhookSecret: env[SERVER_ENV_VARS.stripeSandboxWebhookSecret] || legacyWebhook,
+  };
 }
 
 function parseAssetHost(env: EnvBag): AssetHostConfig {
@@ -87,19 +165,33 @@ function parseAssetHost(env: EnvBag): AssetHostConfig {
  * back to safe defaults (empty keys, sandbox env, manual asset host).
  */
 export function loadServerConfig(env: EnvBag): ServerConfig {
+  const luluEnv = parseEnv(env[SERVER_ENV_VARS.luluEnv]);
+  const luluCreds = selectLuluCreds(env, luluEnv);
   const fulfillment: FulfillmentConfig = {
     ...createDefaultFulfillmentConfig(),
     lulu: {
-      clientKey: env[SERVER_ENV_VARS.luluClientKey] ?? "",
-      clientSecret: env[SERVER_ENV_VARS.luluClientSecret] ?? "",
-      env: parseEnv(env[SERVER_ENV_VARS.luluEnv]),
+      clientKey: luluCreds.clientKey,
+      clientSecret: luluCreds.clientSecret,
+      env: luluEnv,
     },
     assetHost: parseAssetHost(env),
   };
+
+  // Stripe defaults to its own env, but in practice it should track the same
+  // environment as fulfillment (sandbox in dev, live in prod). If STRIPE_ENV is
+  // unset we mirror LULU_ENV so a single switch flips the whole backend.
+  const stripeEnv = env[SERVER_ENV_VARS.stripeEnv] ? parseEnv(env[SERVER_ENV_VARS.stripeEnv]) : luluEnv;
+  const stripeCreds = selectStripe(env, stripeEnv);
 
   return {
     openaiApiKey: env[SERVER_ENV_VARS.openaiApiKey] ?? "",
     googleApiKey: env[SERVER_ENV_VARS.googleApiKey] ?? "",
     fulfillment,
+    stripe: {
+      env: stripeEnv,
+      secretKey: stripeCreds.secretKey,
+      webhookSecret: stripeCreds.webhookSecret,
+      appUrl: (env[SERVER_ENV_VARS.publicAppUrl] ?? "").replace(/\/+$/, ""),
+    },
   };
 }

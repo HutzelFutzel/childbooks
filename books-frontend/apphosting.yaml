@@ -1,0 +1,50 @@
+# Firebase App Hosting configuration for the Next.js web app.
+# Docs: https://firebase.google.com/docs/app-hosting/configure
+#
+# App Hosting builds this app with Cloud Build and serves SSR on Cloud Run.
+# Secrets are pulled from Cloud Secret Manager; non-secret config is inlined.
+
+runConfig:
+  # Scale to zero by default. Raise minInstances in prod if cold-start latency
+  # on first paint matters.
+  minInstances: 0
+  maxInstances: 100
+  concurrency: 80
+
+# Production environment for App Hosting. App Hosting builds from the repo and
+# does NOT see your local (git-ignored) `.env`, so production's public config
+# lives here. NEXT_PUBLIC_* must be available at BUILD time (Next inlines them).
+# These are all non-secret public values; real secrets go in Secret Manager.
+env:
+  # Base URL of the deployed Cloud Functions backend (the `api` function).
+  - variable: NEXT_PUBLIC_BACKEND_URL
+    value: "https://us-central1-childbook-60f89.cloudfunctions.net/api"
+    availability: [BUILD, RUNTIME]
+
+  # Production always uses the real Firebase project, never the emulators.
+  - variable: NEXT_PUBLIC_USE_FIREBASE_EMULATORS
+    value: "false"
+    availability: [BUILD, RUNTIME]
+
+  # Public Firebase web config (NOT secret — safe to expose to the client).
+  - variable: NEXT_PUBLIC_FIREBASE_API_KEY
+    value: "AIzaSyCHW8N4llCdo26X3nkYs5X17uakvt6IzPc"
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
+    value: "childbook-60f89"
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
+    value: "childbook-60f89.firebaseapp.com"
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
+    value: "childbook-60f89.firebasestorage.app"
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_APP_ID
+    value: "1:665169294228:web:611425802b98f2a7919581"
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+    value: "665169294228"
+    availability: [BUILD, RUNTIME]
+  - variable: NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID
+    value: "G-GFM5K4GD8W"
+    availability: [BUILD, RUNTIME]

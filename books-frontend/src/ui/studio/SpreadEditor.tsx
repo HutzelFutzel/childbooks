@@ -8,9 +8,11 @@
  *     half, so every unit on screen is the same size.
  */
 import { motion } from "framer-motion";
+import { BookmarkCheck, BookOpenText } from "lucide-react";
 import type { Anchor, ScreenplayDoc } from "../../core/types";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { paginate, type PageSlot } from "../../core/pipeline/pagination";
+import { cn } from "../lib/cn";
 import type { DesignPage } from "../design/designInit";
 import { PageControls, PageStagePanel, type PageSubject } from "./PageEditorCard";
 
@@ -19,6 +21,9 @@ export interface Entry {
   subject: PageSubject;
 }
 
+/** Which cover a display spread represents (covers get a distinct treatment). */
+export type CoverKind = "front" | "back";
+
 /** One half of a facing spread. */
 export type SpreadSide =
   | { kind: "page"; entry: Entry; label: string }
@@ -26,7 +31,7 @@ export type SpreadSide =
   | { kind: "edge" };
 
 export type DisplaySpread =
-  | { id: string; kind: "full"; label: string; entry: Entry; endInsertIndex: number }
+  | { id: string; kind: "full"; label: string; entry: Entry; endInsertIndex: number; cover?: CoverKind }
   | {
       id: string;
       kind: "pair";
@@ -34,6 +39,7 @@ export type DisplaySpread =
       left: SpreadSide;
       right: SpreadSide;
       endInsertIndex: number;
+      cover?: CoverKind;
     };
 
 function sideFromSlot(slot: PageSlot | null, byId: Map<string, Entry>): SpreadSide {
@@ -63,6 +69,7 @@ export function buildDisplaySpreads(doc: ScreenplayDoc, entries: Entry[]): Displ
       id: "disp-front",
       kind: "pair",
       label: "Front cover",
+      cover: "front",
       left: { kind: "edge" },
       right: { kind: "page", entry: front, label: "Front cover" },
       endInsertIndex: 0,
@@ -112,6 +119,7 @@ export function buildDisplaySpreads(doc: ScreenplayDoc, entries: Entry[]): Displ
       id: "disp-back",
       kind: "pair",
       label: "Back cover",
+      cover: "back",
       left: { kind: "page", entry: back, label: "Back cover" },
       right: { kind: "edge" },
       endInsertIndex: doc.spreads.length,
@@ -152,6 +160,26 @@ function HalfFrame({ side, aspect }: { side: SpreadSide; aspect: number }) {
   );
 }
 
+const COVER_META: Record<CoverKind, { title: string; hint: string; icon: typeof BookOpenText }> = {
+  front: {
+    title: "Front cover",
+    hint: "The first thing readers see — title and headline art.",
+    icon: BookOpenText,
+  },
+  back: {
+    title: "Back cover",
+    hint: "The closing panel — blurb, and the back of the printed book.",
+    icon: BookmarkCheck,
+  },
+};
+
+/** Pull the cover's page side (front sits on the right, back on the left). */
+function coverSideOf(disp: Extract<DisplaySpread, { kind: "pair" }>): SpreadSide | null {
+  if (disp.left.kind === "page") return disp.left;
+  if (disp.right.kind === "page") return disp.right;
+  return null;
+}
+
 /** A single spread unit: header, the wide page frame, and per-page controls. */
 export function SpreadCard({
   disp,
@@ -163,6 +191,61 @@ export function SpreadCard({
   /** Whether a given page id needs a reference refresh. */
   stale: (pageId: string) => boolean;
 }) {
+  // Covers get a distinct, standalone presentation so they read clearly as the
+  // book's front/back — not as just another interior page.
+  if (disp.cover && disp.kind === "pair") {
+    const side = coverSideOf(disp);
+    const meta = COVER_META[disp.cover];
+    const Icon = meta.icon;
+    return (
+      <motion.div
+        layout
+        className="overflow-hidden rounded-3xl bg-linear-to-b from-brand-50/70 to-white shadow-soft ring-2 ring-brand-200"
+      >
+        <div className="flex items-center gap-3 border-b border-brand-100/80 px-4 py-3">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-brand-600 text-white shadow-soft">
+            <Icon className="size-5" />
+          </span>
+          <div className="min-w-0 leading-tight">
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-bold text-ink-900">{meta.title}</span>
+              <span className="rounded-full bg-brand-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-brand-700">
+                Cover
+              </span>
+            </div>
+            <span className="text-[11px] text-ink-500">{meta.hint}</span>
+          </div>
+        </div>
+
+        <div className="space-y-4 p-4">
+          {side && side.kind === "page" ? (
+            <>
+              <div className="mx-auto w-full max-w-sm">
+                <div className="relative overflow-hidden rounded-xl bg-white shadow-lifted ring-1 ring-brand-200">
+                  <PageStagePanel page={side.entry.page} subject={side.entry.subject} chromeless />
+                  <span className="pointer-events-none absolute left-2 top-2 rounded-md bg-ink-900/70 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
+                    {meta.title}
+                  </span>
+                </div>
+              </div>
+              <div className="mx-auto w-full max-w-sm">
+                <PageControls
+                  page={side.entry.page}
+                  subject={side.entry.subject}
+                  anchors={anchors}
+                  stale={stale(side.entry.page.id)}
+                  label={meta.title}
+                />
+              </div>
+            </>
+          ) : (
+            <p className="py-8 text-center text-sm text-ink-400">No {meta.title.toLowerCase()} yet.</p>
+          )}
+        </div>
+      </motion.div>
+    );
+  }
+
   return (
     <motion.div layout className="overflow-hidden rounded-3xl bg-white ring-1 ring-ink-100 shadow-soft">
       <div className="flex items-center gap-2 border-b border-ink-100 px-4 py-2.5">

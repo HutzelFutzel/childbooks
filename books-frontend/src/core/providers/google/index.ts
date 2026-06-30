@@ -2,7 +2,7 @@
  * Google Gemini provider adapter (text, structured output, image generation).
  */
 import { ProviderError } from "../../errors";
-import { providerBaseUrl } from "../../../platform/http";
+import { providerHttp } from "../httpContext";
 import { requestJson } from "../http-helpers";
 import { toGeminiSchema } from "./schema";
 import type {
@@ -19,7 +19,7 @@ import type {
 } from "../types";
 
 function base(): string {
-  return providerBaseUrl("google");
+  return providerHttp().baseUrl("google");
 }
 
 function authHeaders(creds: ProviderCredentials): Record<string, string> {

@@ -1,0 +1,42 @@
+name: CI
+
+# Verify the whole monorepo builds + typechecks on every PR (and on pushes to
+# main). This is the gate that protects deploys — both the App Hosting frontend
+# rollout and the backend deploy workflow assume `main` is always green.
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # Frontend type safety (Next is built below; this catches type errors the
+      # build's transpile-only step would otherwise miss).
+      - name: Typecheck frontend
+        run: yarn workspace books-frontend typecheck
+
+      # Backend bundle (esbuild via the functions workspace build script). Also
+      # surfaces type/import errors in the shared core modules it pulls in.
+      - name: Build functions
+        run: yarn build:functions
+
+      # Production build of the Next.js app (same build App Hosting runs).
+      - name: Build web
+        run: yarn build:web

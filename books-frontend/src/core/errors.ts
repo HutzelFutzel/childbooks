@@ -2,6 +2,7 @@
  * Typed error model shared across the provider + pipeline layers.
  * Keeping this framework-agnostic so it can move to a backend package later.
  */
+import { FulfillmentError } from "./fulfillment/errors";
 
 export type ProviderErrorKind =
   | "auth" // invalid / missing API key
@@ -65,12 +66,27 @@ export function kindFromStatus(status: number): ProviderErrorKind {
 
 /** Produce a short, user-facing message for an error. */
 export function describeError(err: unknown): string {
+  if (err instanceof FulfillmentError) {
+    switch (err.kind) {
+      case "auth":
+        return "Your session expired. Please sign in again and retry your order.";
+      case "config":
+        return "Printing isn't available right now. Please try again later.";
+      case "network":
+        return "Couldn't reach the print service. Check your connection and try again.";
+      case "upload":
+        return "Uploading the print files failed. Please try again.";
+      case "validation":
+      case "not_found":
+        return err.message || "Some order details were rejected. Please review and try again.";
+      default:
+        return err.message || "Something went wrong placing your order.";
+    }
+  }
   if (err instanceof ProviderError) {
     switch (err.kind) {
       case "auth":
-        return `Authentication failed${
-          err.provider ? ` for ${err.provider}` : ""
-        }. Check your API key in Settings.`;
+        return "AI generation isn't available right now. It's managed on the server — please try again shortly.";
       case "rate_limit":
         return "Rate limit reached. The app will retry automatically.";
       case "transient":

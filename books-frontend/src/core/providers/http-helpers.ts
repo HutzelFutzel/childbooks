@@ -2,9 +2,9 @@
  * Shared request helpers for provider adapters: perform a fetch via the
  * platform HTTP layer and normalize failures into ProviderError.
  */
-import { httpFetch } from "../../platform/http";
 import type { ProviderId } from "../config/options";
 import { kindFromStatus, ProviderError } from "../errors";
+import { providerHttp } from "./httpContext";
 
 function isAbort(err: unknown): boolean {
   return err instanceof DOMException && err.name === "AbortError";
@@ -40,7 +40,7 @@ export async function requestJson<T>(
 ): Promise<T> {
   let res: Response;
   try {
-    res = await httpFetch(url, init);
+    res = await providerHttp().fetch(url, init);
   } catch (err) {
     if (isAbort(err)) {
       throw new ProviderError("Request aborted", { kind: "aborted", provider, cause: err });

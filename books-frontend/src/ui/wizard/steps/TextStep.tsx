@@ -1,5 +1,9 @@
-import { useEffect } from "react";
-import { layoutsForPlacement, TEXT_HANDLING } from "../../../core/config/options";
+import { useEffect, useMemo } from "react";
+import { BASE_LAYOUT_IDS, layoutsForPlacement, TEXT_HANDLING } from "../../../core/config/options";
+import { entitlementsForSubscription, layoutAllowed } from "../../../core/config/entitlements";
+import { activeSubscription } from "../../../platform/subscriptions";
+import { useAppConfigStore } from "../../../state/appConfigStore";
+import { useSubscriptionStore } from "../../../state/subscriptionStore";
 import { OptionCard } from "../../components/OptionCard";
 import { LayoutDiagram } from "../visuals";
 import type { StepProps } from "./types";
@@ -7,13 +11,30 @@ import type { StepProps } from "./types";
 export function TextStep({ config, update }: StepProps) {
   const layouts = layoutsForPlacement(config.textPlacement, config.spreadUsage);
 
-  // Keep the chosen layout valid for the current placement/spread combo.
+  // Resolve the user's plan entitlements to gate premium layouts. Premium
+  // layouts the plan doesn't unlock are shown locked (with an upsell hint).
+  const publicPlans = useAppConfigStore((s) => s.plans.plans);
+  const subscriptions = useSubscriptionStore((s) => s.subscriptions);
+  const watchSubscriptions = useSubscriptionStore((s) => s.watch);
   useEffect(() => {
-    if (!layouts.some((l) => l.id === config.layoutId)) {
-      update({ layoutId: layouts[0]?.id ?? "auto" });
+    watchSubscriptions();
+  }, [watchSubscriptions]);
+  const entitlements = useMemo(
+    () => entitlementsForSubscription(activeSubscription(subscriptions)?.priceId ?? null, publicPlans),
+    [subscriptions, publicPlans],
+  );
+  const isAllowed = (id: string) => layoutAllowed(entitlements, id, BASE_LAYOUT_IDS);
+
+  // Keep the chosen layout valid for the current placement/spread combo AND
+  // unlocked by the plan; otherwise fall back to the first available layout.
+  useEffect(() => {
+    const current = layouts.find((l) => l.id === config.layoutId);
+    if (!current || !isAllowed(config.layoutId)) {
+      const fallback = layouts.find((l) => isAllowed(l.id)) ?? layouts[0];
+      if (fallback && fallback.id !== config.layoutId) update({ layoutId: fallback.id });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [config.textPlacement, config.spreadUsage]);
+  }, [config.textPlacement, config.spreadUsage, entitlements]);
 
   return (
     <div className="space-y-7">
@@ -40,16 +61,22 @@ export function TextStep({ config, update }: StepProps) {
           the art). Pick a layout, or let the system choose per page.
         </p>
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {layouts.map((l) => (
-            <OptionCard
-              key={l.id}
-              selected={config.layoutId === l.id}
-              onSelect={() => update({ layoutId: l.id })}
-              title={l.label}
-              description={l.description}
-              visual={<LayoutDiagram template={l} />}
-            />
-          ))}
+          {layouts.map((l) => {
+            const locked = !isAllowed(l.id);
+            return (
+              <OptionCard
+                key={l.id}
+                selected={config.layoutId === l.id}
+                onSelect={() => {
+                  if (!locked) update({ layoutId: l.id });
+                }}
+                disabled={locked}
+                title={l.premium ? `${l.label} · Premium` : l.label}
+                description={locked ? "Unlock this layout with a subscription." : l.description}
+                visual={<LayoutDiagram template={l} />}
+              />
+            );
+          })}
         </div>
       </section>
     </div>

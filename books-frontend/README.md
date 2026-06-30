@@ -1,67 +1,181 @@
-# Tauri + React + Typescript
+# Childbook Studio — Frontend (Next.js)
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+The web app. This used to be a Tauri + Vite desktop app; it is now a **Next.js
+(App Router)** web app that is part of a monorepo:
+
+```
+childbooks/
+├── books-frontend/   ← this app (Next.js, deployed to Firebase App Hosting)
+├── functions/        ← backend (Firebase Functions): holds all secrets, proxies
+│                       AI providers, runs Lulu fulfillment
+└── firebase.json …   ← Firebase infra-as-code (emulators, rules, indexes)
+```
+
+- **Marketing/landing** (`/`) is server-rendered for SEO.
+- **The studio** (`/studio`) is the interactive editor, mounted client-only.
+- **No API keys live in the browser.** All OpenAI / Gemini / Lulu traffic goes
+  through the backend, which injects the server-held keys.
 
 ## Prerequisites
 
-- **Node.js**: Ensure you are using a compatible Node.js version (e.g., v24.x LTS). You can use `nvm` to manage versions.
-- **Yarn**: Used for managing frontend dependencies.
-- **Rust & Cargo**: Required for building the Tauri macOS application. You can install it via [rustup](https://rustup.rs/): 
-  ```bash
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-  ```
+- **Node.js 20+**
+- **Yarn 1 (classic)**
+- Run all `yarn` commands **from the repo root** (`childbooks/`) — it is a yarn
+  workspace. The Firebase CLI is installed there as a dev dependency.
 
-## Installation
-
-Install the required frontend dependencies using Yarn:
+## Install
 
 ```bash
+# from the repo root
 yarn install
 ```
 
-## Running for Development
+## Configure environment
 
-### 1. Web Application Only
-
-To run just the React frontend in your browser (useful for fast UI development without compiling the Rust backend):
+Copy the templates and fill in values (the real `.env*` files are git-ignored):
 
 ```bash
+cp books-frontend/.env.example books-frontend/.env.local   # public, non-secret
+cp functions/.env.example     functions/.env.local         # SECRETS (local only)
+```
+
+- `books-frontend/.env.local` — only `NEXT_PUBLIC_*` values (backend URL, public
+  Firebase web config). In dev you can leave them blank; the app falls back to
+  the local emulator.
+- `functions/.env.local` — the real `OPENAI_API_KEY`, `GOOGLE_API_KEY`, the Lulu
+  OAuth credentials (`LULU_SANDBOX_CLIENT_KEY`/`LULU_SANDBOX_CLIENT_SECRET` and
+  `LULU_LIVE_CLIENT_KEY`/`LULU_LIVE_CLIENT_SECRET`), and `LULU_ENV`. Lulu issues
+  separate credentials per environment; the pair matching `LULU_ENV` is used. The
+  emulator loads these into `process.env`.
+
+## Run for development
+
+Two terminals (both from the repo root):
+
+```bash
+# 1) Backend: builds the functions bundle, starts the emulators
+#    (Functions + Firestore + Auth + Storage) with persistent data, and
+#    LIVE-RELOADS the functions on every save (esbuild --watch).
+yarn dev:backend
+
+# 2) The Next.js dev server (http://localhost:1420)
 yarn dev
 ```
-This will start a local development server (usually accessible at `http://localhost:1420`).
 
-### 2. macOS Application (Tauri)
+Prefer a single terminal? `yarn dev:all` runs both of the above together.
 
-To run the React app wrapped inside the native macOS application window:
+Emulator data survives restarts (imported/exported to `./.emulator-data`).
+The frontend automatically talks to the local **Functions emulator** in
+development (no config needed). Generation calls are proxied through it, so the
+provider keys you put in `functions/.env.local` are used — never shipped to the
+browser.
 
-```bash
-yarn tauri dev
-```
-*Note: The first time you run this, Cargo will download and compile the Rust backend, which might take a few minutes.*
+> `yarn dev:backend` is just `yarn workspace functions dev`: it bundles once,
+> then runs `esbuild --watch` alongside `firebase emulators:start`. Editing
+> anything under `functions/src` (or the shared `books-frontend/src/core`
+> modules it imports) rebuilds `lib/index.js`, and the emulator hot-reloads it.
+> Need the emulators without the watcher? `yarn emulators`.
 
-## Building for Production
-
-### 1. Build the Web Application
-
-To build just the standalone React frontend for web hosting:
-
-```bash
-yarn build
-```
-The compiled web assets will be located in the `dist/` directory.
-
-### 2. Build the macOS Application
-
-To build the standalone macOS `.app` bundle and `.dmg` installer:
+## Build
 
 ```bash
-yarn tauri build
+yarn build            # builds functions (esbuild) + web (next build)
+yarn build:web        # just the web app
+yarn build:functions  # just the backend bundle
 ```
 
-Once the build is complete, you can find your compiled macOS application inside the `src-tauri/target/release/bundle/` directory:
-- **macOS App Bundle**: `src-tauri/target/release/bundle/macos/` (You can double-click the `.app` file here to run it, or drag it to your Applications folder).
-- **DMG Installer**: `src-tauri/target/release/bundle/dmg/` (Useful for distributing your app to others).
+## Deploy
 
-## Recommended IDE Setup
+- **Frontend** → Firebase **App Hosting** (SSR on Cloud Run). Create a backend
+  in the Firebase console pointing at this `books-frontend/` directory; config
+  lives in `books-frontend/apphosting.yaml`. Set `NEXT_PUBLIC_BACKEND_URL` there
+  to the deployed `api` function URL.
+- **Backend functions + rules** → from the repo root:
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+```bash
+firebase functions:secrets:set OPENAI_API_KEY      # one-time, per secret
+firebase functions:secrets:set GOOGLE_API_KEY
+firebase functions:secrets:set LULU_SANDBOX_CLIENT_KEY
+firebase functions:secrets:set LULU_SANDBOX_CLIENT_SECRET
+firebase functions:secrets:set LULU_LIVE_CLIENT_KEY
+firebase functions:secrets:set LULU_LIVE_CLIENT_SECRET
+yarn deploy:functions
+yarn deploy:rules
+```
+
+## Accounts & data (Auth + Firestore)
+
+The studio is **guest-first**: on load it signs you in anonymously so there is
+always an identity, and you can upgrade to email/password or Google from the
+top-bar **Sign in** menu. Signing out drops back to a fresh guest.
+
+- The backend `api` function **requires** a valid Firebase ID token on
+  `/proxy/*` and `/print/*` (sent in the `X-Auth-Token` header, verified with the
+  Admin SDK). `/health` and `/providers` stay open.
+- Persistence is **per-user**: project/settings JSON lives in Firestore under
+  `users/{uid}/store/{key}`, and generated image blobs in Firebase Storage under
+  `users/{uid}/blobs/{id}`. Security rules restrict each path to its owner.
+
+In **development** everything points at the emulators automatically — no extra
+config. Two production prerequisites are easy to miss:
+
+1. **Enable Anonymous sign-in** (Firebase console → Authentication → Sign-in
+   method), plus any providers you offer (Email/Password, Google). Without
+   Anonymous, guest-first sign-in fails and the app can't reach the backend.
+2. **Configure CORS on the Storage bucket** so the browser can download blobs
+   (`getBlob`) from your App Hosting origin, e.g.:
+
+   ```bash
+   gcloud storage buckets update gs://<project>.appspot.com \
+     --cors-file=cors.json   # [{"origin":["https://<your-app-host>"],"method":["GET"],"maxAgeSeconds":3600}]
+   ```
+
+## Where do I put the Firebase private key?
+
+**Short answer: you almost certainly don't need one — don't download it.**
+
+| Environment | What authenticates Firebase Admin | Private key? |
+| --- | --- | --- |
+| Local dev (emulator) | the emulators — no credentials at all | **No** |
+| Deployed (Functions / App Hosting) | Application Default Credentials = the runtime service account | **No** |
+
+The old desktop build inlined a service-account key into the bundle because it
+had no server. That is gone: the backend now uses **ADC**, so no key file is
+required and the `FIREBASE_PRIVATE_KEY` / `FIREBASE_CLIENT_EMAIL` variables are
+no longer used.
+
+**The only time you'd use a downloaded key** is running the Admin SDK on your
+machine against the **real cloud project** (not the emulator) — e.g. a one-off
+script. In that case, prefer:
+
+```bash
+gcloud auth application-default login    # sets up ADC locally, no key file
+```
+
+If you must use a JSON key instead, keep the file **outside the repo** (or in a
+git-ignored location) and point Google's standard ADC variable at it in
+`functions/.env.local`:
+
+```bash
+# functions/.env.local  (git-ignored — NEVER commit the key or this path)
+GOOGLE_APPLICATION_CREDENTIALS=/absolute/path/outside/repo/serviceAccount.json
+```
+
+Then `initializeApp()` in the backend picks it up automatically. Do **not** put
+the key anywhere under `books-frontend/` or in any `NEXT_PUBLIC_*` variable —
+that would ship admin credentials to the browser.
+
+## What changed from the desktop app
+
+- Removed Tauri (`src-tauri/`, `@tauri-apps/*`) and Vite; added Next.js.
+- `src/core/**` is unchanged pure domain logic (shared with the backend, which
+  bundles the Lulu/config modules it needs).
+- `src/platform/*` now targets the web + backend instead of Tauri:
+  `http.ts` → backend proxy, `fulfillment.ts` → backend adapter, `storage.ts` →
+  Firebase (Firestore + Storage), scoped to the signed-in user.
+- API keys moved out of local settings; the Settings panel now shows which
+  providers the **server** is configured for.
+
+> Remaining Phase 2 work: move generation orchestration into a backend job queue
+> (Firestore job doc + Cloud Tasks fan-out + real-time progress), public shared
+> book preview pages (SSR + OG tags), and wiring the checkout UI to `/print/*`.

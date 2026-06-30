@@ -3,26 +3,39 @@ import { AnimatePresence } from "framer-motion";
 import { AlertTriangle, Plus, Sparkles } from "lucide-react";
 import { useProjectsStore } from "../../state/projectsStore";
 import { useSettingsStore } from "../../state/settingsStore";
+import { useAuthStore } from "../../state/authStore";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
 import { notify } from "../lib/notify";
 import { ProjectCard } from "./ProjectCard";
 
-export interface DashboardProps {
-  onOpenSettings: () => void;
-}
-
-export function Dashboard({ onOpenSettings }: DashboardProps) {
+export function Dashboard() {
   const projects = useProjectsStore((s) => s.projects);
   const createProject = useProjectsStore((s) => s.createProject);
   const openProject = useProjectsStore((s) => s.openProject);
   const deleteProject = useProjectsStore((s) => s.deleteProject);
   const hasAnyKey = useSettingsStore((s) => s.hasAnyKey());
+  const isGuest = useAuthStore((s) => s.accessLevel === "guest");
+  const openAuthDialog = useAuthStore((s) => s.openAuthDialog);
 
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 
+  // Guests may draft a storybook, but must sign in before entering the studio.
   const handleCreate = async () => {
+    if (isGuest) {
+      await createProject(undefined, false);
+      openAuthDialog();
+      return;
+    }
     await createProject();
+  };
+
+  const handleOpen = (id: string) => {
+    if (isGuest) {
+      openAuthDialog();
+      return;
+    }
+    openProject(id);
   };
 
   const confirmDelete = async () => {
@@ -46,15 +59,22 @@ export function Dashboard({ onOpenSettings }: DashboardProps) {
         </Button>
       </div>
 
-      {!hasAnyKey && (
-        <div className="mb-6 flex items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+      {isGuest && (
+        <div className="mb-6 flex items-center justify-between gap-3 rounded-2xl border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-800">
           <span className="flex items-center gap-2">
             <AlertTriangle className="size-4 shrink-0" />
-            Add an OpenAI or Google API key to start generating.
+            You're browsing as a guest. Sign in to open the studio and generate your book.
           </span>
-          <Button size="sm" variant="secondary" onClick={onOpenSettings}>
-            Open Settings
+          <Button size="sm" variant="secondary" onClick={openAuthDialog}>
+            Sign in
           </Button>
+        </div>
+      )}
+
+      {!isGuest && !hasAnyKey && (
+        <div className="mb-6 flex items-center gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <AlertTriangle className="size-4 shrink-0" />
+          AI generation is being set up on the server — it'll be ready soon.
         </div>
       )}
 
@@ -79,7 +99,7 @@ export function Dashboard({ onOpenSettings }: DashboardProps) {
               <ProjectCard
                 key={p.id}
                 project={p}
-                onOpen={() => openProject(p.id)}
+                onOpen={() => handleOpen(p.id)}
                 onDelete={() => setPendingDelete(p.id)}
               />
             ))}

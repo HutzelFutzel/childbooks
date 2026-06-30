@@ -1,0 +1,6 @@
+{
+  "projects": {
+    "default": "childbook-60f89",
+    "prod": "childbook-60f89"
+  }
+}

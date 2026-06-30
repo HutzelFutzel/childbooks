@@ -1,14 +1,14 @@
-import { BookOpen, Settings } from "lucide-react";
-import { Button } from "../components/Button";
+import { BookOpen } from "lucide-react";
 
 export interface TopBarProps {
-  onOpenSettings: () => void;
   /** Optional center / breadcrumb slot. */
   center?: React.ReactNode;
   left?: React.ReactNode;
+  /** Optional slot rendered at the far right (e.g. auth). */
+  right?: React.ReactNode;
 }
 
-export function TopBar({ onOpenSettings, center, left }: TopBarProps) {
+export function TopBar({ center, left, right }: TopBarProps) {
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-ink-100 bg-white/80 px-5 backdrop-blur-md">
       <div className="flex items-center gap-3">
@@ -26,9 +26,7 @@ export function TopBar({ onOpenSettings, center, left }: TopBarProps) {
 
       <div className="hidden md:block">{center}</div>
 
-      <Button variant="ghost" size="sm" leftIcon={<Settings className="size-4" />} onClick={onOpenSettings}>
-        Settings
-      </Button>
+      <div className="flex items-center gap-2">{right}</div>
     </header>
   );
 }

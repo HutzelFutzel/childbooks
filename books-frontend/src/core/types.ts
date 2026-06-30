@@ -211,6 +211,11 @@ export interface ScreenplaySpread {
   layoutNote: string;
   /** Anchors that appear here (by anchor id). */
   anchorIds: string[];
+  /**
+   * Anchor names captured alongside `anchorIds` (same order) when the reference
+   * was created, so a stale id can self-heal by name if anchor ids ever drift.
+   */
+  anchorNames?: string[];
   /** True for blank filler pages inserted to keep spreads printable. */
   placeholder?: boolean;
   /**
@@ -234,6 +239,8 @@ export interface CoverSpec {
   illustration: string;
   /** Anchors featured on the cover (by anchor id). */
   anchorIds: string[];
+  /** Anchor names captured alongside `anchorIds` (same order) for self-healing. */
+  anchorNames?: string[];
 }
 
 export interface SpineSpec {
@@ -273,6 +280,15 @@ export interface Project {
   illustrations?: Record<string, VersionTree<IllustrationImage>>;
   /** Final Design: app-owned overlay/typography/pattern layer. */
   design?: BookDesign;
+  /** Public share state, set once the book is published for preview. */
+  share?: ProjectShare;
+}
+
+/** Public-preview publication state for a project. */
+export interface ProjectShare {
+  /** Slug used in the public URL `/book/{id}` and the `publishedBooks` doc id. */
+  id: string;
+  publishedAt: number;
 }
 
 export interface ProjectSummary {

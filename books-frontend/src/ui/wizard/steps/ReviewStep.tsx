@@ -11,7 +11,6 @@ import {
 } from "../../../core/config/options";
 import { bookProductForConfig } from "../../../core/book";
 import { selectModels } from "../../../core/models/registry";
-import { hasKey } from "../../../core/settings";
 import { useSettingsStore } from "../../../state/settingsStore";
 import type { StepProps } from "./types";
 
@@ -29,11 +28,11 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 export function ReviewStep({ config }: StepProps) {
-  const settings = useSettingsStore((s) => s.settings);
+  const providerAvailable = useSettingsStore((s) => s.providerAvailable);
   const discovery = useSettingsStore((s) => s.discovery);
   const models = useMemo(
-    () => selectModels(discovery, (p) => hasKey(settings, p)),
-    [discovery, settings],
+    () => selectModels(discovery, (p) => providerAvailable[p]),
+    [discovery, providerAvailable],
   );
 
   const style = config.artStyle.presetId
@@ -57,22 +56,9 @@ export function ReviewStep({ config }: StepProps) {
       <div className="rounded-2xl border border-ink-100 bg-white p-5">
         <dl className="divide-y divide-ink-100">
           <Row
-            label="Models"
-            value={models ? "Chosen automatically" : "Add an API key in Settings"}
+            label="AI models"
+            value={models ? "Chosen automatically" : "Being set up on the server"}
           />
-          {models && (
-            <>
-              <Row label="Text" value={`${models.textModel.provider} · ${models.textModel.id}`} />
-              <Row
-                label="Page art"
-                value={`${models.imageModel.provider} · ${models.imageModel.id}`}
-              />
-              <Row
-                label="References"
-                value={`${models.anchorImageModel.provider} · ${models.anchorImageModel.id}`}
-              />
-            </>
-          )}
           <Row label="Art style" value={styleExtra ? `${style} + custom` : style} />
           <Row label="Age range" value={find(AGE_RANGES, config.ageRangeId)} />
           <Row label="Book size" value={sizeValue} />

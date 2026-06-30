@@ -1,5 +1,7 @@
 import { AGE_RANGES, bookSizeFromAspect } from "../../../core/config/options";
 import { BOOK_PRODUCTS } from "../../../core/fulfillment";
+import type { PublicProduct } from "../../../core/config/products";
+import { useAppConfigStore } from "../../../state/appConfigStore";
 import { OptionCard } from "../../components/OptionCard";
 import { BookSizeShape } from "../visuals";
 import type { StepProps } from "./types";
@@ -8,6 +10,18 @@ import type { StepProps } from "./types";
 function trimLabel(widthIn: number, heightIn: number): string {
   const r = (n: number) => Math.round(n * 10) / 10;
   return `${r(widthIn)} × ${r(heightIn)} in`;
+}
+
+/** Lowest configured price across currencies, formatted (best-effort). */
+function priceLabel(pp: PublicProduct): string | null {
+  const entries = Object.entries(pp.prices).filter(([, v]) => v > 0);
+  if (entries.length === 0) return null;
+  const [currency, amount] = entries.find(([c]) => c === "USD") ?? entries[0];
+  try {
+    return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount);
+  } catch {
+    return `${amount.toFixed(2)} ${currency}`;
+  }
 }
 
 const BINDING_LABEL: Record<string, string> = {
@@ -19,6 +33,17 @@ const BINDING_LABEL: Record<string, string> = {
 };
 
 export function AudienceStep({ config, update }: StepProps) {
+  const publicProducts = useAppConfigStore((s) => s.products.products);
+
+  // Offer only products an admin has activated in the configurator, matched to
+  // the physical catalog (which still drives trim/aspect for image generation).
+  // Falls back to the full catalog when nothing is configured yet.
+  const activeBySku = new Map(
+    publicProducts.filter((p) => p.status === "active").map((p) => [p.sku, p] as const),
+  );
+  const offerable = BOOK_PRODUCTS.filter((p) => activeBySku.has(p.sku));
+  const shownProducts = offerable.length > 0 ? offerable : BOOK_PRODUCTS;
+
   return (
     <div className="space-y-7">
       <section>
@@ -46,25 +71,30 @@ export function AudienceStep({ config, update }: StepProps) {
           the same font looks bigger or smaller depending on the book.
         </p>
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {BOOK_PRODUCTS.map((product) => (
-            <OptionCard
-              key={product.sku}
-              selected={config.productSku === product.sku}
-              onSelect={() =>
-                update({
-                  productSku: product.sku,
-                  // Keep the coarse shape in sync for image generation / prompts.
-                  bookSize: bookSizeFromAspect(product.aspect),
-                })
-              }
-              title={product.label}
-              description={`${BINDING_LABEL[product.binding] ?? product.binding} · ${trimLabel(
-                product.trim.widthIn,
-                product.trim.heightIn,
-              )}`}
-              visual={<BookSizeShape aspect={product.aspect} />}
-            />
-          ))}
+          {shownProducts.map((product) => {
+            const configured = activeBySku.get(product.sku);
+            const price = configured ? priceLabel(configured) : null;
+            const baseDesc = `${BINDING_LABEL[product.binding] ?? product.binding} · ${trimLabel(
+              product.trim.widthIn,
+              product.trim.heightIn,
+            )}`;
+            return (
+              <OptionCard
+                key={product.sku}
+                selected={config.productSku === product.sku}
+                onSelect={() =>
+                  update({
+                    productSku: product.sku,
+                    // Keep the coarse shape in sync for image generation / prompts.
+                    bookSize: bookSizeFromAspect(product.aspect),
+                  })
+                }
+                title={configured?.name ?? product.label}
+                description={price ? `${baseDesc} · from ${price}` : baseDesc}
+                visual={<BookSizeShape aspect={product.aspect} />}
+              />
+            );
+          })}
         </div>
       </section>
     </div>

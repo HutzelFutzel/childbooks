@@ -1,0 +1,303 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { Plus, Trash2, RefreshCw, Check, AlertCircle } from "lucide-react";
+import { Button } from "../../components/Button";
+import { Field, Input, Textarea } from "../../components/Input";
+import { Select } from "../../components/Select";
+import { Toggle } from "../../components/Toggle";
+import { useAppConfigStore } from "../../../state/appConfigStore";
+import {
+  BILLING_INTERVALS,
+  createDefaultPlan,
+  type PlanDefinition,
+  type PlanStatus,
+} from "../../../core/config/plans";
+import { IMAGE_ACTIONS } from "../../../core/ai/actions";
+import { QUOTAS } from "../../../core/config/quotas";
+import { Grid, NumberField, Section, TextField } from "./products/parts";
+
+const STATUSES: { value: PlanStatus; label: string }[] = [
+  { value: "draft", label: "Draft (hidden)" },
+  { value: "active", label: "Active (live)" },
+  { value: "retired", label: "Retired (hidden, subs kept)" },
+];
+
+const toList = (v: string): string[] => v.split(",").map((s) => s.trim()).filter(Boolean);
+const fromList = (v: string[]): string => v.join(", ");
+
+/**
+ * Editor for **subscription plans**, synced to Stripe. The admin owns the
+ * presentation, entitlements and the monthly Spark grant; saving a plan creates
+ * or updates its Stripe Product + Prices. Editing an amount mints a new Stripe
+ * Price and archives the old one (existing subscribers keep theirs).
+ */
+export function PlansTab() {
+  const loadAdminPlans = useAppConfigStore((s) => s.loadAdminPlans);
+  const savePlan = useAppConfigStore((s) => s.savePlan);
+  const deletePlanById = useAppConfigStore((s) => s.deletePlanById);
+  const syncPlans = useAppConfigStore((s) => s.syncPlans);
+  const currencies = useAppConfigStore((s) => s.pricingSettings.currencies);
+
+  const [plans, setPlans] = useState<PlanDefinition[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [savingId, setSavingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const config = await loadAdminPlans();
+        setPlans(config.plans);
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : "Could not load plans.");
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [loadAdminPlans]);
+
+  const update = (id: string, patch: Partial<PlanDefinition>) => {
+    setPlans((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)));
+  };
+
+  const addPlan = () => {
+    const p = createDefaultPlan({ sortOrder: plans.length });
+    setPlans((ps) => [...ps, p]);
+  };
+
+  const onSave = async (plan: PlanDefinition) => {
+    setSavingId(plan.id);
+    try {
+      const synced = await savePlan(plan);
+      setPlans((ps) => ps.map((p) => (p.id === synced.id ? synced : p)));
+      toast.success("Plan saved & synced to Stripe.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not save plan.");
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  const onDelete = async (id: string) => {
+    try {
+      const config = await deletePlanById(id);
+      setPlans(config.plans);
+      toast.success("Plan removed.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not remove plan.");
+    }
+  };
+
+  const onSync = async () => {
+    setSyncing(true);
+    try {
+      const config = await syncPlans();
+      setPlans(config.plans);
+      toast.success("All plans re-synced to Stripe.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not sync.");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  if (loading) return <p className="text-sm text-ink-400">Loading plans…</p>;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <p className="max-w-2xl text-xs leading-relaxed text-ink-500">
+          Reader-journey plans: <span className="font-medium">Once Upon</span> (free) →{" "}
+          <span className="font-medium">Story Time</span> → <span className="font-medium">Happily Ever After</span>. You
+          own the perks and the monthly Spark grant here; Stripe owns the billing. Saving syncs the
+          plan&apos;s Stripe product + prices.
+        </p>
+        <div className="flex gap-2">
+          <Button variant="secondary" size="sm" leftIcon={<RefreshCw className="size-3.5" />} loading={syncing} onClick={onSync}>
+            Sync all to Stripe
+          </Button>
+          <Button size="sm" leftIcon={<Plus className="size-3.5" />} onClick={addPlan}>
+            New plan
+          </Button>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        {plans
+          .slice()
+          .sort((a, b) => a.sortOrder - b.sortOrder)
+          .map((plan) => (
+            <PlanCard
+              key={plan.id}
+              plan={plan}
+              currencies={currencies}
+              saving={savingId === plan.id}
+              onChange={(patch) => update(plan.id, patch)}
+              onSave={() => onSave(plan)}
+              onDelete={() => onDelete(plan.id)}
+            />
+          ))}
+      </div>
+    </div>
+  );
+}
+
+function PlanCard({
+  plan,
+  currencies,
+  saving,
+  onChange,
+  onSave,
+  onDelete,
+}: {
+  plan: PlanDefinition;
+  currencies: string[];
+  saving: boolean;
+  onChange: (patch: Partial<PlanDefinition>) => void;
+  onSave: () => void;
+  onDelete: () => void;
+}) {
+  const ent = plan.entitlements;
+  const grant = plan.grant;
+
+  const setPrice = (currency: string, interval: "month" | "year", amount: number) => {
+    const prices = { ...plan.billing.prices };
+    const byInterval = { ...(prices[currency] ?? {}) };
+    byInterval[interval] = { amount, stripePriceId: byInterval[interval]?.stripePriceId ?? null, active: true };
+    prices[currency] = byInterval;
+    onChange({ billing: { ...plan.billing, prices } });
+  };
+
+  return (
+    <div className="space-y-3 rounded-xl bg-white p-3.5 ring-1 ring-inset ring-ink-100">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Input
+            value={plan.presentation.name}
+            onChange={(e) => onChange({ presentation: { ...plan.presentation, name: e.target.value } })}
+            className="w-48 font-semibold"
+          />
+          {plan.isFree && <span className="rounded bg-brand-50 px-1.5 py-0.5 text-[10px] font-medium text-brand-700">FREE</span>}
+          <span className="inline-flex items-center gap-1 text-[11px] text-ink-400">
+            {plan.billing.stripeProductId ? (
+              <><Check className="size-3 text-emerald-500" /> Synced</>
+            ) : plan.isFree ? (
+              "No billing"
+            ) : (
+              <><AlertCircle className="size-3 text-amber-500" /> Not synced</>
+            )}
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <Select
+            value={plan.status}
+            options={STATUSES}
+            className="w-44"
+            onChange={(e) => onChange({ status: e.target.value as PlanStatus })}
+          />
+          {!plan.isFree && (
+            <Button variant="ghost" size="sm" leftIcon={<Trash2 className="size-3.5" />} onClick={onDelete} />
+          )}
+          <Button size="sm" loading={saving} onClick={onSave}>Save</Button>
+        </div>
+      </div>
+
+      <Grid cols={2}>
+        <TextField label="Tagline" value={plan.presentation.tagline ?? ""} onChange={(v) => onChange({ presentation: { ...plan.presentation, tagline: v } })} />
+        <NumberField label="Sort order" value={plan.sortOrder} step="1" onChange={(n) => onChange({ sortOrder: n })} />
+      </Grid>
+      <Field label="Description">
+        <Textarea
+          rows={2}
+          value={plan.presentation.description}
+          onChange={(e) => onChange({ presentation: { ...plan.presentation, description: e.target.value } })}
+        />
+      </Field>
+
+      <Section title="Sparks granted" hint="Sparks delivered on each paid invoice (every renewal). The annual bonus is a one-time reward added on a yearly invoice. Rollover caps carried balance at this multiple of the monthly grant (0 = unlimited).">
+        <Grid cols={3}>
+          <NumberField label="Monthly Sparks" value={grant.monthlySparks} step="10" suffix="✦" onChange={(n) => onChange({ grant: { ...grant, monthlySparks: n } })} />
+          <NumberField label="Annual bonus" value={grant.annualBonusSparks} step="10" suffix="✦" onChange={(n) => onChange({ grant: { ...grant, annualBonusSparks: n } })} />
+          <NumberField label="Rollover ×" value={grant.rolloverMultiple} step="1" suffix="×" onChange={(n) => onChange({ grant: { ...grant, rolloverMultiple: n } })} />
+        </Grid>
+      </Section>
+
+      <Section title="Perks" hint="What this plan unlocks. Print discount is capped by each product's break-even at checkout. Lists are comma-separated ids.">
+        <Grid cols={2}>
+          <NumberField label="Print discount" value={ent.printDiscountPct} step="1" suffix="%" onChange={(n) => onChange({ entitlements: { ...ent, printDiscountPct: n } })} />
+          <div className="flex items-center gap-2 pt-6">
+            <Toggle checked={ent.removeWatermark} onChange={(v) => onChange({ entitlements: { ...ent, removeWatermark: v } })} label="Remove watermark" />
+            <span className="text-sm text-ink-600">Remove shared-page watermark</span>
+          </div>
+        </Grid>
+        <Grid cols={2}>
+          <TextField label="Formats (product ids)" value={fromList(ent.formats)} onChange={(v) => onChange({ entitlements: { ...ent, formats: toList(v) } })} />
+          <TextField label="Layouts" value={fromList(ent.layouts)} onChange={(v) => onChange({ entitlements: { ...ent, layouts: toList(v) } })} />
+          <TextField label="Fonts" value={fromList(ent.fonts)} onChange={(v) => onChange({ entitlements: { ...ent, fonts: toList(v) } })} />
+          <TextField label="Features" value={fromList(ent.features)} onChange={(v) => onChange({ entitlements: { ...ent, features: toList(v) } })} />
+        </Grid>
+      </Section>
+
+      <Section title="Usage limits" hint="Caps the backend enforces for this plan. Set -1 (or leave at -1) for unlimited. Example: set “AI edits per book” to 2 on the free plan.">
+        <Grid cols={2}>
+          {QUOTAS.map((q) => (
+            <NumberField
+              key={q.id}
+              label={q.label}
+              value={typeof ent.limits[q.id] === "number" ? ent.limits[q.id] : -1}
+              step="1"
+              min={-1}
+              onChange={(n) =>
+                onChange({ entitlements: { ...ent, limits: { ...ent.limits, [q.id]: Math.trunc(n) } } })
+              }
+            />
+          ))}
+        </Grid>
+      </Section>
+
+      {!plan.isFree && (
+        <Section title="Pricing" hint="Per-currency monthly & annual price. Tip: price annual at ~10 months so the year is cheaper than monthly. Editing an amount mints a new Stripe price on save.">
+          <div className="space-y-2">
+            {currencies.map((c) => {
+              const byInterval = plan.billing.prices[c] ?? {};
+              return (
+                <div key={c} className="rounded-lg bg-ink-50/50 p-2.5 ring-1 ring-inset ring-ink-100">
+                  <div className="mb-1.5 text-xs font-semibold text-ink-700">{c}</div>
+                  <Grid cols={2}>
+                    {BILLING_INTERVALS.map((interval) => (
+                      <NumberField
+                        key={interval}
+                        label={interval === "month" ? "Per month" : "Per year"}
+                        value={byInterval[interval]?.amount ?? 0}
+                        step="0.5"
+                        suffix={c}
+                        onChange={(n) => setPrice(c, interval, n)}
+                      />
+                    ))}
+                  </Grid>
+                </div>
+              );
+            })}
+          </div>
+        </Section>
+      )}
+
+      <Section title="Spark discounts" hint="Optional per-action Spark multiplier for subscribers on this plan (e.g. 0.5 = half-price re-rolls). Leave at 1 for no discount.">
+        <Grid cols={3}>
+          {IMAGE_ACTIONS.map((a) => (
+            <NumberField
+              key={a.id}
+              label={a.label}
+              value={plan.actionMultipliers[a.id] ?? 1}
+              step="0.1"
+              suffix="×"
+              onChange={(n) => onChange({ actionMultipliers: { ...plan.actionMultipliers, [a.id]: n } })}
+            />
+          ))}
+        </Grid>
+      </Section>
+    </div>
+  );
+}

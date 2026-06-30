@@ -67,6 +67,13 @@ export interface OrderDraft {
   shippingMethod: ShippingMethod;
   /** Interior / cover print-ready files. */
   assets: PrintAsset[];
+  /**
+   * Already-hosted print files (public URLs). When present these are used
+   * instead of uploading `assets` — set by payment-gated checkout, where the
+   * files are uploaded up front and the order is placed later from a webhook
+   * (which has no access to the original blobs).
+   */
+  sourceFileUrls?: { interior?: string; cover?: string };
   /** Two-letter ISO destination country code. */
   destinationCountry: string;
   /** Three-letter ISO currency code for quoting / customs. */
@@ -88,6 +95,22 @@ export interface QuoteRequest {
   destinationCountry: string;
   currency?: string;
   shippingMethod?: ShippingMethod;
+  /**
+   * Interior page count to price. When omitted the provider falls back to the
+   * product's minimum (a coarse estimate). Pass the book's real (normalized)
+   * page count for an accurate quote.
+   */
+  pageCount?: number;
+  /**
+   * Destination address beyond the country. Some providers require a full
+   * address (street/city/state/postcode) to price shipping accurately. These are
+   * optional; the provider fills any non-price-affecting required fields with
+   * placeholders so a quote can be produced before checkout.
+   */
+  destinationLine1?: string;
+  destinationCity?: string;
+  destinationState?: string;
+  destinationPostalCode?: string;
 }
 
 export interface QuoteShipment {
@@ -129,7 +152,7 @@ export interface ShipmentInfo {
 export interface FulfillmentOrder {
   /** Provider's order id. */
   id: string;
-  /** Which provider owns this order (e.g. "lulu"). */
+  /** Opaque fulfillment identity (provider-neutral; e.g. "print"). */
   providerId: string;
   stage: OrderStage;
   merchantReference?: string;
@@ -137,8 +160,65 @@ export interface FulfillmentOrder {
   charges: Money[];
   /** Human-readable issues reported by the provider, if any. */
   issues: string[];
+  /**
+   * Print-ready files that were submitted for this order (public URLs), if
+   * known. Lets the order be re-previewed later without re-rendering.
+   */
+  printFiles?: { interior?: string; cover?: string };
   /** The raw provider payload, for debugging / forward-compat. */
   raw?: unknown;
+}
+
+/** One recorded step in an order's lifecycle (for the in-app status timeline). */
+export interface OrderStatusEntry {
+  /** Epoch ms when this status was recorded. */
+  at: number;
+  stage: OrderStage;
+  /** A human-readable note for this step (e.g. a provider issue), if any. */
+  message: string | null;
+}
+
+/**
+ * The persisted, user-facing view of a placed order — the neutral
+ * `users/{uid}/orders/{id}` document written by the backend. Provider-agnostic
+ * by construction (no provider identity, no raw payloads); powers the in-app
+ * order history. Timestamps are normalized to epoch ms for the client.
+ */
+export interface OrderRecord {
+  id: string;
+  /** The local project this order was placed for, if known. */
+  projectId: string | null;
+  productSku: string;
+  copies: number;
+  shippingMethod: ShippingMethod;
+  recipient: {
+    name: string;
+    email: string | null;
+    phone: string | null;
+    address: Address;
+  };
+  stage: OrderStage;
+  /** The latest human-readable status note, if any. */
+  statusMessage: string | null;
+  charges: Money[];
+  shipments: ShipmentInfo[];
+  /** Public URLs of the print-ready files submitted for this order. */
+  fileUrls: { interior?: string; cover?: string };
+  statusHistory: OrderStatusEntry[];
+  /** Epoch ms; null while a server timestamp is still resolving. */
+  createdAt: number | null;
+  updatedAt: number | null;
+}
+
+/**
+ * A provider status-callback (webhook) registration. Used by the backend to push
+ * order-status updates without polling. Provider-neutral shape.
+ */
+export interface StatusWebhook {
+  id: string;
+  url: string;
+  isActive: boolean;
+  topics?: string[];
 }
 
 /**
@@ -226,4 +306,15 @@ export interface FulfillmentProvider {
   getOrder(id: string): Promise<FulfillmentOrder>;
   /** Attempt to cancel an order before it enters production. */
   cancelOrder(id: string): Promise<FulfillmentOrder>;
+
+  /**
+   * Optional: provider status-callback (webhook) management. Implemented only by
+   * providers that push order-status updates, and called only from the backend
+   * (the callback `url` must be publicly reachable by the provider). The neutral
+   * UI/domain layer never touches these.
+   */
+  registerStatusWebhook?(url: string): Promise<StatusWebhook>;
+  listStatusWebhooks?(): Promise<StatusWebhook[]>;
+  deleteStatusWebhook?(id: string): Promise<void>;
+  testStatusWebhook?(id: string): Promise<void>;
 }

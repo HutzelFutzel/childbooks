@@ -2,8 +2,19 @@ import { Image as ImageIcon, Type } from "lucide-react";
 import type { GraphicsDensity, LayoutTemplate, SpreadUsage } from "../../core/config/options";
 import { cn } from "../lib/cn";
 
-/** Gradient tile standing in for an art-style sample. */
-export function StyleSwatch({ swatch }: { swatch: string }) {
+/**
+ * Art-style sample tile. Shows the admin-uploaded example image when one exists;
+ * otherwise falls back to the preset's gradient swatch.
+ */
+export function StyleSwatch({ swatch, imageUrl }: { swatch: string; imageUrl?: string }) {
+  if (imageUrl) {
+    return (
+      <div className="h-24 w-full overflow-hidden rounded-xl ring-1 ring-inset ring-black/5">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={imageUrl} alt="Art style example" className="size-full object-cover" />
+      </div>
+    );
+  }
   return (
     <div
       className={cn(

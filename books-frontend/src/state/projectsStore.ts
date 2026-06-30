@@ -6,12 +6,14 @@ import type {
   IllustrationImage,
   PageDesign,
   Project,
+  ProjectShare,
   ProjectStage,
   ScreenplayDoc,
   ScreenplaySpread,
   StoryAnalysis,
 } from "../core/types";
 import { getCursor, updateNodeContent, type VersionTree } from "../core/versioning";
+import { reconcileAnchorIds } from "../core/book/anchorRefs";
 import { createDefaultConfig, STAGE_ORDER } from "../core/types";
 import { getRepos } from "./repos";
 
@@ -32,7 +34,8 @@ interface ProjectsState {
   loaded: boolean;
 
   load: () => Promise<void>;
-  createProject: (title?: string) => Promise<string>;
+  /** Create a project; `open` (default true) also makes it the current one. */
+  createProject: (title?: string, open?: boolean) => Promise<string>;
   openProject: (id: string) => void;
   closeProject: () => void;
   deleteProject: (id: string) => Promise<void>;
@@ -60,6 +63,8 @@ interface ProjectsState {
 
   setDesign: (design: BookDesign) => Promise<void>;
   updatePageDesign: (pageId: string, patch: Partial<PageDesign>) => Promise<void>;
+
+  setShare: (share: ProjectShare) => Promise<void>;
 }
 
 export const useProjectsStore = create<ProjectsState>((set, get) => ({
@@ -73,7 +78,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     set({ projects: list, loaded: true });
   },
 
-  async createProject(title) {
+  async createProject(title, open = true) {
     const now = Date.now();
     const project: Project = {
       id: genId(),
@@ -88,7 +93,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     await projects.save(project);
     set((state) => ({
       projects: [project, ...state.projects],
-      currentId: project.id,
+      ...(open ? { currentId: project.id } : {}),
     }));
     return project.id;
   },
@@ -140,7 +145,14 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   async setAnalysis(analysis, anchors) {
-    await mutateCurrent(get, set, (p) => ({ ...p, analysis, anchors }));
+    // Re-analysis mints fresh anchors; preserve the ids (and images) of anchors
+    // whose name is unchanged so existing screenplay/illustration references —
+    // which point at anchors by id — don't drift and get silently ignored.
+    await mutateCurrent(get, set, (p) => ({
+      ...p,
+      analysis,
+      anchors: reconcileAnchorIds(anchors, p.anchors ?? []),
+    }));
   },
 
   async setAnchors(anchors) {
@@ -205,6 +217,10 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         },
       };
     });
+  },
+
+  async setShare(share) {
+    await mutateCurrent(get, set, (p) => ({ ...p, share }));
   },
 }));
 

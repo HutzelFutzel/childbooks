@@ -1,0 +1,134 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedInAs(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    // Shape guard for the profile root doc. Validates known fields' types and
+    // caps the field count so the doc can grow over time without being abused.
+    // Unknown keys (e.g. future additions) are tolerated under the count cap.
+    function isValidProfile(d) {
+      return d.keys().size() <= 40
+        && (!('schemaVersion' in d) || d.schemaVersion is int)
+        && (!('displayName' in d) || d.displayName == null || (d.displayName is string && d.displayName.size() <= 200))
+        && (!('email' in d) || d.email == null || (d.email is string && d.email.size() <= 320))
+        && (!('photoURL' in d) || d.photoURL == null || (d.photoURL is string && d.photoURL.size() <= 2000))
+        && (!('defaultAddressId' in d) || d.defaultAddressId == null || (d.defaultAddressId is string && d.defaultAddressId.size() <= 200))
+        && (!('locale' in d) || d.locale == null || (d.locale is string && d.locale.size() <= 35))
+        && (!('currency' in d) || d.currency == null || (d.currency is string && d.currency.size() <= 3))
+        && (!('marketingOptIn' in d) || d.marketingOptIn is bool);
+    }
+
+    // Shape guard for a saved address. Required fields must be present strings
+    // within sane bounds; optional fields are type-checked only when present.
+    function isValidAddress(d) {
+      return d.keys().size() <= 20
+        && d.recipientName is string && d.recipientName.size() <= 200
+        && d.line1 is string && d.line1.size() <= 300
+        && d.city is string && d.city.size() <= 200
+        && d.postal is string && d.postal.size() <= 40
+        && d.country is string && d.country.size() <= 2
+        && (!('label' in d) || (d.label is string && d.label.size() <= 120))
+        && (!('phone' in d) || (d.phone is string && d.phone.size() <= 60))
+        && (!('email' in d) || (d.email is string && d.email.size() <= 320))
+        && (!('line2' in d) || (d.line2 is string && d.line2.size() <= 300))
+        && (!('region' in d) || (d.region is string && d.region.size() <= 200));
+    }
+
+    // Per-user private space: a signed-in user may READ all of their own docs
+    // under users/{uid}/**. The backend (Admin SDK) bypasses these rules.
+    match /users/{uid}/{document=**} {
+      allow read: if signedInAs(uid);
+    }
+    // Client WRITES are limited to the app's own data (project/settings KV and
+    // generation jobs). Usage/cost records (users/{uid}/usage,
+    // users/{uid}/usageAggregates) and the Spark ledger (users/{uid}/sparksLedger)
+    // are written only by the backend, so they stay read-only to the client and
+    // can't be forged or deleted (they fall through to the default-deny write).
+    match /users/{uid}/store/{document=**} {
+      allow write: if signedInAs(uid);
+    }
+    match /users/{uid}/jobs/{document=**} {
+      allow write: if signedInAs(uid);
+    }
+
+    // The Spark balance is backend-authoritative (written only via the Admin SDK
+    // after a transactional ledger entry). A client may carry it through an
+    // unrelated profile write, but must never CHANGE it — otherwise anyone could
+    // mint themselves Sparks by patching their own profile doc.
+    function sparkBalanceUnchanged() {
+      return !('sparkBalance' in request.resource.data)
+        || (resource != null && 'sparkBalance' in resource.data
+            && request.resource.data.sparkBalance == resource.data.sparkBalance);
+    }
+
+    // Profile root doc + saved address book. Owner-only, with field validation
+    // on writes. The broad `users/{uid}/**` read rule above does NOT cover the
+    // `users/{uid}` doc itself (the recursive wildcard needs >=1 extra segment),
+    // so the profile doc gets its own read rule. Orders keep their own
+    // authoritative copy of the shipping address — these just prefill checkout.
+    match /users/{uid} {
+      allow read: if signedInAs(uid);
+      allow write: if signedInAs(uid) && isValidProfile(request.resource.data)
+        && sparkBalanceUnchanged();
+    }
+    match /users/{uid}/addresses/{addressId} {
+      allow create, update: if signedInAs(uid) && isValidAddress(request.resource.data);
+      allow delete: if signedInAs(uid);
+    }
+
+    // Admin membership: the source of truth for admin status, set in the
+    // Firebase console. A user may read their own doc (to drive the cosmetic UI
+    // gate); writes are denied to all clients (set in the console / Admin SDK).
+    match /admins/{uid} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // Global, admin-managed configuration (model config, art-style examples,
+    // model costs). World-readable so the wizard + client can resolve them; writes
+    // only ever happen through the backend (Admin SDK) after `requireAdmin`.
+    match /appConfig/{doc} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Public shared books: anyone can read a published book (powers the SSR
+    // preview pages), but only the owner may create or modify their own share.
+    // The document must own its path (shareId field == doc id) so a share can't
+    // claim a different id, and ownership is immutable once set so an existing
+    // owner can't hand the doc to (or blame it on) someone else.
+    match /publishedBooks/{shareId} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.ownerUid == request.auth.uid
+        && request.resource.data.shareId == shareId;
+      allow update: if request.auth != null
+        && resource.data.ownerUid == request.auth.uid
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.shareId == resource.data.shareId;
+      allow delete: if request.auth != null
+        && resource.data.ownerUid == request.auth.uid;
+    }
+
+    // Admin dashboard settings (exclusion lists, timezone, refresh interval).
+    // Holds the email/domain exclusion list, so — unlike `appConfig/*` — it must
+    // NEVER be world-readable. Read/written only via the admin-gated backend.
+    match /adminSettings/{doc} {
+      allow read, write: if false;
+    }
+
+    // Append-only authentication event log, written by the Auth blocking
+    // functions (Admin SDK). Read only via the admin-gated analytics routes.
+    match /analyticsEvents/{doc} {
+      allow read, write: if false;
+    }
+
+    // Everything else is denied to direct client access.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

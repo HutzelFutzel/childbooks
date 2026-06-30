@@ -7,9 +7,11 @@ export { FulfillmentError, fulfillmentKindFromStatus } from "./errors";
 export type { FulfillmentErrorKind } from "./errors";
 export { buildOrderDraft, type BuildOrderDraftInput } from "./draft";
 /**
- * Provider-neutral catalog surface. The active provider (Lulu) supplies the
- * concrete products; UI/domain code imports `BOOK_PRODUCTS` from here and never
- * reaches into a provider subfolder, so swapping providers is a one-file change.
+ * Provider-neutral catalog surface. The active print provider supplies the
+ * concrete products; UI/domain code imports `BOOK_PRODUCTS` (and the helpers
+ * below) from here and never reaches into a provider subfolder, so the frontend
+ * has no knowledge of which provider backs the platform and swapping providers
+ * is a one-file change.
  */
 export {
   LULU_BOOK_PRODUCTS as BOOK_PRODUCTS,

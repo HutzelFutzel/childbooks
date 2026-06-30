@@ -15,6 +15,7 @@ import {
 import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import type { Anchor, BookConfig, ScreenplayDoc, ScreenplaySpread } from "../types";
+import { effectiveAnchorIds, normalizeAnchorName } from "../book/anchorRefs";
 import { fixPagination } from "./pagination";
 import { withRetry } from "./retry";
 
@@ -152,7 +153,7 @@ export async function generateScreenplay(
             text: s.text,
             illustration: s.illustration,
             layoutNote: s.layoutNote,
-            anchors: s.anchorIds
+            anchors: effectiveAnchorIds(included, s)
               .map((id) => included.find((a) => a.id === id)?.name)
               .filter(Boolean),
           })),
@@ -186,15 +187,6 @@ export async function generateScreenplay(
   return fixPagination(mapScreenplay(raw, included));
 }
 
-/** Normalize an anchor name for tolerant matching (case/whitespace/articles). */
-function normalizeName(name: string): string {
-  return name
-    .trim()
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .replace(/^(the|a|an)\s+/, "");
-}
-
 /**
  * Resolve a list of LLM-provided anchor names to ids, tolerantly. Returns the
  * matched ids (deduped) and any names that could not be resolved so the caller
@@ -207,7 +199,7 @@ export function matchAnchorNames(
 ): { ids: string[]; unmatched: string[]; ambiguous: string[] } {
   const byNorm = new Map<string, string[]>();
   for (const a of anchors) {
-    const key = normalizeName(a.name);
+    const key = normalizeAnchorName(a.name);
     if (!key) continue;
     (byNorm.get(key) ?? byNorm.set(key, []).get(key)!).push(a.id);
   }
@@ -218,7 +210,7 @@ export function matchAnchorNames(
   const seen = new Set<string>();
 
   for (const raw of names) {
-    const norm = normalizeName(raw);
+    const norm = normalizeAnchorName(raw);
     if (!norm) continue;
     let hit = byNorm.get(norm);
     // Fuzzy fallback: a normalized name contained in (or containing) a known one.
@@ -249,11 +241,14 @@ export function matchAnchorNames(
 function mapScreenplay(raw: RawScreenplay, anchors: Anchor[]): ScreenplayDoc {
   const allUnmatched = new Set<string>();
   const allAmbiguous = new Set<string>();
-  const toIds = (names: string[]): string[] => {
+  const nameById = new Map(anchors.map((a) => [a.id, a.name]));
+  // Resolve LLM-provided names to ids AND record the canonical anchor name in
+  // the same slot, so the reference can self-heal by name if ids ever drift.
+  const toRefs = (names: string[]): { anchorIds: string[]; anchorNames: string[] } => {
     const { ids, unmatched, ambiguous } = matchAnchorNames(names, anchors);
     unmatched.forEach((n) => allUnmatched.add(n));
     ambiguous.forEach((n) => allAmbiguous.add(n));
-    return ids;
+    return { anchorIds: ids, anchorNames: ids.map((id) => nameById.get(id) ?? "") };
   };
 
   const spreads: ScreenplaySpread[] = raw.spreads.map((s) => ({
@@ -262,7 +257,7 @@ function mapScreenplay(raw: RawScreenplay, anchors: Anchor[]): ScreenplayDoc {
     text: s.text,
     illustration: s.illustration,
     layoutNote: s.layoutNote,
-    anchorIds: toIds(s.anchors),
+    ...toRefs(s.anchors),
   }));
   const doc: ScreenplayDoc = {
     notes: raw.notes,
@@ -271,13 +266,13 @@ function mapScreenplay(raw: RawScreenplay, anchors: Anchor[]): ScreenplayDoc {
       title: raw.frontCover.title,
       subtitle: raw.frontCover.subtitle,
       illustration: raw.frontCover.illustration,
-      anchorIds: toIds(raw.frontCover.anchors),
+      ...toRefs(raw.frontCover.anchors),
     },
     backCover: {
       title: raw.backCover.title,
       subtitle: raw.backCover.subtitle,
       illustration: raw.backCover.illustration,
-      anchorIds: toIds(raw.backCover.anchors),
+      ...toRefs(raw.backCover.anchors),
     },
     spine: { text: raw.spineText },
   };

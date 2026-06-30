@@ -26,19 +26,26 @@ import {
   currentAnchorImage,
   currentIllustration,
   staleAnchorIds,
+  staleIllustrationSpreadIds,
 } from "../../state/ai";
 import { putBlob } from "../../state/blobs";
 import { useProjectsStore } from "../../state/projectsStore";
 import { useSettingsStore } from "../../state/settingsStore";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
+import { SparkCost, useBatchEstimate } from "../layout/SparkCost";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { useResolvedModels } from "../hooks/useResolvedModels";
 import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
 import { useStudio } from "./StudioContext";
 import { useDragSource } from "./StudioDnd";
-import { generateAllAnchors, generateAllPages, illustrationUnits } from "./studioGen";
+import {
+  generateAllAnchors,
+  generateAllPages,
+  illustrationUnits,
+  refreshStalePages,
+} from "./studioGen";
 
 const TYPE_ICON: Record<AnchorType, typeof User> = {
   character: User,
@@ -67,6 +74,8 @@ export function StudioSidebar() {
   const setAnchors = useProjectsStore((s) => s.setAnchors);
   const models = useResolvedModels();
   const [analyzing, setAnalyzing] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const staleCount = staleIllustrationSpreadIds(project).length;
 
   const anchors = (project.anchors ?? []).filter((a) => a.include);
   const stale = new Set(staleAnchorIds(project));
@@ -83,6 +92,12 @@ export function StudioSidebar() {
 
   const everythingDone =
     anchors.length > 0 && anchorsReady === anchors.length && units.length > 0 && pagesReady === units.length;
+
+  // Spark cost preview for the whole remaining batch (anchors + pages).
+  const batchCost = useBatchEstimate([
+    { action: "anchorImage", count: Math.max(0, anchors.length - anchorsReady) },
+    { action: "pageIllustration", count: Math.max(0, units.length - pagesReady) },
+  ]);
 
   async function reanalyze() {
     setAnalyzing(true);
@@ -111,9 +126,31 @@ export function StudioSidebar() {
     );
   }
 
+  async function refreshStale() {
+    if (!models) {
+      notify.error("AI generation isn't available yet — it's being set up on the server.");
+      return;
+    }
+    setRefreshing(true);
+    try {
+      const queued = await refreshStalePages(
+        useProjectsStore.getState().current()!,
+        (err) => notify.error(err),
+      );
+      if (queued > 0) {
+        notify.info(
+          "Updating pages",
+          `${queued} stale page${queued === 1 ? "" : "s"} are re-rendering in the background — they'll update as each finishes.`,
+        );
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   async function generateEverything() {
     if (!models) {
-      notify.error("Add an OpenAI or Google API key in Settings to generate.");
+      notify.error("AI generation isn't available yet — it's being set up on the server.");
       return;
     }
     const signal = startGeneration();
@@ -253,6 +290,7 @@ export function StudioSidebar() {
           onClick={() => void generateEverything()}
         >
           {busy ? "Generating…" : everythingDone ? "All generated" : "Generate everything"}
+          {!busy && !everythingDone && <SparkCost n={batchCost} />}
         </Button>
         {busy && (
           <button
@@ -262,9 +300,23 @@ export function StudioSidebar() {
             <X className="size-3.5" /> Cancel generation
           </button>
         )}
+        {!busy && staleCount > 0 && (
+          <Button
+            className="mt-2 w-full"
+            variant="secondary"
+            size="sm"
+            loading={refreshing}
+            leftIcon={!refreshing ? <RefreshCw className="size-4" /> : undefined}
+            onClick={() => void refreshStale()}
+          >
+            {refreshing
+              ? "Queuing…"
+              : `Update ${staleCount} stale page${staleCount === 1 ? "" : "s"}`}
+          </Button>
+        )}
         {!models && (
           <p className="mt-2 text-center text-[11px] text-amber-600">
-            Add an API key in Settings to generate.
+            AI generation is being set up on the server.
           </p>
         )}
       </section>

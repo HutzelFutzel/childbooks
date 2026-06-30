@@ -1,0 +1,33 @@
+{
+  "name": "childbooks",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "workspaces": [
+    "books-frontend",
+    "functions"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "yarn workspace books-frontend dev",
+    "dev:backend": "node scripts/dev.mjs",
+    "dev:all": "node scripts/dev.mjs --all",
+    "build:web": "yarn workspace books-frontend build",
+    "build:functions": "yarn workspace functions build",
+    "build": "yarn build:functions && yarn build:web",
+    "emulators": "node scripts/dev-emulators.mjs",
+    "emulators:clear": "node scripts/dev-emulators.mjs --clear",
+    "deploy:functions": "yarn build:functions && firebase deploy --only functions",
+    "deploy:rules": "firebase deploy --only firestore:rules,storage:rules,firestore:indexes"
+  },
+  "devDependencies": {
+    "@ngrok/ngrok": "^1.7.0",
+    "concurrently": "^9.1.0",
+    "firebase-tools": "^13.29.1"
+  },
+  "resolutions": {
+    "universal-analytics": "0.5.3"
+  }
+}

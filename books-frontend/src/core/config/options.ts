@@ -196,6 +196,11 @@ export interface LayoutTemplate {
   label: string;
   description: string;
   spread: boolean;
+  /**
+   * Premium layouts are only selectable on plans that unlock them (via
+   * `PlanEntitlements.layouts`). Non-premium layouts are available to everyone.
+   */
+  premium?: boolean;
   /** A schematic of regions, used to render the example diagram. */
   regions: LayoutRegion[];
 }
@@ -262,12 +267,16 @@ export const LAYOUT_TEMPLATES: LayoutTemplate[] = [
     label: "Alternating sides",
     description: "Swap text/graphic sides every spread for rhythm.",
     spread: true,
+    premium: true,
     regions: [
       { kind: "text", x: 0, y: 0, w: 0.5, h: 1 },
       { kind: "graphic", x: 0.5, y: 0, w: 0.5, h: 1 },
     ],
   },
 ];
+
+/** Layout ids available to everyone; premium layouts require a plan entitlement. */
+export const BASE_LAYOUT_IDS: string[] = LAYOUT_TEMPLATES.filter((l) => !l.premium).map((l) => l.id);
 
 export function layoutsForPlacement(
   placement: TextPlacement,

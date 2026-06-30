@@ -19,6 +19,8 @@ import {
   Redo2,
   Rows3,
   LayoutGrid,
+  Share2,
+  ShoppingCart,
   Sparkles,
   Undo2,
 } from "lucide-react";
@@ -33,6 +35,8 @@ import { useResolvedModels } from "../hooks/useResolvedModels";
 import { cn } from "../lib/cn";
 import { PrintBook } from "../design/PrintBook";
 import { ExportRunner, type ExportMode } from "../design/ExportRunner";
+import { SharePanel } from "../share/SharePanel";
+import { OrderDialog } from "../checkout/OrderDialog";
 import { useStudio } from "./StudioContext";
 import { BookPreview } from "./BookPreview";
 import { illustrationUnits } from "./studioGen";
@@ -56,6 +60,8 @@ export function BookCanvas() {
   const [previewing, setPreviewing] = useState(false);
   const [exporting, setExporting] = useState<ExportMode | null>(null);
   const [pendingExport, setPendingExport] = useState<(() => void) | null>(null);
+  const [sharing, setSharing] = useState(false);
+  const [ordering, setOrdering] = useState(false);
 
   // Non-blank pages/covers that still have no generated illustration: exporting
   // now would produce blank pages, so we warn first.
@@ -125,10 +131,10 @@ export function BookCanvas() {
             <span className="flex size-12 items-center justify-center rounded-2xl bg-amber-50 text-amber-500">
               <Sparkles className="size-6" />
             </span>
-            <p className="text-sm font-semibold text-ink-700">Add an API key to begin</p>
+            <p className="text-sm font-semibold text-ink-700">AI generation is unavailable</p>
             <p className="max-w-sm text-xs text-ink-400">
-              Connect an OpenAI or Google key in Settings. The studio then analyzes your story and
-              drafts the whole book automatically.
+              AI generation is being set up on the server. Once it's ready, the studio analyzes your
+              story and drafts the whole book automatically.
             </p>
           </>
         )}
@@ -187,11 +193,26 @@ export function BookCanvas() {
           >
             Preview
           </Button>
+          <Button
+            size="sm"
+            variant="secondary"
+            leftIcon={<Share2 className="size-4" />}
+            onClick={() => requestExport(() => setSharing(true))}
+          >
+            Share
+          </Button>
           <ExportMenu
             onPrint={() => requestExport(handlePrint)}
             onExportPdf={() => requestExport(() => setExporting("pdf"))}
             onExportImages={() => requestExport(() => setExporting("images"))}
           />
+          <Button
+            size="sm"
+            leftIcon={<ShoppingCart className="size-4" />}
+            onClick={() => requestExport(() => setOrdering(true))}
+          >
+            Order print
+          </Button>
         </div>
       </div>
 
@@ -277,6 +298,22 @@ export function BookCanvas() {
           onDone={() => setExporting(null)}
         />
       )}
+
+      <SharePanel
+        open={sharing}
+        onClose={() => setSharing(false)}
+        project={project}
+        pages={pages}
+        design={design}
+      />
+
+      <OrderDialog
+        open={ordering}
+        onClose={() => setOrdering(false)}
+        project={project}
+        pages={pages}
+        design={design}
+      />
 
       <AnimatePresence>
         {previewing && displays.length > 0 && (
@@ -474,6 +511,7 @@ function ViewToggle({ view, onChange }: { view: ViewMode; onChange: (v: ViewMode
 
 /** A spread-shaped thumbnail (two facing halves) for grid view. */
 function SpreadThumb({ disp, onClick }: { disp: DisplaySpread; onClick: () => void }) {
+  const isCover = Boolean(disp.cover);
   return (
     <motion.button
       whileHover={{ y: -3 }}
@@ -481,7 +519,14 @@ function SpreadThumb({ disp, onClick }: { disp: DisplaySpread; onClick: () => vo
       onClick={onClick}
       className="group flex flex-col gap-2 text-left"
     >
-      <div className="relative flex aspect-2/1 w-full overflow-hidden rounded-2xl bg-ink-100 ring-1 ring-ink-200 transition group-hover:ring-brand-300">
+      <div
+        className={cn(
+          "relative flex aspect-2/1 w-full overflow-hidden rounded-2xl bg-ink-100 ring-1 transition",
+          isCover
+            ? "ring-2 ring-brand-300 group-hover:ring-brand-400"
+            : "ring-ink-200 group-hover:ring-brand-300",
+        )}
+      >
         {disp.kind === "full" ? (
           <ThumbImage blobId={disp.entry.page.blobId} cover={disp.entry.page.isCover} />
         ) : (
@@ -491,8 +536,20 @@ function SpreadThumb({ disp, onClick }: { disp: DisplaySpread; onClick: () => vo
             <ThumbHalf side={disp.right} />
           </>
         )}
+        {isCover && (
+          <span className="pointer-events-none absolute left-1.5 top-1.5 rounded-md bg-brand-600 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white shadow-soft">
+            Cover
+          </span>
+        )}
       </div>
-      <span className="truncate text-xs font-medium text-ink-600">{disp.label}</span>
+      <span
+        className={cn(
+          "truncate text-xs font-medium",
+          isCover ? "text-brand-700" : "text-ink-600",
+        )}
+      >
+        {disp.label}
+      </span>
     </motion.button>
   );
 }

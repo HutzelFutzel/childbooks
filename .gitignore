@@ -1,7 +1,30 @@
 # Real environment files with secrets — never commit these.
-# The committed template is `.env.example`.
+# The committed templates are the various `.env.example` files.
 .env
 .env.*
 !.env.example
+# Exception: committed NON-SECRET, project-specific Functions runtime config
+# (loaded by `firebase deploy`). Secrets never live here — use Secret Manager.
+!functions/.env.childbook-60f89
+
+# Dependencies
+node_modules/
+
+# Builds
+dist/
+.next/
+out/
+functions/lib/
+
+# Firebase emulator persisted data + logs
+.emulator-data/
+# One-off manual `firebase emulators:export` dumps
+firebase-export-*/
+*-debug.log
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+pubsub-debug.log
+.firebase/
 
 .DS_Store

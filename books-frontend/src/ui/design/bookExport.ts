@@ -8,7 +8,6 @@
  * desktop shell (native save dialog) and in a plain browser (anchor download).
  */
 import { getFontEmbedCSS, toBlob } from "html-to-image";
-import { isTauri } from "../../platform/runtime";
 
 /** Reject if `promise` doesn't settle within `ms` (prevents indefinite hangs). */
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -182,31 +181,10 @@ function slug(label: string): string {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "page";
 }
 
-/** Save a blob to disk: native dialog under Tauri, anchor download in browsers. */
+/** Save a blob to disk via an anchor download. */
 export async function saveBlob(filename: string, blob: Blob): Promise<boolean> {
-  if (isTauri()) {
-    const saved = await saveViaTauri(filename, blob);
-    if (saved !== "fallback") return saved;
-  }
   downloadInBrowser(filename, blob);
   return true;
-}
-
-async function saveViaTauri(filename: string, blob: Blob): Promise<boolean | "fallback"> {
-  try {
-    const ext = filename.split(".").pop() ?? "";
-    const { save } = await import("@tauri-apps/plugin-dialog");
-    const path = await save({
-      defaultPath: filename,
-      filters: ext ? [{ name: ext.toUpperCase(), extensions: [ext] }] : undefined,
-    });
-    if (!path) return false; // user cancelled
-    const { writeFile } = await import("@tauri-apps/plugin-fs");
-    await writeFile(path, new Uint8Array(await blob.arrayBuffer()));
-    return true;
-  } catch {
-    return "fallback";
-  }
 }
 
 function downloadInBrowser(filename: string, blob: Blob): void {

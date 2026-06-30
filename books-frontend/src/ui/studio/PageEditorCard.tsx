@@ -18,6 +18,7 @@ import {
 import type { Anchor, CoverSpec, ScreenplaySpread, ShapeKind } from "../../core/types";
 import { COVER_FRONT_ID } from "../../core/types";
 import { wordParagraphs } from "../../core/design";
+import { effectiveAnchorIds } from "../../core/book/anchorRefs";
 import { allVersions, getCursor, selectVersion, updateNodeContent } from "../../core/versioning";
 import { changedAnchorsForSpread, generateIllustrationVersion } from "../../state/ai";
 import { useProjectsStore } from "../../state/projectsStore";
@@ -26,6 +27,7 @@ import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
 import { Field, Input, Textarea } from "../components/Input";
 import { useBlobUrl } from "../hooks/useBlobUrl";
+import { SparkCost, useActionEstimate } from "../layout/SparkCost";
 import { formatList } from "../lib/formatList";
 import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
@@ -161,8 +163,13 @@ export function PageControls({
   const cursor = tree ? getCursor(tree).content : null;
   const versions = tree ? allVersions(tree) : [];
   const generating = generatingPages.has(page.id);
+  const sparkCost = useActionEstimate(coverMode ? "coverIllustration" : "pageIllustration");
 
-  const anchorIds = subject.kind === "spread" ? subject.spread.anchorIds : subject.cover.anchorIds;
+  const subjectRef = subject.kind === "spread" ? subject.spread : subject.cover;
+  const anchorIds = subjectRef.anchorIds;
+  // Active state heals drifted ids by name so the right tags light up even if a
+  // stored id no longer matches the current anchor set.
+  const activeIds = effectiveAnchorIds(anchors, subjectRef);
   const changedHere = stale && cursor ? changedAnchorsForSpread(project, page.id) : [];
 
   /** Patch the underlying screenplay subject (a content spread or a cover spec). */
@@ -290,7 +297,7 @@ export function PageControls({
                   <AnchorToggle
                     key={a.id}
                     anchor={a}
-                    active={anchorIds.includes(a.id)}
+                    active={activeIds.includes(a.id)}
                     onClick={() => toggleAnchor(a.id)}
                   />
                 ))}
@@ -308,6 +315,7 @@ export function PageControls({
                 onClick={() => void generate()}
               >
                 Generate illustration
+                <SparkCost n={sparkCost} />
               </Button>
             ) : (
               <>
@@ -329,6 +337,7 @@ export function PageControls({
                     onClick={() => void generate({ edit, useReference: true })}
                   >
                     Apply edit
+                    <SparkCost n={sparkCost} />
                   </Button>
                   <Button
                     variant="secondary"
@@ -337,6 +346,7 @@ export function PageControls({
                     onClick={() => void generate()}
                   >
                     Regenerate
+                    <SparkCost n={sparkCost} />
                   </Button>
                 </div>
               </>

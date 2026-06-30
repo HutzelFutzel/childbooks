@@ -1,14 +1,15 @@
+import "../platform/providerHttp";
 import { create } from "zustand";
 import type { ProviderId } from "../core/config/options";
 import { ALL_PROVIDERS } from "../core/providers";
 import { discoverProvider, type ProviderDiscovery } from "../core/models/registry";
 import {
   createDefaultSettings,
-  hasKey,
   withColor,
   type AppSettings,
   type AssetItem,
 } from "../core/settings";
+import { backendUrl } from "../platform/backend";
 import { getRepos } from "./repos";
 
 /** Re-fetch model lists in the background if the cache is older than this. */
@@ -28,10 +29,12 @@ interface SettingsState {
   /** Live discovery results keyed by provider, populated by tests / refresh. */
   discovery: Partial<Record<ProviderId, ProviderDiscovery>>;
   connections: Record<ProviderId, ProviderConnection>;
+  /** Which providers the BACKEND has keys for (from GET /providers). */
+  providerAvailable: Record<ProviderId, boolean>;
 
   load: () => Promise<void>;
-  setApiKey: (provider: ProviderId, key: string) => void;
-  saveKey: (provider: ProviderId) => Promise<void>;
+  /** Fetch which providers the server is configured for, then refresh models. */
+  loadProviders: (stale?: ProviderId[]) => Promise<void>;
   testConnection: (provider: ProviderId) => Promise<void>;
   hasAnyKey: () => boolean;
   /** Record a recently-used color in the MRU history (persisted). */
@@ -60,6 +63,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     openai: { status: "idle" },
     google: { status: "idle" },
   },
+  providerAvailable: { openai: false, google: false },
 
   async load() {
     const repos = await getRepos();
@@ -80,53 +84,38 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     }
     set({ settings: loaded, loaded: true, discovery });
 
-    // Background-refresh keyed providers whose cache is missing/stale.
-    for (const p of ALL_PROVIDERS) {
-      if (hasKey(loaded, p) && staleProviders.includes(p)) {
-        void get().testConnection(p);
+    // Ask the backend which providers it has keys for, then refresh the model
+    // lists for the ones whose local cache is missing/stale.
+    void get().loadProviders(staleProviders);
+  },
+
+  async loadProviders(stale) {
+    let available: Record<ProviderId, boolean> = { openai: false, google: false };
+    try {
+      const res = await fetch(backendUrl("/providers"));
+      if (res.ok) {
+        const json = (await res.json()) as Partial<Record<ProviderId, boolean>>;
+        available = { openai: Boolean(json.openai), google: Boolean(json.google) };
       }
+    } catch {
+      // Backend unreachable — leave everything unavailable.
     }
-  },
-
-  setApiKey(provider, key) {
-    set((state) => ({
-      settings: {
-        ...state.settings,
-        apiKeys: { ...state.settings.apiKeys, [provider]: key },
-      },
-    }));
-  },
-
-  async saveKey(provider) {
-    const { settings } = await getRepos();
-    await settings.save(get().settings);
-    // Saving a new key invalidates a previous connection result.
-    set((state) => ({
-      connections: {
-        ...state.connections,
-        [provider]: { status: "idle" },
-      },
-    }));
+    set({ providerAvailable: available });
+    const toRefresh = stale ?? ALL_PROVIDERS;
+    for (const p of ALL_PROVIDERS) {
+      if (available[p] && toRefresh.includes(p)) void get().testConnection(p);
+    }
   },
 
   async testConnection(provider) {
-    const key = get().settings.apiKeys[provider]?.trim();
-    if (!key) {
-      set((state) => ({
-        connections: {
-          ...state.connections,
-          [provider]: { status: "error", message: "No API key set." },
-        },
-      }));
-      return;
-    }
     set((state) => ({
       connections: {
         ...state.connections,
         [provider]: { status: "testing" },
       },
     }));
-    const result = await discoverProvider(provider, { apiKey: key });
+    // The key is injected by the backend proxy; the client sends none.
+    const result = await discoverProvider(provider, { apiKey: "" });
     if (result.error) {
       set((state) => ({
         discovery: { ...state.discovery, [provider]: result },
@@ -158,8 +147,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   },
 
   hasAnyKey() {
-    const s = get().settings;
-    return hasKey(s, "openai") || hasKey(s, "google");
+    const a = get().providerAvailable;
+    return a.openai || a.google;
   },
 
   pushColor(color) {
