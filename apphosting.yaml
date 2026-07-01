@@ -20,10 +20,15 @@ runConfig:
   concurrency: 80
 
 scripts:
-  # Build the frontend workspace from the repo root (uses the root yarn.lock).
-  buildCommand: yarn workspace books-frontend build
+  # Build the frontend from the repo root. We use `yarn --cwd` (a plain
+  # `yarn run` inside the subfolder) rather than `yarn workspace books-frontend`
+  # because the App Hosting buildpack rewrites the root package.json, which
+  # breaks yarn's workspace-root lookup ("Cannot find the root of your
+  # workspace"). Dependencies are already hoisted to the root node_modules by
+  # the install step, so the local build/start scripts resolve fine.
+  buildCommand: yarn --cwd books-frontend build
   # Start Next's production server; it binds to $PORT (Cloud Run sets 8080).
-  runCommand: yarn workspace books-frontend start
+  runCommand: yarn --cwd books-frontend start
 
 # Without a framework adapter, App Hosting can't infer which files the runtime
 # needs, so keep the whole workspace (build output + node_modules) in the image.
