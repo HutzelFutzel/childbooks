@@ -1,8 +1,16 @@
 # Firebase App Hosting configuration for the Next.js web app.
 # Docs: https://firebase.google.com/docs/app-hosting/configure
 #
-# App Hosting builds this app with Cloud Build and serves SSR on Cloud Run.
-# Secrets are pulled from Cloud Secret Manager; non-secret config is inlined.
+# ── Monorepo note ────────────────────────────────────────────────────────────
+# This repo is a Yarn workspaces monorepo (books-frontend + functions). App
+# Hosting's framework adapters only support Nx/Turborepo monorepos, and they
+# look for a lockfile next to the app. Our single `yarn.lock` lives at the repo
+# ROOT, so the App Hosting backend's "Root directory" MUST be "/" (the default),
+# not "books-frontend". Build and run always execute from the repo root anyway.
+#
+# `scripts.buildCommand` opts us out of the Next.js adapter and drives the build
+# ourselves against the `books-frontend` workspace; `runCommand` starts it. Both
+# run from the repo root where `yarn.lock` is, so dependency install just works.
 
 runConfig:
   # Scale to zero by default. Raise minInstances in prod if cold-start latency
@@ -10,6 +18,18 @@ runConfig:
   minInstances: 0
   maxInstances: 100
   concurrency: 80
+
+scripts:
+  # Build the frontend workspace from the repo root (uses the root yarn.lock).
+  buildCommand: yarn workspace books-frontend build
+  # Start Next's production server; it binds to $PORT (Cloud Run sets 8080).
+  runCommand: yarn workspace books-frontend start
+
+# Without a framework adapter, App Hosting can't infer which files the runtime
+# needs, so keep the whole workspace (build output + node_modules) in the image.
+outputFiles:
+  serverApp:
+    include: ["."]
 
 # Production environment for App Hosting. App Hosting builds from the repo and
 # does NOT see your local (git-ignored) `.env`, so production's public config
