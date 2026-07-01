@@ -17,6 +17,7 @@
     "build:web": "yarn workspace books-frontend build",
     "build:functions": "yarn workspace functions build",
     "build": "yarn build:functions && yarn build:web",
+    "start": "yarn workspace books-frontend start",
     "emulators": "node scripts/dev-emulators.mjs",
     "emulators:clear": "node scripts/dev-emulators.mjs --clear",
     "deploy": "node scripts/deploy.mjs",
