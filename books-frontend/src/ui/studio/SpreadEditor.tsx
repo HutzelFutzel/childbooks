@@ -42,6 +42,20 @@ export type DisplaySpread =
       cover?: CoverKind;
     };
 
+/**
+ * The editable (screenplay) spread ids a display unit stands for — covers and
+ * blank fillers excluded. Drives drag-and-drop page reordering in the grid.
+ */
+export function contentSpreadIds(disp: DisplaySpread): string[] {
+  if (disp.cover) return [];
+  if (disp.kind === "full") return [disp.entry.page.id];
+  const ids: string[] = [];
+  for (const side of [disp.left, disp.right]) {
+    if (side.kind === "page" && side.entry.subject.kind === "spread") ids.push(side.entry.page.id);
+  }
+  return ids;
+}
+
 function sideFromSlot(slot: PageSlot | null, byId: Map<string, Entry>): SpreadSide {
   if (!slot) return { kind: "edge" };
   if (slot.spread.placeholder) return { kind: "filler", label: `Page ${slot.pageNumber}` };
@@ -137,12 +151,19 @@ function sideAspect(left: SpreadSide, right: SpreadSide): number {
   return fromPage(left) ?? fromPage(right) ?? 1;
 }
 
-/** One half of the spread frame: a live page, a blank filler, or the book edge. */
-function HalfFrame({ side, aspect }: { side: SpreadSide; aspect: number }) {
+/** One half of the spread frame: a live page, a blank filler, or the book edge.
+ * A left page binds on its right edge and a right page on its left edge, so the
+ * gutter guide is placed on the inner (facing) side. */
+function HalfFrame({ side, aspect, half }: { side: SpreadSide; aspect: number; half: "left" | "right" }) {
   if (side.kind === "page") {
     return (
       <div className="relative flex min-w-0 flex-1 items-center justify-center">
-        <PageStagePanel page={side.entry.page} subject={side.entry.subject} chromeless />
+        <PageStagePanel
+          page={side.entry.page}
+          subject={side.entry.subject}
+          chromeless
+          bindingSide={half === "left" ? "right" : "left"}
+        />
       </div>
     );
   }
@@ -269,8 +290,8 @@ export function SpreadCard({
         ) : (
           <>
             <div className="relative mx-auto flex w-full overflow-hidden rounded-xl bg-white shadow-soft ring-1 ring-ink-200">
-              <HalfFrame side={disp.left} aspect={sideAspect(disp.left, disp.right)} />
-              <HalfFrame side={disp.right} aspect={sideAspect(disp.left, disp.right)} />
+              <HalfFrame side={disp.left} aspect={sideAspect(disp.left, disp.right)} half="left" />
+              <HalfFrame side={disp.right} aspect={sideAspect(disp.left, disp.right)} half="right" />
               <div
                 className="pointer-events-none absolute inset-y-0 left-1/2 w-10 -translate-x-1/2"
                 style={{ background: FOLD_GRADIENT }}

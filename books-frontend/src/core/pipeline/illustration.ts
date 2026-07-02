@@ -3,7 +3,8 @@
  * spread + book settings, picks a fitting canvas size, and renders the image
  * using the chosen anchors as reference images for visual consistency.
  */
-import type { BookSize } from "../config/options";
+import { bookSizeFromAspect } from "../config/options";
+import { bookProductForConfig } from "../book";
 import { getImageProvider } from "../providers";
 import type {
   ImageResult,
@@ -11,16 +12,22 @@ import type {
   ReferenceImage,
 } from "../providers/types";
 import { resolveArtStyleText } from "../prompts/style";
+import type { PromptContext } from "../prompts/context";
 import type { Anchor, BookConfig, ScreenplaySpread } from "../types";
 import { withRetry } from "./retry";
 
-/** Choose a provider-friendly canvas size for a page/spread. */
+/**
+ * Choose a provider-friendly canvas size for a page/spread. The page shape is
+ * derived from the chosen product's real trim aspect (so e.g. a comic-book trim
+ * renders portrait, not square), then mapped to the nearest supported size.
+ */
 export function chooseImageSize(
   kind: ScreenplaySpread["kind"],
-  bookSize: BookSize,
+  config: Pick<BookConfig, "bookSize" | "productSku">,
 ): string {
   if (kind === "spread") return "1536x1024"; // wide double-page
-  switch (bookSize) {
+  const shape = bookSizeFromAspect(bookProductForConfig(config).aspect);
+  switch (shape) {
     case "portrait":
       return "1024x1536";
     case "landscape":
@@ -60,6 +67,8 @@ export interface BuildIllustrationPromptInput {
   maskMode?: boolean;
   /** Optional revision instruction for an iteration. */
   edit?: string;
+  /** Admin prompt overlays (art-style descriptions). */
+  prompts?: PromptContext;
 }
 
 export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): string {
@@ -73,8 +82,9 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
     hasCompositionRef = false,
     maskMode = false,
     edit,
+    prompts,
   } = input;
-  const styleText = resolveArtStyleText(config.artStyle);
+  const styleText = resolveArtStyleText(config.artStyle, prompts);
 
   const parts: string[] = [];
 
@@ -85,6 +95,16 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
   );
 
   parts.push(spread.illustration.trim());
+
+  // Print-format framing. Children's picture books print full-bleed, so the art
+  // must reach every edge (the outer ~0.5in is trimmed away). Keep faces and key
+  // details within the central safe area; on a double-page spread the vertical
+  // center falls on the binding, so keep important content off that fold too.
+  parts.push(
+    spread.kind === "spread"
+      ? "Compose it as a full-bleed image that fills the whole canvas to all four edges, with no borders, frames, or white margins. Keep faces and key details clear of the outer edges (which get trimmed) and clear of the vertical center, where the two pages meet at the binding."
+      : "Compose it as a full-bleed image that fills the whole canvas to all four edges, with no borders, frames, or white margins. Keep faces and key details within the central safe area, clear of the outer edges, which get trimmed.",
+  );
 
   // Subjects with a reference image — bind by name (each image is also labeled
   // with this name when sent to the model). Instructions differ by type:
@@ -211,9 +231,10 @@ export function buildAnchorSwapPrompt(input: {
   config: BookConfig;
   /** Whether a mask constrains the change to a region. */
   maskMode: boolean;
+  prompts?: PromptContext;
 }): string {
-  const { anchor, config, maskMode } = input;
-  const styleText = resolveArtStyleText(config.artStyle);
+  const { anchor, config, maskMode, prompts } = input;
+  const styleText = resolveArtStyleText(config.artStyle, prompts);
   const isChar = anchor.type === "character";
   const region = maskMode
     ? "the transparent (masked) region"

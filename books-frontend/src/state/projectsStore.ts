@@ -3,6 +3,7 @@ import type {
   Anchor,
   BookConfig,
   BookDesign,
+  CoverSpec,
   IllustrationImage,
   PageDesign,
   Project,
@@ -14,7 +15,8 @@ import type {
 } from "../core/types";
 import { getCursor, updateNodeContent, type VersionTree } from "../core/versioning";
 import { reconcileAnchorIds } from "../core/book/anchorRefs";
-import { createDefaultConfig, STAGE_ORDER } from "../core/types";
+import { textFromParagraphs, wordParagraphs } from "../core/design";
+import { COVER_FRONT_ID, createDefaultConfig, STAGE_ORDER } from "../core/types";
 import { getRepos } from "./repos";
 
 function genId(): string {
@@ -43,6 +45,12 @@ interface ProjectsState {
 
   updateConfig: (patch: Partial<BookConfig>) => Promise<void>;
   renameProject: (id: string, title: string) => Promise<void>;
+  /**
+   * Set the book title from any linked surface (story step, project name, or the
+   * front-cover brief). Keeps the project title, the front-cover spec title and
+   * the front-cover title text box in sync.
+   */
+  setBookTitle: (id: string, title: string) => Promise<void>;
   goToStage: (stage: ProjectStage) => Promise<void>;
   advanceStage: (stage: ProjectStage) => Promise<void>;
 
@@ -125,7 +133,11 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   async renameProject(id, title) {
-    await mutateProject(get, set, id, (p) => ({ ...p, title: title.trim() || p.title }));
+    await mutateProject(get, set, id, (p) => applyBookTitle(p, title));
+  },
+
+  async setBookTitle(id, title) {
+    await mutateProject(get, set, id, (p) => applyBookTitle(p, title));
   },
 
   async goToStage(stage) {
@@ -223,6 +235,58 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     await mutateCurrent(get, set, (p) => ({ ...p, share }));
   },
 }));
+
+/**
+ * Apply a new book title across every linked surface: the project name, the
+ * front-cover spec title, and the front-cover title text box. The project always
+ * keeps a non-empty name, but the cover title may be blank.
+ */
+function applyBookTitle(p: Project, rawTitle: string): Project {
+  const clean = rawTitle.trim();
+  // The project must keep a name; only overwrite it with a non-empty value.
+  let next: Project = clean ? { ...p, title: clean } : p;
+
+  if (p.screenplay) {
+    const tree = p.screenplay;
+    const doc = getCursor(tree).content;
+    const prevTitle = doc.frontCover?.title ?? "";
+    const base: CoverSpec =
+      doc.frontCover ?? { title: "", subtitle: "", illustration: "", anchorIds: [] };
+    const nextDoc: ScreenplayDoc = { ...doc, frontCover: { ...base, title: rawTitle } };
+    next = { ...next, screenplay: updateNodeContent(tree, tree.cursorId, nextDoc) };
+    next = syncCoverTitleBox(next, prevTitle, rawTitle);
+  }
+  return next;
+}
+
+/**
+ * Mirror the title into the front-cover "book-title" text box, but only when that
+ * box still shows the previous title — so a manually restyled/retyped cover
+ * title on the canvas is never clobbered by an edit made elsewhere.
+ */
+function syncCoverTitleBox(p: Project, prevTitle: string, nextTitle: string): Project {
+  const design = p.design;
+  const page = design?.pages[COVER_FRONT_ID];
+  if (!design || !page) return p;
+
+  let changed = false;
+  const textBoxes = page.textBoxes.map((b) => {
+    if (b.role !== "book-title") return b;
+    const current = textFromParagraphs(b.paragraphs);
+    if (current !== prevTitle && current.trim() !== "") return b;
+    changed = true;
+    return { ...b, paragraphs: wordParagraphs(nextTitle) };
+  });
+  if (!changed) return p;
+
+  return {
+    ...p,
+    design: {
+      ...design,
+      pages: { ...design.pages, [COVER_FRONT_ID]: { ...page, textBoxes } },
+    },
+  };
+}
 
 type ProjectsGet = () => ProjectsState;
 type ProjectsSet = (fn: (state: ProjectsState) => Partial<ProjectsState>) => void;

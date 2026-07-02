@@ -29,6 +29,7 @@ import {
   renderIllustration,
   type IllustrationRunOptions,
 } from "../../books-frontend/src/core/pipeline/illustrationRun";
+import { loadPromptContext } from "./appConfig";
 import {
   COVER_BACK_ID,
   COVER_FRONT_ID,
@@ -80,13 +81,14 @@ export function registerAiRoutes(app: Express): void {
   app.post("/ai/analyze", json, async (req: AuthedRequest, res: Response) => {
     try {
       const { project } = req.body as { project: Project };
-      const model = await resolveText("storyAnalysis");
+      const [model, prompts] = await Promise.all([resolveText("storyAnalysis"), loadPromptContext()]);
       const { value, events } = await withUsage(() =>
         analyzeStory({
           story: project.config.storyText,
           config: withTextModel(project.config, model),
           creds: { apiKey: apiKeyFor(model.provider) },
           model: model.id,
+          prompts,
         }),
       );
       await recordUsage(req.uid!, "storyAnalysis", events);
@@ -105,6 +107,7 @@ export function registerAiRoutes(app: Express): void {
         return;
       }
       const model = await resolveText("anchorDescription");
+      const prompts = await loadPromptContext();
       const { value, events } = await withUsage(() =>
         generateAnchorDescription({
           story: project.config.storyText,
@@ -116,6 +119,7 @@ export function registerAiRoutes(app: Express): void {
           existingAnchors: (project.anchors ?? [])
             .filter((a) => a.id !== anchorId)
             .map((a) => ({ name: a.name, type: a.type, description: a.description })),
+          prompts,
         }),
       );
       await recordUsage(req.uid!, "anchorDescription", events);
@@ -132,7 +136,7 @@ export function registerAiRoutes(app: Express): void {
         edit?: string;
         previous?: ScreenplayDoc;
       };
-      const model = await resolveText("screenplay");
+      const [model, prompts] = await Promise.all([resolveText("screenplay"), loadPromptContext()]);
       const { value, events } = await withUsage(() =>
         generateScreenplay({
           config: withTextModel(project.config, model),
@@ -141,6 +145,7 @@ export function registerAiRoutes(app: Express): void {
           model: model.id,
           edit,
           previous,
+          prompts,
         }),
       );
       await recordUsage(req.uid!, "screenplay", events);
@@ -165,8 +170,11 @@ export function registerAiRoutes(app: Express): void {
         return;
       }
       await ensureAffordAction(req.uid!, "anchorImage");
-      const models = await resolveImageModels("anchorImage");
-      const env = backendPipelineEnv(req.uid!, models);
+      const [models, prompts] = await Promise.all([
+        resolveImageModels("anchorImage"),
+        loadPromptContext(),
+      ]);
+      const env = backendPipelineEnv(req.uid!, models, prompts);
       const { value, events } = await withUsage(() =>
         renderAnchor(project, anchor, options ?? {}, env),
       );
@@ -197,8 +205,11 @@ export function registerAiRoutes(app: Express): void {
       const isEdit = typeof options?.edit === "string" && options.edit.trim().length > 0;
       if (isEdit) await ensureWithinQuota(req.uid!, "editsPerBook", project.id);
       await ensureAffordAction(req.uid!, action);
-      const models = await resolveImageModels(cover ? "coverIllustration" : "pageIllustration");
-      const env = backendPipelineEnv(req.uid!, models);
+      const [models, prompts] = await Promise.all([
+        resolveImageModels(cover ? "coverIllustration" : "pageIllustration"),
+        loadPromptContext(),
+      ]);
+      const env = backendPipelineEnv(req.uid!, models, prompts);
       const { value, events } = await withUsage(() =>
         renderIllustration(project, spread, options ?? {}, env),
       );

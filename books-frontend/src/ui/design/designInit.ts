@@ -91,14 +91,19 @@ function coverPage(
   };
 }
 
-/** Region heuristic from a layout note (where to place the text block). */
+/**
+ * Region heuristic from a layout note (where to place the text block). The book
+ * is intentionally simple right now — one image with the text beside it — so we
+ * default to a tidy side panel (text on the right) unless the note clearly asks
+ * for another edge.
+ */
 function seedRect(layoutNote: string, isCover: boolean): NormRect {
   if (isCover) return { x: 0.1, y: 0.06, w: 0.8, h: 0.24 };
   const n = layoutNote.toLowerCase();
   if (n.includes("left")) return { x: 0.06, y: 0.12, w: 0.4, h: 0.76 };
-  if (n.includes("right")) return { x: 0.54, y: 0.12, w: 0.4, h: 0.76 };
+  if (n.includes("bottom")) return { x: 0.08, y: 0.66, w: 0.84, h: 0.28 };
   if (n.includes("top")) return { x: 0.08, y: 0.06, w: 0.84, h: 0.24 };
-  return { x: 0.08, y: 0.66, w: 0.84, h: 0.28 }; // default bottom band
+  return { x: 0.54, y: 0.12, w: 0.4, h: 0.76 }; // default: text on the right side
 }
 
 export function defaultDesign(project: Project): BookDesign {
@@ -145,16 +150,17 @@ export function seedPageDesign(design: BookDesign, page: DesignPage): PageDesign
   const boxes: TextBox[] = [];
   if (page.isCover) {
     if (page.seedTitle) {
-      boxes.push(
-        makeTextBox(
-          { x: 0.1, y: 0.08, w: 0.8, h: 0.2 },
-          page.seedTitle,
-          design.defaultFontFamily,
-          Math.min(0.13, design.defaultFontSizePct * 1.7),
-          "shadowed",
-          1,
-        ),
+      const titleBox = makeTextBox(
+        { x: 0.1, y: 0.08, w: 0.8, h: 0.2 },
+        page.seedTitle,
+        design.defaultFontFamily,
+        Math.min(0.13, design.defaultFontSizePct * 1.7),
+        "shadowed",
+        1,
       );
+      // Front-cover title stays linked to the project / story title.
+      if (page.id === COVER_FRONT_ID) titleBox.role = "book-title";
+      boxes.push(titleBox);
     }
     if (page.seedSubtitle) {
       boxes.push(

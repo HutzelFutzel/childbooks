@@ -18,6 +18,9 @@ import type { Anchor, BookConfig, ScreenplayDoc, ScreenplaySpread } from "../typ
 import { effectiveAnchorIds, normalizeAnchorName } from "../book/anchorRefs";
 import { fixPagination } from "./pagination";
 import { withRetry } from "./retry";
+import { resolveAgeLlmGuidance } from "../prompts/age";
+import { ageBandHasReadingModes, readingModeLabel } from "../config/ageWritingCatalog";
+import type { PromptContext } from "../prompts/context";
 
 const spreadSchema = z.object({
   kind: z.enum(["single", "spread"]),
@@ -62,6 +65,9 @@ function describeConfig(config: BookConfig): string {
       : label(LAYOUT_TEMPLATES, config.layoutId);
   return [
     `Age range: ${label(AGE_RANGES, config.ageRangeId)}.`,
+    ...(ageBandHasReadingModes(config.ageRangeId) && config.readingModeId
+      ? [`Reading mode: ${readingModeLabel(config.readingModeId)}.`]
+      : []),
     `Book size: ${label(BOOK_SIZES, config.bookSize)}.`,
     `Graphics density: ${label(GRAPHICS_DENSITY, config.graphicsDensity)}.`,
     `Spread usage: ${label(SPREAD_USAGE, config.spreadUsage)}.`,
@@ -87,12 +93,14 @@ export interface GenerateScreenplayInput {
   edit?: string;
   previous?: ScreenplayDoc;
   signal?: AbortSignal;
+  /** Admin prompt overlays (age writing guidance). */
+  prompts?: PromptContext;
 }
 
 export async function generateScreenplay(
   input: GenerateScreenplayInput,
 ): Promise<ScreenplayDoc> {
-  const { config, anchors, creds, model, edit, previous, signal } = input;
+  const { config, anchors, creds, model, edit, previous, signal, prompts } = input;
   const provider = getTextProvider(config.textModel!.provider);
   const included = anchors.filter((a) => a.include);
 
@@ -111,6 +119,8 @@ export async function generateScreenplay(
   const placementGuidance =
     "Text is ALWAYS laid out separately from the art as an editable overlay (never baked into the illustration); in layoutNote specify where the text block sits (e.g. left page, bottom band). Never request text rendered inside the artwork.";
 
+  const ageTextPrompt = resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, prompts);
+
   const system = [
     "You are an award-winning children's picture-book author and art director.",
     "Produce a complete page-by-page screenplay for the book.",
@@ -118,11 +128,12 @@ export async function generateScreenplay(
     "Illustration briefs must be concrete and reference the named anchors so the art stays consistent.",
     spreadGuidance,
     textGuidance,
+    ageTextPrompt,
     placementGuidance,
     "Also design the book's covers: a frontCover (catchy title + short subtitle + illustration brief), a backCover (a short blurb as 'title', optional subtitle, illustration brief), and a short spineText (usually the title).",
     "Only reference anchors from the provided list, by their exact names. Use an empty array if none appear.",
     "Revision requests may mention anchors by name (e.g. 'put Amanda on page 3'); use the ANCHORS list for who/what each name is, and update each spread's anchors accordingly.",
-    "Pace the story well; keep text age-appropriate in length per page.",
+    "Pace the story well; keep text age-appropriate in length and complexity per page.",
     "PRINTABILITY: page 1 is a single right-hand page. A double-page spread occupies a facing pair, so the number of single pages BEFORE any spread must be even (insert a single page if needed). Never let a spread start on a right-hand page.",
     "Write a short overall 'notes' field with art-direction guidance.",
   ].join(" ");

@@ -1,79 +1,49 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { Fragment, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   BookOpen,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
-  Columns2,
-  Download,
   Eye,
-  FileText,
   Grid3x3,
-  Images,
+  GripVertical,
   Loader2,
   Magnet,
   Plus,
-  Printer,
   Redo2,
   Rows3,
   LayoutGrid,
   Share2,
   ShoppingCart,
   Sparkles,
+  SquareDashed,
   Undo2,
 } from "lucide-react";
-import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
-import { pageTrimForConfig } from "../../core/book";
+import { COVER_BACK_ID, COVER_FRONT_ID, type Anchor } from "../../core/types";
 import { getCursor } from "../../core/versioning";
-import { currentIllustration, staleIllustrationSpreadIds } from "../../state/ai";
+import { staleIllustrationSpreadIds } from "../../state/ai";
 import { Button } from "../components/Button";
-import { Modal } from "../components/Modal";
-import { useBlobUrl } from "../hooks/useBlobUrl";
 import { useResolvedModels } from "../hooks/useResolvedModels";
 import { cn } from "../lib/cn";
-import { PrintBook } from "../design/PrintBook";
-import { ExportRunner, type ExportMode } from "../design/ExportRunner";
 import { SharePanel } from "../share/SharePanel";
-import { OrderDialog } from "../checkout/OrderDialog";
 import { useStudio } from "./StudioContext";
 import { BookPreview } from "./BookPreview";
-import { illustrationUnits } from "./studioGen";
-import { insertSpreadAt } from "./pageOps";
+import { insertSpreadAt, moveSpreadBefore } from "./pageOps";
 import {
   buildDisplaySpreads,
+  contentSpreadIds,
   SpreadCard,
   type DisplaySpread,
   type Entry,
-  type SpreadSide,
 } from "./SpreadEditor";
 
-type ViewMode = "scroll" | "spread" | "grid";
+type ViewMode = "scroll" | "grid";
 
 export function BookCanvas() {
-  const { project, pages, design, undo, redo, snap, grid, toggleSnap, toggleGrid } = useStudio();
+  const { project, pages, design, undo, redo, snap, grid, guides, toggleSnap, toggleGrid, toggleGuides, setStep } =
+    useStudio();
   const models = useResolvedModels();
   const [view, setView] = useState<ViewMode>("scroll");
-  const [index, setIndex] = useState(0);
-  const [printing, setPrinting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
-  const [exporting, setExporting] = useState<ExportMode | null>(null);
-  const [pendingExport, setPendingExport] = useState<(() => void) | null>(null);
   const [sharing, setSharing] = useState(false);
-  const [ordering, setOrdering] = useState(false);
-
-  // Non-blank pages/covers that still have no generated illustration: exporting
-  // now would produce blank pages, so we warn first.
-  const missingArt = useMemo(
-    () => illustrationUnits(project).filter((u) => !currentIllustration(project, u.id)).length,
-    [project],
-  );
-
-  function requestExport(run: () => void) {
-    if (missingArt > 0) setPendingExport(() => run);
-    else run();
-  }
 
   const doc = project.screenplay ? getCursor(project.screenplay).content : null;
   const anchors = (project.anchors ?? []).filter((a) => a.include);
@@ -101,18 +71,6 @@ export function BookCanvas() {
     () => (doc ? buildDisplaySpreads(doc, entries) : []),
     [doc, entries],
   );
-
-  useEffect(() => {
-    if (index >= displays.length) setIndex(0);
-  }, [displays.length, index]);
-
-  function handlePrint() {
-    setPrinting(true);
-    setTimeout(() => {
-      window.print();
-      setPrinting(false);
-    }, 300);
-  }
 
   if (!doc) {
     return (
@@ -142,8 +100,6 @@ export function BookCanvas() {
     );
   }
 
-  const active = displays[Math.min(index, displays.length - 1)];
-
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Toolbar */}
@@ -169,6 +125,16 @@ export function BookCanvas() {
             )}
           >
             <Grid3x3 className="size-4" />
+          </button>
+          <button
+            onClick={toggleGuides}
+            title={guides ? "Print guides on (safe area + gutter)" : "Print guides off"}
+            className={cn(
+              "rounded-lg p-2 transition hover:bg-ink-100",
+              guides ? "bg-brand-50 text-brand-600" : "text-ink-400 hover:text-ink-800",
+            )}
+          >
+            <SquareDashed className="size-4" />
           </button>
           <span className="mx-0.5 h-5 w-px bg-ink-200" />
           <button
@@ -197,21 +163,16 @@ export function BookCanvas() {
             size="sm"
             variant="secondary"
             leftIcon={<Share2 className="size-4" />}
-            onClick={() => requestExport(() => setSharing(true))}
+            onClick={() => setSharing(true)}
           >
             Share
           </Button>
-          <ExportMenu
-            onPrint={() => requestExport(handlePrint)}
-            onExportPdf={() => requestExport(() => setExporting("pdf"))}
-            onExportImages={() => requestExport(() => setExporting("images"))}
-          />
           <Button
             size="sm"
             leftIcon={<ShoppingCart className="size-4" />}
-            onClick={() => requestExport(() => setOrdering(true))}
+            onClick={() => setStep("order")}
           >
-            Order print
+            Order &amp; print
           </Button>
         </div>
       </div>
@@ -230,86 +191,14 @@ export function BookCanvas() {
           </div>
         )}
 
-        {view === "spread" && active && (
-          <div className="mx-auto flex w-full max-w-5xl flex-col px-5 py-6">
-            <div className="mb-3 flex items-center justify-between">
-              <button
-                onClick={() => setIndex((i) => Math.max(0, i - 1))}
-                disabled={index === 0}
-                className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-sm text-ink-600 transition hover:bg-ink-100 disabled:opacity-30"
-              >
-                <ChevronLeft className="size-4" /> Prev
-              </button>
-              <span className="text-xs font-medium text-ink-400">
-                {index + 1} of {displays.length}
-              </span>
-              <button
-                onClick={() => setIndex((i) => Math.min(displays.length - 1, i + 1))}
-                disabled={index >= displays.length - 1}
-                className="flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-sm text-ink-600 transition hover:bg-ink-100 disabled:opacity-30"
-              >
-                Next <ChevronRight className="size-4" />
-              </button>
-            </div>
-            <AnimatePresence mode="wait">
-              <motion.div
-                key={active.id}
-                initial={{ opacity: 0, x: 24 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -24 }}
-                transition={{ duration: 0.2, ease: "easeOut" }}
-              >
-                <SpreadCard disp={active} anchors={anchors} stale={isStale} />
-              </motion.div>
-            </AnimatePresence>
-          </div>
-        )}
-
         {view === "grid" && (
-          <div className="mx-auto w-full max-w-5xl px-5 py-6">
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {displays.map((disp, i) => (
-                <SpreadThumb
-                  key={disp.id}
-                  disp={disp}
-                  onClick={() => {
-                    setIndex(i);
-                    setView("spread");
-                  }}
-                />
-              ))}
-            </div>
-          </div>
+          <PageGrid displays={displays} anchors={anchors} stale={isStale} />
         )}
       </div>
-
-      {printing &&
-        createPortal(
-          <PrintBook pages={pages} design={design} trimIn={pageTrimForConfig(project.config)} />,
-          document.body,
-        )}
-
-      {exporting && (
-        <ExportRunner
-          mode={exporting}
-          pages={pages}
-          design={design}
-          project={project}
-          onDone={() => setExporting(null)}
-        />
-      )}
 
       <SharePanel
         open={sharing}
         onClose={() => setSharing(false)}
-        project={project}
-        pages={pages}
-        design={design}
-      />
-
-      <OrderDialog
-        open={ordering}
-        onClose={() => setOrdering(false)}
         project={project}
         pages={pages}
         design={design}
@@ -320,131 +209,7 @@ export function BookCanvas() {
           <BookPreview displays={displays} onClose={() => setPreviewing(false)} />
         )}
       </AnimatePresence>
-
-      <Modal
-        open={pendingExport !== null}
-        onClose={() => setPendingExport(null)}
-        title="Some pages have no illustration"
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setPendingExport(null)}>
-              Keep editing
-            </Button>
-            <Button
-              onClick={() => {
-                const run = pendingExport;
-                setPendingExport(null);
-                run?.();
-              }}
-            >
-              Export anyway
-            </Button>
-          </>
-        }
-      >
-        <p className="text-sm text-ink-600">
-          {missingArt} page{missingArt === 1 ? "" : "s"} still {missingArt === 1 ? "has" : "have"} no
-          generated art and will appear blank in the export. You can generate the rest from
-          “Generate everything” in the sidebar first.
-        </p>
-      </Modal>
     </div>
-  );
-}
-
-/** Split "Export" control: Print, Download PDF, or Download images (zip). */
-function ExportMenu({
-  onPrint,
-  onExportPdf,
-  onExportImages,
-}: {
-  onPrint: () => void;
-  onExportPdf: () => void;
-  onExportImages: () => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const btnRef = useRef<HTMLButtonElement>(null);
-  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
-
-  const place = () => {
-    const r = btnRef.current?.getBoundingClientRect();
-    if (r) setPos({ top: r.bottom + 8, right: Math.max(8, window.innerWidth - r.right) });
-  };
-
-  useEffect(() => {
-    if (!open) return;
-    place();
-    const close = () => setOpen(false);
-    const reposition = () => place();
-    window.addEventListener("click", close);
-    window.addEventListener("resize", reposition);
-    window.addEventListener("scroll", reposition, true);
-    return () => {
-      window.removeEventListener("click", close);
-      window.removeEventListener("resize", reposition);
-      window.removeEventListener("scroll", reposition, true);
-    };
-  }, [open]);
-
-  const items: { label: string; hint: string; icon: typeof FileText; onClick: () => void }[] = [
-    { label: "Download PDF", hint: "Print-ready, full-bleed", icon: FileText, onClick: onExportPdf },
-    { label: "Download images", hint: "Zip of page PNGs", icon: Images, onClick: onExportImages },
-    { label: "Print…", hint: "Open the print dialog", icon: Printer, onClick: onPrint },
-  ];
-
-  return (
-    <>
-      <Button
-        ref={btnRef}
-        size="sm"
-        leftIcon={<Download className="size-4" />}
-        rightIcon={<ChevronDown className="size-3.5" />}
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((v) => !v);
-        }}
-      >
-        Export
-      </Button>
-      {createPortal(
-        <AnimatePresence>
-          {open && pos && (
-            <motion.div
-              initial={{ opacity: 0, y: -6, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -6, scale: 0.98 }}
-              transition={{ duration: 0.14, ease: "easeOut" }}
-              onClick={(e) => e.stopPropagation()}
-              style={{ position: "fixed", top: pos.top, right: pos.right }}
-              className="z-100 w-60 overflow-hidden rounded-xl border border-ink-100 bg-white p-1.5 shadow-xl"
-            >
-              {items.map((it) => {
-                const Icon = it.icon;
-                return (
-                  <button
-                    key={it.label}
-                    onClick={() => {
-                      setOpen(false);
-                      it.onClick();
-                    }}
-                    className="flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition hover:bg-ink-50"
-                  >
-                    <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
-                      <Icon className="size-4" />
-                    </span>
-                    <span className="flex flex-col">
-                      <span className="text-sm font-medium text-ink-800">{it.label}</span>
-                      <span className="text-[11px] text-ink-400">{it.hint}</span>
-                    </span>
-                  </button>
-                );
-              })}
-            </motion.div>
-          )}
-        </AnimatePresence>,
-        document.body,
-      )}
-    </>
   );
 }
 
@@ -474,7 +239,6 @@ function InsertBar({ at }: { at: number }) {
 function ViewToggle({ view, onChange }: { view: ViewMode; onChange: (v: ViewMode) => void }) {
   const items: { id: ViewMode; label: string; icon: typeof Rows3 }[] = [
     { id: "scroll", label: "Scroll", icon: Rows3 },
-    { id: "spread", label: "Spread", icon: Columns2 },
     { id: "grid", label: "Grid", icon: LayoutGrid },
   ];
   return (
@@ -509,72 +273,131 @@ function ViewToggle({ view, onChange }: { view: ViewMode; onChange: (v: ViewMode
   );
 }
 
-/** A spread-shaped thumbnail (two facing halves) for grid view. */
-function SpreadThumb({ disp, onClick }: { disp: DisplaySpread; onClick: () => void }) {
-  const isCover = Boolean(disp.cover);
-  return (
-    <motion.button
-      whileHover={{ y: -3 }}
-      transition={{ type: "spring", stiffness: 380, damping: 26 }}
-      onClick={onClick}
-      className="group flex flex-col gap-2 text-left"
-    >
-      <div
-        className={cn(
-          "relative flex aspect-2/1 w-full overflow-hidden rounded-2xl bg-ink-100 ring-1 transition",
-          isCover
-            ? "ring-2 ring-brand-300 group-hover:ring-brand-400"
-            : "ring-ink-200 group-hover:ring-brand-300",
-        )}
-      >
-        {disp.kind === "full" ? (
-          <ThumbImage blobId={disp.entry.page.blobId} cover={disp.entry.page.isCover} />
-        ) : (
-          <>
-            <ThumbHalf side={disp.left} />
-            <div className="w-px bg-ink-200/70" />
-            <ThumbHalf side={disp.right} />
-          </>
-        )}
-        {isCover && (
-          <span className="pointer-events-none absolute left-1.5 top-1.5 rounded-md bg-brand-600 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white shadow-soft">
-            Cover
-          </span>
-        )}
-      </div>
-      <span
-        className={cn(
-          "truncate text-xs font-medium",
-          isCover ? "text-brand-700" : "text-ink-600",
-        )}
-      >
-        {disp.label}
-      </span>
-    </motion.button>
-  );
-}
+/**
+ * Editable two-column layout of the book's spreads. Every spread is the full
+ * editor (art + text/shape tools), so you can add elements and refine layout
+ * without leaving the overview. Interior pages can be dragged (by the handle) to
+ * a new position; covers stay pinned to the ends. A live indicator shows exactly
+ * where the dragged page will land.
+ */
+function PageGrid({
+  displays,
+  anchors,
+  stale,
+}: {
+  displays: DisplaySpread[];
+  anchors: Anchor[];
+  stale: (pageId: string) => boolean;
+}) {
+  const [dragId, setDragId] = useState<string | null>(null);
+  const [overId, setOverId] = useState<string | null>(null);
 
-function ThumbHalf({ side }: { side: SpreadSide }) {
-  if (side.kind === "page") {
-    return (
-      <div className="relative flex-1">
-        <ThumbImage blobId={side.entry.page.blobId} cover={side.entry.page.isCover} />
-      </div>
-    );
+  function handleDrop(targetDisp: DisplaySpread | null) {
+    if (!dragId) return;
+    const dragged = displays.find((d) => d.id === dragId);
+    const ids = dragged ? contentSpreadIds(dragged) : [];
+    if (ids.length > 0) {
+      const beforeId = targetDisp ? contentSpreadIds(targetDisp)[0] ?? null : null;
+      if (!ids.includes(beforeId ?? "")) moveSpreadBefore(ids, beforeId);
+    }
+    setDragId(null);
+    setOverId(null);
   }
+
+  const lastInsert = displays.length ? displays[displays.length - 1].endInsertIndex : 0;
+
   return (
-    <div className="flex flex-1 items-center justify-center bg-ink-50 text-[10px] text-ink-300">
-      {side.kind === "filler" ? "blank" : ""}
+    <div className="mx-auto w-full max-w-6xl px-5 py-6">
+      <p className="mb-3 flex items-center justify-center gap-1.5 text-xs text-ink-400">
+        <LayoutGrid className="size-3.5" /> Edit any page inline · drag the handle to reorder
+      </p>
+      {displays.length === 0 && <InsertBar at={0} />}
+      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-2">
+        {displays.map((disp) => {
+          const reorderable = contentSpreadIds(disp).length > 0;
+          return (
+            <GridCell
+              key={disp.id}
+              disp={disp}
+              anchors={anchors}
+              stale={stale}
+              reorderable={reorderable}
+              dragging={dragId === disp.id}
+              dropBefore={overId === disp.id && dragId !== null && dragId !== disp.id}
+              onDragStart={() => reorderable && setDragId(disp.id)}
+              onDragOver={(e) => {
+                if (dragId && dragId !== disp.id) {
+                  e.preventDefault();
+                  setOverId(disp.id);
+                }
+              }}
+              onDrop={() => handleDrop(disp)}
+              onDragEnd={() => {
+                setDragId(null);
+                setOverId(null);
+              }}
+            />
+          );
+        })}
+      </div>
+      {displays.length > 0 && (
+        <div className="mt-4">
+          <InsertBar at={lastInsert} />
+        </div>
+      )}
     </div>
   );
 }
 
-function ThumbImage({ blobId, cover }: { blobId?: string; cover?: boolean }) {
-  const url = useBlobUrl(blobId);
-  if (url) return <img src={url} alt="" className="size-full object-cover" />;
+/**
+ * One editable spread in the grid. The card itself stays fully interactive; only
+ * the dedicated handle starts a reorder drag, so clicking text/shapes to edit
+ * them never gets hijacked by drag-and-drop.
+ */
+function GridCell({
+  disp,
+  anchors,
+  stale,
+  reorderable,
+  dragging,
+  dropBefore,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+}: {
+  disp: DisplaySpread;
+  anchors: Anchor[];
+  stale: (pageId: string) => boolean;
+  reorderable: boolean;
+  dragging: boolean;
+  dropBefore: boolean;
+  onDragStart: () => void;
+  onDragOver: (e: React.DragEvent) => void;
+  onDrop: () => void;
+  onDragEnd: () => void;
+}) {
   return (
-    <div className="flex size-full items-center justify-center text-[11px] text-ink-400">
-      {cover ? "cover" : "no art yet"}
+    <div
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      className={cn("relative transition", dragging && "opacity-40")}
+    >
+      {dropBefore && (
+        <span className="pointer-events-none absolute inset-y-0 -left-2.5 z-20 w-1 rounded-full bg-brand-500" />
+      )}
+      {reorderable && (
+        <button
+          draggable
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+          title="Drag to reorder"
+          className="absolute right-3 top-3 z-10 flex cursor-grab items-center rounded-lg border border-ink-200 bg-white/90 p-1.5 text-ink-400 shadow-soft backdrop-blur transition hover:border-brand-300 hover:text-brand-600 active:cursor-grabbing"
+        >
+          <GripVertical className="size-4" />
+        </button>
+      )}
+      <SpreadCard disp={disp} anchors={anchors} stale={stale} />
     </div>
   );
 }

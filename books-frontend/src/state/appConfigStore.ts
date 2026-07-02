@@ -21,6 +21,11 @@ import {
   type ArtStylesConfig,
 } from "../core/config/artStyles";
 import {
+  createDefaultAgeWritingConfig,
+  normalizeAgeWritingConfig,
+  type AgeWritingConfig,
+} from "../core/config/ageWriting";
+import {
   createDefaultModelCostTable,
   normalizeModelCostTable,
   type ModelCostTable,
@@ -52,8 +57,27 @@ import {
 import {
   createDefaultBrandingConfig,
   normalizeBrandingConfig,
+  type BrandAssetSlot,
+  type BrandColors,
   type BrandingConfig,
 } from "../core/config/branding";
+import {
+  createDefaultSeoConfig,
+  normalizeSeoConfig,
+  type SeoConfig,
+} from "../core/config/seo";
+import {
+  createDefaultSiteImagesConfig,
+  normalizeSiteImagesConfig,
+  type SiteImagesConfig,
+  type SiteImageSlot,
+} from "../core/config/siteImages";
+import {
+  createDefaultSiteContentConfig,
+  normalizeSiteContentConfig,
+  type SiteContentConfig,
+  type SiteTextSlot,
+} from "../core/config/siteContent";
 import type { ActionCostReport, CostGranularity } from "../core/analytics/types";
 
 /** Result of a live margin preview (server fetches a provider quote when able). */
@@ -66,6 +90,7 @@ export interface MarginPreview {
 interface AppConfigState {
   modelConfig: ModelConfig;
   artStyles: ArtStylesConfig;
+  ageWriting: AgeWritingConfig;
   modelCosts: ModelCostTable;
   /** Public product projection (storefront-facing; resolved prices, no internals). */
   products: PublicProductsConfig;
@@ -77,6 +102,12 @@ interface AppConfigState {
   plans: PublicPlansConfig;
   /** Global branding (the share watermark asset + appearance). */
   branding: BrandingConfig;
+  /** Marketing SEO config (landing-page metadata + structured data). */
+  seo: SeoConfig;
+  /** Landing-page illustrations (inline drag-&-drop editor). */
+  siteImages: SiteImagesConfig;
+  /** Landing-page copy overrides (inline text editor). */
+  siteContent: SiteContentConfig;
   loaded: boolean;
   unsubs: Unsubscribe[];
 
@@ -87,15 +118,32 @@ interface AppConfigState {
   // Admin writes (enforced server-side; the snapshot reflects the result).
   saveModelConfig: (config: ModelConfig) => Promise<void>;
   saveArtStyles: (config: ArtStylesConfig) => Promise<void>;
+  saveAgeWriting: (config: AgeWritingConfig) => Promise<void>;
   saveModelCosts: (table: ModelCostTable) => Promise<void>;
   savePricingSettings: (settings: PricingSettings) => Promise<void>;
   saveSparksConfig: (config: SparksConfig) => Promise<void>;
+  saveSeoConfig: (config: SeoConfig) => Promise<void>;
   uploadArtStyleImage: (styleId: string, base64: string, mimeType: string) => Promise<void>;
 
-  // Branding / share watermark.
+  // Landing-page inline editing (admin, gated in the UI; enforced server-side).
+  uploadSiteImage: (slot: SiteImageSlot, base64: string, mimeType: string, alt?: string) => Promise<void>;
+  removeSiteImage: (slot: SiteImageSlot) => Promise<void>;
+  restoreSiteImage: (slot: SiteImageSlot, storagePath: string) => Promise<void>;
+  deleteSiteImageVersion: (slot: SiteImageSlot, storagePath: string) => Promise<void>;
+  saveSiteText: (slot: SiteTextSlot, value: string) => Promise<void>;
+  resetSiteText: (slot: SiteTextSlot) => Promise<void>;
+
+  // Branding — brand identity, image assets, and the share watermark.
+  saveBrandingInfo: (patch: { brandName?: string; tagline?: string; colors?: Partial<BrandColors> }) => Promise<void>;
+  uploadBrandingAsset: (slot: BrandAssetSlot, base64: string, mimeType: string, alt?: string) => Promise<void>;
+  removeBrandingAsset: (slot: BrandAssetSlot) => Promise<void>;
+  restoreBrandingAsset: (slot: BrandAssetSlot, storagePath: string) => Promise<void>;
+  deleteBrandingAssetVersion: (slot: BrandAssetSlot, storagePath: string) => Promise<void>;
   uploadWatermark: (base64: string, mimeType: string, opacity?: number, scale?: number) => Promise<void>;
   updateWatermarkAppearance: (patch: { opacity?: number; scale?: number }) => Promise<void>;
   removeWatermark: () => Promise<void>;
+  restoreWatermark: (storagePath: string) => Promise<void>;
+  deleteWatermarkVersion: (storagePath: string) => Promise<void>;
 
   // Subscription plans (admin). The PUBLIC projection lives in `plans`; the full
   // config (incl. Stripe ids) is fetched on demand from the backend.
@@ -169,12 +217,16 @@ async function safeError(res: Response): Promise<string | null> {
 export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   modelConfig: createDefaultModelConfig(),
   artStyles: createDefaultArtStylesConfig(),
+  ageWriting: createDefaultAgeWritingConfig(),
   modelCosts: createDefaultModelCostTable(),
   products: { version: 1, products: [] },
   pricingSettings: createDefaultPricingSettings(),
   sparks: createDefaultSparksConfig(),
   plans: { version: 1, plans: [] },
   branding: createDefaultBrandingConfig(),
+  seo: createDefaultSeoConfig(),
+  siteImages: createDefaultSiteImagesConfig(),
+  siteContent: createDefaultSiteContentConfig(),
   loaded: false,
   unsubs: [],
 
@@ -187,6 +239,9 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       }, () => set({ loaded: true })),
       onSnapshot(doc(db, "appConfig", "artStyles"), (snap) => {
         set({ artStyles: normalizeArtStylesConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "ageWriting"), (snap) => {
+        set({ ageWriting: normalizeAgeWritingConfig(snap.exists() ? snap.data() : undefined) });
       }),
       onSnapshot(doc(db, "appConfig", "modelCosts"), (snap) => {
         set({ modelCosts: normalizeModelCostTable(snap.exists() ? snap.data() : undefined) });
@@ -206,6 +261,15 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       onSnapshot(doc(db, "appConfig", "branding"), (snap) => {
         set({ branding: normalizeBrandingConfig(snap.exists() ? snap.data() : undefined) });
       }),
+      onSnapshot(doc(db, "appConfig", "seo"), (snap) => {
+        set({ seo: normalizeSeoConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "siteImages"), (snap) => {
+        set({ siteImages: normalizeSiteImagesConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "siteContent"), (snap) => {
+        set({ siteContent: normalizeSiteContentConfig(snap.exists() ? snap.data() : undefined) });
+      }),
     ];
     set({ unsubs });
   },
@@ -223,6 +287,10 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     await putJson("/admin/config/art-styles", config);
   },
 
+  async saveAgeWriting(config) {
+    await putJson("/admin/config/age-writing", config);
+  },
+
   async saveModelCosts(table) {
     await putJson("/admin/config/model-costs", table);
   },
@@ -233,6 +301,10 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
 
   async saveSparksConfig(config) {
     await putJson("/admin/config/sparks", config);
+  },
+
+  async saveSeoConfig(config) {
+    set({ seo: normalizeSeoConfig(await putJson("/admin/config/seo", config)) });
   },
 
   async loadAdminPlans() {
@@ -287,6 +359,106 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     if (!res.ok) throw new Error((await safeError(res)) ?? "Upload failed.");
   },
 
+  async uploadSiteImage(slot, base64, mimeType, alt) {
+    const res = await backendFetch("/admin/site-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slot, base64, mimeType, alt }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Upload failed.");
+    set({ siteImages: normalizeSiteImagesConfig(await res.json()) });
+  },
+
+  async removeSiteImage(slot) {
+    const res = await backendFetch(`/admin/site-image/${encodeURIComponent(slot)}`, { method: "DELETE" });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not remove image.");
+    set({ siteImages: normalizeSiteImagesConfig(await res.json()) });
+  },
+
+  async restoreSiteImage(slot, storagePath) {
+    const res = await backendFetch("/admin/site-image/restore", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slot, storagePath }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not restore version.");
+    set({ siteImages: normalizeSiteImagesConfig(await res.json()) });
+  },
+
+  async deleteSiteImageVersion(slot, storagePath) {
+    const res = await backendFetch("/admin/site-image/version/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slot, storagePath }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not delete version.");
+    set({ siteImages: normalizeSiteImagesConfig(await res.json()) });
+  },
+
+  async saveSiteText(slot, value) {
+    const res = await backendFetch("/admin/site-content", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slot, value }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not save text.");
+    set({ siteContent: normalizeSiteContentConfig(await res.json()) });
+  },
+
+  async resetSiteText(slot) {
+    const res = await backendFetch(`/admin/site-content/${encodeURIComponent(slot)}`, { method: "DELETE" });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not reset text.");
+    set({ siteContent: normalizeSiteContentConfig(await res.json()) });
+  },
+
+  async saveBrandingInfo(patch) {
+    const res = await backendFetch("/admin/branding", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not save branding.");
+    set({ branding: normalizeBrandingConfig(await res.json()) });
+  },
+
+  async uploadBrandingAsset(slot, base64, mimeType, alt) {
+    const res = await backendFetch("/admin/branding/asset", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slot, base64, mimeType, alt }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Upload failed.");
+    set({ branding: normalizeBrandingConfig(await res.json()) });
+  },
+
+  async removeBrandingAsset(slot) {
+    const res = await backendFetch(`/admin/branding/asset/${encodeURIComponent(slot)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not remove asset.");
+    set({ branding: normalizeBrandingConfig(await res.json()) });
+  },
+
+  async restoreBrandingAsset(slot, storagePath) {
+    const res = await backendFetch("/admin/branding/asset/restore", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slot, storagePath }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not restore version.");
+    set({ branding: normalizeBrandingConfig(await res.json()) });
+  },
+
+  async deleteBrandingAssetVersion(slot, storagePath) {
+    const res = await backendFetch("/admin/branding/asset/version/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slot, storagePath }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not delete version.");
+    set({ branding: normalizeBrandingConfig(await res.json()) });
+  },
+
   async uploadWatermark(base64, mimeType, opacity, scale) {
     const res = await backendFetch("/admin/branding/watermark", {
       method: "POST",
@@ -310,6 +482,26 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   async removeWatermark() {
     const res = await backendFetch("/admin/branding/watermark", { method: "DELETE" });
     if (!res.ok) throw new Error((await safeError(res)) ?? "Could not remove watermark.");
+    set({ branding: normalizeBrandingConfig(await res.json()) });
+  },
+
+  async restoreWatermark(storagePath) {
+    const res = await backendFetch("/admin/branding/watermark/restore", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ storagePath }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not restore watermark.");
+    set({ branding: normalizeBrandingConfig(await res.json()) });
+  },
+
+  async deleteWatermarkVersion(storagePath) {
+    const res = await backendFetch("/admin/branding/watermark/version/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ storagePath }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not delete version.");
     set({ branding: normalizeBrandingConfig(await res.json()) });
   },
 

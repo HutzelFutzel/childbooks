@@ -10,14 +10,21 @@ export function useBlobUrl(blobId: string | undefined): string | null {
     let created: string | null = null;
     setUrl(null);
     if (blobId) {
-      void getBlobUrl(blobId).then((u) => {
-        if (active) {
-          created = u;
-          setUrl(u);
-        } else if (u) {
-          URL.revokeObjectURL(u);
-        }
-      });
+      void getBlobUrl(blobId)
+        .then((u) => {
+          if (active) {
+            created = u;
+            setUrl(u);
+          } else if (u) {
+            URL.revokeObjectURL(u);
+          }
+        })
+        .catch((err) => {
+          // A rejection here (e.g. a CORS/permission failure fetching the blob)
+          // would otherwise be swallowed, leaving the thumbnail silently empty.
+          console.error(`useBlobUrl: failed to load blob ${blobId}`, err);
+          if (active) setUrl(null);
+        });
     }
     return () => {
       active = false;

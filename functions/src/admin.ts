@@ -13,23 +13,50 @@ import {
   getModelConfig,
   getModelCostTable,
   getPricingSettings,
+  getSeoConfig,
   getSparksConfig,
+  deleteBrandingAssetVersion,
+  deleteWatermarkVersion,
+  restoreBrandingAsset,
+  restoreWatermark,
   saveArtStylesConfig,
+  saveAgeWritingConfig,
+  saveBrandingInfo,
   saveModelConfig,
   saveModelCostTable,
   savePricingSettings,
+  saveSeoConfig,
   saveSparksConfig,
   setArtStyleExample,
+  setBrandingAsset,
   setBrandingWatermark,
+  getSiteImagesConfig,
+  getSiteContentConfig,
+  setSiteImage,
+  restoreSiteImage,
+  deleteSiteImageVersion,
+  setSiteText,
+  isKnownTextSlot,
 } from "./appConfig";
 import { deletePlan, getPlansConfig, savePlansConfig, syncPlanToStripe, upsertPlan } from "./plans";
 import { normalizePlan } from "../../books-frontend/src/core/config/plans";
 import {
   deletePublicObject,
   uploadArtStyleImage,
+  uploadBrandingAsset,
   uploadBrandingWatermark,
   uploadProductImage,
+  uploadSiteImage,
 } from "./storage";
+import {
+  BRAND_ASSET_SLOTS,
+  type BrandAsset,
+  type BrandAssetSlot,
+} from "../../books-frontend/src/core/config/branding";
+import {
+  isSiteImageSlot,
+  type SiteImageSlot,
+} from "../../books-frontend/src/core/config/siteImages";
 import {
   deleteProduct,
   getProductsConfig,
@@ -249,6 +276,14 @@ export function registerAdminRoutes(app: Express): void {
     }
   });
 
+  app.put("/admin/config/age-writing", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveAgeWritingConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
   app.put("/admin/config/model-costs", json, async (req: Request, res: Response) => {
     try {
       res.json(await saveModelCostTable(req.body));
@@ -362,6 +397,91 @@ export function registerAdminRoutes(app: Express): void {
     }
   });
 
+  // Save brand identity (name / tagline / colors). Assets are preserved.
+  app.put("/admin/branding", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveBrandingInfo(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Upload (replace) a single brand image asset.
+  // Body: { slot, base64, mimeType, alt? } where slot ∈ logo|logoDark|icon|favicon|ogImage.
+  app.post("/admin/branding/asset", json, async (req: Request, res: Response) => {
+    try {
+      const { slot, base64, mimeType, alt } = (req.body ?? {}) as {
+        slot?: string;
+        base64?: string;
+        mimeType?: string;
+        alt?: string;
+      };
+      if (!slot || !BRAND_ASSET_SLOTS.includes(slot as BrandAssetSlot)) {
+        res.status(400).json({ error: { message: "A valid asset slot is required." } });
+        return;
+      }
+      if (!base64 || !mimeType) {
+        res.status(400).json({ error: { message: "base64 and mimeType are required." } });
+        return;
+      }
+      // The previous asset is NOT deleted — it moves into the slot's version
+      // history (see setBrandingAsset) so it can be restored later.
+      const current = await getBrandingConfig();
+      const existing = current[slot as BrandAssetSlot];
+      const buf = Buffer.from(base64, "base64");
+      const { storagePath, publicUrl } = await uploadBrandingAsset(slot, buf, mimeType);
+      const asset: BrandAsset = { imageUrl: publicUrl, storagePath, updatedAt: Date.now() };
+      const nextAlt = typeof alt === "string" ? alt : existing?.alt;
+      if (typeof nextAlt === "string") asset.alt = nextAlt;
+      res.json(await setBrandingAsset(slot as BrandAssetSlot, asset));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Restore a previous version of a slot (makes it current; old current is kept).
+  app.post("/admin/branding/asset/restore", json, async (req: Request, res: Response) => {
+    try {
+      const { slot, storagePath } = (req.body ?? {}) as { slot?: string; storagePath?: string };
+      if (!slot || !BRAND_ASSET_SLOTS.includes(slot as BrandAssetSlot) || !storagePath) {
+        res.status(400).json({ error: { message: "A valid slot and storagePath are required." } });
+        return;
+      }
+      res.json(await restoreBrandingAsset(slot as BrandAssetSlot, storagePath));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Permanently delete one historical version of a slot (removes the file too).
+  app.post("/admin/branding/asset/version/delete", json, async (req: Request, res: Response) => {
+    try {
+      const { slot, storagePath } = (req.body ?? {}) as { slot?: string; storagePath?: string };
+      if (!slot || !BRAND_ASSET_SLOTS.includes(slot as BrandAssetSlot) || !storagePath) {
+        res.status(400).json({ error: { message: "A valid slot and storagePath are required." } });
+        return;
+      }
+      await deletePublicObject(storagePath);
+      res.json(await deleteBrandingAssetVersion(slot as BrandAssetSlot, storagePath));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Remove the current brand image asset (kept in history, file NOT deleted).
+  app.delete("/admin/branding/asset/:slot", async (req: Request, res: Response) => {
+    try {
+      const slot = String(req.params.slot);
+      if (!BRAND_ASSET_SLOTS.includes(slot as BrandAssetSlot)) {
+        res.status(400).json({ error: { message: "Unknown asset slot." } });
+        return;
+      }
+      res.json(await setBrandingAsset(slot as BrandAssetSlot, null));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
   // Upload (replace) the share watermark. Body: { base64, mimeType, opacity?, scale? }.
   app.post("/admin/branding/watermark", json, async (req: Request, res: Response) => {
     try {
@@ -375,9 +495,8 @@ export function registerAdminRoutes(app: Express): void {
         res.status(400).json({ error: { message: "base64 and mimeType are required." } });
         return;
       }
+      // The previous watermark is retained in history (not deleted from storage).
       const current = await getBrandingConfig();
-      if (current.watermark?.storagePath) await deletePublicObject(current.watermark.storagePath);
-
       const buf = Buffer.from(base64, "base64");
       const { storagePath, publicUrl } = await uploadBrandingWatermark(buf, mimeType);
       const config = await setBrandingWatermark({
@@ -414,12 +533,159 @@ export function registerAdminRoutes(app: Express): void {
     }
   });
 
-  // Remove the watermark entirely.
+  // Remove the current watermark (kept in history, file NOT deleted).
   app.delete("/admin/branding/watermark", async (_req: Request, res: Response) => {
     try {
-      const current = await getBrandingConfig();
-      if (current.watermark?.storagePath) await deletePublicObject(current.watermark.storagePath);
       res.json(await setBrandingWatermark(null));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Restore a previous watermark version by its storage path.
+  app.post("/admin/branding/watermark/restore", json, async (req: Request, res: Response) => {
+    try {
+      const { storagePath } = (req.body ?? {}) as { storagePath?: string };
+      if (!storagePath) {
+        res.status(400).json({ error: { message: "storagePath is required." } });
+        return;
+      }
+      res.json(await restoreWatermark(storagePath));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Permanently delete one historical watermark version (removes the file too).
+  app.post("/admin/branding/watermark/version/delete", json, async (req: Request, res: Response) => {
+    try {
+      const { storagePath } = (req.body ?? {}) as { storagePath?: string };
+      if (!storagePath) {
+        res.status(400).json({ error: { message: "storagePath is required." } });
+        return;
+      }
+      await deletePublicObject(storagePath);
+      res.json(await deleteWatermarkVersion(storagePath));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- Landing-page illustrations (inline drag-&-drop editor) --------------
+
+  app.get("/admin/site-images", async (_req: Request, res: Response) => {
+    try {
+      res.json(await getSiteImagesConfig());
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Upload (replace) a single landing illustration. Body: { slot, base64, mimeType, alt? }.
+  app.post("/admin/site-image", json, async (req: Request, res: Response) => {
+    try {
+      const { slot, base64, mimeType, alt } = (req.body ?? {}) as {
+        slot?: string;
+        base64?: string;
+        mimeType?: string;
+        alt?: string;
+      };
+      if (!isSiteImageSlot(slot)) {
+        res.status(400).json({ error: { message: "A valid image slot is required." } });
+        return;
+      }
+      if (!base64 || !mimeType) {
+        res.status(400).json({ error: { message: "base64 and mimeType are required." } });
+        return;
+      }
+      // The previous image is NOT deleted — it moves into the slot's version
+      // history (see setSiteImage) so it can be restored later.
+      const buf = Buffer.from(base64, "base64");
+      const { storagePath, publicUrl } = await uploadSiteImage(slot, buf, mimeType);
+      const asset: BrandAsset = { imageUrl: publicUrl, storagePath, updatedAt: Date.now() };
+      if (typeof alt === "string") asset.alt = alt;
+      res.json(await setSiteImage(slot as SiteImageSlot, asset));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Restore a previous version of a slot (makes it current; old current is kept).
+  app.post("/admin/site-image/restore", json, async (req: Request, res: Response) => {
+    try {
+      const { slot, storagePath } = (req.body ?? {}) as { slot?: string; storagePath?: string };
+      if (!isSiteImageSlot(slot) || !storagePath) {
+        res.status(400).json({ error: { message: "A valid slot and storagePath are required." } });
+        return;
+      }
+      res.json(await restoreSiteImage(slot as SiteImageSlot, storagePath));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Permanently delete one historical version of a slot (removes the file too).
+  app.post("/admin/site-image/version/delete", json, async (req: Request, res: Response) => {
+    try {
+      const { slot, storagePath } = (req.body ?? {}) as { slot?: string; storagePath?: string };
+      if (!isSiteImageSlot(slot) || !storagePath) {
+        res.status(400).json({ error: { message: "A valid slot and storagePath are required." } });
+        return;
+      }
+      await deletePublicObject(storagePath);
+      res.json(await deleteSiteImageVersion(slot as SiteImageSlot, storagePath));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Remove the current illustration for a slot (kept in history, file NOT deleted).
+  app.delete("/admin/site-image/:slot", async (req: Request, res: Response) => {
+    try {
+      const slot = String(req.params.slot);
+      if (!isSiteImageSlot(slot)) {
+        res.status(400).json({ error: { message: "Unknown image slot." } });
+        return;
+      }
+      res.json(await setSiteImage(slot as SiteImageSlot, null));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- Landing-page copy (inline text editor) ------------------------------
+
+  app.get("/admin/site-content", async (_req: Request, res: Response) => {
+    try {
+      res.json(await getSiteContentConfig());
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Set (or clear, with an empty value) a single copy override. Body: { slot, value }.
+  app.put("/admin/site-content", json, async (req: Request, res: Response) => {
+    try {
+      const { slot, value } = (req.body ?? {}) as { slot?: string; value?: string };
+      if (!isKnownTextSlot(slot)) {
+        res.status(400).json({ error: { message: "Unknown text slot." } });
+        return;
+      }
+      res.json(await setSiteText(slot, typeof value === "string" ? value : null));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Reset a copy override back to the code default.
+  app.delete("/admin/site-content/:slot", async (req: Request, res: Response) => {
+    try {
+      const slot = String(req.params.slot);
+      if (!isKnownTextSlot(slot)) {
+        res.status(400).json({ error: { message: "Unknown text slot." } });
+        return;
+      }
+      res.json(await setSiteText(slot, null));
     } catch (err) {
       handleError(res, err);
     }
@@ -527,6 +793,24 @@ export function registerAdminRoutes(app: Express): void {
   app.put("/admin/config/sparks", json, async (req: Request, res: Response) => {
     try {
       res.json(await saveSparksConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- Marketing SEO (landing-page metadata + structured data) -------------
+
+  app.get("/admin/config/seo", async (_req, res) => {
+    try {
+      res.json(await getSeoConfig());
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.put("/admin/config/seo", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveSeoConfig(req.body));
     } catch (err) {
       handleError(res, err);
     }

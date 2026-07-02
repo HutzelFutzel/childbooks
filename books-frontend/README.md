@@ -123,11 +123,16 @@ config. Two production prerequisites are easy to miss:
    method), plus any providers you offer (Email/Password, Google). Without
    Anonymous, guest-first sign-in fails and the app can't reach the backend.
 2. **Configure CORS on the Storage bucket** so the browser can download blobs
-   (`getBlob`) from your App Hosting origin, e.g.:
+   (`getBlob`) from your App Hosting origin. Use the SAME bucket as
+   `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` — for this project that's the modern
+   `<project>.firebasestorage.app` bucket, NOT the legacy `<project>.appspot.com`
+   one. Applying CORS to the wrong bucket leaves blobs unreadable (the version
+   node appears but the thumbnail/canvas stays empty):
 
    ```bash
-   gcloud storage buckets update gs://<project>.appspot.com \
-     --cors-file=cors.json   # [{"origin":["https://<your-app-host>"],"method":["GET"],"maxAgeSeconds":3600}]
+   # cors.json lives at the repo root; list every origin the app is served from.
+   gcloud storage buckets update gs://childbook-60f89.firebasestorage.app \
+     --cors-file=cors.json
    ```
 
 ## Where do I put the Firebase private key?

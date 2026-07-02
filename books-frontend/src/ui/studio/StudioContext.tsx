@@ -38,6 +38,7 @@ import { getPreset } from "../design/presets";
 import { newShapeId, shapeStyleDefaults } from "../design/shapes";
 import { fitBoxHeightPct, fitFontSizePct } from "../design/textFit";
 import type { SpanRef } from "../design/TextBoxView";
+import type { StudioStep } from "./studioSteps";
 
 export type Selection =
   | { kind: "none" }
@@ -121,8 +122,11 @@ interface StudioContextValue {
   // canvas helpers
   snap: boolean;
   grid: boolean;
+  /** Show print-safety guides (safe margin + gutter) on the page surfaces. */
+  guides: boolean;
   toggleSnap: () => void;
   toggleGrid: () => void;
+  toggleGuides: () => void;
 
   // selection-scoped helpers (drive keyboard shortcuts + copy/paste)
   copySelection: () => void;
@@ -147,10 +151,11 @@ interface StudioContextValue {
   /** Cancel the in-flight batch generation (if any). */
   cancelGeneration: () => void;
 
-  // setup slide-over
-  setupOpen: boolean;
+  // guided flow (Story → Anchors → Edit → Order)
+  step: StudioStep;
+  setStep: (step: StudioStep) => void;
+  /** Jump to the Story step (used by "Edit story" affordances). */
   openSetup: () => void;
-  closeSetup: () => void;
 }
 
 /** Highest z across all elements on a page (text boxes + shapes + images). */
@@ -218,11 +223,11 @@ export function useStudio(): StudioContextValue {
 
 export function StudioProvider({
   project,
-  initialSetupOpen,
+  initialStep,
   children,
 }: {
   project: Project;
-  initialSetupOpen: boolean;
+  initialStep: StudioStep;
   children: React.ReactNode;
 }) {
   const setDesign = useProjectsStore((s) => s.setDesign);
@@ -231,9 +236,10 @@ export function StudioProvider({
   const [generatingAnchors, setGA] = useState<Set<string>>(new Set());
   const [generatingPages, setGP] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
-  const [setupOpen, setSetupOpen] = useState(initialSetupOpen);
+  const [step, setStep] = useState<StudioStep>(initialStep);
   const [snap, setSnap] = useState(true);
   const [grid, setGrid] = useState(false);
+  const [guides, setGuides] = useState(true);
   const history = useRef<{ past: BookDesign[]; future: BookDesign[] }>({ past: [], future: [] });
   const genAbort = useRef<AbortController | null>(null);
 
@@ -892,8 +898,10 @@ export function StudioProvider({
         toggleAutoFitGrow,
         snap,
         grid,
+        guides,
         toggleSnap: () => setSnap((v) => !v),
         toggleGrid: () => setGrid((v) => !v),
+        toggleGuides: () => setGuides((v) => !v),
         copySelection,
         cutSelection,
         pasteAt,
@@ -910,9 +918,9 @@ export function StudioProvider({
         setBusy,
         startGeneration,
         cancelGeneration,
-        setupOpen,
-        openSetup: () => setSetupOpen(true),
-        closeSetup: () => setSetupOpen(false),
+        step,
+        setStep,
+        openSetup: () => setStep("story"),
       }
     : null;
 

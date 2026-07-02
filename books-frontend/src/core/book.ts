@@ -12,6 +12,10 @@ import {
   findBookProduct,
   type BookProduct,
 } from "./fulfillment";
+import { resolveFormatCapabilities, type FormatCapabilities } from "./book/format";
+import { paginate } from "./pipeline/pagination";
+import { getCursor } from "./versioning";
+import type { Project } from "./types";
 
 type ConfigLike = { productSku?: string; bookSize?: BookSize };
 
@@ -33,4 +37,24 @@ export function bookProductForConfig(config: ConfigLike): BookProduct {
 /** Single-page trim (inches) for a config's chosen product. */
 export function pageTrimForConfig(config: ConfigLike): { widthIn: number; heightIn: number } {
   return bookProductForConfig(config).trim;
+}
+
+/**
+ * Interior physical page count for a project (covers excluded), derived from the
+ * screenplay's pagination. Falls back to the product minimum before a screenplay
+ * exists, so spine / gutter estimates are always well-defined.
+ */
+export function interiorPageCount(project: Project): number {
+  const tree = project.screenplay;
+  if (!tree) return bookProductForConfig(project.config).minPages;
+  return paginate(getCursor(tree).content).pageCount;
+}
+
+/**
+ * Print-format capabilities (spine, gutter, safe margins, …) for a project at
+ * its current page count — the single input the editor uses to decide which
+ * guides and controls to show.
+ */
+export function formatCapabilitiesForProject(project: Project): FormatCapabilities {
+  return resolveFormatCapabilities(bookProductForConfig(project.config), interiorPageCount(project));
 }

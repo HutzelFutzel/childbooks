@@ -11,6 +11,7 @@ import type {
   ReferenceImage,
 } from "../providers/types";
 import { resolveArtStyleText } from "../prompts/style";
+import type { PromptContext } from "../prompts/context";
 import type { Anchor, ArtStyleSelection } from "../types";
 import { withRetry } from "./retry";
 
@@ -44,6 +45,8 @@ export interface BuildAnchorPromptInput {
    * the description from scratch — which would re-assert removed features).
    */
   editFromImage?: boolean;
+  /** Admin prompt overlays (art-style descriptions). */
+  prompts?: PromptContext;
 }
 
 /** Build the base prompt for an anchor reference sheet. */
@@ -55,6 +58,7 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
     relatedAnchors = [],
     edit,
     editFromImage = false,
+    prompts,
   } = input;
 
   // Edit-from-image: keep the current image as the source of truth and apply
@@ -75,7 +79,7 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
     return parts.filter(Boolean).join(" ");
   }
 
-  const styleText = resolveArtStyleText(artStyle);
+  const styleText = resolveArtStyleText(artStyle, prompts);
   const parts = [
     `${ANGLE_HINT[anchor.type]} of "${anchor.name}".`,
     anchor.description.trim(),

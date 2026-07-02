@@ -14,6 +14,7 @@ import type {
   TextHandling,
   TextPlacement,
 } from "./config/options";
+import type { ReadingModeId } from "./config/ageWritingCatalog";
 import type { VersionTree } from "./versioning";
 import type { BookDesign } from "./design";
 
@@ -63,6 +64,8 @@ export interface BookConfig {
   anchorImageModel?: ModelSelection | null;
   artStyle: ArtStyleSelection;
   ageRangeId: string;
+  /** How the book is read — required for 6–8 and 9–12 age bands. */
+  readingModeId?: ReadingModeId | null;
   /**
    * Physical book product SKU (real trim + binding/format) chosen for print.
    * Source of truth for the page's physical size. See `core/book.ts`.
@@ -88,14 +91,18 @@ export function createDefaultConfig(): BookConfig {
     imageModel: null,
     artStyle: { presetId: "watercolor" },
     ageRangeId: "3-5",
+    readingModeId: null,
     // Default to the square hardcover product (see BOOK_PRODUCTS / Lulu catalog).
     productSku: "0850X0850.FC.STD.CW.080CW444.GXX",
     bookSize: "square",
+    // Simple, fixed layout for now: one illustration per single page with the
+    // text laid out beside it (image on one side, words on the other). The
+    // advanced graphics/text/layout knobs were removed from setup.
     graphicsDensity: "one-per-page",
     spreadUsage: "single",
     textHandling: "creative",
     textPlacement: "separate",
-    layoutId: "auto",
+    layoutId: "graphic-left-text-right",
   };
 }
 
@@ -311,6 +318,7 @@ export function summarize(p: Project): ProjectSummary {
 
 /** Re-exported for convenience by consumers needing the age range object. */
 export type { AgeRange, BookSize, GraphicsDensity, SpreadUsage, TextHandling, TextPlacement };
+export type { ReadingModeId } from "./config/ageWritingCatalog";
 
 /** Re-export the Final Design layer types for one-stop importing. */
 export type {

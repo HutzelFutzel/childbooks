@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ChevronDown,
@@ -16,9 +16,16 @@ import {
   Wand2,
 } from "lucide-react";
 import type { Anchor, CoverSpec, ScreenplaySpread, ShapeKind } from "../../core/types";
-import { COVER_FRONT_ID } from "../../core/types";
+import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { wordParagraphs } from "../../core/design";
 import { effectiveAnchorIds } from "../../core/book/anchorRefs";
+import { formatCapabilitiesForProject } from "../../core/book";
+import {
+  computeBarcodeZone,
+  computePageGuides,
+  SPINE_TEXT_MIN_PAGES,
+  type BindingSide,
+} from "../../core/book/format";
 import { allVersions, getCursor, selectVersion, updateNodeContent } from "../../core/versioning";
 import { changedAnchorsForSpread, generateIllustrationVersion } from "../../state/ai";
 import { useProjectsStore } from "../../state/projectsStore";
@@ -59,17 +66,39 @@ export function PageStagePanel({
   page,
   subject,
   chromeless = false,
+  bindingSide,
 }: {
   page: DesignPage;
   subject: PageSubject;
   chromeless?: boolean;
+  /** Which edge binds into the spine (for the gutter guide on single pages). */
+  bindingSide?: BindingSide;
 }) {
-  const { project, selection, select, pageDesign, patchBox, patchShape, patchImage, snap, grid } =
+  const { project, selection, select, pageDesign, patchBox, patchShape, patchImage, snap, grid, guides } =
     useStudio();
 
   const coverMode = subject.kind === "cover";
   const blank = subject.kind === "spread" && !!subject.spread.blankCanvas;
   const genSpread = genSpreadFor(subject);
+  const isSpread = !coverMode && genSpread.kind === "spread";
+
+  const caps = useMemo(() => formatCapabilitiesForProject(project), [project]);
+  const isBackCover =
+    coverMode && subject.kind === "cover" && subject.coverId === COVER_BACK_ID;
+  // Covers have no gutter; interior single pages bind on `bindingSide` (falling
+  // back to "center", which suppresses the gutter when the side is unknown).
+  const printGuides =
+    guides && !blank
+      ? {
+          ...computePageGuides({
+            caps,
+            spread: isSpread,
+            bindingSide: coverMode ? "center" : bindingSide ?? "center",
+          }),
+          // Reserve the barcode area on the back cover only.
+          barcode: isBackCover ? computeBarcodeZone(caps) : null,
+        }
+      : null;
 
   const tree = project.illustrations?.[page.id];
   const cursor = tree ? getCursor(tree).content : null;
@@ -97,7 +126,8 @@ export function PageStagePanel({
       chromeless={chromeless}
       snap={snap}
       grid={grid}
-      showGutter={!coverMode && genSpread.kind === "spread"}
+      showGutter={isSpread}
+      printGuides={printGuides}
       selectedId={selectedElementId}
       onSelectElement={(ref) => {
         if (!ref) {
@@ -152,12 +182,14 @@ export function PageControls({
   const { project, addBox, addShape, generatingPages, setPageGenerating } = useStudio();
   const setScreenplay = useProjectsStore((s) => s.setScreenplay);
   const updateSpread = useProjectsStore((s) => s.updateSpread);
+  const setBookTitle = useProjectsStore((s) => s.setBookTitle);
   const [edit, setEdit] = useState("");
   const [showBrief, setShowBrief] = useState(false);
 
   const coverMode = subject.kind === "cover";
   const blank = subject.kind === "spread" && !!subject.spread.blankCanvas;
   const genSpread = genSpreadFor(subject);
+  const caps = useMemo(() => formatCapabilitiesForProject(project), [project]);
 
   const tree = project.illustrations?.[page.id];
   const cursor = tree ? getCursor(tree).content : null;
@@ -239,6 +271,25 @@ export function PageControls({
           {subject.kind === "spread" && <PageMenu spreadId={subject.spread.id} />}
         </div>
       </div>
+
+      {/* Format-aware hint: what the binding implies for this page. */}
+      {coverMode && (
+        <p className="text-xs leading-relaxed text-ink-400">
+          {caps.hasSpine ? (
+            <>
+              {caps.bindingLabel}: spine ≈ {caps.spineWidthIn.toFixed(2)}in at {caps.pageCount} pages.{" "}
+              {caps.spineTextAllowed
+                ? "Spine text is allowed."
+                : `Add spine text only above ${SPINE_TEXT_MIN_PAGES} pages.`}
+            </>
+          ) : (
+            <>{caps.bindingLabel}: no printed spine — design the front &amp; back cover only.</>
+          )}
+          {subject.kind === "cover" && subject.coverId === COVER_BACK_ID && (
+            <> A barcode area is reserved at the bottom-right — keep art &amp; text clear of it.</>
+          )}
+        </p>
+      )}
 
       {/* Version history */}
       {versions.length > 0 && (
@@ -379,10 +430,21 @@ export function PageControls({
                   <div className="space-y-3 border-t border-ink-100 px-3 py-3">
                     {coverMode && subject.kind === "cover" ? (
                       <>
-                        <Field label="Title">
+                        <Field
+                          label={subject.coverId === COVER_FRONT_ID ? "Book title" : "Blurb"}
+                          hint={
+                            subject.coverId === COVER_FRONT_ID
+                              ? "Linked to the story title & project name"
+                              : undefined
+                          }
+                        >
                           <Input
                             value={subject.cover.title ?? ""}
-                            onChange={(e) => patchSubject({ title: e.target.value })}
+                            onChange={(e) =>
+                              subject.coverId === COVER_FRONT_ID
+                                ? setBookTitle(project.id, e.target.value)
+                                : patchSubject({ title: e.target.value })
+                            }
                           />
                         </Field>
                         <Field label="Subtitle">
@@ -409,15 +471,6 @@ export function PageControls({
                         placeholder="What the picture shows…"
                       />
                     </Field>
-                    {!coverMode && (
-                      <Field label="Layout note">
-                        <Input
-                          value={genSpread.layoutNote}
-                          onChange={(e) => patchSubject({ layoutNote: e.target.value })}
-                          placeholder="e.g. text in a band along the bottom"
-                        />
-                      </Field>
-                    )}
                   </div>
                 </motion.div>
               )}

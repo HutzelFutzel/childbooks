@@ -27,4 +27,6 @@ ui-debug.log
 pubsub-debug.log
 .firebase/
 
+lulu-guides/
+
 .DS_Store

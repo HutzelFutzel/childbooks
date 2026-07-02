@@ -9,6 +9,7 @@ import {
   TEXT_HANDLING,
   TEXT_PLACEMENT,
 } from "../../../core/config/options";
+import { ageBandHasReadingModes, readingModeLabel } from "../../../core/config/ageWritingCatalog";
 import { bookProductForConfig } from "../../../core/book";
 import { selectModels } from "../../../core/models/registry";
 import { useSettingsStore } from "../../../state/settingsStore";
@@ -61,6 +62,9 @@ export function ReviewStep({ config }: StepProps) {
           />
           <Row label="Art style" value={styleExtra ? `${style} + custom` : style} />
           <Row label="Age range" value={find(AGE_RANGES, config.ageRangeId)} />
+          {ageBandHasReadingModes(config.ageRangeId) && config.readingModeId && (
+            <Row label="Reading mode" value={readingModeLabel(config.readingModeId)} />
+          )}
           <Row label="Book size" value={sizeValue} />
           <Row label="Graphics" value={find(GRAPHICS_DENSITY, config.graphicsDensity)} />
           <Row label="Spreads" value={find(SPREAD_USAGE, config.spreadUsage)} />

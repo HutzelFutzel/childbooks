@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { BookConfig } from "../../core/types";
+import { ageBandHasReadingModes } from "../../core/config/ageWritingCatalog";
 
 const modelSelection = z.object({
   provider: z.enum(["openai", "google"]),
@@ -21,6 +22,7 @@ export const bookConfigSchema = z.object({
       "Pick a style or describe your own.",
     ),
   ageRangeId: z.string().min(1),
+  readingModeId: z.enum(["read-aloud", "with-help", "independent"]).nullable().optional(),
   productSku: z.string().min(1),
   bookSize: z.enum(["square", "landscape", "portrait"]),
   graphicsDensity: z.enum(["one-per-page", "multiple-per-page", "combination"]),
@@ -28,6 +30,14 @@ export const bookConfigSchema = z.object({
   textHandling: z.enum(["exact", "creative"]),
   textPlacement: z.enum(["separate", "embedded"]),
   layoutId: z.string().min(1),
+}).superRefine((config, ctx) => {
+  if (ageBandHasReadingModes(config.ageRangeId) && !config.readingModeId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Pick how the book will be read.",
+      path: ["readingModeId"],
+    });
+  }
 });
 
 export type WizardStepId =
@@ -50,7 +60,11 @@ export function validateStep(step: WizardStepId, config: BookConfig): string | n
       return r.success ? null : r.error.issues[0]?.message ?? "Invalid";
     }
     case "audience":
-      return config.ageRangeId && config.productSku ? null : "Pick an age range and size.";
+      if (!config.ageRangeId || !config.productSku) return "Pick an age range and size.";
+      if (ageBandHasReadingModes(config.ageRangeId) && !config.readingModeId) {
+        return "Pick how the book will be read.";
+      }
+      return null;
     case "graphics":
       return config.graphicsDensity && config.spreadUsage ? null : "Choose graphics options.";
     case "text":

@@ -1,31 +1,32 @@
 import { useEffect, useRef } from "react";
 import type { Project } from "../../core/types";
 import { analyzeCurrentStory, generateScreenplayVersion } from "../../state/ai";
-import { useProjectsStore } from "../../state/projectsStore";
 import { useResolvedModels } from "../hooks/useResolvedModels";
 import { notify } from "../lib/notify";
 import { BookCanvas } from "./BookCanvas";
-import { SetupSlideOver } from "./SetupSlideOver";
 import { StudioDndProvider } from "./StudioDnd";
 import { StudioInspector } from "./StudioInspector";
 import { StudioProvider, useStudio } from "./StudioContext";
 import { StudioSidebar } from "./StudioSidebar";
+import { StudioStepRail } from "./StudioStepRail";
+import { StoryStage } from "./StoryStage";
+import { AnchorsStage } from "./AnchorsStage";
+import { OrderStage } from "./OrderStage";
+import { initialStep } from "./studioSteps";
 import { useStudioHotkeys } from "./useStudioHotkeys";
 
 /** The single unified workspace. Keyed by project id in the parent so all local
  * state (selection, auto-run guards) resets cleanly when switching books. */
 export function StudioWorkspace({ project }: { project: Project }) {
   return (
-    <StudioProvider project={project} initialSetupOpen={project.stage === "setup"}>
+    <StudioProvider project={project} initialStep={initialStep(project)}>
       <StudioInner project={project} />
     </StudioProvider>
   );
 }
 
 function StudioInner({ project }: { project: Project }) {
-  const { setupOpen, closeSetup } = useStudio();
-  const advanceStage = useProjectsStore((s) => s.advanceStage);
-  const closeProject = useProjectsStore((s) => s.closeProject);
+  const { step } = useStudio();
   const models = useResolvedModels();
   useStudioHotkeys();
 
@@ -48,9 +49,7 @@ function StudioInner({ project }: { project: Project }) {
 
   // Auto-draft the screenplay once the analysis is done. We intentionally do NOT
   // require any anchors: a story can legitimately have none (or the analyzer may
-  // find none), and gating on anchors there left the canvas stuck on the
-  // "Drafting your book…" spinner forever. `setAnalysis` writes the summary and
-  // anchors together, so by the time `analysis` exists the anchor list is final.
+  // find none), and gating on anchors there left the canvas stuck forever.
   useEffect(() => {
     if (!inStudio || !models) return;
     if (project.analysis && !project.screenplay && !startedScreenplay.current) {
@@ -62,30 +61,39 @@ function StudioInner({ project }: { project: Project }) {
     }
   }, [inStudio, models, project.analysis, project.screenplay]);
 
+  const showLeft = step === "edit";
+  const showRight = step === "edit" || step === "anchors";
+
   return (
     <StudioDndProvider>
-      <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-72 min-h-0 shrink-0 flex-col border-r border-ink-100 bg-white/60 md:flex">
-          <StudioSidebar />
-        </aside>
+      <div className="flex min-h-0 flex-1 flex-col">
+        <StudioStepRail />
 
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-grid">
-          <BookCanvas />
-        </main>
+        <div className="flex min-h-0 flex-1">
+          {showLeft && (
+            <aside className="hidden w-72 min-h-0 shrink-0 flex-col border-r border-ink-100 bg-white/60 md:flex">
+              <StudioSidebar />
+            </aside>
+          )}
 
-        <aside className="hidden w-80 min-h-0 shrink-0 flex-col border-l border-ink-100 bg-white lg:flex">
-          <StudioInspector />
-        </aside>
+          <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-grid">
+            {step === "edit" ? (
+              <BookCanvas />
+            ) : (
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                {step === "story" && <StoryStage />}
+                {step === "anchors" && <AnchorsStage />}
+                {step === "order" && <OrderStage />}
+              </div>
+            )}
+          </main>
 
-        <SetupSlideOver
-          open={setupOpen}
-          firstRun={project.stage === "setup"}
-          onClose={() => (project.stage === "setup" ? closeProject() : closeSetup())}
-          onSubmit={() => {
-            if (project.stage === "setup") void advanceStage("studio");
-            closeSetup();
-          }}
-        />
+          {showRight && (
+            <aside className="hidden w-80 min-h-0 shrink-0 flex-col border-l border-ink-100 bg-white lg:flex">
+              <StudioInspector />
+            </aside>
+          )}
+        </div>
       </div>
     </StudioDndProvider>
   );

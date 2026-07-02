@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
   BarChart3,
+  BookOpen,
   Cpu,
   DollarSign,
   Image as ImageIcon,
@@ -20,6 +21,7 @@ import {
   Gauge,
   Workflow,
   HeartPulse,
+  Search,
 } from "lucide-react";
 import { Button } from "@/ui/components/Button";
 import { Tabs } from "@/ui/components/Tabs";
@@ -30,19 +32,26 @@ import { AuthDialog } from "@/ui/auth/AuthDialog";
 import { cn } from "@/ui/lib/cn";
 import { useAuthStore } from "@/state/authStore";
 import { useAppConfigStore } from "@/state/appConfigStore";
-import { useAdminTab, type AdminSection } from "./adminTabStore";
+import {
+  useAdminTab,
+  CONFIG_GROUPS,
+  type AdminSection,
+  type ConfigGroupId,
+  type ConfigTabId,
+} from "./adminTabStore";
 import { ModelConfigTab } from "./tabs/ModelConfigTab";
 import { ArtStylesTab } from "./tabs/ArtStylesTab";
+import { AgeWritingTab } from "./tabs/AgeWritingTab";
 import { ModelCostsTab } from "./tabs/ModelCostsTab";
 import { ProductsTab } from "./tabs/ProductsTab";
 import { PricingSettingsTab } from "./tabs/PricingSettingsTab";
 import { PlansTab } from "./tabs/PlansTab";
 import { SparksTab } from "./tabs/SparksTab";
 import { CostIntelligenceTab } from "./tabs/CostIntelligenceTab";
-import { BrandingTab } from "./tabs/BrandingTab";
 import { ActionsTab } from "./tabs/ActionsTab";
 import { SystemHealthTab } from "./tabs/SystemHealthTab";
-import { MarketingTab } from "./tabs/MarketingTab";
+import { SeoTab } from "./tabs/marketing/SeoTab";
+import { BrandingTab } from "./tabs/marketing/BrandingTab";
 import { AnalysisTab } from "./analysis/AnalysisTab";
 
 const SECTIONS: { id: AdminSection; label: string; icon: ReactNode; description: string }[] = [
@@ -51,19 +60,56 @@ const SECTIONS: { id: AdminSection; label: string; icon: ReactNode; description:
   { id: "marketing", label: "Marketing", icon: <Megaphone className="size-4" />, description: "Campaigns and growth tools." },
 ];
 
-const CONFIG_TABS = [
-  { id: "actions", label: "Actions", icon: <Workflow className="size-4" /> },
-  { id: "products", label: "Products", icon: <Package className="size-4" /> },
-  { id: "pricing", label: "Pricing settings", icon: <Tags className="size-4" /> },
-  { id: "plans", label: "Plans", icon: <CreditCard className="size-4" /> },
-  { id: "sparks", label: "Sparks", icon: <Sparkles className="size-4" /> },
-  { id: "costs", label: "Cost intelligence", icon: <Gauge className="size-4" /> },
-  { id: "models", label: "Models", icon: <Cpu className="size-4" /> },
-  { id: "artStyles", label: "Art styles", icon: <ImageIcon className="size-4" /> },
+const CONFIG_TAB_META: Record<
+  ConfigTabId,
+  { label: string; icon: ReactNode }
+> = {
+  actions: { label: "Actions", icon: <Workflow className="size-4" /> },
+  products: { label: "Products", icon: <Package className="size-4" /> },
+  pricing: { label: "Pricing settings", icon: <Tags className="size-4" /> },
+  plans: { label: "Plans", icon: <CreditCard className="size-4" /> },
+  sparks: { label: "Sparks", icon: <Sparkles className="size-4" /> },
+  costs: { label: "Cost intelligence", icon: <Gauge className="size-4" /> },
+  models: { label: "Models", icon: <Cpu className="size-4" /> },
+  artStyles: { label: "Art styles", icon: <ImageIcon className="size-4" /> },
+  ageWriting: { label: "Age writing", icon: <BookOpen className="size-4" /> },
+  modelCosts: { label: "Model costs", icon: <DollarSign className="size-4" /> },
+  system: { label: "System health", icon: <HeartPulse className="size-4" /> },
+};
+
+const MARKETING_TABS = [
+  { id: "seo", label: "SEO", icon: <Search className="size-4" /> },
   { id: "branding", label: "Branding", icon: <Stamp className="size-4" /> },
-  { id: "modelCosts", label: "Model costs", icon: <DollarSign className="size-4" /> },
-  { id: "system", label: "System health", icon: <HeartPulse className="size-4" /> },
 ];
+
+function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
+  switch (tab) {
+    case "actions":
+      return <ActionsTab />;
+    case "products":
+      return <ProductsTab />;
+    case "pricing":
+      return <PricingSettingsTab />;
+    case "plans":
+      return <PlansTab />;
+    case "sparks":
+      return <SparksTab />;
+    case "costs":
+      return <CostIntelligenceTab />;
+    case "models":
+      return <ModelConfigTab />;
+    case "artStyles":
+      return <ArtStylesTab />;
+    case "ageWriting":
+      return <AgeWritingTab />;
+    case "modelCosts":
+      return <ModelCostsTab />;
+    case "system":
+      return <SystemHealthTab />;
+    default:
+      return null;
+  }
+}
 
 /**
  * Admin-only dashboard, served at `/admin`. The `isAdmin` check below is a
@@ -79,8 +125,12 @@ export default function AdminApp() {
   const subscribeConfig = useAppConfigStore((s) => s.subscribe);
   const section = useAdminTab((s) => s.section);
   const setSection = useAdminTab((s) => s.setSection);
+  const configGroup = useAdminTab((s) => s.configGroup);
+  const setConfigGroup = useAdminTab((s) => s.setConfigGroup);
   const configTab = useAdminTab((s) => s.configTab);
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
+  const marketingTab = useAdminTab((s) => s.marketingTab);
+  const setMarketingTab = useAdminTab((s) => s.setMarketingTab);
 
   useEffect(() => {
     initAuth();
@@ -91,6 +141,12 @@ export default function AdminApp() {
   }, [isAdmin, subscribeConfig]);
 
   const active = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
+  const activeGroup = CONFIG_GROUPS.find((g) => g.id === configGroup) ?? CONFIG_GROUPS[0];
+  const groupTabs = activeGroup.tabs.map((id) => ({
+    id,
+    label: CONFIG_TAB_META[id].label,
+    icon: CONFIG_TAB_META[id].icon,
+  }));
 
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-canvas">
@@ -157,28 +213,45 @@ export default function AdminApp() {
                 </header>
 
                 {section === "configuration" && (
-                  <div className="space-y-6">
+                  <div className="space-y-5">
+                    <div className="flex flex-wrap gap-2">
+                      {CONFIG_GROUPS.map((group) => (
+                        <button
+                          key={group.id}
+                          type="button"
+                          onClick={() => setConfigGroup(group.id as ConfigGroupId)}
+                          className={cn(
+                            "rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
+                            configGroup === group.id
+                              ? "bg-brand-600 text-white shadow-sm"
+                              : "bg-white text-ink-600 ring-1 ring-inset ring-ink-100 hover:bg-ink-50",
+                          )}
+                        >
+                          {group.label}
+                        </button>
+                      ))}
+                    </div>
                     <Tabs
-                      items={CONFIG_TABS}
+                      items={groupTabs}
                       value={configTab}
-                      onChange={(id) => setConfigTab(id as typeof configTab)}
+                      onChange={(id) => setConfigTab(id as ConfigTabId)}
                     />
-                    {configTab === "actions" && <ActionsTab />}
-                    {configTab === "products" && <ProductsTab />}
-                    {configTab === "pricing" && <PricingSettingsTab />}
-                    {configTab === "plans" && <PlansTab />}
-                    {configTab === "sparks" && <SparksTab />}
-                    {configTab === "costs" && <CostIntelligenceTab />}
-                    {configTab === "models" && <ModelConfigTab />}
-                    {configTab === "artStyles" && <ArtStylesTab />}
-                    {configTab === "branding" && <BrandingTab />}
-                    {configTab === "modelCosts" && <ModelCostsTab />}
-                    {configTab === "system" && <SystemHealthTab />}
+                    <ConfigTabPanel tab={configTab} />
                   </div>
                 )}
 
                 {section === "analysis" && <AnalysisTab />}
-                {section === "marketing" && <MarketingTab />}
+                {section === "marketing" && (
+                  <div className="space-y-6">
+                    <Tabs
+                      items={MARKETING_TABS}
+                      value={marketingTab}
+                      onChange={(id) => setMarketingTab(id as typeof marketingTab)}
+                    />
+                    {marketingTab === "seo" && <SeoTab />}
+                    {marketingTab === "branding" && <BrandingTab />}
+                  </div>
+                )}
               </div>
             </div>
           </>

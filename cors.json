@@ -1,0 +1,12 @@
+[
+  {
+    "origin": [
+      "https://childbook.studio",
+      "https://childbooks.studio",
+      "https://childbooks--childbook-60f89.us-east4.hosted.app"
+    ],
+    "method": ["GET"],
+    "responseHeader": ["Content-Type"],
+    "maxAgeSeconds": 3600
+  }
+]

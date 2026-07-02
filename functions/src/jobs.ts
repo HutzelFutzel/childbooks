@@ -19,6 +19,7 @@ import "./providerHttp";
 import { serverConfig } from "./config";
 import { compositeMaskedRegion } from "./imaging";
 import { backendPipelineEnv } from "./pipelineEnv";
+import { loadPromptContext } from "./appConfig";
 import { resolveImageModels } from "./modelResolve";
 import { recordUsage, withUsage } from "./usage";
 import { ensureAfford, estimateForUser, settleActionCost } from "./sparks";
@@ -192,7 +193,11 @@ async function runRefreshJob(
 ): Promise<void> {
   const tasks = job.tasks ?? [];
   await ensureAfford(uid, (await estimateForUser(uid, "pageIllustration")) * tasks.length);
-  const env = backendPipelineEnv(uid, await resolveImageModels("pageIllustration"));
+  const [models, prompts] = await Promise.all([
+    resolveImageModels("pageIllustration"),
+    loadPromptContext(),
+  ]);
+  const env = backendPipelineEnv(uid, models, prompts);
   const byId = spreadsById(job.project);
   const writeState = makeWriter(ref, job);
 
@@ -235,7 +240,11 @@ async function runRefreshJob(
 async function runAnchorsJob(ref: DocumentReference, uid: string, job: AnchorsJob): Promise<void> {
   const tasks = job.tasks ?? [];
   await ensureAfford(uid, (await estimateForUser(uid, "anchorImage")) * tasks.length);
-  const env = backendPipelineEnv(uid, await resolveImageModels("anchorImage"));
+  const [models, prompts] = await Promise.all([
+    resolveImageModels("anchorImage"),
+    loadPromptContext(),
+  ]);
+  const env = backendPipelineEnv(uid, models, prompts);
   const writeState = makeWriter(ref, job);
 
   job.status = "running";

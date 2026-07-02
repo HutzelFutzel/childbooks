@@ -1,9 +1,16 @@
 import { AGE_RANGES, bookSizeFromAspect } from "../../../core/config/options";
+import {
+  ageBandHasReadingModes,
+  defaultAgeCardDescription,
+  type ReadingModeId,
+} from "../../../core/config/ageWritingCatalog";
 import { BOOK_PRODUCTS } from "../../../core/fulfillment";
 import type { PublicProduct } from "../../../core/config/products";
+import { resolveAgeHumanGuidance } from "../../../core/prompts/age";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { OptionCard } from "../../components/OptionCard";
 import { BookSizeShape } from "../visuals";
+import { ReadingModePicker } from "../ReadingModePicker";
 import type { StepProps } from "./types";
 
 /** Format a trim in inches as a friendly "8.5 × 8.5 in" string. */
@@ -34,6 +41,21 @@ const BINDING_LABEL: Record<string, string> = {
 
 export function AudienceStep({ config, update }: StepProps) {
   const publicProducts = useAppConfigStore((s) => s.products.products);
+  const ageWriting = useAppConfigStore((s) => s.ageWriting);
+
+  const showReadingModes = ageBandHasReadingModes(config.ageRangeId);
+  const readingMode = (config.readingModeId ?? "read-aloud") as ReadingModeId;
+
+  const selectAge = (ageId: string) => {
+    if (ageBandHasReadingModes(ageId)) {
+      update({
+        ageRangeId: ageId,
+        readingModeId: config.readingModeId ?? "read-aloud",
+      });
+    } else {
+      update({ ageRangeId: ageId, readingModeId: null });
+    }
+  };
 
   // Offer only products an admin has activated in the configurator, matched to
   // the physical catalog (which still drives trim/aspect for image generation).
@@ -56,13 +78,34 @@ export function AudienceStep({ config, update }: StepProps) {
             <OptionCard
               key={age.id}
               selected={config.ageRangeId === age.id}
-              onSelect={() => update({ ageRangeId: age.id })}
+              onSelect={() => selectAge(age.id)}
               title={age.label}
-              description={age.description}
+              description={
+                ageBandHasReadingModes(age.id) && config.ageRangeId === age.id
+                  ? resolveAgeHumanGuidance(age.id, readingMode, ageWriting)
+                  : resolveAgeHumanGuidance(age.id, null, ageWriting) || defaultAgeCardDescription(age)
+              }
             />
           ))}
         </div>
       </section>
+
+      {showReadingModes && (
+        <section>
+          <h3 className="text-sm font-semibold text-ink-700">How will it be read?</h3>
+          <p className="mt-1 text-xs text-ink-500">
+            Toggle between use cases to see how wording and pacing change.
+          </p>
+          <div className="mt-3">
+            <ReadingModePicker
+              ageRangeId={config.ageRangeId}
+              value={readingMode}
+              onChange={(mode) => update({ readingModeId: mode })}
+              ageWriting={ageWriting}
+            />
+          </div>
+        </section>
+      )}
 
       <section>
         <h3 className="text-sm font-semibold text-ink-700">Book size &amp; format</h3>
@@ -85,7 +128,6 @@ export function AudienceStep({ config, update }: StepProps) {
                 onSelect={() =>
                   update({
                     productSku: product.sku,
-                    // Keep the coarse shape in sync for image generation / prompts.
                     bookSize: bookSizeFromAspect(product.aspect),
                   })
                 }

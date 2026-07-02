@@ -9,6 +9,8 @@ import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import type { Anchor, AnchorImportance, AnchorType, BookConfig } from "../types";
 import { withRetry } from "./retry";
+import { resolveAgeLlmGuidance } from "../prompts/age";
+import type { PromptContext } from "../prompts/context";
 
 const anchorItemSchema = z.object({
   name: z.string(),
@@ -34,15 +36,17 @@ export interface AnalyzeStoryInput {
   creds: ProviderCredentials;
   model: string;
   signal?: AbortSignal;
+  prompts?: PromptContext;
 }
 
 /** Run the story analysis and return editable anchors + a short summary. */
 export async function analyzeStory(
   input: AnalyzeStoryInput,
 ): Promise<{ summary: string; anchors: Anchor[] }> {
-  const { story, config, creds, model, signal } = input;
+  const { story, config, creds, model, signal, prompts } = input;
   const provider = getTextProvider(config.textModel!.provider);
   const age = AGE_RANGES.find((a) => a.id === config.ageRangeId)?.label ?? config.ageRangeId;
+  const ageTextPrompt = resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, prompts);
 
   const system = [
     "You are a children's-book art director.",
@@ -58,6 +62,7 @@ export async function analyzeStory(
 
   const user = [
     `Target age range: ${age}.`,
+    ageTextPrompt,
     "",
     "STORY:",
     story.trim(),
@@ -102,6 +107,7 @@ export interface GenerateAnchorDescriptionInput {
   /** Other known subjects, so the description can reference relationships. */
   existingAnchors: { name: string; type: AnchorType; description: string }[];
   signal?: AbortSignal;
+  prompts?: PromptContext;
 }
 
 /**
@@ -111,9 +117,10 @@ export interface GenerateAnchorDescriptionInput {
 export async function generateAnchorDescription(
   input: GenerateAnchorDescriptionInput,
 ): Promise<string> {
-  const { story, config, creds, model, name, type, existingAnchors, signal } = input;
+  const { story, config, creds, model, name, type, existingAnchors, signal, prompts } = input;
   const provider = getTextProvider(config.textModel!.provider);
   const age = AGE_RANGES.find((a) => a.id === config.ageRangeId)?.label ?? config.ageRangeId;
+  const ageTextPrompt = resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, prompts);
 
   const others =
     existingAnchors
@@ -132,6 +139,7 @@ export async function generateAnchorDescription(
 
   const user = [
     `Target age range: ${age}.`,
+    ageTextPrompt,
     "",
     "OTHER KNOWN SUBJECTS:",
     others,

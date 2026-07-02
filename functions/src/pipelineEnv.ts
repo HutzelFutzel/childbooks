@@ -10,6 +10,7 @@ import { downloadBlobBase64, uploadBlob } from "./storage";
 import type { PipelineEnv } from "../../books-frontend/src/core/pipeline/illustrationRun";
 import type { ResolvedModels } from "../../books-frontend/src/core/models/registry";
 import type { ProviderId } from "../../books-frontend/src/core/config/options";
+import type { PromptContext } from "../../books-frontend/src/core/prompts/context";
 
 function apiKeyFor(provider: ProviderId): string {
   const cfg = serverConfig();
@@ -22,7 +23,11 @@ const b64ToBuf = (b64: string) => Buffer.from(b64, "base64");
 const bufToB64 = (buf: Buffer) => buf.toString("base64");
 
 /** Build the worker's pipeline environment for a given user + resolved models. */
-export function backendPipelineEnv(uid: string, models: ResolvedModels): PipelineEnv {
+export function backendPipelineEnv(
+  uid: string,
+  models: ResolvedModels,
+  prompts?: PromptContext,
+): PipelineEnv {
   return {
     models,
     apiKeyFor,
@@ -46,5 +51,6 @@ export function backendPipelineEnv(uid: string, models: ResolvedModels): Pipelin
         return { base64: bufToB64(out), mimeType: "image/png" };
       },
     },
+    prompts,
   };
 }

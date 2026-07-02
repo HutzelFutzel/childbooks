@@ -145,6 +145,7 @@ export async function renderAnchor(
     relatedAnchors,
     edit: options.edit,
     editFromImage,
+    prompts: env.prompts,
   });
 
   const result = await generateAnchorImage({

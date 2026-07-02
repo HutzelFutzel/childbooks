@@ -101,6 +101,11 @@ export interface TextBox {
   locked?: boolean;
   /** Optional display name (Layers panel). */
   name?: string;
+  /**
+   * Semantic role linking this box to a data field so the two stay in sync —
+   * e.g. "book-title" mirrors the project title / front-cover title.
+   */
+  role?: "book-title";
   /** Hidden from the page (still listed in Layers). */
   hidden?: boolean;
   /** Shadow / blur effects. */

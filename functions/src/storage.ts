@@ -153,6 +153,38 @@ export async function uploadBrandingWatermark(
   return { storagePath, publicUrl: publicMediaUrl(storagePath) };
 }
 
+/**
+ * Upload an admin-managed brand asset (logo, icon, favicon, social image, …) to
+ * the world-readable `public/branding/{slot}-...` space and return its path +
+ * public URL. `slot` only shapes the filename (sanitized), never the ACL.
+ */
+export async function uploadBrandingAsset(
+  slot: string,
+  buf: Buffer,
+  contentType: string,
+): Promise<{ storagePath: string; publicUrl: string }> {
+  const safeSlot = slot.replace(/[^a-z0-9]/gi, "").slice(0, 40) || "asset";
+  const storagePath = `public/branding/${safeSlot}-${randomUUID()}.${extForMime(contentType)}`;
+  await bucket().file(storagePath).save(buf, { contentType: contentType || "image/png", resumable: false });
+  return { storagePath, publicUrl: publicMediaUrl(storagePath) };
+}
+
+/**
+ * Upload an admin-managed landing-page illustration to the world-readable
+ * `public/site/{slot}-...` space and return its path + public URL. `slot` only
+ * shapes the filename (sanitized), never the ACL.
+ */
+export async function uploadSiteImage(
+  slot: string,
+  buf: Buffer,
+  contentType: string,
+): Promise<{ storagePath: string; publicUrl: string }> {
+  const safeSlot = slot.replace(/[^a-z0-9]/gi, "").slice(0, 40) || "image";
+  const storagePath = `public/site/${safeSlot}-${randomUUID()}.${extForMime(contentType)}`;
+  await bucket().file(storagePath).save(buf, { contentType: contentType || "image/png", resumable: false });
+  return { storagePath, publicUrl: publicMediaUrl(storagePath) };
+}
+
 /** Delete a previously uploaded object (best-effort). */
 export async function deletePublicObject(storagePath: string): Promise<void> {
   try {

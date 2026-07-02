@@ -17,6 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { ART_STYLE_PRESETS, AGE_RANGES } from "../../core/config/options";
+import { ageBandHasReadingModes, readingModeLabel } from "../../core/config/ageWritingCatalog";
 import { bookProductForConfig } from "../../core/book";
 import { isAbortError } from "../../core/errors";
 import type { Anchor, AnchorType } from "../../core/types";
@@ -87,7 +88,11 @@ export function StudioSidebar() {
   const styleLabel = project.config.artStyle.presetId
     ? ART_STYLE_PRESETS.find((s) => s.id === project.config.artStyle.presetId)?.label ?? "Custom"
     : "Custom";
-  const ageLabel = AGE_RANGES.find((a) => a.id === project.config.ageRangeId)?.label ?? project.config.ageRangeId;
+  const ageBase = AGE_RANGES.find((a) => a.id === project.config.ageRangeId)?.label ?? project.config.ageRangeId;
+  const ageLabel =
+    ageBandHasReadingModes(project.config.ageRangeId) && project.config.readingModeId
+      ? `${ageBase} · ${readingModeLabel(project.config.readingModeId)}`
+      : ageBase;
   const sizeLabel = bookProductForConfig(project.config).label;
 
   const everythingDone =

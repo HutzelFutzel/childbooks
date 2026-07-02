@@ -48,6 +48,7 @@ import {
 import { resolveImageModelClient, resolveModelsClient } from "../platform/aiResolve";
 import { useProjectsStore } from "./projectsStore";
 import { useSettingsStore } from "./settingsStore";
+import { useAppConfigStore } from "./appConfigStore";
 
 // Re-exported for existing UI imports (moved to the platform-agnostic core).
 export { currentAnchorImage } from "../core/pipeline/provenance";
@@ -375,13 +376,14 @@ export function buildIllustrationTask(project: Project, spread: ScreenplaySpread
     removedAnchors: [],
     hasCompositionRef: false,
     maskMode: false,
+    prompts: { artStyles: useAppConfigStore.getState().artStyles },
   });
 
   const request: ImageRenderRequest = {
     provider: imageModel.provider,
     model: imageModel.id,
     prompt,
-    size: chooseImageSize(spread.kind, project.config.bookSize),
+    size: chooseImageSize(spread.kind, project.config),
     references: references.length ? references : undefined,
   };
 

@@ -35,6 +35,14 @@ service firebase.storage {
       allow write: if false;
     }
 
+    // Admin-managed landing-page illustrations (inline drag-&-drop editor).
+    // World-readable so the marketing site can render them; written only by the
+    // backend (Admin SDK) after `requireAdmin`.
+    match /public/site/{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     // Backend-managed print assets are written via the Admin SDK (which bypasses
     // rules) and handed to Lulu through signed URLs — no client access needed.
     match /{allPaths=**} {

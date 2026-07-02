@@ -8,9 +8,12 @@ import {
   Keyboard,
   Lock,
   MousePointerClick,
+  Plus,
   Shapes,
+  Sparkles,
   Type,
   Unlock,
+  X,
 } from "lucide-react";
 import { textFromParagraphs } from "../../core/design";
 import { bookProductForConfig } from "../../core/book";
@@ -26,9 +29,10 @@ import { useStudio } from "./StudioContext";
 import { useDragSource, type DragItem } from "./StudioDnd";
 
 export function StudioInspector() {
+  const { step } = useStudio();
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ElementPalette />
+      {step === "edit" && <ElementPalette />}
       <div className="min-h-0 flex-1 overflow-y-auto">
         <InspectorBody />
       </div>
@@ -46,26 +50,34 @@ function ElementPalette() {
     selection.kind === "image"
       ? selection.pageId
       : undefined;
-  const fallbackPageId = selectedPageId ?? pages[0]?.id;
+  const targetPageId = selectedPageId ?? pages[0]?.id;
+  const targetPage = pages.find((p) => p.id === targetPageId);
 
   return (
     <section className="border-b border-ink-100 p-4">
-      <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-        Add elements
-      </p>
-      <div className="grid grid-cols-7 gap-1.5">
-        <PaletteTile
-          getItem={() => ({ type: "text", label: "Text" })}
-          onClick={fallbackPageId ? () => addBox(fallbackPageId) : undefined}
-          label="Text"
-        >
-          <Type className="size-4 text-ink-500" />
-        </PaletteTile>
+      <div className="mb-2 flex items-center justify-between">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Add to page</p>
+        {targetPage && (
+          <span className="max-w-36 truncate rounded-full bg-ink-100 px-2 py-0.5 text-[10px] font-medium text-ink-500">
+            {targetPage.label}
+          </span>
+        )}
+      </div>
+
+      <PaletteButton
+        getItem={() => ({ type: "text", label: "Text" })}
+        onClick={targetPageId ? () => addBox(targetPageId) : undefined}
+        icon={<Type className="size-4" />}
+        label="Text box"
+      />
+
+      <p className="mb-1.5 mt-3 text-[11px] font-medium text-ink-400">Shapes &amp; bubbles</p>
+      <div className="grid grid-cols-6 gap-1.5">
         {SHAPE_DEFS.map((def) => (
           <PaletteTile
             key={def.id}
             getItem={() => ({ type: "shape", kind: def.id, label: def.label })}
-            onClick={fallbackPageId ? () => addShape(fallbackPageId, def.id) : undefined}
+            onClick={targetPageId ? () => addShape(targetPageId, def.id) : undefined}
             label={def.label}
           >
             <svg width={20} height={20} viewBox="0 0 20 20" style={{ overflow: "visible" }}>
@@ -78,9 +90,39 @@ function ElementPalette() {
           </PaletteTile>
         ))}
       </div>
-      <p className="mt-2 text-[11px] text-ink-400">Drag onto a page, or click to drop it in.</p>
+
+      <p className="mt-2.5 text-[11px] leading-relaxed text-ink-400">
+        Click to drop on this page, or drag straight onto any page.
+      </p>
       <ShortcutsHint />
     </section>
+  );
+}
+
+/** Prominent, full-width add action (used for the primary "Text box" block). */
+function PaletteButton({
+  getItem,
+  onClick,
+  icon,
+  label,
+}: {
+  getItem: () => DragItem;
+  onClick?: () => void;
+  icon: React.ReactNode;
+  label: string;
+}) {
+  const drag = useDragSource(getItem, onClick);
+  return (
+    <button
+      {...drag}
+      className="flex w-full cursor-grab touch-none items-center gap-2 rounded-xl border border-ink-200 bg-white px-3 py-2.5 text-sm font-medium text-ink-700 shadow-soft transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 active:cursor-grabbing"
+    >
+      <span className="flex size-7 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+        {icon}
+      </span>
+      {label}
+      <Plus className="ml-auto size-4 text-ink-300" />
+    </button>
   );
 }
 
@@ -144,26 +186,38 @@ function InspectorBody() {
   const studio = useStudio();
   const { selection, project } = studio;
 
+  const pageLabelOf = (pageId: string) =>
+    studio.pages.find((p) => p.id === pageId)?.label;
+  const backToPage = (pageId: string) => studio.select({ kind: "page", pageId });
+
   if (selection.kind === "box" && studio.selectedBox) {
     const box = studio.selectedBox;
     const pageId = selection.pageId;
     const trim = bookProductForConfig(project.config).trim;
     return (
-      <Inspector
-        box={box}
-        selectedSpan={selection.span}
-        pageWidthIn={trim.widthIn}
-        pageHeightIn={trim.heightIn}
-        onChange={(patch) => studio.patchBox(pageId, box.id, patch)}
-        onChangeSpan={(ref, patch) => studio.patchSpan(pageId, box.id, ref, patch)}
-        onDelete={() => studio.deleteBox(pageId, box.id)}
-        onDuplicate={() => studio.duplicateBox(pageId, box.id)}
-        onAlign={(edge) => studio.alignBox(pageId, box.id, edge)}
-        onFitText={() => studio.fitTextToBox(pageId, box.id)}
-        onFitBox={() => studio.fitBoxToText(pageId, box.id)}
-        onToggleAutoFit={() => studio.toggleAutoFit(pageId, box.id)}
-        onToggleAutoFitGrow={() => studio.toggleAutoFitGrow(pageId, box.id)}
-      />
+      <>
+        <ContextHeader
+          icon={<Type className="size-4" />}
+          title="Text box"
+          subtitle={pageLabelOf(pageId)}
+          onClose={() => backToPage(pageId)}
+        />
+        <Inspector
+          box={box}
+          selectedSpan={selection.span}
+          pageWidthIn={trim.widthIn}
+          pageHeightIn={trim.heightIn}
+          onChange={(patch) => studio.patchBox(pageId, box.id, patch)}
+          onChangeSpan={(ref, patch) => studio.patchSpan(pageId, box.id, ref, patch)}
+          onDelete={() => studio.deleteBox(pageId, box.id)}
+          onDuplicate={() => studio.duplicateBox(pageId, box.id)}
+          onAlign={(edge) => studio.alignBox(pageId, box.id, edge)}
+          onFitText={() => studio.fitTextToBox(pageId, box.id)}
+          onFitBox={() => studio.fitBoxToText(pageId, box.id)}
+          onToggleAutoFit={() => studio.toggleAutoFit(pageId, box.id)}
+          onToggleAutoFitGrow={() => studio.toggleAutoFitGrow(pageId, box.id)}
+        />
+      </>
     );
   }
 
@@ -171,13 +225,21 @@ function InspectorBody() {
     const shape = studio.selectedShape;
     const pageId = selection.pageId;
     return (
-      <ShapeInspector
-        shape={shape}
-        onChange={(patch) => studio.patchShape(pageId, shape.id, patch)}
-        onDelete={() => studio.deleteShape(pageId, shape.id)}
-        onDuplicate={() => studio.duplicateShape(pageId, shape.id)}
-        onAlign={(edge) => studio.alignShape(pageId, shape.id, edge)}
-      />
+      <>
+        <ContextHeader
+          icon={<Shapes className="size-4" />}
+          title="Shape"
+          subtitle={pageLabelOf(pageId)}
+          onClose={() => backToPage(pageId)}
+        />
+        <ShapeInspector
+          shape={shape}
+          onChange={(patch) => studio.patchShape(pageId, shape.id, patch)}
+          onDelete={() => studio.deleteShape(pageId, shape.id)}
+          onDuplicate={() => studio.duplicateShape(pageId, shape.id)}
+          onAlign={(edge) => studio.alignShape(pageId, shape.id, edge)}
+        />
+      </>
     );
   }
 
@@ -185,13 +247,21 @@ function InspectorBody() {
     const image = studio.selectedImage;
     const pageId = selection.pageId;
     return (
-      <ImageInspector
-        image={image}
-        onChange={(patch) => studio.patchImage(pageId, image.id, patch)}
-        onDelete={() => studio.deleteImage(pageId, image.id)}
-        onDuplicate={() => studio.duplicateImage(pageId, image.id)}
-        onAlign={(edge) => studio.alignImage(pageId, image.id, edge)}
-      />
+      <>
+        <ContextHeader
+          icon={<ImageIcon className="size-4" />}
+          title={image.kind === "illustration" ? "Illustration" : "Image"}
+          subtitle={pageLabelOf(pageId)}
+          onClose={() => backToPage(pageId)}
+        />
+        <ImageInspector
+          image={image}
+          onChange={(patch) => studio.patchImage(pageId, image.id, patch)}
+          onDelete={() => studio.deleteImage(pageId, image.id)}
+          onDuplicate={() => studio.duplicateImage(pageId, image.id)}
+          onAlign={(edge) => studio.alignImage(pageId, image.id, edge)}
+        />
+      </>
     );
   }
 
@@ -199,16 +269,21 @@ function InspectorBody() {
     const anchor = project.anchors?.find((a) => a.id === selection.anchorId);
     if (!anchor) return <EmptyInspector />;
     return (
-      <div className="p-4">
-        <h3 className="mb-3 flex items-center gap-2 text-sm font-bold text-ink-900">
-          <ImageIcon className="size-4 text-brand-500" /> {anchor.name}
-        </h3>
-        <AnchorEditor
-          anchor={anchor}
-          generating={studio.generatingAnchors.has(anchor.id)}
-          setGenerating={(v) => studio.setAnchorGenerating(anchor.id, v)}
+      <>
+        <ContextHeader
+          icon={<ImageIcon className="size-4" />}
+          title={anchor.name}
+          subtitle="Character / place"
+          onClose={() => studio.select({ kind: "none" })}
         />
-      </div>
+        <div className="p-4">
+          <AnchorEditor
+            anchor={anchor}
+            generating={studio.generatingAnchors.has(anchor.id)}
+            setGenerating={(v) => studio.setAnchorGenerating(anchor.id, v)}
+          />
+        </div>
+      </>
     );
   }
 
@@ -217,46 +292,85 @@ function InspectorBody() {
     const page = studio.pages.find((p) => p.id === selection.pageId);
     const hasIllustrationEl = (pd.images ?? []).some((im) => im.kind === "illustration");
     return (
-      <div className="space-y-5 p-4">
-        <h3 className="flex items-center gap-2 text-sm font-bold text-ink-900">
-          <Type className="size-4 text-brand-500" /> {page?.label ?? "Page"}
-        </h3>
-        <p className="text-xs text-ink-400">
-          Click a text box on the page to style it, or add one from the page's toolbar.
-        </p>
-
-        {page?.blobId && !hasIllustrationEl && (
-          <button
-            onClick={() => studio.makeIllustrationEditable(selection.pageId)}
-            className="flex w-full items-center justify-center gap-2 rounded-lg border border-ink-200 px-3 py-2 text-xs font-medium text-ink-600 transition hover:border-brand-300 hover:bg-brand-50"
-          >
-            <ImageIcon className="size-4" /> Reposition / resize illustration
-          </button>
-        )}
-
-        <LayersPanel pageId={selection.pageId} />
-
-        <div>
-          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-400">
-            Page background
+      <>
+        <ContextHeader
+          icon={<BookOpen className="size-4" />}
+          title={page?.label ?? "Page"}
+          subtitle="Page settings"
+          onClose={() => studio.select({ kind: "none" })}
+        />
+        <div className="space-y-5 p-4">
+          <p className="text-xs leading-relaxed text-ink-400">
+            Click any text box or shape on the page to style it, or add one from the panel above.
           </p>
-          <ColorField
-            label="Fill"
-            value={pd.background?.color ?? "rgba(255,255,255,0)"}
-            onChange={(color) => studio.setPageBackground(selection.pageId, { color })}
-          />
-          <div className="mt-2">
-            <PatternPicker
-              value={pd.background?.pattern}
-              onChange={(pattern) => studio.setPageBackground(selection.pageId, { pattern })}
+
+          {page?.blobId && !hasIllustrationEl && (
+            <button
+              onClick={() => studio.makeIllustrationEditable(selection.pageId)}
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-ink-200 px-3 py-2 text-xs font-medium text-ink-600 transition hover:border-brand-300 hover:bg-brand-50"
+            >
+              <ImageIcon className="size-4" /> Reposition / resize illustration
+            </button>
+          )}
+
+          <LayersPanel pageId={selection.pageId} />
+
+          <div>
+            <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-400">
+              Page background
+            </p>
+            <ColorField
+              label="Fill"
+              value={pd.background?.color ?? "rgba(255,255,255,0)"}
+              onChange={(color) => studio.setPageBackground(selection.pageId, { color })}
             />
+            <div className="mt-2">
+              <PatternPicker
+                value={pd.background?.pattern}
+                onChange={(pattern) => studio.setPageBackground(selection.pageId, { pattern })}
+              />
+            </div>
           </div>
         </div>
-      </div>
+      </>
     );
   }
 
   return <EmptyInspector />;
+}
+
+/** A sticky context strip telling you what's being edited, with a way out. */
+function ContextHeader({
+  icon,
+  title,
+  subtitle,
+  onClose,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  subtitle?: string;
+  onClose?: () => void;
+}) {
+  return (
+    <div className="sticky top-0 z-10 flex items-center gap-2.5 border-b border-ink-100 bg-white/95 px-4 py-2.5 backdrop-blur">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+        {icon}
+      </span>
+      <div className="min-w-0 flex-1 leading-tight">
+        <p className="truncate text-sm font-semibold text-ink-800">{title}</p>
+        {subtitle && <p className="truncate text-[11px] text-ink-400">{subtitle}</p>}
+      </div>
+      {onClose && (
+        <button
+          onClick={onClose}
+          title="Done"
+          className="rounded-lg p-1.5 text-ink-400 transition hover:bg-ink-100 hover:text-ink-700"
+        >
+          <X className="size-4" />
+        </button>
+      )}
+    </div>
+  );
 }
 
 interface LayerRow {
@@ -381,16 +495,32 @@ function LayersPanel({ pageId }: { pageId: string }) {
 }
 
 function EmptyInspector() {
+  const { step } = useStudio();
+  if (step === "anchors") {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+        <span className="flex size-12 items-center justify-center rounded-2xl bg-brand-50 text-brand-500">
+          <ImageIcon className="size-6" />
+        </span>
+        <p className="text-sm font-semibold text-ink-700">Refine a character</p>
+        <p className="max-w-60 text-xs leading-relaxed text-ink-400">
+          <MousePointerClick className="mr-1 inline size-3.5" />
+          Pick any character or place from the gallery to generate its reference art, describe how
+          it should look, or branch new versions.
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
       <span className="flex size-12 items-center justify-center rounded-2xl bg-brand-50 text-brand-500">
-        <BookOpen className="size-6" />
+        <Sparkles className="size-6" />
       </span>
-      <p className="text-sm font-semibold text-ink-700">Design everything in one place</p>
+      <p className="text-sm font-semibold text-ink-700">Nothing selected</p>
       <p className="max-w-60 text-xs leading-relaxed text-ink-400">
         <MousePointerClick className="mr-1 inline size-3.5" />
-        Drag an element above onto a page, pick a character in the left sidebar to refine its look,
-        or click a page to lay out its text, shapes and background.
+        Click a page to set its background, tap any text or shape to style it, or add a new element
+        from the panel above.
       </p>
     </div>
   );

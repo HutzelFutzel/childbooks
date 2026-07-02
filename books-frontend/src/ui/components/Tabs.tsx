@@ -13,12 +13,14 @@ export interface TabsProps {
   value: string;
   onChange: (id: string) => void;
   className?: string;
+  /** Stretch tabs evenly across the container width. */
+  fullWidth?: boolean;
 }
 
-export function Tabs({ items, value, onChange, className }: TabsProps) {
+export function Tabs({ items, value, onChange, className, fullWidth }: TabsProps) {
   const layoutId = useId();
   return (
-    <div className={cn("inline-flex rounded-xl bg-ink-100 p-1", className)}>
+    <div className={cn("inline-flex rounded-xl bg-ink-100 p-1", fullWidth && "flex w-full", className)}>
       {items.map((item) => {
         const active = item.id === value;
         return (
@@ -27,6 +29,7 @@ export function Tabs({ items, value, onChange, className }: TabsProps) {
             onClick={() => onChange(item.id)}
             className={cn(
               "relative inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-sm font-medium transition-colors",
+              fullWidth && "min-w-0 flex-1 justify-center px-2 text-xs sm:px-3.5 sm:text-sm",
               active ? "text-ink-900" : "text-ink-500 hover:text-ink-700",
             )}
           >

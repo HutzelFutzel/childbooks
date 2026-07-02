@@ -38,6 +38,7 @@ import {
 import { locateSubjects, type SubjectBox } from "./localize";
 import { effectiveAnchorIds } from "../book/anchorRefs";
 import { anchorSignature, currentAnchorImage, currentReferenceUses } from "./provenance";
+import type { PromptContext } from "../prompts/context";
 
 /** Compositing operations, in base64 terms so core stays Buffer-free. */
 export interface CompositeOps {
@@ -73,6 +74,8 @@ export interface PipelineEnv {
   /** Persist a base64 image and return its new blob id. */
   saveImage(base64: string, mimeType: string): Promise<string>;
   composite: CompositeOps;
+  /** Admin-managed prompt overlays (art styles, age writing). */
+  prompts?: PromptContext;
 }
 
 export interface IllustrationRunOptions {
@@ -217,6 +220,7 @@ async function trySurgicalAnchorUpdate(args: {
           anchor: s.anchor,
           config: args.config,
           maskMode: isOpenAI,
+          prompts: env.prompts,
         }),
         size,
         creds: { apiKey: imageKey },
@@ -396,7 +400,7 @@ export async function renderIllustration(
       page: compositionData,
       imageModel,
       imageKey: key,
-      size: chooseImageSize(spread.kind, project.config.bookSize),
+      size: chooseImageSize(spread.kind, project.config),
       env,
       signal: options.signal,
     });
@@ -449,11 +453,12 @@ export async function renderIllustration(
     hasCompositionRef,
     maskMode,
     edit: options.edit,
+    prompts: env.prompts,
   });
 
   const result = await generateIllustrationImage({
     prompt,
-    size: chooseImageSize(spread.kind, project.config.bookSize),
+    size: chooseImageSize(spread.kind, project.config),
     creds: { apiKey: key },
     model: imageModel.id,
     providerId: imageModel.provider,

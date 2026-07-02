@@ -73,6 +73,23 @@ export function moveSpread(spreadId: string, dir: -1 | 1): void {
   });
 }
 
+/**
+ * Drag-and-drop reorder: pull one or more spreads out and reinsert them
+ * immediately before `beforeId` (or at the end when `beforeId` is null). Used by
+ * the grid view to let whole page-units be dragged into a new position.
+ */
+export function moveSpreadBefore(draggedIds: string[], beforeId: string | null): void {
+  const set = new Set(draggedIds);
+  writeSpreads((spreads) => {
+    const moving = spreads.filter((s) => set.has(s.id));
+    if (moving.length === 0) return spreads;
+    const rest = spreads.filter((s) => !set.has(s.id));
+    const at = beforeId ? rest.findIndex((s) => s.id === beforeId) : rest.length;
+    const insertAt = at < 0 ? rest.length : at;
+    return [...rest.slice(0, insertAt), ...moving, ...rest.slice(insertAt)];
+  });
+}
+
 /** Duplicate a page (text/brief + design overlay), placing the copy right after. */
 export function duplicateSpread(spreadId: string): string {
   const id = spreadUid();

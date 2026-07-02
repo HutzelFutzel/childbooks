@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Konva from "konva";
 import type { KonvaEventObject } from "konva/lib/Node";
-import { Circle, Group, Image as KonvaImage, Layer, Line, Rect, Stage, Transformer } from "react-konva";
+import { Circle, Group, Image as KonvaImage, Layer, Line, Rect, Stage, Text, Transformer } from "react-konva";
 import type {
   ImageElement,
   NormRect,
@@ -70,6 +70,7 @@ export function PageStage({
   editable = true,
   dropId,
   showGutter = false,
+  printGuides = null,
   chromeless = false,
   snap = true,
   grid = false,
@@ -92,6 +93,17 @@ export function PageStage({
   dropId?: string;
   /** Draw a center fold guide (double-page spreads) so the page edge is visible. */
   showGutter?: boolean;
+  /**
+   * Print-safety guides: a dashed safe-area rectangle (keep text/important art
+   * inside), an optional translucent gutter band on the binding side, and an
+   * optional reserved barcode zone (back cover). Normalized to the page surface
+   * (0..1). Null hides them.
+   */
+  printGuides?: {
+    safe: NormRect;
+    gutter: { x: number; w: number } | null;
+    barcode?: NormRect | null;
+  } | null;
   /** Drop the page's own frame chrome (rounding/ring/shadow) so a wrapper can
    * provide a single shared frame (e.g. two facing pages in one spread). */
   chromeless?: boolean;
@@ -535,6 +547,58 @@ export function PageStage({
                       listening={false}
                     />
                   ))}
+                </>
+              )}
+
+              {printGuides && W > 0 && H > 0 && (
+                <>
+                  {printGuides.gutter && (
+                    <Rect
+                      x={printGuides.gutter.x * W}
+                      y={0}
+                      width={printGuides.gutter.w * W}
+                      height={H}
+                      fill="rgba(244,63,94,0.10)"
+                      listening={false}
+                    />
+                  )}
+                  <Rect
+                    x={printGuides.safe.x * W}
+                    y={printGuides.safe.y * H}
+                    width={printGuides.safe.w * W}
+                    height={printGuides.safe.h * H}
+                    stroke="rgba(16,185,129,0.85)"
+                    strokeWidth={1}
+                    dash={[6, 5]}
+                    listening={false}
+                  />
+                  {printGuides.barcode && (
+                    <>
+                      <Rect
+                        x={printGuides.barcode.x * W}
+                        y={printGuides.barcode.y * H}
+                        width={printGuides.barcode.w * W}
+                        height={printGuides.barcode.h * H}
+                        fill="rgba(15,23,42,0.06)"
+                        stroke="rgba(15,23,42,0.45)"
+                        strokeWidth={1}
+                        dash={[4, 4]}
+                        listening={false}
+                      />
+                      <Text
+                        x={printGuides.barcode.x * W}
+                        y={printGuides.barcode.y * H}
+                        width={printGuides.barcode.w * W}
+                        height={printGuides.barcode.h * H}
+                        text={"Barcode area\n(reserved)"}
+                        align="center"
+                        verticalAlign="middle"
+                        fontSize={11}
+                        fill="rgba(15,23,42,0.55)"
+                        listening={false}
+                      />
+                    </>
+                  )}
                 </>
               )}
 

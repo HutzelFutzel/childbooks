@@ -1,68 +1,109 @@
-import Link from "next/link";
+import type { Metadata, Viewport } from "next";
+import { getSeoConfig } from "../server/seo";
+import { getBrandingConfig } from "../server/branding";
+import { getPublicPlans } from "../server/plans";
+import { getSiteImagesConfig } from "../server/siteImages";
+import { getSiteContentConfig } from "../server/siteContent";
+import { Nav } from "../ui/marketing/Nav";
+import { Hero } from "../ui/marketing/Hero";
+import { TrustStrip } from "../ui/marketing/TrustStrip";
+import { HowItWorks } from "../ui/marketing/HowItWorks";
+import { Features } from "../ui/marketing/Features";
+import { Pricing } from "../ui/marketing/Pricing";
+import { Faq } from "../ui/marketing/Faq";
+import { CtaBand } from "../ui/marketing/CtaBand";
+import { Footer } from "../ui/marketing/Footer";
+import { JsonLd } from "../ui/marketing/JsonLd";
+import { AdminEditBar } from "../ui/marketing/AdminEditBar";
 
 /**
- * Marketing landing page — server-rendered for SEO. The interactive editor
- * lives at /studio (client-only). Public/shareable pages like this one are the
- * reason the app is on Next.js + App Hosting rather than a plain SPA.
+ * Marketing landing page — server-rendered for SEO. Title/description, social
+ * metadata, robots and structured data all come from the admin-managed SEO
+ * config (`appConfig/seo`); pricing comes from the public plans projection.
+ * Rendered per request so admin edits appear without a redeploy.
  */
-export default function Home() {
-  return (
-    <main className="min-h-screen bg-grid">
-      <div className="mx-auto flex max-w-5xl flex-col items-center px-6 py-24 text-center">
-        <span className="rounded-full bg-brand-100 px-4 py-1 text-sm font-semibold text-brand-700">
-          Childbook Studio
-        </span>
-        <h1 className="mt-6 max-w-3xl text-5xl font-extrabold tracking-tight text-ink-900 sm:text-6xl">
-          Turn a story into a printed picture book.
-        </h1>
-        <p className="mt-6 max-w-2xl text-lg text-ink-600">
-          Write your tale, design recurring characters and places, and let AI
-          illustrate every page with a consistent look — then export a
-          print-ready book.
-        </p>
-        <div className="mt-10 flex items-center gap-4">
-          <Link
-            href="/studio"
-            className="rounded-2xl bg-brand-600 px-8 py-3.5 text-base font-semibold text-white shadow-soft transition hover:bg-brand-700"
-          >
-            Open the Studio
-          </Link>
-          <a
-            href="#how-it-works"
-            className="rounded-2xl border border-ink-200 bg-white px-8 py-3.5 text-base font-semibold text-ink-700 transition hover:border-ink-300"
-          >
-            How it works
-          </a>
-        </div>
+export const dynamic = "force-dynamic";
 
-        <section
-          id="how-it-works"
-          className="mt-24 grid w-full gap-6 text-left sm:grid-cols-3"
-        >
-          {[
-            {
-              title: "1. Write",
-              body: "Paste or write your story. We analyze it into characters, places, and a page-by-page screenplay.",
-            },
-            {
-              title: "2. Illustrate",
-              body: "Design references once; every page reuses them so your cast stays visually consistent.",
-            },
-            {
-              title: "3. Print",
-              body: "Lay out text and art, then export a full-bleed, print-ready PDF for fulfillment.",
-            },
-          ].map((card) => (
-            <div
-              key={card.title}
-              className="rounded-2xl border border-ink-200 bg-white p-6 shadow-soft"
-            >
-              <h2 className="text-lg font-bold text-ink-900">{card.title}</h2>
-              <p className="mt-2 text-sm text-ink-600">{card.body}</p>
-            </div>
-          ))}
-        </section>
-      </div>
-    </main>
+function safeUrl(url: string): URL | undefined {
+  try {
+    return new URL(url);
+  } catch {
+    return undefined;
+  }
+}
+
+export async function generateMetadata(): Promise<Metadata> {
+  const [seo, branding] = await Promise.all([getSeoConfig(), getBrandingConfig()]);
+  const canonical = `${seo.siteUrl}${seo.canonicalPath}`;
+  const ogImage = branding.ogImage?.imageUrl;
+  const ogAlt = branding.ogImage?.alt || seo.titleDefault;
+
+  return {
+    metadataBase: safeUrl(seo.siteUrl),
+    title: { default: seo.titleDefault, template: seo.titleTemplate },
+    description: seo.description,
+    keywords: seo.keywords.length > 0 ? seo.keywords : undefined,
+    applicationName: seo.siteName,
+    alternates: { canonical },
+    robots: {
+      index: seo.robots.index,
+      follow: seo.robots.follow,
+      googleBot: { index: seo.robots.index, follow: seo.robots.follow },
+    },
+    openGraph: {
+      type: "website",
+      siteName: seo.siteName,
+      title: seo.titleDefault,
+      description: seo.description,
+      url: canonical,
+      images: ogImage ? [{ url: ogImage, alt: ogAlt }] : undefined,
+    },
+    twitter: {
+      card: seo.twitterCard,
+      site: seo.twitterHandle || undefined,
+      title: seo.titleDefault,
+      description: seo.description,
+      images: ogImage ? [ogImage] : undefined,
+    },
+    verification: {
+      google: seo.verification.google || undefined,
+      other: seo.verification.bing ? { "msvalidate.01": seo.verification.bing } : undefined,
+    },
+  };
+}
+
+export async function generateViewport(): Promise<Viewport> {
+  const branding = await getBrandingConfig();
+  return { themeColor: branding.colors.primary };
+}
+
+export default async function Home() {
+  const [seo, branding, plans, siteImages, siteContent] = await Promise.all([
+    getSeoConfig(),
+    getBrandingConfig(),
+    getPublicPlans(),
+    getSiteImagesConfig(),
+    getSiteContentConfig(),
+  ]);
+  const logoUrl = branding.logo?.imageUrl ?? null;
+  const images = siteImages.images;
+  const text = siteContent.text;
+
+  return (
+    <>
+      <JsonLd seo={seo} branding={branding} plans={plans} />
+      <Nav siteName={branding.brandName} logoUrl={logoUrl} />
+      <main>
+        <Hero images={images} text={text} />
+        <TrustStrip text={text} />
+        <HowItWorks images={images} text={text} />
+        <Features text={text} />
+        <Pricing initial={plans} />
+        <Faq items={seo.faq} />
+        <CtaBand text={text} />
+      </main>
+      <Footer siteName={branding.brandName} logoUrl={logoUrl} />
+      <AdminEditBar />
+    </>
   );
 }
