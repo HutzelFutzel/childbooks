@@ -80,6 +80,19 @@ export async function getBlobBase64(
   return entry;
 }
 
+/**
+ * Duplicate a stored blob under a fresh id (returns null when the source is
+ * missing). Used when importing images across projects: version-tree blobs are
+ * project-exclusive by construction, so a shared id would be GC'd with its
+ * source project — each project must own its own copy.
+ */
+export async function copyBlob(id: string): Promise<string | null> {
+  const backend = await getStorage();
+  const blob = await backend.blobs.get(id);
+  if (!blob) return null;
+  return putBlob(blob);
+}
+
 export async function removeBlob(id: string): Promise<void> {
   base64Cache.delete(id);
   const backend = await getStorage();

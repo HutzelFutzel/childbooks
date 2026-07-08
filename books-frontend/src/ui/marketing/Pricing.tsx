@@ -101,7 +101,7 @@ export function Pricing({ initial }: { initial: PublicPlansConfig }) {
                   )}
                 >
                   {plan.badges[0] && (
-                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-brand-600 px-3 py-1 text-xs font-semibold text-white shadow-soft">
+                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-brand-600 px-3 py-1 text-xs font-semibold text-(--color-brand-foreground) shadow-soft">
                       {plan.badges[0]}
                     </span>
                   )}
@@ -137,7 +137,7 @@ export function Pricing({ initial }: { initial: PublicPlansConfig }) {
                     className={cn(
                       "mt-7 inline-flex items-center justify-center gap-2 rounded-2xl px-6 py-3 text-sm font-semibold transition",
                       featured
-                        ? "bg-brand-600 text-white shadow-soft hover:bg-brand-700"
+                        ? "bg-brand-600 text-(--color-brand-foreground) shadow-soft hover:bg-brand-700"
                         : "border border-ink-200 text-ink-700 hover:border-ink-300",
                     )}
                   >

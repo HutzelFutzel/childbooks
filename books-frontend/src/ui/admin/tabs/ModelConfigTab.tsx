@@ -7,11 +7,14 @@ import { ALL_PROVIDERS } from "../../../core/providers";
 import type { ProviderId } from "../../../core/config/options";
 import {
   configuredModels,
+  DEFAULT_IMAGE_TIER_LABELS,
   IMAGE_SPEED_LABELS,
   IMAGE_SPEEDS,
+  IMAGE_TIERS,
   TEXT_SPEED_LABELS,
   TEXT_SPEEDS,
   type ImageSpeed,
+  type ImageTier,
   type ModelConfig,
   type ModelSlots,
   type TextSpeed,
@@ -220,10 +223,27 @@ export function ModelConfigTab() {
     setDirty(true);
     setDraft((d) => ({ ...d, textBindings: { ...d.textBindings, [action]: { provider, speed } } }));
   };
-  const setImageBinding = (action: ImageActionId, provider: ProviderId, speed: ImageSpeed) => {
+  const setImageBinding = (
+    action: ImageActionId,
+    tier: ImageTier,
+    provider: ProviderId,
+    speed: ImageSpeed,
+  ) => {
     setDirty(true);
-    setDraft((d) => ({ ...d, imageBindings: { ...d.imageBindings, [action]: { provider, speed } } }));
+    setDraft((d) => ({
+      ...d,
+      imageBindings: {
+        ...d.imageBindings,
+        [action]: { ...d.imageBindings[action], [tier]: { provider, speed } },
+      },
+    }));
   };
+  const setTierLabel = (tier: ImageTier, label: string) => {
+    setDirty(true);
+    setDraft((d) => ({ ...d, imageTierLabels: { ...d.imageTierLabels, [tier]: label } }));
+  };
+  const tierLabel = (tier: ImageTier) =>
+    draft.imageTierLabels?.[tier]?.trim() || DEFAULT_IMAGE_TIER_LABELS[tier];
 
   const hasCost = (p: ProviderId, modelId: string) =>
     !!modelId.trim() && !!modelCosts.models[costKey(p, modelId.trim())];
@@ -242,10 +262,16 @@ export function ModelConfigTab() {
       const b = draft.textBindings[a.id];
       return !textValues.has(`${b.provider}:${b.speed}`);
     }).length +
-    IMAGE_ACTIONS.filter((a) => {
-      const b = draft.imageBindings[a.id];
-      return !imageValues.has(`${b.provider}:${b.speed}`);
-    }).length;
+    IMAGE_ACTIONS.reduce((n, a) => {
+      const tiers = draft.imageBindings[a.id];
+      return (
+        n +
+        IMAGE_TIERS.filter((t) => {
+          const b = tiers?.[t];
+          return !b || !imageValues.has(`${b.provider}:${b.speed}`);
+        }).length
+      );
+    }, 0);
   const allValid = invalidCount === 0;
 
   const onSave = async () => {
@@ -379,33 +405,100 @@ export function ModelConfigTab() {
             })}
           </div>
 
-          <div className="space-y-2">
+          <div className="space-y-3">
             <div className="flex items-center gap-2">
               <ModalityBadge modality="image" />
               <span className="text-xs font-semibold text-ink-600">Image actions</span>
             </div>
+            <p className="text-xs text-ink-500">
+              Each image action binds one model per user-facing quality tier. Users pick their
+              default tier in Settings and can switch per generation, so e.g. &ldquo;{tierLabel("quick")}&rdquo;
+              can be a fast Gemini model while &ldquo;{tierLabel("premium")}&rdquo; is a higher-fidelity
+              OpenAI model.
+            </p>
             {imageOptions.length === 0 && (
               <div className="flex items-center gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
                 <AlertTriangle className="size-3.5" />
                 No image model slots are defined. Add one above before binding image actions.
               </div>
             )}
-            {IMAGE_ACTIONS.map((action) => {
-              const b = draft.imageBindings[action.id];
-              const value = `${b.provider}:${b.speed}`;
-              return (
-                <BindingRow
-                  key={action.id}
-                  action={action}
-                  modality="image"
-                  value={value}
-                  options={imageOptions}
-                  valid={imageValues.has(value)}
-                  onChange={(provider, speed) => setImageBinding(action.id, provider, speed as ImageSpeed)}
-                />
-              );
-            })}
+            {IMAGE_ACTIONS.map((action) => (
+              <div
+                key={action.id}
+                className="space-y-2 rounded-xl ring-1 ring-inset ring-ink-100 p-3"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <ModalityBadge modality="image" />
+                    <span className="text-sm font-medium text-ink-800">{action.label}</span>
+                  </div>
+                  <div className="text-xs text-ink-500">{action.help}</div>
+                </div>
+                {IMAGE_TIERS.map((tier) => {
+                  const b = draft.imageBindings[action.id]?.[tier];
+                  const value = b ? `${b.provider}:${b.speed}` : "";
+                  const valid = imageValues.has(value);
+                  const selectOptions = valid
+                    ? imageOptions
+                    : [{ value: "", label: "— Select a model —" }, ...imageOptions];
+                  return (
+                    <div
+                      key={tier}
+                      className={
+                        "flex flex-col gap-1.5 rounded-lg border-l-4 border-l-violet-200 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" +
+                        (valid ? " bg-ink-50/40" : " bg-amber-50/60")
+                      }
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex items-center rounded-md bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-700">
+                          {tierLabel(tier)}
+                        </span>
+                        {!valid && (
+                          <span className="flex items-center gap-1 text-xs font-medium text-amber-700">
+                            <AlertTriangle className="size-3.5" />
+                            Pick a model
+                          </span>
+                        )}
+                      </div>
+                      <Select
+                        className="w-full sm:w-80"
+                        value={valid ? value : ""}
+                        options={selectOptions}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (!v) return;
+                          const [provider, speed] = v.split(":");
+                          setImageBinding(action.id, tier, provider as ProviderId, speed as ImageSpeed);
+                        }}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            ))}
           </div>
+        </div>
+      </section>
+
+      {/* Stage 3: tier names */}
+      <section className="space-y-3">
+        <header>
+          <h3 className="text-sm font-semibold text-ink-800">Stage 3 · Quality tier names</h3>
+          <p className="text-xs text-ink-500">
+            The labels users see when choosing image quality. Defaults are
+            &ldquo;{DEFAULT_IMAGE_TIER_LABELS.quick}&rdquo; and &ldquo;{DEFAULT_IMAGE_TIER_LABELS.premium}&rdquo;.
+          </p>
+        </header>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {IMAGE_TIERS.map((tier) => (
+            <Field key={tier} label={tier === "quick" ? "Faster / cheaper tier" : "Higher-quality tier"}>
+              <Input
+                value={draft.imageTierLabels?.[tier] ?? ""}
+                placeholder={DEFAULT_IMAGE_TIER_LABELS[tier]}
+                onChange={(e) => setTierLabel(tier, e.target.value)}
+              />
+            </Field>
+          ))}
         </div>
       </section>
 

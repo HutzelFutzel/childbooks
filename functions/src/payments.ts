@@ -45,7 +45,19 @@ export type PaymentStatus =
   | "refunded" // fully refunded
   | "partially_refunded"; // partial refund
 
-export type PaymentKind = "order" | "subscription" | "sparkPack";
+export type PaymentKind = "order" | "subscription" | "sparkPack" | "sparkGift" | "ebook";
+
+/**
+ * What the webhook needs to deliver a purchased ebook AFTER payment: the
+ * already-uploaded PDF's token URL plus the project it belongs to. Stored on
+ * the admin payment doc only; the buyer gets the URL via `users/{uid}/ebooks`
+ * once the payment settles.
+ */
+export interface EbookFulfillment {
+  projectId: string;
+  title: string;
+  fileUrl: string;
+}
 
 /**
  * The plan needed to fulfill an order AFTER payment. Built at checkout (assets
@@ -89,6 +101,8 @@ export interface CreatePendingPaymentArgs {
   stripeCustomerId?: string | null;
   /** Present for `order` payments — drives fulfillment after payment. */
   fulfillment?: FulfillmentPlan | null;
+  /** Present for `ebook` payments — drives digital delivery after payment. */
+  ebook?: EbookFulfillment | null;
   /** Free-form item summary for admin/user display. */
   items?: { label: string; amount: number; quantity: number }[];
 }
@@ -123,6 +137,7 @@ export async function createPendingPayment(args: CreatePendingPaymentArgs): Prom
     feeAmount: null,
     netAmount: null,
     fulfillment: args.fulfillment ?? null,
+    ebook: args.ebook ?? null,
     events: [{ at: Date.now(), type: "checkout.created" }],
   });
 
@@ -135,14 +150,21 @@ export async function createPendingPayment(args: CreatePendingPaymentArgs): Prom
 export interface AdminPaymentRecord {
   id: string;
   ownerUid: string;
+  kind: PaymentKind;
   status: PaymentStatus;
   amount: number;
   currency: string;
+  feeAmount: number | null;
+  refundedAmount: number;
   stripePaymentIntentId: string | null;
   stripeChargeId: string | null;
   stripeCustomerId: string | null;
   orderId: string | null;
   fulfillment: FulfillmentPlan | null;
+  ebook: EbookFulfillment | null;
+  /** Retry bookkeeping for paid orders whose print placement failed. */
+  fulfillmentAttempts: number;
+  fulfillmentFailedAt: number | null;
 }
 
 /** Fetch the admin payment record (with the fulfillment plan) by our id. */
@@ -153,15 +175,85 @@ export async function getAdminPayment(paymentId: string): Promise<AdminPaymentRe
   return {
     id: paymentId,
     ownerUid: (d.ownerUid as string) ?? "",
+    kind: (d.kind as PaymentKind) ?? "order",
     status: (d.status as PaymentStatus) ?? "pending",
     amount: (d.amount as number) ?? 0,
     currency: (d.currency as string) ?? "USD",
+    feeAmount: (d.feeAmount as number) ?? null,
+    refundedAmount: (d.refundedAmount as number) ?? 0,
     stripePaymentIntentId: (d.stripePaymentIntentId as string) ?? null,
     stripeChargeId: (d.stripeChargeId as string) ?? null,
     stripeCustomerId: (d.stripeCustomerId as string) ?? null,
     orderId: (d.orderId as string) ?? null,
     fulfillment: (d.fulfillment as FulfillmentPlan) ?? null,
+    ebook: (d.ebook as EbookFulfillment) ?? null,
+    fulfillmentAttempts: (d.fulfillmentAttempts as number) ?? 0,
+    fulfillmentFailedAt: (d.fulfillmentFailedAt as number) ?? null,
   };
+}
+
+/**
+ * Record a failed fulfillment attempt on the admin payment doc (retry state).
+ * Clears the fulfillment claim so the scheduled retry can claim it again.
+ */
+export async function markFulfillmentFailed(paymentId: string, error: string): Promise<void> {
+  await db()
+    .doc(`payments/${paymentId}`)
+    .set(
+      {
+        fulfillmentAttempts: FieldValue.increment(1),
+        fulfillmentFailedAt: Date.now(),
+        lastFulfillmentError: error.slice(0, 1000),
+        fulfillmentClaimedAt: FieldValue.delete(),
+        events: FieldValue.arrayUnion({ at: Date.now(), type: "fulfillment.failed" }),
+      },
+      { merge: true },
+    );
+}
+
+/**
+ * Paid payments whose print order still isn't placed after a failure — the
+ * scheduled retry sweep works through these (bounded attempts).
+ */
+export async function listFailedFulfillments(maxAttempts: number): Promise<AdminPaymentRecord[]> {
+  // Single-field range query (no composite index); status filtered in memory.
+  const q = await db()
+    .collection("payments")
+    .where("fulfillmentFailedAt", ">", 0)
+    .limit(100)
+    .get();
+  const out: AdminPaymentRecord[] = [];
+  for (const doc of q.docs) {
+    const d = doc.data() as Record<string, unknown>;
+    if (d.orderId) continue;
+    if ((d.status as string) !== "paid") continue;
+    const attempts = (d.fulfillmentAttempts as number) ?? 0;
+    if (attempts >= maxAttempts) continue;
+    const rec = await getAdminPayment(doc.id);
+    if (rec) out.push(rec);
+  }
+  return out;
+}
+
+/**
+ * Whether the user has a PAID print order for a given project (matched via the
+ * fulfillment plan's merchantReference). Drives the ebook print-bundle
+ * discount. Single equality filter + in-memory refinement (no composite index).
+ */
+export async function hasPaidPrintOrder(uid: string, projectId: string): Promise<boolean> {
+  const q = await db()
+    .collection("payments")
+    .where("ownerUid", "==", uid)
+    .limit(300)
+    .get();
+  return q.docs.some((doc) => {
+    const d = doc.data() as Record<string, unknown>;
+    if ((d.kind as string) !== "order") return false;
+    const status = d.status as string;
+    if (status !== "paid" && status !== "partially_refunded") return false;
+    const plan = d.fulfillment as { merchantReference?: string | null } | null;
+    return plan?.merchantReference === projectId;
+  });
 }
 
 /** Resolve our paymentId from a Stripe PaymentIntent or Charge id (webhook lookups). */

@@ -12,8 +12,10 @@ import type {
   ReferenceImage,
 } from "../providers/types";
 import { resolveArtStyleText } from "../prompts/style";
-import type { PromptContext } from "../prompts/context";
+import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
+import { renderSinglePrompt } from "../prompts/render";
 import type { Anchor, BookConfig, ScreenplaySpread } from "../types";
+import { getBookLayout, type PageSide } from "../book/layouts";
 import { withRetry } from "./retry";
 
 /**
@@ -59,6 +61,28 @@ export interface BuildIllustrationPromptInput {
    */
   refreshAnchors?: Anchor[];
   /**
+   * Subjects newly toggled onto this page since the previous version — on a
+   * composition-preserving regeneration they must be ADDED to the scene.
+   */
+  addedAnchors?: Anchor[];
+  /**
+   * Subjects that are UNCHANGED since the previous version — already correct in
+   * the composition reference, so their sheets are NOT re-sent. The prompt
+   * locks them in place instead ("keep exactly as drawn").
+   */
+  keptAnchors?: Anchor[];
+  /**
+   * Parent→child containment pairs active on this page (e.g. a specific bed
+   * inside a room), so the model draws the child once, inside its parent,
+   * matching the child's own reference.
+   */
+  embeddedPairs?: { parent: Anchor; child: Anchor }[];
+  /**
+   * Whether an art-style exemplar is passed as the FIRST reference image (its
+   * rendering style should be matched, but never its subjects/composition).
+   */
+  hasStyleRef?: boolean;
+  /**
    * Whether the current page illustration is appended as the FINAL reference
    * image (used for edits, to preserve composition).
    */
@@ -69,6 +93,12 @@ export interface BuildIllustrationPromptInput {
   edit?: string;
   /** Admin prompt overlays (art-style descriptions). */
   prompts?: PromptContext;
+  /**
+   * Which physical side this page sits on, so the active layout can tell the
+   * model where to keep a calm, text-safe band. Undefined (e.g. covers) skips
+   * the layout guidance.
+   */
+  pageSide?: PageSide;
 }
 
 export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): string {
@@ -79,146 +109,107 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
     describedAnchors = [],
     removedAnchors = [],
     refreshAnchors = [],
+    addedAnchors = [],
+    keptAnchors = [],
+    embeddedPairs = [],
+    hasStyleRef = false,
     hasCompositionRef = false,
     maskMode = false,
     edit,
     prompts,
+    pageSide,
   } = input;
   const styleText = resolveArtStyleText(config.artStyle, prompts);
 
-  const parts: string[] = [];
+  // Structural layout guidance (keep the outer-edge text band calm) is folded
+  // into the layoutNote the template already renders, so the model reserves
+  // space for text without any template change. Covers pass no side ⇒ skipped.
+  const layoutGuidance = pageSide ? getBookLayout(config.layoutId).imageGuidance(pageSide) : "";
+  const combinedLayoutNote = [layoutGuidance, spread.layoutNote.trim()]
+    .filter(Boolean)
+    .join(" ");
+  const listOf = (arr: Anchor[]) => arr.map((a) => `${a.name} (${a.description})`).join("; ");
 
-  parts.push(
-    spread.kind === "spread"
-      ? "Full double-page spread illustration: ONE single continuous wide scene that spans both facing pages. Do NOT split it into two panels, do NOT mirror, tile, or duplicate the scene, and do NOT place a divider or seam down the center. Each character and object appears exactly once."
-      : "Single-page illustration.",
-  );
+  const characters = referencedAnchors.filter((a) => a.type === "character");
+  const settings = referencedAnchors.filter((a) => a.type !== "character");
 
-  parts.push(spread.illustration.trim());
-
-  // Print-format framing. Children's picture books print full-bleed, so the art
-  // must reach every edge (the outer ~0.5in is trimmed away). Keep faces and key
-  // details within the central safe area; on a double-page spread the vertical
-  // center falls on the binding, so keep important content off that fold too.
-  parts.push(
-    spread.kind === "spread"
-      ? "Compose it as a full-bleed image that fills the whole canvas to all four edges, with no borders, frames, or white margins. Keep faces and key details clear of the outer edges (which get trimmed) and clear of the vertical center, where the two pages meet at the binding."
-      : "Compose it as a full-bleed image that fills the whole canvas to all four edges, with no borders, frames, or white margins. Keep faces and key details within the central safe area, clear of the outer edges, which get trimmed.",
-  );
-
-  // Subjects with a reference image — bind by name (each image is also labeled
-  // with this name when sent to the model). Instructions differ by type:
-  // characters keep their identity but may re-pose; places/objects are locked.
-  if (referencedAnchors.length > 0) {
-    const characters = referencedAnchors.filter((a) => a.type === "character");
-    const settings = referencedAnchors.filter((a) => a.type !== "character");
-    if (characters.length > 0) {
-      parts.push(
-        `Keep these characters looking exactly like their provided reference images — ${characters
-          .map((a) => `${a.name} (${a.description})`)
-          .join(
-            "; ",
-          )}. Match each one's face, hair, colors, outfit and overall design to its own reference image; only their pose, expression and camera angle may change to fit the scene.`,
-      );
-    }
-    if (settings.length > 0) {
-      parts.push(
-        `These places/objects must match their reference images EXACTLY — ${settings
-          .map((a) => `${a.name} (${a.description})`)
-          .join(
-            "; ",
-          )}. Keep the same architecture, layout, furniture, props, materials and colors; only the camera angle or viewpoint may change. Do not redesign, rearrange, add or remove their elements unless this page's description explicitly says the setting changed.`,
-      );
-    }
+  // Reference-image legend: the provider receives images in a fixed order (an
+  // optional art-style exemplar first, then each named subject, then the page
+  // image). Spelling out that order lets the model bind each reference to the
+  // right subject. MUST mirror the order references are assembled in
+  // `renderIllustration`.
+  const legendNames: string[] = [];
+  if (hasStyleRef) legendNames.push("an art-style reference (match its style only, not its content)");
+  legendNames.push(...referencedAnchors.map((a) => a.name));
+  if (hasCompositionRef) {
+    legendNames.push(maskMode ? "the page being edited" : "the current page of this book");
   }
+  const legend = legendNames.map((name, i) => `(${i + 1}) ${name}`).join(", ");
 
-  if (describedAnchors.length > 0) {
-    parts.push(
-      "Also feature these subjects: " +
-        describedAnchors.map((a) => `${a.name} (${a.description})`).join("; ") +
-        ".",
-    );
-  }
+  // Kept subjects stay part of the allowed cast even though no sheet is sent.
+  const castNames = [...referencedAnchors, ...keptAnchors, ...describedAnchors].map((a) => a.name);
 
-  // Reference-image legend: the provider receives images in a fixed order
-  // (each named subject first, then the page image). Spelling out that order
-  // lets the model bind each reference to the right subject — critical when
-  // several characters/places changed and must ALL be updated, not just one.
-  if (referencedAnchors.length > 0) {
-    const legend = referencedAnchors.map((a) => a.name);
-    if (hasCompositionRef) {
-      legend.push(maskMode ? "the page being edited" : "the current page of this book");
-    }
-    parts.push(
-      `The reference images are provided in this exact order: ${legend
-        .map((name, i) => `(${i + 1}) ${name}`)
-        .join(", ")}. Use each reference image ONLY for its matching item above, and update every one of the named subjects to match its own reference.`,
-    );
-  }
+  // Tail-branch selection mirrors the original if/else-if chain exactly.
+  const hasEdit = Boolean(edit?.trim());
+  const tailMaskEdit = maskMode && hasEdit;
+  const tailCompositionEdit = !tailMaskEdit && hasCompositionRef && hasEdit;
+  const tailCompositionRefresh = !tailMaskEdit && hasCompositionRef && !hasEdit;
+  const tailPlainEdit = !tailMaskEdit && !hasCompositionRef && hasEdit;
 
-  // Closed cast + single-instance rule: prevent invented or duplicated subjects.
-  const castNames = [...referencedAnchors, ...describedAnchors].map((a) => a.name);
-  if (castNames.length > 0) {
-    parts.push(
-      `The only named subjects that may appear are: ${castNames.join(", ")}. Do NOT invent or add any other named characters or people. Each named subject must appear EXACTLY ONCE — never draw two copies of the same character. If the requested change involves a subject already in the scene, reposition or adjust that same existing subject instead of adding another.`,
-    );
-  }
+  const refreshNames = refreshAnchors.map((a) => a.name).join(", ");
+  const refreshClause =
+    refreshAnchors.length > 0
+      ? ` Also update these characters/places to match their new reference images above — their design changed since this page was made: ${refreshNames}.`
+      : "";
+  const changedClause =
+    refreshAnchors.length > 0
+      ? ` These subjects changed since this page was made and MUST be redrawn to match their NEW reference images above — replace their outdated look entirely: ${refreshNames}.`
+      : "";
+  const addedClause =
+    addedAnchors.length > 0
+      ? ` Additionally, ADD these subjects to the scene, matching their reference images above: ${addedAnchors.map((a) => a.name).join(", ")}.`
+      : "";
+  const embeddedList = embeddedPairs
+    .map((p) => `${p.child.name} appears INSIDE ${p.parent.name}`)
+    .join("; ");
+  const keptList = keptAnchors.map((a) => a.name).join(", ");
 
-  if (removedAnchors.length > 0) {
-    parts.push(
-      `Remove these subjects entirely — they must NOT appear in the image: ${removedAnchors
-        .map((a) => a.name)
-        .join(", ")}.`,
-    );
-  }
-
-  // Text is always handled by the app as a separate editable overlay — never
-  // baked into the artwork.
-  parts.push("Do NOT render any text, letters, captions, words, or numbers in the image.");
-  if (spread.layoutNote.trim()) {
-    parts.push(
-      `Leave clean, uncluttered negative space for a separate text block: ${spread.layoutNote.trim()}.`,
-    );
-  } else {
-    parts.push("Leave some clean negative space where a text block can be placed.");
-  }
-
-  parts.push(`Art style: ${styleText}.`);
-  parts.push("Children's picture-book illustration, cohesive composition, no watermark.");
-
-  if (maskMode && edit?.trim()) {
-    parts.push(
-      `Inpainting edit: only modify the transparent (masked) region of the LAST reference image — apply this change there: ${edit.trim()}. Keep every pixel outside the mask exactly identical (same characters, colors, lighting, and composition).`,
-    );
-  } else if (hasCompositionRef) {
-    // The composition reference is ALWAYS explained, even when there is no edit,
-    // so the model never silently copies outdated subject appearances from it.
-    if (edit?.trim()) {
-      const refresh =
-        refreshAnchors.length > 0
-          ? ` Also update these characters/places to match their new reference images above — their design changed since this page was made: ${refreshAnchors
-              .map((a) => a.name)
-              .join(", ")}.`
-          : "";
-      parts.push(
-        `The LAST image is the CURRENT version of this page. Reproduce it faithfully — keep the exact composition, layout, poses, positions, scale, framing, background, lighting and colors. Apply this change: ${edit.trim()}.${refresh} For any named subject that has its own reference image above, match that subject's appearance to its reference while keeping its position and pose. Do not move, add, or remove anything else.`,
-      );
-    } else {
-      const changed =
-        refreshAnchors.length > 0
-          ? ` These subjects changed since this page was made and MUST be redrawn to match their NEW reference images above — replace their outdated look entirely: ${refreshAnchors
-              .map((a) => a.name)
-              .join(", ")}.`
-          : "";
-      parts.push(
-        `The LAST image is the PREVIOUS version of this page. Reproduce it faithfully — keep the exact composition, poses, positions, framing, background and colors. The ONLY allowed change: update each named subject's appearance to match its own labeled reference image above (e.g. an updated character design).${changed} Do NOT copy outdated character or color details from the last image, and do not re-pose, move, add, or remove anything else.`,
-      );
-    }
-  } else if (edit?.trim()) {
-    parts.push(`Revision: ${edit.trim()}.`);
-  }
-
-  return parts.filter(Boolean).join(" ");
+  return renderSinglePrompt(resolvePromptsConfig(prompts), "pageIllustration/default", {
+    vars: {
+      illustrationBrief: spread.illustration.trim(),
+      charactersList: listOf(characters),
+      settingsList: listOf(settings),
+      describedList: listOf(describedAnchors),
+      embeddedList,
+      legend,
+      castNames: castNames.join(", "),
+      removedList: removedAnchors.map((a) => a.name).join(", "),
+      layoutNote: combinedLayoutNote,
+      artStyle: styleText,
+      edit: edit?.trim() ?? "",
+      refreshClause,
+      changedClause,
+      addedClause,
+      keptList,
+    },
+    flags: {
+      isSpread: spread.kind === "spread",
+      hasStyleRef,
+      hasCharacters: characters.length > 0,
+      hasSettings: settings.length > 0,
+      hasDescribed: describedAnchors.length > 0,
+      hasEmbedded: embeddedPairs.length > 0,
+      hasReferenced: referencedAnchors.length > 0,
+      hasCast: castNames.length > 0,
+      hasRemoved: removedAnchors.length > 0,
+      hasKept: keptAnchors.length > 0,
+      hasLayoutNote: Boolean(combinedLayoutNote),
+      tailMaskEdit,
+      tailCompositionEdit,
+      tailCompositionRefresh,
+      tailPlainEdit,
+    },
+  });
 }
 
 /**
@@ -242,16 +233,69 @@ export function buildAnchorSwapPrompt(input: {
   const identity = isChar
     ? "face, hair, skin, colors, outfit and overall design"
     : "shape, proportions, materials, markings, colors and design";
-  return [
-    "You are updating ONE subject in an existing children's-book illustration.",
-    `The FIRST image is the current page. The SECOND image is the NEW reference for "${anchor.name}" (${anchor.description}).`,
-    `Redraw ${anchor.name} inside ${region} so it matches the NEW reference exactly — ${identity}. Keep its existing position, pose, scale and camera angle from the current page; only its appearance changes.`,
-    "Keep EVERYTHING else pixel-identical: the background, any other characters, lighting, colors, composition and framing. Do not move, add, remove, recolor or restyle anything else.",
-    "Do NOT render any text, letters, captions, words, numbers or watermark.",
-    `Art style: ${styleText}.`,
-  ]
-    .filter(Boolean)
-    .join(" ");
+  return renderSinglePrompt(resolvePromptsConfig(prompts), "pageIllustration/anchorSwap", {
+    vars: {
+      anchorName: anchor.name,
+      description: anchor.description,
+      region,
+      identity,
+      artStyle: styleText,
+    },
+  });
+}
+
+/**
+ * Prompt for a targeted attribute modification of one subject ("make Arthur's
+ * hair blue"): the FIRST image is the current page; the SECOND (optional) is
+ * the subject's reference sheet for identity. Used with a mask so only the
+ * subject's region changes.
+ */
+export function buildModifySubjectPrompt(input: {
+  anchor: Anchor;
+  instruction: string;
+  config: BookConfig;
+  /** Whether a mask constrains the change to a region. */
+  maskMode: boolean;
+  /** Whether the subject's reference sheet is attached as the second image. */
+  hasSheetRef: boolean;
+  prompts?: PromptContext;
+}): string {
+  const { anchor, instruction, config, maskMode, hasSheetRef, prompts } = input;
+  const styleText = resolveArtStyleText(config.artStyle, prompts);
+  const region = maskMode
+    ? "the transparent (masked) region"
+    : "only the area currently showing this subject";
+  return renderSinglePrompt(resolvePromptsConfig(prompts), "pageIllustration/modifySubject", {
+    vars: {
+      anchorName: anchor.name,
+      description: anchor.description,
+      region,
+      instruction,
+      artStyle: styleText,
+    },
+    flags: { hasSheetRef },
+  });
+}
+
+/**
+ * Prompt for removing a DUPLICATE subject occurrence in place: the region (a
+ * mask on OpenAI, or "the area showing the duplicate" on Gemini) is erased and
+ * filled with matching background, leaving exactly one instance of the subject.
+ */
+export function buildRemoveRegionPrompt(input: {
+  subjectName: string;
+  config: BookConfig;
+  maskMode: boolean;
+  prompts?: PromptContext;
+}): string {
+  const { subjectName, config, maskMode, prompts } = input;
+  const styleText = resolveArtStyleText(config.artStyle, prompts);
+  const region = maskMode
+    ? "the transparent (masked) region"
+    : "the area currently showing the duplicate";
+  return renderSinglePrompt(resolvePromptsConfig(prompts), "pageIllustration/removeRegion", {
+    vars: { subjectName, region, artStyle: styleText },
+  });
 }
 
 export async function generateIllustrationImage(input: {
@@ -267,6 +311,9 @@ export async function generateIllustrationImage(input: {
 }): Promise<ImageResult> {
   const { prompt, size, creds, model, providerId, references, mask, quality, signal } = input;
   const provider = getImageProvider(providerId);
+  // Image calls are the slow, user-visible ones: one retry only, so a stalled
+  // provider fails the render in bounded time instead of silently burning
+  // minutes across 4 attempts. Text/vision calls keep the default 3 retries.
   return withRetry(
     () =>
       provider.generateImage(creds, {
@@ -278,6 +325,6 @@ export async function generateIllustrationImage(input: {
         quality,
         signal,
       }),
-    { signal },
+    { retries: 1, signal },
   );
 }

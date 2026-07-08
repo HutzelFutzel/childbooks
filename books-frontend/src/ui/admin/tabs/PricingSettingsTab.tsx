@@ -6,6 +6,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { Button } from "../../components/Button";
 import { Field, Input } from "../../components/Input";
 import { Select } from "../../components/Select";
+import { Toggle } from "../../components/Toggle";
 import type { CurrencyCode, PricingSettings } from "../../../core/config/products";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { Grid, NumberField, Section } from "./products/parts";
@@ -124,6 +125,55 @@ export function PricingSettingsTab() {
             onChange={(e) => set({ tax: { ...draft.tax, bookTaxCode: e.target.value || undefined } })}
           />
         </Field>
+      </Section>
+
+      <Section
+        title="Ebook (digital edition)"
+        hint="Sell the customer's finished book as a downloadable PDF. Near-zero marginal cost, so almost the whole price (minus the Stripe fee) is margin. The bundle discount applies automatically when the buyer already ordered a print copy of the same book."
+      >
+        <div className="flex items-center gap-2">
+          <Toggle
+            checked={draft.ebook.enabled}
+            onChange={(v) => set({ ebook: { ...draft.ebook, enabled: v } })}
+            label="Sell ebooks"
+          />
+          <span className="text-sm text-ink-600">
+            {draft.ebook.enabled ? "Ebooks are on sale" : "Ebooks are hidden"}
+          </span>
+        </div>
+        <Grid cols={4}>
+          {draft.currencies.map((c) => (
+            <NumberField
+              key={c}
+              label={`Price (${c})`}
+              value={draft.ebook.prices[c] ?? 0}
+              step="0.5"
+              suffix={c}
+              onChange={(n) =>
+                set({ ebook: { ...draft.ebook, prices: { ...draft.ebook.prices, [c]: n } } })
+              }
+            />
+          ))}
+          <NumberField
+            label="Print-owner discount"
+            value={draft.ebook.printBundleDiscountPct}
+            step="5"
+            suffix="%"
+            onChange={(n) => set({ ebook: { ...draft.ebook, printBundleDiscountPct: n } })}
+          />
+        </Grid>
+        <Field label="Stripe product tax code (digital books)" className="w-full sm:w-80">
+          <Input
+            value={draft.ebook.taxCode ?? ""}
+            placeholder="txcd_10302000"
+            onChange={(e) => set({ ebook: { ...draft.ebook, taxCode: e.target.value || undefined } })}
+          />
+        </Field>
+        {draft.ebook.enabled && (
+          <p className="text-[11px] text-ink-400">
+            A price of 0 in a currency disables the ebook for buyers paying in that currency.
+          </p>
+        )}
       </Section>
 
       <Section title="Per-currency settings" hint="Payment-processor fee, price rounding, floor, and tax behavior for each currency.">

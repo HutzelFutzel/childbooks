@@ -14,9 +14,22 @@ import {
   type PlanDefinition,
   type PlanStatus,
 } from "../../../core/config/plans";
+import type { SparksConfig } from "../../../core/config/sparks";
+import {
+  effectiveMarkup,
+  grantLiabilityUsd,
+  planSparkEconomics,
+} from "../../../core/config/economics";
+import { computeMargin } from "../../../core/config/productMath";
+import type {
+  CurrencyCode,
+  PricingSettings,
+  ProductDefinition,
+} from "../../../core/config/products";
 import { IMAGE_ACTIONS } from "../../../core/ai/actions";
+import { FEATURES, featureGated } from "../../../core/config/features";
 import { QUOTAS } from "../../../core/config/quotas";
-import { Grid, NumberField, Section, TextField } from "./products/parts";
+import { Grid, NumberField, Section, TextField, fmtMoney } from "./products/parts";
 
 const STATUSES: { value: PlanStatus; label: string }[] = [
   { value: "draft", label: "Draft (hidden)" },
@@ -35,12 +48,16 @@ const fromList = (v: string[]): string => v.join(", ");
  */
 export function PlansTab() {
   const loadAdminPlans = useAppConfigStore((s) => s.loadAdminPlans);
+  const loadAdminProducts = useAppConfigStore((s) => s.loadAdminProducts);
   const savePlan = useAppConfigStore((s) => s.savePlan);
   const deletePlanById = useAppConfigStore((s) => s.deletePlanById);
   const syncPlans = useAppConfigStore((s) => s.syncPlans);
   const currencies = useAppConfigStore((s) => s.pricingSettings.currencies);
+  const pricingSettings = useAppConfigStore((s) => s.pricingSettings);
+  const sparksConfig = useAppConfigStore((s) => s.sparks);
 
   const [plans, setPlans] = useState<PlanDefinition[]>([]);
+  const [products, setProducts] = useState<ProductDefinition[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -56,7 +73,13 @@ export function PlansTab() {
         setLoading(false);
       }
     })();
-  }, [loadAdminPlans]);
+    // Full product definitions (incl. cost) for the break-even discount check.
+    void loadAdminProducts()
+      .then((config) => setProducts(config.products))
+      .catch(() => {
+        /* the impact panel just skips the discount check */
+      });
+  }, [loadAdminPlans, loadAdminProducts]);
 
   const update = (id: string, patch: Partial<PlanDefinition>) => {
     setPlans((ps) => ps.map((p) => (p.id === id ? { ...p, ...patch } : p)));
@@ -132,8 +155,12 @@ export function PlansTab() {
             <PlanCard
               key={plan.id}
               plan={plan}
+              allPlans={plans}
               currencies={currencies}
               saving={savingId === plan.id}
+              sparksConfig={sparksConfig}
+              pricingSettings={pricingSettings}
+              products={products}
               onChange={(patch) => update(plan.id, patch)}
               onSave={() => onSave(plan)}
               onDelete={() => onDelete(plan.id)}
@@ -146,15 +173,23 @@ export function PlansTab() {
 
 function PlanCard({
   plan,
+  allPlans,
   currencies,
   saving,
+  sparksConfig,
+  pricingSettings,
+  products,
   onChange,
   onSave,
   onDelete,
 }: {
   plan: PlanDefinition;
+  allPlans: PlanDefinition[];
   currencies: string[];
   saving: boolean;
+  sparksConfig: SparksConfig;
+  pricingSettings: PricingSettings;
+  products: ProductDefinition[];
   onChange: (patch: Partial<PlanDefinition>) => void;
   onSave: () => void;
   onDelete: () => void;
@@ -236,8 +271,64 @@ function PlanCard({
           <TextField label="Formats (product ids)" value={fromList(ent.formats)} onChange={(v) => onChange({ entitlements: { ...ent, formats: toList(v) } })} />
           <TextField label="Layouts" value={fromList(ent.layouts)} onChange={(v) => onChange({ entitlements: { ...ent, layouts: toList(v) } })} />
           <TextField label="Fonts" value={fromList(ent.fonts)} onChange={(v) => onChange({ entitlements: { ...ent, fonts: toList(v) } })} />
-          <TextField label="Features" value={fromList(ent.features)} onChange={(v) => onChange({ entitlements: { ...ent, features: toList(v) } })} />
         </Grid>
+      </Section>
+
+      <Section
+        title="Gated features"
+        hint="A feature checked on ANY active plan becomes subscriber-gated: only plans that include it may use it (check it on the free plan to give it to everyone). Unchecked everywhere = free for all users."
+      >
+        <div className="space-y-1.5">
+          {FEATURES.map((f) => {
+            const on = ent.features.includes(f.id);
+            const gatedSomewhere = featureGated(allPlans, f.id);
+            return (
+              <div key={f.id} className="flex items-start gap-2.5 rounded-lg bg-ink-50/50 p-2.5 ring-1 ring-inset ring-ink-100">
+                <Toggle
+                  checked={on}
+                  onChange={(v) =>
+                    onChange({
+                      entitlements: {
+                        ...ent,
+                        features: v ? [...ent.features, f.id] : ent.features.filter((x) => x !== f.id),
+                      },
+                    })
+                  }
+                  label={f.label}
+                />
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 text-sm font-medium text-ink-800">
+                    {f.label}
+                    <span
+                      className={
+                        gatedSomewhere
+                          ? "rounded bg-amber-50 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+                          : "rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700"
+                      }
+                    >
+                      {gatedSomewhere ? "gated — only checked plans" : "free for everyone"}
+                    </span>
+                  </div>
+                  <p className="text-xs text-ink-500">{f.description}</p>
+                </div>
+              </div>
+            );
+          })}
+          {ent.features.filter((id) => !FEATURES.some((f) => f.id === id)).length > 0 && (
+            <TextField
+              label="Custom feature keys"
+              value={fromList(ent.features.filter((id) => !FEATURES.some((f) => f.id === id)))}
+              onChange={(v) =>
+                onChange({
+                  entitlements: {
+                    ...ent,
+                    features: [...ent.features.filter((id) => FEATURES.some((f) => f.id === id)), ...toList(v)],
+                  },
+                })
+              }
+            />
+          )}
+        </div>
       </Section>
 
       <Section title="Usage limits" hint="Caps the backend enforces for this plan. Set -1 (or leave at -1) for unlimited. Example: set “AI edits per book” to 2 on the free plan.">
@@ -298,6 +389,152 @@ function PlanCard({
           ))}
         </Grid>
       </Section>
+
+      <PlanImpact
+        plan={plan}
+        sparksConfig={sparksConfig}
+        pricingSettings={pricingSettings}
+        products={products}
+      />
     </div>
+  );
+}
+
+/**
+ * "What this plan means for the business" — a live impact table + warnings
+ * under each plan editor, recomputed as the admin types. Advisory only;
+ * enforcement (e.g. the break-even clamp on print discounts) lives at checkout.
+ */
+function PlanImpact({
+  plan,
+  sparksConfig,
+  pricingSettings,
+  products,
+}: {
+  plan: PlanDefinition;
+  sparksConfig: SparksConfig;
+  pricingSettings: PricingSettings;
+  products: ProductDefinition[];
+}) {
+  const currency = pricingSettings.baseCurrency;
+  const monthlyPrice = plan.billing.prices[currency]?.month?.amount ?? 0;
+  const yearlyPrice = plan.billing.prices[currency]?.year?.amount ?? 0;
+  const grant = plan.grant;
+
+  const monthly = planSparkEconomics(sparksConfig, monthlyPrice, grant.monthlySparks);
+  const annualSparks = grant.monthlySparks * 12 + grant.annualBonusSparks;
+  const annualLiability = grantLiabilityUsd(sparksConfig, annualSparks);
+
+  // Products whose thinnest-margin configuration can't afford this plan's
+  // print discount (checkout clamps to break-even, so subscribers would see a
+  // smaller discount than advertised — better to fix the price or the promise).
+  const overDiscounted = plan.entitlements.printDiscountPct > 0
+    ? products
+        .filter((p) => p.status === "active")
+        .map((p) => {
+          try {
+            const be = Math.min(
+              ...[p.conditions.pages.min, p.conditions.pages.max].map(
+                (pages) =>
+                  computeMargin(p, { currency: currency as CurrencyCode, pages, copies: 1 }, pricingSettings)
+                    .breakEvenDiscountPct,
+              ),
+            );
+            return { name: p.presentation.name, breakEven: Math.round(be * 10) / 10 };
+          } catch {
+            return null;
+          }
+        })
+        .filter((x): x is { name: string; breakEven: number } => x !== null)
+        .filter((x) => plan.entitlements.printDiscountPct > x.breakEven)
+    : [];
+
+  // Multipliers that push the effective markup below cost (or razor-thin).
+  const riskyMultipliers = IMAGE_ACTIONS.map((a) => ({
+    label: a.label,
+    m: plan.actionMultipliers[a.id] ?? 1,
+    eff: effectiveMarkup(sparksConfig, plan.actionMultipliers[a.id] ?? 1),
+  })).filter((x) => x.m !== 1 && x.eff < 1.2);
+
+  const liabilityTone =
+    !plan.isFree && monthlyPrice > 0 && monthly.liabilityPctOfPrice > 50
+      ? "text-rose-600"
+      : "text-ink-800";
+
+  return (
+    <Section
+      title="Business impact"
+      hint="Live read-out of what this configuration means for your margin, assuming the subscriber spends every granted Spark (the worst case — real usage is lower)."
+    >
+      <div className="overflow-hidden rounded-lg ring-1 ring-inset ring-ink-100">
+        <table className="w-full text-xs">
+          <tbody>
+            {!plan.isFree && (
+              <tr className="border-b border-ink-50">
+                <td className="bg-ink-50/50 px-3 py-2 font-medium text-ink-700">Monthly grant liability</td>
+                <td className={`px-3 py-2 font-semibold ${liabilityTone}`}>
+                  {fmtMoney(monthly.monthlyLiabilityUsd, currency)}
+                  {monthlyPrice > 0 && ` (${monthly.liabilityPctOfPrice}% of ${fmtMoney(monthlyPrice, currency)})`}
+                </td>
+                <td className="px-3 py-2 text-ink-400">
+                  {monthlyPrice > 0
+                    ? monthly.liabilityPctOfPrice > 50
+                      ? "Over 50% — a heavy spender leaves little for fees, discounts and profit."
+                      : `Leaves ${fmtMoney(monthly.monthlyHeadroomUsd, currency)}/mo headroom before Stripe fees & print-discount subsidies.`
+                    : "Set a monthly price to see the ratio."}
+                </td>
+              </tr>
+            )}
+            {!plan.isFree && (
+              <tr className="border-b border-ink-50">
+                <td className="bg-ink-50/50 px-3 py-2 font-medium text-ink-700">Annual grant liability</td>
+                <td className="px-3 py-2 font-semibold text-ink-800">
+                  {fmtMoney(annualLiability, currency)}
+                  {yearlyPrice > 0 &&
+                    ` (${Math.round((annualLiability / yearlyPrice) * 1000) / 10}% of ${fmtMoney(yearlyPrice, currency)})`}
+                </td>
+                <td className="px-3 py-2 text-ink-400">
+                  {annualSparks.toLocaleString()} ✦/yr — annual invoices grant 12× the monthly Sparks
+                  {grant.annualBonusSparks > 0 ? " plus the bonus" : ""}.
+                </td>
+              </tr>
+            )}
+            <tr className="border-b border-ink-50 last:border-0">
+              <td className="bg-ink-50/50 px-3 py-2 font-medium text-ink-700">Effective Spark price</td>
+              <td className="px-3 py-2 font-semibold text-ink-800">
+                {plan.isFree || grant.monthlySparks <= 0 || monthlyPrice <= 0
+                  ? "—"
+                  : `${fmtMoney(monthly.effectivePricePerSpark, currency)}/✦`}
+              </td>
+              <td className="px-3 py-2 text-ink-400">
+                {plan.isFree || grant.monthlySparks <= 0 || monthlyPrice <= 0
+                  ? "Free plan / no grant — nothing to compare."
+                  : `vs the ${fmtMoney(sparksConfig.sparkValueUsd, currency)} peg — subscribers should get Sparks a bit cheaper than packs, but not below your provider backing of ${fmtMoney(sparksConfig.sparkValueUsd / Math.max(sparksConfig.markupMultiplier, 1), currency)}/✦.`}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      {overDiscounted.length > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <span className="font-semibold">Print discount exceeds break-even:</span>{" "}
+          {overDiscounted.map((p) => `${p.name} (break-even ${p.breakEven}%)`).join(", ")}. Checkout
+          clamps the discount so you never sell at a loss, but subscribers will get less than the
+          advertised {plan.entitlements.printDiscountPct}% — raise the retail price or lower the
+          discount.
+        </div>
+      )}
+
+      {riskyMultipliers.length > 0 && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <span className="font-semibold">Spark discounts near/below cost:</span>{" "}
+          {riskyMultipliers
+            .map((x) => `${x.label} (${x.m}× ⇒ effective markup ${x.eff}×)`)
+            .join(", ")}
+          . Below 1× every render loses money; below ~1.2× it barely covers overhead.
+        </div>
+      )}
+    </Section>
   );
 }

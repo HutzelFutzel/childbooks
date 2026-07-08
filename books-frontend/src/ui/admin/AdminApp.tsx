@@ -22,6 +22,8 @@ import {
   Workflow,
   HeartPulse,
   Search,
+  MessageSquareText,
+  Mail,
 } from "lucide-react";
 import { Button } from "@/ui/components/Button";
 import { Tabs } from "@/ui/components/Tabs";
@@ -29,8 +31,12 @@ import { Toaster } from "@/ui/components/Toaster";
 import { TopBar } from "@/ui/layout/TopBar";
 import { AuthMenu } from "@/ui/auth/AuthMenu";
 import { AuthDialog } from "@/ui/auth/AuthDialog";
+import { SettingsDialog } from "@/ui/settings/SettingsDialog";
+import { OrdersDialog } from "@/ui/checkout/OrdersDialog";
+import { PlansDialog } from "@/ui/billing/PlansDialog";
 import { cn } from "@/ui/lib/cn";
 import { useAuthStore } from "@/state/authStore";
+import { useAccountUiStore } from "@/state/accountUiStore";
 import { useAppConfigStore } from "@/state/appConfigStore";
 import {
   useAdminTab,
@@ -42,6 +48,7 @@ import {
 import { ModelConfigTab } from "./tabs/ModelConfigTab";
 import { ArtStylesTab } from "./tabs/ArtStylesTab";
 import { AgeWritingTab } from "./tabs/AgeWritingTab";
+import { PromptsTab } from "./tabs/PromptsTab";
 import { ModelCostsTab } from "./tabs/ModelCostsTab";
 import { ProductsTab } from "./tabs/ProductsTab";
 import { PricingSettingsTab } from "./tabs/PricingSettingsTab";
@@ -52,6 +59,7 @@ import { ActionsTab } from "./tabs/ActionsTab";
 import { SystemHealthTab } from "./tabs/SystemHealthTab";
 import { SeoTab } from "./tabs/marketing/SeoTab";
 import { BrandingTab } from "./tabs/marketing/BrandingTab";
+import { EmailTab } from "./tabs/marketing/EmailTab";
 import { AnalysisTab } from "./analysis/AnalysisTab";
 
 const SECTIONS: { id: AdminSection; label: string; icon: ReactNode; description: string }[] = [
@@ -73,6 +81,7 @@ const CONFIG_TAB_META: Record<
   models: { label: "Models", icon: <Cpu className="size-4" /> },
   artStyles: { label: "Art styles", icon: <ImageIcon className="size-4" /> },
   ageWriting: { label: "Age writing", icon: <BookOpen className="size-4" /> },
+  prompts: { label: "Prompts", icon: <MessageSquareText className="size-4" /> },
   modelCosts: { label: "Model costs", icon: <DollarSign className="size-4" /> },
   system: { label: "System health", icon: <HeartPulse className="size-4" /> },
 };
@@ -80,6 +89,7 @@ const CONFIG_TAB_META: Record<
 const MARKETING_TABS = [
   { id: "seo", label: "SEO", icon: <Search className="size-4" /> },
   { id: "branding", label: "Branding", icon: <Stamp className="size-4" /> },
+  { id: "email", label: "Email", icon: <Mail className="size-4" /> },
 ];
 
 function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
@@ -102,6 +112,8 @@ function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
       return <ArtStylesTab />;
     case "ageWriting":
       return <AgeWritingTab />;
+    case "prompts":
+      return <PromptsTab />;
     case "modelCosts":
       return <ModelCostsTab />;
     case "system":
@@ -131,6 +143,8 @@ export default function AdminApp() {
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
   const marketingTab = useAdminTab((s) => s.marketingTab);
   const setMarketingTab = useAdminTab((s) => s.setMarketingTab);
+  const ordersOpen = useAccountUiStore((s) => s.ordersOpen);
+  const closeOrders = useAccountUiStore((s) => s.closeOrders);
 
   useEffect(() => {
     initAuth();
@@ -250,6 +264,7 @@ export default function AdminApp() {
                     />
                     {marketingTab === "seo" && <SeoTab />}
                     {marketingTab === "branding" && <BrandingTab />}
+                    {marketingTab === "email" && <EmailTab />}
                   </div>
                 )}
               </div>
@@ -259,6 +274,9 @@ export default function AdminApp() {
       </main>
 
       <AuthDialog />
+      <SettingsDialog />
+      <PlansDialog />
+      <OrdersDialog open={ordersOpen} onClose={closeOrders} />
       <Toaster />
     </div>
   );

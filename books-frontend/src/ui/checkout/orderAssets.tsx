@@ -138,6 +138,96 @@ export function OrderAssetRunner({
   );
 }
 
+/**
+ * Renders the book offscreen into a single screen-quality PDF for the digital
+ * edition: front cover, every content page, back cover — all at trim size (no
+ * bleed; nothing is cut off on a screen). Reuses the same capture pipeline as
+ * the print renderer.
+ */
+export function EbookAssetRunner({
+  project,
+  pages,
+  design,
+  onProgress,
+  onDone,
+  onError,
+}: {
+  project: Project;
+  pages: DesignPage[];
+  design: BookDesign;
+  onProgress: (status: string) => void;
+  onDone: (pdf: Blob) => void;
+  onError: (err: unknown) => void;
+}) {
+  const stageRef = useRef<HTMLDivElement>(null);
+  const startedRef = useRef(false);
+
+  const trim = pageTrimForConfig(project.config);
+  const pageHeightPx = Math.round(trim.heightIn * EXPORT_DPI);
+
+  useEffect(() => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+
+    async function run() {
+      await new Promise((r) => requestAnimationFrame(() => r(null)));
+      const stage = stageRef.current;
+      if (!stage) {
+        onError(new Error("Could not prepare the ebook stage."));
+        return;
+      }
+      try {
+        onProgress("Loading fonts & artwork…");
+        await waitForStageReady(stage);
+        onProgress("Embedding fonts…");
+        const fontEmbedCSS = await computeFontEmbedCss(stage);
+
+        const grab = (id: string) =>
+          stage.querySelector<HTMLElement>(`[data-export-page="${cssEscape(id)}"]`);
+
+        // Reading order: front cover → content pages → back cover.
+        const ordered = [
+          ...pages.filter((p) => p.id === COVER_FRONT_ID),
+          ...pages.filter((p) => !p.isCover),
+          ...pages.filter((p) => p.id === COVER_BACK_ID),
+        ];
+        const captures: CapturedPage[] = [];
+        for (let i = 0; i < ordered.length; i++) {
+          const page = ordered[i];
+          onProgress(`Rendering page ${i + 1} of ${ordered.length}…`);
+          const el = grab(page.id);
+          if (!el) continue;
+          const blob = await capturePageElement(el, { fontEmbedCSS });
+          captures.push({
+            id: page.id,
+            label: page.label,
+            blob,
+            widthPx: el.offsetWidth,
+            heightPx: el.offsetHeight,
+            widthIn: trim.heightIn * page.aspect,
+            heightIn: trim.heightIn,
+          });
+        }
+        if (captures.length === 0) throw new Error("No pages to include in the ebook.");
+        onProgress("Assembling the ebook PDF…");
+        onDone(await buildPdf(captures));
+      } catch (err) {
+        onError(err);
+      }
+    }
+
+    void run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  return createPortal(
+    <div ref={stageRef} aria-hidden>
+      <PrintBook pages={pages} design={design} pageHeightPx={pageHeightPx} forExport />
+    </div>,
+    document.body,
+  );
+}
+
 async function buildCover(opts: {
   frontEl: HTMLElement | null;
   backEl: HTMLElement | null;

@@ -38,7 +38,7 @@ export function Hero({ images, text }: { images: SiteImagesMap; text: SiteTextMa
           <div className="mt-9 flex flex-col items-center gap-4 sm:flex-row lg:justify-start">
             <Link
               href="/studio"
-              className="inline-flex items-center gap-2 rounded-2xl bg-brand-600 px-8 py-3.5 text-base font-semibold text-white shadow-soft transition hover:bg-brand-700"
+              className="inline-flex items-center gap-2 rounded-2xl bg-brand-600 px-8 py-3.5 text-base font-semibold text-(--color-brand-foreground) shadow-soft transition hover:bg-brand-700"
             >
               <EditableText slotId="hero.ctaPrimary" as="span" defaultValue="Start your story free" serverValue={text["hero.ctaPrimary"]} />
               <ArrowRight className="size-4.5" />

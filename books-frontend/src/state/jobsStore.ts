@@ -1,24 +1,32 @@
 /**
  * Tracks the current project's generation jobs.
  *
- * Generation runs server-side (the Firestore-triggered worker), so a batch can
- * finish while the studio is closed. This store does two things whenever a
- * project is open:
- *   1. Surfaces live progress for in-flight jobs (the TopBar indicator).
- *   2. Reconciles completed results into the project's version trees, so work
- *      that finished while away appears the moment the studio reopens.
+ * Generation runs server-side (the Cloud Tasks fan-out), so a batch can finish
+ * while the studio is closed. This store does two things whenever a project is
+ * open:
+ *   1. Surfaces live progress for in-flight jobs (the TopBar indicator), read
+ *      from each job doc's aggregate `progress`.
+ *   2. Reconciles completed results into the project's version trees, read from
+ *      the per-task subcollection (via a project-scoped collection-group query),
+ *      so work that finished while away appears the moment the studio reopens.
  *
  * Reconciliation is idempotent: a result is only applied if its blob isn't
- * already present in the spread's illustration tree, so repeated snapshots (or
- * reopening twice) never duplicate versions.
+ * already present in the unit's version tree, so repeated snapshots (or reopening
+ * twice) never duplicate versions.
  */
 import { create } from "zustand";
 import type { Unsubscribe } from "firebase/firestore";
-import { applyAnchorRender } from "../core/pipeline/anchorRun";
-import { applyIllustrationRender } from "../core/pipeline/illustrationRun";
+import { normalizeImageTier, type ImageTier } from "../core/config/modelConfig";
+import { applyAnchorRender, type AnchorRender } from "../core/pipeline/anchorRun";
+import { applyIllustrationRender, type IllustrationRender } from "../core/pipeline/illustrationRun";
+import type { TaskDoc } from "../core/jobs/types";
 import type { Project, ScreenplaySpread } from "../core/types";
 import { allVersions } from "../core/versioning";
-import { subscribeProjectJobs, type JobWithId } from "../platform/jobs";
+import {
+  subscribeProjectJobs,
+  subscribeProjectTasks,
+  type JobWithId,
+} from "../platform/jobs";
 import { applyIllustrationResult } from "./ai";
 import { spreadsById } from "./bookUnits";
 import { useProjectsStore } from "./projectsStore";
@@ -30,11 +38,23 @@ export interface JobSummary {
   total: number;
   completed: number;
   failed: number;
+  /** When the client enqueued the job (drives the elapsed timer). */
+  createdAt: number;
+  /** Quality tier + image action, for the time-estimate lookup. */
+  tier: ImageTier;
+  action: "anchorImage" | "pageIllustration";
 }
 
 interface JobsState {
   /** Jobs that are still pending or running for the open project. */
   active: JobSummary[];
+  /**
+   * Ids of units (spread/cover/anchor ids == task ids) currently being generated
+   * by a non-terminal job. Lets the UI show a per-item "working" state driven by
+   * real job state (survives refresh, no blocking await), and clears itself when
+   * the job finishes and its result reconciles.
+   */
+  activeUnitIds: Set<string>;
   projectId: string | null;
   unsub: Unsubscribe | null;
   /** Begin tracking jobs for a project (idempotent for the same id). */
@@ -96,13 +116,18 @@ async function applyTask(
   return true;
 }
 
-/** Apply any done-but-unapplied results from a job into the project. */
-async function reconcile(job: JobWithId, projectId: string): Promise<void> {
-  if (job.kind === "anchors") {
-    for (const task of job.tasks) {
-      if (task.status !== "done" || !task.result) continue;
-      const render = task.result;
-      const key = `${job.id}:${task.id}`;
+/**
+ * Fold any done-but-unapplied task results into the project. Each task doc is
+ * self-describing (carries its `kind` + payload), so reconciliation works off
+ * the task subcollection alone — no job doc needed.
+ */
+async function reconcileTasks(tasks: TaskDoc[], projectId: string): Promise<void> {
+  for (const task of tasks) {
+    if (task.status !== "done" || !task.result) continue;
+
+    if (task.kind === "anchors") {
+      const render = task.result as AnchorRender;
+      const key = `${task.jobId}:${task.id}`;
       if (inFlight.has(key)) continue;
 
       const project = liveProject(projectId);
@@ -117,38 +142,45 @@ async function reconcile(job: JobWithId, projectId: string): Promise<void> {
       } finally {
         inFlight.delete(key);
       }
+      continue;
     }
-    return;
-  }
 
-  if (job.kind === "refresh") {
-    for (const task of job.tasks) {
-      if (task.status !== "done" || !task.result) continue;
-      const render = task.result;
-      const keep = await applyTask(job.id, task.id, render.blobId, projectId, async (project, spread) => {
+    if (task.kind === "refresh") {
+      const render = task.result as IllustrationRender;
+      const keep = await applyTask(task.jobId, task.id, render.blobId, projectId, async (project, spread) => {
         // The worker produced a full render (provenance + label + parent); fold
         // it into the live tree as the project owner (single writer).
         const tree = applyIllustrationRender(project.illustrations?.[spread.id], render);
         await useProjectsStore.getState().setIllustration(spread.id, tree);
       });
       if (!keep) return;
+      continue;
     }
-    return;
-  }
 
-  for (const task of job.tasks) {
-    if (task.status !== "done" || !task.result) continue;
-    const result = task.result;
-    const prompt = task.request.prompt;
-    const keep = await applyTask(job.id, task.id, result.blobId, projectId, async (project, spread) => {
-      await applyIllustrationResult(project, spread, result, prompt);
+    // image
+    const result = task.result as { blobId: string; mimeType: string };
+    const prompt = task.request?.prompt ?? "";
+    const referenceUses = task.referenceUses;
+    const keep = await applyTask(task.jobId, task.id, result.blobId, projectId, async (project, spread) => {
+      await applyIllustrationResult(project, spread, result, prompt, referenceUses);
     });
     if (!keep) return;
   }
 }
 
+/**
+ * Immediately fold a set of finished task docs into the project (same idempotent
+ * path the snapshot subscription uses). Lets orchestration code that awaits a
+ * job's completion continue synchronously with the reconciled state instead of
+ * racing the store's own snapshot-driven reconcile.
+ */
+export async function reconcileTasksNow(tasks: TaskDoc[], projectId: string): Promise<void> {
+  await reconcileTasks(tasks, projectId);
+}
+
 export const useJobsStore = create<JobsState>((set, get) => ({
   active: [],
+  activeUnitIds: new Set<string>(),
   projectId: null,
   unsub: null,
 
@@ -156,8 +188,8 @@ export const useJobsStore = create<JobsState>((set, get) => ({
     if (get().projectId === projectId && get().unsub) return;
     get().unsub?.();
 
-    const unsub = subscribeProjectJobs(projectId, (jobs) => {
-      // Newest first for the indicator.
+    // Job docs drive the aggregate progress indicator.
+    const unsubJobs = subscribeProjectJobs(projectId, (jobs) => {
       const active = jobs
         .filter((j) => j.status === "pending" || j.status === "running")
         .sort((a, b) => b.createdAt - a.createdAt)
@@ -167,24 +199,34 @@ export const useJobsStore = create<JobsState>((set, get) => ({
           total: j.progress.total,
           completed: j.progress.completed,
           failed: j.progress.failed,
+          createdAt: j.createdAt,
+          tier: normalizeImageTier(j.tier),
+          action: j.kind === "anchors" ? "anchorImage" : "pageIllustration",
         }));
       set({ active });
-
-      // Bring any finished results into the project. Live generation paths
-      // already apply their own results, but this also covers jobs that
-      // completed while the studio was closed.
-      for (const job of jobs) {
-        if (job.tasks.some((t) => t.status === "done")) {
-          void reconcile(job, projectId);
-        }
-      }
     });
 
+    // Task docs drive per-unit "updating" state and result reconciliation. Live
+    // generation paths also apply their own results; this covers tasks that
+    // finished while the studio was closed (idempotent either way).
+    const unsubTasks = subscribeProjectTasks(projectId, (tasks) => {
+      const activeUnitIds = new Set<string>();
+      for (const t of tasks) {
+        if (t.status !== "done" && t.status !== "error") activeUnitIds.add(t.id);
+      }
+      set({ activeUnitIds });
+      if (tasks.some((t) => t.status === "done")) void reconcileTasks(tasks, projectId);
+    });
+
+    const unsub = () => {
+      unsubJobs();
+      unsubTasks();
+    };
     set({ projectId, unsub });
   },
 
   stop() {
     get().unsub?.();
-    set({ active: [], projectId: null, unsub: null });
+    set({ active: [], activeUnitIds: new Set<string>(), projectId: null, unsub: null });
   },
 }));

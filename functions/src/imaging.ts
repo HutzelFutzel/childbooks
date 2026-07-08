@@ -20,6 +20,30 @@ async function rawRGBA(
 }
 
 /**
+ * Shrink a reference exemplar (e.g. the art-style image) that is sent on EVERY
+ * generation. Resizes so the longest side is at most `maxDim` and re-encodes as
+ * JPEG — a multi-megabyte lossless source otherwise inflates every request
+ * (client→proxy→provider) and dominates latency. A style reference doesn't need
+ * alpha or pixel-exactness, so JPEG at moderate quality cuts size ~10x. Returns
+ * the original bytes (as-is) when it can't be processed.
+ */
+export async function downscaleReference(
+  buf: Buffer,
+  maxDim = 1024,
+  quality = 80,
+): Promise<{ buf: Buffer; mimeType: string } | null> {
+  try {
+    const out = await sharp(buf)
+      .resize(maxDim, maxDim, { fit: "inside", withoutEnlargement: true })
+      .jpeg({ quality, mozjpeg: true })
+      .toBuffer();
+    return { buf: out, mimeType: "image/jpeg" };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Paste `edited` over `original` only where `mask` is painted (transparent),
  * keeping every other pixel byte-identical to the original. Returns a PNG.
  */

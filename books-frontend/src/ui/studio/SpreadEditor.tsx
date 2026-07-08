@@ -224,7 +224,7 @@ export function SpreadCard({
         className="overflow-hidden rounded-3xl bg-linear-to-b from-brand-50/70 to-white shadow-soft ring-2 ring-brand-200"
       >
         <div className="flex items-center gap-3 border-b border-brand-100/80 px-4 py-3">
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-brand-600 text-white shadow-soft">
+          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-brand-600 text-(--color-brand-foreground) shadow-soft">
             <Icon className="size-5" />
           </span>
           <div className="min-w-0 leading-tight">

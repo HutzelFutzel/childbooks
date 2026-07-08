@@ -12,6 +12,7 @@ import { Heatmap } from "./Heatmap";
 import { UsersTable } from "./UsersTable";
 import { SettingsCard } from "./SettingsCard";
 import { PaymentsAnalysis } from "./PaymentsAnalysis";
+import { FinanceAnalysis } from "./FinanceAnalysis";
 import { fmtRelative } from "./format";
 
 const TIMEFRAMES: { id: Timeframe; label: string }[] = [
@@ -42,7 +43,7 @@ export function AnalysisTab() {
   const autoRefreshSec = useAdminAnalytics((s) => s.settings.autoRefreshSec);
 
   const [, forceTick] = useState(0);
-  const [section, setSection] = useState<"users" | "payments">("users");
+  const [section, setSection] = useState<"users" | "payments" | "finance">("users");
 
   useEffect(() => {
     void init();
@@ -72,12 +73,14 @@ export function AnalysisTab() {
         items={[
           { id: "users", label: "Users" },
           { id: "payments", label: "Payments" },
+          { id: "finance", label: "Finance" },
         ]}
         value={section}
-        onChange={(id) => setSection(id as "users" | "payments")}
+        onChange={(id) => setSection(id as "users" | "payments" | "finance")}
       />
 
       {section === "payments" && <PaymentsAnalysis />}
+      {section === "finance" && <FinanceAnalysis />}
 
       {section === "users" && (
       <div className="space-y-5">

@@ -15,35 +15,80 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
-import { getModelCostTable } from "./appConfig";
+import { getModelCostTable, recordImageCostSample } from "./appConfig";
+import { recordFinanceEvent } from "./finance";
 import { costForUsage, costKey, type UsageSample } from "../../books-frontend/src/core/config/modelCosts";
 import type { ProviderId } from "../../books-frontend/src/core/config/options";
+import { ALL_IMAGE_ACTION_IDS, type ImageActionId } from "../../books-frontend/src/core/ai/actions";
+import type { ImageTier } from "../../books-frontend/src/core/config/modelConfig";
+
+function isImageAction(action: string): action is ImageActionId {
+  return (ALL_IMAGE_ACTION_IDS as string[]).includes(action);
+}
 
 export interface UsageEvent {
   provider: ProviderId;
   model: string;
   modality: "text" | "image";
   usage: UsageSample;
+  /**
+   * The semantic pipeline step this call belongs to (e.g. "image", "binding",
+   * "localize"), when the call site wrapped itself in {@link withStep}. Multiple
+   * steps roll up into ONE action's cost; the step just lets an admin see the
+   * per-step breakdown of that combined total.
+   */
+  step?: string;
+  /** Wall-clock duration of the provider HTTP call, for latency telemetry. */
+  durationMs?: number;
+}
+
+/** Provider-call counters collected alongside usage events (incl. failures). */
+export interface CallStats {
+  /** Every provider HTTP attempt made inside the scope (incl. retries). */
+  calls: number;
+  /** Attempts that failed: non-2xx, network error, or timeout. */
+  failures: number;
 }
 
 interface Collector {
   events: UsageEvent[];
+  stats: CallStats;
 }
 
 const storage = new AsyncLocalStorage<Collector>();
+/**
+ * Tracks the current semantic step. Separate from the usage collector so nested,
+ * concurrent steps (e.g. parallel per-subject edits) each carry their own label
+ * — AsyncLocalStorage propagates it through the awaited provider call that
+ * `meteredFetch` records.
+ */
+const stepStorage = new AsyncLocalStorage<string>();
 
 /** Run `fn` with a fresh usage collector; provider calls inside are recorded. */
-export function withUsage<T>(fn: () => Promise<T>): Promise<{ value: T; events: UsageEvent[] }> {
-  const collector: Collector = { events: [] };
+export function withUsage<T>(
+  fn: () => Promise<T>,
+): Promise<{ value: T; events: UsageEvent[]; stats: CallStats }> {
+  const collector: Collector = { events: [], stats: { calls: 0, failures: 0 } };
   return storage.run(collector, async () => {
     const value = await fn();
-    return { value, events: collector.events };
+    return { value, events: collector.events, stats: collector.stats };
   });
+}
+
+/**
+ * Tag every provider call made inside `fn` with a step label, so the collected
+ * usage events (and their persisted line items) carry per-step attribution.
+ * Combines with `withUsage`: the events still roll up into one action total.
+ */
+export function withStep<T>(step: string, fn: () => Promise<T>): Promise<T> {
+  return stepStorage.run(step, fn);
 }
 
 function push(event: UsageEvent): void {
   const c = storage.getStore();
-  if (c) c.events.push(event);
+  if (!c) return;
+  const step = stepStorage.getStore();
+  c.events.push(step ? { ...event, step } : event);
 }
 
 function providerForHost(url: string): ProviderId | null {
@@ -140,31 +185,88 @@ function sizeFromRequest(init?: RequestInit): string | undefined {
 }
 
 /**
- * Upper bound on a single provider request. Kept below the worker's 540s
- * function timeout so a stalled upstream call (image generation can hang) fails
- * the task with an abort error — letting the job reach a terminal state — rather
- * than being killed by the platform mid-run and leaving the job stuck.
+ * Per-provider upper bound on a single request, kept well below the worker's
+ * 540s function timeout. A healthy Gemini image call completes in 8-30s, so
+ * anything past 90s is a stalled request that should fail fast (and retry)
+ * instead of eating the whole job window — two silent 240s stalls used to turn
+ * a "fast tier" render into 8+ minutes. OpenAI's gpt-image at high quality can
+ * legitimately run for minutes, so it keeps a higher ceiling.
  */
-const PROVIDER_TIMEOUT_MS = 240_000;
+const PROVIDER_TIMEOUT_MS: Record<ProviderId, number> = {
+  google: 90_000,
+  openai: 240_000,
+};
+const DEFAULT_TIMEOUT_MS = 240_000;
 
 /**
- * Fetch wrapper that records token usage from provider responses. It clones the
- * response so the caller still consumes the body normally. Failures never break
- * the request — metering is best-effort.
+ * Instance-wide cap on concurrent IMAGE generation calls. Each job caps its own
+ * task pool, but parallel jobs multiply: 4 jobs x 3 tasks = 12 simultaneous
+ * image calls on one API key, which trips provider rate limiting and produces
+ * exactly the stalled-request pattern above. Queued FIFO, never rejects.
+ */
+const IMAGE_CALL_CONCURRENCY = 4;
+let imageCallsInFlight = 0;
+const imageCallWaiters: (() => void)[] = [];
+
+async function acquireImageSlot(): Promise<() => void> {
+  if (imageCallsInFlight >= IMAGE_CALL_CONCURRENCY) {
+    await new Promise<void>((resolve) => imageCallWaiters.push(resolve));
+  }
+  imageCallsInFlight += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    imageCallsInFlight -= 1;
+    imageCallWaiters.shift()?.();
+  };
+}
+
+/** Is this an image GENERATION request (the expensive, rate-limited kind)? */
+function isImageGenerationCall(provider: ProviderId, url: string, init?: RequestInit): boolean {
+  if (provider === "openai") return url.includes("/images/");
+  const model = modelFromGeminiUrl(url) ?? modelFromRequestBody(init) ?? "";
+  return model.includes("image");
+}
+
+/**
+ * Fetch wrapper that records token usage + call latency from provider
+ * responses. It clones the response so the caller still consumes the body
+ * normally. Failures never break the request — metering is best-effort.
  */
 export async function meteredFetch(url: string, init?: RequestInit): Promise<Response> {
-  const signal = init?.signal ?? AbortSignal.timeout(PROVIDER_TIMEOUT_MS);
-  const res = await fetch(url, { ...init, signal });
+  const provider = providerForHost(url);
+  const collector = storage.getStore();
+  const release =
+    provider && isImageGenerationCall(provider, url, init) ? await acquireImageSlot() : null;
+  // Start the timeout clock only once the request actually goes out (time
+  // spent queued in the semaphore must not eat into the request budget).
+  const timeout = AbortSignal.timeout(
+    provider ? PROVIDER_TIMEOUT_MS[provider] : DEFAULT_TIMEOUT_MS,
+  );
+  const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+  if (provider && collector) collector.stats.calls += 1;
+  const startedAt = Date.now();
+  let res: Response;
   try {
-    const provider = providerForHost(url);
-    if (provider && storage.getStore()) {
+    res = await fetch(url, { ...init, signal });
+  } catch (err) {
+    if (provider && collector) collector.stats.failures += 1;
+    throw err;
+  } finally {
+    release?.();
+  }
+  const durationMs = Date.now() - startedAt;
+  try {
+    if (provider && collector) {
+      if (!res.ok) collector.stats.failures += 1;
       const contentType = res.headers.get("content-type") ?? "";
       if (contentType.includes("application/json")) {
         const reqModel = modelFromRequestBody(init);
         const reqSize = sizeFromRequest(init);
         const json = await res.clone().json();
         const event = parseUsage(provider, url, reqModel, reqSize, json);
-        if (event) push(event);
+        if (event) push({ ...event, durationMs });
       }
     }
   } catch {
@@ -173,17 +275,33 @@ export async function meteredFetch(url: string, init?: RequestInit): Promise<Res
   return res;
 }
 
+export interface RecordUsageOptions {
+  /** The project the action ran for (per-project cost attribution). */
+  projectId?: string;
+  /**
+   * True for edit re-rolls. Edits bundle extra sub-calls (intent, localize,
+   * inpainting, dupe repairs), so their totals are excluded from the estimate
+   * window — the window should reflect what a FRESH render of this action costs.
+   */
+  isEdit?: boolean;
+  /** Provider call/failure counters from the same `withUsage` scope. */
+  stats?: CallStats;
+}
+
 /**
  * Price the collected usage events and persist them under the user's space.
- * Writes immutable line items and increments period aggregates. Best-effort:
- * never throws into the calling request.
+ * Writes immutable line items and increments period aggregates, and appends a
+ * `providerCost` finance event so the admin dashboard sees every dollar of AI
+ * spend (charged or free). Best-effort: never throws into the calling request.
  */
 export async function recordUsage(
   uid: string,
   action: string,
   events: UsageEvent[],
+  tier?: ImageTier,
+  opts: RecordUsageOptions = {},
 ): Promise<void> {
-  if (!uid || events.length === 0) return;
+  if (!uid) return;
   try {
     ensureAdmin();
     const costs = await getModelCostTable();
@@ -196,11 +314,13 @@ export async function recordUsage(
     let totalCost = 0;
     let knownCost = true;
     let totalTokens = 0;
+    let imageModelKey: string | null = null;
     const batch = db.batch();
     for (const e of events) {
       const cost = costForUsage(costs.models[costKey(e.provider, e.model)], e.usage);
       if (cost == null) knownCost = false;
       else totalCost += cost;
+      if (e.modality === "image" && !imageModelKey) imageModelKey = costKey(e.provider, e.model);
       const tokens =
         (e.usage.inputTokens ?? 0) +
         (e.usage.outputTokens ?? 0) +
@@ -214,22 +334,75 @@ export async function recordUsage(
         modality: e.modality,
         usage: e.usage,
         costUsd: cost,
+        // Per-step attribution so an admin can break one action's combined cost
+        // into its steps (e.g. image vs binding vs localize).
+        ...(e.step ? { step: e.step } : {}),
+        // Call latency, so slow steps/models are visible in cost intelligence.
+        ...(typeof e.durationMs === "number" ? { durationMs: e.durationMs } : {}),
+        // Stamp the tier on image line items so cost intelligence can facet by it.
+        ...(tier && e.modality === "image" ? { tier } : {}),
+        ...(opts.projectId ? { projectId: opts.projectId } : {}),
         at,
       });
     }
-    batch.set(
-      aggRef,
-      {
-        period,
-        tokens: FieldValue.increment(totalTokens),
-        costUsd: FieldValue.increment(totalCost),
-        // Flags any unpriced model so the admin knows the total is a lower bound.
-        hasUnpricedModels: knownCost ? FieldValue.delete() : true,
-        updatedAt: at,
-      },
-      { merge: true },
-    );
-    await batch.commit();
+    const failures = opts.stats?.failures ?? 0;
+    if (events.length > 0 || failures > 0) {
+      batch.set(
+        aggRef,
+        {
+          period,
+          tokens: FieldValue.increment(totalTokens),
+          costUsd: FieldValue.increment(totalCost),
+          ...(failures > 0 ? { failedCalls: FieldValue.increment(failures) } : {}),
+          // Flags any unpriced model so the admin knows the total is a lower bound.
+          hasUnpricedModels: knownCost ? FieldValue.delete() : true,
+          updatedAt: at,
+        },
+        { merge: true },
+      );
+      await batch.commit();
+    }
+
+    // Every dollar of provider spend lands in the finance stream — including
+    // spend behind actions that are FREE in Sparks (that subsidy is a real cost).
+    if (totalCost > 0) {
+      await recordFinanceEvent({
+        category: "sparks",
+        kind: "providerCost",
+        amountUsd: -totalCost,
+        uid,
+        projectId: opts.projectId,
+        meta: { action, ...(tier ? { tier } : {}), ...(knownCost ? {} : { partial: true }) },
+      });
+    }
+    // Failed/timed-out provider attempts: persisted as waste markers so the
+    // failure rate (and any silently-billed timeouts) are visible in admin.
+    if (failures > 0) {
+      await recordFinanceEvent({
+        category: "waste",
+        kind: "failedCalls",
+        amountUsd: 0,
+        uid,
+        projectId: opts.projectId,
+        meta: { action, failures, calls: opts.stats?.calls ?? failures, ...(tier ? { tier } : {}) },
+      });
+    }
+
+    // Feed the rolling window that powers Spark estimate ranges. Only a fully
+    // priced, FRESH render qualifies: partial costs would skew the range, and
+    // edit re-rolls carry extra sub-calls that don't represent a fresh render.
+    if (tier && knownCost && totalCost > 0 && isImageAction(action) && !opts.isEdit) {
+      // Sanity clamp: a sample wildly above the model's nominal per-image rate
+      // is a misconfigured cost entry or an outlier batch — don't poison the
+      // window (and with it the pre-flight reserve) for the next 10 calls.
+      const nominal = imageModelKey
+        ? costForUsage(costs.models[imageModelKey], { images: 1, size: "1024x1024" })
+        : null;
+      const outlier = nominal != null && nominal > 0 && totalCost > nominal * 10;
+      if (!outlier) {
+        await recordImageCostSample(action, tier, totalCost, imageModelKey ?? undefined);
+      }
+    }
   } catch {
     // Metering must never break generation.
   }

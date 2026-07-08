@@ -159,6 +159,43 @@ export interface AdminSettings {
   timezone: string;
   /** Auto-refresh interval in seconds, or null to disable. */
   autoRefreshSec: number | null;
+  /** Infrastructure (Firebase/GCP) cost tracking for the finance dashboard. */
+  infra: InfraCostSettings;
+  /** Operating-cost (custom costs) bookkeeping preferences. */
+  ops: OpsCostSettings;
+}
+
+/**
+ * How real Firebase / Google Cloud spend flows into the finance stream. Two
+ * modes, checked in order by the daily scheduled import:
+ *   1. `bigQueryTable` set — query the Cloud Billing "detailed usage cost"
+ *      export in BigQuery for yesterday's spend per service (exact, automatic).
+ *      Requires the billing export to be enabled to that table.
+ *   2. Else `monthlyBudgetUsd` set — a daily prorated slice of the entered
+ *      monthly figure is recorded instead (approximate, zero setup).
+ */
+export interface InfraCostSettings {
+  /**
+   * Fully-qualified BigQuery table of the billing export, e.g.
+   * `myproject.billing_export.gcp_billing_export_v1_XXXXXX`. Null ⇒ not used.
+   */
+  bigQueryTable: string | null;
+  /** Fallback: approximate monthly infra spend in USD, prorated daily. Null ⇒ off. */
+  monthlyBudgetUsd: number | null;
+}
+
+/**
+ * How admin-entered custom costs (email service, tooling subscriptions, …) are
+ * booked into the finance stream.
+ */
+export interface OpsCostSettings {
+  /**
+   * True when the business is VAT-registered and reclaims input tax — custom
+   * costs are then booked at their NET amount (the true economic cost); false
+   * books the GROSS amount actually leaving the account. Either way both
+   * figures are kept on the event for auditing.
+   */
+  reclaimVat: boolean;
 }
 
 export const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
@@ -166,6 +203,8 @@ export const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
   excludedDomains: [],
   timezone: "UTC",
   autoRefreshSec: null,
+  infra: { bigQueryTable: null, monthlyBudgetUsd: null },
+  ops: { reclaimVat: false },
 };
 
 /**
@@ -177,6 +216,12 @@ export const DEFAULT_ADMIN_SETTINGS: AdminSettings = {
 export interface ActionCostStats {
   /** The LLM action id (e.g. "pageIllustration"). */
   action: string;
+  /**
+   * For image actions, the quality tier this row is for ("quick" / "premium"),
+   * so costs are reported separately per tier. Null/absent for text actions and
+   * legacy line items recorded before tiers existed.
+   */
+  tier?: "quick" | "premium" | null;
   /** How many calls in the window. */
   count: number;
   /** Sum of priced cost (USD). */

@@ -16,9 +16,20 @@
  * a convenience source for prefilling the checkout form.
  */
 import type { Address, Recipient } from "../fulfillment/types";
+import type { ImageTier } from "../config/modelConfig";
 
 /** Current profile-document schema version. Bump on any breaking field change. */
 export const PROFILE_SCHEMA_VERSION = 1;
+
+/** Per-user application preferences (editable in Settings). */
+export interface UserPreferences {
+  /**
+   * The user's default image quality tier. `null` means "not chosen yet" — the
+   * studio prompts a one-time pick on the first generation so the choice is
+   * always deliberate.
+   */
+  imageTier: ImageTier | null;
+}
 
 /**
  * One entry in the user's address book. Field names mirror the checkout form
@@ -67,6 +78,8 @@ export interface UserProfile {
   currency: string | null;
   /** Whether the user opted in to marketing email. */
   marketingOptIn: boolean;
+  /** Per-user app preferences (image quality tier, …). */
+  preferences: UserPreferences;
   /** Small, denormalized analytics/metadata summary (NOT an event log). */
   meta: ProfileMeta;
   /** Epoch ms. */
@@ -102,6 +115,7 @@ export function emptyProfile(): UserProfile {
     locale: null,
     currency: null,
     marketingOptIn: false,
+    preferences: { imageTier: null },
     meta: {
       firstSeenAt: null,
       lastActiveAt: null,
@@ -123,9 +137,12 @@ export function migrateProfile(raw: unknown): UserProfile {
   if (!raw || typeof raw !== "object") return base;
   const d = raw as Record<string, unknown>;
   const meta = (d.meta ?? {}) as Record<string, unknown>;
+  const prefs = (d.preferences ?? {}) as Record<string, unknown>;
   const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
   const num = (v: unknown): number => (typeof v === "number" ? v : 0);
   const numOrNull = (v: unknown): number | null => (typeof v === "number" ? v : null);
+  const imageTier: ImageTier | null =
+    prefs.imageTier === "quick" || prefs.imageTier === "premium" ? prefs.imageTier : null;
 
   // schemaVersion < 1 docs (pre-versioning) simply fall through to the defaults
   // above for any missing field; add explicit per-version steps here as needed.
@@ -138,6 +155,7 @@ export function migrateProfile(raw: unknown): UserProfile {
     locale: str(d.locale),
     currency: str(d.currency),
     marketingOptIn: d.marketingOptIn === true,
+    preferences: { imageTier },
     meta: {
       firstSeenAt: numOrNull(meta.firstSeenAt),
       lastActiveAt: numOrNull(meta.lastActiveAt),

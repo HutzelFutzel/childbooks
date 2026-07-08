@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { ImageIcon, Loader2, ZoomIn } from "lucide-react";
+import type { ImageActionId } from "../../core/ai/actions";
 import { cn } from "../lib/cn";
 import { Modal } from "./Modal";
+import { GenerationOverlay } from "../generation/GenerationOverlay";
 
 export interface ImagePreviewProps {
   src?: string | null;
@@ -14,6 +16,11 @@ export interface ImagePreviewProps {
   /** Allow click-to-zoom in an in-app modal. */
   zoomable?: boolean;
   emptyLabel?: string;
+  /** When set, the loading state shows the rich generation overlay (with a
+   *  live time estimate + phases) instead of a plain spinner. */
+  loadingAction?: ImageActionId;
+  /** Reference count, to sharpen the time estimate. */
+  refCount?: number;
 }
 
 export function ImagePreview({
@@ -24,6 +31,8 @@ export function ImagePreview({
   className,
   zoomable = true,
   emptyLabel = "No image yet",
+  loadingAction,
+  refCount = 0,
 }: ImagePreviewProps) {
   const [zoom, setZoom] = useState(false);
   const canZoom = zoomable && Boolean(src) && !loading;
@@ -40,10 +49,14 @@ export function ImagePreview({
         onClick={() => canZoom && setZoom(true)}
       >
         {loading ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-ink-400">
-            <Loader2 className="size-6 animate-spin" />
-            <span className="text-xs">Generating…</span>
-          </div>
+          loadingAction ? (
+            <GenerationOverlay action={loadingAction} refCount={refCount} />
+          ) : (
+            <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-ink-400">
+              <Loader2 className="size-6 animate-spin" />
+              <span className="text-xs">Generating…</span>
+            </div>
+          )
         ) : src ? (
           <>
             <motion.img

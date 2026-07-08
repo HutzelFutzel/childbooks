@@ -75,6 +75,7 @@ export function PageStage({
   snap = true,
   grid = false,
   gridSize = 0.05,
+  overlay,
 }: {
   pageDesign: PageDesign;
   imageUrl?: string;
@@ -113,6 +114,9 @@ export function PageStage({
   grid?: boolean;
   /** Grid spacing as a fraction of page width. */
   gridSize?: number;
+  /** Optional overlay rendered over the sized page surface (e.g. a generation
+   *  progress overlay while the illustration is rendering). */
+  overlay?: React.ReactNode;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -659,6 +663,8 @@ export function PageStage({
             onCancel={() => setEditingId(null)}
           />
         )}
+
+        {overlay}
       </div>
     </div>
   );

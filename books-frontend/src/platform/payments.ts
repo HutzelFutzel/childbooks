@@ -24,7 +24,7 @@ export type PaymentStatus =
 
 export interface UserPaymentRecord {
   id: string;
-  kind: "order" | "subscription" | "sparkPack";
+  kind: "order" | "subscription" | "sparkPack" | "sparkGift" | "ebook";
   status: PaymentStatus;
   amount: number;
   currency: string;
@@ -107,6 +107,115 @@ export async function startOrderCheckout(input: CheckoutInput): Promise<{ url: s
   return { url: json.url, paymentId: json.paymentId ?? "" };
 }
 
+export interface RetailPricePreview {
+  currency: string;
+  copies: number;
+  /** Per-unit price after any plan discount. */
+  unitPrice: number;
+  /** Per-unit sticker price before the discount. */
+  listUnitPrice: number;
+  discountPct: number;
+  items: number;
+  shipping: number;
+  total: number;
+}
+
+/**
+ * Retail price preview for the order dialog. Runs the exact server pricing
+ * path used at checkout (retail tiers + plan discount + charged shipping), so
+ * the preview always matches what Stripe will charge (before tax).
+ */
+export async function fetchOrderPrice(input: {
+  productSku: string;
+  copies: number;
+  pageCount: number;
+  currency: string;
+  shippingMethod: ShippingMethod;
+  destinationCountry: string;
+  line1?: string;
+  city: string;
+  state?: string;
+  postalCode: string;
+}): Promise<RetailPricePreview> {
+  const res = await backendFetch("/checkout/price", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, "We couldn't price this destination."));
+  return (await res.json()) as RetailPricePreview;
+}
+
+/**
+ * Reorder a previously paid print order. The backend reuses the hosted print
+ * files from the original payment and reprices at today's catalog price, so no
+ * re-render/re-upload is needed. Returns the Stripe Checkout URL.
+ */
+export async function startReorderCheckout(
+  paymentId: string,
+  copies?: number,
+): Promise<{ url: string }> {
+  const res = await backendFetch("/checkout/reorder", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paymentId, copies }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, "We couldn't start checkout."));
+  const json = (await res.json()) as { url?: string };
+  if (!json.url) throw new Error("Checkout did not return a URL.");
+  return { url: json.url };
+}
+
+export interface EbookQuote {
+  enabled: boolean;
+  currency: string;
+  /** Final price after any print-owner bundle discount. */
+  price: number;
+  listPrice: number;
+  discountPct: number;
+  /** Whether the user already owns this ebook. */
+  owned: boolean;
+  /** Download URL when owned (token-guarded; only revealed to the owner). */
+  downloadUrl: string | null;
+}
+
+/** Server-authoritative ebook price + ownership for a project. */
+export async function fetchEbookQuote(projectId: string, currency?: string): Promise<EbookQuote> {
+  const params = new URLSearchParams({ projectId });
+  if (currency) params.set("currency", currency);
+  const res = await backendFetch(`/checkout/ebook/quote?${params.toString()}`);
+  if (!res.ok) throw new Error(await errorMessage(res, "We couldn't price the ebook."));
+  return (await res.json()) as EbookQuote;
+}
+
+/**
+ * Buy the digital edition (PDF). Uploads the rendered ebook file as part of the
+ * call; the download unlocks only after Stripe confirms payment.
+ */
+export async function startEbookCheckout(input: {
+  projectId: string;
+  title: string;
+  currency: string;
+  pdf: Blob;
+}): Promise<{ url: string }> {
+  const bytes = new Uint8Array(await input.pdf.arrayBuffer());
+  const res = await backendFetch("/checkout/ebook", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      projectId: input.projectId,
+      title: input.title,
+      currency: input.currency,
+      contentType: input.pdf.type || "application/pdf",
+      pdfBase64: bytesToBase64(bytes),
+    }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, "We couldn't start the ebook checkout."));
+  const json = (await res.json()) as { url?: string };
+  if (!json.url) throw new Error("Checkout did not return a URL.");
+  return { url: json.url };
+}
+
 export interface SubscriptionCheckoutInput {
   /** The configured plan id (preferred — the server resolves the Stripe price). */
   planId?: string;
@@ -140,6 +249,87 @@ export async function buySparkPack(packId: string, currency: string): Promise<{ 
   const json = (await res.json()) as { url?: string };
   if (!json.url) throw new Error("Checkout did not return a URL.");
   return { url: json.url };
+}
+
+/**
+ * Buy a Spark pack as a GIFT: pays now, receives a claim code (shown on the
+ * success page + receipt) that anyone can redeem. Returns the Checkout URL.
+ */
+export async function buySparkGift(input: {
+  packId: string;
+  currency: string;
+  recipientEmail?: string;
+  message?: string;
+}): Promise<{ url: string }> {
+  const res = await backendFetch("/checkout/sparks-gift", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, "We couldn't start checkout."));
+  const json = (await res.json()) as { url?: string };
+  if (!json.url) throw new Error("Checkout did not return a URL.");
+  return { url: json.url };
+}
+
+export interface SparkGiftSummary {
+  code: string;
+  sparks: number;
+  status: "pending" | "claimed";
+  recipientEmail: string | null;
+  message: string | null;
+  createdAt: number;
+  claimedAt: number | null;
+}
+
+/** The gifts the signed-in user has bought (claim codes + redeemed status). */
+export async function listMyGifts(): Promise<SparkGiftSummary[]> {
+  const res = await backendFetch("/account/gifts");
+  if (!res.ok) throw new Error(await errorMessage(res, "Could not load your gifts."));
+  const json = (await res.json()) as { gifts?: SparkGiftSummary[] };
+  return json.gifts ?? [];
+}
+
+/** Redeem a Spark gift code — the Sparks are granted to the signed-in user. */
+export async function claimSparkGift(code: string): Promise<number> {
+  const res = await backendFetch("/account/sparks/claim-gift", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ code }),
+  });
+  if (!res.ok) throw new Error(await errorMessage(res, "Could not claim this gift."));
+  const json = (await res.json()) as { sparks?: number };
+  return json.sparks ?? 0;
+}
+
+export interface ReferralInfo {
+  code: string;
+  enabled: boolean;
+  referrerSparks: number;
+  referredSparks: number;
+}
+
+/** The signed-in user's shareable referral code + current reward amounts. */
+export async function getReferralInfo(): Promise<ReferralInfo> {
+  const res = await backendFetch("/account/referral");
+  if (!res.ok) throw new Error(await errorMessage(res, "Could not load your referral code."));
+  return (await res.json()) as ReferralInfo;
+}
+
+/** Attach the referral code that brought this user here (best-effort). */
+export async function claimReferralCode(code: string): Promise<boolean> {
+  try {
+    const res = await backendFetch("/account/referral/claim", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    if (!res.ok) return false;
+    const json = (await res.json()) as { ok?: boolean };
+    return json.ok === true;
+  } catch {
+    return false;
+  }
 }
 
 /** Claim the one-time starter Spark grant for the signed-in user (idempotent). */
@@ -183,7 +373,10 @@ function mapPayment(id: string, d: Record<string, unknown>): UserPaymentRecord {
     : [];
   return {
     id: typeof d.id === "string" ? d.id : id,
-    kind: d.kind === "subscription" || d.kind === "sparkPack" ? d.kind : "order",
+    kind:
+      d.kind === "subscription" || d.kind === "sparkPack" || d.kind === "sparkGift" || d.kind === "ebook"
+        ? d.kind
+        : "order",
     status: (typeof d.status === "string" ? d.status : "pending") as PaymentStatus,
     amount: typeof d.amount === "number" ? d.amount : 0,
     currency: typeof d.currency === "string" ? d.currency : "USD",

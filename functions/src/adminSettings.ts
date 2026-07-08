@@ -20,6 +20,17 @@ const settingsSchema = z.object({
   excludedDomains: z.array(z.string().max(255)).max(2000).optional(),
   timezone: z.string().max(80).optional(),
   autoRefreshSec: z.number().int().positive().max(86_400).nullable().optional(),
+  infra: z
+    .object({
+      bigQueryTable: z.string().max(1024).nullable().optional(),
+      monthlyBudgetUsd: z.number().min(0).max(10_000_000).nullable().optional(),
+    })
+    .optional(),
+  ops: z
+    .object({
+      reclaimVat: z.boolean().optional(),
+    })
+    .optional(),
 });
 
 function dedupe(list: string[]): string[] {
@@ -52,6 +63,17 @@ export function normalizeSettings(raw: unknown): AdminSettings {
         .map((s) => s.trim().toLowerCase().replace(/^@/, ""))
         .filter(Boolean)
     : [];
+  const infraRaw = (r.infra ?? {}) as Record<string, unknown>;
+  const bigQueryTable =
+    typeof infraRaw.bigQueryTable === "string" && infraRaw.bigQueryTable.trim()
+      ? infraRaw.bigQueryTable.trim()
+      : null;
+  const monthlyBudgetUsd =
+    typeof infraRaw.monthlyBudgetUsd === "number" &&
+    Number.isFinite(infraRaw.monthlyBudgetUsd) &&
+    infraRaw.monthlyBudgetUsd > 0
+      ? infraRaw.monthlyBudgetUsd
+      : null;
   return {
     excludedEmails: dedupe(emails),
     excludedDomains: dedupe(domains),
@@ -60,6 +82,8 @@ export function normalizeSettings(raw: unknown): AdminSettings {
       typeof r.autoRefreshSec === "number" && Number.isFinite(r.autoRefreshSec) && r.autoRefreshSec > 0
         ? Math.floor(r.autoRefreshSec)
         : null,
+    infra: { bigQueryTable, monthlyBudgetUsd },
+    ops: { reclaimVat: (r.ops as Record<string, unknown> | undefined)?.reclaimVat === true },
   };
 }
 

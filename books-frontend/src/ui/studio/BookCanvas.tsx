@@ -2,10 +2,10 @@ import { Fragment, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   BookOpen,
+  BookText,
   Eye,
   Grid3x3,
   GripVertical,
-  Loader2,
   Magnet,
   Plus,
   Redo2,
@@ -16,11 +16,14 @@ import {
   Sparkles,
   SquareDashed,
   Undo2,
+  Users,
 } from "lucide-react";
 import { COVER_BACK_ID, COVER_FRONT_ID, type Anchor } from "../../core/types";
 import { getCursor } from "../../core/versioning";
 import { staleIllustrationSpreadIds } from "../../state/ai";
 import { Button } from "../components/Button";
+import { EmptyState } from "../components/EmptyState";
+import { PipelineStepper, type PipelinePhase } from "../generation/PipelineStepper";
 import { useResolvedModels } from "../hooks/useResolvedModels";
 import { cn } from "../lib/cn";
 import { SharePanel } from "../share/SharePanel";
@@ -36,6 +39,12 @@ import {
 } from "./SpreadEditor";
 
 type ViewMode = "scroll" | "grid";
+
+const SCREENPLAY_PHASES: PipelinePhase[] = [
+  { id: "cast", label: "Casting characters & places", icon: Users },
+  { id: "write", label: "Writing the page-by-page screenplay", icon: BookText },
+  { id: "pages", label: "Laying out the pages", icon: LayoutGrid },
+];
 
 export function BookCanvas() {
   const { project, pages, design, undo, redo, snap, grid, guides, toggleSnap, toggleGrid, toggleGuides, setStep } =
@@ -74,27 +83,20 @@ export function BookCanvas() {
 
   if (!doc) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 py-20 text-center">
+      <div className="flex flex-1 flex-col items-center justify-center bg-aurora">
         {models ? (
-          <>
-            <Loader2 className="size-7 animate-spin text-brand-500" />
-            <p className="text-sm font-medium text-ink-600">Drafting your book…</p>
-            <p className="max-w-sm text-xs text-ink-400">
-              The studio is writing a page-by-page screenplay from your story. Characters &amp; places
-              appear in the sidebar as they're found.
-            </p>
-          </>
+          <PipelineStepper
+            title="Drafting your book…"
+            subtitle="We're turning your story into a page-by-page screenplay. Characters & places appear in the sidebar as they're found."
+            phases={SCREENPLAY_PHASES}
+            activeIndex={1}
+          />
         ) : (
-          <>
-            <span className="flex size-12 items-center justify-center rounded-2xl bg-amber-50 text-amber-500">
-              <Sparkles className="size-6" />
-            </span>
-            <p className="text-sm font-semibold text-ink-700">AI generation is unavailable</p>
-            <p className="max-w-sm text-xs text-ink-400">
-              AI generation is being set up on the server. Once it's ready, the studio analyzes your
-              story and drafts the whole book automatically.
-            </p>
-          </>
+          <EmptyState
+            icon={Sparkles}
+            title="AI generation is being set up"
+            description="Once it's ready, the studio analyzes your story and drafts the whole book automatically."
+          />
         )}
       </div>
     );
@@ -103,54 +105,60 @@ export function BookCanvas() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Toolbar */}
-      <div className="flex items-center justify-between gap-3 border-b border-ink-100 bg-white/70 px-5 py-2.5 backdrop-blur">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-ink-100 bg-white/70 px-3 py-2.5 backdrop-blur sm:px-5">
         <ViewToggle view={view} onChange={setView} />
         <div className="flex items-center gap-1.5">
-          <button
-            onClick={toggleSnap}
-            title={snap ? "Snapping on" : "Snapping off"}
-            className={cn(
-              "rounded-lg p-2 transition hover:bg-ink-100",
-              snap ? "bg-brand-50 text-brand-600" : "text-ink-400 hover:text-ink-800",
-            )}
-          >
-            <Magnet className="size-4" />
-          </button>
-          <button
-            onClick={toggleGrid}
-            title={grid ? "Grid on" : "Grid off"}
-            className={cn(
-              "rounded-lg p-2 transition hover:bg-ink-100",
-              grid ? "bg-brand-50 text-brand-600" : "text-ink-400 hover:text-ink-800",
-            )}
-          >
-            <Grid3x3 className="size-4" />
-          </button>
-          <button
-            onClick={toggleGuides}
-            title={guides ? "Print guides on (safe area + gutter)" : "Print guides off"}
-            className={cn(
-              "rounded-lg p-2 transition hover:bg-ink-100",
-              guides ? "bg-brand-50 text-brand-600" : "text-ink-400 hover:text-ink-800",
-            )}
-          >
-            <SquareDashed className="size-4" />
-          </button>
-          <span className="mx-0.5 h-5 w-px bg-ink-200" />
-          <button
-            onClick={undo}
-            title="Undo"
-            className="rounded-lg p-2 text-ink-500 transition hover:bg-ink-100 hover:text-ink-800"
-          >
-            <Undo2 className="size-4" />
-          </button>
-          <button
-            onClick={redo}
-            title="Redo"
-            className="rounded-lg p-2 text-ink-500 transition hover:bg-ink-100 hover:text-ink-800"
-          >
-            <Redo2 className="size-4" />
-          </button>
+          {/* Editor aids (snap / grid / print guides): desktop-only fine-tuning. */}
+          <div className="hidden items-center gap-1.5 md:flex">
+            <button
+              onClick={toggleSnap}
+              title={snap ? "Snapping on" : "Snapping off"}
+              className={cn(
+                "rounded-lg p-2 transition hover:bg-ink-100",
+                snap ? "bg-brand-50 text-brand-600" : "text-ink-400 hover:text-ink-800",
+              )}
+            >
+              <Magnet className="size-4" />
+            </button>
+            <button
+              onClick={toggleGrid}
+              title={grid ? "Grid on" : "Grid off"}
+              className={cn(
+                "rounded-lg p-2 transition hover:bg-ink-100",
+                grid ? "bg-brand-50 text-brand-600" : "text-ink-400 hover:text-ink-800",
+              )}
+            >
+              <Grid3x3 className="size-4" />
+            </button>
+            <button
+              onClick={toggleGuides}
+              title={guides ? "Print guides on (safe area + gutter)" : "Print guides off"}
+              className={cn(
+                "rounded-lg p-2 transition hover:bg-ink-100",
+                guides ? "bg-brand-50 text-brand-600" : "text-ink-400 hover:text-ink-800",
+              )}
+            >
+              <SquareDashed className="size-4" />
+            </button>
+            <span className="mx-0.5 h-5 w-px bg-ink-200" />
+          </div>
+          {/* Undo / redo: shown from small screens up. */}
+          <div className="hidden items-center gap-1.5 sm:flex">
+            <button
+              onClick={undo}
+              title="Undo"
+              className="rounded-lg p-2 text-ink-500 transition hover:bg-ink-100 hover:text-ink-800"
+            >
+              <Undo2 className="size-4" />
+            </button>
+            <button
+              onClick={redo}
+              title="Redo"
+              className="rounded-lg p-2 text-ink-500 transition hover:bg-ink-100 hover:text-ink-800"
+            >
+              <Redo2 className="size-4" />
+            </button>
+          </div>
           <Button
             size="sm"
             variant="secondary"
@@ -162,6 +170,7 @@ export function BookCanvas() {
           <Button
             size="sm"
             variant="secondary"
+            className="hidden sm:inline-flex"
             leftIcon={<Share2 className="size-4" />}
             onClick={() => setSharing(true)}
           >
@@ -172,7 +181,8 @@ export function BookCanvas() {
             leftIcon={<ShoppingCart className="size-4" />}
             onClick={() => setStep("order")}
           >
-            Order &amp; print
+            <span className="hidden sm:inline">Order &amp; print</span>
+            <span className="sm:hidden">Order</span>
           </Button>
         </div>
       </div>
@@ -213,12 +223,16 @@ export function BookCanvas() {
   );
 }
 
-/** Hover-reveal control to insert a new page (or a blank page) at `at`. */
+/**
+ * Insert a new page (or a blank page) at `at`. On touch the buttons stay
+ * visible (no hover); on pointer devices they fade in on hover to keep the
+ * canvas calm.
+ */
 function InsertBar({ at }: { at: number }) {
   return (
-    <div className="group relative flex h-7 items-center justify-center">
-      <div className="absolute inset-x-8 top-1/2 h-px -translate-y-1/2 bg-ink-200 opacity-0 transition-opacity group-hover:opacity-100" />
-      <div className="relative flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+    <div className="group relative flex h-9 items-center justify-center md:h-7">
+      <div className="absolute inset-x-8 top-1/2 h-px -translate-y-1/2 bg-ink-200 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100" />
+      <div className="relative flex items-center gap-1 opacity-100 transition-opacity md:opacity-0 md:group-hover:opacity-100">
         <button
           onClick={() => insertSpreadAt(at)}
           className="flex items-center gap-1 rounded-full border border-ink-200 bg-white px-2.5 py-1 text-xs font-medium text-ink-600 shadow-soft transition hover:border-brand-300 hover:text-brand-600"
@@ -292,14 +306,36 @@ function PageGrid({
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
 
-  function handleDrop(targetDisp: DisplaySpread | null) {
+  // The spread id currently under the pointer (via hit-testing), or null when
+  // the pointer is past the last cell (⇒ drop at the end).
+  function cellIdAt(x: number, y: number): string | null {
+    const el = document.elementFromPoint(x, y);
+    const cell = el?.closest("[data-spread-id]") as HTMLElement | null;
+    return cell?.getAttribute("data-spread-id") ?? null;
+  }
+
+  function handleMove(x: number, y: number) {
     if (!dragId) return;
-    const dragged = displays.find((d) => d.id === dragId);
-    const ids = dragged ? contentSpreadIds(dragged) : [];
-    if (ids.length > 0) {
-      const beforeId = targetDisp ? contentSpreadIds(targetDisp)[0] ?? null : null;
-      if (!ids.includes(beforeId ?? "")) moveSpreadBefore(ids, beforeId);
+    const id = cellIdAt(x, y);
+    setOverId(id && id !== dragId ? id : null);
+  }
+
+  function handleUp(x: number, y: number) {
+    if (dragId) {
+      const dragged = displays.find((d) => d.id === dragId);
+      const ids = dragged ? contentSpreadIds(dragged) : [];
+      if (ids.length > 0) {
+        const targetId = cellIdAt(x, y);
+        const targetDisp = targetId ? displays.find((d) => d.id === targetId) ?? null : null;
+        const beforeId = targetDisp ? contentSpreadIds(targetDisp)[0] ?? null : null;
+        if (!ids.includes(beforeId ?? "")) moveSpreadBefore(ids, beforeId);
+      }
     }
+    setDragId(null);
+    setOverId(null);
+  }
+
+  function handleCancel() {
     setDragId(null);
     setOverId(null);
   }
@@ -324,18 +360,10 @@ function PageGrid({
               reorderable={reorderable}
               dragging={dragId === disp.id}
               dropBefore={overId === disp.id && dragId !== null && dragId !== disp.id}
-              onDragStart={() => reorderable && setDragId(disp.id)}
-              onDragOver={(e) => {
-                if (dragId && dragId !== disp.id) {
-                  e.preventDefault();
-                  setOverId(disp.id);
-                }
-              }}
-              onDrop={() => handleDrop(disp)}
-              onDragEnd={() => {
-                setDragId(null);
-                setOverId(null);
-              }}
+              onGrabStart={() => reorderable && setDragId(disp.id)}
+              onGrabMove={handleMove}
+              onGrabEnd={handleUp}
+              onGrabCancel={handleCancel}
             />
           );
         })}
@@ -351,8 +379,9 @@ function PageGrid({
 
 /**
  * One editable spread in the grid. The card itself stays fully interactive; only
- * the dedicated handle starts a reorder drag, so clicking text/shapes to edit
- * them never gets hijacked by drag-and-drop.
+ * the dedicated handle starts a reorder drag, so tapping text to edit it never
+ * gets hijacked. Reordering uses pointer events + pointer capture (not the
+ * HTML5 drag API), so it works with a mouse AND on touch screens.
  */
 function GridCell({
   disp,
@@ -361,10 +390,10 @@ function GridCell({
   reorderable,
   dragging,
   dropBefore,
-  onDragStart,
-  onDragOver,
-  onDrop,
-  onDragEnd,
+  onGrabStart,
+  onGrabMove,
+  onGrabEnd,
+  onGrabCancel,
 }: {
   disp: DisplaySpread;
   anchors: Anchor[];
@@ -372,15 +401,14 @@ function GridCell({
   reorderable: boolean;
   dragging: boolean;
   dropBefore: boolean;
-  onDragStart: () => void;
-  onDragOver: (e: React.DragEvent) => void;
-  onDrop: () => void;
-  onDragEnd: () => void;
+  onGrabStart: () => void;
+  onGrabMove: (x: number, y: number) => void;
+  onGrabEnd: (x: number, y: number) => void;
+  onGrabCancel: () => void;
 }) {
   return (
     <div
-      onDragOver={onDragOver}
-      onDrop={onDrop}
+      data-spread-id={disp.id}
       className={cn("relative transition", dragging && "opacity-40")}
     >
       {dropBefore && (
@@ -388,11 +416,22 @@ function GridCell({
       )}
       {reorderable && (
         <button
-          draggable
-          onDragStart={onDragStart}
-          onDragEnd={onDragEnd}
+          onPointerDown={(e) => {
+            e.preventDefault();
+            e.currentTarget.setPointerCapture(e.pointerId);
+            onGrabStart();
+          }}
+          onPointerMove={(e) => {
+            if (dragging) onGrabMove(e.clientX, e.clientY);
+          }}
+          onPointerUp={(e) => {
+            if (dragging) onGrabEnd(e.clientX, e.clientY);
+          }}
+          onPointerCancel={() => {
+            if (dragging) onGrabCancel();
+          }}
           title="Drag to reorder"
-          className="absolute right-3 top-3 z-10 flex cursor-grab items-center rounded-lg border border-ink-200 bg-white/90 p-1.5 text-ink-400 shadow-soft backdrop-blur transition hover:border-brand-300 hover:text-brand-600 active:cursor-grabbing"
+          className="absolute right-3 top-3 z-10 flex touch-none cursor-grab items-center rounded-lg border border-ink-200 bg-white/90 p-1.5 text-ink-400 shadow-soft backdrop-blur transition hover:border-brand-300 hover:text-brand-600 active:cursor-grabbing"
         >
           <GripVertical className="size-4" />
         </button>

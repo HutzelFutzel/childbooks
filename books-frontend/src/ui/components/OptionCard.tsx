@@ -48,7 +48,9 @@ export function OptionCard({
         <span
           className={cn(
             "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border transition",
-            selected ? "border-brand-500 bg-brand-500 text-white" : "border-ink-300 bg-white",
+            selected
+              ? "border-brand-500 bg-brand-500 text-(--color-brand-foreground)"
+              : "border-ink-300 bg-white",
           )}
         >
           {selected && <Check className="size-3.5" strokeWidth={3} />}

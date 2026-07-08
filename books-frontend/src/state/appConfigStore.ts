@@ -30,6 +30,16 @@ import {
   normalizeModelCostTable,
   type ModelCostTable,
 } from "../core/config/modelCosts";
+import {
+  createDefaultImageCostStats,
+  normalizeImageCostStats,
+  type ImageCostStats,
+} from "../core/config/imageCostStats";
+import {
+  createDefaultLatencyStats,
+  normalizeLatencyStats,
+  type LatencyStats,
+} from "../core/config/latencyStats";
 import type { CostSuggestionResult } from "../core/config/costSuggestion";
 import type { ProviderId } from "../core/config/options";
 import {
@@ -78,6 +88,22 @@ import {
   type SiteContentConfig,
   type SiteTextSlot,
 } from "../core/config/siteContent";
+import {
+  createDefaultPromptsConfig,
+  normalizePromptsConfig,
+  type PromptsConfig,
+} from "../core/config/prompts";
+import {
+  createDefaultEmailConfig,
+  normalizeEmailConfig,
+  type EmailConfig,
+} from "../core/config/emailConfig";
+import {
+  createDefaultEmailStats,
+  normalizeEmailStats,
+  type EmailStats,
+} from "../core/config/emailStats";
+import type { EmailTemplateId } from "../core/email/types";
 import type { ActionCostReport, CostGranularity } from "../core/analytics/types";
 
 /** Result of a live margin preview (server fetches a provider quote when able). */
@@ -92,6 +118,10 @@ interface AppConfigState {
   artStyles: ArtStylesConfig;
   ageWriting: AgeWritingConfig;
   modelCosts: ModelCostTable;
+  /** Rolling window of recent per-call image costs (for Spark estimate ranges). */
+  imageCostStats: ImageCostStats;
+  /** Rolling window of recent render durations (for time estimate ranges). */
+  latencyStats: LatencyStats;
   /** Public product projection (storefront-facing; resolved prices, no internals). */
   products: PublicProductsConfig;
   /** Catalog-wide pricing economics (currencies, FX, fees, tax). */
@@ -108,6 +138,12 @@ interface AppConfigState {
   siteImages: SiteImagesConfig;
   /** Landing-page copy overrides (inline text editor). */
   siteContent: SiteContentConfig;
+  /** Admin-editable LLM prompt templates. */
+  prompts: PromptsConfig;
+  /** System + marketing email config (senders, toggles, footer). */
+  emailConfig: EmailConfig;
+  /** Aggregate email delivery statistics (sent/delivered/opened/bounced…). */
+  emailStats: EmailStats;
   loaded: boolean;
   unsubs: Unsubscribe[];
 
@@ -123,6 +159,10 @@ interface AppConfigState {
   savePricingSettings: (settings: PricingSettings) => Promise<void>;
   saveSparksConfig: (config: SparksConfig) => Promise<void>;
   saveSeoConfig: (config: SeoConfig) => Promise<void>;
+  savePrompts: (config: PromptsConfig) => Promise<void>;
+  saveEmailConfig: (config: EmailConfig) => Promise<void>;
+  /** Send a template with its sample vars to a test recipient (admin by default). */
+  sendTestEmail: (templateId: EmailTemplateId, to?: string) => Promise<void>;
   uploadArtStyleImage: (styleId: string, base64: string, mimeType: string) => Promise<void>;
 
   // Landing-page inline editing (admin, gated in the UI; enforced server-side).
@@ -219,6 +259,8 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   artStyles: createDefaultArtStylesConfig(),
   ageWriting: createDefaultAgeWritingConfig(),
   modelCosts: createDefaultModelCostTable(),
+  imageCostStats: createDefaultImageCostStats(),
+  latencyStats: createDefaultLatencyStats(),
   products: { version: 1, products: [] },
   pricingSettings: createDefaultPricingSettings(),
   sparks: createDefaultSparksConfig(),
@@ -227,6 +269,9 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   seo: createDefaultSeoConfig(),
   siteImages: createDefaultSiteImagesConfig(),
   siteContent: createDefaultSiteContentConfig(),
+  prompts: createDefaultPromptsConfig(),
+  emailConfig: createDefaultEmailConfig(),
+  emailStats: createDefaultEmailStats(),
   loaded: false,
   unsubs: [],
 
@@ -245,6 +290,12 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       }),
       onSnapshot(doc(db, "appConfig", "modelCosts"), (snap) => {
         set({ modelCosts: normalizeModelCostTable(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "imageCostStats"), (snap) => {
+        set({ imageCostStats: normalizeImageCostStats(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "latencyStats"), (snap) => {
+        set({ latencyStats: normalizeLatencyStats(snap.exists() ? snap.data() : undefined) });
       }),
       onSnapshot(doc(db, "appConfig", "products"), (snap) => {
         set({ products: normalizePublicProductsConfig(snap.exists() ? snap.data() : undefined) });
@@ -269,6 +320,15 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       }),
       onSnapshot(doc(db, "appConfig", "siteContent"), (snap) => {
         set({ siteContent: normalizeSiteContentConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "prompts"), (snap) => {
+        set({ prompts: normalizePromptsConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "emailConfig"), (snap) => {
+        set({ emailConfig: normalizeEmailConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "emailStats"), (snap) => {
+        set({ emailStats: normalizeEmailStats(snap.exists() ? snap.data() : undefined) });
       }),
     ];
     set({ unsubs });
@@ -305,6 +365,23 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
 
   async saveSeoConfig(config) {
     set({ seo: normalizeSeoConfig(await putJson("/admin/config/seo", config)) });
+  },
+
+  async savePrompts(config) {
+    set({ prompts: normalizePromptsConfig(await putJson("/admin/config/prompts", config)) });
+  },
+
+  async saveEmailConfig(config) {
+    set({ emailConfig: normalizeEmailConfig(await putJson("/admin/config/email", config)) });
+  },
+
+  async sendTestEmail(templateId, to) {
+    const res = await backendFetch("/admin/email/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ templateId, to }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Test send failed.");
   },
 
   async loadAdminPlans() {

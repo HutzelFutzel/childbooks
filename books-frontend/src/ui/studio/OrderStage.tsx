@@ -8,16 +8,19 @@ import {
   Loader2,
   Printer,
   ShoppingBag,
+  Tablet,
   TriangleAlert,
 } from "lucide-react";
 import { pageTrimForConfig } from "../../core/book";
 import { bookProductForConfig } from "../../core/book";
 import { currentIllustration } from "../../state/ai";
+import { useAppConfigStore } from "../../state/appConfigStore";
 import { illustrationUnits } from "../../state/bookUnits";
 import { Button } from "../components/Button";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { PrintBook } from "../design/PrintBook";
 import { OrderDialog } from "../checkout/OrderDialog";
+import { EbookDialog } from "../checkout/EbookDialog";
 import { useStudio } from "./StudioContext";
 import { buildDisplaySpreads, type Entry } from "./SpreadEditor";
 import { getCursor } from "../../core/versioning";
@@ -33,7 +36,10 @@ export function OrderStage() {
   const { project, pages, design, setStep } = useStudio();
   const [printing, setPrinting] = useState(false);
   const [ordering, setOrdering] = useState(false);
+  const [buyingEbook, setBuyingEbook] = useState(false);
   const [previewing, setPreviewing] = useState(false);
+  // Digital edition: only offered when the admin has enabled ebook sales.
+  const ebookEnabled = useAppConfigStore((s) => s.pricingSettings.ebook.enabled);
 
   const units = illustrationUnits(project);
   const missingArt = useMemo(
@@ -118,7 +124,7 @@ export function OrderStage() {
         </div>
       )}
 
-      <div className="mt-6 grid gap-4 sm:grid-cols-2">
+      <div className={`mt-6 grid gap-4 sm:grid-cols-2 ${ebookEnabled ? "lg:grid-cols-3" : ""}`}>
         <OptionCard
           icon={<ShoppingBag className="size-6" />}
           tone="brand"
@@ -127,6 +133,16 @@ export function OrderStage() {
           cta="Order print"
           onClick={() => setOrdering(true)}
         />
+        {ebookEnabled && (
+          <OptionCard
+            icon={<Tablet className="size-6" />}
+            tone="neutral"
+            title="Get the ebook"
+            desc="A high-quality PDF of your book — read it on any device, forever."
+            cta="Get the ebook"
+            onClick={() => setBuyingEbook(true)}
+          />
+        )}
         <OptionCard
           icon={<Printer className="size-6" />}
           tone="neutral"
@@ -156,6 +172,14 @@ export function OrderStage() {
       <OrderDialog
         open={ordering}
         onClose={() => setOrdering(false)}
+        project={project}
+        pages={pages}
+        design={design}
+      />
+
+      <EbookDialog
+        open={buyingEbook}
+        onClose={() => setBuyingEbook(false)}
         project={project}
         pages={pages}
         design={design}
@@ -214,7 +238,7 @@ function OptionCard({
       <span
         className={
           tone === "brand"
-            ? "flex size-12 items-center justify-center rounded-2xl bg-brand-600 text-white shadow-soft"
+            ? "flex size-12 items-center justify-center rounded-2xl bg-brand-600 text-(--color-brand-foreground) shadow-soft"
             : "flex size-12 items-center justify-center rounded-2xl bg-ink-100 text-ink-600"
         }
       >

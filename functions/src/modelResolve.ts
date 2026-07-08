@@ -8,9 +8,11 @@ import { serverConfig } from "./config";
 import { getModelConfig } from "./appConfig";
 import { ALL_PROVIDERS } from "../../books-frontend/src/core/providers";
 import {
+  DEFAULT_IMAGE_TIER,
   resolveImageModel,
   resolveTextModel,
   TEXT_SPEEDS,
+  type ImageTier,
 } from "../../books-frontend/src/core/config/modelConfig";
 import type { ImageActionId, TextActionId } from "../../books-frontend/src/core/ai/actions";
 import type { ResolvedModels } from "../../books-frontend/src/core/models/registry";
@@ -68,13 +70,16 @@ export async function resolveSuggestionModel(): Promise<ModelSelection> {
  */
 export async function resolveImageModels(
   imageAction: ImageActionId,
+  tier: ImageTier = DEFAULT_IMAGE_TIER,
 ): Promise<ResolvedModels> {
   const cfg = await getModelConfig();
   const a = availability();
   const avail = (p: ProviderId) => a[p];
-  const image = resolveImageModel(cfg, imageAction, avail);
-  const anchor = resolveImageModel(cfg, "anchorImage", avail);
+  const image = resolveImageModel(cfg, imageAction, tier, avail);
+  const anchor = resolveImageModel(cfg, "anchorImage", tier, avail);
   if (!image || !anchor) throw new ServiceUnavailable(UNAVAILABLE);
   const text = resolveTextModel(cfg, "localize", avail) ?? { provider: image.provider, id: image.id };
-  return { textModel: text, imageModel: image, anchorImageModel: anchor };
+  const binding = resolveTextModel(cfg, "bindingPass", avail) ?? text;
+  const intent = resolveTextModel(cfg, "editIntent", avail) ?? text;
+  return { textModel: text, imageModel: image, anchorImageModel: anchor, bindingModel: binding, intentModel: intent };
 }

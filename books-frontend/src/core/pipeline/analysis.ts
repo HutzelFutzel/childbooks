@@ -10,7 +10,8 @@ import type { ProviderCredentials } from "../providers/types";
 import type { Anchor, AnchorImportance, AnchorType, BookConfig } from "../types";
 import { withRetry } from "./retry";
 import { resolveAgeLlmGuidance } from "../prompts/age";
-import type { PromptContext } from "../prompts/context";
+import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
+import { renderTextPrompt } from "../prompts/render";
 
 const anchorItemSchema = z.object({
   name: z.string(),
@@ -48,25 +49,9 @@ export async function analyzeStory(
   const age = AGE_RANGES.find((a) => a.id === config.ageRangeId)?.label ?? config.ageRangeId;
   const ageTextPrompt = resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, prompts);
 
-  const system = [
-    "You are a children's-book art director.",
-    "Analyze the story and identify every subject that must look IDENTICAL each time it appears so the illustrations stay consistent.",
-    "Include recurring CHARACTERS (people, animals, creatures), important PLACES/settings, and significant recurring OBJECTS.",
-    "Skip one-off background details that never need to match.",
-    "For each, write a concise but vivid visual description (appearance, colors, distinguishing features) grounded in the story; infer sensible details where the story is silent.",
-    "Describe only the subject itself — do NOT mention the art style, medium, or rendering technique (that is applied separately).",
-    "When a subject's appearance is defined by its relationship to another subject (e.g. a sibling, or an object that belongs in a place), reference that other subject by its exact name in the description so the relationship is preserved.",
-    "Rank importance: high = central/appears often, medium = recurring, low = minor but still needs consistency.",
-    "Also write a 1-2 sentence summary of the story's visual world.",
-  ].join(" ");
-
-  const user = [
-    `Target age range: ${age}.`,
-    ageTextPrompt,
-    "",
-    "STORY:",
-    story.trim(),
-  ].join("\n");
+  const { system, user } = renderTextPrompt(resolvePromptsConfig(prompts), "storyAnalysis", {
+    vars: { age, ageGuidance: ageTextPrompt, story: story.trim() },
+  });
 
   const result = await withRetry(
     () =>
@@ -128,27 +113,9 @@ export async function generateAnchorDescription(
       .map((a) => `- ${a.name} [${a.type}]: ${a.description}`)
       .join("\n") || "(none)";
 
-  const system = [
-    "You are a children's-book art director.",
-    `Write a concise but vivid VISUAL description for a single ${type} named "${name}" that must stay consistent across the book.`,
-    "Ground it in the story; infer sensible, specific details (appearance, colors, distinguishing features) where the story is silent.",
-    "Describe only the subject itself — do NOT mention the art style, medium or rendering technique.",
-    "If this subject's look depends on another listed subject (a relative to resemble, or an object/place it contains), reference that subject by its EXACT name.",
-    "Reply with ONLY the description text — no preamble, no quotes — in 1-3 sentences.",
-  ].join(" ");
-
-  const user = [
-    `Target age range: ${age}.`,
-    ageTextPrompt,
-    "",
-    "OTHER KNOWN SUBJECTS:",
-    others,
-    "",
-    "STORY:",
-    story.trim(),
-    "",
-    `Now write the visual description for the ${type} "${name}".`,
-  ].join("\n");
+  const { system, user } = renderTextPrompt(resolvePromptsConfig(prompts), "anchorDescription", {
+    vars: { type, name, age, ageGuidance: ageTextPrompt, others, story: story.trim() },
+  });
 
   const res = await withRetry(
     () =>

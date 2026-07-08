@@ -16,11 +16,13 @@ import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import type { Anchor, BookConfig, ScreenplayDoc, ScreenplaySpread } from "../types";
 import { effectiveAnchorIds, normalizeAnchorName } from "../book/anchorRefs";
+import { getBookLayout } from "../book/layouts";
 import { fixPagination } from "./pagination";
 import { withRetry } from "./retry";
 import { resolveAgeLlmGuidance } from "../prompts/age";
 import { ageBandHasReadingModes, readingModeLabel } from "../config/ageWritingCatalog";
-import type { PromptContext } from "../prompts/context";
+import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
+import { renderTextPrompt } from "../prompts/render";
 
 const spreadSchema = z.object({
   kind: z.enum(["single", "spread"]),
@@ -116,67 +118,48 @@ export async function generateScreenplay(
       ? "Keep the author's wording EXACTLY as written; only split it across pages. Do not rewrite."
       : "You may adapt and tighten the wording to suit the age range and reading rhythm.";
 
-  const placementGuidance =
-    "Text is ALWAYS laid out separately from the art as an editable overlay (never baked into the illustration); in layoutNote specify where the text block sits (e.g. left page, bottom band). Never request text rendered inside the artwork.";
+  const placementGuidance = `Text is ALWAYS a separate, editable overlay — never baked into the illustration. ${getBookLayout(config.layoutId).screenplayGuidance} Never request text rendered inside the artwork.`;
 
   const ageTextPrompt = resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, prompts);
 
-  const system = [
-    "You are an award-winning children's picture-book author and art director.",
-    "Produce a complete page-by-page screenplay for the book.",
-    "For each page/spread provide: the narrative text, a vivid illustration brief, a layout note, and which named anchors appear.",
-    "Illustration briefs must be concrete and reference the named anchors so the art stays consistent.",
-    spreadGuidance,
-    textGuidance,
-    ageTextPrompt,
-    placementGuidance,
-    "Also design the book's covers: a frontCover (catchy title + short subtitle + illustration brief), a backCover (a short blurb as 'title', optional subtitle, illustration brief), and a short spineText (usually the title).",
-    "Only reference anchors from the provided list, by their exact names. Use an empty array if none appear.",
-    "Revision requests may mention anchors by name (e.g. 'put Amanda on page 3'); use the ANCHORS list for who/what each name is, and update each spread's anchors accordingly.",
-    "Pace the story well; keep text age-appropriate in length and complexity per page.",
-    "PRINTABILITY: page 1 is a single right-hand page. A double-page spread occupies a facing pair, so the number of single pages BEFORE any spread must be even (insert a single page if needed). Never let a spread start on a right-hand page.",
-    "Write a short overall 'notes' field with art-direction guidance.",
-  ].join(" ");
+  const isRevision = Boolean(edit && previous);
+  const previousJson =
+    edit && previous
+      ? JSON.stringify(
+          {
+            notes: previous.notes,
+            frontCover: previous.frontCover,
+            backCover: previous.backCover,
+            spineText: previous.spine?.text ?? "",
+            spreads: previous.spreads.map((s) => ({
+              kind: s.kind,
+              text: s.text,
+              illustration: s.illustration,
+              layoutNote: s.layoutNote,
+              anchors: effectiveAnchorIds(included, s)
+                .map((id) => included.find((a) => a.id === id)?.name)
+                .filter(Boolean),
+            })),
+          },
+          null,
+          2,
+        )
+      : "";
 
-  const userParts = [
-    "BOOK SETTINGS:",
-    describeConfig(config),
-    "",
-    "ANCHORS (use exact names):",
-    describeAnchors(included),
-    "",
-    "STORY:",
-    config.storyText.trim(),
-  ];
-
-  if (edit && previous) {
-    userParts.push(
-      "",
-      "CURRENT SCREENPLAY (JSON) to revise:",
-      JSON.stringify(
-        {
-          notes: previous.notes,
-          frontCover: previous.frontCover,
-          backCover: previous.backCover,
-          spineText: previous.spine?.text ?? "",
-          spreads: previous.spreads.map((s) => ({
-            kind: s.kind,
-            text: s.text,
-            illustration: s.illustration,
-            layoutNote: s.layoutNote,
-            anchors: effectiveAnchorIds(included, s)
-              .map((id) => included.find((a) => a.id === id)?.name)
-              .filter(Boolean),
-          })),
-        },
-        null,
-        2,
-      ),
-      "",
-      `REVISION REQUEST: ${edit.trim()}`,
-      "Return the full revised screenplay.",
-    );
-  }
+  const { system, user } = renderTextPrompt(resolvePromptsConfig(prompts), "screenplay", {
+    vars: {
+      spreadGuidance,
+      textGuidance,
+      ageGuidance: ageTextPrompt,
+      placementGuidance,
+      configDescription: describeConfig(config),
+      anchorsList: describeAnchors(included),
+      story: config.storyText.trim(),
+      previousJson,
+      edit: edit?.trim() ?? "",
+    },
+    flags: { isRevision },
+  });
 
   const raw = await withRetry(
     () =>
@@ -187,7 +170,7 @@ export async function generateScreenplay(
         temperature: config.textHandling === "exact" ? 0.2 : 0.6,
         messages: [
           { role: "system", content: system },
-          { role: "user", content: userParts.join("\n") },
+          { role: "user", content: user },
         ],
         signal,
       }),

@@ -10,7 +10,9 @@ export type TextActionId =
   | "storyAnalysis" // analyzeStory — extract anchors from the story
   | "anchorDescription" // generateAnchorDescription — suggest one anchor's look
   | "screenplay" // generateScreenplay — page-by-page plan + covers
-  | "localize"; // locateSubject(s) — vision call placing subjects on a page
+  | "localize" // locateSubject(s) — vision call placing subjects on a page
+  | "bindingPass" // bindDepictedSubjects — vision call binding anchors to regions in a freshly rendered page
+  | "editIntent"; // resolveEditIntent — classify user edits into structured operations
 
 export type ImageActionId =
   | "anchorImage" // renderAnchor — anchor reference sheet
@@ -29,6 +31,8 @@ export const TEXT_ACTIONS: ActionInfo<TextActionId>[] = [
   { id: "anchorDescription", label: "Anchor description", modality: "text", help: "Suggests a single character/place/object's visual description." },
   { id: "screenplay", label: "Screenplay", modality: "text", help: "Turns the story into a page-by-page plan with covers." },
   { id: "localize", label: "Subject localization (vision)", modality: "text", help: "Finds where a subject sits inside a rendered page (used for in-place edits)." },
+  { id: "bindingPass", label: "Anchor binding (vision)", modality: "text", help: "After a page is rendered, binds each anchor to its region in the image (records what's depicted where)." },
+  { id: "editIntent", label: "Edit intent resolution", modality: "text", help: "Classifies a user's free-text illustration edit into structured remove/replace/refresh operations over known anchors." },
 ];
 
 export const IMAGE_ACTIONS: ActionInfo<ImageActionId>[] = [

@@ -18,7 +18,7 @@ export interface ButtonProps
 
 const VARIANTS: Record<Variant, string> = {
   primary:
-    "bg-brand-600 text-white shadow-soft hover:bg-brand-700 focus-visible:ring-brand-400",
+    "bg-brand-600 text-(--color-brand-foreground) shadow-soft hover:bg-brand-700 focus-visible:ring-brand-400",
   secondary:
     "bg-white text-ink-700 ring-1 ring-inset ring-ink-200 hover:bg-ink-50 focus-visible:ring-brand-400",
   ghost:

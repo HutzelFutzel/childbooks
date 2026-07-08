@@ -122,6 +122,14 @@ export interface ResolvedModels {
   textModel: ModelSelection;
   imageModel: ModelSelection;
   anchorImageModel: ModelSelection;
+  /**
+   * Vision model for the post-render anchor-binding pass. Optional so older job
+   * payloads / the client heuristic still resolve; callers fall back to
+   * `textModel` when it's absent.
+   */
+  bindingModel?: ModelSelection;
+  /** Text model for classifying user edit intents into structured operations. */
+  intentModel?: ModelSelection;
 }
 
 const sel = (m: ModelInfo): ModelSelection => ({ provider: m.provider, id: m.id });

@@ -17,15 +17,13 @@ import type { LuluWebhookEnvelope } from "../../books-frontend/src/core/fulfillm
 import type {
   FulfillmentOrder,
   FulfillmentProvider,
-  OrderDraft,
-  PrintAsset,
   QuoteRequest,
 } from "../../books-frontend/src/core/fulfillment/types";
 import { FulfillmentError } from "../../books-frontend/src/core/fulfillment/errors";
 import { serverConfig } from "./config";
 import { createAdminAssetHost } from "./assets";
 import type { AuthedRequest } from "./auth";
-import { applyOrderStatusUpdate, persistCreatedOrder } from "./orders";
+import { applyOrderStatusUpdate } from "./orders";
 
 function provider(): FulfillmentProvider {
   const cfg = serverConfig();
@@ -41,24 +39,6 @@ function provider(): FulfillmentProvider {
 /** The configured fulfillment provider, for trusted server-side callers (admin). */
 export function fulfillmentProvider(): FulfillmentProvider {
   return provider();
-}
-
-/** Print asset as it arrives over the wire (Blob serialized as base64). */
-interface WireAsset {
-  printArea: string;
-  base64: string;
-  contentType?: string;
-  pageCount?: number;
-}
-
-function decodeAssets(assets: WireAsset[] | undefined): PrintAsset[] {
-  return (assets ?? []).map((a) => ({
-    printArea: a.printArea,
-    pageCount: a.pageCount,
-    blob: new Blob([Buffer.from(a.base64, "base64")], {
-      type: a.contentType || "application/octet-stream",
-    }),
-  }));
 }
 
 /**
@@ -115,6 +95,22 @@ function neutralizeOrder(order: FulfillmentOrder): Omit<FulfillmentOrder, "raw">
   return rest;
 }
 
+/**
+ * Ownership check for order-status routes: the caller must have the order in
+ * their own `users/{uid}/orders` (written at fulfillment time). Prevents any
+ * verified user from reading/cancelling arbitrary provider order ids.
+ */
+async function ownsOrder(uid: string | undefined, orderId: string): Promise<boolean> {
+  if (!uid || !orderId) return false;
+  try {
+    const { getFirestore } = await import("firebase-admin/firestore");
+    const snap = await getFirestore().doc(`users/${uid}/orders/${orderId}`).get();
+    return snap.exists;
+  } catch {
+    return false;
+  }
+}
+
 export function registerLuluRoutes(app: Express): void {
   const json = express.json({ limit: "60mb" });
 
@@ -139,45 +135,29 @@ export function registerLuluRoutes(app: Express): void {
     }
   });
 
-  app.post("/print/order", json, async (req: AuthedRequest, res: Response) => {
-    try {
-      const body = req.body as Omit<OrderDraft, "assets"> & { assets?: WireAsset[] };
-      const draft: OrderDraft = { ...body, assets: decodeAssets(body.assets) };
-      const order = await provider().createOrder(draft);
+  // NOTE: there is deliberately NO `POST /print/order` route. Orders reach the
+  // print provider exclusively through the Stripe webhook (`fulfillPaidOrder`)
+  // AFTER payment is confirmed — a direct order endpoint would let any verified
+  // user ship books without paying.
 
-      // Persist a neutral (user) + admin record. Best-effort: the order is
-      // already placed, so a persistence failure must not fail the response.
-      if (req.uid) {
-        const cfg = serverConfig();
-        try {
-          await persistCreatedOrder({
-            uid: req.uid,
-            provider: "lulu",
-            env: cfg.fulfillment.lulu.env,
-            draft,
-            order,
-          });
-        } catch (persistErr) {
-          console.error("[fulfillment] failed to persist order", order.id, persistErr);
-        }
+  app.get("/print/order/:id", async (req: AuthedRequest, res: Response) => {
+    try {
+      if (!(await ownsOrder(req.uid, req.params.id))) {
+        res.status(404).json({ error: { message: CLIENT_MESSAGE.not_found } });
+        return;
       }
-
-      res.json(neutralizeOrder(order));
-    } catch (err) {
-      sendError(res, err);
-    }
-  });
-
-  app.get("/print/order/:id", async (req: Request, res: Response) => {
-    try {
       res.json(neutralizeOrder(await provider().getOrder(req.params.id)));
     } catch (err) {
       sendError(res, err);
     }
   });
 
-  app.post("/print/order/:id/cancel", async (req: Request, res: Response) => {
+  app.post("/print/order/:id/cancel", async (req: AuthedRequest, res: Response) => {
     try {
+      if (!(await ownsOrder(req.uid, req.params.id))) {
+        res.status(404).json({ error: { message: CLIENT_MESSAGE.not_found } });
+        return;
+      }
       res.json(neutralizeOrder(await provider().cancelOrder(req.params.id)));
     } catch (err) {
       sendError(res, err);

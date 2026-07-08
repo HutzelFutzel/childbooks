@@ -9,6 +9,8 @@ import type { ProviderId } from "../config/options";
 import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import { withRetry } from "./retry";
+import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
+import { renderTextPrompt } from "../prompts/render";
 
 const boxSchema = z.object({
   found: z.boolean(),
@@ -69,6 +71,7 @@ export interface LocateSubjectsInput {
   model: string;
   providerId: ProviderId;
   signal?: AbortSignal;
+  prompts?: PromptContext;
 }
 
 /**
@@ -87,21 +90,12 @@ export async function locateSubjects(
   const list = input.subjects
     .map((s) => `- id "${s.id}": "${s.name}"${s.description ? ` — ${s.description}` : ""}`)
     .join("\n");
+  const { system, user } = renderTextPrompt(resolvePromptsConfig(input.prompts), "localize/multi", {
+    vars: { list },
+  });
   const messages = [
-    {
-      role: "system" as const,
-      content:
-        "You are a precise vision system that locates DISTINCT subjects in an image and returns one bounding box per subject. " +
-        "Coordinates are normalized between 0 and 1 with the origin at the TOP-LEFT corner. Each subject is a different entity, so return a different region for each. Reply with JSON only.",
-    },
-    {
-      role: "user" as const,
-      content:
-        `Locate each of these subjects in the image and return its tightest bounding box:\n${list}\n\n` +
-        `Return {"subjects": [{"id", "found", "x", "y", "width", "height"}, ...]} with one entry per id above, ` +
-        `where (x, y) is the TOP-LEFT corner and width/height the size, all normalized 0..1. ` +
-        `For any subject not clearly visible, set "found": false.`,
-    },
+    { role: "system" as const, content: system },
+    { role: "user" as const, content: user },
   ];
 
   let res: z.infer<typeof multiBoxSchema>;
@@ -128,6 +122,221 @@ export async function locateSubjects(
   return out;
 }
 
+/** One subject located on a page, plus any DUPLICATE regions of the same subject. */
+export interface SubjectBinding {
+  /** Primary (best) region for the subject. */
+  box: SubjectBox;
+  /** Extra regions where the SAME subject was (wrongly) drawn again. */
+  extras: SubjectBox[];
+}
+
+const bindingSchema = z.object({
+  subjects: z.array(
+    z.object({
+      id: z.string(),
+      found: z.boolean(),
+      x: z.number().optional(),
+      y: z.number().optional(),
+      width: z.number().optional(),
+      height: z.number().optional(),
+      /** Extra occurrences of the SAME subject (duplicates to remove). */
+      extras: z
+        .array(
+          z.object({
+            x: z.number().optional(),
+            y: z.number().optional(),
+            width: z.number().optional(),
+            height: z.number().optional(),
+          }),
+        )
+        .optional(),
+    }),
+  ),
+});
+
+export interface LocateAndCountInput {
+  pageBase64: string;
+  pageMime: string;
+  subjects: { id: string; name: string; description?: string }[];
+  creds: ProviderCredentials;
+  model: string;
+  providerId: ProviderId;
+  signal?: AbortSignal;
+  prompts?: PromptContext;
+}
+
+/**
+ * Bind each subject to its region in the page AND detect duplicates — subjects
+ * that must appear exactly once but were drawn more than once. Returns, per id,
+ * the primary box plus any extra (duplicate) boxes to remove. One vision call
+ * does both binding and duplicate detection. Best-effort: returns an empty map
+ * on failure so callers degrade gracefully.
+ */
+export async function locateAndCountSubjects(
+  input: LocateAndCountInput,
+): Promise<Map<string, SubjectBinding>> {
+  const out = new Map<string, SubjectBinding>();
+  if (input.subjects.length === 0) return out;
+
+  const provider = getTextProvider(input.providerId);
+  const list = input.subjects
+    .map((s) => `- id "${s.id}": "${s.name}"${s.description ? ` — ${s.description}` : ""}`)
+    .join("\n");
+  const { system, user } = renderTextPrompt(
+    resolvePromptsConfig(input.prompts),
+    "bindingPass/multi",
+    { vars: { list } },
+  );
+  const messages = [
+    { role: "system" as const, content: system },
+    { role: "user" as const, content: user },
+  ];
+
+  let res: z.infer<typeof bindingSchema>;
+  try {
+    res = await withRetry(
+      () =>
+        provider.generateStructured(input.creds, {
+          model: input.model,
+          messages,
+          schema: bindingSchema,
+          temperature: 0,
+          images: [{ base64: input.pageBase64, mimeType: input.pageMime }],
+          signal: input.signal,
+        }),
+      { signal: input.signal, retries: 1 },
+    );
+  } catch {
+    return out;
+  }
+
+  for (const entry of res.subjects) {
+    const box = sanitizeBox(entry);
+    if (!box) continue;
+    const extras: SubjectBox[] = [];
+    for (const raw of entry.extras ?? []) {
+      const b = sanitizeBox({ found: true, ...raw });
+      if (b) extras.push(b);
+    }
+    out.set(entry.id, { box, extras });
+  }
+  return out;
+}
+
+/** Obsolete generic instance of an embedded child vs its anchored primary region. */
+export interface EmbeddedBinding {
+  childId: string;
+  /** Region where the anchored (correct) instance appears — keep. */
+  primary: SubjectBox;
+  /** Generic/default duplicates to remove (same category, wrong design). */
+  obsolete: SubjectBox[];
+}
+
+const embeddedSchema = z.object({
+  embedded: z.array(
+    z.object({
+      id: z.string(),
+      found: z.boolean(),
+      primaryX: z.number().optional(),
+      primaryY: z.number().optional(),
+      primaryWidth: z.number().optional(),
+      primaryHeight: z.number().optional(),
+      obsolete: z
+        .array(
+          z.object({
+            x: z.number().optional(),
+            y: z.number().optional(),
+            width: z.number().optional(),
+            height: z.number().optional(),
+          }),
+        )
+        .optional(),
+    }),
+  ),
+});
+
+export interface LocateEmbeddedObsoleteInput {
+  pageBase64: string;
+  pageMime: string;
+  /** Parent place/object that contains the embedded children. */
+  parent: { name: string; description?: string };
+  /** Embedded child anchors that must appear once with their anchored design. */
+  children: { id: string; name: string; description?: string }[];
+  /** "scene" = single illustration; "sheet" = multi-angle reference sheet. */
+  mode: "scene" | "sheet";
+  creds: ProviderCredentials;
+  model: string;
+  providerId: ProviderId;
+  signal?: AbortSignal;
+  prompts?: PromptContext;
+}
+
+/**
+ * For embedded anchors (e.g. a specific bed inside a hospital room), locate the
+ * correct anchored instance and any obsolete generic duplicates of the same
+ * object category that should be erased. On reference sheets, legitimate
+ * multi-view repetitions across separate panels are NOT flagged — only within-panel
+ * generic+anchored conflicts.
+ */
+export async function locateEmbeddedObsolete(
+  input: LocateEmbeddedObsoleteInput,
+): Promise<Map<string, EmbeddedBinding>> {
+  const out = new Map<string, EmbeddedBinding>();
+  if (input.children.length === 0) return out;
+
+  const provider = getTextProvider(input.providerId);
+  const childList = input.children
+    .map((c) => `- id "${c.id}": "${c.name}"${c.description ? ` — ${c.description}` : ""}`)
+    .join("\n");
+  const template = input.mode === "sheet" ? "bindingPass/embeddedSheet" : "bindingPass/embeddedScene";
+  const { system, user } = renderTextPrompt(resolvePromptsConfig(input.prompts), template, {
+    vars: {
+      parentName: input.parent.name,
+      parentDescription: input.parent.description ? ` — ${input.parent.description}` : "",
+      childList,
+    },
+  });
+
+  let res: z.infer<typeof embeddedSchema>;
+  try {
+    res = await withRetry(
+      () =>
+        provider.generateStructured(input.creds, {
+          model: input.model,
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ],
+          schema: embeddedSchema,
+          temperature: 0,
+          images: [{ base64: input.pageBase64, mimeType: input.pageMime }],
+          signal: input.signal,
+        }),
+      { signal: input.signal, retries: 1 },
+    );
+  } catch {
+    return out;
+  }
+
+  for (const entry of res.embedded) {
+    const primary = sanitizeBox({
+      found: entry.found,
+      x: entry.primaryX,
+      y: entry.primaryY,
+      width: entry.primaryWidth,
+      height: entry.primaryHeight,
+    });
+    if (!primary) continue;
+    const obsolete: SubjectBox[] = [];
+    for (const raw of entry.obsolete ?? []) {
+      const b = sanitizeBox({ found: true, ...raw });
+      if (b) obsolete.push(b);
+    }
+    out.set(entry.id, { childId: entry.id, primary, obsolete });
+  }
+  return out;
+}
+
 export interface LocateSubjectInput {
   pageBase64: string;
   pageMime: string;
@@ -137,6 +346,7 @@ export interface LocateSubjectInput {
   model: string;
   providerId: ProviderId;
   signal?: AbortSignal;
+  prompts?: PromptContext;
 }
 
 /**
@@ -145,22 +355,15 @@ export interface LocateSubjectInput {
  */
 export async function locateSubject(input: LocateSubjectInput): Promise<SubjectBox | null> {
   const provider = getTextProvider(input.providerId);
+  const { system, user } = renderTextPrompt(resolvePromptsConfig(input.prompts), "localize/single", {
+    vars: {
+      name: input.name,
+      descriptionSuffix: input.description ? ` — ${input.description}` : "",
+    },
+  });
   const messages = [
-    {
-      role: "system" as const,
-      content:
-        "You are a precise vision system that locates a single subject in an image and returns its bounding box. " +
-        "Coordinates are normalized between 0 and 1 with the origin at the TOP-LEFT corner. Reply with JSON only.",
-    },
-    {
-      role: "user" as const,
-      content:
-        `Locate this subject in the image: "${input.name}"` +
-        (input.description ? ` — ${input.description}` : "") +
-        `. Return {"found": true|false, "x", "y", "width", "height"} where (x, y) is the TOP-LEFT corner of the ` +
-        `tightest box around the subject and width/height are its size, all normalized 0..1. ` +
-        `If the subject is not clearly visible, return {"found": false}.`,
-    },
+    { role: "system" as const, content: system },
+    { role: "user" as const, content: user },
   ];
 
   let res: z.infer<typeof boxSchema>;

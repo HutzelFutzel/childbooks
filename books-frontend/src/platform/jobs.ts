@@ -2,14 +2,20 @@
  * Client access to the generation job queue.
  *
  * A job is a Firestore document under `users/{uid}/jobs/{jobId}` holding a batch
- * of image-render tasks. Writing it triggers the backend worker
- * (`onGenerationJob`); the client subscribes to watch live progress and reads
- * each task's result blob id when it completes.
+ * of task SPECS. Writing it triggers the backend enqueuer (`onGenerationJob`),
+ * which expands the specs into a per-task subcollection
+ * (`users/{uid}/jobs/{jobId}/tasks/{taskId}`) and fans them out over Cloud
+ * Tasks. The client watches the job doc for aggregate progress and the task
+ * subcollection for per-unit status + results (folded into the version trees on
+ * reconcile). Tasks are written only by the backend (Admin SDK), so the client
+ * reads them but never writes them.
  */
 import {
   addDoc,
   collection,
+  collectionGroup,
   doc,
+  getDocs,
   onSnapshot,
   query,
   where,
@@ -17,6 +23,7 @@ import {
 } from "firebase/firestore";
 import { getFirebaseAuth, getFirebaseDb } from "../lib/firebase";
 import type { ResolvedModels } from "../core/models/registry";
+import type { ImageTier } from "../core/config/modelConfig";
 import type {
   AnchorsJob,
   AnchorTask,
@@ -25,8 +32,10 @@ import type {
   JobTask,
   PipelineRefreshJob,
   RefreshTask,
+  TaskDoc,
 } from "../core/jobs/types";
 import type { Project } from "../core/types";
+import { slimProjectForRender } from "../core/book/slimProject";
 
 /** A job document paired with its Firestore id. */
 export type JobWithId = AnyJob & { id: string };
@@ -41,14 +50,20 @@ function uid(): string {
 export async function createImageJob(
   projectId: string,
   tasks: JobTask[],
+  tier: ImageTier,
 ): Promise<string> {
   const now = Date.now();
   const job: GenerationJob = {
     kind: "image",
     status: "pending",
     projectId,
+    tier,
     createdAt: now,
     updatedAt: now,
+    // Seed an already-expired lease so the reaper can adopt this job even if its
+    // create trigger never fires; the worker takes ownership the moment it runs.
+    leaseExpiresAt: 0,
+    runCount: 0,
     tasks,
     progress: { total: tasks.length, completed: 0, failed: 0 },
   };
@@ -65,15 +80,26 @@ export async function createRefreshJob(
   project: Project,
   models: ResolvedModels,
   tasks: RefreshTask[],
+  tier: ImageTier,
 ): Promise<string> {
   const now = Date.now();
+  // Persisted in Firestore (1 MB cap): embed only what the worker renders — the
+  // screenplay, the anchors' active images, and the targeted spreads' trees.
+  const slim = slimProjectForRender(project, {
+    keepScreenplay: true,
+    keepAnchorVersions: true,
+    illustrationTargets: tasks.map((t) => ({ id: t.id, nodeId: t.options?.fromNodeId })),
+  });
   const job: PipelineRefreshJob = {
     kind: "refresh",
     status: "pending",
     projectId: project.id,
+    tier,
     createdAt: now,
     updatedAt: now,
-    project,
+    leaseExpiresAt: 0,
+    runCount: 0,
+    project: slim,
     models,
     tasks,
     progress: { total: tasks.length, completed: 0, failed: 0 },
@@ -91,15 +117,26 @@ export async function createAnchorsJob(
   project: Project,
   models: ResolvedModels,
   tasks: AnchorTask[],
+  tier: ImageTier,
 ): Promise<string> {
   const now = Date.now();
+  // The anchor worker honors the dependency graph, so keep ALL anchors' active
+  // images; add each target anchor's branch point. Screenplay/illustrations/
+  // design are not read by anchor rendering, so they are dropped.
+  const slim = slimProjectForRender(project, {
+    keepAnchorVersions: true,
+    anchorTargets: tasks.map((t) => ({ id: t.id, nodeId: t.options?.fromNodeId })),
+  });
   const job: AnchorsJob = {
     kind: "anchors",
     status: "pending",
     projectId: project.id,
+    tier,
     createdAt: now,
     updatedAt: now,
-    project,
+    leaseExpiresAt: 0,
+    runCount: 0,
+    project: slim,
     models,
     tasks,
     progress: { total: tasks.length, completed: 0, failed: 0 },
@@ -130,4 +167,39 @@ export function subscribeProjectJobs(
   return onSnapshot(q, (snap) => {
     cb(snap.docs.map((d) => ({ id: d.id, ...(d.data() as GenerationJob) })));
   });
+}
+
+/**
+ * Subscribe to every task of a project across all its jobs, via a collection-
+ * group query scoped by the owner's uid (so security rules can authorize it) and
+ * the project id. Drives per-unit spinners and result reconciliation now that
+ * results live in the task subcollection rather than on the job doc.
+ */
+export function subscribeProjectTasks(
+  projectId: string,
+  cb: (tasks: TaskDoc[]) => void,
+): Unsubscribe {
+  const q = query(
+    collectionGroup(getFirebaseDb(), "tasks"),
+    where("uid", "==", uid()),
+    where("projectId", "==", projectId),
+  );
+  return onSnapshot(q, (snap) => {
+    cb(snap.docs.map((d) => d.data() as TaskDoc));
+  });
+}
+
+/** Subscribe to a single job's task subcollection. */
+export function subscribeJobTasks(jobId: string, cb: (tasks: TaskDoc[]) => void): Unsubscribe {
+  const col = collection(getFirebaseDb(), `users/${uid()}/jobs/${jobId}/tasks`);
+  return onSnapshot(col, (snap) => {
+    cb(snap.docs.map((d) => d.data() as TaskDoc));
+  });
+}
+
+/** One-shot read of a job's tasks (for eager reconcile before continuing). */
+export async function fetchJobTasks(jobId: string): Promise<TaskDoc[]> {
+  const col = collection(getFirebaseDb(), `users/${uid()}/jobs/${jobId}/tasks`);
+  const snap = await getDocs(col);
+  return snap.docs.map((d) => d.data() as TaskDoc);
 }

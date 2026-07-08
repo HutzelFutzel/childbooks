@@ -147,7 +147,9 @@ export function PillToggle({
       <span
         className={cn(
           "flex size-3.5 items-center justify-center rounded-[4px] border transition",
-          active ? "border-brand-500 bg-brand-500 text-white" : "border-ink-300 text-transparent",
+          active
+            ? "border-brand-500 bg-brand-500 text-(--color-brand-foreground)"
+            : "border-ink-300 text-transparent",
         )}
       >
         <Check className="size-2.5" strokeWidth={3} />

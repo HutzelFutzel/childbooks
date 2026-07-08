@@ -4,14 +4,6 @@
  */
 import pLimit from "p-limit";
 
-/**
- * Default fan-out for batch image generation ("Generate all", "Update affected
- * pages"). Tuned to be noticeably faster than fully serial while staying under
- * typical provider images-per-minute limits (above this, 429s trigger backoff
- * retries and the batch ends up slower).
- */
-export const GENERATION_CONCURRENCY = 4;
-
 export interface MapOptions {
   /** Max concurrent tasks. */
   concurrency?: number;

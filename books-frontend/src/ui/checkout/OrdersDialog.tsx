@@ -13,6 +13,7 @@ import {
 import { Receipt } from "lucide-react";
 import type { OrderRecord, OrderStage } from "../../core/fulfillment/types";
 import type { PaymentStatus, UserPaymentRecord } from "../../platform/payments";
+import { startReorderCheckout } from "../../platform/payments";
 import { createFulfillment } from "../../platform/fulfillment";
 import { useOrdersStore } from "../../state/ordersStore";
 import { usePaymentsStore } from "../../state/paymentsStore";
@@ -141,6 +142,22 @@ const PAYMENT_STATUS: Record<PaymentStatus, { label: string; badge: string }> = 
 
 function PaymentCard({ payment }: { payment: UserPaymentRecord }) {
   const status = PAYMENT_STATUS[payment.status] ?? PAYMENT_STATUS.pending;
+  const [reordering, setReordering] = useState(false);
+  const [reorderError, setReorderError] = useState<string | null>(null);
+  const canReorder = payment.kind === "order" && payment.status === "paid";
+
+  const reorder = async () => {
+    setReordering(true);
+    setReorderError(null);
+    try {
+      const { url } = await startReorderCheckout(payment.id);
+      window.location.href = url;
+    } catch (err) {
+      setReorderError((err as Error)?.message ?? "We couldn't start checkout.");
+      setReordering(false);
+    }
+  };
+
   return (
     <div className="rounded-2xl border border-ink-100 bg-white p-4">
       <div className="flex items-start justify-between gap-3">
@@ -166,9 +183,16 @@ function PaymentCard({ payment }: { payment: UserPaymentRecord }) {
         </p>
       )}
 
-      {payment.receiptUrl && (
-        <div className="mt-3">
-          <FileLink href={payment.receiptUrl} label="View receipt" />
+      {reorderError && <p className="mt-2 text-xs text-rose-600">{reorderError}</p>}
+
+      {(payment.receiptUrl || canReorder) && (
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {payment.receiptUrl && <FileLink href={payment.receiptUrl} label="View receipt" />}
+          {canReorder && (
+            <Button size="sm" variant="secondary" loading={reordering} onClick={() => void reorder()}>
+              Order again
+            </Button>
+          )}
         </div>
       )}
     </div>

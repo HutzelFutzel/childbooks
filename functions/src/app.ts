@@ -30,6 +30,7 @@ import {
   registerStripeUserRoutes,
   registerStripeWebhookRoute,
 } from "./stripe";
+import { registerEmailWebhookRoute } from "./email/webhook";
 
 export function createApp(): Express {
   const app = express();
@@ -53,6 +54,10 @@ export function createApp(): Express {
   // Stripe's event webhook — tokenless (authenticated by signature), so it MUST
   // be registered before the `/checkout` + `requireVerified` guard below.
   registerStripeWebhookRoute(app);
+
+  // ZeptoMail's delivery-event webhook — tokenless (verified by signature when
+  // configured). Registered here so it's reachable without a Firebase token.
+  registerEmailWebhookRoute(app);
 
   // Protected surfaces — registered before their route handlers so the guard
   // runs first. All require a verified, non-anonymous account (guests and

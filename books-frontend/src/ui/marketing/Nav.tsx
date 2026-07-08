@@ -39,7 +39,7 @@ export function Nav({ siteName, logoUrl }: { siteName: string; logoUrl?: string 
             <img src={logoUrl} alt={siteName} className="h-8 w-auto" />
           ) : (
             <>
-              <span className="flex size-8 items-center justify-center rounded-xl bg-brand-600 text-white shadow-soft">
+              <span className="flex size-8 items-center justify-center rounded-xl bg-brand-600 text-(--color-brand-foreground) shadow-soft">
                 <Sparkles className="size-4.5" />
               </span>
               {siteName}
@@ -68,7 +68,7 @@ export function Nav({ siteName, logoUrl }: { siteName: string; logoUrl?: string 
           </Link>
           <Link
             href="/studio"
-            className="inline-flex items-center rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-soft transition hover:bg-brand-700"
+            className="inline-flex items-center rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-(--color-brand-foreground) shadow-soft transition hover:bg-brand-700"
           >
             Open the Studio
           </Link>

@@ -6,13 +6,16 @@ import { buildOrderDraft } from "../../core/fulfillment/draft";
 import { normalizePageCount } from "../../core/fulfillment";
 import { FulfillmentError } from "../../core/fulfillment/errors";
 import type {
-  Quote,
   Recipient,
   ShippingMethod,
 } from "../../core/fulfillment/types";
 import type { BookDesign, Project } from "../../core/types";
 import { createFulfillment } from "../../platform/fulfillment";
-import { startOrderCheckout } from "../../platform/payments";
+import {
+  fetchOrderPrice,
+  startOrderCheckout,
+  type RetailPricePreview,
+} from "../../platform/payments";
 import { isDev } from "../../platform/runtime";
 import { useAuthStore } from "../../state/authStore";
 import { useProfileStore } from "../../state/profileStore";
@@ -137,7 +140,7 @@ export function OrderDialog({
   // customers don't retype. Skipped in dev (the DEV_PREFILL already fills it).
   const prefilledRef = useRef(false);
 
-  const [quote, setQuote] = useState<Quote | null>(null);
+  const [quote, setQuote] = useState<RetailPricePreview | null>(null);
   const [quoting, setQuoting] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const quoteSeq = useRef(0);
@@ -202,20 +205,24 @@ export function OrderDialog({
     setQuoting(true);
     const t = setTimeout(async () => {
       try {
-        const quotes = await provider.quote({
+        // Retail pricing from the backend — the SAME path used at checkout
+        // (tiered retail price + plan discount + charged shipping), so this is
+        // what the customer will actually pay (before tax), not the print
+        // provider's wholesale quote.
+        const priced = await fetchOrderPrice({
           productSku: product.sku,
           copies,
-          destinationCountry: country,
-          destinationLine1: line1,
-          destinationCity: city,
-          destinationState: region,
-          destinationPostalCode: postal,
+          pageCount,
           currency: CURRENCY,
           shippingMethod: shipping,
-          pageCount,
+          destinationCountry: country,
+          line1,
+          city,
+          state: region,
+          postalCode: postal,
         });
         if (seq !== quoteSeq.current) return;
-        setQuote(quotes.find((q) => q.shippingMethod === shipping) ?? quotes[0] ?? null);
+        setQuote(priced);
         setQuoteError(null);
       } catch (err) {
         if (seq === quoteSeq.current) {
@@ -231,7 +238,7 @@ export function OrderDialog({
       }
     }, 500);
     return () => clearTimeout(t);
-  }, [open, provider, product.sku, copies, country, line1, city, region, postal, shipping, canQuote, pageCount]);
+  }, [open, product.sku, copies, country, line1, city, region, postal, shipping, canQuote, pageCount]);
 
   function recipient(): Recipient {
     return {
@@ -511,7 +518,7 @@ export function OrderDialog({
                 <Loader2 className="size-4 animate-spin" /> Getting a live quote…
               </div>
             ) : quote ? (
-              <QuoteLines quote={quote} copies={copies} />
+              <QuoteLines quote={quote} />
             ) : quoteError ? (
               <p className="text-rose-500">{quoteError}</p>
             ) : (
@@ -568,17 +575,24 @@ function money(amount: string, currency: string): string {
   }
 }
 
-function QuoteLines({ quote, copies }: { quote: Quote; copies: number }) {
-  const items = Number(quote.items.amount) || 0;
-  const ship = Number(quote.shipping.amount) || 0;
-  const currency = quote.items.currency || "USD";
-  const total = items + ship;
+function QuoteLines({ quote }: { quote: RetailPricePreview }) {
+  const currency = quote.currency || "USD";
+  const hasDiscount = quote.discountPct > 0 && quote.listUnitPrice > quote.unitPrice;
   return (
     <div className="space-y-1 text-ink-700">
-      <Row label={`Books (${copies})`} value={money(quote.items.amount, currency)} />
-      <Row label="Shipping" value={money(quote.shipping.amount, quote.shipping.currency || currency)} />
+      <Row
+        label={`Books (${quote.copies} × ${money(String(quote.unitPrice), currency)})`}
+        value={money(String(quote.items), currency)}
+      />
+      {hasDiscount && (
+        <p className="text-xs text-emerald-600">
+          Your plan saves you {quote.discountPct}% (was {money(String(quote.listUnitPrice), currency)}{" "}
+          per copy).
+        </p>
+      )}
+      <Row label="Shipping" value={money(String(quote.shipping), currency)} />
       <div className="my-1 h-px bg-ink-100" />
-      <Row label="Estimated total" value={money(String(total), currency)} bold />
+      <Row label="Estimated total" value={money(String(quote.total), currency)} bold />
     </div>
   );
 }

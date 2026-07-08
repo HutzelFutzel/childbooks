@@ -12,6 +12,7 @@ export type ConfigTabId =
   | "models"
   | "artStyles"
   | "ageWriting"
+  | "prompts"
   | "modelCosts"
   | "products"
   | "pricing"
@@ -21,7 +22,7 @@ export type ConfigTabId =
   | "system";
 
 /** Sub-tabs within the Marketing section. */
-export type MarketingTabId = "seo" | "branding";
+export type MarketingTabId = "seo" | "branding" | "email";
 
 export const CONFIG_GROUPS: {
   id: ConfigGroupId;
@@ -36,7 +37,7 @@ export const CONFIG_GROUPS: {
   {
     id: "ai",
     label: "AI pipeline",
-    tabs: ["models", "modelCosts", "actions", "costs"],
+    tabs: ["models", "modelCosts", "actions", "prompts", "costs"],
   },
   {
     id: "creative",

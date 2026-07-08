@@ -1,21 +1,24 @@
 import { useState } from "react";
-import { GitBranch, RefreshCw, RotateCcw, Sparkles, Wand2 } from "lucide-react";
+import { GitBranch, RefreshCw, RotateCcw, Sparkles, Trash2, Wand2 } from "lucide-react";
 import type { Anchor } from "../../core/types";
-import { selectVersion, allVersions } from "../../core/versioning";
-import { changedAnchorsForAnchor, generateAnchorVersion, staleAnchorIds } from "../../state/ai";
+import { selectVersion, allVersions, getCursor } from "../../core/versioning";
+import { changedAnchorsForAnchor, staleAnchorIds } from "../../state/ai";
+import { useJobsStore } from "../../state/jobsStore";
 import { useProjectsStore } from "../../state/projectsStore";
 import { Button } from "../components/Button";
 import { Field, Input, Textarea } from "../components/Input";
 import { ImagePreview } from "../components/ImagePreview";
+import { Modal } from "../components/Modal";
 import { Tabs } from "../components/Tabs";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { formatList } from "../lib/formatList";
 import { notify } from "../lib/notify";
+import { generateAnchorViaJob } from "../studio/studioGen";
 import { RelationsEditor } from "./RelationsEditor";
 
 export function AnchorEditor({
   anchor,
-  generating,
+  generating: generatingProp,
   setGenerating,
 }: {
   anchor: Anchor;
@@ -23,8 +26,15 @@ export function AnchorEditor({
   setGenerating: (v: boolean) => void;
 }) {
   const updateAnchor = useProjectsStore((s) => s.updateAnchor);
+  const deleteAnchorVersion = useProjectsStore((s) => s.deleteAnchorVersion);
   const project = useProjectsStore((s) => s.current());
   const [edit, setEdit] = useState("");
+  const [confirmRevertId, setConfirmRevertId] = useState<string | null>(null);
+  // A background job rendering this anchor keeps the "working" state on after
+  // the brief enqueue spinner clears (survives refresh; result folds in on
+  // reconcile).
+  const jobActive = useJobsStore((s) => s.activeUnitIds.has(anchor.id));
+  const generating = generatingProp || jobActive;
 
   const isStale = Boolean(project && anchor.versions && staleAnchorIds(project).includes(anchor.id));
   const changedRefs = project && isStale ? changedAnchorsForAnchor(project, anchor.id) : [];
@@ -34,22 +44,50 @@ export function AnchorEditor({
   const hasImage = Boolean(anchor.versions);
   const versions = anchor.versions ? allVersions(anchor.versions) : [];
 
-  async function generate(options: Parameters<typeof generateAnchorVersion>[1] = {}) {
+  /**
+   * Generation runs through the backend job queue (non-blocking): the click
+   * only awaits the enqueue; the spinner is then driven by the live job state
+   * and the result appears when the worker's render reconciles. Anchors this
+   * one contains that have no image yet are queued in the same job first, so
+   * the sheet actually embeds their designs.
+   */
+  async function generate(options: { edit?: string; useReference?: boolean } = {}) {
+    if (!project) return;
     setGenerating(true);
     try {
-      await generateAnchorVersion(anchor.id, options);
-      notify.success(hasImage ? "New version created" : "Reference generated");
+      await generateAnchorViaJob(project, anchor.id, options, (err) => notify.error(err));
       setEdit("");
-    } catch (err) {
-      notify.error(err);
     } finally {
       setGenerating(false);
     }
   }
 
-  function selectVer(id: string) {
+  /** Pages whose current illustration was rendered with this anchor. */
+  function dependentPageCount(): number {
+    if (!project) return 0;
+    let count = 0;
+    for (const tree of Object.values(project.illustrations ?? {})) {
+      const refs = getCursor(tree).content.references ?? [];
+      if (refs.some((u) => u.anchorId === anchor.id && !u.textOnly)) count += 1;
+    }
+    return count;
+  }
+
+  function applyVersion(id: string) {
     if (!anchor.versions) return;
     void updateAnchor(anchor.id, { versions: selectVersion(anchor.versions, id) });
+  }
+
+  function selectVer(id: string) {
+    if (!anchor.versions || id === cursorId) return;
+    // Switching the active version cascades: every page rendered with the
+    // current version goes stale. Confirm instead of silently flipping.
+    if (dependentPageCount() > 0) setConfirmRevertId(id);
+    else applyVersion(id);
+  }
+
+  function deleteVer(id: string) {
+    void deleteAnchorVersion(anchor.id, id);
   }
 
   return (
@@ -57,6 +95,8 @@ export function AnchorEditor({
       <ImagePreview
         src={cursorUrl}
         loading={generating}
+        loadingAction="anchorImage"
+        refCount={anchor.containedIds?.length ?? 0}
         aspect={1}
         emptyLabel="No image yet — generate below"
       />
@@ -94,6 +134,7 @@ export function AnchorEditor({
                 index={i + 1}
                 active={node.id === cursorId}
                 onClick={() => selectVer(node.id)}
+                onDelete={() => deleteVer(node.id)}
               />
             ))}
           </div>
@@ -183,6 +224,36 @@ export function AnchorEditor({
         all={project?.anchors ?? []}
         onChange={(patch) => void updateAnchor(anchor.id, patch)}
       />
+
+      <Modal
+        open={confirmRevertId !== null}
+        onClose={() => setConfirmRevertId(null)}
+        title="Switch the active reference?"
+        size="max-w-md"
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setConfirmRevertId(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                if (confirmRevertId) applyVersion(confirmRevertId);
+                setConfirmRevertId(null);
+              }}
+            >
+              Switch version
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm leading-relaxed text-ink-600">
+          {dependentPageCount()} page{dependentPageCount() === 1 ? "" : "s"} of your book{" "}
+          {dependentPageCount() === 1 ? "was" : "were"} illustrated with the current version of{" "}
+          <span className="font-medium text-ink-800">{anchor.name}</span>. Switching marks{" "}
+          {dependentPageCount() === 1 ? "it" : "them"} as needing an update — you can re-render them
+          with one click from the sidebar afterwards.
+        </p>
+      </Modal>
     </div>
   );
 }
@@ -192,28 +263,45 @@ function VersionThumb({
   index,
   active,
   onClick,
+  onDelete,
 }: {
   blobId: string;
   index: number;
   active: boolean;
   onClick: () => void;
+  onDelete?: () => void;
 }) {
   const url = useBlobUrl(blobId);
   return (
-    <button
-      onClick={onClick}
-      className={`relative size-16 shrink-0 overflow-hidden rounded-lg ring-2 transition ${
-        active ? "ring-brand-500" : "ring-transparent hover:ring-ink-200"
-      }`}
-    >
-      {url ? (
-        <img src={url} alt={`Version ${index}`} className="size-full object-cover" />
-      ) : (
-        <div className="size-full bg-ink-100" />
+    <div className="group relative size-16 shrink-0">
+      <button
+        onClick={onClick}
+        className={`size-full overflow-hidden rounded-lg ring-2 transition ${
+          active ? "ring-brand-500" : "ring-transparent hover:ring-ink-200"
+        }`}
+      >
+        {url ? (
+          <img src={url} alt={`Version ${index}`} className="size-full object-cover" />
+        ) : (
+          <div className="size-full bg-ink-100" />
+        )}
+        <span className="absolute bottom-0 right-0 rounded-tl bg-ink-900/60 px-1 text-[10px] text-white">
+          {index}
+        </span>
+      </button>
+      {onDelete && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          title="Delete this version"
+          aria-label={`Delete version ${index}`}
+          className="absolute -right-1 -top-1 hidden rounded-full bg-ink-900/80 p-0.5 text-white transition hover:bg-red-600 group-hover:block"
+        >
+          <Trash2 className="size-3" />
+        </button>
       )}
-      <span className="absolute bottom-0 right-0 rounded-tl bg-ink-900/60 px-1 text-[10px] text-white">
-        {index}
-      </span>
-    </button>
+    </div>
   );
 }

@@ -3,25 +3,47 @@ import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { X } from "lucide-react";
 import { cn } from "../lib/cn";
+import { springSoft } from "../lib/motion";
 
 export interface DrawerProps {
   open: boolean;
   onClose: () => void;
+  /** Which edge the panel slides in from. */
+  side?: "left" | "right";
   title?: string;
   children: React.ReactNode;
-  footer?: React.ReactNode;
-  width?: string;
+  /** width class for the panel, e.g. "max-w-sm". */
+  widthClass?: string;
 }
 
-export function Drawer({ open, onClose, title, children, footer, width = "w-[28rem]" }: DrawerProps) {
+/**
+ * A portal-based edge sheet used to surface the studio side panels on small
+ * screens (where the inline `<aside>`s are hidden). Slides in from the given
+ * edge over a dimmed backdrop; closes on backdrop click or Escape and locks
+ * body scroll while open.
+ */
+export function Drawer({
+  open,
+  onClose,
+  side = "left",
+  title,
+  children,
+  widthClass = "max-w-[22rem]",
+}: DrawerProps) {
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = "";
+    };
   }, [open, onClose]);
+
+  const hiddenX = side === "left" ? "-100%" : "100%";
 
   return createPortal(
     <AnimatePresence>
@@ -35,29 +57,29 @@ export function Drawer({ open, onClose, title, children, footer, width = "w-[28r
             onClick={onClose}
           />
           <motion.aside
+            role="dialog"
+            aria-modal="true"
             className={cn(
-              "absolute right-0 top-0 flex h-full max-w-full flex-col bg-canvas shadow-lifted",
-              width,
+              "absolute inset-y-0 flex w-[88vw] flex-col bg-white shadow-lifted",
+              side === "left" ? "left-0" : "right-0",
+              widthClass,
             )}
-            initial={{ x: "100%" }}
+            initial={{ x: hiddenX }}
             animate={{ x: 0 }}
-            exit={{ x: "100%" }}
-            transition={{ type: "spring", stiffness: 320, damping: 34 }}
+            exit={{ x: hiddenX }}
+            transition={springSoft}
           >
-            <div className="flex items-center justify-between border-b border-ink-100 bg-white px-5 py-4">
-              <h2 className="text-base font-semibold text-ink-800">{title}</h2>
+            <div className="flex items-center justify-between border-b border-ink-100 px-4 py-3">
+              <h2 className="text-sm font-semibold text-ink-800">{title}</h2>
               <button
                 onClick={onClose}
-                className="rounded-lg p-1 text-ink-400 transition hover:bg-ink-100 hover:text-ink-600"
+                className="rounded-lg p-1.5 text-ink-400 transition hover:bg-ink-100 hover:text-ink-700"
                 aria-label="Close"
               >
                 <X className="size-5" />
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto p-5">{children}</div>
-            {footer && (
-              <div className="border-t border-ink-100 bg-white px-5 py-3">{footer}</div>
-            )}
+            <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
           </motion.aside>
         </div>
       )}

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Box,
@@ -34,7 +34,7 @@ import { useProjectsStore } from "../../state/projectsStore";
 import { useSettingsStore } from "../../state/settingsStore";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
-import { SparkCost, useBatchEstimate } from "../layout/SparkCost";
+import { SparkEstimateCost, useImageBatchRange } from "../layout/SparkCost";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { useResolvedModels } from "../hooks/useResolvedModels";
 import { cn } from "../lib/cn";
@@ -46,6 +46,7 @@ import {
   generateAllPages,
   illustrationUnits,
   refreshStalePages,
+  updateStaleAnchors,
 } from "./studioGen";
 
 const TYPE_ICON: Record<AnchorType, typeof User> = {
@@ -76,10 +77,16 @@ export function StudioSidebar() {
   const models = useResolvedModels();
   const [analyzing, setAnalyzing] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const staleCount = staleIllustrationSpreadIds(project).length;
+  // Staleness scans every version tree; memoize per project snapshot so the
+  // sidebar doesn't recompute it on unrelated re-renders.
+  const stalePageIds = useMemo(() => staleIllustrationSpreadIds(project), [project]);
+  const stale = useMemo(() => new Set(staleAnchorIds(project)), [project]);
+  const staleCount = stalePageIds.length;
 
   const anchors = (project.anchors ?? []).filter((a) => a.include);
-  const stale = new Set(staleAnchorIds(project));
+  const staleAnchorCount = anchors.filter(
+    (a) => stale.has(a.id) && currentAnchorImage(a),
+  ).length;
   const anchorsReady = anchors.filter((a) => currentAnchorImage(a)).length;
 
   const units = illustrationUnits(project);
@@ -99,7 +106,7 @@ export function StudioSidebar() {
     anchors.length > 0 && anchorsReady === anchors.length && units.length > 0 && pagesReady === units.length;
 
   // Spark cost preview for the whole remaining batch (anchors + pages).
-  const batchCost = useBatchEstimate([
+  const batchRange = useImageBatchRange([
     { action: "anchorImage", count: Math.max(0, anchors.length - anchorsReady) },
     { action: "pageIllustration", count: Math.max(0, units.length - pagesReady) },
   ]);
@@ -131,6 +138,12 @@ export function StudioSidebar() {
     );
   }
 
+  /**
+   * Update everything stale in the right ORDER: first re-render outdated anchor
+   * sheets (waiting for their results, since the pages must reference the NEW
+   * sheets), then queue the stale pages — including any that only became stale
+   * because of the anchor updates in step one.
+   */
   async function refreshStale() {
     if (!models) {
       notify.error("AI generation isn't available yet — it's being set up on the server.");
@@ -138,6 +151,16 @@ export function StudioSidebar() {
     }
     setRefreshing(true);
     try {
+      const updatedAnchors = await updateStaleAnchors(
+        useProjectsStore.getState().current()!,
+        (err) => notify.error(err),
+      );
+      if (updatedAnchors > 0) {
+        notify.info(
+          "References updated",
+          `${updatedAnchors} reference sheet${updatedAnchors === 1 ? "" : "s"} re-rendered — now updating the affected pages.`,
+        );
+      }
       const queued = await refreshStalePages(
         useProjectsStore.getState().current()!,
         (err) => notify.error(err),
@@ -295,7 +318,7 @@ export function StudioSidebar() {
           onClick={() => void generateEverything()}
         >
           {busy ? "Generating…" : everythingDone ? "All generated" : "Generate everything"}
-          {!busy && !everythingDone && <SparkCost n={batchCost} />}
+          {!busy && !everythingDone && <SparkEstimateCost range={batchRange} />}
         </Button>
         {busy && (
           <button
@@ -305,7 +328,7 @@ export function StudioSidebar() {
             <X className="size-3.5" /> Cancel generation
           </button>
         )}
-        {!busy && staleCount > 0 && (
+        {!busy && (staleCount > 0 || staleAnchorCount > 0) && (
           <Button
             className="mt-2 w-full"
             variant="secondary"
@@ -315,8 +338,10 @@ export function StudioSidebar() {
             onClick={() => void refreshStale()}
           >
             {refreshing
-              ? "Queuing…"
-              : `Update ${staleCount} stale page${staleCount === 1 ? "" : "s"}`}
+              ? "Updating references…"
+              : staleAnchorCount > 0
+                ? `Update ${staleAnchorCount} reference${staleAnchorCount === 1 ? "" : "s"}${staleCount > 0 ? ` + ${staleCount} page${staleCount === 1 ? "" : "s"}` : ""}`
+                : `Update ${staleCount} stale page${staleCount === 1 ? "" : "s"}`}
           </Button>
         )}
         {!models && (

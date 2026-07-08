@@ -10,12 +10,11 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
-  Shapes,
   Sparkles,
   Trash2,
   Wand2,
 } from "lucide-react";
-import type { Anchor, CoverSpec, ScreenplaySpread, ShapeKind } from "../../core/types";
+import type { Anchor, CoverSpec, ScreenplaySpread } from "../../core/types";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { wordParagraphs } from "../../core/design";
 import { effectiveAnchorIds } from "../../core/book/anchorRefs";
@@ -27,23 +26,30 @@ import {
   type BindingSide,
 } from "../../core/book/format";
 import { allVersions, getCursor, selectVersion, updateNodeContent } from "../../core/versioning";
-import { changedAnchorsForSpread, generateIllustrationVersion } from "../../state/ai";
+import {
+  changedAnchorsForSpread,
+  generateIllustrationVersion,
+  staleAnchorIds,
+} from "../../state/ai";
+import { IntentAmbiguousError } from "../../platform/aiClient";
 import { useProjectsStore } from "../../state/projectsStore";
+import { useJobsStore } from "../../state/jobsStore";
 import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
 import { Field, Input, Textarea } from "../components/Input";
 import { useBlobUrl } from "../hooks/useBlobUrl";
-import { SparkCost, useActionEstimate } from "../layout/SparkCost";
+import { SparkEstimateCost, useImageActionRange } from "../layout/SparkCost";
 import { formatList } from "../lib/formatList";
 import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
 import { PageStage } from "../design/PageStage";
-import { SHAPE_DEFS, shapePath } from "../design/shapes";
+import { GenerationOverlay } from "../generation/GenerationOverlay";
+import { InfoHint } from "../components/InfoHint";
 import type { DesignPage } from "../design/designInit";
 import type { SpanRef } from "../design/TextBoxView";
 import { useStudio } from "./StudioContext";
-import { coverSpread } from "./studioGen";
+import { coverSpread, refreshSpread } from "./studioGen";
 import { duplicateSpread, moveSpread, removeSpread } from "./pageOps";
 
 export type PageSubject =
@@ -74,13 +80,31 @@ export function PageStagePanel({
   /** Which edge binds into the spine (for the gutter guide on single pages). */
   bindingSide?: BindingSide;
 }) {
-  const { project, selection, select, pageDesign, patchBox, patchShape, patchImage, snap, grid, guides } =
-    useStudio();
+  const {
+    project,
+    selection,
+    select,
+    pageDesign,
+    patchBox,
+    patchShape,
+    patchImage,
+    snap,
+    grid,
+    guides,
+    generatingPages,
+  } = useStudio();
 
   const coverMode = subject.kind === "cover";
   const blank = subject.kind === "spread" && !!subject.spread.blankCanvas;
   const genSpread = genSpreadFor(subject);
   const isSpread = !coverMode && genSpread.kind === "spread";
+
+  // Mirror the generation state used by the controls so the page surface itself
+  // shows the rich, time-estimated progress overlay while it's rendering.
+  const jobActive = useJobsStore((s) => s.activeUnitIds.has(genSpread.id));
+  const generating = generatingPages.has(page.id) || jobActive;
+  const subjectRefCount =
+    (subject.kind === "spread" ? subject.spread.anchorIds : subject.cover.anchorIds)?.length ?? 0;
 
   const caps = useMemo(() => formatCapabilitiesForProject(project), [project]);
   const isBackCover =
@@ -156,6 +180,16 @@ export function PageStagePanel({
         if (selection.kind === "box" && onThisPage)
           select({ kind: "box", pageId: page.id, boxId: selection.boxId, span: ref });
       }}
+      overlay={
+        generating && !blank ? (
+          <GenerationOverlay
+            action={coverMode ? "coverIllustration" : "pageIllustration"}
+            refCount={subjectRefCount}
+            compact={chromeless}
+            className="rounded-xl"
+          />
+        ) : undefined
+      }
     />
   );
 }
@@ -179,12 +213,16 @@ export function PageControls({
   /** Overrides the displayed page label (e.g. physical page number). */
   label?: string;
 }) {
-  const { project, addBox, addShape, generatingPages, setPageGenerating } = useStudio();
+  const { project, addBox, generatingPages, setPageGenerating } = useStudio();
   const setScreenplay = useProjectsStore((s) => s.setScreenplay);
   const updateSpread = useProjectsStore((s) => s.updateSpread);
   const setBookTitle = useProjectsStore((s) => s.setBookTitle);
   const [edit, setEdit] = useState("");
   const [showBrief, setShowBrief] = useState(false);
+  const [intentPick, setIntentPick] = useState<{
+    edit: string;
+    candidates: { anchorId: string; name: string; brief?: string }[];
+  } | null>(null);
 
   const coverMode = subject.kind === "cover";
   const blank = subject.kind === "spread" && !!subject.spread.blankCanvas;
@@ -194,8 +232,11 @@ export function PageControls({
   const tree = project.illustrations?.[page.id];
   const cursor = tree ? getCursor(tree).content : null;
   const versions = tree ? allVersions(tree) : [];
-  const generating = generatingPages.has(page.id);
-  const sparkCost = useActionEstimate(coverMode ? "coverIllustration" : "pageIllustration");
+  // A background refresh/generate job for this unit keeps the "working" state on
+  // (driven by real job state) after the brief local enqueue spinner clears.
+  const jobActive = useJobsStore((s) => s.activeUnitIds.has(genSpread.id));
+  const generating = generatingPages.has(page.id) || jobActive;
+  const sparkRange = useImageActionRange(coverMode ? "coverIllustration" : "pageIllustration");
 
   const subjectRef = subject.kind === "spread" ? subject.spread : subject.cover;
   const anchorIds = subjectRef.anchorIds;
@@ -203,6 +244,15 @@ export function PageControls({
   // stored id no longer matches the current anchor set.
   const activeIds = effectiveAnchorIds(anchors, subjectRef);
   const changedHere = stale && cursor ? changedAnchorsForSpread(project, page.id) : [];
+  // Order guard: a changed reference that is ITSELF stale (its own linked
+  // anchors changed) would bake an outdated sheet into this page — surface the
+  // right order instead of letting the update silently use the old design.
+  const staleRefNames = useMemo(() => {
+    if (changedHere.length === 0) return [];
+    const staleSet = new Set(staleAnchorIds(project));
+    return changedHere.filter((a) => staleSet.has(a.id)).map((a) => a.name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project, stale, cursor?.blobId]);
 
   /** Patch the underlying screenplay subject (a content spread or a cover spec). */
   function patchSubject(patch: Partial<ScreenplaySpread> & Partial<CoverSpec>) {
@@ -225,6 +275,20 @@ export function PageControls({
   }
 
   async function generate(options: Parameters<typeof generateIllustrationVersion>[1] = {}) {
+    // Fresh generation / plain regeneration runs through the job queue: only
+    // the enqueue is awaited (fast), the render continues server-side even if
+    // the tab closes, and the result folds in on reconcile. Text edits stay on
+    // the interactive path because they can require the "which subject did you
+    // mean?" disambiguation dialog.
+    if (!options.edit?.trim() && !options.mask) {
+      setPageGenerating(page.id, true);
+      try {
+        await refreshSpread(project, genSpread.id, {}, (err) => notify.error(err));
+      } finally {
+        setPageGenerating(page.id, false);
+      }
+      return;
+    }
     setPageGenerating(page.id, true);
     try {
       let target = genSpread;
@@ -241,8 +305,42 @@ export function PageControls({
       }
       await generateIllustrationVersion(target, options);
       setEdit("");
+      setIntentPick(null);
     } catch (err) {
+      if (err instanceof IntentAmbiguousError) {
+        setIntentPick({
+          edit: options.edit?.trim() || edit.trim(),
+          candidates: err.candidates,
+        });
+        return;
+      }
       notify.error(err);
+    } finally {
+      setPageGenerating(page.id, false);
+    }
+  }
+
+  async function applyIntentPick(anchorId: string) {
+    if (!intentPick) return;
+    await generate({
+      edit: intentPick.edit,
+      useReference: true,
+      intentTargetAnchorId: anchorId,
+    });
+  }
+
+  /**
+   * Refresh this page/cover after a referenced anchor changed. Unlike the inline
+   * generate paths, this only ENQUEUES the (slower, surgical) refresh as a job and
+   * returns immediately, so the button never blocks for the whole render. Progress
+   * shows in the global indicator; the per-spread "updating" state is driven by the
+   * jobs store's `activeUnitIds`; the result is folded in on reconcile. The brief
+   * local spinner just covers the gap until the job appears in the jobs snapshot.
+   */
+  async function update() {
+    setPageGenerating(page.id, true);
+    try {
+      await refreshSpread(project, genSpread.id, { useReference: true }, (err) => notify.error(err));
     } finally {
       setPageGenerating(page.id, false);
     }
@@ -267,7 +365,6 @@ export function PageControls({
           <ToolButton title="Add text box" onClick={() => addBox(page.id)} icon={<Plus className="size-3.5" />}>
             Text
           </ToolButton>
-          <ShapeMenu onAdd={(kind) => addShape(page.id, kind)} />
           {subject.kind === "spread" && <PageMenu spreadId={subject.spread.id} />}
         </div>
       </div>
@@ -301,6 +398,7 @@ export function PageControls({
               index={i + 1}
               active={node.id === tree?.cursorId}
               onClick={() => tree && void setIllustrationVersion(page.id, node.id)}
+              onDelete={() => deleteIllustrationVersion(page.id, node.id)}
             />
           ))}
         </div>
@@ -319,29 +417,41 @@ export function PageControls({
           )}
 
           {stale && cursor && (
-            <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
-              <span className="flex items-center gap-1.5 text-xs text-amber-800">
-                <RefreshCw className="size-3.5 shrink-0" />
-                {changedHere.length > 0
-                  ? `${formatList(changedHere.map((a) => a.name))} changed.`
-                  : "A reference changed."}
-              </span>
-              <Button
-                size="sm"
-                loading={generating}
-                leftIcon={<RefreshCw className="size-4" />}
-                onClick={() => void generate({ useReference: true })}
-              >
-                Update
-              </Button>
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5 text-xs text-amber-800">
+                  <RefreshCw className="size-3.5 shrink-0" />
+                  {changedHere.length > 0
+                    ? `${formatList(changedHere.map((a) => a.name))} changed.`
+                    : "The characters & places on this page changed."}
+                </span>
+                <Button
+                  size="sm"
+                  loading={generating}
+                  leftIcon={<RefreshCw className="size-4" />}
+                  onClick={() => void update()}
+                >
+                  Update
+                </Button>
+              </div>
+              {staleRefNames.length > 0 && (
+                <p className="mt-1 text-[11px] leading-relaxed text-amber-700">
+                  Heads up: {formatList(staleRefNames)}{" "}
+                  {staleRefNames.length === 1 ? "has" : "have"} pending reference updates of{" "}
+                  {staleRefNames.length === 1 ? "its" : "their"} own — update{" "}
+                  {staleRefNames.length === 1 ? "it" : "them"} first (in the sidebar) so this page
+                  gets the newest design.
+                </p>
+              )}
             </div>
           )}
 
           {/* Anchors used on this page */}
           {anchors.length > 0 && (
             <div>
-              <p className="mb-1.5 text-xs font-medium text-ink-500">
+              <p className="mb-1.5 flex items-center gap-1 text-xs font-medium text-ink-500">
                 {coverMode ? "Featured characters & places" : "Characters & places here"}
+                <InfoHint topic="pageAnchors" />
               </p>
               <div className="flex flex-wrap gap-1.5">
                 {anchors.map((a) => (
@@ -366,7 +476,7 @@ export function PageControls({
                 onClick={() => void generate()}
               >
                 Generate illustration
-                <SparkCost n={sparkCost} />
+                <SparkEstimateCost range={sparkRange} />
               </Button>
             ) : (
               <>
@@ -388,7 +498,7 @@ export function PageControls({
                     onClick={() => void generate({ edit, useReference: true })}
                   >
                     Apply edit
-                    <SparkCost n={sparkCost} />
+                    <SparkEstimateCost range={sparkRange} />
                   </Button>
                   <Button
                     variant="secondary"
@@ -397,7 +507,7 @@ export function PageControls({
                     onClick={() => void generate()}
                   >
                     Regenerate
-                    <SparkCost n={sparkCost} />
+                    <SparkEstimateCost range={sparkRange} />
                   </Button>
                 </div>
               </>
@@ -478,6 +588,35 @@ export function PageControls({
           </div>
         </>
       )}
+
+      <Modal
+        open={intentPick !== null}
+        onClose={() => setIntentPick(null)}
+        title="Which subject did you mean?"
+        size="max-w-md"
+      >
+        {intentPick && (
+          <div className="space-y-3">
+            <p className="text-sm text-ink-600">{intentPick.edit}</p>
+            <div className="flex flex-col gap-2">
+              {intentPick.candidates.map((c) => (
+                <Button
+                  key={c.anchorId}
+                  variant="secondary"
+                  loading={generating}
+                  className="justify-start"
+                  onClick={() => void applyIntentPick(c.anchorId)}
+                >
+                  {c.name}
+                  {c.brief ? (
+                    <span className="ml-1 truncate font-normal text-ink-400">— {c.brief}</span>
+                  ) : null}
+                </Button>
+              ))}
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }
@@ -488,6 +627,11 @@ function setIllustrationVersion(pageId: string, nodeId: string) {
   const tree = project?.illustrations?.[pageId];
   if (!tree) return;
   void useProjectsStore.getState().setIllustration(pageId, selectVersion(tree, nodeId));
+}
+
+/** Delete one illustration version (and reclaim its image blob). */
+function deleteIllustrationVersion(pageId: string, nodeId: string) {
+  void useProjectsStore.getState().deleteIllustrationVersion(pageId, nodeId);
 }
 
 function ToolButton({
@@ -509,59 +653,6 @@ function ToolButton({
     >
       {icon} {children}
     </button>
-  );
-}
-
-/** "Add shape" popover with a grid of shape previews. */
-function ShapeMenu({ onAdd }: { onAdd: (kind: ShapeKind) => void }) {
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        title="Add a shape"
-        className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-ink-500 transition hover:bg-ink-100 hover:text-brand-600"
-      >
-        <Shapes className="size-3.5" /> Shape
-      </button>
-      <AnimatePresence>
-        {open && (
-          <>
-            <button className="fixed inset-0 z-30 cursor-default" onClick={() => setOpen(false)} aria-label="Close" />
-            <motion.div
-              initial={{ opacity: 0, y: -6, scale: 0.97 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -6, scale: 0.97 }}
-              transition={{ duration: 0.14 }}
-              className="absolute right-0 z-40 mt-1 w-52 rounded-2xl border border-ink-200 bg-white p-2 shadow-lifted"
-            >
-              <div className="grid grid-cols-4 gap-1.5">
-                {SHAPE_DEFS.map((def) => {
-                  const d = shapePath(def.id, 26, 26, { corner: 0.18, points: 5, tailX: 0.32 });
-                  return (
-                    <button
-                      key={def.id}
-                      title={def.label}
-                      onClick={() => {
-                        onAdd(def.id);
-                        setOpen(false);
-                      }}
-                      className="flex aspect-square items-center justify-center rounded-lg border border-ink-200 bg-white transition hover:border-brand-400 hover:bg-brand-50"
-                    >
-                      <svg width={34} height={34} viewBox="0 0 34 34">
-                        <g transform="translate(4 4)">
-                          <path d={d} fill="rgba(71,85,105,0.85)" />
-                        </g>
-                      </svg>
-                    </button>
-                  );
-                })}
-              </div>
-            </motion.div>
-          </>
-        )}
-      </AnimatePresence>
-    </div>
   );
 }
 
@@ -693,26 +784,43 @@ function VersionThumb({
   index,
   active,
   onClick,
+  onDelete,
 }: {
   blobId: string;
   index: number;
   active: boolean;
   onClick: () => void;
+  onDelete?: () => void;
 }) {
   const url = useBlobUrl(blobId);
   return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "relative size-11 shrink-0 overflow-hidden rounded-lg ring-2 transition",
-        active ? "ring-brand-500" : "ring-transparent hover:ring-ink-200",
+    <div className="group relative size-11 shrink-0">
+      <button
+        onClick={onClick}
+        className={cn(
+          "size-full overflow-hidden rounded-lg ring-2 transition",
+          active ? "ring-brand-500" : "ring-transparent hover:ring-ink-200",
+        )}
+      >
+        {url ? (
+          <img src={url} alt={`Version ${index}`} className="size-full object-cover" />
+        ) : (
+          <div className="size-full bg-ink-100" />
+        )}
+      </button>
+      {onDelete && (
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          title="Delete this version"
+          aria-label={`Delete version ${index}`}
+          className="absolute -right-1 -top-1 hidden rounded-full bg-ink-900/80 p-0.5 text-white transition hover:bg-red-600 group-hover:block"
+        >
+          <Trash2 className="size-3" />
+        </button>
       )}
-    >
-      {url ? (
-        <img src={url} alt={`Version ${index}`} className="size-full object-cover" />
-      ) : (
-        <div className="size-full bg-ink-100" />
-      )}
-    </button>
+    </div>
   );
 }

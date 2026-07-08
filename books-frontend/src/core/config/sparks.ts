@@ -61,6 +61,15 @@ export interface SparkPack {
   sortOrder: number;
 }
 
+/** Referral rewards: both sides get Sparks when the referred user first PAYS. */
+export interface ReferralSettings {
+  enabled: boolean;
+  /** Sparks granted to the referrer when their invitee makes a first purchase. */
+  referrerSparks: number;
+  /** Sparks granted to the referred user on their first purchase. */
+  referredSparks: number;
+}
+
 /** The full admin-editable Sparks economy (the `appConfig/sparks` document). */
 export interface SparksConfig {
   version: 1;
@@ -82,6 +91,8 @@ export interface SparksConfig {
   actions: Record<string, ActionPricing>;
   /** Buyable top-up packs. */
   packs: SparkPack[];
+  /** Referral rewards (paid-gated so they can't be farmed with fake accounts). */
+  referral: ReferralSettings;
 }
 
 // ---- Defaults --------------------------------------------------------------
@@ -112,6 +123,7 @@ export function createDefaultSparksConfig(): SparksConfig {
       { id: "medium", label: "Medium", sparks: 300, bonusSparks: 30, prices: { USD: 7.99, EUR: 7.99, GBP: 6.99 }, active: true, sortOrder: 1 },
       { id: "large", label: "Large", sparks: 800, bonusSparks: 120, prices: { USD: 17.99, EUR: 17.99, GBP: 15.99 }, active: true, sortOrder: 2 },
     ],
+    referral: { enabled: false, referrerSparks: 100, referredSparks: 50 },
   };
 }
 
@@ -161,6 +173,17 @@ export function normalizeSparksConfig(input: unknown): SparksConfig {
       typeof p.maxNegativeSparks === "number" && p.maxNegativeSparks >= 0 ? p.maxNegativeSparks : def.maxNegativeSparks,
     actions,
     packs,
+    referral: {
+      enabled: p.referral?.enabled === true,
+      referrerSparks:
+        typeof p.referral?.referrerSparks === "number" && p.referral.referrerSparks >= 0
+          ? p.referral.referrerSparks
+          : def.referral.referrerSparks,
+      referredSparks:
+        typeof p.referral?.referredSparks === "number" && p.referral.referredSparks >= 0
+          ? p.referral.referredSparks
+          : def.referral.referredSparks,
+    },
   };
 }
 
@@ -177,6 +200,71 @@ export function sparksForCostUsd(config: SparksConfig, costUsd: number): number 
   if (costUsd <= 0 || config.sparkValueUsd <= 0) return 0;
   const raw = (costUsd * config.markupMultiplier) / config.sparkValueUsd;
   return Math.max(1, Math.ceil(raw));
+}
+
+/** A pre-flight Spark estimate expressed as a range (min == max when uniform). */
+export interface SparkEstimateRange {
+  minSparks: number;
+  maxSparks: number;
+}
+
+export interface EstimateRangeInputs {
+  /** Recent measured call costs (USD) for this action+tier, if any. */
+  samples?: number[];
+  /**
+   * A nominal per-call cost (USD) from the model cost table, used as a fallback
+   * when there's no recent history yet (e.g. a freshly configured model).
+   */
+  rateCostUsd?: number | null;
+  /** Last-resort flat estimate (the action's configured `estimatedSparks`). */
+  fallbackSparks: number;
+}
+
+/** Linear-interpolated quantile of a SORTED ascending array. */
+function quantile(sorted: number[], q: number): number {
+  if (sorted.length === 0) return 0;
+  const pos = (sorted.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+
+/**
+ * Derive a Spark estimate RANGE for an image action from its recent call costs,
+ * falling back to the model's rate-table cost, then a flat estimate. Used for
+ * the studio preview ("3–5 ✦") and — via {@link maxEstimateSparks} — the server
+ * pre-flight reserve. Settlement still charges the exact measured cost.
+ *
+ * With 4+ samples the range is the p25–p75 band (a single outlier call must not
+ * blow the displayed range or the pre-flight reserve up for the next 10 calls);
+ * with fewer samples it's the raw min–max.
+ */
+export function estimateSparkRange(
+  config: SparksConfig,
+  { samples, rateCostUsd, fallbackSparks }: EstimateRangeInputs,
+): SparkEstimateRange {
+  const valid = (samples ?? [])
+    .filter((n) => typeof n === "number" && Number.isFinite(n) && n > 0)
+    .sort((a, b) => a - b);
+  if (valid.length > 0) {
+    const loUsd = valid.length >= 4 ? quantile(valid, 0.25) : valid[0];
+    const hiUsd = valid.length >= 4 ? quantile(valid, 0.75) : valid[valid.length - 1];
+    const min = sparksForCostUsd(config, loUsd);
+    const max = sparksForCostUsd(config, hiUsd);
+    return { minSparks: Math.min(min, max), maxSparks: Math.max(min, max) };
+  }
+  if (typeof rateCostUsd === "number" && rateCostUsd > 0) {
+    const s = sparksForCostUsd(config, rateCostUsd);
+    return { minSparks: s, maxSparks: s };
+  }
+  const flat = Math.max(0, Math.round(fallbackSparks));
+  return { minSparks: flat, maxSparks: flat };
+}
+
+/** The upper bound of an estimate range (what the pre-flight reserve should use). */
+export function maxEstimateSparks(range: SparkEstimateRange): number {
+  return range.maxSparks;
 }
 
 /**
@@ -303,4 +391,11 @@ export const sparksConfigSchema = z.object({
   maxNegativeSparks: z.number().min(0),
   actions: z.record(z.string(), actionPricingSchema),
   packs: z.array(sparkPackSchema),
+  referral: z
+    .object({
+      enabled: z.boolean(),
+      referrerSparks: z.number().min(0),
+      referredSparks: z.number().min(0),
+    })
+    .optional(),
 });

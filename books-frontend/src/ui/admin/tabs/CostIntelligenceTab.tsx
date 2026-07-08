@@ -24,6 +24,7 @@ import type {
   CostGranularity,
 } from "../../../core/analytics/types";
 import { TEXT_ACTIONS, IMAGE_ACTIONS } from "../../../core/ai/actions";
+import { DEFAULT_IMAGE_TIER_LABELS, type ImageTier } from "../../../core/config/modelConfig";
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
@@ -72,6 +73,8 @@ function bucketAxisLabel(p: ActionCostSeriesPoint, g: CostGranularity): string {
  */
 export function CostIntelligenceTab() {
   const load = useAppConfigStore((s) => s.loadActionCosts);
+  const tierLabels = useAppConfigStore((s) => s.modelConfig.imageTierLabels);
+  const tierLabel = (t: ImageTier) => tierLabels?.[t]?.trim() || DEFAULT_IMAGE_TIER_LABELS[t];
   const [granularity, setGranularity] = useState<CostGranularity>("day");
   const [units, setUnits] = useState<number>(SLIDER.day.default);
   const [report, setReport] = useState<ActionCostReport | null>(null);
@@ -255,11 +258,23 @@ export function CostIntelligenceTab() {
               </thead>
               <tbody className="divide-y divide-ink-100">
                 {report.actions.map((a) => (
-                  <tr key={a.action} className={a.underwaterAtP90 ? "bg-amber-50/60" : "bg-white"}>
+                  <tr key={`${a.action}:${a.tier ?? ""}`} className={a.underwaterAtP90 ? "bg-amber-50/60" : "bg-white"}>
                     <td className="px-3 py-2 font-medium text-ink-800">
                       <span className="flex items-center gap-1.5">
                         {a.underwaterAtP90 && <AlertTriangle className="size-3.5 text-amber-500" />}
                         {ACTION_LABELS[a.action] ?? a.action}
+                        {a.tier && (
+                          <span
+                            className={
+                              "rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide ring-1 ring-inset " +
+                              (a.tier === "premium"
+                                ? "bg-brand-50 text-brand-700 ring-brand-100"
+                                : "bg-amber-50 text-amber-700 ring-amber-200")
+                            }
+                          >
+                            {tierLabel(a.tier)}
+                          </span>
+                        )}
                       </span>
                     </td>
                     <td className="px-3 py-2 text-right tabular-nums text-ink-600">{a.count.toLocaleString()}</td>

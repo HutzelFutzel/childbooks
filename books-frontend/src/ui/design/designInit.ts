@@ -3,6 +3,8 @@
  * boxes/typography for the Final Design editor.
  */
 import { bookProductForConfig } from "../../core/book";
+import { getBookLayout, type PageSide } from "../../core/book/layouts";
+import { paginate } from "../../core/pipeline/pagination";
 import { getCursor } from "../../core/versioning";
 import {
   COVER_BACK_ID,
@@ -31,6 +33,10 @@ export interface DesignPage {
   seedSubtitle?: string;
   layoutNote: string;
   isCover: boolean;
+  /** Physical side this page sits on (drives the outer-edge text column). */
+  outerSide: PageSide;
+  /** The active layout's text-column rectangle for this page's side. */
+  textRect: NormRect;
 }
 
 function uid(): string {
@@ -46,7 +52,16 @@ function blobFor(project: Project, id: string): string | undefined {
 export function buildDesignPages(project: Project): DesignPage[] {
   const aspect = bookProductForConfig(project.config).aspect;
   const doc = project.screenplay ? getCursor(project.screenplay).content : null;
+  const layout = getBookLayout(project.config.layoutId);
   const pages: DesignPage[] = [];
+
+  // Physical side per content spread (recto = odd page number = right edge).
+  const pageMap = doc ? paginate(doc).pageMap : new Map<string, number[]>();
+  const sideOf = (s: { id: string; kind: "single" | "spread" }): PageSide => {
+    if (s.kind === "spread") return "spread";
+    const nums = pageMap.get(s.id);
+    return nums && nums[0] % 2 === 1 ? "right" : "left";
+  };
 
   if (doc?.frontCover) {
     pages.push(coverPage(project, COVER_FRONT_ID, "Front cover", aspect, doc.frontCover));
@@ -54,6 +69,7 @@ export function buildDesignPages(project: Project): DesignPage[] {
   if (doc) {
     doc.spreads.forEach((s, i) => {
       if (s.placeholder) return;
+      const side = sideOf(s);
       pages.push({
         id: s.id,
         label: `Page ${i + 1}`,
@@ -62,6 +78,8 @@ export function buildDesignPages(project: Project): DesignPage[] {
         seedText: s.text,
         layoutNote: s.layoutNote,
         isCover: false,
+        outerSide: side,
+        textRect: layout.textRegion(side),
       });
     });
   }
@@ -78,6 +96,8 @@ function coverPage(
   aspect: number,
   spec: CoverSpec,
 ): DesignPage {
+  // Front cover sits on the right (recto); back cover on the left (verso).
+  const side: PageSide = id === COVER_FRONT_ID ? "right" : "left";
   return {
     id,
     label,
@@ -88,22 +108,9 @@ function coverPage(
     seedSubtitle: spec.subtitle,
     layoutNote: spec.illustration,
     isCover: true,
+    outerSide: side,
+    textRect: getBookLayout(project.config.layoutId).textRegion(side),
   };
-}
-
-/**
- * Region heuristic from a layout note (where to place the text block). The book
- * is intentionally simple right now — one image with the text beside it — so we
- * default to a tidy side panel (text on the right) unless the note clearly asks
- * for another edge.
- */
-function seedRect(layoutNote: string, isCover: boolean): NormRect {
-  if (isCover) return { x: 0.1, y: 0.06, w: 0.8, h: 0.24 };
-  const n = layoutNote.toLowerCase();
-  if (n.includes("left")) return { x: 0.06, y: 0.12, w: 0.4, h: 0.76 };
-  if (n.includes("bottom")) return { x: 0.08, y: 0.66, w: 0.84, h: 0.28 };
-  if (n.includes("top")) return { x: 0.08, y: 0.06, w: 0.84, h: 0.24 };
-  return { x: 0.54, y: 0.12, w: 0.4, h: 0.76 }; // default: text on the right side
 }
 
 export function defaultDesign(project: Project): BookDesign {
@@ -175,9 +182,10 @@ export function seedPageDesign(design: BookDesign, page: DesignPage): PageDesign
       );
     }
   } else if (page.seedText.trim()) {
+    // Seed the text column on the page's outer edge per the active layout.
     boxes.push(
       makeTextBox(
-        seedRect(page.layoutNote, false),
+        page.textRect,
         page.seedText,
         design.defaultFontFamily,
         design.defaultFontSizePct,

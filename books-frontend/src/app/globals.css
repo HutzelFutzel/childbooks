@@ -7,7 +7,9 @@
 */
 @theme {
   --font-sans: "Inter", "Avenir", "Helvetica", "Arial", sans-serif;
-  --font-display: "Inter", "Avenir", sans-serif;
+  /* Distinctive, friendly display face for headings + brand — this is a
+     platform for creative products, so the chrome should feel creative too. */
+  --font-display: "Fredoka", "Baloo 2", "Inter", "Avenir", sans-serif;
 
   --color-brand-50: #f5f3ff;
   --color-brand-100: #ede9fe;
@@ -87,13 +89,85 @@
 }
 
 @layer utilities {
+  /* Subtle dotted grid, tinted by the live brand color. */
   .bg-grid {
     background-image: radial-gradient(
       circle at 1px 1px,
-      rgba(124, 58, 237, 0.08) 1px,
+      color-mix(in srgb, var(--color-brand-500) 11%, transparent) 1px,
       transparent 0
     );
     background-size: 24px 24px;
+  }
+
+  /* Soft, creative "aurora" wash for stage backgrounds, heroes and empty
+     states — blends the brand + accent colors into gentle light. */
+  .bg-aurora {
+    background-color: var(--color-canvas);
+    background-image:
+      radial-gradient(
+        42rem 42rem at 12% -8%,
+        color-mix(in srgb, var(--color-brand-400) 26%, transparent),
+        transparent 60%
+      ),
+      radial-gradient(
+        38rem 38rem at 108% 6%,
+        color-mix(in srgb, var(--color-accent-300) 24%, transparent),
+        transparent 60%
+      ),
+      radial-gradient(
+        36rem 36rem at 60% 118%,
+        color-mix(in srgb, var(--color-brand-300) 20%, transparent),
+        transparent 62%
+      );
+  }
+
+  /* Shimmer sweep for skeletons / loading surfaces. */
+  .shimmer {
+    position: relative;
+    overflow: hidden;
+    background-color: var(--color-ink-100);
+  }
+  .shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background-image: linear-gradient(
+      90deg,
+      transparent 0%,
+      color-mix(in srgb, var(--color-brand-200) 55%, white) 45%,
+      color-mix(in srgb, var(--color-brand-100) 70%, white) 55%,
+      transparent 100%
+    );
+    animation: shimmer-sweep 1.6s ease-in-out infinite;
+  }
+
+  @keyframes shimmer-sweep {
+    100% {
+      transform: translateX(100%);
+    }
+  }
+
+  /* Gentle float for playful decorative marks. */
+  @keyframes float-slow {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-6px);
+    }
+  }
+  .animate-float-slow {
+    animation: float-slow 5s ease-in-out infinite;
+  }
+}
+
+/* Respect reduced-motion for all the decorative animation above. */
+@media (prefers-reduced-motion: reduce) {
+  .shimmer::after,
+  .animate-float-slow {
+    animation: none;
   }
 }
 

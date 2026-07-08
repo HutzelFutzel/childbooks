@@ -21,6 +21,8 @@ import {
   currentReferenceUses,
 } from "../core/pipeline/provenance";
 import { effectiveAnchorIds } from "../core/book/anchorRefs";
+import { spreadsById } from "../core/book/units";
+import { reconcileScreenplaySpreadIds } from "../core/book/screenplayReconcile";
 import { ProviderError } from "../core/errors";
 import type { ResolvedModels } from "../core/models/registry";
 import type { ProviderId } from "../core/config/options";
@@ -46,6 +48,8 @@ import {
   screenplayRemote,
 } from "../platform/aiClient";
 import { resolveImageModelClient, resolveModelsClient } from "../platform/aiResolve";
+import { DEFAULT_IMAGE_TIER, type ImageTier } from "../core/config/modelConfig";
+import { requireImageTier } from "./imageTierPrompt";
 import { useProjectsStore } from "./projectsStore";
 import { useSettingsStore } from "./settingsStore";
 import { useAppConfigStore } from "./appConfigStore";
@@ -79,8 +83,8 @@ function requireKey(provider: "openai" | "google"): string {
  * gate the UI and to stamp job payloads; the server re-resolves authoritatively.
  * Throws a friendly auth error when nothing usable is configured.
  */
-export function getResolvedModels(): ResolvedModels {
-  const models = resolveModelsClient();
+export function getResolvedModels(tier: ImageTier = DEFAULT_IMAGE_TIER): ResolvedModels {
+  const models = resolveModelsClient(tier);
   if (!models) {
     throw new ProviderError(
       "AI generation isn't available right now. It's being set up on the server.",
@@ -131,6 +135,8 @@ export interface GenerateAnchorOptions {
   fromNodeId?: string;
   /** Use the source version's image as a reference for consistency. */
   useReference?: boolean;
+  /** Quality tier to generate at (defaults to the user's preferred tier). */
+  tier?: ImageTier;
   signal?: AbortSignal;
 }
 
@@ -147,7 +153,15 @@ export async function generateAnchorVersion(
   if (!project) throw new Error("No active project.");
   const anchor = project.anchors?.find((a) => a.id === anchorId);
   if (!anchor) throw new Error("Anchor not found.");
-  const render = await anchorImageRemote(project, anchorId, options as AnchorRunOptions);
+  const { tier, ...runOptions } = options;
+  const resolvedTier = tier ?? requireImageTier();
+  if (!resolvedTier) return;
+  const render = await anchorImageRemote(
+    project,
+    anchorId,
+    runOptions as AnchorRunOptions,
+    resolvedTier,
+  );
   const versions = applyAnchorRender(anchor.versions, render);
   await useProjectsStore.getState().updateAnchor(anchorId, { versions });
 }
@@ -169,10 +183,13 @@ export async function generateScreenplayVersion(
   if (!project) throw new Error("No active project.");
 
   const tree = project.screenplay;
-  const previous =
-    options.edit && tree ? getCursor(tree).content : undefined;
+  const prevDoc = tree ? getCursor(tree).content : undefined;
+  const previous = options.edit ? prevDoc : undefined;
 
-  const doc = await screenplayRemote(project, options.edit, previous, options.signal);
+  const generated = await screenplayRemote(project, options.edit, previous, options.signal);
+  // Preserve spread identity across the regeneration so id-keyed illustrations
+  // and page designs stay bound to their page (never orphaned by an edit).
+  const doc = reconcileScreenplaySpreadIds(generated, prevDoc);
 
   const label = options.edit?.trim() || (tree ? "Regenerated" : "Initial");
   const versions = tree
@@ -184,11 +201,15 @@ export async function generateScreenplayVersion(
 
 export interface GenerateIllustrationOptions {
   edit?: string;
+  /** When intent resolution was ambiguous, the user-selected target anchor id. */
+  intentTargetAnchorId?: string;
   fromNodeId?: string;
   /** Reuse the source version's image as a reference (keep composition). */
   useReference?: boolean;
   /** Inpainting mask (transparent hole = region to change). Forces composition ref. */
   mask?: ReferenceImage;
+  /** Quality tier to generate at (defaults to the user's preferred tier). */
+  tier?: ImageTier;
   signal?: AbortSignal;
 }
 
@@ -234,13 +255,27 @@ export function staleAnchorIds(project: Project): string[] {
   for (const a of anchors) {
     if (!a.versions) continue;
     const used = getCursor(a.versions).content.references ?? [];
-    const isStale = used.some((u) => {
+    let isStale = used.some((u) => {
       const r = byId.get(u.anchorId);
       if (!r) return true;
-      if ((r.versions?.cursorId ?? undefined) !== u.versionId) return true;
+      // Text-only uses (related anchors) don't care about image versions.
+      if (!u.textOnly && (r.versions?.cursorId ?? undefined) !== u.versionId) return true;
       if (u.signature !== undefined && u.signature !== anchorSignature(r)) return true;
       return false;
     });
+    // The link SET itself changed since the render (a relation was added or
+    // removed) — the sheet no longer reflects the declared relationships.
+    if (!isStale) {
+      const currentLinks = new Set(
+        [...(a.containedIds ?? []), ...(a.relatedIds ?? [])].filter(
+          (id) => id !== a.id && byId.has(id),
+        ),
+      );
+      const recorded = new Set(used.map((u) => u.anchorId).filter((id) => byId.has(id)));
+      isStale =
+        currentLinks.size !== recorded.size ||
+        [...currentLinks].some((id) => !recorded.has(id));
+    }
     if (isStale) stale.push(a.id);
   }
   return stale;
@@ -252,7 +287,8 @@ function changedFromUses(uses: ReferenceUse[], byId: Map<string, Anchor>): Ancho
   for (const u of uses) {
     const a = byId.get(u.anchorId);
     if (!a) continue; // deleted anchors can't be named; handled as "removed"
-    const versionChanged = (a.versions?.cursorId ?? undefined) !== u.versionId;
+    const versionChanged =
+      !u.textOnly && (a.versions?.cursorId ?? undefined) !== u.versionId;
     const textChanged = u.signature !== undefined && u.signature !== anchorSignature(a);
     if (versionChanged || textChanged) out.push(a);
   }
@@ -294,18 +330,32 @@ export function changedAnchorNamesForSpreads(
  */
 export function staleIllustrationSpreadIds(project: Project): string[] {
   const byId = new Map((project.anchors ?? []).map((a) => [a.id, a]));
+  const units = spreadsById(project);
   const stale: string[] = [];
   for (const [spreadId, tree] of Object.entries(project.illustrations ?? {})) {
     const content = getCursor(tree).content;
     const used = content.references ?? [];
-    const isStale = used.some((u) => {
+    let isStale = used.some((u) => {
       const a = byId.get(u.anchorId);
       if (!a) return true; // anchor was deleted
-      if ((a.versions?.cursorId ?? undefined) !== u.versionId) return true;
+      if (!u.textOnly && (a.versions?.cursorId ?? undefined) !== u.versionId) return true;
       // Only compare signatures for records that carry one (back-compat).
       if (u.signature !== undefined && u.signature !== anchorSignature(a)) return true;
       return false;
     });
+    // Anchors were toggled on/off the page since the render: the recorded
+    // reference set no longer matches the page's current anchor set.
+    if (!isStale) {
+      const spread = units.get(spreadId);
+      if (spread) {
+        const current = new Set(
+          effectiveAnchorIds(project.anchors, spread).filter((id) => byId.has(id)),
+        );
+        const recorded = new Set(used.map((u) => u.anchorId).filter((id) => byId.has(id)));
+        isStale =
+          current.size !== recorded.size || [...current].some((id) => !recorded.has(id));
+      }
+    }
     if (isStale) stale.push(spreadId);
   }
   return stale;
@@ -322,7 +372,15 @@ export async function generateIllustrationVersion(
 ): Promise<void> {
   const project = useProjectsStore.getState().current();
   if (!project) throw new Error("No active project.");
-  const render = await illustrationRemote(project, spread.id, options as IllustrationRunOptions);
+  const { tier, ...runOptions } = options;
+  const resolvedTier = tier ?? requireImageTier();
+  if (!resolvedTier) return;
+  const render = await illustrationRemote(
+    project,
+    spread.id,
+    runOptions as IllustrationRunOptions,
+    resolvedTier,
+  );
   if (!render) return;
   const versions = applyIllustrationRender(project.illustrations?.[spread.id], render);
   await useProjectsStore.getState().setIllustration(spread.id, versions);
@@ -334,8 +392,12 @@ export async function generateIllustrationVersion(
  * described in the prompt. Used for bulk "generate all pages" so generation runs
  * server-side and survives a refresh. Throws if no provider is configured.
  */
-export function buildIllustrationTask(project: Project, spread: ScreenplaySpread): JobTask {
-  const imageModel = resolveImageModelClient("pageIllustration");
+export function buildIllustrationTask(
+  project: Project,
+  spread: ScreenplaySpread,
+  tier: ImageTier = DEFAULT_IMAGE_TIER,
+): JobTask {
+  const imageModel = resolveImageModelClient("pageIllustration", tier);
   if (!imageModel) {
     throw new ProviderError(
       "AI generation isn't available right now. It's being set up on the server.",
@@ -367,6 +429,13 @@ export function buildIllustrationTask(project: Project, spread: ScreenplaySpread
     }
   }
 
+  // Lead with the art-style exemplar when the selected preset has an example
+  // image configured; the worker resolves + prepends the actual image so the
+  // task payload stays small.
+  const artStyles = useAppConfigStore.getState().artStyles;
+  const presetId = project.config.artStyle?.presetId ?? undefined;
+  const hasStyleRef = Boolean(presetId && artStyles?.examples?.[presetId]);
+
   const prompt = buildIllustrationPrompt({
     spread,
     config: project.config,
@@ -374,9 +443,13 @@ export function buildIllustrationTask(project: Project, spread: ScreenplaySpread
     refreshAnchors: [],
     describedAnchors,
     removedAnchors: [],
+    hasStyleRef,
     hasCompositionRef: false,
     maskMode: false,
-    prompts: { artStyles: useAppConfigStore.getState().artStyles },
+    prompts: {
+      artStyles,
+      templates: useAppConfigStore.getState().prompts,
+    },
   });
 
   const request: ImageRenderRequest = {
@@ -385,9 +458,21 @@ export function buildIllustrationTask(project: Project, spread: ScreenplaySpread
     prompt,
     size: chooseImageSize(spread.kind, project.config),
     references: references.length ? references : undefined,
+    ...(hasStyleRef && presetId ? { stylePresetId: presetId } : {}),
   };
 
-  return { id: spread.id, status: "pending", request };
+  return {
+    id: spread.id,
+    status: "pending",
+    request,
+    // Provenance captured at BUILD time (what the render actually uses), so a
+    // reconcile that happens after further anchor edits doesn't stamp the page
+    // with versions it never saw (which would silently skip the stale warning).
+    referenceUses: currentReferenceUses(
+      project.anchors,
+      effectiveAnchorIds(project.anchors, spread),
+    ),
+  };
 }
 
 /** Apply a completed render task's result blob to a spread's illustration tree. */
@@ -396,11 +481,14 @@ export async function applyIllustrationResult(
   spread: ScreenplaySpread,
   result: { blobId: string; mimeType: string },
   prompt: string,
+  referenceUses?: ReferenceUse[],
 ): Promise<void> {
   const content: IllustrationImage = {
     blobId: result.blobId,
     mimeType: result.mimeType,
-    references: currentReferenceUses(project.anchors, effectiveAnchorIds(project.anchors, spread)),
+    references:
+      referenceUses ??
+      currentReferenceUses(project.anchors, effectiveAnchorIds(project.anchors, spread)),
     textMode: spread.textMode,
     prompt,
   };

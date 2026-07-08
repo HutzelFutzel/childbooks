@@ -35,6 +35,27 @@ export const IMAGE_SPEED_LABELS: Record<ImageSpeed, string> = {
   slow: "Slow / quality",
 };
 
+/**
+ * User-facing image quality tiers. Every image generation resolves through one
+ * of these; the user picks their default in Settings and can override per call.
+ * Each tier binds an action to its own provider+speed slot, so e.g. "quick" can
+ * be a Gemini fast model while "premium" is an OpenAI quality model.
+ */
+export type ImageTier = "quick" | "premium";
+export const IMAGE_TIERS: ImageTier[] = ["quick", "premium"];
+export const DEFAULT_IMAGE_TIER = "quick" as const satisfies ImageTier;
+
+/** Default display names for the tiers (admin-overridable via `imageTierLabels`). */
+export const DEFAULT_IMAGE_TIER_LABELS: Record<ImageTier, string> = {
+  quick: "Fast",
+  premium: "High-Quality",
+};
+
+/** Coerce an untrusted value to a valid tier, defaulting to the "quick" tier. */
+export function normalizeImageTier(value: unknown): ImageTier {
+  return value === "premium" ? "premium" : "quick";
+}
+
 /** Stage 1: per-provider speed slots, each holding a concrete model id ("" = unset). */
 export interface ModelSlots {
   text: Record<ProviderId, Record<TextSpeed, string>>;
@@ -50,12 +71,18 @@ export interface ImageSlotRef {
   speed: ImageSpeed;
 }
 
+/** Per-tier image slot references for one image action. */
+export type ImageTierBindings = Record<ImageTier, ImageSlotRef>;
+
 /** The full configuration document. `version` allows future migrations. */
 export interface ModelConfig {
   version: 1;
   slots: ModelSlots;
   textBindings: Record<TextActionId, TextSlotRef>;
-  imageBindings: Record<ImageActionId, ImageSlotRef>;
+  /** Each image action binds one slot PER user-facing quality tier. */
+  imageBindings: Record<ImageActionId, ImageTierBindings>;
+  /** Admin-overridable display labels for the quality tiers. */
+  imageTierLabels: Record<ImageTier, string>;
 }
 
 /** Look up a model id in a provider's catalog fallback for a given modality+economy. */
@@ -86,6 +113,12 @@ export function createDefaultSlots(): ModelSlots {
  * model; anchor sheets on Google's fast image model.
  */
 export function createDefaultModelConfig(): ModelConfig {
+  // Every image action shares the same default tier mapping: the cheaper/faster
+  // Google model for "quick", the higher-fidelity OpenAI model for "premium".
+  const defaultImageTiers = (): ImageTierBindings => ({
+    quick: { provider: "google", speed: "fast" },
+    premium: { provider: "openai", speed: "slow" },
+  });
   return {
     version: 1,
     slots: createDefaultSlots(),
@@ -94,12 +127,15 @@ export function createDefaultModelConfig(): ModelConfig {
       anchorDescription: { provider: "google", speed: "fast" },
       screenplay: { provider: "google", speed: "slow" },
       localize: { provider: "google", speed: "fast" },
+      bindingPass: { provider: "google", speed: "fast" },
+      editIntent: { provider: "google", speed: "fast" },
     },
     imageBindings: {
-      anchorImage: { provider: "google", speed: "fast" },
-      pageIllustration: { provider: "openai", speed: "slow" },
-      coverIllustration: { provider: "openai", speed: "slow" },
+      anchorImage: defaultImageTiers(),
+      pageIllustration: defaultImageTiers(),
+      coverIllustration: defaultImageTiers(),
     },
+    imageTierLabels: { ...DEFAULT_IMAGE_TIER_LABELS },
   };
 }
 
@@ -137,20 +173,37 @@ export function resolveTextModel(
   return null;
 }
 
-/** Resolve an image action to a concrete model (same fallback strategy as text). */
+/**
+ * Resolve an image action + quality tier to a concrete model. Prefers the
+ * bound provider/speed for the requested tier, then the same speed on the other
+ * provider. If the requested tier resolves to nothing usable it falls back to
+ * the other tier's binding, then to any filled image slot — so a half-configured
+ * app (e.g. only "premium" set) still generates.
+ */
 export function resolveImageModel(
   cfg: ModelConfig,
   action: ImageActionId,
+  tier: ImageTier,
   isAvailable?: (p: ProviderId) => boolean,
 ): ModelSelection | null {
-  const ref = cfg.imageBindings[action];
   const ok = (p: ProviderId) => (isAvailable ? isAvailable(p) : true);
-  const ordered: ProviderId[] = [ref.provider, ...ALL_PROVIDERS.filter((p) => p !== ref.provider)];
-  for (const p of ordered) {
-    if (ok(p) && slotFilled(cfg.slots.image[p]?.[ref.speed])) {
-      return { provider: p, id: cfg.slots.image[p][ref.speed] };
+  const tierOrder: ImageTier[] = [tier, ...IMAGE_TIERS.filter((t) => t !== tier)];
+  // Honor each tier's bound speed across providers, preferring the chosen tier.
+  for (const t of tierOrder) {
+    const ref = cfg.imageBindings[action]?.[t];
+    if (!ref) continue;
+    const ordered: ProviderId[] = [ref.provider, ...ALL_PROVIDERS.filter((p) => p !== ref.provider)];
+    for (const p of ordered) {
+      if (ok(p) && slotFilled(cfg.slots.image[p]?.[ref.speed])) {
+        return { provider: p, id: cfg.slots.image[p][ref.speed] };
+      }
     }
   }
+  // Last resort: any filled image slot on an available provider.
+  const first = cfg.imageBindings[action]?.[tier];
+  const ordered: ProviderId[] = first
+    ? [first.provider, ...ALL_PROVIDERS.filter((p) => p !== first.provider)]
+    : [...ALL_PROVIDERS];
   for (const p of ordered) {
     if (!ok(p)) continue;
     for (const s of IMAGE_SPEEDS) {
@@ -191,10 +244,39 @@ export function modelsMissingCost(cfg: ModelConfig, costs: ModelCostTable): Conf
   return configuredModels(cfg).filter((m) => !costs.models[costKey(m.provider, m.modelId)]);
 }
 
+/** A raw stored image slot ref (tolerant of missing fields). */
+function coerceImageSlotRef(raw: unknown, fallback: ImageSlotRef): ImageSlotRef {
+  const r = (raw ?? {}) as Partial<ImageSlotRef>;
+  const provider: ProviderId = r.provider === "openai" || r.provider === "google" ? r.provider : fallback.provider;
+  const speed: ImageSpeed = r.speed === "fast" || r.speed === "slow" ? r.speed : fallback.speed;
+  return { provider, speed };
+}
+
+/**
+ * Coerce one action's image binding to the per-tier shape. Handles migration
+ * from the legacy single-binding shape (`{provider, speed}`), which we map to
+ * BOTH tiers so existing installs keep working until an admin differentiates.
+ */
+function coerceImageTierBindings(raw: unknown, fallback: ImageTierBindings): ImageTierBindings {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  const isLegacySingle = "provider" in r || "speed" in r;
+  if (isLegacySingle) {
+    const single = coerceImageSlotRef(r, fallback.premium);
+    return { quick: single, premium: single };
+  }
+  return {
+    quick: coerceImageSlotRef(r.quick, fallback.quick),
+    premium: coerceImageSlotRef(r.premium, fallback.premium),
+  };
+}
+
 /** Merge a stored (possibly partial / older) config onto current defaults. */
 export function normalizeModelConfig(input: unknown): ModelConfig {
   const def = createDefaultModelConfig();
-  const stored = (input ?? {}) as Partial<ModelConfig>;
+  const stored = (input ?? {}) as Partial<ModelConfig> & {
+    imageBindings?: Record<string, unknown>;
+    imageTierLabels?: Partial<Record<ImageTier, string>>;
+  };
   const slots = stored.slots ?? def.slots;
   const text = {} as ModelSlots["text"];
   const image = {} as ModelSlots["image"];
@@ -202,11 +284,21 @@ export function normalizeModelConfig(input: unknown): ModelConfig {
     text[p] = { ...def.slots.text[p], ...slots.text?.[p] };
     image[p] = { ...def.slots.image[p], ...slots.image?.[p] };
   }
+  const imageBindings = {} as Record<ImageActionId, ImageTierBindings>;
+  for (const id of Object.keys(def.imageBindings) as ImageActionId[]) {
+    imageBindings[id] = coerceImageTierBindings(stored.imageBindings?.[id], def.imageBindings[id]);
+  }
+  const labels: Partial<Record<ImageTier, string>> = stored.imageTierLabels ?? {};
   return {
     version: 1,
     slots: { text, image },
     textBindings: { ...def.textBindings, ...stored.textBindings },
-    imageBindings: { ...def.imageBindings, ...stored.imageBindings },
+    imageBindings,
+    imageTierLabels: {
+      quick: typeof labels.quick === "string" && labels.quick.trim() ? labels.quick : def.imageTierLabels.quick,
+      premium:
+        typeof labels.premium === "string" && labels.premium.trim() ? labels.premium : def.imageTierLabels.premium,
+    },
   };
 }
 
@@ -231,6 +323,10 @@ const recordOf = <V extends z.ZodTypeAny>(value: V) =>
 
 const textSlotRefSchema = z.object({ provider: providerEnum, speed: textSpeedEnum });
 const imageSlotRefSchema = z.object({ provider: providerEnum, speed: imageSpeedEnum });
+const imageTierBindingsSchema = z.object({
+  quick: imageSlotRefSchema,
+  premium: imageSlotRefSchema,
+});
 
 export const modelConfigSchema = z.object({
   version: z.literal(1),
@@ -241,5 +337,6 @@ export const modelConfigSchema = z.object({
   // Bindings are validated as records of valid slot refs; `normalizeModelConfig`
   // fills in any missing action so the fixed key set stays authoritative.
   textBindings: z.record(z.string(), textSlotRefSchema),
-  imageBindings: z.record(z.string(), imageSlotRefSchema),
+  imageBindings: z.record(z.string(), imageTierBindingsSchema),
+  imageTierLabels: z.record(z.string(), z.string()).optional(),
 });

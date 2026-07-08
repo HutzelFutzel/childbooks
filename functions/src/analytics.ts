@@ -25,6 +25,11 @@ import { getAdminSettings, saveAdminSettings } from "./adminSettings";
 import { getSparksConfig } from "./appConfig";
 import { getPlansConfig } from "./plans";
 import { adminAdjustSparks } from "./sparks";
+import { financeSummary, type FinanceCategory } from "./finance";
+import { listAlerts, resolveAlert } from "./alerts";
+import { retryFailedFulfillments } from "./stripe";
+import { importInfraCosts } from "./infraCosts";
+import { deleteCustomCost, listCustomCosts, sweepCustomCosts, upsertCustomCost } from "./customCosts";
 import { priceForAction } from "../../books-frontend/src/core/config/sparks";
 import {
   intervalForPriceId,
@@ -593,9 +598,16 @@ function handleError(res: Response, err: unknown): void {
 const MAX_USAGE_SCAN = 50_000;
 
 interface CostAcc {
+  action: string;
+  tier: "quick" | "premium" | null;
   costs: number[];
   total: number;
   unpriced: number;
+}
+
+/** Group key that keeps image tiers separate while text actions stay merged. */
+function costGroupKey(action: string, tier: "quick" | "premium" | null): string {
+  return tier ? `${action}::${tier}` : action;
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -640,11 +652,14 @@ async function computeActionCosts(opts: {
       .get();
     capped = snap.size >= MAX_USAGE_SCAN;
     for (const doc of snap.docs) {
-      const d = doc.data() as { action?: unknown; costUsd?: unknown; at?: unknown };
+      const d = doc.data() as { action?: unknown; costUsd?: unknown; at?: unknown; tier?: unknown };
       const action = typeof d.action === "string" ? d.action : "unknown";
+      const tier: "quick" | "premium" | null =
+        d.tier === "quick" || d.tier === "premium" ? d.tier : null;
       const at = typeof d.at === "number" ? d.at : null;
       totalEvents += 1;
-      const acc = byAction.get(action) ?? { costs: [], total: 0, unpriced: 0 };
+      const key = costGroupKey(action, tier);
+      const acc = byAction.get(key) ?? { action, tier, costs: [], total: 0, unpriced: 0 };
       const priced = typeof d.costUsd === "number" && Number.isFinite(d.costUsd);
       if (priced) {
         acc.costs.push(d.costUsd as number);
@@ -654,7 +669,7 @@ async function computeActionCosts(opts: {
         acc.unpriced += 1;
         hasUnpriced = true;
       }
-      byAction.set(action, acc);
+      byAction.set(key, acc);
       if (at != null) {
         const key = bucketKey(at, tz, granularity);
         const b = bucketAgg.get(key) ?? { costUsd: 0, count: 0 };
@@ -674,19 +689,20 @@ async function computeActionCosts(opts: {
     },
   );
 
-  const actions: ActionCostStats[] = [...byAction.entries()]
-    .map(([action, acc]) => {
+  const actions: ActionCostStats[] = [...byAction.values()]
+    .map((acc) => {
       const sorted = [...acc.costs].sort((a, b) => a - b);
       const count = acc.costs.length + acc.unpriced;
       const avg = sorted.length > 0 ? acc.total / sorted.length : 0;
       const p90 = percentile(sorted, 90);
       // Always compute the price as if enabled, so the admin can preview margins
       // before flipping the economy on; the report carries `sparksEnabled` too.
-      const sparkPrice = priceForAction({ ...sparks, enabled: true }, action, avg);
+      const sparkPrice = priceForAction({ ...sparks, enabled: true }, acc.action, avg);
       const valueOf = (s: number | null) => (s != null ? s * sparks.sparkValueUsd : null);
       const priceValue = valueOf(sparkPrice);
       return {
-        action,
+        action: acc.action,
+        tier: acc.tier,
         count,
         totalUsd: round4(acc.total),
         minUsd: round4(sorted[0] ?? 0),
@@ -818,6 +834,98 @@ export function registerAnalyticsRoutes(app: Express): void {
           cadenceFilter,
         }),
       );
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- Finance dashboard -----------------------------------------------------
+
+  // The "total win" over a custom window: revenue − every cost, filterable by
+  // category and drillable per user / per project. Backed by `financeEvents`.
+  app.get("/admin/finance/summary", async (req: Request, res: Response) => {
+    try {
+      const { from, to } = parseRange(req);
+      const catParam = String(req.query.category ?? "");
+      const category = (
+        ["sparks", "books", "subscriptions", "waste", "infra", "ops"] as FinanceCategory[]
+      ).find((c) => c === catParam);
+      const uid = String(req.query.uid ?? "").trim() || undefined;
+      const projectId = String(req.query.projectId ?? "").trim() || undefined;
+      const groupLimit = Number(req.query.groupLimit) || undefined;
+      res.json(await financeSummary({ fromMs: from, toMs: to, category, uid, projectId, groupLimit }));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Operational alerts (fulfillment failures, grant-abuse velocity, …).
+  app.get("/admin/alerts", async (req: Request, res: Response) => {
+    try {
+      const limit = Number(req.query.limit) || 100;
+      res.json({ alerts: await listAlerts(limit) });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.post("/admin/alerts/:id/resolve", json, async (req: Request, res: Response) => {
+    try {
+      await resolveAlert(String(req.params.id));
+      res.json({ ok: true });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Manually trigger the failed-fulfillment retry sweep (also runs scheduled).
+  app.post("/admin/fulfillment/retry", json, async (_req: Request, res: Response) => {
+    try {
+      const placed = await retryFailedFulfillments();
+      res.json({ ok: true, placed });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Manually (re)import a day of infra costs — handy to backfill or to verify
+  // the BigQuery billing-export connection right after configuring it.
+  app.post("/admin/finance/infra/import", json, async (req: Request, res: Response) => {
+    try {
+      const date = typeof (req.body as { date?: unknown })?.date === "string"
+        ? String((req.body as { date?: string }).date)
+        : undefined;
+      res.json(await importInfraCosts(date));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Custom operating costs (email service, tooling, …) — CRUD + booking.
+  app.get("/admin/finance/custom-costs", async (_req: Request, res: Response) => {
+    try {
+      res.json({ costs: await listCustomCosts() });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.post("/admin/finance/custom-costs", json, async (req: Request, res: Response) => {
+    try {
+      const cost = await upsertCustomCost(req.body);
+      // Book any already-due periods right away so the dashboard reflects the
+      // new/edited cost without waiting for the nightly sweep.
+      const sweep = await sweepCustomCosts();
+      res.json({ cost, sweep });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.delete("/admin/finance/custom-costs/:id", async (req: Request, res: Response) => {
+    try {
+      await deleteCustomCost(String(req.params.id));
+      res.json({ ok: true });
     } catch (err) {
       handleError(res, err);
     }

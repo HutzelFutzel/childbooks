@@ -8,8 +8,10 @@
  * the backend has keys for (`settingsStore`).
  */
 import {
+  DEFAULT_IMAGE_TIER,
   resolveImageModel,
   resolveTextModel,
+  type ImageTier,
 } from "../core/config/modelConfig";
 import type { ImageActionId, TextActionId } from "../core/ai/actions";
 import type { ResolvedModels } from "../core/models/registry";
@@ -28,22 +30,25 @@ export function resolveTextModelClient(action: TextActionId): ModelSelection | n
   return resolveTextModel(cfg, action, availability());
 }
 
-export function resolveImageModelClient(action: ImageActionId): ModelSelection | null {
+export function resolveImageModelClient(
+  action: ImageActionId,
+  tier: ImageTier = DEFAULT_IMAGE_TIER,
+): ModelSelection | null {
   const cfg = useAppConfigStore.getState().modelConfig;
-  return resolveImageModel(cfg, action, availability());
+  return resolveImageModel(cfg, action, tier, availability());
 }
 
 /**
  * Build the `ResolvedModels` triple (text/image/anchor) used to gate the UI and
- * to fill job payloads. Returns null when no usable text+image model is
- * configured for an available provider.
+ * to fill job payloads for the given quality tier. Returns null when no usable
+ * text+image model is configured for an available provider.
  */
-export function resolveModelsClient(): ResolvedModels | null {
+export function resolveModelsClient(tier: ImageTier = DEFAULT_IMAGE_TIER): ResolvedModels | null {
   const cfg = useAppConfigStore.getState().modelConfig;
   const avail = availability();
   const textModel = resolveTextModel(cfg, "screenplay", avail);
-  const imageModel = resolveImageModel(cfg, "pageIllustration", avail);
+  const imageModel = resolveImageModel(cfg, "pageIllustration", tier, avail);
   if (!textModel || !imageModel) return null;
-  const anchorImageModel = resolveImageModel(cfg, "anchorImage", avail) ?? imageModel;
+  const anchorImageModel = resolveImageModel(cfg, "anchorImage", tier, avail) ?? imageModel;
   return { textModel, imageModel, anchorImageModel };
 }

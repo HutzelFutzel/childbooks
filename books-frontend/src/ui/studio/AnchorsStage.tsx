@@ -2,20 +2,31 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowRight,
+  BookOpen,
   Box,
   Loader2,
+  Lock,
   MapPin,
   Plus,
   Sparkles,
   User,
+  UserPlus,
+  Users,
   Wand2,
 } from "lucide-react";
+import { PipelineStepper, type PipelinePhase } from "../generation/PipelineStepper";
+import { GenerationOverlay } from "../generation/GenerationOverlay";
+import { InfoHint } from "../components/InfoHint";
+import { StickyActionBar } from "../components/StickyActionBar";
 import type { Anchor, AnchorType } from "../../core/types";
 import { analyzeCurrentStory, currentAnchorImage } from "../../state/ai";
 import { isAbortError } from "../../core/errors";
 import { useProjectsStore } from "../../state/projectsStore";
+import { useFeatureAllowed } from "../../state/subscriptionStore";
+import { useBillingUiStore } from "../../state/billingUiStore";
+import { ImportAnchorsDialog } from "./ImportAnchorsDialog";
 import { Button } from "../components/Button";
-import { SparkCost, useBatchEstimate } from "../layout/SparkCost";
+import { SparkEstimateCost, useImageBatchRange } from "../layout/SparkCost";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { useResolvedModels } from "../hooks/useResolvedModels";
 import { cn } from "../lib/cn";
@@ -28,6 +39,12 @@ const TYPE_ICON: Record<AnchorType, typeof User> = {
   place: MapPin,
   object: Box,
 };
+
+const ANALYSIS_PHASES: PipelinePhase[] = [
+  { id: "read", label: "Reading your story", icon: BookOpen },
+  { id: "cast", label: "Finding characters & places", icon: Users },
+  { id: "ready", label: "Getting your cast ready", icon: Sparkles },
+];
 
 function uid(): string {
   return Math.random().toString(36).slice(2, 10);
@@ -53,6 +70,15 @@ export function AnchorsStage() {
   const setAnchors = useProjectsStore((s) => s.setAnchors);
   const models = useResolvedModels();
   const [analyzing, setAnalyzing] = useState(false);
+  const [importing, setImporting] = useState(false);
+
+  // Character transfer: gateable feature — free until an admin lists it on a
+  // plan, then subscriber-only. Other projects with a cast must exist to show it.
+  const transferAllowed = useFeatureAllowed("characterTransfer");
+  const openPlans = useBillingUiStore((s) => s.openPlans);
+  const hasImportSources = useProjectsStore((s) =>
+    s.projects.some((p) => p.id !== project.id && (p.anchors?.length ?? 0) > 0),
+  );
 
   const anchors = (project.anchors ?? []).filter((a) => a.include);
   const ready = anchors.filter((a) => currentAnchorImage(a)).length;
@@ -62,7 +88,7 @@ export function AnchorsStage() {
   // simply has no characters/places to draw.
   const canProceed = allReady || (Boolean(project.analysis) && anchors.length === 0);
 
-  const batchCost = useBatchEstimate([
+  const batchRange = useImageBatchRange([
     { action: "anchorImage", count: Math.max(0, anchors.length - ready) },
   ]);
 
@@ -147,12 +173,13 @@ export function AnchorsStage() {
       </header>
 
       {analysisPending ? (
-        <div className="flex flex-col items-center gap-3 rounded-3xl border border-dashed border-ink-200 py-16 text-center">
-          <Loader2 className="size-6 animate-spin text-brand-500" />
-          <p className="text-sm font-medium text-ink-600">Reading your story…</p>
-          <p className="max-w-xs text-xs text-ink-400">
-            We're finding the characters & places. They'll appear here in a moment.
-          </p>
+        <div className="rounded-3xl border border-dashed border-ink-200 bg-aurora">
+          <PipelineStepper
+            title="Reading your story…"
+            subtitle="We're finding the characters & places in your tale. They'll appear here in a moment."
+            phases={ANALYSIS_PHASES}
+            activeIndex={0}
+          />
         </div>
       ) : (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
@@ -174,8 +201,26 @@ export function AnchorsStage() {
             <Plus className="size-6" />
             <span className="text-xs font-medium">Add character</span>
           </button>
+          {hasImportSources && (
+            <button
+              onClick={() => (transferAllowed ? setImporting(true) : openPlans())}
+              className="flex aspect-3/4 flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-ink-200 text-ink-400 transition hover:border-brand-300 hover:bg-brand-50/40 hover:text-brand-600"
+            >
+              {transferAllowed ? <UserPlus className="size-6" /> : <Lock className="size-6" />}
+              <span className="px-2 text-center text-xs font-medium">
+                Import from another book
+                {!transferAllowed && (
+                  <span className="mt-0.5 block text-[10px] font-normal text-ink-300">
+                    Subscriber perk
+                  </span>
+                )}
+              </span>
+            </button>
+          )}
         </div>
       )}
+
+      <ImportAnchorsDialog open={importing} onClose={() => setImporting(false)} project={project} />
 
       <div className="mt-4 flex justify-center">
         <button
@@ -187,34 +232,38 @@ export function AnchorsStage() {
         </button>
       </div>
 
-      <div className="sticky bottom-4 z-10 mt-8">
-        <div className="flex items-center justify-between gap-3 rounded-2xl border border-ink-100 bg-white/90 p-3 shadow-lifted backdrop-blur">
-          <p className="pl-2 text-xs text-ink-400">
-            <span className="font-semibold text-ink-600">{ready}</span> of{" "}
-            <span className="font-semibold text-ink-600">{anchors.length}</span> references ready
-          </p>
-          {canProceed ? (
-            <Button
-              size="lg"
-              rightIcon={<ArrowRight className="size-5" />}
-              onClick={() => setStep("edit")}
-            >
-              Design the pages
-            </Button>
-          ) : (
-            <Button
-              size="lg"
-              loading={busy}
-              disabled={anchors.length === 0}
-              leftIcon={!busy ? <Sparkles className="size-5" /> : undefined}
-              onClick={() => void generateAll()}
-            >
-              {busy ? "Creating…" : "Create all references"}
-              {!busy && <SparkCost n={batchCost} />}
-            </Button>
-          )}
-        </div>
-      </div>
+      <StickyActionBar
+        hint={
+          <span className="flex items-center gap-1">
+            <span>
+              <span className="font-semibold text-ink-600">{ready}</span> of{" "}
+              <span className="font-semibold text-ink-600">{anchors.length}</span> references ready
+            </span>
+            <InfoHint topic="generationTime" />
+          </span>
+        }
+      >
+        {canProceed ? (
+          <Button
+            size="lg"
+            rightIcon={<ArrowRight className="size-5" />}
+            onClick={() => setStep("edit")}
+          >
+            Design the pages
+          </Button>
+        ) : (
+          <Button
+            size="lg"
+            loading={busy}
+            disabled={anchors.length === 0}
+            leftIcon={!busy ? <Sparkles className="size-5" /> : undefined}
+            onClick={() => void generateAll()}
+          >
+            {busy ? "Creating…" : "Create all references"}
+            {!busy && <SparkEstimateCost range={batchRange} />}
+          </Button>
+        )}
+      </StickyActionBar>
     </div>
   );
 }
@@ -250,7 +299,7 @@ function AnchorCard({
     >
       <span className="relative flex flex-1 items-center justify-center overflow-hidden">
         {generating ? (
-          <Loader2 className="size-6 animate-spin text-brand-500" />
+          <GenerationOverlay action="anchorImage" compact />
         ) : url ? (
           <img src={url} alt={anchor.name} className="size-full object-cover" />
         ) : (

@@ -27,6 +27,20 @@ export function RelationsEditor({
   const related = new Set(anchor.relatedIds ?? []);
   const suggestions = suggestLinkedAnchors(anchor, all);
 
+  // Containment is limited to ONE level: nesting a parent inside another parent
+  // (grandchildren) can't be rendered faithfully — the model would have to match
+  // a reference-inside-a-reference. Chips that would create depth 2 are
+  // disabled with an explanation (already-selected ones stay removable).
+  const isContainedElsewhere = others.some((o) => (o.containedIds ?? []).includes(anchor.id));
+  const containDisabledReason = (o: Anchor): string | null => {
+    if (contained.has(o.id)) return null; // always allow unselecting
+    if ((o.containedIds ?? []).length > 0)
+      return `${o.name} already contains other subjects — nested containers can't be matched reliably.`;
+    if (isContainedElsewhere)
+      return `${anchor.name} is itself contained in another subject — only one level of nesting is supported.`;
+    return null;
+  };
+
   function toggle(field: RelField, id: string) {
     const set = new Set(anchor[field] ?? []);
     if (set.has(id)) set.delete(id);
@@ -55,7 +69,7 @@ export function RelationsEditor({
             {suggestions.map((s) => (
               <div key={s.id} className="flex items-center overflow-hidden rounded-md border border-brand-200 bg-white text-xs">
                 <span className="px-2 py-1 font-medium text-ink-700">{s.name}</span>
-                {canContain && s.type !== "character" && (
+                {canContain && s.type !== "character" && !containDisabledReason(s) && (
                   <button
                     type="button"
                     onClick={() => addSuggestion("containedIds", s.id)}
@@ -80,13 +94,22 @@ export function RelationsEditor({
       )}
 
       {canContain && (
-        <RelationGroup
-          label="Contains"
-          hint="Subjects physically inside this one (drawn here, matched exactly)."
-          options={others}
-          selected={contained}
-          onToggle={(id) => toggle("containedIds", id)}
-        />
+        <>
+          <RelationGroup
+            label="Contains"
+            hint="Subjects physically inside this one (drawn here, matched exactly)."
+            options={others}
+            selected={contained}
+            onToggle={(id) => toggle("containedIds", id)}
+            disabledReason={containDisabledReason}
+          />
+          {contained.size > 3 && (
+            <p className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] leading-relaxed text-amber-700">
+              With more than 3 embedded subjects, each one gets matched less accurately. For best
+              results keep the 2–3 most important ones here and describe the rest in the text.
+            </p>
+          )}
+        </>
       )}
 
       <RelationGroup
@@ -106,12 +129,15 @@ function RelationGroup({
   options,
   selected,
   onToggle,
+  disabledReason,
 }: {
   label: string;
   hint: string;
   options: Anchor[];
   selected: Set<string>;
   onToggle: (id: string) => void;
+  /** When set and returning a string, that chip is disabled with the reason as tooltip. */
+  disabledReason?: (option: Anchor) => string | null;
 }) {
   return (
     <div>
@@ -120,15 +146,20 @@ function RelationGroup({
       <div className="flex flex-wrap gap-1.5">
         {options.map((o) => {
           const on = selected.has(o.id);
+          const reason = disabledReason?.(o) ?? null;
           return (
             <button
               key={o.id}
               type="button"
+              disabled={Boolean(reason)}
+              title={reason ?? undefined}
               onClick={() => onToggle(o.id)}
               className={`flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition ${
                 on
                   ? "border-brand-400 bg-brand-100 text-brand-700"
-                  : "border-ink-200 text-ink-500 hover:border-ink-300"
+                  : reason
+                    ? "cursor-not-allowed border-ink-100 text-ink-300"
+                    : "border-ink-200 text-ink-500 hover:border-ink-300"
               }`}
             >
               {!on && <Plus className="size-3" />}

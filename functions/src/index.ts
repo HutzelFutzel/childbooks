@@ -22,11 +22,20 @@ ensureAdmin();
 
 setGlobalOptions({ region: "us-central1", maxInstances: 40 });
 
-// Firestore-triggered generation worker (users/{uid}/jobs/{jobId}).
-export { onGenerationJob } from "./jobs";
+// Generation fan-out: the Firestore-triggered enqueuer that expands a job
+// (users/{uid}/jobs/{jobId}) into a Cloud Tasks graph, the per-task worker that
+// renders one unit, and the scheduled reaper that re-drives stalled jobs.
+export { onGenerationJob, runFanTask, reapStuckJobs } from "./jobs";
 
 // Scheduled cleanup of stale anonymous (guest) accounts + their data.
 export { cleanupAnonymousUsers } from "./cleanup";
+
+// Scheduled retry of paid orders whose print placement failed.
+export { retryFulfillments } from "./fulfillmentRetry";
+
+// Daily import of Firebase/GCP spend into the finance stream (BigQuery billing
+// export when configured, else a prorated monthly budget).
+export { importInfraCostsDaily } from "./infraCosts";
 
 // Auth blocking functions that log signup/login events for the admin dashboard.
 export { onBeforeCreate, onBeforeSignIn } from "./analyticsEvents";

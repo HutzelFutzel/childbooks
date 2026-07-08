@@ -16,6 +16,13 @@ import { defineSecret } from "firebase-functions/params";
 export const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 export const GOOGLE_API_KEY = defineSecret("GOOGLE_API_KEY");
 
+// ZeptoMail (Zoho's transactional email service). The send token authenticates
+// the send API; the webhook secret verifies incoming delivery/open/bounce
+// events. Both are environment-agnostic (one account), so they live in the
+// base secret set. Optional at runtime — email is a best-effort layer.
+export const ZEPTOMAIL_TOKEN = defineSecret("ZEPTOMAIL_TOKEN");
+export const ZEPTOMAIL_WEBHOOK_SECRET = defineSecret("ZEPTOMAIL_WEBHOOK_SECRET");
+
 // Lulu uses separate OAuth credentials per environment. `serverEnv` selects the
 // pair matching LULU_ENV; the legacy LULU_CLIENT_KEY/SECRET act as a fallback.
 export const LULU_SANDBOX_CLIENT_KEY = defineSecret("LULU_SANDBOX_CLIENT_KEY");
@@ -31,7 +38,7 @@ export const STRIPE_SANDBOX_WEBHOOK_SECRET = defineSecret("STRIPE_SANDBOX_WEBHOO
 export const STRIPE_LIVE_SECRET_KEY = defineSecret("STRIPE_LIVE_SECRET_KEY");
 export const STRIPE_LIVE_WEBHOOK_SECRET = defineSecret("STRIPE_LIVE_WEBHOOK_SECRET");
 
-const BASE_SECRETS = [OPENAI_API_KEY, GOOGLE_API_KEY];
+const BASE_SECRETS = [OPENAI_API_KEY, GOOGLE_API_KEY, ZEPTOMAIL_TOKEN, ZEPTOMAIL_WEBHOOK_SECRET];
 const SANDBOX_SECRETS = [
   LULU_SANDBOX_CLIENT_KEY,
   LULU_SANDBOX_CLIENT_SECRET,

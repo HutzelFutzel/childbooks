@@ -5,6 +5,7 @@
  */
 import { randomUUID } from "node:crypto";
 import { getApps, initializeApp } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 
 /**
@@ -39,6 +40,8 @@ export function storageBucketName(): string | undefined {
   return projectId ? `${projectId}.firebasestorage.app` : undefined;
 }
 
+let firestoreConfigured = false;
+
 export function ensureAdmin(): void {
   // Initialize with NO arguments so the Admin SDK picks up the full runtime
   // configuration (credentials, projectId, emulator wiring) from FIREBASE_CONFIG
@@ -46,6 +49,22 @@ export function ensureAdmin(): void {
   // call site (see `bucket()`), so we must NOT pass a partial options object here
   // — doing so suppresses the auto-config and breaks the default app.
   if (getApps().length === 0) initializeApp();
+
+  // Mirror the client's Firestore config (see `getFirebaseDb`): job documents
+  // embed rich snapshots (full project, resolved models, render results) whose
+  // optional fields are frequently `undefined` — e.g. a root anchor render has
+  // no `parentId`. Without this, the Admin SDK throws "Cannot use undefined as a
+  // Firestore value" on `.update()`/`.set()` and the whole job fails. Must be set
+  // once, before any Firestore access; every DB entry point calls `ensureAdmin`
+  // first, so this runs early enough.
+  if (!firestoreConfigured) {
+    firestoreConfigured = true;
+    try {
+      getFirestore().settings({ ignoreUndefinedProperties: true });
+    } catch {
+      // Firestore was already accessed/configured elsewhere — safe to ignore.
+    }
+  }
 }
 
 function bucket() {
@@ -68,6 +87,26 @@ export async function downloadBlobBase64(
   id: string,
 ): Promise<{ base64: string; mimeType: string }> {
   const file = bucket().file(blobPath(uid, id));
+  const [buf] = await file.download();
+  let mimeType = "image/png";
+  try {
+    const [meta] = await file.getMetadata();
+    if (meta.contentType) mimeType = meta.contentType;
+  } catch {
+    // Metadata is best-effort; the bytes are what matter.
+  }
+  return { base64: buf.toString("base64"), mimeType };
+}
+
+/**
+ * Download an object by its FULL storage path (not scoped to a user's blob
+ * space) as base64 + content type. Used for world-readable admin assets such as
+ * art-style example images under `public/artStyles/...`.
+ */
+export async function downloadPublicBase64(
+  storagePath: string,
+): Promise<{ base64: string; mimeType: string }> {
+  const file = bucket().file(storagePath);
   const [buf] = await file.download();
   let mimeType = "image/png";
   try {

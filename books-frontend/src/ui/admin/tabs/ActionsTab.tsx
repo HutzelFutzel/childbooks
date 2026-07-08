@@ -137,7 +137,7 @@ export function ActionsTab() {
             key={a.id}
             action={a}
             modality="image"
-            model={resolveImageModel(modelConfig, a.id as ImageActionId)}
+            model={resolveImageModel(modelConfig, a.id as ImageActionId, "premium")}
             modelCosts={modelCosts}
             sparks={sparks}
             publicPlans={publicPlans}

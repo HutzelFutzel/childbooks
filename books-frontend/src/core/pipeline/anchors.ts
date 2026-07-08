@@ -11,18 +11,10 @@ import type {
   ReferenceImage,
 } from "../providers/types";
 import { resolveArtStyleText } from "../prompts/style";
-import type { PromptContext } from "../prompts/context";
+import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
+import { renderSinglePrompt } from "../prompts/render";
 import type { Anchor, ArtStyleSelection } from "../types";
 import { withRetry } from "./retry";
-
-const ANGLE_HINT: Record<Anchor["type"], string> = {
-  character:
-    "full-body character reference sheet showing the same character from multiple angles (front, three-quarter, side, and back), consistent proportions and design",
-  place:
-    "environment reference sheet showing the SAME location from a few key viewpoints (wide establishing view and one or two closer angles). Every viewpoint must show the IDENTICAL space — identical architecture, furniture, wall décor, props, layout and color palette. Only the camera angle changes between views; never add, remove, move or alter any element from one view to another",
-  object:
-    "object reference sheet showing the SAME item from multiple angles (front, side, three-quarter). Keep identical shape, proportions, materials, markings and colors across every angle; only the viewpoint changes",
-};
 
 export interface BuildAnchorPromptInput {
   anchor: Anchor;
@@ -37,6 +29,12 @@ export interface BuildAnchorPromptInput {
    * never drawn as separate figures here.
    */
   relatedAnchors?: Anchor[];
+  /**
+   * Anchors the EDIT TEXT refers to ("make him the same age as Amanda"),
+   * detected by the mention resolver — no user tagging required. Injected as
+   * text context so the model can interpret the request; never drawn.
+   */
+  mentionedAnchors?: Anchor[];
   /** Optional extra instruction for an iteration (e.g. "make her smile"). */
   edit?: string;
   /**
@@ -45,6 +43,18 @@ export interface BuildAnchorPromptInput {
    * the description from scratch — which would re-assert removed features).
    */
   editFromImage?: boolean;
+  /**
+   * Whether an art-style exemplar is passed as the FIRST reference image (match
+   * its rendering style only, never its subjects/layout). Not used for
+   * edit-from-image, which preserves the existing sheet's style.
+   */
+  hasStyleRef?: boolean;
+  /**
+   * Ordered legend of the attached reference images, e.g.
+   * `(1) an art-style reference…, (2) Hospital bed (must match…)`. Lets models
+   * without per-image labels (OpenAI) bind each image to its purpose.
+   */
+  legend?: string;
   /** Admin prompt overlays (art-style descriptions). */
   prompts?: PromptContext;
 }
@@ -56,63 +66,73 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
     artStyle,
     containedAnchors = [],
     relatedAnchors = [],
+    mentionedAnchors = [],
     edit,
     editFromImage = false,
+    hasStyleRef = false,
+    legend,
     prompts,
   } = input;
+  const config = resolvePromptsConfig(prompts);
+  const isEdit = Boolean(edit?.trim());
+  const listOf = (arr: Anchor[]) => arr.map((r) => `${r.name} (${r.description})`).join("; ");
 
   // Edit-from-image: keep the current image as the source of truth and apply
   // ONLY the requested change. We deliberately omit the full description and
   // style text (both are already baked into the provided image) so they can't
-  // reintroduce features the user just removed.
-  if (edit?.trim() && editFromImage) {
+  // reintroduce features the user just removed. Mentioned anchors ARE included
+  // (as text) — the change itself may depend on them ("same age as Amanda").
+  if (isEdit && editFromImage) {
     const identity =
       anchor.type === "character"
         ? "the same character — identical face, hair, body, colors and outfit"
         : "the same item — identical shapes, proportions, materials, markings and colors";
-    const parts = [
-      `Edit the provided reference sheet image of "${anchor.name}".`,
-      `Apply ONLY this change: ${edit.trim()}.`,
-      `Keep everything else exactly the same: ${identity}, the multi-angle layout, framing, lighting and the plain white background. Do not add, remove, restyle or redesign anything the change does not explicitly require.`,
-      "No text, labels or watermark.",
-    ];
-    return parts.filter(Boolean).join(" ");
+    return renderSinglePrompt(config, "anchorImage/editFromImage", {
+      vars: {
+        anchorName: anchor.name,
+        edit: edit!.trim(),
+        identity,
+        mentionedList: listOf(mentionedAnchors),
+      },
+      flags: { hasMentioned: mentionedAnchors.length > 0 },
+    });
   }
 
   const styleText = resolveArtStyleText(artStyle, prompts);
-  const parts = [
-    `${ANGLE_HINT[anchor.type]} of "${anchor.name}".`,
-    anchor.description.trim(),
-  ];
-  if (anchor.userGuidance?.trim()) parts.push(anchor.userGuidance.trim());
+  // A character can't physically "contain" another anchor. Contained subjects
+  // are drawn; related subjects are context only (links are user-declared).
+  const contained = anchor.type === "character" ? [] : containedAnchors;
+  // Mentioned anchors already covered by an explicit relation would be
+  // duplicated context — only inject the untagged ones.
+  const covered = new Set([...contained, ...relatedAnchors].map((a) => a.id));
+  const mentioned = mentionedAnchors.filter((a) => !covered.has(a.id));
 
-  // Explicit relationship handling (links are user-declared by id, not inferred
-  // from text). Contained subjects are drawn; related subjects are context only.
-  const contained =
-    anchor.type === "character"
-      ? [] // a character can't physically "contain" another anchor
-      : containedAnchors;
-  if (contained.length > 0) {
-    parts.push(
-      `This ${anchor.type} contains the following, which must look EXACTLY like their reference images (same shape, materials, colors and details): ` +
-        contained.map((r) => `${r.name} (${r.description})`).join("; ") +
-        ".",
-    );
-  }
-  if (relatedAnchors.length > 0) {
-    parts.push(
-      "Related subjects for resemblance/context only — match the described relationships (e.g. family traits) but do NOT draw them as separate figures in this sheet: " +
-        relatedAnchors.map((r) => `${r.name} (${r.description})`).join("; ") +
-        ".",
-    );
-  }
-
-  parts.push(`Art style: ${styleText}.`);
-  parts.push(
-    "Plain pure-white seamless background, even soft studio lighting, no text, no labels, no watermark, clearly separated angles.",
-  );
-  if (edit?.trim()) parts.push(`Revision: ${edit.trim()}.`);
-  return parts.filter(Boolean).join(" ");
+  return renderSinglePrompt(config, "anchorImage/default", {
+    vars: {
+      anchorName: anchor.name,
+      anchorType: anchor.type,
+      description: anchor.description.trim(),
+      userGuidance: anchor.userGuidance?.trim() ?? "",
+      containedList: listOf(contained),
+      relatedList: listOf(relatedAnchors),
+      mentionedList: listOf(mentioned),
+      artStyle: styleText,
+      edit: edit?.trim() ?? "",
+      legend: legend ?? "",
+    },
+    flags: {
+      isCharacter: anchor.type === "character",
+      isPlace: anchor.type === "place",
+      isObject: anchor.type === "object",
+      hasUserGuidance: Boolean(anchor.userGuidance?.trim()),
+      hasContained: contained.length > 0,
+      hasRelated: relatedAnchors.length > 0,
+      hasMentioned: mentioned.length > 0,
+      hasStyleRef,
+      hasEdit: isEdit,
+      hasLegend: Boolean(legend?.trim()),
+    },
+  });
 }
 
 export interface GenerateAnchorImageInput {
@@ -130,6 +150,7 @@ export async function generateAnchorImage(
 ): Promise<ImageResult> {
   const { prompt, creds, model, references, signal, providerId } = input;
   const provider = getImageProvider(providerId);
+  // One retry only — see generateIllustrationImage for the rationale.
   return withRetry(
     () =>
       provider.generateImage(creds, {
@@ -139,6 +160,6 @@ export async function generateAnchorImage(
         references,
         signal,
       }),
-    { signal },
+    { retries: 1, signal },
   );
 }

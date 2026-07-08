@@ -246,6 +246,9 @@ export const googleImageProvider: ImageProvider = {
       if (ref.role === "composition") {
         label =
           "PREVIOUS version of this page — keep its exact composition, layout, poses, positions, framing, background and colors; only update what the instruction says:";
+      } else if (ref.role === "style") {
+        label =
+          "ART-STYLE reference — copy ONLY its visual style: medium, rendering technique, linework, shading, color palette, texture and finish. Do NOT copy its subjects, characters, objects, composition or layout:";
       } else if (ref.role === "relation") {
         label = `Context reference — this is ${ref.label ?? "a related subject"}, mentioned in the instructions. Match it where the instruction relates this subject to it (e.g. shared traits, or an item that appears in the scene):`;
       } else {

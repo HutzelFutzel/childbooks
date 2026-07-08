@@ -35,6 +35,8 @@ import {
   type PlansConfig,
   type PublicPlansConfig,
 } from "../../books-frontend/src/core/config/plans";
+import { featureAllowed } from "../../books-frontend/src/core/config/features";
+import { EMPTY_ENTITLEMENTS } from "../../books-frontend/src/core/config/entitlements";
 
 const PRIVATE_DOC = "adminSettings/plans";
 const PUBLIC_DOC = "appConfig/plans";
@@ -264,6 +266,22 @@ export async function resolveActivePlan(uid: string): Promise<PlanDefinition | n
   const config = await readConfig();
   const priceId = await activePriceId(uid);
   return resolvePlanByPriceId(config, priceId) ?? freePlan(config);
+}
+
+/**
+ * Whether a user may use a gateable feature (see `core/config/features`): free
+ * for everyone until an admin lists the id on an active plan, then only plans
+ * carrying it qualify. Fails OPEN on lookup errors — a config hiccup must never
+ * hard-block generation.
+ */
+export async function featureAllowedForUser(uid: string, featureId: string): Promise<boolean> {
+  try {
+    const config = await readConfig();
+    const plan = await resolveActivePlan(uid);
+    return featureAllowed(config.plans, plan?.entitlements ?? EMPTY_ENTITLEMENTS, featureId);
+  } catch {
+    return true;
+  }
 }
 
 /** The per-action Spark price multiplier for a user's plan (1 when none/unset). */

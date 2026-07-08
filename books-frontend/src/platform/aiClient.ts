@@ -10,8 +10,13 @@
 import { backendFetch } from "./backend";
 import { useSparksUiStore } from "../state/sparksUiStore";
 import type { Anchor, Project, ScreenplayDoc } from "../core/types";
+import { slimProjectForRender } from "../core/book/slimProject";
 import type { AnchorRender, AnchorRunOptions } from "../core/pipeline/anchorRun";
 import type { IllustrationRender, IllustrationRunOptions } from "../core/pipeline/illustrationRun";
+import { IntentAmbiguousError } from "../core/pipeline/intentResolve";
+import type { ImageTier } from "../core/config/modelConfig";
+
+export { IntentAmbiguousError };
 
 /** Thrown when the backend rejects an AI action for lack of Sparks (HTTP 402). */
 export class InsufficientSparksError extends Error {
@@ -26,7 +31,13 @@ export class InsufficientSparksError extends Error {
 }
 
 interface ErrorBody {
-  error?: { message?: string; code?: string; balance?: number; needed?: number };
+  error?: {
+    message?: string;
+    code?: string;
+    balance?: number;
+    needed?: number;
+    candidates?: { anchorId: string; name: string; brief?: string }[];
+  };
 }
 
 async function postAi<T>(path: string, body: unknown, signal?: AbortSignal): Promise<T> {
@@ -44,6 +55,9 @@ async function postAi<T>(path: string, body: unknown, signal?: AbortSignal): Pro
       parsed = null;
     }
     const message = parsed?.error?.message ?? `Request failed (${res.status}).`;
+    if (res.status === 409 && parsed?.error?.code === "intent_ambiguous") {
+      throw new IntentAmbiguousError(message, parsed.error.candidates ?? []);
+    }
     // Out of Sparks → pop the wallet (pre-suggesting a pack that covers the
     // shortfall) so the user can fix it in one click, then surface a typed error.
     if (res.status === 402 && parsed?.error?.code === "insufficient_sparks") {
@@ -70,7 +84,8 @@ export interface AnalyzeResult {
 }
 
 export function analyzeStoryRemote(project: Project, signal?: AbortSignal): Promise<AnalyzeResult> {
-  return postAi<AnalyzeResult>("/ai/analyze", { project }, signal);
+  // Text-only: needs config.storyText; drop all version history/design.
+  return postAi<AnalyzeResult>("/ai/analyze", { project: slimProjectForRender(project, {}) }, signal);
 }
 
 export async function anchorDescriptionRemote(
@@ -80,7 +95,7 @@ export async function anchorDescriptionRemote(
 ): Promise<string> {
   const { description } = await postAi<{ description: string }>(
     "/ai/anchor-description",
-    { project, anchorId },
+    { project: slimProjectForRender(project, {}), anchorId },
     signal,
   );
   return description;
@@ -92,17 +107,28 @@ export function screenplayRemote(
   previous?: ScreenplayDoc,
   signal?: AbortSignal,
 ): Promise<ScreenplayDoc> {
-  return postAi<ScreenplayDoc>("/ai/screenplay", { project, edit, previous }, signal);
+  // Reads anchors' text + config only; the previous screenplay is sent separately.
+  return postAi<ScreenplayDoc>(
+    "/ai/screenplay",
+    { project: slimProjectForRender(project, {}), edit, previous },
+    signal,
+  );
 }
 
 export function anchorImageRemote(
   project: Project,
   anchorId: string,
   options: AnchorRunOptions,
+  tier: ImageTier,
 ): Promise<AnchorRender> {
+  // Image render: keep anchors' active images (+ this anchor's branch point).
+  const slim = slimProjectForRender(project, {
+    keepAnchorVersions: true,
+    anchorTargets: [{ id: anchorId, nodeId: options.fromNodeId }],
+  });
   return postAi<AnchorRender>(
     "/ai/anchor-image",
-    { project, anchorId, options: serializableOptions(options) },
+    { project: slim, anchorId, options: serializableOptions(options), tier },
     options.signal,
   );
 }
@@ -111,10 +137,18 @@ export function illustrationRemote(
   project: Project,
   spreadId: string,
   options: IllustrationRunOptions,
+  tier: ImageTier,
 ): Promise<IllustrationRender | null> {
+  // Illustration render: needs the screenplay (to resolve the spread/cover), the
+  // anchors' active images, and this spread's illustration tree (+ branch point).
+  const slim = slimProjectForRender(project, {
+    keepScreenplay: true,
+    keepAnchorVersions: true,
+    illustrationTargets: [{ id: spreadId, nodeId: options.fromNodeId }],
+  });
   return postAi<IllustrationRender | null>(
     "/ai/illustration",
-    { project, spreadId, options: serializableOptions(options) },
+    { project: slim, spreadId, options: serializableOptions(options), tier },
     options.signal,
   );
 }

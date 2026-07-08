@@ -73,8 +73,10 @@ export interface ReferenceImage {
    *   - "composition": the previous/current page, used only for layout & pose.
    *   - "relation": a related subject for context (a relative to resemble, or an
    *     object/place contained in the subject being drawn).
+   *   - "style": an art-style exemplar — only its rendering technique/palette/
+   *     texture should be copied, never its subjects, layout or composition.
    */
-  role?: "subject" | "composition" | "relation";
+  role?: "subject" | "composition" | "relation" | "style";
 }
 
 export interface ImageRequest {

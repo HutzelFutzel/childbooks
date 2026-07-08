@@ -33,6 +33,18 @@ import {
   type ModelCostTable,
 } from "../../books-frontend/src/core/config/modelCosts";
 import {
+  appendCostSample,
+  normalizeImageCostStats,
+  type ImageCostStats,
+} from "../../books-frontend/src/core/config/imageCostStats";
+import {
+  appendLatencySample,
+  normalizeLatencyStats,
+  type LatencyStats,
+} from "../../books-frontend/src/core/config/latencyStats";
+import type { ImageActionId } from "../../books-frontend/src/core/ai/actions";
+import type { ImageTier } from "../../books-frontend/src/core/config/modelConfig";
+import {
   createDefaultPricingSettings,
   normalizePricingSettings,
   pricingSettingsSchema,
@@ -73,6 +85,25 @@ import {
   type SiteTextSlot,
 } from "../../books-frontend/src/core/config/siteContent";
 import type { PromptContext } from "../../books-frontend/src/core/prompts/context";
+import {
+  createDefaultPromptsConfig,
+  lintPromptsConfig,
+  normalizePromptsConfig,
+  promptsConfigSchema,
+  type PromptsConfig,
+} from "../../books-frontend/src/core/config/prompts";
+import {
+  createDefaultEmailConfig,
+  emailConfigSchema,
+  normalizeEmailConfig,
+  type EmailConfig,
+} from "../../books-frontend/src/core/config/emailConfig";
+import {
+  appendEmailEvent,
+  normalizeEmailStats,
+  type EmailEventInput,
+  type EmailStats,
+} from "../../books-frontend/src/core/config/emailStats";
 
 const MODELS_DOC = "appConfig/models";
 const ART_STYLES_DOC = "appConfig/artStyles";
@@ -84,6 +115,11 @@ const BRANDING_DOC = "appConfig/branding";
 const SEO_DOC = "appConfig/seo";
 const SITE_IMAGES_DOC = "appConfig/siteImages";
 const SITE_CONTENT_DOC = "appConfig/siteContent";
+const PROMPTS_DOC = "appConfig/prompts";
+const IMAGE_COST_STATS_DOC = "appConfig/imageCostStats";
+const LATENCY_STATS_DOC = "appConfig/latencyStats";
+const EMAIL_CONFIG_DOC = "appConfig/emailConfig";
+const EMAIL_STATS_DOC = "appConfig/emailStats";
 
 const CACHE_TTL_MS = 30_000;
 
@@ -145,14 +181,124 @@ export function getSiteImagesConfig(): Promise<SiteImagesConfig> {
 export function getSiteContentConfig(): Promise<SiteContentConfig> {
   return readDoc(SITE_CONTENT_DOC, normalizeSiteContentConfig);
 }
+export function getPromptsConfig(): Promise<PromptsConfig> {
+  return readDoc(PROMPTS_DOC, normalizePromptsConfig);
+}
+export function getImageCostStats(): Promise<ImageCostStats> {
+  return readDoc(IMAGE_COST_STATS_DOC, normalizeImageCostStats);
+}
+
+export function getLatencyStats(): Promise<LatencyStats> {
+  return readDoc(LATENCY_STATS_DOC, normalizeLatencyStats);
+}
+
+/**
+ * Append measured durations to the world-readable rolling window that powers
+ * client time estimates. One transaction for the whole batch (a task usually
+ * records its fine bucket + the coarse fallback bucket together). Best-effort
+ * at the call site — telemetry must never break or slow generation.
+ */
+export async function recordLatencySamples(
+  entries: { key: string; ms: number }[],
+): Promise<void> {
+  const valid = entries.filter((e) => Number.isFinite(e.ms) && e.ms >= 0);
+  if (valid.length === 0) return;
+  ensureAdmin();
+  const db = getFirestore();
+  const ref = db.doc(LATENCY_STATS_DOC);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    let current = normalizeLatencyStats(snap.exists ? snap.data() : undefined);
+    for (const { key, ms } of valid) current = appendLatencySample(current, key, ms);
+    tx.set(ref, current, { merge: false });
+  });
+  cache.delete(LATENCY_STATS_DOC);
+}
+
+/**
+ * Append one measured call cost to the world-readable rolling window used for
+ * Spark estimate ranges. Transactional so concurrent renders can't clobber the
+ * window; best-effort at the call site (never blocks generation).
+ */
+export async function recordImageCostSample(
+  action: ImageActionId,
+  tier: ImageTier,
+  costUsd: number,
+  modelKey?: string,
+): Promise<void> {
+  ensureAdmin();
+  const db = getFirestore();
+  const ref = db.doc(IMAGE_COST_STATS_DOC);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const current = normalizeImageCostStats(snap.exists ? snap.data() : undefined);
+    tx.set(ref, appendCostSample(current, action, tier, costUsd, modelKey), { merge: false });
+  });
+  cache.delete(IMAGE_COST_STATS_DOC);
+}
+
+// ---- Email (system + marketing) --------------------------------------------
+
+export function getEmailConfig(): Promise<EmailConfig> {
+  return readDoc(EMAIL_CONFIG_DOC, normalizeEmailConfig);
+}
+
+export function getEmailStats(): Promise<EmailStats> {
+  return readDoc(EMAIL_STATS_DOC, normalizeEmailStats);
+}
+
+export function defaultEmailConfig(): EmailConfig {
+  return createDefaultEmailConfig();
+}
+
+/** Validate + persist the email config (world-readable appConfig doc). */
+export async function saveEmailConfig(input: unknown): Promise<EmailConfig> {
+  const parsed = emailConfigSchema.parse(input);
+  const normalized = normalizeEmailConfig({ ...parsed, updatedAt: Date.now() });
+  await writeDoc(EMAIL_CONFIG_DOC, normalized);
+  return normalized;
+}
+
+/**
+ * Append one or more delivery events to the world-readable email stats window.
+ * One transaction for the whole batch. Best-effort at the call site — email
+ * telemetry must never break a send or a webhook ack.
+ */
+export async function recordEmailEvents(entries: EmailEventInput[]): Promise<void> {
+  if (entries.length === 0) return;
+  ensureAdmin();
+  const db = getFirestore();
+  const ref = db.doc(EMAIL_STATS_DOC);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    let current = normalizeEmailStats(snap.exists ? snap.data() : undefined);
+    for (const e of entries) current = appendEmailEvent(current, e);
+    tx.set(ref, current, { merge: false });
+  });
+  cache.delete(EMAIL_STATS_DOC);
+}
 
 /** Admin-managed prompt overlays used by text and image pipelines. */
 export async function loadPromptContext(): Promise<PromptContext> {
-  const [artStyles, ageWriting] = await Promise.all([
+  const [artStyles, ageWriting, templates] = await Promise.all([
     getArtStylesConfig(),
     getAgeWritingConfig(),
+    getPromptsConfig(),
   ]);
-  return { artStyles, ageWriting };
+  return { artStyles, ageWriting, templates };
+}
+
+/** Validate + persist the prompt templates (world-readable appConfig doc). */
+export async function savePromptsConfig(input: unknown): Promise<PromptsConfig> {
+  const parsed = promptsConfigSchema.parse(input);
+  const normalized = normalizePromptsConfig(parsed);
+  lintPromptsConfig(normalized);
+  await writeDoc(PROMPTS_DOC, normalized);
+  return normalized;
+}
+
+export function defaultPromptsConfig(): PromptsConfig {
+  return createDefaultPromptsConfig();
 }
 
 export function defaultModelConfig(): ModelConfig {

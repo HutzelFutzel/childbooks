@@ -206,6 +206,23 @@ export interface TaxCurrencyPolicy {
 }
 
 /**
+ * Digital-edition (ebook) sales — fully admin-configurable. The ebook is the
+ * customer's own finished book as a downloadable PDF; near-zero marginal cost,
+ * so it's priced flat per currency. Optional bundle discount rewards buyers who
+ * already ordered a print copy of the SAME project.
+ */
+export interface EbookSettings {
+  /** Master switch: hides the ebook option everywhere when false. */
+  enabled: boolean;
+  /** Sticker price per currency (major units). Missing/0 ⇒ not sold in that currency. */
+  prices: Record<CurrencyCode, number>;
+  /** % off the ebook when the buyer already bought a print copy of the same project. */
+  printBundleDiscountPct: number;
+  /** Stripe product tax code for digital books (drives digital-goods VAT rules). */
+  taxCode?: string;
+}
+
+/**
  * Catalog-wide pricing economics. One document for all products. Editing this
  * does NOT change any product's entered prices — only how margin is computed and
  * how/whether tax is applied.
@@ -232,6 +249,8 @@ export interface PricingSettings {
     bookTaxCode?: string;
     perCurrency: Record<CurrencyCode, TaxCurrencyPolicy>;
   };
+  /** Digital-edition sales (disabled by default). */
+  ebook: EbookSettings;
 }
 
 // ---- Shipping policy + geo restrictions ------------------------------------
@@ -390,6 +409,18 @@ export function createDefaultPricingSettings(): PricingSettings {
         GBP: { behavior: "inclusive", assumedRatePct: 0 },
       },
     },
+    ebook: createDefaultEbookSettings(),
+  };
+}
+
+/** Default ebook settings: off, sensibly priced once switched on. */
+export function createDefaultEbookSettings(): EbookSettings {
+  return {
+    enabled: false,
+    prices: { USD: 9.99, EUR: 9.99, GBP: 8.99 },
+    printBundleDiscountPct: 50,
+    // Stripe tax code for downloadable digital books.
+    taxCode: "txcd_10302000",
   };
 }
 
@@ -525,6 +556,28 @@ export function normalizePricingSettings(input: unknown): PricingSettings {
       bookTaxCode: p.tax?.bookTaxCode ?? def.tax.bookTaxCode,
       perCurrency: { ...def.tax.perCurrency, ...p.tax?.perCurrency },
     },
+    ebook: normalizeEbookSettings(p.ebook),
+  };
+}
+
+/** Coerce a stored (possibly missing) ebook blob into safe {@link EbookSettings}. */
+export function normalizeEbookSettings(raw: unknown): EbookSettings {
+  const def = createDefaultEbookSettings();
+  const e = (raw ?? {}) as Partial<EbookSettings>;
+  const prices: Record<CurrencyCode, number> = { ...def.prices };
+  if (e.prices && typeof e.prices === "object") {
+    for (const [cur, v] of Object.entries(e.prices)) {
+      if (typeof v === "number" && v >= 0) prices[cur] = v;
+    }
+  }
+  return {
+    enabled: e.enabled === true,
+    prices,
+    printBundleDiscountPct:
+      typeof e.printBundleDiscountPct === "number"
+        ? Math.max(0, Math.min(100, e.printBundleDiscountPct))
+        : def.printBundleDiscountPct,
+    taxCode: typeof e.taxCode === "string" && e.taxCode ? e.taxCode : def.taxCode,
   };
 }
 
@@ -693,6 +746,14 @@ export const pricingSettingsSchema = z.object({
       z.object({ behavior: z.enum(["inclusive", "exclusive"]), assumedRatePct: z.number().min(0).max(100) }),
     ),
   }),
+  ebook: z
+    .object({
+      enabled: z.boolean(),
+      prices: z.record(z.string(), z.number().nonnegative()),
+      printBundleDiscountPct: z.number().min(0).max(100),
+      taxCode: z.string().optional(),
+    })
+    .optional(),
 });
 
 const geoMatchSchema = z.object({ country: z.string().optional(), region: z.string().optional() });

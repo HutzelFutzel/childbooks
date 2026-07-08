@@ -22,6 +22,7 @@ import {
   resolveTextAction,
   ServiceUnavailable,
 } from "./modelResolve";
+import { normalizeImageTier } from "../../books-frontend/src/core/config/modelConfig";
 import { analyzeStory, generateAnchorDescription } from "../../books-frontend/src/core/pipeline/analysis";
 import { generateScreenplay } from "../../books-frontend/src/core/pipeline/screenplay";
 import { renderAnchor, type AnchorRunOptions } from "../../books-frontend/src/core/pipeline/anchorRun";
@@ -29,7 +30,11 @@ import {
   renderIllustration,
   type IllustrationRunOptions,
 } from "../../books-frontend/src/core/pipeline/illustrationRun";
+import { IntentAmbiguousError } from "../../books-frontend/src/core/pipeline/intentResolve";
 import { loadPromptContext } from "./appConfig";
+import { latencyKindOf, recordTaskLatency } from "./latency";
+import { containedAnchorsFor } from "../../books-frontend/src/core/book/anchorGraph";
+import { effectiveAnchorIds } from "../../books-frontend/src/core/book/anchorRefs";
 import {
   COVER_BACK_ID,
   COVER_FRONT_ID,
@@ -66,6 +71,16 @@ function sendError(res: Response, err: unknown): void {
     });
     return;
   }
+  if (err instanceof IntentAmbiguousError) {
+    res.status(409).json({
+      error: {
+        message: err.message,
+        code: "intent_ambiguous",
+        candidates: err.candidates,
+      },
+    });
+    return;
+  }
   res.status(500).json({ error: { message: (err as Error)?.message ?? "Generation failed." } });
 }
 
@@ -82,7 +97,7 @@ export function registerAiRoutes(app: Express): void {
     try {
       const { project } = req.body as { project: Project };
       const [model, prompts] = await Promise.all([resolveText("storyAnalysis"), loadPromptContext()]);
-      const { value, events } = await withUsage(() =>
+      const { value, events, stats } = await withUsage(() =>
         analyzeStory({
           story: project.config.storyText,
           config: withTextModel(project.config, model),
@@ -91,7 +106,10 @@ export function registerAiRoutes(app: Express): void {
           prompts,
         }),
       );
-      await recordUsage(req.uid!, "storyAnalysis", events);
+      await recordUsage(req.uid!, "storyAnalysis", events, undefined, {
+        projectId: project.id,
+        stats,
+      });
       res.json({ ...value, model: model.id });
     } catch (err) {
       sendError(res, err);
@@ -108,7 +126,7 @@ export function registerAiRoutes(app: Express): void {
       }
       const model = await resolveText("anchorDescription");
       const prompts = await loadPromptContext();
-      const { value, events } = await withUsage(() =>
+      const { value, events, stats } = await withUsage(() =>
         generateAnchorDescription({
           story: project.config.storyText,
           config: withTextModel(project.config, model),
@@ -122,7 +140,10 @@ export function registerAiRoutes(app: Express): void {
           prompts,
         }),
       );
-      await recordUsage(req.uid!, "anchorDescription", events);
+      await recordUsage(req.uid!, "anchorDescription", events, undefined, {
+        projectId: project.id,
+        stats,
+      });
       res.json({ description: value });
     } catch (err) {
       sendError(res, err);
@@ -137,7 +158,7 @@ export function registerAiRoutes(app: Express): void {
         previous?: ScreenplayDoc;
       };
       const [model, prompts] = await Promise.all([resolveText("screenplay"), loadPromptContext()]);
-      const { value, events } = await withUsage(() =>
+      const { value, events, stats } = await withUsage(() =>
         generateScreenplay({
           config: withTextModel(project.config, model),
           anchors: project.anchors ?? [],
@@ -148,7 +169,10 @@ export function registerAiRoutes(app: Express): void {
           prompts,
         }),
       );
-      await recordUsage(req.uid!, "screenplay", events);
+      await recordUsage(req.uid!, "screenplay", events, undefined, {
+        projectId: project.id,
+        stats,
+      });
       res.json(value);
     } catch (err) {
       sendError(res, err);
@@ -159,27 +183,43 @@ export function registerAiRoutes(app: Express): void {
 
   app.post("/ai/anchor-image", json, async (req: AuthedRequest, res: Response) => {
     try {
-      const { project, anchorId, options } = req.body as {
+      const { project, anchorId, options, tier: rawTier } = req.body as {
         project: Project;
         anchorId: string;
         options?: AnchorRunOptions;
+        tier?: string;
       };
       const anchor = project.anchors?.find((a) => a.id === anchorId);
       if (!anchor) {
         res.status(400).json({ error: { message: "Anchor not found." } });
         return;
       }
-      await ensureAffordAction(req.uid!, "anchorImage");
+      const tier = normalizeImageTier(rawTier);
+      await ensureAffordAction(req.uid!, "anchorImage", tier);
       const [models, prompts] = await Promise.all([
-        resolveImageModels("anchorImage"),
+        resolveImageModels("anchorImage", tier),
         loadPromptContext(),
       ]);
       const env = backendPipelineEnv(req.uid!, models, prompts);
-      const { value, events } = await withUsage(() =>
+      const startedAt = Date.now();
+      const { value, events, stats } = await withUsage(() =>
         renderAnchor(project, anchor, options ?? {}, env),
       );
-      await recordUsage(req.uid!, "anchorImage", events);
-      await settleActionCost(req.uid!, "anchorImage", events);
+      const isAnchorEdit = typeof options?.edit === "string" && options.edit.trim().length > 0;
+      await recordUsage(req.uid!, "anchorImage", events, tier, {
+        projectId: project.id,
+        isEdit: isAnchorEdit,
+        stats,
+      });
+      await settleActionCost(req.uid!, "anchorImage", events, { projectId: project.id });
+      // Feed the rolling latency window that powers client time estimates.
+      await recordTaskLatency(
+        "anchorImage",
+        tier,
+        latencyKindOf(options),
+        containedAnchorsFor(anchor, project.anchors ?? []).length,
+        Date.now() - startedAt,
+      );
       res.json(value);
     } catch (err) {
       sendError(res, err);
@@ -188,10 +228,11 @@ export function registerAiRoutes(app: Express): void {
 
   app.post("/ai/illustration", json, async (req: AuthedRequest, res: Response) => {
     try {
-      const { project, spreadId, options } = req.body as {
+      const { project, spreadId, options, tier: rawTier } = req.body as {
         project: Project;
         spreadId: string;
         options?: IllustrationRunOptions;
+        tier?: string;
       };
       const spread = findSpread(project, spreadId);
       if (!spread) {
@@ -200,22 +241,39 @@ export function registerAiRoutes(app: Express): void {
       }
       const cover = isCoverId(spreadId);
       const action = cover ? "coverIllustration" : "pageIllustration";
+      const tier = normalizeImageTier(rawTier);
       // An "edit" is a re-roll carrying an instruction. These count against the
       // per-book edit quota (scoped to the project); fresh generations don't.
       const isEdit = typeof options?.edit === "string" && options.edit.trim().length > 0;
       if (isEdit) await ensureWithinQuota(req.uid!, "editsPerBook", project.id);
-      await ensureAffordAction(req.uid!, action);
+      await ensureAffordAction(req.uid!, action, tier);
       const [models, prompts] = await Promise.all([
-        resolveImageModels(cover ? "coverIllustration" : "pageIllustration"),
+        resolveImageModels(cover ? "coverIllustration" : "pageIllustration", tier),
         loadPromptContext(),
       ]);
       const env = backendPipelineEnv(req.uid!, models, prompts);
-      const { value, events } = await withUsage(() =>
+      const startedAt = Date.now();
+      const { value, events, stats } = await withUsage(() =>
         renderIllustration(project, spread, options ?? {}, env),
       );
-      await recordUsage(req.uid!, action, events);
-      await settleActionCost(req.uid!, action, events);
+      await recordUsage(req.uid!, action, events, tier, {
+        projectId: project.id,
+        isEdit: isEdit || Boolean(options?.mask),
+        stats,
+      });
+      await settleActionCost(req.uid!, action, events, { projectId: project.id });
       if (isEdit) await incrementQuota(req.uid!, "editsPerBook", project.id);
+      // Feed the rolling latency window that powers client time estimates.
+      // A manual mask is an edit for bucketing purposes.
+      if (value) {
+        await recordTaskLatency(
+          action,
+          tier,
+          options?.mask ? "edit" : latencyKindOf(options),
+          effectiveAnchorIds(project.anchors, spread).length,
+          Date.now() - startedAt,
+        );
+      }
       res.json(value);
     } catch (err) {
       sendError(res, err);

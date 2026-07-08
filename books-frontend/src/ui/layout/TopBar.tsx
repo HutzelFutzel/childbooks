@@ -24,7 +24,7 @@ export function TopBar({ center, left, right }: TopBarProps) {
             <img src={branding.logo.imageUrl} alt={branding.brandName} className="h-9 w-auto" />
           ) : (
             <>
-              <span className="flex size-9 items-center justify-center rounded-xl bg-brand-600 text-white shadow-soft">
+              <span className="flex size-9 items-center justify-center rounded-xl bg-brand-600 text-(--color-brand-foreground) shadow-soft">
                 {branding.icon?.imageUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img src={branding.icon.imageUrl} alt="" className="size-6 object-contain" />

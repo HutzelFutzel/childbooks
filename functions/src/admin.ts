@@ -15,6 +15,8 @@ import {
   getPricingSettings,
   getSeoConfig,
   getSparksConfig,
+  getEmailConfig,
+  saveEmailConfig,
   deleteBrandingAssetVersion,
   deleteWatermarkVersion,
   restoreBrandingAsset,
@@ -27,6 +29,7 @@ import {
   savePricingSettings,
   saveSeoConfig,
   saveSparksConfig,
+  savePromptsConfig,
   setArtStyleExample,
   setBrandingAsset,
   setBrandingWatermark,
@@ -81,6 +84,12 @@ import {
   type CostSuggestionResult,
   type RawBatchCostItem,
 } from "../../books-frontend/src/core/config/costSuggestion";
+import { sendTemplatedEmail } from "./email/service";
+import { emailConfigured } from "./email/sender";
+import {
+  EMAIL_TEMPLATE_REGISTRY,
+} from "../../books-frontend/src/core/email/registry";
+import { isEmailTemplateId } from "../../books-frontend/src/core/email/types";
 
 /** Official pricing pages. Overridable via env so a page move needs no code change. */
 const PRICING_URLS: Record<ProviderId, string> = {
@@ -279,6 +288,14 @@ export function registerAdminRoutes(app: Express): void {
   app.put("/admin/config/age-writing", json, async (req: Request, res: Response) => {
     try {
       res.json(await saveAgeWritingConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.put("/admin/config/prompts", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await savePromptsConfig(req.body));
     } catch (err) {
       handleError(res, err);
     }
@@ -811,6 +828,61 @@ export function registerAdminRoutes(app: Express): void {
   app.put("/admin/config/seo", json, async (req: Request, res: Response) => {
     try {
       res.json(await saveSeoConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- Email (system + marketing) ------------------------------------------
+
+  app.get("/admin/config/email", async (_req, res) => {
+    try {
+      res.json({ config: await getEmailConfig(), configured: emailConfigured() });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.put("/admin/config/email", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveEmailConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Send a template (with its built-in sample vars) to a test recipient — the
+  // admin's own email by default. Bypasses the enabled/cap checks.
+  app.post("/admin/email/test", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const { templateId, to } = (req.body ?? {}) as { templateId?: string; to?: string };
+      if (!isEmailTemplateId(templateId)) {
+        res.status(400).json({ error: { message: "A valid templateId is required." } });
+        return;
+      }
+      const recipient = (typeof to === "string" && to.trim()) || req.authToken?.email || "";
+      if (!recipient) {
+        res.status(400).json({ error: { message: "No recipient email available." } });
+        return;
+      }
+      const result = await sendTemplatedEmail({
+        templateId,
+        to: recipient,
+        vars: EMAIL_TEMPLATE_REGISTRY[templateId].sample,
+        isTest: true,
+      });
+      if (!result.ok) {
+        res.status(502).json({
+          error: {
+            message:
+              result.skipped === "not_configured"
+                ? "Email isn't configured — set the ZEPTOMAIL_TOKEN secret first."
+                : (result.error ?? "Test send failed."),
+          },
+        });
+        return;
+      }
+      res.json({ ok: true, to: recipient });
     } catch (err) {
       handleError(res, err);
     }

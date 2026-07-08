@@ -31,15 +31,44 @@ export function linkedAnchorsFor(anchor: Anchor, all: Anchor[]): Anchor[] {
 }
 
 /**
+ * Parent→child pairs where BOTH anchors are active on the same page/spread.
+ * Used to detect obsolete generic instances of an embedded child (e.g. a default
+ * bed drawn into a room when a specific bed anchor is also on the page).
+ */
+export function embeddedPairsAmong(
+  anchors: Anchor[],
+  activeIds: string[],
+): { parent: Anchor; child: Anchor }[] {
+  const active = new Set(activeIds);
+  const byId = new Map(anchors.map((a) => [a.id, a]));
+  const pairs: { parent: Anchor; child: Anchor }[] = [];
+  for (const pid of activeIds) {
+    const parent = byId.get(pid);
+    if (!parent || parent.type === "character") continue;
+    for (const cid of parent.containedIds ?? []) {
+      if (!active.has(cid)) continue;
+      const child = byId.get(cid);
+      if (child) pairs.push({ parent, child });
+    }
+  }
+  return pairs;
+}
+
+/**
  * Order anchors into dependency layers so that a referenced anchor (e.g. a bed
  * contained in a room) is generated before the anchor that references it.
  * Anchors in the same layer have no remaining dependencies on each other.
+ *
+ * Only CONTAINED anchors are hard dependencies: their reference image is drawn
+ * into the parent's sheet, so it must exist first. Related anchors are context
+ * only (text), so a "resembles" link never forces an ordering — this also keeps
+ * mutual sibling links from forming cycles.
  */
 export function orderAnchorsByDependency(anchors: Anchor[]): Anchor[][] {
   const ids = new Set(anchors.map((a) => a.id));
   const deps = new Map<string, Set<string>>();
   for (const a of anchors) {
-    const rel = linkedAnchorsFor(a, anchors)
+    const rel = containedAnchorsFor(a, anchors)
       .map((r) => r.id)
       .filter((id) => ids.has(id));
     deps.set(a.id, new Set(rel));

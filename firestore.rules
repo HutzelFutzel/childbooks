@@ -50,8 +50,20 @@ service cloud.firestore {
     match /users/{uid}/store/{document=**} {
       allow write: if signedInAs(uid);
     }
-    match /users/{uid}/jobs/{document=**} {
+    // The client only CREATES the job document (its task specs live on that doc);
+    // the backend expands it into the `tasks` subcollection and writes every
+    // render result there. Scoping the write to the job doc itself (not
+    // `{document=**}`) keeps the task subcollection backend-only, so a client
+    // can't forge a completed task/result.
+    match /users/{uid}/jobs/{jobId} {
       allow write: if signedInAs(uid);
+    }
+    // Per-task docs are read by the owner (also via the project-scoped
+    // collection-group query, which needs a rule that authorizes by the doc's
+    // own `uid` field — the path wildcard can't be correlated to a field filter
+    // for group queries). Writes fall through to default-deny (backend only).
+    match /{path=**}/tasks/{taskId} {
+      allow read: if request.auth != null && resource.data.uid == request.auth.uid;
     }
 
     // The Spark balance is backend-authoritative (written only via the Admin SDK
@@ -64,6 +76,22 @@ service cloud.firestore {
             && request.resource.data.sparkBalance == resource.data.sparkBalance);
     }
 
+    // Referral attribution + reward state are backend-authoritative too (set
+    // via /account/referral routes and the Stripe webhook). A client patching
+    // its own profile must never introduce or alter them.
+    function referralFieldsUnchanged() {
+      return fieldUnchanged('referralCode')
+        && fieldUnchanged('referredBy')
+        && fieldUnchanged('referredAt')
+        && fieldUnchanged('referralRewardedAt');
+    }
+
+    function fieldUnchanged(f) {
+      return !(f in request.resource.data)
+        || (resource != null && f in resource.data
+            && request.resource.data[f] == resource.data[f]);
+    }
+
     // Profile root doc + saved address book. Owner-only, with field validation
     // on writes. The broad `users/{uid}/**` read rule above does NOT cover the
     // `users/{uid}` doc itself (the recursive wildcard needs >=1 extra segment),
@@ -72,7 +100,7 @@ service cloud.firestore {
     match /users/{uid} {
       allow read: if signedInAs(uid);
       allow write: if signedInAs(uid) && isValidProfile(request.resource.data)
-        && sparkBalanceUnchanged();
+        && sparkBalanceUnchanged() && referralFieldsUnchanged();
     }
     match /users/{uid}/addresses/{addressId} {
       allow create, update: if signedInAs(uid) && isValidAddress(request.resource.data);

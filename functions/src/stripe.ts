@@ -26,9 +26,14 @@ import { getProductsConfig } from "./products";
 import { getPricingSettings } from "./appConfig";
 import {
   computeMargin,
+  isDestinationAllowed,
   resolveShippingCharged,
 } from "../../books-frontend/src/core/config/productMath";
-import type { CurrencyCode } from "../../books-frontend/src/core/config/products";
+import type {
+  CurrencyCode,
+  PricingSettings,
+  ProductDefinition,
+} from "../../books-frontend/src/core/config/products";
 import {
   planMeetsAccess,
   productAccessOf,
@@ -53,16 +58,25 @@ import {
   findUidByCustomerId,
   getAdminPayment,
   getStripeCustomerId,
+  listFailedFulfillments,
   listPayments,
+  markFulfillmentFailed,
   paymentsAnalytics,
   saveStripeCustomerId,
   updatePayment,
   upsertSubscription,
+  type EbookFulfillment,
   type FulfillmentPlan,
+  type PaymentKind,
 } from "./payments";
+import { deliverPaidEbook, getOwnedEbook, priceEbook } from "./ebooks";
 import { getPlansConfig, resolveActivePlan } from "./plans";
 import { getSparksConfig } from "./appConfig";
 import { grantSparks } from "./sparks";
+import { recordChargeRevenue, recordFinanceEvent, toUsd } from "./finance";
+import { raiseAlert } from "./alerts";
+import { claimReferralCode, ensureReferralCode, maybeRewardReferral } from "./referrals";
+import { claimGift, createPaidGift, listGiftsBought, newGiftCode } from "./gifts";
 import {
   intervalForPriceId,
   priceIdForEnv,
@@ -70,6 +84,14 @@ import {
   type BillingInterval,
 } from "../../books-frontend/src/core/config/plans";
 import { packTotalSparks } from "../../books-frontend/src/core/config/sparks";
+import {
+  sendGiftPurchasedEmail,
+  sendGiftReceivedEmail,
+  sendOrderConfirmationEmail,
+  sendSparksPurchasedEmail,
+  sendSubscriptionCancelledEmail,
+  sendSubscriptionStartedEmail,
+} from "./email/triggers";
 
 // ---- Money helpers ---------------------------------------------------------
 
@@ -156,6 +178,220 @@ async function ensureCustomer(uid: string, email?: string | null): Promise<strin
   return customer.id;
 }
 
+// ---- Print-order checkout core ----------------------------------------------
+
+interface PrintCheckoutArgs {
+  uid: string;
+  email: string | null;
+  product: ProductDefinition;
+  settings: PricingSettings;
+  activePlan: Awaited<ReturnType<typeof resolveActivePlan>>;
+  copies: number;
+  pages: number;
+  currency: CurrencyCode;
+  shippingMethod: ShippingMethod;
+  destinationCountry: string;
+  recipient: OrderDraft["recipient"];
+  sourceFileUrls: { interior?: string; cover?: string };
+  merchantReference: string | null;
+}
+
+type PrintCheckoutResult =
+  | { ok: true; url: string | null; paymentId: string }
+  | { ok: false; error: string };
+
+/**
+ * Price a print order server-side (live shipping quote → retail tiers → plan
+ * discount clamped to break-even), create the pending payment holding the
+ * fulfillment plan, and open the Stripe Checkout Session. Shared by first-time
+ * checkout and reorders.
+ */
+interface RetailPriceArgs {
+  product: ProductDefinition;
+  settings: PricingSettings;
+  activePlan: Awaited<ReturnType<typeof resolveActivePlan>>;
+  copies: number;
+  pages: number;
+  currency: CurrencyCode;
+  shippingMethod: ShippingMethod;
+  destinationCountry: string;
+  address: {
+    line1?: string;
+    townOrCity: string;
+    stateOrCounty?: string | null;
+    postalOrZipCode: string;
+  };
+}
+
+interface RetailPriceResult {
+  /** Per-unit retail price AFTER any plan discount, rounded to cents. */
+  unitPrice: number;
+  /** Per-unit sticker price before the discount. */
+  listUnitPrice: number;
+  /** Applied plan discount (already clamped to break-even). */
+  discountPct: number;
+  shippingCharged: number;
+}
+
+/**
+ * The single retail pricing path: live shipping quote → retail tiers → plan
+ * discount clamped to break-even. Used by checkout, reorders and the client's
+ * price preview so all three always agree.
+ */
+async function priceRetailOrder(args: RetailPriceArgs): Promise<RetailPriceResult> {
+  const { product, settings, copies, pages, currency } = args;
+
+  // Live shipping cost (for an accurate charged-shipping figure).
+  let liveShippingCost: number | undefined;
+  try {
+    const quotes = await fulfillmentProvider().quote({
+      productSku: product.provider.sku,
+      copies,
+      destinationCountry: args.destinationCountry,
+      destinationLine1: args.address.line1,
+      destinationCity: args.address.townOrCity,
+      destinationState: args.address.stateOrCounty ?? undefined,
+      destinationPostalCode: args.address.postalOrZipCode,
+      currency,
+      shippingMethod: args.shippingMethod,
+      pageCount: pages,
+    });
+    const q = quotes.find((x) => x.shippingMethod) ?? quotes[0];
+    if (q) liveShippingCost = Number(q.shipping.amount) || undefined;
+  } catch (err) {
+    console.warn("[stripe] live shipping quote failed; using offline estimate", err);
+  }
+
+  const margin = computeMargin(product, { currency, pages, copies, liveShippingCost }, settings);
+  // Active subscribers get their plan's print discount, clamped to break-even
+  // so the order can never be sold at a loss.
+  const discountPct = effectivePrintDiscountPct(
+    planEntitlements(args.activePlan),
+    margin.breakEvenDiscountPct,
+  );
+  const unitPrice =
+    discountPct > 0
+      ? Math.round(margin.pricePerUnit * (1 - discountPct / 100) * 100) / 100
+      : margin.pricePerUnit;
+  const shippingCharged =
+    margin.shippingCharged || resolveShippingCharged(product.shipping, liveShippingCost ?? 0);
+  return { unitPrice, listUnitPrice: margin.pricePerUnit, discountPct, shippingCharged };
+}
+
+async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintCheckoutResult> {
+  const { uid, product, settings, copies, pages, currency, recipient } = args;
+
+  const { unitPrice, shippingCharged } = await priceRetailOrder({
+    product,
+    settings,
+    activePlan: args.activePlan,
+    copies,
+    pages,
+    currency,
+    shippingMethod: args.shippingMethod,
+    destinationCountry: args.destinationCountry,
+    address: recipient.address,
+  });
+
+  if (unitPrice <= 0) {
+    return { ok: false, error: "This product isn't priced for ordering yet." };
+  }
+
+  const paymentId = randomUUID();
+  const customerId = await ensureCustomer(uid, args.email);
+
+  const taxBehavior = settings.tax.perCurrency[currency]?.behavior ?? "exclusive";
+  const taxCode = settings.tax.bookTaxCode;
+  const hasTax = Boolean(taxCode);
+
+  const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
+    {
+      quantity: copies,
+      price_data: {
+        currency: currency.toLowerCase(),
+        unit_amount: toMinor(unitPrice, currency),
+        tax_behavior: hasTax ? taxBehavior : undefined,
+        product_data: {
+          name: product.presentation.name,
+          description: product.presentation.tagline || undefined,
+          tax_code: taxCode,
+          metadata: { sku: product.provider.sku },
+        },
+      },
+    },
+  ];
+  if (shippingCharged > 0) {
+    lineItems.push({
+      quantity: 1,
+      price_data: {
+        currency: currency.toLowerCase(),
+        unit_amount: toMinor(shippingCharged, currency),
+        tax_behavior: hasTax ? taxBehavior : undefined,
+        product_data: { name: "Shipping & handling" },
+      },
+    });
+  }
+
+  const fulfillment: FulfillmentPlan = {
+    productSku: product.provider.sku,
+    copies,
+    shippingMethod: args.shippingMethod,
+    destinationCountry: args.destinationCountry,
+    currency,
+    pageCount: pages,
+    merchantReference: args.merchantReference,
+    recipient: {
+      name: recipient.name,
+      email: recipient.email ?? null,
+      phoneNumber: recipient.phoneNumber ?? null,
+      address: {
+        line1: recipient.address.line1,
+        line2: recipient.address.line2 ?? null,
+        townOrCity: recipient.address.townOrCity,
+        stateOrCounty: recipient.address.stateOrCounty ?? null,
+        postalOrZipCode: recipient.address.postalOrZipCode,
+        countryCode: recipient.address.countryCode,
+      },
+    },
+    sourceFileUrls: args.sourceFileUrls,
+  };
+
+  const estimatedTotal = unitPrice * copies + shippingCharged;
+  const session = await createCheckoutSession({
+    mode: "payment",
+    customer: customerId,
+    customer_update: { address: "auto", name: "auto" },
+    billing_address_collection: hasTax ? "required" : "auto",
+    automatic_tax: { enabled: hasTax },
+    line_items: lineItems,
+    client_reference_id: paymentId,
+    metadata: { paymentId, uid, kind: "order" },
+    payment_intent_data: { metadata: { paymentId, uid, kind: "order" } },
+    success_url: `${appBaseUrl()}/studio?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${appBaseUrl()}/studio?checkout=cancel`,
+  });
+
+  await createPendingPayment({
+    paymentId,
+    uid,
+    kind: "order",
+    amount: Math.round(estimatedTotal * 100) / 100,
+    currency,
+    description: `${product.presentation.name} ×${copies}`,
+    stripeSessionId: session.id,
+    stripeCustomerId: customerId,
+    fulfillment,
+    items: [
+      { label: product.presentation.name, amount: unitPrice, quantity: copies },
+      ...(shippingCharged > 0
+        ? [{ label: "Shipping & handling", amount: shippingCharged, quantity: 1 }]
+        : []),
+    ],
+  });
+
+  return { ok: true, url: session.url, paymentId };
+}
+
 // ---- Authenticated user routes ---------------------------------------------
 
 export function registerStripeUserRoutes(app: Express): void {
@@ -211,48 +447,32 @@ export function registerStripeUserRoutes(app: Express): void {
       const copies = Math.max(1, Math.floor(body.copies || 1));
       const pages = Math.max(1, Math.floor(body.pageCount || product.conditions.pages.min));
 
-      // Live shipping cost (for an accurate charged-shipping figure).
-      let liveShippingCost: number | undefined;
-      try {
-        const quotes = await fulfillmentProvider().quote({
-          productSku: product.provider.sku,
-          copies,
-          destinationCountry: body.destinationCountry,
-          destinationLine1: body.recipient.address.line1,
-          destinationCity: body.recipient.address.townOrCity,
-          destinationState: body.recipient.address.stateOrCounty,
-          destinationPostalCode: body.recipient.address.postalOrZipCode,
-          currency,
-          shippingMethod: body.shippingMethod,
-          pageCount: pages,
-        });
-        const q = quotes.find((x) => x.shippingMethod) ?? quotes[0];
-        if (q) liveShippingCost = Number(q.shipping.amount) || undefined;
-      } catch (err) {
-        console.warn("[stripe] live shipping quote failed; using offline estimate", err);
+      // Server-authoritative order limits — the client UI mirrors these, but
+      // only this check is binding.
+      const cond = product.conditions;
+      if (pages < cond.pages.min || pages > cond.pages.max) {
+        clientError(res, `This product supports ${cond.pages.min}–${cond.pages.max} pages.`);
+        return;
       }
-
-      const margin = computeMargin(
-        product,
-        { currency, pages, copies, liveShippingCost },
-        settings,
+      if (copies < cond.copies.min || copies > cond.copies.max) {
+        clientError(res, `You can order between ${cond.copies.min} and ${cond.copies.max} copies.`);
+        return;
+      }
+      const methodOk = product.shipping.methods.some(
+        (m) => m.enabled && m.method === body.shippingMethod,
       );
-      // Active subscribers get their plan's print discount, clamped to break-even
-      // so the order can never be sold at a loss.
-      const discountPct = effectivePrintDiscountPct(
-        planEntitlements(activePlan),
-        margin.breakEvenDiscountPct,
-      );
-      const unitPrice =
-        discountPct > 0
-          ? Math.round(margin.pricePerUnit * (1 - discountPct / 100) * 100) / 100
-          : margin.pricePerUnit;
-      const shippingCharged =
-        margin.shippingCharged ||
-        resolveShippingCharged(product.shipping, liveShippingCost ?? 0);
-
-      if (unitPrice <= 0) {
-        clientError(res, "This product isn't priced for ordering yet.");
+      if (!methodOk) {
+        clientError(res, "That shipping method isn't available for this product.");
+        return;
+      }
+      const destCountry = (body.destinationCountry || body.recipient.address.countryCode || "").trim();
+      if (
+        !isDestinationAllowed(product.shipping.destinations, {
+          country: destCountry,
+          region: body.recipient.address.stateOrCounty ?? undefined,
+        })
+      ) {
+        clientError(res, "We can't ship this product to that destination yet.");
         return;
       }
 
@@ -273,101 +493,307 @@ export function registerStripeUserRoutes(app: Express): void {
         return;
       }
 
-      const paymentId = randomUUID();
-      const customerId = await ensureCustomer(uid, body.recipient.email ?? req.authToken?.email);
-
-      const taxBehavior = settings.tax.perCurrency[currency]?.behavior ?? "exclusive";
-      const taxCode = settings.tax.bookTaxCode;
-      const hasTax = Boolean(taxCode);
-
-      const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
-        {
-          quantity: copies,
-          price_data: {
-            currency: currency.toLowerCase(),
-            unit_amount: toMinor(unitPrice, currency),
-            tax_behavior: hasTax ? taxBehavior : undefined,
-            product_data: {
-              name: product.presentation.name,
-              description: product.presentation.tagline || undefined,
-              tax_code: taxCode,
-              metadata: { sku: product.provider.sku },
-            },
-          },
-        },
-      ];
-      if (shippingCharged > 0) {
-        lineItems.push({
-          quantity: 1,
-          price_data: {
-            currency: currency.toLowerCase(),
-            unit_amount: toMinor(shippingCharged, currency),
-            tax_behavior: hasTax ? taxBehavior : undefined,
-            product_data: { name: "Shipping & handling" },
-          },
-        });
-      }
-
-      const fulfillment: FulfillmentPlan = {
-        productSku: product.provider.sku,
+      const result = await createPrintCheckout({
+        uid,
+        email: body.recipient.email ?? req.authToken?.email ?? null,
+        product,
+        settings,
+        activePlan,
         copies,
+        pages,
+        currency,
         shippingMethod: body.shippingMethod,
         destinationCountry: body.destinationCountry,
-        currency,
-        pageCount: pages,
-        merchantReference: body.merchantReference ?? null,
-        recipient: {
-          name: body.recipient.name,
-          email: body.recipient.email ?? null,
-          phoneNumber: body.recipient.phoneNumber ?? null,
-          address: {
-            line1: body.recipient.address.line1,
-            line2: body.recipient.address.line2 ?? null,
-            townOrCity: body.recipient.address.townOrCity,
-            stateOrCounty: body.recipient.address.stateOrCounty ?? null,
-            postalOrZipCode: body.recipient.address.postalOrZipCode,
-            countryCode: body.recipient.address.countryCode,
-          },
-        },
+        recipient: body.recipient,
         sourceFileUrls,
-      };
+        merchantReference: body.merchantReference ?? null,
+      });
+      if (!result.ok) {
+        clientError(res, result.error);
+        return;
+      }
+      res.json({ url: result.url, paymentId: result.paymentId });
+    } catch (err) {
+      console.error("[stripe] checkout failed", err);
+      clientError(res, "We couldn't start checkout. Please try again.", 500);
+    }
+  });
 
-      const estimatedTotal = unitPrice * copies + shippingCharged;
+  // Retail price preview for the order dialog. Runs the SAME pricing path as
+  // checkout (live shipping → retail tiers → plan discount), so what the user
+  // sees before "Continue to payment" is exactly what Stripe will charge
+  // (before tax). Never exposes wholesale/production costs to the client.
+  app.post("/checkout/price", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const uid = req.uid!;
+      const body = (req.body ?? {}) as {
+        productSku?: string;
+        copies?: number;
+        pageCount?: number;
+        currency?: string;
+        shippingMethod?: ShippingMethod;
+        destinationCountry?: string;
+        line1?: string;
+        city?: string;
+        state?: string;
+        postalCode?: string;
+      };
+      if (!body.productSku || !body.city || !body.postalCode || !body.destinationCountry) {
+        clientError(res, "A destination (city, postal code, country) is required.");
+        return;
+      }
+      const [config, settings] = await Promise.all([getProductsConfig(), getPricingSettings()]);
+      const product = config.products.find(
+        (p) => p.provider.sku === body.productSku && p.status === "active",
+      );
+      if (!product) {
+        clientError(res, "This product isn't available.", 404);
+        return;
+      }
+      const currency = (body.currency || settings.baseCurrency).toUpperCase() as CurrencyCode;
+      if (!settings.currencies.includes(currency)) {
+        clientError(res, `Currency ${currency} isn't supported.`);
+        return;
+      }
+      const activePlan = await resolveActivePlan(uid);
+      const copies = Math.max(1, Math.floor(body.copies || 1));
+      const pages = Math.max(1, Math.floor(body.pageCount || product.conditions.pages.min));
+      const priced = await priceRetailOrder({
+        product,
+        settings,
+        activePlan,
+        copies,
+        pages,
+        currency,
+        shippingMethod: body.shippingMethod ?? "Standard",
+        destinationCountry: body.destinationCountry,
+        address: {
+          line1: body.line1,
+          townOrCity: body.city,
+          stateOrCounty: body.state ?? null,
+          postalOrZipCode: body.postalCode,
+        },
+      });
+      res.json({
+        currency,
+        copies,
+        unitPrice: priced.unitPrice,
+        listUnitPrice: priced.listUnitPrice,
+        discountPct: priced.discountPct,
+        items: Math.round(priced.unitPrice * copies * 100) / 100,
+        shipping: priced.shippingCharged,
+        total: Math.round((priced.unitPrice * copies + priced.shippingCharged) * 100) / 100,
+      });
+    } catch (err) {
+      console.error("[stripe] price preview failed", err);
+      clientError(res, "We couldn't price this destination.", 500);
+    }
+  });
+
+  // Ebook quote: price (with any print-bundle discount) + ownership, so the
+  // order screen can show "Buy the ebook" vs "Download your ebook". Pricing is
+  // fully admin-configured (PricingSettings.ebook).
+  app.get("/checkout/ebook/quote", async (req: AuthedRequest, res: Response) => {
+    try {
+      const uid = req.uid!;
+      const projectId = String(req.query.projectId ?? "").trim();
+      if (!projectId) {
+        clientError(res, "A project is required.");
+        return;
+      }
+      const settings = await getPricingSettings();
+      const currency = String(req.query.currency ?? settings.baseCurrency).toUpperCase();
+      const quote = await priceEbook(uid, projectId, currency, settings.ebook);
+      const owned = quote.owned ? await getOwnedEbook(uid, projectId) : null;
+      res.json({ ...quote, downloadUrl: owned?.fileUrl ?? null });
+    } catch (err) {
+      console.error("[stripe] ebook quote failed", err);
+      clientError(res, "We couldn't price the ebook.", 500);
+    }
+  });
+
+  // Buy the digital edition: the client uploads the rendered PDF NOW (hosted
+  // before payment, like print files); the webhook grants the download only
+  // after Stripe confirms payment. Price is server-authoritative.
+  app.post("/checkout/ebook", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      if (!stripeConfigured()) {
+        clientError(res, "Payments are temporarily unavailable.", 503);
+        return;
+      }
+      const uid = req.uid!;
+      const body = (req.body ?? {}) as {
+        projectId?: string;
+        title?: string;
+        currency?: string;
+        pdfBase64?: string;
+        contentType?: string;
+      };
+      if (!body.projectId || !body.pdfBase64) {
+        clientError(res, "Missing ebook details.");
+        return;
+      }
+      const settings = await getPricingSettings();
+      const currency = (body.currency || settings.baseCurrency).toUpperCase() as CurrencyCode;
+      if (!settings.currencies.includes(currency)) {
+        clientError(res, `Currency ${currency} isn't supported.`);
+        return;
+      }
+      const quote = await priceEbook(uid, body.projectId, currency, settings.ebook);
+      if (!quote.enabled) {
+        clientError(res, "Ebooks aren't available right now.");
+        return;
+      }
+      if (quote.owned) {
+        clientError(res, "You already own this ebook — download it from the order screen.");
+        return;
+      }
+
+      const title = (body.title ?? "").trim() || "Your book";
+      const host = createAdminAssetHost();
+      const buf = Buffer.from(body.pdfBase64, "base64");
+      const blob = new Blob([buf], { type: body.contentType || "application/pdf" });
+      const { url: fileUrl } = await host.upload(blob, `ebook-${body.projectId}.pdf`);
+
+      const paymentId = randomUUID();
+      const customerId = await ensureCustomer(uid, req.authToken?.email ?? null);
+      const taxBehavior = settings.tax.perCurrency[currency]?.behavior ?? "exclusive";
+      const taxCode = settings.ebook.taxCode;
+      const hasTax = Boolean(taxCode);
+
       const session = await createCheckoutSession({
         mode: "payment",
         customer: customerId,
         customer_update: { address: "auto", name: "auto" },
         billing_address_collection: hasTax ? "required" : "auto",
         automatic_tax: { enabled: hasTax },
-        line_items: lineItems,
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: currency.toLowerCase(),
+              unit_amount: toMinor(quote.price, currency),
+              tax_behavior: hasTax ? taxBehavior : undefined,
+              product_data: {
+                name: `${title} — digital edition (PDF)`,
+                description:
+                  quote.discountPct > 0
+                    ? `Includes your ${quote.discountPct}% print-owner discount.`
+                    : undefined,
+                tax_code: taxCode,
+              },
+            },
+          },
+        ],
         client_reference_id: paymentId,
-        metadata: { paymentId, uid, kind: "order" },
-        payment_intent_data: { metadata: { paymentId, uid, kind: "order" } },
-        success_url: `${appBaseUrl()}/studio?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${appBaseUrl()}/studio?checkout=cancel`,
+        metadata: { paymentId, uid, kind: "ebook" },
+        payment_intent_data: { metadata: { paymentId, uid, kind: "ebook" } },
+        success_url: `${appBaseUrl()}/studio?ebook=success`,
+        cancel_url: `${appBaseUrl()}/studio?ebook=cancel`,
       });
 
+      const ebook: EbookFulfillment = { projectId: body.projectId, title, fileUrl };
       await createPendingPayment({
         paymentId,
         uid,
-        kind: "order",
-        amount: Math.round(estimatedTotal * 100) / 100,
+        kind: "ebook",
+        amount: quote.price,
         currency,
-        description: `${product.presentation.name} ×${copies}`,
+        description: `${title} — digital edition`,
         stripeSessionId: session.id,
         stripeCustomerId: customerId,
-        fulfillment,
-        items: [
-          { label: product.presentation.name, amount: unitPrice, quantity: copies },
-          ...(shippingCharged > 0
-            ? [{ label: "Shipping & handling", amount: shippingCharged, quantity: 1 }]
-            : []),
-        ],
+        ebook,
+        items: [{ label: `${title} — digital edition (PDF)`, amount: quote.price, quantity: 1 }],
       });
 
       res.json({ url: session.url, paymentId });
     } catch (err) {
-      console.error("[stripe] checkout failed", err);
+      console.error("[stripe] ebook checkout failed", err);
+      clientError(res, "We couldn't start the ebook checkout. Please try again.", 500);
+    }
+  });
+
+  // Reorder a previously PAID print order: reuses the already-hosted print
+  // files from the original payment's fulfillment plan, reprices at today's
+  // catalog price (+ the buyer's current plan discount), and opens a fresh
+  // Checkout Session. No re-rendering, no re-upload.
+  app.post("/checkout/reorder", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      if (!stripeConfigured()) {
+        clientError(res, "Payments are temporarily unavailable.", 503);
+        return;
+      }
+      const uid = req.uid!;
+      const { paymentId, copies: rawCopies } = (req.body ?? {}) as {
+        paymentId?: string;
+        copies?: number;
+      };
+      if (!paymentId) {
+        clientError(res, "A previous order is required.");
+        return;
+      }
+      const previous = await getAdminPayment(paymentId);
+      if (!previous || previous.ownerUid !== uid) {
+        clientError(res, "Order not found.", 404);
+        return;
+      }
+      const plan = previous.fulfillment;
+      if (
+        previous.kind !== "order" ||
+        previous.status !== "paid" ||
+        !plan?.sourceFileUrls?.interior ||
+        !plan.sourceFileUrls.cover
+      ) {
+        clientError(res, "This order can't be reordered. Please place it again from the studio.");
+        return;
+      }
+      const [config, settings] = await Promise.all([getProductsConfig(), getPricingSettings()]);
+      const product = config.products.find(
+        (p) => p.provider.sku === plan.productSku && p.status === "active",
+      );
+      if (!product) {
+        clientError(res, "This product isn't available for ordering anymore.");
+        return;
+      }
+      const activePlan = await resolveActivePlan(uid);
+      const copies = Math.max(
+        product.conditions.copies.min,
+        Math.min(product.conditions.copies.max, Math.floor(rawCopies || plan.copies || 1)),
+      );
+      const result = await createPrintCheckout({
+        uid,
+        email: plan.recipient.email ?? req.authToken?.email ?? null,
+        product,
+        settings,
+        activePlan,
+        copies,
+        pages: plan.pageCount,
+        currency: plan.currency.toUpperCase() as CurrencyCode,
+        shippingMethod: plan.shippingMethod as ShippingMethod,
+        destinationCountry: plan.destinationCountry,
+        recipient: {
+          name: plan.recipient.name,
+          email: plan.recipient.email ?? undefined,
+          phoneNumber: plan.recipient.phoneNumber ?? undefined,
+          address: {
+            line1: plan.recipient.address.line1,
+            line2: plan.recipient.address.line2 ?? undefined,
+            townOrCity: plan.recipient.address.townOrCity,
+            stateOrCounty: plan.recipient.address.stateOrCounty ?? undefined,
+            postalOrZipCode: plan.recipient.address.postalOrZipCode,
+            countryCode: plan.recipient.address.countryCode,
+          },
+        },
+        sourceFileUrls: plan.sourceFileUrls,
+        merchantReference: plan.merchantReference ?? null,
+      });
+      if (!result.ok) {
+        clientError(res, result.error);
+        return;
+      }
+      res.json({ url: result.url, paymentId: result.paymentId });
+    } catch (err) {
+      console.error("[stripe] reorder failed", err);
       clientError(res, "We couldn't start checkout. Please try again.", 500);
     }
   });
@@ -411,9 +837,14 @@ export function registerStripeUserRoutes(app: Express): void {
       }
 
       const customerId = await ensureCustomer(uid, req.authToken?.email);
-      const session = await getStripe().checkout.sessions.create({
+      // `createCheckoutSession` retries without automatic tax if Stripe Tax
+      // isn't activated, so subscriptions collect tax when possible but never
+      // hard-fail because of tax configuration.
+      const session = await createCheckoutSession({
         mode: "subscription",
         customer: customerId,
+        customer_update: { address: "auto", name: "auto" },
+        automatic_tax: { enabled: true },
         line_items: [{ price: priceId, quantity: 1 }],
         metadata: { uid, kind: "subscription" },
         // Stamp uid on the subscription so invoice grants can attribute Sparks.
@@ -493,6 +924,137 @@ export function registerStripeUserRoutes(app: Express): void {
     } catch (err) {
       console.error("[stripe] sparks-pack checkout failed", err);
       clientError(res, "We couldn't start checkout. Please try again.", 500);
+    }
+  });
+
+  // Buy a Spark pack AS A GIFT: the buyer pays now; the Sparks are granted to
+  // whoever redeems the claim code (created by the webhook after payment).
+  app.post("/checkout/sparks-gift", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      if (!stripeConfigured()) {
+        clientError(res, "Payments are temporarily unavailable.", 503);
+        return;
+      }
+      const uid = req.uid!;
+      const body = (req.body ?? {}) as {
+        packId?: string;
+        currency?: string;
+        recipientEmail?: string;
+        message?: string;
+      };
+      const config = await getSparksConfig();
+      if (!config.enabled) {
+        clientError(res, "Spark purchases aren't available right now.", 503);
+        return;
+      }
+      const pack = config.packs.find((p) => p.id === body.packId && p.active);
+      if (!pack) {
+        clientError(res, "That Spark pack isn't available.");
+        return;
+      }
+      const currency = (body.currency || "USD").toUpperCase();
+      const price = pack.prices[currency];
+      if (typeof price !== "number" || price <= 0) {
+        clientError(res, `This pack isn't priced in ${currency}.`);
+        return;
+      }
+      const totalSparks = packTotalSparks(pack);
+      const paymentId = randomUUID();
+      const giftCode = newGiftCode();
+      const customerId = await ensureCustomer(uid, req.authToken?.email);
+      const meta = {
+        paymentId,
+        uid,
+        kind: "sparkGift",
+        packId: pack.id,
+        sparks: String(totalSparks),
+        giftCode,
+        recipientEmail: (body.recipientEmail ?? "").slice(0, 200),
+        giftMessage: (body.message ?? "").slice(0, 300),
+      };
+      const session = await createCheckoutSession({
+        mode: "payment",
+        customer: customerId,
+        line_items: [
+          {
+            quantity: 1,
+            price_data: {
+              currency: currency.toLowerCase(),
+              unit_amount: toMinor(price, currency),
+              product_data: { name: `Gift: ${totalSparks} Sparks (${pack.label})` },
+            },
+          },
+        ],
+        client_reference_id: paymentId,
+        metadata: meta,
+        payment_intent_data: { metadata: meta },
+        success_url: `${appBaseUrl()}/studio?gift=success&payment=${paymentId}`,
+        cancel_url: `${appBaseUrl()}/studio?gift=cancel`,
+      });
+      await createPendingPayment({
+        paymentId,
+        uid,
+        kind: "sparkGift",
+        amount: price,
+        currency,
+        description: `Gift: ${totalSparks} Sparks`,
+        stripeSessionId: session.id,
+        stripeCustomerId: customerId,
+        items: [{ label: `Gift: ${totalSparks} Sparks`, amount: price, quantity: 1 }],
+      });
+      res.json({ url: session.url, paymentId, giftCode });
+    } catch (err) {
+      console.error("[stripe] sparks-gift checkout failed", err);
+      clientError(res, "We couldn't start checkout. Please try again.", 500);
+    }
+  });
+
+  // The gifts the caller has bought (claim codes + status) — the buyer needs
+  // the code after checkout, and this also shows whether it was redeemed.
+  app.get("/account/gifts", async (req: AuthedRequest, res: Response) => {
+    try {
+      res.json({ gifts: await listGiftsBought(req.uid!) });
+    } catch (err) {
+      clientError(res, (err as Error)?.message ?? "Could not load your gifts.", 500);
+    }
+  });
+
+  // Redeem a gift code (grants the Sparks to the CALLER).
+  app.post("/account/sparks/claim-gift", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const { code } = (req.body ?? {}) as { code?: string };
+      const sparks = await claimGift(req.uid!, code ?? "");
+      res.json({ ok: true, sparks });
+    } catch (err) {
+      clientError(res, (err as Error)?.message ?? "Could not claim this gift.");
+    }
+  });
+
+  // The caller's shareable referral code (minted lazily).
+  app.get("/account/referral", async (req: AuthedRequest, res: Response) => {
+    try {
+      const code = await ensureReferralCode(req.uid!);
+      const config = await getSparksConfig();
+      res.json({
+        code,
+        enabled: config.enabled && config.referral.enabled,
+        referrerSparks: config.referral.referrerSparks,
+        referredSparks: config.referral.referredSparks,
+      });
+    } catch (err) {
+      clientError(res, (err as Error)?.message ?? "Could not load your referral code.", 500);
+    }
+  });
+
+  // A new user attaches the code that referred them (reward fires on their
+  // first payment — see the webhook).
+  app.post("/account/referral/claim", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const { code } = (req.body ?? {}) as { code?: string };
+      const ok = await claimReferralCode(req.uid!, code ?? "");
+      res.json({ ok });
+    } catch {
+      res.json({ ok: false });
     }
   });
 
@@ -589,16 +1151,81 @@ async function fulfillPaidOrder(paymentId: string): Promise<void> {
       orderId: order.id,
       event: "order.placed",
     });
+    // Record what the print provider will charge US for this order (COGS).
+    try {
+      const total = order.charges.reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
+      const currency = order.charges[0]?.currency || plan.currency || "USD";
+      if (total > 0) {
+        await recordFinanceEvent({
+          category: "books",
+          kind: "printCost",
+          amountUsd: -(await toUsd(total, currency)),
+          uid: payment.ownerUid,
+          projectId: plan.merchantReference ?? undefined,
+          currency,
+          amount: total,
+          ref: paymentId,
+          meta: { orderId: order.id, sku: plan.productSku, copies: plan.copies },
+        });
+      }
+    } catch (err) {
+      console.warn("[stripe] could not record print cost", paymentId, err);
+    }
   } catch (err) {
     // The customer has paid; surface the failure for admin follow-up but don't
     // throw (a 500 makes Stripe retry, which won't fix a fulfillment error).
+    // The failure is persisted with retry state — a scheduled sweep retries it
+    // with backoff, and an admin alert is raised so a human sees it too.
+    const message = (err as Error)?.message ?? "Unknown fulfillment error";
     console.error("[stripe] fulfillment after payment failed", paymentId, err);
-    await updatePayment({
-      paymentId,
+    await markFulfillmentFailed(paymentId, message);
+    const attempt = payment.fulfillmentAttempts + 1;
+    await raiseAlert({
+      severity: attempt >= MAX_FULFILLMENT_ATTEMPTS ? "critical" : "warning",
+      kind: "fulfillment.failed",
+      message: `Print order for paid payment ${paymentId} failed (attempt ${attempt}): ${message}`,
+      meta: { paymentId, uid: payment.ownerUid, attempt },
+      ref: `${paymentId}_${attempt}`,
+    });
+    await recordFinanceEvent({
+      category: "waste",
+      kind: "fulfillmentFailed",
+      amountUsd: 0,
       uid: payment.ownerUid,
-      event: "fulfillment.failed",
+      projectId: plan.merchantReference ?? undefined,
+      ref: `${paymentId}_${attempt}`,
+      meta: { paymentId, attempt, error: message.slice(0, 500) },
     });
   }
+}
+
+const MAX_FULFILLMENT_ATTEMPTS = 5;
+
+/**
+ * Retry paid orders whose print placement failed, with linear backoff (30min ×
+ * attempts). Called by the scheduled sweep; also usable from the admin route.
+ * Returns how many orders were successfully placed this pass.
+ */
+export async function retryFailedFulfillments(): Promise<number> {
+  const pending = await listFailedFulfillments(MAX_FULFILLMENT_ATTEMPTS);
+  let placed = 0;
+  for (const p of pending) {
+    const backoffMs = 30 * 60_000 * Math.max(1, p.fulfillmentAttempts);
+    if (p.fulfillmentFailedAt && Date.now() - p.fulfillmentFailedAt < backoffMs) continue;
+    await fulfillPaidOrder(p.id);
+    const after = await getAdminPayment(p.id);
+    if (after?.orderId) {
+      placed += 1;
+      await raiseAlert({
+        severity: "info",
+        kind: "fulfillment.recovered",
+        message: `Print order for payment ${p.id} was placed on retry.`,
+        meta: { paymentId: p.id },
+        ref: p.id,
+      });
+    }
+  }
+  return placed;
 }
 
 // ---- Webhook ---------------------------------------------------------------
@@ -648,10 +1275,14 @@ function subStatusToUpsert(sub: Stripe.Subscription, uid: string | null) {
 }
 
 /**
- * Grant a subscription's Sparks for one paid invoice. Resolves the plan from the
- * invoice line's price id, grants `monthlySparks` (capped by the plan's rollover
- * policy) idempotently on the invoice id, and adds the one-time annual bonus on
- * a yearly invoice. Best-effort: never throws back into the webhook.
+ * Grant a subscription's Sparks for one paid invoice. Resolves the plan from
+ * the invoice line's price id and grants idempotently on the invoice id:
+ *   - monthly invoice → `monthlySparks` (capped by the rollover policy)
+ *   - yearly invoice  → `monthlySparks × 12` up front (annual subscribers pay
+ *     for the full year, so they get the full year's Sparks — no rollover cap
+ *     on the lump) plus the one-time annual bonus.
+ * Also records the invoice as subscription revenue. Best-effort: never throws
+ * back into the webhook.
  */
 async function grantSubscriptionSparks(invoice: Stripe.Invoice): Promise<void> {
   try {
@@ -674,29 +1305,51 @@ async function grantSubscriptionSparks(invoice: Stripe.Invoice): Promise<void> {
     const plan = resolvePlanByPriceId(config, priceId);
     if (!plan || plan.isFree) return;
 
+    const interval = intervalForPriceId(plan, priceId);
     const monthly = plan.grant.monthlySparks;
     if (monthly > 0) {
+      const isAnnual = interval === "year";
+      const amount = isAnnual ? monthly * 12 : monthly;
       const rolloverCap =
-        plan.grant.rolloverMultiple > 0 ? monthly * plan.grant.rolloverMultiple : undefined;
+        !isAnnual && plan.grant.rolloverMultiple > 0
+          ? monthly * plan.grant.rolloverMultiple
+          : undefined;
       await grantSparks({
         uid,
-        amount: monthly,
+        amount,
         type: "grant",
         reason: `subscription:${plan.id}`,
+        source: "subscription",
         ref: invoice.id,
         rolloverCap,
       });
     }
 
-    const interval = intervalForPriceId(plan, priceId);
     if (interval === "year" && plan.grant.annualBonusSparks > 0) {
       await grantSparks({
         uid,
         amount: plan.grant.annualBonusSparks,
         type: "grant",
         reason: `subscription-bonus:${plan.id}`,
+        source: "subscription",
         ref: `${invoice.id}_bonus`,
       });
+    }
+
+    // Revenue recognition + referral trigger for the paid invoice.
+    const currency = (invoice.currency ?? "usd").toUpperCase();
+    const gross = toMajor(invoice.amount_paid ?? 0, currency);
+    if (gross > 0 && invoice.id) {
+      await recordChargeRevenue({
+        category: "subscriptions",
+        kind: "subscriptionRevenue",
+        uid,
+        gross,
+        currency,
+        ref: invoice.id,
+        meta: { planId: plan.id, interval },
+      });
+      await maybeRewardReferral(uid);
     }
   } catch (err) {
     console.warn("[stripe] subscription Spark grant failed", err);
@@ -725,29 +1378,77 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
 
       if (session.payment_status === "paid") {
         const piId = typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id;
+        const gross =
+          session.amount_total != null ? toMajor(session.amount_total, session.currency ?? "usd") : undefined;
         await updatePayment({
           paymentId,
           uid,
           status: "paid",
-          amount: session.amount_total != null ? toMajor(session.amount_total, session.currency ?? "usd") : undefined,
+          amount: gross,
           currency: session.currency ?? undefined,
           stripePaymentIntentId: piId,
           event: "checkout.session.completed",
         });
         if (kind === "sparkPack") {
-          // Grant the purchased Sparks, idempotent on the paymentId.
+          // Grant the purchased Sparks, idempotent on the paymentId. The lot
+          // carries the real revenue per Spark for paid/free spend attribution.
           const sparks = Number(session.metadata?.sparks ?? 0);
           if (sparks > 0) {
+            const paidUsd = gross ? await toUsd(gross, session.currency ?? "usd") : 0;
             await grantSparks({
               uid,
               amount: sparks,
               type: "purchase",
               reason: `pack:${session.metadata?.packId ?? ""}`,
+              source: "pack",
+              usdPerSpark: paidUsd > 0 ? paidUsd / sparks : null,
               ref: paymentId,
             });
+            await sendSparksPurchasedEmail({ uid, sparks, paymentId });
           }
+          await maybeRewardReferral(uid);
+        } else if (kind === "sparkGift") {
+          const sparks = Number(session.metadata?.sparks ?? 0);
+          const giftCode = (session.metadata?.giftCode as string) || "";
+          if (sparks > 0 && giftCode) {
+            const paidUsd = gross ? await toUsd(gross, session.currency ?? "usd") : 0;
+            const recipientEmail = (session.metadata?.recipientEmail as string) || null;
+            const giftMessage = (session.metadata?.giftMessage as string) || null;
+            await createPaidGift({
+              code: giftCode,
+              sparks,
+              usdPerSpark: paidUsd > 0 ? paidUsd / sparks : null,
+              buyerUid: uid,
+              recipientEmail,
+              message: giftMessage,
+              paymentId,
+            });
+            // Confirm to the buyer, and notify the recipient if we have their email.
+            await sendGiftPurchasedEmail({ uid, sparks, code: giftCode, recipientEmail, paymentId });
+            if (recipientEmail) {
+              await sendGiftReceivedEmail({
+                to: recipientEmail,
+                sparks,
+                code: giftCode,
+                message: giftMessage,
+                paymentId,
+              });
+            }
+          }
+          await maybeRewardReferral(uid);
+        } else if (kind === "ebook") {
+          await deliverPaidEbook(paymentId);
+          await maybeRewardReferral(uid);
         } else {
           await fulfillPaidOrder(paymentId);
+          const order = await getAdminPayment(paymentId);
+          await sendOrderConfirmationEmail({
+            uid,
+            orderRef: order?.orderId ?? paymentId,
+            itemLabel: "Your custom picture book",
+            paymentId,
+          });
+          await maybeRewardReferral(uid);
         }
       }
       return;
@@ -770,12 +1471,13 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         "";
       const uid = (pi.metadata?.uid as string) || "";
       if (!paymentId || !uid) return;
+      const gross = toMajor(pi.amount_received || pi.amount, pi.currency);
       const fin = await chargeFinancials(pi.id);
       await updatePayment({
         paymentId,
         uid,
         status: "paid",
-        amount: toMajor(pi.amount_received || pi.amount, pi.currency),
+        amount: gross,
         currency: pi.currency,
         stripePaymentIntentId: pi.id,
         stripeChargeId: fin.chargeId,
@@ -784,8 +1486,63 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         netAmount: fin.net ?? null,
         event: "payment_intent.succeeded",
       });
-      // Safety net in case session.completed was missed.
-      await fulfillPaidOrder(paymentId);
+
+      const kind = ((pi.metadata?.kind as string) || "order") as PaymentKind;
+      const payment = await getAdminPayment(paymentId);
+      const projectId =
+        payment?.fulfillment?.merchantReference ?? payment?.ebook?.projectId ?? undefined;
+
+      // Revenue + fee land in the finance stream here (this event carries the
+      // charge financials). Idempotent on the paymentId.
+      await recordChargeRevenue({
+        category: kind === "order" || kind === "ebook" ? "books" : "sparks",
+        kind: kind === "order" ? "printRevenue" : kind === "ebook" ? "ebookRevenue" : "packRevenue",
+        uid,
+        projectId,
+        gross,
+        fee: fin.fee,
+        currency: pi.currency.toUpperCase(),
+        ref: paymentId,
+        meta: kind === "sparkGift" ? { gift: true } : undefined,
+      });
+
+      // Safety net in case checkout.session.completed was missed: grants and
+      // fulfillment are all idempotent on the paymentId, so double-fire is safe.
+      if (kind === "sparkPack") {
+        const sparks = Number(pi.metadata?.sparks ?? 0);
+        if (sparks > 0) {
+          const paidUsd = await toUsd(gross, pi.currency);
+          await grantSparks({
+            uid,
+            amount: sparks,
+            type: "purchase",
+            reason: `pack:${pi.metadata?.packId ?? ""}`,
+            source: "pack",
+            usdPerSpark: paidUsd > 0 ? paidUsd / sparks : null,
+            ref: paymentId,
+          });
+        }
+      } else if (kind === "sparkGift") {
+        const sparks = Number(pi.metadata?.sparks ?? 0);
+        const giftCode = (pi.metadata?.giftCode as string) || "";
+        if (sparks > 0 && giftCode) {
+          const paidUsd = await toUsd(gross, pi.currency);
+          await createPaidGift({
+            code: giftCode,
+            sparks,
+            usdPerSpark: paidUsd > 0 ? paidUsd / sparks : null,
+            buyerUid: uid,
+            recipientEmail: (pi.metadata?.recipientEmail as string) || null,
+            message: (pi.metadata?.giftMessage as string) || null,
+            paymentId,
+          });
+        }
+      } else if (kind === "ebook") {
+        await deliverPaidEbook(paymentId);
+      } else {
+        await fulfillPaidOrder(paymentId);
+      }
+      await maybeRewardReferral(uid);
       return;
     }
 
@@ -814,6 +1571,29 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         refundedAmount: refunded,
         event: "charge.refunded",
       });
+      // Refunds subtract from the payment kind's category. `amount_refunded`
+      // is CUMULATIVE, so record only the DELTA over what was already recorded
+      // (keyed on the cumulative level so webhook retries stay idempotent).
+      const delta = Math.max(0, refunded - payment.refundedAmount);
+      if (delta > 0) {
+        const currency = (charge.currency ?? "usd").toUpperCase();
+        await recordFinanceEvent({
+          category:
+            payment.kind === "order" || payment.kind === "ebook"
+              ? "books"
+              : payment.kind === "subscription"
+                ? "subscriptions"
+                : "sparks",
+          kind: "refund",
+          amountUsd: -(await toUsd(delta, currency)),
+          uid: payment.ownerUid,
+          projectId: payment.fulfillment?.merchantReference ?? payment.ebook?.projectId ?? undefined,
+          currency,
+          amount: delta,
+          ref: `${paymentId}_${charge.amount_refunded}`,
+          meta: { cumulativeRefunded: refunded, fullyRefunded },
+        });
+      }
       return;
     }
 
@@ -824,6 +1604,28 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
       const customerId = typeof sub.customer === "string" ? sub.customer : sub.customer.id;
       const uid = (sub.metadata?.uid as string) || (await findUidByCustomerId(customerId));
       await upsertSubscription(subStatusToUpsert(sub, uid));
+
+      // Lifecycle emails (best-effort; deduped on the subscription id). "Started"
+      // fires once on the first active/trialing state; "cancelled" on deletion.
+      if (uid) {
+        try {
+          const priceId = sub.items.data[0]?.price?.id ?? null;
+          const plan = priceId ? resolvePlanByPriceId(await getPlansConfig(), priceId) : null;
+          const planName = plan?.presentation.name ?? "your plan";
+          if (event.type === "customer.subscription.deleted") {
+            await sendSubscriptionCancelledEmail({ uid, planName, subscriptionId: sub.id });
+          } else if (sub.status === "active" || sub.status === "trialing") {
+            await sendSubscriptionStartedEmail({
+              uid,
+              planName,
+              sparks: plan?.grant.monthlySparks,
+              subscriptionId: sub.id,
+            });
+          }
+        } catch (err) {
+          console.warn("[stripe] subscription email failed", err);
+        }
+      }
       return;
     }
 

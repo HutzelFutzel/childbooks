@@ -19,6 +19,7 @@ import {
   doc,
   getDoc,
   getDocs,
+  runTransaction,
   setDoc,
 } from "firebase/firestore";
 import {
@@ -78,6 +79,26 @@ const firestoreKv: KeyValueStore = {
   async remove(key: string): Promise<void> {
     const uid = requireUid();
     await deleteDoc(doc(getFirebaseDb(), `users/${uid}/store`, docId(key)));
+  },
+
+  async update<T>(key: string, mutator: (prev: T | null) => T): Promise<T> {
+    const uid = requireUid();
+    const ref = doc(getFirebaseDb(), `users/${uid}/store`, docId(key));
+    return runTransaction(getFirebaseDb(), async (tx) => {
+      const snap = await tx.get(ref);
+      let prev: T | null = null;
+      if (snap.exists()) {
+        try {
+          prev = JSON.parse((snap.data() as KvDoc).json) as T;
+        } catch {
+          prev = null;
+        }
+      }
+      const next = mutator(prev);
+      const payload: KvDoc = { key, json: JSON.stringify(next), updatedAt: Date.now() };
+      tx.set(ref, payload);
+      return next;
+    });
   },
 
   async keys(): Promise<string[]> {

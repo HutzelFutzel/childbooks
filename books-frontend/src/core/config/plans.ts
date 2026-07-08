@@ -143,6 +143,11 @@ export interface PublicPlan {
   /** Entitlements + grant are selling points, so they're public. */
   entitlements: PlanEntitlements;
   grant: PlanGrant;
+  /**
+   * Per-action Spark price multipliers (e.g. 0.8 ⇒ 20% cheaper renders). Public
+   * so the studio's estimate chips can show the subscriber's real price.
+   */
+  actionMultipliers: Record<string, number>;
 }
 
 export interface PublicPlansConfig {
@@ -421,7 +426,18 @@ export function toPublicPlan(plan: PlanDefinition, env: BillingEnv = "sandbox"):
     prices,
     entitlements: plan.entitlements,
     grant: plan.grant,
+    actionMultipliers: plan.actionMultipliers,
   };
+}
+
+/**
+ * The Spark price multiplier a public plan applies to an action (1 when the
+ * plan is null/unset — including projections stored before multipliers were
+ * made public).
+ */
+export function planActionMultiplier(plan: PublicPlan | null, action: string): number {
+  const m = plan?.actionMultipliers?.[action];
+  return typeof m === "number" && m > 0 ? m : 1;
 }
 
 // ---- Resolution helpers ----------------------------------------------------

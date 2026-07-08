@@ -152,6 +152,30 @@ export interface ReferenceUse {
    * change even if the image version id did not.
    */
   signature?: string;
+  /**
+   * True when the anchor was used as TEXT context only (e.g. a "related"
+   * anchor whose image is never passed to the model). Staleness then ignores
+   * image-version changes and only tracks the text signature.
+   */
+  textOnly?: boolean;
+}
+
+/**
+ * A subject actually depicted in a rendered illustration, bound to its anchor at
+ * generation time. Captured by a post-render vision "binding pass" (which knows
+ * ground truth — which references were fed in), so the anchor→region mapping is
+ * authoritative and doesn't rely on fuzzy re-matching of descriptions later.
+ * Enables reliable in-place edits/removals and duplicate detection.
+ */
+export interface DepictedSubject {
+  /** The anchor this region depicts, or null for a detected non-anchor subject. */
+  anchorId: string | null;
+  /** Normalized (0..1, top-left origin) bounding box within THIS rendered image. */
+  box: { x: number; y: number; width: number; height: number };
+  /** Short disambiguating description captured at generation time. */
+  brief?: string;
+  /** Localizer confidence (0..1); absent when not reported. */
+  confidence?: number;
 }
 
 /** Per-page text strategy. */
@@ -165,6 +189,12 @@ export interface IllustrationImage extends AnchorImage {
   textMode?: TextMode;
   /** The prompt used (for inspection / reuse). */
   prompt?: string;
+  /**
+   * Subjects bound to regions in this specific rendered image (from the
+   * post-render binding pass). Keyed spatially to THIS blob, so it travels with
+   * the version and stays correct when the user reverts to it.
+   */
+  depicted?: DepictedSubject[];
 }
 
 export interface Anchor {
@@ -273,6 +303,15 @@ export interface Project {
   title: string;
   createdAt: number;
   updatedAt: number;
+  /**
+   * Monotonic persisted-generation counter for optimistic concurrency. Each
+   * successful save increments it (compare-and-set on the stored value), so a
+   * second writer (another tab/device) that edited from an older generation is
+   * detected as a conflict instead of silently clobbering the newer state.
+   * Optional for back-compat with projects persisted before it existed (treated
+   * as 0).
+   */
+  rev?: number;
   stage: ProjectStage;
   config: BookConfig;
   /** Highest stage the user has unlocked, so they can navigate back/forward. */

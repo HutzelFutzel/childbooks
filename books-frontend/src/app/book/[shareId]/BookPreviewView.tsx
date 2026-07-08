@@ -46,7 +46,7 @@ export function BookPreviewView({
           </Link>
           <Link
             href="/studio"
-            className="rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-soft transition hover:bg-brand-700"
+            className="rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-(--color-brand-foreground) shadow-soft transition hover:bg-brand-700"
           >
             Make your own
           </Link>
@@ -105,7 +105,7 @@ export function BookPreviewView({
           </p>
           <Link
             href="/studio"
-            className="mt-2 rounded-2xl bg-brand-600 px-8 py-3.5 text-base font-semibold text-white shadow-soft transition hover:bg-brand-700"
+            className="mt-2 rounded-2xl bg-brand-600 px-8 py-3.5 text-base font-semibold text-(--color-brand-foreground) shadow-soft transition hover:bg-brand-700"
           >
             Start your book
           </Link>

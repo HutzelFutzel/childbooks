@@ -122,7 +122,7 @@ function StepBadge({
         done
           ? "bg-emerald-500 text-white"
           : active
-            ? "bg-brand-600 text-white"
+            ? "bg-brand-600 text-(--color-brand-foreground)"
             : locked
               ? "bg-ink-100 text-ink-400"
               : "bg-white text-ink-500 ring-1 ring-inset ring-ink-200",

@@ -19,12 +19,10 @@ import { textFromParagraphs } from "../../core/design";
 import { bookProductForConfig } from "../../core/book";
 import { cn } from "../lib/cn";
 import { AnchorEditor } from "../anchors/AnchorEditor";
-import { ColorField } from "../design/ColorPicker";
 import { Inspector } from "../design/Inspector";
 import { ImageInspector } from "../design/ImageInspector";
 import { ShapeInspector } from "../design/ShapeInspector";
-import { PatternPicker } from "../design/PatternPicker";
-import { SHAPE_DEFS, shapePath } from "../design/shapes";
+import { EDITOR_ELEMENT_TYPES } from "../design/elements";
 import { useStudio } from "./StudioContext";
 import { useDragSource, type DragItem } from "./StudioDnd";
 
@@ -42,7 +40,8 @@ export function StudioInspector() {
 
 /** Draggable building blocks: drag onto any page, or click to drop on the active page. */
 function ElementPalette() {
-  const { pages, selection, addBox, addShape } = useStudio();
+  const studio = useStudio();
+  const { pages, selection } = studio;
   const selectedPageId =
     selection.kind === "page" ||
     selection.kind === "box" ||
@@ -64,31 +63,19 @@ function ElementPalette() {
         )}
       </div>
 
-      <PaletteButton
-        getItem={() => ({ type: "text", label: "Text" })}
-        onClick={targetPageId ? () => addBox(targetPageId) : undefined}
-        icon={<Type className="size-4" />}
-        label="Text box"
-      />
-
-      <p className="mb-1.5 mt-3 text-[11px] font-medium text-ink-400">Shapes &amp; bubbles</p>
-      <div className="grid grid-cols-6 gap-1.5">
-        {SHAPE_DEFS.map((def) => (
-          <PaletteTile
-            key={def.id}
-            getItem={() => ({ type: "shape", kind: def.id, label: def.label })}
-            onClick={targetPageId ? () => addShape(targetPageId, def.id) : undefined}
-            label={def.label}
-          >
-            <svg width={20} height={20} viewBox="0 0 20 20" style={{ overflow: "visible" }}>
-              <path
-                d={shapePath(def.id, 16, 16, { corner: 0.18, points: 5, tailX: 0.3, tailY: 1.12 })}
-                transform="translate(2 2)"
-                fill="rgba(71,85,105,0.85)"
-              />
-            </svg>
-          </PaletteTile>
-        ))}
+      <div className="space-y-2">
+        {EDITOR_ELEMENT_TYPES.map((el) => {
+          const Icon = el.icon;
+          return (
+            <PaletteButton
+              key={el.id}
+              getItem={el.dragItem}
+              onClick={targetPageId ? () => el.add(studio, targetPageId) : undefined}
+              icon={<Icon className="size-4" />}
+              label={el.label}
+            />
+          );
+        })}
       </div>
 
       <p className="mt-2.5 text-[11px] leading-relaxed text-ink-400">
@@ -122,29 +109,6 @@ function PaletteButton({
       </span>
       {label}
       <Plus className="ml-auto size-4 text-ink-300" />
-    </button>
-  );
-}
-
-function PaletteTile({
-  getItem,
-  onClick,
-  label,
-  children,
-}: {
-  getItem: () => DragItem;
-  onClick?: () => void;
-  label: string;
-  children: React.ReactNode;
-}) {
-  const drag = useDragSource(getItem, onClick);
-  return (
-    <button
-      {...drag}
-      title={label}
-      className="flex aspect-square cursor-grab touch-none items-center justify-center rounded-lg border border-ink-200 bg-white transition hover:border-brand-300 hover:bg-brand-50 active:cursor-grabbing"
-    >
-      {children}
     </button>
   );
 }
@@ -204,18 +168,11 @@ function InspectorBody() {
         />
         <Inspector
           box={box}
-          selectedSpan={selection.span}
           pageWidthIn={trim.widthIn}
           pageHeightIn={trim.heightIn}
           onChange={(patch) => studio.patchBox(pageId, box.id, patch)}
-          onChangeSpan={(ref, patch) => studio.patchSpan(pageId, box.id, ref, patch)}
           onDelete={() => studio.deleteBox(pageId, box.id)}
           onDuplicate={() => studio.duplicateBox(pageId, box.id)}
-          onAlign={(edge) => studio.alignBox(pageId, box.id, edge)}
-          onFitText={() => studio.fitTextToBox(pageId, box.id)}
-          onFitBox={() => studio.fitBoxToText(pageId, box.id)}
-          onToggleAutoFit={() => studio.toggleAutoFit(pageId, box.id)}
-          onToggleAutoFitGrow={() => studio.toggleAutoFitGrow(pageId, box.id)}
         />
       </>
     );
@@ -288,9 +245,7 @@ function InspectorBody() {
   }
 
   if (selection.kind === "page") {
-    const pd = studio.pageDesign(selection.pageId);
     const page = studio.pages.find((p) => p.id === selection.pageId);
-    const hasIllustrationEl = (pd.images ?? []).some((im) => im.kind === "illustration");
     return (
       <>
         <ContextHeader
@@ -301,36 +256,10 @@ function InspectorBody() {
         />
         <div className="space-y-5 p-4">
           <p className="text-xs leading-relaxed text-ink-400">
-            Click any text box or shape on the page to style it, or add one from the panel above.
+            Click any text on the page to style it, or add a text box from the panel above.
           </p>
 
-          {page?.blobId && !hasIllustrationEl && (
-            <button
-              onClick={() => studio.makeIllustrationEditable(selection.pageId)}
-              className="flex w-full items-center justify-center gap-2 rounded-lg border border-ink-200 px-3 py-2 text-xs font-medium text-ink-600 transition hover:border-brand-300 hover:bg-brand-50"
-            >
-              <ImageIcon className="size-4" /> Reposition / resize illustration
-            </button>
-          )}
-
           <LayersPanel pageId={selection.pageId} />
-
-          <div>
-            <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-ink-400">
-              Page background
-            </p>
-            <ColorField
-              label="Fill"
-              value={pd.background?.color ?? "rgba(255,255,255,0)"}
-              onChange={(color) => studio.setPageBackground(selection.pageId, { color })}
-            />
-            <div className="mt-2">
-              <PatternPicker
-                value={pd.background?.pattern}
-                onChange={(pattern) => studio.setPageBackground(selection.pageId, { pattern })}
-              />
-            </div>
-          </div>
         </div>
       </>
     );
@@ -519,8 +448,8 @@ function EmptyInspector() {
       <p className="text-sm font-semibold text-ink-700">Nothing selected</p>
       <p className="max-w-60 text-xs leading-relaxed text-ink-400">
         <MousePointerClick className="mr-1 inline size-3.5" />
-        Click a page to set its background, tap any text or shape to style it, or add a new element
-        from the panel above.
+        Tap any text on a page to change its words, size, or color — or add a new text box from the
+        panel above.
       </p>
     </div>
   );

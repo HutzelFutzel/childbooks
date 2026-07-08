@@ -1,7 +1,17 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
+// Always-available UI chrome fonts (book text fonts are still lazy-loaded on
+// demand via ui/typography/fonts). Inter drives body copy; Fredoka the display.
+import "@fontsource/inter/400.css";
+import "@fontsource/inter/500.css";
+import "@fontsource/inter/600.css";
+import "@fontsource/inter/700.css";
+import "@fontsource/fredoka/500.css";
+import "@fontsource/fredoka/600.css";
+import "@fontsource/fredoka/700.css";
 import { AnalyticsInit } from "../ui/components/AnalyticsInit";
 import { getBrandingConfig } from "../server/branding";
+import { brandingThemeVars } from "../ui/lib/color";
 
 /**
  * Site-wide defaults. The favicon + theme color come from the admin-managed
@@ -39,11 +49,17 @@ export async function generateViewport(): Promise<Viewport> {
   return { themeColor: branding.colors.primary };
 }
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  // Derive the whole palette from the admin's brand colors and inject it as
+  // inline CSS variables on <html>, so every `bg-brand-*` / `text-accent-*`
+  // utility reflects branding with no flash of the default purple.
+  const branding = await getBrandingConfig();
+  const themeVars = brandingThemeVars(branding);
+
   return (
-    <html lang="en">
+    <html lang="en" style={themeVars as React.CSSProperties}>
       <body>
         {children}
         <AnalyticsInit />
