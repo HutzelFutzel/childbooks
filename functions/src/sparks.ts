@@ -284,36 +284,125 @@ export async function grantSparks(args: GrantArgs): Promise<boolean> {
 }
 
 /**
- * When more fresh accounts than this claim the starter grant in one (UTC) day,
- * an admin alert fires — the cheap tripwire against starter-grant farming.
+ * When more callers than this claim their FIRST ladder rung in one (UTC) day,
+ * an admin alert fires — the cheap tripwire against grant farming.
  */
-const STARTER_GRANT_DAILY_ALERT_THRESHOLD = 50;
+const GRANT_LADDER_DAILY_ALERT_THRESHOLD = 50;
+
+/** Max distinct users per IP per (UTC) day that may start the grant ladder. */
+const GRANT_LADDER_IP_DAILY_LIMIT = 5;
+
+/** What the caller has proven about their identity (from the verified token). */
+export interface GrantLadderCaller {
+  uid: string;
+  /** True for anonymous (guest) sessions. */
+  anonymous: boolean;
+  /** True when the account's email is verified (or provider-verified). */
+  verified: boolean;
+  /** Client IP for the per-IP first-grant throttle (best-effort). */
+  ip?: string;
+}
 
 /**
- * Grant the one-time starter Sparks to a brand-new account, exactly once (keyed
- * by a fixed ref). No-op when the economy is disabled or the grant is zero.
- * Also feeds a per-day counter with a velocity alert for abuse detection.
+ * Grant every ladder rung the caller currently qualifies for, exactly once per
+ * rung (fixed refs): the guest rung for any session, the signup bonus once the
+ * account is non-anonymous, and the verify bonus once the email is verified.
+ * Safe to call repeatedly — each rung is idempotent, and later calls simply
+ * top up the newly-unlocked rungs.
+ *
+ * Abuse controls: the FIRST rung for a uid is gated by a per-IP daily cap, and
+ * first-rung velocity feeds a per-day counter with an admin alert. Accounts
+ * that already received the legacy single "starter" grant are skipped entirely
+ * so nobody is double-granted across the migration.
  */
-export async function ensureStarterGrant(uid: string): Promise<void> {
+export async function ensureGrantLadder(caller: GrantLadderCaller): Promise<void> {
   try {
     const config = await getSparksConfig();
-    if (!config.enabled || config.starterGrant <= 0) return;
-    const granted = await grantSparks({
-      uid,
-      amount: config.starterGrant,
-      type: "grant",
-      reason: "starter",
-      source: "starter",
-      ref: "starter",
-    });
-    if (granted) await bumpStarterGrantCounter();
+    if (!config.enabled) return;
+    const g = config.grants;
+
+    // Legacy accounts already got the full old starter grant in one lump.
+    const legacy = await db().doc(`users/${caller.uid}/sparksLedger/grant_starter`).get();
+    if (legacy.exists) return;
+
+    // First contact with the ladder? Enforce the per-IP cap before any grant.
+    const first = !(await db().doc(`users/${caller.uid}/sparksLedger/grant_guest-starter`).get()).exists;
+    if (first) {
+      const allowed = await admitLadderStartForIp(caller.ip);
+      if (!allowed) return;
+    }
+
+    let anyGranted = false;
+    if (g.guestSparks > 0) {
+      anyGranted =
+        (await grantSparks({
+          uid: caller.uid,
+          amount: g.guestSparks,
+          type: "grant",
+          reason: "starter",
+          source: "starter",
+          ref: "guest-starter",
+        })) || anyGranted;
+    }
+    if (!caller.anonymous && g.signupBonusSparks > 0) {
+      anyGranted =
+        (await grantSparks({
+          uid: caller.uid,
+          amount: g.signupBonusSparks,
+          type: "grant",
+          reason: "signup bonus",
+          source: "starter",
+          ref: "signup-bonus",
+        })) || anyGranted;
+    }
+    if (!caller.anonymous && caller.verified && g.verifyBonusSparks > 0) {
+      anyGranted =
+        (await grantSparks({
+          uid: caller.uid,
+          amount: g.verifyBonusSparks,
+          type: "grant",
+          reason: "verify bonus",
+          source: "starter",
+          ref: "verify-bonus",
+        })) || anyGranted;
+    }
+    if (first && anyGranted) await bumpLadderStartCounter();
   } catch {
-    // Best-effort: never block sign-in/first use on the starter grant.
+    // Best-effort: never block sign-in/first use on the starter grants.
   }
 }
 
-/** Increment today's starter-grant counter and alert when velocity spikes. */
-async function bumpStarterGrantCounter(): Promise<void> {
+/**
+ * Per-IP daily admission for STARTING the grant ladder. Returns false once too
+ * many distinct users behind one IP claimed their first rung today. Fails open
+ * (missing/unparseable IP or Firestore hiccups must not block legit users).
+ */
+async function admitLadderStartForIp(ip: string | undefined): Promise<boolean> {
+  if (!ip) return true;
+  try {
+    const { createHash } = await import("node:crypto");
+    const day = new Date().toISOString().slice(0, 10);
+    const hash = createHash("sha256").update(ip).digest("hex").slice(0, 16);
+    const ref = db().doc(`abuseCounters/ipGrants_${day}_${hash}`);
+    return await db().runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const count = ((snap.exists ? (snap.get("count") as number) : 0) ?? 0) + 1;
+      if (count > GRANT_LADDER_IP_DAILY_LIMIT) return false;
+      // expiresAt supports a Firestore TTL policy on this collection.
+      tx.set(
+        ref,
+        { count, day, updatedAt: Date.now(), expiresAt: Date.now() + 7 * 86400_000 },
+        { merge: true },
+      );
+      return true;
+    });
+  } catch {
+    return true;
+  }
+}
+
+/** Increment today's ladder-start counter and alert when velocity spikes. */
+async function bumpLadderStartCounter(): Promise<void> {
   try {
     const day = new Date().toISOString().slice(0, 10);
     const ref = db().doc(`stats/starterGrants_${day}`);
@@ -323,12 +412,12 @@ async function bumpStarterGrantCounter(): Promise<void> {
       tx.set(ref, { count: next, day, updatedAt: Date.now() }, { merge: true });
       return next;
     });
-    if (count === STARTER_GRANT_DAILY_ALERT_THRESHOLD) {
+    if (count === GRANT_LADDER_DAILY_ALERT_THRESHOLD) {
       const { raiseAlert } = await import("./alerts");
       await raiseAlert({
         severity: "warning",
         kind: "starterGrant.velocity",
-        message: `${count} starter grants were claimed today (${day}) — check for signup farming.`,
+        message: `${count} starter-grant ladders were started today (${day}) — check for signup farming.`,
         meta: { day, count },
         ref: day,
       });
@@ -338,17 +427,31 @@ async function bumpStarterGrantCounter(): Promise<void> {
   }
 }
 
+export interface AffordOptions {
+  /**
+   * Deny the negative buffer (guests): the action must be fully covered by the
+   * current balance. Guests have no payment relationship to settle a negative
+   * balance against, so they never get credit.
+   */
+  noNegativeBuffer?: boolean;
+}
+
 /**
  * Pre-flight affordability check. Throws {@link InsufficientSparks} when starting
  * an action costing `estimateSparks` would push the balance below the configured
  * negative buffer. No-op when the economy is off or the estimate is 0.
  */
-export async function ensureAfford(uid: string, estimateSparks: number): Promise<void> {
+export async function ensureAfford(
+  uid: string,
+  estimateSparks: number,
+  opts: AffordOptions = {},
+): Promise<void> {
   if (estimateSparks <= 0) return;
   const config = await getSparksConfig();
   if (!config.enabled) return;
   const balance = await getBalance(uid);
-  if (balance - estimateSparks < -config.maxNegativeSparks) {
+  const floor = opts.noNegativeBuffer ? 0 : -config.maxNegativeSparks;
+  if (balance - estimateSparks < floor) {
     throw new InsufficientSparks(balance, estimateSparks);
   }
 }
@@ -552,9 +655,10 @@ export async function ensureAffordAction(
   uid: string,
   action: string,
   tier: ImageTier = DEFAULT_IMAGE_TIER,
+  opts: AffordOptions = {},
 ): Promise<void> {
   const estimate = await estimateForUser(uid, action, tier);
-  await ensureAfford(uid, estimate);
+  await ensureAfford(uid, estimate, opts);
 }
 
 export type { SparksConfig };

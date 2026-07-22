@@ -115,30 +115,20 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // Global, admin-managed configuration (model config, art-style examples,
-    // model costs). World-readable so the wizard + client can resolve them; writes
-    // only ever happen through the backend (Admin SDK) after `requireAdmin`.
-    match /appConfig/{doc} {
-      allow read: if true;
-      allow write: if false;
+    function isAdmin() {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
     }
 
-    // Public shared books: anyone can read a published book (powers the SSR
-    // preview pages), but only the owner may create or modify their own share.
-    // The document must own its path (shareId field == doc id) so a share can't
-    // claim a different id, and ownership is immutable once set so an existing
-    // owner can't hand the doc to (or blame it on) someone else.
-    match /publishedBooks/{shareId} {
-      allow read: if true;
-      allow create: if request.auth != null
-        && request.resource.data.ownerUid == request.auth.uid
-        && request.resource.data.shareId == shareId;
-      allow update: if request.auth != null
-        && resource.data.ownerUid == request.auth.uid
-        && request.resource.data.ownerUid == resource.data.ownerUid
-        && request.resource.data.shareId == resource.data.shareId;
-      allow delete: if request.auth != null
-        && resource.data.ownerUid == request.auth.uid;
+    // Global, admin-managed configuration (model config, art-style examples…).
+    // World-readable so the wizard + client can resolve them; writes only ever
+    // happen through the backend (Admin SDK) after `requireAdmin`.
+    // Exception: the raw provider rate table (`modelCosts`) is admin-only —
+    // the storefront reads the derived `modelCostsPublic` projection instead
+    // (flat per-image estimates, written by the backend on every save).
+    match /appConfig/{doc} {
+      allow read: if doc != 'modelCosts' || isAdmin();
+      allow write: if false;
     }
 
     // Admin dashboard settings (exclusion lists, timezone, refresh interval).

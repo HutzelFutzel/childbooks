@@ -88,7 +88,11 @@ if (!DRY && !SKIP_SECRETS) {
   }
 }
 
-// 1. Build the backend bundle.
+// 1. Verify required env/config is in place BEFORE building — a deploy with a
+// missing PUBLIC_APP_URL or frontend backend URL ships a broken store.
+run("Check environment", "node", ["scripts/check-env.mjs"]);
+
+// 2. Build the backend bundle.
 run("Build functions", "yarn", ["build:functions"]);
 
 // 2. Deploy backend + rules + indexes (+ optional frontend).

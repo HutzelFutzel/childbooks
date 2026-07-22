@@ -21,6 +21,7 @@ import {
   currentReferenceUses,
 } from "../core/pipeline/provenance";
 import { effectiveAnchorIds } from "../core/book/anchorRefs";
+import { containersOf, linkedAnchorsFor, relatedAnchorsFor } from "../core/book/anchorGraph";
 import { spreadsById } from "../core/book/units";
 import { reconcileScreenplaySpreadIds } from "../core/book/screenplayReconcile";
 import { ProviderError } from "../core/errors";
@@ -29,6 +30,7 @@ import type { ProviderId } from "../core/config/options";
 import type { ReferenceImage } from "../core/providers/types";
 import type {
   Anchor,
+  BakedCoverText,
   IllustrationImage,
   Project,
   ReferenceUse,
@@ -44,9 +46,11 @@ import {
   analyzeStoryRemote,
   anchorDescriptionRemote,
   anchorImageRemote,
+  coverWrapRemote,
   illustrationRemote,
   screenplayRemote,
 } from "../platform/aiClient";
+import { COVER_BACK_ID, COVER_FRONT_ID } from "../core/types";
 import { resolveImageModelClient, resolveModelsClient } from "../platform/aiResolve";
 import { DEFAULT_IMAGE_TIER, type ImageTier } from "../core/config/modelConfig";
 import { requireImageTier } from "./imageTierPrompt";
@@ -58,8 +62,12 @@ import { useAppConfigStore } from "./appConfigStore";
 export { currentAnchorImage } from "../core/pipeline/provenance";
 export {
   containedAnchorsFor,
+  containersOf,
   relatedAnchorsFor,
   linkedAnchorsFor,
+  relationOwner,
+  relationNote,
+  relationSentence,
   orderAnchorsByDependency,
 } from "../core/book/anchorGraph";
 
@@ -235,7 +243,14 @@ function escapeRegExp(s: string): string {
 export function suggestLinkedAnchors(anchor: Anchor, all: Anchor[]): Anchor[] {
   const haystack = `${anchor.description ?? ""} ${anchor.userGuidance ?? ""}`.toLowerCase();
   if (!haystack.trim()) return [];
-  const linked = new Set([...(anchor.containedIds ?? []), ...(anchor.relatedIds ?? [])]);
+  // Exclude anything already connected in EITHER direction (contains either
+  // way, or relates either way), so a link created from the other anchor isn't
+  // re-suggested here.
+  const linked = new Set([
+    ...(anchor.containedIds ?? []),
+    ...containersOf(anchor, all).map((o) => o.id),
+    ...relatedAnchorsFor(anchor, all).map((o) => o.id),
+  ]);
   return all.filter((other) => {
     if (other.id === anchor.id || linked.has(other.id)) return false;
     const name = other.name?.trim();
@@ -265,12 +280,11 @@ export function staleAnchorIds(project: Project): string[] {
     });
     // The link SET itself changed since the render (a relation was added or
     // removed) — the sheet no longer reflects the declared relationships.
+    // Uses the SAME bidirectional definition the renderer records with
+    // (`linkedAnchorsFor`), so an incoming relates edge created from the other
+    // anchor doesn't read as a perpetual mismatch here.
     if (!isStale) {
-      const currentLinks = new Set(
-        [...(a.containedIds ?? []), ...(a.relatedIds ?? [])].filter(
-          (id) => id !== a.id && byId.has(id),
-        ),
-      );
+      const currentLinks = new Set(linkedAnchorsFor(a, anchors).map((r) => r.id));
       const recorded = new Set(used.map((u) => u.anchorId).filter((id) => byId.has(id)));
       isStale =
         currentLinks.size !== recorded.size ||
@@ -361,6 +375,42 @@ export function staleIllustrationSpreadIds(project: Project): string[] {
   return stale;
 }
 
+/** The baked-in cover text vs. the current form text, when they differ. */
+export interface CoverTextDrift {
+  /** What the current artwork actually shows. */
+  baked: BakedCoverText;
+  /** What the title/subtitle/author fields say now. */
+  current: BakedCoverText;
+}
+
+/**
+ * Detect when a typographic (baked-text) cover's artwork no longer matches the
+ * book's current title/subtitle/author — e.g. the user renamed the book after
+ * generating the cover, so the drawn title is now wrong. Returns null when the
+ * cover isn't baked, hasn't been generated, or is still in sync.
+ */
+export function coverTextDrift(project: Project, coverId: string): CoverTextDrift | null {
+  const tree = project.illustrations?.[coverId];
+  if (!tree) return null;
+  const content = getCursor(tree).content;
+  if (content.textMode !== "in-image" || !content.bakedText) return null;
+  const doc = project.screenplay ? getCursor(project.screenplay).content : null;
+  const cover = coverId === COVER_FRONT_ID ? doc?.frontCover : doc?.backCover;
+  // The front cover's title is always the project title (single source of truth).
+  const current: BakedCoverText = {
+    title: coverId === COVER_FRONT_ID ? project.title : cover?.title,
+    subtitle: cover?.subtitle,
+    author: cover?.author,
+  };
+  const norm = (s?: string) => (s ?? "").trim();
+  const baked = content.bakedText;
+  const drifted =
+    norm(baked.title) !== norm(current.title) ||
+    norm(baked.subtitle) !== norm(current.subtitle) ||
+    norm(baked.author) !== norm(current.author);
+  return drifted ? { baked, current } : null;
+}
+
 /**
  * Generate (or iterate on) the illustration for a screenplay spread. The render
  * runs server-side (`/ai/illustration`); the result is folded into the spread's
@@ -382,8 +432,56 @@ export async function generateIllustrationVersion(
     resolvedTier,
   );
   if (!render) return;
+  // Record the exact text baked into a typographic cover, so the studio can
+  // warn when the book's title/subtitle/author later drift from the artwork.
+  if (spread.bakeText && (spread.coverTitle ?? "").trim()) {
+    render.bakedText = {
+      title: spread.coverTitle,
+      subtitle: spread.coverSubtitle,
+      author: spread.coverAuthor,
+    };
+  }
   const versions = applyIllustrationRender(project.illustrations?.[spread.id], render);
   await useProjectsStore.getState().setIllustration(spread.id, versions);
+}
+
+/**
+ * Generate both covers as one continuous wrap image (split server-side into a
+ * front + back panel) and fold each panel into its cover's version tree. One
+ * generation → guaranteed-matching covers. Returns false when the tier prompt
+ * was opened (no generation happened yet).
+ */
+export async function generateCoverWrap(options: { tier?: ImageTier } = {}): Promise<boolean> {
+  const project = useProjectsStore.getState().current();
+  if (!project) throw new Error("No active project.");
+  const resolvedTier = options.tier ?? requireImageTier();
+  if (!resolvedTier) return false;
+  const { front, back } = await coverWrapRemote(project, resolvedTier);
+  // Record the baked title/subtitle/author on the front panel (the wrap bakes
+  // text into the front/right half only), for later drift detection.
+  const frontCover = project.screenplay
+    ? getCursor(project.screenplay).content.frontCover
+    : undefined;
+  if (frontCover?.bakeText && project.title.trim()) {
+    front.bakedText = {
+      title: project.title,
+      subtitle: frontCover.subtitle,
+      author: frontCover.author,
+    };
+  }
+  // Re-read the project so we fold onto the freshest trees (single writer).
+  const store = useProjectsStore.getState();
+  const cur = store.current() ?? project;
+  await store.setIllustration(
+    COVER_FRONT_ID,
+    applyIllustrationRender(cur.illustrations?.[COVER_FRONT_ID], front),
+  );
+  const cur2 = store.current() ?? cur;
+  await store.setIllustration(
+    COVER_BACK_ID,
+    applyIllustrationRender(cur2.illustrations?.[COVER_BACK_ID], back),
+  );
+  return true;
 }
 
 /**
@@ -446,6 +544,10 @@ export function buildIllustrationTask(
     hasStyleRef,
     hasCompositionRef: false,
     maskMode: false,
+    bakeText: spread.bakeText,
+    coverTitle: spread.coverTitle,
+    coverSubtitle: spread.coverSubtitle,
+    coverAuthor: spread.coverAuthor,
     prompts: {
       artStyles,
       templates: useAppConfigStore.getState().prompts,

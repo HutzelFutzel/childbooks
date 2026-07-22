@@ -5,9 +5,9 @@ import type { SiteTextMap } from "./content";
 
 const ITEMS = [
   { icon: Printer, slot: "trust.0" as SiteTextSlot, label: "Professional print quality" },
-  { icon: Truck, slot: "trust.1" as SiteTextSlot, label: "Fulfillment & shipping by Lulu" },
-  { icon: Wand2, slot: "trust.2" as SiteTextSlot, label: "Consistent AI illustrations" },
-  { icon: ShieldCheck, slot: "trust.3" as SiteTextSlot, label: "Your keys never leave the server" },
+  { icon: Truck, slot: "trust.1" as SiteTextSlot, label: "Printed & shipped by Lulu" },
+  { icon: Wand2, slot: "trust.2" as SiteTextSlot, label: "Same characters on every page" },
+  { icon: ShieldCheck, slot: "trust.3" as SiteTextSlot, label: "Free to start — no credit card" },
 ];
 
 /** A quiet reassurance strip under the hero. */

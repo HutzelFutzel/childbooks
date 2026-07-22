@@ -61,6 +61,20 @@ export interface SparkPack {
   sortOrder: number;
 }
 
+/**
+ * The starter-grant LADDER — free Sparks are earned in rungs so a visitor can
+ * try generation before signing up, but the full grant requires a verified
+ * account (each rung is a separate one-time, idempotent grant):
+ *   1. `guestSparks`       — any session, including anonymous guests.
+ *   2. `signupBonusSparks` — when the guest becomes a real account.
+ *   3. `verifyBonusSparks` — when the account's email is verified.
+ */
+export interface GrantLadder {
+  guestSparks: number;
+  signupBonusSparks: number;
+  verifyBonusSparks: number;
+}
+
 /** Referral rewards: both sides get Sparks when the referred user first PAYS. */
 export interface ReferralSettings {
   enabled: boolean;
@@ -79,8 +93,12 @@ export interface SparksConfig {
   sparkValueUsd: number;
   /** Markup over raw provider cost when deriving a price, e.g. 2.5. */
   markupMultiplier: number;
-  /** One-time grant for a brand-new account (enough for ~one complete book). */
-  starterGrant: number;
+  /**
+   * The free-Sparks ladder (guest → signup → verified). The rungs together
+   * should be enough for ~one complete book; the guest rung alone should cover
+   * a taste of generation (a character or two) so value lands before signup.
+   */
+  grants: GrantLadder;
   /**
    * How far a balance may go negative so an in-flight action (whose real cost
    * landed above the reserved estimate) can always finish — never fail a render
@@ -115,7 +133,7 @@ export function createDefaultSparksConfig(): SparksConfig {
     enabled: false,
     sparkValueUsd: 0.02,
     markupMultiplier: 2.5,
-    starterGrant: 150,
+    grants: { guestSparks: 40, signupBonusSparks: 60, verifyBonusSparks: 50 },
     maxNegativeSparks: 10,
     actions,
     packs: [
@@ -137,6 +155,33 @@ function coerceActionPricing(raw: unknown, fallback: ActionPricing): ActionPrici
     estimatedSparks:
       typeof p.estimatedSparks === "number" && p.estimatedSparks >= 0 ? p.estimatedSparks : fallback.estimatedSparks,
   };
+}
+
+function nonNegative(v: unknown, fallback: number): number {
+  return typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : fallback;
+}
+
+/**
+ * Coerce the grant ladder. Older docs stored a single `starterGrant` (granted
+ * only to verified accounts) — map that entirely onto the verify rung so the
+ * admin's configured total is preserved exactly.
+ */
+function normalizeGrants(p: Partial<SparksConfig>, def: GrantLadder): GrantLadder {
+  const legacy = (p as { starterGrant?: unknown }).starterGrant;
+  if (!p.grants && typeof legacy === "number" && legacy >= 0) {
+    return { guestSparks: 0, signupBonusSparks: 0, verifyBonusSparks: legacy };
+  }
+  return {
+    guestSparks: nonNegative(p.grants?.guestSparks, def.guestSparks),
+    signupBonusSparks: nonNegative(p.grants?.signupBonusSparks, def.signupBonusSparks),
+    verifyBonusSparks: nonNegative(p.grants?.verifyBonusSparks, def.verifyBonusSparks),
+  };
+}
+
+/** The total free Sparks a fully verified account can earn from the ladder. */
+export function totalGrantSparks(config: SparksConfig): number {
+  const g = config.grants;
+  return g.guestSparks + g.signupBonusSparks + g.verifyBonusSparks;
 }
 
 /** Merge a stored (possibly partial/older) doc onto the current defaults. */
@@ -168,7 +213,7 @@ export function normalizeSparksConfig(input: unknown): SparksConfig {
     sparkValueUsd: typeof p.sparkValueUsd === "number" && p.sparkValueUsd > 0 ? p.sparkValueUsd : def.sparkValueUsd,
     markupMultiplier:
       typeof p.markupMultiplier === "number" && p.markupMultiplier > 0 ? p.markupMultiplier : def.markupMultiplier,
-    starterGrant: typeof p.starterGrant === "number" && p.starterGrant >= 0 ? p.starterGrant : def.starterGrant,
+    grants: normalizeGrants(p, def.grants),
     maxNegativeSparks:
       typeof p.maxNegativeSparks === "number" && p.maxNegativeSparks >= 0 ? p.maxNegativeSparks : def.maxNegativeSparks,
     actions,
@@ -387,7 +432,11 @@ export const sparksConfigSchema = z.object({
   enabled: z.boolean(),
   sparkValueUsd: z.number().positive(),
   markupMultiplier: z.number().positive(),
-  starterGrant: z.number().min(0),
+  grants: z.object({
+    guestSparks: z.number().min(0),
+    signupBonusSparks: z.number().min(0),
+    verifyBonusSparks: z.number().min(0),
+  }),
   maxNegativeSparks: z.number().min(0),
   actions: z.record(z.string(), actionPricingSchema),
   packs: z.array(sparkPackSchema),

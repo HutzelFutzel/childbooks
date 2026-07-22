@@ -89,6 +89,38 @@ export function requireVerified(req: AuthedRequest, res: Response, next: NextFun
   next();
 }
 
+/** True when the verified token belongs to an anonymous (guest) session. */
+export function isAnonymousToken(token: DecodedIdToken | undefined): boolean {
+  const provider = (token?.firebase as { sign_in_provider?: string } | undefined)?.sign_in_provider;
+  return provider === "anonymous";
+}
+
+/**
+ * True when the token's email is verified. Mirrors {@link requireVerified}'s
+ * emulator convenience: local testing can't send verification emails, so any
+ * non-anonymous emulated caller counts as verified.
+ */
+export function isVerifiedToken(token: DecodedIdToken | undefined): boolean {
+  if (!token || isAnonymousToken(token)) return false;
+  if (process.env.FUNCTIONS_EMULATOR === "true") return true;
+  return token.email_verified === true;
+}
+
+/**
+ * Whether a uid belongs to an anonymous (guest) account — the Admin-SDK lookup
+ * for paths that only have a uid (e.g. the job queue), not a request token.
+ * Fails closed (treated as guest) so a lookup hiccup can't unlock credit.
+ */
+export async function isAnonymousUid(uid: string): Promise<boolean> {
+  ensureAdmin();
+  try {
+    const user = await getAuth().getUser(uid);
+    return user.providerData.length === 0;
+  } catch {
+    return true;
+  }
+}
+
 /**
  * Reject the request unless the caller is an admin. The source of truth is a
  * Firestore `admins/{uid}` document (set in the Firebase console), read with the

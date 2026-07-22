@@ -269,6 +269,15 @@ export async function resolveActivePlan(uid: string): Promise<PlanDefinition | n
 }
 
 /**
+ * Whether the user currently has a live (active/trialing/past_due) Stripe
+ * subscription. Used to block a second concurrent subscription checkout —
+ * plan changes must go through the Customer Portal instead.
+ */
+export async function hasActiveSubscription(uid: string): Promise<boolean> {
+  return (await activePriceId(uid)) != null;
+}
+
+/**
  * Whether a user may use a gateable feature (see `core/config/features`): free
  * for everyone until an admin lists the id on an active plan, then only plans
  * carrying it qualify. Fails OPEN on lookup errors — a config hiccup must never

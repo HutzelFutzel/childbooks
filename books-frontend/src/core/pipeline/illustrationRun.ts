@@ -24,6 +24,12 @@ import type {
   ReferenceUse,
   ScreenplaySpread,
 } from "../types";
+import { COVER_BACK_ID, COVER_FRONT_ID } from "../types";
+
+/** True for the front/back cover pseudo-spreads (adds cover-only negatives). */
+function isCoverSpread(spread: ScreenplaySpread): boolean {
+  return spread.id === COVER_FRONT_ID || spread.id === COVER_BACK_ID;
+}
 import {
   addVersion,
   createVersionTree,
@@ -147,6 +153,8 @@ export interface IllustrationRender {
   prompt: string;
   label: string;
   textMode: IllustrationImage["textMode"];
+  /** Cover-only: the exact text baked into the artwork (typographic covers). */
+  bakedText?: IllustrationImage["bakedText"];
   /** Subjects bound to regions in the rendered image (post-render binding pass). */
   depicted?: DepictedSubject[];
   /** Parent version to branch from (the source node), if any. */
@@ -164,6 +172,7 @@ export function applyIllustrationRender(
     references: render.references,
     textMode: render.textMode,
     prompt: render.prompt,
+    ...(render.bakedText ? { bakedText: render.bakedText } : {}),
     ...(render.depicted ? { depicted: render.depicted } : {}),
   };
   const next = tree
@@ -1097,6 +1106,13 @@ export async function renderIllustration(
       );
     } catch (e) {
       if (e instanceof IntentAmbiguousError) throw e;
+      // Degrading is intentional (substring heuristics still work), but never
+      // silent: a persistent resolver failure (bad model id, quota) would
+      // otherwise quietly worsen every edit with no trace to debug from.
+      console.warn(
+        "[illustration] edit-intent resolution failed; falling back to substring heuristics:",
+        e instanceof Error ? e.message : e,
+      );
       editOps = null;
     }
   }
@@ -1386,6 +1402,12 @@ export async function renderIllustration(
     hasStyleRef,
     hasCompositionRef,
     maskMode,
+    // Cover-only: bake the title/subtitle/author typography into the artwork.
+    bakeText: spread.bakeText,
+    coverTitle: spread.coverTitle,
+    coverSubtitle: spread.coverSubtitle,
+    coverAuthor: spread.coverAuthor,
+    isCover: isCoverSpread(spread),
     // Canonical rewrite when intent resolved cleanly (proper anchor names,
     // typos corrected); the user's raw text otherwise.
     edit: promptEdit,
@@ -1454,6 +1476,159 @@ export async function renderIllustration(
     textMode: spread.textMode,
     depicted,
     parentId: sourceNodeId,
+  };
+}
+
+/** Inputs for a single wrap-cover generation (front + back as one artwork). */
+export interface CoverWrapInput {
+  /** Front-cover art brief (renders into the RIGHT half). */
+  frontIllustration: string;
+  /** Back-cover art brief (renders into the LEFT half). */
+  backIllustration: string;
+  /** Union of the anchors both covers should feature (for consistency). */
+  anchorIds?: string[];
+  anchorNames?: string[];
+  /** Bake the title/subtitle/author typography into the front (right) half. */
+  bakeText?: boolean;
+  coverTitle?: string;
+  coverSubtitle?: string;
+  coverAuthor?: string;
+}
+
+/** The raw (unsaved) product of one wrap-cover render, for the host to split. */
+export interface CoverWrapImage {
+  base64: string;
+  mimeType: string;
+  prompt: string;
+  references: ReferenceUse[];
+}
+
+/**
+ * Render a single continuous "wrap" cover — the back cover on the LEFT, the
+ * front cover on the RIGHT, painted as one seamless wide scene — so the two
+ * covers are guaranteed to match. The host then slices it in half to get the
+ * two panels (see `splitWrapCover`), which both keeps costs to ONE generation
+ * and gives real visual continuity instead of two separately-prompted images.
+ *
+ * Returns the raw image bytes (NOT saved) plus provenance, because the split +
+ * per-panel upscale + blob persistence happen on the host where an image
+ * library is available.
+ */
+export async function renderCoverWrapImage(
+  project: Project,
+  input: CoverWrapInput,
+  env: PipelineEnv,
+  signal?: AbortSignal,
+): Promise<CoverWrapImage> {
+  const bake = Boolean(input.bakeText && (input.coverTitle ?? "").trim());
+  const wrapBrief = [
+    "This is ONE continuous WRAP-AROUND cover for a printed book: the LEFT half is the BACK cover and the RIGHT half is the FRONT cover, painted as a single seamless scene that flows across the full width. Do NOT draw a seam, divider, fold or border down the centre.",
+    input.frontIllustration.trim() ? `FRONT cover (RIGHT half): ${input.frontIllustration.trim()}` : "",
+    input.backIllustration.trim() ? `BACK cover (LEFT half): ${input.backIllustration.trim()}` : "",
+    "Place the main character(s) and the focal point in the RIGHT half (front cover). Let the LEFT half (back cover) continue the SAME setting, sky, colour palette, lighting and art style more calmly, leaving room for a short blurb. Keep the lower-LEFT corner calm and simple — plain, uncluttered background with no objects, symbols or graphics there.",
+    bake ? "Render the title text ONLY in the RIGHT half (front cover); do not place any title on the left (back) half." : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const spread: ScreenplaySpread = {
+    id: "cover-wrap",
+    kind: "spread",
+    text: "",
+    illustration: wrapBrief,
+    layoutNote: "",
+    anchorIds: input.anchorIds ?? [],
+    anchorNames: input.anchorNames,
+    textMode: bake ? "in-image" : "overlay",
+    ...(bake
+      ? {
+          bakeText: true,
+          coverTitle: input.coverTitle,
+          coverSubtitle: input.coverSubtitle,
+          coverAuthor: input.coverAuthor,
+        }
+      : {}),
+  };
+
+  const byId = new Map((project.anchors ?? []).map((a) => [a.id, a]));
+  const effectiveIds = effectiveAnchorIds(project.anchors, spread);
+  const anchors = effectiveIds
+    .map((id) => byId.get(id))
+    .filter((a): a is Anchor => Boolean(a));
+
+  const references: ReferenceImage[] = [];
+  const referencedAnchors: Anchor[] = [];
+  const describedAnchors: Anchor[] = [];
+  const [styleRef, anchorData] = await Promise.all([
+    loadStyleReference(env, project.config),
+    Promise.all(
+      anchors.map(async (a) => {
+        const img = currentAnchorImage(a);
+        const raw = img ? await env.loadBlob(img.blobId) : null;
+        return raw ? await asRefPayload(env, raw) : null;
+      }),
+    ),
+  ]);
+  let hasStyleRef = false;
+  if (styleRef) {
+    references.push(styleRef);
+    hasStyleRef = true;
+  }
+  anchors.forEach((a, i) => {
+    if (!currentAnchorImage(a)) {
+      describedAnchors.push(a);
+      return;
+    }
+    const data = anchorData[i];
+    if (data) {
+      references.push({
+        base64: data.base64,
+        mimeType: data.mimeType,
+        label: `${a.name} (${a.description})`,
+        role: "subject",
+      });
+      referencedAnchors.push(a);
+    } else {
+      describedAnchors.push(a);
+    }
+  });
+
+  const prompt = buildIllustrationPrompt({
+    spread,
+    config: project.config,
+    referencedAnchors,
+    describedAnchors,
+    hasStyleRef,
+    hasCompositionRef: false,
+    maskMode: false,
+    bakeText: spread.bakeText,
+    coverTitle: spread.coverTitle,
+    coverSubtitle: spread.coverSubtitle,
+    coverAuthor: spread.coverAuthor,
+    isCover: true,
+    prompts: env.prompts,
+  });
+
+  const imageModel = env.models.imageModel;
+  const key = env.apiKeyFor(imageModel.provider);
+  const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
+  const result = await runStep("image", () =>
+    generateIllustrationImage({
+      prompt,
+      size: chooseImageSize("spread", project.config),
+      creds: { apiKey: key },
+      model: imageModel.id,
+      providerId: imageModel.provider,
+      references: references.length ? references : undefined,
+      signal,
+    }),
+  );
+
+  return {
+    base64: result.base64,
+    mimeType: result.mimeType,
+    prompt,
+    references: currentReferenceUses(project.anchors, effectiveIds),
   };
 }
 

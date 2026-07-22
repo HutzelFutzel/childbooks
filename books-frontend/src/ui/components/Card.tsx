@@ -5,7 +5,7 @@ export function Card({ className, ...rest }: HTMLAttributes<HTMLDivElement>) {
   return (
     <div
       className={cn(
-        "rounded-2xl bg-white ring-1 ring-ink-100 shadow-soft",
+        "rounded-3xl bg-white ring-1 ring-ink-100 shadow-soft",
         className,
       )}
       {...rest}
@@ -24,7 +24,7 @@ export function CardBody({ className, ...rest }: HTMLAttributes<HTMLDivElement>)
 export function CardTitle({ className, ...rest }: HTMLAttributes<HTMLHeadingElement>) {
   return (
     <h3
-      className={cn("text-base font-semibold text-ink-800", className)}
+      className={cn("font-display text-lg font-semibold text-ink-800", className)}
       {...rest}
     />
   );

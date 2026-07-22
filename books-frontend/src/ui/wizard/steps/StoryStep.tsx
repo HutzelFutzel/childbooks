@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useProjectsStore } from "../../../state/projectsStore";
+import { StoryQuickStart } from "../../studio/StoryQuickStart";
 import { Field, Input, Textarea } from "../../components/Input";
 import type { StepProps } from "./types";
 
@@ -8,20 +9,19 @@ export function StoryStep({ config, update }: StepProps) {
   const rename = useProjectsStore((s) => s.renameProject);
   const [title, setTitle] = useState(current?.title ?? "");
 
+  // Track external renames too (e.g. the quick-start draft titling the book)
+  // — while typing, the store title only changes on blur, so this won't fight.
   useEffect(() => {
     setTitle(current?.title ?? "");
-  }, [current?.id]);
+  }, [current?.id, current?.title]);
 
   const wordCount = config.storyText.trim() ? config.storyText.trim().split(/\s+/).length : 0;
 
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="text-lg font-semibold text-ink-900">Tell your story</h2>
-        <p className="mt-1 text-sm text-ink-500">
-          Paste or write the children's story. You'll refine wording and pacing in later steps.
-        </p>
-      </div>
+      {/* Never a blank page: while there's no story yet, lead with the AI
+          quick-start; it disappears the moment words exist. */}
+      {!config.storyText.trim() && <StoryQuickStart />}
 
       <Field label="Book title">
         <Input

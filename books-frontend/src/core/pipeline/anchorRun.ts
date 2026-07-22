@@ -21,6 +21,7 @@ import {
   containedAnchorsFor,
   linkedAnchorsFor,
   relatedAnchorsFor,
+  relationSentence,
 } from "../book/anchorGraph";
 import { anchorSignature, currentAnchorImage } from "./provenance";
 import {
@@ -93,6 +94,16 @@ export async function renderAnchor(
   const containedAnchors = containedAnchorsFor(anchor, all);
   const relatedAnchors = relatedAnchorsFor(anchor, all);
   const linked = linkedAnchorsFor(anchor, all);
+
+  // Resolve each related pair into a full, side-independent sentence ("Dad has
+  // lighter hair than Mom") so the prompt reads correctly no matter which
+  // anchor stored the edge — the same statement feeds both anchors' prompts,
+  // teaching e.g. Mom she has darker hair without us inverting anything.
+  const relatedNotes: Record<string, string> = {};
+  for (const r of relatedAnchors) {
+    const sentence = relationSentence(anchor, r);
+    if (sentence) relatedNotes[r.id] = sentence;
+  }
 
   // Cross-referencing: when the edit text mentions OTHER anchors ("make him
   // the same age as Amanda", typos included), detect them with one cheap
@@ -211,6 +222,7 @@ export async function renderAnchor(
     artStyle: project.config.artStyle,
     containedAnchors,
     relatedAnchors,
+    relatedNotes,
     mentionedAnchors,
     edit: options.edit,
     editFromImage,

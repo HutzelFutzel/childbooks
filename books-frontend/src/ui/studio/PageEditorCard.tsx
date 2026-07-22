@@ -38,6 +38,7 @@ import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
 import { Field, Input, Textarea } from "../components/Input";
+import { VersionThumb } from "../components/VersionThumb";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { SparkEstimateCost, useImageActionRange } from "../layout/SparkCost";
 import { formatList } from "../lib/formatList";
@@ -46,7 +47,7 @@ import { notify } from "../lib/notify";
 import { PageStage } from "../design/PageStage";
 import { GenerationOverlay } from "../generation/GenerationOverlay";
 import { InfoHint } from "../components/InfoHint";
-import type { DesignPage } from "../design/designInit";
+import { defaultIllustrationFocus, type DesignPage } from "../design/designInit";
 import type { SpanRef } from "../design/TextBoxView";
 import { useStudio } from "./StudioContext";
 import { coverSpread, refreshSpread } from "./studioGen";
@@ -88,6 +89,7 @@ export function PageStagePanel({
     patchBox,
     patchShape,
     patchImage,
+    makeIllustrationEditable,
     snap,
     grid,
     guides,
@@ -146,6 +148,7 @@ export function PageStagePanel({
       pageDesign={pd}
       imageUrl={blank ? undefined : url ?? undefined}
       aspect={page.aspect}
+      illustrationFocus={defaultIllustrationFocus(page)}
       dropId={page.id}
       chromeless={chromeless}
       snap={snap}
@@ -171,10 +174,13 @@ export function PageStagePanel({
             ? patchShape(page.id, id, patch)
             : patchImage(page.id, id, patch)
       }
+      onReframeImage={(id, patch) => patchImage(page.id, id, patch)}
+      onAdjustArt={() => makeIllustrationEditable(page.id)}
       onEditText={(id, value) =>
         patchBox(page.id, id, { paragraphs: wordParagraphs(value) })
       }
       onEditRichText={(id, paragraphs) => patchBox(page.id, id, { paragraphs })}
+      onStyleBox={(id, patch) => patchBox(page.id, id, patch)}
       selectedSpan={selectedSpan}
       onSelectSpan={(ref: SpanRef | null) => {
         if (selection.kind === "box" && onThisPage)
@@ -390,12 +396,14 @@ export function PageControls({
 
       {/* Version history */}
       {versions.length > 0 && (
-        <div className="flex gap-2 overflow-x-auto pb-1">
+        <div className="-mx-1 flex gap-2 overflow-x-auto overflow-y-hidden px-1 pb-1 pt-1">
           {versions.map((node, i) => (
             <VersionThumb
               key={node.id}
               blobId={node.content.blobId}
               index={i + 1}
+              size="sm"
+              hideIndex
               active={node.id === tree?.cursorId}
               onClick={() => tree && void setIllustrationVersion(page.id, node.id)}
               onDelete={() => deleteIllustrationVersion(page.id, node.id)}
@@ -449,10 +457,11 @@ export function PageControls({
           {/* Anchors used on this page */}
           {anchors.length > 0 && (
             <div>
-              <p className="mb-1.5 flex items-center gap-1 text-xs font-medium text-ink-500">
+              {/* div, not p: InfoHint's popover renders a <div> inside (invalid in <p>) */}
+              <div className="mb-1.5 flex items-center gap-1 text-xs font-medium text-ink-500">
                 {coverMode ? "Featured characters & places" : "Characters & places here"}
                 <InfoHint topic="pageAnchors" />
-              </p>
+              </div>
               <div className="flex flex-wrap gap-1.5">
                 {anchors.map((a) => (
                   <AnchorToggle
@@ -549,7 +558,11 @@ export function PageControls({
                           }
                         >
                           <Input
-                            value={subject.cover.title ?? ""}
+                            value={
+                              subject.coverId === COVER_FRONT_ID
+                                ? project.title
+                                : subject.cover.title ?? ""
+                            }
                             onChange={(e) =>
                               subject.coverId === COVER_FRONT_ID
                                 ? setBookTitle(project.id, e.target.value)
@@ -657,7 +670,7 @@ function ToolButton({
 }
 
 /** Per-page actions: move, duplicate, delete. */
-function PageMenu({ spreadId }: { spreadId: string }) {
+export function PageMenu({ spreadId }: { spreadId: string }) {
   const [open, setOpen] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
   function run(fn: () => void) {
@@ -779,48 +792,3 @@ function AnchorToggle({
   );
 }
 
-function VersionThumb({
-  blobId,
-  index,
-  active,
-  onClick,
-  onDelete,
-}: {
-  blobId: string;
-  index: number;
-  active: boolean;
-  onClick: () => void;
-  onDelete?: () => void;
-}) {
-  const url = useBlobUrl(blobId);
-  return (
-    <div className="group relative size-11 shrink-0">
-      <button
-        onClick={onClick}
-        className={cn(
-          "size-full overflow-hidden rounded-lg ring-2 transition",
-          active ? "ring-brand-500" : "ring-transparent hover:ring-ink-200",
-        )}
-      >
-        {url ? (
-          <img src={url} alt={`Version ${index}`} className="size-full object-cover" />
-        ) : (
-          <div className="size-full bg-ink-100" />
-        )}
-      </button>
-      {onDelete && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          title="Delete this version"
-          aria-label={`Delete version ${index}`}
-          className="absolute -right-1 -top-1 hidden rounded-full bg-ink-900/80 p-0.5 text-white transition hover:bg-red-600 group-hover:block"
-        >
-          <Trash2 className="size-3" />
-        </button>
-      )}
-    </div>
-  );
-}

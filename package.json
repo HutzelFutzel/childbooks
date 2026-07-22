@@ -20,6 +20,7 @@
     "start": "yarn workspace books-frontend start",
     "emulators": "node scripts/dev-emulators.mjs",
     "emulators:clear": "node scripts/dev-emulators.mjs --clear",
+    "check:env": "node scripts/check-env.mjs",
     "deploy": "node scripts/deploy.mjs",
     "setSecrets": "node scripts/set-secrets.mjs",
     "setSecrets:status": "node scripts/set-secrets.mjs status",

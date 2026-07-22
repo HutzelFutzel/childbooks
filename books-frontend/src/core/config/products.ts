@@ -216,10 +216,34 @@ export interface EbookSettings {
   enabled: boolean;
   /** Sticker price per currency (major units). Missing/0 ⇒ not sold in that currency. */
   prices: Record<CurrencyCode, number>;
+  /**
+   * Subscriber pricing: `planPrices[planId][currency]` = the price members of
+   * that plan pay (major units). `0` means the ebook is INCLUDED with the plan
+   * (granted without checkout). A missing plan/currency falls back to the
+   * sticker price. The base sticker price still gates availability — a sticker
+   * price of 0 disables the ebook for everyone in that currency.
+   */
+  planPrices: Record<string, Record<CurrencyCode, number>>;
   /** % off the ebook when the buyer already bought a print copy of the same project. */
   printBundleDiscountPct: number;
   /** Stripe product tax code for digital books (drives digital-goods VAT rules). */
   taxCode?: string;
+}
+
+/**
+ * The plan-specific ebook price for a buyer, or `null` when their plan has no
+ * override (⇒ the sticker price applies). `0` means included with the plan.
+ * Used by BOTH the server quote and the storefront display, so what the buyer
+ * sees is exactly what checkout charges.
+ */
+export function ebookPlanPrice(
+  settings: EbookSettings,
+  planId: string | null | undefined,
+  currency: CurrencyCode,
+): number | null {
+  if (!planId) return null;
+  const v = settings.planPrices[planId]?.[currency];
+  return typeof v === "number" && v >= 0 ? v : null;
 }
 
 /**
@@ -418,6 +442,7 @@ export function createDefaultEbookSettings(): EbookSettings {
   return {
     enabled: false,
     prices: { USD: 9.99, EUR: 9.99, GBP: 8.99 },
+    planPrices: {},
     printBundleDiscountPct: 50,
     // Stripe tax code for downloadable digital books.
     taxCode: "txcd_10302000",
@@ -570,9 +595,21 @@ export function normalizeEbookSettings(raw: unknown): EbookSettings {
       if (typeof v === "number" && v >= 0) prices[cur] = v;
     }
   }
+  const planPrices: Record<string, Record<CurrencyCode, number>> = {};
+  if (e.planPrices && typeof e.planPrices === "object") {
+    for (const [planId, byCurrency] of Object.entries(e.planPrices)) {
+      if (!byCurrency || typeof byCurrency !== "object") continue;
+      const entry: Record<CurrencyCode, number> = {};
+      for (const [cur, v] of Object.entries(byCurrency as Record<string, unknown>)) {
+        if (typeof v === "number" && v >= 0) entry[cur] = v;
+      }
+      if (Object.keys(entry).length > 0) planPrices[planId] = entry;
+    }
+  }
   return {
     enabled: e.enabled === true,
     prices,
+    planPrices,
     printBundleDiscountPct:
       typeof e.printBundleDiscountPct === "number"
         ? Math.max(0, Math.min(100, e.printBundleDiscountPct))
@@ -750,6 +787,10 @@ export const pricingSettingsSchema = z.object({
     .object({
       enabled: z.boolean(),
       prices: z.record(z.string(), z.number().nonnegative()),
+      planPrices: z
+        .record(z.string(), z.record(z.string(), z.number().nonnegative()))
+        .optional()
+        .default({}),
       printBundleDiscountPct: z.number().min(0).max(100),
       taxCode: z.string().optional(),
     })

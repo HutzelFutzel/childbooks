@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Sparkles, Plus, ArrowDownRight, ArrowUpRight, Gift, Copy, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Modal } from "../components/Modal";
@@ -10,6 +10,7 @@ import { useSparksStore } from "../../state/sparksStore";
 import { useSparksUiStore } from "../../state/sparksUiStore";
 import { useBillingUiStore } from "../../state/billingUiStore";
 import { useAppConfigStore } from "../../state/appConfigStore";
+import { useAuthStore } from "../../state/authStore";
 import {
   buySparkGift,
   buySparkPack,
@@ -42,7 +43,35 @@ export function SparksBadge() {
   const hasPaidPlans = useAppConfigStore((s) =>
     s.plans.plans.some((p) => p.status === "active" && !p.isFree && Object.keys(p.prices).length > 0),
   );
+  const accessLevel = useAuthStore((s) => s.accessLevel);
+  const openAuthDialog = useAuthStore((s) => s.openAuthDialog);
   const [busy, setBusy] = useState<string | null>(null);
+
+  // Glint the ✦ whenever the balance changes (grant or spend) — the little
+  // "fairy dust" moment. Keyed remount restarts the one-shot CSS animation.
+  const prevBalance = useRef<number | null>(null);
+  const [glintKey, setGlintKey] = useState(0);
+  useEffect(() => {
+    if (prevBalance.current !== null && prevBalance.current !== balance) {
+      setGlintKey((k) => k + 1);
+    }
+    prevBalance.current = balance;
+  }, [balance]);
+
+  // Welcome moment: the first time a guest's starter grant lands, pop the
+  // wallet once so they learn they have Sparks to spend (and what's next on
+  // the ladder). Waiting for balance > 0 means the modal always shows the
+  // granted amount, never an empty zero.
+  useEffect(() => {
+    if (accessLevel !== "guest" || balance <= 0) return;
+    try {
+      if (localStorage.getItem("sparksWelcomeShown")) return;
+      localStorage.setItem("sparksWelcomeShown", "1");
+    } catch {
+      return; // storage unavailable — skip rather than nag on every visit
+    }
+    openWallet();
+  }, [accessLevel, balance, openWallet]);
 
   const packs = sparks.packs.filter((p) => p.active).sort((a, b) => a.sortOrder - b.sortOrder);
 
@@ -90,18 +119,18 @@ export function SparksBadge() {
         className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold ring-1 ring-inset transition ${
           low
             ? "bg-amber-50 text-amber-700 ring-amber-200 hover:bg-amber-100"
-            : "bg-brand-50 text-brand-700 ring-brand-100 hover:bg-brand-100"
+            : "bg-magic-100 text-magic-700 ring-magic-300/50 hover:bg-magic-300/40"
         }`}
         title="Your Sparks"
       >
-        <Sparkles className="size-4" />
+        <Sparkles key={glintKey} className={glintKey > 0 ? "size-4 animate-glint" : "size-4"} />
         {balance.toLocaleString()}
       </button>
 
       <Modal open={walletOpen} onClose={closeWallet} title="Your Sparks" size="max-w-md">
         <div className="space-y-4">
-          <div className="rounded-xl bg-brand-50 p-4 text-center ring-1 ring-inset ring-brand-100">
-            <div className="flex items-center justify-center gap-2 text-3xl font-bold text-brand-700">
+          <div className="bg-magic rounded-xl p-4 text-center ring-1 ring-inset ring-magic-300/50">
+            <div className="flex items-center justify-center gap-2 text-3xl font-bold text-magic-700">
               <Sparkles className="size-6" />
               {balance.toLocaleString()}
             </div>
@@ -124,7 +153,44 @@ export function SparksBadge() {
             ) : null}
           </div>
 
-          {packs.length > 0 && (
+          {/* Guests / unverified users can't buy — their next Sparks come from
+              the remaining ladder rungs, so pitch those instead of packs. */}
+          {accessLevel === "guest" && (
+            <div className="space-y-2 rounded-xl bg-brand-50 p-3 text-center">
+              <p className="text-xs text-ink-600">
+                Create a free account to keep your book safe
+                {sparks.grants.signupBonusSparks > 0 && (
+                  <>
+                    {" "}
+                    and get <span className="font-semibold text-brand-700">+{sparks.grants.signupBonusSparks} ✦</span> instantly
+                  </>
+                )}
+                {sparks.grants.verifyBonusSparks > 0 && (
+                  <> — plus +{sparks.grants.verifyBonusSparks} ✦ when you verify your email</>
+                )}
+                .
+              </p>
+              <Button
+                size="sm"
+                onClick={() => {
+                  closeWallet();
+                  openAuthDialog();
+                }}
+              >
+                Create free account
+              </Button>
+            </div>
+          )}
+          {accessLevel === "unverified" && sparks.grants.verifyBonusSparks > 0 && (
+            <div className="rounded-xl bg-brand-50 p-3 text-center">
+              <p className="text-xs text-ink-600">
+                Verify your email to unlock{" "}
+                <span className="font-semibold text-brand-700">+{sparks.grants.verifyBonusSparks} ✦</span> and the full studio.
+              </p>
+            </div>
+          )}
+
+          {accessLevel === "full" && packs.length > 0 && (
             <div className="space-y-2">
               <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">Top up</div>
               {packs.map((pack) => {
@@ -181,9 +247,9 @@ export function SparksBadge() {
             </div>
           )}
 
-          <GiftsAndInvites open={walletOpen} />
+          {accessLevel === "full" && <GiftsAndInvites open={walletOpen} />}
 
-          {hasPaidPlans && (
+          {accessLevel === "full" && hasPaidPlans && (
             <button
               type="button"
               onClick={() => {
@@ -353,9 +419,13 @@ function labelFor(type: string, reason: string): string {
         ? "Subscription Sparks"
         : reason === "starter"
           ? "Welcome Sparks"
-          : reason.startsWith("referral")
-            ? "Referral reward"
-            : "Sparks granted";
+          : reason === "signup bonus"
+            ? "Signup bonus"
+            : reason === "verify bonus"
+              ? "Verification bonus"
+              : reason.startsWith("referral")
+                ? "Referral reward"
+                : "Sparks granted";
     case "purchase":
       return reason === "gift" ? "Gift redeemed" : "Top-up purchase";
     case "refund":

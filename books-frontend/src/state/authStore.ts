@@ -19,8 +19,10 @@ import { useProjectsStore } from "./projectsStore";
 
 /**
  * The studio is guest-first: nobody is blocked from browsing, so when nobody is
- * signed in we transparently create an anonymous session. Guests can draft books
- * but must upgrade to a verified account before entering the studio / generating.
+ * signed in we transparently create an anonymous session. Guests use the full
+ * studio — drafting AND generating with their granted Sparks — and upgrade to a
+ * (verified) account for the signup/verify Spark bonuses, the premium image
+ * tier, and purchases.
  *
  * Upgrading is done by LINKING the anonymous account (same uid → all the guest's
  * Firestore docs + Storage blobs are preserved automatically). Only when the
@@ -35,8 +37,9 @@ const GUEST_FIRST = true;
 /**
  * Coarse capability gate derived from the auth state:
  *   - loading:    auth state not resolved yet (or the guest session is forming)
- *   - guest:      anonymous user — may browse/draft, gated out of the studio
- *   - unverified: email/password account whose address isn't verified yet
+ *   - guest:      anonymous user — full studio, quick tier only, no purchases
+ *   - unverified: email/password account whose address isn't verified yet —
+ *                 full studio, purchases locked until verified
  *   - full:       verified account (or Google, which is verified by the provider)
  */
 export type AccessLevel = "loading" | "guest" | "unverified" | "full";
@@ -44,6 +47,13 @@ export type AccessLevel = "loading" | "guest" | "unverified" | "full";
 /** A snapshot of the drafts a guest had when switching to an existing account. */
 export interface GuestMigration {
   fromUid: string;
+  /**
+   * The guest session's ID token, captured BEFORE the account switch. It proves
+   * to the backend that this browser really owned the guest account, so the
+   * drafts can be copied across securely (tokens last ~1h — plenty for the
+   * dialog flow).
+   */
+  guestToken: string;
   projects: { id: string; title: string }[];
 }
 
@@ -98,12 +108,13 @@ function isIdentityCollision(err: unknown): boolean {
   return code === "auth/email-already-in-use" || code === "auth/credential-already-in-use";
 }
 
-/** Capture the guest's current drafts so we can offer to migrate them. */
-function snapshotGuestDrafts(uid: string): GuestMigration {
+/** Capture the guest's drafts + a proof-of-ownership token before switching accounts. */
+async function snapshotGuestDrafts(user: User): Promise<GuestMigration> {
   const projects = useProjectsStore
     .getState()
     .projects.map((p) => ({ id: p.id, title: p.title }));
-  return { fromUid: uid, projects };
+  const guestToken = await user.getIdToken();
+  return { fromUid: user.uid, guestToken, projects };
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -122,9 +133,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     onAuthStateChanged(auth, (user) => {
       set({ user, ready: true, accessLevel: levelFor(user, true) });
       if (!user && GUEST_FIRST) {
-        // Failure (e.g. anonymous auth disabled) is swallowed; the listener
-        // won't re-fire, so this can't loop.
-        void signInAnonymously(auth).catch(() => {});
+        // The listener won't re-fire on failure, so this can't loop — but a
+        // failure (e.g. anonymous auth disabled in the Firebase console) must
+        // not be silent: without a session the studio can never save or
+        // generate, so log it loudly for diagnosis.
+        void signInAnonymously(auth).catch((err) => {
+          console.error(
+            "[auth] Guest sign-in failed — is Anonymous auth enabled in the Firebase console?",
+            err,
+          );
+        });
       }
       // Resolve admin status from Firestore for non-guest accounts (cosmetic).
       if (user && !user.isAnonymous) {
@@ -140,7 +158,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   async signInEmail(email, password) {
     const auth = getFirebaseAuth();
     const current = auth.currentUser;
-    const draft = current?.isAnonymous ? snapshotGuestDrafts(current.uid) : null;
+    const draft = current?.isAnonymous ? await snapshotGuestDrafts(current) : null;
     await signInWithEmailAndPassword(auth, email, password);
     if (draft && draft.projects.length > 0) set({ pendingMigration: draft });
   },
@@ -166,7 +184,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const auth = getFirebaseAuth();
     const current = auth.currentUser;
     const provider = new GoogleAuthProvider();
-    const draft = current?.isAnonymous ? snapshotGuestDrafts(current.uid) : null;
+    const draft = current?.isAnonymous ? await snapshotGuestDrafts(current) : null;
     if (current?.isAnonymous) {
       try {
         await linkWithPopup(current, provider);

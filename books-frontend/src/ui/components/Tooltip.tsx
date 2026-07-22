@@ -28,7 +28,7 @@ export function Tooltip({ content, children, side = "top", className }: TooltipP
             exit={{ opacity: 0 }}
             transition={{ duration: 0.12 }}
             className={cn(
-              "pointer-events-none absolute left-1/2 z-50 w-max max-w-xs -translate-x-1/2 rounded-lg",
+              "pointer-events-none absolute left-1/2 z-50 w-max max-w-xs -translate-x-1/2 rounded-xl",
               "bg-ink-900 px-2.5 py-1.5 text-xs text-white shadow-lifted",
               side === "top" ? "bottom-full mb-2" : "top-full mt-2",
               className,

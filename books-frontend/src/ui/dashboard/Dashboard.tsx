@@ -20,21 +20,13 @@ export function Dashboard() {
 
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 
-  // Guests may draft a storybook, but must sign in before entering the studio.
+  // Guest-first: everyone creates and opens projects immediately. Guests get
+  // nudged (not blocked) to create an account so their work survives.
   const handleCreate = async () => {
-    if (isGuest) {
-      await createProject(undefined, false);
-      openAuthDialog();
-      return;
-    }
     await createProject();
   };
 
   const handleOpen = (id: string) => {
-    if (isGuest) {
-      openAuthDialog();
-      return;
-    }
     openProject(id);
   };
 
@@ -59,14 +51,15 @@ export function Dashboard() {
         </Button>
       </div>
 
-      {isGuest && (
+      {isGuest && projects.length > 0 && (
         <div className="mb-6 flex items-center justify-between gap-3 rounded-2xl border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-800">
           <span className="flex items-center gap-2">
-            <AlertTriangle className="size-4 shrink-0" />
-            You're browsing as a guest. Sign in to open the studio and generate your book.
+            <Sparkles className="size-4 shrink-0" />
+            You're creating as a guest — make a free account so your storybooks are saved to you,
+            not this browser.
           </span>
           <Button size="sm" variant="secondary" onClick={openAuthDialog}>
-            Sign in
+            Create free account
           </Button>
         </div>
       )}
@@ -123,8 +116,8 @@ export function Dashboard() {
         }
       >
         <p className="text-sm text-ink-600">
-          This permanently removes the project and its settings from this device. This cannot be
-          undone.
+          This permanently deletes the storybook — its story, characters, and all generated
+          artwork — from your account. This cannot be undone.
         </p>
       </Modal>
     </div>

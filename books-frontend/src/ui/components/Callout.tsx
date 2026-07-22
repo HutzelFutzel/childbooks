@@ -60,7 +60,7 @@ export function Callout({ tone = "info", title, children, action, icon, classNam
   return (
     <div
       className={cn(
-        "flex flex-wrap items-start gap-x-3 gap-y-2 rounded-xl border px-3.5 py-2.5",
+        "flex flex-wrap items-start gap-x-3 gap-y-2 rounded-2xl border px-3.5 py-2.5",
         t.wrap,
         className,
       )}

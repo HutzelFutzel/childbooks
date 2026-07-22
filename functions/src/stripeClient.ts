@@ -61,11 +61,20 @@ export function maskKey(key: string): string {
   return `${prefix}…${last4}`;
 }
 
-/** The storefront base URL for redirects (defaults to the Next dev server). */
+/**
+ * The storefront base URL for Checkout/portal redirects. In production a
+ * missing PUBLIC_APP_URL is a hard error — silently falling back to localhost
+ * would send paying customers to a dead URL after payment. The emulator keeps
+ * the dev default (the Next dev server on :1420).
+ */
 export function appBaseUrl(): string {
   const url = serverConfig().stripe.appUrl;
-  // Local dev runs the Next app on :1420 (see books-frontend `dev` script).
-  return url || "http://localhost:1420";
+  if (url) return url;
+  if (process.env.FUNCTIONS_EMULATOR === "true") return "http://localhost:1420";
+  throw new Error(
+    "PUBLIC_APP_URL is not configured — Stripe redirect URLs cannot be built. " +
+      "Set it (e.g. functions/.env.<projectId> or Secret Manager) and redeploy.",
+  );
 }
 
 /** Whether the active Stripe environment is the test/sandbox one. */

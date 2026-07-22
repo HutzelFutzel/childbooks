@@ -16,12 +16,12 @@ export function Faq({ items }: { items: SeoFaqItem[] }) {
     <section id="faq" aria-labelledby="faq-title" className="scroll-mt-20 bg-white py-20 lg:py-28">
       <div className="mx-auto max-w-3xl px-6">
         <Reveal className="text-center">
-          <h2 id="faq-title" className="text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl">
+          <h2 id="faq-title" className="font-display text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl">
             Frequently asked questions
           </h2>
         </Reveal>
 
-        <div className="mt-12 divide-y divide-ink-100 rounded-2xl border border-ink-200">
+        <div className="mt-12 divide-y divide-ink-100 rounded-3xl border border-ink-200 bg-white">
           {items.map((item, i) => {
             const isOpen = open === i;
             return (

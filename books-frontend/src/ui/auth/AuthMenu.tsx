@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   ChevronDown,
   CreditCard,
+  Download,
   LogOut,
   Package,
   Settings,
@@ -15,6 +16,7 @@ import { useAuthStore, userLabel } from "../../state/authStore";
 import { useAccountUiStore } from "../../state/accountUiStore";
 import { useBillingUiStore } from "../../state/billingUiStore";
 import { useOrdersStore } from "../../state/ordersStore";
+import { unseenDownloadCount, useDownloadsStore } from "../../state/downloadsStore";
 import { Button } from "../components/Button";
 
 function MenuItem({
@@ -22,12 +24,15 @@ function MenuItem({
   label,
   onClick,
   badge,
+  count,
   danger,
 }: {
   icon: React.ReactNode;
   label: string;
   onClick: () => void;
   badge?: boolean;
+  /** Optional count pill shown at the trailing edge (e.g. new downloads). */
+  count?: number;
   danger?: boolean;
 }) {
   return (
@@ -46,7 +51,12 @@ function MenuItem({
           <span className="absolute -right-1 -top-1 size-2 rounded-full bg-amber-500 ring-2 ring-white" />
         )}
       </span>
-      {label}
+      <span className="flex-1">{label}</span>
+      {count != null && count > 0 && (
+        <span className="rounded-full bg-brand-100 px-1.5 py-0.5 text-[10px] font-semibold text-brand-700">
+          {count}
+        </span>
+      )}
     </button>
   );
 }
@@ -64,11 +74,17 @@ export function AuthMenu() {
   const openAuthDialog = useAuthStore((s) => s.openAuthDialog);
   const openSettings = useAccountUiStore((s) => s.openSettings);
   const openOrders = useAccountUiStore((s) => s.openOrders);
+  const openDownloads = useAccountUiStore((s) => s.openDownloads);
   const openPlans = useBillingUiStore((s) => s.openPlans);
   const ordersNeedAttention = useOrdersStore((s) =>
     s.orders.some((o) => o.stage === "onHold" || o.stage === "error"),
   );
+  const unseenDownloads = useDownloadsStore((s) => unseenDownloadCount(s.downloads));
   const router = useRouter();
+
+  // Anything on the account button worth a nudge: an order needing attention or
+  // a freshly-delivered download the user hasn't opened the list to see yet.
+  const buttonBadge = ordersNeedAttention || unseenDownloads > 0;
 
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -118,7 +134,7 @@ export function AuthMenu() {
       >
         <span className="relative flex size-4 items-center justify-center">
           <UserIcon className="size-3.5" />
-          {ordersNeedAttention && (
+          {buttonBadge && (
             <span className="absolute -right-1 -top-1 size-2 rounded-full bg-amber-500 ring-2 ring-white" />
           )}
         </span>
@@ -142,6 +158,13 @@ export function AuthMenu() {
             label="Orders"
             badge={ordersNeedAttention}
             onClick={() => run(openOrders)}
+          />
+          <MenuItem
+            icon={<Download className="size-4" />}
+            label="Downloads"
+            badge={unseenDownloads > 0}
+            count={unseenDownloads}
+            onClick={() => run(openDownloads)}
           />
           {isAdmin && (
             <MenuItem icon={<Shield className="size-4" />} label="Admin" onClick={() => run(() => router.push("/admin"))} />

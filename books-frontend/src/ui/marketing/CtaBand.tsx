@@ -20,7 +20,7 @@ export function CtaBand({ text }: { text: SiteTextMap }) {
             multiline
             defaultValue="Ready to make your first book?"
             serverValue={text["cta.heading"]}
-            className="mx-auto max-w-2xl text-3xl font-bold tracking-tight text-white sm:text-4xl"
+            className="mx-auto max-w-2xl font-display text-3xl font-bold tracking-tight text-white sm:text-4xl"
           />
           <EditableText
             slotId="cta.subhead"

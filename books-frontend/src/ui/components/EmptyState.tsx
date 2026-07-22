@@ -33,10 +33,10 @@ export function EmptyState({
       className="flex flex-col items-center gap-3 text-center"
     >
       <span className="flex size-14 items-center justify-center rounded-2xl bg-brand-100 text-brand-600 shadow-soft animate-float-slow">
-        <Icon className="size-7" />
+        <Icon className="size-7" strokeWidth={2.25} />
       </span>
       <div className="space-y-1">
-        <p className="text-base font-semibold text-ink-800">{title}</p>
+        <p className="font-display text-base font-semibold text-ink-800">{title}</p>
         {description && (
           <p className="mx-auto max-w-sm text-sm leading-relaxed text-ink-500">{description}</p>
         )}

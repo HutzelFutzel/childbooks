@@ -49,6 +49,13 @@ export const SERVER_ENV_VARS = {
   stripeSandboxWebhookSecret: "STRIPE_SANDBOX_WEBHOOK_SECRET",
   stripeLiveSecretKey: "STRIPE_LIVE_SECRET_KEY",
   stripeLiveWebhookSecret: "STRIPE_LIVE_WEBHOOK_SECRET",
+  /**
+   * Emulator-only override. The Stripe CLI listener (`scripts/dev.mjs`) mints its
+   * own signing secret per run and injects it here; when present under the
+   * Functions emulator it wins over any static sandbox value in `.env.local`, so
+   * keeping a value in that file is harmless locally. Never set in production.
+   */
+  stripeEmulatorWebhookSecret: "STRIPE_EMULATOR_WEBHOOK_SECRET",
   /** Public base URL of the storefront, for Checkout success/cancel redirects. */
   publicAppUrl: "PUBLIC_APP_URL",
   assetHostKind: "ASSET_HOST_KIND",
@@ -122,15 +129,21 @@ function selectLuluCreds(
 function selectStripe(env: EnvBag, stripeEnv: FulfillmentEnv): { secretKey: string; webhookSecret: string } {
   const legacySecret = env[SERVER_ENV_VARS.stripeSecretKey] ?? "";
   const legacyWebhook = env[SERVER_ENV_VARS.stripeWebhookSecret] ?? "";
+  // Under the local Functions emulator the Stripe CLI listener signs events with
+  // its own per-run secret (injected as STRIPE_EMULATOR_WEBHOOK_SECRET). Prefer it
+  // over any static sandbox secret in .env.local so the two never drift apart.
+  // Unset in production (no emulator), so live/sandbox resolution is unaffected.
+  const emulatorWebhook =
+    env.FUNCTIONS_EMULATOR === "true" ? (env[SERVER_ENV_VARS.stripeEmulatorWebhookSecret] ?? "") : "";
   if (stripeEnv === "live") {
     return {
       secretKey: env[SERVER_ENV_VARS.stripeLiveSecretKey] || legacySecret,
-      webhookSecret: env[SERVER_ENV_VARS.stripeLiveWebhookSecret] || legacyWebhook,
+      webhookSecret: emulatorWebhook || env[SERVER_ENV_VARS.stripeLiveWebhookSecret] || legacyWebhook,
     };
   }
   return {
     secretKey: env[SERVER_ENV_VARS.stripeSandboxSecretKey] || legacySecret,
-    webhookSecret: env[SERVER_ENV_VARS.stripeSandboxWebhookSecret] || legacyWebhook,
+    webhookSecret: emulatorWebhook || env[SERVER_ENV_VARS.stripeSandboxWebhookSecret] || legacyWebhook,
   };
 }
 

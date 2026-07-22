@@ -11,7 +11,7 @@ export interface SkeletonProps {
  * sweep, disabled under prefers-reduced-motion). Compose several to skeleton a
  * layout, or wrap a fixed aspect box for image placeholders.
  */
-export function Skeleton({ className, rounded = "lg" }: SkeletonProps) {
+export function Skeleton({ className, rounded = "xl" }: SkeletonProps) {
   const radius =
     rounded === "full"
       ? "rounded-full"

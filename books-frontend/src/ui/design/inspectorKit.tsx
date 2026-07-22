@@ -93,15 +93,18 @@ export function IconButton({
   );
 }
 
-/** A square icon toggle (bold/italic/etc.). */
+/** A square icon toggle (bold/italic/etc.). `mixed` marks an indeterminate
+ * state (some — but not all — of the selection has the style). */
 export function IconToggle({
   children,
   active,
+  mixed,
   onClick,
   title,
 }: {
   children: React.ReactNode;
   active: boolean;
+  mixed?: boolean;
   onClick: () => void;
   title?: string;
 }) {
@@ -113,7 +116,9 @@ export function IconToggle({
         "flex size-8 items-center justify-center rounded-lg border transition",
         active
           ? "border-brand-500 bg-brand-50 text-brand-700"
-          : "border-ink-200 text-ink-600 hover:bg-ink-50",
+          : mixed
+            ? "border-amber-400 bg-amber-50 text-amber-700"
+            : "border-ink-200 text-ink-600 hover:bg-ink-50",
       )}
     >
       {children}

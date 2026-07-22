@@ -7,7 +7,6 @@ import type {
   IllustrationImage,
   PageDesign,
   Project,
-  ProjectShare,
   ProjectStage,
   ScreenplayDoc,
   ScreenplaySpread,
@@ -50,6 +49,14 @@ interface ProjectsState {
    * it until {@link ProjectsState.reloadProject} pulls the latest and clears this.
    */
   staleProjectId: string | null;
+  /**
+   * Id of a project whose last save FAILED for a transient reason (offline,
+   * storage error). Edits stay in memory; saving is retried automatically and
+   * a banner tells the user their latest changes aren't stored yet.
+   */
+  saveFailedProjectId: string | null;
+  /** Manually retry persisting a project whose save failed. */
+  retrySave: (id: string) => Promise<void>;
 
   load: () => Promise<void>;
   /** Re-fetch a project from storage, replacing the in-memory copy and clearing its stale flag. */
@@ -75,6 +82,12 @@ interface ProjectsState {
   setAnalysis: (analysis: StoryAnalysis, anchors: Anchor[]) => Promise<void>;
   setAnchors: (anchors: Anchor[]) => Promise<void>;
   updateAnchor: (anchorId: string, patch: Partial<Anchor>) => Promise<void>;
+  /**
+   * Rename an anchor, remembering its old name so a later "re-read the
+   * story" still recognizes it (see `reconcileAnchorIds`) instead of
+   * orphaning its art/relationships behind a freshly-minted duplicate.
+   */
+  renameAnchor: (anchorId: string, name: string) => Promise<void>;
   removeAnchor: (anchorId: string) => Promise<void>;
 
   setScreenplay: (screenplay: VersionTree<ScreenplayDoc>) => Promise<void>;
@@ -102,8 +115,6 @@ interface ProjectsState {
 
   setDesign: (design: BookDesign) => Promise<void>;
   updatePageDesign: (pageId: string, patch: Partial<PageDesign>) => Promise<void>;
-
-  setShare: (share: ProjectShare) => Promise<void>;
 }
 
 export const useProjectsStore = create<ProjectsState>((set, get) => ({
@@ -111,6 +122,11 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   currentId: null,
   loaded: false,
   staleProjectId: null,
+  saveFailedProjectId: null,
+
+  async retrySave(id) {
+    await persistLatest(get, set, id);
+  },
 
   async load() {
     const { projects } = await getRepos();
@@ -241,6 +257,25 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     );
   },
 
+  async renameAnchor(anchorId, name) {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    await mutateCurrent(get, set, (p) =>
+      p.anchors
+        ? {
+            ...p,
+            anchors: p.anchors.map((a) => {
+              if (a.id !== anchorId || a.name === trimmed) return a;
+              const aliasNames = Array.from(
+                new Set([...(a.aliasNames ?? []), a.name].filter((n) => n !== trimmed)),
+              );
+              return { ...a, name: trimmed, aliasNames };
+            }),
+          }
+        : p,
+    );
+  },
+
   async removeAnchor(anchorId) {
     await mutateCurrent(get, set, (p) => ({
       ...p,
@@ -355,9 +390,6 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     });
   },
 
-  async setShare(share) {
-    await mutateCurrent(get, set, (p) => ({ ...p, share }));
-  },
 }));
 
 /**
@@ -454,6 +486,9 @@ async function gcBlobsIfUnreferenced(
  * Failures don't break the chain (next saves still run).
  */
 let saveChain: Promise<void> = Promise.resolve();
+let saveRetryTimer: ReturnType<typeof setTimeout> | null = null;
+const SAVE_RETRY_MS = 10_000;
+
 function persistLatest(get: ProjectsGet, set: ProjectsSet, id: string): Promise<void> {
   const next = saveChain.then(async () => {
     // A conflicted project is frozen from auto-save until the user reloads it,
@@ -470,7 +505,12 @@ function persistLatest(get: ProjectsGet, set: ProjectsSet, id: string): Promise<
         projects: state.projects.map((p) =>
           p.id === id && p.rev !== saved.rev ? { ...p, rev: saved.rev } : p,
         ),
+        ...(state.saveFailedProjectId === id ? { saveFailedProjectId: null } : {}),
       }));
+      if (saveRetryTimer != null) {
+        clearTimeout(saveRetryTimer);
+        saveRetryTimer = null;
+      }
     } catch (err) {
       if (err instanceof ProjectConflictError) {
         // Another writer advanced the stored copy — flag it so the UI can prompt
@@ -478,7 +518,15 @@ function persistLatest(get: ProjectsGet, set: ProjectsSet, id: string): Promise<
         set(() => ({ staleProjectId: id }));
         return;
       }
-      // Transient failure (e.g. offline): leave state as-is; a later save retries.
+      // Transient failure (e.g. offline): keep the edits in memory, tell the
+      // user their work isn't stored yet, and retry automatically.
+      set(() => ({ saveFailedProjectId: id }));
+      if (saveRetryTimer == null) {
+        saveRetryTimer = setTimeout(() => {
+          saveRetryTimer = null;
+          void persistLatest(get, set, id);
+        }, SAVE_RETRY_MS);
+      }
     }
   });
   saveChain = next.catch(() => {});

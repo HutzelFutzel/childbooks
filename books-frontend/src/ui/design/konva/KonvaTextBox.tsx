@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
+import Konva from "konva";
 import { Group, Rect, Text } from "react-konva";
 import type { TextBox } from "../../../core/types";
 import { loadFont } from "../../typography/fonts";
@@ -95,11 +96,32 @@ export function KonvaTextBox({
     : null;
   const shadowProps = effectShadow ?? presetShadow;
 
+  // Soft "frosted" blur of the whole box (chrome + background + words). Konva
+  // needs an offscreen cache to run a filter; we skip it mid-resize (the cache
+  // would rebuild every frame) and re-apply once the box settles.
+  const contentRef = useRef<Konva.Group>(null);
+  const blurPx = (box.effects?.blur ?? 0) * pageHeight;
+  const canBlur = blurPx > 0 && liveScaleX === 1 && liveScaleY === 1 && !hideText;
+  useEffect(() => {
+    const node = contentRef.current;
+    if (!node) return;
+    if (canBlur) {
+      node.cache();
+      node.filters([Konva.Filters.Blur]);
+      node.blurRadius(blurPx);
+    } else {
+      node.filters([]);
+      node.clearCache();
+    }
+    node.getLayer()?.batchDraw();
+  }, [canBlur, blurPx, w, h, box, baseSize, selectedSpan]);
+
   return (
     <>
       {/* Invisible hit/drag surface so the whole box reacts to clicks. */}
       <Rect width={w} height={h} fill="#fff" opacity={0} />
 
+      <Group ref={contentRef} listening={false}>
       {chromeFor(box.presetId, w, h, colors)}
 
       {box.pattern && pattern && (
@@ -195,6 +217,7 @@ export function KonvaTextBox({
           />
         </>
       )}
+      </Group>
       </Group>
     </>
   );

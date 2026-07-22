@@ -9,23 +9,16 @@
  * projects would let one project's GC delete the other's image).
  */
 import { useMemo, useState } from "react";
-import { ArrowLeft, Box, Check, MapPin, User, UserPlus } from "lucide-react";
-import type { Anchor, AnchorType, Project } from "../../core/types";
+import { ArrowLeft, UserPlus } from "lucide-react";
+import type { Anchor, Project } from "../../core/types";
 import { createVersionTree } from "../../core/versioning";
 import { currentAnchorImage } from "../../state/ai";
 import { copyBlob } from "../../state/blobs";
 import { useProjectsStore } from "../../state/projectsStore";
+import { AnchorCard } from "../anchors/AnchorCard";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
-import { useBlobUrl } from "../hooks/useBlobUrl";
-import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
-
-const TYPE_ICON: Record<AnchorType, typeof User> = {
-  character: User,
-  place: MapPin,
-  object: Box,
-};
 
 function newId(): string {
   return Math.random().toString(36).slice(2, 10);
@@ -89,9 +82,11 @@ export function ImportAnchorsDialog({
         imported.push({
           ...anchor,
           id: newId(),
-          // Relations reference source-project anchor ids that don't exist here.
+          // Relations reference source-project anchor ids that don't exist here
+          // (clear the notes too, since they're keyed by those same dead ids).
           containedIds: undefined,
           relatedIds: undefined,
+          relatedNotes: undefined,
           versions,
         });
       }
@@ -171,58 +166,15 @@ export function ImportAnchorsDialog({
           {(source.anchors ?? [])
             .filter((a) => a.include)
             .map((anchor) => (
-              <PickCard
+              <AnchorCard
                 key={anchor.id}
                 anchor={anchor}
-                picked={picked.has(anchor.id)}
-                onToggle={() => toggle(anchor.id)}
+                selected={picked.has(anchor.id)}
+                onClick={() => toggle(anchor.id)}
               />
             ))}
         </div>
       )}
     </Modal>
-  );
-}
-
-function PickCard({
-  anchor,
-  picked,
-  onToggle,
-}: {
-  anchor: Anchor;
-  picked: boolean;
-  onToggle: () => void;
-}) {
-  const image = currentAnchorImage(anchor);
-  const url = useBlobUrl(image?.blobId);
-  const Icon = TYPE_ICON[anchor.type];
-
-  return (
-    <button
-      onClick={onToggle}
-      className={cn(
-        "relative flex aspect-3/4 flex-col overflow-hidden rounded-xl bg-ink-100 text-left ring-1 transition",
-        picked ? "ring-2 ring-brand-400" : "ring-ink-200 hover:ring-brand-300",
-      )}
-    >
-      <span className="relative flex flex-1 items-center justify-center overflow-hidden">
-        {url ? (
-          <img src={url} alt={anchor.name} className="size-full object-cover" />
-        ) : (
-          <Icon className="size-7 text-ink-300" />
-        )}
-        {picked && (
-          <span className="absolute right-1.5 top-1.5 flex size-5 items-center justify-center rounded-full bg-brand-600 text-(--color-brand-foreground) shadow-soft">
-            <Check className="size-3" />
-          </span>
-        )}
-      </span>
-      <span className="flex items-center gap-1 bg-white/85 px-2 py-1.5">
-        <Icon className="size-3 shrink-0 text-ink-400" />
-        <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-ink-800">
-          {anchor.name}
-        </span>
-      </span>
-    </button>
   );
 }

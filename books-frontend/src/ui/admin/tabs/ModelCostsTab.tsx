@@ -327,7 +327,7 @@ function summarizeCost(c: ModelCost): string {
 }
 
 export function ModelCostsTab() {
-  const stored = useAppConfigStore((s) => s.modelCosts);
+  const stored = useAppConfigStore((s) => s.adminModelCosts);
   const save = useAppConfigStore((s) => s.saveModelCosts);
   const modelConfig = useAppConfigStore((s) => s.modelConfig);
   const suggestCost = useAppConfigStore((s) => s.suggestCost);

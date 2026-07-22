@@ -33,6 +33,8 @@ export interface DesignPage {
   seedSubtitle?: string;
   layoutNote: string;
   isCover: boolean;
+  /** Cover-only: the title/subtitle are baked into the art, so no overlay boxes. */
+  bakeText?: boolean;
   /** Physical side this page sits on (drives the outer-edge text column). */
   outerSide: PageSide;
   /** The active layout's text-column rectangle for this page's side. */
@@ -64,7 +66,13 @@ export function buildDesignPages(project: Project): DesignPage[] {
   };
 
   if (doc?.frontCover) {
-    pages.push(coverPage(project, COVER_FRONT_ID, "Front cover", aspect, doc.frontCover));
+    // The project title is the single source of truth for the front-cover title.
+    pages.push(
+      coverPage(project, COVER_FRONT_ID, "Front cover", aspect, {
+        ...doc.frontCover,
+        title: project.title,
+      }),
+    );
   }
   if (doc) {
     doc.spreads.forEach((s, i) => {
@@ -108,9 +116,23 @@ function coverPage(
     seedSubtitle: spec.subtitle,
     layoutNote: spec.illustration,
     isCover: true,
+    bakeText: Boolean(spec.bakeText && (spec.title ?? "").trim()),
     outerSide: side,
     textRect: getBookLayout(project.config.layoutId).textRegion(side),
   };
+}
+
+/**
+ * Default framing for a page's full-bleed illustration before the user has
+ * manually repositioned it. Covers bias the crop toward the TOP: the generated
+ * cover art is often taller than the trim, and a centred `object-fit: cover`
+ * would then shave the top edge — exactly where a baked-in title lives. Content
+ * pages keep the neutral centre crop.
+ */
+export function defaultIllustrationFocus(
+  page: Pick<DesignPage, "isCover">,
+): { x: number; y: number } | undefined {
+  return page.isCover ? { x: 0.5, y: 0 } : undefined;
 }
 
 export function defaultDesign(project: Project): BookDesign {
@@ -155,7 +177,9 @@ export function seedPageDesign(design: BookDesign, page: DesignPage): PageDesign
   if (existing) return existing;
 
   const boxes: TextBox[] = [];
-  if (page.isCover) {
+  // Baked-text covers carry their title/subtitle in the artwork itself, so no
+  // overlay text boxes are seeded (that would double up the text).
+  if (page.isCover && !page.bakeText) {
     if (page.seedTitle) {
       const titleBox = makeTextBox(
         { x: 0.1, y: 0.08, w: 0.8, h: 0.2 },
@@ -170,16 +194,18 @@ export function seedPageDesign(design: BookDesign, page: DesignPage): PageDesign
       boxes.push(titleBox);
     }
     if (page.seedSubtitle) {
-      boxes.push(
-        makeTextBox(
-          { x: 0.15, y: 0.3, w: 0.7, h: 0.12 },
-          page.seedSubtitle,
-          design.defaultFontFamily,
-          design.defaultFontSizePct,
-          "shadowed",
-          2,
-        ),
+      const subtitleBox = makeTextBox(
+        { x: 0.15, y: 0.3, w: 0.7, h: 0.12 },
+        page.seedSubtitle,
+        design.defaultFontFamily,
+        design.defaultFontSizePct,
+        "shadowed",
+        2,
       );
+      // Tagged so toggling baked cover text can remove exactly the seeded
+      // title/subtitle without touching any boxes the user added themselves.
+      subtitleBox.role = "book-subtitle";
+      boxes.push(subtitleBox);
     }
   } else if (page.seedText.trim()) {
     // Seed the text column on the page's outer edge per the active layout.

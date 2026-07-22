@@ -3,9 +3,9 @@
  * classifier to surface, per provider and modality, an economy and a premium
  * variant. New models are picked up automatically with no code changes.
  */
-import { ALL_PROVIDERS, getTextProvider } from "../providers";
+import { ALL_PROVIDERS } from "../providers";
 import type { Modality, ModelTier, ProviderId } from "../config/options";
-import type { ProviderCredentials, RawModel } from "../providers/types";
+import type { RawModel } from "../providers/types";
 import type { ModelInfo, ModelSelection } from "../types";
 import {
   classifyModel,
@@ -88,24 +88,6 @@ export interface ProviderDiscovery {
   provider: ProviderId;
   models: RawModel[];
   error?: string;
-}
-
-/** Fetch the raw model list for a provider; never throws. */
-export async function discoverProvider(
-  provider: ProviderId,
-  creds: ProviderCredentials,
-  signal?: AbortSignal,
-): Promise<ProviderDiscovery> {
-  try {
-    const models = await getTextProvider(provider).listModels(creds, signal);
-    return { provider, models };
-  } catch (err) {
-    return {
-      provider,
-      models: [],
-      error: err instanceof Error ? err.message : String(err),
-    };
-  }
 }
 
 export function filterByModality(models: ModelInfo[], modality: Modality): ModelInfo[] {

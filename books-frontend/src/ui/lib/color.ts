@@ -46,8 +46,8 @@ function mix(a: Rgb, b: Rgb, t: number): Rgb {
 }
 
 const WHITE: Rgb = { r: 255, g: 255, b: 255 };
-/** Warm near-black (ink-900) — mixing toward this keeps dark stops from going flat/grey. */
-const NEAR_BLACK: Rgb = { r: 15, g: 23, b: 42 };
+/** Indigo near-black (ink-900) — mixing toward this keeps dark stops from going flat/grey. */
+const NEAR_BLACK: Rgb = { r: 20, g: 22, b: 58 };
 
 /**
  * How far each stop is mixed toward white (<500) or near-black (>500). 500 is
@@ -71,7 +71,7 @@ export type ColorRamp = Record<number, string>;
 export const RAMP_STOPS = [50, 100, 200, 300, 400, 500, 600, 700, 800, 900] as const;
 
 /** Build a 50–900 ramp from one base hex (falls back if the hex is invalid). */
-export function buildRamp(baseHex: string, fallback = "#7c3aed"): ColorRamp {
+export function buildRamp(baseHex: string, fallback = "#f96a4d"): ColorRamp {
   const base = parseHex(baseHex) ?? parseHex(fallback)!;
   const out: ColorRamp = {};
   for (const stop of RAMP_STOPS) {
@@ -94,7 +94,7 @@ export function luminance({ r, g, b }: Rgb): number {
 export function readableOn(bgHex: string, fallback = "#ffffff"): string {
   const rgb = parseHex(bgHex);
   if (!rgb) return fallback;
-  return luminance(rgb) > 0.45 ? "#0f172a" : "#ffffff";
+  return luminance(rgb) > 0.45 ? "#14163a" : "#ffffff";
 }
 
 /**
@@ -103,8 +103,8 @@ export function readableOn(bgHex: string, fallback = "#ffffff"): string {
  * stylesheet `:root` defaults with no ordering/flash issues).
  */
 export function brandingThemeVars(branding: BrandingConfig): Record<string, string> {
-  const brand = buildRamp(branding.colors.primary, "#7c3aed");
-  const accent = buildRamp(branding.colors.accent, "#f97316");
+  const brand = buildRamp(branding.colors.primary, "#f96a4d");
+  const accent = buildRamp(branding.colors.accent, "#f79b04");
   const vars: Record<string, string> = {};
   for (const stop of RAMP_STOPS) {
     vars[`--color-brand-${stop}`] = brand[stop];

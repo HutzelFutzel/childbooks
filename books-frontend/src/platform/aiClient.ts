@@ -8,6 +8,7 @@
  * (single writer), exactly like the job-reconcile path does.
  */
 import { backendFetch } from "./backend";
+import { useAuthStore } from "../state/authStore";
 import { useSparksUiStore } from "../state/sparksUiStore";
 import type { Anchor, Project, ScreenplayDoc } from "../core/types";
 import { slimProjectForRender } from "../core/book/slimProject";
@@ -58,12 +59,17 @@ async function postAi<T>(path: string, body: unknown, signal?: AbortSignal): Pro
     if (res.status === 409 && parsed?.error?.code === "intent_ambiguous") {
       throw new IntentAmbiguousError(message, parsed.error.candidates ?? []);
     }
-    // Out of Sparks → pop the wallet (pre-suggesting a pack that covers the
-    // shortfall) so the user can fix it in one click, then surface a typed error.
+    // Out of Sparks → full accounts get the wallet (pre-suggesting a pack that
+    // covers the shortfall); guests/unverified users can't buy, so the next
+    // Sparks for them come from the signup/verify bonus — open the auth dialog.
     if (res.status === 402 && parsed?.error?.code === "insufficient_sparks") {
       const balance = parsed.error.balance ?? 0;
       const needed = parsed.error.needed ?? 0;
-      useSparksUiStore.getState().openWallet(Math.max(0, needed - balance));
+      if (useAuthStore.getState().accessLevel === "full") {
+        useSparksUiStore.getState().openWallet(Math.max(0, needed - balance));
+      } else {
+        useAuthStore.getState().openAuthDialog();
+      }
       throw new InsufficientSparksError(message, balance, needed);
     }
     throw new Error(message);
@@ -81,6 +87,25 @@ export interface AnalyzeResult {
   summary: string;
   anchors: Anchor[];
   model: string;
+}
+
+export interface StoryDraftResult {
+  title: string;
+  story: string;
+}
+
+/** Quick-start: ask the backend to write a first story for the hero. */
+export function storyDraftRemote(
+  project: Project,
+  heroName: string,
+  theme?: string,
+  signal?: AbortSignal,
+): Promise<StoryDraftResult> {
+  return postAi<StoryDraftResult>(
+    "/ai/story-draft",
+    { project: slimProjectForRender(project, {}), heroName, theme },
+    signal,
+  );
 }
 
 export function analyzeStoryRemote(project: Project, signal?: AbortSignal): Promise<AnalyzeResult> {
@@ -131,6 +156,39 @@ export function anchorImageRemote(
     { project: slim, anchorId, options: serializableOptions(options), tier },
     options.signal,
   );
+}
+
+/** One panel of a split wrap-cover generation, ready to fold into a tree. */
+export interface CoverWrapPanel {
+  blobId: string;
+  mimeType: string;
+  references: IllustrationRender["references"];
+  prompt: string;
+  label: string;
+  textMode: IllustrationRender["textMode"];
+  /** Cover-only: the exact text baked into this panel's artwork. */
+  bakedText?: IllustrationRender["bakedText"];
+}
+
+export interface CoverWrapResult {
+  front: CoverWrapPanel;
+  back: CoverWrapPanel;
+}
+
+/**
+ * Generate both covers as one continuous wrap image and split it into a front +
+ * back panel (server-side). One generation → guaranteed-matching covers.
+ */
+export function coverWrapRemote(
+  project: Project,
+  tier: ImageTier,
+  signal?: AbortSignal,
+): Promise<CoverWrapResult> {
+  const slim = slimProjectForRender(project, {
+    keepScreenplay: true,
+    keepAnchorVersions: true,
+  });
+  return postAi<CoverWrapResult>("/ai/cover-wrap", { project: slim, tier }, signal);
 }
 
 export function illustrationRemote(

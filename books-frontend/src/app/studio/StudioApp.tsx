@@ -1,17 +1,19 @@
 "use client";
 
 import { useEffect } from "react";
+import { MotionConfig } from "framer-motion";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/ui/components/Button";
 import { Toaster } from "@/ui/components/Toaster";
 import { AuthMenu } from "@/ui/auth/AuthMenu";
 import { AuthDialog } from "@/ui/auth/AuthDialog";
 import { GuestMigrationDialog } from "@/ui/auth/GuestMigrationDialog";
-import { VerifyEmailGate } from "@/ui/auth/VerifyEmailGate";
+import { VerifyEmailBanner } from "@/ui/auth/VerifyEmailBanner";
 import { Dashboard } from "@/ui/dashboard/Dashboard";
 import { TopBar } from "@/ui/layout/TopBar";
+import { LowSparksBanner } from "@/ui/layout/LowSparksBanner";
 import { JobProgress } from "@/ui/layout/JobProgress";
-import { ProjectConflictBanner } from "@/ui/layout/ProjectConflictBanner";
+import { ProjectConflictBanner, SaveFailureBanner } from "@/ui/layout/ProjectConflictBanner";
 import { OrdersDialog } from "@/ui/checkout/OrdersDialog";
 import { SettingsDialog } from "@/ui/settings/SettingsDialog";
 import { ImageTierPromptDialog } from "@/ui/settings/ImageTierPromptDialog";
@@ -22,6 +24,8 @@ import { useAuthStore } from "@/state/authStore";
 import { useJobsStore } from "@/state/jobsStore";
 import { useOrdersStore } from "@/state/ordersStore";
 import { usePaymentsStore } from "@/state/paymentsStore";
+import { useDownloadsStore } from "@/state/downloadsStore";
+import { DownloadsDialog } from "@/ui/checkout/DownloadsDialog";
 import { useProfileStore } from "@/state/profileStore";
 import { useAppConfigStore } from "@/state/appConfigStore";
 import { useSparksStore } from "@/state/sparksStore";
@@ -36,7 +40,9 @@ import { notify } from "@/ui/lib/notify";
 export default function StudioApp() {
   const loadProjects = useProjectsStore((s) => s.load);
   const loadSettings = useSettingsStore((s) => s.load);
+  const projectsLoaded = useProjectsStore((s) => s.loaded);
   const currentId = useProjectsStore((s) => s.currentId);
+  const createProject = useProjectsStore((s) => s.createProject);
   const closeProject = useProjectsStore((s) => s.closeProject);
   const initAuth = useAuthStore((s) => s.init);
   const uid = useAuthStore((s) => s.user?.uid ?? null);
@@ -47,6 +53,8 @@ export default function StudioApp() {
   const stopOrders = useOrdersStore((s) => s.stop);
   const watchPayments = usePaymentsStore((s) => s.watch);
   const stopPayments = usePaymentsStore((s) => s.stop);
+  const watchDownloads = useDownloadsStore((s) => s.watch);
+  const stopDownloads = useDownloadsStore((s) => s.stop);
   const watchProfile = useProfileStore((s) => s.watch);
   const stopProfile = useProfileStore((s) => s.stop);
   const recordSession = useProfileStore((s) => s.recordSession);
@@ -58,6 +66,8 @@ export default function StudioApp() {
   const sparksEnabled = useAppConfigStore((s) => s.sparks.enabled);
   const ordersOpen = useAccountUiStore((s) => s.ordersOpen);
   const closeOrders = useAccountUiStore((s) => s.closeOrders);
+  const downloadsOpen = useAccountUiStore((s) => s.downloadsOpen);
+  const closeDownloads = useAccountUiStore((s) => s.closeDownloads);
 
   useEffect(() => {
     initAuth();
@@ -95,19 +105,43 @@ export default function StudioApp() {
     if (!uid || accessLevel !== "full") {
       stopOrders();
       stopPayments();
+      stopDownloads();
       return;
     }
     watchOrders();
     watchPayments();
-    watchSparks();
+    watchDownloads();
     watchSubs();
     return () => {
       stopOrders();
       stopPayments();
-      stopSparks();
+      stopDownloads();
       stopSubs();
     };
-  }, [uid, accessLevel, watchOrders, stopOrders, watchPayments, stopPayments, watchSparks, stopSparks, watchSubs, stopSubs]);
+  }, [
+    uid,
+    accessLevel,
+    watchOrders,
+    stopOrders,
+    watchPayments,
+    stopPayments,
+    watchDownloads,
+    stopDownloads,
+    watchSubs,
+    stopSubs,
+  ]);
+
+  // Mirror the Spark balance for EVERY signed-in identity — guests hold a small
+  // starter balance too. Restarting on access-level changes also re-claims the
+  // grant ladder, so the signup/verify bonuses land the moment they're earned.
+  useEffect(() => {
+    if (!uid || accessLevel === "loading") {
+      stopSparks();
+      return;
+    }
+    watchSparks();
+    return () => stopSparks();
+  }, [uid, accessLevel, watchSparks, stopSparks]);
 
   // Surface the result of a Stripe Checkout redirect (success/cancel) once, then
   // strip the query params so a refresh doesn't re-toast.
@@ -120,6 +154,7 @@ export default function StudioApp() {
     const gift = params.get("gift");
     const ebook = params.get("ebook");
     const ref = params.get("ref");
+    const hero = params.get("hero");
     // A referral landing (`?ref=CODE`) is remembered and claimed once the
     // visitor has a full account (see the claim effect below).
     if (ref) {
@@ -129,7 +164,16 @@ export default function StudioApp() {
         /* storage unavailable — the invite just doesn't stick */
       }
     }
-    if (!checkout && !subscription && !sparks && !gift && !ebook && !ref) return;
+    // A landing-page on-ramp (`?hero=Name`) is remembered until the guest
+    // session + project list are ready, then a storybook is created for them.
+    if (hero) {
+      try {
+        sessionStorage.setItem("pendingHeroName", hero.slice(0, 40));
+      } catch {
+        /* storage unavailable — they just land on the library */
+      }
+    }
+    if (!checkout && !subscription && !sparks && !gift && !ebook && !ref && !hero) return;
     if (checkout === "success") {
       notify.success(
         "Payment received",
@@ -165,10 +209,33 @@ export default function StudioApp() {
     params.delete("ebook");
     params.delete("payment");
     params.delete("ref");
+    params.delete("hero");
     params.delete("session_id");
     const qs = params.toString();
     window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
   }, []);
+
+  // Fulfil the landing-page on-ramp: once the (guest) session and project list
+  // are ready, create the promised storybook and drop the visitor straight into
+  // it. One-shot — the stored name is cleared before creating, so a failure or
+  // refresh can't spawn duplicates.
+  useEffect(() => {
+    if (!uid || !projectsLoaded || accessLevel === "loading") return;
+    let heroName: string | null = null;
+    try {
+      heroName = sessionStorage.getItem("pendingHeroName");
+      if (heroName) {
+        sessionStorage.removeItem("pendingHeroName");
+        // Keep the name for the Story stage's quick-start prefill (session-
+        // scoped; cleared once a draft is written).
+        sessionStorage.setItem("quickStartHeroName", heroName);
+      }
+    } catch {
+      return;
+    }
+    if (!heroName) return;
+    void createProject(`${heroName}'s Storybook`);
+  }, [uid, projectsLoaded, accessLevel, createProject]);
 
   // Claim a remembered referral code once the user has a full account. The
   // backend rejects self-referrals/stale accounts softly; clearing on any
@@ -217,20 +284,22 @@ export default function StudioApp() {
     return () => stopProfile();
   }, [uid, accessLevel, watchProfile, stopProfile, recordSession]);
 
-  // Unverified users are gated out of the studio entirely (hard gate). Guests
-  // see the library but can't open a project. Only a full account may be in the
-  // studio, so a stale currentId from a previous identity can never leak in.
-  const gated = accessLevel === "unverified";
-  const inProject = currentId !== null && accessLevel === "full";
+  // The studio is open to every signed-in identity — guests included (they
+  // draft and generate with their granted Sparks; purchases and premium tier
+  // stay account-gated). Unverified accounts see a reminder banner instead of
+  // a hard gate. `loading` still blocks so a stale currentId from a previous
+  // identity can never leak in before auth resolves.
+  const inProject = currentId !== null && accessLevel !== "loading";
 
   return (
+    <MotionConfig reducedMotion="user">
     <div className="flex h-screen flex-col overflow-hidden bg-canvas">
       <TopBar
-        center={gated ? null : <JobProgress />}
+        center={<JobProgress />}
         right={
           <>
-            {inProject && <ImageTierControl />}
-            {accessLevel === "full" && sparksEnabled && <SparksBadge />}
+            {inProject && accessLevel === "full" && <ImageTierControl />}
+            {accessLevel !== "loading" && sparksEnabled && <SparksBadge />}
             <AuthMenu />
           </>
         }
@@ -249,14 +318,15 @@ export default function StudioApp() {
       />
 
       <ProjectConflictBanner />
+      <SaveFailureBanner />
+      {accessLevel === "unverified" && <VerifyEmailBanner />}
+      <LowSparksBanner />
 
       <main className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-grid">
         {accessLevel === "loading" ? (
           <div className="flex flex-1 items-center justify-center">
             <Loader2 className="size-7 animate-spin text-brand-400" />
           </div>
-        ) : gated ? (
-          <VerifyEmailGate />
         ) : inProject ? (
           <ProjectWorkspace />
         ) : (
@@ -268,9 +338,11 @@ export default function StudioApp() {
       <GuestMigrationDialog />
       <PlansDialog />
       {accessLevel === "full" && <OrdersDialog open={ordersOpen} onClose={closeOrders} />}
+      {accessLevel === "full" && <DownloadsDialog open={downloadsOpen} onClose={closeDownloads} />}
       <SettingsDialog />
       <ImageTierPromptDialog />
       <Toaster />
     </div>
+    </MotionConfig>
   );
 }

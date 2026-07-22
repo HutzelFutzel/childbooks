@@ -26,6 +26,11 @@ import {
   type AgeWritingConfig,
 } from "../core/config/ageWriting";
 import {
+  createDefaultTypographyConfig,
+  normalizeTypographyConfig,
+  type TypographyConfig,
+} from "../core/config/typography";
+import {
   createDefaultModelCostTable,
   normalizeModelCostTable,
   type ModelCostTable,
@@ -117,7 +122,19 @@ interface AppConfigState {
   modelConfig: ModelConfig;
   artStyles: ArtStylesConfig;
   ageWriting: AgeWritingConfig;
+  /** Age/format-aware font-size recommendation coefficients. */
+  typography: TypographyConfig;
+  /**
+   * PUBLIC cost projection (`appConfig/modelCostsPublic`): flat per-image
+   * estimates only, derived server-side. Powers storefront Spark estimates.
+   * The full provider rate table is admin-only — see `adminModelCosts`.
+   */
   modelCosts: ModelCostTable;
+  /**
+   * Full rate table (admin-only doc). Empty until subscribeAdminModelCosts is
+   * called (the admin dashboard does) and the admin-gated read succeeds.
+   */
+  adminModelCosts: ModelCostTable;
   /** Rolling window of recent per-call image costs (for Spark estimate ranges). */
   imageCostStats: ImageCostStats;
   /** Rolling window of recent render durations (for time estimate ranges). */
@@ -146,15 +163,22 @@ interface AppConfigState {
   emailStats: EmailStats;
   loaded: boolean;
   unsubs: Unsubscribe[];
+  adminCostsUnsub: Unsubscribe | null;
 
   /** Begin live subscriptions to the config docs (idempotent). */
   subscribe: () => void;
   stop: () => void;
+  /**
+   * Live-subscribe to the FULL rate table (admin-only Firestore doc). Called by
+   * the admin dashboard; rules deny it for everyone else (state stays null).
+   */
+  subscribeAdminModelCosts: () => void;
 
   // Admin writes (enforced server-side; the snapshot reflects the result).
   saveModelConfig: (config: ModelConfig) => Promise<void>;
   saveArtStyles: (config: ArtStylesConfig) => Promise<void>;
   saveAgeWriting: (config: AgeWritingConfig) => Promise<void>;
+  saveTypography: (config: TypographyConfig) => Promise<void>;
   saveModelCosts: (table: ModelCostTable) => Promise<void>;
   savePricingSettings: (settings: PricingSettings) => Promise<void>;
   saveSparksConfig: (config: SparksConfig) => Promise<void>;
@@ -258,7 +282,9 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   modelConfig: createDefaultModelConfig(),
   artStyles: createDefaultArtStylesConfig(),
   ageWriting: createDefaultAgeWritingConfig(),
+  typography: createDefaultTypographyConfig(),
   modelCosts: createDefaultModelCostTable(),
+  adminModelCosts: createDefaultModelCostTable(),
   imageCostStats: createDefaultImageCostStats(),
   latencyStats: createDefaultLatencyStats(),
   products: { version: 1, products: [] },
@@ -288,7 +314,12 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       onSnapshot(doc(db, "appConfig", "ageWriting"), (snap) => {
         set({ ageWriting: normalizeAgeWritingConfig(snap.exists() ? snap.data() : undefined) });
       }),
-      onSnapshot(doc(db, "appConfig", "modelCosts"), (snap) => {
+      onSnapshot(doc(db, "appConfig", "typography"), (snap) => {
+        set({ typography: normalizeTypographyConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      // The public projection (per-image estimates only); the raw rate table
+      // is admin-only and subscribed separately via subscribeAdminModelCosts.
+      onSnapshot(doc(db, "appConfig", "modelCostsPublic"), (snap) => {
         set({ modelCosts: normalizeModelCostTable(snap.exists() ? snap.data() : undefined) });
       }),
       onSnapshot(doc(db, "appConfig", "imageCostStats"), (snap) => {
@@ -334,9 +365,27 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     set({ unsubs });
   },
 
+  adminCostsUnsub: null,
+
   stop() {
     get().unsubs.forEach((u) => u());
-    set({ unsubs: [] });
+    get().adminCostsUnsub?.();
+    set({ unsubs: [], adminCostsUnsub: null });
+  },
+
+  subscribeAdminModelCosts() {
+    if (get().adminCostsUnsub) return;
+    const unsub = onSnapshot(
+      doc(getFirebaseDb(), "appConfig", "modelCosts"),
+      (snap) => {
+        set({ adminModelCosts: normalizeModelCostTable(snap.exists() ? snap.data() : undefined) });
+      },
+      () => {
+        // Permission denied (not an admin) — the tabs that need it are behind
+        // the admin gate anyway, so just leave it empty.
+      },
+    );
+    set({ adminCostsUnsub: unsub });
   },
 
   async saveModelConfig(config) {
@@ -349,6 +398,10 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
 
   async saveAgeWriting(config) {
     await putJson("/admin/config/age-writing", config);
+  },
+
+  async saveTypography(config) {
+    set({ typography: normalizeTypographyConfig(await putJson("/admin/config/typography", config)) });
   },
 
   async saveModelCosts(table) {

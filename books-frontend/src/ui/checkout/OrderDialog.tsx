@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Package, ShieldCheck, Truck } from "lucide-react";
+import { FileDown, Loader2, Package, ShieldCheck, TriangleAlert, Truck } from "lucide-react";
 import { bookProductForConfig } from "../../core/book";
 import { buildOrderDraft } from "../../core/fulfillment/draft";
 import { normalizePageCount } from "../../core/fulfillment";
@@ -30,10 +30,13 @@ import { Field, Input } from "../components/Input";
 import { Modal } from "../components/Modal";
 import { Select } from "../components/Select";
 import { notify } from "../lib/notify";
+import { saveBlob } from "../design/bookExport";
 import type { DesignPage } from "../design/designInit";
 import { OrderAssetRunner, type OrderAssets } from "./orderAssets";
 
 type Phase = "form" | "rendering" | "submitting";
+/** Whether the current render is for placing an order or downloading a proof. */
+type RenderIntent = "order" | "proof";
 
 const COUNTRIES: { value: string; label: string }[] = [
   { value: "US", label: "United States" },
@@ -55,19 +58,23 @@ const SHIPPING: { value: ShippingMethod; label: string }[] = [
   { value: "Overnight", label: "Overnight (fastest)" },
 ];
 
+const SHIPPING_LABEL: Record<ShippingMethod, string> = Object.fromEntries(
+  SHIPPING.map((s) => [s.value, s.label]),
+) as Record<ShippingMethod, string>;
+
 const CURRENCY = "USD";
 
 // In dev, seed the form with a real Lulu-priceable address so the live quote
 // fires and the order can be placed without typing. Empty in production.
 const DEV_PREFILL = isDev()
   ? {
-      name: "Jane Doe",
-      phone: "+1 415 555 0123",
-      line1: "123 Market St",
-      line2: "Apt 4B",
-      city: "San Francisco",
+      name: "David Sperber",
+      phone: "+1 669 677 0452",
+      line1: "1850 Sand Hill Road",
+      line2: "18",
+      city: "Palo Alto",
       region: "CA",
-      postal: "94103",
+      postal: "94304",
       country: "US",
     }
   : null;
@@ -98,8 +105,11 @@ export function OrderDialog({
   useEffect(() => {
     watchSubscriptions();
   }, [watchSubscriptions]);
+  const catalogProduct = useMemo(
+    () => publicProducts.find((p) => p.sku === product.sku),
+    [publicProducts, product.sku],
+  );
   const accessGate = useMemo(() => {
-    const catalogProduct = publicProducts.find((p) => p.sku === product.sku);
     if (!catalogProduct) return { ok: true as const, mode: "public" as const };
     const access = productAccessOf(catalogProduct.conditions);
     if (access.mode === "public") return { ok: true as const, mode: access.mode };
@@ -108,7 +118,7 @@ export function OrderDialog({
     const planId = plan?.id ?? publicPlans.find((p) => p.isFree)?.id ?? "free";
     const isSubscribed = Boolean(plan && !plan.isFree);
     return { ok: planMeetsAccess(access, { planId, isSubscribed }), mode: access.mode };
-  }, [publicProducts, publicPlans, subscriptions, product.sku]);
+  }, [catalogProduct, publicPlans, subscriptions]);
 
   const savedAddresses = useProfileStore((s) => s.addresses);
   const preferredAddress = useProfileStore((s) => s.preferredAddress);
@@ -117,7 +127,26 @@ export function OrderDialog({
   const contentPages = pages.filter((p) => !p.isCover).length;
   const pageCount = normalizePageCount(product, contentPages);
 
+  // Order limits for this format. The admin catalog is authoritative when set;
+  // otherwise we fall back to the provider catalog's minimum page count. The
+  // backend re-checks these at checkout — this just fails fast with a clear
+  // message instead of after the (slow) print-file render.
+  const minPages = catalogProduct?.conditions.pages.min ?? product.minPages;
+  const maxPages = catalogProduct?.conditions.pages.max ?? Number.POSITIVE_INFINITY;
+  const maxCopies = catalogProduct?.conditions.copies.max ?? Number.POSITIVE_INFINITY;
+
+  // Shipping methods the product actually supports (backend rejects the rest).
+  const shippingOptions = useMemo(() => {
+    const enabled = catalogProduct?.shipping.methods.filter((m) => m.enabled) ?? [];
+    if (enabled.length === 0) return SHIPPING;
+    return enabled.map((m) => ({
+      value: m.method,
+      label: m.label || SHIPPING_LABEL[m.method] || m.method,
+    }));
+  }, [catalogProduct]);
+
   const [phase, setPhase] = useState<Phase>("form");
+  const [renderIntent, setRenderIntent] = useState<RenderIntent>("order");
   const [status, setStatus] = useState("");
   const [coverDims, setCoverDims] = useState<{ widthMm: number; heightMm: number } | null>(null);
 
@@ -152,6 +181,14 @@ export function OrderDialog({
   useEffect(() => {
     if (open) setContactEmail((e) => e || email);
   }, [open, email]);
+
+  // Keep the selected shipping method within what the product supports (the
+  // options can arrive/refresh after the dialog opens).
+  useEffect(() => {
+    if (!shippingOptions.some((o) => o.value === shipping)) {
+      setShipping(shippingOptions[0]?.value ?? "Standard");
+    }
+  }, [shippingOptions, shipping]);
 
   // Editing any address field detaches from the picked saved address, so saving
   // creates a new entry instead of silently overwriting the selected one.
@@ -227,10 +264,14 @@ export function OrderDialog({
       } catch (err) {
         if (seq === quoteSeq.current) {
           setQuote(null);
+          // Surface the real reason (the backend returns actionable messages
+          // like "This product isn't available." or "Currency … isn't
+          // supported."). Only fall back to a generic hint when there's none.
           setQuoteError(
             err instanceof FulfillmentError && err.kind === "auth"
               ? "Please sign in again to see live pricing."
-              : "We couldn't price this destination. Check the city, state and postal code.",
+              : (err instanceof Error && err.message) ||
+                  "We couldn't price this destination. Check the city, state and postal code.",
           );
         }
       } finally {
@@ -256,7 +297,24 @@ export function OrderDialog({
     };
   }
 
-  const canOrder = Boolean(
+  // Format requirements (page count + copies) checked up front so a book that
+  // can't be printed in this format never renders → uploads → fails at Stripe.
+  const requirementError = useMemo(() => {
+    if (contentPages < minPages) {
+      return `This format needs at least ${minPages} pages — your book has ${contentPages}. Add ${
+        minPages - contentPages
+      } more before ordering.`;
+    }
+    if (contentPages > maxPages) {
+      return `This format allows up to ${maxPages} pages — your book has ${contentPages}. Remove some pages or choose another format.`;
+    }
+    if (copies > maxCopies) {
+      return `You can order up to ${maxCopies} copies at a time.`;
+    }
+    return null;
+  }, [contentPages, minPages, maxPages, copies, maxCopies]);
+
+  const addressComplete = Boolean(
     name.trim() &&
       phone.trim() &&
       line1.trim() &&
@@ -265,22 +323,30 @@ export function OrderDialog({
       country &&
       copies >= 1,
   );
+  const canOrder = addressComplete && !requirementError;
 
-  async function placeOrder() {
-    if (!accessGate.ok) {
-      notify.error("This product is only available with a subscription. Upgrade your plan to order it.");
+  async function beginRender(intent: RenderIntent) {
+    if (requirementError) {
+      notify.error(requirementError);
       return;
     }
-    if (!canOrder) {
-      notify.error("Add a recipient name, phone number and full shipping address.");
-      return;
+    if (intent === "order") {
+      if (!accessGate.ok) {
+        notify.error("This product is only available with a subscription. Upgrade your plan to order it.");
+        return;
+      }
+      if (!canOrder) {
+        notify.error("Add a recipient name, phone number and full shipping address.");
+        return;
+      }
     }
     try {
+      setRenderIntent(intent);
       setPhase("rendering");
       setStatus("Calculating cover size…");
       const dims = await provider.getCoverDimensionsMm(product.sku, pageCount);
       setCoverDims(dims);
-      setStatus("Rendering print files…");
+      setStatus(intent === "proof" ? "Rendering proof files…" : "Rendering print files…");
       // OrderAssetRunner mounts below once coverDims is set and calls onAssets.
     } catch (err) {
       setPhase("form");
@@ -288,7 +354,33 @@ export function OrderDialog({
     }
   }
 
+  // Render the print files but hand them to the browser as a download so the
+  // exact interior + wraparound cover PDFs Lulu receives can be proofed before
+  // paying (illustrations, bleed, spine, page order).
+  async function downloadProof(assets: OrderAssets) {
+    try {
+      const base = (project.title || "book").trim() || "book";
+      await saveBlob(`${base} — interior.pdf`, assets.interior);
+      if (assets.cover) await saveBlob(`${base} — cover.pdf`, assets.cover);
+      notify.success(
+        "Print proof downloaded",
+        assets.cover
+          ? "Check the interior and cover PDFs — this is exactly what gets printed."
+          : "Interior PDF saved. (No front cover is designed yet, so there's no cover file.)",
+      );
+    } catch (err) {
+      notify.error(err);
+    } finally {
+      setPhase("form");
+      setCoverDims(null);
+    }
+  }
+
   async function onAssets(assets: OrderAssets) {
+    if (renderIntent === "proof") {
+      await downloadProof(assets);
+      return;
+    }
     try {
       setPhase("submitting");
       setStatus("Redirecting to secure checkout…");
@@ -324,7 +416,9 @@ export function OrderDialog({
       // Payment-gated: the backend prices the order, uploads the print files,
       // and opens a Stripe Checkout Session. The print order is placed only
       // AFTER Stripe confirms payment (via webhook). Redirect to Stripe.
-      const { url } = await startOrderCheckout({ draft, pageCount: assets.pageCount });
+      // Send the SAME (normalized) page count the price preview used so the
+      // charge matches what the customer was quoted.
+      const { url } = await startOrderCheckout({ draft, pageCount });
       window.location.href = url;
     } catch (err) {
       setPhase("form");
@@ -334,26 +428,48 @@ export function OrderDialog({
   }
 
   const busy = phase === "rendering" || phase === "submitting";
+  const proofing = phase === "rendering" && renderIntent === "proof";
+  const orderBusy = busy && renderIntent === "order";
 
   return (
+    // Closing during "rendering" is allowed — it unmounts the asset runner and
+    // safely abandons the render (nothing uploaded/charged yet), so a hung
+    // render can't trap the user. Only "submitting" (checkout request already
+    // in flight) is locked.
     <Modal
       open={open}
-      onClose={busy ? () => {} : onClose}
+      onClose={phase === "submitting" ? () => {} : onClose}
       title="Order a printed book"
       size="max-w-xl"
       footer={
-        <>
-          <Button variant="ghost" onClick={onClose} disabled={busy}>
-            Cancel
+        <div className="flex w-full flex-wrap items-center justify-between gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            leftIcon={<FileDown className="size-4" />}
+            onClick={() => beginRender("proof")}
+            loading={proofing}
+            disabled={busy || Boolean(requirementError)}
+          >
+            {proofing ? "Preparing…" : "Download print proof"}
           </Button>
-          <Button onClick={placeOrder} loading={busy} disabled={!canOrder || !accessGate.ok}>
-            {phase === "rendering"
-              ? "Preparing files…"
-              : phase === "submitting"
-                ? "Redirecting…"
-                : "Continue to payment"}
-          </Button>
-        </>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose} disabled={phase === "submitting"}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => beginRender("order")}
+              loading={orderBusy}
+              disabled={busy || !canOrder || !accessGate.ok}
+            >
+              {orderBusy && phase === "rendering"
+                ? "Preparing files…"
+                : orderBusy && phase === "submitting"
+                  ? "Redirecting…"
+                  : "Continue to payment"}
+            </Button>
+          </div>
+        </div>
       }
     >
       {
@@ -371,6 +487,14 @@ export function OrderDialog({
               </p>
             </div>
           </div>
+
+          {/* Format requirement gate — the book doesn't fit this product yet. */}
+          {requirementError && (
+            <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm text-rose-700">
+              <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+              <span>{requirementError}</span>
+            </div>
+          )}
 
           {/* Subscription gate — this product is restricted to certain plans. */}
           {!accessGate.ok && (
@@ -495,13 +619,17 @@ export function OrderDialog({
               <Input
                 type="number"
                 min={1}
+                max={Number.isFinite(maxCopies) ? maxCopies : undefined}
                 value={copies}
-                onChange={(e) => setCopies(Math.max(1, Number(e.target.value) || 1))}
+                onChange={(e) => {
+                  const next = Math.max(1, Number(e.target.value) || 1);
+                  setCopies(Number.isFinite(maxCopies) ? Math.min(next, maxCopies) : next);
+                }}
               />
             </Field>
             <Field label="Shipping" required>
               <Select
-                options={SHIPPING}
+                options={shippingOptions}
                 value={shipping}
                 onChange={(e) => setShipping(e.target.value as ShippingMethod)}
               />

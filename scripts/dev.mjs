@@ -281,10 +281,12 @@ async function startStripeListener() {
     );
   });
   if (!secret) return null;
-  // Inject so the functions emulator (which inherits this process's env) verifies
-  // forwarded events against the SAME secret the listener signs them with.
-  process.env.STRIPE_SANDBOX_WEBHOOK_SECRET = secret;
-  process.env.STRIPE_WEBHOOK_SECRET = secret;
+  // Inject under the emulator-only override name so the functions emulator (which
+  // inherits this process's env) verifies forwarded events against the SAME secret
+  // the listener signs them with. This var is never set in .env.local, so it isn't
+  // clobbered by a static value there — `selectStripe` prefers it when
+  // FUNCTIONS_EMULATOR is set, leaving any .env.local sandbox secret as a fallback.
+  process.env.STRIPE_EMULATOR_WEBHOOK_SECRET = secret;
   console.log(`[stripe] Webhook listener → ${url}`);
   console.log(`[stripe] Signing secret injected (${secret.slice(0, 12)}…).`);
   return `stripe listen --api-key ${key} --forward-to ${url}`;

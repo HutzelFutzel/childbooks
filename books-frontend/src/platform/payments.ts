@@ -169,7 +169,7 @@ export async function startReorderCheckout(
 export interface EbookQuote {
   enabled: boolean;
   currency: string;
-  /** Final price after any print-owner bundle discount. */
+  /** Final price after plan pricing + any print-owner bundle discount (0 ⇒ included). */
   price: number;
   listPrice: number;
   discountPct: number;
@@ -177,6 +177,11 @@ export interface EbookQuote {
   owned: boolean;
   /** Download URL when owned (token-guarded; only revealed to the owner). */
   downloadUrl: string | null;
+  /** The buyer's plan, ONLY when it changed the price (drives the wording). */
+  planId: string | null;
+  planName: string | null;
+  /** True when the buyer's plan includes the ebook (granted without checkout). */
+  included: boolean;
 }
 
 /** Server-authoritative ebook price + ownership for a project. */
@@ -190,14 +195,16 @@ export async function fetchEbookQuote(projectId: string, currency?: string): Pro
 
 /**
  * Buy the digital edition (PDF). Uploads the rendered ebook file as part of the
- * call; the download unlocks only after Stripe confirms payment.
+ * call. Two outcomes: `{ url }` — a Stripe Checkout URL to redirect to (the
+ * download unlocks after payment), or `{ granted: true }` — the buyer's plan
+ * includes the ebook and the download was granted immediately.
  */
 export async function startEbookCheckout(input: {
   projectId: string;
   title: string;
   currency: string;
   pdf: Blob;
-}): Promise<{ url: string }> {
+}): Promise<{ url: string } | { granted: true }> {
   const bytes = new Uint8Array(await input.pdf.arrayBuffer());
   const res = await backendFetch("/checkout/ebook", {
     method: "POST",
@@ -211,7 +218,8 @@ export async function startEbookCheckout(input: {
     }),
   });
   if (!res.ok) throw new Error(await errorMessage(res, "We couldn't start the ebook checkout."));
-  const json = (await res.json()) as { url?: string };
+  const json = (await res.json()) as { url?: string; granted?: boolean };
+  if (json.granted) return { granted: true };
   if (!json.url) throw new Error("Checkout did not return a URL.");
   return { url: json.url };
 }
@@ -332,10 +340,13 @@ export async function claimReferralCode(code: string): Promise<boolean> {
   }
 }
 
-/** Claim the one-time starter Spark grant for the signed-in user (idempotent). */
-export async function claimStarterSparks(): Promise<void> {
+/**
+ * Claim every starter-grant ladder rung the caller qualifies for (guest →
+ * signup → verify). Each rung is granted once; safe to call repeatedly.
+ */
+export async function claimSparkGrants(): Promise<void> {
   try {
-    await backendFetch("/account/sparks/claim-starter", { method: "POST" });
+    await backendFetch("/sparks/claim", { method: "POST" });
   } catch {
     // Best-effort — non-fatal.
   }

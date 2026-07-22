@@ -13,22 +13,24 @@ import {
   useRef,
   useState,
 } from "react";
-import { wordParagraphs } from "../../core/design";
-import type {
-  BookDesign,
-  ImageElement,
-  PageDesign,
-  Project,
-  ShapeElement,
-  ShapeKind,
-  TextBox,
-  TextSpan,
+import { textFromParagraphs, wordParagraphs } from "../../core/design";
+import {
+  COVER_FRONT_ID,
+  type BookDesign,
+  type ImageElement,
+  type PageDesign,
+  type Project,
+  type ShapeElement,
+  type ShapeKind,
+  type TextBox,
+  type TextSpan,
 } from "../../core/types";
 import type { AssetItem } from "../../core/settings";
 import { useProjectsStore } from "../../state/projectsStore";
 import {
   buildDesignPages,
   defaultDesign,
+  defaultIllustrationFocus,
   newImageId,
   newTextBoxId,
   seedPageDesign,
@@ -38,7 +40,8 @@ import { getPreset } from "../design/presets";
 import { newShapeId, shapeStyleDefaults } from "../design/shapes";
 import { fitBoxHeightPct, fitFontSizePct } from "../design/textFit";
 import type { SpanRef } from "../design/TextBoxView";
-import type { StudioStep } from "./studioSteps";
+import { notify } from "../lib/notify";
+import { computeProgress, type StudioStep } from "./studioSteps";
 
 export type Selection =
   | { kind: "none" }
@@ -80,6 +83,14 @@ interface StudioContextValue {
   selectedShape: ShapeElement | null;
   selectedImage: ImageElement | null;
 
+  /**
+   * The display-spread id currently open in the Design stage's main canvas —
+   * i.e. page navigation. Only one spread is ever mounted as a live Konva
+   * editor at a time; every other page is just a static filmstrip thumbnail.
+   */
+  editingDispId: string | null;
+  setEditingDisp: (id: string | null) => void;
+
   // design ops (page-scoped)
   undo: () => void;
   redo: () => void;
@@ -110,6 +121,8 @@ interface StudioContextValue {
 
   // layers (page-scoped, across all element kinds)
   moveLayer: (pageId: string, id: string, dir: -1 | 1) => void;
+  /** Reassign the whole stack from a top-first ordering (drag-to-reorder). */
+  setLayerOrder: (pageId: string, orderedIdsTopFirst: string[]) => void;
   setLayerHidden: (pageId: string, id: string, hidden: boolean) => void;
   setLayerLocked: (pageId: string, id: string, locked: boolean) => void;
 
@@ -156,6 +169,24 @@ interface StudioContextValue {
   setStep: (step: StudioStep) => void;
   /** Jump to the Story step (used by "Edit story" affordances). */
   openSetup: () => void;
+
+  /**
+   * Whether the Design step is showing its book-setup flow (size/format/layout)
+   * rather than the canvas. It opens automatically the first time (until the
+   * reader confirms), and can be reopened from the canvas as a summary.
+   */
+  designSetupOpen: boolean;
+  openDesignSetup: () => void;
+  closeDesignSetup: () => void;
+
+  /**
+   * Whether the dedicated Cover Studio (front + back cover, shown together as a
+   * wrap) is open over the main canvas. Opened from a cover cell in the rail or
+   * the toolbar "Covers" action.
+   */
+  coverStudioOpen: boolean;
+  openCoverStudio: () => void;
+  closeCoverStudio: () => void;
 }
 
 /** Highest z across all elements on a page (text boxes + shapes + images). */
@@ -233,10 +264,13 @@ export function StudioProvider({
   const setDesign = useProjectsStore((s) => s.setDesign);
 
   const [selection, setSelection] = useState<Selection>({ kind: "none" });
+  const [editingDispId, setEditingDispId] = useState<string | null>(null);
   const [generatingAnchors, setGA] = useState<Set<string>>(new Set());
   const [generatingPages, setGP] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
-  const [step, setStep] = useState<StudioStep>(initialStep);
+  const [step, setStepRaw] = useState<StudioStep>(initialStep);
+  const [designSetupOpen, setDesignSetupOpen] = useState(false);
+  const [coverStudioOpen, setCoverStudioOpen] = useState(false);
   const [snap, setSnap] = useState(true);
   const [grid, setGrid] = useState(false);
   const [guides, setGuides] = useState(true);
@@ -274,7 +308,75 @@ export function StudioProvider({
     void setDesign({ ...design, pages: nextPages });
   }, [design, pages, project, setDesign]);
 
+  // The project title is the single source of truth for the front cover: keep
+  // the linked "book-title" overlay box mirroring it, so the title on the cover
+  // can never drift from the book's real title.
+  useEffect(() => {
+    if (!design) return;
+    const page = design.pages[COVER_FRONT_ID];
+    if (!page) return;
+    let changed = false;
+    const textBoxes = page.textBoxes.map((b) => {
+      if (b.role !== "book-title") return b;
+      if (textFromParagraphs(b.paragraphs) === project.title) return b;
+      changed = true;
+      return { ...b, paragraphs: wordParagraphs(project.title) };
+    });
+    if (changed) {
+      void setDesign({
+        ...design,
+        pages: { ...design.pages, [COVER_FRONT_ID]: { ...page, textBoxes } },
+      });
+    }
+  }, [design, project.title, setDesign]);
+
+  // Guarded step navigation: EVERY "go to step X" affordance (the rail, the
+  // canvas "Order & print" button, the anchors "Design the pages" button, …)
+  // goes through this one gate, so nothing can jump past the rail's own locks.
+  // A blocked jump explains what's still missing instead of silently failing.
+  const setStep = useCallback(
+    (next: StudioStep) => {
+      // Read the LIVE project from the store (not the render-time prop): the
+      // story step advances the stage and navigates in the same tick, so the
+      // captured prop can be one update behind.
+      const live =
+        useProjectsStore.getState().projects.find((p) => p.id === project.id) ?? project;
+      const progress = computeProgress(live);
+      if (!progress[next].unlocked) {
+        if (next === "order") {
+          notify.info(
+            "Almost there!",
+            progress.pagesTotal > 0
+              ? `Every page needs its artwork before you can order — ${progress.pagesReady} of ${progress.pagesTotal} ready.`
+              : "Design your pages before ordering a printed book.",
+          );
+        } else if (next === "edit" && live.stage === "studio") {
+          // Setup is done but the screenplay hasn't finished auto-drafting.
+          notify.info("Your pages are still being written", "Give it a moment, then try again.");
+        } else {
+          notify.info("One step at a time", "Finish the Story step first.");
+        }
+        return;
+      }
+      setStepRaw(next);
+    },
+    [project],
+  );
+
+  const openSetup = useCallback(() => setStep("story"), [setStep]);
+  const openDesignSetup = useCallback(() => setDesignSetupOpen(true), []);
+  const closeDesignSetup = useCallback(() => setDesignSetupOpen(false), []);
+  const openCoverStudio = useCallback(() => setCoverStudioOpen(true), []);
+  const closeCoverStudio = useCallback(() => setCoverStudioOpen(false), []);
+
   const select = useCallback((sel: Selection) => setSelection(sel), []);
+
+  // Entering/leaving focused edit clears element selection so the inspector
+  // never shows controls for an element whose editor is no longer on screen.
+  const setEditingDisp = useCallback((id: string | null) => {
+    setEditingDispId(id);
+    setSelection({ kind: "none" });
+  }, []);
 
   const setAnchorGenerating = useCallback((id: string, on: boolean) => {
     setGA((prev) => {
@@ -332,14 +434,37 @@ export function StudioProvider({
 
   const patchBox = useCallback(
     (pageId: string, boxId: string, patch: Partial<TextBox>) => {
+      const aspect = pages.find((p) => p.id === pageId)?.aspect;
+      // Fields whose change alters how tall the text lays out.
+      const affectsHeight =
+        "paragraphs" in patch ||
+        "fontSizePct" in patch ||
+        "padding" in patch ||
+        "lineHeight" in patch ||
+        "fontFamily" in patch ||
+        "minHeightPct" in patch ||
+        "rect" in patch;
       commit((d) =>
         mutatePage(d, pageId, (pd) => ({
           ...pd,
-          textBoxes: pd.textBoxes.map((b) => (b.id === boxId ? { ...b, ...patch } : b)),
+          textBoxes: pd.textBoxes.map((b) => {
+            if (b.id !== boxId) return b;
+            let next = { ...b, ...patch };
+            // Auto-height boxes render at max(target floor, content height): they
+            // grow as text is added and can never be shorter than the text, but a
+            // larger user-set target (minHeightPct) leaves room to breathe.
+            if (next.autoHeight && affectsHeight && aspect) {
+              const contentH = fitBoxHeightPct(next, aspect);
+              const h = Math.max(contentH, next.minHeightPct ?? 0);
+              const y = Math.max(0, Math.min(1 - h, next.rect.y));
+              next = { ...next, rect: { ...next.rect, h, y } };
+            }
+            return next;
+          }),
         })),
       );
     },
-    [commit, mutatePage],
+    [commit, mutatePage, pages],
   );
 
   const patchSpan = useCallback(
@@ -381,12 +506,18 @@ export function StudioProvider({
         fill: preset.defaults.fill,
         stroke: preset.defaults.stroke,
         padding: preset.padding,
-        autoFit: true,
+        // Auto-height keeps the box hugging its text (grows as you type, never
+        // shrinks below content). Font size stays exactly what the user sets —
+        // no surprise re-fitting — so we leave auto-fit off.
+        autoHeight: true,
+        autoFit: false,
       };
+      const page = pages.find((p) => p.id === pageId);
+      if (page) box.rect = { ...box.rect, h: fitBoxHeightPct(box, page.aspect) };
       commit((d) => mutatePage(d, pageId, (pd) => ({ ...pd, textBoxes: [...pd.textBoxes, box] })));
       setSelection({ kind: "box", pageId, boxId: box.id, span: null });
     },
-    [commit, design, mutatePage],
+    [commit, design, mutatePage, pages],
   );
 
   const deleteBox = useCallback(
@@ -615,18 +746,23 @@ export function StudioProvider({
       if (!design) return;
       const pd = design.pages[pageId];
       if (pd?.images?.some((im) => im.kind === "illustration")) return;
+      // Start the movable illustration from the same crop the passive full-bleed
+      // used (top-biased on covers), so "Adjust art" doesn't jump the framing.
+      const page = pages.find((p) => p.id === pageId);
+      const focus = page ? defaultIllustrationFocus(page) : undefined;
       const img: ImageElement = {
         id: newImageId(),
         kind: "illustration",
         rect: { x: 0, y: 0, w: 1, h: 1 },
         z: bottomZ(pd) - 1,
         fit: "cover",
+        ...(focus ? { focus } : {}),
         name: "Illustration",
       };
       commit((d) => mutatePage(d, pageId, (p) => ({ ...p, images: [...(p.images ?? []), img] })));
       setSelection({ kind: "image", pageId, imageId: img.id });
     },
-    [commit, design, mutatePage],
+    [commit, design, mutatePage, pages],
   );
 
   // --- layers (across all element kinds) ----------------------------------
@@ -646,6 +782,28 @@ export function StudioProvider({
           [items[idx], items[j]] = [items[j], items[idx]];
           const zById = new Map<string, number>();
           items.forEach((it, i) => zById.set(it.id, i + 1));
+          return {
+            ...pd,
+            textBoxes: pd.textBoxes.map((b) => ({ ...b, z: zById.get(b.id) ?? b.z })),
+            shapes: (pd.shapes ?? []).map((s) => ({ ...s, z: zById.get(s.id) ?? s.z })),
+            images: (pd.images ?? []).map((im) => ({ ...im, z: zById.get(im.id) ?? im.z })),
+          };
+        }),
+      );
+    },
+    [commit, mutatePage],
+  );
+
+  const setLayerOrder = useCallback(
+    (pageId: string, orderedIdsTopFirst: string[]) => {
+      commit((d) =>
+        mutatePage(d, pageId, (pd) => {
+          // The panel lists top-of-stack first; z ascends from the bottom, so
+          // reverse before assigning z = 1..N. Any id not in the list keeps a
+          // stable relative order below the reordered set (defensive).
+          const bottomFirst = [...orderedIdsTopFirst].reverse();
+          const zById = new Map<string, number>();
+          bottomFirst.forEach((id, i) => zById.set(id, i + 1));
           return {
             ...pd,
             textBoxes: pd.textBoxes.map((b) => ({ ...b, z: zById.get(b.id) ?? b.z })),
@@ -868,6 +1026,8 @@ export function StudioProvider({
         selectedBox,
         selectedShape,
         selectedImage,
+        editingDispId,
+        setEditingDisp,
         undo,
         redo,
         addBox,
@@ -890,6 +1050,7 @@ export function StudioProvider({
         alignImage,
         makeIllustrationEditable,
         moveLayer,
+        setLayerOrder,
         setLayerHidden,
         setLayerLocked,
         fitTextToBox,
@@ -920,7 +1081,13 @@ export function StudioProvider({
         cancelGeneration,
         step,
         setStep,
-        openSetup: () => setStep("story"),
+        openSetup,
+        designSetupOpen,
+        openDesignSetup,
+        closeDesignSetup,
+        coverStudioOpen,
+        openCoverStudio,
+        closeCoverStudio,
       }
     : null;
 

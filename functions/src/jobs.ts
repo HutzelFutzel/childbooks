@@ -223,15 +223,18 @@ function buildDependsOn(job: AnyJob): Map<string, string[]> {
   return out;
 }
 
-/** Verified, non-anonymous accounts only (mirrors the HTTP proxy). */
-async function verifyUser(uid: string): Promise<boolean> {
-  if (process.env.FUNCTIONS_EMULATOR === "true") return true;
+/**
+ * The caller's standing for job execution (mirrors the HTTP `/ai` guard):
+ * every existing account may run jobs — guests included — but guests are
+ * limited to the cheap tier with no negative-balance buffer. Fails closed
+ * (denied) when the account can't be loaded.
+ */
+async function jobCallerStanding(uid: string): Promise<{ allowed: boolean; guest: boolean }> {
   try {
     const user = await getAuth().getUser(uid);
-    const isAnonymous = user.providerData.length === 0;
-    return !isAnonymous && user.emailVerified;
+    return { allowed: true, guest: user.providerData.length === 0 };
   } catch {
-    return false;
+    return { allowed: false, guest: true };
   }
 }
 
@@ -273,10 +276,11 @@ function taskPayload(kind: JobKind, spec: JobTask | RefreshTask | AnchorTask): P
  * trust every dispatched task is authorized and paid for.
  */
 async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Promise<void> {
-  if (!(await verifyUser(uid))) {
+  const caller = await jobCallerStanding(uid);
+  if (!caller.allowed) {
     await ref.update({
       status: "error",
-      error: "Please verify your email to generate.",
+      error: "Please sign in again to generate.",
       updatedAt: Date.now(),
     });
     return;
@@ -293,11 +297,14 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
     return;
   }
 
-  const tier = normalizeImageTier(job.tier);
+  // Guests render on the cheap tier only and get no negative buffer.
+  const tier = caller.guest ? "quick" : normalizeImageTier(job.tier);
   // Pre-check the whole batch is affordable (within the negative buffer) so we
   // don't dispatch work the user can't pay for; each task settles as it renders.
   const action = job.kind === "anchors" ? "anchorImage" : "pageIllustration";
-  await ensureAfford(uid, (await estimateForUser(uid, action, tier)) * specs.length);
+  await ensureAfford(uid, (await estimateForUser(uid, action, tier)) * specs.length, {
+    noNegativeBuffer: caller.guest,
+  });
 
   await applyFeatureGate(uid, job);
 
@@ -326,6 +333,8 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
     expanded: true,
     updatedAt: now,
     progress: { total: specs.length, completed: 0, failed: 0 },
+    // Persist the (possibly guest-downgraded) tier so workers render with it.
+    tier,
     // Persist the feature-gated snapshot so workers render against it.
     ...(job.kind !== "image" ? { project: (job as PipelineRefreshJob | AnchorsJob).project } : {}),
   });

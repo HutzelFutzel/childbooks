@@ -39,10 +39,38 @@ export interface BrandAsset {
 }
 
 /** The uploadable brand-image slots (everything except the watermark, which
- *  has its own appearance controls). */
-export type BrandAssetSlot = "logo" | "logoDark" | "icon" | "favicon" | "ogImage";
+ *  has its own appearance controls).
+ *
+ *  `defaultCover*` are the fallback book covers shown in the studio (e.g. the
+ *  library) before a project has generated its own cover art. They come in a
+ *  square and a wide (landscape) variant so the fallback matches the book's
+ *  format; {@link defaultCoverAsset} picks the right one by aspect. */
+export type BrandAssetSlot =
+  | "logo"
+  | "logoDark"
+  | "icon"
+  | "favicon"
+  | "ogImage"
+  | "defaultCoverFront"
+  | "defaultCoverBack"
+  | "defaultCoverFrontWide"
+  | "defaultCoverBackWide"
+  | "defaultCoverFrontPortrait"
+  | "defaultCoverBackPortrait";
 
-export const BRAND_ASSET_SLOTS: BrandAssetSlot[] = ["logo", "logoDark", "icon", "favicon", "ogImage"];
+export const BRAND_ASSET_SLOTS: BrandAssetSlot[] = [
+  "logo",
+  "logoDark",
+  "icon",
+  "favicon",
+  "ogImage",
+  "defaultCoverFront",
+  "defaultCoverBack",
+  "defaultCoverFrontWide",
+  "defaultCoverBackWide",
+  "defaultCoverFrontPortrait",
+  "defaultCoverBackPortrait",
+];
 
 /** Brand colors (hex). `primary` also drives the browser theme color. */
 export interface BrandColors {
@@ -66,6 +94,18 @@ export interface BrandingConfig {
   favicon: BrandAsset | null;
   /** Social share (Open Graph / Twitter) image, ~1200×630. */
   ogImage: BrandAsset | null;
+  /** Fallback front cover for square books with no generated cover yet. */
+  defaultCoverFront: BrandAsset | null;
+  /** Fallback back cover for square books with no generated cover yet. */
+  defaultCoverBack: BrandAsset | null;
+  /** Fallback front cover for landscape (wide) books. */
+  defaultCoverFrontWide: BrandAsset | null;
+  /** Fallback back cover for landscape (wide) books. */
+  defaultCoverBackWide: BrandAsset | null;
+  /** Fallback front cover for portrait (tall) books. */
+  defaultCoverFrontPortrait: BrandAsset | null;
+  /** Fallback back cover for portrait (tall) books. */
+  defaultCoverBackPortrait: BrandAsset | null;
   /** Brand colors. */
   colors: BrandColors;
   /** The share watermark, or null when none is configured. */
@@ -90,7 +130,13 @@ export function createDefaultBrandingConfig(): BrandingConfig {
     icon: null,
     favicon: null,
     ogImage: null,
-    colors: { primary: "#7c3aed", accent: "#f97316" },
+    defaultCoverFront: null,
+    defaultCoverBack: null,
+    defaultCoverFrontWide: null,
+    defaultCoverBackWide: null,
+    defaultCoverFrontPortrait: null,
+    defaultCoverBackPortrait: null,
+    colors: { primary: "#f96a4d", accent: "#f79b04" },
     watermark: null,
     assetHistory: {},
     watermarkHistory: [],
@@ -189,6 +235,12 @@ export function normalizeBrandingConfig(input: unknown): BrandingConfig {
     icon: normalizeAsset(b.icon),
     favicon: normalizeAsset(b.favicon),
     ogImage: normalizeAsset(b.ogImage),
+    defaultCoverFront: normalizeAsset(b.defaultCoverFront),
+    defaultCoverBack: normalizeAsset(b.defaultCoverBack),
+    defaultCoverFrontWide: normalizeAsset(b.defaultCoverFrontWide),
+    defaultCoverBackWide: normalizeAsset(b.defaultCoverBackWide),
+    defaultCoverFrontPortrait: normalizeAsset(b.defaultCoverFrontPortrait),
+    defaultCoverBackPortrait: normalizeAsset(b.defaultCoverBackPortrait),
     colors: {
       primary: hex(colors.primary, d.colors.primary),
       accent: hex(colors.accent, d.colors.accent),
@@ -197,4 +249,48 @@ export function normalizeBrandingConfig(input: unknown): BrandingConfig {
     assetHistory: normalizeAssetHistory(b.assetHistory),
     watermarkHistory: normalizeWatermarkList(b.watermarkHistory),
   };
+}
+
+/** Aspect at/below which a book counts as "portrait" (tall) for cover fallback. */
+const PORTRAIT_ASPECT_THRESHOLD = 0.85;
+/** Aspect at/above which a book counts as "wide" (landscape) for cover fallback. */
+const WIDE_ASPECT_THRESHOLD = 1.15;
+
+/**
+ * Pick the fallback cover for a book of the given aspect, choosing the portrait,
+ * square, or wide variant by shape. Format-agnostic: it buckets by aspect rather
+ * than by any specific product, so new formats sharing an aspect just work.
+ * Falls back to whichever variant is configured (square first, as the universal
+ * default) if the exact shape isn't uploaded.
+ */
+export function defaultCoverAsset(
+  branding: BrandingConfig,
+  aspect: number,
+  face: "front" | "back",
+): BrandAsset | null {
+  const shape =
+    aspect <= PORTRAIT_ASPECT_THRESHOLD ? "portrait" : aspect >= WIDE_ASPECT_THRESHOLD ? "wide" : "square";
+  if (face === "front") {
+    const exact =
+      shape === "wide"
+        ? branding.defaultCoverFrontWide
+        : shape === "portrait"
+          ? branding.defaultCoverFrontPortrait
+          : branding.defaultCoverFront;
+    return (
+      exact ??
+      branding.defaultCoverFront ??
+      branding.defaultCoverFrontWide ??
+      branding.defaultCoverFrontPortrait
+    );
+  }
+  const exact =
+    shape === "wide"
+      ? branding.defaultCoverBackWide
+      : shape === "portrait"
+        ? branding.defaultCoverBackPortrait
+        : branding.defaultCoverBack;
+  return (
+    exact ?? branding.defaultCoverBack ?? branding.defaultCoverBackWide ?? branding.defaultCoverBackPortrait
+  );
 }

@@ -75,36 +75,44 @@ export function layoutTextBox(
       const family = fontStack(span.fontFamily ?? box.fontFamily);
       const style = konvaFontStyle(span.bold, span.italic);
       c.font = `${style === "normal" ? "" : style + " "}${fontSize}px ${family}`;
-      const width = c.measureText(span.text).width;
-      const space = /^\s+$/.test(span.text);
 
-      if (!space && line.length > 0 && lineWidth + width > inner.w) {
-        // Drop a trailing space before wrapping so alignment stays correct.
-        while (line.length && line[line.length - 1].space) {
-          lineWidth -= line.pop()!.width;
+      // Break the span into word / whitespace runs so wrapping works *within* a
+      // span, not only between spans. Without this, a paragraph stored as one
+      // span (e.g. after inline editing merges same-style characters) could not
+      // wrap and collapsed onto a single overflowing line.
+      const parts = span.text.match(/\s+|\S+/g) ?? [];
+      for (const part of parts) {
+        const space = /^\s+$/.test(part);
+        const width = c.measureText(part).width;
+
+        if (!space && line.length > 0 && lineWidth + width > inner.w) {
+          // Drop a trailing space before wrapping so alignment stays correct.
+          while (line.length && line[line.length - 1].space) {
+            lineWidth -= line.pop()!.width;
+          }
+          flush();
         }
-        flush();
-      }
-      if (space && line.length === 0) continue; // no leading spaces
+        if (space && line.length === 0) continue; // no leading spaces
 
-      line.push({
-        p,
-        i,
-        text: span.text,
-        x: 0,
-        y: 0,
-        fontSize,
-        fontFamily: family,
-        fontStyle: style,
-        underline: !!span.underline,
-        strike: !!span.strike,
-        fill: span.color ?? box.color,
-        width,
-        lineHeight: 0,
-        space,
-      });
-      lineWidth += width;
-      maxFont = Math.max(maxFont, fontSize);
+        line.push({
+          p,
+          i,
+          text: part,
+          x: 0,
+          y: 0,
+          fontSize,
+          fontFamily: family,
+          fontStyle: style,
+          underline: !!span.underline,
+          strike: !!span.strike,
+          fill: span.color ?? box.color,
+          width,
+          lineHeight: 0,
+          space,
+        });
+        lineWidth += width;
+        maxFont = Math.max(maxFont, fontSize);
+      }
     }
     flush(); // every paragraph ends a line (keeps empty paragraphs spaced)
   }

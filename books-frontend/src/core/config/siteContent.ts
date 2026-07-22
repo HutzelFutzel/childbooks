@@ -20,6 +20,7 @@ export const SITE_TEXT_SLOTS = [
   "hero.ctaPrimary",
   "hero.ctaSecondary",
   "hero.note",
+  "hero.namePlaceholder",
   // Trust strip
   "trust.0",
   "trust.1",

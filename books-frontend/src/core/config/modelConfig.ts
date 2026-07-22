@@ -123,6 +123,7 @@ export function createDefaultModelConfig(): ModelConfig {
     version: 1,
     slots: createDefaultSlots(),
     textBindings: {
+      storyDraft: { provider: "google", speed: "slow" },
       storyAnalysis: { provider: "google", speed: "fast" },
       anchorDescription: { provider: "google", speed: "fast" },
       screenplay: { provider: "google", speed: "slow" },

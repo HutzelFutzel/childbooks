@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Minus, Plus as PlusIcon } from "lucide-react";
 import Konva from "konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import { Circle, Group, Image as KonvaImage, Layer, Line, Rect, Stage, Text, Transformer } from "react-konva";
@@ -12,15 +13,21 @@ import type {
 } from "../../core/types";
 import { fontStack, loadFont } from "../typography/fonts";
 import { cn } from "../lib/cn";
-import { InlineTextToolbar } from "./InlineTextToolbar";
-import { editorToParagraphs, paragraphsToHtml } from "./richText";
+import { TextStyleBar, type TextStyleKey } from "./TextStyleBar";
+import {
+  applyInlineColor,
+  applyInlineCommand,
+  editorToParagraphs,
+  paragraphsToHtml,
+} from "./richText";
 import { KonvaTextBox } from "./konva/KonvaTextBox";
 import { KonvaImageElement } from "./konva/KonvaImageElement";
 import { KonvaShape } from "./ShapeRender";
 import { useImage } from "./konva/useImage";
 import { usePatternImage } from "./konva/usePatternImage";
+import { useBlobUrl } from "../hooks/useBlobUrl";
 import { getPreset } from "./presets";
-import { effectiveBaseSize } from "./textFit";
+import { effectiveBaseSize, fitBoxHeightPct, minContentWidthPct } from "./textFit";
 import { isBubble } from "./shapes";
 import type { SpanRef } from "./TextBoxView";
 
@@ -40,6 +47,8 @@ export interface GeomPatch {
   /** Speech-bubble tail target (shape elements only). */
   tailX?: number;
   tailY?: number;
+  /** New target/min height for auto-height text boxes (set on resize). */
+  minHeightPct?: number;
 }
 
 interface StageElement {
@@ -60,13 +69,17 @@ export function PageStage({
   pageDesign,
   imageUrl,
   aspect,
+  illustrationFocus,
   selectedId,
   onSelectElement,
   onChangeElement,
+  onReframeImage,
+  onAdjustArt,
   selectedSpan,
   onSelectSpan,
   onEditText,
   onEditRichText,
+  onStyleBox,
   editable = true,
   dropId,
   showGutter = false,
@@ -80,15 +93,36 @@ export function PageStage({
   pageDesign: PageDesign;
   imageUrl?: string;
   aspect: number;
+  /**
+   * Focal point (0..1) for the full-bleed illustration's `cover` crop when the
+   * generated art overflows the frame. Covers pass a top-biased focus so a
+   * baked-in title near the top edge survives; defaults to centre otherwise.
+   */
+  illustrationFocus?: { x: number; y: number };
   selectedId: string | null;
   onSelectElement: (ref: ElementRef | null) => void;
   onChangeElement: (id: string, kind: ElementKind, patch: GeomPatch) => void;
+  /**
+   * Commit a non-destructive reframe (zoom + focal point) for an image element.
+   * Driven by double-click "reframe" mode, which shows the hidden overflow and
+   * lets the user drag to pan / scroll to zoom.
+   */
+  onReframeImage?: (id: string, patch: { zoom?: number; focus?: { x: number; y: number } }) => void;
+  /**
+   * Turn the page's full-bleed illustration into a movable element so it can be
+   * repositioned. Invoked when the user double-clicks the background art (no
+   * illustration element yet); the stage then auto-enters reframe on the new
+   * element so "reposition the art" is a single gesture.
+   */
+  onAdjustArt?: () => void;
   selectedSpan?: SpanRef | null;
   onSelectSpan?: (ref: SpanRef | null) => void;
   /** Commit new plain text for a text box (double-click to edit in place). */
   onEditText?: (id: string, value: string) => void;
   /** Commit styled paragraphs (preferred; preserves per-range styling). */
   onEditRichText?: (id: string, paragraphs: TextParagraph[]) => void;
+  /** Apply a whole-box style patch (used by the floating character toolbar). */
+  onStyleBox?: (id: string, patch: Partial<TextBox>) => void;
   editable?: boolean;
   /** Marks the sized page surface as a drop target for the sidebar element pool. */
   dropId?: string;
@@ -122,6 +156,9 @@ export function PageStage({
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [, setFontTick] = useState(0);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [reframeId, setReframeId] = useState<string | null>(null);
+  // Screen position for the whole-box character toolbar (recomputed on scroll).
+  const [boxBarPos, setBoxBarPos] = useState<{ x: number; y: number } | null>(null);
   const [liveResize, setLiveResize] = useState<{ id: string; sx: number; sy: number } | null>(null);
   const [guides, setGuides] = useState<{ x: number[]; y: number[] }>({ x: [], y: [] });
   const groupRefs = useRef<Map<string, Konva.Group>>(new Map());
@@ -199,12 +236,35 @@ export function PageStage({
     const tr = trRef.current;
     if (!tr) return;
     const node =
-      editable && selectedId && selectedId !== editingId
+      editable && selectedId && selectedId !== editingId && selectedId !== reframeId
         ? groupRefs.current.get(selectedId) ?? null
         : null;
     tr.nodes(node ? [node] : []);
     tr.getLayer()?.batchDraw();
-  }, [editable, selectedId, editingId, W, H, pageDesign]);
+  }, [editable, selectedId, editingId, reframeId, W, H, pageDesign]);
+
+  // Leaving a page / losing edit rights cancels any in-progress reframe.
+  useEffect(() => {
+    if (!editable) setReframeId(null);
+  }, [editable]);
+
+  // Double-clicking the background art asks the host to materialize the
+  // illustration as a movable element; once it appears we auto-enter reframe so
+  // repositioning the art is a single gesture rather than a multi-step flow.
+  const pendingReframe = useRef(false);
+  function requestAdjustArt() {
+    if (!editable || !onAdjustArt || !imageUrl || hasIllustrationEl) return;
+    pendingReframe.current = true;
+    onAdjustArt();
+  }
+  useEffect(() => {
+    if (!pendingReframe.current) return;
+    const illus = (pageDesign.images ?? []).find((im) => im.kind === "illustration");
+    if (illus && illus.fit !== "contain") {
+      pendingReframe.current = false;
+      setReframeId(illus.id);
+    }
+  }, [pageDesign]);
 
   // Preload fonts used anywhere on the page.
   useEffect(() => {
@@ -215,7 +275,13 @@ export function PageStage({
   }, [pageDesign.textBoxes]);
 
   const imageCrop = image
-    ? coverCrop(image.naturalWidth || image.width, image.naturalHeight || image.height, W, H)
+    ? coverCrop(
+        image.naturalWidth || image.width,
+        image.naturalHeight || image.height,
+        W,
+        H,
+        illustrationFocus,
+      )
     : undefined;
 
   function clearSelection() {
@@ -225,6 +291,99 @@ export function PageStage({
 
   const editingBox = editingId
     ? pageDesign.textBoxes.find((b) => b.id === editingId)
+    : undefined;
+
+  // Minimum width (px) the selected text box may be resized to before words start
+  // clipping — keeps resize from squeezing a box narrower than its content.
+  const selectedTextBox =
+    editable && selectedId ? pageDesign.textBoxes.find((b) => b.id === selectedId) : undefined;
+  const selMinWidthPx =
+    selectedTextBox && W > 0 ? minContentWidthPct(selectedTextBox, aspect) * W : 0;
+  // Auto-height boxes can't be dragged shorter than their text — the min height
+  // is the content height at the current font.
+  const selMinHeightPx =
+    selectedTextBox?.autoHeight && H > 0 ? fitBoxHeightPct(selectedTextBox, aspect) * H : 0;
+
+  // The whole-box character toolbar shows whenever a text box is selected but
+  // not being edited in place (editing shows the word-level toolbar instead).
+  const showBoxBar = Boolean(
+    editable && selectedTextBox && onStyleBox && editingId !== selectedId,
+  );
+  const boxBarId = showBoxBar ? selectedId : null;
+  useEffect(() => {
+    if (!boxBarId) {
+      setBoxBarPos(null);
+      return;
+    }
+    const update = () => {
+      const container = containerRef.current;
+      const node = groupRefs.current.get(boxBarId);
+      const stage = node?.getStage();
+      if (!container || !node || !stage) {
+        setBoxBarPos(null);
+        return;
+      }
+      const b = node.getClientRect({ relativeTo: stage });
+      const r = container.getBoundingClientRect();
+      setBoxBarPos({ x: r.left + b.x + b.width / 2, y: r.top + b.y });
+    };
+    update();
+    // Scroll events don't bubble, so listen in the capture phase to catch the
+    // canvas scroller (and any ancestor) without wiring each one up manually.
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [boxBarId, W, H, pageDesign]);
+
+  // Style state for the whole-box toolbar: a mark is "active" only when every
+  // span carries it, "mixed" when some do — mirroring word processors.
+  const boxSpans = (selectedTextBox?.paragraphs.flatMap((p) => p.spans) ?? []).filter(
+    (s) => s.text.length > 0,
+  );
+  const spanAll = (fn: (s: (typeof boxSpans)[number]) => boolean) =>
+    boxSpans.length > 0 && boxSpans.every(fn);
+  const spanSome = (fn: (s: (typeof boxSpans)[number]) => boolean) =>
+    boxSpans.some(fn);
+  const boxHasWordOverrides = boxSpans.some(
+    (s) => s.color !== undefined || (s.sizeMul !== undefined && s.sizeMul !== 1),
+  );
+
+  const toggleBoxStyle = (key: TextStyleKey) => {
+    if (!selectedTextBox || !onStyleBox) return;
+    const next = !spanAll((s) => Boolean(s[key]));
+    onStyleBox(selectedTextBox.id, {
+      paragraphs: selectedTextBox.paragraphs.map((p) => ({
+        ...p,
+        spans: p.spans.map((s) => ({ ...s, [key]: next })),
+      })),
+    });
+  };
+  const setBoxColor = (color: string) => {
+    if (!selectedTextBox || !onStyleBox) return;
+    // Box colour is authoritative: clear per-word colours so it applies evenly.
+    onStyleBox(selectedTextBox.id, {
+      color,
+      paragraphs: selectedTextBox.paragraphs.map((p) => ({
+        ...p,
+        spans: p.spans.map((s) => ({ ...s, color: undefined })),
+      })),
+    });
+  };
+  const resetBoxWordStyles = () => {
+    if (!selectedTextBox || !onStyleBox) return;
+    onStyleBox(selectedTextBox.id, {
+      paragraphs: selectedTextBox.paragraphs.map((p) => ({
+        ...p,
+        spans: p.spans.map((s) => ({ ...s, color: undefined, sizeMul: undefined })),
+      })),
+    });
+  };
+
+  const reframeEl = reframeId
+    ? (pageDesign.images ?? []).find((im) => im.id === reframeId)
     : undefined;
 
   /**
@@ -295,6 +454,7 @@ export function PageStage({
       <div
         ref={containerRef}
         data-page-drop={dropId}
+        data-editor-surface=""
         className={cn(
           "relative max-h-[70vh] w-full overflow-hidden bg-white",
           !chromeless && "rounded-xl shadow-soft ring-1 ring-ink-200",
@@ -310,6 +470,12 @@ export function PageStage({
             }}
             onTouchStart={(e: KonvaEventObject<TouchEvent>) => {
               if (e.target === e.target.getStage()) clearSelection();
+            }}
+            onDblClick={(e: KonvaEventObject<MouseEvent>) => {
+              if (e.target === e.target.getStage()) requestAdjustArt();
+            }}
+            onDblTap={(e: KonvaEventObject<Event>) => {
+              if (e.target === e.target.getStage()) requestAdjustArt();
             }}
           >
             <Layer>
@@ -373,7 +539,7 @@ export function PageStage({
                     offsetY={h / 2}
                     rotation={el.rotation ?? 0}
                     opacity={opacity}
-                    draggable={editable && !el.locked}
+                    draggable={editable && !el.locked && reframeId !== el.id}
                     onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
                       e.cancelBubble = true;
                       select();
@@ -383,13 +549,27 @@ export function PageStage({
                       select();
                     }}
                     onDblClick={(e: KonvaEventObject<MouseEvent>) => {
-                      if (!el.box || !(onEditText || onEditRichText) || el.locked) return;
+                      if (el.locked || !editable) return;
+                      if (el.image && el.image.fit !== "contain" && onReframeImage) {
+                        e.cancelBubble = true;
+                        select();
+                        setReframeId(el.id);
+                        return;
+                      }
+                      if (!el.box || !(onEditText || onEditRichText)) return;
                       e.cancelBubble = true;
                       select();
                       setEditingId(el.id);
                     }}
                     onDblTap={(e: KonvaEventObject<Event>) => {
-                      if (!el.box || !(onEditText || onEditRichText) || el.locked) return;
+                      if (el.locked || !editable) return;
+                      if (el.image && el.image.fit !== "contain" && onReframeImage) {
+                        e.cancelBubble = true;
+                        select();
+                        setReframeId(el.id);
+                        return;
+                      }
+                      if (!el.box || !(onEditText || onEditRichText)) return;
                       e.cancelBubble = true;
                       select();
                       setEditingId(el.id);
@@ -452,6 +632,13 @@ export function PageStage({
                           w: newW / W,
                           h: newH / H,
                         },
+                        // For auto-height boxes a *vertical* drag sets the new target
+                        // floor (room to breathe); patchBox keeps the rendered height
+                        // at max(target, content). Width-only drags leave the floor
+                        // alone so re-wrapping can still shrink the box to its text.
+                        ...(el.box?.autoHeight && scaleY !== 1
+                          ? { minHeightPct: newH / H }
+                          : {}),
                       });
                     }}
                   >
@@ -640,9 +827,12 @@ export function PageStage({
                   anchorCornerRadius={2}
                   borderStroke="rgba(99,102,241,0.9)"
                   anchorStroke="rgba(99,102,241,0.9)"
-                  boundBoxFunc={(oldBox, newBox) =>
-                    newBox.width < MIN_PX || newBox.height < MIN_PX ? oldBox : newBox
-                  }
+                  boundBoxFunc={(oldBox, newBox) => {
+                    const minW = Math.max(MIN_PX, selMinWidthPx);
+                    const minH = Math.max(MIN_PX, selMinHeightPx);
+                    if (newBox.width < minW || newBox.height < minH) return oldBox;
+                    return newBox;
+                  }}
                 />
               )}
             </Layer>
@@ -664,8 +854,39 @@ export function PageStage({
           />
         )}
 
+        {editable && reframeEl && onReframeImage && W > 0 && H > 0 && (
+          <ReframeOverlay
+            el={reframeEl}
+            W={W}
+            H={H}
+            illustrationUrl={imageUrl}
+            onChange={(patch) => onReframeImage(reframeEl.id, patch)}
+            onDone={() => setReframeId(null)}
+          />
+        )}
+
         {overlay}
       </div>
+
+      {showBoxBar && boxBarPos && selectedTextBox && (
+        <TextStyleBar
+          x={boxBarPos.x}
+          y={boxBarPos.y}
+          scopeLabel="Whole text box"
+          bold={spanAll((s) => Boolean(s.bold))}
+          italic={spanAll((s) => Boolean(s.italic))}
+          underline={spanAll((s) => Boolean(s.underline))}
+          boldMixed={spanSome((s) => Boolean(s.bold)) && !spanAll((s) => Boolean(s.bold))}
+          italicMixed={spanSome((s) => Boolean(s.italic)) && !spanAll((s) => Boolean(s.italic))}
+          underlineMixed={
+            spanSome((s) => Boolean(s.underline)) && !spanAll((s) => Boolean(s.underline))
+          }
+          color={selectedTextBox.color}
+          onToggle={toggleBoxStyle}
+          onColor={setBoxColor}
+          onReset={boxHasWordOverrides ? resetBoxWordStyles : undefined}
+        />
+      )}
     </div>
   );
 }
@@ -693,7 +914,13 @@ function InlineTextEditor({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const done = useRef(false);
-  const [toolbar, setToolbar] = useState<{ x: number; y: number } | null>(null);
+  const [toolbar, setToolbar] = useState<{
+    x: number;
+    y: number;
+    bold: boolean;
+    italic: boolean;
+    underline: boolean;
+  } | null>(null);
 
   useEffect(() => {
     const el = ref.current;
@@ -723,7 +950,13 @@ function InlineTextEditor({
         return;
       }
       const rect = range.getBoundingClientRect();
-      setToolbar({ x: rect.left + rect.width / 2, y: rect.top });
+      setToolbar({
+        x: rect.left + rect.width / 2,
+        y: rect.top,
+        bold: document.queryCommandState("bold"),
+        italic: document.queryCommandState("italic"),
+        underline: document.queryCommandState("underline"),
+      });
     };
     document.addEventListener("selectionchange", onSel);
     return () => document.removeEventListener("selectionchange", onSel);
@@ -811,9 +1044,198 @@ function InlineTextEditor({
           />
         </div>
       </div>
-      {toolbar && <InlineTextToolbar x={toolbar.x} y={toolbar.y} refocus={() => ref.current?.focus()} />}
+      {toolbar && (
+        <TextStyleBar
+          x={toolbar.x}
+          y={toolbar.y}
+          scopeLabel="Selected words"
+          bold={toolbar.bold}
+          italic={toolbar.italic}
+          underline={toolbar.underline}
+          color={box.color}
+          onToggle={(key) => {
+            applyInlineCommand(key);
+            ref.current?.focus();
+          }}
+          onColor={(c) => {
+            applyInlineColor(c);
+            ref.current?.focus();
+          }}
+        />
+      )}
     </>
   );
+}
+
+/**
+ * Drag-to-reframe overlay for a "Fill" image: renders the full bitmap ghosted
+ * so the user can see what's cropped, with the in-frame slice at full opacity.
+ * Drag pans the focal point; the wheel (or the on-screen buttons) zooms. This is
+ * a non-destructive crop — only `zoom`/`focus` change, never the rect.
+ */
+function ReframeOverlay({
+  el,
+  W,
+  H,
+  illustrationUrl,
+  onChange,
+  onDone,
+}: {
+  el: ImageElement;
+  W: number;
+  H: number;
+  illustrationUrl?: string;
+  onChange: (patch: { zoom?: number; focus?: { x: number; y: number } }) => void;
+  onDone: () => void;
+}) {
+  const assetUrl = useBlobUrl(el.kind === "asset" ? el.blobId : undefined);
+  const url = el.kind === "illustration" ? illustrationUrl : assetUrl ?? undefined;
+  const image = useImage(url);
+  const drag = useRef<{ x: number; y: number; fx: number; fy: number } | null>(null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" || e.key === "Enter") {
+        e.preventDefault();
+        onDone();
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onDone]);
+
+  const fx = el.focus?.x ?? 0.5;
+  const fy = el.focus?.y ?? 0.5;
+  const zoom = Math.max(1, el.zoom ?? 1);
+
+  // Frame rect in stage px.
+  const fw = el.rect.w * W;
+  const fh = el.rect.h * H;
+  const fl = el.rect.x * W;
+  const ft = el.rect.y * H;
+
+  const iw = image ? image.naturalWidth || image.width : 0;
+  const ih = image ? image.naturalHeight || image.height : 0;
+  const coverScale = iw && ih ? Math.max(fw / iw, fh / ih) : 1;
+  const scale = coverScale * zoom;
+  const dw = iw * scale; // displayed (ghost) bitmap size in px
+  const dh = ih * scale;
+  // Crop origin in image px, then convert to a ghost offset so the crop aligns
+  // with the frame's top-left.
+  const cropW = fw / scale;
+  const cropH = fh / scale;
+  const cx = clampN(fx * iw - cropW / 2, 0, Math.max(0, iw - cropW));
+  const cy = clampN(fy * ih - cropH / 2, 0, Math.max(0, ih - cropH));
+  const offX = -cx * scale;
+  const offY = -cy * scale;
+
+  function setZoom(next: number) {
+    onChange({ zoom: next <= 1.001 ? undefined : Number(next.toFixed(3)) });
+  }
+
+  return (
+    <>
+      {/* Dim backdrop; clicking it (outside the frame) finishes. */}
+      <div
+        className="absolute inset-0 z-20 bg-ink-900/40"
+        onMouseDown={(e) => {
+          if (e.target === e.currentTarget) onDone();
+        }}
+      />
+      <div
+        className="absolute z-30 cursor-move select-none overflow-visible ring-2 ring-brand-400"
+        style={{ left: fl, top: ft, width: fw, height: fh, borderRadius: (el.corner ?? 0) * Math.min(fw, fh) }}
+        onWheel={(e) => {
+          e.preventDefault();
+          const next = clampN(zoom * (1 - e.deltaY * 0.0015), 1, 4);
+          setZoom(next);
+        }}
+        onPointerDown={(e) => {
+          (e.target as HTMLElement).setPointerCapture(e.pointerId);
+          drag.current = { x: e.clientX, y: e.clientY, fx, fy };
+        }}
+        onPointerMove={(e) => {
+          const d = drag.current;
+          if (!d || !dw || !dh) return;
+          const dx = e.clientX - d.x;
+          const dy = e.clientY - d.y;
+          onChange({
+            focus: {
+              x: clampN(d.fx - dx / dw, 0, 1),
+              y: clampN(d.fy - dy / dh, 0, 1),
+            },
+          });
+        }}
+        onPointerUp={(e) => {
+          (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+          drag.current = null;
+        }}
+      >
+        {/* Ghosted full bitmap (shows the hidden overflow). */}
+        {url && (
+          <img
+            src={url}
+            alt=""
+            draggable={false}
+            className="pointer-events-none absolute max-w-none opacity-35"
+            style={{ left: offX, top: offY, width: dw, height: dh }}
+          />
+        )}
+        {/* In-frame slice at full opacity. */}
+        <div className="absolute inset-0 overflow-hidden" style={{ borderRadius: "inherit" }}>
+          {url && (
+            <img
+              src={url}
+              alt=""
+              draggable={false}
+              className="pointer-events-none absolute max-w-none"
+              style={{ left: offX, top: offY, width: dw, height: dh }}
+            />
+          )}
+        </div>
+      </div>
+      {/* Floating controls under the frame. */}
+      <div
+        className="absolute z-40 flex -translate-x-1/2 items-center gap-1 rounded-full border border-ink-200 bg-white/95 px-1.5 py-1 shadow-lifted"
+        style={{ left: fl + fw / 2, top: ft + fh + 8 }}
+      >
+        <button
+          title="Zoom out"
+          className="flex size-7 items-center justify-center rounded-full text-ink-600 hover:bg-ink-100"
+          onClick={() => setZoom(clampN(zoom - 0.2, 1, 4))}
+        >
+          <Minus className="size-4" />
+        </button>
+        <input
+          type="range"
+          min={1}
+          max={4}
+          step={0.05}
+          value={zoom}
+          onChange={(e) => setZoom(Number(e.target.value))}
+          className="w-28"
+        />
+        <button
+          title="Zoom in"
+          className="flex size-7 items-center justify-center rounded-full text-ink-600 hover:bg-ink-100"
+          onClick={() => setZoom(clampN(zoom + 0.2, 1, 4))}
+        >
+          <PlusIcon className="size-4" />
+        </button>
+        <span className="mx-1 h-5 w-px bg-ink-200" />
+        <button
+          className="rounded-full px-3 py-1 text-xs font-semibold text-brand-700 hover:bg-brand-50"
+          onClick={onDone}
+        >
+          Done
+        </button>
+      </div>
+    </>
+  );
+}
+
+function clampN(v: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, v));
 }
 
 /** Vertical + horizontal grid line point arrays for the given spacing. */
@@ -825,11 +1247,26 @@ function gridLines(W: number, H: number, gridSize: number): number[][] {
   return lines;
 }
 
-/** Compute a Konva `crop` rect that emulates CSS `object-fit: cover`. */
-function coverCrop(iw: number, ih: number, W: number, H: number) {
+/**
+ * Compute a Konva `crop` rect that emulates CSS `object-fit: cover`. The focal
+ * point (0..1, defaults to centre) picks which part survives when the source
+ * overflows the frame — covers pass a top-biased focus so a baked-in title near
+ * the top edge is never clipped.
+ */
+function coverCrop(
+  iw: number,
+  ih: number,
+  W: number,
+  H: number,
+  focus?: { x: number; y: number },
+) {
   if (!iw || !ih || !W || !H) return { x: 0, y: 0, width: iw, height: ih };
   const scale = Math.max(W / iw, H / ih);
   const cropW = W / scale;
   const cropH = H / scale;
-  return { x: (iw - cropW) / 2, y: (ih - cropH) / 2, width: cropW, height: cropH };
+  const fx = focus?.x ?? 0.5;
+  const fy = focus?.y ?? 0.5;
+  const x = clampN((iw - cropW) * fx, 0, Math.max(0, iw - cropW));
+  const y = clampN((ih - cropH) * fy, 0, Math.max(0, ih - cropH));
+  return { x, y, width: cropW, height: cropH };
 }

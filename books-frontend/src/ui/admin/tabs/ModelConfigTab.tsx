@@ -192,7 +192,7 @@ function NoCostHint() {
 export function ModelConfigTab() {
   const stored = useAppConfigStore((s) => s.modelConfig);
   const save = useAppConfigStore((s) => s.saveModelConfig);
-  const modelCosts = useAppConfigStore((s) => s.modelCosts);
+  const modelCosts = useAppConfigStore((s) => s.adminModelCosts);
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
   const suggestionsFor = useModelSuggestions();
 

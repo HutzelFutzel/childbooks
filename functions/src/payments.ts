@@ -50,8 +50,9 @@ export type PaymentKind = "order" | "subscription" | "sparkPack" | "sparkGift" |
 /**
  * What the webhook needs to deliver a purchased ebook AFTER payment: the
  * already-uploaded PDF's token URL plus the project it belongs to. Stored on
- * the admin payment doc only; the buyer gets the URL via `users/{uid}/ebooks`
- * once the payment settles.
+ * the admin payment doc only; once the payment settles the buyer gets a
+ * `users/{uid}/downloads/{projectId}` entitlement and fetches the file through
+ * the gated download-link endpoint (the URL itself stays off the client doc).
  */
 export interface EbookFulfillment {
   projectId: string;
@@ -97,7 +98,8 @@ export interface CreatePendingPaymentArgs {
   amount: number;
   currency: string;
   description: string;
-  stripeSessionId: string;
+  /** Null for zero-amount grants (e.g. plan-included ebooks) with no Stripe session. */
+  stripeSessionId: string | null;
   stripeCustomerId?: string | null;
   /** Present for `order` payments — drives fulfillment after payment. */
   fulfillment?: FulfillmentPlan | null;

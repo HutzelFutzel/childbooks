@@ -14,6 +14,7 @@ import { Grid, NumberField, Section } from "./products/parts";
 export function PricingSettingsTab() {
   const stored = useAppConfigStore((s) => s.pricingSettings);
   const save = useAppConfigStore((s) => s.savePricingSettings);
+  const publicPlans = useAppConfigStore((s) => s.plans.plans);
 
   const [draft, setDraft] = useState<PricingSettings>(stored);
   const [dirty, setDirty] = useState(false);
@@ -24,6 +25,12 @@ export function PricingSettingsTab() {
   useEffect(() => {
     if (!dirty) setDraft(stored);
   }, [stored, dirty]);
+
+  // Paid plans eligible for member ebook pricing (from the public projection).
+  const paidPlans = publicPlans
+    .filter((p) => p.status === "active" && !p.isFree)
+    .slice()
+    .sort((a, b) => a.sortOrder - b.sortOrder);
 
   const set = (patch: Partial<PricingSettings>) => {
     setDraft((d) => ({ ...d, ...patch }));
@@ -173,6 +180,75 @@ export function PricingSettingsTab() {
           <p className="text-[11px] text-ink-400">
             A price of 0 in a currency disables the ebook for buyers paying in that currency.
           </p>
+        )}
+
+        {/* Member (per-plan) pricing: each paid plan can have its own ebook
+            price. 0 means the ebook is INCLUDED with the plan (granted without
+            checkout). No override ⇒ members pay the regular price. */}
+        {draft.ebook.enabled && paidPlans.length > 0 && (
+          <div className="space-y-2 rounded-lg bg-ink-50/60 p-3">
+            <p className="text-xs font-semibold text-ink-700">Member pricing</p>
+            <p className="text-[11px] leading-relaxed text-ink-500">
+              Give subscribers a better ebook price. Set <span className="font-medium">0</span> to include
+              ebooks with a plan for free (granted instantly, no checkout). Plans without a member price pay
+              the regular price. The storefront wording adapts automatically.
+            </p>
+            {paidPlans.map((plan) => {
+              const override = draft.ebook.planPrices[plan.id];
+              const on = override != null;
+              return (
+                <div key={plan.id} className="space-y-2 rounded-lg bg-white p-2.5 ring-1 ring-inset ring-ink-100">
+                  <Toggle
+                    checked={on}
+                    onChange={(v) => {
+                      const planPrices = { ...draft.ebook.planPrices };
+                      if (v) {
+                        planPrices[plan.id] = Object.fromEntries(draft.currencies.map((c) => [c, 0]));
+                      } else {
+                        delete planPrices[plan.id];
+                      }
+                      set({ ebook: { ...draft.ebook, planPrices } });
+                    }}
+                    label={`Member price for ${plan.name}`}
+                  />
+                  {on && (
+                    <Grid cols={4}>
+                      {draft.currencies.map((c) => (
+                        <NumberField
+                          key={c}
+                          label={`${plan.name} price (${c})`}
+                          value={override?.[c] ?? 0}
+                          step="0.5"
+                          suffix={c}
+                          onChange={(n) =>
+                            set({
+                              ebook: {
+                                ...draft.ebook,
+                                planPrices: {
+                                  ...draft.ebook.planPrices,
+                                  [plan.id]: { ...override, [c]: n },
+                                },
+                              },
+                            })
+                          }
+                        />
+                      ))}
+                    </Grid>
+                  )}
+                  {on && (
+                    <p className="text-[11px] text-ink-400">
+                      {draft.currencies
+                        .map((c) => {
+                          const v = override?.[c] ?? 0;
+                          return v <= 0 ? `${c}: included free` : `${c}: ${v}`;
+                        })
+                        .join(" · ")}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
         )}
       </Section>
 

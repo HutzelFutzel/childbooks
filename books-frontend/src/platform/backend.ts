@@ -25,7 +25,15 @@ export const AUTH_TOKEN_HEADER = "X-Auth-Token";
 export const BACKEND_BASE: string = (() => {
   const explicit = process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "");
   if (explicit) return explicit;
-  return process.env.NODE_ENV !== "production" ? EMULATOR_DEFAULT : "";
+  if (process.env.NODE_ENV !== "production") return EMULATOR_DEFAULT;
+  // Fail FAST: a production bundle without a backend URL would send every API
+  // call to the app's own origin and 404. NEXT_PUBLIC_* is inlined at build
+  // time, so this throws during `next build` — the deploy fails loudly instead
+  // of shipping a silently broken app. Set it in apphosting.yaml.
+  throw new Error(
+    "NEXT_PUBLIC_BACKEND_URL is not set for a production build. " +
+      "Set it in apphosting.yaml (env → NEXT_PUBLIC_BACKEND_URL) to the deployed Functions origin.",
+  );
 })();
 
 export function backendUrl(path: string): string {

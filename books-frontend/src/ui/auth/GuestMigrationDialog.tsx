@@ -1,20 +1,23 @@
 import { useEffect, useState } from "react";
 import { useAuthStore } from "../../state/authStore";
+import { useProjectsStore } from "../../state/projectsStore";
+import { migrateGuestDrafts } from "../../platform/migration";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
 import { notify } from "../lib/notify";
 
 /**
  * Shown when a guest signs into a PRE-EXISTING account while holding unsaved
- * drafts. Because the two accounts have different uids, the drafts can't be
- * linked automatically — they'd have to be copied across by a backend (Admin
- * SDK) job. That migration isn't built yet, so this dialog wires the UX
- * (which drafts to bring over) and is honest that the copy is coming soon.
+ * drafts. Because the two accounts have different uids, the backend copies the
+ * selected drafts' Firestore docs + Storage blobs across (ownership of the
+ * guest side is proven by the guest ID token captured before the switch).
  */
 export function GuestMigrationDialog() {
   const pending = useAuthStore((s) => s.pendingMigration);
   const clearMigration = useAuthStore((s) => s.clearMigration);
+  const reloadProjects = useProjectsStore((s) => s.load);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [importing, setImporting] = useState(false);
 
   // Default to "bring everything over" whenever a new prompt appears.
   useEffect(() => {
@@ -32,28 +35,43 @@ export function GuestMigrationDialog() {
     });
   };
 
-  const confirm = () => {
-    // TODO(backend migration): copy the selected drafts' Firestore docs + Storage
-    // blobs from `pending.fromUid` into the current account via an Admin SDK job.
-    notify.info(
-      "Importing guest drafts is coming soon",
-      `${selected.size} storybook${selected.size === 1 ? "" : "s"} couldn't be moved automatically yet.`,
-    );
-    clearMigration();
+  const confirm = async () => {
+    setImporting(true);
+    try {
+      const result = await migrateGuestDrafts(pending.guestToken, [...selected]);
+      await reloadProjects();
+      const n = result.migrated.length;
+      if (n > 0) {
+        notify.success(
+          `${n} storybook${n === 1 ? "" : "s"} added to your account`,
+          result.skipped.length > 0 ? "Some were already in your account and were left as-is." : undefined,
+        );
+      } else {
+        notify.info(
+          "Nothing to import",
+          "Those storybooks are already in your account or are no longer available.",
+        );
+      }
+      clearMigration();
+    } catch (err) {
+      notify.error(err);
+    } finally {
+      setImporting(false);
+    }
   };
 
   return (
     <Modal
       open
-      onClose={clearMigration}
+      onClose={importing ? () => {} : clearMigration}
       title="Bring your guest storybooks?"
       size="max-w-md"
       footer={
         <>
-          <Button variant="ghost" onClick={clearMigration}>
+          <Button variant="ghost" onClick={clearMigration} disabled={importing}>
             Discard
           </Button>
-          <Button onClick={confirm} disabled={selected.size === 0}>
+          <Button onClick={() => void confirm()} disabled={selected.size === 0} loading={importing}>
             Add to my account
           </Button>
         </>

@@ -10,10 +10,16 @@ import { useBillingUiStore } from "../../state/billingUiStore";
 import { useSubscriptionStore } from "../../state/subscriptionStore";
 import { startSubscriptionCheckout, openBillingPortal } from "../../platform/payments";
 import { findPublicPlanByPriceId, type BillingInterval, type PublicPlan } from "../../core/config/plans";
+import { ebookPlanPrice, type EbookSettings } from "../../core/config/products";
 import { fmtMoney } from "../admin/tabs/products/parts";
 
 /** Selling-point bullets derived from a plan's entitlements + grant. */
-function planPerks(plan: PublicPlan, interval: BillingInterval): string[] {
+function planPerks(
+  plan: PublicPlan,
+  interval: BillingInterval,
+  ebook: EbookSettings,
+  currency: string,
+): string[] {
   const out: string[] = [];
   const g = plan.grant;
   if (g.monthlySparks > 0) out.push(`${g.monthlySparks.toLocaleString()} Sparks every month`);
@@ -21,10 +27,24 @@ function planPerks(plan: PublicPlan, interval: BillingInterval): string[] {
     out.push(`+${g.annualBonusSparks.toLocaleString()} bonus Sparks up front`);
   const e = plan.entitlements;
   if (e.printDiscountPct > 0) out.push(`${e.printDiscountPct}% off printed books`);
+  // Member ebook pricing (data-driven, mirrors the checkout quote): included
+  // when the plan price is 0, otherwise the member price vs the sticker price.
+  if (ebook.enabled && !plan.isFree) {
+    const listPrice = ebook.prices[currency] ?? 0;
+    const planPrice = ebookPlanPrice(ebook, plan.id, currency);
+    if (listPrice > 0 && planPrice != null && planPrice < listPrice) {
+      out.push(
+        planPrice <= 0
+          ? "Digital editions of your books — included"
+          : `Digital editions for ${fmtMoney(planPrice, currency)} (instead of ${fmtMoney(listPrice, currency)})`,
+      );
+    }
+  }
   if (e.formats.length > 0) out.push(`${e.formats.length} premium format${e.formats.length === 1 ? "" : "s"}`);
   if (e.layouts.length > 0) out.push(`${e.layouts.length} premium layout${e.layouts.length === 1 ? "" : "s"}`);
   if (e.fonts.length > 0) out.push(`${e.fonts.length} extra font${e.fonts.length === 1 ? "" : "s"}`);
-  if (e.removeWatermark) out.push("No watermark on shared books");
+  // NOTE: the removeWatermark entitlement is not advertised while the public
+  // sharing feature is shelved — it has no visible effect right now.
   for (const f of e.features) out.push(f);
   return out;
 }
@@ -39,6 +59,7 @@ export function PlansDialog() {
   const close = useBillingUiStore((s) => s.closePlans);
   const plans = useAppConfigStore((s) => s.plans.plans);
   const baseCurrency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
+  const ebookSettings = useAppConfigStore((s) => s.pricingSettings.ebook);
   const subscriptions = useSubscriptionStore((s) => s.subscriptions);
 
   const [interval, setInterval] = useState<BillingInterval>("month");
@@ -120,21 +141,27 @@ export function PlansDialog() {
             {visible.map((plan) => {
               const price = plan.prices[baseCurrency]?.[interval];
               const isCurrent = currentPlan?.id === plan.id || (plan.isFree && !currentPlan);
-              const perks = planPerks(plan, interval);
+              const perks = planPerks(plan, interval, ebookSettings, baseCurrency);
+              // The plan the admin badged is the one we visually lead with.
+              const featured = Boolean(plan.badges[0]) && !plan.isFree;
               return (
                 <div
                   key={plan.id}
-                  className={`flex flex-col rounded-2xl border p-4 ${
-                    isCurrent ? "border-brand-300 ring-1 ring-brand-200" : "border-ink-100"
+                  className={`flex flex-col rounded-3xl p-4 shadow-soft ring-1 transition ${
+                    featured
+                      ? "bg-linear-to-b from-brand-50/80 to-white ring-2 ring-brand-300"
+                      : isCurrent
+                        ? "bg-white ring-2 ring-brand-200"
+                        : "bg-white ring-ink-100"
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <h3 className="text-sm font-bold text-ink-900">{plan.name}</h3>
+                      <h3 className="font-display text-base font-bold text-ink-900">{plan.name}</h3>
                       {plan.tagline && <p className="text-[11px] text-ink-400">{plan.tagline}</p>}
                     </div>
                     {plan.badges[0] && (
-                      <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[10px] font-medium text-brand-700">
+                      <span className="rounded-full bg-brand-600 px-2 py-0.5 text-[10px] font-bold text-(--color-brand-foreground) shadow-soft">
                         {plan.badges[0]}
                       </span>
                     )}
@@ -156,12 +183,19 @@ export function PlansDialog() {
                   {plan.description && <p className="mt-2 text-xs leading-relaxed text-ink-500">{plan.description}</p>}
 
                   <ul className="mt-3 flex-1 space-y-1.5">
-                    {perks.map((perk, i) => (
-                      <li key={i} className="flex items-start gap-1.5 text-xs text-ink-600">
-                        <Check className="mt-0.5 size-3.5 shrink-0 text-emerald-500" />
-                        {perk}
-                      </li>
-                    ))}
+                    {perks.map((perk, i) => {
+                      const isSparksPerk = perk.toLowerCase().includes("spark");
+                      return (
+                        <li key={i} className="flex items-start gap-1.5 text-xs text-ink-600">
+                          {isSparksPerk ? (
+                            <Sparkles className="mt-0.5 size-3.5 shrink-0 text-magic-500" />
+                          ) : (
+                            <Check className="mt-0.5 size-3.5 shrink-0 text-emerald-500" />
+                          )}
+                          {isSparksPerk ? <span className="font-medium text-ink-700">{perk}</span> : perk}
+                        </li>
+                      );
+                    })}
                   </ul>
 
                   <div className="mt-4">
@@ -176,12 +210,16 @@ export function PlansDialog() {
                     ) : (
                       <Button
                         size="sm"
+                        variant={featured ? "primary" : "secondary"}
                         className="w-full"
-                        loading={busy === plan.id}
+                        loading={busy === plan.id || (portalBusy && Boolean(currentPlan && !currentPlan.isFree))}
                         disabled={!price?.priceId}
-                        onClick={() => subscribe(plan)}
+                        // Existing subscribers change plans in the Customer Portal
+                        // (one subscription per account, prorated by Stripe). The
+                        // server enforces this too — a second Checkout is refused.
+                        onClick={() => (currentPlan && !currentPlan.isFree ? void manage() : void subscribe(plan))}
                       >
-                        {currentPlan && !currentPlan.isFree ? "Switch" : "Choose"} {plan.name}
+                        {currentPlan && !currentPlan.isFree ? "Switch in billing portal" : `Choose ${plan.name}`}
                       </Button>
                     )}
                   </div>

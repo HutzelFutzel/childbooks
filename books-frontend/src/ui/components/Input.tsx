@@ -3,13 +3,13 @@ import type { InputHTMLAttributes, TextareaHTMLAttributes } from "react";
 import { cn } from "../lib/cn";
 
 const fieldBase =
-  "w-full rounded-xl bg-white text-ink-800 placeholder:text-ink-400 ring-1 ring-inset ring-ink-200 " +
+  "w-full rounded-xl2 bg-white text-ink-800 placeholder:text-ink-400 ring-1 ring-inset ring-ink-200 " +
   "transition focus:outline-none focus:ring-2 focus:ring-brand-400 disabled:opacity-60";
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
   function Input({ className, ...rest }, ref) {
     return (
-      <input ref={ref} className={cn(fieldBase, "h-10 px-3.5 text-sm", className)} {...rest} />
+      <input ref={ref} className={cn(fieldBase, "h-11 px-3.5 text-sm", className)} {...rest} />
     );
   },
 );

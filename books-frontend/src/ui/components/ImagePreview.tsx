@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { ImageIcon, Loader2, ZoomIn } from "lucide-react";
 import type { ImageActionId } from "../../core/ai/actions";
 import { cn } from "../lib/cn";
+import { paintIn } from "../lib/motion";
 import { Modal } from "./Modal";
 import { GenerationOverlay } from "../generation/GenerationOverlay";
 
@@ -63,9 +64,9 @@ export function ImagePreview({
               src={src}
               alt={alt}
               className="size-full object-cover"
-              initial={{ opacity: 0, scale: 1.02 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ duration: 0.3 }}
+              variants={paintIn}
+              initial="hidden"
+              animate="visible"
             />
             {canZoom && (
               <div className="absolute right-2 top-2 rounded-lg bg-ink-900/50 p-1.5 text-white opacity-0 transition group-hover:opacity-100">

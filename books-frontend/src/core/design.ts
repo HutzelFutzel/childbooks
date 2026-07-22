@@ -103,9 +103,11 @@ export interface TextBox {
   name?: string;
   /**
    * Semantic role linking this box to a data field so the two stay in sync —
-   * e.g. "book-title" mirrors the project title / front-cover title.
+   * e.g. "book-title" mirrors the project title / front-cover title. Role-tagged
+   * boxes are the ones auto-seeded from the cover spec, so toggling "bake text
+   * into the art" can remove exactly them (and leave any user-added boxes).
    */
-  role?: "book-title";
+  role?: "book-title" | "book-subtitle";
   /** Hidden from the page (still listed in Layers). */
   hidden?: boolean;
   /** Shadow / blur effects. */
@@ -117,6 +119,22 @@ export interface TextBox {
    * Off by default so body text keeps a constant reading size.
    */
   autoFitGrow?: boolean;
+  /**
+   * When true, the box height is `max(minHeightPct, content height)`: it grows
+   * as the user types and can't be dragged shorter than the content (so text
+   * always fits), but the user *can* drag it taller to give the text room to
+   * breathe — that dragged height becomes {@link minHeightPct}, the new target
+   * floor. Width stays user-controlled and text wraps within it. This is the
+   * opposite of {@link autoFit} (which resizes the font to a fixed box), so the
+   * two shouldn't both be enabled on the same box.
+   */
+  autoHeight?: boolean;
+  /**
+   * Target/minimum box height (fraction of page height) for auto-height boxes.
+   * The rendered height never falls below this, giving deliberate whitespace
+   * until the text grows past it. Set when the user resizes the box taller.
+   */
+  minHeightPct?: number;
 }
 
 /** A decorative vector element: geometric shapes and speech bubbles. */
@@ -180,6 +198,19 @@ export interface ImageElement {
   blobId?: string;
   /** How the bitmap fills its rect. */
   fit: "cover" | "contain";
+  /**
+   * Extra scale applied on top of the base {@link fit} (1 = none). Lets the user
+   * zoom into the bitmap without resizing the rect. Combined with {@link focus}
+   * this is a non-destructive crop: the rect stays put, only the visible slice
+   * of the bitmap changes.
+   */
+  zoom?: number;
+  /**
+   * Focal point (normalized 0..1 of the bitmap) kept centred in the rect when
+   * the scaled bitmap overflows. Defaults to the centre `{ x: 0.5, y: 0.5 }`.
+   * Mirrors CSS `object-position`.
+   */
+  focus?: { x: number; y: number };
   opacity?: number;
   /** Corner radius as a fraction of the smaller side. */
   corner?: number;

@@ -44,6 +44,64 @@ export async function downscaleReference(
 }
 
 /**
+ * Split a wide "wrap" cover into its two printed panels and upscale each so a
+ * single generation yields print-usable front + back covers.
+ *
+ * The wrap is generated as one continuous landscape image (back on the LEFT,
+ * front on the RIGHT); slicing it in half at the centre gives two panels that
+ * already share lighting, palette and scene (true continuity). Each half is
+ * upscaled back up to `targetWidth` — the print-resolution safeguard for the
+ * "generate one, split it" approach.
+ *
+ * When `panelAspect` (width/height of the book's trim) is given, each half is
+ * first centre-cropped to that exact aspect before upscaling, so the saved
+ * panel matches the page shape and the editor's object-fit:cover no longer
+ * crops off (baked-in) content at the edges. Returns PNG buffers.
+ */
+export async function splitWrapCover(
+  buf: Buffer,
+  opts: { targetWidth?: number; panelAspect?: number } = {},
+): Promise<{ back: Buffer; front: Buffer }> {
+  const targetWidth = opts.targetWidth ?? 1024;
+  const meta = await sharp(buf).metadata();
+  const w = meta.width ?? 1536;
+  const h = meta.height ?? 1024;
+  const halfW = Math.floor(w / 2);
+  // Left panel = back cover, right panel = front cover.
+  const cut = async (left: number, width: number): Promise<Buffer> => {
+    let cropLeft = left;
+    let cropWidth = width;
+    let cropHeight = h;
+    let cropTop = 0;
+    if (opts.panelAspect && opts.panelAspect > 0) {
+      // Centre-crop the half to the target trim aspect (minimal loss because
+      // the half is already close to the trim shape).
+      const halfAspect = width / h;
+      if (halfAspect > opts.panelAspect) {
+        // Half is too wide → trim its width.
+        cropWidth = Math.round(h * opts.panelAspect);
+        cropLeft = left + Math.round((width - cropWidth) / 2);
+      } else if (halfAspect < opts.panelAspect) {
+        // Half is too tall → trim its height.
+        cropHeight = Math.round(width / opts.panelAspect);
+        cropTop = Math.round((h - cropHeight) / 2);
+      }
+    }
+    const targetHeight = Math.round((cropHeight / cropWidth) * targetWidth);
+    return sharp(buf)
+      .extract({ left: cropLeft, top: cropTop, width: cropWidth, height: cropHeight })
+      .resize(targetWidth, targetHeight, { fit: "fill", kernel: "lanczos3" })
+      .png()
+      .toBuffer();
+  };
+  const [back, front] = await Promise.all([
+    cut(0, halfW),
+    cut(w - halfW, halfW),
+  ]);
+  return { back, front };
+}
+
+/**
  * Paste `edited` over `original` only where `mask` is painted (transparent),
  * keeping every other pixel byte-identical to the original. Returns a PNG.
  */

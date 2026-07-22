@@ -30,6 +30,13 @@ export interface BuildAnchorPromptInput {
    */
   relatedAnchors?: Anchor[];
   /**
+   * Optional resolved statement per related anchor id — a full, side-independent
+   * sentence naming both parties (e.g. "Dad has lighter hair than Mom") so the
+   * model knows exactly how the resemblance/connection works from THIS anchor's
+   * point of view, without having to invert the phrasing.
+   */
+  relatedNotes?: Record<string, string>;
+  /**
    * Anchors the EDIT TEXT refers to ("make him the same age as Amanda"),
    * detected by the mention resolver — no user tagging required. Injected as
    * text context so the model can interpret the request; never drawn.
@@ -66,6 +73,7 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
     artStyle,
     containedAnchors = [],
     relatedAnchors = [],
+    relatedNotes,
     mentionedAnchors = [],
     edit,
     editFromImage = false,
@@ -76,6 +84,17 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
   const config = resolvePromptsConfig(prompts);
   const isEdit = Boolean(edit?.trim());
   const listOf = (arr: Anchor[]) => arr.map((r) => `${r.name} (${r.description})`).join("; ");
+  // Related anchors additionally carry the resolved statement on HOW they
+  // relate (a full sentence naming both, e.g. "Dad has lighter hair than Mom")
+  // right alongside the description, so the model doesn't have to invent what
+  // the resemblance means.
+  const listRelated = (arr: Anchor[]) =>
+    arr
+      .map((r) => {
+        const note = relatedNotes?.[r.id]?.trim();
+        return `${r.name} (${r.description}${note ? `; ${note}` : ""})`;
+      })
+      .join("; ");
 
   // Edit-from-image: keep the current image as the source of truth and apply
   // ONLY the requested change. We deliberately omit the full description and
@@ -114,7 +133,7 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
       description: anchor.description.trim(),
       userGuidance: anchor.userGuidance?.trim() ?? "",
       containedList: listOf(contained),
-      relatedList: listOf(relatedAnchors),
+      relatedList: listRelated(relatedAnchors),
       mentionedList: listOf(mentioned),
       artStyle: styleText,
       edit: edit?.trim() ?? "",

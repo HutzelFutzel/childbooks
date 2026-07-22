@@ -1,24 +1,29 @@
-import { useMemo, useState } from "react";
-import { createPortal } from "react-dom";
+import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowLeft,
   BookOpenCheck,
   Eye,
   Loader2,
-  Printer,
   ShoppingBag,
   Tablet,
   TriangleAlert,
 } from "lucide-react";
-import { pageTrimForConfig } from "../../core/book";
 import { bookProductForConfig } from "../../core/book";
+import { ebookPlanPrice } from "../../core/config/products";
+import { findPublicPlanByPriceId } from "../../core/config/plans";
+import { activeSubscription } from "../../platform/subscriptions";
 import { currentIllustration } from "../../state/ai";
 import { useAppConfigStore } from "../../state/appConfigStore";
+import { useAuthStore } from "../../state/authStore";
+import { useSubscriptionStore } from "../../state/subscriptionStore";
+import { notify } from "../lib/notify";
 import { illustrationUnits } from "../../state/bookUnits";
 import { Button } from "../components/Button";
-import { useBlobUrl } from "../hooks/useBlobUrl";
-import { PrintBook } from "../design/PrintBook";
+import { BookMockup } from "../components/BookMockup";
+import { Celebrate } from "../components/Celebrate";
+import { StageHeader } from "../components/StageHeader";
+import { fmtMoney } from "../admin/tabs/products/parts";
 import { OrderDialog } from "../checkout/OrderDialog";
 import { EbookDialog } from "../checkout/EbookDialog";
 import { useStudio } from "./StudioContext";
@@ -28,18 +33,43 @@ import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { BookPreview } from "./BookPreview";
 
 /**
- * Step 4 · Order. The finish line: flip through the book, print it at home, or
- * order a professionally printed & bound copy. (No PDF/image exports — the goal
- * is a real book in your hands.)
+ * Step 4 · Order. The finish line: flip through the book, order a professionally
+ * printed & bound copy, or buy the digital edition (ebook PDF).
  */
 export function OrderStage() {
   const { project, pages, design, setStep } = useStudio();
-  const [printing, setPrinting] = useState(false);
   const [ordering, setOrdering] = useState(false);
   const [buyingEbook, setBuyingEbook] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   // Digital edition: only offered when the admin has enabled ebook sales.
   const ebookEnabled = useAppConfigStore((s) => s.pricingSettings.ebook.enabled);
+  const accessLevel = useAuthStore((s) => s.accessLevel);
+  const openAuthDialog = useAuthStore((s) => s.openAuthDialog);
+
+  // Show the price before asking for anything: the storefront "from" price for
+  // this book's format (admin catalog), plus the flat ebook price. Shipping is
+  // quoted live in checkout once we know the destination.
+  const publicProducts = useAppConfigStore((s) => s.products.products);
+  const baseCurrency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
+  const ebookSettings = useAppConfigStore((s) => s.pricingSettings.ebook);
+  const publicPlans = useAppConfigStore((s) => s.plans.plans);
+  const subscriptions = useSubscriptionStore((s) => s.subscriptions);
+
+  // Purchases require a verified account (the backend enforces this too). The
+  // studio itself is open to guests, so the gate lives on the buy buttons:
+  // guests get the sign-up dialog, unverified users a verify reminder.
+  const requireFullAccount = (proceed: () => void) => {
+    if (accessLevel === "guest") {
+      notify.info("Create a free account to order", "Your book comes with you — nothing is lost.");
+      openAuthDialog();
+      return;
+    }
+    if (accessLevel === "unverified") {
+      notify.info("Verify your email to order", "Click the link we sent you, then try again.");
+      return;
+    }
+    proceed();
+  };
 
   const units = illustrationUnits(project);
   const missingArt = useMemo(
@@ -47,9 +77,61 @@ export function OrderStage() {
     [project, units],
   );
   const pageCount = pages.length;
-  const sizeLabel = bookProductForConfig(project.config).label;
+  const contentPages = pages.filter((p) => !p.isCover).length;
+  const bookProduct = bookProductForConfig(project.config);
+  const sizeLabel = bookProduct.label;
+
+  const catalogProduct = useMemo(
+    () => publicProducts.find((p) => p.sku === bookProduct.sku),
+    [publicProducts, bookProduct.sku],
+  );
+
+  // Physical page limits for the chosen format. Falls back to the provider
+  // catalog's minimum when the admin catalog hasn't been configured yet.
+  const minPages = catalogProduct?.conditions.pages.min ?? bookProduct.minPages;
+  const maxPages = catalogProduct?.conditions.pages.max ?? Number.POSITIVE_INFINITY;
+  const belowMinPages = contentPages < minPages;
+  const aboveMaxPages = contentPages > maxPages;
+  const printBlocked = belowMinPages || aboveMaxPages;
+  const printBlockedReason = belowMinPages
+    ? `This format needs at least ${minPages} pages — your book has ${contentPages}. Add ${minPages - contentPages} more before ordering a print copy.`
+    : aboveMaxPages
+      ? `This format allows up to ${maxPages} pages — your book has ${contentPages}. Remove some pages or choose another format.`
+      : null;
+
+  const printFromPrice = useMemo(() => {
+    const price = catalogProduct?.prices[baseCurrency];
+    return typeof price === "number" && price > 0 ? price : null;
+  }, [catalogProduct, baseCurrency]);
+
+  // Plan-aware ebook price (mirrors the server quote): the subscriber's plan
+  // price replaces the sticker price when one is configured; 0 ⇒ included with
+  // the plan. Wording is derived from the data so it stays correct no matter
+  // how plans/prices are configured in the admin.
+  const ebookDisplay = useMemo(() => {
+    const listPrice = ebookSettings.prices[baseCurrency] ?? 0;
+    if (listPrice <= 0) return null;
+    const sub = activeSubscription(subscriptions);
+    const plan = sub ? findPublicPlanByPriceId(publicPlans, sub.priceId) : null;
+    const planPrice = plan && !plan.isFree ? ebookPlanPrice(ebookSettings, plan.id, baseCurrency) : null;
+    const planApplied = planPrice != null && planPrice < listPrice;
+    const price = planApplied ? planPrice : listPrice;
+    return {
+      price,
+      planName: planApplied && plan ? plan.name : null,
+      included: planApplied && price <= 0,
+    };
+  }, [ebookSettings, baseCurrency, subscriptions, publicPlans]);
 
   const cover = pages.find((p) => p.id === COVER_FRONT_ID) ?? pages[0];
+
+  // The finish-line moment: arriving here with a fully illustrated book earns
+  // a small sparkle burst over the cover. Once per visit to the stage.
+  const [celebrate, setCelebrate] = useState(false);
+  useEffect(() => {
+    if (pageCount > 0 && missingArt === 0) setCelebrate(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const displays = useMemo(() => {
     const doc = project.screenplay ? getCursor(project.screenplay).content : null;
@@ -69,28 +151,28 @@ export function OrderStage() {
     return buildDisplaySpreads(doc, entries);
   }, [project.screenplay, pages]);
 
-  function handlePrint() {
-    setPrinting(true);
-    setTimeout(() => {
-      window.print();
-      setPrinting(false);
-    }, 300);
-  }
+  // Name the one extra step up front, so the account ask at the buy button
+  // never feels like a surprise wall.
+  const purchaseNote =
+    accessLevel === "guest"
+      ? "Takes a free account (about 30 seconds) — your book comes with you."
+      : accessLevel === "unverified"
+        ? "Verify your email first — check your inbox for our link."
+        : undefined;
 
   return (
     <div className="mx-auto w-full max-w-3xl px-5 py-8">
-      <header className="mb-7 text-center">
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-700">
-          <BookOpenCheck className="size-3.5" /> Step 4 · Order
-        </span>
-        <h1 className="mt-3 text-2xl font-black tracking-tight text-ink-900">Your book is ready</h1>
-        <p className="mx-auto mt-1.5 max-w-md text-sm text-ink-500">
-          Take one last look, then print it at home or order a beautifully bound copy.
-        </p>
-      </header>
+      <StageHeader
+        eyebrow="Step 4 · Order"
+        eyebrowIcon={BookOpenCheck}
+        tone="mint"
+        title="Your book is ready"
+        subtitle="Take one last look, then order a beautifully bound copy or get the digital edition."
+      />
 
-      <div className="flex flex-col items-center gap-4 rounded-3xl border border-ink-100 bg-white p-6 shadow-soft sm:flex-row sm:items-stretch">
-        <CoverThumb blobId={cover?.blobId} aspect={cover?.aspect ?? 1} />
+      <div className="relative flex flex-col items-center gap-6 rounded-3xl border border-ink-100 bg-aurora p-6 shadow-soft sm:flex-row sm:items-center">
+        <Celebrate play={celebrate} />
+        <BookMockup blobId={cover?.blobId} aspect={cover?.aspect ?? 1} className="shrink-0 py-2" />
         <div className="flex min-w-0 flex-1 flex-col justify-center gap-3 text-center sm:text-left">
           <div>
             <h2 className="truncate text-lg font-bold text-ink-900">{project.title}</h2>
@@ -124,14 +206,30 @@ export function OrderStage() {
         </div>
       )}
 
-      <div className={`mt-6 grid gap-4 sm:grid-cols-2 ${ebookEnabled ? "lg:grid-cols-3" : ""}`}>
+      {printBlockedReason && (
+        <div className="mt-4 flex items-start gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+          <span>
+            {printBlockedReason}{" "}
+            <button onClick={() => setStep("edit")} className="font-semibold underline">
+              Back to design
+            </button>
+            {ebookEnabled ? " to adjust it. The digital edition is still available." : " to adjust it."}
+          </span>
+        </div>
+      )}
+
+      <div className={`mt-6 grid gap-4 ${ebookEnabled ? "sm:grid-cols-2" : ""}`}>
         <OptionCard
           icon={<ShoppingBag className="size-6" />}
           tone="brand"
           title="Order a printed book"
           desc="Professionally printed, bound and shipped to your door."
+          price={printFromPrice != null ? `from ${fmtMoney(printFromPrice, baseCurrency)} + shipping` : undefined}
           cta="Order print"
-          onClick={() => setOrdering(true)}
+          note={printBlocked ? printBlockedReason ?? undefined : purchaseNote}
+          disabled={printBlocked}
+          onClick={() => requireFullAccount(() => setOrdering(true))}
         />
         {ebookEnabled && (
           <OptionCard
@@ -139,19 +237,20 @@ export function OrderStage() {
             tone="neutral"
             title="Get the ebook"
             desc="A high-quality PDF of your book — read it on any device, forever."
+            price={
+              ebookDisplay == null
+                ? undefined
+                : ebookDisplay.included
+                  ? `Included with your ${ebookDisplay.planName} plan`
+                  : ebookDisplay.planName
+                    ? `${fmtMoney(ebookDisplay.price, baseCurrency)} · ${ebookDisplay.planName} price`
+                    : fmtMoney(ebookDisplay.price, baseCurrency)
+            }
             cta="Get the ebook"
-            onClick={() => setBuyingEbook(true)}
+            note={purchaseNote}
+            onClick={() => requireFullAccount(() => setBuyingEbook(true))}
           />
         )}
-        <OptionCard
-          icon={<Printer className="size-6" />}
-          tone="neutral"
-          title="Print at home"
-          desc="Open your browser's print dialog to print or save as PDF."
-          cta={printing ? "Preparing…" : "Print"}
-          loading={printing}
-          onClick={handlePrint}
-        />
       </div>
 
       <div className="mt-8 flex justify-center">
@@ -162,12 +261,6 @@ export function OrderStage() {
           <ArrowLeft className="size-3.5" /> Back to design
         </button>
       </div>
-
-      {printing &&
-        createPortal(
-          <PrintBook pages={pages} design={design} trimIn={pageTrimForConfig(project.config)} />,
-          document.body,
-        )}
 
       <OrderDialog
         open={ordering}
@@ -194,46 +287,39 @@ export function OrderStage() {
   );
 }
 
-function CoverThumb({ blobId, aspect }: { blobId?: string; aspect: number }) {
-  const url = useBlobUrl(blobId);
-  return (
-    <div
-      className="mx-auto w-40 shrink-0 overflow-hidden rounded-xl bg-ink-100 shadow-lifted ring-1 ring-ink-200"
-      style={{ aspectRatio: String(aspect) }}
-    >
-      {url ? (
-        <img src={url} alt="Front cover" className="size-full object-cover" />
-      ) : (
-        <div className="flex size-full items-center justify-center text-xs text-ink-400">
-          No cover yet
-        </div>
-      )}
-    </div>
-  );
-}
-
 function OptionCard({
   icon,
   title,
   desc,
+  price,
   cta,
+  note,
   onClick,
   tone,
   loading,
+  disabled,
 }: {
   icon: React.ReactNode;
   title: string;
   desc: string;
+  /** Shown up front so nobody has to click to learn what it costs. */
+  price?: string;
   cta: string;
+  /** Small line under the CTA (e.g. the account/verify requirement). */
+  note?: string;
   onClick: () => void;
   tone: "brand" | "neutral";
   loading?: boolean;
+  /** Greys out the card + disables the CTA (e.g. the book doesn't fit this format). */
+  disabled?: boolean;
 }) {
   return (
     <motion.div
-      whileHover={{ y: -3 }}
+      whileHover={disabled ? undefined : { y: -3 }}
       transition={{ type: "spring", stiffness: 360, damping: 26 }}
-      className="flex flex-col gap-3 rounded-3xl border border-ink-100 bg-white p-5 shadow-soft"
+      className={`flex flex-col gap-3 rounded-3xl border border-ink-100 bg-white p-5 shadow-soft ${
+        disabled ? "opacity-60" : ""
+      }`}
     >
       <span
         className={
@@ -247,14 +333,17 @@ function OptionCard({
       <div className="flex-1">
         <h3 className="text-sm font-bold text-ink-900">{title}</h3>
         <p className="mt-1 text-xs leading-relaxed text-ink-500">{desc}</p>
+        {price && <p className="mt-2 text-sm font-bold text-ink-800">{price}</p>}
       </div>
       <Button
         variant={tone === "brand" ? "primary" : "secondary"}
         loading={loading}
+        disabled={disabled}
         onClick={onClick}
       >
         {cta}
       </Button>
+      {note && <p className="-mt-1 text-center text-[11px] leading-relaxed text-ink-400">{note}</p>}
     </motion.div>
   );
 }

@@ -1,5 +1,5 @@
 import type { BookDesign, ImageElement, ShapeElement, TextBox } from "../../core/types";
-import type { DesignPage } from "./designInit";
+import { defaultIllustrationFocus, type DesignPage } from "./designInit";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { cssFilter } from "./effects";
 import { PatternFill } from "./patterns";
@@ -80,6 +80,13 @@ function PrintPage({
 
   const hasIllustrationEl = (pd.images ?? []).some((im) => im.kind === "illustration");
 
+  // Keep the full-bleed crop consistent with the editor: covers anchor to the
+  // top so a baked-in title isn't shaved when the art overflows the trim.
+  const bgFocus = defaultIllustrationFocus(page);
+  const bgObjectPosition = bgFocus
+    ? `${(bgFocus.x * 100).toFixed(2)}% ${(bgFocus.y * 100).toFixed(2)}%`
+    : undefined;
+
   const stacked: Stacked[] = [
     ...pd.textBoxes.map((b) => ({ id: b.id, z: b.z, rect: b.rect, rotation: b.rotation, hidden: b.hidden, box: b })),
     ...(pd.shapes ?? []).map((s) => ({ id: s.id, z: s.z, rect: s.rect, rotation: s.rotation, hidden: s.hidden, shape: s })),
@@ -106,7 +113,18 @@ function PrintPage({
       {pd.background?.color && <div style={{ position: "absolute", inset: 0, background: pd.background.color }} />}
       {pd.background?.pattern && <PatternFill config={pd.background.pattern} />}
       {url && !hasIllustrationEl && (
-        <img src={url} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+        <img
+          src={url}
+          alt=""
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            objectPosition: bgObjectPosition,
+          }}
+        />
       )}
       {stacked.map((el) => {
         const w = el.rect.w * W;
@@ -159,16 +177,60 @@ function PrintImage({
   const assetUrl = useBlobUrl(image.kind === "asset" ? image.blobId : undefined);
   const src = image.kind === "illustration" ? illustrationUrl : assetUrl ?? undefined;
   if (!src) return null;
+  const radius = (image.corner ?? 0) * Math.min(w, h);
+  // A rescaled illustration shown whole leaves blank bars in print too — fill
+  // them with a blurred, zoomed copy so the printed page matches the editor.
+  const showBackdrop = image.fit === "contain" && image.kind === "illustration";
+  if (showBackdrop) {
+    return (
+      <div style={{ position: "relative", width: w, height: h, overflow: "hidden", borderRadius: radius }}>
+        <img
+          src={src}
+          alt=""
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: w,
+            height: h,
+            objectFit: "cover",
+            filter: `blur(${h * 0.04}px)`,
+            transform: "scale(1.1)",
+            opacity: 0.85,
+          }}
+        />
+        <img
+          src={src}
+          alt=""
+          style={{ position: "relative", width: w, height: h, objectFit: "contain" }}
+        />
+      </div>
+    );
+  }
+  if (image.fit === "contain") {
+    return (
+      <img src={src} alt="" style={{ width: w, height: h, objectFit: "contain", borderRadius: radius }} />
+    );
+  }
+  // cover: object-position handles the focal point; an extra transform scale
+  // (anchored at the same point) applies the zoom, matching the editor's crop.
+  const zoom = Math.max(1, image.zoom ?? 1);
+  const fx = image.focus?.x ?? 0.5;
+  const fy = image.focus?.y ?? 0.5;
+  const pos = `${(fx * 100).toFixed(2)}% ${(fy * 100).toFixed(2)}%`;
   return (
-    <img
-      src={src}
-      alt=""
-      style={{
-        width: w,
-        height: h,
-        objectFit: image.fit === "contain" ? "contain" : "cover",
-        borderRadius: (image.corner ?? 0) * Math.min(w, h),
-      }}
-    />
+    <div style={{ position: "relative", width: w, height: h, overflow: "hidden", borderRadius: radius }}>
+      <img
+        src={src}
+        alt=""
+        style={{
+          width: w,
+          height: h,
+          objectFit: "cover",
+          objectPosition: pos,
+          transform: zoom > 1 ? `scale(${zoom})` : undefined,
+          transformOrigin: pos,
+        }}
+      />
+    </div>
   );
 }

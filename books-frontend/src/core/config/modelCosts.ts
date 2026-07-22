@@ -135,6 +135,33 @@ export function costForUsage(cost: ModelCost | undefined, usage: UsageSample): n
   return Math.round(value * 1e6) / 1e6;
 }
 
+// ---- Public projection -------------------------------------------------------
+
+/**
+ * The reference usage the storefront Spark estimates assume (one standard
+ * image). Shared between the projection below and `useTierEstimate` so the
+ * public per-image rate and the client's lookup always agree.
+ */
+export const PUBLIC_IMAGE_ESTIMATE_USAGE: UsageSample = { images: 1, size: "1024x1024" };
+
+/**
+ * World-readable projection of the cost table (`appConfig/modelCostsPublic`),
+ * derived server-side whenever the private table is saved. The full rate table
+ * (text rates, cached-input, per-size tiers) stays admin-only; the storefront
+ * only needs one number per image model — the estimated cost of one standard
+ * image — to render Spark estimates. Shaped as a regular `ModelCostTable`
+ * (flat per-image rates) so `costForUsage` works on it unchanged.
+ */
+export function publicModelCostProjection(table: ModelCostTable): ModelCostTable {
+  const models: Record<string, ModelCost> = {};
+  for (const [key, cost] of Object.entries(table.models)) {
+    if (cost.kind !== "image") continue; // text rates are never needed client-side
+    const perImage = costForUsage(cost, PUBLIC_IMAGE_ESTIMATE_USAGE) ?? 0;
+    models[key] = { kind: "image", input: 0, output: { mode: "perImage", rate: perImage } };
+  }
+  return { version: 1, currency: "usd", models };
+}
+
 // ---- Validation ------------------------------------------------------------
 
 const textRatesShape = {

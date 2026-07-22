@@ -31,11 +31,15 @@ Two kinds of graphics:
 |---------|-----------|-----------------|------------|
 | `hero.main` | `Hero.tsx` | Illustrated open storybook / sample spread | ~1200×900, transparent |
 | `hero.card1`, `hero.card2` | `Hero.tsx` | Sample page thumbnails | ~400×500 each |
-| `how.step1`, `how.step2`, `how.step3` | `HowItWorks.tsx` | Spot illustrations: writing / illustrating / printing | ~600×400 each |
+| `how.step1`, `how.step2`, `how.step3` | `HowItWorks.tsx` | Spot illustrations: writing / illustrating / printing | ~1600×1000 each (16:10) |
 
 ## Notes
 - Until an image is uploaded, each slot still renders a labeled
   `GraphicPlaceholder` (encodes the target ratio, so uploading real art won't
-  shift the layout). Uploaded art renders via `next/image`.
+  shift the layout). Uploaded art renders via `next/image` with
+  `object-contain`, so the full illustration is always visible — art whose
+  ratio doesn't exactly match the slot letterboxes (transparent/matching the
+  page background) rather than being cropped. Exporting at the exact ratio
+  listed above still gives the cleanest, edge-to-edge result.
 - New editable slots live in `core/config/siteImages.ts` (`SITE_IMAGE_SLOTS`)
   and editable copy in `core/config/siteContent.ts` (`SITE_TEXT_SLOTS`).

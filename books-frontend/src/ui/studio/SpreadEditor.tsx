@@ -1,20 +1,29 @@
 /**
- * Spread-centric rendering for the Studio. The editor always presents the book
- * as facing spreads — never lone narrow pages — so what you see matches the
- * opened, bound result:
+ * Spread-centric data model + presentation primitives for the Studio. The
+ * editor always presents the book as facing spreads — never lone narrow
+ * pages — so what you see matches the opened, bound result:
  *   - a true double-page spread fills one wide frame;
  *   - two facing single pages sit side by side in one wide frame with a fold;
  *   - a lone page (cover / first page) keeps the wide frame with a blank facing
  *     half, so every unit on screen is the same size.
+ *
+ * The design stage (`BookCanvas.tsx`) shows exactly ONE display spread at a
+ * time, always live/interactive — there is no separate "review" vs "edit"
+ * mode. This file supplies the data helpers (`buildDisplaySpreads`,
+ * `contentSpreadIds`) plus the small presentational pieces (`HalfFrame` for
+ * the live editor, `SpreadThumbnail` for the filmstrip) that both the main
+ * stage and the filmstrip share.
  */
-import { motion } from "framer-motion";
-import { BookmarkCheck, BookOpenText } from "lucide-react";
-import type { Anchor, ScreenplayDoc } from "../../core/types";
+import type { ScreenplayDoc } from "../../core/types";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { paginate, type PageSlot } from "../../core/pipeline/pagination";
-import { cn } from "../lib/cn";
-import type { DesignPage } from "../design/designInit";
-import { PageControls, PageStagePanel, type PageSubject } from "./PageEditorCard";
+import { useJobsStore } from "../../state/jobsStore";
+import { useBlobUrl } from "../hooks/useBlobUrl";
+import { PageStage } from "../design/PageStage";
+import { GenerationOverlay } from "../generation/GenerationOverlay";
+import { defaultIllustrationFocus, type DesignPage } from "../design/designInit";
+import { useStudio } from "./StudioContext";
+import { PageStagePanel, type PageSubject } from "./PageEditorCard";
 
 export interface Entry {
   page: DesignPage;
@@ -44,7 +53,7 @@ export type DisplaySpread =
 
 /**
  * The editable (screenplay) spread ids a display unit stands for — covers and
- * blank fillers excluded. Drives drag-and-drop page reordering in the grid.
+ * blank fillers excluded. Drives drag-and-drop page reordering in the filmstrip.
  */
 export function contentSpreadIds(disp: DisplaySpread): string[] {
   if (disp.cover) return [];
@@ -143,18 +152,26 @@ export function buildDisplaySpreads(doc: ScreenplayDoc, entries: Entry[]): Displ
   return out;
 }
 
-const FOLD_GRADIENT =
+export const FOLD_GRADIENT =
   "linear-gradient(to right, rgba(15,23,42,0) 0%, rgba(15,23,42,0.10) 42%, rgba(15,23,42,0.16) 50%, rgba(15,23,42,0.10) 58%, rgba(15,23,42,0) 100%)";
 
-function sideAspect(left: SpreadSide, right: SpreadSide): number {
+export function sideAspect(left: SpreadSide, right: SpreadSide): number {
   const fromPage = (s: SpreadSide) => (s.kind === "page" ? s.entry.page.aspect : undefined);
   return fromPage(left) ?? fromPage(right) ?? 1;
 }
 
-/** One half of the spread frame: a live page, a blank filler, or the book edge.
- * A left page binds on its right edge and a right page on its left edge, so the
- * gutter guide is placed on the inner (facing) side. */
-function HalfFrame({ side, aspect, half }: { side: SpreadSide; aspect: number; half: "left" | "right" }) {
+/** One half of the LIVE spread frame: an interactive page, a blank filler, or
+ * the book edge. A left page binds on its right edge and a right page on its
+ * left edge, so the gutter guide is placed on the inner (facing) side. */
+export function HalfFrame({
+  side,
+  aspect,
+  half,
+}: {
+  side: SpreadSide;
+  aspect: number;
+  half: "left" | "right";
+}) {
   if (side.kind === "page") {
     return (
       <div className="relative flex min-w-0 flex-1 items-center justify-center">
@@ -169,10 +186,7 @@ function HalfFrame({ side, aspect, half }: { side: SpreadSide; aspect: number; h
   }
   return (
     <div className="relative flex min-w-0 flex-1 items-center justify-center">
-      <div
-        className="flex w-full items-center justify-center"
-        style={{ aspectRatio: String(aspect) }}
-      >
+      <div className="flex w-full items-center justify-center" style={{ aspectRatio: String(aspect) }}>
         {side.kind === "filler" ? (
           <span className="text-[11px] font-medium text-ink-300">Blank page</span>
         ) : null}
@@ -181,160 +195,158 @@ function HalfFrame({ side, aspect, half }: { side: SpreadSide; aspect: number; h
   );
 }
 
-const COVER_META: Record<CoverKind, { title: string; hint: string; icon: typeof BookOpenText }> = {
-  front: {
-    title: "Front cover",
-    hint: "The first thing readers see — title and headline art.",
-    icon: BookOpenText,
-  },
-  back: {
-    title: "Back cover",
-    hint: "The closing panel — blurb, and the back of the printed book.",
-    icon: BookmarkCheck,
-  },
+export const COVER_META: Record<CoverKind, { title: string; hint: string }> = {
+  front: { title: "Front cover", hint: "The first thing readers see — title and headline art." },
+  back: { title: "Back cover", hint: "The closing panel — blurb, and the back of the printed book." },
 };
 
 /** Pull the cover's page side (front sits on the right, back on the left). */
-function coverSideOf(disp: Extract<DisplaySpread, { kind: "pair" }>): SpreadSide | null {
+export function coverSideOf(disp: Extract<DisplaySpread, { kind: "pair" }>): SpreadSide | null {
   if (disp.left.kind === "page") return disp.left;
   if (disp.right.kind === "page") return disp.right;
   return null;
 }
 
-/** A single spread unit: header, the wide page frame, and per-page controls. */
-export function SpreadCard({
-  disp,
-  anchors,
-  stale,
-}: {
-  disp: DisplaySpread;
-  anchors: Anchor[];
-  /** Whether a given page id needs a reference refresh. */
-  stale: (pageId: string) => boolean;
-}) {
-  // Covers get a distinct, standalone presentation so they read clearly as the
-  // book's front/back — not as just another interior page.
-  if (disp.cover && disp.kind === "pair") {
-    const side = coverSideOf(disp);
-    const meta = COVER_META[disp.cover];
-    const Icon = meta.icon;
-    return (
-      <motion.div
-        layout
-        className="overflow-hidden rounded-3xl bg-linear-to-b from-brand-50/70 to-white shadow-soft ring-2 ring-brand-200"
-      >
-        <div className="flex items-center gap-3 border-b border-brand-100/80 px-4 py-3">
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-brand-600 text-(--color-brand-foreground) shadow-soft">
-            <Icon className="size-5" />
-          </span>
-          <div className="min-w-0 leading-tight">
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-bold text-ink-900">{meta.title}</span>
-              <span className="rounded-full bg-brand-100 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-brand-700">
-                Cover
-              </span>
-            </div>
-            <span className="text-[11px] text-ink-500">{meta.hint}</span>
-          </div>
-        </div>
-
-        <div className="space-y-4 p-4">
-          {side && side.kind === "page" ? (
-            <>
-              <div className="mx-auto w-full max-w-sm">
-                <div className="relative overflow-hidden rounded-xl bg-white shadow-lifted ring-1 ring-brand-200">
-                  <PageStagePanel page={side.entry.page} subject={side.entry.subject} chromeless />
-                  <span className="pointer-events-none absolute left-2 top-2 rounded-md bg-ink-900/70 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
-                    {meta.title}
-                  </span>
-                </div>
-              </div>
-              <div className="mx-auto w-full max-w-sm">
-                <PageControls
-                  page={side.entry.page}
-                  subject={side.entry.subject}
-                  anchors={anchors}
-                  stale={stale(side.entry.page.id)}
-                  label={meta.title}
-                />
-              </div>
-            </>
-          ) : (
-            <p className="py-8 text-center text-sm text-ink-400">No {meta.title.toLowerCase()} yet.</p>
-          )}
-        </div>
-      </motion.div>
-    );
+/** All live page entries a display unit shows, in reading order. */
+export function displayEntries(disp: DisplaySpread): { entry: Entry; label: string }[] {
+  if (disp.kind === "full") return [{ entry: disp.entry, label: disp.label }];
+  const out: { entry: Entry; label: string }[] = [];
+  for (const side of [disp.left, disp.right]) {
+    if (side.kind === "page") out.push({ entry: side.entry, label: side.label });
   }
+  return out;
+}
 
+export function isBlankEntry(entry: Entry): boolean {
+  return entry.subject.kind === "spread" && !!entry.subject.spread.blankCanvas;
+}
+
+/**
+ * Static, non-interactive render of one page surface — used by the filmstrip
+ * and the read-through preview. Same design layer and illustration as the
+ * editor, but no Konva transformers/selection. Still shows the live
+ * generation overlay so filmstrip thumbnails reflect in-flight renders.
+ */
+export function PagePreview({ entry, compact }: { entry: Entry; compact?: boolean }) {
+  const { pageDesign, generatingPages } = useStudio();
+  const page = entry.page;
+  const blank = isBlankEntry(entry);
+  const coverMode = entry.subject.kind === "cover";
+  const url = useBlobUrl(page.blobId);
+  const jobActive = useJobsStore((s) => s.activeUnitIds.has(page.id));
+  const generating = generatingPages.has(page.id) || jobActive;
+  const refCount =
+    (entry.subject.kind === "spread" ? entry.subject.spread.anchorIds : entry.subject.cover.anchorIds)
+      ?.length ?? 0;
   return (
-    <motion.div layout className="overflow-hidden rounded-3xl bg-white ring-1 ring-ink-100 shadow-soft">
-      <div className="flex items-center gap-2 border-b border-ink-100 px-4 py-2.5">
-        <span className="text-sm font-semibold text-ink-800">{disp.label}</span>
-      </div>
-
-      <div className="space-y-4 p-4">
-        {disp.kind === "full" ? (
-          <>
-            <div className="relative mx-auto w-full overflow-hidden rounded-xl bg-white shadow-soft ring-1 ring-ink-200">
-              <PageStagePanel page={disp.entry.page} subject={disp.entry.subject} chromeless />
-            </div>
-            <PageControls
-              page={disp.entry.page}
-              subject={disp.entry.subject}
-              anchors={anchors}
-              stale={stale(disp.entry.page.id)}
-              label={disp.label}
-            />
-          </>
-        ) : (
-          <>
-            <div className="relative mx-auto flex w-full overflow-hidden rounded-xl bg-white shadow-soft ring-1 ring-ink-200">
-              <HalfFrame side={disp.left} aspect={sideAspect(disp.left, disp.right)} half="left" />
-              <HalfFrame side={disp.right} aspect={sideAspect(disp.left, disp.right)} half="right" />
-              <div
-                className="pointer-events-none absolute inset-y-0 left-1/2 w-10 -translate-x-1/2"
-                style={{ background: FOLD_GRADIENT }}
-              />
-            </div>
-            <div className="grid gap-4 lg:grid-cols-2">
-              <SideControls side={disp.left} anchors={anchors} stale={stale} />
-              <SideControls side={disp.right} anchors={anchors} stale={stale} />
-            </div>
-          </>
-        )}
-      </div>
-    </motion.div>
+    <PageStage
+      pageDesign={pageDesign(page.id)}
+      imageUrl={blank ? undefined : url ?? undefined}
+      aspect={page.aspect}
+      illustrationFocus={defaultIllustrationFocus(page)}
+      editable={false}
+      chromeless
+      selectedId={null}
+      onSelectElement={() => {}}
+      onChangeElement={() => {}}
+      overlay={
+        generating && !blank ? (
+          <GenerationOverlay
+            action={coverMode ? "coverIllustration" : "pageIllustration"}
+            refCount={refCount}
+            compact={compact ?? true}
+            className="rounded-xl"
+          />
+        ) : undefined
+      }
+    />
   );
 }
 
-function SideControls({
-  side,
-  anchors,
-  stale,
-}: {
-  side: SpreadSide;
-  anchors: Anchor[];
-  stale: (pageId: string) => boolean;
-}) {
+function PreviewHalfFrame({ side, aspect }: { side: SpreadSide; aspect: number }) {
   if (side.kind === "page") {
     return (
-      <PageControls
-        page={side.entry.page}
-        subject={side.entry.subject}
-        anchors={anchors}
-        stale={stale(side.entry.page.id)}
-        label={side.label}
-      />
-    );
-  }
-  if (side.kind === "filler") {
-    return (
-      <div className="flex flex-col gap-1 rounded-xl border border-dashed border-ink-200 p-3 text-xs text-ink-400">
-        <span className="font-medium text-ink-500">{side.label} · Blank</span>
-        <span>Inserted so the facing spread prints correctly. Turn it into a page from the “+”.</span>
+      <div className="relative flex min-w-0 flex-1 items-center justify-center">
+        <PagePreview entry={side.entry} />
       </div>
     );
   }
-  return <div className="hidden lg:block" aria-hidden />;
+  return (
+    <div className="relative flex min-w-0 flex-1 items-center justify-center">
+      <div className="flex w-full items-center justify-center" style={{ aspectRatio: String(aspect) }} />
+    </div>
+  );
+}
+
+/**
+ * A cover thumbnail: a single upright cover panel with a printed-spine edge —
+ * deliberately NOT the facing-spread look (no fold, no blank facing half), so a
+ * cover reads as a cover in the rail. Front binds on the left (spine left), back
+ * binds on the right (spine right).
+ */
+function CoverThumbnail({ disp }: { disp: Extract<DisplaySpread, { kind: "pair" }> }) {
+  const side = coverSideOf(disp);
+  const spineLeft = disp.cover === "front";
+  return (
+    <div className="relative flex w-full">
+      {spineLeft && <span className="w-1.5 shrink-0 rounded-l bg-linear-to-b from-ink-700 to-ink-900" />}
+      <div className="relative min-w-0 flex-1">
+        {side && side.kind === "page" ? (
+          <PagePreview entry={side.entry} />
+        ) : (
+          <div className="flex aspect-3/4 w-full items-center justify-center bg-ink-50 text-[10px] font-medium text-ink-300">
+            No cover
+          </div>
+        )}
+      </div>
+      {!spineLeft && <span className="w-1.5 shrink-0 rounded-r bg-linear-to-b from-ink-700 to-ink-900" />}
+    </div>
+  );
+}
+
+/** Small, static rendering of a whole display spread — the filmstrip's thumbnail. */
+export function SpreadThumbnail({ disp }: { disp: DisplaySpread }) {
+  if (disp.kind === "full") return <PagePreview entry={disp.entry} />;
+  if (disp.cover) return <CoverThumbnail disp={disp} />;
+  return (
+    <div className="relative flex w-full">
+      <PreviewHalfFrame side={disp.left} aspect={sideAspect(disp.left, disp.right)} />
+      <PreviewHalfFrame side={disp.right} aspect={sideAspect(disp.left, disp.right)} />
+      <div
+        className="pointer-events-none absolute inset-y-0 left-1/2 w-3 -translate-x-1/2"
+        style={{ background: FOLD_GRADIENT }}
+      />
+    </div>
+  );
+}
+
+export type UnitStatus = "empty" | "missing" | "generating" | "stale" | "ready";
+
+/** Live generation status for one page/cover entry — drives chip badges & dots. */
+export function useEntryStatus(entry: Entry, stale: (pageId: string) => boolean): UnitStatus {
+  const { generatingPages } = useStudio();
+  const id = entry.page.id;
+  const jobActive = useJobsStore((s) => s.activeUnitIds.has(id));
+  if (isBlankEntry(entry)) return "ready";
+  const generating = generatingPages.has(id) || jobActive;
+  if (generating) return "generating";
+  if (!entry.page.blobId) return "missing";
+  if (stale(id)) return "stale";
+  return "ready";
+}
+
+/** Worst-of status across every live page a display spread shows — for the filmstrip dot. */
+export function useDisplayStatus(disp: DisplaySpread, stale: (pageId: string) => boolean): UnitStatus {
+  const { generatingPages } = useStudio();
+  const entries = displayEntries(disp)
+    .map((e) => e.entry)
+    .filter((e) => !isBlankEntry(e));
+  const ids = entries.map((e) => e.page.id);
+  const jobActive = useJobsStore((s) => ids.some((id) => s.activeUnitIds.has(id)));
+  if (entries.length === 0) return "empty";
+  const generating = jobActive || ids.some((id) => generatingPages.has(id));
+  if (generating) return "generating";
+  if (entries.some((e) => !e.page.blobId)) return "missing";
+  if (entries.some((e) => e.page.blobId && stale(e.page.id))) return "stale";
+  return "ready";
 }

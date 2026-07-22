@@ -1,7 +1,7 @@
-import Link from "next/link";
-import { ArrowRight, Sparkles } from "lucide-react";
+import { Sparkles } from "lucide-react";
 import { EditableImage } from "./EditableImage";
 import { EditableText } from "./EditableText";
+import { HeroOnRamp } from "./HeroOnRamp";
 import type { SiteImagesMap, SiteTextMap } from "./content";
 
 /** Above-the-fold hero. Text renders instantly (fast LCP); art is admin-editable. */
@@ -25,7 +25,7 @@ export function Hero({ images, text }: { images: SiteImagesMap; text: SiteTextMa
             multiline
             defaultValue="Turn a story into a printed picture book."
             serverValue={text["hero.title"]}
-            className="mt-6 text-4xl font-extrabold tracking-tight text-ink-900 sm:text-5xl lg:text-6xl"
+            className="mt-6 font-display text-4xl font-bold tracking-tight text-ink-900 sm:text-5xl lg:text-6xl"
           />
           <EditableText
             slotId="hero.subtitle"
@@ -35,28 +35,26 @@ export function Hero({ images, text }: { images: SiteImagesMap; text: SiteTextMa
             serverValue={text["hero.subtitle"]}
             className="mx-auto mt-6 max-w-xl text-lg text-ink-600 lg:mx-0"
           />
-          <div className="mt-9 flex flex-col items-center gap-4 sm:flex-row lg:justify-start">
-            <Link
-              href="/studio"
-              className="inline-flex items-center gap-2 rounded-2xl bg-brand-600 px-8 py-3.5 text-base font-semibold text-(--color-brand-foreground) shadow-soft transition hover:bg-brand-700"
-            >
-              <EditableText slotId="hero.ctaPrimary" as="span" defaultValue="Start your story free" serverValue={text["hero.ctaPrimary"]} />
-              <ArrowRight className="size-4.5" />
-            </Link>
+          {/* The on-ramp: type the hero's name, land in the studio with their
+              book already created. Lowest possible friction to first value. */}
+          <div className="mt-9">
+            <HeroOnRamp text={text} />
+          </div>
+          <div className="mt-4 flex flex-col items-center gap-2 sm:flex-row sm:gap-4 lg:justify-start">
+            <EditableText
+              slotId="hero.note"
+              as="p"
+              defaultValue="Free to start — no account or credit card needed."
+              serverValue={text["hero.note"]}
+              className="text-sm text-ink-500"
+            />
             <a
               href="#how-it-works"
-              className="inline-flex items-center rounded-2xl border border-ink-200 bg-white px-8 py-3.5 text-base font-semibold text-ink-700 transition hover:border-ink-300"
+              className="text-sm font-semibold text-brand-700 underline-offset-4 transition hover:underline"
             >
               <EditableText slotId="hero.ctaSecondary" as="span" defaultValue="See how it works" serverValue={text["hero.ctaSecondary"]} />
             </a>
           </div>
-          <EditableText
-            slotId="hero.note"
-            as="p"
-            defaultValue="No account needed — start as a guest in seconds."
-            serverValue={text["hero.note"]}
-            className="mt-4 text-sm text-ink-500"
-          />
         </div>
 
         {/* Hero visual. Floating page cards frame the main spread. */}

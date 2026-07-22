@@ -18,7 +18,7 @@ import express, { type Express, type Request, type Response } from "express";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 import { serverConfig } from "./config";
-import type { AuthedRequest } from "./auth";
+import { isAnonymousToken, isVerifiedToken, requireAuth, type AuthedRequest } from "./auth";
 import { createAdminAssetHost } from "./assets";
 import { fulfillmentProvider } from "./lulu";
 import { persistCreatedOrder } from "./orders";
@@ -69,8 +69,14 @@ import {
   type FulfillmentPlan,
   type PaymentKind,
 } from "./payments";
-import { deliverPaidEbook, getOwnedEbook, priceEbook } from "./ebooks";
-import { getPlansConfig, resolveActivePlan } from "./plans";
+import {
+  deliverPaidEbook,
+  logDownloadAndResolveUrl,
+  markDownloadsSeen,
+  priceEbook,
+  revokeRefundedEbook,
+} from "./ebooks";
+import { getPlansConfig, hasActiveSubscription, resolveActivePlan } from "./plans";
 import { getSparksConfig } from "./appConfig";
 import { grantSparks } from "./sparks";
 import { recordChargeRevenue, recordFinanceEvent, toUsd } from "./finance";
@@ -603,9 +609,11 @@ export function registerStripeUserRoutes(app: Express): void {
       }
       const settings = await getPricingSettings();
       const currency = String(req.query.currency ?? settings.baseCurrency).toUpperCase();
-      const quote = await priceEbook(uid, projectId, currency, settings.ebook);
-      const owned = quote.owned ? await getOwnedEbook(uid, projectId) : null;
-      res.json({ ...quote, downloadUrl: owned?.fileUrl ?? null });
+      const activePlan = await resolveActivePlan(uid);
+      const quote = await priceEbook(uid, projectId, currency, settings.ebook, activePlan);
+      // The download link is never handed out here — owned ebooks are fetched
+      // through the gated, logged `/account/downloads/:id/link` endpoint.
+      res.json({ ...quote, downloadUrl: null });
     } catch (err) {
       console.error("[stripe] ebook quote failed", err);
       clientError(res, "We couldn't price the ebook.", 500);
@@ -639,7 +647,8 @@ export function registerStripeUserRoutes(app: Express): void {
         clientError(res, `Currency ${currency} isn't supported.`);
         return;
       }
-      const quote = await priceEbook(uid, body.projectId, currency, settings.ebook);
+      const activePlan = await resolveActivePlan(uid);
+      const quote = await priceEbook(uid, body.projectId, currency, settings.ebook, activePlan);
       if (!quote.enabled) {
         clientError(res, "Ebooks aren't available right now.");
         return;
@@ -656,6 +665,27 @@ export function registerStripeUserRoutes(app: Express): void {
       const { url: fileUrl } = await host.upload(blob, `ebook-${body.projectId}.pdf`);
 
       const paymentId = randomUUID();
+
+      // Included with the buyer's plan (price 0): no Stripe session — record a
+      // zero-amount paid payment and grant the download entitlement directly.
+      if (quote.included || quote.price <= 0) {
+        const ebook: EbookFulfillment = { projectId: body.projectId, title, fileUrl };
+        await createPendingPayment({
+          paymentId,
+          uid,
+          kind: "ebook",
+          amount: 0,
+          currency,
+          description: `${title} — digital edition (included with ${quote.planName ?? "plan"})`,
+          stripeSessionId: null,
+          ebook,
+          items: [{ label: `${title} — digital edition (PDF)`, amount: 0, quantity: 1 }],
+        });
+        await updatePayment({ paymentId, uid, status: "paid", event: "ebook.plan_grant" });
+        await deliverPaidEbook(paymentId);
+        res.json({ granted: true, paymentId });
+        return;
+      }
       const customerId = await ensureCustomer(uid, req.authToken?.email ?? null);
       const taxBehavior = settings.tax.perCurrency[currency]?.behavior ?? "exclusive";
       const taxCode = settings.ebook.taxCode;
@@ -677,9 +707,14 @@ export function registerStripeUserRoutes(app: Express): void {
               product_data: {
                 name: `${title} — digital edition (PDF)`,
                 description:
-                  quote.discountPct > 0
-                    ? `Includes your ${quote.discountPct}% print-owner discount.`
-                    : undefined,
+                  [
+                    quote.planName ? `${quote.planName} member price.` : null,
+                    quote.discountPct > 0
+                      ? `Includes your ${quote.discountPct}% print-owner discount.`
+                      : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" ") || undefined,
                 tax_code: taxCode,
               },
             },
@@ -814,6 +849,23 @@ export function registerStripeUserRoutes(app: Express): void {
         interval?: BillingInterval;
         currency?: string;
       };
+
+      // One live subscription per account: plan CHANGES go through the Customer
+      // Portal (which upgrades/downgrades the existing subscription with
+      // proration) instead of opening a second Checkout subscription.
+      if (await hasActiveSubscription(uid)) {
+        const customerId = await getStripeCustomerId(uid);
+        if (customerId) {
+          const portal = await getStripe().billingPortal.sessions.create({
+            customer: customerId,
+            return_url: `${appBaseUrl()}/studio`,
+          });
+          res.json({ url: portal.url, portal: true });
+          return;
+        }
+        clientError(res, "You already have an active subscription. Manage it from your account menu.");
+        return;
+      }
 
       let priceId = body.priceId?.trim() || "";
       if (!priceId && body.planId) {
@@ -1058,12 +1110,19 @@ export function registerStripeUserRoutes(app: Express): void {
     }
   });
 
-  // Claim the one-time starter Spark grant (idempotent). The studio calls this
-  // once a verified user opens it; safe to call repeatedly.
-  app.post("/account/sparks/claim-starter", json, async (req: AuthedRequest, res: Response) => {
+  // Claim every starter-grant ladder rung the caller qualifies for (guest →
+  // signup → verify; each rung idempotent). Deliberately OUTSIDE the /account
+  // requireVerified guard: guests and unverified users claim their rungs too.
+  // The studio calls this whenever the sparks watch (re)starts.
+  app.post("/sparks/claim", requireAuth, json, async (req: AuthedRequest, res: Response) => {
     try {
-      const { ensureStarterGrant } = await import("./sparks");
-      await ensureStarterGrant(req.uid!);
+      const { ensureGrantLadder } = await import("./sparks");
+      await ensureGrantLadder({
+        uid: req.uid!,
+        anonymous: isAnonymousToken(req.authToken),
+        verified: isVerifiedToken(req.authToken),
+        ip: req.ip,
+      });
       res.json({ ok: true });
     } catch {
       res.json({ ok: false });
@@ -1090,6 +1149,41 @@ export function registerStripeUserRoutes(app: Express): void {
     } catch (err) {
       console.error("[stripe] portal failed", err);
       clientError(res, "We couldn't open billing. Please try again.", 500);
+    }
+  });
+
+  // Digital-download link. Authorizes the owner, records an audit event (time,
+  // IP, device) + bumps the download counter, then returns a fresh URL to fetch
+  // the file. The raw storage URL is never exposed directly, so every download
+  // is authenticated and logged.
+  app.post("/account/downloads/:id/link", async (req: AuthedRequest, res: Response) => {
+    try {
+      const id = String(req.params.id ?? "").trim();
+      if (!id) {
+        clientError(res, "A download id is required.");
+        return;
+      }
+      const userAgent = (req.headers["user-agent"] as string | undefined) ?? null;
+      const url = await logDownloadAndResolveUrl(req.uid!, id, { ip: req.ip ?? null, userAgent });
+      if (!url) {
+        clientError(res, "We couldn't find that download.", 404);
+        return;
+      }
+      res.json({ url });
+    } catch (err) {
+      console.error("[stripe] download link failed", err);
+      clientError(res, "We couldn't prepare your download. Please try again.", 500);
+    }
+  });
+
+  // Clear the "new downloads" badge by marking every entitlement seen.
+  app.post("/account/downloads/seen", async (req: AuthedRequest, res: Response) => {
+    try {
+      await markDownloadsSeen(req.uid!);
+      res.json({ ok: true });
+    } catch (err) {
+      console.error("[stripe] mark downloads seen failed", err);
+      clientError(res, "We couldn't update your downloads.", 500);
     }
   });
 }
@@ -1592,6 +1686,33 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
           amount: delta,
           ref: `${paymentId}_${charge.amount_refunded}`,
           meta: { cumulativeRefunded: refunded, fullyRefunded },
+        });
+      }
+      // A fully refunded ebook loses its download entitlement (the buyer no
+      // longer owns it; a later re-purchase grants a fresh one).
+      if (fullyRefunded && payment.kind === "ebook") {
+        await revokeRefundedEbook(paymentId);
+      }
+      // A refunded print order may already be at (or past) the printer —
+      // fulfillment isn't auto-cancelled, so a human must decide what to do.
+      if (payment.kind === "order" && refunded > 0) {
+        await raiseAlert({
+          severity: "warning",
+          kind: "print-order-refunded",
+          message:
+            `Print order payment ${paymentId} was ${fullyRefunded ? "fully" : "partially"} refunded ` +
+            `(${refunded} ${(charge.currency ?? "usd").toUpperCase()}). ` +
+            "Check the print job — it is NOT cancelled automatically and may still ship.",
+          meta: {
+            paymentId,
+            uid: payment.ownerUid,
+            orderId: payment.orderId,
+            projectId: payment.fulfillment?.merchantReference ?? null,
+            refunded,
+            fullyRefunded,
+          },
+          // One alert per cumulative refund level (webhook retries stay quiet).
+          ref: `${paymentId}_${charge.amount_refunded}`,
         });
       }
       return;

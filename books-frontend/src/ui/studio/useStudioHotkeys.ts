@@ -32,7 +32,7 @@ export function useStudioHotkeys() {
       if (isTypingTarget(e.target)) return;
       const s = studioRef.current;
       const sel = s.selection;
-      const hasEl = sel.kind === "box" || sel.kind === "shape";
+      const hasEl = sel.kind === "box" || sel.kind === "shape" || sel.kind === "image";
       const mod = e.metaKey || e.ctrlKey;
       const key = e.key.toLowerCase();
 

@@ -2,10 +2,12 @@
 
 import { motion, useReducedMotion } from "framer-motion";
 import type { ReactNode } from "react";
+import { revealHidden, revealTransition, revealVisible } from "../lib/motion";
 
 /**
- * Fade-and-rise a section into view on scroll. Honors `prefers-reduced-motion`
- * by rendering statically. Kept tiny so every marketing section can wrap itself.
+ * Pop a section into view on scroll using the house `reveal` vocabulary.
+ * Honors `prefers-reduced-motion` by rendering statically. Kept tiny so every
+ * marketing section can wrap itself.
  */
 export function Reveal({
   children,
@@ -21,10 +23,10 @@ export function Reveal({
   return (
     <motion.div
       className={className}
-      initial={{ opacity: 0, y: 24 }}
-      whileInView={{ opacity: 1, y: 0 }}
+      initial={revealHidden}
+      whileInView={revealVisible}
       viewport={{ once: true, margin: "-80px" }}
-      transition={{ duration: 0.5, delay, ease: [0.22, 1, 0.36, 1] }}
+      transition={{ ...revealTransition, delay }}
     >
       {children}
     </motion.div>

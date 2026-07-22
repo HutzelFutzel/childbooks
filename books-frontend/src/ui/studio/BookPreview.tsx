@@ -10,7 +10,7 @@ import { ChevronLeft, ChevronRight, X } from "lucide-react";
 import type { PageDesign } from "../../core/types";
 import { PageStage } from "../design/PageStage";
 import { useBlobUrl } from "../hooks/useBlobUrl";
-import type { DesignPage } from "../design/designInit";
+import { defaultIllustrationFocus, type DesignPage } from "../design/designInit";
 import { useStudio } from "./StudioContext";
 import type { DisplaySpread, Entry, SpreadSide } from "./SpreadEditor";
 
@@ -167,6 +167,7 @@ function PreviewSurface({ page, pd }: { page: DesignPage; pd: PageDesign }) {
       pageDesign={pd}
       imageUrl={url ?? undefined}
       aspect={page.aspect}
+      illustrationFocus={defaultIllustrationFocus(page)}
       editable={false}
       chromeless
       selectedId={null}

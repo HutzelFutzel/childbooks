@@ -11,44 +11,62 @@
      platform for creative products, so the chrome should feel creative too. */
   --font-display: "Fredoka", "Baloo 2", "Inter", "Avenir", sans-serif;
 
-  --color-brand-50: #f5f3ff;
-  --color-brand-100: #ede9fe;
-  --color-brand-200: #ddd6fe;
-  --color-brand-300: #c4b5fd;
-  --color-brand-400: #a78bfa;
-  --color-brand-500: #8b5cf6;
-  --color-brand-600: #7c3aed;
-  --color-brand-700: #6d28d9;
-  --color-brand-800: #5b21b6;
-  --color-brand-900: #4c1d95;
+  /* Brand: warm coral. Default only — admin branding overrides the whole ramp
+     at runtime via inline vars on <html> (see ui/lib/color.ts). */
+  --color-brand-50: #fff4f0;
+  --color-brand-100: #ffe6de;
+  --color-brand-200: #ffcdbf;
+  --color-brand-300: #ffab94;
+  --color-brand-400: #ff8266;
+  --color-brand-500: #f96a4d;
+  --color-brand-600: #e04f2e;
+  --color-brand-700: #b93d20;
+  --color-brand-800: #93301a;
+  --color-brand-900: #6e2513;
 
-  --color-accent-50: #fff7ed;
-  --color-accent-100: #ffedd5;
-  --color-accent-200: #fed7aa;
-  --color-accent-300: #fdba74;
-  --color-accent-400: #fb923c;
-  --color-accent-500: #f97316;
-  --color-accent-600: #ea580c;
+  /* Accent: golden amber. */
+  --color-accent-50: #fff9eb;
+  --color-accent-100: #ffefc7;
+  --color-accent-200: #ffe08a;
+  --color-accent-300: #ffcb4d;
+  --color-accent-400: #ffb31f;
+  --color-accent-500: #f79b04;
+  --color-accent-600: #dd7e02;
+  --color-accent-700: #b75e06;
+  --color-accent-800: #94480c;
+  --color-accent-900: #7a3b0e;
 
-  --color-ink-50: #f8fafc;
-  --color-ink-100: #f1f5f9;
-  --color-ink-200: #e2e8f0;
-  --color-ink-300: #cbd5e1;
-  --color-ink-400: #94a3b8;
-  --color-ink-500: #64748b;
-  --color-ink-600: #475569;
-  --color-ink-700: #334155;
-  --color-ink-800: #1e293b;
-  --color-ink-900: #0f172a;
+  /* Ink: indigo-tinted neutrals — "night-sky print" instead of office slate. */
+  --color-ink-50: #f7f7fc;
+  --color-ink-100: #efeff8;
+  --color-ink-200: #e0e1f0;
+  --color-ink-300: #c6c8de;
+  --color-ink-400: #9195b8;
+  --color-ink-500: #626695;
+  --color-ink-600: #484c78;
+  --color-ink-700: #363a61;
+  --color-ink-800: #232649;
+  --color-ink-900: #14163a;
 
+  /* Surfaces: white "pages" resting on warm cream paper. */
   --color-surface: #ffffff;
-  --color-canvas: #f6f5fb;
+  --color-canvas: #fdfbf7;
+
+  /* Magic: fixed violet, deliberately NOT themeable by admin branding —
+     reserved exclusively for AI/generation moments (overlays, spark chips,
+     shimmer) so users learn "violet glow = magic is happening". */
+  --color-magic-100: #ede9fe;
+  --color-magic-300: #c4b5fd;
+  --color-magic-500: #8b5cf6;
+  --color-magic-700: #6d28d9;
 
   --radius-xl2: 1.25rem;
 
-  --shadow-soft: 0 1px 2px rgba(15, 23, 42, 0.04),
-    0 8px 24px -8px rgba(76, 29, 149, 0.12);
-  --shadow-lifted: 0 12px 40px -12px rgba(76, 29, 149, 0.28);
+  /* Shadows tinted by the live brand hue — warm glow, not office grey. */
+  --shadow-soft: 0 1px 2px color-mix(in srgb, var(--color-ink-900) 4%, transparent),
+    0 8px 24px -8px color-mix(in srgb, var(--color-brand-600) 14%, transparent);
+  --shadow-lifted: 0 16px 48px -16px
+    color-mix(in srgb, var(--color-brand-600) 30%, transparent);
 }
 
 @layer base {
@@ -100,13 +118,13 @@
   }
 
   /* Soft, creative "aurora" wash for stage backgrounds, heroes and empty
-     states — blends the brand + accent colors into gentle light. */
+     states — a whisper of the magic violet blended with the accent color. */
   .bg-aurora {
     background-color: var(--color-canvas);
     background-image:
       radial-gradient(
         42rem 42rem at 12% -8%,
-        color-mix(in srgb, var(--color-brand-400) 26%, transparent),
+        color-mix(in srgb, var(--color-magic-300) 26%, transparent),
         transparent 60%
       ),
       radial-gradient(
@@ -121,8 +139,17 @@
       );
   }
 
-  /* Shimmer sweep for skeletons / loading surfaces. */
-  .shimmer {
+  /* Shimmer sweep for skeletons / loading surfaces — magic-tinted so loading
+     always reads as "magic happening". `:where()` drops this rule's
+     specificity to 0 so a plain Tailwind `absolute` class on the same element
+     (e.g. `shimmer absolute inset-0`, used to fill a container) always wins
+     the `position` conflict instead of losing to `.shimmer` on source order —
+     without it, this custom utility layer rule sits after Tailwind's own
+     utilities are injected and silently forced everything back to `relative`,
+     collapsing the overlay down to its content's own height instead of
+     covering the full container. `position: absolute` is just as valid a
+     positioning context for the `::after` sweep below, so nothing breaks. */
+  :where(.shimmer) {
     position: relative;
     overflow: hidden;
     background-color: var(--color-ink-100);
@@ -135,11 +162,52 @@
     background-image: linear-gradient(
       90deg,
       transparent 0%,
-      color-mix(in srgb, var(--color-brand-200) 55%, white) 45%,
-      color-mix(in srgb, var(--color-brand-100) 70%, white) 55%,
+      color-mix(in srgb, var(--color-magic-300) 45%, white) 45%,
+      color-mix(in srgb, var(--color-magic-100) 70%, white) 55%,
       transparent 100%
     );
     animation: shimmer-sweep 1.6s ease-in-out infinite;
+  }
+
+  /* Generation-surface wash: soft violet gradient over the canvas color.
+     Use on overlays, magic CTAs and spark chips — never for plain chrome. */
+  .bg-magic {
+    background-color: var(--color-canvas);
+    background-image: linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--color-magic-300) 30%, transparent),
+      color-mix(in srgb, var(--color-magic-500) 18%, transparent)
+    );
+  }
+
+  /* Marker-swipe highlight behind personal words (e.g. the child's name). */
+  .text-highlight {
+    background: linear-gradient(
+      to top,
+      color-mix(in srgb, var(--color-accent-300) 55%, transparent) 38%,
+      transparent 38%
+    );
+    border-radius: 4px;
+    padding-inline: 0.1em;
+  }
+
+  /* One-shot glint for the spark glyph when sparks are granted or spent. */
+  @keyframes glint {
+    0% {
+      transform: rotate(0deg) scale(1);
+    }
+    35% {
+      transform: rotate(-8deg) scale(1.25);
+    }
+    70% {
+      transform: rotate(8deg) scale(1.15);
+    }
+    100% {
+      transform: rotate(0deg) scale(1);
+    }
+  }
+  .animate-glint {
+    animation: glint 0.6s ease-in-out;
   }
 
   @keyframes shimmer-sweep {
@@ -166,7 +234,8 @@
 /* Respect reduced-motion for all the decorative animation above. */
 @media (prefers-reduced-motion: reduce) {
   .shimmer::after,
-  .animate-float-slow {
+  .animate-float-slow,
+  .animate-glint {
     animation: none;
   }
 }

@@ -82,6 +82,14 @@ export interface BookConfig {
   textPlacement: TextPlacement;
   /** Layout template id (or "auto"). */
   layoutId: string;
+  /**
+   * Whether the reader has confirmed the physical book setup (size / format /
+   * layout) in the Design step at least once. Until then, entering Design shows
+   * the guided setup intro; afterwards it opens straight to the canvas and the
+   * setup is reachable as a summary. Optional so older projects default to the
+   * intro on their next Design visit.
+   */
+  designReady?: boolean;
 }
 
 export function createDefaultConfig(): BookConfig {
@@ -181,12 +189,25 @@ export interface DepictedSubject {
 /** Per-page text strategy. */
 export type TextMode = "in-image" | "overlay";
 
+/** The exact cover text baked into a typographic cover image. */
+export interface BakedCoverText {
+  title?: string;
+  subtitle?: string;
+  author?: string;
+}
+
 /** A generated page/cover illustration with provenance for staleness checks. */
 export interface IllustrationImage extends AnchorImage {
   /** Reference versions used, so we can detect when a reference changed. */
   references?: ReferenceUse[];
   /** Text strategy this image was generated for. */
   textMode?: TextMode;
+  /**
+   * Cover-only: the title/subtitle/author actually rendered INTO this image
+   * (when `textMode === "in-image"`). Lets the studio warn when the book's
+   * title/subtitle/author later drift from what the artwork shows.
+   */
+  bakedText?: BakedCoverText;
   /** The prompt used (for inspection / reuse). */
   prompt?: string;
   /**
@@ -200,6 +221,13 @@ export interface IllustrationImage extends AnchorImage {
 export interface Anchor {
   id: string;
   name: string;
+  /**
+   * Prior name(s) this anchor has been renamed from. Lets a fresh story
+   * re-analysis — which only knows the name as it appears in the story text —
+   * still match this anchor by an old name and preserve the rename instead of
+   * minting a duplicate and orphaning this one's art/relationships.
+   */
+  aliasNames?: string[];
   type: AnchorType;
   /** Description derived from the story analysis (editable). */
   description: string;
@@ -223,6 +251,14 @@ export interface Anchor {
    * as separate figures. Undefined/empty means "no relations".
    */
   relatedIds?: string[];
+  /**
+   * Optional free-text note per `relatedIds` entry describing HOW the two
+   * relate (e.g. "has lighter hair than him"), keyed by the other anchor's id.
+   * Fed into the prompt alongside the related anchor's own description. A
+   * separate map (not a richer `related` array) so existing `relatedIds`
+   * data needs no migration.
+   */
+  relatedNotes?: Record<string, string>;
   /** Image version history (undefined until first generation). */
   versions?: VersionTree<AnchorImage>;
 }
@@ -265,6 +301,18 @@ export interface ScreenplaySpread {
    * out by the app as an editable overlay ("overlay", the default).
    */
   textMode?: TextMode;
+  /**
+   * Cover-only: when true, the title/subtitle/author below are rendered INTO
+   * the generated artwork (typographic cover) instead of being laid out as
+   * editable overlay text boxes. Baked text forces the high-quality tier.
+   */
+  bakeText?: boolean;
+  /** Cover-only: the exact title to bake into the art. */
+  coverTitle?: string;
+  /** Cover-only: the exact subtitle to bake into the art (optional). */
+  coverSubtitle?: string;
+  /** Cover-only: the author line to bake into the art (optional). */
+  coverAuthor?: string;
 }
 
 /** Cover / spine art direction drafted alongside the screenplay. */
@@ -278,6 +326,14 @@ export interface CoverSpec {
   anchorIds: string[];
   /** Anchor names captured alongside `anchorIds` (same order) for self-healing. */
   anchorNames?: string[];
+  /**
+   * When true, the title (and optional subtitle/author) are rendered directly
+   * into the cover artwork by the image model, rather than laid out as editable
+   * overlay text. Requires — and forces — the high-quality image tier.
+   */
+  bakeText?: boolean;
+  /** Author line, optionally baked into the cover artwork. */
+  author?: string;
 }
 
 export interface SpineSpec {
@@ -326,15 +382,6 @@ export interface Project {
   illustrations?: Record<string, VersionTree<IllustrationImage>>;
   /** Final Design: app-owned overlay/typography/pattern layer. */
   design?: BookDesign;
-  /** Public share state, set once the book is published for preview. */
-  share?: ProjectShare;
-}
-
-/** Public-preview publication state for a project. */
-export interface ProjectShare {
-  /** Slug used in the public URL `/book/{id}` and the `publishedBooks` doc id. */
-  id: string;
-  publishedAt: number;
 }
 
 export interface ProjectSummary {

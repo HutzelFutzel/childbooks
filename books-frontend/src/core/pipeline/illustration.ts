@@ -89,6 +89,23 @@ export interface BuildIllustrationPromptInput {
   hasCompositionRef?: boolean;
   /** Whether an inpainting mask is supplied (restrict change to masked area). */
   maskMode?: boolean;
+  /**
+   * Cover-only: render the title/subtitle/author typography INTO the artwork
+   * (typographic cover) instead of reserving clean space for overlay text.
+   */
+  bakeText?: boolean;
+  /** Title text to bake into the cover art (when `bakeText`). */
+  coverTitle?: string;
+  /** Subtitle text to bake into the cover art (optional). */
+  coverSubtitle?: string;
+  /** Author line to bake into the cover art (optional). */
+  coverAuthor?: string;
+  /**
+   * Whether this render is a front/back cover — adds a strong "no barcode / QR /
+   * logo / badge" negative (image models tend to invent one on covers, and it's
+   * not allowed on the printed cover). Applies in both plain and baked modes.
+   */
+  isCover?: boolean;
   /** Optional revision instruction for an iteration. */
   edit?: string;
   /** Admin prompt overlays (art-style descriptions). */
@@ -115,11 +132,26 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
     hasStyleRef = false,
     hasCompositionRef = false,
     maskMode = false,
+    bakeText = false,
+    coverTitle,
+    coverSubtitle,
+    coverAuthor,
+    isCover = false,
     edit,
     prompts,
     pageSide,
   } = input;
   const styleText = resolveArtStyleText(config.artStyle, prompts);
+
+  // Assemble the human-readable typography instruction when baking cover text.
+  const bakeParts: string[] = [];
+  if (bakeText && (coverTitle ?? "").trim()) {
+    bakeParts.push(`the title "${coverTitle!.trim()}"`);
+    if ((coverSubtitle ?? "").trim()) bakeParts.push(`the subtitle "${coverSubtitle!.trim()}"`);
+    if ((coverAuthor ?? "").trim()) bakeParts.push(`the author line "${coverAuthor!.trim()}"`);
+  }
+  const bakeTextActive = bakeParts.length > 0;
+  const bakeTextInstruction = bakeParts.join(", ");
 
   // Structural layout guidance (keep the outer-edge text band calm) is folded
   // into the layoutNote the template already renders, so the model reserves
@@ -186,6 +218,7 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
       removedList: removedAnchors.map((a) => a.name).join(", "),
       layoutNote: combinedLayoutNote,
       artStyle: styleText,
+      bakeTextInstruction,
       edit: edit?.trim() ?? "",
       refreshClause,
       changedClause,
@@ -203,7 +236,12 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
       hasCast: castNames.length > 0,
       hasRemoved: removedAnchors.length > 0,
       hasKept: keptAnchors.length > 0,
-      hasLayoutNote: Boolean(combinedLayoutNote),
+      // When baking cover text, suppress the "leave clean negative space" +
+      // "no text" clauses and instead instruct the model to render typography.
+      hasLayoutNote: Boolean(combinedLayoutNote) && !bakeTextActive,
+      layoutGeneric: !Boolean(combinedLayoutNote) && !bakeTextActive,
+      bakeText: bakeTextActive,
+      isCover,
       tailMaskEdit,
       tailCompositionEdit,
       tailCompositionRefresh,

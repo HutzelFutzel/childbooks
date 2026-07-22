@@ -5,7 +5,6 @@
 import { z } from "zod";
 import {
   AGE_RANGES,
-  BOOK_SIZES,
   GRAPHICS_DENSITY,
   LAYOUT_TEMPLATES,
   SPREAD_USAGE,
@@ -70,7 +69,9 @@ function describeConfig(config: BookConfig): string {
     ...(ageBandHasReadingModes(config.ageRangeId) && config.readingModeId
       ? [`Reading mode: ${readingModeLabel(config.readingModeId)}.`]
       : []),
-    `Book size: ${label(BOOK_SIZES, config.bookSize)}.`,
+    // Book size is intentionally omitted: the physical trim is chosen later, in
+    // the Design step, and doesn't meaningfully steer text pacing. Keeping it
+    // out lets size be decided after the screenplay without a stale hint.
     `Graphics density: ${label(GRAPHICS_DENSITY, config.graphicsDensity)}.`,
     `Spread usage: ${label(SPREAD_USAGE, config.spreadUsage)}.`,
     `Text handling: ${label(TEXT_HANDLING, config.textHandling)}.`,

@@ -1,20 +1,36 @@
 import { useEffect, useState } from "react";
+import {
+  AlignCenter,
+  AlignLeft,
+  AlignRight,
+  ArrowDownToLine,
+  ArrowUpToLine,
+  MoveVertical,
+} from "lucide-react";
 import { textFromParagraphs, wordParagraphs } from "../../core/design";
-import type { TextBox } from "../../core/types";
+import type { ElementEffects, HAlign, TextBox, VAlign } from "../../core/types";
+import type { ReadingModeId } from "../../core/config/ageWritingCatalog";
+import { recommendFontSize } from "../../core/config/typography";
+import { useAppConfigStore } from "../../state/appConfigStore";
+import { CATEGORY_LABEL, FONTS, fontStack, getFont, loadFont, type FontCategory } from "../typography/fonts";
 import { ColorField } from "./ColorPicker";
-import { ActionBar, Section } from "./inspectorKit";
+import { EffectsControls } from "./EffectsControls";
+import { ActionBar, Section, SegGroup, Slider } from "./inspectorKit";
+import { RecommendedSizeSlider } from "./RecommendedSizeSlider";
 
 /**
- * The text inspector — intentionally lean for the MVP. A text box exposes only
- * three things a user can change: its words, its size, and its color. Everything
- * else (fonts, alignment, presets, patterns, effects, per-word styling) is
- * deferred; the element-type registry in `design/elements.ts` is the seam for
- * reintroducing richer controls later without disturbing this surface.
+ * The text inspector owns box *structure*: words, alignment, size, spacing,
+ * background and drop-shadow/opacity effects. Character styling (bold/italic/
+ * underline + colour) lives in the floating toolbar that appears over the text
+ * itself, so there is a single, selection-aware place to style characters —
+ * whole-box when the box is selected, per-word while editing in place.
  */
 export function Inspector({
   box,
   pageWidthIn,
   pageHeightIn,
+  ageRangeId,
+  readingModeId,
   onChange,
   onDelete,
   onDuplicate,
@@ -23,19 +39,17 @@ export function Inspector({
   /** Real single-page trim, so font size can be shown in physical points. */
   pageWidthIn?: number;
   pageHeightIn?: number;
+  /** Reader age band + reading mode, to recommend an age-appropriate size range. */
+  ageRangeId?: string;
+  readingModeId?: ReadingModeId | null;
   onChange: (patch: Partial<TextBox>) => void;
   onDelete: () => void;
   onDuplicate: () => void;
 }) {
-  // Font size is stored as a fraction of page height; convert to/from real
-  // points using the physical trim so "20 pt" means 20 pt on the printed page,
-  // regardless of book size. Fall back to a common trim if not provided.
+  const typography = useAppConfigStore((s) => s.typography);
   const trimHeightIn = pageHeightIn && pageHeightIn > 0 ? pageHeightIn : 8.27;
   const ptPerPct = trimHeightIn * 72;
   const fmtIn = (n?: number) => (n ? Math.round(n * 10) / 10 : undefined);
-  // Local draft for the text editor so the caret never jumps: we only resync
-  // from the box when the *content* genuinely changes elsewhere (box switch,
-  // undo/redo) — not after our own normalized keystrokes.
   const [draft, setDraft] = useState("");
   useEffect(() => {
     if (!box) return;
@@ -43,6 +57,11 @@ export function Inspector({
     if (external !== textFromParagraphs(wordParagraphs(draft))) setDraft(external);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [box?.id, box?.paragraphs]);
+
+  // Load the box's current face so the selector previews it in that font.
+  useEffect(() => {
+    if (box?.fontFamily) loadFont(box.fontFamily);
+  }, [box?.fontFamily]);
 
   if (!box) {
     return (
@@ -53,6 +72,8 @@ export function Inspector({
   }
 
   const sizePt = Math.round(box.fontSizePct * ptPerPct);
+
+  const hasBg = box.fill !== undefined && box.fill !== "rgba(0,0,0,0)";
 
   return (
     <div className="space-y-4 p-4">
@@ -70,12 +91,41 @@ export function Inspector({
             setDraft(e.target.value);
             onChange({ paragraphs: wordParagraphs(e.target.value) });
           }}
-          rows={4}
+          rows={3}
           className="w-full rounded-lg border border-ink-200 px-2 py-1.5 text-sm"
         />
         <p className="mt-1 text-[11px] text-ink-400">
-          Tip: double-click the text on the page to edit it right there.
+          To change <span className="font-medium text-ink-500">colour, bold, italic or underline</span>,
+          use the toolbar that floats above the text — it styles the whole box, or just the words you
+          select when you double-click to edit.
         </p>
+      </Section>
+
+      <Section title="Font">
+        <FontField value={box.fontFamily} onChange={(fontFamily) => onChange({ fontFamily })} />
+      </Section>
+
+      <Section title="Alignment">
+        <div className="flex flex-wrap items-center gap-2">
+          <SegGroup<HAlign>
+            value={box.align}
+            onChange={(align) => onChange({ align })}
+            options={[
+              { id: "left", node: <AlignLeft className="size-4" />, title: "Align left" },
+              { id: "center", node: <AlignCenter className="size-4" />, title: "Align centre" },
+              { id: "right", node: <AlignRight className="size-4" />, title: "Align right" },
+            ]}
+          />
+          <SegGroup<VAlign>
+            value={box.vAlign}
+            onChange={(vAlign) => onChange({ vAlign })}
+            options={[
+              { id: "top", node: <ArrowUpToLine className="size-4" />, title: "Top" },
+              { id: "center", node: <MoveVertical className="size-4" />, title: "Middle" },
+              { id: "bottom", node: <ArrowDownToLine className="size-4" />, title: "Bottom" },
+            ]}
+          />
+        </div>
       </Section>
 
       <Section title="Size">
@@ -84,23 +134,95 @@ export function Inspector({
             Page {fmtIn(pageWidthIn)}″ × {fmtIn(pageHeightIn)}″ — size shown in real points.
           </p>
         )}
-        <label className="flex items-center gap-2 text-xs text-ink-500">
-          <input
-            type="range"
-            min={6}
-            max={120}
-            step={1}
-            value={sizePt}
-            onChange={(e) => onChange({ fontSizePct: Number(e.target.value) / ptPerPct })}
-            className="flex-1"
-          />
-          <span className="w-10 text-right tabular-nums text-ink-500">{sizePt}pt</span>
-        </label>
+        <RecommendedSizeSlider
+          sizePt={sizePt}
+          rec={
+            ageRangeId && pageHeightIn && pageWidthIn
+              ? recommendFontSize({
+                  ageRangeId,
+                  readingModeId,
+                  trim: { widthIn: pageWidthIn, heightIn: pageHeightIn },
+                  boxWidthIn: box.rect.w * pageWidthIn,
+                  config: typography,
+                })
+              : null
+          }
+          onChange={(pt) =>
+            // Manually setting a size is authoritative: turn off auto-fit so the
+            // chosen size actually sticks (auto-fit would otherwise clamp it).
+            onChange({ fontSizePct: pt / ptPerPct, autoFit: false, autoFitGrow: false })
+          }
+        />
       </Section>
 
-      <Section title="Color">
-        <ColorField label="Text color" value={box.color} onChange={(color) => onChange({ color })} />
+      <Section title="Spacing">
+        <Slider
+          label="Padding"
+          min={0}
+          max={0.3}
+          step={0.01}
+          value={box.padding ?? 0.08}
+          onChange={(padding) => onChange({ padding })}
+        />
+      </Section>
+
+      <Section title="Background" collapsible defaultOpen={hasBg}>
+        <label className="mb-2 flex items-center gap-2 text-xs font-medium text-ink-600">
+          <input
+            type="checkbox"
+            checked={hasBg}
+            onChange={(e) => onChange({ fill: e.target.checked ? "rgba(255,255,255,1)" : "rgba(0,0,0,0)" })}
+          />
+          Show a background behind the text
+        </label>
+        {hasBg && (
+          <div className="space-y-2">
+            <ColorField label="Fill (colour & transparency)" value={box.fill!} onChange={(fill) => onChange({ fill })} />
+          </div>
+        )}
+      </Section>
+
+      <Section title="Effects" collapsible defaultOpen={!!box.effects}>
+        <p className="mb-2 text-[11px] leading-snug text-ink-400">
+          "Blur" softens the whole box (a frosted look); Opacity fades it; a drop
+          shadow lifts it off the page.
+        </p>
+        <EffectsControls
+          effects={box.effects}
+          showOpacity
+          onChange={(effects: ElementEffects | undefined) => onChange({ effects })}
+        />
       </Section>
     </div>
+  );
+}
+
+const FONT_CATEGORY_ORDER: FontCategory[] = ["rounded", "sans", "serif", "hand"];
+
+/** A grouped font picker that previews the chosen face inline. */
+function FontField({ value, onChange }: { value: string; onChange: (family: string) => void }) {
+  const current = getFont(value);
+  return (
+    <select
+      value={current?.id ?? ""}
+      onChange={(e) => {
+        const font = getFont(e.target.value);
+        if (!font) return;
+        loadFont(font.family);
+        onChange(font.family);
+      }}
+      style={{ fontFamily: fontStack(current?.family ?? value) }}
+      className="w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-sm text-ink-800"
+    >
+      {FONT_CATEGORY_ORDER.map((cat) => (
+        <optgroup key={cat} label={CATEGORY_LABEL[cat]}>
+          {FONTS.filter((f) => f.category === cat).map((f) => (
+            <option key={f.id} value={f.id}>
+              {f.label}
+            </option>
+          ))}
+        </optgroup>
+      ))}
+    </select>
   );
 }

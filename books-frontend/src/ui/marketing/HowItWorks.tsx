@@ -33,7 +33,7 @@ const STEPS = [
     titleSlot: "how.step3.title" as const,
     bodySlot: "how.step3.body" as const,
     title: "Print & share",
-    body: "Lay out text and art, then order a full-bleed, print-ready book — or share a public preview link with family.",
+    body: "Lay out text and art, then order a full-bleed, print-ready book — or get it instantly as a digital edition.",
     art: "Spot illustration — printing",
   },
 ];
@@ -50,7 +50,7 @@ export function HowItWorks({ images, text }: { images: SiteImagesMap; text: Site
             multiline
             defaultValue="From blank page to bookshelf in three steps"
             serverValue={text["how.heading"]}
-            className="text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl"
+            className="font-display text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl"
           />
           <EditableText
             slotId="how.subhead"
@@ -76,7 +76,7 @@ export function HowItWorks({ images, text }: { images: SiteImagesMap; text: Site
                     as="h3"
                     defaultValue={title}
                     serverValue={text[titleSlot]}
-                    className="mt-4 text-2xl font-bold text-ink-900"
+                    className="mt-4 font-display text-2xl font-bold text-ink-900"
                   />
                   <EditableText
                     slotId={bodySlot}
@@ -91,7 +91,7 @@ export function HowItWorks({ images, text }: { images: SiteImagesMap; text: Site
                   slotId={slot}
                   label={art}
                   ratio="16/10"
-                  hint="600×400"
+                  hint="1600×1000"
                   className={i % 2 === 1 ? "lg:order-1" : undefined}
                   serverUrl={images[slot]?.imageUrl}
                   alt={images[slot]?.alt}

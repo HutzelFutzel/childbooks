@@ -27,9 +27,15 @@ import {
   type AgeWritingConfig,
 } from "../../books-frontend/src/core/config/ageWriting";
 import {
+  normalizeTypographyConfig,
+  typographyConfigSchema,
+  type TypographyConfig,
+} from "../../books-frontend/src/core/config/typography";
+import {
   createDefaultModelCostTable,
   modelCostTableSchema,
   normalizeModelCostTable,
+  publicModelCostProjection,
   type ModelCostTable,
 } from "../../books-frontend/src/core/config/modelCosts";
 import {
@@ -108,7 +114,9 @@ import {
 const MODELS_DOC = "appConfig/models";
 const ART_STYLES_DOC = "appConfig/artStyles";
 const AGE_WRITING_DOC = "appConfig/ageWriting";
+const TYPOGRAPHY_DOC = "appConfig/typography";
 const MODEL_COSTS_DOC = "appConfig/modelCosts";
+const MODEL_COSTS_PUBLIC_DOC = "appConfig/modelCostsPublic";
 const PRICING_SETTINGS_DOC = "appConfig/pricingSettings";
 const SPARKS_DOC = "appConfig/sparks";
 const BRANDING_DOC = "appConfig/branding";
@@ -160,8 +168,24 @@ export function getArtStylesConfig(): Promise<ArtStylesConfig> {
 export function getAgeWritingConfig(): Promise<AgeWritingConfig> {
   return readDoc(AGE_WRITING_DOC, normalizeAgeWritingConfig);
 }
-export function getModelCostTable(): Promise<ModelCostTable> {
-  return readDoc(MODEL_COSTS_DOC, normalizeModelCostTable);
+/** Once-per-instance guard for the projection backfill below. */
+let modelCostsProjectionEnsured = false;
+
+export async function getModelCostTable(): Promise<ModelCostTable> {
+  const table = await readDoc(MODEL_COSTS_DOC, normalizeModelCostTable);
+  // Backfill the world-readable projection for deployments that populated the
+  // cost table before the projection existed (it's normally written on every
+  // admin save). Once per instance, best-effort.
+  if (!modelCostsProjectionEnsured) {
+    modelCostsProjectionEnsured = true;
+    try {
+      const snap = await getFirestore().doc(MODEL_COSTS_PUBLIC_DOC).get();
+      if (!snap.exists) await writeDoc(MODEL_COSTS_PUBLIC_DOC, publicModelCostProjection(table));
+    } catch {
+      // Non-fatal — the next admin save writes it.
+    }
+  }
+  return table;
 }
 export function getPricingSettings(): Promise<PricingSettings> {
   return readDoc(PRICING_SETTINGS_DOC, normalizePricingSettings);
@@ -369,9 +393,20 @@ export async function saveAgeWritingConfig(input: unknown): Promise<AgeWritingCo
   return normalized;
 }
 
+export async function saveTypographyConfig(input: unknown): Promise<TypographyConfig> {
+  const parsed = typographyConfigSchema.parse(input);
+  const normalized = normalizeTypographyConfig(parsed);
+  await writeDoc(TYPOGRAPHY_DOC, normalized);
+  return normalized;
+}
+
 export async function saveModelCostTable(input: unknown): Promise<ModelCostTable> {
   const parsed = modelCostTableSchema.parse(input);
   await writeDoc(MODEL_COSTS_DOC, parsed);
+  // The full rate table is admin-only (Firestore rules). Storefront Spark
+  // estimates read this derived, world-readable projection instead — one flat
+  // per-image rate per image model, nothing else.
+  await writeDoc(MODEL_COSTS_PUBLIC_DOC, publicModelCostProjection(parsed));
   return parsed;
 }
 

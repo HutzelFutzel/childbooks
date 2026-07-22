@@ -17,13 +17,6 @@ export function StyleStep({ config, update }: StepProps) {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-lg font-semibold text-ink-900">Pick an art style</h2>
-        <p className="mt-1 text-sm text-ink-500">
-          Choose a base look. You can layer your own creative direction on top.
-        </p>
-      </div>
-
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
         {ART_STYLE_PRESETS.map((style) => (
           <OptionCard

@@ -109,3 +109,25 @@ export function fitBoxHeightPct(box: TextBox, pageAspect: number): number {
   const boxH = m.height + 2 * inner.pad;
   return Math.min(0.98, Math.max(0.04, boxH / VH));
 }
+
+/**
+ * Smallest box *width* (normalized to page width) that still fits the text
+ * without clipping any single word — i.e. the widest word laid out on its own
+ * line, plus padding. Used to stop a resize from squeezing the box narrower than
+ * its content. Measured in the module's virtual-height space so the result is
+ * zoom-independent.
+ */
+export function minContentWidthPct(box: TextBox, pageAspect: number): number {
+  // Measure against a very wide box so words never pre-wrap; the widest laid-out
+  // word then tells us the tightest column that avoids mid-word clipping.
+  const wide: TextBox = { ...box, rect: { ...box.rect, w: 4 } };
+  const inner = innerFor(wide, pageAspect, 1e6);
+  const words = layoutTextBox(wide, box.fontSizePct * VH, inner);
+  let widest = 0;
+  for (const wd of words) widest = Math.max(widest, wd.width);
+  const pageWidth = pageAspect * VH;
+  const pad = box.padding !== undefined ? box.padding : getPreset(box.presetId).padding;
+  // Padding is a fraction of the box's smaller side; approximate with the width.
+  const needed = widest + 2 * pad * (widest || pageWidth);
+  return Math.min(0.98, Math.max(0.05, needed / pageWidth));
+}

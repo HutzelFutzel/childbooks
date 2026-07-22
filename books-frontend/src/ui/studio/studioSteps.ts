@@ -96,5 +96,9 @@ export function computeProgress(project: Project): StudioProgress {
 /** The step the studio should open on for a given project state. */
 export function initialStep(project: Project): StudioStep {
   if (project.stage === "setup") return "story";
+  // Don't skip past Characters: reopening a book whose anchor references
+  // aren't finished lands on the step that still needs work, not on a Design
+  // canvas full of subjects with no reference art.
+  if (!computeProgress(project).anchors.done) return "anchors";
   return "edit";
 }

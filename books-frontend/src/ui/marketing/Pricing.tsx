@@ -62,7 +62,7 @@ export function Pricing({ initial }: { initial: PublicPlansConfig }) {
     <section id="pricing" aria-labelledby="pricing-title" className="scroll-mt-20 py-20 lg:py-28">
       <div className="mx-auto max-w-6xl px-6">
         <Reveal className="mx-auto max-w-2xl text-center">
-          <h2 id="pricing-title" className="text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl">
+          <h2 id="pricing-title" className="font-display text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl">
             Simple plans that grow with your stories
           </h2>
           <p className="mt-4 text-lg text-ink-600">

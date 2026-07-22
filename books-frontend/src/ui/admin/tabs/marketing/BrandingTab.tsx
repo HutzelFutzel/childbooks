@@ -45,6 +45,21 @@ const ASSETS: {
   { slot: "ogImage", label: "Social share image", hint: "Open Graph / Twitter card. 1200×630 PNG.", ratio: "1200/630" },
 ];
 
+/** Fallback book covers shown in the studio before a project has its own art. */
+const COVER_ASSETS: {
+  slot: BrandAssetSlot;
+  label: string;
+  hint: string;
+  ratio: string;
+}[] = [
+  { slot: "defaultCoverFront", label: "Default front cover (square)", hint: "Fallback front cover for square books with no cover yet. ~1024×1024 PNG; keep the top third clear for the title.", ratio: "1/1" },
+  { slot: "defaultCoverBack", label: "Default back cover (square)", hint: "Fallback back cover for square books. ~1024×1024 PNG.", ratio: "1/1" },
+  { slot: "defaultCoverFrontWide", label: "Default front cover (landscape)", hint: "Fallback front cover for landscape books. ~1536×1024 PNG; keep the top third clear for the title.", ratio: "22/17" },
+  { slot: "defaultCoverBackWide", label: "Default back cover (landscape)", hint: "Fallback back cover for landscape books. ~1536×1024 PNG.", ratio: "22/17" },
+  { slot: "defaultCoverFrontPortrait", label: "Default front cover (portrait)", hint: "Fallback front cover for tall/portrait books. ~1024×1280 PNG; keep the top third clear for the title.", ratio: "4/5" },
+  { slot: "defaultCoverBackPortrait", label: "Default back cover (portrait)", hint: "Fallback back cover for tall/portrait books. ~1024×1280 PNG.", ratio: "4/5" },
+];
+
 /**
  * Marketing → Branding: the product's brand kit. Identity (name/tagline/colors)
  * plus every brand image (logo, dark logo, icon, favicon, social image) and the
@@ -165,6 +180,26 @@ export function BrandingTab() {
               hint={a.hint}
               ratio={a.ratio}
               dark={a.dark}
+              asset={branding[a.slot]}
+              history={branding.assetHistory[a.slot] ?? []}
+            />
+          ))}
+        </div>
+      </Section>
+
+      {/* ---- Default book covers ---- */}
+      <Section
+        title="Default book covers"
+        hint="Fallback covers shown in the studio (e.g. the library) before a book has its own generated cover. Upload square, landscape and portrait variants; each book automatically uses the one matching its format (square is the universal fallback)."
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
+          {COVER_ASSETS.map((a) => (
+            <AssetCard
+              key={a.slot}
+              slot={a.slot}
+              label={a.label}
+              hint={a.hint}
+              ratio={a.ratio}
               asset={branding[a.slot]}
               history={branding.assetHistory[a.slot] ?? []}
             />

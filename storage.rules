@@ -8,16 +8,6 @@ service firebase.storage {
       allow read, write: if request.auth != null && request.auth.uid == uid;
     }
 
-    // Public preview images for published books. Rasterized pages are uploaded
-    // here so the public SSR preview can load them without auth. The owner uid
-    // is the first path segment, so a signed-in user can only write previews
-    // under their OWN namespace — preventing one user from overwriting (or
-    // defacing) another user's published share, while reads stay public.
-    match /public/books/{uid}/{shareId}/{allPaths=**} {
-      allow read: if true;
-      allow write: if request.auth != null && request.auth.uid == uid;
-    }
-
     // Admin-managed art-style example images. World-readable so the setup wizard
     // can show them; written only by the backend (Admin SDK) after `requireAdmin`.
     match /public/artStyles/{allPaths=**} {

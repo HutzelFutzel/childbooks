@@ -1,6 +1,7 @@
-import { useState } from "react";
-import { AlertCircle, LogIn, Mail, UserPlus } from "lucide-react";
+import { useEffect, useState } from "react";
+import { AlertCircle, BookHeart, LogIn, Mail, Sparkles, UserPlus } from "lucide-react";
 import { authErrorMessage, useAuthStore } from "../../state/authStore";
+import { useAppConfigStore } from "../../state/appConfigStore";
 import { Button } from "../components/Button";
 import { Field, Input } from "../components/Input";
 import { Modal } from "../components/Modal";
@@ -14,12 +15,27 @@ export function AuthDialog() {
   const signInEmail = useAuthStore((s) => s.signInEmail);
   const signUpEmail = useAuthStore((s) => s.signUpEmail);
   const signInGoogle = useAuthStore((s) => s.signInGoogle);
+  const isGuest = useAuthStore((s) => s.accessLevel === "guest");
+  const sparks = useAppConfigStore((s) => s.sparks);
 
   const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState<null | "email" | "google">(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Guests are here to UPGRADE (keep their drafts + earn the ladder bonuses),
+  // so open on "create account"; everyone else most likely wants to sign in.
+  useEffect(() => {
+    if (open) {
+      setMode(isGuest ? "signup" : "signin");
+      setError(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const signupBonus = sparks.enabled ? sparks.grants.signupBonusSparks : 0;
+  const verifyBonus = sparks.enabled ? sparks.grants.verifyBonusSparks : 0;
 
   const close = () => {
     setError(null);
@@ -68,9 +84,29 @@ export function AuthDialog() {
     <Modal
       open={open}
       onClose={close}
-      title={mode === "signin" ? "Sign in" : "Create account"}
+      title={mode === "signin" ? "Sign in" : isGuest ? "Keep your storybook" : "Create account"}
       size="max-w-md"
     >
+      {/* The upgrade pitch: guests aren't "signing up", they're keeping the
+          book they already made — and pocketing the ladder bonuses. */}
+      {mode === "signup" && isGuest && (
+        <div className="mb-4 space-y-1.5 rounded-2xl bg-brand-50 px-4 py-3 text-sm text-ink-700">
+          <p className="flex items-center gap-2">
+            <BookHeart className="size-4 shrink-0 text-brand-600" />
+            Your storybook and Sparks come with you — nothing is lost.
+          </p>
+          {signupBonus > 0 && (
+            <p className="flex items-center gap-2">
+              <Sparkles className="size-4 shrink-0 text-magic-500" />
+              <span>
+                Get <span className="font-semibold text-brand-700">+{signupBonus} ✦</span> instantly
+                {verifyBonus > 0 && <> — and +{verifyBonus} ✦ more when you verify your email</>}.
+              </span>
+            </p>
+          )}
+        </div>
+      )}
+
       {error && (
         <div className="mb-4 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 text-sm text-red-700">
           <AlertCircle className="mt-0.5 size-4 shrink-0" />
@@ -113,7 +149,7 @@ export function AuthDialog() {
           loading={busy === "email"}
           leftIcon={mode === "signin" ? <LogIn className="size-4" /> : <UserPlus className="size-4" />}
         >
-          {mode === "signin" ? "Sign in" : "Create account"}
+          {mode === "signin" ? "Sign in" : "Create free account"}
         </Button>
       </form>
 

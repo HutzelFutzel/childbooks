@@ -43,10 +43,11 @@ export const HELP: Record<string, HelpTopic> = {
   },
   containsRelates: {
     title: "Contains vs. Relates to",
-    body: "These link characters and places so they stay consistent.",
+    body: "Linking two characters, places or objects helps the AI keep them consistent whenever they're drawn together — but the two links mean very different things.",
     points: [
-      "Contains — something physically inside this subject (e.g. a bed in a room). It's drawn here and matched to its own reference.",
-      "Relates to / resembles — context only (e.g. a sibling to match traits). It's not drawn as a separate figure.",
+      "Contains — physically drawn inside this subject, matched exactly to its own reference. E.g. Hospital Room contains Hospital Bed: the bed looks exactly like its own reference photo. Only makes sense between two places/objects (not characters). It shows on both — as \u201cContains\u201d on the room and \u201cContained in\u201d on the bed.",
+      "Relates to — a resemblance or connection the AI should know about, but never draws as a separate figure. E.g. Mila relates to her big brother: the AI keeps a family likeness without drawing him into her picture. It's two-way, so it appears on both. Add a note as a full sentence naming both (\u201cMila has lighter hair than her brother\u201d) — it reads the same on both, so there's no confusion about who's who.",
+      "Cost: if a contained subject has no reference yet, creating this one creates that one too — extra time & Sparks right away. And if any linked subject's design changes later, this one will need a fresh (paid) regenerate to stay in sync.",
     ],
   },
   embedLimit: {
@@ -57,9 +58,13 @@ export const HELP: Record<string, HelpTopic> = {
     title: "Characters & places on this page",
     body: "Tap to add or remove who appears here. Adding a character sends its reference to the AI so it's drawn consistently — each extra one adds a little render time.",
   },
-  anchorMode: {
-    title: "Design mode",
-    body: "\u201cLet AI design\u201d invents the look from your story. \u201cI'll describe it\u201d lets you spell out exactly how it should look.",
+  creativeDirection: {
+    title: "Creative direction",
+    body: "Extra details you want kept every time this reference art is (re)created — outfit, colors, personality, vibe. Leave it blank and the AI designs freely from the story.",
+    points: [
+      "Baked into the design brief for every from-scratch generation: the first \u201cGenerate\u201d, \u201cRegenerate\u201d, and \u201cVariation\u201d.",
+      "Different from \u201cRefine this version\u201d, which is a one-off tweak to the image you already have (e.g. \u201cmake her smile\u201d) — it isn't saved anywhere, it just makes one new version.",
+    ],
   },
   versions: {
     title: "Version history",

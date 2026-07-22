@@ -1,8 +1,8 @@
-import "../platform/providerHttp";
 import { create } from "zustand";
 import type { ProviderId } from "../core/config/options";
 import { ALL_PROVIDERS } from "../core/providers";
-import { discoverProvider, type ProviderDiscovery } from "../core/models/registry";
+import type { RawModel } from "../core/providers/types";
+import type { ProviderDiscovery } from "../core/models/registry";
 import {
   createDefaultSettings,
   withColor,
@@ -43,6 +43,31 @@ interface SettingsState {
   addAsset: (asset: AssetItem) => void;
   removeAsset: (id: string) => void;
   renameAsset: (id: string, name: string) => void;
+}
+
+/**
+ * Fetch a provider's model list from the backend (`GET /providers/models`).
+ * The server lists models with its own key and caches the result; the client
+ * never talks to a provider directly. Never throws.
+ */
+async function discoverViaBackend(provider: ProviderId): Promise<ProviderDiscovery> {
+  try {
+    const res = await fetch(backendUrl(`/providers/models?provider=${encodeURIComponent(provider)}`));
+    if (!res.ok) {
+      let message = `Model discovery failed (${res.status}).`;
+      try {
+        const body = (await res.json()) as { error?: { message?: string } };
+        message = body.error?.message ?? message;
+      } catch {
+        // keep fallback
+      }
+      return { provider, models: [], error: message };
+    }
+    const json = (await res.json()) as { models?: RawModel[] };
+    return { provider, models: json.models ?? [] };
+  } catch (err) {
+    return { provider, models: [], error: err instanceof Error ? err.message : String(err) };
+  }
 }
 
 /** Persist the current settings snapshot (best-effort). */
@@ -114,8 +139,8 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         [provider]: { status: "testing" },
       },
     }));
-    // The key is injected by the backend proxy; the client sends none.
-    const result = await discoverProvider(provider, { apiKey: "" });
+    // Discovery runs server-side (the key never leaves the backend).
+    const result = await discoverViaBackend(provider);
     if (result.error) {
       set((state) => ({
         discovery: { ...state.discovery, [provider]: result },

@@ -8,7 +8,12 @@
 import { useMemo } from "react";
 import type { ImageActionId } from "../../core/ai/actions";
 import type { ImageTier } from "../../core/config/modelConfig";
-import { costForUsage, costKey, type ModelCostTable } from "../../core/config/modelCosts";
+import {
+  costForUsage,
+  costKey,
+  PUBLIC_IMAGE_ESTIMATE_USAGE,
+  type ModelCostTable,
+} from "../../core/config/modelCosts";
 import { recentCostSamples, type ImageCostStats } from "../../core/config/imageCostStats";
 import {
   estimateSparkRange,
@@ -46,7 +51,7 @@ export function tierSparkRange(
   }
   const sel = resolveImageModelClient(action, tier);
   const rateCostUsd = sel
-    ? costForUsage(modelCosts.models[costKey(sel.provider, sel.id)], { images: 1, size: "1024x1024" })
+    ? costForUsage(modelCosts.models[costKey(sel.provider, sel.id)], PUBLIC_IMAGE_ESTIMATE_USAGE)
     : null;
   return applyM(
     estimateSparkRange(sparks, {

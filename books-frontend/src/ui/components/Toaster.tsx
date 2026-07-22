@@ -9,8 +9,9 @@ export function Toaster() {
       closeButton
       toastOptions={{
         style: {
-          borderRadius: "0.875rem",
+          borderRadius: "1rem",
           fontFamily: "var(--font-sans)",
+          boxShadow: "var(--shadow-lifted)",
         },
       }}
     />

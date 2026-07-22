@@ -19,6 +19,21 @@ function blk(id: string, text: string, enabledWhen?: string): PromptBlock {
 // ---- Default templates (ported verbatim from the pipeline builders) --------
 
 const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
+  // core/pipeline/storyDraft.ts → generateStoryDraft
+  storyDraft: {
+    system: [
+      blk(
+        "role",
+        "You are a beloved children's picture-book author. Write a complete, original short story for a picture book starring the given hero. The story must have a clear beginning, a gentle adventure or problem in the middle, and a warm, satisfying ending. Give the hero one or two memorable companions and a vivid setting. Use concrete, visual scenes an illustrator can paint — avoid abstract narration. {{ageGuidance}} Keep the whole story between {{minWords}} and {{maxWords}} words. Also invent a catchy, short book title. Do not include chapter headings, page numbers, or any commentary — return only the title and the story text.",
+      ),
+    ],
+    user: [
+      blk("age", "Target age range: {{age}}."),
+      blk("hero", 'The hero of the story is "{{heroName}}".'),
+      blk("theme", "The story should be about: {{theme}}.", "hasTheme"),
+    ],
+  },
+
   // core/pipeline/analysis.ts → analyzeStory
   storyAnalysis: {
     system: [
@@ -316,7 +331,21 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "These subjects are already correct in the LAST reference image (the previous version of this page) — keep each one EXACTLY as it appears there: same design, pose, position, scale and colors. Do not redraw, restyle, move or duplicate them: {{keptList}}.",
         "hasKept",
       ),
-      blk("noText", "Do NOT render any text, letters, captions, words, or numbers in the image."),
+      blk(
+        "noText",
+        "Do NOT render any text, letters, captions, words, or numbers in the image.",
+        "!bakeText",
+      ),
+      blk(
+        "bakeText",
+        "Render {{bakeTextInstruction}} as beautiful, legible cover typography integrated into the artwork — well composed and high contrast against the background. Keep ALL text comfortably inside the central safe area, well away from the outer trim edges (roughly a 12% margin), because the outer edge may be trimmed during printing — nothing readable should touch or run off the edge. Spell every word EXACTLY as written.",
+        "bakeText",
+      ),
+      blk(
+        "noBadges",
+        "This is a book cover: do NOT draw any barcode, QR code, ISBN, price tag, sticker, label, logo, badge, stamp, watermark or user-interface graphic anywhere in the image.",
+        "isCover",
+      ),
       blk(
         "layoutNote",
         "Leave clean, uncluttered negative space for a separate text block: {{layoutNote}}.",
@@ -325,7 +354,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk(
         "layoutGeneric",
         "Leave some clean negative space where a text block can be placed.",
-        "!hasLayoutNote",
+        "layoutGeneric",
       ),
       blk("style", "Art style: {{artStyle}}."),
       blk("closing", "Children's picture-book illustration, cohesive composition, no watermark."),
@@ -469,6 +498,28 @@ const AGE_SAMPLE = "Keep sentences short and the vocabulary simple.";
 const STYLE_SAMPLE = "soft watercolor children's book illustration";
 
 export const PROMPT_ACTIONS: PromptActionMeta[] = [
+  {
+    actionId: "storyDraft",
+    label: "Story draft",
+    description: "Writes a first story from a hero name + theme (the quick-start path).",
+    kind: "text",
+    templates: [
+      {
+        key: "storyDraft",
+        label: "Draft",
+        description: "System + user prompt for proposing a complete first story.",
+        variables: [
+          V("age", "Target age-range label.", "3–5"),
+          V("ageGuidance", "Age-band writing guidance overlay.", AGE_SAMPLE),
+          V("heroName", "The hero's name from the quick-start.", "Mila"),
+          V("theme", "The chosen story theme, when picked.", "a bedtime adventure"),
+          V("minWords", "Lower bound for story length.", "150"),
+          V("maxWords", "Upper bound for story length.", "300"),
+        ],
+        sampleFlags: { hasTheme: true },
+      },
+    ],
+  },
   {
     actionId: "storyAnalysis",
     label: "Story analysis",
@@ -700,6 +751,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("keptList", "Unchanged subjects locked to the previous version (no sheet re-sent).", "Bruno"),
           V("layoutNote", "Where the text block should sit.", "bottom band"),
           V("artStyle", "Resolved art-style overlay.", STYLE_SAMPLE),
+          V("bakeTextInstruction", "Cover typography to render into the art.", 'the title "Mila\'s Big Day"'),
           V("edit", "Revision instruction.", "make it night-time"),
           V("refreshClause", "Appended when subjects also need refreshing.", ""),
           V("changedClause", "Appended when subjects changed (no-edit refresh).", ""),
@@ -717,6 +769,9 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           hasRemoved: false,
           hasKept: false,
           hasLayoutNote: true,
+          layoutGeneric: false,
+          bakeText: false,
+          isCover: false,
           tailMaskEdit: false,
           tailCompositionEdit: false,
           tailCompositionRefresh: false,

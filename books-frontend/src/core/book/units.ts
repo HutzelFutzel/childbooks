@@ -9,15 +9,26 @@ import { getCursor } from "../versioning";
 
 /** Build a generatable pseudo-spread for a cover spec. */
 export function coverSpread(id: string, spec: CoverSpec): ScreenplaySpread {
+  const bake = Boolean(spec.bakeText && (spec.title ?? "").trim());
   return {
     id,
     kind: "single",
     text: "",
     illustration: spec.illustration,
-    layoutNote: "Cover art. Leave clean space for the title text (added in design).",
+    layoutNote: bake
+      ? "Cover art with the title typography integrated into the artwork."
+      : "Cover art. Leave clean space for the title text (added in design).",
     anchorIds: spec.anchorIds,
     anchorNames: spec.anchorNames,
-    textMode: "overlay",
+    textMode: bake ? "in-image" : "overlay",
+    ...(bake
+      ? {
+          bakeText: true,
+          coverTitle: spec.title,
+          coverSubtitle: spec.subtitle,
+          coverAuthor: spec.author,
+        }
+      : {}),
   };
 }
 

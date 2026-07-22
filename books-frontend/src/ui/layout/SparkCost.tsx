@@ -77,7 +77,7 @@ export function SparkEstimateCost({
       : `${range.minSparks.toLocaleString()}–${range.maxSparks.toLocaleString()}`;
   return (
     <span
-      className={`ml-1.5 inline-flex items-center gap-0.5 rounded bg-black/10 px-1 py-0.5 text-[10px] font-semibold leading-none ${className}`}
+      className={`ml-1.5 inline-flex items-center gap-0.5 rounded-full bg-magic-100 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-magic-700 ring-1 ring-inset ring-magic-300/50 ${className}`}
       title="Estimated cost — you're charged the actual amount when it finishes, which can vary a little."
     >
       <Sparkles className="size-3" />~{text}

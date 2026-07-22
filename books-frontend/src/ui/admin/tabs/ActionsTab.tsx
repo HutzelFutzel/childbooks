@@ -82,7 +82,7 @@ function Cell({ label, children }: { label: string; children: React.ReactNode })
  */
 export function ActionsTab() {
   const modelConfig = useAppConfigStore((s) => s.modelConfig);
-  const modelCosts = useAppConfigStore((s) => s.modelCosts);
+  const modelCosts = useAppConfigStore((s) => s.adminModelCosts);
   const sparks = useAppConfigStore((s) => s.sparks);
   const publicPlans = useAppConfigStore((s) => s.plans.plans);
   const loadAdminPlans = useAppConfigStore((s) => s.loadAdminPlans);

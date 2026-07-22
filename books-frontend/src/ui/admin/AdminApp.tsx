@@ -24,6 +24,7 @@ import {
   Search,
   MessageSquareText,
   Mail,
+  Type,
 } from "lucide-react";
 import { Button } from "@/ui/components/Button";
 import { Tabs } from "@/ui/components/Tabs";
@@ -48,6 +49,7 @@ import {
 import { ModelConfigTab } from "./tabs/ModelConfigTab";
 import { ArtStylesTab } from "./tabs/ArtStylesTab";
 import { AgeWritingTab } from "./tabs/AgeWritingTab";
+import { TypographyTab } from "./tabs/TypographyTab";
 import { PromptsTab } from "./tabs/PromptsTab";
 import { ModelCostsTab } from "./tabs/ModelCostsTab";
 import { ProductsTab } from "./tabs/ProductsTab";
@@ -81,6 +83,7 @@ const CONFIG_TAB_META: Record<
   models: { label: "Models", icon: <Cpu className="size-4" /> },
   artStyles: { label: "Art styles", icon: <ImageIcon className="size-4" /> },
   ageWriting: { label: "Age writing", icon: <BookOpen className="size-4" /> },
+  typography: { label: "Typography", icon: <Type className="size-4" /> },
   prompts: { label: "Prompts", icon: <MessageSquareText className="size-4" /> },
   modelCosts: { label: "Model costs", icon: <DollarSign className="size-4" /> },
   system: { label: "System health", icon: <HeartPulse className="size-4" /> },
@@ -112,6 +115,8 @@ function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
       return <ArtStylesTab />;
     case "ageWriting":
       return <AgeWritingTab />;
+    case "typography":
+      return <TypographyTab />;
     case "prompts":
       return <PromptsTab />;
     case "modelCosts":
@@ -135,6 +140,7 @@ export default function AdminApp() {
   const ready = useAuthStore((s) => s.ready);
   const isAdmin = useAuthStore((s) => s.isAdmin);
   const subscribeConfig = useAppConfigStore((s) => s.subscribe);
+  const subscribeAdminModelCosts = useAppConfigStore((s) => s.subscribeAdminModelCosts);
   const section = useAdminTab((s) => s.section);
   const setSection = useAdminTab((s) => s.setSection);
   const configGroup = useAdminTab((s) => s.configGroup);
@@ -151,8 +157,11 @@ export default function AdminApp() {
   }, [initAuth]);
 
   useEffect(() => {
-    if (isAdmin) subscribeConfig();
-  }, [isAdmin, subscribeConfig]);
+    if (!isAdmin) return;
+    subscribeConfig();
+    // The full rate table is an admin-only doc, so it has its own subscription.
+    subscribeAdminModelCosts();
+  }, [isAdmin, subscribeConfig, subscribeAdminModelCosts]);
 
   const active = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
   const activeGroup = CONFIG_GROUPS.find((g) => g.id === configGroup) ?? CONFIG_GROUPS[0];

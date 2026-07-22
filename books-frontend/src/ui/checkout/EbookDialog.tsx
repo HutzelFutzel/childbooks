@@ -17,6 +17,7 @@ import {
   startEbookCheckout,
   type EbookQuote,
 } from "../../platform/payments";
+import { fetchDownloadLink } from "../../platform/downloads";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
 import type { DesignPage } from "../design/designInit";
@@ -43,6 +44,24 @@ export function EbookDialog({
   const [status, setStatus] = useState("");
   const [quote, setQuote] = useState<EbookQuote | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+
+  // Owned ebooks are fetched through the gated, logged download endpoint (the
+  // raw file URL is never exposed), so each download is authorized + recorded.
+  async function downloadOwned() {
+    const win = window.open("", "_blank");
+    setDownloading(true);
+    try {
+      const url = await fetchDownloadLink(project.id);
+      if (win) win.location.href = url;
+      else window.location.href = url;
+    } catch (err) {
+      win?.close();
+      notify.error(err);
+    } finally {
+      setDownloading(false);
+    }
+  }
 
   useEffect(() => {
     if (!open) return;
@@ -74,15 +93,23 @@ export function EbookDialog({
 
   async function onRendered(pdf: Blob) {
     try {
+      const included = quote?.included ?? false;
       setPhase("redirecting");
-      setStatus("Opening secure payment…");
-      const { url } = await startEbookCheckout({
+      setStatus(included ? "Adding it to your library…" : "Opening secure payment…");
+      const result = await startEbookCheckout({
         projectId: project.id,
         title: project.title,
         currency: quote?.currency ?? baseCurrency,
         pdf,
       });
-      window.location.href = url;
+      if ("granted" in result) {
+        // Included with the plan — no payment step; the download is live now.
+        setQuote((q) => (q ? { ...q, owned: true } : q));
+        setPhase("ready");
+        notify.success("Your ebook is ready", "It's in your library — download it anytime.");
+        return;
+      }
+      window.location.href = result.url;
     } catch (err) {
       setPhase("ready");
       setError(err instanceof Error ? err.message : "We couldn't start checkout.");
@@ -92,7 +119,16 @@ export function EbookDialog({
   const busy = phase === "rendering" || phase === "redirecting";
 
   return (
-    <Modal open={open} onClose={busy ? () => {} : onClose} title="Your book as an ebook" size="max-w-md">
+    // Closing during "rendering" is allowed — it unmounts the asset runner and
+    // safely abandons the render (nothing has been uploaded or charged yet), so
+    // a hung render can never trap the user. Only the brief "redirecting" step
+    // (checkout request in flight) is locked.
+    <Modal
+      open={open}
+      onClose={phase === "redirecting" ? () => {} : onClose}
+      title="Your book as an ebook"
+      size="max-w-md"
+    >
       {phase === "quote" && (
         <div className="flex items-center justify-center gap-2 py-8 text-sm text-ink-500">
           <Loader2 className="size-4 animate-spin" /> Checking the price…
@@ -104,11 +140,14 @@ export function EbookDialog({
           <p className="text-sm text-ink-600">
             You already own the digital edition of <span className="font-semibold">{project.title}</span>.
           </p>
-          {quote.downloadUrl && (
-            <a href={quote.downloadUrl} target="_blank" rel="noreferrer" className="inline-block">
-              <Button leftIcon={<Download className="size-4" />}>Download your ebook</Button>
-            </a>
-          )}
+          <Button
+            leftIcon={<Download className="size-4" />}
+            loading={downloading}
+            onClick={() => void downloadOwned()}
+          >
+            Download your ebook
+          </Button>
+          <p className="text-xs text-ink-400">Find it anytime under Downloads in your account menu.</p>
         </div>
       )}
 
@@ -136,14 +175,24 @@ export function EbookDialog({
           <div className="flex items-baseline justify-between rounded-xl border border-ink-100 px-4 py-3">
             <span className="text-sm text-ink-600">Price</span>
             <span className="text-right">
-              {quote.discountPct > 0 && (
+              {quote.price < quote.listPrice && (
                 <span className="mr-2 text-xs text-ink-400 line-through">
                   {money(quote.listPrice, quote.currency)}
                 </span>
               )}
-              <span className="text-lg font-bold text-ink-900">{money(quote.price, quote.currency)}</span>
+              <span className="text-lg font-bold text-ink-900">
+                {quote.included ? "Included" : money(quote.price, quote.currency)}
+              </span>
             </span>
           </div>
+          {quote.included && quote.planName && (
+            <p className="text-xs text-emerald-700">
+              Digital editions are included with your {quote.planName} plan.
+            </p>
+          )}
+          {!quote.included && quote.planName && (
+            <p className="text-xs text-emerald-700">Your {quote.planName} member price.</p>
+          )}
           {quote.discountPct > 0 && (
             <p className="text-xs text-emerald-700">
               Includes your {quote.discountPct}% discount for owning the printed book.
@@ -158,10 +207,16 @@ export function EbookDialog({
           {error && <p className="text-xs text-rose-600">{error}</p>}
 
           <Button className="w-full" size="lg" loading={busy} onClick={buy}>
-            {busy ? "One moment…" : `Buy the ebook · ${money(quote.price, quote.currency)}`}
+            {busy
+              ? "One moment…"
+              : quote.included
+                ? "Get your ebook — included in your plan"
+                : `Buy the ebook · ${money(quote.price, quote.currency)}`}
           </Button>
           <p className="text-center text-[11px] text-ink-400">
-            Secure payment by Stripe. Your download unlocks right after payment.
+            {quote.included
+              ? "No payment needed — this is part of your plan."
+              : "Secure payment by Stripe. Your download unlocks right after payment."}
           </p>
         </div>
       )}

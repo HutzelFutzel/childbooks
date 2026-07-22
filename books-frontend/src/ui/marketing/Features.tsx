@@ -1,4 +1,4 @@
-import { Users, Palette, FileDown, Share2, Zap, Coins } from "lucide-react";
+import { Users, Palette, FileDown, Tablet, Zap, Coins } from "lucide-react";
 import { EditableText } from "./EditableText";
 import { Reveal } from "./Reveal";
 import type { SiteTextSlot } from "@/core/config/siteContent";
@@ -27,11 +27,11 @@ const FEATURES = [
     body: "We compose full-bleed, correctly-sized pages and hand off a print-ready book for real fulfillment.",
   },
   {
-    icon: Share2,
+    icon: Tablet,
     titleSlot: "features.3.title" as SiteTextSlot,
     bodySlot: "features.3.body" as SiteTextSlot,
-    title: "Shareable book pages",
-    body: "Publish a public preview link so grandparents and friends can flip through the book online.",
+    title: "Digital edition included",
+    body: "Get your finished book as a beautiful PDF too — read it on any device, keep it forever.",
   },
   {
     icon: Zap,
@@ -61,7 +61,7 @@ export function Features({ text }: { text: SiteTextMap }) {
             multiline
             defaultValue="Everything you need to make a real book"
             serverValue={text["features.heading"]}
-            className="text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl"
+            className="font-display text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl"
           />
           <EditableText
             slotId="features.subhead"
@@ -76,8 +76,8 @@ export function Features({ text }: { text: SiteTextMap }) {
         <div className="mt-14 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {FEATURES.map(({ icon: Icon, titleSlot, bodySlot, title, body }, i) => (
             <Reveal key={title} delay={(i % 3) * 0.05}>
-              <div className="h-full rounded-2xl border border-ink-200 bg-canvas p-6 shadow-soft transition hover:shadow-lifted">
-                <span className="flex size-11 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+              <div className="h-full rounded-3xl border border-ink-200 bg-canvas p-6 shadow-soft transition hover:shadow-lifted">
+                <span className="flex size-11 items-center justify-center rounded-xl2 bg-brand-50 text-brand-600">
                   <Icon className="size-5.5" />
                 </span>
                 <EditableText
@@ -85,7 +85,7 @@ export function Features({ text }: { text: SiteTextMap }) {
                   as="h3"
                   defaultValue={title}
                   serverValue={text[titleSlot]}
-                  className="mt-4 text-lg font-bold text-ink-900"
+                  className="mt-4 font-display text-lg font-semibold text-ink-900"
                 />
                 <EditableText
                   slotId={bodySlot}

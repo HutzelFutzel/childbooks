@@ -26,7 +26,12 @@ function readBase64(file: File): Promise<{ base64: string; mimeType: string }> {
   });
 }
 
-/** A remote image rendered at a fixed aspect ratio (next/image, cover-fit). */
+/**
+ * A remote image rendered at a fixed aspect ratio (next/image, contain-fit).
+ * `object-contain` (not `cover`) so the full illustration is always visible —
+ * uploaded art whose ratio doesn't exactly match `ratio` letterboxes instead of
+ * cropping, which matters here since the art is transparent-background.
+ */
 function ImageFrame({
   url,
   alt,
@@ -42,7 +47,7 @@ function ImageFrame({
 }) {
   return (
     <div style={{ aspectRatio: ratio }} className={cn("relative w-full overflow-hidden rounded-2xl", className)}>
-      <Image src={url} alt={alt} fill sizes={sizes} className="object-cover" />
+      <Image src={url} alt={alt} fill sizes={sizes} className="object-contain" />
     </div>
   );
 }
@@ -150,9 +155,9 @@ export function EditableImage({
       {pending ? (
         // Local preview of the dropped file (blob URL — not yet uploaded).
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={pending.previewUrl} alt="" className="absolute inset-0 size-full object-cover" />
+        <img src={pending.previewUrl} alt="" className="absolute inset-0 size-full object-contain" />
       ) : url ? (
-        <Image src={url} alt={altText} fill sizes={sizes} className="object-cover" />
+        <Image src={url} alt={altText} fill sizes={sizes} className="object-contain" />
       ) : (
         <div className="flex size-full flex-col items-center justify-center gap-2 bg-brand-50/60 bg-grid p-6 text-center">
           <span className="flex size-10 items-center justify-center rounded-xl bg-white/80 text-brand-500 shadow-soft">

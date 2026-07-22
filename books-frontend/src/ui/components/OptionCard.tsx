@@ -1,6 +1,7 @@
 import { motion } from "framer-motion";
 import { Check } from "lucide-react";
 import { cn } from "../lib/cn";
+import { spring } from "../lib/motion";
 
 export interface OptionCardProps {
   selected: boolean;
@@ -29,7 +30,7 @@ export function OptionCard({
       onClick={onSelect}
       whileHover={disabled ? undefined : { y: -2 }}
       whileTap={disabled ? undefined : { scale: 0.99 }}
-      transition={{ type: "spring", stiffness: 400, damping: 28 }}
+      transition={spring}
       className={cn(
         "relative flex w-full flex-col gap-2 rounded-2xl border p-3 text-left transition-colors",
         selected

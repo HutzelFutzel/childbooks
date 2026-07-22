@@ -11,6 +11,7 @@ import { useAppConfigStore } from "../../../state/appConfigStore";
 import {
   priceForAction,
   sparksForCostUsd,
+  totalGrantSparks,
   type ActionPricing,
   type ActionPricingMode,
   type SparkPack,
@@ -40,7 +41,7 @@ const MODES: { value: ActionPricingMode; label: string }[] = [
  */
 export function SparksTab() {
   const stored = useAppConfigStore((s) => s.sparks);
-  const modelCosts = useAppConfigStore((s) => s.modelCosts);
+  const modelCosts = useAppConfigStore((s) => s.adminModelCosts);
   const modelConfig = useAppConfigStore((s) => s.modelConfig);
   const baseCurrency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
   const save = useAppConfigStore((s) => s.saveSparksConfig);
@@ -139,15 +140,42 @@ export function SparksTab() {
         hint="The master switch and the peg. One Spark is worth the value below; derived prices are the measured provider cost × the markup, divided by that value."
         action={<Toggle checked={draft.enabled} onChange={(v) => set({ enabled: v })} label="Enable Sparks" />}
       >
-        <Grid cols={4}>
+        <Grid cols={3}>
           <NumberField label="Spark value" value={draft.sparkValueUsd} step="0.005" suffix={baseCurrency} onChange={(n) => set({ sparkValueUsd: n })} />
           <NumberField label="Markup" value={draft.markupMultiplier} step="0.1" suffix="×" onChange={(n) => set({ markupMultiplier: n })} />
-          <NumberField label="Starter grant" value={draft.starterGrant} step="10" suffix="✦" onChange={(n) => set({ starterGrant: n })} />
           <NumberField label="Negative buffer" value={draft.maxNegativeSparks} step="1" suffix="✦" onChange={(n) => set({ maxNegativeSparks: n })} />
         </Grid>
         <p className="text-[11px] text-ink-400">
           The negative buffer lets an in-flight render finish even if its real cost lands above the
           estimate — never fail a book mid-generation. The user tops up before the next action.
+        </p>
+        <Grid cols={3}>
+          <NumberField
+            label="Guest grant"
+            value={draft.grants.guestSparks}
+            step="10"
+            suffix="✦"
+            onChange={(n) => set({ grants: { ...draft.grants, guestSparks: n } })}
+          />
+          <NumberField
+            label="Signup bonus"
+            value={draft.grants.signupBonusSparks}
+            step="10"
+            suffix="✦"
+            onChange={(n) => set({ grants: { ...draft.grants, signupBonusSparks: n } })}
+          />
+          <NumberField
+            label="Verify bonus"
+            value={draft.grants.verifyBonusSparks}
+            step="10"
+            suffix="✦"
+            onChange={(n) => set({ grants: { ...draft.grants, verifyBonusSparks: n } })}
+          />
+        </Grid>
+        <p className="text-[11px] text-ink-400">
+          Free Sparks are granted as a ladder: guests get a taste before signing up, creating an
+          account adds the signup bonus, and verifying the email unlocks the rest. Each rung is
+          one-time per user; guest grants are additionally rate-limited per IP.
         </p>
         <EconomyImpact draft={draft} baseCurrency={baseCurrency} />
       </Section>
@@ -297,7 +325,9 @@ export function SparksTab() {
  */
 function EconomyImpact({ draft, baseCurrency }: { draft: SparksConfig; baseCurrency: string }) {
   const unit = sparkUnitEconomics(draft);
-  const starterCost = grantLiabilityUsd(draft, draft.starterGrant);
+  const ladderTotal = totalGrantSparks(draft);
+  const starterCost = grantLiabilityUsd(draft, ladderTotal);
+  const guestCost = grantLiabilityUsd(draft, draft.grants.guestSparks);
   const rows: { label: string; value: string; note: string }[] = [
     {
       label: "One Spark buys (provider cost)",
@@ -310,9 +340,14 @@ function EconomyImpact({ draft, baseCurrency }: { draft: SparksConfig; baseCurre
       note: "Share of every derived Spark price that isn't provider cost (before Stripe/infra).",
     },
     {
-      label: "Starter grant worst-case cost",
+      label: "Grant ladder worst-case cost",
       value: fmtMoney(starterCost, baseCurrency),
-      note: `${draft.starterGrant} ✦ per new account if fully spent — your customer-acquisition cost ceiling.`,
+      note: `${ladderTotal} ✦ per fully-verified account if fully spent — your customer-acquisition cost ceiling.`,
+    },
+    {
+      label: "Guest rung worst-case cost",
+      value: fmtMoney(guestCost, baseCurrency),
+      note: `${draft.grants.guestSparks} ✦ per anonymous visitor who generates — capped per IP per day.`,
     },
   ];
   return (

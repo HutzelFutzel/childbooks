@@ -6,8 +6,9 @@
  * proceeds normally on every subsequent action.
  */
 import { create } from "zustand";
-import type { ImageTier } from "../core/config/modelConfig";
+import { DEFAULT_IMAGE_TIER, type ImageTier } from "../core/config/modelConfig";
 import { preferredImageTier } from "./imageTier";
+import { useAuthStore } from "./authStore";
 
 interface ImageTierPromptState {
   open: boolean;
@@ -27,6 +28,9 @@ export const useImageTierPromptStore = create<ImageTierPromptState>((set) => ({
  * returns null so nothing is generated until a tier is explicitly selected.
  */
 export function requireImageTier(): ImageTier | null {
+  // Guests always render on the cheap tier (the server enforces this anyway),
+  // and they have no profile to persist a choice to — skip the prompt.
+  if (useAuthStore.getState().accessLevel !== "full") return DEFAULT_IMAGE_TIER;
   const tier = preferredImageTier();
   if (!tier) {
     useImageTierPromptStore.getState().requestSelection();

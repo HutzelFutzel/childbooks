@@ -8,10 +8,12 @@
  * the result for the client to fold into its version trees. Bulk/long-running
  * work still goes through the Firestore job queue (`jobs.ts`).
  *
- * Mounted under `/ai`, guarded by `requireVerified` in `app.ts`.
+ * Mounted under `/ai`, guarded by `requireAuth` in `app.ts` — guests generate
+ * too (low-friction trial), but with guest limits: forced "quick" tier and no
+ * negative-balance buffer, so a guest can never spend past their granted Sparks.
  */
 import express, { type Express, type Response } from "express";
-import type { AuthedRequest } from "./auth";
+import { isAnonymousToken, type AuthedRequest } from "./auth";
 import { backendPipelineEnv } from "./pipelineEnv";
 import { recordUsage, withUsage } from "./usage";
 import { ensureAffordAction, InsufficientSparks, settleActionCost } from "./sparks";
@@ -24,12 +26,17 @@ import {
 } from "./modelResolve";
 import { normalizeImageTier } from "../../books-frontend/src/core/config/modelConfig";
 import { analyzeStory, generateAnchorDescription } from "../../books-frontend/src/core/pipeline/analysis";
+import { generateStoryDraft } from "../../books-frontend/src/core/pipeline/storyDraft";
 import { generateScreenplay } from "../../books-frontend/src/core/pipeline/screenplay";
 import { renderAnchor, type AnchorRunOptions } from "../../books-frontend/src/core/pipeline/anchorRun";
 import {
+  renderCoverWrapImage,
   renderIllustration,
   type IllustrationRunOptions,
 } from "../../books-frontend/src/core/pipeline/illustrationRun";
+import { bookProductForConfig } from "../../books-frontend/src/core/book";
+import { splitWrapCover } from "./imaging";
+import { uploadBlob } from "./storage";
 import { IntentAmbiguousError } from "../../books-frontend/src/core/pipeline/intentResolve";
 import { loadPromptContext } from "./appConfig";
 import { latencyKindOf, recordTaskLatency } from "./latency";
@@ -92,6 +99,38 @@ export function registerAiRoutes(app: Express): void {
   const json = express.json({ limit: "50mb" });
 
   // --- Text actions ---------------------------------------------------------
+
+  app.post("/ai/story-draft", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const { project, heroName, theme } = req.body as {
+        project: Project;
+        heroName: string;
+        theme?: string;
+      };
+      if (!heroName?.trim()) {
+        res.status(400).json({ error: { message: "A hero name is required." } });
+        return;
+      }
+      const [model, prompts] = await Promise.all([resolveText("storyDraft"), loadPromptContext()]);
+      const { value, events, stats } = await withUsage(() =>
+        generateStoryDraft({
+          heroName,
+          theme,
+          config: withTextModel(project.config, model),
+          creds: { apiKey: apiKeyFor(model.provider) },
+          model: model.id,
+          prompts,
+        }),
+      );
+      await recordUsage(req.uid!, "storyDraft", events, undefined, {
+        projectId: project.id,
+        stats,
+      });
+      res.json(value);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
 
   app.post("/ai/analyze", json, async (req: AuthedRequest, res: Response) => {
     try {
@@ -194,8 +233,10 @@ export function registerAiRoutes(app: Express): void {
         res.status(400).json({ error: { message: "Anchor not found." } });
         return;
       }
-      const tier = normalizeImageTier(rawTier);
-      await ensureAffordAction(req.uid!, "anchorImage", tier);
+      // Guests render on the cheap tier only and get no negative buffer.
+      const guest = isAnonymousToken(req.authToken);
+      const tier = guest ? "quick" : normalizeImageTier(rawTier);
+      await ensureAffordAction(req.uid!, "anchorImage", tier, { noNegativeBuffer: guest });
       const [models, prompts] = await Promise.all([
         resolveImageModels("anchorImage", tier),
         loadPromptContext(),
@@ -241,12 +282,14 @@ export function registerAiRoutes(app: Express): void {
       }
       const cover = isCoverId(spreadId);
       const action = cover ? "coverIllustration" : "pageIllustration";
-      const tier = normalizeImageTier(rawTier);
+      // Guests render on the cheap tier only and get no negative buffer.
+      const guest = isAnonymousToken(req.authToken);
+      const tier = guest ? "quick" : normalizeImageTier(rawTier);
       // An "edit" is a re-roll carrying an instruction. These count against the
       // per-book edit quota (scoped to the project); fresh generations don't.
       const isEdit = typeof options?.edit === "string" && options.edit.trim().length > 0;
       if (isEdit) await ensureWithinQuota(req.uid!, "editsPerBook", project.id);
-      await ensureAffordAction(req.uid!, action, tier);
+      await ensureAffordAction(req.uid!, action, tier, { noNegativeBuffer: guest });
       const [models, prompts] = await Promise.all([
         resolveImageModels(cover ? "coverIllustration" : "pageIllustration", tier),
         loadPromptContext(),
@@ -279,6 +322,93 @@ export function registerAiRoutes(app: Express): void {
       sendError(res, err);
     }
   });
+
+  // Generate BOTH covers as one continuous wrap image, then split it into a
+  // front + back panel. One generation → guaranteed-matching covers at ~half
+  // the cost of rendering them separately.
+  app.post("/ai/cover-wrap", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const { project, tier: rawTier } = req.body as { project: Project; tier?: string };
+      const doc = currentScreenplay(project);
+      const front = doc?.frontCover;
+      const back = doc?.backCover;
+      if (!front || !back) {
+        res.status(400).json({ error: { message: "Both covers must be drafted first." } });
+        return;
+      }
+      // Guests render on the cheap tier only and get no negative buffer. Baked
+      // title typography needs the high-quality tier, so it's forced on (unless
+      // the caller is a guest, who can't use premium at all).
+      const guest = isAnonymousToken(req.authToken);
+      const requested = guest ? "quick" : normalizeImageTier(rawTier);
+      const bake = Boolean(front.bakeText && project.title.trim());
+      const tier = !guest && bake ? "premium" : requested;
+      await ensureAffordAction(req.uid!, "coverIllustration", tier, { noNegativeBuffer: guest });
+      const [models, prompts] = await Promise.all([
+        resolveImageModels("coverIllustration", tier),
+        loadPromptContext(),
+      ]);
+      const env = backendPipelineEnv(req.uid!, models, prompts);
+      const startedAt = Date.now();
+      const { value, events, stats } = await withUsage(() =>
+        renderCoverWrapImage(
+          project,
+          {
+            frontIllustration: front.illustration,
+            backIllustration: back.illustration,
+            anchorIds: Array.from(new Set([...(front.anchorIds ?? []), ...(back.anchorIds ?? [])])),
+            anchorNames: Array.from(
+              new Set([...(front.anchorNames ?? []), ...(back.anchorNames ?? [])]),
+            ),
+            bakeText: bake,
+            coverTitle: project.title,
+            coverSubtitle: front.subtitle,
+            coverAuthor: front.author,
+          },
+          env,
+        ),
+      );
+      await recordUsage(req.uid!, "coverIllustration", events, tier, {
+        projectId: project.id,
+        stats,
+      });
+      await settleActionCost(req.uid!, "coverIllustration", events, { projectId: project.id });
+      await recordTaskLatency("coverIllustration", tier, "fresh", 0, Date.now() - startedAt);
+
+      // Split the wide wrap into its two panels and persist each as a blob.
+      // Crop each panel to the book's real trim aspect so the saved cover
+      // matches the page shape (otherwise the editor's cover-crop clips the
+      // outer edges, cutting off baked-in title text).
+      const wrapBuf = Buffer.from(value.base64, "base64");
+      const panelAspect = bookProductForConfig(project.config).aspect;
+      const { front: frontBuf, back: backBuf } = await splitWrapCover(wrapBuf, { panelAspect });
+      const [frontBlobId, backBlobId] = await Promise.all([
+        uploadBlob(req.uid!, frontBuf, "image/png"),
+        uploadBlob(req.uid!, backBuf, "image/png"),
+      ]);
+
+      res.json({
+        front: {
+          blobId: frontBlobId,
+          mimeType: "image/png",
+          references: value.references,
+          prompt: value.prompt,
+          label: "Wrap",
+          textMode: bake ? "in-image" : "overlay",
+        },
+        back: {
+          blobId: backBlobId,
+          mimeType: "image/png",
+          references: value.references,
+          prompt: value.prompt,
+          label: "Wrap",
+          textMode: "overlay",
+        },
+      });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
 }
 
 /** Resolve a spread (or a cover pseudo-spread) from the project snapshot. */
@@ -289,7 +419,8 @@ function findSpread(project: Project, spreadId: string): ScreenplaySpread | unde
   if (direct) return direct;
   // Covers/spine are rendered through the same pipeline as a synthetic spread.
   if (spreadId === COVER_FRONT_ID && doc.frontCover) {
-    return coverSpread(spreadId, doc.frontCover);
+    // The project title is the single source of truth for the front-cover title.
+    return coverSpread(spreadId, doc.frontCover, project.title);
   }
   if (spreadId === COVER_BACK_ID && doc.backCover) {
     return coverSpread(spreadId, doc.backCover);
@@ -300,15 +431,30 @@ function findSpread(project: Project, spreadId: string): ScreenplaySpread | unde
 function coverSpread(
   id: string,
   cover: NonNullable<ScreenplayDoc["frontCover"]>,
+  frontTitleOverride?: string,
 ): ScreenplaySpread {
+  // Front covers show the book's real title; back covers use their blurb.
+  const title = (frontTitleOverride ?? cover.title ?? "").trim();
+  const bake = Boolean(cover.bakeText && title);
   return {
     id,
     kind: "single",
     text: cover.title ?? "",
     illustration: cover.illustration,
-    layoutNote: "",
+    layoutNote: bake
+      ? "Cover art with the title typography integrated into the artwork."
+      : "",
     anchorIds: cover.anchorIds,
     anchorNames: cover.anchorNames,
+    textMode: bake ? "in-image" : undefined,
+    ...(bake
+      ? {
+          bakeText: true,
+          coverTitle: title,
+          coverSubtitle: cover.subtitle,
+          coverAuthor: cover.author,
+        }
+      : {}),
   };
 }
 

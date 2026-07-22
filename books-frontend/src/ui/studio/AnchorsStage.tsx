@@ -1,44 +1,40 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowRight,
   BookOpen,
-  Box,
+  ImagePlus,
   Loader2,
   Lock,
-  MapPin,
   Plus,
   Sparkles,
-  User,
   UserPlus,
   Users,
   Wand2,
+  type LucideIcon,
 } from "lucide-react";
 import { PipelineStepper, type PipelinePhase } from "../generation/PipelineStepper";
-import { GenerationOverlay } from "../generation/GenerationOverlay";
 import { InfoHint } from "../components/InfoHint";
+import { StageHeader } from "../components/StageHeader";
 import { StickyActionBar } from "../components/StickyActionBar";
-import type { Anchor, AnchorType } from "../../core/types";
+import type { Anchor } from "../../core/types";
 import { analyzeCurrentStory, currentAnchorImage } from "../../state/ai";
 import { isAbortError } from "../../core/errors";
+import { useJobsStore } from "../../state/jobsStore";
 import { useProjectsStore } from "../../state/projectsStore";
 import { useFeatureAllowed } from "../../state/subscriptionStore";
 import { useBillingUiStore } from "../../state/billingUiStore";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import { ImportAnchorsDialog } from "./ImportAnchorsDialog";
+import { AnchorEditor } from "../anchors/AnchorEditor";
+import { AnchorReelThumb } from "../anchors/AnchorReelThumb";
 import { Button } from "../components/Button";
+import { Celebrate } from "../components/Celebrate";
 import { SparkEstimateCost, useImageBatchRange } from "../layout/SparkCost";
-import { useBlobUrl } from "../hooks/useBlobUrl";
 import { useResolvedModels } from "../hooks/useResolvedModels";
-import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
 import { useStudio } from "./StudioContext";
 import { generateAllAnchors } from "./studioGen";
-
-const TYPE_ICON: Record<AnchorType, typeof User> = {
-  character: User,
-  place: MapPin,
-  object: Box,
-};
 
 const ANALYSIS_PHASES: PipelinePhase[] = [
   { id: "read", label: "Reading your story", icon: BookOpen },
@@ -46,14 +42,21 @@ const ANALYSIS_PHASES: PipelinePhase[] = [
   { id: "ready", label: "Getting your cast ready", icon: Sparkles },
 ];
 
+/** How long a pointer has to rest on a thumbnail before it previews on the
+ *  stage — long enough that scrolling past thumbnails doesn't strobe it. */
+const HOVER_PREVIEW_MS = 90;
+
 function uid(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
 /**
- * Step 2 · Characters. A gallery of every character & place the story needs.
- * Generate all their reference art in one tap, refine any of them in the
- * inspector, then move on to designing pages.
+ * Step 2 · Characters. A "casting reel" of every character & place the story
+ * needs, small enough to take in the whole cast at a glance; whichever one is
+ * active gets the big spotlight underneath — its reference art, version
+ * history and generation controls — instead of a separate sidebar you have
+ * to look away to. Hovering a thumbnail (desktop) already spotlights it;
+ * clicking/tapping commits that as the selection.
  */
 export function AnchorsStage() {
   const {
@@ -68,9 +71,18 @@ export function AnchorsStage() {
     startGeneration,
   } = useStudio();
   const setAnchors = useProjectsStore((s) => s.setAnchors);
+  // `generatingAnchors` (from studio context) only spans the brief enqueue
+  // step for a single anchor's "Apply edit"/"Regenerate" — that call doesn't
+  // await the worker (see `generateAnchorViaJob`), so on its own it clears the
+  // reel thumb's overlay seconds before the art is actually ready. The jobs
+  // store's `activeUnitIds` tracks the real background job, survives a
+  // refresh, and is what `AnchorEditor` already leans on for the big
+  // portrait's own spinner — union both so the reel thumb agrees with it.
+  const activeJobUnitIds = useJobsStore((s) => s.activeUnitIds);
   const models = useResolvedModels();
   const [analyzing, setAnalyzing] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [celebrate, setCelebrate] = useState(false);
 
   // Character transfer: gateable feature — free until an admin lists it on a
   // plan, then subscriber-only. Other projects with a cast must exist to show it.
@@ -87,21 +99,80 @@ export function AnchorsStage() {
   // Nothing left to generate — either every reference is ready, or the story
   // simply has no characters/places to draw.
   const canProceed = allReady || (Boolean(project.analysis) && anchors.length === 0);
+  // The bottom bar only earns its bold, floating-over-the-page treatment at
+  // the two moments that genuinely need it: before anything's been made (it's
+  // the obvious first move) and once everything's ready (it's the obvious
+  // next one). In between, generating references is just one thing among
+  // several the user might do while browsing the cast, so the bar settles
+  // into the normal flow instead of hovering over whichever anchor they're
+  // actually looking at.
+  const floatingBar = ready === 0 || canProceed;
 
   const batchRange = useImageBatchRange([
     { action: "anchorImage", count: Math.max(0, anchors.length - ready) },
   ]);
 
-  // Keep the inspector useful: focus the first character when arriving here with
-  // nothing (relevant) selected.
+  // Which of the two selection paths caused the CURRENT stage content, so the
+  // render below can skip animating for hover: a deliberate click still gets
+  // the nice crossfade + height glide, but a quick sweep across the reel
+  // should feel instant, not like it's dragging a 250ms animation behind the
+  // cursor. A ref (not state) since it only needs to be read during render,
+  // and setting it must never itself trigger a re-render.
+  const swapSourceRef = useRef<"hover" | "click">("click");
+
+  // What's committed (persisted in `selection`, survives navigating away and
+  // back) vs. what's merely previewed on hover (local, forgotten the moment
+  // the cursor leaves the reel without a click). Keeping these separate means
+  // a careless sweep of the cursor across the reel can never leave you on a
+  // character you didn't actually mean to pick — it always snaps back.
+  const [previewId, setPreviewId] = useState<string | null>(null);
   const selectedAnchorId = selection.kind === "anchor" ? selection.anchorId : null;
+  const activeAnchorId = previewId ?? selectedAnchorId;
+  const activeAnchor = anchors.find((a) => a.id === activeAnchorId) ?? null;
+
+  function commitSelect(anchorId: string) {
+    swapSourceRef.current = "click";
+    setPreviewId(null);
+    select({ kind: "anchor", anchorId });
+  }
+
+  // Keep the stage useful: focus the first character when arriving here with
+  // nothing (relevant) selected.
   useEffect(() => {
     if (anchors.length === 0) return;
     if (!selectedAnchorId || !anchors.some((a) => a.id === selectedAnchorId)) {
-      select({ kind: "anchor", anchorId: anchors[0].id });
+      commitSelect(anchors[0].id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [anchors.length, selectedAnchorId]);
+
+  // Hover-preview: only on devices with a real pointer, and debounced so
+  // sweeping the cursor across the reel doesn't thrash the stage below. This
+  // never touches the real `selection` — it only sets the local preview, so
+  // leaving without clicking has nothing to undo.
+  const canHover = useMediaQuery("(hover: hover) and (pointer: fine)");
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => void (hoverTimer.current && clearTimeout(hoverTimer.current)), []);
+  function previewOnHover(anchorId: string) {
+    if (!canHover) return;
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => {
+      swapSourceRef.current = "hover";
+      setPreviewId(anchorId);
+    }, HOVER_PREVIEW_MS);
+  }
+  /** Cursor left the whole reel (not just one thumb for another) without
+   *  clicking — drop the preview and snap back to the committed anchor. */
+  function endPreview() {
+    if (hoverTimer.current) {
+      clearTimeout(hoverTimer.current);
+      hoverTimer.current = null;
+    }
+    if (previewId !== null) {
+      swapSourceRef.current = "hover";
+      setPreviewId(null);
+    }
+  }
 
   async function reanalyze() {
     setAnalyzing(true);
@@ -125,9 +196,7 @@ export function AnchorsStage() {
       mode: "creative",
       include: true,
     };
-    void setAnchors([...(project.anchors ?? []), next]).then(() =>
-      select({ kind: "anchor", anchorId: next.id }),
-    );
+    void setAnchors([...(project.anchors ?? []), next]).then(() => commitSelect(next.id));
   }
 
   async function generateAll() {
@@ -151,6 +220,7 @@ export function AnchorsStage() {
       );
       if (!signal.aborted && failures === 0) {
         notify.success("Cast is ready", "Tap any character to refine its look.");
+        setCelebrate(true);
       }
     } finally {
       setBusy(false);
@@ -158,19 +228,15 @@ export function AnchorsStage() {
   }
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-5 py-8">
-      <header className="mb-7 text-center">
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-700">
-          <Sparkles className="size-3.5" /> Step 2 · Characters
-        </span>
-        <h1 className="mt-3 text-2xl font-black tracking-tight text-ink-900">
-          Meet your cast
-        </h1>
-        <p className="mx-auto mt-1.5 max-w-md text-sm text-ink-500">
-          These are the characters & places we found in your story. Generate their reference art so
-          they look consistent on every page.
-        </p>
-      </header>
+    <div className="relative mx-auto w-full max-w-5xl px-5 py-8">
+      <Celebrate play={celebrate} />
+      <StageHeader
+        eyebrow="Step 2 · Characters"
+        eyebrowIcon={ImagePlus}
+        tone="sky"
+        title="Meet your cast"
+        subtitle="These are the characters & places we found in your story. Hover or tap anyone in the reel below to spotlight them, then generate their reference art."
+      />
 
       {analysisPending ? (
         <div className="rounded-3xl border border-dashed border-ink-200 bg-aurora">
@@ -182,42 +248,97 @@ export function AnchorsStage() {
           />
         </div>
       ) : (
-        <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
-          <AnimatePresence initial={false}>
-            {anchors.map((anchor) => (
-              <AnchorCard
-                key={anchor.id}
-                anchor={anchor}
-                active={selection.kind === "anchor" && selection.anchorId === anchor.id}
-                generating={generatingAnchors.has(anchor.id)}
-                onClick={() => select({ kind: "anchor", anchorId: anchor.id })}
-              />
-            ))}
-          </AnimatePresence>
-          <button
-            onClick={addAnchor}
-            className="flex aspect-3/4 flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-ink-200 text-ink-400 transition hover:border-brand-300 hover:bg-brand-50/40 hover:text-brand-600"
+        <>
+          {/* The casting reel — the whole cast at a glance. `items-start` keeps
+              every thumb at its natural height instead of the flex row
+              stretching them (the end-caps are a touch shorter, by design).
+              `overflow-y-hidden` pins the axis `overflow-x-auto` otherwise
+              forces to `auto` — without it, the active thumb's hover scale-up
+              can register as scrollable overflow even when the whole cast
+              already fits, making the reel feel scrollable when it isn't.
+              `onMouseLeave` here (not on each thumb) is what makes the
+              preview-reverts-on-exit behavior work: mouse-enter/leave don't
+              bubble between siblings, so moving between thumbs never fires
+              it — only actually leaving the whole reel does. */}
+          <div
+            className="-mx-1 flex items-start gap-4 overflow-x-auto overflow-y-hidden px-1 py-2"
+            onMouseLeave={endPreview}
           >
-            <Plus className="size-6" />
-            <span className="text-xs font-medium">Add character</span>
-          </button>
-          {hasImportSources && (
-            <button
-              onClick={() => (transferAllowed ? setImporting(true) : openPlans())}
-              className="flex aspect-3/4 flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-ink-200 text-ink-400 transition hover:border-brand-300 hover:bg-brand-50/40 hover:text-brand-600"
-            >
-              {transferAllowed ? <UserPlus className="size-6" /> : <Lock className="size-6" />}
-              <span className="px-2 text-center text-xs font-medium">
-                Import from another book
-                {!transferAllowed && (
-                  <span className="mt-0.5 block text-[10px] font-normal text-ink-300">
-                    Subscriber perk
-                  </span>
-                )}
-              </span>
-            </button>
-          )}
-        </div>
+            <AnimatePresence initial={false}>
+              {anchors.map((anchor) => (
+                <AnchorReelThumb
+                  key={anchor.id}
+                  anchor={anchor}
+                  committed={selectedAnchorId === anchor.id}
+                  previewing={previewId === anchor.id}
+                  generating={generatingAnchors.has(anchor.id) || activeJobUnitIds.has(anchor.id)}
+                  onSelect={() => commitSelect(anchor.id)}
+                  onMouseEnter={() => previewOnHover(anchor.id)}
+                />
+              ))}
+            </AnimatePresence>
+            <ReelEndCap icon={Plus} label="Add" onClick={addAnchor} />
+            {hasImportSources && (
+              <ReelEndCap
+                icon={transferAllowed ? UserPlus : Lock}
+                label="Import"
+                sub={!transferAllowed ? "Subscriber perk" : undefined}
+                onClick={() => (transferAllowed ? setImporting(true) : openPlans())}
+              />
+            )}
+          </div>
+
+          {/* The stage — the active character's spotlight. `popLayout` (not
+              `wait`) — with `wait`, a quick sweep across the reel that changes
+              the active key again before the previous exit finishes leaves
+              the old child permanently stuck mid-exit (a long-standing Framer
+              Motion bug: https://github.com/motiondivision/motion/issues/2554).
+              `popLayout` pulls the exiting child out of flow immediately
+              instead of waiting on it, so rapid hover changes can't strand it.
+              The container itself gets `layout` so a switch between anchors
+              with very different content heights (versions, stale banner,
+              relationships) glides to the new height instead of snapping —
+              combined with a pure crossfade (no rise) on the content, that's
+              what actually kills the "jumpy" feel, not just the exit fix.
+
+              A hover-preview swap skips all of that (duration 0 everywhere):
+              it's meant to feel instant while scanning the reel, not like the
+              stage is dragging a 250ms animation behind the cursor. Only a
+              deliberate click/tap keeps the smooth glide + crossfade. */}
+          <motion.div
+            layout
+            transition={
+              swapSourceRef.current === "hover" ? { duration: 0 } : { duration: 0.25, ease: "easeOut" }
+            }
+            className="relative overflow-hidden rounded-3xl bg-aurora p-4 sm:p-6"
+          >
+            <AnimatePresence mode="popLayout" initial={false}>
+              {activeAnchor ? (
+                <motion.div
+                  key={activeAnchor.id}
+                  initial={{ opacity: swapSourceRef.current === "hover" ? 1 : 0 }}
+                  animate={{
+                    opacity: 1,
+                    transition: { duration: swapSourceRef.current === "hover" ? 0 : 0.22 },
+                  }}
+                  exit={{
+                    opacity: 0,
+                    transition: { duration: swapSourceRef.current === "hover" ? 0 : 0.12 },
+                  }}
+                >
+                  <AnchorEditor
+                    layout="split"
+                    anchor={activeAnchor}
+                    generating={generatingAnchors.has(activeAnchor.id)}
+                    setGenerating={(v) => setAnchorGenerating(activeAnchor.id, v)}
+                  />
+                </motion.div>
+              ) : anchors.length === 0 ? (
+                <EmptyStage />
+              ) : null}
+            </AnimatePresence>
+          </motion.div>
+        </>
       )}
 
       <ImportAnchorsDialog open={importing} onClose={() => setImporting(false)} project={project} />
@@ -233,14 +354,22 @@ export function AnchorsStage() {
       </div>
 
       <StickyActionBar
+        floating={floatingBar}
         hint={
-          <span className="flex items-center gap-1">
-            <span>
-              <span className="font-semibold text-ink-600">{ready}</span> of{" "}
-              <span className="font-semibold text-ink-600">{anchors.length}</span> references ready
+          // Redundant with the "3 / 7" badge the step rail already shows once
+          // the bar has settled into the quiet, in-flow state — only worth
+          // repeating here when the bar is actually the thing asking for
+          // attention.
+          floatingBar ? (
+            <span className="flex items-center gap-1">
+              <span>
+                <span className="font-semibold text-ink-600">{ready}</span> of{" "}
+                <span className="font-semibold text-ink-600">{anchors.length}</span> references
+                ready
+              </span>
+              <InfoHint topic="generationTime" />
             </span>
-            <InfoHint topic="generationTime" />
-          </span>
+          ) : undefined
         }
       >
         {canProceed ? (
@@ -253,7 +382,8 @@ export function AnchorsStage() {
           </Button>
         ) : (
           <Button
-            size="lg"
+            size={floatingBar ? "lg" : "md"}
+            variant={floatingBar ? "primary" : "secondary"}
             loading={busy}
             disabled={anchors.length === 0}
             leftIcon={!busy ? <Sparkles className="size-5" /> : undefined}
@@ -268,61 +398,42 @@ export function AnchorsStage() {
   );
 }
 
-function AnchorCard({
-  anchor,
-  active,
-  generating,
+/** A slim end-cap in the reel, sized to match the thumbnails next to it. */
+function ReelEndCap({
+  icon: Icon,
+  label,
+  sub,
   onClick,
 }: {
-  anchor: Anchor;
-  active: boolean;
-  generating: boolean;
+  icon: LucideIcon;
+  label: string;
+  sub?: string;
   onClick: () => void;
 }) {
-  const image = currentAnchorImage(anchor);
-  const url = useBlobUrl(image?.blobId);
-  const Icon = TYPE_ICON[anchor.type];
-
   return (
-    <motion.button
-      layout
-      initial={{ opacity: 0, scale: 0.94 }}
-      animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: 0.94 }}
-      whileHover={{ y: -3 }}
-      transition={{ type: "spring", stiffness: 340, damping: 28 }}
+    <button
       onClick={onClick}
-      className={cn(
-        "group relative flex aspect-3/4 flex-col overflow-hidden rounded-2xl bg-ink-100 text-left ring-1 transition",
-        active ? "ring-2 ring-brand-400" : "ring-ink-200 hover:ring-brand-300",
-      )}
+      title={label}
+      className="flex h-24 w-20 shrink-0 flex-col items-center justify-center gap-1 rounded-2xl border-2 border-dashed border-ink-200 text-ink-400 transition hover:border-brand-300 hover:bg-brand-50/40 hover:text-brand-600"
     >
-      <span className="relative flex flex-1 items-center justify-center overflow-hidden">
-        {generating ? (
-          <GenerationOverlay action="anchorImage" compact />
-        ) : url ? (
-          <img src={url} alt={anchor.name} className="size-full object-cover" />
-        ) : (
-          <span className="flex flex-col items-center gap-1.5 text-ink-300">
-            <Icon className="size-8" />
-            <span className="text-[10px] font-medium text-ink-400">No art yet</span>
-          </span>
-        )}
-        {!generating && (
-          <span
-            className={cn(
-              "absolute right-2 top-2 size-2.5 rounded-full ring-2 ring-white",
-              url ? "bg-emerald-400" : "bg-ink-300",
-            )}
-          />
-        )}
+      <Icon className="size-5" />
+      <span className="px-1 text-center text-[11px] font-medium leading-tight">{label}</span>
+      {sub && <span className="text-[9px] leading-none text-ink-300">{sub}</span>}
+    </button>
+  );
+}
+
+/** Shown on the stage when the story genuinely has no cast to draw. */
+function EmptyStage() {
+  return (
+    <div className="flex flex-col items-center justify-center gap-2 px-6 py-10 text-center">
+      <span className="flex size-11 items-center justify-center rounded-2xl bg-white text-brand-500 shadow-soft">
+        <Users className="size-5" />
       </span>
-      <span className="flex items-center gap-1.5 border-t border-white/40 bg-white/85 px-2.5 py-2 backdrop-blur">
-        <Icon className="size-3.5 shrink-0 text-ink-400" />
-        <span className="min-w-0 flex-1 truncate text-xs font-semibold text-ink-800">
-          {anchor.name}
-        </span>
-      </span>
-    </motion.button>
+      <p className="text-sm font-semibold text-ink-700">No cast yet</p>
+      <p className="max-w-64 text-xs leading-relaxed text-ink-400">
+        Add a character or place above, or re-read the story to find them automatically.
+      </p>
+    </div>
   );
 }

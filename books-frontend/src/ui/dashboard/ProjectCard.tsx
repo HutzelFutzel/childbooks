@@ -1,7 +1,13 @@
 import { motion } from "framer-motion";
 import { Trash2 } from "lucide-react";
 import type { Project } from "../../core/types";
+import { COVER_FRONT_ID } from "../../core/types";
+import { bookProductForConfig } from "../../core/book";
+import { defaultCoverAsset } from "../../core/config/branding";
+import { currentIllustration } from "../../state/ai";
+import { useAppConfigStore } from "../../state/appConfigStore";
 import { Badge } from "../components/Badge";
+import { BookMockup } from "../components/BookMockup";
 
 /** A friendly status derived from how far the book has actually been built. */
 function projectStatus(p: Project): { label: string; tone: "brand" | "accent" | "success" | "neutral" } {
@@ -31,40 +37,67 @@ export interface ProjectCardProps {
 }
 
 export function ProjectCard({ project, onOpen, onDelete }: ProjectCardProps) {
-  const preview = project.config.storyText.trim().slice(0, 140);
+  const branding = useAppConfigStore((s) => s.branding);
+
+  // Cover-forward: show the book's real front cover as a 3D mockup, or the
+  // branded default (matched to the book's format) with the title stamped on it
+  // so brand-new drafts stay recognizable.
+  const aspect = bookProductForConfig(project.config).aspect;
+  const coverBlobId = currentIllustration(project, COVER_FRONT_ID)?.blobId;
+  const fallbackUrl = coverBlobId
+    ? undefined
+    : defaultCoverAsset(branding, aspect, "front")?.imageUrl;
+
+  const status = projectStatus(project);
+
   return (
     <motion.div
       layout
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0, scale: 0.97 }}
-      whileHover={{ y: -3 }}
-      transition={{ type: "spring", stiffness: 380, damping: 28 }}
-      className="group relative flex cursor-pointer flex-col rounded-2xl bg-white p-5 ring-1 ring-ink-100 shadow-soft hover:shadow-lifted"
+      whileHover="hover"
+      className="group relative flex cursor-pointer flex-col items-center gap-3 rounded-3xl px-3 pb-3 pt-4"
       onClick={onOpen}
     >
-      <div className="mb-3 flex items-start justify-between gap-2">
-        <h3 className="line-clamp-1 text-base font-semibold text-ink-900">{project.title}</h3>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          className="rounded-lg p-1.5 text-ink-300 opacity-0 transition hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
-          aria-label="Delete project"
-        >
-          <Trash2 className="size-4" />
-        </button>
-      </div>
-      <p className="line-clamp-3 min-h-15 text-sm text-ink-500">
-        {preview || "No story text yet."}
-      </p>
-      <div className="mt-4 flex items-center justify-between">
-        {(() => {
-          const s = projectStatus(project);
-          return <Badge tone={s.tone}>{s.label}</Badge>;
-        })()}
-        <span className="text-xs text-ink-400">{timeAgo(project.updatedAt)}</span>
+      {/* Soft glow that blooms behind the book on hover — gives the shelf depth
+          without a boxy card. */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-6 top-4 bottom-16 rounded-4xl bg-brand-100/0 blur-2xl transition-colors duration-300 group-hover:bg-brand-100/60"
+      />
+
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+        className="absolute right-1 top-1 z-10 rounded-full bg-white/80 p-1.5 text-ink-400 opacity-0 shadow-soft backdrop-blur transition hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
+        aria-label="Delete project"
+      >
+        <Trash2 className="size-4" />
+      </button>
+
+      <motion.div
+        className="relative"
+        variants={{ hover: { y: -6 } }}
+        transition={{ type: "spring", stiffness: 380, damping: 26 }}
+      >
+        <BookMockup
+          blobId={coverBlobId}
+          fallbackUrl={fallbackUrl}
+          title={coverBlobId ? undefined : project.title}
+          aspect={aspect}
+          width={176}
+        />
+      </motion.div>
+
+      <div className="relative w-full text-center">
+        <h3 className="line-clamp-1 font-display text-[15px] font-bold text-ink-900">{project.title}</h3>
+        <div className="mt-1.5 flex items-center justify-center gap-2">
+          <Badge tone={status.tone}>{status.label}</Badge>
+          <span className="text-xs text-ink-400">{timeAgo(project.updatedAt)}</span>
+        </div>
       </div>
     </motion.div>
   );

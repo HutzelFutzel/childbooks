@@ -25,12 +25,15 @@ export function normalizeAnchorName(name: string): string {
     .replace(/^(the|a|an)\s+/, "");
 }
 
-/** Index current anchors by normalized name (first occurrence wins). */
+/** Index current anchors by normalized name, including any past names from
+ * renames (first occurrence wins). */
 function anchorsByName(anchors: Anchor[]): Map<string, Anchor> {
   const m = new Map<string, Anchor>();
   for (const a of anchors) {
-    const key = normalizeAnchorName(a.name);
-    if (key && !m.has(key)) m.set(key, a);
+    for (const raw of [a.name, ...(a.aliasNames ?? [])]) {
+      const key = normalizeAnchorName(raw);
+      if (key && !m.has(key)) m.set(key, a);
+    }
   }
   return m;
 }
@@ -41,15 +44,26 @@ function anchorsByName(anchors: Anchor[]): Map<string, Anchor> {
  * for anchors whose name is unchanged. This is the primary fix for "id drift":
  * it keeps screenplay/illustration references — which point at anchors by id —
  * valid across re-analysis instead of orphaning them behind brand-new ids.
+ *
+ * Matching also checks `aliasNames`, so an anchor the user renamed still
+ * matches the fresh analysis result (which only knows the name as it appears
+ * in the story text, i.e. the *old* name) instead of being orphaned behind a
+ * newly-minted duplicate. When that happens the user's current name and
+ * hand-set fields (relationships, creative direction, etc.) win over the
+ * freshly-analyzed ones, since re-analysis should refresh story-derived facts
+ * (description/importance) without discarding the user's customization.
  */
 export function reconcileAnchorIds(next: Anchor[], prev: Anchor[]): Anchor[] {
   const prevByName = new Map<string, Anchor[]>();
-  for (const a of prev) {
-    const key = normalizeAnchorName(a.name);
-    if (!key) continue;
+  const index = (key: string, a: Anchor) => {
+    if (!key) return;
     const bucket = prevByName.get(key);
     if (bucket) bucket.push(a);
     else prevByName.set(key, [a]);
+  };
+  for (const a of prev) {
+    index(normalizeAnchorName(a.name), a);
+    for (const alias of a.aliasNames ?? []) index(normalizeAnchorName(alias), a);
   }
   const used = new Set<string>();
   return next.map((a) => {
@@ -57,9 +71,19 @@ export function reconcileAnchorIds(next: Anchor[], prev: Anchor[]): Anchor[] {
     const match = candidates.find((c) => !used.has(c.id));
     if (!match) return a;
     used.add(match.id);
-    // Keep the stable id so existing page references still resolve, and carry
-    // over already-generated images so re-analysis doesn't discard the artwork.
-    return { ...a, id: match.id, versions: a.versions ?? match.versions };
+    return {
+      ...a,
+      id: match.id,
+      name: match.name,
+      aliasNames: match.aliasNames,
+      mode: match.mode,
+      include: match.include,
+      userGuidance: match.userGuidance,
+      containedIds: match.containedIds,
+      relatedIds: match.relatedIds,
+      relatedNotes: match.relatedNotes,
+      versions: a.versions ?? match.versions,
+    };
   });
 }
 
