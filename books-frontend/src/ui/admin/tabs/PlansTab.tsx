@@ -29,7 +29,8 @@ import type {
 import { IMAGE_ACTIONS } from "../../../core/ai/actions";
 import { FEATURES, featureGated } from "../../../core/config/features";
 import { QUOTAS } from "../../../core/config/quotas";
-import { Grid, NumberField, Section, TextField, fmtMoney } from "./products/parts";
+import { useAdminTab } from "../adminTabStore";
+import { Grid, ImpactNote, NumberField, Section, TabIntro, TextField, fmtMoney } from "./products/parts";
 
 const STATUSES: { value: PlanStatus; label: string }[] = [
   { value: "draft", label: "Draft (hidden)" },
@@ -54,6 +55,7 @@ export function PlansTab() {
   const syncPlans = useAppConfigStore((s) => s.syncPlans);
   const currencies = useAppConfigStore((s) => s.pricingSettings.currencies);
   const pricingSettings = useAppConfigStore((s) => s.pricingSettings);
+  const savePricingSettings = useAppConfigStore((s) => s.savePricingSettings);
   const sparksConfig = useAppConfigStore((s) => s.sparks);
 
   const [plans, setPlans] = useState<PlanDefinition[]>([]);
@@ -90,11 +92,25 @@ export function PlansTab() {
     setPlans((ps) => [...ps, p]);
   };
 
-  const onSave = async (plan: PlanDefinition) => {
+  const onSave = async (
+    plan: PlanDefinition,
+    memberEbook: Record<string, number> | null,
+    memberChanged: boolean,
+  ) => {
     setSavingId(plan.id);
     try {
       const synced = await savePlan(plan);
       setPlans((ps) => ps.map((p) => (p.id === synced.id ? synced : p)));
+      // The plan's member ebook price lives on the shared pricingSettings doc
+      // (so the storefront + server quote read one source). Persist it here so
+      // the plan editor is the single place to define everything a plan gives.
+      if (memberChanged) {
+        const cur = pricingSettings;
+        const planPrices = { ...cur.ebook.planPrices };
+        if (memberEbook) planPrices[plan.id] = memberEbook;
+        else delete planPrices[plan.id];
+        await savePricingSettings({ ...cur, ebook: { ...cur.ebook, planPrices } });
+      }
       toast.success("Plan saved & synced to Stripe.");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not save plan.");
@@ -130,21 +146,28 @@ export function PlansTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <p className="max-w-2xl text-xs leading-relaxed text-ink-500">
-          Reader-journey plans: <span className="font-medium">Once Upon</span> (free) →{" "}
-          <span className="font-medium">Story Time</span> → <span className="font-medium">Happily Ever After</span>. You
-          own the perks and the monthly Spark grant here; Stripe owns the billing. Saving syncs the
-          plan&apos;s Stripe product + prices.
-        </p>
-        <div className="flex gap-2">
-          <Button variant="secondary" size="sm" leftIcon={<RefreshCw className="size-3.5" />} loading={syncing} onClick={onSync}>
-            Sync all to Stripe
-          </Button>
-          <Button size="sm" leftIcon={<Plus className="size-3.5" />} onClick={addPlan}>
-            New plan
-          </Button>
-        </div>
+      <TabIntro
+        elsewhere={
+          <>
+            The digital-edition and Spark-pack products themselves are set up in the{" "}
+            <span className="font-medium">Catalog</span>; here you only decide what each plan gives
+            its members.
+          </>
+        }
+      >
+        <span className="font-medium">Memberships</span> are recurring subscriptions. Each plan
+        bundles a monthly Spark grant, print discounts, unlocked features and a member price for the
+        digital edition — everything a subscriber gets is defined on the plan below. You own the
+        perks; Stripe owns the billing, and saving syncs the plan&apos;s Stripe product + prices.
+      </TabIntro>
+
+      <div className="flex items-center justify-end gap-2">
+        <Button variant="secondary" size="sm" leftIcon={<RefreshCw className="size-3.5" />} loading={syncing} onClick={onSync}>
+          Sync all to Stripe
+        </Button>
+        <Button size="sm" leftIcon={<Plus className="size-3.5" />} onClick={addPlan}>
+          New plan
+        </Button>
       </div>
 
       <div className="space-y-3">
@@ -162,7 +185,7 @@ export function PlansTab() {
               pricingSettings={pricingSettings}
               products={products}
               onChange={(patch) => update(plan.id, patch)}
-              onSave={() => onSave(plan)}
+              onSave={(memberEbook, memberChanged) => onSave(plan, memberEbook, memberChanged)}
               onDelete={() => onDelete(plan.id)}
             />
           ))}
@@ -191,11 +214,35 @@ function PlanCard({
   pricingSettings: PricingSettings;
   products: ProductDefinition[];
   onChange: (patch: Partial<PlanDefinition>) => void;
-  onSave: () => void;
+  onSave: (memberEbook: Record<string, number> | null, memberChanged: boolean) => Promise<void>;
   onDelete: () => void;
 }) {
   const ent = plan.entitlements;
   const grant = plan.grant;
+  const openCatalog = useAdminTab((s) => s.openCatalog);
+
+  // Member ebook price for THIS plan. `null` ⇒ no override (members pay the
+  // regular ebook price). It lives on the shared pricingSettings doc, so it's
+  // edited here as local state and persisted alongside the plan on Save.
+  const ebook = pricingSettings.ebook;
+  const [memberEbook, setMemberEbook] = useState<Record<string, number> | null>(
+    () => ebook.planPrices[plan.id] ?? null,
+  );
+  const [memberDirty, setMemberDirty] = useState(false);
+  // Re-sync from the live doc when it changes and we have no local edits.
+  useEffect(() => {
+    if (!memberDirty) setMemberEbook(ebook.planPrices[plan.id] ?? null);
+  }, [ebook, plan.id, memberDirty]);
+
+  const editMember = (next: Record<string, number> | null) => {
+    setMemberEbook(next);
+    setMemberDirty(true);
+  };
+
+  const handleSave = async () => {
+    await onSave(memberEbook, memberDirty);
+    setMemberDirty(false);
+  };
 
   const setPrice = (currency: string, interval: "month" | "year", amount: number) => {
     const prices = { ...plan.billing.prices };
@@ -235,7 +282,7 @@ function PlanCard({
           {!plan.isFree && (
             <Button variant="ghost" size="sm" leftIcon={<Trash2 className="size-3.5" />} onClick={onDelete} />
           )}
-          <Button size="sm" loading={saving} onClick={onSave}>Save</Button>
+          <Button size="sm" loading={saving} onClick={handleSave}>Save</Button>
         </div>
       </div>
 
@@ -373,6 +420,75 @@ function PlanCard({
             })}
           </div>
         </Section>
+      )}
+
+      {!plan.isFree && (
+      <Section
+        title="Digital edition for members"
+        hint="What members of this plan pay for the ebook — a headline perk. Set it below the regular price, or make it free, to drive subscriptions."
+      >
+        {!ebook.enabled ? (
+          <ImpactNote>
+            The digital edition isn&apos;t on sale yet, so member pricing has no effect. Turn it on
+            under Catalog → Digital edition first.{" "}
+            <button
+              type="button"
+              onClick={() => openCatalog("ebook")}
+              className="font-semibold underline"
+            >
+              Open the digital edition
+            </button>
+            .
+          </ImpactNote>
+        ) : (
+          <>
+            <div className="flex items-center gap-2">
+              <Toggle
+                checked={memberEbook != null}
+                onChange={(v) =>
+                  editMember(v ? Object.fromEntries(currencies.map((c) => [c, 0])) : null)
+                }
+                label="Special ebook price for this plan"
+              />
+              <span className="text-sm text-ink-600">
+                {memberEbook != null ? "Members get a special price" : "Members pay the regular price"}
+              </span>
+            </div>
+            {memberEbook == null ? (
+              <p className="text-[11px] text-ink-400">
+                Members on this plan buy the digital edition at the regular price
+                {currencies.length > 0
+                  ? ` (${currencies
+                      .map((c) => fmtMoney(ebook.prices[c] ?? 0, c))
+                      .join(" · ")})`
+                  : ""}
+                .
+              </p>
+            ) : (
+              <>
+                <Grid cols={4}>
+                  {currencies.map((c) => (
+                    <NumberField
+                      key={c}
+                      label={`Member price (${c})`}
+                      value={memberEbook[c] ?? 0}
+                      step="0.5"
+                      suffix={c}
+                      onChange={(n) => editMember({ ...memberEbook, [c]: n })}
+                    />
+                  ))}
+                </Grid>
+                <ImpactNote>
+                  Set a currency to <span className="font-semibold">0</span> to include the digital
+                  edition <span className="font-semibold">free</span> with this plan — it&apos;s
+                  granted instantly with no checkout. Any amount above 0 is what members pay instead
+                  of the regular price ({currencies.map((c) => fmtMoney(ebook.prices[c] ?? 0, c)).join(" · ")}).
+                </ImpactNote>
+              </>
+            )}
+          </>
+        )}
+      </Section>
       )}
 
       <Section title="Spark discounts" hint="Optional per-action Spark multiplier for subscribers on this plan (e.g. 0.5 = half-price re-rolls). Leave at 1 for no discount.">

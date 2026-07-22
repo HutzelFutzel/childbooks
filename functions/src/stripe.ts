@@ -81,6 +81,7 @@ import { getSparksConfig } from "./appConfig";
 import { grantSparks } from "./sparks";
 import { recordChargeRevenue, recordFinanceEvent, toUsd } from "./finance";
 import { raiseAlert } from "./alerts";
+import { notifySlack, money } from "./notify";
 import { claimReferralCode, ensureReferralCode, maybeRewardReferral } from "./referrals";
 import { claimGift, createPaidGift, listGiftsBought, newGiftCode } from "./gifts";
 import {
@@ -1637,6 +1638,22 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         await fulfillPaidOrder(paymentId);
       }
       await maybeRewardReferral(uid);
+
+      // Celebratory ping (#growth). Deduped on the paymentId so a webhook retry
+      // (or the checkout.session.completed safety-net) can't double-post.
+      const label =
+        kind === "order"
+          ? "📦 Print order placed"
+          : kind === "ebook"
+            ? "📖 Ebook purchased"
+            : kind === "sparkGift"
+              ? "🎁 Spark gift purchased"
+              : "✨ Spark pack purchased";
+      await notifySlack({
+        channel: "growth",
+        ref: `purchase_${paymentId}`,
+        text: `${label} — ${money(gross, pi.currency)}${projectId ? ` · project ${projectId}` : ""}`,
+      });
       return;
     }
 
@@ -1735,12 +1752,23 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
           const planName = plan?.presentation.name ?? "your plan";
           if (event.type === "customer.subscription.deleted") {
             await sendSubscriptionCancelledEmail({ uid, planName, subscriptionId: sub.id });
+            await notifySlack({
+              channel: "growth",
+              ref: `sub_cancelled_${sub.id}`,
+              text: `👋 Subscription cancelled — ${planName}`,
+            });
           } else if (sub.status === "active" || sub.status === "trialing") {
             await sendSubscriptionStartedEmail({
               uid,
               planName,
               sparks: plan?.grant.monthlySparks,
               subscriptionId: sub.id,
+            });
+            // Deduped on the subscription id: fires once, not on every renewal.
+            await notifySlack({
+              channel: "growth",
+              ref: `sub_started_${sub.id}`,
+              text: `💳 New subscriber — ${planName}`,
             });
           }
         } catch (err) {

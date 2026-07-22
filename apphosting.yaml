@@ -1,6 +1,14 @@
 # Firebase App Hosting configuration for the Next.js web app.
 # Docs: https://firebase.google.com/docs/app-hosting/configure
 #
+# ── Release branch ───────────────────────────────────────────────────────────
+# Point this App Hosting backend's connected branch at **`release`** (Firebase
+# console → App Hosting → your backend → settings). The `.github/workflows/
+# deploy.yml` pipeline fast-forwards `release` to a `main` commit only after it
+# has built, typechecked, passed the env/secret check, deployed the backend, and
+# health-checked it — so the frontend only ever rolls out vetted commits. Never
+# push to `release` by hand.
+#
 # ── Monorepo note ────────────────────────────────────────────────────────────
 # This repo is a Yarn workspaces monorepo (books-frontend + functions). App
 # Hosting's framework adapters only support Nx/Turborepo monorepos, and they

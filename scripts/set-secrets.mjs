@@ -38,6 +38,15 @@ export function projectId() {
 }
 
 /**
+ * The subset of secrets that ALSO belong in GitHub Actions (for the CI/CD Slack
+ * pings). Deliberately tiny: the workflows don't need your AI/Stripe/Lulu keys —
+ * the running function reads those from Secret Manager — so copying them into a
+ * second store would only widen the leak surface. `.env.local` stays the single
+ * source of truth; `yarn setSecrets` fans this allowlist out to GitHub too.
+ */
+export const GITHUB_ACTION_SECRETS = ["SLACK_WEBHOOK_URL"];
+
+/**
  * Every secret name declared in functions/src/secrets.ts. Parsed from the
  * `defineSecret("NAME")` calls so this list can never drift from the code.
  */
@@ -118,6 +127,56 @@ function fbSecretExists(project, name) {
   return r.status === 0;
 }
 
+// ── GitHub Actions secrets (via the `gh` CLI) ────────────────────────────────
+
+/** Whether the `gh` CLI is installed AND authenticated for this repo. */
+export function ghReady() {
+  const installed = spawnSync("gh", ["--version"], { stdio: "ignore" }).status === 0;
+  if (!installed) return { ok: false, reason: "the GitHub CLI (`gh`) is not installed" };
+  const authed = spawnSync("gh", ["auth", "status"], { cwd: ROOT, stdio: "ignore" }).status === 0;
+  if (!authed) return { ok: false, reason: "`gh` is not authenticated — run `gh auth login`" };
+  return { ok: true };
+}
+
+/** Set a GitHub Actions repo secret (value via stdin so it never hits argv/logs). */
+function ghSecretSet(name, value) {
+  return spawnSync("gh", ["secret", "set", name], {
+    cwd: ROOT, // gh infers the repo from the git remote here
+    input: value,
+    stdio: ["pipe", "ignore", "inherit"],
+  });
+}
+
+/**
+ * Push the GitHub allowlist ({@link GITHUB_ACTION_SECRETS}) from
+ * functions/.env.local to GitHub Actions secrets. Best-effort: if `gh` isn't
+ * ready it warns and skips (the GCP sync is what deploys actually depend on).
+ */
+export function syncGithubSecrets({ quiet = false } = {}) {
+  const log = (...a) => !quiet && console.log(...a);
+  const env = readEnvLocal();
+  const names = GITHUB_ACTION_SECRETS.filter((n) => !isPlaceholder(env[n]));
+  if (names.length === 0) {
+    log(`\n${c("dim", "No GitHub-synced secrets have real values in functions/.env.local — skipping GitHub.")}`);
+    return { set: 0, skipped: 0, failed: 0 };
+  }
+  const ready = ghReady();
+  if (!ready.ok) {
+    log(`\n${c("yellow", "skip GitHub sync")} ${c("dim", `(${ready.reason})`)}`);
+    return { set: 0, skipped: names.length, failed: 0 };
+  }
+  log(`\nSyncing GitHub Actions secrets ${c("dim", "(for CI/CD)")}\n`);
+  let set = 0, failed = 0;
+  for (const name of names) {
+    process.stdout.write(`  ${c("cyan", "set ")}  ${name} … `);
+    const r = ghSecretSet(name, env[name]);
+    if (r.status === 0) { log(c("green", "ok")); set++; }
+    else { log(c("red", "FAILED")); failed++; }
+  }
+  log(`\n${c("bold", "GitHub:")} ${set} set, ${failed} failed.`);
+  return { set, skipped: 0, failed };
+}
+
 /**
  * Push every non-placeholder secret from functions/.env.local to Secret Manager.
  * Returns counts so callers (deploy) can report. Pure side-effect on Secret Manager.
@@ -196,8 +255,12 @@ if (isMain) {
         const proceed = args.has("--yes") || args.has("-y") || (await confirm(
           `Sync ${c("bold", pending.length)} secret(s) from functions/.env.local to Secret Manager? [y/N]`,
         ));
-        if (proceed) syncSecrets();
-        else console.log("Aborted.");
+        if (proceed) {
+          syncSecrets();
+          // Fan the CI/CD allowlist out to GitHub Actions too, so functions/.env.local
+          // stays the one place you edit. Best-effort — never fails the run.
+          syncGithubSecrets();
+        } else console.log("Aborted.");
       }
     }
   } catch (err) {

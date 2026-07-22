@@ -1,0 +1,158 @@
+name: Deploy
+
+# Single, gated release pipeline for a push to `main`. Everything ships through
+# GitHub so a deploy is only ever as good as the checks that precede it:
+#
+#   build + typecheck  →  full env/secret check  →  deploy backend  →  health
+#   check  →  promote the vetted commit to `release` (frontend rollout)
+#
+# What deploys where:
+#   - BACKEND  (this workflow): the `api` Cloud Function (+ scheduled/trigger
+#     functions), Firestore rules + indexes, and Storage rules. Firebase skips
+#     functions whose code is unchanged, so running on every push is cheap.
+#   - FRONTEND (Firebase App Hosting): App Hosting watches the **`release`**
+#     branch and builds the Next.js app on every push to it. The final step here
+#     fast-forwards `release` to this commit ONLY after all checks pass — so the
+#     frontend never rolls out a commit the pipeline hasn't vetted.
+#
+# ── One-time setup (see the repo README / the summary in chat) ──────────────
+#   Repo secrets (Settings → Secrets and variables → Actions):
+#     GCP_WIF_PROVIDER  — Workload Identity Federation provider resource name
+#     GCP_DEPLOY_SA     — deploy service account email. Roles: Cloud Functions
+#                         Admin, Cloud Run Admin, Service Account User, Firebase
+#                         Rules Admin, Cloud Datastore Index Admin, and Secret
+#                         Manager Secret Accessor (for check-env + secret binding).
+#     SLACK_WEBHOOK_URL — (optional) Slack incoming webhook for failure pings.
+#                         If unset, GitHub's built-in email/mobile notifications
+#                         for failed runs still apply.
+#   Firebase console: point the App Hosting backend's connected branch at
+#     `release` (not `main`).
+#   Branch protection on `main`: require the CI checks to pass before merge.
+#
+# Secrets (OpenAI/Gemini/Lulu/Stripe keys) are NOT set here — set them once with
+# `yarn setSecrets` / `firebase functions:secrets:set`. A deploy binds the latest
+# versions; `check-env` fails the run if a required one is missing.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {} # allow manual runs
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false # never interrupt an in-flight deploy
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # to fast-forward the `release` branch
+      id-token: write # required for Workload Identity Federation
+    env:
+      PROJECT_ID: childbook-60f89
+      BACKEND_URL: https://us-central1-childbook-60f89.cloudfunctions.net/api
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: yarn
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      # ── Gate: it must build & typecheck before anything is deployed ─────────
+      - name: Typecheck frontend
+        id: typecheck
+        run: yarn workspace books-frontend typecheck
+
+      - name: Build functions
+        id: build_functions
+        run: yarn build:functions
+
+      # Same build App Hosting will run for `release`; catching it here means we
+      # never promote a commit the frontend can't build.
+      - name: Build web
+        id: build_web
+        run: yarn build:web
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+
+      # ── Gate: config is actually deployable ────────────────────────────────
+      # apphosting.yaml frontend vars + every declared secret exists in Secret
+      # Manager + PUBLIC_APP_URL is set (checkout would 500 without it). Runs
+      # after auth so the Secret Manager lookups work; fails BEFORE any deploy.
+      - name: Check environment
+        id: checkenv
+        run: node scripts/check-env.mjs
+
+      - name: Deploy backend (functions, rules, indexes, storage)
+        id: deploy
+        run: >-
+          yarn firebase deploy
+          --only functions,firestore:rules,firestore:indexes,storage
+          --project "$PROJECT_ID"
+          --non-interactive
+
+      # ── Gate: it actually came up ──────────────────────────────────────────
+      - name: Health check
+        id: health
+        run: |
+          set -euo pipefail
+          for path in /health /providers; do
+            echo "→ GET $BACKEND_URL$path"
+            curl -fsS --max-time 20 "$BACKEND_URL$path" > /dev/null
+          done
+          echo "Backend is up."
+
+      # All green → promote this exact commit to `release`, which App Hosting
+      # watches to roll out the frontend. Force-push is safe: `release` is a
+      # deploy pointer that only ever tracks vetted `main` commits.
+      - name: Promote to release (frontend rollout)
+        id: promote
+        run: git push --force origin HEAD:release
+
+      # Report the outcome to Slack on SUCCESS and FAILURE. Runs always so a
+      # failure at any step above still pings; skipped only when no webhook is
+      # configured (GitHub's own failed-run emails still cover you).
+      - name: Notify Slack (deploy result)
+        if: always() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          STATUS: ${{ job.status }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          # Name the first step that failed (for a helpful message).
+          failed=""
+          for entry in \
+            "typecheck:${{ steps.typecheck.outcome }}" \
+            "build functions:${{ steps.build_functions.outcome }}" \
+            "build web:${{ steps.build_web.outcome }}" \
+            "google auth:${{ steps.auth.outcome }}" \
+            "env check:${{ steps.checkenv.outcome }}" \
+            "deploy backend:${{ steps.deploy.outcome }}" \
+            "health check:${{ steps.health.outcome }}" \
+            "promote release:${{ steps.promote.outcome }}"; do
+            name="${entry%%:*}"; outcome="${entry##*:}"
+            if [ "$outcome" = "failure" ]; then failed="$name"; break; fi
+          done
+
+          case "$STATUS" in
+            success)   emoji="✅"; detail="Backend deployed · \`release\` promoted (frontend rolling out)";;
+            cancelled) emoji="⚠️"; detail="Run cancelled";;
+            *)         emoji="❌"; detail="Failed at *${failed:-unknown step}* — open the logs";;
+          esac
+
+          text="$emoji Deploy *$STATUS* — ${GITHUB_REPOSITORY}@${GITHUB_SHA:0:7}
+          ${detail}
+          ${COMMIT_MSG%%$'\n'*}
+          by ${GITHUB_ACTOR} · ${RUN_URL}"
+          payload=$(printf '{"text": %s}' "$(printf '%s' "$text" | jq -Rs .)")
+          curl -fsS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"

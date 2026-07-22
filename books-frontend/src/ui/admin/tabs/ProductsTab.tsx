@@ -33,7 +33,7 @@ import {
 } from "../../../core/config/products";
 import { isOfferable, productErrors, validateProduct, type ProductIssue } from "../../../core/config/productValidation";
 import { useAppConfigStore } from "../../../state/appConfigStore";
-import { Disclosure, Grid, NumberField, Section, TextField } from "./products/parts";
+import { Disclosure, Grid, NumberField, Section, TabIntro, TextField } from "./products/parts";
 import { CostSection, PricingSection } from "./products/ProductPricing";
 
 type Update = (fn: (p: ProductDefinition) => ProductDefinition) => void;
@@ -168,11 +168,19 @@ export function ProductsTab() {
 
   return (
     <div className="space-y-4">
-      <p className="max-w-2xl text-xs leading-relaxed text-ink-500">
-        The print products customers can order. Set the page-range prices here; currencies, payment fees and tax are
-        managed once under <span className="font-medium text-ink-600">Pricing settings</span>. Only{" "}
-        <span className="font-medium text-ink-600">active</span>, valid products are offered.
-      </p>
+      <TabIntro
+        elsewhere={
+          <>
+            Currencies, payment fees and tax that turn these prices into margins are set once under{" "}
+            <span className="font-medium">Financial settings</span>.
+          </>
+        }
+      >
+        <span className="font-medium">Print books</span> are the physical products customers order —
+        each one binds a print spec to per-page-range prices. Only{" "}
+        <span className="font-medium">active</span>, valid products are offered at checkout; the badge
+        on each product tells you if it&apos;s ready.
+      </TabIntro>
 
       <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
         {/* Master list */}

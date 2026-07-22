@@ -1,8 +1,10 @@
 name: CI
 
-# Verify the whole monorepo builds + typechecks on every PR (and on pushes to
-# main). This is the gate that protects deploys — both the App Hosting frontend
-# rollout and the backend deploy workflow assume `main` is always green.
+# The PR gate: verify the whole monorepo builds, typechecks, and is
+# configuration-sane before code can reach `main`. Make these required status
+# checks in branch protection so nothing merges red — the Deploy workflow (and
+# the App Hosting frontend rollout it promotes to `release`) trust that `main`
+# is always green.
 on:
   pull_request:
     branches: [main]
@@ -16,6 +18,8 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    env:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -40,3 +44,22 @@ jobs:
       # Production build of the Next.js app (same build App Hosting runs).
       - name: Build web
         run: yarn build:web
+
+      # Config-only deployability check (no cloud auth): apphosting.yaml declares
+      # every NEXT_PUBLIC_* the frontend build inlines, and emulators are off.
+      # The full check (Secret Manager + PUBLIC_APP_URL) runs in the Deploy
+      # workflow after Google auth.
+      - name: Check environment (config only)
+        run: node scripts/check-env.mjs --no-secrets
+
+      # Ping Slack only when CI fails on `main` (a red PR is the author's problem;
+      # a red `main` is everyone's). Skipped when no webhook is configured.
+      - name: Notify Slack on failure
+        if: failure() && github.ref == 'refs/heads/main' && env.SLACK_WEBHOOK_URL != ''
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          text="❌ CI failed on *main* — ${GITHUB_REPOSITORY}@${GITHUB_SHA:0:7}
+          by ${GITHUB_ACTOR} · ${RUN_URL}"
+          payload=$(printf '{"text": %s}' "$(printf '%s' "$text" | jq -Rs .)")
+          curl -fsS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"

@@ -23,6 +23,13 @@ export const GOOGLE_API_KEY = defineSecret("GOOGLE_API_KEY");
 export const ZEPTOMAIL_TOKEN = defineSecret("ZEPTOMAIL_TOKEN");
 export const ZEPTOMAIL_WEBHOOK_SECRET = defineSecret("ZEPTOMAIL_WEBHOOK_SECRET");
 
+// Slack incoming-webhook URL(s) for event notifications (signups, purchases,
+// ops alerts). Environment-agnostic and best-effort — `notifySlack` no-ops when
+// unset — but note that binding a secret requires it to EXIST in Secret Manager
+// at deploy time, so create it (`yarn setSecrets`) before the next deploy.
+// SLACK_OPS_WEBHOOK_URL is optional; ops alerts fall back to SLACK_WEBHOOK_URL.
+export const SLACK_WEBHOOK_URL = defineSecret("SLACK_WEBHOOK_URL");
+
 // Lulu uses separate OAuth credentials per environment. `serverEnv` selects the
 // pair matching LULU_ENV; the legacy LULU_CLIENT_KEY/SECRET act as a fallback.
 export const LULU_SANDBOX_CLIENT_KEY = defineSecret("LULU_SANDBOX_CLIENT_KEY");
@@ -38,7 +45,13 @@ export const STRIPE_SANDBOX_WEBHOOK_SECRET = defineSecret("STRIPE_SANDBOX_WEBHOO
 export const STRIPE_LIVE_SECRET_KEY = defineSecret("STRIPE_LIVE_SECRET_KEY");
 export const STRIPE_LIVE_WEBHOOK_SECRET = defineSecret("STRIPE_LIVE_WEBHOOK_SECRET");
 
-const BASE_SECRETS = [OPENAI_API_KEY, GOOGLE_API_KEY, ZEPTOMAIL_TOKEN, ZEPTOMAIL_WEBHOOK_SECRET];
+const BASE_SECRETS = [
+  OPENAI_API_KEY,
+  GOOGLE_API_KEY,
+  ZEPTOMAIL_TOKEN,
+  ZEPTOMAIL_WEBHOOK_SECRET,
+  SLACK_WEBHOOK_URL,
+];
 const SANDBOX_SECRETS = [
   LULU_SANDBOX_CLIENT_KEY,
   LULU_SANDBOX_CLIENT_SECRET,

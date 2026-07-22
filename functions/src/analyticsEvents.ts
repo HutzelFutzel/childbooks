@@ -20,6 +20,7 @@ import { beforeUserCreated, beforeUserSignedIn } from "firebase-functions/v2/ide
 import type { AuthUserRecord } from "firebase-functions/v2/identity";
 import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
+import { notifySlack } from "./notify";
 
 /** The provider an account was created/signed in with. */
 function sourceOf(user: AuthUserRecord): string {
@@ -29,17 +30,29 @@ function sourceOf(user: AuthUserRecord): string {
 }
 
 async function record(type: "signup" | "login", user: AuthUserRecord): Promise<void> {
+  const source = sourceOf(user);
   try {
     ensureAdmin();
     await getFirestore().collection("analyticsEvents").add({
       type,
       uid: user.uid,
       email: user.email ? user.email.toLowerCase() : null,
-      source: sourceOf(user),
+      source,
       at: Date.now(),
     });
   } catch {
     // Best-effort: never block authentication on analytics.
+  }
+
+  // Ping Slack (#growth) for REAL new accounts only — everyone starts as an
+  // anonymous guest, so those would be pure noise. Deduped on uid; prod-only and
+  // best-effort (notifySlack swallows failures, so it can't block sign-in).
+  if (type === "signup" && source !== "anonymous") {
+    await notifySlack({
+      channel: "growth",
+      ref: `signup_${user.uid}`,
+      text: `🎉 New signup — ${user.email ?? user.uid} (${source})`,
+    });
   }
 }
 

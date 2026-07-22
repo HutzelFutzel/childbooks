@@ -275,9 +275,9 @@ function ActionCard({
         <JumpButton icon={<Cpu className="size-3.5" />} label="Model" tab="models" />
         <JumpButton icon={<DollarSign className="size-3.5" />} label="Cost" tab="modelCosts" />
         <JumpButton icon={<Sparkles className="size-3.5" />} label="Price" tab="sparks" />
-        <JumpButton icon={<CreditCard className="size-3.5" />} label="Plans" tab="plans" />
+        <JumpButton icon={<CreditCard className="size-3.5" />} label="Plans" tab="memberships" />
         {EDIT_QUOTA_ACTIONS.has(action.id) && (
-          <JumpButton icon={<Gauge className="size-3.5" />} label="Limits" tab="plans" />
+          <JumpButton icon={<Gauge className="size-3.5" />} label="Limits" tab="memberships" />
         )}
       </div>
     </div>

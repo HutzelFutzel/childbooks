@@ -2,30 +2,25 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Plus, Trash2 } from "lucide-react";
 import { Button } from "../../components/Button";
-import { Field, Input } from "../../components/Input";
+import { Field } from "../../components/Input";
 import { Select } from "../../components/Select";
 import { Toggle } from "../../components/Toggle";
 import { useAppConfigStore } from "../../../state/appConfigStore";
+import { useAdminTab } from "../adminTabStore";
 import {
   priceForAction,
   sparksForCostUsd,
   totalGrantSparks,
   type ActionPricing,
   type ActionPricingMode,
-  type SparkPack,
   type SparksConfig,
 } from "../../../core/config/sparks";
 import { costForUsage, costKey } from "../../../core/config/modelCosts";
 import { resolveImageModel } from "../../../core/config/modelConfig";
-import {
-  grantLiabilityUsd,
-  packEconomics,
-  sparkUnitEconomics,
-} from "../../../core/config/economics";
+import { grantLiabilityUsd, sparkUnitEconomics } from "../../../core/config/economics";
 import { TEXT_ACTIONS, IMAGE_ACTIONS, type ImageActionId } from "../../../core/ai/actions";
-import { Grid, NumberField, Section, fmtMoney } from "./products/parts";
+import { Grid, NumberField, Section, TabIntro, fmtMoney } from "./products/parts";
 
 const MODES: { value: ActionPricingMode; label: string }[] = [
   { value: "free", label: "Free" },
@@ -45,6 +40,7 @@ export function SparksTab() {
   const modelConfig = useAppConfigStore((s) => s.modelConfig);
   const baseCurrency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
   const save = useAppConfigStore((s) => s.saveSparksConfig);
+  const openCatalog = useAdminTab((s) => s.openCatalog);
 
   const [draft, setDraft] = useState<SparksConfig>(stored);
   const [dirty, setDirty] = useState(false);
@@ -61,27 +57,6 @@ export function SparksTab() {
 
   const setAction = (id: string, patch: Partial<ActionPricing>) => {
     set({ actions: { ...draft.actions, [id]: { ...draft.actions[id], ...patch } } });
-  };
-
-  const setPack = (idx: number, patch: Partial<SparkPack>) => {
-    set({ packs: draft.packs.map((p, i) => (i === idx ? { ...p, ...patch } : p)) });
-  };
-
-  const addPack = () => {
-    set({
-      packs: [
-        ...draft.packs,
-        {
-          id: `pack-${Date.now().toString(36)}`,
-          label: "New pack",
-          sparks: 100,
-          bonusSparks: 0,
-          prices: { [baseCurrency]: 0 },
-          active: true,
-          sortOrder: draft.packs.length,
-        },
-      ],
-    });
   };
 
   const onSave = async () => {
@@ -116,23 +91,30 @@ export function SparksTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <p className="max-w-2xl text-xs leading-relaxed text-ink-500">
-          Sparks meter the variable backend cost of AI generation. The honest principle: the book is
-          the product, Sparks just pay for the kitchen — so text/thinking steps stay free and image
-          generation is priced from its real cost. While <span className="font-medium">disabled</span>,
-          everything is free and the app behaves exactly as before.
-        </p>
-        <div className="flex gap-2">
-          {dirty && (
-            <Button variant="ghost" size="sm" onClick={() => { setDraft(stored); setDirty(false); }}>
-              Discard
-            </Button>
-          )}
-          <Button size="sm" onClick={onSave} loading={saving} disabled={!dirty}>
-            Save Sparks config
+      <TabIntro
+        elsewhere={
+          <>
+            The <span className="font-medium">packs</span> customers buy to top up live in the
+            Catalog. Per-plan Spark grants and discounts live under Memberships.
+          </>
+        }
+        links={[{ label: "Spark packs (Catalog)", onClick: () => openCatalog("packs") }]}
+      >
+        Sparks meter the variable backend cost of AI generation. The honest principle: the book is
+        the product, Sparks just pay for the kitchen — so text/thinking steps stay free and image
+        generation is priced from its real cost. While <span className="font-medium">disabled</span>,
+        everything is free and the app behaves exactly as before.
+      </TabIntro>
+
+      <div className="flex items-center justify-end gap-2">
+        {dirty && (
+          <Button variant="ghost" size="sm" onClick={() => { setDraft(stored); setDirty(false); }}>
+            Discard
           </Button>
-        </div>
+        )}
+        <Button size="sm" onClick={onSave} loading={saving} disabled={!dirty}>
+          Save Sparks config
+        </Button>
       </div>
 
       <Section
@@ -253,59 +235,6 @@ export function SparksTab() {
               </div>
             );
           })}
-        </div>
-      </Section>
-
-      <Section
-        title="Top-up packs"
-        hint="One-time Spark purchases (the power-user overflow valve). Price each pack in your base currency; add more currencies as keys if you like."
-        action={
-          <Button variant="secondary" size="sm" leftIcon={<Plus className="size-3.5" />} onClick={addPack}>
-            Add pack
-          </Button>
-        }
-      >
-        <div className="space-y-2">
-          {draft.packs.map((pack, idx) => {
-            const total = pack.sparks + pack.bonusSparks;
-            const price = pack.prices[baseCurrency] ?? 0;
-            const perSpark = total > 0 && price > 0 ? price / total : null;
-            const eco = packEconomics(draft, pack, baseCurrency);
-            return (
-              <div key={pack.id} className="space-y-2 rounded-lg bg-white p-2.5 ring-1 ring-inset ring-ink-100">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Toggle checked={pack.active} onChange={(v) => setPack(idx, { active: v })} label="Active" />
-                    <span className="text-sm font-semibold text-ink-800">
-                      {total.toLocaleString()} ✦{perSpark != null && <span className="ml-2 text-[11px] font-normal text-ink-400">{fmtMoney(perSpark, baseCurrency)}/✦</span>}
-                    </span>
-                    {eco && (
-                      <span
-                        className={
-                          eco.belowCost
-                            ? "rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700"
-                            : "rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700"
-                        }
-                        title={`If every Spark in this pack is spent, providers charge you ~${fmtMoney(eco.worstCaseCostUsd, baseCurrency)}.`}
-                      >
-                        {eco.belowCost
-                          ? "BELOW COST — every fully-spent pack loses money"
-                          : `≥ ${eco.worstCaseMarginPct}% margin worst-case`}
-                      </span>
-                    )}
-                  </div>
-                  <Button variant="ghost" size="sm" leftIcon={<Trash2 className="size-3.5" />} onClick={() => set({ packs: draft.packs.filter((_, i) => i !== idx) })} />
-                </div>
-                <Grid cols={4}>
-                  <Field label="Label"><Input value={pack.label} onChange={(e) => setPack(idx, { label: e.target.value })} /></Field>
-                  <NumberField label="Sparks" value={pack.sparks} step="10" onChange={(n) => setPack(idx, { sparks: n })} />
-                  <NumberField label="Bonus" value={pack.bonusSparks} step="5" onChange={(n) => setPack(idx, { bonusSparks: n })} />
-                  <NumberField label={`Price (${baseCurrency})`} value={price} step="0.5" suffix={baseCurrency} onChange={(n) => setPack(idx, { prices: { ...pack.prices, [baseCurrency]: n } })} />
-                </Grid>
-              </div>
-            );
-          })}
-          {draft.packs.length === 0 && <p className="text-xs text-ink-400">No packs yet.</p>}
         </div>
       </Section>
 

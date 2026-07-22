@@ -6,6 +6,13 @@
 import { randomUUID } from "node:crypto";
 import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
+import { notifySlack } from "./notify";
+
+const SEVERITY_EMOJI: Record<AlertSeverity, string> = {
+  info: "ℹ️",
+  warning: "⚠️",
+  critical: "🚨",
+};
 
 export type AlertSeverity = "info" | "warning" | "critical";
 
@@ -46,9 +53,17 @@ export async function raiseAlert(args: {
     else await db().collection("adminAlerts").doc(id).set(doc);
   } catch (err) {
     const code = (err as { code?: number }).code;
-    if (code === 6) return; // ALREADY_EXISTS — idempotent
+    if (code === 6) return; // ALREADY_EXISTS — idempotent (already alerted + pinged)
     console.error("[alerts] failed to raise alert", args.kind, err);
   }
+
+  // Mirror every fresh alert to Slack (#ops). Only reached once per alert — the
+  // ALREADY_EXISTS early-return above suppresses duplicates. Best-effort.
+  await notifySlack({
+    channel: "ops",
+    ref: args.ref ? `${args.kind}_${args.ref}` : undefined,
+    text: `${SEVERITY_EMOJI[args.severity]} *${args.kind}* — ${args.message}`,
+  });
 }
 
 /** Newest alerts first (unresolved and resolved; the client can filter). */

@@ -6,9 +6,11 @@ import {
   ArrowLeft,
   BarChart3,
   BookOpen,
+  Coins,
   Cpu,
   DollarSign,
   Image as ImageIcon,
+  LayoutDashboard,
   Loader2,
   Megaphone,
   Package,
@@ -16,7 +18,6 @@ import {
   ShieldAlert,
   Sparkles,
   Stamp,
-  Tags,
   CreditCard,
   Gauge,
   Workflow,
@@ -52,8 +53,9 @@ import { AgeWritingTab } from "./tabs/AgeWritingTab";
 import { TypographyTab } from "./tabs/TypographyTab";
 import { PromptsTab } from "./tabs/PromptsTab";
 import { ModelCostsTab } from "./tabs/ModelCostsTab";
-import { ProductsTab } from "./tabs/ProductsTab";
-import { PricingSettingsTab } from "./tabs/PricingSettingsTab";
+import { BusinessOverviewTab } from "./tabs/BusinessOverviewTab";
+import { CatalogTab } from "./tabs/CatalogTab";
+import { FinancialTab } from "./tabs/FinancialTab";
 import { PlansTab } from "./tabs/PlansTab";
 import { SparksTab } from "./tabs/SparksTab";
 import { CostIntelligenceTab } from "./tabs/CostIntelligenceTab";
@@ -74,18 +76,23 @@ const CONFIG_TAB_META: Record<
   ConfigTabId,
   { label: string; icon: ReactNode }
 > = {
-  actions: { label: "Actions", icon: <Workflow className="size-4" /> },
-  products: { label: "Products", icon: <Package className="size-4" /> },
-  pricing: { label: "Pricing settings", icon: <Tags className="size-4" /> },
-  plans: { label: "Plans", icon: <CreditCard className="size-4" /> },
-  sparks: { label: "Sparks", icon: <Sparkles className="size-4" /> },
-  costs: { label: "Cost intelligence", icon: <Gauge className="size-4" /> },
+  // Business
+  overview: { label: "Overview", icon: <LayoutDashboard className="size-4" /> },
+  catalog: { label: "Catalog", icon: <Package className="size-4" /> },
+  memberships: { label: "Memberships", icon: <CreditCard className="size-4" /> },
+  sparks: { label: "Sparks economy", icon: <Sparkles className="size-4" /> },
+  financial: { label: "Financial settings", icon: <Coins className="size-4" /> },
+  // AI pipeline
   models: { label: "Models", icon: <Cpu className="size-4" /> },
+  modelCosts: { label: "Model costs", icon: <DollarSign className="size-4" /> },
+  actions: { label: "Actions", icon: <Workflow className="size-4" /> },
+  prompts: { label: "Prompts", icon: <MessageSquareText className="size-4" /> },
+  costs: { label: "Cost intelligence", icon: <Gauge className="size-4" /> },
+  // Creative defaults
   artStyles: { label: "Art styles", icon: <ImageIcon className="size-4" /> },
   ageWriting: { label: "Age writing", icon: <BookOpen className="size-4" /> },
   typography: { label: "Typography", icon: <Type className="size-4" /> },
-  prompts: { label: "Prompts", icon: <MessageSquareText className="size-4" /> },
-  modelCosts: { label: "Model costs", icon: <DollarSign className="size-4" /> },
+  // Operations
   system: { label: "System health", icon: <HeartPulse className="size-4" /> },
 };
 
@@ -97,16 +104,18 @@ const MARKETING_TABS = [
 
 function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
   switch (tab) {
-    case "actions":
-      return <ActionsTab />;
-    case "products":
-      return <ProductsTab />;
-    case "pricing":
-      return <PricingSettingsTab />;
-    case "plans":
+    case "overview":
+      return <BusinessOverviewTab />;
+    case "catalog":
+      return <CatalogTab />;
+    case "memberships":
       return <PlansTab />;
     case "sparks":
       return <SparksTab />;
+    case "financial":
+      return <FinancialTab />;
+    case "actions":
+      return <ActionsTab />;
     case "costs":
       return <CostIntelligenceTab />;
     case "models":
