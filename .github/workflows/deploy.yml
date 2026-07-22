@@ -55,6 +55,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Ping Slack as soon as a deploy kicks off — the matching result ping
+      # ("Notify Slack (deploy result)") posts at the end. Two independent
+      # messages (start + end), since an incoming webhook can't edit/thread.
+      - name: Notify Slack (deploy started)
+        if: env.SLACK_WEBHOOK_URL != ''
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          text="⏳ Deploy started — ${GITHUB_REPOSITORY}@${GITHUB_SHA:0:7}
+          ${COMMIT_MSG%%$'\n'*}
+          by ${GITHUB_ACTOR} · ${RUN_URL}"
+          payload=$(printf '{"text": %s}' "$(printf '%s' "$text" | jq -Rs .)")
+          curl -fsS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
