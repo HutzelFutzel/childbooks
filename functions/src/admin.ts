@@ -184,7 +184,11 @@ async function extractCostsForProvider(
     "Use 0 for any field that does not apply. For text models set kind=text. For image-generation models set kind=image and pick the output billing: " +
     "perMillionTokens when output is billed per 1M image tokens (e.g. Gemini image output), perImage for a flat per-image price, or perImageBySize when it depends on output resolution. " +
     "If a model charges higher rates above an input-token threshold (e.g. > 200k tokens), set text.largePrompt.enabled=true with that threshold and the higher rates. " +
-    "Set canonicalModelId to the exact id shown in the docs, found=false if the model isn't present, and put the verbatim line(s) you used in sourceQuote.";
+    "Matching rules: prefer an EXACT id match (found=true, approximate=false). " +
+    "If the exact id is absent but the SAME model appears under a close variant — differing only by a `-preview`/`-latest`/`-exp` suffix, a trailing date or version number (e.g. `-001`, `-2024-xx`), or being the base family of a size/tier suffix — use that variant's rates and set found=true, approximate=true, canonicalModelId=the variant id you used, and explain the substitution in notes. " +
+    "Do NOT substitute across clearly different models or size tiers (e.g. do not price a `-mini` from the full model, or vice versa). " +
+    "Only set found=false (approximate=false) when no exact id and no close same-model variant exists in the excerpt. " +
+    "Always put the verbatim line(s) you used in sourceQuote.";
   const user = `Provider: ${provider}\n${columnHint}\n\nRequested model ids:\n${ids
     .map((id) => `- ${id}`)
     .join("\n")}\n\nPricing excerpt:\n${excerpt}`;
@@ -220,6 +224,7 @@ async function extractCostsForProvider(
         provider,
         requestedModelId: id,
         found: false,
+        approximate: false,
         modelCost: null,
         canonicalModelId: raw?.canonicalModelId ?? "",
         sourceQuote: raw?.sourceQuote ?? "",
@@ -230,6 +235,7 @@ async function extractCostsForProvider(
       provider,
       requestedModelId: id,
       found: true,
+      approximate: raw.approximate === true,
       modelCost: suggestionToModelCost(raw),
       canonicalModelId: raw.canonicalModelId,
       sourceQuote: raw.sourceQuote,
@@ -371,6 +377,7 @@ export function registerAdminRoutes(app: Express): void {
               provider,
               requestedModelId: id,
               found: false,
+              approximate: false,
               modelCost: null,
               canonicalModelId: "",
               sourceQuote: "",

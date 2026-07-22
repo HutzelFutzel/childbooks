@@ -20,7 +20,6 @@ import {
   Stamp,
   CreditCard,
   Gauge,
-  Workflow,
   HeartPulse,
   Search,
   MessageSquareText,
@@ -59,7 +58,6 @@ import { FinancialTab } from "./tabs/FinancialTab";
 import { PlansTab } from "./tabs/PlansTab";
 import { SparksTab } from "./tabs/SparksTab";
 import { CostIntelligenceTab } from "./tabs/CostIntelligenceTab";
-import { ActionsTab } from "./tabs/ActionsTab";
 import { SystemHealthTab } from "./tabs/SystemHealthTab";
 import { SeoTab } from "./tabs/marketing/SeoTab";
 import { BrandingTab } from "./tabs/marketing/BrandingTab";
@@ -85,7 +83,6 @@ const CONFIG_TAB_META: Record<
   // AI pipeline
   models: { label: "Models", icon: <Cpu className="size-4" /> },
   modelCosts: { label: "Model costs", icon: <DollarSign className="size-4" /> },
-  actions: { label: "Actions", icon: <Workflow className="size-4" /> },
   prompts: { label: "Prompts", icon: <MessageSquareText className="size-4" /> },
   costs: { label: "Cost intelligence", icon: <Gauge className="size-4" /> },
   // Creative defaults
@@ -114,8 +111,6 @@ function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
       return <SparksTab />;
     case "financial":
       return <FinancialTab />;
-    case "actions":
-      return <ActionsTab />;
     case "costs":
       return <CostIntelligenceTab />;
     case "models":

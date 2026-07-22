@@ -37,7 +37,6 @@ function bullets(plan: PublicPlan): string[] {
   if (plan.entitlements.printDiscountPct > 0) {
     out.push(`${plan.entitlements.printDiscountPct}% off every print order`);
   }
-  if (plan.entitlements.removeWatermark) out.push("No watermark on shared books");
   if (plan.isFree) {
     out.push("Make a complete book for free");
     out.push("Print anytime at standard price");

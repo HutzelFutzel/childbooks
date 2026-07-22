@@ -170,7 +170,7 @@ export function PlansTab() {
         </Button>
       </div>
 
-      <div className="space-y-3">
+      <div className="space-y-6">
         {plans
           .slice()
           .sort((a, b) => a.sortOrder - b.sortOrder)
@@ -253,8 +253,8 @@ function PlanCard({
   };
 
   return (
-    <div className="space-y-3 rounded-xl bg-white p-3.5 ring-1 ring-inset ring-ink-100">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    <div className="space-y-3 overflow-hidden rounded-2xl border border-ink-200 bg-white p-4 shadow-sm">
+      <div className="-mx-4 -mt-4 mb-1 flex flex-wrap items-center justify-between gap-2 border-b border-ink-100 bg-ink-50/60 px-4 py-3">
         <div className="flex items-center gap-2">
           <Input
             value={plan.presentation.name}

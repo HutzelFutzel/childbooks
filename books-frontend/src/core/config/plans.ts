@@ -216,7 +216,7 @@ export function createDefaultPlansConfig(): PlansConfig {
     presentation: {
       name: "Storyteller",
       tagline: "For regular bedtime makers",
-      description: "A fresh bundle of Sparks every month, cheaper prints, and no watermark on shares.",
+      description: "A fresh bundle of Sparks every month, cheaper prints, and premium extras.",
       badges: ["Most popular"],
     },
     billing: {
@@ -521,6 +521,25 @@ export function findPublicPlanByPriceId(plans: PublicPlan[], priceId: string | n
     }
   }
   return null;
+}
+
+/** The baseline free public plan, or null if none is published. */
+export function freePublicPlan(plans: PublicPlan[]): PublicPlan | null {
+  return plans.find((p) => p.isFree) ?? null;
+}
+
+/**
+ * The public plan that applies to a user with the given active price id —
+ * falling back to the free plan when there's no subscription. Mirrors the
+ * server's `resolveActivePlan`, so free-tier `actionMultipliers` (and other
+ * entitlements) are reflected in the studio estimates, not silently treated
+ * as a neutral 1× multiplier.
+ */
+export function resolvePublicPlanByPriceId(
+  plans: PublicPlan[],
+  priceId: string | null,
+): PublicPlan | null {
+  return findPublicPlanByPriceId(plans, priceId) ?? freePublicPlan(plans);
 }
 
 // ---- Validation (used by the backend before persisting) --------------------

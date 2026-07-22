@@ -32,7 +32,7 @@ const STEPS = [
     slot: "how.step3" as SiteImageSlot,
     titleSlot: "how.step3.title" as const,
     bodySlot: "how.step3.body" as const,
-    title: "Print & share",
+    title: "Print & keep",
     body: "Lay out text and art, then order a full-bleed, print-ready book — or get it instantly as a digital edition.",
     art: "Spot illustration — printing",
   },

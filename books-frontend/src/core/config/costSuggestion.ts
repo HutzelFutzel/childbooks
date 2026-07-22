@@ -16,6 +16,12 @@ import type { ImageOutputCost, ModelCost } from "./modelCosts";
 export const costSuggestionSchema = z.object({
   /** False when the model id can't be found in the excerpt. */
   found: z.boolean(),
+  /**
+   * True when the rates come from a CLOSE variant of the requested model rather
+   * than an exact id match (e.g. the docs list a `-preview`/`-latest`/dated or
+   * base-family entry of the same model). The admin must verify these.
+   */
+  approximate: z.boolean(),
   /** The exact id as shown in the docs (may differ from the requested id). */
   canonicalModelId: z.string(),
   kind: z.enum(["text", "image"]),
@@ -68,6 +74,8 @@ export interface CostSuggestionResult {
   provider: ProviderId;
   requestedModelId: string;
   found: boolean;
+  /** Rates came from a close variant, not an exact id match — verify carefully. */
+  approximate: boolean;
   modelCost: ModelCost | null;
   canonicalModelId: string;
   sourceQuote: string;

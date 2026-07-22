@@ -11,8 +11,8 @@ import {
   type UserSubscription,
 } from "../platform/subscriptions";
 import {
-  findPublicPlanByPriceId,
   planActionMultiplier,
+  resolvePublicPlanByPriceId,
   type PublicPlan,
 } from "../core/config/plans";
 import { featureAllowedForSubscription } from "../core/config/features";
@@ -51,14 +51,15 @@ export const useSubscriptionStore = create<SubscriptionState>((set, get) => ({
 }));
 
 /**
- * The signed-in user's current PUBLIC plan (their active subscription's plan,
- * else null — i.e. the free baseline). Non-hook so pure estimate helpers can
- * use it; components should select the stores they need for reactivity.
+ * The signed-in user's current PUBLIC plan: their active subscription's plan,
+ * else the free baseline plan (mirroring the server's `resolveActivePlan`) so
+ * free-tier pricing/entitlements are honoured in estimates. Non-hook so pure
+ * estimate helpers can use it; components should select the stores they need
+ * for reactivity.
  */
 export function currentPublicPlan(): PublicPlan | null {
   const sub = activeSubscription(useSubscriptionStore.getState().subscriptions);
-  if (!sub) return null;
-  return findPublicPlanByPriceId(useAppConfigStore.getState().plans.plans, sub.priceId);
+  return resolvePublicPlanByPriceId(useAppConfigStore.getState().plans.plans, sub?.priceId ?? null);
 }
 
 /**
@@ -74,7 +75,7 @@ export function usePlanActionMultiplier(action: string): number {
   const subscriptions = useSubscriptionStore((s) => s.subscriptions);
   const plans = useAppConfigStore((s) => s.plans.plans);
   const sub = activeSubscription(subscriptions);
-  const plan = sub ? findPublicPlanByPriceId(plans, sub.priceId) : null;
+  const plan = resolvePublicPlanByPriceId(plans, sub?.priceId ?? null);
   return planActionMultiplier(plan, action);
 }
 

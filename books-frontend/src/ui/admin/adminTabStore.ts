@@ -17,7 +17,6 @@ export type ConfigTabId =
   // AI pipeline group.
   | "models"
   | "modelCosts"
-  | "actions"
   | "prompts"
   | "costs"
   // Creative defaults group.
@@ -46,7 +45,7 @@ export const CONFIG_GROUPS: {
   {
     id: "ai",
     label: "AI pipeline",
-    tabs: ["models", "modelCosts", "actions", "prompts", "costs"],
+    tabs: ["models", "modelCosts", "prompts", "costs"],
   },
   {
     id: "creative",

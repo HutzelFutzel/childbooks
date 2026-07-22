@@ -109,7 +109,7 @@ export function createDefaultSeoConfig(): SeoConfig {
       {
         question: "What are Sparks?",
         answer:
-          "Sparks are the credits used for AI generation. Paid plans include a monthly bundle of Sparks that roll over, plus cheaper prints and no watermark on shared books.",
+          "Sparks are the credits used for AI generation. Paid plans include a monthly bundle of Sparks that roll over, plus cheaper prints and premium extras.",
       },
     ],
     updatedAt: Date.now(),

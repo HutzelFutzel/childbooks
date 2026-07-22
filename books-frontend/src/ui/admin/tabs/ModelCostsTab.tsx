@@ -412,7 +412,9 @@ export function ModelCostsTab() {
     try {
       const res = await suggestCost(row.provider, id, row.cost.kind);
       if (!res.found || !res.modelCost) {
-        toast.error(`Couldn't find pricing for "${id}" on the ${PROVIDER_LABELS[row.provider]} docs.`);
+        toast.error(
+          `No pricing found for "${id}" on the ${PROVIDER_LABELS[row.provider]} docs — it may be an unreleased or placeholder model. Enter the rates manually.`,
+        );
         return;
       }
       const cost = res.modelCost;
@@ -429,7 +431,13 @@ export function ModelCostsTab() {
       setPending(({ [key]: _drop, ...rest }) => rest);
       // Remount editors so internal (by-size) state reseeds from the suggestion.
       setSeed((s) => s + 1);
-      toast.success(`Suggested rates for "${id}" — please verify before saving.`);
+      if (res.approximate) {
+        toast.warning(
+          `No exact match for "${id}" — used the closest variant "${res.canonicalModelId}". Verify the rates before saving.`,
+        );
+      } else {
+        toast.success(`Suggested rates for "${id}" — please verify before saving.`);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Suggestion failed.");
     } finally {
@@ -471,12 +479,14 @@ export function ModelCostsTab() {
       let conflicts = 0;
       let matched = 0;
       let notFound = 0;
+      let approx = 0;
 
       for (const res of results) {
         if (!res.found || !res.modelCost) {
           notFound += 1;
           continue;
         }
+        if (res.approximate) approx += 1;
         const key = costKey(res.provider, res.requestedModelId);
         const metaObj: SuggestMeta = {
           canonicalModelId: res.canonicalModelId,
@@ -513,9 +523,10 @@ export function ModelCostsTab() {
       const bits = [`${applied} applied`];
       if (conflicts) bits.push(`${conflicts} need review`);
       if (matched) bits.push(`${matched} already match`);
+      if (approx) bits.push(`${approx} approximate`);
       if (notFound) bits.push(`${notFound} not found`);
       const msg = `Suggested ${selected.length} model${selected.length === 1 ? "" : "s"}: ${bits.join(", ")}.`;
-      if (conflicts || notFound) toast.warning(msg);
+      if (conflicts || notFound || approx) toast.warning(msg);
       else toast.success(msg);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Suggestion failed.");
