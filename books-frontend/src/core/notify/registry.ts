@@ -22,6 +22,7 @@ export const SLACK_MESSAGE_IDS = [
   "subscription_started",
   "subscription_cancelled",
   "referral_paid",
+  "contact_form",
   "admin_alert",
 ] as const;
 
@@ -67,6 +68,12 @@ export const SLACK_MESSAGE_REGISTRY: Record<SlackMessageKey, SlackMessageMeta> =
     id: "referral_paid",
     label: "Referral paid out",
     description: "Posted to #growth when a referral reward is paid after a first purchase.",
+    channel: "growth",
+  },
+  contact_form: {
+    id: "contact_form",
+    label: "Contact form submission",
+    description: "Posted to #growth when a visitor submits the public contact form.",
     channel: "growth",
   },
   admin_alert: {

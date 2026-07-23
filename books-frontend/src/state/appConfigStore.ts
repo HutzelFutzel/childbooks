@@ -113,6 +113,17 @@ import {
   normalizeSlackConfig,
   type SlackConfig,
 } from "../core/config/slackConfig";
+import {
+  createDefaultLegalConfig,
+  normalizeLegalConfig,
+  type LegalConfig,
+  type LegalRole,
+} from "../core/config/legal";
+import {
+  createDefaultCookieConfig,
+  normalizeCookieConfig,
+  type CookieConfig,
+} from "../core/config/cookieConfig";
 import type { SlackChannel } from "../core/notify/registry";
 import type { EmailTemplateId } from "../core/email/types";
 import type { ActionCostReport, CostGranularity } from "../core/analytics/types";
@@ -169,6 +180,10 @@ interface AppConfigState {
   emailStats: EmailStats;
   /** Per-message Slack notification toggles. */
   slackConfig: SlackConfig;
+  /** Legal documents (dynamic URL list + roles + consent versions). */
+  legal: LegalConfig;
+  /** Cookie consent banner config (copy, categories, consent version). */
+  cookieConfig: CookieConfig;
   loaded: boolean;
   unsubs: Unsubscribe[];
   adminCostsUnsub: Unsubscribe | null;
@@ -198,6 +213,12 @@ interface AppConfigState {
   saveSlackConfig: (config: SlackConfig) => Promise<void>;
   /** Post a real test notification to a Slack channel to verify the webhook. */
   sendTestSlack: (channel: SlackChannel) => Promise<void>;
+  saveLegal: (config: LegalConfig) => Promise<void>;
+  /** Email every user about a material change to a legal document (bulk send). */
+  notifyPolicyUpdate: (role: LegalRole) => Promise<{ recipients: number; sent: number }>;
+  saveCookieConfig: (config: CookieConfig) => Promise<void>;
+  /** Send a sample contact-form message to the configured contact inbox. */
+  sendTestContact: () => Promise<void>;
   uploadArtStyleImage: (styleId: string, base64: string, mimeType: string) => Promise<void>;
 
   // Landing-page inline editing (admin, gated in the UI; enforced server-side).
@@ -310,6 +331,8 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   emailConfig: createDefaultEmailConfig(),
   emailStats: createDefaultEmailStats(),
   slackConfig: createDefaultSlackConfig(),
+  legal: createDefaultLegalConfig(),
+  cookieConfig: createDefaultCookieConfig(),
   loaded: false,
   unsubs: [],
 
@@ -375,6 +398,12 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       }),
       onSnapshot(doc(db, "appConfig", "slackConfig"), (snap) => {
         set({ slackConfig: normalizeSlackConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "legal"), (snap) => {
+        set({ legal: normalizeLegalConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "cookieConfig"), (snap) => {
+        set({ cookieConfig: normalizeCookieConfig(snap.exists() ? snap.data() : undefined) });
       }),
     ];
     set({ unsubs });
@@ -463,6 +492,34 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       body: JSON.stringify({ channel }),
     });
     if (!res.ok) throw new Error((await safeError(res)) ?? "Slack test failed.");
+  },
+
+  async saveLegal(config) {
+    set({ legal: normalizeLegalConfig(await putJson("/admin/config/legal", config)) });
+  },
+
+  async notifyPolicyUpdate(role) {
+    const res = await backendFetch("/admin/legal/notify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not send notifications.");
+    const json = (await res.json()) as { recipients: number; sent: number };
+    return { recipients: json.recipients, sent: json.sent };
+  },
+
+  async saveCookieConfig(config) {
+    set({ cookieConfig: normalizeCookieConfig(await putJson("/admin/config/cookies", config)) });
+  },
+
+  async sendTestContact() {
+    const res = await backendFetch("/admin/contact/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Contact test failed.");
   },
 
   async loadAdminPlans() {

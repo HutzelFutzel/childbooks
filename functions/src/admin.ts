@@ -19,6 +19,10 @@ import {
   saveEmailConfig,
   getSlackConfig,
   saveSlackConfig,
+  getLegalConfig,
+  saveLegalConfig,
+  getCookieConfig,
+  saveCookieConfig,
   deleteBrandingAssetVersion,
   deleteWatermarkVersion,
   restoreBrandingAsset,
@@ -87,8 +91,10 @@ import {
   type CostSuggestionResult,
   type RawBatchCostItem,
 } from "../../books-frontend/src/core/config/costSuggestion";
+import { getAuth } from "firebase-admin/auth";
 import { sendTemplatedEmail } from "./email/service";
 import { emailConfigured } from "./email/sender";
+import { legalLinkByRole, type LegalRole } from "../../books-frontend/src/core/config/legal";
 import {
   EMAIL_TEMPLATE_REGISTRY,
 } from "../../books-frontend/src/core/email/registry";
@@ -957,6 +963,120 @@ export function registerAdminRoutes(app: Express): void {
   app.get("/admin/config/slack", async (_req, res) => {
     try {
       res.json({ config: await getSlackConfig(), registry: SLACK_MESSAGE_REGISTRY });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- Legal documents ------------------------------------------------------
+
+  app.get("/admin/config/legal", async (_req, res) => {
+    try {
+      res.json(await getLegalConfig());
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.put("/admin/config/legal", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveLegalConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  /**
+   * Notify every user by email about a material change to a legal document.
+   * A deliberate bulk send — sends the `policy_update` transactional template to
+   * all accounts, deduped per uid + policy + version so re-triggering is safe.
+   * Body: { role } (a well-known legal role, e.g. "privacy" | "terms").
+   */
+  app.post("/admin/legal/notify", json, async (req: Request, res: Response) => {
+    try {
+      const role = ((req.body ?? {}) as { role?: string }).role as LegalRole | undefined;
+      const config = await getLegalConfig();
+      const link = role ? legalLinkByRole(config, role) : undefined;
+      if (!link) {
+        res.status(400).json({ error: { message: "Unknown or unset legal document." } });
+        return;
+      }
+
+      let recipients = 0;
+      let sent = 0;
+      let pageToken: string | undefined;
+      do {
+        const page = await getAuth().listUsers(1000, pageToken);
+        for (const user of page.users) {
+          const email = user.email;
+          // Real, non-anonymous accounts with an email only.
+          if (!email || (user.providerData ?? []).length === 0) continue;
+          recipients++;
+          const result = await sendTemplatedEmail({
+            templateId: "policy_update",
+            to: email,
+            vars: {
+              name: user.displayName ?? undefined,
+              policyName: link.label,
+              effectiveDate: link.effectiveDate || undefined,
+              documentUrl: link.url,
+            },
+            // Once per user per policy version.
+            dedupeKey: `${link.id}_v${link.version}_${user.uid}`,
+          });
+          if (result.ok && result.skipped !== "duplicate") sent++;
+        }
+        pageToken = page.pageToken;
+      } while (pageToken);
+
+      res.json({ ok: true, recipients, sent, policy: link.label, version: link.version });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- Cookie consent -------------------------------------------------------
+
+  app.get("/admin/config/cookies", async (_req, res) => {
+    try {
+      res.json(await getCookieConfig());
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.put("/admin/config/cookies", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveCookieConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Send a sample contact-form message to the configured contact inbox — proves
+  // the whole delivery chain (sender identity → ZeptoMail → inbox) end to end.
+  app.post("/admin/contact/test", json, async (_req: Request, res: Response) => {
+    try {
+      const config = await getEmailConfig();
+      const recipient = config.global.contactRecipient || config.global.supportEmail;
+      if (!recipient) {
+        res.status(400).json({ error: { message: "Set a contact recipient first." } });
+        return;
+      }
+      const result = await sendTemplatedEmail({
+        templateId: "contact_form",
+        to: recipient,
+        replyTo: config.senders.replyTo || undefined,
+        isTest: true,
+        vars: EMAIL_TEMPLATE_REGISTRY.contact_form.sample,
+      });
+      if (!result.ok) {
+        res
+          .status(500)
+          .json({ error: { message: result.error ?? "Test send failed — check email setup." } });
+        return;
+      }
+      res.json({ ok: true, recipient });
     } catch (err) {
       handleError(res, err);
     }

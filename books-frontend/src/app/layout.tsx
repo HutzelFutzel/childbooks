@@ -9,8 +9,11 @@ import "@fontsource/inter/700.css";
 import "@fontsource/fredoka/500.css";
 import "@fontsource/fredoka/600.css";
 import "@fontsource/fredoka/700.css";
-import { AnalyticsInit } from "../ui/components/AnalyticsInit";
+import { ConsentManager } from "../ui/consent/ConsentManager";
 import { getBrandingConfig } from "../server/branding";
+import { getCookieConfig } from "../server/cookieConfig";
+import { getLegalConfig } from "../server/legal";
+import { legalUrlByRole } from "../core/config/legal";
 import { brandingThemeVars } from "../ui/lib/color";
 
 /**
@@ -55,14 +58,24 @@ export default async function RootLayout({
   // Derive the whole palette from the admin's brand colors and inject it as
   // inline CSS variables on <html>, so every `bg-brand-*` / `text-accent-*`
   // utility reflects branding with no flash of the default purple.
-  const branding = await getBrandingConfig();
+  const [branding, cookieConfig, legal] = await Promise.all([
+    getBrandingConfig(),
+    getCookieConfig(),
+    getLegalConfig(),
+  ]);
   const themeVars = brandingThemeVars(branding);
 
   return (
     <html lang="en" style={themeVars as React.CSSProperties}>
       <body>
         {children}
-        <AnalyticsInit />
+        {/* Cookie consent gates Google Analytics — no analytics cookies fire
+            until the visitor grants the analytics category. */}
+        <ConsentManager
+          config={cookieConfig}
+          privacyUrl={legalUrlByRole(legal, "privacy") || undefined}
+          cookiePolicyUrl={legalUrlByRole(legal, "cookies") || undefined}
+        />
       </body>
     </html>
   );

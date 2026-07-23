@@ -57,6 +57,10 @@ export interface EmailGlobalSettings {
   physicalAddress: string;
   /** Safety valve: refuse to send beyond this many emails/day. 0 = unlimited. */
   maxDailySends: number;
+  /** Whether the public contact form accepts submissions. */
+  contactEnabled: boolean;
+  /** Inbox that contact-form submissions are delivered to (falls back to support). */
+  contactRecipient: string;
 }
 
 export interface EmailConfig {
@@ -92,6 +96,8 @@ export function createDefaultEmailConfig(): EmailConfig {
       unsubscribeUrl: `https://${DEFAULT_DOMAIN}/unsubscribe`,
       physicalAddress: "",
       maxDailySends: 0,
+      contactEnabled: true,
+      contactRecipient: `hello@${DEFAULT_DOMAIN}`,
     },
     senders: {
       default: `Childbook Studio <noreply@${DEFAULT_DOMAIN}>`,
@@ -153,6 +159,8 @@ export function normalizeEmailConfig(input: unknown): EmailConfig {
       unsubscribeUrl: str(g.unsubscribeUrl, d.global.unsubscribeUrl, 500),
       physicalAddress: str(g.physicalAddress, d.global.physicalAddress, 300),
       maxDailySends: Math.round(num(g.maxDailySends, d.global.maxDailySends, 0, 1_000_000)),
+      contactEnabled: bool(g.contactEnabled, d.global.contactEnabled),
+      contactRecipient: str(g.contactRecipient, d.global.contactRecipient, 320),
     },
     senders: {
       default: str(s.default, d.senders.default, 320),
@@ -183,6 +191,8 @@ export const emailConfigSchema = z.object({
       unsubscribeUrl: z.string().max(500),
       physicalAddress: z.string().max(300),
       maxDailySends: z.number(),
+      contactEnabled: z.boolean(),
+      contactRecipient: z.string().max(320),
     })
     .partial()
     .optional(),

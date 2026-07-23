@@ -118,6 +118,34 @@ export const EMAIL_TEMPLATE_REGISTRY: Registry = {
     defaultSenderKey: "default",
     sample: { name: "Alex", sparks: 100, kind: "referrer" },
   },
+  contact_form: {
+    id: "contact_form",
+    label: "Contact form submission",
+    description:
+      "Delivered to the support inbox when a visitor submits the public contact form (reply-to is set to the sender).",
+    category: "transactional",
+    defaultSenderKey: "support",
+    sample: {
+      fromName: "Jamie Rivera",
+      fromEmail: "jamie@example.com",
+      topic: "Question about printing",
+      message: "Hi! I'd love to know how long shipping takes to Germany. Thanks!",
+    },
+  },
+  policy_update: {
+    id: "policy_update",
+    label: "Policy update notice",
+    description:
+      "Sent to users when a legal document changes materially. Transactional (a service notice), not gated on marketing opt-in.",
+    category: "transactional",
+    defaultSenderKey: "default",
+    sample: {
+      name: "Alex",
+      policyName: "Privacy Policy",
+      effectiveDate: "August 1, 2026",
+      documentUrl: "https://childbook.studio/legal/privacy",
+    },
+  },
 };
 
 /** Ordered list of template metadata (drives the admin list). */

@@ -269,6 +269,50 @@ export const RENDERERS: { [Id in keyof EmailTemplateVarsMap]: TemplateRenderer<I
     const text = `${greeting(vars.name)}\n\n${reason}\n${sparks(vars.sparks)} added to your account.\n\nStudio: ${ctx.brand.siteUrl}/studio`;
     return assemble(ctx, subject, "You earned Sparks", body, text);
   },
+
+  contact_form: (vars, ctx) => {
+    const topic = vars.topic?.trim();
+    const subject = topic
+      ? `Contact form: ${topic}`
+      : `New contact form message from ${vars.fromName}`;
+    const body = [
+      heading("New contact form message", ctx.brand),
+      paragraph(
+        `<strong>From:</strong> ${escapeHtml(vars.fromName)} &lt;${escapeHtml(vars.fromEmail)}&gt;`,
+      ),
+      topic ? paragraph(`<strong>Topic:</strong> ${escapeHtml(topic)}`) : "",
+      calloutBox(escapeHtml(vars.message).replace(/\n/g, "<br/>"), ctx.brand),
+      paragraph("Just reply to this email to respond — it goes straight to the sender."),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const text = `New contact form message\n\nFrom: ${vars.fromName} <${vars.fromEmail}>${
+      topic ? `\nTopic: ${topic}` : ""
+    }\n\n${vars.message}\n\nReply to this email to respond.`;
+    return assemble(ctx, subject, "New contact form message", body, text);
+  },
+
+  policy_update: (vars, ctx) => {
+    const subject = `We've updated our ${vars.policyName}`;
+    const body = [
+      heading(`Our ${escapeHtml(vars.policyName)} has changed`, ctx.brand),
+      paragraph(
+        `${greeting(vars.name)} we're letting you know that we've updated our ${escapeHtml(
+          vars.policyName,
+        )}${
+          vars.effectiveDate ? `, effective <strong>${escapeHtml(vars.effectiveDate)}</strong>` : ""
+        }.`,
+      ),
+      paragraph(
+        "Please take a moment to review the changes. By continuing to use your account you accept the updated terms.",
+      ),
+      button(`Read the updated ${vars.policyName}`, vars.documentUrl, ctx.brand),
+    ].join("\n");
+    const text = `${greeting(vars.name)}\n\nWe've updated our ${vars.policyName}${
+      vars.effectiveDate ? `, effective ${vars.effectiveDate}` : ""
+    }.\n\nRead it here: ${vars.documentUrl}`;
+    return assemble(ctx, subject, `Our ${vars.policyName} has changed`, body, text);
+  },
 };
 
 /** Re-export for callers that only need the token helper (subject overrides). */

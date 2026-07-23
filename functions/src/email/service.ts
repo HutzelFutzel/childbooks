@@ -101,6 +101,8 @@ export interface SendTemplateOptions<Id extends EmailTemplateId> {
   dedupeKey?: string;
   /** Bypass the enabled/cap checks (used by the admin "send test" action). */
   isTest?: boolean;
+  /** Override the reply-to address (e.g. the contact form's submitter). */
+  replyTo?: string;
 }
 
 export interface SendTemplateResult {
@@ -168,7 +170,7 @@ export async function sendTemplatedEmail<Id extends EmailTemplateId>(
         (typeof (opts.vars as { name?: string }).name === "string"
           ? (opts.vars as { name?: string }).name
           : fallbackName) ?? undefined,
-      replyTo: config.senders.replyTo || undefined,
+      replyTo: opts.replyTo || config.senders.replyTo || undefined,
       subject,
       html: rendered.html,
       text: rendered.text,

@@ -45,12 +45,14 @@ export function EmailTab() {
   const seo = useAppConfigStore((s) => s.seo);
   const save = useAppConfigStore((s) => s.saveEmailConfig);
   const sendTest = useAppConfigStore((s) => s.sendTestEmail);
+  const sendTestContact = useAppConfigStore((s) => s.sendTestContact);
 
   const [draft, setDraft] = useState<EmailConfig>(stored);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [previewId, setPreviewId] = useState<EmailTemplateId | null>(null);
   const [testing, setTesting] = useState<EmailTemplateId | null>(null);
+  const [testingContact, setTestingContact] = useState(false);
   const [configured, setConfigured] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -104,6 +106,22 @@ export function EmailTab() {
       toast.error(err instanceof Error ? err.message : "Test send failed.");
     } finally {
       setTesting(null);
+    }
+  };
+
+  const onTestContact = async () => {
+    if (dirty) {
+      toast.error("Save your changes first, then send a test.");
+      return;
+    }
+    setTestingContact(true);
+    try {
+      await sendTestContact();
+      toast.success("Test message sent to the contact inbox.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Contact test failed.");
+    } finally {
+      setTestingContact(false);
     }
   };
 
@@ -235,6 +253,37 @@ export function EmailTab() {
             onChange={(e) => setGlobal({ physicalAddress: e.target.value })}
           />
         </Field>
+      </Section>
+
+      {/* ---- Contact form ---- */}
+      <Section
+        title="Contact form"
+        hint="The public /contact page delivers messages here. Reply-to is set to the sender, so you can respond directly."
+        action={
+          <Button
+            variant="secondary"
+            size="sm"
+            leftIcon={<Send className="size-3.5" />}
+            loading={testingContact}
+            onClick={onTestContact}
+          >
+            Send test to inbox
+          </Button>
+        }
+      >
+        <label className="flex items-center gap-2 text-sm text-ink-700">
+          <Toggle
+            checked={draft.global.contactEnabled}
+            onChange={(v) => setGlobal({ contactEnabled: v })}
+            label="Contact form enabled"
+          />
+          Contact form enabled {draft.global.contactEnabled ? "" : "— the form rejects submissions"}
+        </label>
+        <TextField
+          label="Contact inbox (where submissions are delivered)"
+          value={draft.global.contactRecipient}
+          onChange={(v) => setGlobal({ contactRecipient: v })}
+        />
       </Section>
 
       {/* ---- Sender identities ---- */}

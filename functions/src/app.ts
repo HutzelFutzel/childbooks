@@ -22,6 +22,7 @@ import { registerAiRoutes } from "./ai";
 import { registerMigrationRoutes } from "./migration";
 import { registerAuthRoutes } from "./authRoutes";
 import { registerAdminRoutes } from "./admin";
+import { registerGdprRoutes } from "./gdpr";
 import { registerHealthRoutes } from "./health";
 import { registerRuntimeRoutes } from "./readiness";
 import { registerAnalyticsRoutes } from "./analytics";
@@ -31,6 +32,7 @@ import {
   registerStripeWebhookRoute,
 } from "./stripe";
 import { registerEmailWebhookRoute } from "./email/webhook";
+import { registerContactRoutes } from "./contact";
 
 export function createApp(): Express {
   const app = express();
@@ -62,6 +64,11 @@ export function createApp(): Express {
   // configured). Registered here so it's reachable without a Firebase token.
   registerEmailWebhookRoute(app);
 
+  // Public contact form — tokenless (the marketing site has no Firebase
+  // session), rate-limited + honeypot-guarded. Registered before the auth
+  // guards so visitors can reach it.
+  registerContactRoutes(app);
+
   // Protected surfaces — registered before their route handlers so the guard
   // runs first. Fulfillment + payments require a verified, non-anonymous
   // account; `/ai` only requires *some* authenticated identity (guests and
@@ -86,6 +93,7 @@ export function createApp(): Express {
   registerMigrationRoutes(app);
   registerAuthRoutes(app);
   registerAdminRoutes(app);
+  registerGdprRoutes(app);
   registerHealthRoutes(app);
   registerRuntimeRoutes(app);
   registerAnalyticsRoutes(app);

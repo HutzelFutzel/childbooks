@@ -30,6 +30,8 @@ export const EMAIL_TEMPLATE_IDS = [
   "gift_received",
   "gift_claimed",
   "referral_reward",
+  "contact_form",
+  "policy_update",
 ] as const;
 
 export type EmailTemplateId = (typeof EMAIL_TEMPLATE_IDS)[number];
@@ -110,6 +112,14 @@ export interface EmailTemplateVarsMap {
   gift_received: { sparks: number; code: string; message?: string; senderName?: string; claimUrl?: string };
   gift_claimed: { name?: string; sparks: number; balance?: number };
   referral_reward: { name?: string; sparks: number; kind: "referrer" | "referred" };
+  /** Sent to the support inbox when a visitor submits the public contact form. */
+  contact_form: { fromName: string; fromEmail: string; topic?: string; message: string };
+  /**
+   * Sent to users when a legal document changes materially. A service message
+   * about the account's governing policy — transactional, NOT gated on marketing
+   * opt-in.
+   */
+  policy_update: { name?: string; policyName: string; effectiveDate?: string; documentUrl: string };
 }
 
 export type EmailTemplateVars<Id extends EmailTemplateId> = EmailTemplateVarsMap[Id];

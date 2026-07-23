@@ -49,7 +49,7 @@ export function Hero({ images, text }: { images: SiteImagesMap; text: SiteTextMa
               className="text-sm text-ink-500"
             />
             <a
-              href="#how-it-works"
+              href="/#how-it-works"
               className="text-sm font-semibold text-brand-700 underline-offset-4 transition hover:underline"
             >
               <EditableText slotId="hero.ctaSecondary" as="span" defaultValue="See how it works" serverValue={text["hero.ctaSecondary"]} />

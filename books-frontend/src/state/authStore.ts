@@ -25,9 +25,20 @@ import { useProjectsStore } from "./projectsStore";
  * mail hiccup must never break signup. Also powers the "Resend" button, which
  * re-sends a fresh link.
  */
-async function requestWelcomeEmail(): Promise<void> {
+/** Consent captured in the signup dialog, forwarded to the backend to record. */
+export interface SignupConsent {
+  marketingOptIn: boolean;
+  termsVersion?: string;
+  privacyVersion?: string;
+}
+
+async function requestWelcomeEmail(consent?: SignupConsent): Promise<void> {
   try {
-    await backendFetch("/auth/welcome", { method: "POST" });
+    await backendFetch("/auth/welcome", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(consent ?? {}),
+    });
   } catch (err) {
     console.warn("[auth] welcome/verification email request failed", err);
   }
@@ -94,8 +105,8 @@ interface AuthState {
   /** Attach the auth-state listener (idempotent). Call once on app mount. */
   init: () => void;
   signInEmail: (email: string, password: string) => Promise<void>;
-  signUpEmail: (email: string, password: string) => Promise<void>;
-  signInGoogle: () => Promise<void>;
+  signUpEmail: (email: string, password: string, consent?: SignupConsent) => Promise<void>;
+  signInGoogle: (consent?: SignupConsent) => Promise<void>;
   signInGuest: () => Promise<void>;
   signOutUser: () => Promise<void>;
   /** Re-send the verification email to the current user. */
@@ -179,7 +190,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (draft && draft.projects.length > 0) set({ pendingMigration: draft });
   },
 
-  async signUpEmail(email, password) {
+  async signUpEmail(email, password, consent) {
     const auth = getFirebaseAuth();
     const current = auth.currentUser;
     const credential = EmailAuthProvider.credential(email, password);
@@ -195,11 +206,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // listener may not fire — sync the derived level so the verify gate shows.
     set({ user: auth.currentUser, accessLevel: levelFor(auth.currentUser, true) });
     // Send the branded welcome + verification email via the backend (which mints
-    // the Firebase verification link). Fire-and-forget.
-    await requestWelcomeEmail();
+    // the Firebase verification link) and record the signup consent. Fire-and-forget.
+    await requestWelcomeEmail(consent);
   },
 
-  async signInGoogle() {
+  async signInGoogle(consent) {
     const auth = getFirebaseAuth();
     const current = auth.currentUser;
     const provider = new GoogleAuthProvider();
@@ -210,12 +221,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         // Same uid → the listener may not fire; sync the derived level.
         set({ user: auth.currentUser, accessLevel: levelFor(auth.currentUser, true) });
         // New (Google-verified) account → send the plain welcome email + fire the
-        // signup ping. Deduped server-side, so it goes out at most once.
-        await requestWelcomeEmail();
+        // signup ping + record consent. Deduped server-side, so it goes out once.
+        await requestWelcomeEmail(consent);
         return; // linked in place → same uid, drafts preserved, Google verified
       } catch (err) {
         if (!isIdentityCollision(err)) throw err;
-        // Google account already exists — sign in and offer migration.
+        // Google account already exists — sign in and offer migration. This is an
+        // existing account, so we do NOT re-record consent (would clobber prefs).
         await signInWithPopup(auth, provider);
         if (draft && draft.projects.length > 0) set({ pendingMigration: draft });
         return;
@@ -224,7 +236,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     await signInWithPopup(auth, provider);
     // First-ever Google sign-in without a prior guest session: send the welcome
     // + fire the signup ping. Deduped server-side, so returning users are no-ops.
-    await requestWelcomeEmail();
+    await requestWelcomeEmail(consent);
   },
 
   async signInGuest() {

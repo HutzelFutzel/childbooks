@@ -15,6 +15,8 @@ import { LowSparksBanner } from "@/ui/layout/LowSparksBanner";
 import { JobProgress } from "@/ui/layout/JobProgress";
 import { ProjectConflictBanner, SaveFailureBanner } from "@/ui/layout/ProjectConflictBanner";
 import { OrdersDialog } from "@/ui/checkout/OrdersDialog";
+import { ContactDialog } from "@/ui/contact/ContactDialog";
+import { HelpButton } from "@/ui/contact/HelpButton";
 import { SettingsDialog } from "@/ui/settings/SettingsDialog";
 import { ImageTierPromptDialog } from "@/ui/settings/ImageTierPromptDialog";
 import { ProjectWorkspace } from "@/ui/project/ProjectWorkspace";
@@ -300,6 +302,7 @@ export default function StudioApp() {
           <>
             {inProject && accessLevel === "full" && <ImageTierControl />}
             {accessLevel !== "loading" && sparksEnabled && <SparksBadge />}
+            <HelpButton />
             <AuthMenu />
           </>
         }
@@ -335,6 +338,7 @@ export default function StudioApp() {
       </main>
 
       <AuthDialog />
+      <ContactDialog />
       <GuestMigrationDialog />
       <PlansDialog />
       {accessLevel === "full" && <OrdersDialog open={ordersOpen} onClose={closeOrders} />}

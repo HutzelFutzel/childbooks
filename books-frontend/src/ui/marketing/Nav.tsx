@@ -5,11 +5,13 @@ import Link from "next/link";
 import { Sparkles } from "lucide-react";
 import { cn } from "../lib/cn";
 
+// Root-relative hashes so these work from any route (e.g. /contact), not just
+// the landing page: they navigate to `/` and scroll to the section.
 const LINKS = [
-  { href: "#how-it-works", label: "How it works" },
-  { href: "#features", label: "Features" },
-  { href: "#pricing", label: "Pricing" },
-  { href: "#faq", label: "FAQ" },
+  { href: "/#how-it-works", label: "How it works" },
+  { href: "/#features", label: "Features" },
+  { href: "/#pricing", label: "Pricing" },
+  { href: "/#faq", label: "FAQ" },
 ];
 
 /** Sticky top navigation that gains a solid, blurred background once scrolled. */
@@ -49,13 +51,13 @@ export function Nav({ siteName, logoUrl }: { siteName: string; logoUrl?: string 
 
         <div className="hidden items-center gap-1 md:flex">
           {LINKS.map((l) => (
-            <a
+            <Link
               key={l.href}
               href={l.href}
               className="rounded-lg px-3 py-2 text-sm font-medium text-ink-600 transition-colors hover:text-ink-900"
             >
               {l.label}
-            </a>
+            </Link>
           ))}
         </div>
 

@@ -1,7 +1,12 @@
 import { create } from "zustand";
 
 /** Top-level admin sections (rendered as the left sidebar). */
-export type AdminSection = "configuration" | "analysis" | "marketing" | "communication";
+export type AdminSection =
+  | "configuration"
+  | "analysis"
+  | "marketing"
+  | "communication"
+  | "legal";
 
 /** Configuration section groups (second-level nav). */
 export type ConfigGroupId = "business" | "ai" | "creative" | "operations";
@@ -34,6 +39,9 @@ export type MarketingTabId = "seo" | "branding";
 
 /** Sub-tabs within the Communication section. */
 export type CommunicationTabId = "transactional-emails" | "admin-slack";
+
+/** Sub-tabs within the Legal & Privacy section. */
+export type LegalTabId = "documents" | "cookies" | "gdpr";
 
 export const CONFIG_GROUPS: {
   id: ConfigGroupId;
@@ -74,6 +82,7 @@ interface AdminNavState {
   catalogSegment: CatalogSegment;
   marketingTab: MarketingTabId;
   communicationTab: CommunicationTabId;
+  legalTab: LegalTabId;
   setSection: (section: AdminSection) => void;
   setConfigGroup: (group: ConfigGroupId) => void;
   setConfigTab: (tab: ConfigTabId) => void;
@@ -82,6 +91,7 @@ interface AdminNavState {
   setCatalogSegment: (segment: CatalogSegment) => void;
   setMarketingTab: (tab: MarketingTabId) => void;
   setCommunicationTab: (tab: CommunicationTabId) => void;
+  setLegalTab: (tab: LegalTabId) => void;
 }
 
 /** Admin navigation state, lifted to a store so views can cross-link (e.g. a
@@ -94,6 +104,7 @@ export const useAdminTab = create<AdminNavState>((set) => ({
   catalogSegment: "print",
   marketingTab: "seo",
   communicationTab: "transactional-emails",
+  legalTab: "documents",
   setSection: (section) => set({ section }),
   setConfigGroup: (configGroup) => {
     const first = CONFIG_GROUPS.find((g) => g.id === configGroup)?.tabs[0];
@@ -106,4 +117,5 @@ export const useAdminTab = create<AdminNavState>((set) => ({
   setCatalogSegment: (catalogSegment) => set({ catalogSegment }),
   setMarketingTab: (marketingTab) => set({ marketingTab }),
   setCommunicationTab: (communicationTab) => set({ communicationTab }),
+  setLegalTab: (legalTab) => set({ legalTab }),
 }));

@@ -116,6 +116,18 @@ import {
   slackConfigSchema,
   type SlackConfig,
 } from "../../books-frontend/src/core/config/slackConfig";
+import {
+  createDefaultLegalConfig,
+  legalConfigSchema,
+  normalizeLegalConfig,
+  type LegalConfig,
+} from "../../books-frontend/src/core/config/legal";
+import {
+  cookieConfigSchema,
+  createDefaultCookieConfig,
+  normalizeCookieConfig,
+  type CookieConfig,
+} from "../../books-frontend/src/core/config/cookieConfig";
 
 const MODELS_DOC = "appConfig/models";
 const ART_STYLES_DOC = "appConfig/artStyles";
@@ -135,6 +147,8 @@ const LATENCY_STATS_DOC = "appConfig/latencyStats";
 const EMAIL_CONFIG_DOC = "appConfig/emailConfig";
 const EMAIL_STATS_DOC = "appConfig/emailStats";
 const SLACK_CONFIG_DOC = "appConfig/slackConfig";
+const LEGAL_DOC = "appConfig/legal";
+const COOKIE_CONFIG_DOC = "appConfig/cookieConfig";
 
 const CACHE_TTL_MS = 30_000;
 
@@ -324,6 +338,42 @@ export async function saveSlackConfig(input: unknown): Promise<SlackConfig> {
   const parsed = slackConfigSchema.parse(input);
   const normalized = normalizeSlackConfig({ ...parsed, updatedAt: Date.now() });
   await writeDoc(SLACK_CONFIG_DOC, normalized);
+  return normalized;
+}
+
+// ---- Legal documents -------------------------------------------------------
+
+export function getLegalConfig(): Promise<LegalConfig> {
+  return readDoc(LEGAL_DOC, normalizeLegalConfig);
+}
+
+export function defaultLegalConfig(): LegalConfig {
+  return createDefaultLegalConfig();
+}
+
+/** Validate + persist the legal documents config (world-readable appConfig doc). */
+export async function saveLegalConfig(input: unknown): Promise<LegalConfig> {
+  const parsed = legalConfigSchema.parse(input);
+  const normalized = normalizeLegalConfig({ ...parsed, updatedAt: Date.now() });
+  await writeDoc(LEGAL_DOC, normalized);
+  return normalized;
+}
+
+// ---- Cookie consent --------------------------------------------------------
+
+export function getCookieConfig(): Promise<CookieConfig> {
+  return readDoc(COOKIE_CONFIG_DOC, normalizeCookieConfig);
+}
+
+export function defaultCookieConfig(): CookieConfig {
+  return createDefaultCookieConfig();
+}
+
+/** Validate + persist the cookie consent config (world-readable appConfig doc). */
+export async function saveCookieConfig(input: unknown): Promise<CookieConfig> {
+  const parsed = cookieConfigSchema.parse(input);
+  const normalized = normalizeCookieConfig({ ...parsed, updatedAt: Date.now() });
+  await writeDoc(COOKIE_CONFIG_DOC, normalized);
   return normalized;
 }
 

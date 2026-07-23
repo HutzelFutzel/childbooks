@@ -27,6 +27,10 @@ import {
   Hash,
   Mail,
   Type,
+  Scale,
+  FileText,
+  Cookie,
+  UserX,
 } from "lucide-react";
 import { Button } from "@/ui/components/Button";
 import { Tabs } from "@/ui/components/Tabs";
@@ -34,6 +38,8 @@ import { Toaster } from "@/ui/components/Toaster";
 import { TopBar } from "@/ui/layout/TopBar";
 import { AuthMenu } from "@/ui/auth/AuthMenu";
 import { AuthDialog } from "@/ui/auth/AuthDialog";
+import { ContactDialog } from "@/ui/contact/ContactDialog";
+import { HelpButton } from "@/ui/contact/HelpButton";
 import { SettingsDialog } from "@/ui/settings/SettingsDialog";
 import { OrdersDialog } from "@/ui/checkout/OrdersDialog";
 import { PlansDialog } from "@/ui/billing/PlansDialog";
@@ -48,6 +54,7 @@ import {
   type ConfigGroupId,
   type ConfigTabId,
   type CommunicationTabId,
+  type LegalTabId,
 } from "./adminTabStore";
 import { ModelConfigTab } from "./tabs/ModelConfigTab";
 import { ArtStylesTab } from "./tabs/ArtStylesTab";
@@ -66,6 +73,9 @@ import { SeoTab } from "./tabs/marketing/SeoTab";
 import { BrandingTab } from "./tabs/marketing/BrandingTab";
 import { EmailTab } from "./tabs/communication/EmailTab";
 import { SlackTab } from "./tabs/communication/SlackTab";
+import { LegalDocsTab } from "./tabs/legal/LegalDocsTab";
+import { CookieConsentTab } from "./tabs/legal/CookieConsentTab";
+import { GdprTab } from "./tabs/legal/GdprTab";
 import { AnalysisTab } from "./analysis/AnalysisTab";
 
 const SECTIONS: { id: AdminSection; label: string; icon: ReactNode; description: string }[] = [
@@ -73,6 +83,13 @@ const SECTIONS: { id: AdminSection; label: string; icon: ReactNode; description:
   { id: "configuration", label: "Configuration", icon: <Settings2 className="size-4" />, description: "Global app configuration. Changes apply to everyone immediately." },
   { id: "marketing", label: "Marketing", icon: <Megaphone className="size-4" />, description: "Campaigns and growth tools." },
   { id: "communication", label: "Communication", icon: <MessagesSquare className="size-4" />, description: "Transactional email and Slack notifications." },
+  { id: "legal", label: "Legal & Privacy", icon: <Scale className="size-4" />, description: "Legal documents, cookie consent, and GDPR data requests." },
+];
+
+const LEGAL_TABS = [
+  { id: "documents", label: "Documents", icon: <FileText className="size-4" /> },
+  { id: "cookies", label: "Cookies", icon: <Cookie className="size-4" /> },
+  { id: "gdpr", label: "Data requests", icon: <UserX className="size-4" /> },
 ];
 
 const CONFIG_TAB_META: Record<
@@ -164,6 +181,8 @@ export default function AdminApp() {
   const setMarketingTab = useAdminTab((s) => s.setMarketingTab);
   const communicationTab = useAdminTab((s) => s.communicationTab);
   const setCommunicationTab = useAdminTab((s) => s.setCommunicationTab);
+  const legalTab = useAdminTab((s) => s.legalTab);
+  const setLegalTab = useAdminTab((s) => s.setLegalTab);
   const ordersOpen = useAccountUiStore((s) => s.ordersOpen);
   const closeOrders = useAccountUiStore((s) => s.closeOrders);
 
@@ -189,7 +208,12 @@ export default function AdminApp() {
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-canvas">
       <TopBar
-        right={<AuthMenu />}
+        right={
+          <>
+            <HelpButton />
+            <AuthMenu />
+          </>
+        }
         left={
           <Button
             variant="ghost"
@@ -301,6 +325,18 @@ export default function AdminApp() {
                     {communicationTab === "admin-slack" && <SlackTab />}
                   </div>
                 )}
+                {section === "legal" && (
+                  <div className="space-y-6">
+                    <Tabs
+                      items={LEGAL_TABS}
+                      value={legalTab}
+                      onChange={(id) => setLegalTab(id as LegalTabId)}
+                    />
+                    {legalTab === "documents" && <LegalDocsTab />}
+                    {legalTab === "cookies" && <CookieConsentTab />}
+                    {legalTab === "gdpr" && <GdprTab />}
+                  </div>
+                )}
               </div>
             </div>
           </>
@@ -308,6 +344,7 @@ export default function AdminApp() {
       </main>
 
       <AuthDialog />
+      <ContactDialog />
       <SettingsDialog />
       <PlansDialog />
       <OrdersDialog open={ordersOpen} onClose={closeOrders} />

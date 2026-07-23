@@ -4,8 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ChevronDown,
+  Cookie,
   CreditCard,
   Download,
+  ExternalLink,
+  LifeBuoy,
   LogOut,
   Package,
   Settings,
@@ -17,6 +20,10 @@ import { useAccountUiStore } from "../../state/accountUiStore";
 import { useBillingUiStore } from "../../state/billingUiStore";
 import { useOrdersStore } from "../../state/ordersStore";
 import { unseenDownloadCount, useDownloadsStore } from "../../state/downloadsStore";
+import { useSupportUiStore } from "../../state/supportUiStore";
+import { useConsentStore } from "../../state/consentStore";
+import { useAppConfigStore } from "../../state/appConfigStore";
+import { visibleLegalLinks } from "../../core/config/legal";
 import { Button } from "../components/Button";
 
 function MenuItem({
@@ -76,6 +83,11 @@ export function AuthMenu() {
   const openOrders = useAccountUiStore((s) => s.openOrders);
   const openDownloads = useAccountUiStore((s) => s.openDownloads);
   const openPlans = useBillingUiStore((s) => s.openPlans);
+  const openContact = useSupportUiStore((s) => s.openContact);
+  const openCookiePreferences = useConsentStore((s) => s.openPreferences);
+  const legal = useAppConfigStore((s) => s.legal);
+  const cookieEnabled = useAppConfigStore((s) => s.cookieConfig.enabled);
+  const legalLinks = visibleLegalLinks(legal, "footer");
   const ordersNeedAttention = useOrdersStore((s) =>
     s.orders.some((o) => o.stage === "onHold" || o.stage === "error"),
   );
@@ -138,7 +150,7 @@ export function AuthMenu() {
             <span className="absolute -right-1 -top-1 size-2 rounded-full bg-amber-500 ring-2 ring-white" />
           )}
         </span>
-        <span className="hidden max-w-[10rem] truncate sm:inline">{user ? userLabel(user) : "Account"}</span>
+        <span className="hidden max-w-40 truncate sm:inline">{user ? userLabel(user) : "Account"}</span>
         <ChevronDown className={"size-3.5 transition-transform " + (open ? "rotate-180" : "")} />
       </button>
 
@@ -169,6 +181,33 @@ export function AuthMenu() {
           {isAdmin && (
             <MenuItem icon={<Shield className="size-4" />} label="Admin" onClick={() => run(() => router.push("/admin"))} />
           )}
+
+          <div className="my-1 border-t border-ink-100" />
+          <MenuItem icon={<LifeBuoy className="size-4" />} label="Contact us" onClick={() => run(openContact)} />
+          {legalLinks.map((l) => (
+            <a
+              key={l.id}
+              role="menuitem"
+              href={l.url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => setOpen(false)}
+              className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-ink-700 transition hover:bg-ink-50"
+            >
+              <span className="flex size-4 items-center justify-center text-ink-400">
+                <ExternalLink className="size-3.5" />
+              </span>
+              <span className="flex-1">{l.label}</span>
+            </a>
+          ))}
+          {cookieEnabled && (
+            <MenuItem
+              icon={<Cookie className="size-4" />}
+              label="Cookie settings"
+              onClick={() => run(openCookiePreferences)}
+            />
+          )}
+
           <div className="my-1 border-t border-ink-100" />
           <MenuItem
             icon={<LogOut className="size-4" />}

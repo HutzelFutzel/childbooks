@@ -4,6 +4,7 @@ import { getBrandingConfig } from "../server/branding";
 import { getPublicPlans } from "../server/plans";
 import { getSiteImagesConfig } from "../server/siteImages";
 import { getSiteContentConfig } from "../server/siteContent";
+import { getLegalConfig } from "../server/legal";
 import { Nav } from "../ui/marketing/Nav";
 import { Hero } from "../ui/marketing/Hero";
 import { TrustStrip } from "../ui/marketing/TrustStrip";
@@ -78,12 +79,13 @@ export async function generateViewport(): Promise<Viewport> {
 }
 
 export default async function Home() {
-  const [seo, branding, plans, siteImages, siteContent] = await Promise.all([
+  const [seo, branding, plans, siteImages, siteContent, legal] = await Promise.all([
     getSeoConfig(),
     getBrandingConfig(),
     getPublicPlans(),
     getSiteImagesConfig(),
     getSiteContentConfig(),
+    getLegalConfig(),
   ]);
   const logoUrl = branding.logo?.imageUrl ?? null;
   const images = siteImages.images;
@@ -102,7 +104,7 @@ export default async function Home() {
         <Faq items={seo.faq} />
         <CtaBand text={text} />
       </main>
-      <Footer siteName={branding.brandName} logoUrl={logoUrl} />
+      <Footer siteName={branding.brandName} logoUrl={logoUrl} legal={legal} />
       <AdminEditBar />
     </>
   );

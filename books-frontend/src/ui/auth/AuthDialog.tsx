@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { AlertCircle, BookHeart, LogIn, Sparkles, UserPlus } from "lucide-react";
-import { authErrorMessage, useAuthStore } from "../../state/authStore";
+import { authErrorMessage, useAuthStore, type SignupConsent } from "../../state/authStore";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { Button } from "../components/Button";
 import { Field, Input } from "../components/Input";
 import { Modal } from "../components/Modal";
+import { legalLinkByRole } from "../../core/config/legal";
 import { PasswordStrength, scorePassword } from "./PasswordStrength";
 
 type Mode = "signin" | "signup";
@@ -41,12 +42,22 @@ export function AuthDialog() {
   const signInGoogle = useAuthStore((s) => s.signInGoogle);
   const isGuest = useAuthStore((s) => s.accessLevel === "guest");
   const sparks = useAppConfigStore((s) => s.sparks);
+  const legal = useAppConfigStore((s) => s.legal);
 
   const [mode, setMode] = useState<Mode>("signin");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [busy, setBusy] = useState<null | "email" | "google">(null);
   const [error, setError] = useState<string | null>(null);
+
+  const termsLink = legalLinkByRole(legal, "terms");
+  const privacyLink = legalLinkByRole(legal, "privacy");
+  const consent = (): SignupConsent => ({
+    marketingOptIn,
+    termsVersion: termsLink?.version,
+    privacyVersion: privacyLink?.version,
+  });
 
   // Guests are here to UPGRADE (keep their drafts + earn the ladder bonuses),
   // so open on "create account"; everyone else most likely wants to sign in.
@@ -100,9 +111,13 @@ export function AuthDialog() {
       return;
     }
     void run("email", () =>
-      mode === "signin" ? signInEmail(email, password) : signUpEmail(email, password),
+      mode === "signin" ? signInEmail(email, password) : signUpEmail(email, password, consent()),
     );
   };
+
+  // Only forward consent for new-account contexts (signup, or a guest upgrading);
+  // an existing user signing in with Google must not have prefs re-recorded.
+  const googleConsent = () => (mode === "signup" || isGuest ? consent() : undefined);
 
   return (
     <Modal
@@ -167,6 +182,20 @@ export function AuthDialog() {
           {mode === "signup" && <PasswordStrength password={password} />}
         </Field>
 
+        {mode === "signup" && (
+          <label className="flex cursor-pointer items-start gap-2.5 text-xs text-ink-600">
+            <input
+              type="checkbox"
+              checked={marketingOptIn}
+              onChange={(e) => setMarketingOptIn(e.target.checked)}
+              className="mt-0.5 size-4 rounded border-ink-300 text-brand-600 focus:ring-brand-400"
+            />
+            <span>
+              Send me occasional product news and tips. You can unsubscribe anytime. (Optional)
+            </span>
+          </label>
+        )}
+
         <Button
           type="submit"
           className="w-full"
@@ -187,11 +216,29 @@ export function AuthDialog() {
           className="w-full"
           loading={busy === "google"}
           leftIcon={<GoogleIcon className="size-4" />}
-          onClick={() => void run("google", signInGoogle)}
+          onClick={() => void run("google", () => signInGoogle(googleConsent()))}
         >
           Continue with Google
         </Button>
       </div>
+
+      {mode === "signup" && (termsLink || privacyLink) && (
+        <p className="mt-4 text-center text-[11px] leading-relaxed text-ink-400">
+          By creating an account, you agree to our{" "}
+          {termsLink && (
+            <a href={termsLink.url} target="_blank" rel="noreferrer" className="underline hover:text-ink-600">
+              {termsLink.label}
+            </a>
+          )}
+          {termsLink && privacyLink && " and "}
+          {privacyLink && (
+            <a href={privacyLink.url} target="_blank" rel="noreferrer" className="underline hover:text-ink-600">
+              {privacyLink.label}
+            </a>
+          )}
+          .
+        </p>
+      )}
 
       <p className="mt-4 text-center text-sm text-ink-500">
         {mode === "signin" ? "Don't have an account?" : "Already have an account?"}{" "}

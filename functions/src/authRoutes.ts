@@ -24,11 +24,40 @@
  */
 import express, { type Express, type Response } from "express";
 import { getAuth } from "firebase-admin/auth";
+import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { type AuthedRequest } from "./auth";
 import { getSeoConfig } from "./appConfig";
 import { sendWelcomeEmail } from "./email/triggers";
 import { notifySlack } from "./notify";
+
+/** Consent captured at signup (client-supplied). All fields optional. */
+interface ConsentPayload {
+  marketingOptIn?: boolean;
+  termsVersion?: string;
+  privacyVersion?: string;
+}
+
+/**
+ * Stamp consent onto the user's profile doc (Admin SDK, so it bypasses rules and
+ * can't be forged). Best-effort — a failure here must not fail signup. Records
+ * the accepted policy versions + timestamp for GDPR accountability (Art. 7) and
+ * the marketing opt-in.
+ */
+async function recordConsent(uid: string, consent: ConsentPayload): Promise<void> {
+  const patch: Record<string, unknown> = { updatedAt: Date.now() };
+  if (typeof consent.marketingOptIn === "boolean") patch.marketingOptIn = consent.marketingOptIn;
+  const acceptedVersions: Record<string, string> = {};
+  if (typeof consent.termsVersion === "string") acceptedVersions.terms = consent.termsVersion.slice(0, 40);
+  if (typeof consent.privacyVersion === "string")
+    acceptedVersions.privacy = consent.privacyVersion.slice(0, 40);
+  if (Object.keys(acceptedVersions).length > 0) {
+    patch.consent = { acceptedAt: Date.now(), versions: acceptedVersions };
+  }
+  // Only write when there's something to record.
+  if (Object.keys(patch).length <= 1) return;
+  await getFirestore().doc(`users/${uid}`).set(patch, { merge: true });
+}
 
 /** Where Firebase returns the user after they click the verification link. */
 async function continueUrl(): Promise<string> {
@@ -63,6 +92,15 @@ export function registerAuthRoutes(app: Express): void {
 
       const name = user.displayName ?? null;
       const providerId = user.providerData?.[0]?.providerId ?? "password";
+
+      // Record signup consent (marketing opt-in + accepted policy versions), if
+      // the client supplied it. Best-effort — never fails the request.
+      const consent = (req.body ?? {}) as ConsentPayload;
+      try {
+        await recordConsent(uid, consent);
+      } catch (err) {
+        console.warn("[auth] could not record consent", err);
+      }
 
       let verifyUrl: string | undefined;
       if (!user.emailVerified) {
