@@ -13,18 +13,31 @@ import { ConsentManager } from "../ui/consent/ConsentManager";
 import { getBrandingConfig } from "../server/branding";
 import { getCookieConfig } from "../server/cookieConfig";
 import { getLegalConfig } from "../server/legal";
+import { getSeoConfig } from "../server/seo";
 import { legalUrlByRole } from "../core/config/legal";
 import { brandingThemeVars } from "../ui/lib/color";
+
+function safeUrl(url: string): URL | undefined {
+  try {
+    return new URL(url);
+  } catch {
+    return undefined;
+  }
+}
 
 /**
  * Site-wide defaults. The favicon + theme color come from the admin-managed
  * branding kit so they can be changed without a redeploy (the landing page
  * overrides title/description/OG per its SEO config). Favicons are referenced
  * by their stable public Storage URL — dynamic to configure, cached to serve.
+ *
+ * `metadataBase` is set from the admin SEO config so every page (including
+ * child pages like /contact) resolves relative canonical/OG URLs correctly.
  */
 export async function generateMetadata(): Promise<Metadata> {
-  const branding = await getBrandingConfig();
+  const [branding, seo] = await Promise.all([getBrandingConfig(), getSeoConfig()]);
   return {
+    metadataBase: safeUrl(seo.siteUrl),
     title: {
       default: `${branding.brandName} — AI-illustrated children's books`,
       template: `%s · ${branding.brandName}`,

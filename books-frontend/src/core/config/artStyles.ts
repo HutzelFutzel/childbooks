@@ -21,16 +21,23 @@ export interface ArtStylePromptDescription {
   updatedAt: number;
 }
 
+export interface ArtStyleLabel {
+  text: string;
+  updatedAt: number;
+}
+
 export interface ArtStylesConfig {
   version: 1;
   /** Keyed by ART_STYLE_PRESETS[].id. */
   examples: Record<string, ArtStyleExample>;
   /** Admin overrides for the full image-generation style description. */
   promptDescriptions: Record<string, ArtStylePromptDescription>;
+  /** Admin overrides for the display title of a preset. */
+  labels: Record<string, ArtStyleLabel>;
 }
 
 export function createDefaultArtStylesConfig(): ArtStylesConfig {
-  return { version: 1, examples: {}, promptDescriptions: {} };
+  return { version: 1, examples: {}, promptDescriptions: {}, labels: {} };
 }
 
 export function normalizeArtStylesConfig(input: unknown): ArtStylesConfig {
@@ -39,6 +46,7 @@ export function normalizeArtStylesConfig(input: unknown): ArtStylesConfig {
     version: 1,
     examples: stored.examples ?? {},
     promptDescriptions: stored.promptDescriptions ?? {},
+    labels: stored.labels ?? {},
   };
 }
 
@@ -59,4 +67,14 @@ export const artStylesConfigSchema = z.object({
       updatedAt: z.number(),
     }),
   ),
+  labels: z
+    .record(
+      z.string(),
+      z.object({
+        text: z.string().min(1).max(120),
+        updatedAt: z.number(),
+      }),
+    )
+    .optional()
+    .default({}),
 });

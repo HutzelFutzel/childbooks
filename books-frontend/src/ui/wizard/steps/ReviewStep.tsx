@@ -2,7 +2,6 @@ import { useMemo } from "react";
 import { Sparkles } from "lucide-react";
 import {
   AGE_RANGES,
-  ART_STYLE_PRESETS,
   GRAPHICS_DENSITY,
   LAYOUT_TEMPLATES,
   SPREAD_USAGE,
@@ -12,6 +11,8 @@ import {
 import { ageBandHasReadingModes, readingModeLabel } from "../../../core/config/ageWritingCatalog";
 import { bookProductForConfig } from "../../../core/book";
 import { selectModels } from "../../../core/models/registry";
+import { resolveArtStyleLabel } from "../../../core/prompts/style";
+import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useSettingsStore } from "../../../state/settingsStore";
 import type { StepProps } from "./types";
 
@@ -31,13 +32,14 @@ function Row({ label, value }: { label: string; value: string }) {
 export function ReviewStep({ config }: StepProps) {
   const providerAvailable = useSettingsStore((s) => s.providerAvailable);
   const discovery = useSettingsStore((s) => s.discovery);
+  const artStyles = useAppConfigStore((s) => s.artStyles);
   const models = useMemo(
     () => selectModels(discovery, (p) => providerAvailable[p]),
     [discovery, providerAvailable],
   );
 
   const style = config.artStyle.presetId
-    ? find(ART_STYLE_PRESETS, config.artStyle.presetId)
+    ? resolveArtStyleLabel(config.artStyle.presetId, artStyles)
     : "Custom";
   const styleExtra = config.artStyle.customDescription?.trim();
 

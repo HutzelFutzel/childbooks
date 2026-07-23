@@ -7,7 +7,7 @@ import { ART_STYLE_PRESETS } from "../../../core/config/options";
 import { resolveArtStyleText } from "../../../core/prompts/style";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { Button } from "../../components/Button";
-import { Field, Textarea } from "../../components/Input";
+import { Field, Input, Textarea } from "../../components/Input";
 import { Section } from "./products/parts";
 
 /** Read a File as bare base64 (no data: prefix) + its mime type. */
@@ -28,6 +28,9 @@ function StyleEditor({
   presetId,
   label,
   description,
+  labelText,
+  onLabelChange,
+  onLabelReset,
   promptText,
   onPromptChange,
   onPromptReset,
@@ -35,6 +38,9 @@ function StyleEditor({
   presetId: string;
   label: string;
   description: string;
+  labelText: string | undefined;
+  onLabelChange: (text: string) => void;
+  onLabelReset: () => void;
   promptText: string | undefined;
   onPromptChange: (text: string) => void;
   onPromptReset: () => void;
@@ -47,7 +53,9 @@ function StyleEditor({
 
   const preset = ART_STYLE_PRESETS.find((p) => p.id === presetId);
   const defaultDesc = preset?.promptDescription ?? preset?.promptHint ?? "";
+  const defaultLabel = preset?.label ?? presetId;
   const hasOverride = Boolean(promptText?.trim());
+  const hasLabelOverride = Boolean(labelText?.trim());
 
   const onPick = async (file: File | undefined) => {
     if (!file) return;
@@ -70,6 +78,7 @@ function StyleEditor({
       artStyles: {
         version: 1,
         examples: {},
+        labels: {},
         promptDescriptions: promptText?.trim()
           ? { [presetId]: { text: promptText, updatedAt: 0 } }
           : promptDescriptions,
@@ -79,7 +88,7 @@ function StyleEditor({
 
   return (
     <Section
-      title={label}
+      title={labelText?.trim() || label}
       hint={description}
       action={
         hasOverride ? (
@@ -106,6 +115,30 @@ function StyleEditor({
           )}
         </div>
         <div className="min-w-0 flex-1 space-y-3">
+          <Field
+            label="Style title"
+            hint={
+              hasLabelOverride ? `Default: ${defaultLabel}` : "Shown to customers in the story setup wizard."
+            }
+          >
+            <div className="flex items-center gap-2">
+              <Input
+                value={labelText ?? defaultLabel}
+                onChange={(e) => onLabelChange(e.target.value)}
+                placeholder={defaultLabel}
+              />
+              {hasLabelOverride ? (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  leftIcon={<RotateCcw className="size-3.5" />}
+                  onClick={onLabelReset}
+                >
+                  Reset
+                </Button>
+              ) : null}
+            </div>
+          </Field>
           <Field label="Style prompt (for image generation)">
             <Textarea
               rows={5}
@@ -146,12 +179,16 @@ export function ArtStylesTab() {
   const save = useAppConfigStore((s) => s.saveArtStyles);
 
   const [promptDescriptions, setPromptDescriptions] = useState(stored.promptDescriptions);
+  const [labels, setLabels] = useState(stored.labels);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (!dirty) setPromptDescriptions(stored.promptDescriptions);
-  }, [stored.promptDescriptions, dirty]);
+    if (!dirty) {
+      setPromptDescriptions(stored.promptDescriptions);
+      setLabels(stored.labels);
+    }
+  }, [stored.promptDescriptions, stored.labels, dirty]);
 
   const onSave = async () => {
     setSaving(true);
@@ -160,9 +197,10 @@ export function ArtStylesTab() {
         version: 1,
         examples: stored.examples,
         promptDescriptions,
+        labels,
       });
       setDirty(false);
-      toast.success("Art style prompts saved.");
+      toast.success("Art style settings saved.");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not save art styles.");
     } finally {
@@ -187,21 +225,40 @@ export function ArtStylesTab() {
     setDirty(true);
   };
 
+  const setLabel = (presetId: string, text: string) => {
+    setLabels((prev) => ({
+      ...prev,
+      [presetId]: { text, updatedAt: Date.now() },
+    }));
+    setDirty(true);
+  };
+
+  const resetLabel = (presetId: string) => {
+    setLabels((prev) => {
+      const next = { ...prev };
+      delete next[presetId];
+      return next;
+    });
+    setDirty(true);
+  };
+
   const unchanged = useMemo(
-    () => JSON.stringify(promptDescriptions) === JSON.stringify(stored.promptDescriptions),
-    [promptDescriptions, stored.promptDescriptions],
+    () =>
+      JSON.stringify(promptDescriptions) === JSON.stringify(stored.promptDescriptions) &&
+      JSON.stringify(labels) === JSON.stringify(stored.labels),
+    [promptDescriptions, labels, stored.promptDescriptions, stored.labels],
   );
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-2xl text-xs leading-relaxed text-ink-500">
-          Example images appear in the story setup wizard; style prompts are injected into
-          illustration and character-reference generation. Images upload immediately; prompt
-          text saves with the button below.
+          Titles and example images appear in the story setup wizard; style prompts are injected
+          into illustration and character-reference generation. Images upload immediately; titles
+          and prompt text save with the button below.
         </p>
         <Button size="sm" loading={saving} disabled={!dirty || unchanged} onClick={() => void onSave()}>
-          Save prompts
+          Save changes
         </Button>
       </div>
 
@@ -212,6 +269,9 @@ export function ArtStylesTab() {
             presetId={preset.id}
             label={preset.label}
             description={preset.description}
+            labelText={labels[preset.id]?.text}
+            onLabelChange={(text) => setLabel(preset.id, text)}
+            onLabelReset={() => resetLabel(preset.id)}
             promptText={promptDescriptions[preset.id]?.text}
             onPromptChange={(text) => setPrompt(preset.id, text)}
             onPromptReset={() => resetPrompt(preset.id)}

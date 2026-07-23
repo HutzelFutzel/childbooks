@@ -29,3 +29,16 @@ export function resolveArtStyleText(
   if (parts.length === 0) parts.push("charming children's book illustration");
   return parts.join(". ");
 }
+
+/** Resolve the display title for a preset, honoring the admin label override. */
+export function resolveArtStyleLabel(
+  presetId: string,
+  ctx?: Pick<PromptContext, "artStyles"> | ArtStylesConfig | null,
+): string {
+  const artStyles =
+    ctx && "artStyles" in ctx ? ctx.artStyles : (ctx as ArtStylesConfig | null | undefined);
+  const override = artStyles?.labels?.[presetId]?.text?.trim();
+  if (override) return override;
+  const preset = ART_STYLE_PRESETS.find((p) => p.id === presetId);
+  return preset?.label ?? presetId;
+}

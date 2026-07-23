@@ -49,35 +49,43 @@ export function JsonLd({
         }
       : null;
 
-  const paid = plans.plans.filter((p) => !p.isFree && p.status === "active");
-  const product =
-    paid.length > 0
-      ? {
-          "@context": "https://schema.org",
-          "@type": "Product",
-          name: `${seo.siteName} subscription`,
-          description: seo.description,
-          brand: { "@type": "Brand", name: seo.organization.name || branding.brandName },
-          offers: paid.flatMap((plan) => {
-            const currency = plan.prices.USD ? "USD" : Object.keys(plan.prices)[0];
-            if (!currency) return [];
-            const month = plan.prices[currency]?.month;
-            if (!month) return [];
-            return [
-              {
-                "@type": "Offer",
-                name: plan.name,
-                price: month.amount,
-                priceCurrency: currency,
-                url: `${base}/studio`,
-                availability: "https://schema.org/InStock",
-              },
-            ];
-          }),
-        }
-      : null;
+  // A subscription to a browser-based creative tool is a SoftwareApplication
+  // (schema.org's type for exactly this), not a physical Product — cleaner,
+  // warning-free structured data. The paid-plan prices map to the same Offer
+  // shape either type uses.
+  const paidOffers = plans.plans
+    .filter((p) => !p.isFree && p.status === "active")
+    .flatMap((plan) => {
+      const currency = plan.prices.USD ? "USD" : Object.keys(plan.prices)[0];
+      if (!currency) return [];
+      const month = plan.prices[currency]?.month;
+      if (!month) return [];
+      return [
+        {
+          "@type": "Offer",
+          name: plan.name,
+          price: month.amount,
+          priceCurrency: currency,
+          url: `${base}/studio`,
+          availability: "https://schema.org/InStock",
+        },
+      ];
+    });
 
-  const blocks = [organization, website, faqPage, product].filter(Boolean);
+  const application = {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    name: seo.siteName,
+    applicationCategory: "DesignApplication",
+    operatingSystem: "Web",
+    description: seo.description,
+    url: base,
+    // Only advertise offers when there are paid plans; the free tier makes an
+    // empty `offers` array both accurate and warning-free.
+    ...(paidOffers.length > 0 ? { offers: paidOffers } : {}),
+  };
+
+  const blocks = [organization, website, faqPage, application].filter(Boolean);
 
   return (
     <>

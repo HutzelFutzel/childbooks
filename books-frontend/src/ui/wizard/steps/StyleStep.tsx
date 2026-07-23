@@ -1,5 +1,6 @@
 import { Lock } from "lucide-react";
 import { ART_STYLE_PRESETS } from "../../../core/config/options";
+import { resolveArtStyleLabel } from "../../../core/prompts/style";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useFeatureAllowed } from "../../../state/subscriptionStore";
 import { useBillingUiStore } from "../../../state/billingUiStore";
@@ -10,7 +11,8 @@ import type { StepProps } from "./types";
 
 export function StyleStep({ config, update }: StepProps) {
   const { artStyle } = config;
-  const examples = useAppConfigStore((s) => s.artStyles.examples);
+  const artStyles = useAppConfigStore((s) => s.artStyles);
+  const examples = artStyles.examples;
   // Data-driven gate: free for everyone until an admin lists "customArtStyle"
   // on a plan, then only those plans may add free-text style directions.
   const customAllowed = useFeatureAllowed("customArtStyle");
@@ -23,7 +25,7 @@ export function StyleStep({ config, update }: StepProps) {
             key={style.id}
             selected={artStyle.presetId === style.id}
             onSelect={() => update({ artStyle: { ...artStyle, presetId: style.id } })}
-            title={style.label}
+            title={resolveArtStyleLabel(style.id, artStyles)}
             description={style.description}
             visual={<StyleSwatch swatch={style.swatch} imageUrl={examples[style.id]?.imageUrl} />}
           />

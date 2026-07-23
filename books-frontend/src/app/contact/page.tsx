@@ -1,29 +1,42 @@
 import type { Metadata } from "next";
 import { getBrandingConfig } from "../../server/branding";
 import { getLegalConfig } from "../../server/legal";
+import { getSeoConfig } from "../../server/seo";
 import { legalUrlByRole } from "../../core/config/legal";
 import { Nav } from "../../ui/marketing/Nav";
 import { Footer } from "../../ui/marketing/Footer";
+import { BreadcrumbJsonLd } from "../../ui/marketing/BreadcrumbJsonLd";
 import { ContactForm } from "../../ui/contact/ContactForm";
 
 /** Rendered per request so brand + legal links reflect admin edits without a redeploy. */
 export const dynamic = "force-dynamic";
 
 export async function generateMetadata(): Promise<Metadata> {
-  const branding = await getBrandingConfig();
+  const [branding, seo] = await Promise.all([getBrandingConfig(), getSeoConfig()]);
   return {
     title: "Contact",
     description: `Get in touch with the ${branding.brandName} team.`,
+    alternates: { canonical: `${seo.siteUrl}/contact` },
   };
 }
 
 export default async function ContactPage() {
-  const [branding, legal] = await Promise.all([getBrandingConfig(), getLegalConfig()]);
+  const [branding, legal, seo] = await Promise.all([
+    getBrandingConfig(),
+    getLegalConfig(),
+    getSeoConfig(),
+  ]);
   const logoUrl = branding.logo?.imageUrl ?? null;
   const privacyUrl = legalUrlByRole(legal, "privacy") || undefined;
 
   return (
     <>
+      <BreadcrumbJsonLd
+        items={[
+          { name: "Home", url: `${seo.siteUrl}/` },
+          { name: "Contact", url: `${seo.siteUrl}/contact` },
+        ]}
+      />
       <Nav siteName={branding.brandName} logoUrl={logoUrl} />
       <main className="mx-auto max-w-2xl px-6 pb-20 pt-28 sm:pt-32">
         <header className="mb-8 text-center">
