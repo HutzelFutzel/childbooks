@@ -16,6 +16,7 @@
 import { randomUUID } from "node:crypto";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
+import { sendOrderShippedEmail } from "./email/triggers";
 import type {
   FulfillmentOrder,
   OrderDraft,
@@ -177,5 +178,22 @@ export async function applyOrderStatusUpdate(order: FulfillmentOrder): Promise<b
       ? db().doc(`users/${ownerUid}/orders/${order.id}`).set(userUpdate, { merge: true })
       : Promise.resolve(),
   ]);
+
+  // Notify the customer when the provider reports the order shipped. Deduped on
+  // the order id (the provider may re-post SHIPPED), best-effort — an email
+  // failure must never fail the webhook ack.
+  if (ownerUid && statusNameOf(order.raw) === "SHIPPED") {
+    const shipment = order.shipments.find((s) => s.trackingUrl) ?? order.shipments[0];
+    try {
+      await sendOrderShippedEmail({
+        uid: ownerUid,
+        orderRef: order.id,
+        carrier: shipment?.carrier ?? null,
+        trackingUrl: shipment?.trackingUrl ?? null,
+      });
+    } catch (err) {
+      console.warn("[orders] shipped email failed", order.id, err);
+    }
+  }
   return true;
 }

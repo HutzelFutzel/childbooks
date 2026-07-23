@@ -61,6 +61,7 @@ export async function raiseAlert(args: {
   // ALREADY_EXISTS early-return above suppresses duplicates. Best-effort.
   await notifySlack({
     channel: "ops",
+    messageKey: "admin_alert",
     ref: args.ref ? `${args.kind}_${args.ref}` : undefined,
     text: `${SEVERITY_EMOJI[args.severity]} *${args.kind}* — ${args.message}`,
   });

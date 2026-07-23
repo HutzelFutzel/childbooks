@@ -1,7 +1,7 @@
 import { create } from "zustand";
 
 /** Top-level admin sections (rendered as the left sidebar). */
-export type AdminSection = "configuration" | "analysis" | "marketing";
+export type AdminSection = "configuration" | "analysis" | "marketing" | "communication";
 
 /** Configuration section groups (second-level nav). */
 export type ConfigGroupId = "business" | "ai" | "creative" | "operations";
@@ -30,7 +30,10 @@ export type ConfigTabId =
 export type CatalogSegment = "print" | "ebook" | "packs";
 
 /** Sub-tabs within the Marketing section. */
-export type MarketingTabId = "seo" | "branding" | "email";
+export type MarketingTabId = "seo" | "branding";
+
+/** Sub-tabs within the Communication section. */
+export type CommunicationTabId = "transactional-emails" | "admin-slack";
 
 export const CONFIG_GROUPS: {
   id: ConfigGroupId;
@@ -70,6 +73,7 @@ interface AdminNavState {
   /** Which sub-section of the Catalog tab is showing. */
   catalogSegment: CatalogSegment;
   marketingTab: MarketingTabId;
+  communicationTab: CommunicationTabId;
   setSection: (section: AdminSection) => void;
   setConfigGroup: (group: ConfigGroupId) => void;
   setConfigTab: (tab: ConfigTabId) => void;
@@ -77,6 +81,7 @@ interface AdminNavState {
   openCatalog: (segment: CatalogSegment) => void;
   setCatalogSegment: (segment: CatalogSegment) => void;
   setMarketingTab: (tab: MarketingTabId) => void;
+  setCommunicationTab: (tab: CommunicationTabId) => void;
 }
 
 /** Admin navigation state, lifted to a store so views can cross-link (e.g. a
@@ -88,6 +93,7 @@ export const useAdminTab = create<AdminNavState>((set) => ({
   configTab: "overview",
   catalogSegment: "print",
   marketingTab: "seo",
+  communicationTab: "transactional-emails",
   setSection: (section) => set({ section }),
   setConfigGroup: (configGroup) => {
     const first = CONFIG_GROUPS.find((g) => g.id === configGroup)?.tabs[0];
@@ -99,4 +105,5 @@ export const useAdminTab = create<AdminNavState>((set) => ({
     set({ configTab: "catalog", configGroup: "business", catalogSegment }),
   setCatalogSegment: (catalogSegment) => set({ catalogSegment }),
   setMarketingTab: (marketingTab) => set({ marketingTab }),
+  setCommunicationTab: (communicationTab) => set({ communicationTab }),
 }));

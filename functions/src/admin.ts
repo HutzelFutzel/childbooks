@@ -17,6 +17,8 @@ import {
   getSparksConfig,
   getEmailConfig,
   saveEmailConfig,
+  getSlackConfig,
+  saveSlackConfig,
   deleteBrandingAssetVersion,
   deleteWatermarkVersion,
   restoreBrandingAsset,
@@ -91,6 +93,11 @@ import {
   EMAIL_TEMPLATE_REGISTRY,
 } from "../../books-frontend/src/core/email/registry";
 import { isEmailTemplateId } from "../../books-frontend/src/core/email/types";
+import { notifySlack } from "./notify";
+import {
+  SLACK_MESSAGE_REGISTRY,
+  type SlackChannel,
+} from "../../books-frontend/src/core/notify/registry";
 
 /** Official pricing pages. Overridable via env so a page move needs no code change. */
 const PRICING_URLS: Record<ProviderId, string> = {
@@ -899,6 +906,57 @@ export function registerAdminRoutes(app: Express): void {
         return;
       }
       res.json({ ok: true, to: recipient });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- Slack notifications --------------------------------------------------
+
+  app.put("/admin/config/slack", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveSlackConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Post a real test notification to a channel to verify the webhook is wired.
+  // Bypasses the emulator guard, per-message toggles, and idempotency markers.
+  app.post("/admin/slack/test", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const channel = ((req.body ?? {}) as { channel?: string }).channel;
+      const target: SlackChannel = channel === "ops" ? "ops" : "growth";
+      const who = req.authToken?.email ?? req.uid ?? "an admin";
+      const result = await notifySlack({
+        channel: target,
+        force: true,
+        text: `🔔 Test notification — Slack is wired up correctly (sent from the admin dashboard by ${who}).`,
+      });
+      if (!result.sent) {
+        res.status(502).json({
+          error: {
+            message:
+              result.reason === "not_configured"
+                ? `No webhook is configured for #${target}. Set the ${
+                    target === "ops" ? "SLACK_OPS_WEBHOOK_URL" : "SLACK_WEBHOOK_URL"
+                  } secret and deploy.`
+                : `Slack test failed (${result.reason}).`,
+          },
+        });
+        return;
+      }
+      res.json({ ok: true, channel: target });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Expose the message registry so the admin UI can render toggles without
+  // duplicating the catalogue (labels/descriptions/channels live in one place).
+  app.get("/admin/config/slack", async (_req, res) => {
+    try {
+      res.json({ config: await getSlackConfig(), registry: SLACK_MESSAGE_REGISTRY });
     } catch (err) {
       handleError(res, err);
     }

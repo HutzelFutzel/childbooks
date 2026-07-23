@@ -99,7 +99,7 @@ export interface RenderedEmail {
  * through Firestore for the dedupe/test paths and are echoed in previews).
  */
 export interface EmailTemplateVarsMap {
-  welcome: { name?: string };
+  welcome: { name?: string; verifyUrl?: string };
   order_confirmation: { name?: string; orderRef: string; itemLabel: string; orderUrl?: string };
   order_shipped: { name?: string; orderRef: string; carrier?: string; trackingUrl?: string };
   order_failed: { name?: string; orderRef: string };

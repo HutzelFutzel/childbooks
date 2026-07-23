@@ -7,14 +7,64 @@
  * address is given. None of them throw — a failed email must never break the
  * money/reward flow that produced it.
  */
-import { sendTemplatedEmail } from "./service";
+import { sendTemplatedEmail, type SendTemplateResult } from "./service";
 
-export async function sendWelcomeEmail(uid: string, name?: string | null): Promise<void> {
-  await sendTemplatedEmail({
+/**
+ * Welcome (and, for unverified email/password signups, verify) email.
+ *
+ * Passing `verifyUrl` turns the primary CTA into an email-verification link (a
+ * Firebase action link generated server-side — see `authRoutes.ts`). Because the
+ * "resend" button must be able to re-send a FRESH link, the verify variant is
+ * NOT deduped; the plain welcome variant (verified identities) dedupes on uid so
+ * it's sent at most once.
+ */
+export async function sendWelcomeEmail(args: {
+  uid?: string;
+  to?: string | null;
+  name?: string | null;
+  verifyUrl?: string;
+  /** Dedupe on uid (default true). Set false so a resend can re-send. */
+  dedupe?: boolean;
+}): Promise<SendTemplateResult> {
+  return sendTemplatedEmail({
     templateId: "welcome",
-    uid,
-    vars: { name: name ?? undefined },
-    dedupeKey: uid,
+    uid: args.uid,
+    to: args.to,
+    vars: { name: args.name ?? undefined, verifyUrl: args.verifyUrl },
+    dedupeKey: args.dedupe === false ? undefined : args.uid,
+  });
+}
+
+export async function sendOrderShippedEmail(args: {
+  uid: string;
+  orderRef: string;
+  carrier?: string | null;
+  trackingUrl?: string | null;
+}): Promise<void> {
+  await sendTemplatedEmail({
+    templateId: "order_shipped",
+    uid: args.uid,
+    vars: {
+      orderRef: args.orderRef,
+      carrier: args.carrier ?? undefined,
+      trackingUrl: args.trackingUrl ?? undefined,
+    },
+    // One "shipped" email per order (the provider may re-post SHIPPED webhooks).
+    dedupeKey: `shipped_${args.orderRef}`,
+  });
+}
+
+export async function sendOrderFailedEmail(args: {
+  uid: string;
+  orderRef: string;
+  paymentId: string;
+}): Promise<void> {
+  await sendTemplatedEmail({
+    templateId: "order_failed",
+    uid: args.uid,
+    vars: { orderRef: args.orderRef },
+    // One "problem" email per payment, even though retries exhaust over time.
+    dedupeKey: `failed_${args.paymentId}`,
   });
 }
 

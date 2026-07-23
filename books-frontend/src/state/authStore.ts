@@ -6,7 +6,6 @@ import {
   linkWithCredential,
   linkWithPopup,
   onAuthStateChanged,
-  sendEmailVerification,
   signInAnonymously,
   signInWithEmailAndPassword,
   signInWithPopup,
@@ -15,7 +14,24 @@ import {
 } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
 import { getFirebaseAuth, getFirebaseDb, useEmulators } from "../lib/firebase";
+import { backendFetch } from "../platform/backend";
 import { useProjectsStore } from "./projectsStore";
+
+/**
+ * Kick off the branded welcome + email-verification email (Option B): the
+ * backend generates a Firebase verification action link and sends our own
+ * ZeptoMail template carrying it (or a plain welcome for already-verified
+ * identities like Google). Best-effort — the account is valid regardless, so a
+ * mail hiccup must never break signup. Also powers the "Resend" button, which
+ * re-sends a fresh link.
+ */
+async function requestWelcomeEmail(): Promise<void> {
+  try {
+    await backendFetch("/auth/welcome", { method: "POST" });
+  } catch (err) {
+    console.warn("[auth] welcome/verification email request failed", err);
+  }
+}
 
 /**
  * The studio is guest-first: nobody is blocked from browsing, so when nobody is
@@ -170,14 +186,17 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     // On collision the link/create throws (the guest stays anonymous), and the
     // dialog routes the user to "sign in" — where the guest drafts get picked up
     // for migration. So we deliberately don't silently sign in here.
-    const cred =
-      current?.isAnonymous
-        ? await linkWithCredential(current, credential)
-        : await createUserWithEmailAndPassword(auth, email, password);
-    await sendEmailVerification(cred.user);
+    if (current?.isAnonymous) {
+      await linkWithCredential(current, credential);
+    } else {
+      await createUserWithEmailAndPassword(auth, email, password);
+    }
     // Linking an anonymous user in place keeps the same uid, so the auth
     // listener may not fire — sync the derived level so the verify gate shows.
     set({ user: auth.currentUser, accessLevel: levelFor(auth.currentUser, true) });
+    // Send the branded welcome + verification email via the backend (which mints
+    // the Firebase verification link). Fire-and-forget.
+    await requestWelcomeEmail();
   },
 
   async signInGoogle() {
@@ -190,6 +209,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         await linkWithPopup(current, provider);
         // Same uid → the listener may not fire; sync the derived level.
         set({ user: auth.currentUser, accessLevel: levelFor(auth.currentUser, true) });
+        // New (Google-verified) account → send the plain welcome email + fire the
+        // signup ping. Deduped server-side, so it goes out at most once.
+        await requestWelcomeEmail();
         return; // linked in place → same uid, drafts preserved, Google verified
       } catch (err) {
         if (!isIdentityCollision(err)) throw err;
@@ -200,6 +222,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
     }
     await signInWithPopup(auth, provider);
+    // First-ever Google sign-in without a prior guest session: send the welcome
+    // + fire the signup ping. Deduped server-side, so returning users are no-ops.
+    await requestWelcomeEmail();
   },
 
   async signInGuest() {
@@ -213,7 +238,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   async resendVerification() {
     const user = getFirebaseAuth().currentUser;
-    if (user && !user.emailVerified) await sendEmailVerification(user);
+    if (!user || user.emailVerified) return;
+    // Re-send a FRESH branded verification email via the backend. Surface a
+    // failure so the banner can toast it.
+    const res = await backendFetch("/auth/welcome", { method: "POST" });
+    if (!res.ok) throw new Error("Could not send the verification email. Please try again.");
   },
 
   async refreshUser() {

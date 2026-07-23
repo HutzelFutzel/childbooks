@@ -23,6 +23,8 @@ import {
   HeartPulse,
   Search,
   MessageSquareText,
+  MessagesSquare,
+  Hash,
   Mail,
   Type,
 } from "lucide-react";
@@ -45,6 +47,7 @@ import {
   type AdminSection,
   type ConfigGroupId,
   type ConfigTabId,
+  type CommunicationTabId,
 } from "./adminTabStore";
 import { ModelConfigTab } from "./tabs/ModelConfigTab";
 import { ArtStylesTab } from "./tabs/ArtStylesTab";
@@ -61,13 +64,15 @@ import { CostIntelligenceTab } from "./tabs/CostIntelligenceTab";
 import { SystemHealthTab } from "./tabs/SystemHealthTab";
 import { SeoTab } from "./tabs/marketing/SeoTab";
 import { BrandingTab } from "./tabs/marketing/BrandingTab";
-import { EmailTab } from "./tabs/marketing/EmailTab";
+import { EmailTab } from "./tabs/communication/EmailTab";
+import { SlackTab } from "./tabs/communication/SlackTab";
 import { AnalysisTab } from "./analysis/AnalysisTab";
 
 const SECTIONS: { id: AdminSection; label: string; icon: ReactNode; description: string }[] = [
   { id: "analysis", label: "Analysis", icon: <BarChart3 className="size-4" />, description: "Usage, signups and active users across the product." },
   { id: "configuration", label: "Configuration", icon: <Settings2 className="size-4" />, description: "Global app configuration. Changes apply to everyone immediately." },
   { id: "marketing", label: "Marketing", icon: <Megaphone className="size-4" />, description: "Campaigns and growth tools." },
+  { id: "communication", label: "Communication", icon: <MessagesSquare className="size-4" />, description: "Transactional email and Slack notifications." },
 ];
 
 const CONFIG_TAB_META: Record<
@@ -96,7 +101,11 @@ const CONFIG_TAB_META: Record<
 const MARKETING_TABS = [
   { id: "seo", label: "SEO", icon: <Search className="size-4" /> },
   { id: "branding", label: "Branding", icon: <Stamp className="size-4" /> },
-  { id: "email", label: "Email", icon: <Mail className="size-4" /> },
+];
+
+const COMMUNICATION_TABS = [
+  { id: "transactional-emails", label: "Transactional Emails", icon: <Mail className="size-4" /> },
+  { id: "admin-slack", label: "Admin Slack", icon: <Hash className="size-4" /> },
 ];
 
 function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
@@ -153,6 +162,8 @@ export default function AdminApp() {
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
   const marketingTab = useAdminTab((s) => s.marketingTab);
   const setMarketingTab = useAdminTab((s) => s.setMarketingTab);
+  const communicationTab = useAdminTab((s) => s.communicationTab);
+  const setCommunicationTab = useAdminTab((s) => s.setCommunicationTab);
   const ordersOpen = useAccountUiStore((s) => s.ordersOpen);
   const closeOrders = useAccountUiStore((s) => s.closeOrders);
 
@@ -277,7 +288,17 @@ export default function AdminApp() {
                     />
                     {marketingTab === "seo" && <SeoTab />}
                     {marketingTab === "branding" && <BrandingTab />}
-                    {marketingTab === "email" && <EmailTab />}
+                  </div>
+                )}
+                {section === "communication" && (
+                  <div className="space-y-6">
+                    <Tabs
+                      items={COMMUNICATION_TABS}
+                      value={communicationTab}
+                      onChange={(id) => setCommunicationTab(id as CommunicationTabId)}
+                    />
+                    {communicationTab === "transactional-emails" && <EmailTab />}
+                    {communicationTab === "admin-slack" && <SlackTab />}
                   </div>
                 )}
               </div>

@@ -49,6 +49,13 @@ function sparks(n: number): string {
 export const RENDERERS: { [Id in keyof EmailTemplateVarsMap]: TemplateRenderer<Id> } = {
   welcome: (vars, ctx) => {
     const subject = `Welcome to ${ctx.brand.brandName}!`;
+    // When a verification link is supplied (email/password signups), the primary
+    // CTA verifies the address — clicking it confirms the account and unlocks
+    // ordering + the verify bonus. Verified identities (e.g. Google) get the
+    // plain "start creating" CTA instead.
+    const cta = vars.verifyUrl
+      ? button("Verify your email", vars.verifyUrl, ctx.brand)
+      : button("Start your first book", `${ctx.brand.siteUrl}/studio`, ctx.brand);
     const body = [
       heading(`Welcome to ${ctx.brand.brandName}`, ctx.brand),
       paragraph(`${greeting(vars.name)} we're so glad you're here.`),
@@ -57,9 +64,16 @@ export const RENDERERS: { [Id in keyof EmailTemplateVarsMap]: TemplateRenderer<I
           ctx.brand.brandName,
         )} lets you write, illustrate, and print your own children's picture books with AI — consistent characters, beautiful layouts, and a real book shipped to your door.`,
       ),
-      button("Start your first book", `${ctx.brand.siteUrl}/studio`, ctx.brand),
-    ].join("\n");
-    const text = `${greeting(vars.name)}\n\nWelcome to ${ctx.brand.brandName}! Start your first book: ${ctx.brand.siteUrl}/studio`;
+      vars.verifyUrl
+        ? paragraph("First, please confirm your email address so we know it's really you:")
+        : "",
+      cta,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const text = vars.verifyUrl
+      ? `${greeting(vars.name)}\n\nWelcome to ${ctx.brand.brandName}! Please confirm your email address to get started: ${vars.verifyUrl}`
+      : `${greeting(vars.name)}\n\nWelcome to ${ctx.brand.brandName}! Start your first book: ${ctx.brand.siteUrl}/studio`;
     return assemble(ctx, subject, `Welcome to ${ctx.brand.brandName}`, body, text);
   },
 

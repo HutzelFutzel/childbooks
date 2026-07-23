@@ -13,7 +13,7 @@
  *
  * It never prints secret VALUES. `status` checks existence by exit code only.
  */
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -110,21 +110,60 @@ export function nonPlaceholderSecrets() {
   return secretNames().filter((n) => !isPlaceholder(env[n]));
 }
 
+/** Max concurrent firebase CLI invocations (each is a separate child process). */
+const SET_CONCURRENCY = 6;
+
+function run(cmd, args, { cwd = ROOT, inheritStderr = false } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, {
+      cwd,
+      stdio: ["ignore", "ignore", inheritStderr ? "inherit" : "ignore"],
+    });
+    child.on("close", (code) => resolve(code ?? 1));
+    child.on("error", () => resolve(1));
+  });
+}
+
+function runWithInput(cmd, args, input, { cwd = ROOT, inheritStderr = true } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, {
+      cwd,
+      stdio: ["pipe", "ignore", inheritStderr ? "inherit" : "ignore"],
+    });
+    child.stdin.write(input);
+    child.stdin.end();
+    child.on("close", (code) => resolve(code ?? 1));
+    child.on("error", () => resolve(1));
+  });
+}
+
+/** Run `fn` over `items` with at most `limit` in flight at once; results keep input order. */
+async function mapConcurrent(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, () => worker()));
+  return results;
+}
+
 function fbSecretSet(project, name, value) {
-  return spawnSync(
+  return runWithInput(
     "npx",
     ["--no-install", "firebase", "functions:secrets:set", name, "--data-file", "-", "--project", project],
-    { cwd: ROOT, input: value, stdio: ["pipe", "ignore", "inherit"] },
+    value,
   );
 }
 
 function fbSecretExists(project, name) {
-  const r = spawnSync(
+  return run(
     "npx",
     ["--no-install", "firebase", "functions:secrets:access", name, "--project", project],
-    { cwd: ROOT, stdio: ["ignore", "ignore", "ignore"] },
-  );
-  return r.status === 0;
+  ).then((code) => code === 0);
 }
 
 // ── GitHub Actions secrets (via the `gh` CLI) ────────────────────────────────
@@ -140,11 +179,7 @@ export function ghReady() {
 
 /** Set a GitHub Actions repo secret (value via stdin so it never hits argv/logs). */
 function ghSecretSet(name, value) {
-  return spawnSync("gh", ["secret", "set", name], {
-    cwd: ROOT, // gh infers the repo from the git remote here
-    input: value,
-    stdio: ["pipe", "ignore", "inherit"],
-  });
+  return runWithInput("gh", ["secret", "set", name], value, { cwd: ROOT });
 }
 
 /**
@@ -152,7 +187,7 @@ function ghSecretSet(name, value) {
  * functions/.env.local to GitHub Actions secrets. Best-effort: if `gh` isn't
  * ready it warns and skips (the GCP sync is what deploys actually depend on).
  */
-export function syncGithubSecrets({ quiet = false } = {}) {
+export async function syncGithubSecrets({ quiet = false } = {}) {
   const log = (...a) => !quiet && console.log(...a);
   const env = readEnvLocal();
   const names = GITHUB_ACTION_SECRETS.filter((n) => !isPlaceholder(env[n]));
@@ -166,12 +201,14 @@ export function syncGithubSecrets({ quiet = false } = {}) {
     return { set: 0, skipped: names.length, failed: 0 };
   }
   log(`\nSyncing GitHub Actions secrets ${c("dim", "(for CI/CD)")}\n`);
+  const results = await Promise.all(
+    names.map(async (name) => ({ name, ok: (await ghSecretSet(name, env[name])) === 0 })),
+  );
   let set = 0, failed = 0;
-  for (const name of names) {
-    process.stdout.write(`  ${c("cyan", "set ")}  ${name} … `);
-    const r = ghSecretSet(name, env[name]);
-    if (r.status === 0) { log(c("green", "ok")); set++; }
-    else { log(c("red", "FAILED")); failed++; }
+  for (const { name, ok } of results) {
+    log(`  ${c("cyan", "set ")}  ${name} … ${ok ? c("green", "ok") : c("red", "FAILED")}`);
+    if (ok) set++;
+    else failed++;
   }
   log(`\n${c("bold", "GitHub:")} ${set} set, ${failed} failed.`);
   return { set, skipped: 0, failed };
@@ -181,12 +218,16 @@ export function syncGithubSecrets({ quiet = false } = {}) {
  * Push every non-placeholder secret from functions/.env.local to Secret Manager.
  * Returns counts so callers (deploy) can report. Pure side-effect on Secret Manager.
  */
-export function syncSecrets({ project = projectId(), quiet = false } = {}) {
+export async function syncSecrets({ project = projectId(), quiet = false } = {}) {
   const env = readEnvLocal();
   const names = secretNames();
   const log = (...a) => !quiet && console.log(...a);
-  log(`\nSyncing secrets from functions/.env.local → project ${c("cyan", project)}\n`);
-  let set = 0, skipped = 0, failed = 0;
+  log(
+    `\nSyncing secrets from functions/.env.local → project ${c("cyan", project)}` +
+      ` ${c("dim", `(up to ${SET_CONCURRENCY} at a time)`)}\n`,
+  );
+  const toSet = [];
+  let skipped = 0;
   for (const name of names) {
     const val = env[name];
     if (isPlaceholder(val)) {
@@ -196,10 +237,16 @@ export function syncSecrets({ project = projectId(), quiet = false } = {}) {
     }
     const warn = shapeWarning(name, val);
     if (warn) log(`  ${c("yellow", "warn")}  ${name} ${c("dim", `(${warn})`)}`);
-    process.stdout.write(`  ${c("cyan", "set ")}  ${name} … `);
-    const r = fbSecretSet(project, name, val);
-    if (r.status === 0) { log(c("green", "ok")); set++; }
-    else { log(c("red", "FAILED")); failed++; }
+    toSet.push({ name, val });
+  }
+  const results = await mapConcurrent(toSet, SET_CONCURRENCY, ({ name, val }) =>
+    fbSecretSet(project, name, val).then((code) => ({ name, ok: code === 0 })),
+  );
+  let set = 0, failed = 0;
+  for (const { name, ok } of results) {
+    log(`  ${c("cyan", "set ")}  ${name} … ${ok ? c("green", "ok") : c("red", "FAILED")}`);
+    if (ok) set++;
+    else failed++;
   }
   log(`\n${c("bold", "Done:")} ${set} set, ${skipped} skipped, ${failed} failed.`);
   if (set > 0 && !quiet) log(c("yellow", "Redeploy to bind the new versions:  yarn deploy\n"));
@@ -211,7 +258,7 @@ export async function status({ project = projectId() } = {}) {
   const names = secretNames();
   console.log(`\n${c("bold", "Secrets")} — project ${c("cyan", project)}  ${c("dim", `(${names.length} declared)`)}\n`);
   console.log(c("dim", "(checking Secret Manager in parallel…)\n"));
-  const exists = await Promise.all(names.map((n) => Promise.resolve().then(() => fbSecretExists(project, n))));
+  const exists = await Promise.all(names.map((n) => fbSecretExists(project, n)));
   const byName = new Map(names.map((n, i) => [n, exists[i]]));
   const groups = [...new Set(names.map(groupOf))];
   for (const group of groups) {
@@ -256,10 +303,8 @@ if (isMain) {
           `Sync ${c("bold", pending.length)} secret(s) from functions/.env.local to Secret Manager? [y/N]`,
         ));
         if (proceed) {
-          syncSecrets();
-          // Fan the CI/CD allowlist out to GitHub Actions too, so functions/.env.local
-          // stays the one place you edit. Best-effort — never fails the run.
-          syncGithubSecrets();
+          // GCP + GitHub targets are independent; run both concurrently.
+          await Promise.all([syncSecrets(), syncGithubSecrets()]);
         } else console.log("Aborted.");
       }
     }

@@ -84,7 +84,7 @@ if (!DRY && !SKIP_SECRETS) {
     const doSync =
       FORCE_SECRETS ||
       (await confirm(`\n▶ Sync ${pending.length} secret(s) from functions/.env.local to Secret Manager first? [y/N]`));
-    if (doSync) syncSecrets({ project: PROJECT });
+    if (doSync) await syncSecrets({ project: PROJECT });
   }
 }
 

@@ -110,6 +110,12 @@ import {
   type EmailEventInput,
   type EmailStats,
 } from "../../books-frontend/src/core/config/emailStats";
+import {
+  createDefaultSlackConfig,
+  normalizeSlackConfig,
+  slackConfigSchema,
+  type SlackConfig,
+} from "../../books-frontend/src/core/config/slackConfig";
 
 const MODELS_DOC = "appConfig/models";
 const ART_STYLES_DOC = "appConfig/artStyles";
@@ -128,6 +134,7 @@ const IMAGE_COST_STATS_DOC = "appConfig/imageCostStats";
 const LATENCY_STATS_DOC = "appConfig/latencyStats";
 const EMAIL_CONFIG_DOC = "appConfig/emailConfig";
 const EMAIL_STATS_DOC = "appConfig/emailStats";
+const SLACK_CONFIG_DOC = "appConfig/slackConfig";
 
 const CACHE_TTL_MS = 30_000;
 
@@ -300,6 +307,24 @@ export async function recordEmailEvents(entries: EmailEventInput[]): Promise<voi
     tx.set(ref, current, { merge: false });
   });
   cache.delete(EMAIL_STATS_DOC);
+}
+
+// ---- Slack notifications ---------------------------------------------------
+
+export function getSlackConfig(): Promise<SlackConfig> {
+  return readDoc(SLACK_CONFIG_DOC, normalizeSlackConfig);
+}
+
+export function defaultSlackConfig(): SlackConfig {
+  return createDefaultSlackConfig();
+}
+
+/** Validate + persist the Slack config (world-readable appConfig doc). */
+export async function saveSlackConfig(input: unknown): Promise<SlackConfig> {
+  const parsed = slackConfigSchema.parse(input);
+  const normalized = normalizeSlackConfig({ ...parsed, updatedAt: Date.now() });
+  await writeDoc(SLACK_CONFIG_DOC, normalized);
+  return normalized;
 }
 
 /** Admin-managed prompt overlays used by text and image pipelines. */

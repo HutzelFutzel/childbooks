@@ -17,9 +17,17 @@
  */
 import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
+import { getSlackConfig } from "./appConfig";
+import { slackMessageEnabled } from "../../books-frontend/src/core/config/slackConfig";
+import type { SlackMessageKey } from "../../books-frontend/src/core/notify/registry";
 
 /** Which Slack channel a message is for (drives which webhook is used). */
 export type NotifyChannel = "growth" | "ops";
+
+/** Why a Slack ping was (or wasn't) delivered — surfaced by the test action. */
+export type NotifyResult =
+  | { sent: true }
+  | { sent: false; reason: "emulator" | "not_configured" | "disabled" | "duplicate" | "error" };
 
 /** The webhook URL for a channel, or undefined when none is configured. */
 function webhookFor(channel: NotifyChannel): string | undefined {
@@ -36,29 +44,52 @@ function webhookFor(channel: NotifyChannel): string | undefined {
  * marker (`slackNotified/{channel}_{ref}`) makes retries idempotent, so a
  * Stripe webhook that fires twice (or a subscription that stays "active" across
  * renewals) only pings once.
+ *
+ * When `messageKey` is supplied the ping is gated on the admin toggle in
+ * `appConfig/slackConfig` (Communication → Admin Slack) — a disabled message is
+ * silently skipped.
+ *
+ * `force` (used by the admin "Send Test Notification" action) bypasses the
+ * emulator guard, the toggle check, and the idempotency marker so it always
+ * attempts a real delivery to verify the webhook.
  */
 export async function notifySlack(opts: {
   text: string;
   channel?: NotifyChannel;
   ref?: string;
-}): Promise<void> {
+  /** Gate this ping on the admin per-message toggle (default ON when unset). */
+  messageKey?: SlackMessageKey;
+  /** Bypass emulator/toggle/dedupe guards (admin test send). */
+  force?: boolean;
+}): Promise<NotifyResult> {
   try {
     // Prod only — the emulator sets FUNCTIONS_EMULATOR (see auth.ts, stripeClient.ts).
-    if (process.env.FUNCTIONS_EMULATOR === "true") return;
+    if (!opts.force && process.env.FUNCTIONS_EMULATOR === "true") return { sent: false, reason: "emulator" };
 
     const channel = opts.channel ?? "growth";
     const url = webhookFor(channel);
-    if (!url) return; // not configured — silently skip
+    if (!url) return { sent: false, reason: "not_configured" };
+
+    // Admin per-message toggle (best-effort — a config read failure never blocks
+    // an alert; we default to sending).
+    if (!opts.force && opts.messageKey) {
+      try {
+        const cfg = await getSlackConfig();
+        if (!slackMessageEnabled(cfg, opts.messageKey)) return { sent: false, reason: "disabled" };
+      } catch {
+        // fall through — a possible ping beats a missed alert.
+      }
+    }
 
     // Idempotency: claim a one-time marker keyed on the underlying fact.
-    if (opts.ref) {
+    if (!opts.force && opts.ref) {
       const key = `${channel}_${opts.ref}`.replace(/\//g, "_");
       try {
         ensureAdmin();
         await getFirestore().collection("slackNotified").doc(key).create({ at: Date.now() });
       } catch (err) {
         // ALREADY_EXISTS ⇒ we've pinged for this fact before; stay quiet.
-        if ((err as { code?: number }).code === 6) return;
+        if ((err as { code?: number }).code === 6) return { sent: false, reason: "duplicate" };
         // Any other marker failure: fall through and still try to notify — a
         // possible duplicate beats a missed alert.
       }
@@ -73,12 +104,17 @@ export async function notifySlack(opts: {
         body: JSON.stringify({ text: opts.text }),
         signal: ctrl.signal,
       });
-      if (!res.ok) console.error("[notify] slack responded", res.status);
+      if (!res.ok) {
+        console.error("[notify] slack responded", res.status);
+        return { sent: false, reason: "error" };
+      }
+      return { sent: true };
     } finally {
       clearTimeout(timer);
     }
   } catch (err) {
     console.error("[notify] slack failed", err);
+    return { sent: false, reason: "error" };
   }
 }
 

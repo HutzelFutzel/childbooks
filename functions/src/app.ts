@@ -20,6 +20,7 @@ import { registerProviderRoutes } from "./providers";
 import { registerLuluRoutes, registerPrintWebhookRoute } from "./lulu";
 import { registerAiRoutes } from "./ai";
 import { registerMigrationRoutes } from "./migration";
+import { registerAuthRoutes } from "./authRoutes";
 import { registerAdminRoutes } from "./admin";
 import { registerHealthRoutes } from "./health";
 import { registerRuntimeRoutes } from "./readiness";
@@ -75,11 +76,15 @@ export function createApp(): Express {
   // pull its own guest drafts across — ownership of the guest side is proven by
   // the guest ID token inside the request (see migration.ts).
   app.use("/migrate", requireAuth);
+  // Post-signup welcome + email verification: signed-in but NOT-yet-verified
+  // accounts must reach these (verifying is the point), so `requireAuth` only.
+  app.use("/auth", requireAuth);
   app.use("/admin", requireVerified, requireAdmin);
 
   registerLuluRoutes(app);
   registerAiRoutes(app);
   registerMigrationRoutes(app);
+  registerAuthRoutes(app);
   registerAdminRoutes(app);
   registerHealthRoutes(app);
   registerRuntimeRoutes(app);

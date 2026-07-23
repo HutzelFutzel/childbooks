@@ -144,6 +144,7 @@ export async function maybeRewardReferral(uid: string): Promise<void> {
     // reward itself is already claimed once via the transaction above).
     await notifySlack({
       channel: "growth",
+      messageKey: "referral_paid",
       ref: `referral_${uid}`,
       text:
         `🤝 Referral paid out — +${config.referral.referredSparks} ✦ to the new user, ` +

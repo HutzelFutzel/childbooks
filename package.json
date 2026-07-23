@@ -11,6 +11,8 @@
     "node": ">=20"
   },
   "scripts": {
+    "cmds": "node scripts/yarn-help.mjs",
+    "help": "node scripts/yarn-help.mjs",
     "dev": "yarn workspace books-frontend dev",
     "dev:backend": "node scripts/dev.mjs",
     "dev:all": "node scripts/dev.mjs --all",

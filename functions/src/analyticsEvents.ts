@@ -21,6 +21,7 @@ import type { AuthUserRecord } from "firebase-functions/v2/identity";
 import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { notifySlack } from "./notify";
+import { SLACK_WEBHOOK_URL } from "./secrets";
 
 /** The provider an account was created/signed in with. */
 function sourceOf(user: AuthUserRecord): string {
@@ -50,18 +51,23 @@ async function record(type: "signup" | "login", user: AuthUserRecord): Promise<v
   if (type === "signup" && source !== "anonymous") {
     await notifySlack({
       channel: "growth",
+      messageKey: "signup",
       ref: `signup_${user.uid}`,
       text: `🎉 New signup — ${user.email ?? user.uid} (${source})`,
     });
   }
 }
 
+// The signup ping needs the Slack webhook URL in this function's env too (the
+// blocking functions run separately from `api`), so bind the secret here.
+const BLOCKING_OPTS = { secrets: [SLACK_WEBHOOK_URL] };
+
 /** Fired once when an account (incl. anonymous guests) is first created. */
-export const onBeforeCreate = beforeUserCreated(async (event) => {
+export const onBeforeCreate = beforeUserCreated(BLOCKING_OPTS, async (event) => {
   if (event.data) await record("signup", event.data);
 });
 
 /** Fired on every sign-in (not token refresh). */
-export const onBeforeSignIn = beforeUserSignedIn(async (event) => {
+export const onBeforeSignIn = beforeUserSignedIn(BLOCKING_OPTS, async (event) => {
   if (event.data) await record("login", event.data);
 });

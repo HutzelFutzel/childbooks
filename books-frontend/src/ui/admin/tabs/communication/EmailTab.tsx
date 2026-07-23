@@ -32,10 +32,11 @@ function pct(part: number, whole: number): string {
 }
 
 /**
- * Marketing → Email. Edits the world-readable `appConfig/emailConfig` (senders,
- * master switch, per-template toggles + subject overrides + send delay, footer,
- * daily cap), shows live ZeptoMail delivery statistics from `appConfig/emailStats`,
- * previews each code template with the live brand kit, and sends test emails.
+ * Communication → Transactional emails. Edits the world-readable
+ * `appConfig/emailConfig` (senders, master switch, per-template toggles +
+ * subject overrides + send delay, footer, daily cap), shows live ZeptoMail
+ * delivery statistics from `appConfig/emailStats`, previews each code template
+ * with the live brand kit, and sends test emails.
  */
 export function EmailTab() {
   const stored = useAppConfigStore((s) => s.emailConfig);
@@ -142,7 +143,7 @@ export function EmailTab() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-2xl text-xs leading-relaxed text-ink-500">
-          System + marketing email, sent via ZeptoMail. Toggles, senders, subject
+          Transactional email, sent via ZeptoMail. Toggles, senders, subject
           overrides and the footer are stored in Firebase and applied immediately —
           no deploy. The API token + webhook secret live in Cloud Secret Manager.
         </p>

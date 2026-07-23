@@ -108,6 +108,12 @@ import {
   normalizeEmailStats,
   type EmailStats,
 } from "../core/config/emailStats";
+import {
+  createDefaultSlackConfig,
+  normalizeSlackConfig,
+  type SlackConfig,
+} from "../core/config/slackConfig";
+import type { SlackChannel } from "../core/notify/registry";
 import type { EmailTemplateId } from "../core/email/types";
 import type { ActionCostReport, CostGranularity } from "../core/analytics/types";
 
@@ -161,6 +167,8 @@ interface AppConfigState {
   emailConfig: EmailConfig;
   /** Aggregate email delivery statistics (sent/delivered/opened/bounced…). */
   emailStats: EmailStats;
+  /** Per-message Slack notification toggles. */
+  slackConfig: SlackConfig;
   loaded: boolean;
   unsubs: Unsubscribe[];
   adminCostsUnsub: Unsubscribe | null;
@@ -187,6 +195,9 @@ interface AppConfigState {
   saveEmailConfig: (config: EmailConfig) => Promise<void>;
   /** Send a template with its sample vars to a test recipient (admin by default). */
   sendTestEmail: (templateId: EmailTemplateId, to?: string) => Promise<void>;
+  saveSlackConfig: (config: SlackConfig) => Promise<void>;
+  /** Post a real test notification to a Slack channel to verify the webhook. */
+  sendTestSlack: (channel: SlackChannel) => Promise<void>;
   uploadArtStyleImage: (styleId: string, base64: string, mimeType: string) => Promise<void>;
 
   // Landing-page inline editing (admin, gated in the UI; enforced server-side).
@@ -298,6 +309,7 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   prompts: createDefaultPromptsConfig(),
   emailConfig: createDefaultEmailConfig(),
   emailStats: createDefaultEmailStats(),
+  slackConfig: createDefaultSlackConfig(),
   loaded: false,
   unsubs: [],
 
@@ -360,6 +372,9 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       }),
       onSnapshot(doc(db, "appConfig", "emailStats"), (snap) => {
         set({ emailStats: normalizeEmailStats(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "slackConfig"), (snap) => {
+        set({ slackConfig: normalizeSlackConfig(snap.exists() ? snap.data() : undefined) });
       }),
     ];
     set({ unsubs });
@@ -435,6 +450,19 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       body: JSON.stringify({ templateId, to }),
     });
     if (!res.ok) throw new Error((await safeError(res)) ?? "Test send failed.");
+  },
+
+  async saveSlackConfig(config) {
+    set({ slackConfig: normalizeSlackConfig(await putJson("/admin/config/slack", config)) });
+  },
+
+  async sendTestSlack(channel) {
+    const res = await backendFetch("/admin/slack/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channel }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Slack test failed.");
   },
 
   async loadAdminPlans() {

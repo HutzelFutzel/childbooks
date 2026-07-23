@@ -95,6 +95,7 @@ import {
   sendGiftPurchasedEmail,
   sendGiftReceivedEmail,
   sendOrderConfirmationEmail,
+  sendOrderFailedEmail,
   sendSparksPurchasedEmail,
   sendSubscriptionCancelledEmail,
   sendSubscriptionStartedEmail,
@@ -1291,6 +1292,19 @@ async function fulfillPaidOrder(paymentId: string): Promise<void> {
       ref: `${paymentId}_${attempt}`,
       meta: { paymentId, attempt, error: message.slice(0, 500) },
     });
+    // Once retries are exhausted, tell the customer we hit a snag (deduped on
+    // the payment id so it goes out at most once). Best-effort.
+    if (attempt >= MAX_FULFILLMENT_ATTEMPTS) {
+      try {
+        await sendOrderFailedEmail({
+          uid: payment.ownerUid,
+          orderRef: payment.orderId ?? paymentId,
+          paymentId,
+        });
+      } catch (mailErr) {
+        console.warn("[stripe] order_failed email failed", paymentId, mailErr);
+      }
+    }
   }
 }
 
@@ -1651,6 +1665,7 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
               : "✨ Spark pack purchased";
       await notifySlack({
         channel: "growth",
+        messageKey: "purchase",
         ref: `purchase_${paymentId}`,
         text: `${label} — ${money(gross, pi.currency)}${projectId ? ` · project ${projectId}` : ""}`,
       });
@@ -1754,6 +1769,7 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
             await sendSubscriptionCancelledEmail({ uid, planName, subscriptionId: sub.id });
             await notifySlack({
               channel: "growth",
+              messageKey: "subscription_cancelled",
               ref: `sub_cancelled_${sub.id}`,
               text: `👋 Subscription cancelled — ${planName}`,
             });
@@ -1767,6 +1783,7 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
             // Deduped on the subscription id: fires once, not on every renewal.
             await notifySlack({
               channel: "growth",
+              messageKey: "subscription_started",
               ref: `sub_started_${sub.id}`,
               text: `💳 New subscriber — ${planName}`,
             });
