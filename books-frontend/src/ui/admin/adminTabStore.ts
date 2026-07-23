@@ -35,7 +35,7 @@ export type ConfigTabId =
 export type CatalogSegment = "print" | "ebook" | "packs";
 
 /** Sub-tabs within the Marketing section. */
-export type MarketingTabId = "seo" | "branding";
+export type MarketingTabId = "seo" | "blog" | "branding";
 
 /** Sub-tabs within the Communication section. */
 export type CommunicationTabId = "transactional-emails" | "admin-slack";

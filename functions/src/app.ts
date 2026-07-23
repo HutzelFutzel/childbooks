@@ -33,6 +33,7 @@ import {
 } from "./stripe";
 import { registerEmailWebhookRoute } from "./email/webhook";
 import { registerContactRoutes } from "./contact";
+import { registerBlogRoutes } from "./blog";
 
 export function createApp(): Express {
   const app = express();
@@ -93,6 +94,7 @@ export function createApp(): Express {
   registerMigrationRoutes(app);
   registerAuthRoutes(app);
   registerAdminRoutes(app);
+  registerBlogRoutes(app);
   registerGdprRoutes(app);
   registerHealthRoutes(app);
   registerRuntimeRoutes(app);

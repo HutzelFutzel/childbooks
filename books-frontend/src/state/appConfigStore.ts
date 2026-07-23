@@ -124,6 +124,7 @@ import {
   normalizeCookieConfig,
   type CookieConfig,
 } from "../core/config/cookieConfig";
+import type { BlogImage, BlogIndex, BlogPost } from "../core/config/blog";
 import type { SlackChannel } from "../core/notify/registry";
 import type { EmailTemplateId } from "../core/email/types";
 import type { ActionCostReport, CostGranularity } from "../core/analytics/types";
@@ -274,6 +275,19 @@ interface AppConfigState {
     product: ProductDefinition,
     scenario: { pages: number; copies: number; currency: string; country?: string; region?: string },
   ) => Promise<MarginPreview>;
+
+  // Blog / articles (admin). Full posts live in the `blog` Firestore collection
+  // (not client-writable); the public projection is read server-side. These
+  // admin actions go through the admin-gated backend.
+  loadAdminPosts: () => Promise<BlogPost[]>;
+  savePost: (post: BlogPost, originalSlug?: string) => Promise<{ post: BlogPost; index: BlogIndex }>;
+  deletePost: (slug: string) => Promise<BlogIndex>;
+  uploadPostImage: (
+    slug: string,
+    base64: string,
+    mimeType: string,
+    alt?: string,
+  ) => Promise<BlogImage>;
 
   /** Ask the server to read the provider's pricing docs and suggest a cost. */
   suggestCost: (
@@ -718,6 +732,40 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     });
     if (!res.ok) throw new Error((await safeError(res)) ?? "Could not delete version.");
     set({ branding: normalizeBrandingConfig(await res.json()) });
+  },
+
+  async loadAdminPosts() {
+    const res = await backendFetch("/admin/blog");
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load posts.");
+    const json = (await res.json()) as { posts: BlogPost[] };
+    return json.posts;
+  },
+
+  async savePost(post, originalSlug) {
+    const res = await backendFetch("/admin/blog", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...post, originalSlug }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not save post.");
+    return (await res.json()) as { post: BlogPost; index: BlogIndex };
+  },
+
+  async deletePost(slug) {
+    const res = await backendFetch(`/admin/blog/${encodeURIComponent(slug)}`, { method: "DELETE" });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not delete post.");
+    const json = (await res.json()) as { index: BlogIndex };
+    return json.index;
+  },
+
+  async uploadPostImage(slug, base64, mimeType, alt) {
+    const res = await backendFetch(`/admin/blog/${encodeURIComponent(slug)}/image`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ base64, mimeType, alt }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Upload failed.");
+    return (await res.json()) as BlogImage;
   },
 
   async suggestCost(provider, modelId, modality) {

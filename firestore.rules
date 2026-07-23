@@ -131,6 +131,16 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Blog / articles. Full post bodies live in their own collection (they'd
+    // outgrow a single appConfig doc). Published posts are world-readable so the
+    // App Router can render article pages; drafts stay hidden. Writes only ever
+    // happen through the admin-gated backend (Admin SDK). The lightweight index
+    // projection is `appConfig/blogIndex`, already covered by the rule above.
+    match /blog/{slug} {
+      allow read: if resource.data.status == 'published';
+      allow write: if false;
+    }
+
     // Admin dashboard settings (exclusion lists, timezone, refresh interval).
     // Holds the email/domain exclusion list, so — unlike `appConfig/*` — it must
     // NEVER be world-readable. Read/written only via the admin-gated backend.

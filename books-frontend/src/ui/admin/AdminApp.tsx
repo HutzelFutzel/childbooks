@@ -22,6 +22,7 @@ import {
   Gauge,
   HeartPulse,
   Search,
+  Newspaper,
   MessageSquareText,
   MessagesSquare,
   Hash,
@@ -70,6 +71,7 @@ import { SparksTab } from "./tabs/SparksTab";
 import { CostIntelligenceTab } from "./tabs/CostIntelligenceTab";
 import { SystemHealthTab } from "./tabs/SystemHealthTab";
 import { SeoTab } from "./tabs/marketing/SeoTab";
+import { BlogTab } from "./tabs/marketing/BlogTab";
 import { BrandingTab } from "./tabs/marketing/BrandingTab";
 import { EmailTab } from "./tabs/communication/EmailTab";
 import { SlackTab } from "./tabs/communication/SlackTab";
@@ -117,6 +119,7 @@ const CONFIG_TAB_META: Record<
 
 const MARKETING_TABS = [
   { id: "seo", label: "SEO", icon: <Search className="size-4" /> },
+  { id: "blog", label: "Blog", icon: <Newspaper className="size-4" /> },
   { id: "branding", label: "Branding", icon: <Stamp className="size-4" /> },
 ];
 
@@ -311,6 +314,7 @@ export default function AdminApp() {
                       onChange={(id) => setMarketingTab(id as typeof marketingTab)}
                     />
                     {marketingTab === "seo" && <SeoTab />}
+                    {marketingTab === "blog" && <BlogTab />}
                     {marketingTab === "branding" && <BrandingTab />}
                   </div>
                 )}

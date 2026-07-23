@@ -224,6 +224,22 @@ export async function uploadSiteImage(
   return { storagePath, publicUrl: publicMediaUrl(storagePath) };
 }
 
+/**
+ * Upload an admin-managed blog cover image to the world-readable
+ * `public/blog/{slug}-...` space and return its path + public URL. `slug` only
+ * shapes the filename (sanitized), never the ACL.
+ */
+export async function uploadBlogImage(
+  slug: string,
+  buf: Buffer,
+  contentType: string,
+): Promise<{ storagePath: string; publicUrl: string }> {
+  const safeSlug = slug.replace(/[^a-z0-9-]/gi, "").slice(0, 80) || "post";
+  const storagePath = `public/blog/${safeSlug}-${randomUUID()}.${extForMime(contentType)}`;
+  await bucket().file(storagePath).save(buf, { contentType: contentType || "image/png", resumable: false });
+  return { storagePath, publicUrl: publicMediaUrl(storagePath) };
+}
+
 /** Delete a previously uploaded object (best-effort). */
 export async function deletePublicObject(storagePath: string): Promise<void> {
   try {
