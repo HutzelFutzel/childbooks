@@ -6,9 +6,16 @@ import { Button } from "../../components/Button";
 import { Field, Input } from "../../components/Input";
 import { Toggle } from "../../components/Toggle";
 import type { PricingSettings } from "../../../core/config/products";
+import type { PublicPlan } from "../../../core/config/plans";
+import {
+  buyerContextsFromPublicPlans,
+  ebookDiscountImpact,
+  ebookWorstCaseImpact,
+  minViableEbookPrice,
+} from "../../../core/config/discountImpact";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useAdminTab } from "../adminTabStore";
-import { Grid, ImpactNote, NumberField, Section, TabIntro } from "./products/parts";
+import { Grid, ImpactNote, NumberField, Section, TabIntro, fmtMoney } from "./products/parts";
 
 /**
  * Digital-edition (ebook) product editor. The ebook is a real product — a
@@ -21,6 +28,7 @@ import { Grid, ImpactNote, NumberField, Section, TabIntro } from "./products/par
 export function EbookTab() {
   const stored = useAppConfigStore((s) => s.pricingSettings);
   const save = useAppConfigStore((s) => s.savePricingSettings);
+  const plans = useAppConfigStore((s) => s.plans.plans);
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
 
   const [draft, setDraft] = useState<PricingSettings>(stored);
@@ -141,7 +149,10 @@ export function EbookTab() {
             ? ` Print owners pay ${ebook.printBundleDiscountPct}% less.`
             : " Set above 0 to offer it."}
         </p>
+        <BundleDiscountWarning settings={draft} plans={plans} />
       </Section>
+
+      <EbookImpact settings={draft} plans={plans} />
 
       <Section
         title="Tax"
@@ -156,5 +167,133 @@ export function EbookTab() {
         </Field>
       </Section>
     </div>
+  );
+}
+
+/**
+ * The bundle discount is a REAL, always-on discount, and it STACKS on top of
+ * member prices — so evaluate the worst reachable price (lowest member price
+ * of any active plan, with the bundle discount on top) per currency. Checkout
+ * clamps the automatic bundle discount so it can never push a viable price
+ * below covering the fixed Stripe fee, but a clamped promise is still worth
+ * fixing — and member prices themselves are honored as configured.
+ */
+function BundleDiscountWarning({
+  settings,
+  plans,
+}: {
+  settings: PricingSettings;
+  plans: PublicPlan[];
+}) {
+  const d = settings.ebook.printBundleDiscountPct;
+  if (d <= 0) return null;
+  const buyers = buyerContextsFromPublicPlans(plans, settings);
+  const losing = settings.currencies
+    .map((c) => ({ c, impact: ebookWorstCaseImpact(settings, c, buyers) }))
+    .filter((x) => x.impact != null && x.impact.underwaterAtList);
+  if (losing.length === 0) return null;
+  return (
+    <ImpactNote>
+      <span className="font-semibold">The cheapest reachable ebook price sells at a loss</span> in{" "}
+      {losing
+        .map(
+          (x) =>
+            `${x.c} (${x.impact!.buyerLabel} pays ${fmtMoney(x.impact!.listPrice, x.c)}, floor ${fmtMoney(minViableEbookPrice(settings, x.c), x.c)})`,
+        )
+        .join(", ")}
+      : the fixed Stripe fee exceeds what&apos;s left of the price. Checkout clamps the automatic
+      bundle discount so it can&apos;t cause this by itself, but member prices are honored as
+      configured — raise the price, the member price, or lower the discount.
+    </ImpactNote>
+  );
+}
+
+/**
+ * "What this means for the business" — the ebook's fee-aware economics per
+ * currency, twice: at the sticker price, and for the WORST-CASE buyer (the
+ * lowest member price of any active plan, with the print-bundle discount
+ * stacked on top — exactly the price checkout can produce).
+ */
+function EbookImpact({ settings, plans }: { settings: PricingSettings; plans: PublicPlan[] }) {
+  const buyers = buyerContextsFromPublicPlans(plans, settings);
+  const rows = settings.currencies
+    .map((c) => ({
+      c,
+      sticker: ebookDiscountImpact(settings, c),
+      worst: ebookWorstCaseImpact(settings, c, buyers),
+    }))
+    .filter((x) => x.sticker != null || x.worst != null);
+  if (rows.length === 0) return null;
+  // Only show the worst-case columns when some buyer actually pays less than sticker.
+  const hasWorse = rows.some(
+    (x) => x.worst != null && x.sticker != null && x.worst.listPrice < x.sticker.listPrice,
+  );
+  return (
+    <Section
+      title="Business impact"
+      hint={`Per currency: what one ebook sale earns after the Stripe fee and (where prices are tax-inclusive) tax — plus the deepest discount that keeps your margin floor, and the break-even.${
+        hasWorse
+          ? " The worst-case columns price the cheapest reachable sale: the lowest member price with the print-bundle discount stacked on top."
+          : ""
+      }`}
+    >
+      <div className="overflow-x-auto rounded-lg ring-1 ring-inset ring-ink-100">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="bg-ink-50/70 text-left text-[11px] uppercase tracking-wide text-ink-400">
+              <th className="px-3 py-2 font-semibold">Currency</th>
+              <th className="px-3 py-2 font-semibold">Price</th>
+              <th className="px-3 py-2 font-semibold">Payment fee</th>
+              <th className="px-3 py-2 font-semibold">You keep</th>
+              <th className="px-3 py-2 font-semibold">Margin</th>
+              <th className="px-3 py-2 font-semibold">Safe max discount</th>
+              <th className="px-3 py-2 font-semibold">Break-even</th>
+              {hasWorse && <th className="px-3 py-2 font-semibold">Worst-case buyer</th>}
+              {hasWorse && <th className="px-3 py-2 font-semibold">They pay → you keep</th>}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(({ c, sticker, worst }) => {
+              const impact = sticker ?? worst!;
+              const wf = impact.atDiscount(0);
+              const worstWf = worst?.atDiscount(0);
+              const worstDiffers =
+                worst != null && sticker != null && worst.listPrice < sticker.listPrice;
+              return (
+                <tr key={c} className="border-t border-ink-50">
+                  <td className="px-3 py-2 font-medium text-ink-800">{c}</td>
+                  <td className="px-3 py-2 text-ink-600">{fmtMoney(impact.listPrice, c)}</td>
+                  <td className="px-3 py-2 text-ink-600">{fmtMoney(wf.paymentFee, c)}</td>
+                  <td className={`px-3 py-2 font-semibold ${wf.netProfit < 0 ? "text-rose-600" : "text-ink-800"}`}>
+                    {fmtMoney(wf.netProfit, c)}
+                  </td>
+                  <td className="px-3 py-2 text-ink-600">{wf.marginPct}%</td>
+                  <td className="px-3 py-2 font-semibold text-ink-800">{impact.safeMaxDiscountPct}%</td>
+                  <td className="px-3 py-2 text-ink-600">{impact.breakEvenDiscountPct}%</td>
+                  {hasWorse && (
+                    <td className="px-3 py-2 text-ink-600">
+                      {worstDiffers ? worst.buyerLabel : "—"}
+                    </td>
+                  )}
+                  {hasWorse && (
+                    <td
+                      className={`px-3 py-2 font-semibold ${
+                        worstDiffers && worstWf && worstWf.netProfit < 0
+                          ? "text-rose-600"
+                          : "text-ink-800"
+                      }`}
+                    >
+                      {worstDiffers && worstWf
+                        ? `${fmtMoney(worst.listPrice, c)} → ${fmtMoney(worstWf.netProfit, c)}`
+                        : "—"}
+                    </td>
+                  )}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Section>
   );
 }

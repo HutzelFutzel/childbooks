@@ -79,7 +79,7 @@ import {
 import { getPlansConfig, hasActiveSubscription, resolveActivePlan } from "./plans";
 import { getSparksConfig } from "./appConfig";
 import { grantSparks } from "./sparks";
-import { recordChargeRevenue, recordFinanceEvent, toUsd } from "./finance";
+import { recordChargeRevenue, recordFinanceEvent, recordTaxRemitted, toUsd } from "./finance";
 import { raiseAlert } from "./alerts";
 import { notifySlack, money } from "./notify";
 import { claimReferralCode, ensureReferralCode, maybeRewardReferral } from "./referrals";
@@ -239,6 +239,14 @@ interface RetailPriceResult {
   /** Applied plan discount (already clamped to break-even). */
   discountPct: number;
   shippingCharged: number;
+  /** The configured cost view of this scenario (calibration baseline). */
+  estimatedCost: {
+    amount: number;
+    production: number;
+    shipping: number;
+    currency: string;
+    shippingSource: "live" | "table";
+  };
 }
 
 /**
@@ -283,13 +291,23 @@ async function priceRetailOrder(args: RetailPriceArgs): Promise<RetailPriceResul
       : margin.pricePerUnit;
   const shippingCharged =
     margin.shippingCharged || resolveShippingCharged(product.shipping, liveShippingCost ?? 0);
-  return { unitPrice, listUnitPrice: margin.pricePerUnit, discountPct, shippingCharged };
+  // The CONFIGURED cost view of this exact scenario (cost table + live shipping
+  // quote when we got one) — stamped onto the fulfillment plan so the finance
+  // stream can later compare it against what the provider actually charges.
+  const estimatedCost = {
+    amount: Math.round((margin.productionCost + margin.shippingCost) * 100) / 100,
+    production: margin.productionCost,
+    shipping: margin.shippingCost,
+    currency,
+    shippingSource: (liveShippingCost != null ? "live" : "table") as "live" | "table",
+  };
+  return { unitPrice, listUnitPrice: margin.pricePerUnit, discountPct, shippingCharged, estimatedCost };
 }
 
 async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintCheckoutResult> {
   const { uid, product, settings, copies, pages, currency, recipient } = args;
 
-  const { unitPrice, shippingCharged } = await priceRetailOrder({
+  const { unitPrice, shippingCharged, estimatedCost } = await priceRetailOrder({
     product,
     settings,
     activePlan: args.activePlan,
@@ -362,6 +380,7 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
       },
     },
     sourceFileUrls: args.sourceFileUrls,
+    estimatedCost,
   };
 
   const estimatedTotal = unitPrice * copies + shippingCharged;
@@ -612,7 +631,7 @@ export function registerStripeUserRoutes(app: Express): void {
       const settings = await getPricingSettings();
       const currency = String(req.query.currency ?? settings.baseCurrency).toUpperCase();
       const activePlan = await resolveActivePlan(uid);
-      const quote = await priceEbook(uid, projectId, currency, settings.ebook, activePlan);
+      const quote = await priceEbook(uid, projectId, currency, settings, activePlan);
       // The download link is never handed out here — owned ebooks are fetched
       // through the gated, logged `/account/downloads/:id/link` endpoint.
       res.json({ ...quote, downloadUrl: null });
@@ -650,7 +669,7 @@ export function registerStripeUserRoutes(app: Express): void {
         return;
       }
       const activePlan = await resolveActivePlan(uid);
-      const quote = await priceEbook(uid, body.projectId, currency, settings.ebook, activePlan);
+      const quote = await priceEbook(uid, body.projectId, currency, settings, activePlan);
       if (!quote.enabled) {
         clientError(res, "Ebooks aren't available right now.");
         return;
@@ -1234,10 +1253,16 @@ async function fulfillPaidOrder(paymentId: string): Promise<void> {
   try {
     const order = await fulfillmentProvider().createOrder(draft);
     const cfg = serverConfig();
+    // Persisting also books the provider's charge as `printCost` COGS via the
+    // cumulative-delta pattern (and status webhooks book any later revisions),
+    // so the finance stream tracks what Lulu ACTUALLY charges — with the
+    // checkout-time configured estimate alongside for calibration.
     await persistCreatedOrder({
       uid: payment.ownerUid,
       provider: "lulu",
       env: cfg.fulfillment.lulu.env,
+      paymentId,
+      estimatedCost: plan.estimatedCost ?? null,
       draft,
       order,
     });
@@ -1247,26 +1272,6 @@ async function fulfillPaidOrder(paymentId: string): Promise<void> {
       orderId: order.id,
       event: "order.placed",
     });
-    // Record what the print provider will charge US for this order (COGS).
-    try {
-      const total = order.charges.reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
-      const currency = order.charges[0]?.currency || plan.currency || "USD";
-      if (total > 0) {
-        await recordFinanceEvent({
-          category: "books",
-          kind: "printCost",
-          amountUsd: -(await toUsd(total, currency)),
-          uid: payment.ownerUid,
-          projectId: plan.merchantReference ?? undefined,
-          currency,
-          amount: total,
-          ref: paymentId,
-          meta: { orderId: order.id, sku: plan.productSku, copies: plan.copies },
-        });
-      }
-    } catch (err) {
-      console.warn("[stripe] could not record print cost", paymentId, err);
-    }
   } catch (err) {
     // The customer has paid; surface the failure for admin follow-up but don't
     // throw (a 500 makes Stripe retry, which won't fix a fulfillment error).
@@ -1338,6 +1343,23 @@ export async function retryFailedFulfillments(): Promise<number> {
 }
 
 // ---- Webhook ---------------------------------------------------------------
+
+/**
+ * The total tax on an invoice, in minor units. Older API versions expose
+ * `invoice.tax`; 2025+ versions replace it with a `total_taxes` array — read
+ * both defensively (webhook shapes follow the ACCOUNT's API version).
+ */
+function invoiceTaxMinor(invoice: Stripe.Invoice): number {
+  const inv = invoice as unknown as {
+    tax?: number | null;
+    total_taxes?: { amount?: number }[] | null;
+  };
+  if (typeof inv.tax === "number") return inv.tax;
+  if (Array.isArray(inv.total_taxes)) {
+    return inv.total_taxes.reduce((sum, t) => sum + (Number(t?.amount) || 0), 0);
+  }
+  return 0;
+}
 
 /** Pull fee + net + receipt off a PaymentIntent's charge (expanded). */
 async function chargeFinancials(
@@ -1449,14 +1471,32 @@ async function grantSubscriptionSparks(invoice: Stripe.Invoice): Promise<void> {
     const currency = (invoice.currency ?? "usd").toUpperCase();
     const gross = toMajor(invoice.amount_paid ?? 0, currency);
     if (gross > 0 && invoice.id) {
+      // The Stripe fee lives on the charge's balance transaction, reachable
+      // through the invoice's payment intent (field name varies across API
+      // versions, so read it defensively). Without it, subscription profit is
+      // overstated by ~2–3% + the fixed fee on every invoice.
+      const piRef = (invoice as unknown as { payment_intent?: string | { id?: string } | null })
+        .payment_intent;
+      const piId = typeof piRef === "string" ? piRef : (piRef?.id ?? undefined);
+      const fee = piId ? (await chargeFinancials(piId)).fee : undefined;
       await recordChargeRevenue({
         category: "subscriptions",
         kind: "subscriptionRevenue",
         uid,
         gross,
+        fee,
         currency,
         ref: invoice.id,
         meta: { planId: plan.id, interval },
+      });
+      // `amount_paid` includes the tax Stripe Tax collected — owed to the tax
+      // authority, not revenue.
+      await recordTaxRemitted({
+        category: "subscriptions",
+        uid,
+        tax: toMajor(invoiceTaxMinor(invoice), currency),
+        currency,
+        ref: invoice.id,
       });
       await maybeRewardReferral(uid);
     }
@@ -1498,6 +1538,21 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
           stripePaymentIntentId: piId,
           event: "checkout.session.completed",
         });
+        // The session's `amount_total` (and the PI gross recorded as revenue on
+        // payment_intent.succeeded) includes the tax Stripe Tax collected —
+        // owed to the authority, not revenue. Book it as a cost line here, the
+        // one event that carries the tax split. Idempotent on the paymentId.
+        const taxMinor = session.total_details?.amount_tax ?? 0;
+        if (taxMinor > 0) {
+          const cur = (session.currency ?? "usd").toUpperCase();
+          await recordTaxRemitted({
+            category: kind === "order" || kind === "ebook" ? "books" : "sparks",
+            uid,
+            tax: toMajor(taxMinor, cur),
+            currency: cur,
+            ref: paymentId,
+          });
+        }
         if (kind === "sparkPack") {
           // Grant the purchased Sparks, idempotent on the paymentId. The lot
           // carries the real revenue per Spark for paid/free spend attribution.

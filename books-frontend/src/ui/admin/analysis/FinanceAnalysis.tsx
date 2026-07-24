@@ -33,6 +33,7 @@ import { cn } from "../../lib/cn";
 import { notify } from "../../lib/notify";
 import { fmtDateTime, fmtNumber, fmtRelative, fmtUsd } from "./format";
 import { CustomCostsCard } from "./CustomCostsCard";
+import { PrintCalibrationCard } from "./PrintCalibrationCard";
 
 const TIMEFRAMES: { id: Timeframe; label: string }[] = [
   { id: "today", label: "Today" },
@@ -62,6 +63,7 @@ const KIND_LABELS: Record<string, string> = {
   refund: "Refunds",
   subscriptionRevenue: "Subscription invoices",
   stripeFee: "Stripe processing fees",
+  taxRemitted: "Sales tax / VAT remitted",
   ebookRevenue: "Ebook sales",
   failedCalls: "Failed provider calls",
   fulfillmentFailed: "Failed fulfillments",
@@ -320,6 +322,9 @@ export function FinanceAnalysis() {
           </div>
         </>
       ) : null}
+
+      {/* Configured vs actually-paid print costs (cost-table drift) */}
+      <PrintCalibrationCard />
 
       {/* Custom operating costs (email service, tooling, …) */}
       <CustomCostsCard />

@@ -48,6 +48,7 @@ export type FinanceKind =
   | "subscriptionRevenue" // + a subscription invoice was paid (gross)
   // any revenue category
   | "stripeFee" // − processor fee on a captured charge
+  | "taxRemitted" // − sales tax / VAT collected on a charge (owed to the authority, not revenue)
   // waste
   | "failedCalls" // 0 (count marker) — failed/timed-out provider attempts
   | "fulfillmentFailed" // 0 (marker) — paid order whose print job failed
@@ -176,6 +177,43 @@ export async function recordChargeRevenue(args: {
       ref: args.ref,
     });
   }
+}
+
+/**
+ * Record the sales tax / VAT collected on a charge as a cost line. Charge
+ * grosses (`amount_received`, `invoice.amount_paid`) INCLUDE the tax Stripe
+ * Tax collected — money owed to the tax authority, not revenue — so without
+ * this line the "total win" is overstated by the full tax in every taxed
+ * market. Booked as a separate line (rather than shrinking the recorded gross)
+ * so the stream stays auditable against Stripe's own numbers.
+ *
+ * Known approximation: refunds are booked at their gross (tax-inclusive)
+ * amount while the remitted tax here isn't reversed — a fully refunded charge
+ * therefore looks worse by its tax portion (in reality the remittance is
+ * adjusted). Rare enough to accept for a dashboard.
+ */
+export async function recordTaxRemitted(args: {
+  category: FinanceCategory;
+  uid?: string;
+  projectId?: string;
+  /** Major-unit tax amount in `currency`. */
+  tax: number;
+  currency: string;
+  /** Idempotency handle (paymentId / invoiceId). */
+  ref: string;
+  meta?: Record<string, unknown>;
+}): Promise<void> {
+  if (!(args.tax > 0)) return;
+  await recordFinanceEvent({
+    category: args.category,
+    kind: "taxRemitted",
+    amountUsd: -(await toUsd(args.tax, args.currency)),
+    uid: args.uid,
+    projectId: args.projectId,
+    currency: args.currency,
+    amount: args.tax,
+    ref: args.ref,
+  });
 }
 
 // ---- Summary (admin dashboard) ----------------------------------------------

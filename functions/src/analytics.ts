@@ -28,6 +28,7 @@ import { adminAdjustSparks } from "./sparks";
 import { financeSummary, type FinanceCategory } from "./finance";
 import { listAlerts, resolveAlert } from "./alerts";
 import { retryFailedFulfillments } from "./stripe";
+import { printCostCalibration } from "./orders";
 import { importInfraCosts } from "./infraCosts";
 import { deleteCustomCost, listCustomCosts, sweepCustomCosts, upsertCustomCost } from "./customCosts";
 import { priceForAction } from "../../books-frontend/src/core/config/sparks";
@@ -854,6 +855,19 @@ export function registerAnalyticsRoutes(app: Express): void {
       const projectId = String(req.query.projectId ?? "").trim() || undefined;
       const groupLimit = Number(req.query.groupLimit) || undefined;
       res.json(await financeSummary({ fromMs: from, toMs: to, category, uid, projectId, groupLimit }));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Configured-vs-actual print cost calibration: per SKU, what the product
+  // cost table predicted at checkout vs what the provider actually charged.
+  // The drift signal that keeps the cost table (and with it every margin and
+  // safe-discount number in the planner) honest.
+  app.get("/admin/finance/print-calibration", async (req: Request, res: Response) => {
+    try {
+      const days = Number(req.query.days) || 90;
+      res.json(await printCostCalibration(days));
     } catch (err) {
       handleError(res, err);
     }

@@ -88,6 +88,22 @@ export interface FulfillmentPlan {
   };
   /** Public URLs of the already-uploaded print-ready files. */
   sourceFileUrls: { interior?: string; cover?: string };
+  /**
+   * The CONFIGURED cost estimate captured at checkout time (from the product's
+   * cost table / live shipping quote via `computeMargin`). Stamped here so the
+   * finance stream can compare "what the admin thinks it costs" against what
+   * the print provider actually charges — the drift signal that keeps the cost
+   * table (and with it the discount planner's numbers) honest.
+   */
+  estimatedCost?: {
+    /** production + shipping, in `currency`. */
+    amount: number;
+    production: number;
+    shipping: number;
+    currency: string;
+    /** Whether the shipping part came from a live provider quote or the table. */
+    shippingSource: "live" | "table";
+  } | null;
 }
 
 export interface CreatePendingPaymentArgs {

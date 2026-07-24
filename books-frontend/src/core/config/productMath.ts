@@ -29,12 +29,28 @@ export function fxRate(settings: PricingSettings, currency: CurrencyCode): numbe
   return rate && rate > 0 ? rate : 1;
 }
 
+/**
+ * Convert a COST amount between currencies, padding any cross-currency
+ * conversion with the configured FX buffer so rate drift can't quietly erode
+ * the computed margin (costs are deliberately over- rather than under-stated).
+ */
+export function convertCostAmount(
+  settings: PricingSettings,
+  amount: number,
+  from: CurrencyCode,
+  to: CurrencyCode,
+): number {
+  if (from === to) return amount;
+  const buffer = 1 + Math.max(0, settings.fx.bufferPct) / 100;
+  return amount * (fxRate(settings, to) / fxRate(settings, from)) * buffer;
+}
+
 export function feeFor(settings: PricingSettings, currency: CurrencyCode): PaymentFeeModel {
   return settings.fees[currency] ?? settings.fees[settings.baseCurrency] ?? { percentPct: 0, fixed: 0 };
 }
 
 /** Total effective payment-fee percentage (processor % + optional extra %). */
-function feePercent(fee: PaymentFeeModel): number {
+export function feePercent(fee: PaymentFeeModel): number {
   return (fee.percentPct + (fee.extraPct ?? 0)) / 100;
 }
 
@@ -176,8 +192,8 @@ export function computeMargin(
   const netRevenuePerUnit = taxPol.behavior === "inclusive" ? round2(pricePerUnit / (1 + rate)) : pricePerUnit;
   const netRevenue = round2(netRevenuePerUnit * copies);
 
-  // Costs converted into the presentment currency.
-  const costToCurrency = cost.currency === currency ? 1 : fxRate(settings, currency) / fxRate(settings, cost.currency);
+  // Costs converted into the presentment currency (incl. the FX drift buffer).
+  const costToCurrency = convertCostAmount(settings, 1, cost.currency, currency);
   const productionCost = round2(totalUnitCost(cost, scenario) * copies * costToCurrency);
 
   const shippingCostCostCcy =

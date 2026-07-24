@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Plus, Trash2 } from "lucide-react";
 import { Button } from "../../components/Button";
@@ -8,7 +8,7 @@ import { Field, Input } from "../../components/Input";
 import { Toggle } from "../../components/Toggle";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import type { SparkPack, SparksConfig } from "../../../core/config/sparks";
-import { packEconomics } from "../../../core/config/economics";
+import { buyerContextsFromPublicPlans, packWorstCaseImpact } from "../../../core/config/discountImpact";
 import { Grid, ImpactNote, NumberField, Section, TabIntro, fmtMoney } from "./products/parts";
 
 /**
@@ -22,7 +22,15 @@ import { Grid, ImpactNote, NumberField, Section, TabIntro, fmtMoney } from "./pr
 export function PacksTab() {
   const stored = useAppConfigStore((s) => s.sparks);
   const save = useAppConfigStore((s) => s.saveSparksConfig);
-  const baseCurrency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
+  const pricingSettings = useAppConfigStore((s) => s.pricingSettings);
+  const plans = useAppConfigStore((s) => s.plans.plans);
+  const baseCurrency = pricingSettings.baseCurrency;
+  // Pack Sparks are spent at the BUYER's plan multipliers (Sparks are
+  // fungible), so the badge shows the worst case across all active plans.
+  const buyers = useMemo(
+    () => buyerContextsFromPublicPlans(plans, pricingSettings),
+    [plans, pricingSettings],
+  );
 
   const [draft, setDraft] = useState<SparksConfig>(stored);
   const [dirty, setDirty] = useState(false);
@@ -109,7 +117,9 @@ export function PacksTab() {
             const total = pack.sparks + pack.bonusSparks;
             const price = pack.prices[baseCurrency] ?? 0;
             const perSpark = total > 0 && price > 0 ? price / total : null;
-            const eco = packEconomics(draft, pack, baseCurrency);
+            const impact = packWorstCaseImpact(draft, pack, pricingSettings, baseCurrency, buyers);
+            const atList = impact?.atDiscount(0);
+            const worstBuyer = impact?.buyerPlanId ? ` (worst buyer: ${impact.buyerLabel})` : "";
             return (
               <div key={pack.id} className="space-y-2 rounded-lg bg-white p-2.5 ring-1 ring-inset ring-ink-100">
                 <div className="flex items-center justify-between">
@@ -121,18 +131,18 @@ export function PacksTab() {
                         <span className="ml-2 text-[11px] font-normal text-ink-400">{fmtMoney(perSpark, baseCurrency)}/✦</span>
                       )}
                     </span>
-                    {eco && (
+                    {impact && atList && (
                       <span
                         className={
-                          eco.belowCost
+                          atList.netProfit < 0
                             ? "rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700"
                             : "rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700"
                         }
-                        title={`If every Spark in this pack is spent, providers charge you ~${fmtMoney(eco.worstCaseCostUsd, baseCurrency)}.`}
+                        title={`${impact.costLabel}: ~${fmtMoney(atList.directCost, baseCurrency)}. Payment fee ${fmtMoney(atList.paymentFee, baseCurrency)}. Net profit ${fmtMoney(atList.netProfit, baseCurrency)}. Break-even discount ${impact.breakEvenDiscountPct}%${worstBuyer}.`}
                       >
-                        {eco.belowCost
-                          ? "BELOW COST — every fully-spent pack loses money"
-                          : `≥ ${eco.worstCaseMarginPct}% margin worst-case`}
+                        {atList.netProfit < 0
+                          ? `BELOW COST — a used-up pack loses money after fees${worstBuyer}`
+                          : `${atList.marginPct}% margin after fees · sale-safe to ${impact.safeMaxDiscountPct}% off${worstBuyer}`}
                       </span>
                     )}
                   </div>

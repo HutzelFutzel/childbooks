@@ -19,7 +19,9 @@ import {
   effectiveMarkup,
   grantLiabilityUsd,
   planSparkEconomics,
+  worstActionMultiplier,
 } from "../../../core/config/economics";
+import { planDiscountImpact } from "../../../core/config/discountImpact";
 import { computeMargin } from "../../../core/config/productMath";
 import type {
   CurrencyCode,
@@ -537,9 +539,48 @@ function PlanImpact({
   const yearlyPrice = plan.billing.prices[currency]?.year?.amount ?? 0;
   const grant = plan.grant;
 
-  const monthly = planSparkEconomics(sparksConfig, monthlyPrice, grant.monthlySparks);
+  // This plan's own Spark discounts make each granted Spark buy MORE provider
+  // work, so its lowest multiplier inflates the grant's worst-case cost.
+  const worstM = worstActionMultiplier(plan.actionMultipliers);
+  const monthly = planSparkEconomics(sparksConfig, monthlyPrice, grant.monthlySparks, worstM);
   const annualSparks = grant.monthlySparks * 12 + grant.annualBonusSparks;
-  const annualLiability = grantLiabilityUsd(sparksConfig, annualSparks);
+  const annualLiability = grantLiabilityUsd(sparksConfig, annualSparks, worstM);
+
+  // Fee/tax-aware economics per invoice (the same engine as the Discount
+  // planner), so the plan's real headroom and safe sale depth are visible here.
+  const monthlyImpact = plan.isFree
+    ? null
+    : planDiscountImpact(
+        {
+          id: plan.id,
+          name: plan.presentation.name,
+          interval: "month",
+          price: monthlyPrice,
+          sparksGranted: grant.monthlySparks,
+          worstActionMultiplier: worstM,
+          taxBehavior: plan.billing.taxBehavior,
+        },
+        sparksConfig,
+        pricingSettings,
+        currency as CurrencyCode,
+      );
+  const yearlyImpact = plan.isFree
+    ? null
+    : planDiscountImpact(
+        {
+          id: plan.id,
+          name: plan.presentation.name,
+          interval: "year",
+          price: yearlyPrice,
+          sparksGranted: annualSparks,
+          worstActionMultiplier: worstM,
+          taxBehavior: plan.billing.taxBehavior,
+        },
+        sparksConfig,
+        pricingSettings,
+        currency as CurrencyCode,
+      );
+  const monthlyAtList = monthlyImpact?.atDiscount(0) ?? null;
 
   // Products whose thinnest-margin configuration can't afford this plan's
   // print discount (checkout clamps to break-even, so subscribers would see a
@@ -580,7 +621,11 @@ function PlanImpact({
   return (
     <Section
       title="Business impact"
-      hint="Live read-out of what this configuration means for your margin, assuming the subscriber spends every granted Spark (the worst case — real usage is lower)."
+      hint={`Live read-out of what this configuration means for your margin, assuming the subscriber spends every granted Spark (the worst case — real usage is lower).${
+        worstM < 1
+          ? ` Includes this plan's ${worstM}× Spark discount: each granted Spark buys ${Math.round((1 / worstM) * 100) / 100}× the provider work.`
+          : ""
+      }`}
     >
       <div className="overflow-hidden rounded-lg ring-1 ring-inset ring-ink-100">
         <table className="w-full text-xs">
@@ -612,6 +657,42 @@ function PlanImpact({
                 <td className="px-3 py-2 text-ink-400">
                   {annualSparks.toLocaleString()} ✦/yr — annual invoices grant 12× the monthly Sparks
                   {grant.annualBonusSparks > 0 ? " plus the bonus" : ""}.
+                </td>
+              </tr>
+            )}
+            {monthlyImpact && monthlyAtList && (
+              <tr className="border-b border-ink-50">
+                <td className="bg-ink-50/50 px-3 py-2 font-medium text-ink-700">Net after fees (monthly)</td>
+                <td className={`px-3 py-2 font-semibold ${monthlyAtList.netProfit < 0 ? "text-rose-600" : "text-ink-800"}`}>
+                  {fmtMoney(monthlyAtList.netProfit, currency)} ({monthlyAtList.marginPct}%)
+                </td>
+                <td className="px-3 py-2 text-ink-400">
+                  Invoice minus Spark backing ({monthlyImpact.costLabel.toLowerCase()}), the Stripe
+                  fee and tax. Excludes the print-discount subsidy.
+                </td>
+              </tr>
+            )}
+            {(monthlyImpact || yearlyImpact) && (
+              <tr className="border-b border-ink-50">
+                <td className="bg-ink-50/50 px-3 py-2 font-medium text-ink-700">Max sale discount</td>
+                <td className="px-3 py-2 font-semibold text-ink-800">
+                  {[
+                    monthlyImpact ? `monthly ${monthlyImpact.safeMaxDiscountPct}%` : null,
+                    yearlyImpact ? `annual ${yearlyImpact.safeMaxDiscountPct}%` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </td>
+                <td className="px-3 py-2 text-ink-400">
+                  Deepest promo on the invoice that keeps ≥{pricingSettings.minMarginPct}% margin
+                  (break-even:{" "}
+                  {[
+                    monthlyImpact ? `${monthlyImpact.breakEvenDiscountPct}% monthly` : null,
+                    yearlyImpact ? `${yearlyImpact.breakEvenDiscountPct}% annual` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(", ")}
+                  ). The Spark grant still costs the same after a discount.
                 </td>
               </tr>
             )}

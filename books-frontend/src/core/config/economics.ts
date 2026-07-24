@@ -1,17 +1,19 @@
 /**
  * Business-economics helpers for the admin configuration screens.
  *
- * Pure functions that translate raw config knobs (peg, markup, grants, pack
- * prices, plan multipliers, print discounts) into the numbers an operator
- * actually cares about: what a Spark costs ME, what it earns, whether a pack
- * or plan sells below cost, and how big the liability of a grant is.
+ * Pure functions that translate raw config knobs (peg, markup, grants, plan
+ * multipliers) into the numbers an operator actually cares about: what a Spark
+ * costs ME, what it earns, and how big the liability of a grant is.
+ *
+ * Fee/tax-aware sale planning (per-item break-even and safe max discounts for
+ * print, ebook, packs and plans) lives in `discountImpact.ts` — that engine is
+ * the single source of truth for "can I run this discount?".
  *
  * Everything here is advisory (rendered as helper tables/warnings next to the
  * config editors) — enforcement stays where it already lives (e.g. print
  * discounts are clamped to break-even at checkout).
  */
-import type { SparkPack, SparksConfig } from "./sparks";
-import { packTotalSparks } from "./sparks";
+import type { SparksConfig } from "./sparks";
 
 // ---- Spark unit economics ----------------------------------------------------
 
@@ -37,53 +39,33 @@ export function sparkUnitEconomics(config: SparksConfig): SparkUnitEconomics {
  * The worst-case provider cost of a Spark grant (USD): if every granted Spark
  * is spent on derived-priced actions, this is what the AI providers charge you.
  * Real cost is usually lower (breakage: not everyone spends everything).
+ *
+ * `actionMultiplier` is the buyer's per-action Spark discount (e.g. 0.5 =
+ * half-price renders). A discounted Spark buys MORE provider work — each Spark
+ * covers `providerUsdPerSpark ÷ multiplier` of cost — so generous multipliers
+ * INCREASE the liability. Multipliers above 1 are not credited (conservative).
  */
-export function grantLiabilityUsd(config: SparksConfig, sparks: number): number {
-  return round2(sparks * sparkUnitEconomics(config).providerUsdPerSpark);
-}
-
-// ---- Pack economics ----------------------------------------------------------
-
-export interface PackEconomics {
-  totalSparks: number;
-  price: number;
-  /** What the buyer pays per Spark. */
-  pricePerSpark: number;
-  /** Buyer's price per Spark relative to the peg (1 = exactly peg). */
-  pegRatio: number;
-  /** Worst-case provider cost if the whole pack is spent (USD). */
-  worstCaseCostUsd: number;
-  /** Margin after worst-case spend, as a % of the pack price. */
-  worstCaseMarginPct: number;
-  /** True when the pack sells Sparks below their provider backing — a loss. */
-  belowCost: boolean;
+export function grantLiabilityUsd(
+  config: SparksConfig,
+  sparks: number,
+  actionMultiplier = 1,
+): number {
+  const m = actionMultiplier > 0 ? Math.min(actionMultiplier, 1) : 1;
+  return round2((sparks * sparkUnitEconomics(config).providerUsdPerSpark) / m);
 }
 
 /**
- * Economics of one top-up pack in a currency. `price` is treated as USD-like
- * for the margin math (packs are usually priced near-parity across currencies;
- * this is an advisory helper, not accounting).
+ * The most generous (lowest) Spark action multiplier in a plan's map — the one
+ * that determines the worst-case value of a Spark in that buyer's hands.
+ * 1 when the plan has no discounts; multipliers above 1 are ignored.
  */
-export function packEconomics(
-  config: SparksConfig,
-  pack: SparkPack,
-  currency: string,
-): PackEconomics | null {
-  const price = pack.prices[currency];
-  const total = packTotalSparks(pack);
-  if (typeof price !== "number" || price <= 0 || total <= 0) return null;
-  const unit = sparkUnitEconomics(config);
-  const pricePerSpark = price / total;
-  const worstCaseCostUsd = round2(total * unit.providerUsdPerSpark);
-  return {
-    totalSparks: total,
-    price,
-    pricePerSpark: Math.round(pricePerSpark * 10000) / 10000,
-    pegRatio: unit.sparkValueUsd > 0 ? Math.round((pricePerSpark / unit.sparkValueUsd) * 100) / 100 : 0,
-    worstCaseCostUsd,
-    worstCaseMarginPct: price > 0 ? Math.round(((price - worstCaseCostUsd) / price) * 1000) / 10 : 0,
-    belowCost: pricePerSpark < unit.providerUsdPerSpark,
-  };
+export function worstActionMultiplier(
+  multipliers: Record<string, number> | undefined,
+): number {
+  const values = Object.values(multipliers ?? {}).filter(
+    (v) => typeof v === "number" && Number.isFinite(v) && v > 0,
+  );
+  return Math.min(1, ...values);
 }
 
 // ---- Plan economics ----------------------------------------------------------
@@ -105,14 +87,16 @@ export interface PlanSparkEconomics {
  * What a plan's monthly Spark grant means for the business, at a given monthly
  * price. Rule of thumb: keep `liabilityPctOfPrice` under ~50% so the plan
  * still funds Stripe fees, print-discount subsidies and profit even if the
- * subscriber spends every Spark.
+ * subscriber spends every Spark. Pass the plan's worst (lowest) action
+ * multiplier so its own Spark discounts inflate the liability correctly.
  */
 export function planSparkEconomics(
   config: SparksConfig,
   monthlyPrice: number,
   monthlySparks: number,
+  actionMultiplier = 1,
 ): PlanSparkEconomics {
-  const liability = grantLiabilityUsd(config, monthlySparks);
+  const liability = grantLiabilityUsd(config, monthlySparks, actionMultiplier);
   return {
     monthlyPrice,
     monthlySparks,

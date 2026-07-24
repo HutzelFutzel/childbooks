@@ -23,7 +23,8 @@ import {
   hasPaidPrintOrder,
   updatePayment,
 } from "./payments";
-import { ebookPlanPrice, type EbookSettings } from "../../books-frontend/src/core/config/products";
+import { ebookPlanPrice, type PricingSettings } from "../../books-frontend/src/core/config/products";
+import { minViableEbookPrice } from "../../books-frontend/src/core/config/discountImpact";
 import type { PlanDefinition } from "../../books-frontend/src/core/config/plans";
 
 function db() {
@@ -58,14 +59,22 @@ export interface EbookQuote {
  * Price the ebook for a buyer + project: sticker price per currency, replaced
  * by the buyer's plan price when one is configured (0 ⇒ included free), minus
  * the print-bundle discount when they already bought a print copy.
+ *
+ * The AUTOMATIC bundle discount is clamped to the currency's viability floor
+ * (the smallest price that still covers the fixed processor fee), mirroring
+ * how plan print discounts are clamped to break-even: stacking "member price ×
+ * bundle discount" must never produce a sale that pays out more than it takes
+ * in. Explicitly configured prices (sticker or member) are honored as-is —
+ * they're admin intent, and the admin config-health panel flags them instead.
  */
 export async function priceEbook(
   uid: string,
   projectId: string,
   currency: string,
-  settings: EbookSettings,
+  pricing: PricingSettings,
   plan: PlanDefinition | null,
 ): Promise<EbookQuote> {
+  const settings = pricing.ebook;
   const cur = currency.toUpperCase();
   const listPrice = settings.prices[cur] ?? 0;
   // Sticker price gates availability for everyone; the plan price only
@@ -93,8 +102,17 @@ export async function priceEbook(
       ? hasPaidPrintOrder(uid, projectId)
       : Promise.resolve(false),
   ]);
-  const discountPct = hasPrint ? Math.max(0, Math.min(100, settings.printBundleDiscountPct)) : 0;
-  const price = Math.round(effective * (1 - discountPct / 100) * 100) / 100;
+  let discountPct = hasPrint ? Math.max(0, Math.min(100, settings.printBundleDiscountPct)) : 0;
+  let price = Math.round(effective * (1 - discountPct / 100) * 100) / 100;
+  if (discountPct > 0 && price > 0) {
+    // Clamp the automatic discount so it never cuts a viable price below the
+    // fee-covering floor. Never RAISE a price above the configured `effective`.
+    const floor = Math.min(effective, minViableEbookPrice(pricing, cur));
+    if (price < floor) {
+      price = floor;
+      discountPct = Math.round((1 - price / effective) * 100);
+    }
+  }
   return { ...base, owned, discountPct, price, included: planApplied && price <= 0 };
 }
 

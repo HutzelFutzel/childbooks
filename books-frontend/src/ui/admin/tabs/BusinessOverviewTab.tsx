@@ -1,9 +1,17 @@
 "use client";
 
-import { BookOpen, CreditCard, Sparkles, Tablet, Coins, ArrowRight } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { BookOpen, CreditCard, Sparkles, Tablet, Coins, ArrowRight, Percent } from "lucide-react";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { sparkUnitEconomics } from "../../../core/config/economics";
+import {
+  catalogDiscountImpacts,
+  storewideSafeDiscount,
+  DISCOUNT_ITEM_LABELS,
+} from "../../../core/config/discountImpact";
+import type { ProductDefinition } from "../../../core/config/products";
 import { useAdminTab } from "../adminTabStore";
+import { ConfigHealthPanel } from "./ConfigHealthPanel";
 import { TabIntro, fmtMoney } from "./products/parts";
 
 /**
@@ -18,8 +26,20 @@ export function BusinessOverviewTab() {
   const products = useAppConfigStore((s) => s.products.products);
   const pricing = useAppConfigStore((s) => s.pricingSettings);
   const sparks = useAppConfigStore((s) => s.sparks);
+  const loadAdminProducts = useAppConfigStore((s) => s.loadAdminProducts);
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
   const openCatalog = useAdminTab((s) => s.openCatalog);
+
+  // Full product definitions (incl. cost) for the sale-headroom card — the
+  // public projection deliberately has no cost internals.
+  const [adminProducts, setAdminProducts] = useState<ProductDefinition[]>([]);
+  useEffect(() => {
+    void loadAdminProducts()
+      .then((config) => setAdminProducts(config.products))
+      .catch(() => {
+        /* the card simply shows no print rows */
+      });
+  }, [loadAdminProducts]);
 
   const base = pricing.baseCurrency;
   const ebook = pricing.ebook;
@@ -34,6 +54,19 @@ export function BusinessOverviewTab() {
     .slice()
     .sort((a, b) => a.sortOrder - b.sortOrder);
   const activePacks = sparks.packs.filter((p) => p.active);
+
+  const saleImpacts = useMemo(
+    () =>
+      catalogDiscountImpacts({
+        settings: pricing,
+        sparks,
+        products: adminProducts,
+        plans,
+        currency: base,
+      }),
+    [pricing, sparks, adminProducts, plans, base],
+  );
+  const storewide = storewideSafeDiscount(saleImpacts);
 
   /** The ebook perk wording for a plan (mirrors the storefront logic). */
   const memberEbookLabel = (planId: string, isFree: boolean): string => {
@@ -51,6 +84,11 @@ export function BusinessOverviewTab() {
         gives them. Everything here is read-only; use the links to jump to the editor for any piece.
         All amounts are shown in your base currency ({base}).
       </TabIntro>
+
+      {/* Live cross-config health check: single edits can combine into
+          money-losing setups, so this re-validates the WHOLE economy on every
+          config change and points at the tab to fix. */}
+      <ConfigHealthPanel settings={pricing} sparks={sparks} products={adminProducts} plans={plans} />
 
       {/* Memberships */}
       <OverviewCard
@@ -175,6 +213,43 @@ export function BusinessOverviewTab() {
         )}
       </OverviewCard>
 
+      {/* Sale headroom */}
+      <OverviewCard
+        icon={<Percent className="size-4" />}
+        title="Sale headroom"
+        subtitle="How deep a discount each item can absorb for its most expensive buyer — after plan perks, cost, fees and tax"
+        onEdit={() => setConfigTab("discounts")}
+        editLabel="Open discount planner"
+      >
+        {saleImpacts.length === 0 ? (
+          <Empty>Nothing on sale yet — activate a product, pack or plan to see its headroom.</Empty>
+        ) : (
+          <>
+            {storewide && (
+              <p className="text-xs text-ink-600">
+                A storewide sale is safe up to{" "}
+                <span className="font-semibold text-ink-900">{storewide.pct}% off</span> (keeps every
+                item at ≥{pricing.minMarginPct}% margin) — limited by {storewide.limitedBy.itemLabel}.
+              </p>
+            )}
+            <Table
+              head={["Item", "Worst-case buyer", `They pay (${base})`, "Margin at list", "Safe max", "Break-even"]}
+              rows={saleImpacts.map((impact) => {
+                const wf = impact.atDiscount(0);
+                return [
+                  `${impact.itemLabel} (${DISCOUNT_ITEM_LABELS[impact.itemType].toLowerCase()})`,
+                  impact.buyerLabel,
+                  fmtMoney(impact.listPrice, base),
+                  `${wf.marginPct}%`,
+                  `${impact.safeMaxDiscountPct}%`,
+                  `${impact.breakEvenDiscountPct}%`,
+                ];
+              })}
+            />
+          </>
+        )}
+      </OverviewCard>
+
       {/* Currencies */}
       <OverviewCard
         icon={<Coins className="size-4" />}
@@ -199,7 +274,8 @@ export function BusinessOverviewTab() {
           ))}
         </div>
         <p className="mt-2 text-[11px] text-ink-400">
-          Max discount allowed: {pricing.maxDiscountPct}%. Tax is collected by Stripe Tax at checkout.
+          Planned max discount: {pricing.maxDiscountPct}% · margin floor for sales:{" "}
+          {pricing.minMarginPct}%. Tax is collected by Stripe Tax at checkout.
         </p>
       </OverviewCard>
     </div>

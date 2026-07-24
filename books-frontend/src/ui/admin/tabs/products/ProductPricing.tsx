@@ -8,6 +8,11 @@ import { Field, Input } from "../../../components/Input";
 import { Select } from "../../../components/Select";
 import type { CurrencyCode, PageTier, PricingSettings, ProductDefinition } from "../../../../core/config/products";
 import { computeMargin, type MarginBreakdown } from "../../../../core/config/productMath";
+import {
+  buyerContextsFromPublicPlans,
+  eligibleBuyers,
+  printImpactFromBreakdown,
+} from "../../../../core/config/discountImpact";
 import { useAppConfigStore, type MarginPreview } from "../../../../state/appConfigStore";
 import { Grid, NumberField, Section, fmtMoney } from "./parts";
 
@@ -222,6 +227,7 @@ export function PricingSection({
 
 function MarginInfo({ product, settings }: { product: ProductDefinition; settings: PricingSettings }) {
   const previewMargin = useAppConfigStore((s) => s.previewMargin);
+  const plans = useAppConfigStore((s) => s.plans.plans);
   const [currency, setCurrency] = useState(settings.baseCurrency);
   const [pages, setPages] = useState(product.conditions.pages.min);
   const [copies, setCopies] = useState(Math.max(1, product.conditions.copies.min));
@@ -236,6 +242,35 @@ function MarginInfo({ product, settings }: { product: ProductDefinition; setting
     [product, cur, pages, copies, settings],
   );
   const shown = live?.breakdown ?? offline;
+  const costIsEstimate = product.cost.source === "providerLive" && !live?.live;
+  // Same engine as the Discount planner, fed with the (possibly live) breakdown.
+  const impact = printImpactFromBreakdown(
+    { id: product.id, label: product.presentation.name },
+    shown,
+    settings,
+    costIsEstimate,
+  );
+  // The most expensive buyer this product can have: the eligible plan with the
+  // deepest print discount. Members of that plan pay less, so their margin —
+  // not the sticker margin — is the number a sale must survive.
+  const worstBuyer = useMemo(() => {
+    const eligible = eligibleBuyers(
+      product.conditions.access,
+      buyerContextsFromPublicPlans(plans, settings),
+    ).filter((b) => b.printDiscountPct > 0);
+    if (eligible.length === 0) return null;
+    return eligible.reduce((a, b) => (b.printDiscountPct > a.printDiscountPct ? b : a));
+  }, [product.conditions.access, plans, settings]);
+  const worstImpact = worstBuyer
+    ? printImpactFromBreakdown(
+        { id: product.id, label: product.presentation.name },
+        shown,
+        settings,
+        costIsEstimate,
+        worstBuyer,
+      )
+    : null;
+  const worstWf = worstImpact?.atDiscount(0);
 
   const fetchLive = async () => {
     setLoading(true);
@@ -297,8 +332,20 @@ function MarginInfo({ product, settings }: { product: ProductDefinition; setting
           </MetricGroup>
           <MetricGroup title="You keep">
             <Metric label="Net profit" value={fmtMoney(shown.netProfit, cur)} accent={shown.netProfit > 0 ? "good" : "bad"} />
-            <Metric label="Margin" value={`${shown.marginPct}%`} accent={shown.marginPct >= 10 ? "good" : "warn"} />
+            <Metric label="Margin" value={`${shown.marginPct}%`} accent={shown.marginPct >= settings.minMarginPct ? "good" : "warn"} />
+            <Metric
+              label="Safe sale discount"
+              value={`${impact.safeMaxDiscountPct}%`}
+              accent={settings.maxDiscountPct > impact.safeMaxDiscountPct ? "warn" : "good"}
+            />
             <Metric label="Break-even discount" value={`${shown.breakEvenDiscountPct}%`} accent={shown.underwaterAtMaxDiscount ? "bad" : undefined} />
+            {worstBuyer && worstImpact && worstWf && (
+              <Metric
+                label={`${worstBuyer.planName} buyer (−${worstBuyer.printDiscountPct}%)`}
+                value={`${worstWf.marginPct}% · sale to ${worstImpact.safeMaxDiscountPct}%`}
+                accent={worstWf.netProfit < 0 ? "bad" : worstWf.marginPct < settings.minMarginPct ? "warn" : "good"}
+              />
+            )}
           </MetricGroup>
         </div>
         {shown.underwaterAtMaxDiscount && (

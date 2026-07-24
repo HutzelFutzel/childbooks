@@ -158,6 +158,11 @@ export interface FulfillmentOrder {
   merchantReference?: string;
   shipments: ShipmentInfo[];
   charges: Money[];
+  /**
+   * The tax portion of `charges`, when the provider breaks it out — lets
+   * bookkeeping deduct reclaimable VAT from the booked cost.
+   */
+  taxCharged?: Money;
   /** Human-readable issues reported by the provider, if any. */
   issues: string[];
   /**

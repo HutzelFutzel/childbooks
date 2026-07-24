@@ -103,7 +103,18 @@ export interface LuluPrintJobResponse {
   external_id?: string;
   status?: LuluPrintJobStatus;
   line_items?: LuluPrintJobLineItemResponse[];
-  costs?: { total_cost_incl_tax?: string; currency?: string };
+  /**
+   * What Lulu charges US. `total_cost_incl_tax` is the headline; the excl-tax
+   * total + tax split lets bookkeeping deduct reclaimable VAT. Costs may be
+   * absent on creation (Lulu finalizes them after file validation) and arrive
+   * later via status webhooks.
+   */
+  costs?: {
+    total_cost_incl_tax?: string;
+    total_cost_excl_tax?: string;
+    total_tax?: string;
+    currency?: string;
+  };
 }
 
 /** Webhook configuration returned by `/webhooks/`. */
@@ -201,6 +212,12 @@ export function mapOrder(json: LuluPrintJobResponse): FulfillmentOrder {
   const charges: Money[] = json.costs?.total_cost_incl_tax
     ? [money(json.costs.total_cost_incl_tax, json.costs.currency)]
     : [];
+  // The tax portion of the charge, when Lulu breaks it out — lets bookkeeping
+  // book the net (excl-tax) cost where VAT is reclaimed.
+  const taxCharged: Money | undefined =
+    json.costs?.total_tax && Number(json.costs.total_tax) > 0
+      ? money(json.costs.total_tax, json.costs.currency)
+      : undefined;
 
   const issues = json.status?.message ? [json.status.message] : [];
 
@@ -211,6 +228,7 @@ export function mapOrder(json: LuluPrintJobResponse): FulfillmentOrder {
     merchantReference: json.external_id,
     shipments,
     charges,
+    taxCharged,
     issues,
     raw: json,
   };

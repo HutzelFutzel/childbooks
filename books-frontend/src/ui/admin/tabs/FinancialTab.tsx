@@ -8,6 +8,7 @@ import { Field, Input } from "../../components/Input";
 import { Select } from "../../components/Select";
 import type { CurrencyCode, PricingSettings } from "../../../core/config/products";
 import { useAppConfigStore } from "../../../state/appConfigStore";
+import { useAdminTab } from "../adminTabStore";
 import { Grid, NumberField, Section, TabIntro } from "./products/parts";
 
 /**
@@ -20,6 +21,7 @@ import { Grid, NumberField, Section, TabIntro } from "./products/parts";
 export function FinancialTab() {
   const stored = useAppConfigStore((s) => s.pricingSettings);
   const save = useAppConfigStore((s) => s.savePricingSettings);
+  const setConfigTab = useAdminTab((s) => s.setConfigTab);
 
   const [draft, setDraft] = useState<PricingSettings>(stored);
   const [dirty, setDirty] = useState(false);
@@ -131,10 +133,25 @@ export function FinancialTab() {
       </Section>
 
       <Section
-        title="Maximum discount"
-        hint="The largest discount you'd ever run (promo codes, subscriber perks). The margin read-outs use it as a stress test: any price that would sell at a loss once this discount is applied gets flagged, so you never advertise a discount you can't honour profitably."
+        title="Discount planning"
+        hint="Guardrails for sales and promos. The planned max discount is the largest sale you'd ever run — margin read-outs stress-test every price against it. The margin floor defines each item's “safe max discount”: the deepest sale that still keeps at least this margin after cost, fees and tax. The Spark spend rate is how much of granted/sold Sparks you assume customers actually use when costing packs and plan grants (100% = worst case)."
       >
-        <NumberField label="Maximum discount" value={draft.maxDiscountPct} step="1" className="w-44" suffix="%" onChange={(n) => set({ maxDiscountPct: n })} />
+        <Grid cols={3}>
+          <NumberField label="Planned max discount" value={draft.maxDiscountPct} step="1" suffix="%" onChange={(n) => set({ maxDiscountPct: n })} />
+          <NumberField label="Margin floor for sales" value={draft.minMarginPct} step="1" suffix="%" onChange={(n) => set({ minMarginPct: n })} />
+          <NumberField label="Assumed Spark spend rate" value={draft.sparkUtilizationPct} step="5" suffix="%" onChange={(n) => set({ sparkUtilizationPct: n })} />
+        </Grid>
+        <p className="text-[11px] text-ink-400">
+          See the effect on every product with the slider in the{" "}
+          <button
+            type="button"
+            onClick={() => setConfigTab("discounts")}
+            className="font-semibold text-brand-700 underline"
+          >
+            Discount planner
+          </button>
+          .
+        </p>
       </Section>
 
       <Section

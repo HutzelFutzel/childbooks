@@ -14,6 +14,7 @@ import {
   Loader2,
   Megaphone,
   Package,
+  Percent,
   Settings2,
   ShieldAlert,
   Sparkles,
@@ -66,6 +67,7 @@ import { ModelCostsTab } from "./tabs/ModelCostsTab";
 import { BusinessOverviewTab } from "./tabs/BusinessOverviewTab";
 import { CatalogTab } from "./tabs/CatalogTab";
 import { FinancialTab } from "./tabs/FinancialTab";
+import { DiscountPlannerTab } from "./tabs/DiscountPlannerTab";
 import { PlansTab } from "./tabs/PlansTab";
 import { SparksTab } from "./tabs/SparksTab";
 import { CostIntelligenceTab } from "./tabs/CostIntelligenceTab";
@@ -104,6 +106,7 @@ const CONFIG_TAB_META: Record<
   memberships: { label: "Memberships", icon: <CreditCard className="size-4" /> },
   sparks: { label: "Sparks economy", icon: <Sparkles className="size-4" /> },
   financial: { label: "Financial settings", icon: <Coins className="size-4" /> },
+  discounts: { label: "Discount planner", icon: <Percent className="size-4" /> },
   // AI pipeline
   models: { label: "Models", icon: <Cpu className="size-4" /> },
   modelCosts: { label: "Model costs", icon: <DollarSign className="size-4" /> },
@@ -140,6 +143,8 @@ function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
       return <SparksTab />;
     case "financial":
       return <FinancialTab />;
+    case "discounts":
+      return <DiscountPlannerTab />;
     case "costs":
       return <CostIntelligenceTab />;
     case "models":

@@ -267,6 +267,18 @@ export interface PricingSettings {
   floorPrice: Record<CurrencyCode, number>;
   /** Largest discount allowed; the break-even guardrail checks against it. */
   maxDiscountPct: number;
+  /**
+   * Margin floor (as a % of the revenue you keep) that a sale must preserve.
+   * Drives each item's "safe max discount": the deepest promo that still leaves
+   * at least this margin after cost, fees and tax. 0 ⇒ safe max == break-even.
+   */
+  minMarginPct: number;
+  /**
+   * Assumed share (%) of granted/sold Sparks that customers actually spend on
+   * cost-derived actions. Used when costing Spark packs and plan grants for
+   * discount planning. 100 ⇒ worst case (every Spark is spent).
+   */
+  sparkUtilizationPct: number;
   /** Tax handling for Stripe Tax + the admin margin readout. */
   tax: {
     /** Stripe product tax code for physical books (drives zero/reduced rating). */
@@ -423,6 +435,8 @@ export function createDefaultPricingSettings(): PricingSettings {
     },
     floorPrice: { USD: 0, EUR: 0, GBP: 0 },
     maxDiscountPct: 20,
+    minMarginPct: 10,
+    sparkUtilizationPct: 100,
     tax: {
       // Stripe tax code for printed books (zero/reduced-rated in many markets).
       bookTaxCode: "txcd_35010000",
@@ -577,6 +591,12 @@ export function normalizePricingSettings(input: unknown): PricingSettings {
     rounding: { ...def.rounding, ...p.rounding },
     floorPrice: { ...def.floorPrice, ...p.floorPrice },
     maxDiscountPct: typeof p.maxDiscountPct === "number" ? p.maxDiscountPct : def.maxDiscountPct,
+    minMarginPct:
+      typeof p.minMarginPct === "number" ? Math.max(0, Math.min(90, p.minMarginPct)) : def.minMarginPct,
+    sparkUtilizationPct:
+      typeof p.sparkUtilizationPct === "number"
+        ? Math.max(1, Math.min(100, p.sparkUtilizationPct))
+        : def.sparkUtilizationPct,
     tax: {
       bookTaxCode: p.tax?.bookTaxCode ?? def.tax.bookTaxCode,
       perCurrency: { ...def.tax.perCurrency, ...p.tax?.perCurrency },
@@ -776,6 +796,10 @@ export const pricingSettingsSchema = z.object({
   rounding: roundingSchema,
   floorPrice: z.record(z.string(), z.number().nonnegative()),
   maxDiscountPct: z.number().min(0).max(100),
+  // Optional so configs saved before these knobs existed still validate;
+  // normalizePricingSettings fills the defaults.
+  minMarginPct: z.number().min(0).max(90).optional(),
+  sparkUtilizationPct: z.number().min(0).max(100).optional(),
   tax: z.object({
     bookTaxCode: z.string().optional(),
     perCurrency: z.record(
