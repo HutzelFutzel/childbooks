@@ -69,11 +69,16 @@ export default async function BlogIndexPage() {
         {posts.length === 0 ? (
           <p className="mt-16 text-center text-ink-400">No posts yet — check back soon.</p>
         ) : (
-          <div className="mt-14 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-            {posts.map((post) => (
-              <BlogCard key={post.slug} post={post} />
-            ))}
-          </div>
+          <section aria-label="Latest articles">
+            <h2 className="sr-only">Latest articles</h2>
+            <ul className="mt-14 grid list-none gap-6 p-0 sm:grid-cols-2 lg:grid-cols-3">
+              {posts.map((post) => (
+                <li key={post.slug}>
+                  <BlogCard post={post} />
+                </li>
+              ))}
+            </ul>
+          </section>
         )}
       </main>
       <Footer siteName={branding.brandName} logoUrl={logoUrl} legal={legal} />

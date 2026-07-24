@@ -15,6 +15,7 @@ import { BreadcrumbJsonLd } from "../../../ui/marketing/BreadcrumbJsonLd";
 import { Prose } from "../../../ui/blog/Prose";
 import { BlogCard } from "../../../ui/blog/BlogCard";
 import { ArticleJsonLd } from "../../../ui/blog/ArticleJsonLd";
+import { BlogAnalytics } from "../../../ui/blog/BlogAnalytics";
 import { formatPostDate } from "../../../ui/blog/date";
 
 /** Static params + ISR: pre-render published posts, revalidate on a short window
@@ -95,6 +96,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ slug: 
 
   return (
     <>
+      <BlogAnalytics slug={post.slug} />
       <ArticleJsonLd post={post} seo={seo} branding={branding} />
       <BreadcrumbJsonLd
         items={[
@@ -178,11 +180,13 @@ export default async function ArticlePage({ params }: { params: Promise<{ slug: 
             <h2 className="font-display text-2xl font-bold tracking-tight text-ink-900">
               Keep reading
             </h2>
-            <div className="mt-6 grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
+            <ul className="mt-6 grid list-none gap-6 p-0 sm:grid-cols-2 lg:grid-cols-3">
               {related.map((p) => (
-                <BlogCard key={p.slug} post={p} />
+                <li key={p.slug}>
+                  <BlogCard post={p} />
+                </li>
               ))}
-            </div>
+            </ul>
           </section>
         )}
 

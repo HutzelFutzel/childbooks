@@ -9,7 +9,7 @@ export function BlogCard({ post }: { post: BlogPostSummary }) {
   return (
     <Link
       href={`/blog/${post.slug}`}
-      className="group flex h-full flex-col overflow-hidden rounded-3xl border border-ink-200 bg-white shadow-soft transition hover:shadow-lifted"
+      className="group flex h-full flex-col overflow-hidden rounded-3xl border border-ink-200 bg-white shadow-soft transition hover:shadow-lifted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 focus-visible:ring-offset-2"
     >
       <div className="relative aspect-video w-full overflow-hidden bg-linear-to-br from-brand-100 to-accent-100">
         {post.coverImage?.imageUrl && (

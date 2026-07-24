@@ -25,6 +25,11 @@
         { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" },
         { "order": "DESCENDING", "queryScope": "COLLECTION_GROUP" }
       ]
+    },
+    {
+      "collectionGroup": "days",
+      "fieldPath": "seen",
+      "indexes": []
     }
   ]
 }

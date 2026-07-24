@@ -22,6 +22,7 @@ import {
   type BlogIndex,
   type BlogPost,
 } from "../../books-frontend/src/core/config/blog";
+import { BLOG_SEED_POSTS } from "../../books-frontend/src/core/config/blogSeed";
 
 const BLOG_COLLECTION = "blog";
 const BLOG_INDEX_DOC = "appConfig/blogIndex";
@@ -104,6 +105,32 @@ export async function upsertBlogPost(
   return { post, index };
 }
 
+/**
+ * Seed curated starter articles, idempotent by slug: existing posts are left
+ * untouched (never clobbers admin edits), only missing ones are written. Returns
+ * how many were added alongside the refreshed projection.
+ */
+export async function seedBlogPosts(): Promise<{ added: number; index: BlogIndex }> {
+  ensureAdmin();
+  const db = getFirestore();
+  let added = 0;
+  for (const seed of BLOG_SEED_POSTS) {
+    const ref = db.collection(BLOG_COLLECTION).doc(seed.slug);
+    const existing = await ref.get();
+    if (existing.exists) continue;
+    const post = normalizeBlogPost({
+      ...seed,
+      publishedAt: seed.status === "published" ? Date.now() : null,
+      updatedAt: Date.now(),
+    });
+    await ref.set(post, { merge: false });
+    added += 1;
+  }
+  const index = await rebuildBlogIndex();
+  if (added > 0) await triggerRevalidate(["/blog", ...BLOG_SEED_POSTS.map((s) => `/blog/${s.slug}`)]);
+  return { added, index };
+}
+
 /** Delete a post + its cover image, then rebuild the projection. */
 export async function deleteBlogPost(slug: string): Promise<{ index: BlogIndex }> {
   ensureAdmin();
@@ -157,6 +184,14 @@ export function registerBlogRoutes(app: Express): void {
         originalSlug?: string;
       };
       res.json(await upsertBlogPost(post, typeof originalSlug === "string" ? originalSlug : undefined));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.post("/admin/blog/seed", json, async (_req: Request, res: Response) => {
+    try {
+      res.json(await seedBlogPosts());
     } catch (err) {
       handleError(res, err);
     }

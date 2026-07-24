@@ -53,6 +53,12 @@ export interface BlogPost {
   /** Markdown body. */
   body: string;
   coverImage: BlogImage | null;
+  /**
+   * Optional AI-image generation prompt for the cover — authoring aid only,
+   * never rendered on the public site. Lets a seed article ship a ready-to-use
+   * prompt the admin can paste into an image model, then upload the result.
+   */
+  coverImagePrompt: string;
   tags: string[];
   author: BlogAuthor;
   status: "draft" | "published";
@@ -157,6 +163,7 @@ export function createDefaultBlogPost(): BlogPost {
     excerpt: "",
     body: "",
     coverImage: null,
+    coverImagePrompt: "",
     tags: [],
     author: { name: "Childbook Studio" },
     status: "draft",
@@ -181,6 +188,7 @@ export function normalizeBlogPost(input: unknown): BlogPost {
     excerpt: str(s.excerpt, "", 400).trim(),
     body,
     coverImage: normalizeImage(s.coverImage),
+    coverImagePrompt: str(s.coverImagePrompt, "", 1200).trim(),
     tags: strArray(s.tags),
     author: normalizeAuthor(s.author),
     status,
@@ -250,6 +258,7 @@ export const blogPostSchema = z.object({
     })
     .nullable()
     .optional(),
+  coverImagePrompt: z.string().max(1200).optional(),
   tags: z.array(z.string().max(60)).optional(),
   author: z
     .object({

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  BookOpen,
   ChevronDown,
   Cookie,
   CreditCard,
@@ -183,6 +184,22 @@ export function AuthMenu() {
           )}
 
           <div className="my-1 border-t border-ink-100" />
+          <a
+            role="menuitem"
+            href="/blog"
+            target="_blank"
+            rel="noreferrer"
+            onClick={() => setOpen(false)}
+            className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-ink-700 transition hover:bg-ink-50"
+          >
+            <span className="flex size-4 items-center justify-center text-ink-400">
+              <BookOpen className="size-4" />
+            </span>
+            <span className="flex-1">Blog</span>
+            <span className="flex size-4 items-center justify-center text-ink-300">
+              <ExternalLink className="size-3.5" />
+            </span>
+          </a>
           <MenuItem icon={<LifeBuoy className="size-4" />} label="Contact us" onClick={() => run(openContact)} />
           {legalLinks.map((l) => (
             <a

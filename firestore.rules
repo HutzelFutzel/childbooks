@@ -141,6 +141,19 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Blog analytics aggregates (cookieless, first-party). Written only by the
+    // backend (Admin SDK) from the tokenless `/blog-track` beacon; read only by
+    // the admin dashboard via the admin-gated backend. Never client-accessible
+    // — the per-day `days/{date}` dedupe docs hold rotating visitor hashes and
+    // must not be exposed. The top-level deny-all already covers this, but we
+    // spell it out for clarity.
+    match /blogStats/{slug} {
+      allow read, write: if false;
+      match /days/{date} {
+        allow read, write: if false;
+      }
+    }
+
     // Admin dashboard settings (exclusion lists, timezone, refresh interval).
     // Holds the email/domain exclusion list, so — unlike `appConfig/*` — it must
     // NEVER be world-readable. Read/written only via the admin-gated backend.

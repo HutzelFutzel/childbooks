@@ -12,6 +12,12 @@ import {
   Pencil,
   Clock,
   ExternalLink,
+  Sparkles,
+  BarChart3,
+  Copy,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
 } from "lucide-react";
 import { Button } from "../../../components/Button";
 import { Field, Input, Textarea } from "../../../components/Input";
@@ -24,11 +30,20 @@ import {
   slugify,
   type BlogPost,
 } from "../../../../core/config/blog";
+import { BLOG_SEED_POSTS } from "../../../../core/config/blogSeed";
 import { Prose } from "../../../blog/Prose";
+import { BlogStatsPanel } from "./BlogStatsPanel";
 import { Grid, Section, TextField, Disclosure } from "../products/parts";
+import type { BlogStatsListItem } from "../../../../core/config/blogStats";
 
 const EXCERPT_MIN = 120;
 const EXCERPT_MAX = 160;
+
+/** Columns the "all posts" table can be sorted by. */
+type SortKey = "title" | "views" | "uniques" | "cta" | "ctaRate" | "updated";
+
+/** Below this view count, CTA rate is too noisy to compare — shown as "—". */
+const MIN_VIEWS_FOR_RATE = 30;
 
 /** Read a File as bare base64 (no data: prefix) + its mime type. */
 function readBase64(file: File): Promise<{ base64: string; mimeType: string }> {
@@ -56,11 +71,19 @@ function readBase64(file: File): Promise<{ base64: string; mimeType: string }> {
  */
 export function BlogTab() {
   const loadAdminPosts = useAppConfigStore((s) => s.loadAdminPosts);
+  const loadAllBlogStats = useAppConfigStore((s) => s.loadAllBlogStats);
+  const seedPosts = useAppConfigStore((s) => s.seedPosts);
   const [posts, setPosts] = useState<BlogPost[]>([]);
+  const [statsBySlug, setStatsBySlug] = useState<Record<string, BlogStatsListItem>>({});
   const [loading, setLoading] = useState(true);
+  const [seeding, setSeeding] = useState(false);
   const [editing, setEditing] = useState<BlogPost | null>(null);
   const [originalSlug, setOriginalSlug] = useState<string | undefined>(undefined);
   const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<{ key: SortKey; dir: "asc" | "desc" }>({
+    key: "updated",
+    dir: "desc",
+  });
 
   const refresh = async () => {
     setLoading(true);
@@ -70,6 +93,13 @@ export function BlogTab() {
       toast.error(err instanceof Error ? err.message : "Could not load posts.");
     } finally {
       setLoading(false);
+    }
+    // Stats are best-effort — a failure here must not blank the post list.
+    try {
+      const rows = await loadAllBlogStats();
+      setStatsBySlug(Object.fromEntries(rows.map((r) => [r.slug, r])));
+    } catch {
+      setStatsBySlug({});
     }
   };
 
@@ -81,6 +111,19 @@ export function BlogTab() {
   const startNew = () => {
     setEditing({ ...createDefaultBlogPost() });
     setOriginalSlug(undefined);
+  };
+
+  const onSeed = async () => {
+    setSeeding(true);
+    try {
+      const { added } = await seedPosts();
+      toast.success(added > 0 ? `Added ${added} starter post${added === 1 ? "" : "s"}.` : "Starter posts already exist.");
+      await refresh();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not seed posts.");
+    } finally {
+      setSeeding(false);
+    }
   };
 
   const startEdit = (post: BlogPost) => {
@@ -100,11 +143,57 @@ export function BlogTab() {
     );
   }
 
-  const filtered = posts.filter(
-    (p) =>
-      p.title.toLowerCase().includes(search.toLowerCase()) ||
-      p.slug.toLowerCase().includes(search.toLowerCase()),
-  );
+  // CTA rate is only meaningful once a post has some traffic — below this,
+  // treat it as "no rate" so a 1-click/2-view fluke can't top the sort.
+  const rateOf = (slug: string): number | null => {
+    const s = statsBySlug[slug];
+    if (!s || s.views < MIN_VIEWS_FOR_RATE) return null;
+    return s.ctaClicks / s.views;
+  };
+
+  const toggleSort = (key: SortKey) =>
+    setSort((prev) =>
+      prev.key === key
+        ? { key, dir: prev.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: key === "title" ? "asc" : "desc" },
+    );
+
+  const sortValue = (p: BlogPost): number | string => {
+    switch (sort.key) {
+      case "title":
+        return p.title.toLowerCase();
+      case "views":
+        return statsBySlug[p.slug]?.views ?? 0;
+      case "uniques":
+        return statsBySlug[p.slug]?.uniques ?? 0;
+      case "cta":
+        return statsBySlug[p.slug]?.ctaClicks ?? 0;
+      case "ctaRate":
+        return rateOf(p.slug) ?? -1; // low-traffic posts sink to the bottom
+      case "updated":
+      default:
+        return p.updatedAt;
+    }
+  };
+
+  const dir = sort.dir === "asc" ? 1 : -1;
+  const filtered = posts
+    .filter(
+      (p) =>
+        p.title.toLowerCase().includes(search.toLowerCase()) ||
+        p.slug.toLowerCase().includes(search.toLowerCase()),
+    )
+    .sort((a, b) => {
+      const va = sortValue(a);
+      const vb = sortValue(b);
+      if (typeof va === "string" && typeof vb === "string") return va.localeCompare(vb) * dir;
+      return ((va as number) - (vb as number)) * dir;
+    });
+
+  // Hide the seed action once every starter article already exists — there's
+  // nothing left to add (the backend seed is idempotent by slug).
+  const allSeedsPresent =
+    !loading && BLOG_SEED_POSTS.every((s) => posts.some((p) => p.slug === s.slug));
 
   return (
     <div className="space-y-4">
@@ -113,9 +202,22 @@ export function BlogTab() {
           Articles power your organic search traffic. Each published post gets its own SEO metadata,
           structured data and sitemap entry automatically. Changes go live without a deploy.
         </p>
-        <Button size="sm" leftIcon={<Plus className="size-3.5" />} onClick={startNew}>
-          New post
-        </Button>
+        <div className="flex gap-2">
+          {!allSeedsPresent && (
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={<Sparkles className="size-3.5" />}
+              onClick={onSeed}
+              loading={seeding}
+            >
+              Seed starter posts
+            </Button>
+          )}
+          <Button size="sm" leftIcon={<Plus className="size-3.5" />} onClick={startNew}>
+            New post
+          </Button>
+        </div>
       </div>
 
       <div className="relative">
@@ -136,9 +238,20 @@ export function BlogTab() {
             {posts.length === 0 ? "No articles yet." : "No posts match your search."}
           </p>
           {posts.length === 0 && (
-            <Button size="sm" className="mt-3" leftIcon={<Plus className="size-3.5" />} onClick={startNew}>
-              Write your first post
-            </Button>
+            <div className="mt-3 flex justify-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                leftIcon={<Sparkles className="size-3.5" />}
+                onClick={onSeed}
+                loading={seeding}
+              >
+                Seed starter posts
+              </Button>
+              <Button size="sm" leftIcon={<Plus className="size-3.5" />} onClick={startNew}>
+                Write your first post
+              </Button>
+            </div>
           )}
         </div>
       ) : (
@@ -146,9 +259,40 @@ export function BlogTab() {
           <table className="w-full text-left text-sm">
             <thead className="bg-ink-50/60 text-[11px] uppercase tracking-wide text-ink-500">
               <tr>
-                <th className="px-4 py-2.5 font-semibold">Title</th>
+                <SortHeader label="Title" col="title" sort={sort} onSort={toggleSort} />
                 <th className="px-4 py-2.5 font-semibold">Status</th>
-                <th className="hidden px-4 py-2.5 font-semibold sm:table-cell">Updated</th>
+                <SortHeader label="Views" col="views" sort={sort} onSort={toggleSort} align="right" />
+                <SortHeader
+                  label="Unique"
+                  col="uniques"
+                  sort={sort}
+                  onSort={toggleSort}
+                  align="right"
+                  thClass="hidden sm:table-cell"
+                />
+                <SortHeader
+                  label="CTA"
+                  col="cta"
+                  sort={sort}
+                  onSort={toggleSort}
+                  align="right"
+                  thClass="hidden md:table-cell"
+                />
+                <SortHeader
+                  label="CTA %"
+                  col="ctaRate"
+                  sort={sort}
+                  onSort={toggleSort}
+                  align="right"
+                  thClass="hidden md:table-cell"
+                />
+                <SortHeader
+                  label="Updated"
+                  col="updated"
+                  sort={sort}
+                  onSort={toggleSort}
+                  thClass="hidden lg:table-cell"
+                />
                 <th className="px-4 py-2.5" />
               </tr>
             </thead>
@@ -168,7 +312,20 @@ export function BlogTab() {
                   <td className="px-4 py-2.5">
                     <StatusPill status={post.status} />
                   </td>
-                  <td className="hidden px-4 py-2.5 text-ink-500 sm:table-cell">
+                  <StatCell value={statsBySlug[post.slug]?.views} />
+                  <StatCell value={statsBySlug[post.slug]?.uniques} thClass="hidden sm:table-cell" />
+                  <StatCell value={statsBySlug[post.slug]?.ctaClicks} thClass="hidden md:table-cell" />
+                  <td className="hidden px-4 py-2.5 text-right tabular-nums text-ink-600 md:table-cell">
+                    {(() => {
+                      const r = rateOf(post.slug);
+                      return r === null ? (
+                        <span className="text-ink-300">—</span>
+                      ) : (
+                        <span>{(r * 100).toFixed(1)}%</span>
+                      );
+                    })()}
+                  </td>
+                  <td className="hidden px-4 py-2.5 text-ink-500 lg:table-cell">
                     {new Date(post.updatedAt).toLocaleDateString()}
                   </td>
                   <td className="px-4 py-2.5">
@@ -201,6 +358,50 @@ export function BlogTab() {
         </div>
       )}
     </div>
+  );
+}
+
+/** A clickable, sortable column header with an active-direction arrow. */
+function SortHeader({
+  label,
+  col,
+  sort,
+  onSort,
+  align = "left",
+  thClass = "",
+}: {
+  label: string;
+  col: SortKey;
+  sort: { key: SortKey; dir: "asc" | "desc" };
+  onSort: (key: SortKey) => void;
+  align?: "left" | "right";
+  thClass?: string;
+}) {
+  const active = sort.key === col;
+  const Icon = !active ? ArrowUpDown : sort.dir === "asc" ? ArrowUp : ArrowDown;
+  return (
+    <th className={`px-4 py-2.5 font-semibold ${thClass}`}>
+      <button
+        type="button"
+        onClick={() => onSort(col)}
+        aria-label={`Sort by ${label}`}
+        className={`inline-flex items-center gap-1 uppercase tracking-wide transition hover:text-ink-700 ${
+          align === "right" ? "w-full justify-end" : ""
+        } ${active ? "text-ink-700" : ""}`}
+      >
+        <span>{label}</span>
+        <Icon className={`size-3 ${active ? "" : "opacity-40"}`} />
+      </button>
+    </th>
+  );
+}
+
+/** A right-aligned numeric stat cell, dimming a zero/missing value to "—". */
+function StatCell({ value, thClass = "" }: { value?: number; thClass?: string }) {
+  return (
+    <td className={`px-4 py-2.5 text-right tabular-nums text-ink-600 ${thClass}`}>
+      {value ? value.toLocaleString() : <span className="text-ink-300">—</span>}
+    </td>
   );
 }
 
@@ -405,6 +606,38 @@ function PostEditor({
             />
           </div>
         </div>
+        <Field
+          label="Cover image prompt (for AI generation)"
+          hint="Paste this into an image model (e.g. ChatGPT), then upload the result above. Not shown on the site."
+        >
+          <div className="relative">
+            <Textarea
+              rows={3}
+              value={draft.coverImagePrompt}
+              placeholder="Describe the cover scene and art style…"
+              onChange={(e) => set({ coverImagePrompt: e.target.value })}
+            />
+            {draft.coverImagePrompt.trim() && (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                leftIcon={<Copy className="size-3.5" />}
+                className="absolute right-2 top-2"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(draft.coverImagePrompt);
+                    toast.success("Prompt copied.");
+                  } catch {
+                    toast.error("Couldn't copy — select and copy manually.");
+                  }
+                }}
+              >
+                Copy
+              </Button>
+            )}
+          </div>
+        </Field>
       </Section>
 
       {/* ---- Body ---- */}
@@ -512,6 +745,17 @@ function PostEditor({
           </label>
         </Grid>
       </Disclosure>
+
+      {/* ---- Analytics ---- */}
+      {!isNew && originalSlug && (
+        <Section
+          title="Analytics"
+          hint="Cookieless, first-party traffic + engagement for this article. No personal data is stored."
+          action={<BarChart3 className="size-4 text-ink-400" />}
+        >
+          <BlogStatsPanel slug={originalSlug} />
+        </Section>
+      )}
     </div>
   );
 }

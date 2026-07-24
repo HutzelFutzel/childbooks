@@ -34,6 +34,7 @@ import {
 import { registerEmailWebhookRoute } from "./email/webhook";
 import { registerContactRoutes } from "./contact";
 import { registerBlogRoutes } from "./blog";
+import { registerBlogStatsAdminRoutes, registerBlogTrackingRoute } from "./blogStats";
 
 export function createApp(): Express {
   const app = express();
@@ -70,6 +71,11 @@ export function createApp(): Express {
   // guards so visitors can reach it.
   registerContactRoutes(app);
 
+  // Public blog analytics beacon — tokenless + cookieless (no consent needed).
+  // Registered before the auth guards so visitors on the marketing site can
+  // reach it; it only writes anonymous aggregates (see blogStats.ts).
+  registerBlogTrackingRoute(app);
+
   // Protected surfaces — registered before their route handlers so the guard
   // runs first. Fulfillment + payments require a verified, non-anonymous
   // account; `/ai` only requires *some* authenticated identity (guests and
@@ -95,6 +101,7 @@ export function createApp(): Express {
   registerAuthRoutes(app);
   registerAdminRoutes(app);
   registerBlogRoutes(app);
+  registerBlogStatsAdminRoutes(app);
   registerGdprRoutes(app);
   registerHealthRoutes(app);
   registerRuntimeRoutes(app);

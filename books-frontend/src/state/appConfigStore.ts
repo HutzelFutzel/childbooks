@@ -125,6 +125,7 @@ import {
   type CookieConfig,
 } from "../core/config/cookieConfig";
 import type { BlogImage, BlogIndex, BlogPost } from "../core/config/blog";
+import type { BlogStats, BlogStatsListItem } from "../core/config/blogStats";
 import type { SlackChannel } from "../core/notify/registry";
 import type { EmailTemplateId } from "../core/email/types";
 import type { ActionCostReport, CostGranularity } from "../core/analytics/types";
@@ -282,12 +283,17 @@ interface AppConfigState {
   loadAdminPosts: () => Promise<BlogPost[]>;
   savePost: (post: BlogPost, originalSlug?: string) => Promise<{ post: BlogPost; index: BlogIndex }>;
   deletePost: (slug: string) => Promise<BlogIndex>;
+  seedPosts: () => Promise<{ added: number; index: BlogIndex }>;
   uploadPostImage: (
     slug: string,
     base64: string,
     mimeType: string,
     alt?: string,
   ) => Promise<BlogImage>;
+  /** Full analytics aggregate for one post (admin dashboard). */
+  loadBlogStats: (slug: string) => Promise<BlogStats>;
+  /** Lightweight per-post totals for the admin list. */
+  loadAllBlogStats: () => Promise<BlogStatsListItem[]>;
 
   /** Ask the server to read the provider's pricing docs and suggest a cost. */
   suggestCost: (
@@ -758,6 +764,12 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     return json.index;
   },
 
+  async seedPosts() {
+    const res = await backendFetch("/admin/blog/seed", { method: "POST" });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not seed posts.");
+    return (await res.json()) as { added: number; index: BlogIndex };
+  },
+
   async uploadPostImage(slug, base64, mimeType, alt) {
     const res = await backendFetch(`/admin/blog/${encodeURIComponent(slug)}/image`, {
       method: "POST",
@@ -766,6 +778,19 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     });
     if (!res.ok) throw new Error((await safeError(res)) ?? "Upload failed.");
     return (await res.json()) as BlogImage;
+  },
+
+  async loadBlogStats(slug) {
+    const res = await backendFetch(`/admin/blog/${encodeURIComponent(slug)}/stats`);
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load stats.");
+    return (await res.json()) as BlogStats;
+  },
+
+  async loadAllBlogStats() {
+    const res = await backendFetch("/admin/blog/stats");
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load stats.");
+    const json = (await res.json()) as { stats: BlogStatsListItem[] };
+    return json.stats;
   },
 
   async suggestCost(provider, modelId, modality) {
