@@ -5,6 +5,8 @@ import { MotionConfig } from "framer-motion";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/ui/components/Button";
 import { Toaster } from "@/ui/components/Toaster";
+import { cn } from "@/ui/lib/cn";
+import { isDev } from "@/platform/runtime";
 import { AuthMenu } from "@/ui/auth/AuthMenu";
 import { AuthDialog } from "@/ui/auth/AuthDialog";
 import { GuestMigrationDialog } from "@/ui/auth/GuestMigrationDialog";
@@ -295,7 +297,14 @@ export default function StudioApp() {
 
   return (
     <MotionConfig reducedMotion="user">
-    <div className="flex h-screen flex-col overflow-hidden bg-canvas">
+    <div
+      className={cn(
+        "flex flex-col overflow-hidden bg-canvas",
+        // Leaves room for the dev-environment banner (`h-6`) above it instead
+        // of overflowing past the viewport — see ui/layout/DevEnvironmentBanner.
+        isDev() ? "h-[calc(100vh-1.5rem)]" : "h-screen",
+      )}
+    >
       <TopBar
         center={<JobProgress />}
         right={

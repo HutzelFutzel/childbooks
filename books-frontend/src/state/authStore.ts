@@ -101,6 +101,13 @@ interface AuthState {
   pendingMigration: GuestMigration | null;
   /** Whether the global sign-in dialog is open. */
   dialogOpen: boolean;
+  /**
+   * Optional context shown inside the sign-in dialog — set when it was opened
+   * automatically (e.g. a backend call came back 401 for a real account whose
+   * session is dead, see `platform/backend.ts`) so the user understands why
+   * they're suddenly looking at a sign-in form instead of just retrying blindly.
+   */
+  authDialogReason: string | null;
 
   /** Attach the auth-state listener (idempotent). Call once on app mount. */
   init: () => void;
@@ -114,7 +121,8 @@ interface AuthState {
   /** Reload the user from Firebase (picks up a freshly-verified email). */
   refreshUser: () => Promise<void>;
 
-  openAuthDialog: () => void;
+  /** Open the sign-in dialog, optionally with a reason shown to the user. */
+  openAuthDialog: (reason?: string) => void;
   closeAuthDialog: () => void;
   clearMigration: () => void;
 }
@@ -152,6 +160,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isAdmin: false,
   pendingMigration: null,
   dialogOpen: false,
+  authDialogReason: null,
 
   init() {
     if (get().initialized) return;
@@ -274,12 +283,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ user: fresh, accessLevel: levelFor(fresh, true) });
   },
 
-  openAuthDialog() {
-    set({ dialogOpen: true });
+  openAuthDialog(reason) {
+    set({ dialogOpen: true, authDialogReason: reason ?? null });
   },
 
   closeAuthDialog() {
-    set({ dialogOpen: false });
+    set({ dialogOpen: false, authDialogReason: null });
   },
 
   clearMigration() {

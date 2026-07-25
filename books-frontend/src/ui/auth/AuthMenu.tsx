@@ -125,7 +125,7 @@ export function AuthMenu() {
 
   if (!signedIn) {
     return (
-      <Button variant="secondary" size="sm" onClick={openAuthDialog}>
+      <Button variant="secondary" size="sm" onClick={() => openAuthDialog()}>
         Sign in
       </Button>
     );

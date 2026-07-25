@@ -58,7 +58,7 @@ export function Dashboard() {
             You're creating as a guest — make a free account so your storybooks are saved to you,
             not this browser.
           </span>
-          <Button size="sm" variant="secondary" onClick={openAuthDialog}>
+          <Button size="sm" variant="secondary" onClick={() => openAuthDialog()}>
             Create free account
           </Button>
         </div>

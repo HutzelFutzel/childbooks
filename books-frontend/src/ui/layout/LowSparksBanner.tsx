@@ -59,7 +59,7 @@ export function LowSparksBanner() {
       </span>
       <button
         type="button"
-        onClick={openAuthDialog}
+        onClick={() => openAuthDialog()}
         className="shrink-0 rounded-full bg-white/80 px-2.5 py-1 font-semibold text-magic-700 ring-1 ring-inset ring-magic-300/60 transition hover:bg-white"
       >
         Create free account

@@ -33,6 +33,8 @@ import {
   FileText,
   Cookie,
   UserX,
+  Rocket,
+  FlaskConical,
 } from "lucide-react";
 import { Button } from "@/ui/components/Button";
 import { Tabs } from "@/ui/components/Tabs";
@@ -46,7 +48,9 @@ import { SettingsDialog } from "@/ui/settings/SettingsDialog";
 import { OrdersDialog } from "@/ui/checkout/OrdersDialog";
 import { PlansDialog } from "@/ui/billing/PlansDialog";
 import { cn } from "@/ui/lib/cn";
+import { isDev } from "@/platform/runtime";
 import { useAuthStore } from "@/state/authStore";
+import { useAdminHealth } from "@/state/adminHealthStore";
 import { useAccountUiStore } from "@/state/accountUiStore";
 import { useAppConfigStore } from "@/state/appConfigStore";
 import {
@@ -167,6 +171,44 @@ function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
 }
 
 /**
+ * Persistent sandbox/live indicator for the whole Admin shell — not just the
+ * one System Health tab that owns the actual switch. This is the highest-risk
+ * control in the app (flips Stripe + Lulu between test and real money/prints
+ * at runtime, no redeploy), so it should be impossible to lose track of while
+ * navigating anywhere else in Admin. Clicking it jumps straight to the tab
+ * that manages it.
+ */
+function BillingEnvBadge({ onOpenSystemHealth }: { onOpenSystemHealth: () => void }) {
+  const runtime = useAdminHealth((s) => s.runtime);
+  const loadRuntime = useAdminHealth((s) => s.loadRuntime);
+
+  useEffect(() => {
+    if (!runtime) void loadRuntime();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (!runtime) return null;
+  const isLive = runtime.env === "live";
+
+  return (
+    <button
+      type="button"
+      onClick={onOpenSystemHealth}
+      title="Sandbox/live billing mode — click to manage in System health"
+      className={cn(
+        "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold transition-colors",
+        isLive
+          ? "bg-rose-100 text-rose-700 hover:bg-rose-200"
+          : "bg-sky-100 text-sky-700 hover:bg-sky-200",
+      )}
+    >
+      {isLive ? <Rocket className="size-3.5" /> : <FlaskConical className="size-3.5" />}
+      {isLive ? "Live billing" : "Sandbox billing"}
+    </button>
+  );
+}
+
+/**
  * Admin-only dashboard, served at `/admin`. The `isAdmin` check below is a
  * cosmetic gate — every write goes through the backend `/admin/*` routes which
  * independently enforce admin status, so a non-admin reaching this page can't do
@@ -214,10 +256,25 @@ export default function AdminApp() {
   }));
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-canvas">
+    <div
+      className={cn(
+        "flex flex-col overflow-hidden bg-canvas",
+        // Leaves room for the dev-environment banner (`h-6`) above it instead
+        // of overflowing past the viewport — see ui/layout/DevEnvironmentBanner.
+        isDev() ? "h-[calc(100vh-1.5rem)]" : "h-screen",
+      )}
+    >
       <TopBar
         right={
           <>
+            {isAdmin && (
+              <BillingEnvBadge
+                onOpenSystemHealth={() => {
+                  setSection("configuration");
+                  setConfigTab("system");
+                }}
+              />
+            )}
             <HelpButton />
             <AuthMenu />
           </>

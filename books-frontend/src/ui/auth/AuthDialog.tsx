@@ -7,6 +7,7 @@ import { Field, Input } from "../components/Input";
 import { Modal } from "../components/Modal";
 import { legalLinkByRole } from "../../core/config/legal";
 import { PasswordStrength, scorePassword } from "./PasswordStrength";
+import { notify } from "../lib/notify";
 
 type Mode = "signin" | "signup";
 
@@ -36,6 +37,7 @@ function GoogleIcon({ className }: { className?: string }) {
 
 export function AuthDialog() {
   const open = useAuthStore((s) => s.dialogOpen);
+  const reason = useAuthStore((s) => s.authDialogReason);
   const closeAuthDialog = useAuthStore((s) => s.closeAuthDialog);
   const signInEmail = useAuthStore((s) => s.signInEmail);
   const signUpEmail = useAuthStore((s) => s.signUpEmail);
@@ -87,7 +89,12 @@ export function AuthDialog() {
     setBusy(kind);
     try {
       await fn();
+      // Capture before `close()` clears it, so a session-expired re-auth gets
+      // a distinct "you can pick up where you left off" confirmation instead of
+      // silently vanishing like a normal sign-in.
+      const resumed = Boolean(reason);
       close();
+      if (resumed) notify.success("You're signed in again", "Go ahead and retry what you were doing.");
     } catch (err) {
       const code = (err as { code?: string })?.code ?? "";
       // Trying to sign up with an existing email → guide them to sign in.
@@ -143,6 +150,13 @@ export function AuthDialog() {
               </span>
             </p>
           )}
+        </div>
+      )}
+
+      {!error && reason && (
+        <div className="mb-4 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+          <AlertCircle className="mt-0.5 size-4 shrink-0" />
+          <span>{reason}</span>
         </div>
       )}
 

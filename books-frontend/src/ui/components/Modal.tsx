@@ -33,6 +33,12 @@ export function Modal({ open, onClose, title, children, footer, size = "max-w-lg
     };
   }, [open, onClose]);
 
+  // `createPortal` needs a real DOM `document`, which doesn't exist during
+  // server-side rendering (e.g. statically prerendered/ISR pages). Client
+  // components still render once on the server for the initial HTML, so
+  // guard here rather than assuming a browser environment.
+  if (typeof document === "undefined") return null;
+
   return createPortal(
     <AnimatePresence>
       {open && (

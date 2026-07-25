@@ -94,6 +94,31 @@ export async function withAuthHeaders(headers?: HeadersInit): Promise<Headers> {
   return merged;
 }
 
+/**
+ * When `recoverSession()` gives up, it's specifically because a real
+ * (non-anonymous) account's token truly can't be refreshed — the one case
+ * where the user actually needs to type credentials again. Rather than let
+ * that surface as a bare failed request, pop the global sign-in dialog right
+ * where the user already is: it's a modal, so whatever they were doing (an
+ * open project, a half-filled form) never unmounts, and once they sign back in
+ * they can just retry. Dynamically imported to avoid a static import cycle
+ * with `state/authStore.ts` (which imports `backendFetch` from this module).
+ * Best-effort: must never throw and mask the real 401.
+ */
+async function promptReauth(): Promise<void> {
+  try {
+    const { useAuthStore } = await import("../state/authStore");
+    const { user, dialogOpen } = useAuthStore.getState();
+    if (user && !user.isAnonymous && !dialogOpen) {
+      useAuthStore
+        .getState()
+        .openAuthDialog("Your session ended. Sign in again to pick up right where you left off.");
+    }
+  } catch {
+    // Best-effort UX nudge only — the caller still gets the failed response.
+  }
+}
+
 export async function backendFetch(path: string, init?: RequestInit): Promise<Response> {
   const res = await fetch(backendUrl(path), {
     ...init,
@@ -104,11 +129,14 @@ export async function backendFetch(path: string, init?: RequestInit): Promise<Re
   // backend restart doesn't strand the user mid-action. This is safe even for
   // POSTs: `requireVerified` rejects before the route handler runs, so the first
   // (rejected) attempt has no side effects.
-  if (res.status === 401 && (await recoverSession())) {
-    return fetch(backendUrl(path), {
-      ...init,
-      headers: await withAuthHeaders(init?.headers),
-    });
+  if (res.status === 401) {
+    if (await recoverSession()) {
+      return fetch(backendUrl(path), {
+        ...init,
+        headers: await withAuthHeaders(init?.headers),
+      });
+    }
+    void promptReauth();
   }
   return res;
 }

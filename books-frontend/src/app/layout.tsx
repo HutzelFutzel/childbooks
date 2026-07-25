@@ -10,6 +10,8 @@ import "@fontsource/fredoka/500.css";
 import "@fontsource/fredoka/600.css";
 import "@fontsource/fredoka/700.css";
 import { ConsentManager } from "../ui/consent/ConsentManager";
+import { AuthInit } from "../ui/auth/AuthInit";
+import { DevEnvironmentBanner } from "../ui/layout/DevEnvironmentBanner";
 import { getBrandingConfig } from "../server/branding";
 import { getCookieConfig } from "../server/cookieConfig";
 import { getLegalConfig } from "../server/legal";
@@ -81,6 +83,8 @@ export default async function RootLayout({
   return (
     <html lang="en" style={themeVars as React.CSSProperties}>
       <body>
+        <DevEnvironmentBanner />
+        <AuthInit />
         {children}
         {/* Cookie consent gates Google Analytics — no analytics cookies fire
             until the visitor grants the analytics category. */}
