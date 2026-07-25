@@ -20,11 +20,14 @@ import {
   X,
 } from "lucide-react";
 import type { Timeframe } from "../../../core/analytics/types";
+import { countryFlag, countryLabel } from "../../../core/analytics/markets";
 import {
   useAdminFinance,
   type AdminAlertRow,
   type FinanceCategoryFilter,
+  type FinanceCountryRow,
   type FinanceGroupRow,
+  type FinanceProductRow,
 } from "../../../state/adminFinanceStore";
 import { Button } from "../../components/Button";
 import { Input } from "../../components/Input";
@@ -97,8 +100,11 @@ export function FinanceAnalysis() {
   const s = useAdminFinance();
 
   useEffect(() => {
-    void s.refresh();
-    void s.loadAlerts();
+    // Guarded on "no data yet": the section unmounts when another one is shown,
+    // and the Analysis tab already re-fetches this section when the market
+    // filter changes — an unconditional load here would duplicate that.
+    if (!s.summary) void s.refresh();
+    if (s.alerts.length === 0) void s.loadAlerts();
     // Only on mount — subsequent loads are driven by the filter setters.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -299,6 +305,12 @@ export function FinanceAnalysis() {
             </div>
           </section>
 
+          {/* Per-market / per-product contribution */}
+          <div className="grid gap-4 lg:grid-cols-2">
+            <MarketTable rows={sum.byCountry} />
+            <ProductTable rows={sum.byProduct} />
+          </div>
+
           {/* Per-user / per-project drill-down */}
           <div className="grid gap-4 lg:grid-cols-2">
             <GroupTable
@@ -436,6 +448,130 @@ function DrilldownChip({
         <X className="size-3.5" />
       </button>
     </span>
+  );
+}
+
+/**
+ * Net contribution per market. Buyers (not events) is the count that matters:
+ * one whale and fifty customers produce very different businesses at the same
+ * revenue, and only one of them is worth expanding into.
+ */
+function MarketTable({ rows }: { rows: FinanceCountryRow[] }) {
+  return (
+    <section className="rounded-2xl border border-ink-100 bg-white">
+      <header className="border-b border-ink-100 px-4 py-3">
+        <h3 className="text-sm font-semibold text-ink-800">Per market</h3>
+        <p className="text-xs text-ink-500">
+          Revenue and net win by country. Unattributed lines (infrastructure, operating costs) sit
+          under &ldquo;Unknown&rdquo; so the totals still reconcile.
+        </p>
+      </header>
+      <div className="max-h-72 overflow-y-auto">
+        <table className="w-full text-sm">
+          <thead className="sticky top-0 bg-white">
+            <tr className="text-left text-xs text-ink-400">
+              <th className="px-4 py-2 font-medium">Market</th>
+              <th className="px-4 py-2 text-right font-medium">Revenue</th>
+              <th className="px-4 py-2 text-right font-medium">Net</th>
+              <th className="px-4 py-2 text-right font-medium">Units</th>
+              <th className="px-4 py-2 text-right font-medium">Buyers</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={5} className="px-4 py-5 text-center text-ink-400">
+                  Nothing in this window.
+                </td>
+              </tr>
+            )}
+            {rows.map((c) => (
+              <tr key={c.key} className="border-t border-ink-50">
+                <td className="px-4 py-2 text-ink-700">
+                  {countryFlag(c.key)} {countryLabel(c.key)}
+                </td>
+                <td className="px-4 py-2 text-right tabular-nums text-emerald-600">
+                  {c.revenueUsd > 0 ? fmtUsd(c.revenueUsd) : "—"}
+                </td>
+                <td
+                  className={cn(
+                    "px-4 py-2 text-right font-semibold tabular-nums",
+                    c.netUsd >= 0 ? "text-emerald-700" : "text-rose-700",
+                  )}
+                >
+                  {signed(c.netUsd)}
+                </td>
+                <td className="px-4 py-2 text-right tabular-nums text-ink-600">
+                  {c.units !== 0 ? fmtNumber(c.units) : "—"}
+                </td>
+                <td className="px-4 py-2 text-right tabular-nums text-ink-500">
+                  {c.buyers > 0 ? fmtNumber(c.buyers) : "—"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+/** Net contribution per product — the short version of the Products section. */
+function ProductTable({ rows }: { rows: FinanceProductRow[] }) {
+  return (
+    <section className="rounded-2xl border border-ink-100 bg-white">
+      <header className="border-b border-ink-100 px-4 py-3">
+        <h3 className="text-sm font-semibold text-ink-800">Per product</h3>
+        <p className="text-xs text-ink-500">
+          Net win per product, costs included. See the Products section for time series and market
+          splits.
+        </p>
+      </header>
+      <div className="max-h-72 overflow-y-auto">
+        <table className="w-full text-sm">
+          <thead className="sticky top-0 bg-white">
+            <tr className="text-left text-xs text-ink-400">
+              <th className="px-4 py-2 font-medium">Product</th>
+              <th className="px-4 py-2 text-right font-medium">Revenue</th>
+              <th className="px-4 py-2 text-right font-medium">Net</th>
+              <th className="px-4 py-2 text-right font-medium">Units</th>
+              <th className="px-4 py-2 text-right font-medium">Net / unit</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={5} className="px-4 py-5 text-center text-ink-400">
+                  No product-tagged money in this window.
+                </td>
+              </tr>
+            )}
+            {rows.map((p) => (
+              <tr key={p.key} className="border-t border-ink-50">
+                <td className="max-w-[180px] truncate px-4 py-2 text-ink-700">{p.key}</td>
+                <td className="px-4 py-2 text-right tabular-nums text-emerald-600">
+                  {p.revenueUsd > 0 ? fmtUsd(p.revenueUsd) : "—"}
+                </td>
+                <td
+                  className={cn(
+                    "px-4 py-2 text-right font-semibold tabular-nums",
+                    p.netUsd >= 0 ? "text-emerald-700" : "text-rose-700",
+                  )}
+                >
+                  {signed(p.netUsd)}
+                </td>
+                <td className="px-4 py-2 text-right tabular-nums text-ink-600">
+                  {p.units !== 0 ? fmtNumber(p.units) : "—"}
+                </td>
+                <td className="px-4 py-2 text-right tabular-nums text-ink-600">
+                  {p.netPerUnitUsd == null ? "—" : signed(p.netPerUnitUsd)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 

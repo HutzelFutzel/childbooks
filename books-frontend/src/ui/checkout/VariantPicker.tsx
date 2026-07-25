@@ -1,0 +1,130 @@
+"use client";
+
+import { primaryPhotoFor } from "../../core/config/catalogMedia";
+import {
+  VARIANT_AXES,
+  VARIANT_AXIS_DEFS,
+  firstAllowedVariant,
+  offeredValues,
+  optionSelectable,
+  variantMediaKey,
+  variantOptionDef,
+  type ProductVariantPolicy,
+  type VariantAxisId,
+  type VariantSelection,
+} from "../../core/config/variants";
+import { useAppConfigStore } from "../../state/appConfigStore";
+import { cn } from "../lib/cn";
+
+/**
+ * Customer-facing print / paper / finish picker. Driven entirely by the
+ * product's public variant policy — disabled options are ones that can't form
+ * an orderable combination with the current selection (e.g. cream + colour).
+ */
+export function VariantPicker({
+  policy,
+  value,
+  onChange,
+  currency = "USD",
+  className,
+}: {
+  policy: ProductVariantPolicy;
+  value: VariantSelection;
+  onChange: (next: VariantSelection) => void;
+  currency?: string;
+  className?: string;
+}) {
+  const media = useAppConfigStore((s) => s.catalogMedia);
+
+  // Hide axes with only one offered value — there's nothing to choose.
+  const axes = VARIANT_AXES.filter((axis) => offeredValues(policy, axis).length > 1);
+  if (axes.length === 0) return null;
+
+  const pick = (axis: VariantAxisId, nextValue: string) => {
+    const next = { ...value, [axis]: nextValue };
+    if (optionSelectable(policy, axis, nextValue, value)) {
+      onChange(next);
+      return;
+    }
+    // Picking an incompatible option (cream while on colour) snaps to the
+    // nearest orderable variant that keeps the new choice.
+    const fallback = firstAllowedVariant(policy, next);
+    if (fallback) onChange(fallback);
+  };
+
+  return (
+    <div className={cn("space-y-4", className)}>
+      {axes.map((axis) => {
+        const def = VARIANT_AXIS_DEFS[axis];
+        const values = offeredValues(policy, axis);
+        return (
+          <fieldset key={axis} className="space-y-2">
+            <legend className="text-[12px] font-semibold text-ink-800">{def.label}</legend>
+            <p className="text-[11px] text-ink-500">{def.hint}</p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {values.map((v) => {
+                const opt = variantOptionDef(axis, v);
+                const selected = value[axis] === v;
+                const ok = optionSelectable(policy, axis, v, value);
+                const photo = primaryPhotoFor(media, variantMediaKey(axis, v));
+                // Delta of switching ONLY this axis — clearer while shopping
+                // than the absolute surcharge of the whole selection.
+                const from =
+                  policy.options[axis].find((o) => o.value === value[axis])?.priceDelta?.[currency] ?? 0;
+                const to = policy.options[axis].find((o) => o.value === v)?.priceDelta?.[currency] ?? 0;
+                const switchDelta = to - from;
+                return (
+                  <button
+                    key={v}
+                    type="button"
+                    disabled={!ok && !selected}
+                    onClick={() => pick(axis, v)}
+                    aria-pressed={selected}
+                    className={cn(
+                      "flex items-start gap-2.5 rounded-lg px-2.5 py-2 text-left ring-1 ring-inset transition",
+                      selected
+                        ? "bg-brand-50 ring-brand-300"
+                        : ok
+                          ? "bg-white ring-ink-200 hover:ring-ink-300"
+                          : "cursor-not-allowed bg-ink-50 ring-ink-100 opacity-50",
+                    )}
+                  >
+                    <span className="relative size-12 shrink-0 overflow-hidden rounded-md bg-ink-100 ring-1 ring-inset ring-ink-200">
+                      {photo ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={photo.imageUrl} alt={photo.alt || opt?.label || v} className="size-full object-cover" />
+                      ) : (
+                        <span className="flex size-full items-center justify-center text-[9px] font-medium uppercase tracking-wide text-ink-400">
+                          {axis}
+                        </span>
+                      )}
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="flex items-baseline justify-between gap-2">
+                        <span className="text-[12px] font-medium text-ink-800">{opt?.label ?? v}</span>
+                        {switchDelta !== 0 && ok && (
+                          <span className="shrink-0 text-[11px] tabular-nums text-ink-500">
+                            {switchDelta > 0 ? "+" : ""}
+                            {switchDelta.toFixed(2)}
+                          </span>
+                        )}
+                      </span>
+                      {opt?.hint && (
+                        <span className="mt-0.5 block text-[11px] leading-snug text-ink-500">{opt.hint}</span>
+                      )}
+                      {!ok && !selected && (
+                        <span className="mt-0.5 block text-[10px] text-ink-400">
+                          Not available with the current selection
+                        </span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </fieldset>
+        );
+      })}
+    </div>
+  );
+}

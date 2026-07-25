@@ -10,7 +10,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { bookProductForConfig } from "../../core/book";
-import { ebookPlanPrice } from "../../core/config/products";
+import { ebookPlanPrice, findPublicProductForSku } from "../../core/config/products";
 import { findPublicPlanByPriceId } from "../../core/config/plans";
 import { activeSubscription } from "../../platform/subscriptions";
 import { currentIllustration } from "../../state/ai";
@@ -82,14 +82,14 @@ export function OrderStage() {
   const sizeLabel = bookProduct.label;
 
   const catalogProduct = useMemo(
-    () => publicProducts.find((p) => p.sku === bookProduct.sku),
+    () => findPublicProductForSku(publicProducts, bookProduct.sku),
     [publicProducts, bookProduct.sku],
   );
 
   // Physical page limits for the chosen format. Falls back to the provider
-  // catalog's minimum when the admin catalog hasn't been configured yet.
+  // catalog's own limits when the admin catalog hasn't been configured yet.
   const minPages = catalogProduct?.conditions.pages.min ?? bookProduct.minPages;
-  const maxPages = catalogProduct?.conditions.pages.max ?? Number.POSITIVE_INFINITY;
+  const maxPages = catalogProduct?.conditions.pages.max ?? bookProduct.maxPages;
   const belowMinPages = contentPages < minPages;
   const aboveMaxPages = contentPages > maxPages;
   const printBlocked = belowMinPages || aboveMaxPages;

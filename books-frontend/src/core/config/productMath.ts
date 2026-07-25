@@ -6,6 +6,7 @@
  * (currencies, FX, payment fees, rounding, tax) come from {@link PricingSettings},
  * so these functions take both the product and the global settings.
  */
+import { variantFromSku } from "../fulfillment/lulu/skuAxes";
 import type {
   CurrencyCode,
   GeoMatch,
@@ -19,6 +20,7 @@ import type {
   PublicProduct,
   TaxBehavior,
 } from "./products";
+import { cheapestVariant, variantPriceDelta, type VariantSelection } from "./variants";
 
 // ---- Currency helpers ------------------------------------------------------
 
@@ -45,6 +47,23 @@ export function convertCostAmount(
   return amount * (fxRate(settings, to) / fxRate(settings, from)) * buffer;
 }
 
+/**
+ * Whether the catalog's FX table can convert this currency at all.
+ *
+ * {@link fxRate} deliberately falls back to 1 for an unknown currency, which is
+ * fine for display but dangerous for costs — a provider quoting in a currency we
+ * can't convert would be read as if it were the base currency and understate
+ * what we pay. Callers converting a COST from an external source must check this
+ * first and refuse rather than convert at a silent 1:1.
+ */
+export function canConvertCurrency(settings: PricingSettings, currency: string): boolean {
+  const c = (currency ?? "").trim().toUpperCase();
+  if (!c) return false;
+  if (c === settings.baseCurrency.trim().toUpperCase()) return true;
+  const rate = settings.fx.rates[c];
+  return typeof rate === "number" && rate > 0;
+}
+
 export function feeFor(settings: PricingSettings, currency: CurrencyCode): PaymentFeeModel {
   return settings.fees[currency] ?? settings.fees[settings.baseCurrency] ?? { percentPct: 0, fixed: 0 };
 }
@@ -66,7 +85,10 @@ function round2(n: number): number {
 export function applyRounding(value: number, rule: { mode: "charm" | "none"; to?: number } | undefined): number {
   if (!rule || rule.mode === "none" || value <= 0) return round2(value);
   const to = rule.to ?? 0.99;
-  const whole = Math.ceil(value - to);
+  // The epsilon is load-bearing: 17.99 − 0.99 lands a hair ABOVE 17 in binary
+  // floating point, and a bare ceil would answer 18.99 — a price already ending
+  // in the charm value must round to itself, not jump a whole unit.
+  const whole = Math.ceil(value - to - 1e-9);
   return round2(Math.max(0, whole) + to);
 }
 
@@ -97,6 +119,28 @@ export function resolveUnitCost(cost: ProductCostModel, scenario: CostScenario):
   return base * (1 - discount);
 }
 
+/**
+ * Whether the static cost table carries any production-cost baseline at all.
+ *
+ * An empty table makes every margin, break-even and discount-limit number
+ * vacuously perfect, so configuration validation treats it as blocking. It
+ * matters even for `providerLive` products: the table is the fallback when a
+ * live quote fails, and it backs every offline projection.
+ */
+export function costTableIsEmpty(cost: ProductCostModel): boolean {
+  return cost.table.basePerUnit === 0 && cost.table.perPage === 0;
+}
+
+/**
+ * Whether a scenario resolves to a real (> 0) production cost, by exactly the
+ * rule {@link resolveUnitCost} applies. Guards the checkout pricing path: with a
+ * zero cost, {@link computeMargin} reports the entire price as profit and
+ * `breakEvenDiscountPct` would permit discounting an order to nearly free.
+ */
+export function hasUsableUnitCost(cost: ProductCostModel, scenario: CostScenario): boolean {
+  return resolveUnitCost(cost, scenario) > 0;
+}
+
 /** Per-order + per-unit surcharges resolved to a single per-unit amount. */
 export function surchargePerUnit(cost: ProductCostModel, copies: number): number {
   let perUnit = 0;
@@ -116,6 +160,11 @@ export function totalUnitCost(cost: ProductCostModel, scenario: CostScenario): n
 
 export interface PriceScenario extends CostScenario {
   currency: CurrencyCode;
+  /**
+   * Variant being priced. The page-tier price is the BASE variant; other
+   * options add {@link variantPriceDelta}. Omitted ⇒ base (the product's own SKU).
+   */
+  variant?: VariantSelection;
 }
 
 /** The tier whose page range contains `pages` (first match; falls back to the last tier). */
@@ -137,8 +186,9 @@ export function computeRetailPrice(
   const rounding = settings.rounding[currency];
   const floor = settings.floorPrice[currency] ?? 0;
   const tier = pickTier(product.pricing.tiers, scenario.pages);
-  const price = tier?.prices[currency] ?? 0;
-  return Math.max(applyRounding(price, rounding), floor);
+  const base = tier?.prices[currency] ?? 0;
+  const delta = variantPriceDelta(product.variants, scenario.variant, currency);
+  return Math.max(applyRounding(base + delta, rounding), floor);
 }
 
 // ---- Margin breakdown (the configurator's read-only "additional info") -----
@@ -147,6 +197,8 @@ export interface MarginBreakdown {
   currency: CurrencyCode;
   copies: number;
   pages: number;
+  /** The variant priced, when the scenario named one (absent ⇒ the base SKU's). */
+  variant?: VariantSelection;
   /** Sticker price per unit (what the admin entered, after rounding/floor). */
   pricePerUnit: number;
   taxBehavior: TaxBehavior;
@@ -233,6 +285,7 @@ export function computeMargin(
     currency,
     copies,
     pages: scenario.pages,
+    variant: scenario.variant,
     pricePerUnit,
     taxBehavior: taxPol.behavior,
     taxRatePct: taxPol.assumedRatePct,
@@ -253,12 +306,119 @@ export function computeMargin(
   };
 }
 
+// ---- Price suggestion ------------------------------------------------------
+
+/**
+ * The sticker price that hits a target margin — {@link computeMargin} run
+ * backwards.
+ *
+ * Margin is measured against the revenue we keep (goods + shipping, ex tax), so
+ * for a target m we need `netProfit = m · revenueYouKeep`, where
+ *
+ *   revenueYouKeep = netRevenue + shippingCharged
+ *   netProfit      = revenueYouKeep − production − shippingCost − paymentFee
+ *   paymentFee     = grossCustomerPays · fp + fixed
+ *                  = revenueYouKeep · (1 + taxRate) · fp + fixed
+ *
+ * Substituting and solving for revenueYouKeep:
+ *
+ *   revenueYouKeep · (1 − m − (1 + rate)·fp) = production + shippingCost + fixed
+ *
+ * The sticker is then the per-unit share of that, grossed back up for tax in
+ * inclusive markets and rounded by the currency's rule. Rounding nudges the
+ * realised margin slightly above target (charm rounding only ever rounds up to
+ * the ending), which is the safe direction.
+ */
+export function suggestPrice(
+  product: ProductDefinition,
+  scenario: PriceScenario,
+  settings: PricingSettings,
+  targetMarginPct: number,
+): number | null {
+  const currency = scenario.currency;
+  const copies = Math.max(1, scenario.copies);
+  const m = targetMarginPct / 100;
+
+  const taxPol = settings.tax.perCurrency[currency] ?? { behavior: "exclusive" as const, assumedRatePct: 0 };
+  const rate = Math.max(0, taxPol.assumedRatePct) / 100;
+  const fee = feeFor(settings, currency);
+  const fp = feePercent(fee);
+
+  const denominator = 1 - m - (1 + rate) * fp;
+  // A target at or above what fees and tax leave behind has no finite answer.
+  if (denominator <= 0) return null;
+
+  const costToCurrency = convertCostAmount(settings, 1, product.cost.currency, currency);
+  const production = totalUnitCost(product.cost, scenario) * copies * costToCurrency;
+  const shippingCostCcy =
+    typeof scenario.liveShippingCost === "number"
+      ? scenario.liveShippingCost
+      : estimateShippingCost(product.shipping);
+  const shippingCost = shippingCostCcy * costToCurrency;
+  const shippingCharged = resolveShippingCharged(product.shipping, shippingCost);
+
+  const revenueYouKeep = (production + shippingCost + fee.fixed) / denominator;
+  // Shipping revenue is fixed by policy, so only the goods portion is ours to set.
+  const netRevenue = revenueYouKeep - shippingCharged;
+  if (netRevenue <= 0) return null;
+
+  const netPerUnit = netRevenue / copies;
+  // Inclusive markets quote tax-in, so gross the ex-tax figure back up.
+  const sticker = taxPol.behavior === "inclusive" ? netPerUnit * (1 + rate) : netPerUnit;
+
+  const rounded = applyRounding(sticker, settings.rounding[currency]);
+  return Math.max(rounded, settings.floorPrice[currency] ?? 0);
+}
+
+/**
+ * The page-tier price to STORE so that every variant on offer clears the target
+ * margin — {@link suggestPrice} for the cheapest variant, with that variant's
+ * delta backed out.
+ *
+ * A tier price buys the base variant; a customer picking an option priced below
+ * it pays less for the same production cost. Targeting the base would leave that
+ * customer under the target (and, with a deep enough delta, under water), so the
+ * target is applied to the cheapest orderable combination and everything pricier
+ * lands above it. With no negative deltas — the usual case — the cheapest variant
+ * IS the base and this returns exactly what {@link suggestPrice} does.
+ */
+export function suggestTierPrice(
+  product: ProductDefinition,
+  scenario: PriceScenario,
+  settings: PricingSettings,
+  targetMarginPct: number,
+): number | null {
+  const variant = scenario.variant ?? cheapestVariant(product.variants, scenario.currency);
+  const sticker = suggestPrice(product, { ...scenario, variant }, settings, targetMarginPct);
+  if (sticker == null) return null;
+  const delta = variantPriceDelta(product.variants, variant, scenario.currency);
+  return round2(Math.max(0, sticker - delta));
+}
+
 // ---- Shipping ---------------------------------------------------------------
 
-/** Rough shipping cost estimate used when no live quote is available. */
+/** Shipping cost estimate used when no live quote is available. */
 function estimateShippingCost(shipping: ProductShippingPolicy): number {
   if (shipping.pricing.mode === "flat") return shipping.pricing.default;
-  return 0; // passthrough/free have no offline estimate; admin uses the live quote
+  // Passthrough charges what shipping costs us, so with no quote it needs a
+  // configured stand-in; free shipping has nothing to estimate.
+  if (shipping.pricing.mode === "passthrough") return shipping.pricing.fallbackCost ?? 0;
+  return 0;
+}
+
+/**
+ * Whether shipping can be priced without a live quote. `free` and `flat` are
+ * self-sufficient (both charge a configured amount), but `passthrough` charges
+ * the provider's cost — with no quote and no `fallbackCost` it would charge zero
+ * while we still pay to ship, so an order in that state must not be priced.
+ */
+export function hasUsableShippingCost(
+  shipping: ProductShippingPolicy,
+  liveShippingCost: number | undefined,
+): boolean {
+  if (typeof liveShippingCost === "number") return true;
+  if (shipping.pricing.mode !== "passthrough") return true;
+  return (shipping.pricing.fallbackCost ?? 0) > 0;
 }
 
 /** What the customer is charged for shipping, given the cost we pay. */
@@ -322,6 +482,7 @@ export function toPublicProduct(product: ProductDefinition, settings: PricingSet
     prices[currency] = computeRetailPrice(product, { currency, pages: displayPages, copies: 1 }, settings);
     taxBehavior[currency] = settings.tax.perCurrency[currency]?.behavior ?? "exclusive";
   }
+  const defaultVariant = variantFromSku(product.provider.sku) ?? undefined;
   return {
     id: product.id,
     status: product.status,
@@ -329,11 +490,12 @@ export function toPublicProduct(product: ProductDefinition, settings: PricingSet
     name: product.presentation.name,
     tagline: product.presentation.tagline,
     description: product.presentation.description,
-    images: product.presentation.images,
     badges: product.presentation.badges,
     sku: product.provider.sku,
     printAreas: product.provider.printAreas,
     spec: product.spec,
+    variants: product.variants,
+    defaultVariant,
     conditions: product.conditions,
     prices,
     priceTiers: product.pricing.tiers,

@@ -15,7 +15,11 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import type { AnalyticsOverview } from "../../../core/analytics/types";
+import type {
+  ActivityGrid,
+  AnalyticsOverview,
+  TimezoneMode,
+} from "../../../core/analytics/types";
 import { CardBody, CardHeader, CardTitle } from "../../components/Card";
 import { fmtDayKey, fmtNumber } from "./format";
 
@@ -23,11 +27,20 @@ const SIGNUP_COLOR = "#10b981";
 const LOGIN_COLOR = "#0ea5e9";
 const PIE_COLORS = ["#6366f1", "#10b981", "#f59e0b", "#ec4899", "#0ea5e9", "#a855f7"];
 
-function ChartCard({ title, children }: { title: string; children: React.ReactNode }) {
+function ChartCard({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  children: React.ReactNode;
+}) {
   return (
     <div className="rounded-2xl bg-white ring-1 ring-ink-100 shadow-soft">
       <CardHeader className="py-3.5">
         <CardTitle className="text-sm">{title}</CardTitle>
+        {subtitle && <p className="mt-0.5 text-xs text-ink-400">{subtitle}</p>}
       </CardHeader>
       <CardBody className="pt-2">{children}</CardBody>
     </div>
@@ -93,19 +106,46 @@ export function SourcesChart({ overview }: { overview: AnalyticsOverview }) {
   );
 }
 
-/** Activity distribution by hour of day. */
-export function HourChart({ overview }: { overview: AnalyticsOverview }) {
-  const data = overview.byHour.map((value, hour) => ({ hour: `${hour}`, value }));
+/**
+ * Activity distribution by hour of day, in the same clock the heatmap uses.
+ * Plots events and distinct people together: when the two curves diverge, a few
+ * heavy users are driving the hour rather than a broad audience.
+ */
+export function HourChart({
+  grid,
+  tzMode,
+  timezone,
+  metricLabel,
+}: {
+  grid: ActivityGrid;
+  tzMode: TimezoneMode;
+  timezone: string;
+  metricLabel: string;
+}) {
+  const data = grid.byHour.map((events, hour) => ({
+    hour: `${hour}`,
+    events,
+    users: grid.usersByHour[hour] ?? 0,
+  }));
   return (
-    <ChartCard title="Activity by hour of day">
+    <ChartCard
+      title={`${metricLabel} by hour of day`}
+      subtitle={
+        tzMode === "market"
+          ? "Each event in its own market's local time."
+          : `All events in ${timezone}.`
+      }
+    >
       <div className="h-56 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#eef0f3" vertical={false} />
             <XAxis dataKey="hour" tick={{ fontSize: 10, fill: "#9aa1ac" }} tickLine={false} axisLine={false} interval={1} />
             <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: "#9aa1ac" }} tickLine={false} axisLine={false} width={36} />
-            <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v) => [fmtNumber(Number(v)), "Events"]} labelFormatter={(h) => `${h}:00`} />
-            <Bar dataKey="value" fill="#6366f1" radius={[4, 4, 0, 0]} />
+            <Tooltip contentStyle={TOOLTIP_STYLE} formatter={(v, n) => [fmtNumber(Number(v)), n]} labelFormatter={(h) => `${h}:00`} />
+            <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
+            <Bar dataKey="events" name="Events" fill="#6366f1" radius={[4, 4, 0, 0]} />
+            <Bar dataKey="users" name="People" fill="#c7d2fe" radius={[4, 4, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </div>

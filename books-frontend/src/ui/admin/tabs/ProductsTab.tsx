@@ -6,7 +6,7 @@ import {
   AlertTriangle,
   BadgeCheck,
   CheckCircle2,
-  Image as ImageIcon,
+  Layers,
   Loader2,
   Package,
   Plus,
@@ -15,7 +15,6 @@ import {
   Tag,
   Trash2,
   Truck,
-  Upload,
 } from "lucide-react";
 import { Button } from "../../components/Button";
 import { Field, Input, Textarea } from "../../components/Input";
@@ -24,32 +23,71 @@ import { Tabs } from "../../components/Tabs";
 import { cn } from "../../lib/cn";
 import {
   FULFILLMENT_PROVIDERS,
+  PROVIDER_ENVS,
   PROVIDER_LABELS,
   createDefaultProduct,
   productAccessOf,
+  verificationCoversPages,
+  verificationFor,
   type ProductAccess,
   type ProductDefinition,
-  type ProductImage,
+  type ProductsConfig,
+  type ProviderEnv,
 } from "../../../core/config/products";
-import { isOfferable, productErrors, validateProduct, type ProductIssue } from "../../../core/config/productValidation";
-import { useAppConfigStore } from "../../../state/appConfigStore";
-import { Disclosure, Grid, NumberField, Section, TabIntro, TextField } from "./products/parts";
+import { bookMediaKey, optionMediaKey } from "../../../core/config/catalogMedia";
+import { BINDINGS, FINISHES } from "../../../core/fulfillment/types";
+import {
+  isOfferable,
+  productErrors,
+  saveBlockingIssues,
+  validateProduct,
+  type ProductIssue,
+} from "../../../core/config/productValidation";
+import {
+  BINDING_BY_CODE,
+  SKU_AXES,
+  composeSku,
+  defaultSkuParts,
+  isChoiceAxis,
+  parseSku,
+  parseTrimCode,
+  trimCode,
+  type SkuAxis,
+  type SkuAxisId,
+  type SkuParts,
+} from "../../../core/fulfillment/lulu/skuAxes";
+import {
+  useAppConfigStore,
+  type CatalogCalibrationRun,
+  type SkuMatrixEntry,
+} from "../../../state/appConfigStore";
+import { useAdminHealth } from "../../../state/adminHealthStore";
+import { useAdminTab } from "../adminTabStore";
+import {
+  Disclosure,
+  Grid,
+  NumberField,
+  Section,
+  TabIntro,
+  TextField,
+} from "./products/parts";
 import { CostSection, PricingSection } from "./products/ProductPricing";
+import { PictureButton } from "./products/Pictures";
+import { PrintPicturesSection } from "./products/PicturesSection";
+import { VariantsSection } from "./products/VariantsSection";
 
 type Update = (fn: (p: ProductDefinition) => ProductDefinition) => void;
 
-const BINDINGS = ["saddle-stitch", "perfect-bound", "coil-bound", "casewrap", "linen-wrap"] as const;
-const FINISHES = ["matte", "gloss"] as const;
 const ORIENTATIONS = ["square", "landscape", "portrait"] as const;
 const SHIPPING_METHODS = ["Budget", "Standard", "StandardPlus", "Express", "Overnight"] as const;
 
 const EDITOR_TABS = [
   { id: "details", label: "Details", icon: <Tag className="size-4" /> },
   { id: "format", label: "Format", icon: <Ruler className="size-4" /> },
+  { id: "variants", label: "Variants", icon: <Layers className="size-4" /> },
   { id: "pricing", label: "Pricing", icon: <Sparkles className="size-4" /> },
   { id: "costs", label: "Costs", icon: <Package className="size-4" /> },
   { id: "shipping", label: "Shipping", icon: <Truck className="size-4" /> },
-  { id: "images", label: "Images", icon: <ImageIcon className="size-4" /> },
 ];
 
 export function ProductsTab() {
@@ -57,9 +95,22 @@ export function ProductsTab() {
   const saveProductFn = useAppConfigStore((s) => s.saveProduct);
   const deleteProductFn = useAppConfigStore((s) => s.deleteProductById);
   const seedProductsFn = useAppConfigStore((s) => s.seedProducts);
+  const verifyProductsFn = useAppConfigStore((s) => s.verifyProducts);
+  const calibrateCatalogCosts = useAppConfigStore((s) => s.calibrateCatalogCosts);
   const settings = useAppConfigStore((s) => s.pricingSettings);
+  // Product pictures live outside the product record, so validation can only
+  // warn about a book having none if it's handed the catalog's pictures.
+  const media = useAppConfigStore((s) => s.catalogMedia);
+  // Verification is per-environment, so validation needs to know which one is
+  // being served before it can say whether a product is safe to offer.
+  const runtime = useAdminHealth((s) => s.runtime);
+  const loadRuntime = useAdminHealth((s) => s.loadRuntime);
+  const setConfigTab = useAdminTab((s) => s.setConfigTab);
 
   const [products, setProducts] = useState<ProductDefinition[]>([]);
+  const [verifying, setVerifying] = useState(false);
+  const [measuring, setMeasuring] = useState(false);
+  const [costRuns, setCostRuns] = useState<CatalogCalibrationRun[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<ProductDefinition | null>(null);
@@ -81,6 +132,67 @@ export function ProductsTab() {
       live = false;
     };
   }, [loadAdminProducts]);
+
+  useEffect(() => {
+    if (!runtime) void loadRuntime();
+  }, [runtime, loadRuntime]);
+
+  /** Adopt a catalog the server just rewrote (verification, calibration). */
+  const applyCatalog = (cfg: ProductsConfig) => {
+    setProducts(cfg.products);
+    const next = selectedId ? cfg.products.find((p) => p.id === selectedId) : undefined;
+    // Only safe because these actions require a clean draft — nothing to lose.
+    if (next) setDraft(structuredClone(next));
+  };
+
+  /**
+   * Re-derive every product's cost from the provider. Destructive by design —
+   * it replaces hand-entered tables — so it confirms first, and reports each
+   * product's before/after because a silent catalog-wide cost change is exactly
+   * the kind of thing that should never be silent.
+   */
+  const onMeasureAll = async () => {
+    const env = runtime?.env ?? "the provider";
+    if (
+      !window.confirm(
+        `Re-measure cost for ${products.length} product${products.length === 1 ? "" : "s"} against ${env}?\n\n` +
+          "Every cost table is replaced with what the provider quotes, including any you set by hand.",
+      )
+    ) {
+      return;
+    }
+    setMeasuring(true);
+    try {
+      const s = await calibrateCatalogCosts(runtime?.env);
+      applyCatalog(s.config);
+      setCostRuns(s.runs);
+      const message = `${s.env}: ${s.ok} measured${s.failed ? `, ${s.failed} failed` : ""}.`;
+      if (s.failed) toast.warning(message);
+      else toast.success(message);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Measuring costs failed.");
+    } finally {
+      setMeasuring(false);
+    }
+  };
+
+  const onVerifyAll = async () => {
+    setVerifying(true);
+    try {
+      const s = await verifyProductsFn(runtime ? { env: runtime.env } : undefined);
+      applyCatalog(s.config);
+      const parts = [`${s.ok} verified`];
+      if (s.rejected) parts.push(`${s.rejected} rejected`);
+      if (s.inconclusive) parts.push(`${s.inconclusive} unreachable`);
+      const message = `${s.env}: ${parts.join(", ")}.`;
+      if (s.rejected || s.inconclusive) toast.warning(message);
+      else toast.success(message);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Verification failed.");
+    } finally {
+      setVerifying(false);
+    }
+  };
 
   const select = (p: ProductDefinition) => {
     if (dirty && !window.confirm("Discard unsaved changes?")) return;
@@ -155,8 +267,14 @@ export function ProductsTab() {
     }
   };
 
-  const issues = useMemo(() => (draft ? validateProduct(draft, settings) : []), [draft, settings]);
-  const errors = issues.filter((i) => i.level === "error");
+  const issues = useMemo(
+    () =>
+      draft ? validateProduct(draft, settings, { media, ...(runtime ? { env: runtime.env } : {}) }) : [],
+    [draft, settings, runtime, media],
+  );
+  // Actionable errors (verify / calibrate) don't block saving — you must save a
+  // product before you can run those tools against it.
+  const saveBlockers = saveBlockingIssues(issues);
 
   if (loading) {
     return (
@@ -171,10 +289,18 @@ export function ProductsTab() {
       <TabIntro
         elsewhere={
           <>
-            Currencies, payment fees and tax that turn these prices into margins are set once under{" "}
+            Verifying SKUs and measuring costs run against the{" "}
+            <span className="font-medium">{runtime?.env ?? "active"}</span> print catalog, because
+            sandbox and live are separate catalogues — the sandbox/live switch itself lives under{" "}
+            <span className="font-medium">System health</span>. Currencies, payment fees and tax that
+            turn these prices into margins are set once under{" "}
             <span className="font-medium">Financial settings</span>.
           </>
         }
+        links={[
+          { label: `Environment: ${runtime?.env ?? "…"}`, onClick: () => setConfigTab("system") },
+          { label: "Financial settings", onClick: () => setConfigTab("financial") },
+        ]}
       >
         <span className="font-medium">Print books</span> are the physical products customers order —
         each one binds a print spec to per-page-range prices. Only{" "}
@@ -193,6 +319,43 @@ export function ProductsTab() {
               Seed
             </Button>
           </div>
+          {products.length > 0 && (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="w-full"
+              leftIcon={<BadgeCheck className="size-4" />}
+              loading={verifying}
+              disabled={dirty}
+              onClick={onVerifyAll}
+              title={
+                dirty
+                  ? "Save your changes first — verification runs against the saved catalog."
+                  : `Probe every SKU against the ${runtime?.env ?? "active"} print catalog`
+              }
+            >
+              Verify all against {runtime?.env ?? "…"}
+            </Button>
+          )}
+          {products.length > 0 && (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="w-full"
+              leftIcon={<Ruler className="size-4" />}
+              loading={measuring}
+              disabled={dirty}
+              onClick={onMeasureAll}
+              title={
+                dirty
+                  ? "Save your changes first — this runs against the saved catalog."
+                  : `Re-derive every cost table from ${runtime?.env ?? "provider"} quotes`
+              }
+            >
+              Measure all costs
+            </Button>
+          )}
+          {costRuns && <CalibrationRuns runs={costRuns} onDismiss={() => setCostRuns(null)} />}
 
           {products.length === 0 ? (
             <div className="rounded-xl border border-dashed border-ink-200 p-5 text-center text-xs text-ink-400">
@@ -249,7 +412,7 @@ export function ProductsTab() {
                       Discard
                     </Button>
                   )}
-                  <Button size="sm" onClick={onSave} loading={saving} disabled={!dirty || errors.length > 0} title={errors.length ? "Fix errors before saving" : undefined}>
+                  <Button size="sm" onClick={onSave} loading={saving} disabled={!dirty || saveBlockers.length > 0} title={saveBlockers.length ? "Fix errors before saving" : undefined}>
                     Save product
                   </Button>
                 </div>
@@ -261,16 +424,22 @@ export function ProductsTab() {
 
               <div className="rounded-xl ring-1 ring-inset ring-ink-100 p-3">
                 {editorTab === "details" && <DetailsSection product={draft} update={update} />}
-                {editorTab === "format" && <FormatSection product={draft} update={update} />}
+                {editorTab === "format" && (
+                  <FormatSection product={draft} update={update} dirty={dirty} onVerified={applyCatalog} />
+                )}
+                {editorTab === "variants" && <VariantsSection product={draft} update={update} />}
                 {editorTab === "pricing" && <PricingSection product={draft} update={update} settings={settings} />}
-                {editorTab === "costs" && <CostSection product={draft} update={update} />}
+                {editorTab === "costs" && (
+                  <CostSection product={draft} update={update} dirty={dirty} onCalibrated={applyCatalog} />
+                )}
                 {editorTab === "shipping" && <ShippingSection product={draft} update={update} />}
-                {editorTab === "images" && <ImagesSection product={draft} update={update} />}
               </div>
             </div>
           )}
         </div>
       </div>
+
+      <PrintPicturesSection products={products} />
     </div>
   );
 }
@@ -331,8 +500,18 @@ function DetailsSection({ product, update }: { product: ProductDefinition; updat
   return (
     <div className="space-y-3">
       <Section title="Presentation" hint="What customers see in the storefront.">
-        <TextField label="Name" value={p.name} onChange={(v) => setP({ name: v })} />
-        <TextField label="Tagline" value={p.tagline ?? ""} placeholder="Optional one-liner" onChange={(v) => setP({ tagline: v })} />
+        <div className="flex items-start gap-3">
+          <div className="min-w-0 flex-1 space-y-3">
+            <TextField label="Name" value={p.name} onChange={(v) => setP({ name: v })} />
+            <TextField label="Tagline" value={p.tagline ?? ""} placeholder="Optional one-liner" onChange={(v) => setP({ tagline: v })} />
+          </div>
+          {/* Pictures live in the catalog-wide store, not on this record — this is
+              a shortcut into the same manager as the Product pictures section. */}
+          <div className="space-y-1">
+            <p className="text-[11px] font-medium text-ink-500">Pictures</p>
+            <PictureButton mediaKey={bookMediaKey(product.id)} label={p.name || "this book"} />
+          </div>
+        </div>
         <Field label="Description">
           <Textarea rows={4} value={p.description} placeholder="Markdown supported" onChange={(e) => setP({ description: e.target.value })} />
         </Field>
@@ -365,42 +544,412 @@ function DetailsSection({ product, update }: { product: ProductDefinition; updat
   );
 }
 
-function FormatSection({ product, update }: { product: ProductDefinition; update: Update }) {
+function FormatSection({
+  product,
+  update,
+  dirty,
+  onVerified,
+}: {
+  product: ProductDefinition;
+  update: Update;
+  dirty: boolean;
+  onVerified: (config: ProductsConfig) => void;
+}) {
   return (
     <div className="space-y-3">
-      <ProviderFields product={product} update={update} />
+      <ProviderFields product={product} update={update} dirty={dirty} onVerified={onVerified} />
       <SpecFields product={product} update={update} />
       <ConditionsFields product={product} update={update} />
     </div>
   );
 }
 
-function ProviderFields({ product, update }: { product: ProductDefinition; update: Update }) {
+/**
+ * Choice axes in the order that reads best, which is not the order they appear
+ * in the code: binding leads because it's the decision everything else hangs
+ * off, and the two longest lists sit side by side so the grid doesn't leave a
+ * column of dead space. Fields with only one possible value are dropped.
+ */
+const CHOICE_AXES = (["binding", "paper", "ink", "quality", "finish", "linen", "foil"] as const)
+  .map((id) => SKU_AXES.find((a) => a.id === id)!)
+  .filter(isChoiceAxis);
+
+/**
+ * Trim in inches, with the provider's code derived rather than typed. The code
+ * encodes hundredths of an inch as width-then-height ("0850X0850"), which is
+ * unguessable — and getting it subtly wrong yields a package that doesn't exist.
+ */
+function TrimPicker({ code, onChange }: { code: string; onChange: (code: string) => void }) {
+  const presets = SKU_AXES.find((a) => a.id === "trim")!.options;
+  const trim = parseTrimCode(code);
+  const isPreset = presets.some((p) => p.code === code);
+
+  const preset = presets.find((p) => p.code === code);
+
+  return (
+    <div className="space-y-2 rounded-lg bg-ink-50/50 p-2.5">
+      <div className="flex items-end gap-2">
+        <div className="min-w-0 flex-1">
+          <Field
+            label="Trim size"
+            hint={trim ? `Encodes as ${code}` : "Enter a width and height to build the code."}
+          >
+            <Select
+              value={isPreset ? code : "custom"}
+              options={[
+                ...presets.map((p) => ({ value: p.code, label: p.label })),
+                { value: "custom", label: "Custom size…" },
+              ]}
+              onChange={(e) => {
+                if (e.target.value !== "custom") onChange(e.target.value);
+              }}
+            />
+          </Field>
+        </div>
+        {/* Size is the hardest option to picture, so a size-guide shot earns its place. */}
+        {preset && <PictureButton mediaKey={preset.mediaKey} label={preset.label} className="mb-1" />}
+      </div>
+      <Grid cols={2}>
+        <NumberField
+          label="Width"
+          value={trim?.widthIn ?? 0}
+          step="0.25"
+          suffix="in"
+          onChange={(n) => onChange(trimCode(n, trim?.heightIn ?? 0))}
+        />
+        <NumberField
+          label="Height"
+          value={trim?.heightIn ?? 0}
+          step="0.25"
+          suffix="in"
+          onChange={(n) => onChange(trimCode(trim?.widthIn ?? 0, n))}
+        />
+      </Grid>
+    </div>
+  );
+}
+
+/**
+ * One axis as a list of selectable cards, each explaining what it actually is
+ * and showing a photo of it. The photo button is a sibling of the radio rather
+ * than a child, so "choose this option" and "manage its photos" stay distinct
+ * controls; the card reserves the space it sits in.
+ */
+function OptionCards({
+  axis,
+  value,
+  onChange,
+}: {
+  axis: SkuAxis;
+  value: string;
+  onChange: (code: string) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <p className="text-sm font-medium text-ink-700">{axis.label}</p>
+      <div role="radiogroup" aria-label={axis.label} className="space-y-1.5">
+        {axis.options.map((o) => {
+          const selected = o.code === value;
+          return (
+            <div key={o.code} className="relative">
+              <button
+                type="button"
+                role="radio"
+                aria-checked={selected}
+                onClick={() => onChange(o.code)}
+                className={cn(
+                  "block w-full rounded-lg py-2 pr-2.5 text-left ring-1 ring-inset transition",
+                  o.mediaKey ? "pl-16" : "pl-2.5",
+                  selected ? "bg-brand-50 ring-brand-300" : "bg-white ring-ink-100 hover:bg-ink-50",
+                )}
+              >
+                <span className="flex items-baseline justify-between gap-2">
+                  <span className={cn("text-xs font-semibold", selected ? "text-brand-800" : "text-ink-700")}>
+                    {o.label}
+                  </span>
+                  <code className="font-mono text-[10px] text-ink-400">{o.code}</code>
+                </span>
+                {o.hint && <span className="mt-0.5 block text-[11px] leading-snug text-ink-500">{o.hint}</span>}
+              </button>
+              <PictureButton
+                mediaKey={o.mediaKey}
+                label={o.label}
+                hint={o.hint}
+                className="absolute left-2.5 top-2"
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Assemble a `pod_package_id` from choices instead of typing 27 characters.
+ *
+ * The provider publishes no list of valid packages, so the only way to know a
+ * combination exists is to ask it to price one. That's what "Check" does — and
+ * because the provider names the supported page range when it rejects an absurd
+ * page count, a successful check also tells us the real page bounds, which get
+ * applied along with the SKU.
+ */
+function SkuBuilder({ product, update }: { product: ProductDefinition; update: Update }) {
+  const checkSku = useAppConfigStore((s) => s.checkSku);
+  const runtime = useAdminHealth((s) => s.runtime);
+  const [open, setOpen] = useState(false);
+  const [parts, setParts] = useState<SkuParts>(() => parseSku(product.provider.sku) ?? defaultSkuParts());
+  const [checking, setChecking] = useState(false);
+  const [entry, setEntry] = useState<SkuMatrixEntry | null>(null);
+
+  const sku = composeSku(parts);
+  const trim = parseTrimCode(parts.trim);
+  // Any edit invalidates the previous verdict — it belonged to a different SKU.
+  const setPart = (id: SkuAxisId, code: string) => {
+    setParts((p) => ({ ...p, [id]: code }));
+    setEntry(null);
+  };
+
+  const run = async () => {
+    setChecking(true);
+    try {
+      const res = await checkSku(sku, { env: runtime?.env, refresh: true });
+      setEntry(res.entry);
+      if (!res.entry.ok) toast.error(res.entry.message ?? "The provider doesn't offer this combination.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Check failed.");
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const applyToProduct = () => {
+    if (!entry?.ok) return;
+    update((d) => ({
+      ...d,
+      provider: { ...d.provider, sku: entry.sku },
+      spec: {
+        ...d.spec,
+        binding: (BINDING_BY_CODE[parts.binding] ?? d.spec.binding) as ProductDefinition["spec"]["binding"],
+        finish: parts.finish === "M" ? "matte" : "gloss",
+        ...(trim ? { pageTrim: { width: trim.widthIn, height: trim.heightIn, unit: "in" as const } } : {}),
+      },
+      // The provider's own bounds beat anything hand-entered.
+      conditions: entry.pages
+        ? { ...d.conditions, pages: { ...d.conditions.pages, min: entry.pages.min, max: entry.pages.max } }
+        : d.conditions,
+    }));
+    toast.success("Applied. Save, then verify.");
+  };
+
+  return (
+    <div className="rounded-lg ring-1 ring-inset ring-ink-100">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between px-3 py-2 text-left"
+      >
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">Build a SKU</span>
+        <span className="text-xs text-ink-400">{open ? "Hide" : "Show"}</span>
+      </button>
+      {open && (
+        <div className="space-y-3 border-t border-ink-100 p-3">
+          <p className="text-xs text-ink-500">
+            The provider has no catalogue to browse, so these options are a starting point rather than a
+            guarantee. Check the combination to find out whether it really exists.
+          </p>
+          <TrimPicker code={parts.trim} onChange={(c) => setPart("trim", c)} />
+          <Grid cols={2}>
+            {CHOICE_AXES.map((axis) => (
+              <OptionCards
+                key={axis.id}
+                axis={axis}
+                value={parts[axis.id]}
+                onChange={(code) => setPart(axis.id, code)}
+              />
+            ))}
+          </Grid>
+          <div className="flex flex-wrap items-center gap-2">
+            <code className="rounded bg-ink-50 px-2 py-1 font-mono text-xs text-ink-700">{sku}</code>
+            <Button variant="secondary" size="sm" loading={checking} onClick={run}>
+              Check with provider
+            </Button>
+            {entry?.ok && (
+              <Button variant="primary" size="sm" onClick={applyToProduct}>
+                Use this SKU
+              </Button>
+            )}
+          </div>
+          {entry && (
+            <p className={cn("text-xs", entry.ok ? "text-emerald-700" : "text-red-600")}>
+              {entry.ok
+                ? `Exists in ${entry.env}${entry.pages ? ` · ${entry.pages.min}–${entry.pages.max} pages` : ""}${
+                    entry.unitCost ? ` · from ${entry.unitCost.toFixed(2)} ${entry.currency}/book` : ""
+                  }`
+                : (entry.message ?? "Not available.")}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** What a catalog-wide cost measurement changed, per product. */
+function CalibrationRuns({
+  runs,
+  onDismiss,
+}: {
+  runs: CatalogCalibrationRun[];
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="space-y-1 rounded-lg p-2 ring-1 ring-inset ring-ink-100">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">Cost measurement</span>
+        <button type="button" onClick={onDismiss} className="text-[10px] text-ink-400 hover:text-ink-600">
+          Dismiss
+        </button>
+      </div>
+      {runs.map((r) => (
+        <div key={r.productId} className="flex items-baseline justify-between gap-2 text-[11px]">
+          <span className="min-w-0 flex-1 truncate text-ink-600">{r.name}</span>
+          {r.ok && r.after ? (
+            <span className="shrink-0 tabular-nums text-ink-500" title={r.message}>
+              {r.before.basePerUnit.toFixed(2)} → {r.after.basePerUnit.toFixed(2)} + {r.after.perPage.toFixed(3)}/pg
+            </span>
+          ) : (
+            <span className="shrink-0 text-red-600" title={r.message}>
+              failed
+            </span>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Per-environment proof that the SKU can actually be printed. Verification runs
+ * against the SAVED product (the backend reads the catalog, probes, and writes
+ * the verdict), so unsaved edits must be committed first — otherwise you'd be
+ * verifying something other than what you're looking at.
+ */
+function VerificationPanel({
+  product,
+  dirty,
+  onVerified,
+}: {
+  product: ProductDefinition;
+  dirty: boolean;
+  onVerified: (config: ProductsConfig) => void;
+}) {
+  const verifyProducts = useAppConfigStore((s) => s.verifyProducts);
+  const [busy, setBusy] = useState<ProviderEnv | null>(null);
+
+  const run = async (env: ProviderEnv) => {
+    setBusy(env);
+    try {
+      const summary = await verifyProducts({ env, id: product.id });
+      const result = summary.results[0];
+      if (!result || result.outcome === "inconclusive") {
+        toast.error(`Couldn't reach a verdict: ${result?.message ?? "no response"}`);
+      } else if (result.outcome === "rejected") {
+        toast.error(`${env} rejected this SKU: ${result.message}`);
+      } else {
+        toast.success(`Verified against ${env}.`);
+      }
+      onVerified(summary.config);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Verification failed.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="rounded-lg ring-1 ring-inset ring-ink-100">
+      <div className="border-b border-ink-100 px-3 py-2">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">SKU verification</p>
+        <p className="mt-0.5 text-xs text-ink-500">
+          Sandbox and live are separate print catalogs, so each must be proven on its own. An unverified SKU
+          fails after the customer has paid.
+        </p>
+      </div>
+      <div className="divide-y divide-ink-100">
+        {PROVIDER_ENVS.map((env) => {
+          const record = verificationFor(product.provider, env);
+          const covers = verificationCoversPages(record, product.conditions.pages);
+          return (
+            <div key={env} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+              <div className="min-w-0">
+                <span className="text-sm font-medium capitalize text-ink-800">{env}</span>
+                <p className="text-xs text-ink-500">
+                  {!record ? (
+                    "Never verified."
+                  ) : !record.ok ? (
+                    <span className="text-red-600">Rejected: {record.error ?? "unknown reason"}</span>
+                  ) : !covers ? (
+                    <span className="text-amber-700">
+                      Verified for {record.pages.min}–{record.pages.max} pages, but this product allows{" "}
+                      {product.conditions.pages.min}–{product.conditions.pages.max}. Re-verify.
+                    </span>
+                  ) : (
+                    <span className="text-emerald-700">
+                      Verified {record.pages.min}–{record.pages.max} pages on{" "}
+                      {new Date(record.at).toLocaleDateString()}.
+                    </span>
+                  )}
+                </p>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                loading={busy === env}
+                disabled={busy != null || dirty || !product.provider.sku.trim()}
+                title={dirty ? "Save your changes first — verification runs against the saved product." : undefined}
+                onClick={() => run(env)}
+              >
+                Verify {env}
+              </Button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ProviderFields({
+  product,
+  update,
+  dirty,
+  onVerified,
+}: {
+  product: ProductDefinition;
+  update: Update;
+  dirty: boolean;
+  onVerified: (config: ProductsConfig) => void;
+}) {
   const pr = product.provider;
   const setPr = (patch: Partial<ProductDefinition["provider"]>) =>
     update((d) => ({ ...d, provider: { ...d.provider, ...patch } }));
   return (
     <Section title="Print provider" hint="Which provider prints and ships this book. Their API handles quotes and orders.">
-      <Grid cols={2}>
-        <Field label="Provider">
-          <Select
-            value={pr.id}
-            options={FULFILLMENT_PROVIDERS.map((id) => ({ value: id, label: PROVIDER_LABELS[id] }))}
-            onChange={(e) => setPr({ id: e.target.value as ProductDefinition["provider"]["id"] })}
-          />
-        </Field>
-        <Field label="Verified against catalog">
-          <Select
-            value={pr.verified ? "yes" : "no"}
-            options={[
-              { value: "no", label: "Not verified" },
-              { value: "yes", label: "Verified" },
-            ]}
-            onChange={(e) => setPr({ verified: e.target.value === "yes" })}
-          />
-        </Field>
-      </Grid>
-      <TextField label="Provider SKU" value={pr.sku} placeholder="e.g. 0850X0850.FC.STD.CW.080CW444.GXX" onChange={(v) => setPr({ sku: v })} />
+      <Field label="Provider" className="w-full sm:w-72">
+        <Select
+          value={pr.id}
+          options={FULFILLMENT_PROVIDERS.map((id) => ({ value: id, label: PROVIDER_LABELS[id] }))}
+          onChange={(e) => setPr({ id: e.target.value as ProductDefinition["provider"]["id"] })}
+        />
+      </Field>
+      <TextField label="Provider SKU" value={pr.sku} placeholder="e.g. 0850X0850FCPRECW080CW444GXX" onChange={(v) => setPr({ sku: v })} />
+      {pr.id === "lulu" && (
+        <>
+          <SkuBuilder product={product} update={update} />
+          <VerificationPanel product={product} dirty={dirty} onVerified={onVerified} />
+        </>
+      )}
       <Disclosure label="Print areas">
         <Grid cols={3}>
           <TextField label="Interior" value={pr.printAreas.interior} onChange={(v) => setPr({ printAreas: { ...pr.printAreas, interior: v } })} />
@@ -420,12 +969,24 @@ function SpecFields({ product, update }: { product: ProductDefinition; update: U
   return (
     <Section title="Size & binding" hint="Binding and finish drive print specs and page-count rules.">
       <Grid cols={3}>
-        <Field label="Binding">
-          <Select value={s.binding} options={BINDINGS.map((b) => ({ value: b, label: b }))} onChange={(e) => setS({ binding: e.target.value as ProductDefinition["spec"]["binding"] })} />
-        </Field>
-        <Field label="Finish">
-          <Select value={s.finish} options={FINISHES.map((f) => ({ value: f, label: f }))} onChange={(e) => setS({ finish: e.target.value as ProductDefinition["spec"]["finish"] })} />
-        </Field>
+        {/* The spec's binding/finish values ARE the media keys, so the photo of
+            the thing being described sits right next to the choice. */}
+        <div className="flex items-end gap-2">
+          <div className="min-w-0 flex-1">
+            <Field label="Binding">
+              <Select value={s.binding} options={BINDINGS.map((b) => ({ value: b, label: b }))} onChange={(e) => setS({ binding: e.target.value as ProductDefinition["spec"]["binding"] })} />
+            </Field>
+          </div>
+          <PictureButton mediaKey={optionMediaKey("binding", s.binding)} label={s.binding} className="mb-1" />
+        </div>
+        <div className="flex items-end gap-2">
+          <div className="min-w-0 flex-1">
+            <Field label="Finish">
+              <Select value={s.finish} options={FINISHES.map((f) => ({ value: f, label: f }))} onChange={(e) => setS({ finish: e.target.value as ProductDefinition["spec"]["finish"] })} />
+            </Field>
+          </div>
+          <PictureButton mediaKey={optionMediaKey("finish", s.finish)} label={s.finish} className="mb-1" />
+        </div>
         <Field label="Orientation">
           <Select value={s.orientation} options={ORIENTATIONS.map((o) => ({ value: o, label: o }))} onChange={(e) => setS({ orientation: e.target.value as ProductDefinition["spec"]["orientation"] })} />
         </Field>
@@ -605,6 +1166,8 @@ function ShippingSection({ product, update }: { product: ProductDefinition; upda
     sh.pricing.mode === "flat"
       ? sh.pricing
       : { mode: "flat" as const, default: 0, currency: "USD", overrides: [] };
+  // Patch passthrough fields without dropping the sibling one.
+  const pass = sh.pricing.mode === "passthrough" ? sh.pricing : { mode: "passthrough" as const };
   return (
     <div className="space-y-3">
       <Section title="Shipping speeds" hint="Delivery options offered to the customer (mapped to provider services).">
@@ -664,7 +1227,18 @@ function ShippingSection({ product, update }: { product: ProductDefinition; upda
           />
         </Field>
         {sh.pricing.mode === "passthrough" && (
-          <NumberField label="Markup on shipping" value={sh.pricing.markupPct ?? 0} step="1" className="w-44" suffix="%" onChange={(n) => setSh({ pricing: { mode: "passthrough", markupPct: n } })} />
+          <div className="flex flex-wrap items-start gap-4">
+            <NumberField label="Markup on shipping" value={sh.pricing.markupPct ?? 0} step="1" className="w-44" suffix="%" onChange={(n) => setSh({ pricing: { ...pass, markupPct: n } })} />
+            <NumberField
+              label="Fallback shipping cost"
+              hint="Charged (plus markup) when a live shipping quote can't be fetched. Without it, those orders are refused rather than shipped at your expense."
+              value={sh.pricing.fallbackCost ?? 0}
+              step="0.5"
+              className="w-56"
+              suffix={product.cost.currency}
+              onChange={(n) => setSh({ pricing: { ...pass, fallbackCost: n } })}
+            />
+          </div>
         )}
         {sh.pricing.mode === "free" && (
           <Field label="Cover the cost in the book price" className="w-full sm:w-64">
@@ -704,89 +1278,3 @@ function ShippingSection({ product, update }: { product: ProductDefinition; upda
   );
 }
 
-function ImagesSection({ product, update }: { product: ProductDefinition; update: Update }) {
-  const uploadProductImage = useAppConfigStore((s) => s.uploadProductImage);
-  const [uploading, setUploading] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
-  const [role, setRole] = useState<ProductImage["role"]>("hero");
-
-  const images = product.presentation.images;
-  const setImages = (next: ProductImage[]) =>
-    update((d) => ({ ...d, presentation: { ...d.presentation, images: next } }));
-
-  const onFile = async (file: File) => {
-    setUploading(true);
-    try {
-      const base64 = await fileToBase64(file);
-      const img = await uploadProductImage(product.id, base64, file.type, role);
-      setImages([...images, img]);
-      toast.success("Image uploaded — Save the product to keep it.");
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Upload failed.");
-    } finally {
-      setUploading(false);
-      if (fileRef.current) fileRef.current.value = "";
-    }
-  };
-
-  return (
-    <div className="space-y-3">
-      <Section
-        title="Product images"
-        hint="A hero image and gallery shots. Uploaded immediately; remember to Save the product to keep the reference."
-        action={
-          <div className="flex items-end gap-1.5">
-            <Select
-              className="h-8 w-32 text-sm"
-              value={role}
-              options={[
-                { value: "hero", label: "Hero" },
-                { value: "gallery", label: "Gallery" },
-                { value: "sizeGuide", label: "Size guide" },
-              ]}
-              onChange={(e) => setRole(e.target.value as ProductImage["role"])}
-            />
-            <Button variant="secondary" size="sm" leftIcon={<Upload className="size-4" />} loading={uploading} onClick={() => fileRef.current?.click()}>
-              Upload
-            </Button>
-            <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => e.target.files?.[0] && onFile(e.target.files[0])} />
-          </div>
-        }
-      >
-        {images.length === 0 ? (
-          <p className="text-[11px] text-ink-400">No images yet.</p>
-        ) : (
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {images.map((img, i) => (
-              <div key={i} className="group relative overflow-hidden rounded-lg ring-1 ring-inset ring-ink-100">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img src={img.url} alt={img.alt ?? ""} className="aspect-square w-full object-cover" />
-                <span className="absolute left-1.5 top-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] font-medium text-white">{img.role}</span>
-                <button
-                  onClick={() => setImages(images.filter((_, idx) => idx !== i))}
-                  className="absolute right-1.5 top-1.5 rounded bg-white/90 p-1 text-red-600 opacity-0 transition group-hover:opacity-100"
-                  title="Remove"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </Section>
-    </div>
-  );
-}
-
-function fileToBase64(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result as string;
-      const comma = result.indexOf(",");
-      resolve(comma >= 0 ? result.slice(comma + 1) : result);
-    };
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}

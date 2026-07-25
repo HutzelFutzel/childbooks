@@ -14,6 +14,7 @@ import { collection, onSnapshot, type Unsubscribe } from "firebase/firestore";
 import { getFirebaseAuth, getFirebaseDb } from "../lib/firebase";
 import { backendFetch } from "./backend";
 import type { OrderDraft, PrintAsset, ShippingMethod } from "../core/fulfillment/types";
+import type { VariantSelection } from "../core/config/variants";
 
 export type PaymentStatus =
   | "pending"
@@ -82,11 +83,16 @@ export interface CheckoutInput {
  * to (the caller does `window.location.href = url`). The print files are uploaded
  * as part of this call so the order can be placed from the payment webhook.
  */
-export async function startOrderCheckout(input: CheckoutInput): Promise<{ url: string; paymentId: string }> {
-  const { draft, pageCount } = input;
+export async function startOrderCheckout(
+  input: CheckoutInput & { variant?: VariantSelection },
+): Promise<{ url: string; paymentId: string }> {
+  const { draft, pageCount, variant } = input;
   const assets = await Promise.all(draft.assets.map(assetToWire));
   const body = {
+    // Format identity (base SKU). The server composes the print SKU from
+    // `variant` so the client never invents a package id.
     productSku: draft.productSku,
+    variant,
     copies: draft.copies,
     pageCount,
     currency: draft.currency,
@@ -127,6 +133,7 @@ export interface RetailPricePreview {
  */
 export async function fetchOrderPrice(input: {
   productSku: string;
+  variant?: VariantSelection;
   copies: number;
   pageCount: number;
   currency: string;

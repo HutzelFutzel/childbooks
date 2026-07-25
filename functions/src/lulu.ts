@@ -12,6 +12,8 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import express, { type Express, type Request, type Response } from "express";
 import { createLuluProvider } from "../../books-frontend/src/core/fulfillment/lulu/provider";
+import { loadServerConfig } from "../../books-frontend/src/core/config/serverEnv";
+import type { FulfillmentEnv } from "../../books-frontend/src/core/settings";
 import { mapOrder } from "../../books-frontend/src/core/fulfillment/lulu/wire";
 import type { LuluWebhookEnvelope } from "../../books-frontend/src/core/fulfillment/lulu/wire";
 import type {
@@ -39,6 +41,36 @@ function provider(): FulfillmentProvider {
 /** The configured fulfillment provider, for trusted server-side callers (admin). */
 export function fulfillmentProvider(): FulfillmentProvider {
   return provider();
+}
+
+/**
+ * A provider bound to an EXPLICIT environment rather than the active one.
+ *
+ * Sandbox and live are separate catalogs behind separate credentials, so a SKU
+ * proven in one says nothing about the other. Verification and readiness probes
+ * need to reach either side from a single running instance — typically to prove
+ * live is ready while the backend is still serving sandbox.
+ */
+export function fulfillmentProviderFor(env: FulfillmentEnv): FulfillmentProvider {
+  const cfg = loadServerConfig(process.env as Record<string, string | undefined>, { envOverride: env });
+  return createLuluProvider({
+    httpFetch: (url, init) => fetch(url, init as RequestInit),
+    // Resolved on first upload rather than up front: quoting and probing never
+    // touch Storage, and they shouldn't fail when it's unavailable.
+    assetHost: {
+      id: "firebase-admin",
+      upload: (blob, name) => createAdminAssetHost().upload(blob, name),
+    },
+    clientKey: () => cfg.fulfillment.lulu.clientKey,
+    clientSecret: () => cfg.fulfillment.lulu.clientSecret,
+    env: cfg.fulfillment.lulu.env,
+  });
+}
+
+/** Whether credentials for an environment are present at all (cheap pre-check). */
+export function luluCredentialsPresent(env: FulfillmentEnv): boolean {
+  const cfg = loadServerConfig(process.env as Record<string, string | undefined>, { envOverride: env });
+  return Boolean(cfg.fulfillment.lulu.clientKey && cfg.fulfillment.lulu.clientSecret);
 }
 
 /**

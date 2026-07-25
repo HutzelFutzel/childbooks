@@ -101,7 +101,7 @@ export function createDefaultConfig(): BookConfig {
     ageRangeId: "3-5",
     readingModeId: null,
     // Default to the square hardcover product (see BOOK_PRODUCTS / Lulu catalog).
-    productSku: "0850X0850.FC.STD.CW.080CW444.GXX",
+    productSku: "0850X0850FCPRECW080CW444GXX",
     bookSize: "square",
     // Simple, fixed layout for now: one illustration per single page with the
     // text laid out beside it (image on one side, words on the other). The

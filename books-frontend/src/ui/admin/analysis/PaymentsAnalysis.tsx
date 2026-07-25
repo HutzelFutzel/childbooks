@@ -2,10 +2,15 @@
 
 import { useEffect } from "react";
 import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
-import { useAdminPayments, type PaymentListItem } from "../../../state/adminPaymentsStore";
+import { countryFlag, countryLabel } from "../../../core/analytics/markets";
+import {
+  useAdminPayments,
+  type CountryRollup,
+  type PaymentListItem,
+} from "../../../state/adminPaymentsStore";
 import { Button } from "../../components/Button";
 import { Tabs } from "../../components/Tabs";
-import { fmtDateTime, fmtNumber, fmtRelative } from "./format";
+import { fmtDateTime, fmtNumber, fmtRelative, fmtUsd } from "./format";
 import { StripeHealthCard } from "./StripeHealthCard";
 
 const WINDOWS = [
@@ -106,9 +111,74 @@ export function PaymentsAnalysis() {
             <Stat label="Failed" value={fmtNumber(analytics.failedCount)} />
           </div>
 
+          {analytics.capped && (
+            <p className="rounded-xl bg-amber-50 px-4 py-2.5 text-xs text-amber-700 ring-1 ring-amber-100">
+              This window holds more payments than one scan covers — totals are a lower bound.
+              Narrow the window for exact figures.
+            </p>
+          )}
+
+          <MarketVolumeTable rows={analytics.byCountry} />
+
           <PaymentsTable payments={payments} />
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * Payment volume per market, in USD.
+ *
+ * Reported in one currency unlike the per-currency cards above: a market's
+ * currency is a property of the market, so splitting by it would make markets
+ * incomparable — which is the entire point of this table.
+ */
+function MarketVolumeTable({ rows }: { rows: CountryRollup[] }) {
+  if (rows.length === 0) return null;
+  return (
+    <div className="overflow-hidden rounded-2xl border border-ink-100 bg-white">
+      <div className="border-b border-ink-100 px-4 py-3">
+        <h3 className="text-sm font-semibold text-ink-800">Volume by market</h3>
+        <p className="text-xs text-ink-500">
+          Converted to USD so markets are comparable. A high refund rate in one market usually means
+          a shipping or expectation problem specific to it.
+        </p>
+      </div>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-ink-100 text-left text-xs uppercase tracking-wide text-ink-400">
+            <th className="px-4 py-2.5 font-medium">Market</th>
+            <th className="px-4 py-2.5 text-right font-medium">Gross</th>
+            <th className="px-4 py-2.5 text-right font-medium">Net</th>
+            <th className="px-4 py-2.5 text-right font-medium">Paid</th>
+            <th className="px-4 py-2.5 text-right font-medium">Avg order</th>
+            <th className="px-4 py-2.5 text-right font-medium">Refund rate</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.country} className="border-b border-ink-50 last:border-0">
+              <td className="px-4 py-2.5 text-ink-700">
+                {countryFlag(r.country)} {countryLabel(r.country)}
+              </td>
+              <td className="px-4 py-2.5 text-right tabular-nums text-ink-800">{fmtUsd(r.grossUsd)}</td>
+              <td className="px-4 py-2.5 text-right tabular-nums font-medium text-emerald-600">
+                {fmtUsd(r.netUsd)}
+              </td>
+              <td className="px-4 py-2.5 text-right tabular-nums text-ink-600">{fmtNumber(r.paidCount)}</td>
+              <td className="px-4 py-2.5 text-right tabular-nums text-ink-600">{fmtUsd(r.averageOrderUsd)}</td>
+              <td
+                className={`px-4 py-2.5 text-right tabular-nums ${
+                  r.refundRatePct > 5 ? "font-semibold text-rose-600" : "text-ink-500"
+                }`}
+              >
+                {r.refundRatePct > 0 ? `${r.refundRatePct}%` : "—"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

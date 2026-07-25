@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Loader2, Printer, RefreshCw } from "lucide-react";
 import { backendFetch } from "../../../platform/backend";
+import { countryFlag, countryLabel } from "../../../core/analytics/markets";
 import { Button } from "../../components/Button";
 import { Select } from "../../components/Select";
 import { cn } from "../../lib/cn";
@@ -29,10 +30,15 @@ interface CalibrationRow {
   pendingActual: number;
 }
 
+interface CalibrationMarketRow extends CalibrationRow {
+  country: string;
+}
+
 interface CalibrationSummary {
   fromMs: number;
   scanned: number;
   rows: CalibrationRow[];
+  byMarket: CalibrationMarketRow[];
 }
 
 const WINDOWS = [
@@ -177,8 +183,75 @@ export function PrintCalibrationCard() {
             recorded; &ldquo;pending&rdquo; counts orders whose provider costs haven&apos;t arrived
             yet.
           </p>
+
+          <MarketDriftTable rows={data?.byMarket ?? []} />
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * The same drift, split per shipping destination.
+ *
+ * Shipping dominates print COGS, so a SKU that's perfectly calibrated at home
+ * can be badly underpriced across a border — and the blended per-SKU number
+ * above averages exactly that away. This is where cross-border margin leaks
+ * actually show up.
+ */
+function MarketDriftTable({ rows }: { rows: CalibrationMarketRow[] }) {
+  // One order is an anecdote; a market row only means something once a pattern
+  // could exist at all.
+  const meaningful = rows.filter((r) => r.orders >= 2);
+  if (meaningful.length === 0) return null;
+
+  return (
+    <div className="border-t border-ink-100">
+      <div className="px-4 pb-1 pt-3">
+        <h4 className="text-xs font-semibold text-ink-700">Drift by shipping destination</h4>
+        <p className="text-[11px] text-ink-400">
+          Markets with at least two comparable orders, worst drift first.
+        </p>
+      </div>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-xs text-ink-400">
+            <th className="px-4 py-2 font-medium">SKU → market</th>
+            <th className="px-4 py-2 text-right font-medium">Orders</th>
+            <th className="px-4 py-2 text-right font-medium">Configured</th>
+            <th className="px-4 py-2 text-right font-medium">Actually paid</th>
+            <th className="px-4 py-2 text-right font-medium">Drift</th>
+          </tr>
+        </thead>
+        <tbody>
+          {meaningful.slice(0, 15).map((r) => {
+            const drift = r.driftPct;
+            const driftCls =
+              drift == null
+                ? "text-ink-400"
+                : drift >= DRIFT_WARN_PCT
+                  ? "text-rose-600"
+                  : drift <= -DRIFT_WARN_PCT
+                    ? "text-emerald-600"
+                    : "text-ink-600";
+            return (
+              <tr key={`${r.sku}|${r.country}`} className="border-t border-ink-50">
+                <td className="max-w-[260px] truncate px-4 py-2 text-xs text-ink-700">
+                  <span className="font-mono">{r.sku}</span>
+                  <span className="mx-1 text-ink-300">→</span>
+                  {countryFlag(r.country)} {countryLabel(r.country)}
+                </td>
+                <td className="px-4 py-2 text-right tabular-nums text-ink-600">{fmtNumber(r.orders)}</td>
+                <td className="px-4 py-2 text-right tabular-nums text-ink-600">{fmtUsd(r.estimatedUsd)}</td>
+                <td className="px-4 py-2 text-right tabular-nums text-ink-600">{fmtUsd(r.actualUsd)}</td>
+                <td className={cn("px-4 py-2 text-right font-semibold tabular-nums", driftCls)}>
+                  {drift == null ? "—" : `${drift > 0 ? "+" : ""}${drift}%`}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }

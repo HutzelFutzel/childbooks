@@ -157,17 +157,21 @@ export async function uploadArtStyleImage(
 }
 
 /**
- * Upload an admin-managed product image to the world-readable
- * `public/products/{productId}/...` space and return its path + public URL.
+ * Upload a catalog picture — of a print option, a book, the digital edition or a
+ * Spark pack — to the world-readable `public/catalogMedia/{scope}/{id}/...`
+ * space. The caller passes an already-parsed key; the segments are sanitized
+ * again here so a bad key can never escape the public prefix.
  */
-export async function uploadProductImage(
-  productId: string,
+export async function uploadCatalogPhoto(
+  scope: string,
+  segments: string[],
   buf: Buffer,
   contentType: string,
 ): Promise<{ storagePath: string; publicUrl: string }> {
-  const ext = (contentType.split("/")[1] || "png").replace(/[^a-z0-9]/gi, "") || "png";
-  const storagePath = `public/products/${encodeURIComponent(productId)}/image-${randomUUID()}.${ext}`;
-  await bucket().file(storagePath).save(buf, { contentType, resumable: false });
+  const safe = (s: string) => s.replace(/[^a-z0-9._-]/gi, "").slice(0, 80) || "other";
+  const dir = [scope, ...segments].map(safe).join("/");
+  const storagePath = `public/catalogMedia/${dir}/photo-${randomUUID()}.${extForMime(contentType)}`;
+  await bucket().file(storagePath).save(buf, { contentType: contentType || "image/jpeg", resumable: false });
   return { storagePath, publicUrl: publicMediaUrl(storagePath) };
 }
 

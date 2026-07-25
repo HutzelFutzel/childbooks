@@ -31,28 +31,49 @@ import { retryFailedFulfillments } from "./stripe";
 import { printCostCalibration } from "./orders";
 import { importInfraCosts } from "./infraCosts";
 import { deleteCustomCost, listCustomCosts, sweepCustomCosts, upsertCustomCost } from "./customCosts";
+import { getProductsConfig } from "./products";
+import { toUsd } from "./finance";
 import { priceForAction } from "../../books-frontend/src/core/config/sparks";
+import {
+  MULTI_ZONE_COUNTRIES,
+  normalizeCountry,
+  timezoneForCountry,
+  UNKNOWN_COUNTRY,
+} from "../../books-frontend/src/core/analytics/markets";
 import {
   intervalForPriceId,
   resolvePlanByPriceId,
   type PlanDefinition,
   type PlansConfig,
 } from "../../books-frontend/src/core/config/plans";
+import { previousRange } from "../../books-frontend/src/core/analytics/types";
 import type {
   ActionCostReport,
   ActionCostSeriesPoint,
   ActionCostStats,
+  ActiveUsersSource,
+  ActivityGrid,
+  ActivityMetric,
   AdminSettings,
   AnalyticsOverview,
+  AnalyticsTotals,
   CostGranularity,
   AnalyticsUserRow,
   AnalyticsUsersResult,
   BillingCadence,
   BreakdownSlice,
   CadenceFilter,
+  CountryActivity,
+  FunnelReport,
+  FunnelStage,
   PlanFilter,
+  ProductFamily,
+  ProductRow,
+  ProductSeriesPoint,
+  ProductsReport,
   SortDir,
   TimeSeriesPoint,
+  TimezoneMode,
   UserEconomics,
   UserSort,
 } from "../../books-frontend/src/core/analytics/types";
@@ -61,6 +82,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 /** Cap the Auth scan so one request can't run unbounded against a huge project. */
 const MAX_USERS_SCAN = 20_000;
+/**
+ * Cap the auth-event scan. `analyticsEvents` is append-only and never pruned,
+ * so an uncapped range read grows without bound as the project ages.
+ */
+const MAX_EVENTS_SCAN = 100_000;
 const SCAN_CACHE_TTL_MS = 30_000;
 
 /** A flattened, exclusion-filtered view of an Auth account. */
@@ -82,6 +108,27 @@ interface ScanResult {
 }
 
 let scanCache: { key: string; at: number; value: ScanResult } | null = null;
+
+/**
+ * Briefly memoize a whole-collection scan.
+ *
+ * One dashboard refresh fans out to overview + users + funnel, and each of
+ * those needs the same `users` and `payments` collections. Without this, adding
+ * the market dimension would have tripled the read cost of every refresh; with
+ * it, they share a single scan and the dashboard is cheaper than before.
+ */
+function cachedScan<T>(ttlMs: number): (load: () => Promise<T>) => Promise<T> {
+  let cache: { at: number; value: Promise<T> } | null = null;
+  return (load) => {
+    if (cache && Date.now() - cache.at < ttlMs) return cache.value;
+    const value = load().catch((err) => {
+      cache = null; // Never cache a failure.
+      throw err;
+    });
+    cache = { at: Date.now(), value };
+    return value;
+  };
+}
 
 function parseTime(stamp?: string): number | null {
   if (!stamp) return null;
@@ -166,29 +213,42 @@ async function scanUsers(settings: AdminSettings): Promise<ScanResult> {
 
 interface EventRow {
   type: string;
+  uid: string | null;
   email: string | null;
+  country: string | null;
   at: number;
 }
 
+interface EventScan {
+  events: EventRow[];
+  /** True when the scan hit {@link MAX_EVENTS_SCAN} — counts are a lower bound. */
+  capped: boolean;
+}
+
 /** Fetch recorded auth events within the window (login time-series source). */
-async function fetchEvents(from: number, to: number): Promise<EventRow[]> {
+async function fetchEvents(from: number, to: number): Promise<EventScan> {
   ensureAdmin();
   try {
     const snap = await getFirestore()
       .collection("analyticsEvents")
       .where("at", ">=", from)
       .where("at", "<=", to)
+      .orderBy("at", "asc")
+      .limit(MAX_EVENTS_SCAN)
       .get();
-    return snap.docs.map((d) => {
+    const events = snap.docs.map((d) => {
       const data = d.data() as Record<string, unknown>;
       return {
         type: typeof data.type === "string" ? data.type : "",
+        uid: typeof data.uid === "string" ? data.uid : null,
         email: typeof data.email === "string" ? data.email : null,
+        country: normalizeCountry(data.country),
         at: typeof data.at === "number" ? data.at : 0,
       };
     });
+    return { events, capped: snap.size >= MAX_EVENTS_SCAN };
   } catch {
-    return [];
+    return { events: [], capped: false };
   }
 }
 
@@ -216,20 +276,40 @@ async function fetchSpendByUid(): Promise<Map<string, number>> {
 const ACTIVE_SUB_STATUSES = new Set(["active", "trialing", "past_due"]);
 const PAID_LIKE_STATUSES = new Set(["paid", "refunded", "partially_refunded"]);
 
-/** The current cached Spark balance per uid (`users/{uid}.sparkBalance`). */
-async function fetchSparkBalanceByUid(): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
-  ensureAdmin();
-  try {
-    const snap = await getFirestore().collection("users").get();
-    for (const doc of snap.docs) {
-      const v = (doc.data() as { sparkBalance?: unknown }).sparkBalance;
-      if (typeof v === "number" && Number.isFinite(v)) out.set(doc.id, v);
+/** Per-user fields the dashboard reads off the `users/{uid}` doc. */
+interface UserMeta {
+  sparkBalance: number | null;
+  /** Market, denormalized by the auth blocking functions (see analyticsEvents.ts). */
+  country: string | null;
+}
+
+/**
+ * One pass over the `users` collection for every per-user field the dashboard
+ * needs. Spark balance and market are read together because they come from the
+ * same document — two separate scans of the collection would double the cost of
+ * every refresh for no benefit.
+ */
+const userMetaCache = cachedScan<Map<string, UserMeta>>(SCAN_CACHE_TTL_MS);
+
+function fetchUserMeta(): Promise<Map<string, UserMeta>> {
+  return userMetaCache(async () => {
+    const out = new Map<string, UserMeta>();
+    ensureAdmin();
+    try {
+      const snap = await getFirestore().collection("users").get();
+      for (const doc of snap.docs) {
+        const d = doc.data() as { sparkBalance?: unknown; country?: unknown };
+        const balance =
+          typeof d.sparkBalance === "number" && Number.isFinite(d.sparkBalance)
+            ? d.sparkBalance
+            : null;
+        out.set(doc.id, { sparkBalance: balance, country: normalizeCountry(d.country) });
+      }
+    } catch {
+      // ignore — degrade to no per-user metadata
     }
-  } catch {
-    // ignore — degrade to no balances
-  }
-  return out;
+    return out;
+  });
 }
 
 interface SubInfo {
@@ -268,30 +348,45 @@ async function fetchSubscriptionByUid(): Promise<Map<string, SubInfo>> {
 interface RevenueInfo {
   total: number;
   currency: string | null;
+  /** Shipping destination of the user's most recent print order, if any. */
+  country: string | null;
 }
 
-/** Lifetime gross revenue per uid from the admin `payments` collection. */
-async function fetchRevenueByUid(): Promise<Map<string, RevenueInfo>> {
-  const out = new Map<string, RevenueInfo>();
-  ensureAdmin();
-  try {
-    const snap = await getFirestore().collection("payments").get();
-    for (const doc of snap.docs) {
-      const d = doc.data() as Record<string, unknown>;
-      const uid = typeof d.ownerUid === "string" ? d.ownerUid : null;
-      const status = typeof d.status === "string" ? d.status : "";
-      const amount = typeof d.amount === "number" ? d.amount : 0;
-      if (!uid || !PAID_LIKE_STATUSES.has(status)) continue;
-      const currency = typeof d.currency === "string" ? d.currency.toUpperCase() : null;
-      const prev = out.get(uid) ?? { total: 0, currency };
-      prev.total += amount;
-      if (!prev.currency) prev.currency = currency;
-      out.set(uid, prev);
+/**
+ * Lifetime gross revenue per uid from the admin `payments` collection, plus the
+ * market their orders shipped to. The market rides along on this scan because
+ * it's the best fallback for accounts that predate market capture at sign-in:
+ * somebody who ordered a book told us where they are.
+ */
+const revenueCache = cachedScan<Map<string, RevenueInfo>>(SCAN_CACHE_TTL_MS);
+
+function fetchRevenueByUid(): Promise<Map<string, RevenueInfo>> {
+  return revenueCache(async () => {
+    const out = new Map<string, RevenueInfo>();
+    ensureAdmin();
+    try {
+      const snap = await getFirestore().collection("payments").get();
+      for (const doc of snap.docs) {
+        const d = doc.data() as Record<string, unknown>;
+        const uid = typeof d.ownerUid === "string" ? d.ownerUid : null;
+        const status = typeof d.status === "string" ? d.status : "";
+        const amount = typeof d.amount === "number" ? d.amount : 0;
+        if (!uid || !PAID_LIKE_STATUSES.has(status)) continue;
+        const currency = typeof d.currency === "string" ? d.currency.toUpperCase() : null;
+        const plan = d.fulfillment as { destinationCountry?: unknown } | null;
+        const country =
+          normalizeCountry(d.billingCountry) ?? normalizeCountry(plan?.destinationCountry);
+        const prev = out.get(uid) ?? { total: 0, currency, country };
+        prev.total += amount;
+        if (!prev.currency) prev.currency = currency;
+        if (!prev.country) prev.country = country;
+        out.set(uid, prev);
+      }
+    } catch {
+      // ignore — degrade to no revenue
     }
-  } catch {
-    // ignore — degrade to no revenue
-  }
-  return out;
+    return out;
+  });
 }
 
 /** Resolve the plan + billing cadence a subscription's price id maps to. */
@@ -305,30 +400,38 @@ function resolvePlanInfo(
   return { plan, cadence: intervalForPriceId(plan, sub.priceId) };
 }
 
+/**
+ * Memoized `Intl.DateTimeFormat` per zone. Market-mode bucketing formats every
+ * event in its own market's zone, so a fresh formatter per call would dominate
+ * the cost of building the grids.
+ */
+const FORMATTERS = new Map<string, Intl.DateTimeFormat>();
+
+function formatterFor(tz: string): Intl.DateTimeFormat {
+  const cached = FORMATTERS.get(tz);
+  if (cached) return cached;
+  const opts: Intl.DateTimeFormatOptions = {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    hourCycle: "h23",
+    weekday: "short",
+  };
+  let fmt: Intl.DateTimeFormat;
+  try {
+    fmt = new Intl.DateTimeFormat("en-US", opts);
+  } catch {
+    fmt = new Intl.DateTimeFormat("en-US", { ...opts, timeZone: "UTC" });
+  }
+  FORMATTERS.set(tz, fmt);
+  return fmt;
+}
+
 /** Day/weekday/hour for an instant in the given IANA timezone. */
 function tzParts(at: number, tz: string): { dayKey: string; weekday: number; hour: number } {
-  let parts: Intl.DateTimeFormatPart[];
-  try {
-    parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      hourCycle: "h23",
-      weekday: "short",
-    }).formatToParts(new Date(at));
-  } catch {
-    parts = new Intl.DateTimeFormat("en-US", {
-      timeZone: "UTC",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      hourCycle: "h23",
-      weekday: "short",
-    }).formatToParts(new Date(at));
-  }
+  const parts = formatterFor(tz).formatToParts(new Date(at));
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "";
   const wd: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   return {
@@ -396,83 +499,324 @@ function emptyMatrix(): number[][] {
   return Array.from({ length: 7 }, () => new Array<number>(24).fill(0));
 }
 
+/** One activity instant, already resolved to a market and an actor. */
+interface ActivityPoint {
+  at: number;
+  /** Market the instant belongs to (drives local-time bucketing). */
+  country: string;
+  /** Who caused it — lets a cell count people, not just events. */
+  actor: string;
+}
+
+/**
+ * Accumulates a weekday × hour grid, counting both events and distinct people.
+ *
+ * Distinct-user counts need a set per cell (168 of them) because the same
+ * person signing in five times on Tuesday evening is one person, not five —
+ * and that distinction is the whole difference between "when are our customers
+ * around" and "who refreshes the most".
+ */
+class GridBuilder {
+  private readonly events = emptyMatrix();
+  private readonly cellUsers: Set<string>[][] = Array.from({ length: 7 }, () =>
+    Array.from({ length: 24 }, () => new Set<string>()),
+  );
+  private readonly weekdayUsers = Array.from({ length: 7 }, () => new Set<string>());
+  private readonly hourUsers = Array.from({ length: 24 }, () => new Set<string>());
+
+  add(weekday: number, hour: number, actor: string): void {
+    this.events[weekday][hour] += 1;
+    if (!actor) return;
+    this.cellUsers[weekday][hour].add(actor);
+    this.weekdayUsers[weekday].add(actor);
+    this.hourUsers[hour].add(actor);
+  }
+
+  build(): ActivityGrid {
+    const users = this.cellUsers.map((row) => row.map((s) => s.size));
+    const byWeekday = this.events.map((row) => row.reduce((a, b) => a + b, 0));
+    const byHour = new Array<number>(24).fill(0);
+    let peak = 0;
+    for (const row of this.events) {
+      for (let h = 0; h < 24; h += 1) {
+        byHour[h] += row[h];
+        if (row[h] > peak) peak = row[h];
+      }
+    }
+    return {
+      events: this.events,
+      users,
+      byWeekday,
+      byHour,
+      usersByWeekday: this.weekdayUsers.map((s) => s.size),
+      usersByHour: this.hourUsers.map((s) => s.size),
+      peak,
+    };
+  }
+}
+
+/**
+ * Build the three metric grids from one pass of activity points.
+ *
+ * `tzMode` decides which clock each point is read against: `market` uses the
+ * point's own market (so the curve describes the person), `fixed` uses one zone
+ * for everything (so the curve describes the business's own day).
+ */
+function buildActivity(
+  signups: ActivityPoint[],
+  logins: ActivityPoint[],
+  tzMode: TimezoneMode,
+  fixedTz: string,
+): Record<ActivityMetric, ActivityGrid> {
+  const builders: Record<ActivityMetric, GridBuilder> = {
+    all: new GridBuilder(),
+    signups: new GridBuilder(),
+    logins: new GridBuilder(),
+  };
+  const feed = (points: ActivityPoint[], metric: "signups" | "logins") => {
+    for (const p of points) {
+      const tz = tzMode === "market" ? timezoneForCountry(p.country, fixedTz) : fixedTz;
+      const { weekday, hour } = tzParts(p.at, tz);
+      builders[metric].add(weekday, hour, p.actor);
+      builders.all.add(weekday, hour, p.actor);
+    }
+  };
+  feed(signups, "signups");
+  feed(logins, "logins");
+  return {
+    all: builders.all.build(),
+    signups: builders.signups.build(),
+    logins: builders.logins.build(),
+  };
+}
+
+/** Resolve each account's market, best signal first. */
+function resolveUserCountries(
+  users: ScannedUser[],
+  meta: Map<string, UserMeta>,
+  eventCountryByUid: Map<string, string>,
+  revenue: Map<string, RevenueInfo>,
+): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const u of users) {
+    const country =
+      // 1. Denormalized at sign-in/login from the client locale — the freshest.
+      meta.get(u.uid)?.country ??
+      // 2. An event inside the window, for accounts whose doc predates capture.
+      eventCountryByUid.get(u.uid) ??
+      // 3. Where they had a book shipped — slow but definitive.
+      revenue.get(u.uid)?.country ??
+      UNKNOWN_COUNTRY;
+    out.set(u.uid, country);
+  }
+  return out;
+}
+
+/** The subset of headline counters computable for an arbitrary window. */
+function countTotals(
+  users: ScannedUser[],
+  events: EventRow[],
+  countryOf: (uid: string) => string,
+  country: string | null,
+  from: number,
+  to: number,
+): { totals: AnalyticsTotals; activeSource: ActiveUsersSource } {
+  const inMarket = (uid: string) => !country || countryOf(uid) === country;
+  let totalUsers = 0;
+  let totalGuests = 0;
+  let newSignups = 0;
+  for (const u of users) {
+    if (!inMarket(u.uid)) continue;
+    if (u.isAnonymous) totalGuests += 1;
+    else totalUsers += 1;
+    if (!u.isAnonymous && u.createdAt != null && u.createdAt >= from && u.createdAt <= to) {
+      newSignups += 1;
+    }
+  }
+
+  let logins = 0;
+  const activeFromEvents = new Set<string>();
+  let sawAnyEvent = false;
+  for (const e of events) {
+    if (e.at < from || e.at > to) continue;
+    if (e.uid && !inMarket(e.uid)) continue;
+    sawAnyEvent = true;
+    if (e.uid) activeFromEvents.add(e.uid);
+    if (e.type === "login") logins += 1;
+  }
+
+  // The event log is the only source that can answer "active during THIS
+  // window"; Auth's single last-sign-in stamp can only approximate a trailing
+  // one. Prefer events whenever the log covers the window at all.
+  let activeUsers = activeFromEvents.size;
+  let activeSource: ActiveUsersSource = "events";
+  if (!sawAnyEvent) {
+    activeSource = "auth";
+    activeUsers = users.filter(
+      (u) =>
+        !u.isAnonymous &&
+        inMarket(u.uid) &&
+        u.lastActiveAt != null &&
+        u.lastActiveAt >= from &&
+        u.lastActiveAt <= to,
+    ).length;
+  }
+
+  return {
+    totals: { totalUsers, totalGuests, newSignups, logins, activeUsers },
+    activeSource,
+  };
+}
+
 async function computeOverview(
   from: number,
   to: number,
   settings: AdminSettings,
+  opts: { country: string | null; tzMode: TimezoneMode },
 ): Promise<AnalyticsOverview> {
-  const tz = settings.timezone;
-  const [{ users, excludedCount, capped }, events] = await Promise.all([
+  const { country, tzMode } = opts;
+  // A market-filtered view reads most naturally in that market's own clock.
+  const tz = country ? timezoneForCountry(country, settings.timezone) : settings.timezone;
+  const prev = previousRange({ from, to });
+
+  const [{ users, excludedCount, capped }, current, previous, meta, revenue] = await Promise.all([
     scanUsers(settings),
     fetchEvents(from, to),
+    fetchEvents(prev.from, prev.to),
+    fetchUserMeta(),
+    fetchRevenueByUid(),
   ]);
+
+  // Events carry their own market; use them to fill in accounts whose user doc
+  // predates market capture.
+  const eventCountryByUid = new Map<string, string>();
+  for (const e of [...current.events, ...previous.events]) {
+    if (e.uid && e.country && !eventCountryByUid.has(e.uid)) eventCountryByUid.set(e.uid, e.country);
+  }
+  const userCountry = resolveUserCountries(users, meta, eventCountryByUid, revenue);
+  const countryOf = (uid: string) => userCountry.get(uid) ?? UNKNOWN_COUNTRY;
+  /** Market of an event: its own stamp, else its actor's resolved market. */
+  const eventCountry = (e: EventRow) =>
+    e.country ?? (e.uid ? countryOf(e.uid) : UNKNOWN_COUNTRY);
+  const inMarket = (c: string) => !country || c === country;
 
   const dayKeys = dayKeysBetween(from, to, tz);
   const seriesMap = new Map<string, TimeSeriesPoint>();
   for (const day of dayKeys) seriesMap.set(day, { day, signups: 0, logins: 0 });
 
-  const weekdayHour = emptyMatrix();
-  const byWeekday = new Array<number>(7).fill(0);
-  const byHour = new Array<number>(24).fill(0);
   const sources = new Map<string, number>();
-
-  let totalUsers = 0;
-  let totalGuests = 0;
-  let newSignups = 0;
-  let activeUsers = 0;
+  const signupPoints: ActivityPoint[] = [];
+  const loginPoints: ActivityPoint[] = [];
 
   for (const u of users) {
-    if (u.isAnonymous) totalGuests += 1;
-    else totalUsers += 1;
-
-    // Signups within the window (retroactive, from Auth creationTime).
-    if (u.createdAt != null && u.createdAt >= from && u.createdAt <= to) {
-      const p = tzParts(u.createdAt, tz);
-      const point = seriesMap.get(p.dayKey);
-      if (point && !u.isAnonymous) point.signups += 1;
-      if (!u.isAnonymous) newSignups += 1;
-      sources.set(u.source, (sources.get(u.source) ?? 0) + 1);
-      // Signups also count as activity for the heatmap.
-      weekdayHour[p.weekday][p.hour] += 1;
-      byWeekday[p.weekday] += 1;
-      byHour[p.hour] += 1;
-    }
-
-    if (!u.isAnonymous && u.lastActiveAt != null && u.lastActiveAt >= from && u.lastActiveAt <= to) {
-      activeUsers += 1;
-    }
+    const c = countryOf(u.uid);
+    if (!inMarket(c)) continue;
+    if (u.createdAt == null || u.createdAt < from || u.createdAt > to) continue;
+    sources.set(u.source, (sources.get(u.source) ?? 0) + 1);
+    if (u.isAnonymous) continue;
+    const point = seriesMap.get(tzParts(u.createdAt, tz).dayKey);
+    if (point) point.signups += 1;
+    signupPoints.push({ at: u.createdAt, country: c, actor: u.uid });
   }
 
-  // Logins from the event log (forward-only) feed the series + heatmap.
-  let logins = 0;
-  for (const e of events) {
+  for (const e of current.events) {
     if (e.type !== "login") continue;
-    logins += 1;
-    const p = tzParts(e.at, tz);
-    const point = seriesMap.get(p.dayKey);
+    const c = eventCountry(e);
+    if (!inMarket(c)) continue;
+    const point = seriesMap.get(tzParts(e.at, tz).dayKey);
     if (point) point.logins += 1;
-    weekdayHour[p.weekday][p.hour] += 1;
-    byWeekday[p.weekday] += 1;
-    byHour[p.hour] += 1;
+    loginPoints.push({ at: e.at, country: c, actor: e.uid ?? e.email ?? "" });
   }
 
   const signupSources: BreakdownSlice[] = Array.from(sources.entries())
     .map(([key, value]) => ({ key, label: sourceLabel(key), value }))
     .sort((a, b) => b.value - a.value);
 
+  const { totals, activeSource } = countTotals(users, current.events, countryOf, country, from, to);
+  const { totals: previousTotals, activeSource: previousActiveSource } = countTotals(
+    users,
+    previous.events,
+    countryOf,
+    country,
+    prev.from,
+    prev.to,
+  );
+
   return {
     range: { from, to },
     timezone: tz,
+    country,
+    tzMode,
     generatedAt: Date.now(),
-    totals: { totalUsers, totalGuests, newSignups, logins, activeUsers },
+    totals,
+    previousTotals,
+    activeUsersSource: activeSource,
+    // The two windows can be measured differently (the event log is
+    // forward-only, so an older window may have no events and fall back to
+    // Auth stamps). When they disagree, the UI suppresses the active-users
+    // delta rather than presenting a methodology artefact as a trend.
+    activeUsersComparable: activeSource === previousActiveSource,
     series: dayKeys.map((d) => seriesMap.get(d)!),
     signupSources,
-    weekdayHour,
-    byWeekday,
-    byHour,
+    activity: buildActivity(signupPoints, loginPoints, tzMode, tz),
+    countries: buildCountryBreakdown(users, current.events, countryOf, eventCountry, from, to),
     excludedCount,
     capped,
+    eventsCapped: current.capped,
   };
+}
+
+/** Per-market signups / logins / active users, ranked by engagement. */
+function buildCountryBreakdown(
+  users: ScannedUser[],
+  events: EventRow[],
+  countryOf: (uid: string) => string,
+  eventCountry: (e: EventRow) => string,
+  from: number,
+  to: number,
+): CountryActivity[] {
+  interface Acc {
+    totalUsers: number;
+    signups: number;
+    logins: number;
+    active: Set<string>;
+  }
+  const acc = new Map<string, Acc>();
+  const get = (c: string) => {
+    const existing = acc.get(c);
+    if (existing) return existing;
+    const fresh: Acc = { totalUsers: 0, signups: 0, logins: 0, active: new Set() };
+    acc.set(c, fresh);
+    return fresh;
+  };
+
+  for (const u of users) {
+    if (u.isAnonymous) continue;
+    const a = get(countryOf(u.uid));
+    a.totalUsers += 1;
+    if (u.createdAt != null && u.createdAt >= from && u.createdAt <= to) a.signups += 1;
+  }
+  for (const e of events) {
+    if (e.at < from || e.at > to) continue;
+    const a = get(eventCountry(e));
+    if (e.type === "login") a.logins += 1;
+    if (e.uid) a.active.add(e.uid);
+  }
+
+  return [...acc.entries()]
+    .map(([country, a]) => ({
+      country,
+      totalUsers: a.totalUsers,
+      signups: a.signups,
+      logins: a.logins,
+      activeUsers: a.active.size,
+      timezone: timezoneForCountry(country, "UTC"),
+      timezoneApproximate: MULTI_ZONE_COUNTRIES.has(country),
+    }))
+    .sort(
+      (a, b) =>
+        b.signups + b.activeUsers - (a.signups + a.activeUsers) || b.totalUsers - a.totalUsers,
+    );
 }
 
 function compareRows(a: AnalyticsUserRow, b: AnalyticsUserRow, sort: UserSort): number {
@@ -509,24 +853,31 @@ async function computeUsers(
     includeGuests: boolean;
     planFilter: PlanFilter;
     cadenceFilter: CadenceFilter;
+    country: string | null;
   },
 ): Promise<AnalyticsUsersResult> {
-  const [{ users }, events, spendByUid, sparkByUid, subByUid, revenueByUid, plans] =
+  const [{ users }, { events }, spendByUid, metaByUid, subByUid, revenueByUid, plans] =
     await Promise.all([
       scanUsers(settings),
       fetchEvents(from, to),
       fetchSpendByUid(),
-      fetchSparkBalanceByUid(),
+      fetchUserMeta(),
       fetchSubscriptionByUid(),
       fetchRevenueByUid(),
       getPlansConfig(),
     ]);
 
-  const eventsByEmail = new Map<string, number>();
+  // Keyed on uid, not email: guests have no email, and guests are where every
+  // user journey in this product starts — joining on email hid all their
+  // activity behind a permanent zero.
+  const eventsByUid = new Map<string, number>();
+  const eventCountryByUid = new Map<string, string>();
   for (const e of events) {
-    if (!e.email) continue;
-    eventsByEmail.set(e.email, (eventsByEmail.get(e.email) ?? 0) + 1);
+    if (!e.uid) continue;
+    eventsByUid.set(e.uid, (eventsByUid.get(e.uid) ?? 0) + 1);
+    if (e.country && !eventCountryByUid.has(e.uid)) eventCountryByUid.set(e.uid, e.country);
   }
+  const userCountry = resolveUserCountries(users, metaByUid, eventCountryByUid, revenueByUid);
 
   const search = opts.search.trim().toLowerCase();
   let rows: AnalyticsUserRow[] = users
@@ -543,8 +894,9 @@ async function computeUsers(
       const { plan, cadence } = resolvePlanInfo(plans, sub);
       const isSubscribed = Boolean(sub) && !!plan && !plan.isFree;
       const revenue = revenueByUid.get(u.uid) ?? null;
+      const country = userCountry.get(u.uid) ?? UNKNOWN_COUNTRY;
       const economics: UserEconomics = {
-        sparkBalance: sparkByUid.has(u.uid) ? sparkByUid.get(u.uid)! : null,
+        sparkBalance: metaByUid.get(u.uid)?.sparkBalance ?? null,
         planId: plan?.id ?? null,
         planName: plan?.presentation.name ?? null,
         isSubscribed,
@@ -559,12 +911,13 @@ async function computeUsers(
         uid: u.uid,
         email: u.email,
         displayName: u.displayName,
+        country: country === UNKNOWN_COUNTRY ? null : country,
         source: u.source,
         createdAt: u.createdAt,
         lastActiveAt: u.lastActiveAt,
         emailVerified: u.emailVerified,
         isAnonymous: u.isAnonymous,
-        events: u.email ? eventsByEmail.get(u.email.toLowerCase()) ?? 0 : 0,
+        events: eventsByUid.get(u.uid) ?? 0,
         spendUsd: spendByUid.has(u.uid) ? spendByUid.get(u.uid)! : null,
         ...economics,
       } satisfies AnalyticsUserRow;
@@ -573,6 +926,10 @@ async function computeUsers(
       if (opts.planFilter === "paid" && !row.isSubscribed) return false;
       if (opts.planFilter === "free" && row.isSubscribed) return false;
       if (opts.cadenceFilter !== "all" && row.billingCadence !== opts.cadenceFilter) return false;
+      if (opts.country) {
+        const c = row.country ?? UNKNOWN_COUNTRY;
+        if (c !== opts.country) return false;
+      }
       return true;
     });
 
@@ -735,6 +1092,373 @@ async function computeActionCosts(opts: {
   };
 }
 
+// ---- Top products ------------------------------------------------------------
+
+/** Cap the finance scan behind the products/funnel reports. */
+const MAX_PRODUCT_SCAN = 50_000;
+
+/** Split a product key (`print:square-hardcover`) into family + slug. */
+function parseProductKey(key: string): { family: ProductFamily; slug: string } {
+  const idx = key.indexOf(":");
+  const head = idx >= 0 ? key.slice(0, idx) : key;
+  const slug = idx >= 0 ? key.slice(idx + 1) : "";
+  const family: ProductFamily =
+    head === "print" || head === "ebook" || head === "pack" || head === "plan" ? head : "other";
+  return { family, slug };
+}
+
+const FAMILY_LABELS: Record<ProductFamily, string> = {
+  print: "Print book",
+  ebook: "Ebook",
+  pack: "Spark pack",
+  plan: "Subscription",
+  other: "Other",
+};
+
+/** Turn a slug into a title ("square-hardcover" → "Square hardcover"). */
+function titleize(slug: string): string {
+  const words = slug.replace(/[-_]+/g, " ").trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : "";
+}
+
+/**
+ * Rank every sellable thing by what it actually contributed over the window.
+ *
+ * Built from the finance stream rather than the orders collection so print
+ * books, ebooks, Spark packs and subscription plans all land in ONE ranking —
+ * the question "what should we sell more of" doesn't respect those boundaries.
+ * Costs (print COGS, Stripe fees, refunds, tax) carry the same product key as
+ * the revenue they offset, so `netUsd` is a real contribution figure and not
+ * just gross.
+ */
+async function computeProducts(opts: {
+  from: number;
+  to: number;
+  tz: string;
+  country: string | null;
+  productNames: Map<string, string>;
+}): Promise<ProductsReport> {
+  ensureAdmin();
+  const { from, to, tz, country } = opts;
+
+  interface Acc {
+    productId: string;
+    sku: string | null;
+    units: number;
+    orders: number;
+    revenueUsd: number;
+    costUsd: number;
+    refundUsd: number;
+    byCountry: Map<string, { revenueUsd: number; units: number }>;
+    byDay: Map<string, ProductSeriesPoint>;
+  }
+  const acc = new Map<string, Acc>();
+  let capped = false;
+  let scanned = 0;
+  let cursor: FirebaseFirestore.QueryDocumentSnapshot | null = null;
+
+  for (;;) {
+    let q: FirebaseFirestore.Query = getFirestore()
+      .collection("financeEvents")
+      .where("at", ">=", from)
+      .where("at", "<=", to)
+      .orderBy("at", "asc")
+      .limit(5_000);
+    if (cursor) q = q.startAfter(cursor);
+    const snap = await q.get();
+    if (snap.empty) break;
+    for (const doc of snap.docs) {
+      scanned += 1;
+      const d = doc.data() as Record<string, unknown>;
+      const productId = typeof d.productId === "string" ? d.productId : "";
+      if (!productId) continue;
+      const c = normalizeCountry(d.country) ?? UNKNOWN_COUNTRY;
+      if (country && c !== country) continue;
+
+      const amountUsd = typeof d.amountUsd === "number" ? d.amountUsd : 0;
+      const units = typeof d.units === "number" && Number.isFinite(d.units) ? d.units : 0;
+      const at = typeof d.at === "number" ? d.at : from;
+      const kind = typeof d.kind === "string" ? d.kind : "";
+
+      const a =
+        acc.get(productId) ??
+        ({
+          productId,
+          sku: null,
+          units: 0,
+          orders: 0,
+          revenueUsd: 0,
+          costUsd: 0,
+          refundUsd: 0,
+          byCountry: new Map(),
+          byDay: new Map(),
+        } satisfies Acc);
+      if (typeof d.sku === "string" && d.sku) a.sku = d.sku;
+      a.units += units;
+      if (amountUsd >= 0) a.revenueUsd += amountUsd;
+      else a.costUsd += -amountUsd;
+      if (kind === "refund" && amountUsd < 0) a.refundUsd += -amountUsd;
+      // "Orders" counts revenue lines only; fees and COGS are the same sale.
+      if (amountUsd > 0 && kind !== "refund") a.orders += 1;
+
+      if (amountUsd > 0 || units !== 0) {
+        const cn = a.byCountry.get(c) ?? { revenueUsd: 0, units: 0 };
+        if (amountUsd > 0) cn.revenueUsd += amountUsd;
+        cn.units += units;
+        a.byCountry.set(c, cn);
+      }
+
+      const dayKey = tzParts(at, tz).dayKey;
+      const day = a.byDay.get(dayKey) ?? { day: dayKey, revenueUsd: 0, netUsd: 0, units: 0 };
+      if (amountUsd >= 0) day.revenueUsd += amountUsd;
+      day.netUsd += amountUsd;
+      day.units += units;
+      a.byDay.set(dayKey, day);
+
+      acc.set(productId, a);
+    }
+    cursor = snap.docs[snap.docs.length - 1];
+    if (scanned >= MAX_PRODUCT_SCAN) {
+      capped = true;
+      break;
+    }
+    if (snap.size < 5_000) break;
+  }
+
+  const dayKeys = dayKeysBetween(from, to, tz);
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+
+  const products: ProductRow[] = [...acc.values()]
+    .map((a) => {
+      const netUsd = a.revenueUsd - a.costUsd;
+      const { family, slug } = parseProductKey(a.productId);
+      const name = opts.productNames.get(a.productId) ?? titleize(slug);
+      return {
+        productId: a.productId,
+        label: name ? `${name}` : FAMILY_LABELS[family],
+        family,
+        sku: a.sku,
+        units: a.units,
+        orders: a.orders,
+        revenueUsd: r2(a.revenueUsd),
+        costUsd: r2(a.costUsd),
+        netUsd: r2(netUsd),
+        refundUsd: r2(a.refundUsd),
+        refundRatePct:
+          a.revenueUsd > 0 ? Math.round((a.refundUsd / a.revenueUsd) * 1000) / 10 : null,
+        netPerUnitUsd: a.units > 0 ? r2(netUsd / a.units) : null,
+        marginPct: a.revenueUsd > 0 ? Math.round((netUsd / a.revenueUsd) * 1000) / 10 : null,
+        countries: [...a.byCountry.keys()].filter((c) => c !== UNKNOWN_COUNTRY).length,
+        topCountries: [...a.byCountry.entries()]
+          .map(([c, v]) => ({ country: c, revenueUsd: r2(v.revenueUsd), units: v.units }))
+          .sort((x, y) => y.revenueUsd - x.revenueUsd || y.units - x.units)
+          .slice(0, 5),
+        // Zero-filled so a product's gap reads as "sold nothing", not "no data".
+        series: dayKeys.map(
+          (day) =>
+            a.byDay.get(day) ?? { day, revenueUsd: 0, netUsd: 0, units: 0 },
+        ).map((p) => ({ day: p.day, revenueUsd: r2(p.revenueUsd), netUsd: r2(p.netUsd), units: p.units })),
+      } satisfies ProductRow;
+    })
+    .sort((a, b) => b.revenueUsd - a.revenueUsd || b.netUsd - a.netUsd);
+
+  return {
+    range: { from, to },
+    timezone: tz,
+    country,
+    generatedAt: Date.now(),
+    products,
+    totals: {
+      revenueUsd: r2(products.reduce((s, p) => s + p.revenueUsd, 0)),
+      costUsd: r2(products.reduce((s, p) => s + p.costUsd, 0)),
+      netUsd: r2(products.reduce((s, p) => s + p.netUsd, 0)),
+      units: products.reduce((s, p) => s + p.units, 0),
+      orders: products.reduce((s, p) => s + p.orders, 0),
+    },
+    capped,
+  };
+}
+
+/** Display names for the catalog's print products, keyed by product key. */
+async function productDisplayNames(): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  try {
+    const config = await getProductsConfig();
+    for (const p of config.products) {
+      out.set(`print:${p.id}`, p.presentation.name);
+      if (p.provider.sku) out.set(`print:${p.provider.sku}`, p.presentation.name);
+    }
+  } catch {
+    // Catalog unavailable — the report falls back to titleized slugs.
+  }
+  try {
+    const plans = await getPlansConfig();
+    for (const plan of plans.plans) out.set(`plan:${plan.id}`, plan.presentation.name);
+  } catch {
+    // Same fallback for plans.
+  }
+  out.set("ebook", "Ebook");
+  return out;
+}
+
+// ---- Conversion funnel -------------------------------------------------------
+
+/**
+ * Where money leaks out of the purchase path.
+ *
+ * Built from the `payments` collection, which already distinguishes a checkout
+ * that was STARTED (`pending`) from one that completed (`paid`) — so checkout
+ * abandonment, the single most expensive drop-off in the product, is sitting in
+ * data that was never queried. Signups come from the Auth scan so the funnel
+ * starts at acquisition rather than at checkout.
+ */
+async function computeFunnel(opts: {
+  from: number;
+  to: number;
+  settings: AdminSettings;
+  country: string | null;
+}): Promise<FunnelReport> {
+  ensureAdmin();
+  const { from, to, settings, country } = opts;
+
+  const [{ users }, { events }, meta, revenue] = await Promise.all([
+    scanUsers(settings),
+    fetchEvents(from, to),
+    fetchUserMeta(),
+    fetchRevenueByUid(),
+  ]);
+  const eventCountryByUid = new Map<string, string>();
+  for (const e of events) {
+    if (e.uid && e.country && !eventCountryByUid.has(e.uid)) eventCountryByUid.set(e.uid, e.country);
+  }
+  const userCountry = resolveUserCountries(users, meta, eventCountryByUid, revenue);
+  const inMarket = (uid: string) => !country || (userCountry.get(uid) ?? UNKNOWN_COUNTRY) === country;
+
+  let signups = 0;
+  let guests = 0;
+  for (const u of users) {
+    if (u.createdAt == null || u.createdAt < from || u.createdAt > to) continue;
+    if (!inMarket(u.uid)) continue;
+    if (u.isAnonymous) guests += 1;
+    else signups += 1;
+  }
+
+  interface KindAcc {
+    started: number;
+    paid: number;
+    failed: number;
+    abandonedUsd: number;
+  }
+  const byKind = new Map<string, KindAcc>();
+  let started = 0;
+  let paid = 0;
+  let fulfilled = 0;
+  let abandonedCheckouts = 0;
+  let abandonedUsd = 0;
+  let capped = false;
+
+  try {
+    // Bounded at BOTH ends: a `>= from` scan of a historical window would spend
+    // its whole cap on payments made after the window and report zero checkouts.
+    const snap = await getFirestore()
+      .collection("payments")
+      .where("createdAt", ">=", new Date(from))
+      .where("createdAt", "<=", new Date(to))
+      .orderBy("createdAt", "desc")
+      .limit(MAX_PRODUCT_SCAN)
+      .get();
+    capped = snap.size >= MAX_PRODUCT_SCAN;
+    for (const doc of snap.docs) {
+      const d = doc.data() as Record<string, unknown>;
+      const created = tsToMillis(d.createdAt);
+      if (created == null) continue;
+      const uid = typeof d.ownerUid === "string" ? d.ownerUid : "";
+      if (country) {
+        const plan = d.fulfillment as { destinationCountry?: unknown } | null;
+        const payCountry =
+          normalizeCountry(d.billingCountry) ??
+          normalizeCountry(plan?.destinationCountry) ??
+          (uid ? userCountry.get(uid) ?? UNKNOWN_COUNTRY : UNKNOWN_COUNTRY);
+        if (payCountry !== country) continue;
+      }
+      const status = typeof d.status === "string" ? d.status : "pending";
+      const kind = typeof d.kind === "string" ? d.kind : "order";
+      const amount = typeof d.amount === "number" ? d.amount : 0;
+      const currency = typeof d.currency === "string" ? d.currency : "USD";
+
+      const k = byKind.get(kind) ?? { started: 0, paid: 0, failed: 0, abandonedUsd: 0 };
+      started += 1;
+      k.started += 1;
+      if (status === "paid" || status === "refunded" || status === "partially_refunded") {
+        paid += 1;
+        k.paid += 1;
+        if (d.orderId) fulfilled += 1;
+      } else {
+        // Pending sessions from the last hour may still complete — counting
+        // them as abandoned would permanently overstate the leak.
+        const settled = status === "failed" || Date.now() - created > HOUR_MS;
+        if (settled) {
+          abandonedCheckouts += 1;
+          const usd = await toUsd(amount, currency);
+          abandonedUsd += usd;
+          k.abandonedUsd += usd;
+        }
+        if (status === "failed") k.failed += 1;
+      }
+      byKind.set(kind, k);
+    }
+  } catch {
+    // Degrade to the acquisition stages only.
+  }
+
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const pct = (num: number, den: number) =>
+    den > 0 ? Math.round((num / den) * 1000) / 10 : null;
+
+  const raw: { key: string; label: string; value: number; hint?: string }[] = [
+    { key: "guests", label: "Guests started", value: guests, hint: "Anonymous sessions created — everyone begins here." },
+    { key: "signups", label: "Accounts created", value: signups },
+    { key: "checkout", label: "Checkout started", value: started },
+    { key: "paid", label: "Paid", value: paid },
+    { key: "fulfilled", label: "Fulfilled", value: fulfilled, hint: "Paid orders with a print job placed." },
+  ];
+  const first = raw[0].value;
+  const stages: FunnelStage[] = raw.map((s, i) => ({
+    ...s,
+    stepPct: i === 0 ? null : pct(s.value, raw[i - 1].value),
+    overallPct: pct(s.value, first),
+  }));
+
+  return {
+    range: { from, to },
+    country,
+    generatedAt: Date.now(),
+    stages,
+    abandonedCheckouts,
+    abandonedUsd: r2(abandonedUsd),
+    byKind: [...byKind.entries()]
+      .map(([kind, k]) => ({
+        kind,
+        started: k.started,
+        paid: k.paid,
+        failed: k.failed,
+        conversionPct: pct(k.paid, k.started),
+        abandonedUsd: r2(k.abandonedUsd),
+      }))
+      .sort((a, b) => b.started - a.started),
+    capped,
+  };
+}
+
+/** Firestore Timestamp (or epoch number) → epoch ms. */
+function tsToMillis(v: unknown): number | null {
+  if (typeof v === "number") return v;
+  if (v && typeof v === "object" && typeof (v as { toMillis?: () => number }).toMillis === "function") {
+    return (v as { toMillis: () => number }).toMillis();
+  }
+  return null;
+}
+
 function parseRange(req: Request): { from: number; to: number } {
   const now = Date.now();
   const to = Number(req.query.to);
@@ -756,6 +1480,22 @@ const SORTS: UserSort[] = [
 ];
 const PLAN_FILTERS: PlanFilter[] = ["all", "paid", "free"];
 const CADENCE_FILTERS: CadenceFilter[] = ["all", "month", "year"];
+
+/**
+ * The shared market filter every analysis route accepts. `?country=DE` scopes
+ * the whole dashboard to one market; absent (or `all`) means every market.
+ * `ZZ` is a real value — it isolates traffic we couldn't attribute.
+ */
+function parseCountry(req: Request): string | null {
+  const raw = String(req.query.country ?? "").trim().toUpperCase();
+  if (!raw || raw === "ALL") return null;
+  if (raw === UNKNOWN_COUNTRY) return UNKNOWN_COUNTRY;
+  return normalizeCountry(raw);
+}
+
+function parseTzMode(req: Request): TimezoneMode {
+  return req.query.tzMode === "fixed" ? "fixed" : "market";
+}
 
 export function registerAnalyticsRoutes(app: Express): void {
   const json = express.json({ limit: "1mb" });
@@ -780,7 +1520,45 @@ export function registerAnalyticsRoutes(app: Express): void {
     try {
       const { from, to } = parseRange(req);
       const settings = await getAdminSettings();
-      res.json(await computeOverview(from, to, settings));
+      res.json(
+        await computeOverview(from, to, settings, {
+          country: parseCountry(req),
+          tzMode: parseTzMode(req),
+        }),
+      );
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Top products — one ranking across print books, ebooks, Spark packs and
+  // subscription plans, with a per-product time series and market split.
+  app.get("/admin/analytics/products", async (req: Request, res: Response) => {
+    try {
+      const { from, to } = parseRange(req);
+      const settings = await getAdminSettings();
+      const country = parseCountry(req);
+      res.json(
+        await computeProducts({
+          from,
+          to,
+          tz: country ? timezoneForCountry(country, settings.timezone) : settings.timezone,
+          country,
+          productNames: await productDisplayNames(),
+        }),
+      );
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Acquisition → checkout → paid → fulfilled, with the abandoned-checkout
+  // value the funnel is really there to expose.
+  app.get("/admin/analytics/funnel", async (req: Request, res: Response) => {
+    try {
+      const { from, to } = parseRange(req);
+      const settings = await getAdminSettings();
+      res.json(await computeFunnel({ from, to, settings, country: parseCountry(req) }));
     } catch (err) {
       handleError(res, err);
     }
@@ -833,6 +1611,7 @@ export function registerAnalyticsRoutes(app: Express): void {
           includeGuests,
           planFilter,
           cadenceFilter,
+          country: parseCountry(req),
         }),
       );
     } catch (err) {
@@ -853,8 +1632,25 @@ export function registerAnalyticsRoutes(app: Express): void {
       ).find((c) => c === catParam);
       const uid = String(req.query.uid ?? "").trim() || undefined;
       const projectId = String(req.query.projectId ?? "").trim() || undefined;
+      const productId = String(req.query.productId ?? "").trim() || undefined;
       const groupLimit = Number(req.query.groupLimit) || undefined;
-      res.json(await financeSummary({ fromMs: from, toMs: to, category, uid, projectId, groupLimit }));
+      const settings = await getAdminSettings();
+      const country = parseCountry(req);
+      res.json(
+        await financeSummary({
+          fromMs: from,
+          toMs: to,
+          category,
+          uid,
+          projectId,
+          productId,
+          country: country ?? undefined,
+          groupLimit,
+          timezone: country
+            ? timezoneForCountry(country, settings.timezone)
+            : settings.timezone,
+        }),
+      );
     } catch (err) {
       handleError(res, err);
     }

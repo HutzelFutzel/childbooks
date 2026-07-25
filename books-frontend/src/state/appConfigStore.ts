@@ -53,11 +53,12 @@ import {
   normalizePublicProductsConfig,
   type PricingSettings,
   type ProductDefinition,
-  type ProductImage,
   type ProductsConfig,
+  type ProviderEnv,
   type PublicProductsConfig,
 } from "../core/config/products";
 import type { MarginBreakdown } from "../core/config/productMath";
+import type { VariantSelection } from "../core/config/variants";
 import {
   createDefaultSparksConfig,
   normalizeSparksConfig,
@@ -93,6 +94,11 @@ import {
   type SiteContentConfig,
   type SiteTextSlot,
 } from "../core/config/siteContent";
+import {
+  createDefaultCatalogMediaConfig,
+  normalizeCatalogMediaConfig,
+  type CatalogMediaConfig,
+} from "../core/config/catalogMedia";
 import {
   createDefaultPromptsConfig,
   normalizePromptsConfig,
@@ -137,6 +143,90 @@ export interface MarginPreview {
   quoteError?: string;
 }
 
+/** One SKU's verdict from probing the print provider. */
+export interface SkuVerifyResult {
+  productId: string;
+  sku: string;
+  /** "inconclusive" means the probe failed, NOT that the SKU is bad. */
+  outcome: "ok" | "rejected" | "inconclusive";
+  message?: string;
+}
+
+/** What the provider knows about one assembled SKU. */
+export interface SkuMatrixEntry {
+  sku: string;
+  env: ProviderEnv;
+  ok: boolean;
+  at: number;
+  pages?: { min: number; max: number };
+  unitCost?: number;
+  currency?: string;
+  message?: string;
+}
+
+export interface SkuCheck {
+  entry: SkuMatrixEntry;
+  /** False when the answer came from the cache rather than the provider. */
+  fresh: boolean;
+}
+
+/** One probe taken while measuring cost against the provider. */
+export interface CostSample {
+  pages: number;
+  copies: number;
+  unitCost: number;
+}
+
+export interface CalibrationResult {
+  ok: boolean;
+  message?: string;
+  env: ProviderEnv;
+  currency?: string;
+  table?: ProductDefinition["cost"]["table"];
+  shippingFallback?: number;
+  /** Page bounds the provider itself reported. */
+  discoveredPages?: { min: number; max: number };
+  samples: CostSample[];
+  /** How far the midpoint sample missed the fitted line. */
+  fitResidual?: number;
+}
+
+export interface CalibrationOutcome {
+  result: CalibrationResult;
+  config: ProductsConfig;
+}
+
+/** One product's outcome from a catalog-wide cost measurement. */
+export interface CatalogCalibrationRun {
+  productId: string;
+  name: string;
+  sku: string;
+  ok: boolean;
+  message?: string;
+  currency?: string;
+  before: { basePerUnit: number; perPage: number };
+  after?: { basePerUnit: number; perPage: number };
+}
+
+export interface CatalogCalibrationSummary {
+  env: ProviderEnv;
+  runs: CatalogCalibrationRun[];
+  ok: number;
+  failed: number;
+  /** The catalog after the successful measurements were persisted. */
+  config: ProductsConfig;
+}
+
+export interface SkuVerifySummary {
+  env: ProviderEnv;
+  results: SkuVerifyResult[];
+  ok: number;
+  rejected: number;
+  inconclusive: number;
+  /** The catalog after the verdicts were persisted. */
+  config: ProductsConfig;
+}
+
 interface AppConfigState {
   modelConfig: ModelConfig;
   artStyles: ArtStylesConfig;
@@ -174,6 +264,8 @@ interface AppConfigState {
   siteImages: SiteImagesConfig;
   /** Landing-page copy overrides (inline text editor). */
   siteContent: SiteContentConfig;
+  /** Catalog pictures (print options, books, the ebook, packs), by `scope/id`. */
+  catalogMedia: CatalogMediaConfig;
   /** Admin-editable LLM prompt templates. */
   prompts: PromptsConfig;
   /** System + marketing email config (senders, toggles, footer). */
@@ -231,6 +323,23 @@ interface AppConfigState {
   saveSiteText: (slot: SiteTextSlot, value: string) => Promise<void>;
   resetSiteText: (slot: SiteTextSlot) => Promise<void>;
 
+  // Catalog pictures, keyed `scope/id` (see `catalogMedia.ts`).
+  uploadCatalogPhoto: (
+    key: string,
+    base64: string,
+    mimeType: string,
+    alt: string,
+    caption?: string,
+  ) => Promise<void>;
+  /** Retire, reinstate, retitle, or promote a picture to the item's thumbnail. */
+  patchCatalogPhoto: (
+    key: string,
+    storagePath: string,
+    patch: { active?: boolean; alt?: string; caption?: string; makePrimary?: boolean },
+  ) => Promise<void>;
+  /** Permanently forget a picture and delete the stored file. */
+  deleteCatalogPhoto: (key: string, storagePath: string) => Promise<void>;
+
   // Branding — brand identity, image assets, and the share watermark.
   saveBrandingInfo: (patch: { brandName?: string; tagline?: string; colors?: Partial<BrandColors> }) => Promise<void>;
   uploadBrandingAsset: (slot: BrandAssetSlot, base64: string, mimeType: string, alt?: string) => Promise<void>;
@@ -265,17 +374,26 @@ interface AppConfigState {
   saveProduct: (product: ProductDefinition) => Promise<ProductDefinition>;
   deleteProductById: (id: string) => Promise<ProductsConfig>;
   seedProducts: () => Promise<ProductsConfig>;
-  uploadProductImage: (
-    productId: string,
-    base64: string,
-    mimeType: string,
-    role: ProductImage["role"],
-    alt?: string,
-  ) => Promise<ProductImage>;
   previewMargin: (
     product: ProductDefinition,
-    scenario: { pages: number; copies: number; currency: string; country?: string; region?: string },
+    scenario: {
+      pages: number;
+      copies: number;
+      currency: string;
+      country?: string;
+      region?: string;
+      /** Quote and price this variant instead of the product's base SKU. */
+      variant?: VariantSelection;
+    },
   ) => Promise<MarginPreview>;
+  /** Probe SKUs against a provider environment and persist the verdicts. */
+  verifyProducts: (opts?: { env?: ProviderEnv; id?: string }) => Promise<SkuVerifySummary>;
+  /** Derive a product's cost table from live provider quotes. */
+  calibrateProductCost: (id: string, env?: ProviderEnv) => Promise<CalibrationOutcome>;
+  /** Re-measure every print product's cost against the provider in one pass. */
+  calibrateCatalogCosts: (env?: ProviderEnv) => Promise<CatalogCalibrationSummary>;
+  /** Ask the provider whether an assembled SKU exists. */
+  checkSku: (sku: string, opts?: { env?: ProviderEnv; pages?: number; refresh?: boolean }) => Promise<SkuCheck>;
 
   // Blog / articles (admin). Full posts live in the `blog` Firestore collection
   // (not client-writable); the public projection is read server-side. These
@@ -347,6 +465,7 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   seo: createDefaultSeoConfig(),
   siteImages: createDefaultSiteImagesConfig(),
   siteContent: createDefaultSiteContentConfig(),
+  catalogMedia: createDefaultCatalogMediaConfig(),
   prompts: createDefaultPromptsConfig(),
   emailConfig: createDefaultEmailConfig(),
   emailStats: createDefaultEmailStats(),
@@ -406,6 +525,11 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       }),
       onSnapshot(doc(db, "appConfig", "siteContent"), (snap) => {
         set({ siteContent: normalizeSiteContentConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "catalogMedia"), (snap) => {
+        set({
+          catalogMedia: normalizeCatalogMediaConfig(snap.exists() ? snap.data() : undefined),
+        });
       }),
       onSnapshot(doc(db, "appConfig", "prompts"), (snap) => {
         set({ prompts: normalizePromptsConfig(snap.exists() ? snap.data() : undefined) });
@@ -630,6 +754,36 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     set({ siteImages: normalizeSiteImagesConfig(await res.json()) });
   },
 
+  async uploadCatalogPhoto(key, base64, mimeType, alt, caption) {
+    const res = await backendFetch("/admin/catalog/media", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, base64, mimeType, alt, caption }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Upload failed.");
+    set({ catalogMedia: normalizeCatalogMediaConfig(await res.json()) });
+  },
+
+  async patchCatalogPhoto(key, storagePath, patch) {
+    const res = await backendFetch("/admin/catalog/media/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, storagePath, ...patch }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not update the picture.");
+    set({ catalogMedia: normalizeCatalogMediaConfig(await res.json()) });
+  },
+
+  async deleteCatalogPhoto(key, storagePath) {
+    const res = await backendFetch("/admin/catalog/media/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, storagePath }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not delete the picture.");
+    set({ catalogMedia: normalizeCatalogMediaConfig(await res.json()) });
+  },
+
   async saveSiteText(slot, value) {
     const res = await backendFetch("/admin/site-content", {
       method: "PUT",
@@ -844,16 +998,6 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     return (await res.json()) as ProductsConfig;
   },
 
-  async uploadProductImage(productId, base64, mimeType, role, alt) {
-    const res = await backendFetch(`/admin/config/products/${encodeURIComponent(productId)}/image`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ base64, mimeType, role, alt }),
-    });
-    if (!res.ok) throw new Error((await safeError(res)) ?? "Upload failed.");
-    return (await res.json()) as ProductImage;
-  },
-
   async previewMargin(product, scenario) {
     const res = await backendFetch("/admin/config/products/margin-preview", {
       method: "POST",
@@ -862,5 +1006,45 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     });
     if (!res.ok) throw new Error((await safeError(res)) ?? "Margin preview failed.");
     return (await res.json()) as MarginPreview;
+  },
+
+  async calibrateProductCost(id, env) {
+    const res = await backendFetch(`/admin/config/products/${encodeURIComponent(id)}/calibrate`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(env ? { env } : {}),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Calibration failed.");
+    return (await res.json()) as CalibrationOutcome;
+  },
+
+  async calibrateCatalogCosts(env) {
+    const res = await backendFetch("/admin/config/products/calibrate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(env ? { env } : {}),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Calibration failed.");
+    return (await res.json()) as CatalogCalibrationSummary;
+  },
+
+  async checkSku(sku, opts) {
+    const res = await backendFetch("/admin/print/sku/check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sku, ...opts }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "SKU check failed.");
+    return (await res.json()) as SkuCheck;
+  },
+
+  async verifyProducts(opts) {
+    const res = await backendFetch("/admin/config/products/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(opts ?? {}),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Verification failed.");
+    return (await res.json()) as SkuVerifySummary;
   },
 }));

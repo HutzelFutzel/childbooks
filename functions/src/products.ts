@@ -126,12 +126,28 @@ export async function deleteProduct(id: string): Promise<ProductsConfig> {
 
 /**
  * Seed the catalog from the curated provider catalog. Skips products whose SKU
- * already exists so it's safe to call more than once.
+ * already exists so it's safe to call more than once. Also backfills an empty
+ * variant policy from the curated format when a product matches a seed SKU —
+ * so re-seeding after the variants model landed opens the measured options on
+ * formats that were already in the catalog.
  */
 export async function seedProducts(): Promise<ProductsConfig> {
   const current = await readConfig();
+  const seeds = seedProductsFromCatalog();
+  const seedBySku = new Map(seeds.map((s) => [s.provider.sku, s]));
   const existingSkus = new Set(current.products.map((p) => p.provider.sku));
-  const seeds = seedProductsFromCatalog().filter((p) => !existingSkus.has(p.provider.sku));
-  if (seeds.length === 0) return current;
-  return writeConfig({ version: 1, products: [...current.products, ...seeds] });
+
+  let changed = false;
+  const products = current.products.map((p) => {
+    const seed = seedBySku.get(p.provider.sku);
+    if (!seed) return p;
+    const hasOptions = Object.values(p.variants.options).some((list) => list.length > 0);
+    if (hasOptions) return p;
+    changed = true;
+    return { ...p, variants: seed.variants, updatedAt: Date.now() };
+  });
+
+  const newcomers = seeds.filter((p) => !existingSkus.has(p.provider.sku));
+  if (!changed && newcomers.length === 0) return current;
+  return writeConfig({ version: 1, products: [...products, ...newcomers] });
 }

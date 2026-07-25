@@ -8,17 +8,22 @@
  */
 import { create } from "zustand";
 import { backendFetch } from "../platform/backend";
+import { marketParam, useAdminMarket } from "./adminMarketStore";
 import {
   DEFAULT_ADMIN_SETTINGS,
   resolveRange,
+  type ActivityMetric,
   type AdminSettings,
   type AnalyticsOverview,
   type AnalyticsUserRow,
   type CadenceFilter,
+  type FunnelReport,
   type PlanFilter,
+  type ProductsReport,
   type SortDir,
   type SparksAdjustResult,
   type Timeframe,
+  type TimezoneMode,
   type UserSort,
 } from "../core/analytics/types";
 
@@ -45,6 +50,8 @@ interface AdminAnalyticsState {
   overview: AnalyticsOverview | null;
   users: AnalyticsUserRow[];
   usersTotal: number;
+  products: ProductsReport | null;
+  funnel: FunnelReport | null;
   settings: AdminSettings;
 
   sort: UserSort;
@@ -55,8 +62,16 @@ interface AdminAnalyticsState {
   planFilter: PlanFilter;
   cadenceFilter: CadenceFilter;
 
+  /** Which clock the activity grids are bucketed in (server-side). */
+  tzMode: TimezoneMode;
+  /** Which activity the heatmap / hour chart shows (client-side selection). */
+  metric: ActivityMetric;
+  /** Count distinct people rather than raw events (client-side selection). */
+  countUniqueUsers: boolean;
+
   loading: boolean;
   usersLoading: boolean;
+  productsLoading: boolean;
   savingSettings: boolean;
   error: string | null;
   lastUpdated: number | null;
@@ -65,7 +80,13 @@ interface AdminAnalyticsState {
   init: () => Promise<void>;
   setTimeframe: (tf: Timeframe) => void;
   setCustomRange: (from: number, to: number) => void;
+  setCountry: (country: string | null) => void;
+  setTzMode: (mode: TimezoneMode) => void;
+  setMetric: (metric: ActivityMetric) => void;
+  setCountUniqueUsers: (unique: boolean) => void;
   refresh: () => Promise<void>;
+  refreshAll: () => Promise<void>;
+  refreshProducts: () => Promise<void>;
   setUserQuery: (
     patch: Partial<
       Pick<
@@ -82,7 +103,7 @@ interface AdminAnalyticsState {
 function rangeParams(get: () => AdminAnalyticsState): string {
   const { timeframe, customFrom, customTo } = get();
   const range = resolveRange(timeframe, { from: customFrom, to: customTo });
-  return `from=${range.from}&to=${range.to}`;
+  return `from=${range.from}&to=${range.to}${marketParam()}`;
 }
 
 export const useAdminAnalytics = create<AdminAnalyticsState>((set, get) => ({
@@ -93,6 +114,8 @@ export const useAdminAnalytics = create<AdminAnalyticsState>((set, get) => ({
   overview: null,
   users: [],
   usersTotal: 0,
+  products: null,
+  funnel: null,
   settings: { ...DEFAULT_ADMIN_SETTINGS },
 
   sort: "lastActive",
@@ -103,8 +126,15 @@ export const useAdminAnalytics = create<AdminAnalyticsState>((set, get) => ({
   planFilter: "all",
   cadenceFilter: "all",
 
+  // Market-local by default: for a global audience, the hour a person acted in
+  // their OWN timezone is the only reading that describes real behaviour.
+  tzMode: "market",
+  metric: "all",
+  countUniqueUsers: false,
+
   loading: false,
   usersLoading: false,
+  productsLoading: false,
   savingSettings: false,
   error: null,
   lastUpdated: null,
@@ -127,17 +157,38 @@ export const useAdminAnalytics = create<AdminAnalyticsState>((set, get) => ({
 
   setTimeframe(tf) {
     set({ timeframe: tf });
-    void get().refresh();
+    void get().refreshAll();
   },
 
   setCustomRange(from, to) {
     set({ timeframe: "custom", customFrom: from, customTo: to });
+    void get().refreshAll();
+  },
+
+  setCountry(country) {
+    // Only records the choice — the Analysis tab decides which section to
+    // re-fetch, so switching markets doesn't re-scan sections nobody is looking
+    // at (the overview alone is a full Auth scan).
+    useAdminMarket.getState().setCountry(country);
+  },
+
+  setTzMode(tzMode) {
+    set({ tzMode });
+    // The grids are bucketed server-side, so switching clocks is a re-fetch.
     void get().refresh();
+  },
+
+  setMetric(metric) {
+    set({ metric });
+  },
+
+  setCountUniqueUsers(countUniqueUsers) {
+    set({ countUniqueUsers });
   },
 
   async refresh() {
     const params = rangeParams(get);
-    const { sort, dir, search, limit, includeGuests, planFilter, cadenceFilter } = get();
+    const { sort, dir, search, limit, includeGuests, planFilter, cadenceFilter, tzMode } = get();
     set({ loading: true, usersLoading: true, error: null });
     try {
       const usersQs =
@@ -145,20 +196,54 @@ export const useAdminAnalytics = create<AdminAnalyticsState>((set, get) => ({
         `&includeGuests=${includeGuests}` +
         `&plan=${planFilter}&cadence=${cadenceFilter}` +
         (search ? `&search=${encodeURIComponent(search)}` : "");
-      const [overview, usersRes] = await Promise.all([
-        getJson<AnalyticsOverview>(`/admin/analytics/overview?${params}`),
+      const [overview, usersRes, funnel] = await Promise.all([
+        getJson<AnalyticsOverview>(`/admin/analytics/overview?${params}&tzMode=${tzMode}`),
         getJson<{ rows: AnalyticsUserRow[]; total: number }>(`/admin/analytics/users?${usersQs}`),
+        // Supplementary: a funnel failure shouldn't blank the whole dashboard.
+        getJson<FunnelReport>(`/admin/analytics/funnel?${params}`).catch(() => null),
       ]);
       set({
         overview,
         users: usersRes.rows,
         usersTotal: usersRes.total,
+        funnel,
         lastUpdated: Date.now(),
       });
+      // Keep the market picker's options in sync with what the data contains,
+      // but only from the unfiltered view — a filtered one knows just one market.
+      if (!useAdminMarket.getState().country) {
+        useAdminMarket.getState().setKnown(overview.countries);
+      }
     } catch (err) {
       set({ error: (err as Error)?.message ?? "Failed to load analytics." });
     } finally {
       set({ loading: false, usersLoading: false });
+    }
+  },
+
+  /**
+   * Re-fetch everything this store owns that has already been loaded. The
+   * timeframe applies to every section, so changing it from the Products view
+   * has to move the Products numbers too — but there's no point fetching a
+   * report nobody has opened yet.
+   */
+  async refreshAll() {
+    const tasks = [get().refresh()];
+    if (get().products) tasks.push(get().refreshProducts());
+    await Promise.all(tasks);
+  },
+
+  async refreshProducts() {
+    set({ productsLoading: true, error: null });
+    try {
+      const products = await getJson<ProductsReport>(
+        `/admin/analytics/products?${rangeParams(get)}`,
+      );
+      set({ products, lastUpdated: Date.now() });
+    } catch (err) {
+      set({ error: (err as Error)?.message ?? "Failed to load products." });
+    } finally {
+      set({ productsLoading: false });
     }
   },
 

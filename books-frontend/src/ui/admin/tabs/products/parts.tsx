@@ -4,6 +4,20 @@ import { useState, type ReactNode } from "react";
 import { ChevronRight, Info } from "lucide-react";
 import { Field, Input } from "../../../components/Input";
 
+/** Read a picked file as bare base64 (no data-URL prefix), for upload bodies. */
+export function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
 /** A labeled group of related fields, matching the Model-costs editor styling. */
 export function Section({
   title,
@@ -95,8 +109,16 @@ export function Grid({ children, cols = 3 }: { children: ReactNode; cols?: 2 | 3
 }
 
 /** Collapsible "Advanced options" block — rare fields stay out of the way. */
-export function Disclosure({ label = "Advanced options", children }: { label?: string; children: ReactNode }) {
-  const [open, setOpen] = useState(false);
+export function Disclosure({
+  label = "Advanced options",
+  defaultOpen = false,
+  children,
+}: {
+  label?: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="rounded-lg ring-1 ring-inset ring-ink-100">
       <button
@@ -120,6 +142,7 @@ export function NumberField({
   onChange,
   className = "w-full",
   suffix,
+  hint,
 }: {
   label: string;
   value: number;
@@ -128,9 +151,10 @@ export function NumberField({
   onChange: (n: number) => void;
   className?: string;
   suffix?: string;
+  hint?: string;
 }) {
   return (
-    <Field label={label} className={className}>
+    <Field label={label} className={className} hint={hint}>
       <div className="relative">
         <Input
           type="number"

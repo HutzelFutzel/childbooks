@@ -8,6 +8,7 @@
  */
 import { create } from "zustand";
 import { backendFetch } from "../platform/backend";
+import { marketParam } from "./adminMarketStore";
 
 export type PaymentStatus = "pending" | "paid" | "failed" | "refunded" | "partially_refunded";
 
@@ -26,6 +27,20 @@ export interface PaymentListItem {
   orderId: string | null;
   stripePaymentIntentId: string | null;
   createdAt: number | null;
+  /** Billing market, falling back to the shipping destination. */
+  country: string | null;
+}
+
+/** One market's payment volume, in USD so markets are comparable. */
+export interface CountryRollup {
+  country: string;
+  grossUsd: number;
+  netUsd: number;
+  refundsUsd: number;
+  paidCount: number;
+  orderCount: number;
+  averageOrderUsd: number;
+  refundRatePct: number;
 }
 
 export interface CurrencyRollup {
@@ -43,6 +58,9 @@ export interface CurrencyRollup {
 export interface PaymentsAnalytics {
   windowDays: number;
   byCurrency: CurrencyRollup[];
+  byCountry: CountryRollup[];
+  country: string | null;
+  capped: boolean;
   series: { date: string; currency: string; gross: number; count: number }[];
   totalPayments: number;
   pendingCount: number;
@@ -119,9 +137,10 @@ export const useAdminPayments = create<AdminPaymentsState>((set, get) => ({
     const { days } = get();
     set({ loading: true, error: null });
     try {
+      const market = marketParam();
       const [analytics, list] = await Promise.all([
-        getJson<PaymentsAnalytics>(`/admin/payments/analytics?days=${days}`),
-        getJson<{ payments: PaymentListItem[] }>(`/admin/payments?days=${days}`),
+        getJson<PaymentsAnalytics>(`/admin/payments/analytics?days=${days}${market}`),
+        getJson<{ payments: PaymentListItem[] }>(`/admin/payments?days=${days}${market}`),
       ]);
       set({ analytics, payments: list.payments, lastUpdated: Date.now() });
     } catch (err) {

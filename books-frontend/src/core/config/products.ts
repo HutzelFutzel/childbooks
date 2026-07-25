@@ -19,7 +19,17 @@
  */
 import { z } from "zod";
 import type { Binding, Finish, ShippingMethod } from "../fulfillment/types";
-import { LULU_BOOK_PRODUCTS } from "../fulfillment/lulu/products";
+import { LULU_BOOK_FORMATS } from "../fulfillment/lulu/products";
+import { sameFormat, skuForVariant, variantFromSku } from "../fulfillment/lulu/skuAxes";
+import {
+  createDefaultVariantPolicy,
+  firstAllowedVariant,
+  isVariantSelection,
+  normalizeVariantPolicy,
+  variantAllowed,
+  type ProductVariantPolicy,
+  type VariantSelection,
+} from "./variants";
 
 // ---- Shared primitives -----------------------------------------------------
 
@@ -44,13 +54,6 @@ export interface Dimensions {
   width: number;
   height: number;
   unit: LengthUnit;
-}
-
-export interface ProductImage {
-  url: string;
-  storagePath?: string;
-  alt?: string;
-  role: "hero" | "gallery" | "sizeGuide";
 }
 
 // ---- Physical spec ---------------------------------------------------------
@@ -310,7 +313,13 @@ export interface ShippingMethodConfig {
 }
 
 export type ShippingPricing =
-  | { mode: "passthrough"; markupPct?: number } // charge provider shipping (+optional markup)
+  /**
+   * Charge the provider's shipping cost (+ optional markup). `fallbackCost`
+   * stands in for that cost — in the product's COST currency — when a live quote
+   * can't be obtained; without it a failed quote would charge the customer
+   * nothing while we still pay the provider, so it's required.
+   */
+  | { mode: "passthrough"; markupPct?: number; fallbackCost?: number }
   | { mode: "free"; absorbInPrice: boolean } // free shipping (optionally folded into price)
   | { mode: "flat"; default: number; currency: CurrencyCode; overrides: { match: GeoMatch; amount: number }[] };
 
@@ -321,6 +330,61 @@ export interface ProductShippingPolicy {
   surcharges: { match: GeoMatch; amount: number; currency: CurrencyCode }[];
 }
 
+// ---- Provider SKU verification ---------------------------------------------
+
+/**
+ * Provider environments a SKU can be verified in. Mirrors `FulfillmentEnv`,
+ * declared locally so the catalog schema doesn't depend on runtime config.
+ */
+export type ProviderEnv = "sandbox" | "live";
+
+export const PROVIDER_ENVS: ProviderEnv[] = ["sandbox", "live"];
+
+/** The outcome of probing a SKU against one provider environment. */
+export interface SkuVerification {
+  /** Whether the provider priced the SKU across the product's page range. */
+  ok: boolean;
+  /** When the probe ran (epoch ms). */
+  at: number;
+  /**
+   * The page counts actually probed. A verification only vouches for the range
+   * it tested, so widening `conditions.pages` invalidates it.
+   */
+  pages: { min: number; max: number };
+  /** The provider's own reason when `ok` is false. */
+  error?: string;
+}
+
+/** The verification record for one environment, if the SKU was ever probed there. */
+export function verificationFor(
+  provider: ProductDefinition["provider"],
+  env: ProviderEnv,
+): SkuVerification | undefined {
+  return provider.verifiedIn?.[env];
+}
+
+/**
+ * Whether a SKU is proven usable in an environment. Deliberately strict: an
+ * absent record is NOT verified, because "never probed" and "probed and fine"
+ * must never be conflated when real money is involved.
+ */
+export function isVerifiedIn(provider: ProductDefinition["provider"], env: ProviderEnv): boolean {
+  return verificationFor(provider, env)?.ok === true;
+}
+
+/**
+ * Whether a verification still covers the product's configured page range.
+ * Widening the range past what was probed makes the old verdict stale rather
+ * than wrong — the untested pages were never proven printable.
+ */
+export function verificationCoversPages(
+  record: SkuVerification | undefined,
+  pages: { min: number; max: number },
+): boolean {
+  if (!record?.ok) return false;
+  return record.pages.min <= pages.min && record.pages.max >= pages.max;
+}
+
 // ---- The product definition ------------------------------------------------
 
 export interface ProductDefinition {
@@ -329,11 +393,16 @@ export interface ProductDefinition {
   status: ProductStatus;
   sortOrder: number;
 
+  /**
+   * Copy only. Pictures of the product live in `appConfig/catalogMedia` under
+   * `book/{id}` — they're uploaded and retired on their own schedule, and a
+   * product with none falls back to `book/default`, so pinning them to this
+   * record would mean re-saving a product to change a photograph.
+   */
   presentation: {
     name: string;
     tagline?: string;
     description: string; // markdown
-    images: ProductImage[];
     badges: string[];
   };
 
@@ -341,10 +410,23 @@ export interface ProductDefinition {
     id: FulfillmentProviderId;
     sku: string; // e.g. Lulu pod_package_id
     printAreas: { interior: string; cover?: string; spine?: string };
-    verified: boolean; // confirmed against the live provider catalog
+    /**
+     * Proof the SKU is real, recorded PER ENVIRONMENT. Sandbox and live are
+     * separate provider catalogs behind separate credentials, so one verdict
+     * can't stand for both — a SKU that only exists in sandbox would fail at
+     * print-job creation, which happens after the customer has been charged.
+     */
+    verifiedIn?: Partial<Record<ProviderEnv, SkuVerification>>;
   };
 
   spec: ProductSpec;
+  /**
+   * The choices a customer may make about this same book — print tier, paper,
+   * cover finish. The product's own SKU encodes one of each (the base variant);
+   * ordering another composes a different SKU from it at checkout, which is why
+   * these don't need a product record each. See `variants.ts`.
+   */
+  variants: ProductVariantPolicy;
   conditions: ProductConditions;
   cost: ProductCostModel;
   pricing: ProductPricingModel;
@@ -370,12 +452,19 @@ export interface PublicProduct {
   name: string;
   tagline?: string;
   description: string;
-  images: ProductImage[];
   badges: string[];
-  /** Opaque provider SKU (needed to quote/order); provider identity is not exposed. */
+  /**
+   * Opaque provider SKU of the BASE variant (needed to quote/order); provider
+   * identity is not exposed. Checkout sends this plus the chosen variant and the
+   * server composes the SKU that actually prints — the client never builds one.
+   */
   sku: string;
   printAreas: { interior: string; cover?: string; spine?: string };
   spec: ProductSpec;
+  /** The variants offered, with each option's per-copy surcharge per currency. */
+  variants: ProductVariantPolicy;
+  /** The variant `sku` encodes and `prices` are quoted for. */
+  defaultVariant?: VariantSelection;
   conditions: ProductConditions;
   /** Resolved per-currency display price (per unit) at the display page count. */
   prices: Record<CurrencyCode, number>;
@@ -519,8 +608,8 @@ export function createDefaultProduct(overrides: Partial<ProductDefinition> = {})
     version: 1,
     status: "draft",
     sortOrder: 0,
-    presentation: { name: "New product", description: "", images: [], badges: [] },
-    provider: { id: "lulu", sku: "", printAreas: { interior: "interior", cover: "cover" }, verified: false },
+    presentation: { name: "New product", description: "", badges: [] },
+    provider: { id: "lulu", sku: "", printAreas: { interior: "interior", cover: "cover" } },
     spec: {
       binding: "casewrap",
       finish: "gloss",
@@ -531,6 +620,9 @@ export function createDefaultProduct(overrides: Partial<ProductDefinition> = {})
       coverDpi: 200,
       cover: { differsFromPage: true, sizing: { mode: "providerComputed" }, wrapMarginIn: 0.5 },
     },
+    // No choices until an admin opens them: a new product can only be ordered as
+    // exactly the SKU it names, which is the only combination anyone has checked.
+    variants: createDefaultVariantPolicy(),
     conditions: {
       pages: { min: 24, max: 800, step: 2 },
       copies: { min: 1, max: 100 },
@@ -653,16 +745,55 @@ function normalizeAccess(raw: unknown): ProductAccess {
  * Merge a stored (possibly partial / older) product onto the current defaults so
  * every field is present and typed. Tolerant of missing nested objects.
  */
+/** Keep only well-formed, known-environment verification records. */
+function normalizeVerifiedIn(
+  input: Partial<Record<ProviderEnv, SkuVerification>>,
+): Partial<Record<ProviderEnv, SkuVerification>> {
+  const out: Partial<Record<ProviderEnv, SkuVerification>> = {};
+  for (const env of PROVIDER_ENVS) {
+    const r = input[env];
+    if (!r || typeof r.ok !== "boolean") continue;
+    out[env] = {
+      ok: r.ok,
+      at: Number(r.at) || 0,
+      pages: { min: Number(r.pages?.min) || 0, max: Number(r.pages?.max) || 0 },
+      ...(r.error ? { error: r.error } : {}),
+    };
+  }
+  return out;
+}
+
 export function normalizeProduct(input: unknown): ProductDefinition {
   const def = createDefaultProduct();
   const p = (input ?? {}) as Partial<ProductDefinition>;
+  const sku = p.provider?.sku ?? def.provider.sku;
   return {
     ...def,
     ...p,
     version: 1,
-    presentation: { ...def.presentation, ...p.presentation },
-    provider: { ...def.provider, ...p.provider, printAreas: { ...def.provider.printAreas, ...p.provider?.printAreas } },
+    // Explicit, so a legacy `images` array left on a stored product is dropped
+    // rather than carried along; product pictures moved to `catalogMedia`.
+    presentation: {
+      name: p.presentation?.name ?? def.presentation.name,
+      ...(p.presentation?.tagline ? { tagline: p.presentation.tagline } : {}),
+      description: p.presentation?.description ?? def.presentation.description,
+      badges: Array.isArray(p.presentation?.badges) ? p.presentation.badges : def.presentation.badges,
+    },
+    // Built explicitly (not spread) so the legacy single `verified` boolean is
+    // dropped rather than carried along. It claimed a verdict with no
+    // environment and no timestamp attached, which is exactly the ambiguity
+    // `verifiedIn` exists to remove — those SKUs must be re-probed.
+    provider: {
+      id: p.provider?.id ?? def.provider.id,
+      sku,
+      printAreas: { ...def.provider.printAreas, ...p.provider?.printAreas },
+      ...(p.provider?.verifiedIn ? { verifiedIn: normalizeVerifiedIn(p.provider.verifiedIn) } : {}),
+    },
     spec: { ...def.spec, ...p.spec, cover: { ...def.spec.cover, ...p.spec?.cover } },
+    // Anchored to the SKU: whatever the stored policy says, the variant this
+    // product IS stays orderable, and options the current build doesn't know are
+    // dropped rather than offered and then refused by the provider.
+    variants: normalizeVariantPolicy(p.variants, variantFromSku(sku) ?? undefined),
     conditions: {
       ...def.conditions,
       ...p.conditions,
@@ -694,18 +825,18 @@ const dimensionsSchema = z.object({
   unit: z.enum(["in", "mm"]),
 });
 
-const imageSchema = z.object({
-  url: z.string().url(),
-  storagePath: z.string().optional(),
-  alt: z.string().optional(),
-  role: z.enum(["hero", "gallery", "sizeGuide"]),
-});
-
 const spineSchema = z.discriminatedUnion("mode", [
   z.object({ mode: z.literal("none") }),
   z.object({ mode: z.literal("perPage"), mmPerPage: z.number().nonnegative(), baseMm: z.number().nonnegative() }),
   z.object({ mode: z.literal("fixed"), widthMm: z.number().nonnegative() }),
 ]);
+
+const skuVerificationSchema = z.object({
+  ok: z.boolean(),
+  at: z.number(),
+  pages: z.object({ min: z.number().nonnegative(), max: z.number().nonnegative() }),
+  error: z.string().optional(),
+});
 
 const bindingEnum = z.enum(["saddle-stitch", "perfect-bound", "coil-bound", "casewrap", "linen-wrap"]);
 const finishEnum = z.enum(["matte", "gloss"]);
@@ -728,6 +859,23 @@ const specSchema = z.object({
     ]),
     wrapMarginIn: z.number().nonnegative().optional(),
   }),
+});
+
+/**
+ * Optional and permissive by design: the values are validated against this
+ * build's vocabulary by {@link normalizeVariantPolicy}, which runs on every read
+ * and write, so a catalog saved before an option was renamed still loads.
+ */
+const variantChoiceSchema = z.object({
+  value: z.string().min(1),
+  priceDelta: z.record(z.string(), z.number()).optional(),
+});
+
+// Keys stay `z.string()` rather than an axis enum: a keyed record demands an
+// entry for every key, and a policy that only opens one axis is normal.
+const variantPolicySchema = z.object({
+  options: z.record(z.string(), z.array(variantChoiceSchema)).optional(),
+  exclusions: z.array(z.record(z.string(), z.string())).optional(),
 });
 
 const conditionRuleSchema = z.discriminatedUnion("kind", [
@@ -833,7 +981,11 @@ const shippingSchema = z.object({
   destinations: geoPolicySchema,
   methods: z.array(z.object({ method: shippingMethodEnum, enabled: z.boolean(), label: z.string().optional() })),
   pricing: z.union([
-    z.object({ mode: z.literal("passthrough"), markupPct: z.number().optional() }),
+    z.object({
+      mode: z.literal("passthrough"),
+      markupPct: z.number().optional(),
+      fallbackCost: z.number().nonnegative().optional(),
+    }),
     z.object({ mode: z.literal("free"), absorbInPrice: z.boolean() }),
     z.object({
       mode: z.literal("flat"),
@@ -854,16 +1006,21 @@ export const productSchema = z.object({
     name: z.string(),
     tagline: z.string().optional(),
     description: z.string(),
-    images: z.array(imageSchema),
     badges: z.array(z.string()),
   }),
   provider: z.object({
     id: z.enum(["lulu", "manual"]),
     sku: z.string(),
     printAreas: z.object({ interior: z.string(), cover: z.string().optional(), spine: z.string().optional() }),
-    verified: z.boolean(),
+    // Spelled out per environment rather than as a record: a product is
+    // normally verified in one environment and not the other, and a keyed
+    // record would demand an entry for both.
+    verifiedIn: z
+      .object({ sandbox: skuVerificationSchema.optional(), live: skuVerificationSchema.optional() })
+      .optional(),
   }),
   spec: specSchema,
+  variants: variantPolicySchema.optional(),
   conditions: conditionsSchema,
   cost: costSchema,
   pricing: pricingSchema,
@@ -880,15 +1037,6 @@ export const productsConfigSchema = z.object({
 
 // ---- Seeding from the existing Lulu catalog --------------------------------
 
-/** Documented Lulu page maximums by binding (mins live on each BookProduct). */
-const BINDING_MAX_PAGES: Record<Binding, number> = {
-  "saddle-stitch": 48,
-  "perfect-bound": 800,
-  "coil-bound": 470,
-  casewrap: 800,
-  "linen-wrap": 800,
-};
-
 function orientationFromAspect(aspect: number): ProductSpec["orientation"] {
   if (aspect >= 1.12) return "landscape";
   if (aspect <= 0.9) return "portrait";
@@ -896,12 +1044,22 @@ function orientationFromAspect(aspect: number): ProductSpec["orientation"] {
 }
 
 /**
- * Build initial {@link ProductDefinition}s from the curated Lulu catalog so
- * admins start from real SKUs/specs (status `draft`, unverified) instead of a
- * blank slate. Prices default to a 45% target margin; cost is provider-live.
+ * Build initial {@link ProductDefinition}s from the curated Lulu format catalog
+ * so admins start from real SKUs/specs (status `draft`, unverified) instead of a
+ * blank slate. One product per trim × binding; print/paper/finish ride on
+ * {@link ProductDefinition.variants} so every measured combination is buyable
+ * without a product record each.
+ *
+ * Cost is `providerLive`, so what we pay is always the provider's own number.
+ * Prices are NOT: every seed inherits the single flat default tier, which is a
+ * placeholder and not a margin. Print cost climbs steeply with page count — a
+ * hardcover measured $16 at 24 pages and $183 at 800 — so a seeded product left
+ * at the default price sells at a loss on a long book. Verify it, measure its
+ * cost, then suggest prices (and variant deltas) before making it active.
  */
 export function seedProductsFromCatalog(): ProductDefinition[] {
-  return LULU_BOOK_PRODUCTS.map((bp, i) => {
+  return LULU_BOOK_FORMATS.map((fmt, i) => {
+    const bp = fmt.product;
     const base = createDefaultProduct({
       id: newProductId("lulu"),
       sortOrder: i,
@@ -914,11 +1072,13 @@ export function seedProductsFromCatalog(): ProductDefinition[] {
         name: bp.label,
         description: bp.description,
       },
+      // No verification records: the curated catalog's `verified` flag was
+      // earned against whichever environment happened to be probed, so a seed
+      // can't inherit it. The admin verifies against the target environment.
       provider: {
         id: "lulu",
         sku: bp.sku,
         printAreas: { ...bp.printAreas },
-        verified: bp.verified,
       },
       spec: {
         ...base.spec,
@@ -933,10 +1093,78 @@ export function seedProductsFromCatalog(): ProductDefinition[] {
           wrapMarginIn: bp.binding === "casewrap" || bp.binding === "linen-wrap" ? 0.5 : undefined,
         },
       },
+      variants: fmt.variants,
       conditions: {
         ...base.conditions,
-        pages: { min: bp.minPages, max: BINDING_MAX_PAGES[bp.binding] ?? 800, step: bp.pageStep },
+        pages: { min: bp.minPages, max: bp.maxPages, step: bp.pageStep },
       },
     };
   });
+}
+
+/**
+ * Find the catalog product for a SKU. Exact match first, then same trim+binding
+ * (so an order's composed variant SKU still resolves to its format product).
+ */
+export function findProductForSku<T extends { provider: { sku: string }; status?: ProductStatus }>(
+  products: readonly T[],
+  sku: string,
+  opts: { activeOnly?: boolean } = {},
+): T | undefined {
+  const needle = (sku ?? "").trim();
+  if (!needle) return undefined;
+  const list = opts.activeOnly ? products.filter((p) => p.status === "active") : products;
+  const exact = list.find((p) => p.provider.sku === needle);
+  if (exact) return exact;
+  return list.find((p) => sameFormat(p.provider.sku, needle));
+}
+
+/** Storefront counterpart of {@link findProductForSku}. */
+export function findPublicProductForSku(
+  products: readonly PublicProduct[],
+  sku: string,
+): PublicProduct | undefined {
+  const needle = (sku ?? "").trim();
+  if (!needle) return undefined;
+  return products.find((p) => p.sku === needle) ?? products.find((p) => sameFormat(p.sku, needle));
+}
+
+/**
+ * Turn a checkout request (format SKU + optional variant) into the product, the
+ * allowed variant, and the provider SKU that actually prints. Returns null when
+ * the format isn't in the catalog or the variant isn't offered.
+ */
+export function resolvePrintOrder(args: {
+  products: readonly ProductDefinition[];
+  /** Base format SKU, or any same-format composed SKU. */
+  productSku: string;
+  variant?: VariantSelection;
+  activeOnly?: boolean;
+}): { product: ProductDefinition; variant: VariantSelection; printSku: string } | null {
+  const product = findProductForSku(args.products, args.productSku, {
+    activeOnly: args.activeOnly,
+  });
+  if (!product) return null;
+
+  const base = variantFromSku(product.provider.sku);
+  // An explicitly chosen variant must be offered — never silently substitute a
+  // different one (the customer would be charged for something they didn't pick).
+  // When the caller only sent a SKU, derive the variant from it and fall back to
+  // the nearest orderable option if that exact combo was retired.
+  let variant: VariantSelection | undefined;
+  if (args.variant && isVariantSelection(args.variant)) {
+    if (!variantAllowed(product.variants, args.variant)) return null;
+    variant = args.variant;
+  } else {
+    const derived = variantFromSku(args.productSku) ?? base;
+    if (!derived) return null;
+    variant = variantAllowed(product.variants, derived)
+      ? derived
+      : firstAllowedVariant(product.variants, base ?? undefined);
+  }
+  if (!variant) return null;
+
+  const printSku = skuForVariant(product.provider.sku, variant);
+  if (!printSku) return null;
+  return { product, variant, printSku };
 }

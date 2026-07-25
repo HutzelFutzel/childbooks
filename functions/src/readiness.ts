@@ -30,6 +30,11 @@ import { createLuluProvider } from "../../books-frontend/src/core/fulfillment/lu
 import { createAdminAssetHost } from "./assets";
 import { serverConfig } from "./config";
 import { getPlansConfig, reprojectPublicPlans } from "./plans";
+import { getProductsConfig } from "./products";
+import {
+  verificationCoversPages,
+  verificationFor,
+} from "../../books-frontend/src/core/config/products";
 import { keyMode, maskKey } from "./stripeClient";
 import { liveSecretsBound } from "./secrets";
 import { getRuntimeEnv, setRuntimeEnv } from "./runtimeConfig";
@@ -237,6 +242,65 @@ async function luluReadiness(env: BillingEnv, clientKey: string, clientSecret: s
   }
 }
 
+// ---- Print product readiness ------------------------------------------------
+
+/**
+ * Every product a customer can buy must be proven printable in the target
+ * environment. This is the check that makes flipping to live safe: an
+ * unverified SKU fails at print-job creation, which happens AFTER the customer
+ * has been charged, so the failure mode is a refund rather than a declined sale.
+ *
+ * Verification is not run here — probing the whole catalog would make the
+ * readiness page slow and rate-limited. It reports what the recorded verdicts
+ * say and points at the Verify action.
+ */
+async function productsReadiness(env: BillingEnv): Promise<HealthCheck[]> {
+  const config = await getProductsConfig();
+  const sellable = config.products.filter((p) => p.status === "active" && p.provider.id === "lulu");
+
+  if (sellable.length === 0) {
+    return [
+      check(
+        "products-verified",
+        "Print products",
+        "warn",
+        "No active print products, so there's nothing to sell.",
+        "Activate at least one product in the Products tab.",
+      ),
+    ];
+  }
+
+  const unverified: string[] = [];
+  const rejected: string[] = [];
+  const stale: string[] = [];
+
+  for (const p of sellable) {
+    const name = p.presentation.name || p.provider.sku;
+    const record = verificationFor(p.provider, env);
+    if (!record) unverified.push(name);
+    else if (!record.ok) rejected.push(`${name} (${record.error ?? "rejected"})`);
+    else if (!verificationCoversPages(record, p.conditions.pages)) {
+      stale.push(`${name} (verified ${record.pages.min}–${record.pages.max}, now allows ${p.conditions.pages.min}–${p.conditions.pages.max})`);
+    }
+  }
+
+  const fix = `Run Verify against ${env} in the Products tab.`;
+  const checks: HealthCheck[] = [];
+  if (rejected.length) {
+    checks.push(check("products-rejected", "Print SKUs rejected", "fail", `The ${env} print catalog rejected: ${rejected.join("; ")}.`, "Fix the SKU or page range, then re-verify."));
+  }
+  if (unverified.length) {
+    checks.push(check("products-verified", "Print SKUs verified", "fail", `Never verified against ${env}: ${unverified.join(", ")}.`, fix));
+  }
+  if (stale.length) {
+    checks.push(check("products-page-range", "Verified page ranges", "fail", `Page range widened since verification: ${stale.join("; ")}.`, fix));
+  }
+  if (checks.length === 0) {
+    checks.push(check("products-verified", "Print SKUs verified", "pass", `All ${sellable.length} active print product(s) verified against ${env}.`));
+  }
+  return checks;
+}
+
 // ---- Aggregate -------------------------------------------------------------
 
 export async function goLiveReadiness(env: BillingEnv = "live"): Promise<ReadinessReport> {
@@ -272,10 +336,11 @@ export async function goLiveReadiness(env: BillingEnv = "live"): Promise<Readine
   const stripe = new Stripe(cfg.stripe.secretKey, { appInfo: { name: "childbooks" } });
   const plansConfig = await getPlansConfig();
 
-  const [stripeChecks, planChecks, luluChecks] = await Promise.all([
+  const [stripeChecks, planChecks, luluChecks, productChecks] = await Promise.all([
     stripeReadiness(env, stripe, cfg.stripe.secretKey, cfg.stripe.webhookSecret),
     plansReadiness(env, stripe, plansConfig.plans),
     luluReadiness(env, cfg.fulfillment.lulu.clientKey, cfg.fulfillment.lulu.clientSecret),
+    productsReadiness(env),
   ]);
 
   const appUrl = cfg.stripe.appUrl;
@@ -289,6 +354,7 @@ export async function goLiveReadiness(env: BillingEnv = "live"): Promise<Readine
     { id: "stripe", label: "Payments (Stripe live)", ok: groupOk(stripeChecks), checks: stripeChecks },
     { id: "plans", label: "Subscription plans", ok: groupOk(planChecks), checks: planChecks },
     { id: "lulu", label: "Print (Lulu live)", ok: groupOk(luluChecks), checks: luluChecks },
+    { id: "products", label: "Print products", ok: groupOk(productChecks), checks: productChecks },
     { id: "config", label: "Configuration", ok: groupOk([urlCheck]), checks: [urlCheck] },
   ];
 

@@ -11,6 +11,7 @@
  */
 import { create } from "zustand";
 import { backendFetch } from "../platform/backend";
+import { marketParam } from "./adminMarketStore";
 import { resolveRange, type Timeframe } from "../core/analytics/types";
 
 export type FinanceCategoryFilter =
@@ -73,6 +74,30 @@ export interface FinanceGroupRow {
   count: number;
 }
 
+/** One market's contribution over the window. */
+export interface FinanceCountryRow extends FinanceGroupRow {
+  units: number;
+  refundUsd: number;
+  buyers: number;
+}
+
+/** One product's contribution over the window. */
+export interface FinanceProductRow extends FinanceGroupRow {
+  sku: string | null;
+  units: number;
+  refundUsd: number;
+  netPerUnitUsd: number | null;
+  countries: number;
+}
+
+export interface FinanceSeriesPoint {
+  day: string;
+  revenueUsd: number;
+  costUsd: number;
+  netUsd: number;
+  units: number;
+}
+
 export interface FinanceSummaryData {
   fromMs: number;
   toMs: number;
@@ -85,6 +110,9 @@ export interface FinanceSummaryData {
   byKind: FinanceKindRow[];
   byUser: FinanceGroupRow[];
   byProject: FinanceGroupRow[];
+  byCountry: FinanceCountryRow[];
+  byProduct: FinanceProductRow[];
+  series: FinanceSeriesPoint[];
 }
 
 export interface AdminAlertRow {
@@ -185,6 +213,7 @@ export const useAdminFinance = create<AdminFinanceState>((set, get) => ({
     try {
       const qs =
         `from=${range.from}&to=${range.to}` +
+        marketParam() +
         (category !== "all" ? `&category=${category}` : "") +
         (uid ? `&uid=${encodeURIComponent(uid)}` : "") +
         (projectId ? `&projectId=${encodeURIComponent(projectId)}` : "");

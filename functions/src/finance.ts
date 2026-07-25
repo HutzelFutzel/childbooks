@@ -6,7 +6,12 @@
  * writes only; denied to clients):
  *
  *   { at, category, kind, amountUsd, uid?, projectId?, sparks?, currency?,
- *     amount?, ref?, meta? }
+ *     amount?, country?, productId?, sku?, units?, ref?, meta? }
+ *
+ * `country` and `productId` are the two analysis dimensions the admin dashboard
+ * slices on. Both are stamped at WRITE time rather than joined at read time:
+ * the stream is append-only and immutable, so a revenue line that didn't record
+ * which market and which product it came from can never be attributed later.
  *
  * `amountUsd` is SIGNED: positive = revenue, negative = cost. Non-money facts
  * (Spark grants/spends, failure markers) carry `amountUsd: 0` plus a `sparks`
@@ -28,6 +33,7 @@ import { getFirestore, type Query } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { getPricingSettings } from "./appConfig";
 import { fxRate } from "../../books-frontend/src/core/config/productMath";
+import { normalizeCountry, UNKNOWN_COUNTRY } from "../../books-frontend/src/core/analytics/markets";
 import type { CurrencyCode } from "../../books-frontend/src/core/config/products";
 
 export type FinanceCategory = "sparks" | "books" | "subscriptions" | "waste" | "infra" | "ops";
@@ -71,11 +77,41 @@ export interface FinanceEventInput {
   /** Original money amount + currency (before USD conversion), if applicable. */
   currency?: string;
   amount?: number;
+  /**
+   * ISO-3166 alpha-2 market this money came from or went to. Which country
+   * that is depends on the line: revenue uses the BILLING country (who paid),
+   * print costs use the SHIPPING DESTINATION (what drove the cost). They differ
+   * on every gift order, so the dashboard reports them as separate dimensions
+   * rather than pretending there's one "country" per order.
+   */
+  country?: string;
+  /** Stable product key (see {@link productKey}) — the "top products" axis. */
+  productId?: string;
+  /** Provider SKU for print lines, kept for provider-side reconciliation. */
+  sku?: string;
+  /** Sellable units on this line (copies for print, else 1). */
+  units?: number;
   /** Idempotency handle — same (kind, ref) never writes twice. */
   ref?: string;
   meta?: Record<string, unknown>;
   /** Event time override (defaults to now). */
   at?: number;
+}
+
+/**
+ * Build the stable product key every revenue/cost line is grouped by.
+ *
+ * Namespaced by family so print books, ebooks, Spark packs and subscription
+ * plans share one "top products" ranking. Print uses the catalog's INTERNAL
+ * product id, never the provider SKU: re-pointing a product at a different
+ * Lulu SKU (paper change, provider switch) must not split its history in two.
+ */
+export function productKey(
+  family: "print" | "ebook" | "pack" | "plan",
+  id: string | null | undefined,
+): string {
+  const slug = (id ?? "").trim();
+  return slug ? `${family}:${slug}` : family;
 }
 
 function db() {
@@ -125,6 +161,11 @@ export async function recordFinanceEvent(e: FinanceEventInput): Promise<void> {
     if (typeof e.sparks === "number" && e.sparks !== 0) doc.sparks = e.sparks;
     if (e.currency) doc.currency = e.currency.toUpperCase();
     if (typeof e.amount === "number") doc.amount = e.amount;
+    const country = normalizeCountry(e.country);
+    if (country) doc.country = country;
+    if (e.productId) doc.productId = e.productId;
+    if (e.sku) doc.sku = e.sku;
+    if (typeof e.units === "number" && Number.isFinite(e.units)) doc.units = e.units;
     if (e.ref) doc.ref = e.ref;
     if (e.meta && Object.keys(e.meta).length > 0) doc.meta = e.meta;
     if (e.ref) {
@@ -149,6 +190,11 @@ export async function recordChargeRevenue(args: {
   gross: number;
   fee?: number | null;
   currency: string;
+  /** Billing market of the charge. */
+  country?: string;
+  productId?: string;
+  sku?: string;
+  units?: number;
   ref: string;
   meta?: Record<string, unknown>;
 }): Promise<void> {
@@ -161,11 +207,17 @@ export async function recordChargeRevenue(args: {
     projectId: args.projectId,
     currency: args.currency,
     amount: args.gross,
+    country: args.country,
+    productId: args.productId,
+    sku: args.sku,
+    units: args.units,
     ref: args.ref,
     meta: args.meta,
   });
   if (typeof args.fee === "number" && args.fee > 0) {
     const feeUsd = await toUsd(args.fee, args.currency);
+    // The fee carries the same dimensions as the charge it was taken from, so
+    // per-market and per-product NET stays correct rather than only gross.
     await recordFinanceEvent({
       category: args.category,
       kind: "stripeFee",
@@ -174,6 +226,9 @@ export async function recordChargeRevenue(args: {
       projectId: args.projectId,
       currency: args.currency,
       amount: args.fee,
+      country: args.country,
+      productId: args.productId,
+      sku: args.sku,
       ref: args.ref,
     });
   }
@@ -199,6 +254,9 @@ export async function recordTaxRemitted(args: {
   /** Major-unit tax amount in `currency`. */
   tax: number;
   currency: string;
+  /** Billing market — tax rates are market-specific, so net-by-market needs it. */
+  country?: string;
+  productId?: string;
   /** Idempotency handle (paymentId / invoiceId). */
   ref: string;
   meta?: Record<string, unknown>;
@@ -212,6 +270,8 @@ export async function recordTaxRemitted(args: {
     projectId: args.projectId,
     currency: args.currency,
     amount: args.tax,
+    country: args.country,
+    productId: args.productId,
     ref: args.ref,
   });
 }
@@ -236,6 +296,28 @@ export interface FinanceGroupSummary {
   count: number;
 }
 
+/** One market's contribution to the window. */
+export interface FinanceCountrySummary extends FinanceGroupSummary {
+  /** Sellable units sold into this market. */
+  units: number;
+  /** Refunded USD (a subset of `costUsd`) — the market's quality signal. */
+  refundUsd: number;
+  /** Distinct paying users seen in this market. */
+  buyers: number;
+}
+
+/** One product's contribution to the window. */
+export interface FinanceProductSummary extends FinanceGroupSummary {
+  /** Latest provider SKU observed for this product (print lines only). */
+  sku: string | null;
+  units: number;
+  refundUsd: number;
+  /** Net USD per unit — the number that ranks products honestly. */
+  netPerUnitUsd: number | null;
+  /** Distinct markets this product sold into. */
+  countries: number;
+}
+
 export interface FinanceSummary {
   fromMs: number;
   toMs: number;
@@ -251,6 +333,21 @@ export interface FinanceSummary {
   byKind: FinanceKindSummary[];
   byUser: FinanceGroupSummary[];
   byProject: FinanceGroupSummary[];
+  /** Ranked markets — the "which countries actually pay" view. */
+  byCountry: FinanceCountrySummary[];
+  /** Ranked products — top sellers by net contribution. */
+  byProduct: FinanceProductSummary[];
+  /** Daily net/revenue/cost series across the window (zero-filled, ascending). */
+  series: FinanceSeriesPoint[];
+}
+
+/** One day on the finance time-series axis (`day` is `YYYY-MM-DD` in tz). */
+export interface FinanceSeriesPoint {
+  day: string;
+  revenueUsd: number;
+  costUsd: number;
+  netUsd: number;
+  units: number;
 }
 
 const MAX_SCAN = 50_000;
@@ -264,8 +361,29 @@ export interface FinanceSummaryQuery {
   /** Optional filters for drill-down. */
   uid?: string;
   projectId?: string;
+  /** Optional market filter (ISO-3166 alpha-2, or "ZZ" for unattributed). */
+  country?: string;
+  /** Optional product filter (a {@link productKey}). */
+  productId?: string;
   /** Cap for the per-user / per-project group lists. */
   groupLimit?: number;
+  /** IANA timezone the daily series is bucketed in. Defaults to UTC. */
+  timezone?: string;
+}
+
+/** `YYYY-MM-DD` for an instant in the given IANA timezone. */
+function dayKeyIn(at: number, tz: string): string {
+  try {
+    // `en-CA` formats as YYYY-MM-DD, which is exactly the sortable key we want.
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date(at));
+  } catch {
+    return new Date(at).toISOString().slice(0, 10);
+  }
 }
 
 /**
@@ -275,10 +393,20 @@ export interface FinanceSummaryQuery {
  */
 export async function financeSummary(q: FinanceSummaryQuery): Promise<FinanceSummary> {
   const groupLimit = Math.min(Math.max(q.groupLimit ?? 50, 1), 500);
+  const tz = q.timezone || "UTC";
   const byCategory = new Map<string, { revenueUsd: number; costUsd: number; netUsd: number; count: number }>();
   const byKind = new Map<string, FinanceKindSummary>();
   const byUser = new Map<string, FinanceGroupSummary>();
   const byProject = new Map<string, FinanceGroupSummary>();
+  const byCountry = new Map<
+    string,
+    FinanceCountrySummary & { buyerSet: Set<string> }
+  >();
+  const byProduct = new Map<
+    string,
+    FinanceProductSummary & { countrySet: Set<string> }
+  >();
+  const byDay = new Map<string, FinanceSeriesPoint>();
   let revenue = 0;
   let cost = 0;
   let count = 0;
@@ -303,12 +431,19 @@ export async function financeSummary(q: FinanceSummaryQuery): Promise<FinanceSum
       if (q.category && category !== q.category) continue;
       const uid = (d.uid as string) ?? "";
       const projectId = (d.projectId as string) ?? "";
+      const country = normalizeCountry(d.country) ?? UNKNOWN_COUNTRY;
+      const productId = (d.productId as string) ?? "";
       if (q.uid && uid !== q.uid) continue;
       if (q.projectId && projectId !== q.projectId) continue;
+      if (q.country && country !== q.country) continue;
+      if (q.productId && productId !== q.productId) continue;
 
       const kind = (d.kind as string) ?? "unknown";
       const amountUsd = typeof d.amountUsd === "number" ? d.amountUsd : 0;
       const sparks = typeof d.sparks === "number" ? d.sparks : 0;
+      const units = typeof d.units === "number" && Number.isFinite(d.units) ? d.units : 0;
+      const at = typeof d.at === "number" ? d.at : q.fromMs;
+      const refundUsd = kind === "refund" && amountUsd < 0 ? -amountUsd : 0;
 
       count += 1;
       if (amountUsd >= 0) revenue += amountUsd;
@@ -344,6 +479,51 @@ export async function financeSummary(q: FinanceSummaryQuery): Promise<FinanceSum
         g.count += 1;
         map.set(key, g);
       }
+
+      // Market rollup. Unattributed lines (infra, ops, legacy events) still land
+      // under "ZZ" so the per-market totals always reconcile to the grand total.
+      const cn =
+        byCountry.get(country) ??
+        ({
+          key: country, revenueUsd: 0, costUsd: 0, netUsd: 0, count: 0,
+          units: 0, refundUsd: 0, buyers: 0, buyerSet: new Set<string>(),
+        } as FinanceCountrySummary & { buyerSet: Set<string> });
+      if (amountUsd >= 0) cn.revenueUsd += amountUsd;
+      else cn.costUsd += -amountUsd;
+      cn.netUsd += amountUsd;
+      cn.count += 1;
+      cn.units += units;
+      cn.refundUsd += refundUsd;
+      if (uid && amountUsd > 0) cn.buyerSet.add(uid);
+      byCountry.set(country, cn);
+
+      if (productId) {
+        const pr =
+          byProduct.get(productId) ??
+          ({
+            key: productId, sku: null, revenueUsd: 0, costUsd: 0, netUsd: 0, count: 0,
+            units: 0, refundUsd: 0, netPerUnitUsd: null, countries: 0,
+            countrySet: new Set<string>(),
+          } as FinanceProductSummary & { countrySet: Set<string> });
+        if (amountUsd >= 0) pr.revenueUsd += amountUsd;
+        else pr.costUsd += -amountUsd;
+        pr.netUsd += amountUsd;
+        pr.count += 1;
+        pr.units += units;
+        pr.refundUsd += refundUsd;
+        if (typeof d.sku === "string" && d.sku) pr.sku = d.sku;
+        if (country !== UNKNOWN_COUNTRY) pr.countrySet.add(country);
+        byProduct.set(productId, pr);
+      }
+
+      const dayKey = dayKeyIn(at, tz);
+      const day =
+        byDay.get(dayKey) ?? { day: dayKey, revenueUsd: 0, costUsd: 0, netUsd: 0, units: 0 };
+      if (amountUsd >= 0) day.revenueUsd += amountUsd;
+      else day.costUsd += -amountUsd;
+      day.netUsd += amountUsd;
+      day.units += units;
+      byDay.set(dayKey, day);
     }
     cursor = snap.docs[snap.docs.length - 1];
     if (scanned >= MAX_SCAN) {
@@ -365,6 +545,45 @@ export async function financeSummary(q: FinanceSummaryQuery): Promise<FinanceSum
       .sort((a, b) => Math.abs(b.netUsd) - Math.abs(a.netUsd))
       .slice(0, groupLimit)
       .map(roundGroup);
+
+  const countries: FinanceCountrySummary[] = [...byCountry.values()]
+    .map(({ buyerSet, ...c }) => ({
+      ...roundGroup(c),
+      units: c.units,
+      refundUsd: r2(c.refundUsd),
+      buyers: buyerSet.size,
+    }))
+    // Revenue-first: a market is interesting because it BUYS, and ranking by
+    // net would bury a high-volume market that happens to be cost-heavy.
+    .sort((a, b) => b.revenueUsd - a.revenueUsd || b.netUsd - a.netUsd)
+    .slice(0, groupLimit);
+
+  const products: FinanceProductSummary[] = [...byProduct.values()]
+    .map(({ countrySet, ...p }) => ({
+      ...roundGroup(p),
+      sku: p.sku,
+      units: p.units,
+      refundUsd: r2(p.refundUsd),
+      netPerUnitUsd: p.units > 0 ? r2(p.netUsd / p.units) : null,
+      countries: countrySet.size,
+    }))
+    .sort((a, b) => b.revenueUsd - a.revenueUsd || b.netUsd - a.netUsd)
+    .slice(0, groupLimit);
+
+  // Zero-fill the day axis so a gap reads as "no sales", not "no data".
+  const series: FinanceSeriesPoint[] = [];
+  const seenDays = new Set<string>();
+  for (let t = q.fromMs; t <= q.toMs + 86_400_000; t += 86_400_000) {
+    const key = dayKeyIn(Math.min(t, q.toMs), tz);
+    if (seenDays.has(key)) continue;
+    seenDays.add(key);
+    const d = byDay.get(key);
+    series.push(
+      d
+        ? { day: key, revenueUsd: r2(d.revenueUsd), costUsd: r2(d.costUsd), netUsd: r2(d.netUsd), units: d.units }
+        : { day: key, revenueUsd: 0, costUsd: 0, netUsd: 0, units: 0 },
+    );
+  }
 
   return {
     fromMs: q.fromMs,
@@ -391,5 +610,8 @@ export async function financeSummary(q: FinanceSummaryQuery): Promise<FinanceSum
       .sort((a, b) => b.costUsd - a.costUsd || b.revenueUsd - a.revenueUsd),
     byUser: topGroups(byUser),
     byProject: topGroups(byProject),
+    byCountry: countries,
+    byProduct: products,
+    series,
   };
 }

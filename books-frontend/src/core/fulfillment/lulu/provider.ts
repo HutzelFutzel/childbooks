@@ -26,6 +26,7 @@ import type {
   ShippingMethod,
 } from "../types";
 import { LULU_BOOK_PRODUCTS } from "./products";
+import { sameFormat } from "./skuAxes";
 import {
   mapCostToQuote,
   mapCoverDimensionsMm,
@@ -62,7 +63,14 @@ const BASE_URL: Record<LuluEnv, string> = {
 
 const TOKEN_PATH = "/auth/realms/glasstree/protocol/openid-connect/token";
 
-/** Map our domain shipping tiers to Lulu shipping levels. */
+/**
+ * Map our domain shipping tiers to Lulu shipping levels.
+ *
+ * Availability is per destination, not universal: MAIL / PRIORITY_MAIL / EXPRESS
+ * quote everywhere we sell, GROUND is unavailable to the US and UK, and
+ * EXPEDITED is US-only. Quoting an unavailable level is a hard 400, so which
+ * tiers a product offers belongs in its admin shipping config.
+ */
 const SHIPPING_LEVEL: Record<ShippingMethod, string> = {
   Budget: "MAIL",
   Standard: "GROUND",
@@ -245,7 +253,9 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
     },
 
     async quote(req: QuoteRequest): Promise<Quote[]> {
-      const product = LULU_BOOK_PRODUCTS.find((p) => p.sku === req.productSku);
+      const product =
+        LULU_BOOK_PRODUCTS.find((p) => p.sku === req.productSku) ??
+        LULU_BOOK_PRODUCTS.find((p) => sameFormat(p.sku, req.productSku));
       // Price the real (normalized) page count when the caller provides it;
       // otherwise fall back to the product minimum as a coarse estimate.
       const pageCount = Math.max(

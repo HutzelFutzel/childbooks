@@ -118,8 +118,8 @@ export interface BookSizeOption {
 
 export const BOOK_SIZES: BookSizeOption[] = [
   { id: "square", label: "Square", description: "1:1 — friendly and balanced, great for young readers.", aspect: 1, widthIn: 8.5, heightIn: 8.5 },
-  { id: "landscape", label: "Landscape", description: "4:3 — wide scenes and panoramic spreads.", aspect: 4 / 3, widthIn: 10, heightIn: 7.5 },
-  { id: "portrait", label: "Portrait", description: "3:4 — tall, classic picture-book feel.", aspect: 3 / 4, widthIn: 7.5, heightIn: 10 },
+  { id: "landscape", label: "Landscape", description: "Wide scenes and panoramic spreads.", aspect: 11 / 8.5, widthIn: 11, heightIn: 8.5 },
+  { id: "portrait", label: "Portrait", description: "Tall, classic picture-book feel.", aspect: 8.5 / 11, widthIn: 8.5, heightIn: 11 },
 ];
 
 /** Resolution (dots per inch) used when rasterizing pages for export. */

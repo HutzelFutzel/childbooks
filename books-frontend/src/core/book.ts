@@ -12,6 +12,7 @@ import {
   findBookProduct,
   type BookProduct,
 } from "./fulfillment";
+import { sameFormat } from "./fulfillment/lulu/skuAxes";
 import { resolveFormatCapabilities, type FormatCapabilities } from "./book/format";
 import { paginate } from "./pipeline/pagination";
 import { getCursor } from "./versioning";
@@ -24,6 +25,9 @@ export function bookProductForConfig(config: ConfigLike): BookProduct {
   if (config.productSku) {
     const exact = findBookProduct(config.productSku);
     if (exact) return exact;
+    // A composed variant SKU still describes the same format (trim + binding).
+    const byFormat = BOOK_PRODUCTS.find((p) => sameFormat(p.sku, config.productSku!));
+    if (byFormat) return byFormat;
   }
   if (config.bookSize) {
     const byShape = BOOK_PRODUCTS.find(

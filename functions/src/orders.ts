@@ -18,7 +18,9 @@ import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { sendOrderShippedEmail } from "./email/triggers";
 import { getAdminSettings } from "./adminSettings";
-import { recordFinanceEvent, toUsd } from "./finance";
+import { productKey, recordFinanceEvent, toUsd } from "./finance";
+import { getProductsConfig } from "./products";
+import { normalizeCountry, UNKNOWN_COUNTRY } from "../../books-frontend/src/core/analytics/markets";
 import type {
   FulfillmentOrder,
   Money,
@@ -85,7 +87,14 @@ export interface PersistCreatedOrderArgs {
   /** The paying payment id — anchors finance events + webhook cost booking. */
   paymentId?: string | null;
   /** The CONFIGURED cost estimate captured at checkout (calibration baseline). */
-  estimatedCost?: { amount: number; production: number; shipping: number; currency: string; shippingSource: string } | null;
+  estimatedCost?: {
+    amount: number;
+    production: number;
+    shipping: number;
+    currency: string;
+    shippingSource: string;
+    productionSource?: string;
+  } | null;
   draft: OrderDraft;
   order: FulfillmentOrder;
 }
@@ -132,6 +141,9 @@ export async function persistCreatedOrder(args: PersistCreatedOrderArgs): Promis
     paymentId: args.paymentId ?? null,
     estimatedCost: args.estimatedCost ? stripUndefined(args.estimatedCost) : null,
     statusName: statusNameOf(order.raw),
+    // Hoisted out of `createRequest` so the analytics scans can group by market
+    // without reading into the nested provider request payload.
+    destinationCountry: normalizeCountry(draft.destinationCountry),
     createRequest: sanitizeDraft(draft),
     createResponse: (order.raw as Record<string, unknown> | undefined) ?? null,
   };
@@ -150,6 +162,7 @@ export async function persistCreatedOrder(args: PersistCreatedOrderArgs): Promis
     projectId: draft.merchantReference ?? null,
     sku: draft.productSku,
     copies: draft.copies,
+    destinationCountry: draft.destinationCountry,
     charges: order.charges,
     taxCharged: order.taxCharged,
     estimatedCost: args.estimatedCost ?? null,
@@ -214,6 +227,10 @@ export async function applyOrderStatusUpdate(order: FulfillmentOrder): Promise<b
       projectId: (snap.get("projectId") as string | undefined) ?? null,
       sku: (snap.get("productSku") as string | undefined) ?? null,
       copies: (snap.get("copies") as number | undefined) ?? null,
+      destinationCountry:
+        (snap.get("destinationCountry") as string | undefined) ??
+        (snap.get("createRequest.destinationCountry") as string | undefined) ??
+        null,
       charges: order.charges,
       taxCharged: order.taxCharged,
       estimatedCost:
@@ -246,6 +263,22 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+/**
+ * The catalog's internal product key for a provider SKU, so the cost line
+ * groups with the revenue line for the same product. Falls back to the SKU when
+ * the catalog can't be read or the SKU is no longer in it (retired products).
+ */
+async function printProductKey(sku: string | null): Promise<string | undefined> {
+  if (!sku) return undefined;
+  try {
+    const config = await getProductsConfig();
+    const internalId = config.products.find((p) => p.provider.sku === sku)?.id;
+    return productKey("print", internalId ?? sku);
+  } catch {
+    return productKey("print", sku);
+  }
+}
+
 interface BookPrintCostArgs {
   orderId: string;
   paymentId: string | null;
@@ -253,6 +286,12 @@ interface BookPrintCostArgs {
   projectId: string | null;
   sku: string | null;
   copies: number | null;
+  /**
+   * Where the order SHIPS. Print COGS is dominated by shipping, so the
+   * destination — not the buyer's billing country — is the market this cost
+   * belongs to. Booking it here is what makes per-market print margin real.
+   */
+  destinationCountry?: string | null;
   /** The provider's CURRENT (cumulative) charge for the order. */
   charges: Money[];
   /** Tax portion of `charges`, when the provider breaks it out. */
@@ -319,6 +358,9 @@ export async function bookPrintCostDelta(args: BookPrintCostArgs): Promise<void>
       projectId: args.projectId ?? undefined,
       currency,
       amount: delta,
+      country: normalizeCountry(args.destinationCountry) ?? undefined,
+      productId: await printProductKey(args.sku),
+      sku: args.sku ?? undefined,
       // Cumulative-keyed: the same charge level can never book twice.
       ref: `${refBase}_${Math.round(target * 100)}`,
       meta: {
@@ -360,10 +402,22 @@ export interface PrintCalibrationRow {
   pendingActual: number;
 }
 
+/**
+ * Cost drift for one SKU shipped to one market. Split out from the per-SKU view
+ * because shipping is the dominant term in print COGS: a SKU can be perfectly
+ * calibrated at home and badly underpriced across a border, and the blended
+ * per-SKU number hides exactly that.
+ */
+export interface PrintCalibrationMarketRow extends PrintCalibrationRow {
+  country: string;
+}
+
 export interface PrintCalibrationSummary {
   fromMs: number;
   scanned: number;
   rows: PrintCalibrationRow[];
+  /** The same drift, split per shipping destination (ranked by |drift|). */
+  byMarket: PrintCalibrationMarketRow[];
 }
 
 const CALIBRATION_SCAN_LIMIT = 2_000;
@@ -385,11 +439,20 @@ export async function printCostCalibration(days: number): Promise<PrintCalibrati
     .get();
 
   const bySku = new Map<string, PrintCalibrationRow>();
+  const byMarket = new Map<string, PrintCalibrationMarketRow>();
   for (const doc of snap.docs) {
     const sku = (doc.get("productSku") as string | undefined) || "unknown";
+    const country =
+      normalizeCountry(doc.get("destinationCountry")) ??
+      normalizeCountry(doc.get("createRequest.destinationCountry")) ??
+      UNKNOWN_COUNTRY;
     const row =
       bySku.get(sku) ??
       ({ sku, orders: 0, estimatedUsd: 0, actualUsd: 0, driftPct: null, missingEstimate: 0, pendingActual: 0 } satisfies PrintCalibrationRow);
+    const marketKey = `${sku}|${country}`;
+    const marketRow =
+      byMarket.get(marketKey) ??
+      ({ sku, country, orders: 0, estimatedUsd: 0, actualUsd: 0, driftPct: null, missingEstimate: 0, pendingActual: 0 } satisfies PrintCalibrationMarketRow);
 
     const est = doc.get("estimatedCost") as { amount?: number; currency?: string } | null;
     // Prefer the booked figure (net of reclaimed VAT — the true cost basis);
@@ -403,18 +466,26 @@ export async function printCostCalibration(days: number): Promise<PrintCalibrati
     const hasEstimate = typeof est?.amount === "number" && est.amount > 0;
     const hasActual = actualAmount > 0;
     if (hasEstimate && hasActual) {
+      const estUsd = await toUsd(est.amount!, est.currency ?? "USD");
+      const actUsd = await toUsd(actualAmount, actualCurrency);
       row.orders += 1;
-      row.estimatedUsd += await toUsd(est.amount!, est.currency ?? "USD");
-      row.actualUsd += await toUsd(actualAmount, actualCurrency);
+      row.estimatedUsd += estUsd;
+      row.actualUsd += actUsd;
+      marketRow.orders += 1;
+      marketRow.estimatedUsd += estUsd;
+      marketRow.actualUsd += actUsd;
     } else if (hasActual) {
       row.missingEstimate += 1;
+      marketRow.missingEstimate += 1;
     } else if (hasEstimate) {
       row.pendingActual += 1;
+      marketRow.pendingActual += 1;
     }
     bySku.set(sku, row);
+    byMarket.set(marketKey, marketRow);
   }
 
-  const rows = [...bySku.values()].map((r) => ({
+  const withDrift = <T extends PrintCalibrationRow>(r: T): T => ({
     ...r,
     estimatedUsd: round2(r.estimatedUsd),
     actualUsd: round2(r.actualUsd),
@@ -422,7 +493,15 @@ export async function printCostCalibration(days: number): Promise<PrintCalibrati
       r.orders > 0 && r.estimatedUsd > 0
         ? Math.round(((r.actualUsd - r.estimatedUsd) / r.estimatedUsd) * 1000) / 10
         : null,
-  }));
+  });
+
+  const rows = [...bySku.values()].map(withDrift);
   rows.sort((a, b) => Math.abs(b.driftPct ?? 0) - Math.abs(a.driftPct ?? 0));
-  return { fromMs, scanned: snap.size, rows };
+  const markets = [...byMarket.values()]
+    .map(withDrift)
+    // Single-order rows are noise at the market level — one odd shipping quote
+    // shouldn't outrank a consistent bias across a dozen orders.
+    .filter((r) => r.orders > 0)
+    .sort((a, b) => Math.abs(b.driftPct ?? 0) - Math.abs(a.driftPct ?? 0));
+  return { fromMs, scanned: snap.size, rows, byMarket: markets };
 }

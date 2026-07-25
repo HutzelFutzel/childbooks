@@ -18,6 +18,8 @@
  */
 import { getFirestore, FieldValue, type Query } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
+import { toUsd } from "./finance";
+import { normalizeCountry, UNKNOWN_COUNTRY } from "../../books-frontend/src/core/analytics/markets";
 
 function db() {
   ensureAdmin();
@@ -66,7 +68,17 @@ export interface EbookFulfillment {
  * by the webhook to place the print order. No binary blobs (URLs only).
  */
 export interface FulfillmentPlan {
+  /**
+   * The provider package id that actually prints — the format's base SKU with
+   * the customer's variant composed in. Lookup of the catalog product uses
+   * trim+binding equality against this, not string equality.
+   */
   productSku: string;
+  /**
+   * Domain variant the customer chose (`premium-colour` / …). Optional on
+   * orders placed before variants existed; derive from `productSku` when absent.
+   */
+  variant?: { print: string; paper: string; finish: string } | null;
   copies: number;
   shippingMethod: string;
   destinationCountry: string;
@@ -103,6 +115,11 @@ export interface FulfillmentPlan {
     currency: string;
     /** Whether the shipping part came from a live provider quote or the table. */
     shippingSource: "live" | "table";
+    /**
+     * Whether the production part came from a live provider quote or the table.
+     * Optional: orders placed before this was recorded have no value.
+     */
+    productionSource?: "live" | "table";
   } | null;
 }
 
@@ -297,6 +314,12 @@ export interface UpdatePaymentArgs {
   feeAmount?: number | null;
   netAmount?: number | null;
   orderId?: string;
+  /**
+   * ISO-3166 alpha-2 billing market, resolved from the settled charge. Kept on
+   * the admin record only (the buyer's own copy has no need for it) so the
+   * payments analytics can be sliced per market without re-reading Stripe.
+   */
+  billingCountry?: string | null;
   event?: string;
 }
 
@@ -316,6 +339,7 @@ export async function updatePayment(args: UpdatePaymentArgs): Promise<void> {
   if (args.stripeCustomerId !== undefined) adminPatch.stripeCustomerId = args.stripeCustomerId;
   if (args.feeAmount !== undefined) adminPatch.feeAmount = args.feeAmount;
   if (args.netAmount !== undefined) adminPatch.netAmount = args.netAmount;
+  if (args.billingCountry) adminPatch.billingCountry = args.billingCountry;
   if (args.event) adminPatch.events = FieldValue.arrayUnion({ at: Date.now(), type: args.event });
 
   await Promise.all([
@@ -341,6 +365,8 @@ export interface PaymentListItem {
   orderId: string | null;
   stripePaymentIntentId: string | null;
   createdAt: number | null;
+  /** Billing market, or the shipping destination when billing is unknown. */
+  country: string | null;
 }
 
 function tsToMs(v: unknown): number | null {
@@ -351,8 +377,13 @@ function tsToMs(v: unknown): number | null {
 }
 
 function toListItem(id: string, d: Record<string, unknown>): PaymentListItem {
+  const plan = d.fulfillment as { destinationCountry?: unknown } | null;
   return {
     id,
+    // Billing first (who paid), destination as a fallback so pre-capture
+    // orders still land in a market rather than in "unknown".
+    country:
+      normalizeCountry(d.billingCountry) ?? normalizeCountry(plan?.destinationCountry) ?? null,
     ownerUid: (d.ownerUid as string) ?? "",
     status: (d.status as PaymentStatus) ?? "pending",
     kind: (d.kind as PaymentKind) ?? "order",
@@ -369,11 +400,19 @@ function toListItem(id: string, d: Record<string, unknown>): PaymentListItem {
   };
 }
 
-/** List payments for the admin dashboard, newest first, within an optional window. */
+/**
+ * List payments for the admin dashboard, newest first, within an optional
+ * window. `country` filters in memory (the field is derived from billing OR
+ * shipping, so it isn't a single indexable field) — which means the display cap
+ * must be applied AFTER filtering, or a market's list would be truncated by
+ * payments from other markets.
+ */
 export async function listPayments(opts: {
   sinceMs?: number;
   limit?: number;
+  country?: string | null;
 }): Promise<PaymentListItem[]> {
+  const limit = Math.min(opts.limit ?? 200, 500);
   let q: Query = db().collection("payments").orderBy("createdAt", "desc");
   if (opts.sinceMs) {
     q = db()
@@ -381,9 +420,47 @@ export async function listPayments(opts: {
       .where("createdAt", ">=", new Date(opts.sinceMs))
       .orderBy("createdAt", "desc");
   }
-  q = q.limit(Math.min(opts.limit ?? 200, 500));
+  // Over-fetch when filtering so the cap bounds the RESULT, not the candidates.
+  q = q.limit(opts.country ? Math.min(limit * 10, MAX_PAYMENT_SCAN) : limit);
   const snap = await q.get();
-  return snap.docs.map((doc) => toListItem(doc.id, doc.data() as Record<string, unknown>));
+  const items = snap.docs.map((doc) => toListItem(doc.id, doc.data() as Record<string, unknown>));
+  const filtered = opts.country
+    ? items.filter((p) => (p.country ?? UNKNOWN_COUNTRY) === opts.country)
+    : items;
+  return filtered.slice(0, limit);
+}
+
+/**
+ * Cap for whole-window payment scans (analytics, not display). Well above the
+ * display cap so a market's aggregates are computed from every payment in the
+ * window rather than from whatever happened to fit in the first page.
+ */
+const MAX_PAYMENT_SCAN = 20_000;
+
+/** Every payment in `[sinceMs, now]`, paged, up to {@link MAX_PAYMENT_SCAN}. */
+async function scanPaymentsSince(
+  sinceMs: number,
+): Promise<{ items: PaymentListItem[]; capped: boolean }> {
+  const items: PaymentListItem[] = [];
+  let cursor: FirebaseFirestore.QueryDocumentSnapshot | null = null;
+  const PAGE = 1_000;
+  for (;;) {
+    let q: Query = db()
+      .collection("payments")
+      .where("createdAt", ">=", new Date(sinceMs))
+      .orderBy("createdAt", "desc")
+      .limit(PAGE);
+    if (cursor) q = q.startAfter(cursor);
+    const snap = await q.get();
+    if (snap.empty) break;
+    for (const doc of snap.docs) {
+      items.push(toListItem(doc.id, doc.data() as Record<string, unknown>));
+    }
+    cursor = snap.docs[snap.docs.length - 1];
+    if (items.length >= MAX_PAYMENT_SCAN) return { items, capped: true };
+    if (snap.size < PAGE) break;
+  }
+  return { items, capped: false };
 }
 
 export interface PaymentsAnalytics {
@@ -402,16 +479,47 @@ export interface PaymentsAnalytics {
   }[];
   /** Daily gross volume time series (base buckets), per currency. */
   series: { date: string; currency: string; gross: number; count: number }[];
+  /**
+   * Per-market rollup. Reported in USD (unlike {@link byCurrency}) because a
+   * market comparison is only meaningful on one scale — a market's currency is
+   * a property OF the market, so per-currency splitting would defeat the point.
+   */
+  byCountry: {
+    country: string;
+    grossUsd: number;
+    netUsd: number;
+    refundsUsd: number;
+    paidCount: number;
+    orderCount: number;
+    averageOrderUsd: number;
+    /** Share of paid checkouts that were refunded. */
+    refundRatePct: number;
+  }[];
+  /** The market filter this report was computed under, if any. */
+  country: string | null;
+  /** True when the window held more payments than one scan covers. */
+  capped: boolean;
   totalPayments: number;
   pendingCount: number;
   failedCount: number;
 }
 
 /** Aggregate payments in a rolling window for the admin "Payments" analysis tab. */
-export async function paymentsAnalytics(windowDays: number): Promise<PaymentsAnalytics> {
+export async function paymentsAnalytics(
+  windowDays: number,
+  country?: string | null,
+): Promise<PaymentsAnalytics> {
   const sinceMs = Date.now() - windowDays * 86_400_000;
-  const items = await listPayments({ sinceMs, limit: 500 });
+  // A full windowed scan, not the display page: aggregating the first 500 rows
+  // would silently under-report every total, and filtering that page by market
+  // would under-report it again.
+  const { items: all, capped } = await scanPaymentsSince(sinceMs);
+  const items = country ? all.filter((p) => (p.country ?? UNKNOWN_COUNTRY) === country) : all;
 
+  const byCountry = new Map<
+    string,
+    { grossUsd: number; feesUsd: number; refundsUsd: number; paidCount: number; orderCount: number; refundCount: number }
+  >();
   const byCurrency = new Map<
     string,
     {
@@ -437,7 +545,17 @@ export async function paymentsAnalytics(windowDays: number): Promise<PaymentsAna
       paidCount: 0,
       refundCount: 0,
     };
+    const market = p.country ?? "ZZ";
+    const cn = byCountry.get(market) ?? {
+      grossUsd: 0,
+      feesUsd: 0,
+      refundsUsd: 0,
+      paidCount: 0,
+      orderCount: 0,
+      refundCount: 0,
+    };
     bucket.orderCount += 1;
+    cn.orderCount += 1;
     if (p.status === "pending") pendingCount += 1;
     if (p.status === "failed") failedCount += 1;
     const isPaidLike = p.status === "paid" || p.status === "refunded" || p.status === "partially_refunded";
@@ -445,9 +563,14 @@ export async function paymentsAnalytics(windowDays: number): Promise<PaymentsAna
       bucket.paidCount += 1;
       bucket.grossVolume += p.amount;
       bucket.fees += p.feeAmount ?? 0;
+      cn.paidCount += 1;
+      cn.grossUsd += await toUsd(p.amount, cur);
+      cn.feesUsd += p.feeAmount ? await toUsd(p.feeAmount, cur) : 0;
       if (p.refundedAmount > 0) {
         bucket.refunds += p.refundedAmount;
         bucket.refundCount += 1;
+        cn.refundsUsd += await toUsd(p.refundedAmount, cur);
+        cn.refundCount += 1;
       }
       const day = p.createdAt ? new Date(p.createdAt).toISOString().slice(0, 10) : "unknown";
       const key = `${day}|${cur}`;
@@ -457,10 +580,26 @@ export async function paymentsAnalytics(windowDays: number): Promise<PaymentsAna
       seriesMap.set(key, s);
     }
     byCurrency.set(cur, bucket);
+    byCountry.set(market, cn);
   }
 
   return {
     windowDays,
+    country: country ?? null,
+    capped,
+    byCountry: [...byCountry.entries()]
+      .map(([market, c]) => ({
+        country: market,
+        grossUsd: round2(c.grossUsd),
+        netUsd: round2(c.grossUsd - c.feesUsd - c.refundsUsd),
+        refundsUsd: round2(c.refundsUsd),
+        paidCount: c.paidCount,
+        orderCount: c.orderCount,
+        averageOrderUsd: c.paidCount > 0 ? round2(c.grossUsd / c.paidCount) : 0,
+        refundRatePct:
+          c.paidCount > 0 ? Math.round((c.refundCount / c.paidCount) * 1000) / 10 : 0,
+      }))
+      .sort((a, b) => b.grossUsd - a.grossUsd),
     byCurrency: [...byCurrency.entries()].map(([currency, b]) => ({
       currency,
       grossVolume: round2(b.grossVolume),

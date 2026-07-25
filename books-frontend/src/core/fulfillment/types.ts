@@ -239,13 +239,17 @@ export interface StatusWebhook {
  *   - "casewrap"       (CW) — hardcover with image printed on the case, 24+ pages.
  *   - "linen-wrap"     (LW) — hardcover wrapped in linen, 24+ pages.
  */
-export type Binding =
-  | "saddle-stitch"
-  | "perfect-bound"
-  | "coil-bound"
-  | "casewrap"
-  | "linen-wrap";
-export type Finish = "matte" | "gloss";
+export const BINDINGS = [
+  "saddle-stitch",
+  "perfect-bound",
+  "coil-bound",
+  "casewrap",
+  "linen-wrap",
+] as const;
+export const FINISHES = ["matte", "gloss"] as const;
+
+export type Binding = (typeof BINDINGS)[number];
+export type Finish = (typeof FINISHES)[number];
 
 export interface BookProduct {
   /** Provider SKU used when quoting / ordering. */
@@ -263,13 +267,14 @@ export interface BookProduct {
   /** Minimum interior page count and the step the count must align to. */
   minPages: number;
   pageStep: number;
+  /**
+   * Maximum interior page count the binding supports. Enforced up front so a
+   * book that is too thick for its format never reaches payment — the provider
+   * would otherwise reject the print job *after* the customer is charged.
+   */
+  maxPages: number;
   /** Provider print-area names for each asset (confirm per SKU via product details). */
   printAreas: { interior: string; cover?: string; spine?: string };
-  /**
-   * Whether these specs were confirmed against the live provider catalog. When
-   * false, treat trim/SKU as a best-effort default pending verification.
-   */
-  verified: boolean;
 }
 
 /** An uploaded asset that a provider can fetch by URL. */

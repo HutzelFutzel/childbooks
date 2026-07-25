@@ -20,6 +20,9 @@
  *     purchased packs for that buyer.
  * Every builder therefore takes a {@link BuyerContext}; "worst case" helpers
  * pick the most expensive eligible buyer so headline numbers are always safe.
+ * Print adds a second axis of the same kind: a format sells several variants,
+ * and one priced below the tier price is cheaper revenue against an unchanged
+ * cost, so the worst case is the cheapest variant bought by the worst buyer.
  *
  * Every item is reduced to the same fee/tax-aware waterfall, so the admin sees
  * one consistent set of numbers everywhere:
@@ -50,6 +53,7 @@ import {
 import type { SparkPack, SparksConfig } from "./sparks";
 import { packTotalSparks } from "./sparks";
 import { sparkUnitEconomics, worstActionMultiplier } from "./economics";
+import { cheapestVariant, variantSummary } from "./variants";
 import {
   computeMargin,
   convertCostAmount,
@@ -460,6 +464,9 @@ export function printImpactFromBreakdown(
   const notes = [
     "Shipping is charged as configured and is not discounted — only the book price is.",
   ];
+  if (m.variant) {
+    notes.push(`Priced for the ${variantSummary(m.variant)} variant.`);
+  }
   if (applied > 0) {
     notes.push(
       applied < advertised
@@ -511,7 +518,16 @@ export function printDiscountImpact(
   );
 }
 
-/** Worst-case print impact across the buyers allowed to purchase the product. */
+/**
+ * Worst-case print impact: the most expensive eligible buyer, ordering the
+ * cheapest variant the product offers.
+ *
+ * Both halves are the same discipline. A plan's print discount lowers the
+ * revenue side; a variant priced below the tier price lowers it too, for the
+ * same production cost. Unless the caller pinned a variant, this prices the
+ * cheapest one so the headline safe-discount number is one no real order can
+ * undercut.
+ */
 export function printWorstCaseImpact(
   product: ProductDefinition,
   scenario: PriceScenario,
@@ -520,7 +536,9 @@ export function printWorstCaseImpact(
 ): DiscountImpact | null {
   const eligible = eligibleBuyers(product.conditions.access, buyers);
   if (eligible.length === 0) return null; // nobody can buy it (flagged by config health)
-  return pickWorst(eligible.map((b) => printDiscountImpact(product, scenario, settings, b)));
+  const variant = scenario.variant ?? cheapestVariant(product.variants, scenario.currency);
+  const worstCase = variant ? { ...scenario, variant } : scenario;
+  return pickWorst(eligible.map((b) => printDiscountImpact(product, worstCase, settings, b)));
 }
 
 /**

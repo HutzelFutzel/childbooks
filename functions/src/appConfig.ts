@@ -90,6 +90,12 @@ import {
   type SiteContentConfig,
   type SiteTextSlot,
 } from "../../books-frontend/src/core/config/siteContent";
+import {
+  normalizeCatalogMediaConfig,
+  photosFor,
+  type CatalogMediaConfig,
+  type CatalogPhoto,
+} from "../../books-frontend/src/core/config/catalogMedia";
 import type { PromptContext } from "../../books-frontend/src/core/prompts/context";
 import {
   createDefaultPromptsConfig,
@@ -140,6 +146,7 @@ const SPARKS_DOC = "appConfig/sparks";
 const BRANDING_DOC = "appConfig/branding";
 const SEO_DOC = "appConfig/seo";
 const SITE_IMAGES_DOC = "appConfig/siteImages";
+const CATALOG_MEDIA_DOC = "appConfig/catalogMedia";
 const SITE_CONTENT_DOC = "appConfig/siteContent";
 const PROMPTS_DOC = "appConfig/prompts";
 const IMAGE_COST_STATS_DOC = "appConfig/imageCostStats";
@@ -225,6 +232,9 @@ export function getSiteImagesConfig(): Promise<SiteImagesConfig> {
 }
 export function getSiteContentConfig(): Promise<SiteContentConfig> {
   return readDoc(SITE_CONTENT_DOC, normalizeSiteContentConfig);
+}
+export function getCatalogMediaConfig(): Promise<CatalogMediaConfig> {
+  return readDoc(CATALOG_MEDIA_DOC, normalizeCatalogMediaConfig);
 }
 export function getPromptsConfig(): Promise<PromptsConfig> {
   return readDoc(PROMPTS_DOC, normalizePromptsConfig);
@@ -666,6 +676,76 @@ export async function deleteSiteImageVersion(
   });
   await writeDoc(SITE_IMAGES_DOC, next);
   return next;
+}
+
+// ---- Catalog pictures ------------------------------------------------------
+
+/**
+ * Persist a key's picture list. Order in the array IS the order shown, so it's
+ * reindexed on every write and the first entry is the item's thumbnail.
+ * Writing an empty list drops the key rather than leaving an empty array.
+ */
+async function writeCatalogPhotos(
+  current: CatalogMediaConfig,
+  key: string,
+  list: CatalogPhoto[],
+): Promise<CatalogMediaConfig> {
+  const photos = { ...current.photos };
+  if (list.length > 0) photos[key] = list.map((p, i) => ({ ...p, sortOrder: i }));
+  else delete photos[key];
+  const next = normalizeCatalogMediaConfig({ ...current, photos });
+  await writeDoc(CATALOG_MEDIA_DOC, next);
+  return next;
+}
+
+/** Add a freshly uploaded picture to a key (active, shown last). */
+export async function addCatalogPhoto(
+  key: string,
+  photo: { imageUrl: string; storagePath: string; alt: string; caption?: string },
+): Promise<CatalogMediaConfig> {
+  const current = await getCatalogMediaConfig();
+  const list = photosFor(current, key);
+  const added: CatalogPhoto = { ...photo, active: true, sortOrder: list.length, updatedAt: Date.now() };
+  return writeCatalogPhotos(current, key, [...list, added]);
+}
+
+/**
+ * Edit one picture: retire or reinstate it, fix its alt text or caption, or
+ * promote it to the item's thumbnail. Retiring keeps the record and the file
+ * — that's the history — so nothing here deletes anything.
+ */
+export async function patchCatalogPhoto(
+  key: string,
+  storagePath: string,
+  patch: { active?: boolean; alt?: string; caption?: string; makePrimary?: boolean },
+): Promise<CatalogMediaConfig> {
+  const current = await getCatalogMediaConfig();
+  const list = photosFor(current, key);
+  const target = list.find((p) => p.storagePath === storagePath);
+  if (!target) throw new Error("Photo not found.");
+  const updated: CatalogPhoto = {
+    ...target,
+    ...(typeof patch.active === "boolean" ? { active: patch.active } : {}),
+    ...(typeof patch.alt === "string" ? { alt: patch.alt } : {}),
+    ...(typeof patch.caption === "string" ? { caption: patch.caption } : {}),
+    updatedAt: Date.now(),
+  };
+  // A retired picture can't stand in for the item, so promotion implies active.
+  const promote = patch.makePrimary && updated.active;
+  const next = promote
+    ? [updated, ...list.filter((p) => p.storagePath !== storagePath)]
+    : list.map((p) => (p.storagePath === storagePath ? updated : p));
+  return writeCatalogPhotos(current, key, next);
+}
+
+/** Forget a picture entirely (the route deletes the stored file). */
+export async function removeCatalogPhoto(
+  key: string,
+  storagePath: string,
+): Promise<CatalogMediaConfig> {
+  const current = await getCatalogMediaConfig();
+  const list = photosFor(current, key).filter((p) => p.storagePath !== storagePath);
+  return writeCatalogPhotos(current, key, list);
 }
 
 /** Set (or clear, with empty/undefined) a single landing-copy override. */

@@ -2,16 +2,43 @@
 
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, Plus, RefreshCw, Ruler, Trash2, Wand2 } from "lucide-react";
 import { Button } from "../../../components/Button";
 import { Field, Input } from "../../../components/Input";
 import { Select } from "../../../components/Select";
-import type { CurrencyCode, PageTier, PricingSettings, ProductDefinition } from "../../../../core/config/products";
-import { computeMargin, type MarginBreakdown } from "../../../../core/config/productMath";
+import type {
+  CurrencyCode,
+  PageTier,
+  PricingSettings,
+  ProductDefinition,
+  ProductsConfig,
+} from "../../../../core/config/products";
+import {
+  computeMargin,
+  feeFor,
+  feePercent,
+  suggestTierPrice,
+  type MarginBreakdown,
+} from "../../../../core/config/productMath";
+import {
+  cheapestVariant,
+  enumerateVariants,
+  parseVariantKey,
+  sameVariant,
+  variantAllowed,
+  variantKey,
+  variantPriceDelta,
+  variantSummary,
+} from "../../../../core/config/variants";
+import { variantFromSku } from "../../../../core/fulfillment/lulu/skuAxes";
+import { useAdminHealth } from "../../../../state/adminHealthStore";
+import type { CalibrationOutcome } from "../../../../state/appConfigStore";
+import { Slider } from "../../../components/Slider";
 import {
   buyerContextsFromPublicPlans,
   eligibleBuyers,
   printImpactFromBreakdown,
+  printWorstCaseImpact,
 } from "../../../../core/config/discountImpact";
 import { useAppConfigStore, type MarginPreview } from "../../../../state/appConfigStore";
 import { Grid, NumberField, Section, fmtMoney } from "./parts";
@@ -20,7 +47,17 @@ type Update = (fn: (p: ProductDefinition) => ProductDefinition) => void;
 
 // ---- Cost (its own tab) ----------------------------------------------------
 
-export function CostSection({ product, update }: { product: ProductDefinition; update: Update }) {
+export function CostSection({
+  product,
+  update,
+  dirty,
+  onCalibrated,
+}: {
+  product: ProductDefinition;
+  update: Update;
+  dirty: boolean;
+  onCalibrated: (config: ProductsConfig) => void;
+}) {
   const cost = product.cost;
   const setCost = (patch: Partial<ProductDefinition["cost"]>) =>
     update((p) => ({ ...p, cost: { ...p.cost, ...patch } }));
@@ -29,6 +66,7 @@ export function CostSection({ product, update }: { product: ProductDefinition; u
 
   return (
     <div className="space-y-3">
+      <CalibrateCard product={product} dirty={dirty} onCalibrated={onCalibrated} />
       <Section
         title="What it costs you"
         hint="With a live quote, the margin info uses the provider's real per-book + shipping cost. The estimate below is the offline fallback used until you fetch one."
@@ -120,6 +158,107 @@ export function CostSection({ product, update }: { product: ProductDefinition; u
   );
 }
 
+/**
+ * Derive the cost table from the provider rather than typing it in. Runs
+ * against the SAVED product (the backend probes and writes), so unsaved edits
+ * have to be committed first.
+ */
+function CalibrateCard({
+  product,
+  dirty,
+  onCalibrated,
+}: {
+  product: ProductDefinition;
+  dirty: boolean;
+  onCalibrated: (config: ProductsConfig) => void;
+}) {
+  const calibrateProductCost = useAppConfigStore((s) => s.calibrateProductCost);
+  const runtime = useAdminHealth((s) => s.runtime);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<CalibrationOutcome["result"] | null>(null);
+
+  if (product.provider.id !== "lulu") return null;
+
+  const run = async () => {
+    setBusy(true);
+    try {
+      const outcome = await calibrateProductCost(product.id, runtime?.env);
+      setResult(outcome.result);
+      if (outcome.result.ok) {
+        onCalibrated(outcome.config);
+        toast.success("Cost derived from live provider quotes.");
+        if (outcome.result.message) toast.warning(outcome.result.message);
+      } else {
+        toast.error(outcome.result.message ?? "Calibration failed.");
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Calibration failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Section
+      title="Measure cost from the provider"
+      hint="Prices this SKU at both ends of its page range and fits the line, then checks the midpoint to be sure the fit holds. Fills in the base + per-page cost and the fallback shipping rate."
+      action={
+        <Button
+          variant="secondary"
+          size="sm"
+          leftIcon={<Ruler className="size-3.5" />}
+          loading={busy}
+          disabled={dirty || !product.provider.sku.trim()}
+          title={dirty ? "Save your changes first — this runs against the saved product." : undefined}
+          onClick={run}
+        >
+          Measure against {runtime?.env ?? "provider"}
+        </Button>
+      }
+    >
+      {result && (
+        <div className="space-y-1.5 text-xs">
+          {result.samples.length > 0 && (
+            <div className="overflow-x-auto">
+              <table className="min-w-[280px] text-xs">
+                <thead className="text-[10px] uppercase tracking-wide text-ink-400">
+                  <tr>
+                    <th className="pr-4 text-left font-medium">Pages</th>
+                    <th className="pr-4 text-left font-medium">Copies</th>
+                    <th className="text-left font-medium">Cost / book</th>
+                  </tr>
+                </thead>
+                <tbody className="text-ink-600">
+                  {result.samples.map((s, i) => (
+                    <tr key={i}>
+                      <td className="pr-4">{s.pages}</td>
+                      <td className="pr-4">{s.copies}</td>
+                      <td>{fmtMoney(s.unitCost, result.currency ?? "USD")}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {result.fitResidual != null && (
+            <p className="text-ink-500">
+              Midpoint check: off by {fmtMoney(result.fitResidual, result.currency ?? "USD")}.
+            </p>
+          )}
+          {result.discoveredPages && (
+            <p className="text-ink-500">
+              Provider allows {result.discoveredPages.min}–{result.discoveredPages.max} pages.
+            </p>
+          )}
+          {result.message && (
+            <p className={result.ok ? "text-amber-700" : "text-red-600"}>{result.message}</p>
+          )}
+        </div>
+      )}
+    </Section>
+  );
+}
+
 // ---- Page-tier price table (the only pricing input) ------------------------
 
 function TierTable({
@@ -191,10 +330,220 @@ function TierTable({
           </tbody>
         </table>
       </div>
-      <Button variant="secondary" size="sm" leftIcon={<Plus className="size-4" />} onClick={addTier}>
-        Add page range
-      </Button>
+      <div className="flex flex-wrap items-end gap-2">
+        <Button variant="secondary" size="sm" leftIcon={<Plus className="size-4" />} onClick={addTier}>
+          Add page range
+        </Button>
+      </div>
     </div>
+  );
+}
+
+// ---- Margin planner --------------------------------------------------------
+
+/**
+ * The highest margin this fee and tax structure can ever produce, whatever the
+ * price. Margin tops out at `1 − (1 + taxRate)·feePercent` as the price grows,
+ * so targets above that have no answer — the slider stops short of the tightest
+ * currency's ceiling instead of letting the admin drag into a dead zone.
+ */
+function maxTargetMargin(settings: PricingSettings): number {
+  let cap = 95;
+  for (const currency of settings.currencies) {
+    const rate = Math.max(0, settings.tax.perCurrency[currency]?.assumedRatePct ?? 0) / 100;
+    const ceiling = (1 - (1 + rate) * feePercent(feeFor(settings, currency))) * 100;
+    cap = Math.min(cap, Math.floor(ceiling) - 1);
+  }
+  return Math.max(1, cap);
+}
+
+/**
+ * Every tier repriced for a target margin.
+ *
+ * Each tier is priced at the MIDPOINT of its page range: a tier charges one
+ * price across the whole range, so pricing at the cheap end would underprice
+ * every thicker book in it.
+ */
+function tiersForMargin(
+  product: ProductDefinition,
+  settings: PricingSettings,
+  tiers: PageTier[],
+  target: number,
+): { tiers: PageTier[]; unreachable: string[] } {
+  const unreachable = new Set<string>();
+  const next = tiers.map((t) => {
+    const lo = Math.max(t.minPages, product.conditions.pages.min);
+    const hi = Math.min(t.maxPages, product.conditions.pages.max);
+    const pages = Math.max(1, Math.round((lo + Math.max(lo, hi)) / 2));
+    const prices = { ...t.prices };
+    for (const currency of settings.currencies) {
+      const price = suggestTierPrice(product, { currency, pages, copies: 1 }, settings, target);
+      if (price == null) unreachable.add(currency);
+      else prices[currency] = price;
+    }
+    return { ...t, prices };
+  });
+  return { tiers: next, unreachable: [...unreachable] };
+}
+
+/**
+ * Set the whole table from one number — the margin you want to earn — and see
+ * what that leaves for a sale before committing to it.
+ *
+ * The two headroom figures come from the same engine as the Discount planner,
+ * run against the SUGGESTED prices rather than the saved ones, so dragging the
+ * slider answers the question the admin actually has: "if I price for 45%, how
+ * deep can I go on Black Friday?". They're worst-case by construction — the
+ * cheapest variant on offer, bought by the plan with the deepest print discount
+ * — because a headline that only holds for full-price buyers isn't a limit.
+ *
+ * Suggestions are a starting point, which is why Apply writes them to the inputs
+ * for review rather than saving.
+ */
+function MarginPlanner({
+  product,
+  settings,
+  tiers,
+  setTiers,
+}: {
+  product: ProductDefinition;
+  settings: PricingSettings;
+  tiers: PageTier[];
+  setTiers: (next: PageTier[]) => void;
+}) {
+  const plans = useAppConfigStore((s) => s.plans.plans);
+  const cap = useMemo(() => maxTargetMargin(settings), [settings]);
+  const [target, setTarget] = useState(() => Math.min(45, cap));
+
+  const suggestion = useMemo(
+    () => tiersForMargin(product, settings, tiers, Math.min(target, cap)),
+    [product, settings, tiers, target, cap],
+  );
+
+  const headroom = useMemo(() => {
+    if (suggestion.tiers.length === 0) return null;
+    const pages = product.pricing.displayPages ?? product.conditions.pages.min;
+    return printWorstCaseImpact(
+      { ...product, pricing: { ...product.pricing, tiers: suggestion.tiers } },
+      { currency: settings.baseCurrency, pages, copies: 1 },
+      settings,
+      buyerContextsFromPublicPlans(plans, settings),
+    );
+  }, [product, suggestion.tiers, settings, plans]);
+
+  // Named only when it isn't the base variant — otherwise it's noise.
+  const cheapest = cheapestVariant(product.variants, settings.baseCurrency);
+  const base = variantFromSku(product.provider.sku);
+  const targetsCheaperVariant = cheapest && base && !sameVariant(cheapest, base);
+
+  const apply = () => {
+    setTiers(suggestion.tiers);
+    if (suggestion.unreachable.length > 0) {
+      toast.warning(`${suggestion.unreachable.join(", ")}: ${target}% isn't reachable after fees and tax.`);
+    } else {
+      toast.success(`Prices set for a ${target}% margin. Review before saving.`);
+    }
+  };
+
+  if (tiers.length === 0) return null;
+
+  return (
+    <Section
+      title="Price from a target margin"
+      hint={`Drag to the margin you want to earn and see what it costs — and what it leaves for a sale. Nothing changes until you apply.${
+        targetsCheaperVariant
+          ? ` Prices target ${variantSummary(cheapest!)}, the cheapest variant you offer; the rest land above target.`
+          : ""
+      }`}
+      action={
+        <Button variant="secondary" size="sm" leftIcon={<Wand2 className="size-4" />} onClick={apply}>
+          Apply to price rows
+        </Button>
+      }
+    >
+      <div className="flex items-center gap-3">
+        <Slider value={Math.min(target, cap)} min={0} max={cap} step={1} onValueChange={setTarget} />
+        <span className="w-16 shrink-0 text-right text-sm font-semibold tabular-nums text-ink-800">
+          {Math.min(target, cap)}%
+        </span>
+      </div>
+
+      {headroom && (
+        <div className="flex flex-wrap gap-2 text-[11px]">
+          <Pill
+            label="Max sale without a loss"
+            value={`${headroom.breakEvenDiscountPct}%`}
+            tone={headroom.underwaterAtList ? "bad" : "neutral"}
+          />
+          <Pill
+            label={`Keeps the ${settings.minMarginPct}% floor to`}
+            value={`${headroom.safeMaxDiscountPct}%`}
+            tone={settings.maxDiscountPct > headroom.safeMaxDiscountPct ? "warn" : "good"}
+          />
+          <span className="self-center text-ink-400">
+            worst case: {headroom.buyerLabel}
+            {headroom.costIsEstimate ? ", on the cost estimate" : ""}
+          </span>
+        </div>
+      )}
+
+      <div className="overflow-x-auto">
+        <table className="min-w-80 text-xs">
+          <thead className="text-[10px] uppercase tracking-wide text-ink-400">
+            <tr>
+              <th className="pr-4 text-left font-medium">Pages</th>
+              {settings.currencies.map((c) => (
+                <th key={c} className="pr-4 text-left font-medium">
+                  {c}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="text-ink-600">
+            {suggestion.tiers.map((t, i) => (
+              <tr key={i}>
+                <td className="pr-4 py-0.5">
+                  {t.minPages}–{t.maxPages}
+                </td>
+                {settings.currencies.map((c) => {
+                  const now = tiers[i]?.prices[c] ?? 0;
+                  const next = t.prices[c] ?? 0;
+                  return (
+                    <td key={c} className="pr-4 py-0.5 tabular-nums">
+                      <span className="text-ink-400 line-through">{fmtMoney(now, c)}</span>{" "}
+                      <span className="font-semibold text-ink-800">{fmtMoney(next, c)}</span>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {suggestion.unreachable.length > 0 && (
+        <p className="text-[11px] text-amber-700">
+          {suggestion.unreachable.join(", ")}: fees and tax leave less than {Math.min(target, cap)}% — those rows are
+          unchanged.
+        </p>
+      )}
+    </Section>
+  );
+}
+
+function Pill({ label, value, tone }: { label: string; value: string; tone: "good" | "bad" | "warn" | "neutral" }) {
+  const color =
+    tone === "good"
+      ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+      : tone === "bad"
+        ? "bg-red-50 text-red-700 ring-red-200"
+        : tone === "warn"
+          ? "bg-amber-50 text-amber-700 ring-amber-200"
+          : "bg-ink-100 text-ink-600 ring-ink-200";
+  return (
+    <span className={`rounded px-2 py-1 ring-1 ring-inset ${color}`}>
+      {label} <strong className="font-semibold tabular-nums">{value}</strong>
+    </span>
   );
 }
 
@@ -218,6 +567,13 @@ export function PricingSection({
         <TierTable product={product} update={update} settings={settings} />
       </Section>
 
+      <MarginPlanner
+        product={product}
+        settings={settings}
+        tiers={product.pricing.tiers}
+        setTiers={(next) => update((p) => ({ ...p, pricing: { ...p.pricing, tiers: next } }))}
+      />
+
       <MarginInfo product={product} settings={settings} />
     </div>
   );
@@ -232,14 +588,25 @@ function MarginInfo({ product, settings }: { product: ProductDefinition; setting
   const [pages, setPages] = useState(product.conditions.pages.min);
   const [copies, setCopies] = useState(Math.max(1, product.conditions.copies.min));
   const [country, setCountry] = useState("US");
+  const [variantKeyChoice, setVariantKeyChoice] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [live, setLive] = useState<MarginPreview | null>(null);
 
   const cur = settings.currencies.includes(currency) ? currency : settings.baseCurrency;
 
+  // Default to the cheapest variant on offer, not the base one: it's the order
+  // that earns least on the same production cost, so it's the number that has to
+  // hold. With no discounted options the two are the same variant.
+  const orderable = useMemo(() => enumerateVariants(product.variants), [product.variants]);
+  const variant = useMemo(() => {
+    const chosen = variantKeyChoice ? parseVariantKey(variantKeyChoice) : null;
+    if (chosen && variantAllowed(product.variants, chosen)) return chosen;
+    return cheapestVariant(product.variants, cur);
+  }, [variantKeyChoice, product.variants, cur]);
+
   const offline = useMemo<MarginBreakdown>(
-    () => computeMargin(product, { currency: cur, pages, copies }, settings),
-    [product, cur, pages, copies, settings],
+    () => computeMargin(product, { currency: cur, pages, copies, variant }, settings),
+    [product, cur, pages, copies, variant, settings],
   );
   const shown = live?.breakdown ?? offline;
   const costIsEstimate = product.cost.source === "providerLive" && !live?.live;
@@ -275,7 +642,7 @@ function MarginInfo({ product, settings }: { product: ProductDefinition; setting
   const fetchLive = async () => {
     setLoading(true);
     try {
-      const res = await previewMargin(product, { currency: cur, pages, copies, country });
+      const res = await previewMargin(product, { currency: cur, pages, copies, country, variant });
       setLive(res);
       if (res.quoteError) toast.warning(res.quoteError);
     } catch (err) {
@@ -307,6 +674,26 @@ function MarginInfo({ product, settings }: { product: ProductDefinition; setting
           <Input value={country} onChange={(e) => { setCountry(e.target.value.toUpperCase()); reset(); }} />
         </Field>
       </Grid>
+
+      {orderable.length > 1 && variant && (
+        <Field label="Variant" hint="Defaults to the cheapest you offer — the order that earns least. A live quote prices this exact variant.">
+          <Select
+            value={variantKey(variant)}
+            options={orderable.map((v) => ({
+              value: variantKey(v),
+              label: `${variantSummary(v)}${
+                variantPriceDelta(product.variants, v, cur) !== 0
+                  ? ` (${variantPriceDelta(product.variants, v, cur) > 0 ? "+" : ""}${fmtMoney(
+                      variantPriceDelta(product.variants, v, cur),
+                      cur,
+                    )})`
+                  : ""
+              }`,
+            }))}
+            onChange={(e) => { setVariantKeyChoice(e.target.value); reset(); }}
+          />
+        </Field>
+      )}
 
       <div className="rounded-lg bg-white p-3 ring-1 ring-inset ring-ink-100">
         <div className="mb-2 flex items-center gap-2 text-[11px]">

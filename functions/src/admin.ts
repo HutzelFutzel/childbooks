@@ -47,6 +47,10 @@ import {
   deleteSiteImageVersion,
   setSiteText,
   isKnownTextSlot,
+  getCatalogMediaConfig,
+  addCatalogPhoto,
+  patchCatalogPhoto,
+  removeCatalogPhoto,
 } from "./appConfig";
 import { deletePlan, getPlansConfig, savePlansConfig, syncPlanToStripe, upsertPlan } from "./plans";
 import { normalizePlan } from "../../books-frontend/src/core/config/plans";
@@ -55,9 +59,13 @@ import {
   uploadArtStyleImage,
   uploadBrandingAsset,
   uploadBrandingWatermark,
-  uploadProductImage,
+  uploadCatalogPhoto,
   uploadSiteImage,
 } from "./storage";
+import {
+  isCatalogMediaKey,
+  parseCatalogMediaKey,
+} from "../../books-frontend/src/core/config/catalogMedia";
 import {
   BRAND_ASSET_SLOTS,
   type BrandAsset,
@@ -75,12 +83,16 @@ import {
   seedProducts,
   upsertProduct,
 } from "./products";
-import { fulfillmentProvider } from "./lulu";
+import { fetchLiveCost, productionCostSource } from "./printCost";
+import { verifyCatalog } from "./printVerify";
+import { calibrateAndSave, calibrateCatalog } from "./printCalibrate";
+import { checkSku, readSkuMatrix } from "./printSkuMatrix";
+import { serverConfig } from "./config";
+import type { FulfillmentEnv } from "../../books-frontend/src/core/settings";
 import { computeMargin } from "../../books-frontend/src/core/config/productMath";
-import type {
-  ProductDefinition,
-  ProductImage,
-} from "../../books-frontend/src/core/config/products";
+import { isVariantSelection } from "../../books-frontend/src/core/config/variants";
+import { skuForVariant } from "../../books-frontend/src/core/fulfillment/lulu/skuAxes";
+import type { ProductDefinition } from "../../books-frontend/src/core/config/products";
 import { apiKeyFor, resolveSuggestionModel } from "./modelResolve";
 import { recordUsage, withUsage } from "./usage";
 import { getTextProvider } from "../../books-frontend/src/core/providers";
@@ -257,6 +269,11 @@ async function extractCostsForProvider(
   });
 
   return { results, events };
+}
+
+/** The provider environment currently being served (runtime override aware). */
+function activeEnv(): FulfillmentEnv {
+  return serverConfig().fulfillment.lulu.env;
 }
 
 function handleError(res: Response, err: unknown): void {
@@ -699,6 +716,103 @@ export function registerAdminRoutes(app: Express): void {
     }
   });
 
+  // ---- Catalog pictures ----------------------------------------------------
+  //
+  // Pictures of what a binding looks like, what a book looks like on a shelf,
+  // what a Spark pack looks like — filed under a `scope/id` key rather than on a
+  // product record, because one photo of a coil binding serves every coil-bound
+  // book and a `book/default` set stands in for any book without its own.
+  // Retiring a picture keeps both the record and the file; only the delete route
+  // removes anything.
+
+  app.get("/admin/catalog/media", async (_req: Request, res: Response) => {
+    try {
+      res.json(await getCatalogMediaConfig());
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Body: { key, base64, mimeType, alt, caption? }.
+  app.post("/admin/catalog/media", json, async (req: Request, res: Response) => {
+    try {
+      const { key, base64, mimeType, alt, caption } = (req.body ?? {}) as {
+        key?: string;
+        base64?: string;
+        mimeType?: string;
+        alt?: string;
+        caption?: string;
+      };
+      const parsed = typeof key === "string" ? parseCatalogMediaKey(key) : null;
+      if (!parsed) {
+        res.status(400).json({ error: { message: "A valid catalog media key is required." } });
+        return;
+      }
+      if (!base64 || !mimeType) {
+        res.status(400).json({ error: { message: "base64 and mimeType are required." } });
+        return;
+      }
+      // Customers see these, so a description isn't optional.
+      if (!alt?.trim()) {
+        res.status(400).json({ error: { message: "Describe the picture (alt text) so it's accessible." } });
+        return;
+      }
+      const buf = Buffer.from(base64, "base64");
+      const { storagePath, publicUrl } = await uploadCatalogPhoto(
+        parsed.scope,
+        parsed.segments,
+        buf,
+        mimeType,
+      );
+      res.json(
+        await addCatalogPhoto(key as string, {
+          imageUrl: publicUrl,
+          storagePath,
+          alt: alt.trim(),
+          ...(typeof caption === "string" ? { caption } : {}),
+        }),
+      );
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Retire / reinstate / retitle / promote. Body: { key, storagePath, ...patch }.
+  app.post("/admin/catalog/media/update", json, async (req: Request, res: Response) => {
+    try {
+      const { key, storagePath, active, alt, caption, makePrimary } = (req.body ?? {}) as {
+        key?: string;
+        storagePath?: string;
+        active?: boolean;
+        alt?: string;
+        caption?: string;
+        makePrimary?: boolean;
+      };
+      if (!isCatalogMediaKey(key) || !storagePath) {
+        res.status(400).json({ error: { message: "A valid key and storagePath are required." } });
+        return;
+      }
+      res.json(await patchCatalogPhoto(key, storagePath, { active, alt, caption, makePrimary }));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Permanently forget a picture AND delete the file. Body: { key, storagePath }.
+  app.post("/admin/catalog/media/delete", json, async (req: Request, res: Response) => {
+    try {
+      const { key, storagePath } = (req.body ?? {}) as { key?: string; storagePath?: string };
+      if (!isCatalogMediaKey(key) || !storagePath) {
+        res.status(400).json({ error: { message: "A valid key and storagePath are required." } });
+        return;
+      }
+      await deletePublicObject(storagePath);
+      res.json(await removeCatalogPhoto(key, storagePath));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
   // ---- Landing-page copy (inline text editor) ------------------------------
 
   app.get("/admin/site-content", async (_req: Request, res: Response) => {
@@ -795,32 +909,71 @@ export function registerAdminRoutes(app: Express): void {
     }
   });
 
-  app.delete("/admin/config/products/:id", async (req: Request, res: Response) => {
+  // Verify SKUs against a provider environment (defaults to the active one) and
+  // persist the per-env verdicts. `?id=` limits it to one product.
+  // Verifying LIVE while still serving sandbox is the point: it's how you prove
+  // the catalog is ready before flipping.
+  app.post("/admin/config/products/verify", json, async (req: Request, res: Response) => {
     try {
-      res.json(await deleteProduct(String(req.params.id)));
+      const body = (req.body ?? {}) as { env?: string; id?: string };
+      const env: FulfillmentEnv = body.env === "live" ? "live" : body.env === "sandbox" ? "sandbox" : activeEnv();
+      res.json(await verifyCatalog(env, body.id?.trim() || undefined));
     } catch (err) {
       handleError(res, err);
     }
   });
 
-  // Upload (append) a product image. Body: { base64, mimeType, role?, alt? }.
-  app.post("/admin/config/products/:id/image", json, async (req: Request, res: Response) => {
+  // Ask the provider whether an assembled SKU exists (and what page counts it
+  // takes). Backs the SKU builder; answers accumulate in the learned matrix.
+  app.post("/admin/print/sku/check", json, async (req: Request, res: Response) => {
     try {
-      const id = String(req.params.id);
-      const { base64, mimeType, role, alt } = (req.body ?? {}) as {
-        base64?: string;
-        mimeType?: string;
-        role?: ProductImage["role"];
-        alt?: string;
-      };
-      if (!base64 || !mimeType) {
-        res.status(400).json({ error: { message: "base64 and mimeType are required." } });
+      const body = (req.body ?? {}) as { sku?: string; pages?: number; env?: string; refresh?: boolean };
+      if (!body.sku?.trim()) {
+        res.status(400).json({ error: { message: "sku is required." } });
         return;
       }
-      const buf = Buffer.from(base64, "base64");
-      const { storagePath, publicUrl } = await uploadProductImage(id, buf, mimeType);
-      const image: ProductImage = { url: publicUrl, storagePath, role: role ?? "gallery", alt };
-      res.json(image);
+      const env: FulfillmentEnv = body.env === "live" ? "live" : body.env === "sandbox" ? "sandbox" : activeEnv();
+      res.json(await checkSku({ env, sku: body.sku, pages: body.pages, refresh: body.refresh }));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.get("/admin/print/sku/matrix", async (_req: Request, res: Response) => {
+    try {
+      res.json({ entries: Object.values(await readSkuMatrix()) });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Derive the cost table + shipping fallback from real provider quotes instead
+  // of hand-entry. Persists only when the fit is trustworthy.
+  app.post("/admin/config/products/:id/calibrate", json, async (req: Request, res: Response) => {
+    try {
+      const body = (req.body ?? {}) as { env?: string };
+      const env: FulfillmentEnv = body.env === "live" ? "live" : body.env === "sandbox" ? "sandbox" : activeEnv();
+      res.json(await calibrateAndSave(String(req.params.id), env));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // The same measurement across the whole catalog. Overwrites cost tables, so
+  // the UI confirms first; failures are reported per product and write nothing.
+  app.post("/admin/config/products/calibrate", json, async (req: Request, res: Response) => {
+    try {
+      const body = (req.body ?? {}) as { env?: string; id?: string };
+      const env: FulfillmentEnv = body.env === "live" ? "live" : body.env === "sandbox" ? "sandbox" : activeEnv();
+      res.json(await calibrateCatalog(env, body.id?.trim() || undefined));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.delete("/admin/config/products/:id", async (req: Request, res: Response) => {
+    try {
+      res.json(await deleteProduct(String(req.params.id)));
     } catch (err) {
       handleError(res, err);
     }
@@ -1136,7 +1289,14 @@ export function registerAdminRoutes(app: Express): void {
     try {
       const body = (req.body ?? {}) as {
         product?: ProductDefinition;
-        scenario?: { pages: number; copies: number; currency: string; country?: string; region?: string };
+        scenario?: {
+          pages: number;
+          copies: number;
+          currency: string;
+          country?: string;
+          region?: string;
+          variant?: unknown;
+        };
       };
       const product = body.product;
       const sc = body.scenario;
@@ -1145,44 +1305,41 @@ export function registerAdminRoutes(app: Express): void {
         return;
       }
 
-      let liveUnitCost: number | undefined;
-      let liveShippingCost: number | undefined;
-      let quoteError: string | undefined;
-
-      if (product.provider.id === "lulu" && product.cost.source === "providerLive" && product.provider.sku) {
-        try {
-          const quotes = await fulfillmentProvider().quote({
-            productSku: product.provider.sku,
-            copies: Math.max(1, sc.copies),
-            destinationCountry: sc.country || "US",
-            destinationState: sc.region,
-            pageCount: sc.pages,
-          });
-          const cheapest = quotes
-            .map((q) => ({ items: Number(q.items.amount) || 0, ship: Number(q.shipping.amount) || 0 }))
-            .sort((a, b) => a.ship - b.ship)[0];
-          if (cheapest) {
-            liveUnitCost = cheapest.items / Math.max(1, sc.copies);
-            liveShippingCost = cheapest.ship;
-          }
-        } catch (err) {
-          quoteError = err instanceof Error ? err.message : "Live quote failed; used the cost table.";
-        }
-      }
-
       const settings = await getPricingSettings();
+      // Variants change both sides of the preview: a different SKU to quote, and
+      // a different sticker. Quoting the base while pricing a variant would show
+      // a margin no order can produce.
+      const variant = isVariantSelection(sc.variant) ? sc.variant : undefined;
+      // Same resolver checkout uses, so the preview can never drift from what a
+      // customer is actually charged against. No shippingMethod is pinned here:
+      // an admin preview wants the cheapest available tier.
+      const live = await fetchLiveCost({
+        product,
+        settings,
+        sku: variant ? (skuForVariant(product.provider.sku, variant) ?? undefined) : undefined,
+        pages: sc.pages,
+        copies: Math.max(1, sc.copies),
+        destinationCountry: sc.country || "US",
+        destinationState: sc.region,
+      });
+
       const breakdown = computeMargin(
         product,
         {
           currency: sc.currency,
           pages: sc.pages,
           copies: sc.copies,
-          liveUnitCost,
-          liveShippingCost,
+          variant,
+          liveUnitCost: live.unitCost,
+          liveShippingCost: live.shippingCost,
         },
         settings,
       );
-      res.json({ breakdown, live: liveUnitCost != null, quoteError });
+      res.json({
+        breakdown,
+        live: productionCostSource(product, live) === "live",
+        quoteError: live.error,
+      });
     } catch (err) {
       handleError(res, err);
     }

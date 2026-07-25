@@ -26,18 +26,26 @@ import { getProductsConfig } from "./products";
 import { getPricingSettings } from "./appConfig";
 import {
   computeMargin,
+  hasUsableShippingCost,
+  hasUsableUnitCost,
   isDestinationAllowed,
   resolveShippingCharged,
 } from "../../books-frontend/src/core/config/productMath";
+import { fetchLiveCost, productionCostSource } from "./printCost";
 import type {
   CurrencyCode,
   PricingSettings,
   ProductDefinition,
 } from "../../books-frontend/src/core/config/products";
 import {
+  findProductForSku,
   planMeetsAccess,
   productAccessOf,
+  resolvePrintOrder,
+  verificationCoversPages,
+  verificationFor,
 } from "../../books-frontend/src/core/config/products";
+import type { VariantSelection } from "../../books-frontend/src/core/config/variants";
 import {
   effectivePrintDiscountPct,
   planEntitlements,
@@ -65,6 +73,7 @@ import {
   saveStripeCustomerId,
   updatePayment,
   upsertSubscription,
+  type AdminPaymentRecord,
   type EbookFulfillment,
   type FulfillmentPlan,
   type PaymentKind,
@@ -79,7 +88,17 @@ import {
 import { getPlansConfig, hasActiveSubscription, resolveActivePlan } from "./plans";
 import { getSparksConfig } from "./appConfig";
 import { grantSparks } from "./sparks";
-import { recordChargeRevenue, recordFinanceEvent, recordTaxRemitted, toUsd } from "./finance";
+import {
+  productKey,
+  recordChargeRevenue,
+  recordFinanceEvent,
+  recordTaxRemitted,
+  toUsd,
+} from "./finance";
+import {
+  normalizeCountry,
+  UNKNOWN_COUNTRY,
+} from "../../books-frontend/src/core/analytics/markets";
 import { raiseAlert } from "./alerts";
 import { notifySlack, money } from "./notify";
 import { claimReferralCode, ensureReferralCode, maybeRewardReferral } from "./referrals";
@@ -126,7 +145,10 @@ interface WireAsset {
 }
 
 interface CheckoutBody {
+  /** Format base SKU (or any same-format composed SKU). */
   productSku: string;
+  /** Customer-chosen print/paper/finish. Omitted ⇒ the product's base variant. */
+  variant?: VariantSelection;
   copies: number;
   pageCount: number;
   currency: string;
@@ -192,6 +214,10 @@ interface PrintCheckoutArgs {
   uid: string;
   email: string | null;
   product: ProductDefinition;
+  /** Variant being sold; drives retail deltas and the composed print SKU. */
+  variant: VariantSelection;
+  /** Provider package id that actually prints (base SKU ⊕ variant). */
+  printSku: string;
   settings: PricingSettings;
   activePlan: Awaited<ReturnType<typeof resolveActivePlan>>;
   copies: number;
@@ -216,6 +242,8 @@ type PrintCheckoutResult =
  */
 interface RetailPriceArgs {
   product: ProductDefinition;
+  variant: VariantSelection;
+  printSku: string;
   settings: PricingSettings;
   activePlan: Awaited<ReturnType<typeof resolveActivePlan>>;
   copies: number;
@@ -246,7 +274,23 @@ interface RetailPriceResult {
     shipping: number;
     currency: string;
     shippingSource: "live" | "table";
+    productionSource: "live" | "table";
   };
+}
+
+/**
+ * The order can't be priced honestly — no production-cost baseline, an
+ * unverified SKU, or a provider refusal. Retrying won't help. The Error message
+ * is the operator's diagnosis (logged, never sent); `clientMessage` is what the
+ * customer sees, which stays neutral about the provider.
+ */
+class PricingUnavailableError extends Error {
+  readonly clientMessage: string;
+
+  constructor(message: string, clientMessage = "This book format can't be ordered right now.") {
+    super(message);
+    this.clientMessage = clientMessage;
+  }
 }
 
 /**
@@ -255,30 +299,88 @@ interface RetailPriceResult {
  * price preview so all three always agree.
  */
 async function priceRetailOrder(args: RetailPriceArgs): Promise<RetailPriceResult> {
-  const { product, settings, copies, pages, currency } = args;
+  const { product, variant, printSku, settings, copies, pages, currency } = args;
 
-  // Live shipping cost (for an accurate charged-shipping figure).
-  let liveShippingCost: number | undefined;
-  try {
-    const quotes = await fulfillmentProvider().quote({
-      productSku: product.provider.sku,
-      copies,
-      destinationCountry: args.destinationCountry,
-      destinationLine1: args.address.line1,
-      destinationCity: args.address.townOrCity,
-      destinationState: args.address.stateOrCounty ?? undefined,
-      destinationPostalCode: args.address.postalOrZipCode,
-      currency,
-      shippingMethod: args.shippingMethod,
-      pageCount: pages,
-    });
-    const q = quotes.find((x) => x.shippingMethod) ?? quotes[0];
-    if (q) liveShippingCost = Number(q.shipping.amount) || undefined;
-  } catch (err) {
-    console.warn("[stripe] live shipping quote failed; using offline estimate", err);
+  // The FORMAT must be proven printable in the environment we're serving.
+  // Page bounds are a property of trim+binding (verified on the base SKU); the
+  // concrete variant is gated by the live quote below — a package the provider
+  // doesn't sell is refused there, before anything is charged.
+  const env = serverConfig().fulfillment.lulu.env;
+  if (product.provider.id === "lulu") {
+    const record = verificationFor(product.provider, env);
+    if (!record?.ok) {
+      throw new PricingUnavailableError(
+        `SKU ${product.provider.sku} is not verified against the ${env} print catalog` +
+          `${record?.error ? `: ${record.error}` : " (never probed)"}.`,
+      );
+    }
+    if (!verificationCoversPages(record, { min: pages, max: pages })) {
+      throw new PricingUnavailableError(
+        `SKU ${product.provider.sku} is verified for ${record.pages.min}–${record.pages.max} pages in ${env}, but this order is ${pages}.`,
+      );
+    }
   }
 
-  const margin = computeMargin(product, { currency, pages, copies, liveShippingCost }, settings);
+  // Live provider cost for this exact scenario — BOTH the per-unit production
+  // cost and shipping. Quoted against the COMPOSED variant SKU so a cheaper
+  // paper or finish moves the number the margin math uses.
+  const live = await fetchLiveCost({
+    product,
+    sku: printSku,
+    settings,
+    pages,
+    copies,
+    destinationCountry: args.destinationCountry,
+    destinationLine1: args.address.line1,
+    destinationCity: args.address.townOrCity,
+    destinationState: args.address.stateOrCounty ?? undefined,
+    destinationPostalCode: args.address.postalOrZipCode,
+    shippingMethod: args.shippingMethod,
+  });
+  // A REFUSAL is not something the cost table can paper over: the provider has
+  // said it won't fulfil this order as requested (most often the chosen shipping
+  // tier isn't offered at this quantity — Budget/MAIL drops out above ~20
+  // copies). Charging a fallback rate here would strand a paid order.
+  if (live.errorKind === "refused") {
+    throw new PricingUnavailableError(
+      `Provider refused to quote ${printSku} (${copies} copies, ${args.shippingMethod} to ${args.destinationCountry}): ${live.error}`,
+      `We can't ship ${copies} ${copies === 1 ? "copy" : "copies"} to your address at the selected delivery speed. Please choose a different shipping option.`,
+    );
+  }
+  if (live.error) {
+    console.warn("[stripe] live cost unavailable; falling back to the cost table:", live.error);
+  }
+
+  const scenario = {
+    currency,
+    pages,
+    copies,
+    variant,
+    liveUnitCost: live.unitCost,
+    liveShippingCost: live.shippingCost,
+  };
+
+  // Refuse to price an order with no production-cost baseline. Without one,
+  // computeMargin reports the whole price as profit and breakEvenDiscountPct
+  // resolves near 100%, so the plan discount below would clamp to nothing and
+  // the book could ship at a loss. Fail loudly instead of selling blind.
+  if (!hasUsableUnitCost(product.cost, scenario)) {
+    throw new PricingUnavailableError(
+      `No production cost for SKU ${printSku}: ` +
+        `live quote ${live.error ?? "returned no unit cost"} and the cost table is empty.`,
+    );
+  }
+  // Same rule for shipping: passthrough with no quote and no configured fallback
+  // would charge the customer nothing while we still pay the provider.
+  if (!hasUsableShippingCost(product.shipping, live.shippingCost)) {
+    throw new PricingUnavailableError(
+      `No shipping cost for SKU ${printSku}: ` +
+        `live quote ${live.error ?? "returned no shipping cost"} and shipping is passthrough ` +
+        `with no fallback cost configured.`,
+    );
+  }
+
+  const margin = computeMargin(product, scenario, settings);
   // Active subscribers get their plan's print discount, clamped to break-even
   // so the order can never be sold at a loss.
   const discountPct = effectivePrintDiscountPct(
@@ -290,25 +392,30 @@ async function priceRetailOrder(args: RetailPriceArgs): Promise<RetailPriceResul
       ? Math.round(margin.pricePerUnit * (1 - discountPct / 100) * 100) / 100
       : margin.pricePerUnit;
   const shippingCharged =
-    margin.shippingCharged || resolveShippingCharged(product.shipping, liveShippingCost ?? 0);
-  // The CONFIGURED cost view of this exact scenario (cost table + live shipping
-  // quote when we got one) — stamped onto the fulfillment plan so the finance
-  // stream can later compare it against what the provider actually charges.
+    margin.shippingCharged || resolveShippingCharged(product.shipping, live.shippingCost ?? 0);
+  // The cost view of this exact scenario — stamped onto the fulfillment plan so
+  // the finance stream can later compare it against what the provider actually
+  // charges. The per-part sources make that drift readable: a "live" estimate
+  // should track the real charge closely, a "table" one only as well as the
+  // table is maintained.
   const estimatedCost = {
     amount: Math.round((margin.productionCost + margin.shippingCost) * 100) / 100,
     production: margin.productionCost,
     shipping: margin.shippingCost,
     currency,
-    shippingSource: (liveShippingCost != null ? "live" : "table") as "live" | "table",
+    shippingSource: (live.shippingCost != null ? "live" : "table") as "live" | "table",
+    productionSource: productionCostSource(product, live),
   };
   return { unitPrice, listUnitPrice: margin.pricePerUnit, discountPct, shippingCharged, estimatedCost };
 }
 
 async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintCheckoutResult> {
-  const { uid, product, settings, copies, pages, currency, recipient } = args;
+  const { uid, product, variant, printSku, settings, copies, pages, currency, recipient } = args;
 
   const { unitPrice, shippingCharged, estimatedCost } = await priceRetailOrder({
     product,
+    variant,
+    printSku,
     settings,
     activePlan: args.activePlan,
     copies,
@@ -341,7 +448,7 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
           name: product.presentation.name,
           description: product.presentation.tagline || undefined,
           tax_code: taxCode,
-          metadata: { sku: product.provider.sku },
+          metadata: { sku: printSku },
         },
       },
     },
@@ -359,7 +466,8 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
   }
 
   const fulfillment: FulfillmentPlan = {
-    productSku: product.provider.sku,
+    productSku: printSku,
+    variant,
     copies,
     shippingMethod: args.shippingMethod,
     destinationCountry: args.destinationCountry,
@@ -439,13 +547,17 @@ export function registerStripeUserRoutes(app: Express): void {
       }
 
       const [config, settings] = await Promise.all([getProductsConfig(), getPricingSettings()]);
-      const product = config.products.find(
-        (p) => p.provider.sku === body.productSku && p.status === "active",
-      );
-      if (!product) {
+      const resolved = resolvePrintOrder({
+        products: config.products,
+        productSku: body.productSku,
+        variant: body.variant,
+        activeOnly: true,
+      });
+      if (!resolved) {
         clientError(res, "This product isn't available for ordering.");
         return;
       }
+      const { product, variant, printSku } = resolved;
 
       // Resolve the buyer's plan once — it drives both the access gate and the
       // subscriber print discount below.
@@ -524,6 +636,8 @@ export function registerStripeUserRoutes(app: Express): void {
         uid,
         email: body.recipient.email ?? req.authToken?.email ?? null,
         product,
+        variant,
+        printSku,
         settings,
         activePlan,
         copies,
@@ -541,6 +655,11 @@ export function registerStripeUserRoutes(app: Express): void {
       }
       res.json({ url: result.url, paymentId: result.paymentId });
     } catch (err) {
+      if (err instanceof PricingUnavailableError) {
+        console.error("[stripe] checkout blocked — order is unpriceable:", err.message);
+        clientError(res, err.clientMessage, 409);
+        return;
+      }
       console.error("[stripe] checkout failed", err);
       clientError(res, "We couldn't start checkout. Please try again.", 500);
     }
@@ -555,6 +674,7 @@ export function registerStripeUserRoutes(app: Express): void {
       const uid = req.uid!;
       const body = (req.body ?? {}) as {
         productSku?: string;
+        variant?: VariantSelection;
         copies?: number;
         pageCount?: number;
         currency?: string;
@@ -570,13 +690,17 @@ export function registerStripeUserRoutes(app: Express): void {
         return;
       }
       const [config, settings] = await Promise.all([getProductsConfig(), getPricingSettings()]);
-      const product = config.products.find(
-        (p) => p.provider.sku === body.productSku && p.status === "active",
-      );
-      if (!product) {
+      const resolved = resolvePrintOrder({
+        products: config.products,
+        productSku: body.productSku,
+        variant: body.variant,
+        activeOnly: true,
+      });
+      if (!resolved) {
         clientError(res, "This product isn't available.", 404);
         return;
       }
+      const { product, variant, printSku } = resolved;
       const currency = (body.currency || settings.baseCurrency).toUpperCase() as CurrencyCode;
       if (!settings.currencies.includes(currency)) {
         clientError(res, `Currency ${currency} isn't supported.`);
@@ -587,12 +711,17 @@ export function registerStripeUserRoutes(app: Express): void {
       const pages = Math.max(1, Math.floor(body.pageCount || product.conditions.pages.min));
       const priced = await priceRetailOrder({
         product,
+        variant,
+        printSku,
         settings,
         activePlan,
         copies,
         pages,
         currency,
-        shippingMethod: body.shippingMethod ?? "Standard",
+        // Budget (provider MAIL) is the one tier quotable in every destination we
+        // sell to; Standard (GROUND) is unavailable to the US and UK, so it is a
+        // poor fallback for a price preview. The client always sends a method.
+        shippingMethod: body.shippingMethod ?? "Budget",
         destinationCountry: body.destinationCountry,
         address: {
           line1: body.line1,
@@ -612,6 +741,11 @@ export function registerStripeUserRoutes(app: Express): void {
         total: Math.round((priced.unitPrice * copies + priced.shippingCharged) * 100) / 100,
       });
     } catch (err) {
+      if (err instanceof PricingUnavailableError) {
+        console.error("[stripe] price preview blocked — order is unpriceable:", err.message);
+        clientError(res, err.clientMessage, 409);
+        return;
+      }
       console.error("[stripe] price preview failed", err);
       clientError(res, "We couldn't price this destination.", 500);
     }
@@ -804,13 +938,19 @@ export function registerStripeUserRoutes(app: Express): void {
         return;
       }
       const [config, settings] = await Promise.all([getProductsConfig(), getPricingSettings()]);
-      const product = config.products.find(
-        (p) => p.provider.sku === plan.productSku && p.status === "active",
-      );
-      if (!product) {
+      // plan.productSku is the composed print SKU; resolve back to the format
+      // product and keep the original variant so the reorder reprints the same book.
+      const resolved = resolvePrintOrder({
+        products: config.products,
+        productSku: plan.productSku,
+        variant: (plan.variant as VariantSelection | null | undefined) ?? undefined,
+        activeOnly: true,
+      });
+      if (!resolved) {
         clientError(res, "This product isn't available for ordering anymore.");
         return;
       }
+      const { product, variant, printSku } = resolved;
       const activePlan = await resolveActivePlan(uid);
       const copies = Math.max(
         product.conditions.copies.min,
@@ -820,6 +960,8 @@ export function registerStripeUserRoutes(app: Express): void {
         uid,
         email: plan.recipient.email ?? req.authToken?.email ?? null,
         product,
+        variant,
+        printSku,
         settings,
         activePlan,
         copies,
@@ -1361,10 +1503,28 @@ function invoiceTaxMinor(invoice: Stripe.Invoice): number {
   return 0;
 }
 
-/** Pull fee + net + receipt off a PaymentIntent's charge (expanded). */
-async function chargeFinancials(
-  paymentIntentId: string,
-): Promise<{ chargeId?: string; receiptUrl?: string; fee?: number; net?: number; currency?: string }> {
+/**
+ * The BILLING market of a charge — who paid, which is what revenue, tax and
+ * pricing questions are really about. Prefers the address the customer entered
+ * over the card's issuing country, since a card issued abroad is common for
+ * expats and says little about the market.
+ */
+function billingCountryOf(charge: Stripe.Charge): string | undefined {
+  const address = charge.billing_details?.address?.country;
+  const card = (charge.payment_method_details as { card?: { country?: string | null } } | null)
+    ?.card?.country;
+  return normalizeCountry(address) ?? normalizeCountry(card) ?? undefined;
+}
+
+/** Pull fee + net + receipt + billing market off a PaymentIntent's charge (expanded). */
+async function chargeFinancials(paymentIntentId: string): Promise<{
+  chargeId?: string;
+  receiptUrl?: string;
+  fee?: number;
+  net?: number;
+  currency?: string;
+  country?: string;
+}> {
   try {
     const pi = await getStripe().paymentIntents.retrieve(paymentIntentId, {
       expand: ["latest_charge.balance_transaction"],
@@ -1379,11 +1539,53 @@ async function chargeFinancials(
       fee: bt ? toMajor(bt.fee, bt.currency) : undefined,
       net: bt ? toMajor(bt.net, bt.currency) : undefined,
       currency,
+      country: billingCountryOf(charge),
     };
   } catch (err) {
     console.warn("[stripe] could not load charge financials", err);
     return {};
   }
+}
+
+/**
+ * Resolve the analysis dimensions of a paid payment: which product was sold,
+ * how many units, and — for print — the provider SKU and shipping destination.
+ *
+ * The catalog lookup maps the provider SKU stored on the fulfillment plan back
+ * to the catalog's internal product id, so the finance stream records a key
+ * that survives re-pointing a product at a different SKU.
+ */
+async function paymentDimensions(
+  kind: PaymentKind,
+  payment: AdminPaymentRecord | null,
+  metadata: Stripe.Metadata | null | undefined,
+): Promise<{ productId: string; sku?: string; units: number; destinationCountry?: string }> {
+  if (kind === "order") {
+    const plan = payment?.fulfillment ?? null;
+    const sku = plan?.productSku ?? undefined;
+    let internalId: string | null = null;
+    if (sku) {
+      try {
+        const config = await getProductsConfig();
+        internalId = findProductForSku(config.products, sku)?.id ?? null;
+      } catch {
+        // Catalog unavailable — fall back to the SKU so the line is still grouped.
+      }
+    }
+    return {
+      productId: productKey("print", internalId ?? sku ?? null),
+      sku,
+      units: plan?.copies ?? 1,
+      destinationCountry: normalizeCountry(plan?.destinationCountry) ?? undefined,
+    };
+  }
+  if (kind === "ebook") {
+    return { productId: productKey("ebook", null), units: 1 };
+  }
+  if (kind === "sparkPack" || kind === "sparkGift") {
+    return { productId: productKey("pack", (metadata?.packId as string) || null), units: 1 };
+  }
+  return { productId: productKey("plan", (metadata?.planId as string) || null), units: 1 };
 }
 
 function subStatusToUpsert(sub: Stripe.Subscription, uid: string | null) {
@@ -1478,14 +1680,22 @@ async function grantSubscriptionSparks(invoice: Stripe.Invoice): Promise<void> {
       const piRef = (invoice as unknown as { payment_intent?: string | { id?: string } | null })
         .payment_intent;
       const piId = typeof piRef === "string" ? piRef : (piRef?.id ?? undefined);
-      const fee = piId ? (await chargeFinancials(piId)).fee : undefined;
+      const charge = piId ? await chargeFinancials(piId) : {};
+      const country =
+        charge.country ??
+        normalizeCountry(invoice.customer_address?.country) ??
+        undefined;
+      const productId = productKey("plan", plan.id);
       await recordChargeRevenue({
         category: "subscriptions",
         kind: "subscriptionRevenue",
         uid,
         gross,
-        fee,
+        fee: charge.fee,
         currency,
+        country,
+        productId,
+        units: 1,
         ref: invoice.id,
         meta: { planId: plan.id, interval },
       });
@@ -1496,6 +1706,8 @@ async function grantSubscriptionSparks(invoice: Stripe.Invoice): Promise<void> {
         uid,
         tax: toMajor(invoiceTaxMinor(invoice), currency),
         currency,
+        country,
+        productId,
         ref: invoice.id,
       });
       await maybeRewardReferral(uid);
@@ -1550,6 +1762,9 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
             uid,
             tax: toMajor(taxMinor, cur),
             currency: cur,
+            // The session is where Stripe Tax resolved the customer's location,
+            // so this is the most authoritative billing market we ever see.
+            country: normalizeCountry(session.customer_details?.address?.country) ?? undefined,
             ref: paymentId,
           });
         }
@@ -1648,6 +1863,7 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         receiptUrl: fin.receiptUrl ?? null,
         feeAmount: fin.fee ?? null,
         netAmount: fin.net ?? null,
+        billingCountry: fin.country ?? null,
         event: "payment_intent.succeeded",
       });
 
@@ -1655,6 +1871,7 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
       const payment = await getAdminPayment(paymentId);
       const projectId =
         payment?.fulfillment?.merchantReference ?? payment?.ebook?.projectId ?? undefined;
+      const dims = await paymentDimensions(kind, payment, pi.metadata);
 
       // Revenue + fee land in the finance stream here (this event carries the
       // charge financials). Idempotent on the paymentId.
@@ -1666,8 +1883,17 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         gross,
         fee: fin.fee,
         currency: pi.currency.toUpperCase(),
+        country: fin.country,
+        productId: dims.productId,
+        sku: dims.sku,
+        units: dims.units,
         ref: paymentId,
-        meta: kind === "sparkGift" ? { gift: true } : undefined,
+        meta: {
+          ...(kind === "sparkGift" ? { gift: true } : {}),
+          // Where it SHIPPED, alongside where it was BILLED — they diverge on
+          // gift orders, and print margin follows the destination.
+          ...(dims.destinationCountry ? { destinationCountry: dims.destinationCountry } : {}),
+        },
       });
 
       // Safety net in case checkout.session.completed was missed: grants and
@@ -1758,6 +1984,9 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
       const delta = Math.max(0, refunded - payment.refundedAmount);
       if (delta > 0) {
         const currency = (charge.currency ?? "usd").toUpperCase();
+        // Carry the original charge's dimensions so a refund subtracts from the
+        // market and product that earned the revenue, not from "unattributed".
+        const dims = await paymentDimensions(payment.kind, payment, charge.metadata);
         await recordFinanceEvent({
           category:
             payment.kind === "order" || payment.kind === "ebook"
@@ -1771,6 +2000,12 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
           projectId: payment.fulfillment?.merchantReference ?? payment.ebook?.projectId ?? undefined,
           currency,
           amount: delta,
+          country: billingCountryOf(charge),
+          productId: dims.productId,
+          sku: dims.sku,
+          // Negative units: a refunded copy is a copy un-sold, so per-product
+          // unit counts stay honest instead of double-counting the sale.
+          units: fullyRefunded ? -dims.units : 0,
           ref: `${paymentId}_${charge.amount_refunded}`,
           meta: { cumulativeRefunded: refunded, fullyRefunded },
         });
@@ -1903,6 +2138,13 @@ export function registerStripeWebhookRoute(app: Express): void {
 
 // ---- Admin routes ----------------------------------------------------------
 
+/** The dashboard-wide `?country=` filter (see analytics.ts `parseCountry`). */
+function marketFilter(req: Request): string | null {
+  const raw = String(req.query.country ?? "").trim().toUpperCase();
+  if (!raw || raw === "ALL") return null;
+  return raw === UNKNOWN_COUNTRY ? UNKNOWN_COUNTRY : normalizeCountry(raw);
+}
+
 export function registerStripeAdminRoutes(app: Express): void {
   const json = express.json();
 
@@ -1911,7 +2153,7 @@ export function registerStripeAdminRoutes(app: Express): void {
     try {
       const sinceDays = Number(req.query.days);
       const sinceMs = Number.isFinite(sinceDays) && sinceDays > 0 ? Date.now() - sinceDays * 86_400_000 : undefined;
-      const items = await listPayments({ sinceMs, limit: 500 });
+      const items = await listPayments({ sinceMs, limit: 500, country: marketFilter(req) });
       res.json({ payments: items });
     } catch (err) {
       console.error("[stripe-admin] list failed", err);
@@ -1923,7 +2165,7 @@ export function registerStripeAdminRoutes(app: Express): void {
   app.get("/admin/payments/analytics", async (req: Request, res: Response) => {
     try {
       const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
-      res.json(await paymentsAnalytics(days));
+      res.json(await paymentsAnalytics(days, marketFilter(req)));
     } catch (err) {
       console.error("[stripe-admin] analytics failed", err);
       res.status(500).json({ error: { message: (err as Error)?.message ?? "Failed to compute analytics." } });

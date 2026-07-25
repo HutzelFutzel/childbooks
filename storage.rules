@@ -20,7 +20,11 @@ service firebase.storage {
       allow write: if false;
     }
 
-    match /public/products/{allPaths=**} {
+    // Admin-uploaded catalog pictures: print options (bindings, papers,
+    // finishes), the books themselves, the digital edition and Spark packs.
+    // World-readable so the storefront can show buyers what they're choosing;
+    // written only by the backend (Admin SDK) after `requireAdmin`.
+    match /public/catalogMedia/{allPaths=**} {
       allow read: if true;
       allow write: if false;
     }

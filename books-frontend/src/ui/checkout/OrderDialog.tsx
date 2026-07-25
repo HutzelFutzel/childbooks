@@ -2,6 +2,14 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FileDown, Loader2, Package, ShieldCheck, TriangleAlert, Truck } from "lucide-react";
 import { bookProductForConfig } from "../../core/book";
+import { findPublicPlanByPriceId } from "../../core/config/plans";
+import { findPublicProductForSku, planMeetsAccess, productAccessOf } from "../../core/config/products";
+import {
+  createDefaultVariantPolicy,
+  firstAllowedVariant,
+  normalizeVariantPolicy,
+  type VariantSelection,
+} from "../../core/config/variants";
 import { buildOrderDraft } from "../../core/fulfillment/draft";
 import { normalizePageCount } from "../../core/fulfillment";
 import { FulfillmentError } from "../../core/fulfillment/errors";
@@ -9,7 +17,10 @@ import type {
   Recipient,
   ShippingMethod,
 } from "../../core/fulfillment/types";
+import { BASE_VARIANT } from "../../core/fulfillment/lulu/products";
+import { skuForVariant, variantFromSku } from "../../core/fulfillment/lulu/skuAxes";
 import type { BookDesign, Project } from "../../core/types";
+import { addressSummary, type SavedAddress } from "../../core/profile/types";
 import { createFulfillment } from "../../platform/fulfillment";
 import {
   fetchOrderPrice,
@@ -17,14 +28,11 @@ import {
   type RetailPricePreview,
 } from "../../platform/payments";
 import { isDev } from "../../platform/runtime";
+import { activeSubscription } from "../../platform/subscriptions";
 import { useAuthStore } from "../../state/authStore";
 import { useProfileStore } from "../../state/profileStore";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useSubscriptionStore } from "../../state/subscriptionStore";
-import { activeSubscription } from "../../platform/subscriptions";
-import { findPublicPlanByPriceId } from "../../core/config/plans";
-import { planMeetsAccess, productAccessOf } from "../../core/config/products";
-import { addressSummary, type SavedAddress } from "../../core/profile/types";
 import { Button } from "../components/Button";
 import { Field, Input } from "../components/Input";
 import { Modal } from "../components/Modal";
@@ -33,6 +41,7 @@ import { notify } from "../lib/notify";
 import { saveBlob } from "../design/bookExport";
 import type { DesignPage } from "../design/designInit";
 import { OrderAssetRunner, type OrderAssets } from "./orderAssets";
+import { VariantPicker } from "./VariantPicker";
 
 type Phase = "form" | "rendering" | "submitting";
 /** Whether the current render is for placing an order or downloading a proof. */
@@ -106,8 +115,34 @@ export function OrderDialog({
     watchSubscriptions();
   }, [watchSubscriptions]);
   const catalogProduct = useMemo(
-    () => publicProducts.find((p) => p.sku === product.sku),
+    () => findPublicProductForSku(publicProducts, product.sku),
     [publicProducts, product.sku],
+  );
+
+  const variantPolicy = useMemo(
+    () =>
+      normalizeVariantPolicy(
+        catalogProduct?.variants ?? createDefaultVariantPolicy(),
+        catalogProduct?.defaultVariant ?? variantFromSku(product.sku) ?? BASE_VARIANT,
+      ),
+    [catalogProduct, product.sku],
+  );
+  const defaultVariant = useMemo(
+    () =>
+      firstAllowedVariant(
+        variantPolicy,
+        catalogProduct?.defaultVariant ?? variantFromSku(product.sku) ?? BASE_VARIANT,
+      ) ?? BASE_VARIANT,
+    [variantPolicy, catalogProduct, product.sku],
+  );
+  const [variant, setVariant] = useState<VariantSelection>(defaultVariant);
+  useEffect(() => {
+    setVariant(defaultVariant);
+  }, [defaultVariant]);
+
+  const printSku = useMemo(
+    () => skuForVariant(product.sku, variant) ?? product.sku,
+    [product.sku, variant],
   );
   const accessGate = useMemo(() => {
     if (!catalogProduct) return { ok: true as const, mode: "public" as const };
@@ -128,11 +163,11 @@ export function OrderDialog({
   const pageCount = normalizePageCount(product, contentPages);
 
   // Order limits for this format. The admin catalog is authoritative when set;
-  // otherwise we fall back to the provider catalog's minimum page count. The
+  // otherwise we fall back to the provider catalog's own page limits. The
   // backend re-checks these at checkout — this just fails fast with a clear
   // message instead of after the (slow) print-file render.
   const minPages = catalogProduct?.conditions.pages.min ?? product.minPages;
-  const maxPages = catalogProduct?.conditions.pages.max ?? Number.POSITIVE_INFINITY;
+  const maxPages = catalogProduct?.conditions.pages.max ?? product.maxPages;
   const maxCopies = catalogProduct?.conditions.copies.max ?? Number.POSITIVE_INFINITY;
 
   // Shipping methods the product actually supports (backend rejects the rest).
@@ -160,7 +195,11 @@ export function OrderDialog({
   const [postal, setPostal] = useState(DEV_PREFILL?.postal ?? "");
   const [country, setCountry] = useState(DEV_PREFILL?.country ?? "US");
   const [copies, setCopies] = useState(1);
-  const [shipping, setShipping] = useState<ShippingMethod>("Standard");
+  // Budget (Lulu MAIL) is the only level quotable in every destination we sell
+  // to — GROUND ("Standard") is unavailable to the US and UK, and EXPEDITED
+  // ("Express") is US-only, so defaulting to either fails the first price quote.
+  // Per-product availability is configured in the admin catalog's shipping tab.
+  const [shipping, setShipping] = useState<ShippingMethod>("Budget");
 
   // Saved-address book: "" means a new/unsaved address is being entered.
   const [selectedAddressId, setSelectedAddressId] = useState("");
@@ -248,6 +287,7 @@ export function OrderDialog({
         // provider's wholesale quote.
         const priced = await fetchOrderPrice({
           productSku: product.sku,
+          variant,
           copies,
           pageCount,
           currency: CURRENCY,
@@ -279,7 +319,7 @@ export function OrderDialog({
       }
     }, 500);
     return () => clearTimeout(t);
-  }, [open, product.sku, copies, country, line1, city, region, postal, shipping, canQuote, pageCount]);
+  }, [open, product.sku, variant, copies, country, line1, city, region, postal, shipping, canQuote, pageCount]);
 
   function recipient(): Recipient {
     return {
@@ -344,7 +384,7 @@ export function OrderDialog({
       setRenderIntent(intent);
       setPhase("rendering");
       setStatus("Calculating cover size…");
-      const dims = await provider.getCoverDimensionsMm(product.sku, pageCount);
+      const dims = await provider.getCoverDimensionsMm(printSku, pageCount);
       setCoverDims(dims);
       setStatus(intent === "proof" ? "Rendering proof files…" : "Rendering print files…");
       // OrderAssetRunner mounts below once coverDims is set and calls onAssets.
@@ -418,7 +458,7 @@ export function OrderDialog({
       // AFTER Stripe confirms payment (via webhook). Redirect to Stripe.
       // Send the SAME (normalized) page count the price preview used so the
       // charge matches what the customer was quoted.
-      const { url } = await startOrderCheckout({ draft, pageCount });
+      const { url } = await startOrderCheckout({ draft, pageCount, variant });
       window.location.href = url;
     } catch (err) {
       setPhase("form");
@@ -612,6 +652,13 @@ export function OrderDialog({
             />
             Save this address for next time
           </label>
+
+          <VariantPicker
+            policy={variantPolicy}
+            value={variant}
+            onChange={setVariant}
+            currency={CURRENCY}
+          />
 
           {/* Copies + shipping */}
           <div className="grid grid-cols-2 gap-3">

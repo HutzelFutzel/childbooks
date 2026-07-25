@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { ArrowDown, ArrowUp, EyeOff, Search, Sparkles } from "lucide-react";
 import { toast } from "sonner";
+import { countryFlag, countryLabel } from "../../../core/analytics/markets";
 import type { AnalyticsUserRow, UserSort } from "../../../core/analytics/types";
 import { useAdminAnalytics } from "../../../state/adminAnalyticsStore";
 import { Button } from "../../components/Button";
@@ -13,8 +14,9 @@ import { Select } from "../../components/Select";
 import { CardHeader, CardTitle } from "../../components/Card";
 import { fmtDateTime, fmtMoney, fmtNumber, fmtRelative, fmtSparks, fmtUsd, sourceLabel } from "./format";
 
-const COLUMNS: { key: UserSort; label: string; sortable: boolean; align?: "right" }[] = [
+const COLUMNS: { key: UserSort | "country"; label: string; sortable: boolean; align?: "right" }[] = [
   { key: "email", label: "User", sortable: true },
+  { key: "country", label: "Market", sortable: false },
   { key: "plan", label: "Plan", sortable: true },
   { key: "sparks", label: "Sparks", sortable: true, align: "right" },
   { key: "revenue", label: "Revenue", sortable: true, align: "right" },
@@ -116,7 +118,7 @@ export function UsersTable() {
                 >
                   <button
                     type="button"
-                    onClick={() => c.sortable && onSort(c.key)}
+                    onClick={() => c.sortable && onSort(c.key as UserSort)}
                     className={`inline-flex items-center gap-1 ${c.sortable ? "hover:text-ink-800" : "cursor-default"} ${c.align === "right" ? "flex-row-reverse" : ""}`}
                   >
                     {c.label}
@@ -140,6 +142,20 @@ export function UsersTable() {
                       <span className="text-amber-500">unverified</span>
                     )}
                   </div>
+                </td>
+                <td className="px-4 py-2.5">
+                  {u.country ? (
+                    <span
+                      className="whitespace-nowrap text-xs text-ink-600"
+                      title={countryLabel(u.country)}
+                    >
+                      {countryFlag(u.country)} {u.country}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-ink-300" title="No location signal captured yet.">
+                      —
+                    </span>
+                  )}
                 </td>
                 <td className="px-4 py-2.5">
                   <PlanCell row={u} />

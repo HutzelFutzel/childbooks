@@ -7,7 +7,15 @@
  * blocking triggers capture every signup + sign-in server-side (can't be
  * spoofed by the client) into `analyticsEvents/{autoId}`:
  *
- *   { type: "signup" | "login", uid, email, source, at }
+ *   { type: "signup" | "login", uid, email, source, country, at }
+ *
+ * `country` is the MARKET the event came from, derived from the already-exposed
+ * locale/IP signals the blocking event carries (see geo.ts — never a stored IP,
+ * never fine-grained geolocation). Without it every per-market number and every
+ * local-time-of-day curve on the dashboard would be unbuildable, since Auth
+ * itself records no location. The same code is denormalized onto `users/{uid}`
+ * so the cross-user scans can group by market from a single collection read
+ * instead of re-deriving it per request.
  *
  * The admin Analysis dashboard queries this collection by `at` range. Writes are
  * STRICTLY best-effort: a throw here would block the user's authentication, so
@@ -17,11 +25,13 @@
  * registers them). Against the Auth emulator they run automatically.
  */
 import { beforeUserCreated, beforeUserSignedIn } from "firebase-functions/v2/identity";
-import type { AuthUserRecord } from "firebase-functions/v2/identity";
+import type { AuthBlockingEvent, AuthUserRecord } from "firebase-functions/v2/identity";
 import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { notifySlack } from "./notify";
 import { SLACK_WEBHOOK_URL } from "./secrets";
+import { regionFromLocale } from "./geo";
+import { UNKNOWN_COUNTRY } from "../../books-frontend/src/core/analytics/markets";
 
 /** The provider an account was created/signed in with. */
 function sourceOf(user: AuthUserRecord): string {
@@ -30,17 +40,41 @@ function sourceOf(user: AuthUserRecord): string {
   return "anonymous";
 }
 
-async function record(type: "signup" | "login", user: AuthUserRecord): Promise<void> {
+/**
+ * Market for a blocking event. The event carries the client's BCP-47 locale,
+ * whose region subtag ("de-DE" → DE) is the only location signal available at
+ * auth time — Auth records none and there's no request header to read here.
+ */
+function countryOf(event: AuthBlockingEvent): string {
+  return regionFromLocale(event.locale ?? "") ?? UNKNOWN_COUNTRY;
+}
+
+async function record(
+  type: "signup" | "login",
+  user: AuthUserRecord,
+  country: string,
+): Promise<void> {
   const source = sourceOf(user);
   try {
     ensureAdmin();
-    await getFirestore().collection("analyticsEvents").add({
+    const db = getFirestore();
+    await db.collection("analyticsEvents").add({
       type,
       uid: user.uid,
       email: user.email ? user.email.toLowerCase() : null,
       source,
+      country,
       at: Date.now(),
     });
+    // Denormalize the market onto the user doc so the dashboard's per-market
+    // grouping is a single `users` read rather than a join against the event
+    // log (which only covers the selected window). Only overwrite with a known
+    // country — a signal-less sign-in must not erase a good earlier reading.
+    if (country !== UNKNOWN_COUNTRY) {
+      const patch: Record<string, unknown> = { country };
+      if (type === "signup") patch.signupCountry = country;
+      await db.doc(`users/${user.uid}`).set(patch, { merge: true });
+    }
   } catch {
     // Best-effort: never block authentication on analytics.
   }
@@ -64,10 +98,10 @@ const BLOCKING_OPTS = { secrets: [SLACK_WEBHOOK_URL] };
 
 /** Fired once when an account (incl. anonymous guests) is first created. */
 export const onBeforeCreate = beforeUserCreated(BLOCKING_OPTS, async (event) => {
-  if (event.data) await record("signup", event.data);
+  if (event.data) await record("signup", event.data, countryOf(event));
 });
 
 /** Fired on every sign-in (not token refresh). */
 export const onBeforeSignIn = beforeUserSignedIn(BLOCKING_OPTS, async (event) => {
-  if (event.data) await record("login", event.data);
+  if (event.data) await record("login", event.data, countryOf(event));
 });

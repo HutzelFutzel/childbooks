@@ -45,26 +45,187 @@ export interface AnalyticsTotals {
   activeUsers: number;
 }
 
+/**
+ * Where {@link AnalyticsTotals.activeUsers} came from.
+ *
+ * `events` counts distinct users in the auth event log — correct for any
+ * window. `auth` is the fallback used before the blocking functions have
+ * recorded anything: it tests each account's SINGLE last-sign-in stamp against
+ * the window, which is fine for trailing windows but systematically undercounts
+ * historical ones (a user active then AND since only carries the later stamp).
+ */
+export type ActiveUsersSource = "events" | "auth";
+
+/** Which kind of activity a heatmap / hour chart is measuring. */
+export type ActivityMetric = "all" | "signups" | "logins";
+
+/**
+ * How instants are mapped to a wall-clock hour.
+ *
+ * - `market` — every event is bucketed in ITS OWN market's timezone, so the
+ *   curve reads as "what time it was for the person". The only view that means
+ *   anything for a global audience.
+ * - `fixed` — everything is bucketed in one zone (the selected market's, or the
+ *   dashboard default). Answers operational questions like when to deploy.
+ */
+export type TimezoneMode = "market" | "fixed";
+
+/** Weekday × hour activity, counted both as events and as distinct people. */
+export interface ActivityGrid {
+  /** `[weekday 0=Sun..6=Sat][hour 0..23]` event counts. */
+  events: number[][];
+  /** Same shape, distinct users — one power user can't fake a busy hour. */
+  users: number[][];
+  /** Marginal totals of {@link events}. */
+  byWeekday: number[];
+  byHour: number[];
+  /** Marginal distinct-user totals (not the sum of the grid — people repeat). */
+  usersByWeekday: number[];
+  usersByHour: number[];
+  /** Largest single cell in {@link events} (the heatmap's colour ceiling). */
+  peak: number;
+}
+
+/** One market's slice of the window. */
+export interface CountryActivity {
+  /** ISO-3166 alpha-2, or "ZZ" when the market couldn't be derived. */
+  country: string;
+  /** Accounts (lifetime) whose resolved market is this one. */
+  totalUsers: number;
+  signups: number;
+  logins: number;
+  activeUsers: number;
+  /** Representative IANA zone this market's local time is bucketed in. */
+  timezone: string;
+  /**
+   * True when the market spans enough offsets that its local-time curve is
+   * meaningfully smeared (the US spans six zones; Germany spans one).
+   */
+  timezoneApproximate: boolean;
+}
+
 /** The full payload behind the Analysis dashboard for one window. */
 export interface AnalyticsOverview {
   range: AnalyticsRange;
+  /** The zone the daily series and the `fixed` grids are bucketed in. */
   timezone: string;
+  /** Active market filter (ISO-2), or null for "all markets". */
+  country: string | null;
+  /** Which bucketing the returned {@link activity} grids used. */
+  tzMode: TimezoneMode;
   /** When the server computed this (epoch ms). */
   generatedAt: number;
   totals: AnalyticsTotals;
+  /**
+   * The same counters for the immediately preceding window of equal length, so
+   * every KPI can show a delta. A number with no trend isn't actionable.
+   */
+  previousTotals: AnalyticsTotals;
+  activeUsersSource: ActiveUsersSource;
+  /**
+   * False when this window and the previous one measured active users by
+   * different methods, which makes the delta between them meaningless.
+   */
+  activeUsersComparable: boolean;
   /** Per-day series across the window (zero-filled, ascending). */
   series: TimeSeriesPoint[];
   /** Signup source split for accounts created in the window. */
   signupSources: BreakdownSlice[];
-  /** Activity matrix `[weekday 0=Sun..6=Sat][hour 0..23]` (logins + signups). */
-  weekdayHour: number[][];
-  /** Activity totals by weekday (0=Sun..6=Sat). */
-  byWeekday: number[];
-  /** Activity totals by hour (0..23). */
-  byHour: number[];
+  /** Weekday × hour activity, per metric. */
+  activity: Record<ActivityMetric, ActivityGrid>;
+  /** Per-market breakdown, ranked by activity. */
+  countries: CountryActivity[];
   /** How many accounts the exclusion list removed from this computation. */
   excludedCount: number;
   /** True when the user scan hit its safety cap (numbers are a lower bound). */
+  capped: boolean;
+  /** True when the event scan hit its cap (the series is a lower bound). */
+  eventsCapped: boolean;
+}
+
+// ---- Products ---------------------------------------------------------------
+
+/** Product families the "top products" ranking spans. */
+export type ProductFamily = "print" | "ebook" | "pack" | "plan" | "other";
+
+/** One day on a product's time-series axis. */
+export interface ProductSeriesPoint {
+  day: string;
+  revenueUsd: number;
+  netUsd: number;
+  units: number;
+}
+
+/** One row in the top-products table. */
+export interface ProductRow {
+  /** Stable product key, e.g. `print:square-hardcover`, `plan:storyteller`. */
+  productId: string;
+  label: string;
+  family: ProductFamily;
+  /** Provider SKU (print only) — for reconciling against the provider. */
+  sku: string | null;
+  units: number;
+  /** Money lines touching this product (a proxy for order count). */
+  orders: number;
+  revenueUsd: number;
+  costUsd: number;
+  netUsd: number;
+  refundUsd: number;
+  /** Refunds as a share of gross revenue — the product-quality signal. */
+  refundRatePct: number | null;
+  netPerUnitUsd: number | null;
+  /** Net as a share of revenue. */
+  marginPct: number | null;
+  /** Distinct markets this product sold into. */
+  countries: number;
+  /** The markets that bought it most, best first. */
+  topCountries: { country: string; revenueUsd: number; units: number }[];
+  series: ProductSeriesPoint[];
+}
+
+export interface ProductsReport {
+  range: AnalyticsRange;
+  timezone: string;
+  country: string | null;
+  generatedAt: number;
+  products: ProductRow[];
+  totals: { revenueUsd: number; costUsd: number; netUsd: number; units: number; orders: number };
+  capped: boolean;
+}
+
+// ---- Conversion funnel -------------------------------------------------------
+
+export interface FunnelStage {
+  key: string;
+  label: string;
+  value: number;
+  /** Conversion from the previous stage, in %. Null for the first stage. */
+  stepPct: number | null;
+  /** Conversion from the first stage, in %. */
+  overallPct: number | null;
+  hint?: string;
+}
+
+/** Checkout conversion per payment kind (order / ebook / sparkPack / …). */
+export interface FunnelKindRow {
+  kind: string;
+  started: number;
+  paid: number;
+  failed: number;
+  conversionPct: number | null;
+  /** Gross value of the checkouts that never completed, in USD. */
+  abandonedUsd: number;
+}
+
+export interface FunnelReport {
+  range: AnalyticsRange;
+  country: string | null;
+  generatedAt: number;
+  stages: FunnelStage[];
+  /** Checkout sessions started in the window that never reached `paid`. */
+  abandonedCheckouts: number;
+  abandonedUsd: number;
+  byKind: FunnelKindRow[];
   capped: boolean;
 }
 
@@ -100,6 +261,8 @@ export interface AnalyticsUserRow extends UserEconomics {
   uid: string;
   email: string | null;
   displayName: string | null;
+  /** Resolved market (ISO-2), or null when no signal was ever captured. */
+  country: string | null;
   /** Provider the account was created with (`password`, `google.com`, `anonymous`). */
   source: string | null;
   /** Epoch ms the account was created. */
@@ -298,4 +461,19 @@ export function resolveRange(
   }
   if (timeframe === "7d") return { from: now - 7 * DAY, to: now };
   return { from: now - 30 * DAY, to: now };
+}
+
+/**
+ * The window immediately preceding `range`, of identical length — the baseline
+ * every KPI delta is measured against.
+ */
+export function previousRange(range: AnalyticsRange): AnalyticsRange {
+  const span = Math.max(1, range.to - range.from);
+  return { from: range.from - span, to: range.from - 1 };
+}
+
+/** Percentage change from `before` to `after`; null when there's no baseline. */
+export function deltaPct(after: number, before: number): number | null {
+  if (!Number.isFinite(before) || before <= 0) return after > 0 ? null : 0;
+  return Math.round(((after - before) / before) * 1000) / 10;
 }

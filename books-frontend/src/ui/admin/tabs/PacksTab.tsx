@@ -10,6 +10,7 @@ import { useAppConfigStore } from "../../../state/appConfigStore";
 import type { SparkPack, SparksConfig } from "../../../core/config/sparks";
 import { buyerContextsFromPublicPlans, packWorstCaseImpact } from "../../../core/config/discountImpact";
 import { Grid, ImpactNote, NumberField, Section, TabIntro, fmtMoney } from "./products/parts";
+import { PackPicturesSection } from "./products/PicturesSection";
 
 /**
  * Spark-pack editor. Packs are a one-time purchasable — the power-user overflow
@@ -160,6 +161,10 @@ export function PacksTab() {
           {draft.packs.length === 0 && <p className="text-xs text-ink-400">No packs yet. Add one to offer top-ups.</p>}
         </div>
       </Section>
+
+      {/* Keyed by pack id, so only SAVED packs get a row — pictures uploaded
+          against an id that never lands would be orphaned. */}
+      <PackPicturesSection packs={stored.packs} />
     </div>
   );
 }

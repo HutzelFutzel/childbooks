@@ -16,6 +16,7 @@ import {
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useAdminTab } from "../adminTabStore";
 import { Grid, ImpactNote, NumberField, Section, TabIntro, fmtMoney } from "./products/parts";
+import { EbookPicturesSection } from "./products/PicturesSection";
 
 /**
  * Digital-edition (ebook) product editor. The ebook is a real product — a
@@ -107,6 +108,8 @@ export function EbookTab() {
             : "The digital edition is hidden from customers."}
         </p>
       </Section>
+
+      <EbookPicturesSection />
 
       <Section
         title="Price"
