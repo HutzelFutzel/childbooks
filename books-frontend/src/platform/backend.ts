@@ -4,7 +4,8 @@
  * the browser never holds an API key.
  *
  *   - Production: set NEXT_PUBLIC_BACKEND_URL (App Hosting env / apphosting.yaml)
- *     to e.g. https://us-central1-<project>.cloudfunctions.net/api
+ *     to e.g. https://us-central1-<project>.cloudfunctions.net/api. CI builds
+ *     load the same value out of apphosting.yaml (scripts/apphosting-env.mjs).
  *   - Development: defaults to the local Functions emulator.
  *
  * Every backend request carries the current user's Firebase ID token in the
@@ -22,22 +23,28 @@ const EMULATOR_DEFAULT = `http://127.0.0.1:5001/${PROJECT_ID}/us-central1/api`;
 /** Header the backend reads the Firebase ID token from. */
 export const AUTH_TOKEN_HEADER = "X-Auth-Token";
 
-export const BACKEND_BASE: string = (() => {
+/**
+ * Resolved lazily, on the first request — NOT at module scope. This module is
+ * pulled into the server bundle of every page (the root layout mounts
+ * `AuthInit` → `authStore` → here), so throwing while the module evaluates
+ * would crash `next build` on any statically prerendered page that never even
+ * talks to the backend. Missing config is instead caught by
+ * `scripts/check-env.mjs`, which both CI and the deploy pipeline run.
+ */
+export function backendBase(): string {
   const explicit = process.env.NEXT_PUBLIC_BACKEND_URL?.replace(/\/$/, "");
   if (explicit) return explicit;
   if (process.env.NODE_ENV !== "production") return EMULATOR_DEFAULT;
-  // Fail FAST: a production bundle without a backend URL would send every API
-  // call to the app's own origin and 404. NEXT_PUBLIC_* is inlined at build
-  // time, so this throws during `next build` — the deploy fails loudly instead
-  // of shipping a silently broken app. Set it in apphosting.yaml.
+  // Fail loudly rather than silently: a production bundle without a backend URL
+  // would send every API call to the app's own origin and 404.
   throw new Error(
     "NEXT_PUBLIC_BACKEND_URL is not set for a production build. " +
       "Set it in apphosting.yaml (env → NEXT_PUBLIC_BACKEND_URL) to the deployed Functions origin.",
   );
-})();
+}
 
 export function backendUrl(path: string): string {
-  return BACKEND_BASE + (path.startsWith("/") ? path : `/${path}`);
+  return backendBase() + (path.startsWith("/") ? path : `/${path}`);
 }
 
 /** The current user's ID token, or null when signed out / unavailable. */

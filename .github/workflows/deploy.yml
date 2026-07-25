@@ -87,6 +87,12 @@ jobs:
         id: build_functions
         run: yarn build:functions
 
+      # NEXT_PUBLIC_* are inlined at build time and only App Hosting applies
+      # apphosting.yaml's env automatically — load it so the build below matches
+      # the one `release` will get.
+      - name: Load frontend build env (apphosting.yaml)
+        run: node scripts/apphosting-env.mjs >> "$GITHUB_ENV"
+
       # Same build App Hosting will run for `release`; catching it here means we
       # never promote a commit the frontend can't build.
       - name: Build web

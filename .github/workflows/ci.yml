@@ -41,6 +41,12 @@ jobs:
       - name: Build functions
         run: yarn build:functions
 
+      # App Hosting applies apphosting.yaml's env when it builds; a bare
+      # `yarn build:web` here would not, and NEXT_PUBLIC_* are inlined at build
+      # time. Load them so this really is the same build production gets.
+      - name: Load frontend build env (apphosting.yaml)
+        run: node scripts/apphosting-env.mjs >> "$GITHUB_ENV"
+
       # Production build of the Next.js app (same build App Hosting runs).
       - name: Build web
         run: yarn build:web

@@ -22,6 +22,7 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { secretNames, projectId, readEnvLocal } from "./set-secrets.mjs";
+import { appHostingEnv, APP_HOSTING_PATH } from "./apphosting-env.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ARGS = new Set(process.argv.slice(2));
@@ -51,15 +52,10 @@ const REQUIRED_FRONTEND_VARS = [
 ];
 
 console.log("\n▶ Frontend env (apphosting.yaml)");
-const appHostingPath = join(ROOT, "apphosting.yaml");
-if (!existsSync(appHostingPath)) {
+if (!existsSync(APP_HOSTING_PATH)) {
   fail("apphosting.yaml is missing — App Hosting builds will have NO env vars.");
 } else {
-  const yaml = readFileSync(appHostingPath, "utf8");
-  // Minimal parse: `- variable: NAME` followed by a `value: "…"` line.
-  const declared = new Map();
-  const re = /-\s*variable:\s*([A-Z0-9_]+)\s*\n\s*value:\s*["']?([^"'\n]*)["']?/g;
-  for (const m of yaml.matchAll(re)) declared.set(m[1], m[2].trim());
+  const declared = appHostingEnv();
   for (const name of REQUIRED_FRONTEND_VARS) {
     const value = declared.get(name);
     if (value === undefined) fail(`${name} is not declared in apphosting.yaml.`);

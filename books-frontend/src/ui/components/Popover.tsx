@@ -15,8 +15,12 @@ import { popIn } from "../lib/motion";
 import { cn } from "../lib/cn";
 
 export interface PopoverProps {
-  /** The clickable trigger. Receives no props; wrap your own button/element. */
-  trigger: ReactNode;
+  /**
+   * The clickable trigger. Either static content, or a render function that
+   * receives the current open state (e.g. to rotate a chevron / swap a
+   * highlight while the panel is open).
+   */
+  trigger: ReactNode | ((open: boolean) => ReactNode);
   children: ReactNode | ((close: () => void) => ReactNode);
   align?: "start" | "center" | "end";
   side?: "bottom" | "top";
@@ -141,7 +145,7 @@ export function Popover({
         onClick={() => setOpen((v) => !v)}
         className="inline-flex"
       >
-        {trigger}
+        {typeof trigger === "function" ? trigger(open) : trigger}
       </button>
       {typeof document !== "undefined" &&
         createPortal(

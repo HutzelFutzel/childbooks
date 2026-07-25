@@ -3,7 +3,7 @@
 import { Image as ImageIcon, LogOut, User as UserIcon } from "lucide-react";
 import { Modal } from "../components/Modal";
 import { Button } from "../components/Button";
-import { useAuthStore, userLabel } from "../../state/authStore";
+import { useAuthStore, userLabel, userSecondaryLine } from "../../state/authStore";
 import { useAccountUiStore } from "../../state/accountUiStore";
 import { usePreferredImageTier, setPreferredImageTier } from "../../state/imageTier";
 import { ImageTierPicker } from "./ImageTierPicker";
@@ -69,7 +69,9 @@ export function SettingsDialog() {
             <div className="flex items-center justify-between gap-3 rounded-xl bg-ink-50/60 px-3 py-2.5">
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium text-ink-800">{userLabel(user)}</p>
-                {user.email && <p className="truncate text-xs text-ink-500">{user.email}</p>}
+                {userSecondaryLine(user) && (
+                  <p className="truncate text-xs text-ink-500">{userSecondaryLine(user)}</p>
+                )}
               </div>
               <Button
                 variant="ghost"

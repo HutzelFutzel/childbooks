@@ -329,3 +329,15 @@ export function userLabel(user: User | null): string {
   if (user.isAnonymous) return "Guest";
   return user.displayName || user.email || "Account";
 }
+
+/**
+ * The secondary line shown under `userLabel` in account UI (menus, settings)
+ * — the user's email, but only when it says something the label doesn't
+ * already. Accounts with no `displayName` fall back to their email *as* the
+ * label, so rendering `user.email` underneath unconditionally shows the same
+ * address twice. Returns `null` whenever there's nothing extra to add.
+ */
+export function userSecondaryLine(user: User | null): string | null {
+  if (!user?.email) return null;
+  return user.email === userLabel(user) ? null : user.email;
+}

@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
-import { BookOpen, ChevronDown, LogOut, Shield, User as UserIcon } from "lucide-react";
+import { ChevronDown, BookOpen, LogOut, Shield } from "lucide-react";
 import { useAuthStore, userLabel } from "../../state/authStore";
+import { Popover } from "../components/Popover";
+import { MenuDivider, MenuHeader, MenuItem, UserAvatar } from "../components/UserMenu";
+import { cn } from "../lib/cn";
 
 /**
  * Compact account control for the marketing chrome (landing, blog, contact) —
  * the counterpart to `ui/auth/AuthMenu` used inside the Studio/Admin shells.
+ * Both share their header/item building blocks (`ui/components/UserMenu`) so
+ * the two stay visually and behaviorally in sync.
  *
  * Marketing pages don't mount the Studio/Admin-only dialogs (Settings, Orders,
  * Plans, Downloads), so this intentionally only offers what's safe to act on
@@ -25,24 +28,6 @@ export function AccountMenu() {
   const isAdmin = useAuthStore((s) => s.isAdmin);
   const signOutUser = useAuthStore((s) => s.signOutUser);
   const openAuthDialog = useAuthStore((s) => s.openAuthDialog);
-
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  // Close on outside click / Escape — mirrors `ui/auth/AuthMenu`.
-  useEffect(() => {
-    if (!open) return;
-    const onDown = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
-    document.addEventListener("mousedown", onDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
 
   if (!ready) {
     return <div className="hidden h-9 w-20 animate-pulse rounded-xl bg-ink-100 sm:block" />;
@@ -62,66 +47,52 @@ export function AccountMenu() {
     );
   }
 
-  const run = (fn: () => void) => {
-    setOpen(false);
-    fn();
-  };
-
   return (
-    <div className="relative hidden sm:block" ref={ref}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        className="flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-medium text-ink-700 transition-colors hover:bg-ink-100 hover:text-ink-900"
+    <div className="hidden sm:block">
+      <Popover
+        align="end"
+        panelClassName="w-64 overflow-hidden p-0"
+        trigger={(open) => (
+          <span
+            className={cn(
+              "flex items-center gap-1.5 rounded-xl py-1.5 pl-1.5 pr-3 transition-colors",
+              open ? "bg-ink-100" : "hover:bg-ink-100",
+            )}
+          >
+            <UserAvatar user={user} size="sm" />
+            <span className="max-w-32 truncate text-sm font-medium text-ink-700">{userLabel(user)}</span>
+            <ChevronDown className={cn("size-3.5 text-ink-400 transition-transform", open && "rotate-180")} />
+          </span>
+        )}
       >
-        <UserIcon className="size-4" />
-        <span className="max-w-32 truncate">{userLabel(user)}</span>
-        <ChevronDown className={"size-3.5 transition-transform " + (open ? "rotate-180" : "")} />
-      </button>
+        {(close) => (
+          <>
+            <MenuHeader user={user} />
+            <div className="py-1">
+              <MenuItem icon={<BookOpen className="size-4" />} label="Open the Studio" href="/studio" onClick={close} />
+            </div>
 
-      {open && (
-        <div
-          role="menu"
-          className="absolute right-0 top-full z-40 mt-1.5 w-52 overflow-hidden rounded-xl bg-white py-1 shadow-lg ring-1 ring-ink-100"
-        >
-          <div className="border-b border-ink-100 px-3 py-2">
-            <p className="truncate text-sm font-medium text-ink-800">{userLabel(user)}</p>
-            {user?.email && <p className="truncate text-xs text-ink-400">{user.email}</p>}
-          </div>
-          <Link
-            href="/studio"
-            role="menuitem"
-            onClick={() => setOpen(false)}
-            className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-ink-700 transition hover:bg-ink-50"
-          >
-            <BookOpen className="size-4 text-ink-400" />
-            Open the Studio
-          </Link>
-          {isAdmin && (
-            <Link
-              href="/admin"
-              role="menuitem"
-              onClick={() => setOpen(false)}
-              className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-ink-700 transition hover:bg-ink-50"
-            >
-              <Shield className="size-4 text-ink-400" />
-              Admin
-            </Link>
-          )}
-          <div className="my-1 border-t border-ink-100" />
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => run(() => void signOutUser())}
-            className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-sm text-rose-600 transition hover:bg-ink-50"
-          >
-            <LogOut className="size-4" />
-            Sign out
-          </button>
-        </div>
-      )}
+            {isAdmin && (
+              <>
+                <MenuDivider />
+                <div className="py-1">
+                  <MenuItem icon={<Shield className="size-3" />} label="Admin" href="/admin" tone="admin" onClick={close} />
+                </div>
+              </>
+            )}
+
+            <MenuDivider />
+            <div className="py-1">
+              <MenuItem
+                icon={<LogOut className="size-4" />}
+                label="Sign out"
+                tone="danger"
+                onClick={() => { close(); void signOutUser(); }}
+              />
+            </div>
+          </>
+        )}
+      </Popover>
     </div>
   );
 }
