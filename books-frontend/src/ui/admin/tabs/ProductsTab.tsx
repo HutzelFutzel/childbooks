@@ -25,15 +25,20 @@ import {
   FULFILLMENT_PROVIDERS,
   PROVIDER_ENVS,
   PROVIDER_LABELS,
+  SUPPORTED_MARKETS,
   createDefaultProduct,
   productAccessOf,
   verificationCoversPages,
   verificationFor,
+  type GeoPolicy,
   type ProductAccess,
   type ProductDefinition,
   type ProductsConfig,
   type ProviderEnv,
+  type ShippingFallbackRow,
 } from "../../../core/config/products";
+import { isDestinationAllowed } from "../../../core/config/productMath";
+import { countryFlag, countryLabel } from "../../../core/analytics/markets";
 import { bookMediaKey, optionMediaKey } from "../../../core/config/catalogMedia";
 import { BINDINGS, FINISHES } from "../../../core/fulfillment/types";
 import {
@@ -66,6 +71,7 @@ import { useAdminTab } from "../adminTabStore";
 import {
   Disclosure,
   Grid,
+  ImpactNote,
   NumberField,
   Section,
   TabIntro,
@@ -80,6 +86,20 @@ type Update = (fn: (p: ProductDefinition) => ProductDefinition) => void;
 
 const ORIENTATIONS = ["square", "landscape", "portrait"] as const;
 const SHIPPING_METHODS = ["Budget", "Standard", "StandardPlus", "Express", "Overnight"] as const;
+
+/**
+ * What each speed means to a customer, and where it's known not to run. The
+ * availability notes are the load-bearing part: enabling a speed the printer
+ * doesn't offer to a market makes every order from that market fail at
+ * checkout, and the tier names give no hint of it.
+ */
+const SHIPPING_METHOD_HINTS: Record<(typeof SHIPPING_METHODS)[number], string> = {
+  Budget: "Cheapest and slowest, untracked. Quotes to every country we sell to, but drops out on large orders.",
+  Standard: "Ground courier. Not offered to the US or the UK — don't rely on it as your only speed.",
+  StandardPlus: "Tracked priority post. The one speed available everywhere we sell; a safe default.",
+  Express: "Fast courier, US only.",
+  Overnight: "Fastest and dearest. Quotes to every country we sell to.",
+};
 
 const EDITOR_TABS = [
   { id: "details", label: "Details", icon: <Tag className="size-4" /> },
@@ -96,7 +116,7 @@ export function ProductsTab() {
   const deleteProductFn = useAppConfigStore((s) => s.deleteProductById);
   const seedProductsFn = useAppConfigStore((s) => s.seedProducts);
   const verifyProductsFn = useAppConfigStore((s) => s.verifyProducts);
-  const calibrateCatalogCosts = useAppConfigStore((s) => s.calibrateCatalogCosts);
+  const calibrateProductCost = useAppConfigStore((s) => s.calibrateProductCost);
   const settings = useAppConfigStore((s) => s.pricingSettings);
   // Product pictures live outside the product record, so validation can only
   // warn about a book having none if it's handed the catalog's pictures.
@@ -110,6 +130,11 @@ export function ProductsTab() {
   const [products, setProducts] = useState<ProductDefinition[]>([]);
   const [verifying, setVerifying] = useState(false);
   const [measuring, setMeasuring] = useState(false);
+  const [measureProgress, setMeasureProgress] = useState<{
+    done: number;
+    total: number;
+    name: string;
+  } | null>(null);
   const [costRuns, setCostRuns] = useState<CatalogCalibrationRun[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -146,33 +171,80 @@ export function ProductsTab() {
   };
 
   /**
-   * Re-derive every product's cost from the provider. Destructive by design —
-   * it replaces hand-entered tables — so it confirms first, and reports each
-   * product's before/after because a silent catalog-wide cost change is exactly
-   * the kind of thing that should never be silent.
+   * Re-derive every product's cost from the provider.
+   *
+   * Runs ONE PRODUCT AT A TIME rather than in a single catalog request. Each
+   * product now costs ~35 provider round trips (a cost line per variant, plus a
+   * shipping sweep), so a whole catalog in one call would not finish inside the
+   * function timeout — and measuring per product persists as it goes, so a
+   * failure at product nine doesn't discard the eight that worked.
+   *
+   * Destructive by design: it replaces hand-entered tables, so it confirms
+   * first and reports each product's before/after. A silent catalog-wide cost
+   * change is exactly the kind of thing that should never be silent.
    */
   const onMeasureAll = async () => {
     const env = runtime?.env ?? "the provider";
+    const targets = products.filter((p) => p.provider.id === "lulu" && p.provider.sku.trim());
+    if (targets.length === 0) {
+      toast.warning("No print-provider products to measure.");
+      return;
+    }
     if (
       !window.confirm(
-        `Re-measure cost for ${products.length} product${products.length === 1 ? "" : "s"} against ${env}?\n\n` +
-          "Every cost table is replaced with what the provider quotes, including any you set by hand.",
+        `Re-measure cost for ${targets.length} product${targets.length === 1 ? "" : "s"} against ${env}?\n\n` +
+          "Each product is priced at both ends of its page range, once per variant, then shipping is " +
+          "measured to five destinations. Every cost table is replaced with what the provider quotes, " +
+          "including any you set by hand.\n\n" +
+          `That's around a minute per product, so roughly ${Math.max(1, Math.round(targets.length * 0.75))}–${targets.length * 2} minutes. ` +
+          "Progress is saved as it goes, so you can stop and resume.",
       )
     ) {
       return;
     }
     setMeasuring(true);
+    setCostRuns([]);
+    const runs: CatalogCalibrationRun[] = [];
+    let failed = 0;
     try {
-      const s = await calibrateCatalogCosts(runtime?.env);
-      applyCatalog(s.config);
-      setCostRuns(s.runs);
-      const message = `${s.env}: ${s.ok} measured${s.failed ? `, ${s.failed} failed` : ""}.`;
-      if (s.failed) toast.warning(message);
+      for (const [i, product] of targets.entries()) {
+        setMeasureProgress({ done: i, total: targets.length, name: product.presentation.name });
+        try {
+          const outcome = await calibrateProductCost(product.id, runtime?.env);
+          if (outcome.run) runs.push(outcome.run);
+          if (!outcome.result.ok) failed += 1;
+          // Adopt each catalog as it lands, so the list reflects work already
+          // banked even if a later product fails or the admin navigates away.
+          applyCatalog(outcome.config);
+        } catch (err) {
+          failed += 1;
+          runs.push({
+            productId: product.id,
+            name: product.presentation.name,
+            sku: product.provider.sku,
+            ok: false,
+            message: err instanceof Error ? err.message : "Measurement failed.",
+            before: {
+              basePerUnit: product.cost.table.basePerUnit,
+              perPage: product.cost.table.perPage,
+            },
+          });
+        }
+        setCostRuns([...runs]);
+      }
+      // Throttling gets its own line in the summary. It's the one outcome here
+      // that isn't a problem with the catalog, and the only one whose fix is
+      // simply to run this again in a minute.
+      const throttled = runs.filter((r) => r.throttled).length;
+      const parts = [`${runs.length - failed} measured`];
+      if (failed) parts.push(`${failed} failed`);
+      if (throttled) parts.push(`${throttled} rate-limited — re-run to finish`);
+      const message = `${env}: ${parts.join(", ")}.`;
+      if (failed || throttled) toast.warning(message);
       else toast.success(message);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Measuring costs failed.");
     } finally {
       setMeasuring(false);
+      setMeasureProgress(null);
     }
   };
 
@@ -315,47 +387,43 @@ export function ProductsTab() {
             <Button variant="primary" size="sm" leftIcon={<Plus className="size-4" />} onClick={addProduct} className="flex-1">
               New product
             </Button>
-            <Button variant="secondary" size="sm" leftIcon={<Sparkles className="size-4" />} loading={seeding} onClick={onSeed} title="Seed from the print catalog">
+            <Button
+              variant="secondary"
+              size="sm"
+              leftIcon={<Sparkles className="size-4" />}
+              loading={seeding}
+              onClick={onSeed}
+              title="Create one draft product per trim size and binding the printer sells, with measured page limits, costs and variant options already filled in. Existing products are left alone."
+            >
               Seed
             </Button>
           </div>
-          {products.length > 0 && (
-            <Button
-              variant="secondary"
-              size="sm"
-              className="w-full"
-              leftIcon={<BadgeCheck className="size-4" />}
-              loading={verifying}
-              disabled={dirty}
-              onClick={onVerifyAll}
-              title={
-                dirty
-                  ? "Save your changes first — verification runs against the saved catalog."
-                  : `Probe every SKU against the ${runtime?.env ?? "active"} print catalog`
-              }
-            >
-              Verify all against {runtime?.env ?? "…"}
-            </Button>
+          <ActionButton
+            show={products.length > 0}
+            icon={<BadgeCheck className="size-4" />}
+            label={`Verify all against ${runtime?.env ?? "…"}`}
+            explainer={`Asks the printer to price every SKU, which is the only way to find out whether it really exists. A rejected SKU fails at print time — after the customer has paid — so nothing is offered for sale until it passes here. Sandbox and live are separate catalogues, so this proves ${runtime?.env ?? "the active environment"} only.`}
+            busy={verifying}
+            disabledReason={dirty ? "Save your changes first — verification runs against the saved catalog." : null}
+            onClick={onVerifyAll}
+          />
+          <ActionButton
+            show={products.length > 0}
+            icon={<Ruler className="size-4" />}
+            label="Measure all costs"
+            explainer="Prices each book at both ends of its page range to work out what the printer charges: a fixed amount per copy plus an amount per page, measured separately for every paper and print quality you offer. Then measures shipping to five countries. About a minute per book, saved as it goes. Replaces cost tables you typed in yourself."
+            busy={measuring}
+            progress={
+              measureProgress
+                ? `${measureProgress.done + 1}/${measureProgress.total} · ${measureProgress.name}`
+                : null
+            }
+            disabledReason={dirty ? "Save your changes first — this runs against the saved catalog." : null}
+            onClick={onMeasureAll}
+          />
+          {costRuns && costRuns.length > 0 && (
+            <CalibrationRuns runs={costRuns} onDismiss={() => setCostRuns(null)} />
           )}
-          {products.length > 0 && (
-            <Button
-              variant="secondary"
-              size="sm"
-              className="w-full"
-              leftIcon={<Ruler className="size-4" />}
-              loading={measuring}
-              disabled={dirty}
-              onClick={onMeasureAll}
-              title={
-                dirty
-                  ? "Save your changes first — this runs against the saved catalog."
-                  : `Re-derive every cost table from ${runtime?.env ?? "provider"} quotes`
-              }
-            >
-              Measure all costs
-            </Button>
-          )}
-          {costRuns && <CalibrationRuns runs={costRuns} onDismiss={() => setCostRuns(null)} />}
 
           {products.length === 0 ? (
             <div className="rounded-xl border border-dashed border-ink-200 p-5 text-center text-xs text-ink-400">
@@ -419,6 +487,7 @@ export function ProductsTab() {
               </div>
 
               <ValidationBanner issues={issues} />
+              <SetupChecklist product={draft} issues={issues} onGoTo={setEditorTab} />
 
               <Tabs items={EDITOR_TABS} value={editorTab} onChange={setEditorTab} />
 
@@ -451,6 +520,73 @@ function StatusDot({ status, offerable }: { status: ProductDefinition["status"];
   return <span className="size-2.5 shrink-0 rounded-full bg-amber-300" />;
 }
 
+/**
+ * The route from a fresh product to a sellable one, in order.
+ *
+ * The error banner says what's wrong; this says what to do next. They're
+ * different questions, and the second one is the hard one when six tabs each
+ * hold part of the answer and two of the steps have to happen in a particular
+ * order (you can't price a variant before you know what it costs).
+ */
+function SetupChecklist({
+  product,
+  issues,
+  onGoTo,
+}: {
+  product: ProductDefinition;
+  issues: ProductIssue[];
+  onGoTo: (tab: string) => void;
+}) {
+  const verified = Object.values(product.provider.verifiedIn ?? {}).some((v) => v?.ok);
+  const measured = product.cost.table.basePerUnit > 0 || product.cost.table.perPage > 0;
+  const shippingMeasured = (product.shipping.fallback ?? []).length > 0;
+  const priced = product.pricing.tiers.some((t) => Object.values(t.prices).some((v) => v > 0));
+  const steps = [
+    { tab: "format", done: verified, label: "Verify the SKU", why: "proves the printer will accept it" },
+    { tab: "costs", done: measured, label: "Measure costs", why: "everything below needs to know what it costs you" },
+    { tab: "shipping", done: shippingMeasured, label: "Measure shipping", why: "sets the fallback rate and which speeds reach where" },
+    { tab: "pricing", done: priced, label: "Set prices", why: "per page range, per currency" },
+    { tab: "variants", done: true, label: "Price the variants", why: "derive them from cost with Suggest" },
+  ];
+  const remaining = steps.filter((s) => !s.done);
+  // Nothing to guide once it's set up and clean; the banner covers the rest.
+  if (remaining.length === 0 && issues.length === 0) return null;
+  if (remaining.length === 0) return null;
+
+  return (
+    <div className="space-y-1 rounded-lg bg-ink-50 px-3 py-2.5 text-xs">
+      <p className="font-semibold text-ink-700">Getting this product ready</p>
+      <ol className="space-y-0.5">
+        {steps.map((s) => (
+          <li key={s.tab} className="flex items-baseline gap-2">
+            <span className={s.done ? "text-emerald-600" : "text-ink-300"}>{s.done ? "✓" : "○"}</span>
+            <button
+              type="button"
+              onClick={() => onGoTo(s.tab)}
+              className={cn(
+                "text-left underline-offset-2 hover:underline",
+                s.done ? "text-ink-400" : "font-medium text-ink-700",
+              )}
+            >
+              {s.label}
+            </button>
+            <span className="text-ink-400">— {s.why}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/**
+ * What each issue's fix is CALLED, so the message can point at the tool instead
+ * of leaving you to guess which tab it lives on.
+ */
+const FIX_HINTS: Record<NonNullable<ProductIssue["fix"]>, string> = {
+  verify: "Fixed by: Verify (Details tab, or “Verify all” in the list)",
+  measure: "Fixed by: Measure cost from the provider (Costs tab)",
+};
+
 function ValidationBanner({ issues }: { issues: ProductIssue[] }) {
   if (issues.length === 0) {
     return (
@@ -461,16 +597,25 @@ function ValidationBanner({ issues }: { issues: ProductIssue[] }) {
   }
   const errors = issues.filter((i) => i.level === "error");
   const warnings = issues.filter((i) => i.level === "warning");
+  // Actionable errors are cleared by running a tool, not by typing, so they
+  // don't stop a save — saying so up front stops the banner reading as a wall.
+  const actionable = errors.filter((e) => e.actionable).length;
   return (
     <div className="space-y-1.5">
       {errors.length > 0 && (
         <div className="space-y-1 rounded-lg bg-red-50 p-2.5 text-xs text-red-700 ring-1 ring-inset ring-red-200">
           <div className="flex items-center gap-1.5 font-semibold">
-            <AlertTriangle className="size-4" /> {errors.length} error{errors.length === 1 ? "" : "s"} — fix before saving
+            <AlertTriangle className="size-4" /> {errors.length} error{errors.length === 1 ? "" : "s"} —{" "}
+            {actionable === errors.length
+              ? "you can still save; run the tools below to clear these"
+              : "fix before saving"}
           </div>
-          <ul className="ml-5 list-disc space-y-0.5">
+          <ul className="ml-5 list-disc space-y-1">
             {errors.map((e, i) => (
-              <li key={i}>{e.message}</li>
+              <li key={i}>
+                {e.message}
+                {e.fix && <span className="mt-0.5 block text-[11px] text-red-500">{FIX_HINTS[e.fix]}</span>}
+              </li>
             ))}
           </ul>
         </div>
@@ -771,11 +916,22 @@ function SkuBuilder({ product, update }: { product: ProductDefinition; update: U
           </Grid>
           <div className="flex flex-wrap items-center gap-2">
             <code className="rounded bg-ink-50 px-2 py-1 font-mono text-xs text-ink-700">{sku}</code>
-            <Button variant="secondary" size="sm" loading={checking} onClick={run}>
+            <Button
+              variant="secondary"
+              size="sm"
+              loading={checking}
+              onClick={run}
+              title="Ask the printer to price this exact combination. A price back means it's real and sellable; a refusal means this trim, binding, paper or finish combination isn't made."
+            >
               Check with provider
             </Button>
             {entry?.ok && (
-              <Button variant="primary" size="sm" onClick={applyToProduct}>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={applyToProduct}
+                title="Make this the product's SKU. The spec and base variant above are rewritten to match it, so re-measure costs afterwards."
+              >
                 Use this SKU
               </Button>
             )}
@@ -796,6 +952,164 @@ function SkuBuilder({ product, update }: { product: ProductDefinition; update: U
 }
 
 /** What a catalog-wide cost measurement changed, per product. */
+/**
+ * What the printer was measured to charge, per country and speed.
+ *
+ * Read-only: these are observations, not settings. Editing them would be
+ * editing the answer to a question we asked the provider, and the next
+ * measurement would silently discard the edit anyway.
+ */
+function ShippingRatesTable({ product }: { product: ProductDefinition }) {
+  // Only markets this product still sells to. Rows for a withdrawn market are
+  // kept (re-adding it shouldn't lose the measurement) but showing them here
+  // would contradict the checkboxes directly above, which is worse than showing
+  // nothing.
+  const rows = (product.shipping.fallback ?? []).filter((r) =>
+    isDestinationAllowed(product.shipping.destinations, { country: r.country }),
+  );
+  if (rows.length === 0) {
+    return (
+      <Section title="Measured shipping rates" hint="Filled in by “Measure cost from the provider”.">
+        <p className="text-[11px] text-ink-500">
+          Nothing measured yet. Until it is, an order whose live quote fails falls back to the single
+          fallback amount below — and we can&apos;t tell which speeds reach which countries.
+        </p>
+      </Section>
+    );
+  }
+  const countries = [...new Set(rows.map((r) => r.country))];
+  // Enabled speeds are listed even with no rows at all. A speed that failed to
+  // measure everywhere would otherwise vanish from the table, hiding the one
+  // thing worth knowing about it — that we don't know whether it works.
+  const methods = [
+    ...new Set([
+      ...rows.map((r) => r.method),
+      ...product.shipping.methods.filter((m) => m.enabled).map((m) => m.method),
+    ]),
+  ];
+  const measuredAt = product.shipping.fallbackMeasuredAt;
+  return (
+    <Section
+      title="Measured shipping rates"
+      hint={`What the printer quoted per destination, as a fixed amount plus an amount per copy. Used when a live quote can't be fetched.${
+        measuredAt ? ` Measured ${new Date(measuredAt).toLocaleDateString()}.` : ""
+      }`}
+    >
+      <div className="overflow-x-auto">
+        <table className="min-w-[420px] text-[11px]">
+          <thead className="text-[10px] uppercase tracking-wide text-ink-400">
+            <tr>
+              <th className="pb-1 pr-3 text-left font-medium">Speed</th>
+              {countries.map((c) => (
+                <th key={c} className="pb-1 pr-3 text-right font-medium">
+                  {c}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {methods.map((method) => (
+              <tr key={method} className="border-t border-ink-100">
+                <td className="py-1 pr-3 text-ink-700">{method}</td>
+                {countries.map((country) => {
+                  const row = rows.find((r) => r.method === method && r.country === country);
+                  // No row and a refused row mean different things, and only one
+                  // of them is a finding: "?" is a gap in our measurement, "—"
+                  // is the printer telling us it doesn't go there.
+                  if (!row) {
+                    return (
+                      <td
+                        key={country}
+                        className="py-1 pr-3 text-right text-ink-300"
+                        title="Not measured yet — re-run to find out"
+                      >
+                        ?
+                      </td>
+                    );
+                  }
+                  if (!row.available) {
+                    return (
+                      <td key={country} className="py-1 pr-3 text-right text-ink-300" title="Not offered here">
+                        —
+                      </td>
+                    );
+                  }
+                  return (
+                    <td
+                      key={country}
+                      className="py-1 pr-3 text-right tabular-nums text-ink-600"
+                      title={`${row.base.toFixed(2)} + ${row.perCopy.toFixed(2)} per copy`}
+                    >
+                      {(row.base + row.perCopy).toFixed(2)}
+                      {row.perCopy > 0 && (
+                        <span className="text-ink-400"> +{row.perCopy.toFixed(2)}/ea</span>
+                      )}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-[10px] text-ink-400">
+        Shown for one copy, in {product.cost.currency}. A dash means the printer doesn&apos;t run that
+        speed to that country — enabling it there fails the order at checkout. A question mark means
+        we haven&apos;t found out yet; those fall back to the single amount below.
+      </p>
+    </Section>
+  );
+}
+
+/**
+ * A catalog-wide action with its explanation attached.
+ *
+ * These buttons each fire off dozens of provider calls and rewrite saved data,
+ * and their names ("Verify", "Measure") say what they're called rather than
+ * what they do. A tooltip isn't enough for something you can't undo, so the
+ * sentence is always on screen.
+ */
+function ActionButton({
+  show,
+  icon,
+  label,
+  explainer,
+  busy,
+  progress,
+  disabledReason,
+  onClick,
+}: {
+  show: boolean;
+  icon: React.ReactNode;
+  label: string;
+  explainer: string;
+  busy: boolean;
+  progress?: string | null;
+  disabledReason: string | null;
+  onClick: () => void;
+}) {
+  if (!show) return null;
+  return (
+    <div className="space-y-1">
+      <Button
+        variant="secondary"
+        size="sm"
+        className="w-full"
+        leftIcon={icon}
+        loading={busy}
+        disabled={disabledReason != null}
+        onClick={onClick}
+        title={disabledReason ?? explainer}
+      >
+        {label}
+      </Button>
+      <p className="px-0.5 text-[10px] leading-snug text-ink-400">
+        {busy && progress ? progress : (disabledReason ?? explainer)}
+      </p>
+    </div>
+  );
+}
+
 function CalibrationRuns({
   runs,
   onDismiss,
@@ -812,16 +1126,34 @@ function CalibrationRuns({
         </button>
       </div>
       {runs.map((r) => (
-        <div key={r.productId} className="flex items-baseline justify-between gap-2 text-[11px]">
-          <span className="min-w-0 flex-1 truncate text-ink-600">{r.name}</span>
-          {r.ok && r.after ? (
-            <span className="shrink-0 tabular-nums text-ink-500" title={r.message}>
-              {r.before.basePerUnit.toFixed(2)} → {r.after.basePerUnit.toFixed(2)} + {r.after.perPage.toFixed(3)}/pg
-            </span>
-          ) : (
-            <span className="shrink-0 text-red-600" title={r.message}>
-              failed
-            </span>
+        <div key={r.productId} className="space-y-0.5">
+          <div className="flex items-baseline justify-between gap-2 text-[11px]">
+            <span className="min-w-0 flex-1 truncate text-ink-600">{r.name}</span>
+            {r.ok && r.after ? (
+              <span className="shrink-0 tabular-nums text-ink-500" title={r.message}>
+                {r.before.basePerUnit.toFixed(2)} → {r.after.basePerUnit.toFixed(2)} + {r.after.perPage.toFixed(3)}/pg
+              </span>
+            ) : (
+              <span className={`shrink-0 ${r.throttled ? "text-amber-700" : "text-red-600"}`} title={r.message}>
+                {/* Throttled isn't failed. Colouring it red sends the admin
+                    looking for a misconfiguration that doesn't exist. */}
+                {r.throttled ? "rate-limited" : "failed"}
+              </span>
+            )}
+          </div>
+          {r.ok && r.variants && r.variants.measured < r.variants.offered && (
+            <p className="text-[10px] text-amber-700">
+              Only {r.variants.measured} of {r.variants.offered} variants priced
+              {r.variantsThrottled
+                ? ` — ${r.variantsThrottled} of the rest were rate-limited, not unavailable. Re-run to price them.`
+                : " — the rest fall back to the base cost."}
+            </p>
+          )}
+          {/* A cost fit that worked while shipping didn't still leaves a
+              passthrough product unsellable, so it can't be reported as green. */}
+          {r.shippingMessage && <p className="text-[10px] text-amber-700">{r.shippingMessage}</p>}
+          {!r.ok && r.message && (
+            <p className={`text-[10px] ${r.throttled ? "text-amber-700" : "text-red-500"}`}>{r.message}</p>
           )}
         </div>
       ))}
@@ -872,8 +1204,15 @@ function VerificationPanel({
       <div className="border-b border-ink-100 px-3 py-2">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">SKU verification</p>
         <p className="mt-0.5 text-xs text-ink-500">
-          Sandbox and live are separate print catalogs, so each must be proven on its own. An unverified SKU
-          fails after the customer has paid.
+          Asks the printer to price this book at the smallest and largest page count you allow. If it
+          quotes both, the SKU exists and the whole range is printable; if it refuses, the SKU is wrong
+          or the range is. Nothing is ordered and nothing is charged.
+        </p>
+        <p className="mt-1 text-xs text-ink-400">
+          Sandbox and live are <span className="font-medium">separate catalogues</span> behind separate
+          credentials, so a pass in one says nothing about the other — verify whichever you&apos;re
+          serving. An unverified SKU fails at print time, which is after the customer has paid, so
+          nothing is offered for sale until this passes.
         </p>
       </div>
       <div className="divide-y divide-ink-100">
@@ -907,7 +1246,11 @@ function VerificationPanel({
                 size="sm"
                 loading={busy === env}
                 disabled={busy != null || dirty || !product.provider.sku.trim()}
-                title={dirty ? "Save your changes first — verification runs against the saved product." : undefined}
+                title={
+                  dirty
+                    ? "Save your changes first — verification runs against the saved product."
+                    : `Ask the ${env} print catalogue to price this SKU at ${product.conditions.pages.min} and ${product.conditions.pages.max} pages, and record the verdict`
+                }
                 onClick={() => run(env)}
               >
                 Verify {env}
@@ -1168,48 +1511,80 @@ function ShippingSection({ product, update }: { product: ProductDefinition; upda
       : { mode: "flat" as const, default: 0, currency: "USD", overrides: [] };
   // Patch passthrough fields without dropping the sibling one.
   const pass = sh.pricing.mode === "passthrough" ? sh.pricing : { mode: "passthrough" as const };
+  const rows = sh.fallback ?? [];
   return (
     <div className="space-y-3">
-      <Section title="Shipping speeds" hint="Delivery options offered to the customer (mapped to provider services).">
+      <TabIntro>
+        Two separate things live on this tab. <span className="font-medium">Speeds</span> are what the
+        customer picks at checkout — we re-quote the printer for whichever one they choose.{" "}
+        <span className="font-medium">What you charge</span> decides whether they pay that quote, a flat
+        rate, or nothing. Not every speed reaches every country: the printer simply refuses one it
+        doesn&apos;t run there, which fails the order after the customer has typed their address, so
+        only enable speeds the grid below shows as available.
+      </TabIntro>
+
+      <Section
+        title="Shipping speeds"
+        hint="Delivery options offered to the customer (mapped to provider services). Measure costs to fill in which ones actually reach where you sell."
+      >
         <div className="space-y-1.5">
           {SHIPPING_METHODS.map((method) => {
             const cfg = sh.methods.find((m) => m.method === method);
             const enabled = cfg?.enabled ?? false;
+            const refusedIn = rows.filter((r) => r.method === method && !r.available).map((r) => r.country);
+            const availableIn = rows.filter((r) => r.method === method && r.available).map((r) => r.country);
             return (
-              <div key={method} className="flex flex-wrap items-center gap-2">
-                <label className="flex w-40 items-center gap-2 text-sm text-ink-700">
-                  <input
-                    type="checkbox"
-                    checked={enabled}
+              <div key={method} className="space-y-0.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="flex w-40 items-center gap-2 text-sm text-ink-700">
+                    <input
+                      type="checkbox"
+                      checked={enabled}
+                      onChange={(e) => {
+                        const exists = sh.methods.some((m) => m.method === method);
+                        const methods = exists
+                          ? sh.methods.map((m) => (m.method === method ? { ...m, enabled: e.target.checked } : m))
+                          : [...sh.methods, { method, enabled: e.target.checked }];
+                        setSh({ methods });
+                      }}
+                    />
+                    {method}
+                  </label>
+                  <Input
+                    className="h-8 flex-1 min-w-40 text-sm"
+                    placeholder="Customer-facing label (optional)"
+                    value={cfg?.label ?? ""}
                     onChange={(e) => {
                       const exists = sh.methods.some((m) => m.method === method);
                       const methods = exists
-                        ? sh.methods.map((m) => (m.method === method ? { ...m, enabled: e.target.checked } : m))
-                        : [...sh.methods, { method, enabled: e.target.checked }];
+                        ? sh.methods.map((m) => (m.method === method ? { ...m, label: e.target.value } : m))
+                        : [...sh.methods, { method, enabled: false, label: e.target.value }];
                       setSh({ methods });
                     }}
                   />
-                  {method}
-                </label>
-                <Input
-                  className="h-8 flex-1 min-w-40 text-sm"
-                  placeholder="Customer-facing label (optional)"
-                  value={cfg?.label ?? ""}
-                  onChange={(e) => {
-                    const exists = sh.methods.some((m) => m.method === method);
-                    const methods = exists
-                      ? sh.methods.map((m) => (m.method === method ? { ...m, label: e.target.value } : m))
-                      : [...sh.methods, { method, enabled: false, label: e.target.value }];
-                    setSh({ methods });
-                  }}
-                />
+                </div>
+                <p className="pl-6 text-[10px] leading-snug text-ink-400">
+                  {SHIPPING_METHOD_HINTS[method]}
+                  {rows.length > 0 && refusedIn.length > 0 && (
+                    <span className="text-amber-600">
+                      {" "}
+                      Measured: not offered to {refusedIn.join(", ")}
+                      {availableIn.length > 0 ? `; available to ${availableIn.join(", ")}` : ""}.
+                    </span>
+                  )}
+                </p>
               </div>
             );
           })}
         </div>
       </Section>
 
-      <Section title="What you charge for shipping" hint="How shipping cost is passed on to the customer.">
+      <ShippingRatesTable product={product} />
+
+      <Section
+        title="What you charge for shipping"
+        hint="Charge the printer's cost and you never lose money on postage, but the customer sees a different number for every destination. A flat rate is predictable for them — you win on nearby orders and lose on distant ones. Free is simplest to sell, and you absorb it unless you fold it into the book price."
+      >
         <Field label="Shipping charge" className="w-full sm:w-72">
           <Select
             value={sh.pricing.mode}
@@ -1227,18 +1602,26 @@ function ShippingSection({ product, update }: { product: ProductDefinition; upda
           />
         </Field>
         {sh.pricing.mode === "passthrough" && (
-          <div className="flex flex-wrap items-start gap-4">
-            <NumberField label="Markup on shipping" value={sh.pricing.markupPct ?? 0} step="1" className="w-44" suffix="%" onChange={(n) => setSh({ pricing: { ...pass, markupPct: n } })} />
-            <NumberField
-              label="Fallback shipping cost"
-              hint="Charged (plus markup) when a live shipping quote can't be fetched. Without it, those orders are refused rather than shipped at your expense."
-              value={sh.pricing.fallbackCost ?? 0}
-              step="0.5"
-              className="w-56"
-              suffix={product.cost.currency}
-              onChange={(n) => setSh({ pricing: { ...pass, fallbackCost: n } })}
-            />
-          </div>
+          <>
+            <div className="flex flex-wrap items-start gap-4">
+              <NumberField label="Markup on shipping" value={sh.pricing.markupPct ?? 0} step="1" className="w-44" suffix="%" onChange={(n) => setSh({ pricing: { ...pass, markupPct: n } })} />
+              <NumberField
+                label="Fallback shipping cost"
+                hint="Used only when a live quote can't be fetched AND the destination has no measured rate above."
+                value={sh.pricing.fallbackCost ?? 0}
+                step="0.5"
+                className="w-56"
+                suffix={product.cost.currency}
+                onChange={(n) => setSh({ pricing: { ...pass, fallbackCost: n } })}
+              />
+            </div>
+            <ImpactNote>
+              This number is <span className="font-medium">charged to the customer</span>, plus your
+              markup, whenever a live quote fails. Leave it empty and those orders are refused rather
+              than shipped at your expense; set it too high and everyone caught by an outage is
+              overcharged. Measuring costs fills it in from the dearest route it saw.
+            </ImpactNote>
+          </>
         )}
         {sh.pricing.mode === "free" && (
           <Field label="Cover the cost in the book price" className="w-full sm:w-64">
@@ -1253,28 +1636,96 @@ function ShippingSection({ product, update }: { product: ProductDefinition; upda
         )}
       </Section>
 
-      <Section title="Where it ships" hint="Restrict where this product can ship by country.">
-        <Field label="Policy" className="w-full sm:w-72">
-          <Select
-            value={dest.mode}
-            options={[
-              { value: "all", label: "Ship anywhere" },
-              { value: "allowlist", label: "Only these countries" },
-              { value: "blocklist", label: "Everywhere except these countries" },
-            ]}
-            onChange={(e) => setSh({ destinations: { ...dest, mode: e.target.value as typeof dest.mode } })}
-          />
-        </Field>
-        {dest.mode !== "all" && (
-          <TextField
-            label="Countries (ISO-2, comma-separated)"
-            value={dest.countries.join(", ")}
-            placeholder="US, CA, GB, DE"
-            onChange={(v) => setSh({ destinations: { ...dest, countries: v.split(",").map((c) => c.trim().toUpperCase()).filter(Boolean) } })}
-          />
-        )}
-      </Section>
+      <MarketsSection dest={dest} rows={rows} onChange={(destinations) => setSh({ destinations })} />
     </div>
+  );
+}
+
+/**
+ * Which of our markets this product ships to.
+ *
+ * A checkbox per market rather than a comma-separated list of codes: the set is
+ * small and fixed, and typing ISO codes into a text field is how you end up
+ * selling to a country you never measured. `SUPPORTED_MARKETS` is a ceiling
+ * enforced server-side, so there's deliberately no way to type in a country
+ * outside it — that would render a box the order path refuses to honour.
+ *
+ * Each market also reports whether an enabled speed actually reaches it, because
+ * "selected" and "orderable" are different things and the gap between them only
+ * shows up at checkout otherwise.
+ */
+function MarketsSection({
+  dest,
+  rows,
+  onChange,
+}: {
+  dest: GeoPolicy;
+  rows: ShippingFallbackRow[];
+  onChange: (dest: GeoPolicy) => void;
+}) {
+  const selected = SUPPORTED_MARKETS.filter((c) => isDestinationAllowed(dest, { country: c }));
+  const toggle = (country: string, on: boolean) => {
+    const next = on
+      ? [...selected, country]
+      : selected.filter((c) => c !== country);
+    // Always written as an allowlist. A stored blocklist is read correctly above
+    // but never produced here: two ways to express one intent is how a policy
+    // ends up meaning the opposite of what it reads like.
+    onChange({ ...dest, mode: "allowlist", countries: [...new Set(next)] });
+  };
+
+  return (
+    <Section
+      title="Where it ships"
+      hint="The markets this product can be ordered to. Customers outside them can't reach checkout, and the server refuses the order regardless."
+    >
+      <div className="space-y-1.5">
+        {SUPPORTED_MARKETS.map((country) => {
+          const on = selected.includes(country);
+          const measured = rows.filter((r) => r.country === country);
+          const priced = measured.filter((r) => r.available).length;
+          return (
+            <div key={country} className="flex flex-wrap items-center gap-2">
+              <label className="flex w-56 items-center gap-2 text-sm text-ink-700">
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={(e) => toggle(country, e.target.checked)}
+                  className="size-4 rounded border-ink-300 text-brand-600 focus:ring-brand-400"
+                />
+                <span>
+                  {countryFlag(country)} {countryLabel(country)}
+                </span>
+              </label>
+              {on && measured.length === 0 && (
+                <span className="text-[11px] text-amber-700">
+                  No shipping measured — run “Measure cost from the provider”.
+                </span>
+              )}
+              {on && measured.length > 0 && priced === 0 && (
+                <span className="text-[11px] text-red-600">
+                  The printer quotes no speed here — orders will fail.
+                </span>
+              )}
+              {on && priced > 0 && (
+                <span className="text-[11px] text-ink-400">
+                  {priced} speed{priced === 1 ? "" : "s"} available
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {selected.length === 0 && (
+        <p className="text-[11px] text-red-600">
+          No markets selected — this product can&apos;t be ordered anywhere.
+        </p>
+      )}
+      <p className="text-[10px] text-ink-400">
+        Adding a market means measuring shipping to it and checking its tax setup, so the list is
+        fixed in code rather than typed here.
+      </p>
+    </Section>
   );
 }
 

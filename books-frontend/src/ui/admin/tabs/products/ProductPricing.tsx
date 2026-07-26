@@ -22,11 +22,13 @@ import {
 } from "../../../../core/config/productMath";
 import {
   cheapestVariant,
+  costVariantKey,
   enumerateVariants,
   parseVariantKey,
   sameVariant,
   variantAllowed,
   variantKey,
+  variantOptionLabel,
   variantPriceDelta,
   variantSummary,
 } from "../../../../core/config/variants";
@@ -41,7 +43,7 @@ import {
   printWorstCaseImpact,
 } from "../../../../core/config/discountImpact";
 import { useAppConfigStore, type MarginPreview } from "../../../../state/appConfigStore";
-import { Grid, NumberField, Section, fmtMoney } from "./parts";
+import { Grid, NumberField, Section, TabIntro, fmtMoney } from "./parts";
 
 type Update = (fn: (p: ProductDefinition) => ProductDefinition) => void;
 
@@ -66,6 +68,16 @@ export function CostSection({
 
   return (
     <div className="space-y-3">
+      <TabIntro>
+        Printing costs you <span className="font-medium">two things per copy</span>: a{" "}
+        <span className="font-medium">base amount</span> for the cover and the binding, which is the
+        same whether the book is 24 pages or 240, and an{" "}
+        <span className="font-medium">amount per page</span> for ink and paper. The per-page amount is
+        the one that moves — premium colour on coated stock costs many times more per page than
+        standard black &amp; white, so on a long book the interior, not the cover, is what you&apos;re
+        paying for. That&apos;s why each paper and print quality gets measured separately below.
+      </TabIntro>
+
       <CalibrateCard product={product} dirty={dirty} onCalibrated={onCalibrated} />
       <Section
         title="What it costs you"
@@ -88,12 +100,32 @@ export function CostSection({
         </Grid>
       </Section>
 
-      <Section title="Cost estimate" hint="Per book: a base cost plus a per-page cost.">
+      <Section
+        title="Cost estimate"
+        hint="Per book: a base cost plus a per-page cost. These are the base variant's numbers — the one this product's own SKU encodes."
+      >
         <Grid cols={2}>
-          <NumberField label="Base cost per book" value={cost.table.basePerUnit} step="0.01" onChange={(n) => setTable({ basePerUnit: n })} suffix={cost.currency} />
-          <NumberField label="Cost per page" value={cost.table.perPage} step="0.001" onChange={(n) => setTable({ perPage: n })} suffix={cost.currency} />
+          <NumberField
+            label="Base cost per book"
+            hint="Cover, binding and handling. Doesn't change with length."
+            value={cost.table.basePerUnit}
+            step="0.01"
+            onChange={(n) => setTable({ basePerUnit: n })}
+            suffix={cost.currency}
+          />
+          <NumberField
+            label="Cost per page"
+            hint="Ink and paper, per interior page. Kept to more decimals than money normally is, because it's multiplied by up to several hundred pages."
+            value={cost.table.perPage}
+            step="0.001"
+            onChange={(n) => setTable({ perPage: n })}
+            suffix={cost.currency}
+          />
         </Grid>
+        <WorkedExample product={product} />
       </Section>
+
+      <VariantCostTable product={product} />
 
       <Section
         title="Volume cost discounts"
@@ -159,6 +191,125 @@ export function CostSection({
 }
 
 /**
+ * The cost table, spelled out as the arithmetic it is.
+ *
+ * A base of `2.16` and a per-page of `0.2148` are two abstract numbers until
+ * you multiply them out; "a 40-page book costs you $10.75" is checkable against
+ * the printer's own calculator in ten seconds. It also makes the extra decimals
+ * on the per-page rate read as precision rather than as a bug.
+ */
+function WorkedExample({ product }: { product: ProductDefinition }) {
+  const { basePerUnit, perPage } = product.cost.table;
+  if (basePerUnit === 0 && perPage === 0) {
+    return (
+      <p className="rounded-lg bg-ink-50 px-3 py-2 text-[11px] leading-relaxed text-ink-500">
+        No cost measured yet, so every margin on this product is currently meaningless — with a cost
+        of zero, the whole price looks like profit. Measure it above.
+      </p>
+    );
+  }
+  const pages = Math.min(
+    Math.max(product.pricing.displayPages ?? product.conditions.pages.min, product.conditions.pages.min),
+    product.conditions.pages.max,
+  );
+  const total = basePerUnit + perPage * pages;
+  return (
+    <p className="rounded-lg bg-ink-50 px-3 py-2 text-[11px] leading-relaxed text-ink-600">
+      A <span className="font-medium">{pages}-page</span> book costs you{" "}
+      <span className="tabular-nums">{fmtMoney(basePerUnit, product.cost.currency)}</span> +{" "}
+      <span className="tabular-nums">
+        {pages} × {perPage.toFixed(4)}
+      </span>{" "}
+      = <span className="font-medium tabular-nums">{fmtMoney(total, product.cost.currency)}</span> per
+      copy, before shipping and payment fees.
+    </p>
+  );
+}
+
+/**
+ * What each variant costs to print, and how the ones you haven't measured are
+ * being treated.
+ *
+ * The gap matters: an unmeasured variant falls back to the base rate, which is
+ * the costliest one we sell. That's the safe direction — it never understates —
+ * but it makes a cheap variant look unprofitable and misprices its delta, so
+ * the fallback has to be visible rather than silently assumed.
+ */
+function VariantCostTable({ product }: { product: ProductDefinition }) {
+  const measured = product.cost.variantPerPage ?? {};
+  const rows = useMemo(() => {
+    const seen = new Map<string, { key: string; label: string }>();
+    for (const variant of enumerateVariants(product.variants)) {
+      const key = costVariantKey(variant);
+      if (!seen.has(key)) {
+        seen.set(key, {
+          key,
+          label: [
+            variantOptionLabel("print", variant.print),
+            variantOptionLabel("paper", variant.paper),
+          ].join(" · "),
+        });
+      }
+    }
+    return [...seen.values()];
+  }, [product.variants]);
+
+  if (rows.length <= 1) return null;
+  const base = variantFromSku(product.provider.sku);
+  const baseKey = base ? costVariantKey(base) : null;
+  const pages = Math.min(
+    Math.max(product.pricing.displayPages ?? product.conditions.pages.min, product.conditions.pages.min),
+    product.conditions.pages.max,
+  );
+
+  return (
+    <Section
+      title="Cost per variant"
+      hint={`What each combination of print quality and paper costs to make. Cover finish is left out — gloss and matte cost the same. Totals shown for a ${pages}-page book.`}
+    >
+      <div className="overflow-x-auto">
+        <table className="min-w-[420px] text-[11px]">
+          <thead className="text-[10px] uppercase tracking-wide text-ink-400">
+            <tr>
+              <th className="pb-1 pr-4 text-left font-medium">Print &amp; paper</th>
+              <th className="pb-1 pr-4 text-right font-medium">Per page</th>
+              <th className="pb-1 pr-4 text-right font-medium">{pages} pages</th>
+              <th className="pb-1 text-left font-medium">Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => {
+              const rate = measured[row.key];
+              const effective = rate ?? product.cost.table.perPage;
+              const total = product.cost.table.basePerUnit + effective * pages;
+              return (
+                <tr key={row.key} className="border-t border-ink-100">
+                  <td className="py-1 pr-4 text-ink-700">
+                    {row.label}
+                    {row.key === baseKey && (
+                      <span className="ml-1.5 rounded bg-brand-50 px-1 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-brand-700">
+                        base
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-1 pr-4 text-right tabular-nums text-ink-600">{effective.toFixed(4)}</td>
+                  <td className="py-1 pr-4 text-right tabular-nums text-ink-800">
+                    {fmtMoney(total, product.cost.currency)}
+                  </td>
+                  <td className="py-1 text-ink-400">
+                    {rate != null ? "measured" : <span className="text-amber-600">base rate (not measured)</span>}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Section>
+  );
+}
+
+/**
  * Derive the cost table from the provider rather than typing it in. Runs
  * against the SAVED product (the backend probes and writes), so unsaved edits
  * have to be committed first.
@@ -186,8 +337,17 @@ function CalibrateCard({
       setResult(outcome.result);
       if (outcome.result.ok) {
         onCalibrated(outcome.config);
-        toast.success("Cost derived from live provider quotes.");
+        toast.success(
+          `Measured ${outcome.result.variants.length} variant${outcome.result.variants.length === 1 ? "" : "s"} from live provider quotes.`,
+        );
         if (outcome.result.message) toast.warning(outcome.result.message);
+        // A cost fit that worked while shipping didn't still leaves a
+        // passthrough product unsellable, so it can't pass as a plain success.
+        if (outcome.result.shippingMessage) toast.warning(outcome.result.shippingMessage);
+      } else if (outcome.result.throttled) {
+        // Not an error: the provider asked us to slow down. Nothing to fix, and
+        // showing this in red sends the admin hunting for a broken SKU.
+        toast.warning(outcome.result.message ?? "The provider rate-limited us. Try again in a minute.");
       } else {
         toast.error(outcome.result.message ?? "Calibration failed.");
       }
@@ -198,10 +358,18 @@ function CalibrateCard({
     }
   };
 
+  const measurement = product.cost.measurement;
+
   return (
     <Section
       title="Measure cost from the provider"
-      hint="Prices this SKU at both ends of its page range and fits the line, then checks the midpoint to be sure the fit holds. Fills in the base + per-page cost and the fallback shipping rate."
+      hint={
+        "Asks the printer what this book actually costs, instead of you guessing. It prices the book at " +
+        "both ends of its page range to work out the fixed cost per copy and the cost per page, repeats " +
+        "the per-page part for every paper and print quality you offer, checks for volume discounts, and " +
+        "measures shipping to five countries. Dozens of price checks, so give it up to a minute — nothing " +
+        "is ordered and nothing is charged. Anything you typed in by hand is replaced."
+      }
       action={
         <Button
           variant="secondary"
@@ -209,22 +377,59 @@ function CalibrateCard({
           leftIcon={<Ruler className="size-3.5" />}
           loading={busy}
           disabled={dirty || !product.provider.sku.trim()}
-          title={dirty ? "Save your changes first — this runs against the saved product." : undefined}
+          title={
+            dirty
+              ? "Save your changes first — this runs against the saved product."
+              : `Price this book against the ${runtime?.env ?? "active"} print catalogue and fill in the costs below`
+          }
           onClick={run}
         >
           Measure against {runtime?.env ?? "provider"}
         </Button>
       }
     >
+      {measurement && !result && (
+        <p className="text-[11px] text-ink-500">
+          Last measured {new Date(measurement.at).toLocaleDateString()} against{" "}
+          <span className="font-medium">{measurement.env}</span>, shipping to {measurement.destination} —{" "}
+          {measurement.variantsMeasured} of {measurement.variantsOffered} variants priced.
+        </p>
+      )}
       {result && (
         <div className="space-y-1.5 text-xs">
-          {result.samples.length > 0 && (
+          {result.variants.length > 0 && (
             <div className="overflow-x-auto">
-              <table className="min-w-[280px] text-xs">
+              <table className="min-w-[320px] text-xs">
+                <thead className="text-[10px] uppercase tracking-wide text-ink-400">
+                  <tr>
+                    <th className="pr-4 text-left font-medium">Variant</th>
+                    <th className="pr-4 text-right font-medium">Cost / page</th>
+                    <th className="text-right font-medium">Fit</th>
+                  </tr>
+                </thead>
+                <tbody className="text-ink-600">
+                  {result.variants.map((v) => (
+                    <tr key={v.key}>
+                      <td className="pr-4">{v.label}</td>
+                      <td className="pr-4 text-right tabular-nums">{v.perPage.toFixed(4)}</td>
+                      <td className="text-right tabular-nums text-ink-400">±{v.residual.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {result.samples.length > 0 && (
+            <details className="text-[11px] text-ink-500">
+              <summary className="cursor-pointer select-none">
+                {result.samples.length} price checks taken
+              </summary>
+              <table className="mt-1 min-w-[280px] text-xs">
                 <thead className="text-[10px] uppercase tracking-wide text-ink-400">
                   <tr>
                     <th className="pr-4 text-left font-medium">Pages</th>
                     <th className="pr-4 text-left font-medium">Copies</th>
+                    <th className="pr-4 text-left font-medium">Variant</th>
                     <th className="text-left font-medium">Cost / book</th>
                   </tr>
                 </thead>
@@ -233,16 +438,18 @@ function CalibrateCard({
                     <tr key={i}>
                       <td className="pr-4">{s.pages}</td>
                       <td className="pr-4">{s.copies}</td>
+                      <td className="pr-4">{s.variant ?? "base"}</td>
                       <td>{fmtMoney(s.unitCost, result.currency ?? "USD")}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
+            </details>
           )}
           {result.fitResidual != null && (
             <p className="text-ink-500">
-              Midpoint check: off by {fmtMoney(result.fitResidual, result.currency ?? "USD")}.
+              Straight-line check: the measured prices sit within{" "}
+              {fmtMoney(result.fitResidual, result.currency ?? "USD")} of the fitted cost.
             </p>
           )}
           {result.discoveredPages && (
@@ -251,8 +458,11 @@ function CalibrateCard({
             </p>
           )}
           {result.message && (
-            <p className={result.ok ? "text-amber-700" : "text-red-600"}>{result.message}</p>
+            <p className={result.ok || result.throttled ? "text-amber-700" : "text-red-600"}>
+              {result.message}
+            </p>
           )}
+          {result.shippingMessage && <p className="text-amber-700">{result.shippingMessage}</p>}
         </div>
       )}
     </Section>
@@ -431,8 +641,14 @@ function MarginPlanner({
     );
   }, [product, suggestion.tiers, settings, plans]);
 
-  // Named only when it isn't the base variant — otherwise it's noise.
-  const cheapest = cheapestVariant(product.variants, settings.baseCurrency);
+  // Named only when it isn't the base variant — otherwise it's noise. Judged at
+  // the display length, since a per-page delta can make a different variant the
+  // cheapest one on a long book than on a short one.
+  const cheapest = cheapestVariant(
+    product.variants,
+    settings.baseCurrency,
+    product.pricing.displayPages ?? product.conditions.pages.min,
+  );
   const base = variantFromSku(product.provider.sku);
   const targetsCheaperVariant = cheapest && base && !sameVariant(cheapest, base);
 
@@ -456,7 +672,13 @@ function MarginPlanner({
           : ""
       }`}
       action={
-        <Button variant="secondary" size="sm" leftIcon={<Wand2 className="size-4" />} onClick={apply}>
+        <Button
+          variant="secondary"
+          size="sm"
+          leftIcon={<Wand2 className="size-4" />}
+          onClick={apply}
+          title="Overwrite the price rows above with these suggestions. Nothing is saved until you save the product, so you can still edit or discard them."
+        >
           Apply to price rows
         </Button>
       }
@@ -601,8 +823,8 @@ function MarginInfo({ product, settings }: { product: ProductDefinition; setting
   const variant = useMemo(() => {
     const chosen = variantKeyChoice ? parseVariantKey(variantKeyChoice) : null;
     if (chosen && variantAllowed(product.variants, chosen)) return chosen;
-    return cheapestVariant(product.variants, cur);
-  }, [variantKeyChoice, product.variants, cur]);
+    return cheapestVariant(product.variants, cur, pages);
+  }, [variantKeyChoice, product.variants, cur, pages]);
 
   const offline = useMemo<MarginBreakdown>(
     () => computeMargin(product, { currency: cur, pages, copies, variant }, settings),
@@ -679,17 +901,15 @@ function MarginInfo({ product, settings }: { product: ProductDefinition; setting
         <Field label="Variant" hint="Defaults to the cheapest you offer — the order that earns least. A live quote prices this exact variant.">
           <Select
             value={variantKey(variant)}
-            options={orderable.map((v) => ({
-              value: variantKey(v),
-              label: `${variantSummary(v)}${
-                variantPriceDelta(product.variants, v, cur) !== 0
-                  ? ` (${variantPriceDelta(product.variants, v, cur) > 0 ? "+" : ""}${fmtMoney(
-                      variantPriceDelta(product.variants, v, cur),
-                      cur,
-                    )})`
-                  : ""
-              }`,
-            }))}
+            options={orderable.map((v) => {
+              const delta = variantPriceDelta(product.variants, v, cur, pages);
+              return {
+                value: variantKey(v),
+                label: `${variantSummary(v)}${
+                  Math.abs(delta) >= 0.005 ? ` (${delta > 0 ? "+" : ""}${fmtMoney(delta, cur)})` : ""
+                }`,
+              };
+            })}
             onChange={(e) => { setVariantKeyChoice(e.target.value); reset(); }}
           />
         </Field>

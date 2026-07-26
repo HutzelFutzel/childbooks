@@ -188,6 +188,25 @@ export function variantKey(selection: VariantSelection): string {
   return VARIANT_AXES.map((axis) => selection[axis]).join("/");
 }
 
+/**
+ * The axes that change what a book costs to print.
+ *
+ * Ink, quality and paper decide the per-page rate; cover lamination does not
+ * change the price at all (both finishes carry `costRank` 0, measured). Keying
+ * measured costs by these two alone halves the probes a calibration needs and
+ * stops the same number being measured twice under different names.
+ */
+export const VARIANT_COST_AXES = ["print", "paper"] as const satisfies readonly VariantAxisId[];
+
+/**
+ * Identity of a variant for COSTING purposes: `print/paper`. Two variants that
+ * share this key are printed on the same stock with the same ink, so they cost
+ * the same to make however their covers are finished.
+ */
+export function costVariantKey(selection: VariantSelection): string {
+  return VARIANT_COST_AXES.map((axis) => selection[axis]).join("/");
+}
+
 export function parseVariantKey(key: string): VariantSelection | null {
   const parts = (key ?? "").split("/");
   if (parts.length !== VARIANT_AXES.length) return null;
@@ -214,6 +233,24 @@ export function sameVariant(a: VariantSelection, b: VariantSelection): boolean {
 
 // ---- Per-product policy ----------------------------------------------------
 
+/**
+ * What choosing an option adds to the price of one copy.
+ *
+ * Two components, because the COST it covers has two components. Paper and
+ * print tier change what a page costs to make, so their price difference has
+ * to scale with the page count: premium colour over standard black & white is
+ * a few dollars on a 24-page board book and the better part of a hundred on a
+ * 400-page one. A single flat number priced one of those two correctly and the
+ * other one at a loss. Cover finish, which costs the same at any length, uses
+ * `perCopy` alone.
+ */
+export interface VariantDelta {
+  /** Flat amount added per copy, whatever the length. */
+  perCopy: number;
+  /** Amount added per interior page. */
+  perPage: number;
+}
+
 /** An option a product offers, and what choosing it adds to the price. */
 export interface VariantChoice {
   value: string;
@@ -222,8 +259,37 @@ export interface VariantChoice {
    * price IS the price of the base variant, so the options the base SKU already
    * encodes carry no delta (validation enforces it) and every other option is
    * priced as the upgrade it is.
+   *
+   * A bare number is the legacy flat-per-copy form and still loads; see
+   * {@link normalizeVariantDelta}.
    */
-  priceDelta?: Record<string, number>;
+  priceDelta?: Record<string, VariantDelta>;
+}
+
+/** Zero delta — the value every unpriced option resolves to. */
+export function emptyVariantDelta(): VariantDelta {
+  return { perCopy: 0, perPage: 0 };
+}
+
+/**
+ * Coerce a stored delta into shape. Accepts the legacy bare number so a catalog
+ * priced before per-page deltas existed keeps charging exactly what it did.
+ */
+export function normalizeVariantDelta(input: unknown): VariantDelta | null {
+  if (typeof input === "number") {
+    return Number.isFinite(input) ? { perCopy: input, perPage: 0 } : null;
+  }
+  if (!input || typeof input !== "object") return null;
+  const d = input as Partial<VariantDelta>;
+  const perCopy = typeof d.perCopy === "number" && Number.isFinite(d.perCopy) ? d.perCopy : 0;
+  const perPage = typeof d.perPage === "number" && Number.isFinite(d.perPage) ? d.perPage : 0;
+  if (perCopy === 0 && perPage === 0) return null;
+  return { perCopy, perPage };
+}
+
+/** Whether a delta is worth storing (a zero delta is the absence of one). */
+export function variantDeltaIsZero(delta: VariantDelta | undefined): boolean {
+  return !delta || (delta.perCopy === 0 && delta.perPage === 0);
 }
 
 /**
@@ -287,18 +353,27 @@ export function enumerateVariants(policy: ProductVariantPolicy): VariantSelectio
   return combos.filter((combo) => !policy.exclusions.some((rule) => variantMatches(rule, combo)));
 }
 
-/** Per-copy surcharge for a variant in one currency (0 when nothing is set). */
+/**
+ * Per-copy surcharge for a variant in one currency (0 when nothing is set).
+ *
+ * `pages` scales the per-page component. Callers that genuinely have no page
+ * count (a storefront "from" badge, say) may omit it and get the flat part
+ * alone — which understates an upgrade on a long book, so anything pricing a
+ * real order must pass the real length.
+ */
 export function variantPriceDelta(
   policy: ProductVariantPolicy,
   selection: VariantSelection | undefined,
   currency: string,
+  pages = 0,
 ): number {
   if (!selection) return 0;
   let total = 0;
   for (const axis of VARIANT_AXES) {
     const choice = policy.options[axis].find((o) => o.value === selection[axis]);
     const delta = choice?.priceDelta?.[currency];
-    if (typeof delta === "number" && Number.isFinite(delta)) total += delta;
+    if (!delta) continue;
+    total += delta.perCopy + delta.perPage * Math.max(0, pages);
   }
   return total;
 }
@@ -318,11 +393,12 @@ export function variantPriceDelta(
 export function cheapestVariant(
   policy: ProductVariantPolicy,
   currency: string,
+  pages = 0,
 ): VariantSelection | undefined {
   let cheapest: VariantSelection | undefined;
   let lowest = Number.POSITIVE_INFINITY;
   for (const variant of enumerateVariants(policy)) {
-    const delta = variantPriceDelta(policy, variant, currency);
+    const delta = variantPriceDelta(policy, variant, currency, pages);
     if (delta < lowest) {
       lowest = delta;
       cheapest = variant;
@@ -363,9 +439,10 @@ function normalizeChoice(input: unknown): VariantChoice | null {
   if (typeof c.value !== "string" || !c.value) return null;
   const choice: VariantChoice = { value: c.value };
   if (c.priceDelta && typeof c.priceDelta === "object") {
-    const deltas: Record<string, number> = {};
+    const deltas: Record<string, VariantDelta> = {};
     for (const [currency, amount] of Object.entries(c.priceDelta as Record<string, unknown>)) {
-      if (typeof amount === "number" && Number.isFinite(amount)) deltas[currency.toUpperCase()] = amount;
+      const delta = normalizeVariantDelta(amount);
+      if (delta) deltas[currency.toUpperCase()] = delta;
     }
     if (Object.keys(deltas).length > 0) choice.priceDelta = deltas;
   }

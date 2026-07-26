@@ -112,9 +112,18 @@ export async function fetchLiveCost(req: LiveCostRequest): Promise<LiveCost> {
       shippingMethod: req.shippingMethod,
     });
   } catch (err) {
+    // "Refused" means the provider looked at this order and said no, which is
+    // a fact worth surfacing. Everything else — including a rate limit, which
+    // is a 4xx but not a judgement — is just us failing to ask, and falls back
+    // to the measured cost table rather than blaming the order.
     const refused = err instanceof FulfillmentError && err.kind === "validation";
+    const throttled = err instanceof FulfillmentError && err.kind === "rate_limit";
     return {
-      error: err instanceof Error ? err.message : "Live provider quote failed.",
+      error: throttled
+        ? "The print provider is rate-limiting us, so this quote used measured costs instead."
+        : err instanceof Error
+          ? err.message
+          : "Live provider quote failed.",
       errorKind: refused ? "refused" : "unreachable",
     };
   }

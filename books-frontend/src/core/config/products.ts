@@ -138,6 +138,41 @@ export interface CostSurcharge {
   currency: CurrencyCode;
 }
 
+/**
+ * Print cost as the provider actually charges it: a fixed amount per copy plus
+ * an amount per interior page.
+ *
+ * The split is not a convenience — it mirrors how the book is made. The base
+ * pays for the cover and the binding, which cost the same whether there are 24
+ * pages inside or 240, so it is a property of the FORMAT (trim × binding) and
+ * therefore of the product. The per-page rate pays for ink and paper, so it is
+ * a property of the VARIANT (print tier × paper stock) and varies by more than
+ * an order of magnitude across the ones we sell.
+ */
+export interface CostLine {
+  /** Fixed cost per copy: cover, binding, handling. */
+  basePerUnit: number;
+  /** Cost per interior page: ink and paper. */
+  perPage: number;
+}
+
+/**
+ * Where a cost table came from, so a stale or wrong-environment measurement
+ * can be told apart from a fresh one. Costs measured in sandbox must not
+ * silently back live pricing, and a table nobody has re-measured in a year is
+ * a margin calculation waiting to be wrong.
+ */
+export interface CostMeasurement {
+  at: number;
+  env: ProviderEnv;
+  /** The reference destination probed, e.g. "US/10001". */
+  destination: string;
+  /** How far the worst sample missed the fitted line, in the cost currency. */
+  fitResidual?: number;
+  variantsMeasured: number;
+  variantsOffered: number;
+}
+
 export interface ProductCostModel {
   /** Currency the cost numbers below are expressed in. */
   currency: CurrencyCode;
@@ -150,11 +185,22 @@ export interface ProductCostModel {
    * without a network call.
    */
   source: "providerLive" | "table";
-  table: {
-    basePerUnit: number; // fixed cost per book
-    perPage: number; // × interior page count
+  /** The base variant's line — and the fallback for any variant not measured. */
+  table: CostLine & {
     quantityBreaks: { minQty: number; unitDiscountPct: number }[];
   };
+  /**
+   * Per-page cost for each variant that differs from the base, keyed by
+   * {@link costVariantKey} (`print/paper`). Only the per-page term appears
+   * here: the base is a property of the format, shared by every variant of it,
+   * and letting it drift per variant would be fitting noise rather than price.
+   *
+   * A key that isn't present falls back to `table.perPage`. Since the base
+   * variant is the costliest one we sell, that fallback over- rather than
+   * under-states cost, which is the safe direction for an unmeasured variant.
+   */
+  variantPerPage?: Record<string, number>;
+  measurement?: CostMeasurement;
   surcharges: CostSurcharge[];
 }
 
@@ -294,12 +340,45 @@ export interface PricingSettings {
 
 // ---- Shipping policy + geo restrictions ------------------------------------
 
+/**
+ * The countries we sell to. Not a default — a CEILING.
+ *
+ * Shipping somewhere is not a switch we can flip: the tier matrix has to be
+ * measured there, the tax treatment has to be configured, and the print
+ * provider has to actually run a service to it. So the honest model is a short
+ * explicit list, and everything else refuses.
+ *
+ * {@link isDestinationAllowed} intersects every product's own geo policy with
+ * this list, which is why it can be trusted as a ceiling rather than a
+ * suggestion: a product misconfigured to ship worldwide still can't, and a
+ * checkout path that forgets to look at the product policy still can't.
+ *
+ * Adding a market means adding it here AND re-running the shipping measurement
+ * so orders to it can be priced. See `SHIPPING_ZONES` in `printCalibrate.ts`,
+ * which probes exactly these countries.
+ */
+export const SUPPORTED_MARKETS = ["US", "GB", "DE", "CA", "AU"] as const;
+
+export type SupportedMarket = (typeof SUPPORTED_MARKETS)[number];
+
+/** Whether a country code is one we sell to at all. */
+export function isSupportedMarket(country: string | null | undefined): boolean {
+  const c = (country ?? "").trim().toUpperCase();
+  return (SUPPORTED_MARKETS as readonly string[]).includes(c);
+}
+
 export interface GeoMatch {
   country?: string; // ISO-2
   region?: string; // state / province code
 }
 
 export interface GeoPolicy {
+  /**
+   * How `countries` is read. Note that `"all"` means "everywhere we sell", not
+   * everywhere — {@link SUPPORTED_MARKETS} bounds every mode, so a policy can
+   * only ever narrow the set. Stored `"all"` policies are rewritten to an
+   * explicit allowlist on read so the admin UI shows what's enforced.
+   */
   mode: "all" | "allowlist" | "blocklist";
   countries: string[]; // ISO-2
   /** Per-country state/province restrictions (e.g. ship to US but not AK/HI). */
@@ -323,11 +402,66 @@ export type ShippingPricing =
   | { mode: "free"; absorbInPrice: boolean } // free shipping (optionally folded into price)
   | { mode: "flat"; default: number; currency: CurrencyCode; overrides: { match: GeoMatch; amount: number }[] };
 
+/**
+ * One measured cell of the provider's shipping: what a tier costs to one
+ * country, and whether it reaches it at all.
+ *
+ * Both halves matter, and they're recorded together because one probe answers
+ * both. Cost is fitted as `base + perCopy × copies` rather than stored flat,
+ * because a passthrough product BILLS this number to the customer — a single
+ * scalar measured at three copies overcharges the person buying one and
+ * undercharges the person buying ten.
+ *
+ * Availability is per (tier, destination), not per product: the provider hard-
+ * refuses a tier it doesn't run to a country, which fails the order after the
+ * customer has filled in their address.
+ */
+/**
+ * One measured shipping rate: what a speed costs to a country.
+ *
+ * A row is only written when we LEARNED something. `available: true` means the
+ * provider priced it; `available: false` means the provider refused it, which
+ * is a real fact about coverage. A speed we couldn't get an answer for gets no
+ * row at all — absence means "unknown", and falls through to the scalar
+ * `pricing.fallbackCost`.
+ *
+ * That three-way distinction is the whole point. When a failed request was
+ * recorded as `available: false`, one throttled probe became a permanent claim
+ * that a country had no shipping, which blocked saving until someone re-ran a
+ * measurement they had no reason to suspect.
+ */
+export interface ShippingFallbackRow {
+  /**
+   * ISO-2 country this row was measured against.
+   *
+   * Always a real country: the sweep measures representative destinations and
+   * never invents a wildcard row, because a rate measured in one country is not
+   * evidence about another. Destinations with no row fall through to the scalar
+   * `pricing.fallbackCost` instead.
+   */
+  country: string;
+  method: ShippingMethod;
+  /** Whether the provider quoted this tier to this country at all. */
+  available: boolean;
+  /** Shipping cost = `base + perCopy × copies`. Zero when unavailable. */
+  base: number;
+  perCopy: number;
+}
+
 export interface ProductShippingPolicy {
   destinations: GeoPolicy;
   methods: ShippingMethodConfig[];
   pricing: ShippingPricing;
   surcharges: { match: GeoMatch; amount: number; currency: CurrencyCode }[];
+  /**
+   * What the provider was measured to charge and to offer, per country and
+   * tier, in the product's COST currency. Fills in for a live quote when one
+   * can't be fetched, and tells validation which tiers actually reach the
+   * destinations this product sells to.
+   */
+  fallback?: ShippingFallbackRow[];
+  /** When {@link fallback} was measured (epoch ms). */
+  fallbackMeasuredAt?: number;
 }
 
 // ---- Provider SKU verification ---------------------------------------------
@@ -588,12 +722,27 @@ export function createDefaultCostModel(): ProductCostModel {
   };
 }
 
+/**
+ * Shipping tiers are NOT universally available, so the default enables the one
+ * that is.
+ *
+ * `Standard` maps to the provider's GROUND service, which it does not run to
+ * the US or the UK — asking for it there is a hard refusal, not a fallback, so
+ * a product offering only Standard cannot be ordered in either of our biggest
+ * markets. `StandardPlus` (PRIORITY_MAIL) quotes everywhere we sell and is the
+ * safe default; the rest are opened per product once measured against the
+ * destinations it ships to. See `SHIPPING_LEVEL` in `lulu/provider.ts`.
+ */
 export function createDefaultShippingPolicy(): ProductShippingPolicy {
   return {
-    destinations: { mode: "all", countries: [], regions: {} },
+    // An explicit allowlist, not "anywhere". A new product that claims worldwide
+    // shipping is claiming something nobody has measured or priced, and the
+    // claim surfaces as a checkout failure in front of a paying customer.
+    destinations: { mode: "allowlist", countries: [...SUPPORTED_MARKETS], regions: {} },
     methods: [
       { method: "Budget", enabled: false },
-      { method: "Standard", enabled: true },
+      { method: "StandardPlus", enabled: true },
+      { method: "Standard", enabled: false },
       { method: "Express", enabled: false },
     ],
     pricing: { mode: "passthrough" },
@@ -800,10 +949,61 @@ export function normalizeProduct(input: unknown): ProductDefinition {
       custom: p.conditions?.custom ?? [],
       access: normalizeAccess(p.conditions?.access),
     },
-    cost: { ...def.cost, ...p.cost, table: { ...def.cost.table, ...p.cost?.table } },
+    cost: normalizeCost(p.cost, def.cost),
     pricing: normalizePricing(p.pricing),
-    shipping: { ...def.shipping, ...p.shipping },
+    shipping: normalizeShipping(p.shipping, def.shipping),
   };
+}
+
+/** Merge a stored cost model onto the defaults, dropping unusable numbers. */
+function normalizeCost(input: unknown, def: ProductCostModel): ProductCostModel {
+  const c = (input ?? {}) as Partial<ProductCostModel>;
+  const cost: ProductCostModel = {
+    ...def,
+    ...c,
+    table: { ...def.table, ...c.table },
+    surcharges: Array.isArray(c.surcharges) ? c.surcharges : def.surcharges,
+  };
+  // A NaN or negative per-page rate would read as a free (or profitable) page
+  // and quietly inflate every margin computed from it.
+  const perPage: Record<string, number> = {};
+  for (const [key, value] of Object.entries(c.variantPerPage ?? {})) {
+    if (typeof value === "number" && Number.isFinite(value) && value >= 0) perPage[key] = value;
+  }
+  if (Object.keys(perPage).length > 0) cost.variantPerPage = perPage;
+  else delete cost.variantPerPage;
+  return cost;
+}
+
+/** Merge a stored shipping policy onto the defaults, dropping malformed rows. */
+function normalizeShipping(input: unknown, def: ProductShippingPolicy): ProductShippingPolicy {
+  const s = (input ?? {}) as Partial<ProductShippingPolicy>;
+  const shipping: ProductShippingPolicy = { ...def, ...s };
+
+  // Products stored before markets were declared say "ship anywhere". Rewriting
+  // that on read restricts them without anyone having to re-save every product,
+  // and makes the admin UI show what is actually enforced rather than a promise
+  // the order path will refuse to keep.
+  if (shipping.destinations.mode === "all") {
+    shipping.destinations = {
+      ...shipping.destinations,
+      mode: "allowlist",
+      countries: [...SUPPORTED_MARKETS],
+    };
+  }
+  const rows = Array.isArray(s.fallback) ? s.fallback : [];
+  const clean = rows.filter(
+    (r): r is ShippingFallbackRow =>
+      r != null &&
+      typeof r.country === "string" &&
+      typeof r.method === "string" &&
+      typeof r.available === "boolean" &&
+      Number.isFinite(r.base) &&
+      Number.isFinite(r.perCopy),
+  );
+  if (clean.length > 0) shipping.fallback = clean;
+  else delete shipping.fallback;
+  return shipping;
 }
 
 export function normalizeProductsConfig(input: unknown): ProductsConfig {
@@ -868,7 +1068,14 @@ const specSchema = z.object({
  */
 const variantChoiceSchema = z.object({
   value: z.string().min(1),
-  priceDelta: z.record(z.string(), z.number()).optional(),
+  // A bare number is the legacy flat-per-copy delta; `normalizeVariantDelta`
+  // lifts it to `{ perCopy, perPage }` on read so old catalogs price unchanged.
+  priceDelta: z
+    .record(
+      z.string(),
+      z.union([z.number(), z.object({ perCopy: z.number(), perPage: z.number() })]),
+    )
+    .optional(),
 });
 
 // Keys stay `z.string()` rather than an axis enum: a keyed record demands an
@@ -906,6 +1113,20 @@ const costSchema = z.object({
     perPage: z.number().nonnegative(),
     quantityBreaks: z.array(z.object({ minQty: z.number().positive(), unitDiscountPct: z.number().min(0).max(100) })),
   }),
+  // Keyed by `costVariantKey` (`print/paper`). A plain record rather than an
+  // enum-keyed one so a catalog measured before an option was renamed still
+  // loads; unknown keys are simply never looked up.
+  variantPerPage: z.record(z.string(), z.number().nonnegative()).optional(),
+  measurement: z
+    .object({
+      at: z.number(),
+      env: z.enum(["sandbox", "live"]),
+      destination: z.string(),
+      fitResidual: z.number().nonnegative().optional(),
+      variantsMeasured: z.number().nonnegative(),
+      variantsOffered: z.number().nonnegative(),
+    })
+    .optional(),
   surcharges: z.array(
     z.object({
       label: z.string(),
@@ -995,6 +1216,18 @@ const shippingSchema = z.object({
     }),
   ]),
   surcharges: z.array(z.object({ match: geoMatchSchema, amount: z.number().nonnegative(), currency: z.string() })),
+  fallback: z
+    .array(
+      z.object({
+        country: z.string(),
+        method: shippingMethodEnum,
+        available: z.boolean(),
+        base: z.number().nonnegative(),
+        perCopy: z.number().nonnegative(),
+      }),
+    )
+    .optional(),
+  fallbackMeasuredAt: z.number().optional(),
 });
 
 export const productSchema = z.object({
@@ -1050,12 +1283,19 @@ function orientationFromAspect(aspect: number): ProductSpec["orientation"] {
  * {@link ProductDefinition.variants} so every measured combination is buyable
  * without a product record each.
  *
- * Cost is `providerLive`, so what we pay is always the provider's own number.
- * Prices are NOT: every seed inherits the single flat default tier, which is a
- * placeholder and not a margin. Print cost climbs steeply with page count — a
- * hardcover measured $16 at 24 pages and $183 at 800 — so a seeded product left
- * at the default price sells at a loss on a long book. Verify it, measure its
- * cost, then suggest prices (and variant deltas) before making it active.
+ * Cost is `providerLive` and the cost TABLE is left empty on purpose: nobody
+ * can know what the printer charges for a format without asking it, and a
+ * plausible-looking guess baked into the seed would be worse than nothing —
+ * it reads as measured, and validation would stop asking for the real thing.
+ * The empty table raises an actionable error instead, which blocks OFFERING
+ * the product but not saving it.
+ *
+ * Prices are placeholders too: every seed inherits the single flat default
+ * tier, which is a number, not a margin. Print cost climbs steeply with page
+ * count, so a seeded product left at the default price sells at a loss on a
+ * long book. The order is Verify → Measure → price, and the admin UI walks
+ * through it; `suggestVariantDeltas` then prices the variants from what they
+ * were measured to cost.
  */
 export function seedProductsFromCatalog(): ProductDefinition[] {
   return LULU_BOOK_FORMATS.map((fmt, i) => {

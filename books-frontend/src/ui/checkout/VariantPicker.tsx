@@ -26,12 +26,19 @@ export function VariantPicker({
   value,
   onChange,
   currency = "USD",
+  pages = 0,
   className,
 }: {
   policy: ProductVariantPolicy;
   value: VariantSelection;
   onChange: (next: VariantSelection) => void;
   currency?: string;
+  /**
+   * The book's length. Paper and print upgrades are priced per page, so the
+   * surcharge shown next to each option is only right for the book actually
+   * being ordered — a shared "+$4" would be a lie on anything but one length.
+   */
+  pages?: number;
   className?: string;
 }) {
   const media = useAppConfigStore((s) => s.catalogMedia);
@@ -69,10 +76,9 @@ export function VariantPicker({
                 const photo = primaryPhotoFor(media, variantMediaKey(axis, v));
                 // Delta of switching ONLY this axis — clearer while shopping
                 // than the absolute surcharge of the whole selection.
-                const from =
-                  policy.options[axis].find((o) => o.value === value[axis])?.priceDelta?.[currency] ?? 0;
-                const to = policy.options[axis].find((o) => o.value === v)?.priceDelta?.[currency] ?? 0;
-                const switchDelta = to - from;
+                const switchDelta =
+                  axisDelta(policy, axis, v, currency, pages) -
+                  axisDelta(policy, axis, value[axis], currency, pages);
                 return (
                   <button
                     key={v}
@@ -102,7 +108,7 @@ export function VariantPicker({
                     <span className="min-w-0 flex-1">
                       <span className="flex items-baseline justify-between gap-2">
                         <span className="text-[12px] font-medium text-ink-800">{opt?.label ?? v}</span>
-                        {switchDelta !== 0 && ok && (
+                        {Math.abs(switchDelta) >= 0.005 && ok && (
                           <span className="shrink-0 text-[11px] tabular-nums text-ink-500">
                             {switchDelta > 0 ? "+" : ""}
                             {switchDelta.toFixed(2)}
@@ -127,4 +133,16 @@ export function VariantPicker({
       })}
     </div>
   );
+}
+
+/** One option's surcharge at this length, in this currency. */
+function axisDelta(
+  policy: ProductVariantPolicy,
+  axis: VariantAxisId,
+  value: string,
+  currency: string,
+  pages: number,
+): number {
+  const delta = policy.options[axis].find((o) => o.value === value)?.priceDelta?.[currency];
+  return delta ? delta.perCopy + delta.perPage * Math.max(0, pages) : 0;
 }

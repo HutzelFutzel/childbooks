@@ -536,7 +536,8 @@ export function printWorstCaseImpact(
 ): DiscountImpact | null {
   const eligible = eligibleBuyers(product.conditions.access, buyers);
   if (eligible.length === 0) return null; // nobody can buy it (flagged by config health)
-  const variant = scenario.variant ?? cheapestVariant(product.variants, scenario.currency);
+  const variant =
+    scenario.variant ?? cheapestVariant(product.variants, scenario.currency, scenario.pages);
   const worstCase = variant ? { ...scenario, variant } : scenario;
   return pickWorst(eligible.map((b) => printDiscountImpact(product, worstCase, settings, b)));
 }

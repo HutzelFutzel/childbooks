@@ -8,9 +8,15 @@
  */
 import type { PricingSettings, ProductDefinition, ProviderEnv } from "./products";
 import { verificationCoversPages, verificationFor } from "./products";
-import { computeMargin, costTableIsEmpty, hasReachableDestination } from "./productMath";
+import {
+  computeMargin,
+  costTableIsEmpty,
+  hasReachableDestination,
+  isDestinationAllowed,
+} from "./productMath";
 import { bookMediaKey, resolvedPhotosFor, type CatalogMediaConfig } from "./catalogMedia";
 import { variantFromSku } from "../fulfillment/lulu/skuAxes";
+import type { ShippingMethod } from "../fulfillment/types";
 import {
   VARIANT_AXES,
   cheapestVariant,
@@ -25,6 +31,13 @@ import {
 
 export type IssueLevel = "error" | "warning";
 
+/**
+ * The tool that resolves an issue, so the message can carry its own fix button.
+ * An error that says what's wrong but not which of two panels away fixes it is
+ * only half an error message.
+ */
+export type IssueFix = "verify" | "measure";
+
 export interface ProductIssue {
   level: IssueLevel;
   field: string;
@@ -36,6 +49,8 @@ export interface ProductIssue {
    * so treating them as save blockers would deadlock a new product.
    */
   actionable?: boolean;
+  /** Which tool clears it, when one does. */
+  fix?: IssueFix;
 }
 
 /** Errors the admin can fix by editing — the ones that should block a save. */
@@ -68,8 +83,8 @@ export function validateProduct(
   const issues: ProductIssue[] = [];
   const err = (field: string, message: string) => issues.push({ level: "error", field, message });
   /** An error whose fix is running a tool (Verify / Calibrate), not typing. */
-  const action = (field: string, message: string) =>
-    issues.push({ level: "error", field, message, actionable: true });
+  const action = (field: string, message: string, fix?: IssueFix) =>
+    issues.push({ level: "error", field, message, actionable: true, ...(fix ? { fix } : {}) });
   const warn = (field: string, message: string) => issues.push({ level: "warning", field, message });
 
   // Presentation
@@ -92,13 +107,18 @@ export function validateProduct(
         warn("provider.verifiedIn", "SKU has never been verified against the print provider.");
       }
     } else if (!record) {
-      action("provider.verifiedIn", `SKU has not been verified against the ${env} print catalog. Run Verify.`);
+      action(
+        "provider.verifiedIn",
+        `SKU has not been verified against the ${env} print catalog. Run Verify.`,
+        "verify",
+      );
     } else if (!record.ok) {
       err("provider.verifiedIn", `The ${env} print catalog rejected this SKU: ${record.error ?? "unknown reason"}.`);
     } else if (!verificationCoversPages(record, p.conditions.pages)) {
       action(
         "provider.verifiedIn",
         `Verified for ${record.pages.min}–${record.pages.max} pages, but this product allows ${p.conditions.pages.min}–${p.conditions.pages.max}. Re-run Verify.`,
+        "verify",
       );
     }
   }
@@ -129,6 +149,7 @@ export function validateProduct(
     action(
       "cost.table",
       "Set a production cost (base per unit + per page). Margin, break-even and discount limits are meaningless without it, and orders can't be priced if a live quote fails.",
+      "measure",
     );
   }
 
@@ -147,9 +168,15 @@ export function validateProduct(
     if (!variantAllowed(p.variants, baseVariant)) {
       err("variants", "The product's own SKU variant must stay offered — otherwise nothing is orderable.");
     }
+    // Checked component by component rather than through variantPriceDelta at
+    // some page count: a per-page delta on the base would be invisible at zero
+    // pages and then quietly double-charge on every real book.
     for (const currency of currencies) {
-      const delta = variantPriceDelta(p.variants, baseVariant, currency);
-      if (delta !== 0) {
+      const nonZero = VARIANT_AXES.some((axis) => {
+        const delta = p.variants.options[axis].find((o) => o.value === baseVariant[axis])?.priceDelta?.[currency];
+        return delta != null && (delta.perCopy !== 0 || delta.perPage !== 0);
+      });
+      if (nonZero) {
         err(
           "variants",
           `Base variant price delta for ${currency} must be 0 (the page-tier price is already that variant).`,
@@ -207,12 +234,16 @@ export function validateProduct(
   const checkPoints =
     tiers.length > 0 ? tiers.map((t) => Math.max(pages.min, t.minPages)) : [pages.min];
   for (const currency of currencies) {
-    const variant = cheapestVariant(p.variants, currency);
-    const at =
-      variant && baseVariant && !sameVariant(variant, baseVariant)
-        ? ` on ${variantSummary(variant)}`
-        : "";
     for (const pg of checkPoints) {
+      // Re-picked per page count, not once per currency: with per-page deltas
+      // the cheapest option can change with length, and a check that used one
+      // tier's cheapest variant on another tier would be checking a price no
+      // customer can pay.
+      const variant = cheapestVariant(p.variants, currency, pg);
+      const at =
+        variant && baseVariant && !sameVariant(variant, baseVariant)
+          ? ` on ${variantSummary(variant)}`
+          : "";
       let m;
       try {
         m = computeMargin(p, { currency, pages: pg, copies: Math.max(1, copies.min), variant }, settings);
@@ -234,7 +265,8 @@ export function validateProduct(
   }
 
   // Shipping
-  if (!p.shipping.methods.some((s) => s.enabled)) err("shipping.methods", "Enable at least one shipping method.");
+  const enabledMethods = p.shipping.methods.filter((s) => s.enabled).map((s) => s.method);
+  if (enabledMethods.length === 0) err("shipping.methods", "Enable at least one shipping method.");
   if (!hasReachableDestination(p.shipping.destinations)) {
     err("shipping.destinations", "No destinations are reachable with this geo policy.");
   }
@@ -245,11 +277,97 @@ export function validateProduct(
     action(
       "shipping.pricing",
       "Set a fallback shipping cost. It's charged (plus your markup) when a live shipping quote can't be fetched; without it those orders can't be placed at all.",
+      "measure",
     );
+  }
+
+  // Tier availability. The provider hard-refuses a speed it doesn't run to a
+  // country, which fails the order AFTER the customer has entered their
+  // address — so a product whose only enabled tier doesn't reach a market it
+  // sells to is broken there, however well everything else is configured.
+  //
+  // Only rows the provider actually REFUSED count. A speed we couldn't get an
+  // answer for has no row at all, and must not read as unavailable: that turned
+  // one throttled request into a permanent save-blocking claim about a country.
+  //
+  // And only countries we still SELL to. Measurements outlive the markets they
+  // were taken for — deselecting a market doesn't delete its rows — so reading
+  // the country list off the rows alone kept reporting a market as broken after
+  // it had been withdrawn, with no way to clear it but a full re-measure.
+  const measuredRows = p.shipping.fallback ?? [];
+  if (measuredRows.length > 0 && enabledMethods.length > 0) {
+    const countries = [...new Set(measuredRows.map((r) => r.country))].filter((c) =>
+      isDestinationAllowed(p.shipping.destinations, { country: c }),
+    );
+    const refusedFor = (country: string, method: ShippingMethod) =>
+      measuredRows.some((r) => r.country === country && r.method === method && !r.available);
+    const stranded = countries.filter((country) => enabledMethods.every((m) => refusedFor(country, m)));
+    if (stranded.length > 0) {
+      // Name the speeds that DO reach the stranded markets. "Enable a speed the
+      // provider offers" is only useful if you already know which, and the
+      // measured rows know — so the fix is one click rather than a guess.
+      const alternatives = [
+        ...new Set(
+          stranded.flatMap((country) =>
+            measuredRows
+              .filter((r) => r.country === country && r.available && !enabledMethods.includes(r.method))
+              .map((r) => r.method),
+          ),
+        ),
+      ];
+      err(
+        "shipping.methods",
+        `No enabled shipping speed reaches ${stranded.join(", ")} — orders there will be refused at checkout. ` +
+          (alternatives.length > 0
+            ? `Enable ${alternatives.join(" or ")}, which the provider does quote there.`
+            : `Enable another speed, or stop selling to ${stranded.join(", ")} under Destinations.`),
+      );
+    }
+    for (const method of enabledMethods) {
+      const refusedIn = countries.filter((country) => refusedFor(country, method));
+      if (refusedIn.length > 0 && refusedIn.length < countries.length) {
+        warn(
+          "shipping.methods",
+          `${method} isn't offered to ${refusedIn.join(", ")}; customers there can't pick it.`,
+        );
+      }
+    }
+  }
+
+  // Cost coverage and provenance. An unmeasured variant falls back to the base
+  // line, which overstates its cost — safe for the business, but it makes the
+  // variant look less profitable than it is and misprices its delta.
+  const measurement = p.cost.measurement;
+  if (!costTableIsEmpty(p.cost)) {
+    if (measurement && measurement.variantsMeasured < measurement.variantsOffered) {
+      warn(
+        "cost.table",
+        `${measurement.variantsOffered - measurement.variantsMeasured} of ${measurement.variantsOffered} variants have no measured cost and fall back to the base (costliest) rate.`,
+      );
+    }
+    if (opts.env && measurement && measurement.env !== opts.env) {
+      warn(
+        "cost.table",
+        `Costs were measured against ${measurement.env}, but this catalog serves ${opts.env}. Re-measure to price against the right catalogue.`,
+      );
+    }
+    if (measurement && Date.now() - measurement.at > STALE_COST_MS) {
+      const days = Math.round((Date.now() - measurement.at) / 86_400_000);
+      warn("cost.table", `Costs were last measured ${days} days ago; printer prices drift. Re-measure.`);
+    }
+    if (!measurement) {
+      warn(
+        "cost.table",
+        "This cost table was entered by hand, not measured. Run Measure to price it from real provider quotes.",
+      );
+    }
   }
 
   return issues;
 }
+
+/** How long a measured cost table is trusted before it's worth re-checking. */
+const STALE_COST_MS = 120 * 86_400_000;
 
 export function productErrors(p: ProductDefinition, settings: PricingSettings): ProductIssue[] {
   return validateProduct(p, settings).filter((i) => i.level === "error");

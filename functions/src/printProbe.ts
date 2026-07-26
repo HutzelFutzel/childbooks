@@ -16,6 +16,7 @@
  * nothing" and leave any prior verdict untouched.
  */
 import { FulfillmentError } from "../../books-frontend/src/core/fulfillment/errors";
+import type { ShippingMethod } from "../../books-frontend/src/core/fulfillment/types";
 import type { FulfillmentEnv } from "../../books-frontend/src/core/settings";
 import { fulfillmentProviderFor, luluCredentialsPresent } from "./lulu";
 
@@ -37,6 +38,15 @@ export interface SkuProbe {
   currency?: string;
   /** The provider's own explanation, when it gave one. */
   message?: string;
+  /**
+   * We were rate-limited (after the adapter's own retries gave up).
+   *
+   * A stronger statement than `inconclusive`, and worth making separately: it
+   * means the answer exists and we simply weren't allowed to ask. A report that
+   * can't tell this from "the provider doesn't sell this variant" will present
+   * a throttled sweep as a finding about the catalog.
+   */
+  throttled?: boolean;
 }
 
 export interface ProbeDestination {
@@ -79,6 +89,11 @@ export interface ProbeRequest {
  * rejection triggers a retry across all tiers before we blame the SKU. Without
  * that retry, a large-quantity probe would report a perfectly good SKU as
  * nonexistent.
+ *
+ * The retry is deliberately gated on `rejected`. A rate limit is `inconclusive`
+ * and returns immediately: re-asking five more times is the worst possible
+ * response to being told we're asking too much, and turned one throttled probe
+ * into six.
  */
 export async function probeSku(req: ProbeRequest): Promise<SkuProbe> {
   const sku = req.sku?.trim();
@@ -95,6 +110,107 @@ export async function probeSku(req: ProbeRequest): Promise<SkuProbe> {
   // that one shipping level was unavailable.
   const anyTier = await quoteOnce(req, sku, undefined);
   return anyTier.outcome === "ok" ? anyTier : first;
+}
+
+/** What one shipping tier costs to one destination, as the provider quoted it. */
+export interface TierQuote {
+  method: ShippingMethod;
+  /** Shipping cost for the probed quantity, ex tax. */
+  shippingCost: number;
+}
+
+export interface ShippingProbe {
+  outcome: ProbeOutcome;
+  /** We were rate-limited, so the empty result says nothing about coverage. */
+  throttled?: boolean;
+  /** One entry per tier the provider priced. */
+  tiers: TierQuote[];
+  /**
+   * Tiers the provider explicitly REFUSED for this destination.
+   *
+   * Deliberately not "everything missing from `tiers`". A tier can be absent
+   * because the provider doesn't run it here, or because that one request
+   * failed — and only the first is a fact worth storing. Callers recording
+   * coverage must use this list, not the complement of `tiers`.
+   */
+  refused: ShippingMethod[];
+  /** Tiers we couldn't get an answer for. Neither available nor unavailable. */
+  undetermined: ShippingMethod[];
+  currency?: string;
+  message?: string;
+}
+
+/**
+ * Price every shipping tier to one destination.
+ *
+ * The provider has no "quote all speeds" call — an unpinned quote enumerates
+ * the levels itself, one request each — so this is several round trips, not
+ * one. It's still the right shape: the tiers the provider REFUSES are the real
+ * prize. It doesn't run GROUND to the US or EXPEDITED outside it, and a refused
+ * tier is one that would hard-refuse a customer's order at checkout, after
+ * they've entered their address.
+ *
+ * The three-way split matters because these round trips fail independently. A
+ * single throttled request used to look identical to a refusal, which is how a
+ * momentary blip became a stored claim that a country has no shipping.
+ */
+export async function probeShippingTiers(req: ProbeRequest): Promise<ShippingProbe> {
+  const empty = { tiers: [], refused: [], undetermined: [] };
+  const sku = req.sku?.trim();
+  if (!sku) return { ...empty, outcome: "rejected", message: "No SKU given." };
+  if (!luluCredentialsPresent(req.env)) {
+    return { ...empty, outcome: "inconclusive", message: `No print-provider credentials for ${req.env}.` };
+  }
+
+  const copies = Math.max(1, Math.round(req.copies ?? 1));
+  const dest = req.destination ?? REFERENCE_DESTINATION;
+  const provider = fulfillmentProviderFor(req.env);
+  if (!provider.quoteTiers) {
+    return { ...empty, outcome: "inconclusive", message: "Provider can't report per-tier coverage." };
+  }
+  try {
+    const outcomes = await provider.quoteTiers({
+      productSku: sku,
+      copies,
+      pageCount: Math.max(1, Math.round(req.pages)),
+      destinationCountry: dest.country,
+      destinationState: dest.state,
+      destinationCity: dest.city,
+      destinationPostalCode: dest.postalCode,
+      destinationLine1: dest.line1,
+    });
+
+    const tiers: TierQuote[] = [];
+    const refused: ShippingMethod[] = [];
+    const undetermined: ShippingMethod[] = [];
+    let currency: string | undefined;
+    let throttled = false;
+    for (const o of outcomes) {
+      if (o.quote) {
+        tiers.push({ method: o.method, shippingCost: Number(o.quote.shipping.amount) || 0 });
+        currency ??= o.quote.shipping.currency;
+      } else if (o.refused) {
+        refused.push(o.method);
+      } else {
+        undetermined.push(o.method);
+        throttled ||= o.throttled === true;
+      }
+    }
+    if (tiers.length === 0 && refused.length === 0) {
+      return { ...empty, outcome: "inconclusive", throttled, message: "Provider returned no quote." };
+    }
+    // `ok` with tiers left undetermined: partial success is still success, but
+    // the throttle flag has to travel or the gaps look like considered verdicts.
+    return { outcome: "ok", currency, tiers, refused, undetermined, throttled };
+  } catch (err) {
+    const probe = classify(err);
+    return {
+      ...empty,
+      outcome: probe.outcome,
+      message: probe.message,
+      ...(probe.throttled ? { throttled: true } : {}),
+    };
+  }
 }
 
 /**
@@ -156,9 +272,14 @@ function classify(err: unknown): SkuProbe {
   if (err instanceof FulfillmentError) {
     // Only a 4xx we caused is evidence about the SKU itself. `not_found` comes
     // from a missing resource path rather than an invalid package id, so it
-    // doesn't condemn the SKU either.
+    // doesn't condemn the SKU either — and neither does a 429, which is why it
+    // has its own kind rather than sitting in the generic 4xx bucket.
     const outcome: ProbeOutcome = err.kind === "validation" ? "rejected" : "inconclusive";
-    return { outcome, message: providerReason(err) };
+    return {
+      outcome,
+      message: providerReason(err),
+      ...(err.kind === "rate_limit" ? { throttled: true } : {}),
+    };
   }
   return { outcome: "inconclusive", message: err instanceof Error ? err.message : "Probe failed." };
 }
@@ -169,6 +290,12 @@ function classify(err: unknown): SkuProbe {
  * "request failed with status 400".
  */
 function providerReason(err: FulfillmentError): string {
+  // The provider's body for a 429 is boilerplate, and its own message names the
+  // endpoint that happened to be throttled ("auth failed with status 429"),
+  // which reads as a credentials problem. Say what actually happened.
+  if (err.kind === "rate_limit") {
+    return "Rate-limited by the print provider — it asked us to slow down, so this says nothing about the SKU.";
+  }
   const details = err.details?.trim();
   if (!details) return err.message;
   try {

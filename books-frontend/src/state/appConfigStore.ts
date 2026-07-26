@@ -175,25 +175,53 @@ export interface CostSample {
   pages: number;
   copies: number;
   unitCost: number;
+  /** Which variant was priced (`print/paper`); absent ⇒ the base variant. */
+  variant?: string;
+}
+
+/** One variant's measured per-page rate. */
+export interface VariantCostSample {
+  key: string;
+  label: string;
+  perPage: number;
+  residual: number;
 }
 
 export interface CalibrationResult {
   ok: boolean;
   message?: string;
+  /**
+   * Set when the cost fit worked but shipping couldn't be measured. Reported
+   * separately because a passthrough product is still unsellable in that state,
+   * and folding it into `ok` is how it used to go unnoticed.
+   */
+  shippingMessage?: string;
+  /**
+   * The provider rate-limited part of this run. Distinct from failure: the
+   * numbers we did get are good, but the gaps are ours, not the catalog's.
+   */
+  throttled?: boolean;
+  /** How many variants went unmeasured because we were throttled. */
+  variantsThrottled?: number;
   env: ProviderEnv;
   currency?: string;
   table?: ProductDefinition["cost"]["table"];
+  variantPerPage?: Record<string, number>;
+  variants: VariantCostSample[];
+  shippingRows?: ProductDefinition["shipping"]["fallback"];
   shippingFallback?: number;
   /** Page bounds the provider itself reported. */
   discoveredPages?: { min: number; max: number };
   samples: CostSample[];
-  /** How far the midpoint sample missed the fitted line. */
+  /** How far the worst sample missed the fitted line. */
   fitResidual?: number;
 }
 
 export interface CalibrationOutcome {
   result: CalibrationResult;
   config: ProductsConfig;
+  /** This product's row for the catalog-wide report, when it ran as part of one. */
+  run?: CatalogCalibrationRun;
 }
 
 /** One product's outcome from a catalog-wide cost measurement. */
@@ -203,18 +231,14 @@ export interface CatalogCalibrationRun {
   sku: string;
   ok: boolean;
   message?: string;
+  shippingMessage?: string;
+  /** The provider rate-limited this product: re-run rather than reconfigure. */
+  throttled?: boolean;
   currency?: string;
   before: { basePerUnit: number; perPage: number };
   after?: { basePerUnit: number; perPage: number };
-}
-
-export interface CatalogCalibrationSummary {
-  env: ProviderEnv;
-  runs: CatalogCalibrationRun[];
-  ok: number;
-  failed: number;
-  /** The catalog after the successful measurements were persisted. */
-  config: ProductsConfig;
+  variants?: { measured: number; offered: number };
+  variantsThrottled?: number;
 }
 
 export interface SkuVerifySummary {
@@ -388,10 +412,15 @@ interface AppConfigState {
   ) => Promise<MarginPreview>;
   /** Probe SKUs against a provider environment and persist the verdicts. */
   verifyProducts: (opts?: { env?: ProviderEnv; id?: string }) => Promise<SkuVerifySummary>;
-  /** Derive a product's cost table from live provider quotes. */
+  /**
+   * Derive a product's cost table from live provider quotes.
+   *
+   * Also how the catalog is measured: the admin calls this in a loop rather
+   * than hitting the catalog-wide endpoint, because a full sweep is far too
+   * many provider round trips to finish inside one request, and per-product
+   * calls persist as they go.
+   */
   calibrateProductCost: (id: string, env?: ProviderEnv) => Promise<CalibrationOutcome>;
-  /** Re-measure every print product's cost against the provider in one pass. */
-  calibrateCatalogCosts: (env?: ProviderEnv) => Promise<CatalogCalibrationSummary>;
   /** Ask the provider whether an assembled SKU exists. */
   checkSku: (sku: string, opts?: { env?: ProviderEnv; pages?: number; refresh?: boolean }) => Promise<SkuCheck>;
 
@@ -1016,16 +1045,6 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     });
     if (!res.ok) throw new Error((await safeError(res)) ?? "Calibration failed.");
     return (await res.json()) as CalibrationOutcome;
-  },
-
-  async calibrateCatalogCosts(env) {
-    const res = await backendFetch("/admin/config/products/calibrate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(env ? { env } : {}),
-    });
-    if (!res.ok) throw new Error((await safeError(res)) ?? "Calibration failed.");
-    return (await res.json()) as CatalogCalibrationSummary;
   },
 
   async checkSku(sku, opts) {

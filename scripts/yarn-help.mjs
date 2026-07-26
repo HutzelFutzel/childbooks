@@ -22,6 +22,8 @@ const ROOT_DESCRIPTIONS = {
   emulators: "Firebase emulators with persistent ./.emulator-data",
   "emulators:clear": "Delete saved emulator data, then start fresh on next run",
   "check:env": "Validate apphosting.yaml + Secret Manager before deploy",
+  "check:print": "Quote every catalog SKU against the provider (needs credentials)",
+  "check:pricing": "Assert the pricing/margin/shipping invariants hold (offline)",
   deploy: "Build + deploy backend, rules, indexes, storage (+ optional --web)",
   "deploy:functions": "Build functions only, then firebase deploy --only functions",
   "deploy:rules": "Deploy Firestore rules/indexes and Storage rules only",

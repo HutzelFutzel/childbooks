@@ -26,6 +26,7 @@ import { getProductsConfig } from "./products";
 import { getPricingSettings } from "./appConfig";
 import {
   computeMargin,
+  defaultShippingMethod,
   hasUsableShippingCost,
   hasUsableUnitCost,
   isDestinationAllowed,
@@ -358,6 +359,10 @@ async function priceRetailOrder(args: RetailPriceArgs): Promise<RetailPriceResul
     variant,
     liveUnitCost: live.unitCost,
     liveShippingCost: live.shippingCost,
+    // Named so that, if the live quote failed, the fallback used is the one
+    // measured for THIS route and tier rather than the catch-all scalar.
+    destinationCountry: args.destinationCountry,
+    shippingMethod: args.shippingMethod,
   };
 
   // Refuse to price an order with no production-cost baseline. Without one,
@@ -372,11 +377,12 @@ async function priceRetailOrder(args: RetailPriceArgs): Promise<RetailPriceResul
   }
   // Same rule for shipping: passthrough with no quote and no configured fallback
   // would charge the customer nothing while we still pay the provider.
-  if (!hasUsableShippingCost(product.shipping, live.shippingCost)) {
+  if (!hasUsableShippingCost(product.shipping, live.shippingCost, scenario)) {
     throw new PricingUnavailableError(
       `No shipping cost for SKU ${printSku}: ` +
         `live quote ${live.error ?? "returned no shipping cost"} and shipping is passthrough ` +
-        `with no fallback cost configured.`,
+        `with no measured rate for ${args.shippingMethod} to ${args.destinationCountry} ` +
+        `and no fallback cost configured.`,
     );
   }
 
@@ -409,8 +415,40 @@ async function priceRetailOrder(args: RetailPriceArgs): Promise<RetailPriceResul
   return { unitPrice, listUnitPrice: margin.pricePerUnit, discountPct, shippingCharged, estimatedCost };
 }
 
+/**
+ * Why this order can't ship, or `null` if it can.
+ *
+ * One implementation, two call sites: {@link createPrintCheckout} enforces it so
+ * no path can skip it, and `/checkout` calls it before uploading print files so
+ * a doomed order doesn't cost a Storage round trip first. Sharing the function
+ * means the fast path can't drift from the binding one.
+ */
+function shippingRefusal(
+  product: ProductDefinition,
+  dest: { country?: string | null; region?: string; method: ShippingMethod },
+): string | null {
+  const country = (dest.country ?? "").trim();
+  if (!isDestinationAllowed(product.shipping.destinations, { country, region: dest.region })) {
+    return "We can't ship this product to that destination yet.";
+  }
+  if (!product.shipping.methods.some((m) => m.enabled && m.method === dest.method)) {
+    return "That shipping method isn't available for this product.";
+  }
+  return null;
+}
+
 async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintCheckoutResult> {
   const { uid, product, variant, printSku, settings, copies, pages, currency, recipient } = args;
+
+  // Checked HERE, at the chokepoint both physical-order paths funnel through.
+  // Only one of them used to validate: a reorder replayed a stored address, so
+  // an order placed before a market was withdrawn stayed repeatable forever.
+  const refusal = shippingRefusal(product, {
+    country: args.destinationCountry || recipient.address.countryCode,
+    region: recipient.address.stateOrCounty ?? undefined,
+    method: args.shippingMethod,
+  });
+  if (refusal) return { ok: false, error: refusal };
 
   const { unitPrice, shippingCharged, estimatedCost } = await priceRetailOrder({
     product,
@@ -597,21 +635,15 @@ export function registerStripeUserRoutes(app: Express): void {
         clientError(res, `You can order between ${cond.copies.min} and ${cond.copies.max} copies.`);
         return;
       }
-      const methodOk = product.shipping.methods.some(
-        (m) => m.enabled && m.method === body.shippingMethod,
-      );
-      if (!methodOk) {
-        clientError(res, "That shipping method isn't available for this product.");
-        return;
-      }
-      const destCountry = (body.destinationCountry || body.recipient.address.countryCode || "").trim();
-      if (
-        !isDestinationAllowed(product.shipping.destinations, {
-          country: destCountry,
-          region: body.recipient.address.stateOrCounty ?? undefined,
-        })
-      ) {
-        clientError(res, "We can't ship this product to that destination yet.");
+      // Checked before the uploads below purely to save the round trip;
+      // `createPrintCheckout` re-checks and is the binding one.
+      const refusal = shippingRefusal(product, {
+        country: body.destinationCountry || body.recipient.address.countryCode,
+        region: body.recipient.address.stateOrCounty ?? undefined,
+        method: body.shippingMethod,
+      });
+      if (refusal) {
+        clientError(res, refusal);
         return;
       }
 
@@ -718,10 +750,12 @@ export function registerStripeUserRoutes(app: Express): void {
         copies,
         pages,
         currency,
-        // Budget (provider MAIL) is the one tier quotable in every destination we
-        // sell to; Standard (GROUND) is unavailable to the US and UK, so it is a
-        // poor fallback for a price preview. The client always sends a method.
-        shippingMethod: body.shippingMethod ?? "Budget",
+        // The client always sends a method; when it doesn't, preview a tier this
+        // product actually offers. Defaulting to a fixed one previewed a price
+        // for a speed the customer would then be unable to select — and if that
+        // tier isn't sold to their country, the preview fails on a product that
+        // would have quoted perfectly well.
+        shippingMethod: body.shippingMethod ?? defaultShippingMethod(product),
         destinationCountry: body.destinationCountry,
         address: {
           line1: body.line1,

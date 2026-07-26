@@ -36,10 +36,22 @@ jobs:
       - name: Typecheck frontend
         run: yarn workspace books-frontend typecheck
 
-      # Backend bundle (esbuild via the functions workspace build script). Also
-      # surfaces type/import errors in the shared core modules it pulls in.
+      # esbuild (below) strips types without checking them, so the backend needs
+      # its own tsc pass — otherwise a type error in a function, or in the shared
+      # core modules it imports, bundles cleanly and fails in production.
+      - name: Typecheck functions
+        run: yarn workspace functions typecheck
+
+      # Backend bundle (esbuild via the functions workspace build script).
       - name: Build functions
         run: yarn build:functions
+
+      # Pricing properties that typechecking can't see: margins that hold at one
+      # page count and collapse at another, shipping fallbacks that don't scale
+      # with copies, a seeded product whose only shipping tier isn't sold to our
+      # biggest markets. Offline — no provider credentials, no network.
+      - name: Check pricing invariants
+        run: yarn check:pricing
 
       # App Hosting applies apphosting.yaml's env when it builds; a bare
       # `yarn build:web` here would not, and NEXT_PUBLIC_* are inlined at build

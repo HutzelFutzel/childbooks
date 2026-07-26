@@ -131,6 +131,37 @@ export interface Quote {
   shipments: QuoteShipment[];
 }
 
+/**
+ * What happened when one shipping tier was priced.
+ *
+ * A plain `Quote[]` can only say which tiers came back, and the tiers that
+ * DIDN'T are the interesting ones — they're what a customer would be refused at
+ * checkout. But "the provider doesn't run this speed here" and "we never got an
+ * answer" both look like absence, and recording the second as the first writes
+ * a permanent claim about a country's coverage from a momentary network blip.
+ * So each tier reports its own outcome.
+ */
+export interface TierOutcome {
+  method: ShippingMethod;
+  /** Present when the provider priced this tier. */
+  quote?: Quote;
+  /**
+   * The provider looked at this tier for this destination and said no. Real
+   * evidence about coverage, safe to record.
+   */
+  refused?: boolean;
+  /**
+   * We failed to ask — throttled, network, provider outage. Says NOTHING about
+   * coverage; callers must leave any prior verdict alone rather than writing
+   * this down as unavailable.
+   */
+  failed?: boolean;
+  /** The failure was a rate limit — worth distinguishing, since re-running fixes it. */
+  throttled?: boolean;
+  /** The provider's explanation, when it gave one. */
+  message?: string;
+}
+
 /** Normalized lifecycle stage of an order across providers. */
 export type OrderStage =
   | "draft"
@@ -310,6 +341,17 @@ export interface FulfillmentProvider {
   getCoverDimensionsMm(sku: string, pages: number): Promise<{ widthMm: number; heightMm: number }>;
   /** Price + shipping options for a set of items, without creating an order. */
   quote(req: QuoteRequest): Promise<Quote[]>;
+  /**
+   * Like {@link quote}, but reporting every tier's outcome rather than only the
+   * ones that priced. Used where the ABSENCE of a tier is the finding — the
+   * shipping sweep records which speeds reach which countries — and where
+   * mistaking a failed request for an unavailable speed would be persisted.
+   *
+   * Optional because it's a direct-to-provider capability: the browser-side
+   * adapter speaks to our own `/print/*` API, which returns priced quotes and
+   * has no way to report why a tier is missing. Only backend callers need it.
+   */
+  quoteTiers?(req: QuoteRequest): Promise<TierOutcome[]>;
   /** Upload assets and submit an order for fulfillment. */
   createOrder(draft: OrderDraft): Promise<FulfillmentOrder>;
   /** Fetch current order status. */

@@ -3,7 +3,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { FileDown, Loader2, Package, ShieldCheck, TriangleAlert, Truck } from "lucide-react";
 import { bookProductForConfig } from "../../core/book";
 import { findPublicPlanByPriceId } from "../../core/config/plans";
-import { findPublicProductForSku, planMeetsAccess, productAccessOf } from "../../core/config/products";
+import {
+  SUPPORTED_MARKETS,
+  findPublicProductForSku,
+  planMeetsAccess,
+  productAccessOf,
+} from "../../core/config/products";
+import { allowedMarketsFor } from "../../core/config/productMath";
+import { countryLabel } from "../../core/analytics/markets";
 import {
   createDefaultVariantPolicy,
   firstAllowedVariant,
@@ -47,17 +54,18 @@ type Phase = "form" | "rendering" | "submitting";
 /** Whether the current render is for placing an order or downloading a proof. */
 type RenderIntent = "order" | "proof";
 
-const COUNTRIES: { value: string; label: string }[] = [
-  { value: "US", label: "United States" },
-  { value: "CA", label: "Canada" },
-  { value: "GB", label: "United Kingdom" },
-  { value: "AU", label: "Australia" },
-  { value: "DE", label: "Germany" },
-  { value: "FR", label: "France" },
-  { value: "ES", label: "Spain" },
-  { value: "IT", label: "Italy" },
-  { value: "NL", label: "Netherlands" },
-];
+/**
+ * Fallback country list, used only before the catalog has loaded.
+ *
+ * There is deliberately no hand-maintained list here any more. This one offered
+ * France, Spain, Italy and the Netherlands — markets nobody had measured or
+ * priced — so a customer could pick a destination the server would then refuse.
+ * The real options come from the product's own geo policy.
+ */
+const FALLBACK_COUNTRIES: { value: string; label: string }[] = SUPPORTED_MARKETS.map((value) => ({
+  value,
+  label: countryLabel(value),
+}));
 
 const SHIPPING: { value: ShippingMethod; label: string }[] = [
   { value: "Budget", label: "Budget (slowest, cheapest)" },
@@ -170,6 +178,15 @@ export function OrderDialog({
   const maxPages = catalogProduct?.conditions.pages.max ?? product.maxPages;
   const maxCopies = catalogProduct?.conditions.copies.max ?? Number.POSITIVE_INFINITY;
 
+  // Countries this product can actually be shipped to, from the same function
+  // the server enforces with — so the picker can't offer a destination checkout
+  // will refuse.
+  const countryOptions = useMemo(() => {
+    if (!catalogProduct) return FALLBACK_COUNTRIES;
+    const allowed = allowedMarketsFor(catalogProduct.shipping.destinations);
+    return allowed.map((value) => ({ value, label: countryLabel(value) }));
+  }, [catalogProduct]);
+
   // Shipping methods the product actually supports (backend rejects the rest).
   const shippingOptions = useMemo(() => {
     const enabled = catalogProduct?.shipping.methods.filter((m) => m.enabled) ?? [];
@@ -228,6 +245,17 @@ export function OrderDialog({
       setShipping(shippingOptions[0]?.value ?? "Standard");
     }
   }, [shippingOptions, shipping]);
+
+  // Same for the country. A saved address from before a market was withdrawn
+  // can hold a country no longer offered, and a `<select>` whose value isn't
+  // among its options SHOWS the first one while holding the old value — so the
+  // customer would read "United States" and have the order refused for France.
+  useEffect(() => {
+    if (countryOptions.length === 0) return;
+    if (!countryOptions.some((o) => o.value === country)) {
+      setCountry(countryOptions[0].value);
+    }
+  }, [countryOptions, country]);
 
   // Editing any address field detaches from the picked saved address, so saving
   // creates a new entry instead of silently overwriting the selected one.
@@ -634,7 +662,7 @@ export function OrderDialog({
             </Field>
             <Field label="Country" required>
               <Select
-                options={COUNTRIES}
+                options={countryOptions}
                 value={country}
                 onChange={(e) => editAddr(setCountry, e.target.value)}
                 autoComplete="shipping country"
@@ -658,6 +686,7 @@ export function OrderDialog({
             value={variant}
             onChange={setVariant}
             currency={CURRENCY}
+            pages={pageCount}
           />
 
           {/* Copies + shipping */}

@@ -6,6 +6,7 @@
  * (currencies, FX, payment fees, rounding, tax) come from {@link PricingSettings},
  * so these functions take both the product and the global settings.
  */
+import type { ShippingMethod } from "../fulfillment/types";
 import { variantFromSku } from "../fulfillment/lulu/skuAxes";
 import type {
   CurrencyCode,
@@ -18,9 +19,19 @@ import type {
   ProductDefinition,
   ProductShippingPolicy,
   PublicProduct,
+  ShippingFallbackRow,
   TaxBehavior,
 } from "./products";
-import { cheapestVariant, variantPriceDelta, type VariantSelection } from "./variants";
+import { SUPPORTED_MARKETS, isSupportedMarket } from "./products";
+import {
+  VARIANT_COST_AXES,
+  costVariantKey,
+  cheapestVariant,
+  variantPriceDelta,
+  type ProductVariantPolicy,
+  type VariantDelta,
+  type VariantSelection,
+} from "./variants";
 
 // ---- Currency helpers ------------------------------------------------------
 
@@ -97,10 +108,30 @@ export function applyRounding(value: number, rule: { mode: "charm" | "none"; to?
 export interface CostScenario {
   pages: number;
   copies: number;
+  /**
+   * The variant being made. Print tier and paper set the per-page rate, so
+   * without this the base variant's rate is used — which is the costliest one
+   * we sell, and so overstates rather than understates.
+   */
+  variant?: VariantSelection;
   /** Per-unit production cost from a live provider quote (cost currency). */
   liveUnitCost?: number;
   /** Total shipping cost from a live provider quote (cost currency). */
   liveShippingCost?: number;
+  /** Where the order ships, for picking a measured shipping row. */
+  destinationCountry?: string;
+  /** Shipping tier the order uses, for picking a measured shipping row. */
+  shippingMethod?: ShippingMethod;
+}
+
+/**
+ * The per-page rate for a variant: its own measured rate when we have one, the
+ * base variant's otherwise.
+ */
+export function perPageCostFor(cost: ProductCostModel, variant: VariantSelection | undefined): number {
+  if (!variant) return cost.table.perPage;
+  const measured = cost.variantPerPage?.[costVariantKey(variant)];
+  return typeof measured === "number" && Number.isFinite(measured) ? measured : cost.table.perPage;
 }
 
 /**
@@ -112,7 +143,7 @@ export function resolveUnitCost(cost: ProductCostModel, scenario: CostScenario):
   if (cost.source === "providerLive" && typeof scenario.liveUnitCost === "number") {
     return scenario.liveUnitCost;
   }
-  const base = cost.table.basePerUnit + cost.table.perPage * scenario.pages;
+  const base = cost.table.basePerUnit + perPageCostFor(cost, scenario.variant) * scenario.pages;
   const breaks = [...cost.table.quantityBreaks].sort((a, b) => b.minQty - a.minQty);
   const applicable = breaks.find((b) => scenario.copies >= b.minQty);
   const discount = applicable ? applicable.unitDiscountPct / 100 : 0;
@@ -158,13 +189,14 @@ export function totalUnitCost(cost: ProductCostModel, scenario: CostScenario): n
 
 // ---- Retail price ----------------------------------------------------------
 
+/**
+ * A scenario to price. `variant` (inherited from {@link CostScenario}) is both
+ * what gets made and what gets charged: it selects the measured per-page cost
+ * AND the price delta over the page tier. Omitted ⇒ the base variant, which is
+ * the one the product's own SKU encodes and the tier price is quoted for.
+ */
 export interface PriceScenario extends CostScenario {
   currency: CurrencyCode;
-  /**
-   * Variant being priced. The page-tier price is the BASE variant; other
-   * options add {@link variantPriceDelta}. Omitted ⇒ base (the product's own SKU).
-   */
-  variant?: VariantSelection;
 }
 
 /** The tier whose page range contains `pages` (first match; falls back to the last tier). */
@@ -187,7 +219,7 @@ export function computeRetailPrice(
   const floor = settings.floorPrice[currency] ?? 0;
   const tier = pickTier(product.pricing.tiers, scenario.pages);
   const base = tier?.prices[currency] ?? 0;
-  const delta = variantPriceDelta(product.variants, scenario.variant, currency);
+  const delta = variantPriceDelta(product.variants, scenario.variant, currency, scenario.pages);
   return Math.max(applyRounding(base + delta, rounding), floor);
 }
 
@@ -249,7 +281,9 @@ export function computeMargin(
   const productionCost = round2(totalUnitCost(cost, scenario) * copies * costToCurrency);
 
   const shippingCostCostCcy =
-    typeof scenario.liveShippingCost === "number" ? scenario.liveShippingCost : estimateShippingCost(shipping);
+    typeof scenario.liveShippingCost === "number"
+      ? scenario.liveShippingCost
+      : estimateShippingCost(shipping, scenario);
   const shippingCost = round2(shippingCostCostCcy * costToCurrency);
   const shippingCharged = round2(resolveShippingCharged(shipping, shippingCost));
 
@@ -353,7 +387,7 @@ export function suggestPrice(
   const shippingCostCcy =
     typeof scenario.liveShippingCost === "number"
       ? scenario.liveShippingCost
-      : estimateShippingCost(product.shipping);
+      : estimateShippingCost(product.shipping, scenario);
   const shippingCost = shippingCostCcy * costToCurrency;
   const shippingCharged = resolveShippingCharged(product.shipping, shippingCost);
 
@@ -388,37 +422,165 @@ export function suggestTierPrice(
   settings: PricingSettings,
   targetMarginPct: number,
 ): number | null {
-  const variant = scenario.variant ?? cheapestVariant(product.variants, scenario.currency);
+  const variant =
+    scenario.variant ?? cheapestVariant(product.variants, scenario.currency, scenario.pages);
   const sticker = suggestPrice(product, { ...scenario, variant }, settings, targetMarginPct);
   if (sticker == null) return null;
-  const delta = variantPriceDelta(product.variants, variant, scenario.currency);
+  const delta = variantPriceDelta(product.variants, variant, scenario.currency, scenario.pages);
   return round2(Math.max(0, sticker - delta));
+}
+
+/**
+ * Price deltas for every offered option, derived from what the options
+ * actually cost rather than typed in by hand.
+ *
+ * Print tier and paper change only the PER-PAGE cost, so their price delta is
+ * purely per-page too — which is the whole point: one number then prices the
+ * upgrade correctly on a 24-page board book and a 400-page chapter book alike.
+ * Cover finish costs the same either way and is left alone, since any charge
+ * there is a positioning decision rather than a cost to recover.
+ *
+ * The gross-up matches {@link suggestPrice} exactly, so an option priced from
+ * here lands on the same target margin as the tier price it sits on top of.
+ * Returns null when the product has no per-variant measurement to derive from —
+ * guessing here would quietly overwrite deltas someone reasoned about.
+ */
+export function suggestVariantDeltas(
+  product: ProductDefinition,
+  settings: PricingSettings,
+  targetMarginPct: number,
+): ProductVariantPolicy | null {
+  const measured = product.cost.variantPerPage;
+  if (!measured || Object.keys(measured).length === 0) return null;
+  const base = variantFromSku(product.provider.sku);
+  if (!base) return null;
+
+  const m = targetMarginPct / 100;
+  const basePerPage = perPageCostFor(product.cost, base);
+  const options = { ...product.variants.options };
+
+  for (const axis of VARIANT_COST_AXES) {
+    options[axis] = product.variants.options[axis].map((choice) => {
+      if (choice.value === base[axis]) return { value: choice.value };
+      const costPerPage = perPageCostFor(product.cost, { ...base, [axis]: choice.value });
+      const deltaCostPerPage = costPerPage - basePerPage;
+
+      const priceDelta: Record<CurrencyCode, VariantDelta> = {};
+      for (const currency of settings.currencies) {
+        const taxPol = settings.tax.perCurrency[currency] ?? { behavior: "exclusive" as const, assumedRatePct: 0 };
+        const rate = Math.max(0, taxPol.assumedRatePct) / 100;
+        const fp = feePercent(feeFor(settings, currency));
+        const denominator = 1 - m - (1 + rate) * fp;
+        if (denominator <= 0) continue;
+
+        const costCcy = deltaCostPerPage * convertCostAmount(settings, 1, product.cost.currency, currency);
+        const net = costCcy / denominator;
+        // Inclusive markets quote tax-in, so gross the ex-tax figure back up.
+        const perPage = taxPol.behavior === "inclusive" ? net * (1 + rate) : net;
+        if (Math.abs(perPage) >= 1e-4) priceDelta[currency] = { perCopy: 0, perPage: round(perPage, 4) };
+      }
+      return Object.keys(priceDelta).length > 0 ? { value: choice.value, priceDelta } : { value: choice.value };
+    });
+  }
+
+  return { ...product.variants, options };
+}
+
+function round(value: number, dp: number): number {
+  const f = 10 ** dp;
+  return Math.round(value * f) / f;
 }
 
 // ---- Shipping ---------------------------------------------------------------
 
-/** Shipping cost estimate used when no live quote is available. */
-function estimateShippingCost(shipping: ProductShippingPolicy): number {
+/** Shipping tiers cheapest → fastest, the order a customer is offered them in. */
+const METHODS_BY_SPEED: ShippingMethod[] = ["Budget", "StandardPlus", "Standard", "Express", "Overnight"];
+
+/**
+ * A tier this product actually offers, for callers that must pick one on the
+ * customer's behalf (a price preview, say). The cheapest enabled tier, since
+ * that's the one a "from" price should quote.
+ */
+export function defaultShippingMethod(product: ProductDefinition): ShippingMethod {
+  const enabled = new Set(product.shipping.methods.filter((m) => m.enabled).map((m) => m.method));
+  return METHODS_BY_SPEED.find((m) => enabled.has(m)) ?? "StandardPlus";
+}
+
+/**
+ * The measured row for a destination + tier.
+ *
+ * An exact country match or nothing. There is deliberately no "nearest
+ * measured country" fallback: shipping to Australia costs nothing like shipping
+ * to Canada, and a passthrough product BILLS this number, so substituting one
+ * for the other would overcharge or undercharge a real customer. A destination
+ * we never measured falls through to the scalar `pricing.fallbackCost`, which
+ * is only ever set from a sweep that reached every zone.
+ */
+export function shippingRowFor(
+  shipping: ProductShippingPolicy,
+  country: string | undefined,
+  method: ShippingMethod | undefined,
+): ShippingFallbackRow | undefined {
+  const rows = shipping.fallback;
+  if (!rows || rows.length === 0 || !country || !method) return undefined;
+  const c = country.trim().toUpperCase();
+  return rows.find((r) => r.method === method && r.country.toUpperCase() === c);
+}
+
+/**
+ * Whether the provider was measured to refuse this tier to this destination.
+ *
+ * Deliberately false for anything unmeasured: "never probed" is not evidence of
+ * unavailability, and treating it as such would disable working tiers the
+ * moment a new country was allowed.
+ */
+export function shippingTierRefused(
+  shipping: ProductShippingPolicy,
+  country: string | undefined,
+  method: ShippingMethod,
+): boolean {
+  const row = shippingRowFor(shipping, country, method);
+  return row != null && !row.available;
+}
+
+/**
+ * Shipping cost estimate used when no live quote is available.
+ *
+ * Prefers the measured row for the actual destination and tier — it scales with
+ * copies, which the flat `fallbackCost` cannot — and falls back to the scalar
+ * when nothing has been measured for this scenario.
+ */
+export function estimateShippingCost(
+  shipping: ProductShippingPolicy,
+  scenario?: { destinationCountry?: string; shippingMethod?: ShippingMethod; copies?: number },
+): number {
   if (shipping.pricing.mode === "flat") return shipping.pricing.default;
   // Passthrough charges what shipping costs us, so with no quote it needs a
-  // configured stand-in; free shipping has nothing to estimate.
-  if (shipping.pricing.mode === "passthrough") return shipping.pricing.fallbackCost ?? 0;
-  return 0;
+  // measured stand-in; free shipping has nothing to estimate.
+  if (shipping.pricing.mode !== "passthrough") return 0;
+
+  const row = shippingRowFor(shipping, scenario?.destinationCountry, scenario?.shippingMethod);
+  if (row?.available) {
+    return row.base + row.perCopy * Math.max(1, scenario?.copies ?? 1);
+  }
+  return shipping.pricing.fallbackCost ?? 0;
 }
 
 /**
  * Whether shipping can be priced without a live quote. `free` and `flat` are
  * self-sufficient (both charge a configured amount), but `passthrough` charges
- * the provider's cost — with no quote and no `fallbackCost` it would charge zero
- * while we still pay to ship, so an order in that state must not be priced.
+ * the provider's cost — with no quote, no measured row and no `fallbackCost` it
+ * would charge zero while we still pay to ship, so an order in that state must
+ * not be priced.
  */
 export function hasUsableShippingCost(
   shipping: ProductShippingPolicy,
   liveShippingCost: number | undefined,
+  scenario?: { destinationCountry?: string; shippingMethod?: ShippingMethod; copies?: number },
 ): boolean {
   if (typeof liveShippingCost === "number") return true;
   if (shipping.pricing.mode !== "passthrough") return true;
-  return (shipping.pricing.fallbackCost ?? 0) > 0;
+  return estimateShippingCost(shipping, scenario) > 0;
 }
 
 /** What the customer is charged for shipping, given the cost we pay. */
@@ -441,13 +603,26 @@ function regionListed(codes: string[], region?: string): boolean {
   return codes.some((c) => c.trim().toUpperCase() === r);
 }
 
-/** Whether a destination is allowed by the product's geo policy. */
+/**
+ * Whether a destination is allowed — by {@link SUPPORTED_MARKETS} first, and by
+ * the product's own geo policy second.
+ *
+ * The ceiling lives HERE, in the one function every caller already goes through,
+ * rather than as a second check alongside it. A separate rule is a rule someone
+ * adding a checkout path can forget; this one they'd have to actively remove.
+ * The product policy can only narrow the set, never widen it, so a product
+ * misconfigured to ship worldwide still ships to five countries.
+ */
 export function isDestinationAllowed(policy: GeoPolicy, dest: GeoMatch): boolean {
   const country = dest.country?.trim().toUpperCase();
   if (!country) return false;
+  if (!isSupportedMarket(country)) return false;
   const inCountries = policy.countries.some((c) => c.trim().toUpperCase() === country);
 
   let countryOk: boolean;
+  // `all` now means "everywhere we sell", which the ceiling above has already
+  // decided. A stored blocklist still subtracts from that set — it can carve
+  // markets out, which is a narrowing, and never adds one back.
   if (policy.mode === "all") countryOk = true;
   else if (policy.mode === "allowlist") countryOk = inCountries;
   else countryOk = !inCountries; // blocklist
@@ -460,12 +635,18 @@ export function isDestinationAllowed(policy: GeoPolicy, dest: GeoMatch): boolean
   return regionRule.mode === "allowlist" ? listed : !listed;
 }
 
-/** Reachable iff at least one country is allowed (sanity for validation). */
+/**
+ * The countries this product can actually be ordered to: the supported markets
+ * the policy doesn't exclude. Drives the checkout country picker, so what a
+ * customer can choose and what the server will accept come from one place.
+ */
+export function allowedMarketsFor(policy: GeoPolicy): string[] {
+  return SUPPORTED_MARKETS.filter((c) => isDestinationAllowed(policy, { country: c }));
+}
+
+/** Reachable iff at least one supported market is allowed (sanity for validation). */
 export function hasReachableDestination(policy: GeoPolicy): boolean {
-  if (policy.mode === "all") return true;
-  if (policy.mode === "allowlist") return policy.countries.length > 0;
-  // blocklist: reachable unless it somehow blocks the entire world (can't enumerate) → assume yes
-  return true;
+  return allowedMarketsFor(policy).length > 0;
 }
 
 // ---- Public projection -----------------------------------------------------

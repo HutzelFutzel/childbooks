@@ -27,15 +27,39 @@ import { createAdminAssetHost } from "./assets";
 import type { AuthedRequest } from "./auth";
 import { applyOrderStatusUpdate } from "./orders";
 
-function provider(): FulfillmentProvider {
-  const cfg = serverConfig();
+/**
+ * One provider per environment, for the lifetime of the instance.
+ *
+ * The OAuth token is cached INSIDE the provider closure, so a provider built
+ * per call is a token exchange per call. That was invisible while the only
+ * callers were single quotes; a cost calibration is dozens of probes per
+ * product, which meant hundreds of sessions opened in a couple of minutes and
+ * the provider rate-limiting our auth endpoint — reported, confusingly, as the
+ * SKU being rejected.
+ *
+ * Keyed by environment because sandbox and live are separate catalogs behind
+ * separate credentials and must never share a token.
+ */
+const providers = new Map<FulfillmentEnv, FulfillmentProvider>();
+
+function buildProvider(env: FulfillmentEnv): FulfillmentProvider {
+  const cfg = loadServerConfig(process.env as Record<string, string | undefined>, { envOverride: env });
   return createLuluProvider({
     httpFetch: (url, init) => fetch(url, init as RequestInit),
-    assetHost: createAdminAssetHost(),
+    // Resolved on first upload rather than up front: quoting and probing never
+    // touch Storage, and they shouldn't fail when it's unavailable.
+    assetHost: {
+      id: "firebase-admin",
+      upload: (blob, name) => createAdminAssetHost().upload(blob, name),
+    },
     clientKey: () => cfg.fulfillment.lulu.clientKey,
     clientSecret: () => cfg.fulfillment.lulu.clientSecret,
     env: cfg.fulfillment.lulu.env,
   });
+}
+
+function provider(): FulfillmentProvider {
+  return fulfillmentProviderFor(serverConfig().fulfillment.lulu.env);
 }
 
 /** The configured fulfillment provider, for trusted server-side callers (admin). */
@@ -52,19 +76,11 @@ export function fulfillmentProvider(): FulfillmentProvider {
  * live is ready while the backend is still serving sandbox.
  */
 export function fulfillmentProviderFor(env: FulfillmentEnv): FulfillmentProvider {
-  const cfg = loadServerConfig(process.env as Record<string, string | undefined>, { envOverride: env });
-  return createLuluProvider({
-    httpFetch: (url, init) => fetch(url, init as RequestInit),
-    // Resolved on first upload rather than up front: quoting and probing never
-    // touch Storage, and they shouldn't fail when it's unavailable.
-    assetHost: {
-      id: "firebase-admin",
-      upload: (blob, name) => createAdminAssetHost().upload(blob, name),
-    },
-    clientKey: () => cfg.fulfillment.lulu.clientKey,
-    clientSecret: () => cfg.fulfillment.lulu.clientSecret,
-    env: cfg.fulfillment.lulu.env,
-  });
+  const existing = providers.get(env);
+  if (existing) return existing;
+  const built = buildProvider(env);
+  providers.set(env, built);
+  return built;
 }
 
 /** Whether credentials for an environment are present at all (cheap pre-check). */
