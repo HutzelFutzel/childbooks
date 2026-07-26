@@ -63,7 +63,7 @@ export function Nav({ siteName, logoUrl }: { siteName: string; logoUrl?: string 
               <Link
                 key={l.href}
                 href={l.href}
-                className="rounded-lg px-3 py-2 text-sm font-medium text-ink-600 transition-colors hover:text-ink-900"
+                className="rounded-lg px-3 py-2 text-sm font-medium text-ink-600 transition-colors hover:bg-ink-100/70 hover:text-ink-900"
               >
                 {l.label}
               </Link>

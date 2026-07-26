@@ -1,10 +1,10 @@
 "use client";
 
-import { ChevronDown, BookOpen, LogOut, Shield } from "lucide-react";
-import { useAuthStore, userLabel } from "../../state/authStore";
+import { BookOpen, LogOut, Shield } from "lucide-react";
+import { useAuthStore } from "../../state/authStore";
+import { Button } from "../components/Button";
 import { Popover } from "../components/Popover";
-import { MenuDivider, MenuHeader, MenuItem, UserAvatar } from "../components/UserMenu";
-import { cn } from "../lib/cn";
+import { MenuDivider, MenuHeader, MenuItem, UserMenuTrigger } from "../components/UserMenu";
 
 /**
  * Compact account control for the marketing chrome (landing, blog, contact) —
@@ -37,13 +37,9 @@ export function AccountMenu() {
 
   if (!signedIn) {
     return (
-      <button
-        type="button"
-        onClick={() => openAuthDialog()}
-        className="hidden rounded-xl px-4 py-2 text-sm font-semibold text-ink-700 transition-colors hover:text-ink-900 sm:inline-flex"
-      >
+      <Button variant="secondary" size="sm" className="hidden sm:inline-flex" onClick={() => openAuthDialog()}>
         Sign in
-      </button>
+      </Button>
     );
   }
 
@@ -52,18 +48,7 @@ export function AccountMenu() {
       <Popover
         align="end"
         panelClassName="w-64 overflow-hidden p-0"
-        trigger={(open) => (
-          <span
-            className={cn(
-              "flex items-center gap-1.5 rounded-xl py-1.5 pl-1.5 pr-3 transition-colors",
-              open ? "bg-ink-100" : "hover:bg-ink-100",
-            )}
-          >
-            <UserAvatar user={user} size="sm" />
-            <span className="max-w-32 truncate text-sm font-medium text-ink-700">{userLabel(user)}</span>
-            <ChevronDown className={cn("size-3.5 text-ink-400 transition-transform", open && "rotate-180")} />
-          </span>
-        )}
+        trigger={(open) => <UserMenuTrigger user={user} open={open} />}
       >
         {(close) => (
           <>

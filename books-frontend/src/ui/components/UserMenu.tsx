@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { ChevronDown } from "lucide-react";
 import type { User } from "firebase/auth";
 import { cn } from "../lib/cn";
 import { userLabel, userSecondaryLine } from "../../state/authStore";
@@ -64,6 +65,48 @@ export function UserAvatar({
     >
       {initials(user)}
     </span>
+  );
+}
+
+/**
+ * The account-menu trigger — shared by `AuthMenu` (Studio/Admin) and
+ * `AccountMenu` (marketing nav) so the control looks and behaves identically
+ * everywhere it appears, right down to the pixel. Meant to be passed as
+ * `Popover`'s `trigger` render-prop so the chevron can flip on open.
+ */
+export function UserMenuTrigger({
+  user,
+  open,
+  badge,
+}: {
+  user: User | null;
+  open: boolean;
+  /** Small attention dot (e.g. an order needs a look, a download is unseen). */
+  badge?: boolean;
+}) {
+  return (
+    <span
+      className={cn(
+        "flex items-center gap-1.5 rounded-full py-1 pl-1 pr-2.5 transition-colors",
+        open ? "bg-ink-100" : "hover:bg-ink-100",
+      )}
+    >
+      <span className="relative flex">
+        <UserAvatar user={user} size="sm" />
+        {badge && <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-amber-500 ring-2 ring-white" />}
+      </span>
+      <span className="hidden max-w-32 truncate text-xs font-medium text-ink-700 sm:inline">{userLabel(user)}</span>
+      <ChevronDown className={cn("size-3.5 text-ink-400 transition-transform", open && "rotate-180")} />
+    </span>
+  );
+}
+
+/** Small uppercase caption above a group of related items (e.g. "Account",
+ * "Resources") — improves scannability once a menu has more than a
+ * couple of groups, without repeating a group's own item labels. */
+export function MenuSectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <p className="px-3 pb-1 pt-2.5 text-[10px] font-semibold uppercase tracking-wider text-ink-300">{children}</p>
   );
 }
 

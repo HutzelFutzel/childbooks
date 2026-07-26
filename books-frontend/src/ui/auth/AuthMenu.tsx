@@ -2,7 +2,6 @@
 
 import {
   BookOpen,
-  ChevronDown,
   Cookie,
   CreditCard,
   Download,
@@ -12,7 +11,7 @@ import {
   Settings,
   Shield,
 } from "lucide-react";
-import { useAuthStore, userLabel } from "../../state/authStore";
+import { useAuthStore } from "../../state/authStore";
 import { useAccountUiStore } from "../../state/accountUiStore";
 import { useBillingUiStore } from "../../state/billingUiStore";
 import { useOrdersStore } from "../../state/ordersStore";
@@ -22,8 +21,7 @@ import { useAppConfigStore } from "../../state/appConfigStore";
 import { visibleLegalLinks } from "../../core/config/legal";
 import { Button } from "../components/Button";
 import { Popover } from "../components/Popover";
-import { MenuDivider, MenuHeader, MenuItem, UserAvatar } from "../components/UserMenu";
-import { cn } from "../lib/cn";
+import { MenuDivider, MenuHeader, MenuItem, MenuSectionLabel, UserMenuTrigger } from "../components/UserMenu";
 
 /**
  * The account dropdown — the single home for user actions that used to clutter
@@ -76,31 +74,14 @@ export function AuthMenu() {
     <Popover
       align="end"
       panelClassName="w-64 overflow-hidden p-0"
-      trigger={(open) => (
-        <span
-          className={cn(
-            "flex items-center gap-1.5 rounded-full py-1 pl-1 pr-2 transition",
-            open ? "bg-ink-100" : "hover:bg-ink-100",
-          )}
-        >
-          <span className="relative flex">
-            <UserAvatar user={user} size="sm" />
-            {buttonBadge && (
-              <span className="absolute -right-0.5 -top-0.5 size-2 rounded-full bg-amber-500 ring-2 ring-white" />
-            )}
-          </span>
-          <span className="hidden max-w-32 truncate text-xs font-medium text-ink-700 sm:inline">
-            {userLabel(user)}
-          </span>
-          <ChevronDown className={cn("size-3.5 text-ink-400 transition-transform", open && "rotate-180")} />
-        </span>
-      )}
+      trigger={(open) => <UserMenuTrigger user={user} open={open} badge={buttonBadge} />}
     >
       {(close) => (
         <>
           <MenuHeader user={user} />
 
           <div className="py-1">
+            <MenuSectionLabel>Account</MenuSectionLabel>
             <MenuItem icon={<Settings className="size-4" />} label="Settings" onClick={() => { close(); openSettings(); }} />
             <MenuItem icon={<CreditCard className="size-4" />} label="Plans" onClick={() => { close(); openPlans(); }} />
             <MenuItem
@@ -120,6 +101,7 @@ export function AuthMenu() {
 
           <MenuDivider />
           <div className="py-1">
+            <MenuSectionLabel>Resources</MenuSectionLabel>
             <MenuItem
               icon={<BookOpen className="size-4" />}
               label="Blog"
