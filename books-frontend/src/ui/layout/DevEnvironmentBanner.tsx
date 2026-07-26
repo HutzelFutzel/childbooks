@@ -22,12 +22,22 @@ export const DEV_BANNER_HEIGHT_REM = 1.5;
  *     dev-brain, prod-data — that's easy to fall into (e.g. `next start`
  *     locally with `.env.production`) and easy to miss without this.
  *
- * `sticky` (not `fixed`) so it occupies real layout space at the top of the
- * document — everything else naturally renders below it — while still
- * staying pinned in view if the page scrolls. Renders nothing at all in
- * production builds. No hooks/browser APIs are needed (`isDev`/`useEmulators`
- * just read inlined `NEXT_PUBLIC_*`/`NODE_ENV` values), so this can render as
- * a plain server component.
+ * A plain in-flow block (NOT `sticky`) — `html, body { height: 100% }`
+ * (globals.css) pins `<body>`'s own box to exactly one viewport tall, which
+ * makes `position: sticky` on a direct body child stop tracking scroll the
+ * moment the page has scrolled past that first viewport (its "containing
+ * block" has already scrolled out of view). On any page taller than one
+ * screen — most marketing pages — that made the banner vanish mid-scroll
+ * while `Nav` stayed parked in the `top-6` slot it left behind, opening a
+ * visible gap at the top of the screen.
+ *
+ * So instead this scrolls away naturally with the page (same as everything
+ * else here), and `Nav` tracks that: it starts at `top-6`, under the banner,
+ * then slides up to `top-0` once scrolled past `DEV_BANNER_HEIGHT_REM` of
+ * scroll — see `ui/marketing/Nav`. Renders nothing at all in production
+ * builds. No hooks/browser APIs are needed (`isDev`/`useEmulators` just read
+ * inlined `NEXT_PUBLIC_*`/`NODE_ENV` values), so this can render as a plain
+ * server component.
  */
 export function DevEnvironmentBanner() {
   if (!isDev()) return null;
@@ -38,7 +48,7 @@ export function DevEnvironmentBanner() {
     <div
       role="status"
       className={cn(
-        "sticky inset-x-0 top-0 z-9999 flex h-6 shrink-0 items-center justify-center gap-1.5",
+        "flex h-6 shrink-0 items-center justify-center gap-1.5",
         "text-[11px] font-semibold uppercase tracking-wide text-white shadow-sm",
         emulated ? "bg-amber-600" : "bg-red-600",
       )}
