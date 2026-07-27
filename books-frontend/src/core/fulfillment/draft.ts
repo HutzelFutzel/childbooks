@@ -1,9 +1,11 @@
 /**
- * Pure assembly of an {@link OrderDraft} from already-rendered print assets.
+ * Pure assembly of an {@link OrderDraft}.
  *
- * This is deliberately I/O-free: callers produce the print-ready blobs (via the
- * export pipeline) and pass them in. Keeping it pure means it runs identically
- * in the desktop client today and on a backend later.
+ * Deliberately I/O-free, so it runs identically wherever the print files came
+ * from. Since assembly moved to the backend the usual case is that the files
+ * are ALREADY hosted and the draft carries no blobs at all — the order is
+ * placed against a render the server holds, addressed by fingerprint. Blobs
+ * remain supported for any caller that still has them in hand.
  */
 import { normalizePageCount } from "./lulu/products";
 import type { BookProduct, OrderDraft, PrintAsset, Recipient, ShippingMethod } from "./types";
@@ -13,8 +15,11 @@ export interface BuildOrderDraftInput {
   copies: number;
   recipient: Recipient;
   shippingMethod: ShippingMethod;
-  /** Multi-page interior PDF (single-page layout, not spreads). */
-  interior: Blob;
+  /**
+   * Multi-page interior PDF (one printed leaf per page, not spreads). Omitted
+   * when the file is already hosted server-side.
+   */
+  interior?: Blob;
   /** Number of interior pages (will be normalized to the product's constraints). */
   pageCount: number;
   /** Cover PDF (back + spine + front). Lulu takes a single wraparound cover. */
@@ -41,9 +46,10 @@ export function buildOrderDraft(input: BuildOrderDraftInput): OrderDraft {
   const pages = normalizePageCount(input.product, input.pageCount);
   const areas = input.product.printAreas;
 
-  const assets: PrintAsset[] = [
-    { printArea: areas.interior, blob: input.interior, pageCount: pages },
-  ];
+  const assets: PrintAsset[] = [];
+  if (input.interior) {
+    assets.push({ printArea: areas.interior, blob: input.interior, pageCount: pages });
+  }
   if (input.cover && areas.cover) {
     assets.push({ printArea: areas.cover, blob: input.cover });
   }

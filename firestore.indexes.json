@@ -30,6 +30,13 @@
       "collectionGroup": "days",
       "fieldPath": "seen",
       "indexes": []
+    },
+    {
+      "collectionGroup": "renders",
+      "fieldPath": "lastUsedAt",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }
+      ]
     }
   ]
 }

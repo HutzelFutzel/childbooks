@@ -53,6 +53,13 @@ jobs:
       - name: Check pricing invariants
         run: yarn check:pricing
 
+      # Print properties that typechecking can't see either, and that produce a
+      # perfectly valid PDF when they're wrong: a page declared at one size and
+      # drawn at another, a spread that never gets split into two leaves, an
+      # interior short of the page count the order was priced and bound at.
+      - name: Check print geometry invariants
+        run: yarn check:print-geometry
+
       # App Hosting applies apphosting.yaml's env when it builds; a bare
       # `yarn build:web` here would not, and NEXT_PUBLIC_* are inlined at build
       # time. Load them so this really is the same build production gets.

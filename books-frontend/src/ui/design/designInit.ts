@@ -51,6 +51,13 @@ function blobFor(project: Project, id: string): string | undefined {
 }
 
 /** All pages that can be designed, in reading order (covers + content pages). */
+/** "Page 7", or "Pages 8–9" for the two leaves a spread occupies. */
+function pageLabel(pageNumbers: number[] | undefined): string {
+  if (!pageNumbers || pageNumbers.length === 0) return "Page";
+  if (pageNumbers.length === 1) return `Page ${pageNumbers[0]}`;
+  return `Pages ${pageNumbers[0]}–${pageNumbers[pageNumbers.length - 1]}`;
+}
+
 export function buildDesignPages(project: Project): DesignPage[] {
   const aspect = bookProductForConfig(project.config).aspect;
   const doc = project.screenplay ? getCursor(project.screenplay).content : null;
@@ -75,12 +82,16 @@ export function buildDesignPages(project: Project): DesignPage[] {
     );
   }
   if (doc) {
-    doc.spreads.forEach((s, i) => {
+    doc.spreads.forEach((s) => {
       if (s.placeholder) return;
       const side = sideOf(s);
       pages.push({
         id: s.id,
-        label: `Page ${i + 1}`,
+        // The PHYSICAL page number, not the position in the spread list. They
+        // diverge as soon as the book has a double-page spread (two leaves) or
+        // a pagination filler (a leaf with no design page), and this label is
+        // what a print warning tells the reader to go and look at.
+        label: pageLabel(pageMap.get(s.id)),
         aspect: s.kind === "spread" ? aspect * 2 : aspect,
         blobId: blobFor(project, s.id),
         seedText: s.text,

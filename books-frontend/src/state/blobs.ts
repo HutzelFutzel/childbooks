@@ -31,10 +31,7 @@ async function blobToBase64(blob: Blob): Promise<string> {
 
 /** Store a base64 image and return its blob id. */
 export async function putImageBlob(base64: string, mimeType: string): Promise<string> {
-  const backend = await getStorage();
-  const id = genId();
-  await backend.blobs.put(id, base64ToBlob(base64, mimeType));
-  return id;
+  return putBlob(base64ToBlob(base64, mimeType));
 }
 
 /** Store a binary Blob directly (e.g. an uploaded asset) and return its id. */
@@ -42,13 +39,71 @@ export async function putBlob(blob: Blob): Promise<string> {
   const backend = await getStorage();
   const id = genId();
   await backend.blobs.put(id, blob);
+  // Seed the cache: the bytes are already in hand, so the first read back (the
+  // editor showing what was just generated) shouldn't be a download.
+  rememberBlob(id, blob);
   return id;
 }
 
-/** Create an object URL for a stored blob (caller must revoke it). */
+/**
+ * In-memory cache of fetched blobs. Every `blobs.get` is a round trip to
+ * Firebase Storage, and the same illustration is asked for by the editor, the
+ * preview and each export pass — a 25-page book used to download its artwork
+ * several times over, which is also what made the export race its own images.
+ *
+ * Ids are immutable (a new id is minted for every stored image), so entries
+ * never go stale. In-flight promises are cached too, so N simultaneous callers
+ * (exactly what a print stage does) share ONE download.
+ */
+const blobCache = new Map<string, Promise<Blob | null>>();
+const BLOB_CACHE_MAX = 64;
+
+function evictIfFull(): void {
+  if (blobCache.size >= BLOB_CACHE_MAX) {
+    const oldest = blobCache.keys().next().value;
+    if (oldest !== undefined) blobCache.delete(oldest);
+  }
+}
+
+/** Seed the cache with bytes we already hold (e.g. straight after a write). */
+function rememberBlob(id: string, blob: Blob): void {
+  evictIfFull();
+  blobCache.set(id, Promise.resolve(blob));
+}
+
+function fetchBlob(id: string): Promise<Blob | null> {
+  const hit = blobCache.get(id);
+  if (hit) return hit;
+
+  const pending = (async () => {
+    const backend = await getStorage();
+    return backend.blobs.get(id);
+  })().catch((err) => {
+    // Never cache a failure: a CORS hiccup or an expired token must not pin an
+    // illustration to "broken" for the rest of the session.
+    blobCache.delete(id);
+    throw err;
+  });
+
+  evictIfFull();
+  blobCache.set(id, pending);
+  return pending;
+}
+
+/** Read a stored blob, from cache when it's already been fetched this session. */
+export async function getBlob(id: string): Promise<Blob | null> {
+  return fetchBlob(id);
+}
+
+/**
+ * Create an object URL for a stored blob (caller must revoke it).
+ *
+ * A FRESH object URL per call, deliberately: consumers revoke on unmount, and a
+ * shared URL would be pulled out from under everyone else still using it. Only
+ * the underlying bytes are shared.
+ */
 export async function getBlobUrl(id: string): Promise<string | null> {
-  const backend = await getStorage();
-  const blob = await backend.blobs.get(id);
+  const blob = await fetchBlob(id);
   return blob ? URL.createObjectURL(blob) : null;
 }
 
@@ -67,8 +122,7 @@ export async function getBlobBase64(
   const cached = base64Cache.get(id);
   if (cached) return cached;
 
-  const backend = await getStorage();
-  const blob = await backend.blobs.get(id);
+  const blob = await fetchBlob(id);
   if (!blob) return null;
   const entry = { base64: await blobToBase64(blob), mimeType: blob.type || "image/png" };
 
@@ -87,14 +141,14 @@ export async function getBlobBase64(
  * source project — each project must own its own copy.
  */
 export async function copyBlob(id: string): Promise<string | null> {
-  const backend = await getStorage();
-  const blob = await backend.blobs.get(id);
+  const blob = await fetchBlob(id);
   if (!blob) return null;
   return putBlob(blob);
 }
 
 export async function removeBlob(id: string): Promise<void> {
   base64Cache.delete(id);
+  blobCache.delete(id);
   const backend = await getStorage();
   await backend.blobs.remove(id);
 }

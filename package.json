@@ -24,6 +24,7 @@
     "emulators:clear": "node scripts/dev-emulators.mjs --clear",
     "check:env": "node scripts/check-env.mjs",
     "check:print": "node scripts/check-print-catalog.mjs",
+    "check:print-geometry": "node scripts/check-print-geometry.mjs",
     "check:pricing": "node scripts/check-pricing.mjs",
     "deploy": "node scripts/deploy.mjs",
     "setSecrets": "node scripts/set-secrets.mjs",

@@ -24,6 +24,7 @@ import { registerAuthRoutes } from "./authRoutes";
 import { registerAdminRoutes } from "./admin";
 import { registerGdprRoutes } from "./gdpr";
 import { registerHealthRoutes } from "./health";
+import { registerRenderRoutes } from "./renders";
 import { registerRuntimeRoutes } from "./readiness";
 import { registerAnalyticsRoutes } from "./analytics";
 import {
@@ -104,6 +105,7 @@ export function createApp(): Express {
   registerBlogStatsAdminRoutes(app);
   registerGdprRoutes(app);
   registerHealthRoutes(app);
+  registerRenderRoutes(app);
   registerRuntimeRoutes(app);
   registerAnalyticsRoutes(app);
   registerStripeUserRoutes(app);

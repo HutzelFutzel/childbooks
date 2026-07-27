@@ -8,9 +8,11 @@
  * the payment webhook confirms funds. Already-owned books show a download
  * button instead.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { BookOpen, Download, Loader2 } from "lucide-react";
 import { pageTrimForConfig } from "../../core/book";
+import { renderFingerprint } from "../../core/print/fingerprint";
+import { fetchRenderAvailability } from "../../platform/renders";
 import type { BookDesign, Project } from "../../core/types";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import {
@@ -53,6 +55,8 @@ export function EbookDialog({
   const [quote, setQuote] = useState<EbookQuote | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  const [needsRender, setNeedsRender] = useState(false);
+  const fingerprint = useMemo(() => renderFingerprint(project, design), [project, design]);
 
   // Owned ebooks are fetched through the gated, logged download endpoint (the
   // raw file URL is never exposed), so each download is authorized + recorded.
@@ -93,22 +97,41 @@ export function EbookDialog({
     };
   }, [open, project.id, baseCurrency]);
 
-  function buy() {
+  /**
+   * A book that hasn't changed since it was last rendered doesn't need to be
+   * rendered again — the backend still has the exact PDF. Worth the round trip:
+   * it's the difference between a minute of rasterizing and an instant buy, and
+   * the second copy is byte-identical to the first.
+   */
+  async function buy() {
     setError(null);
     setPhase("rendering");
     setStatus("Preparing your book…");
+    try {
+      const availability = await fetchRenderAvailability(fingerprint);
+      if (availability.ebook) {
+        await checkout();
+        return;
+      }
+      setStatus("Rendering your book…");
+      setNeedsRender(true);
+    } catch (err) {
+      setPhase("ready");
+      setError(err instanceof Error ? err.message : "We couldn't prepare your book.");
+    }
   }
 
-  async function onRendered(pdf: Blob) {
+  async function checkout() {
     try {
       const included = quote?.included ?? false;
+      setNeedsRender(false);
       setPhase("redirecting");
       setStatus(included ? "Adding it to your library…" : "Opening secure payment…");
       const result = await startEbookCheckout({
         projectId: project.id,
         title: project.title,
         currency: quote?.currency ?? baseCurrency,
-        pdf,
+        fingerprint,
       });
       if ("granted" in result) {
         // Included with the plan — no payment step, so there's no Stripe redirect
@@ -123,6 +146,7 @@ export function EbookDialog({
       window.location.href = result.url;
     } catch (err) {
       setPhase("ready");
+      setNeedsRender(false);
       setError(err instanceof Error ? err.message : "We couldn't start checkout.");
     }
   }
@@ -222,7 +246,7 @@ export function EbookDialog({
           )}
           {error && <p className="text-xs text-rose-600">{error}</p>}
 
-          <Button className="w-full" size="lg" loading={busy} onClick={buy}>
+          <Button className="w-full" size="lg" loading={busy} onClick={() => void buy()}>
             {busy
               ? "One moment…"
               : quote.included
@@ -241,15 +265,17 @@ export function EbookDialog({
         <p className="py-6 text-center text-sm text-rose-600">{error}</p>
       )}
 
-      {phase === "rendering" && (
+      {needsRender && (
         <EbookAssetRunner
           project={project}
           pages={pages}
           design={design}
+          fingerprint={fingerprint}
           onProgress={setStatus}
-          onDone={(pdf) => void onRendered(pdf)}
+          onDone={() => void checkout()}
           onError={(err) => {
             setPhase("ready");
+            setNeedsRender(false);
             notify.error(err);
           }}
         />

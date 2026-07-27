@@ -7,37 +7,74 @@ import { ShapeSvg } from "./ShapeRender";
 import { TextBoxView } from "./TextBoxView";
 
 /**
- * A print-friendly, read-only rendering of every page (one per sheet).
+ * Resolved artwork for a render pass: blob id -> object URL.
  *
- * Pages share a common pixel height; spreads (aspect ≈ 2×) are simply twice as
- * wide. `pageHeightPx` lets the export pipeline render at print resolution while
- * the on-screen `window.print()` path keeps a comfortable default.
+ * Export passes resolve every blob BEFORE the stage mounts and hand the result
+ * in here, so a page renders its illustration on its first paint. Fetching per
+ * page from inside the component (which is what the on-screen path still does)
+ * leaves a gap between mount and artwork that a capture loop will happily
+ * rasterize straight through.
+ */
+export type ResolvedArtwork = Record<string, string>;
+
+/**
+ * One thing to capture: a page drawn onto a surface, optionally showing only a
+ * horizontal slice of it.
+ *
+ * The slice is how a double-page spread becomes two printable leaves and how a
+ * cover becomes a wraparound panel — the page is laid out once, continuously,
+ * and the window decides which part of it this capture is for. Two windows onto
+ * the same page render the page twice; that costs a little memory and buys
+ * artwork that stays continuous across the fold.
+ */
+export interface PrintTarget {
+  /** Value of `data-export-page`, and the id the capture loop looks up. */
+  id: string;
+  page: DesignPage;
+  /** Rendered surface, including any bleed, in device pixels. */
+  surfaceWidthPx: number;
+  surfaceHeightPx: number;
+  /** Bleed inset on each edge. The trim box sits inside it. */
+  bleedPx: number;
+  /** Horizontal slice of the surface to expose, if not all of it. */
+  clip?: { xPx: number; widthPx: number };
+}
+
+/**
+ * A print-friendly, read-only rendering of a set of capture targets.
+ *
+ * Used two ways: the browser's own print dialog (`window.print()`, one page per
+ * sheet, no bleed) and the export pipeline (offscreen, at print resolution,
+ * with bleed and slicing).
  */
 export function PrintBook({
-  pages,
+  targets,
   design,
+  artwork,
   trimIn,
-  pageHeightPx = 900,
   forExport = false,
 }: {
-  pages: DesignPage[];
+  targets: PrintTarget[];
   design: BookDesign;
+  /** Pre-resolved artwork. When omitted, pages fetch their own (on-screen path). */
+  artwork?: ResolvedArtwork;
   /** When set, emits an `@page` rule sized to the book's real trim for `window.print()`. */
   trimIn?: { widthIn: number; heightIn: number };
-  /** Pixel height of a single page (export uses trimHeightIn × DPI). */
-  pageHeightPx?: number;
   /** Export mode renders pages stacked with no page-break CSS for snapshotting. */
   forExport?: boolean;
 }) {
   return (
-    <div className={forExport ? "export-root" : "print-root"}>
+    // Export mode is a plain wrapper: the offscreen stage that hosts it owns
+    // the positioning, so anything else it renders (the spine band) is hidden
+    // by the same rule rather than landing in the middle of the page.
+    <div className={forExport ? undefined : "print-root"}>
       {trimIn && !forExport && <PageSizeStyle trimIn={trimIn} />}
-      {pages.map((page) => (
-        <PrintPage
-          key={page.id}
-          page={page}
+      {targets.map((target) => (
+        <PrintTargetView
+          key={target.id}
+          target={target}
           design={design}
-          height={pageHeightPx}
+          artwork={artwork}
           forExport={forExport}
         />
       ))}
@@ -51,6 +88,49 @@ function PageSizeStyle({ trimIn }: { trimIn: { widthIn: number; heightIn: number
   return <style>{css}</style>;
 }
 
+/** The capture element: a window onto a rendered page surface. */
+function PrintTargetView({
+  target,
+  design,
+  artwork,
+  forExport,
+}: {
+  target: PrintTarget;
+  design: BookDesign;
+  artwork?: ResolvedArtwork;
+  forExport: boolean;
+}) {
+  const clip = target.clip;
+  return (
+    <div
+      className={forExport ? "export-page" : "print-page"}
+      data-export-page={forExport ? target.id : undefined}
+      style={{
+        width: clip ? clip.widthPx : target.surfaceWidthPx,
+        height: target.surfaceHeightPx,
+        position: "relative",
+        overflow: "hidden",
+        background: "#fff",
+        // Force backgrounds/colors to print exactly as designed.
+        printColorAdjust: "exact",
+        WebkitPrintColorAdjust: "exact",
+      }}
+    >
+      <div
+        style={{
+          position: "absolute",
+          top: 0,
+          left: clip ? -clip.xPx : 0,
+          width: target.surfaceWidthPx,
+          height: target.surfaceHeightPx,
+        }}
+      >
+        <PrintPage target={target} design={design} artwork={artwork} />
+      </div>
+    </div>
+  );
+}
+
 interface Stacked {
   id: string;
   z: number;
@@ -62,21 +142,33 @@ interface Stacked {
   image?: ImageElement;
 }
 
+/**
+ * A page surface: full-bleed background layers filling the whole surface, and
+ * the designed elements laid out against the TRIM box inside it.
+ *
+ * That split is the whole point of bleed. Artwork runs past the cut line so
+ * there's no white sliver if the knife wanders; text and placed elements stay
+ * on the trim box, at the physical position they were designed at, whether or
+ * not this pass includes bleed.
+ */
 function PrintPage({
-  page,
+  target,
   design,
-  height = 900,
-  forExport = false,
+  artwork,
 }: {
-  page: DesignPage;
+  target: PrintTarget;
   design: BookDesign;
-  height?: number;
-  forExport?: boolean;
+  artwork?: ResolvedArtwork;
 }) {
-  const url = useBlobUrl(page.blobId);
+  const { page, bleedPx } = target;
+  // Only fetch when nothing was pre-resolved: passing `undefined` keeps the
+  // hook call unconditional (and inert) on the export path.
+  const fetched = useBlobUrl(artwork ? undefined : page.blobId);
+  const url = (page.blobId ? artwork?.[page.blobId] : undefined) ?? fetched;
+
   const pd = design.pages[page.id] ?? { textBoxes: [] };
-  const H = height;
-  const W = Math.round(H * page.aspect);
+  const W = target.surfaceWidthPx - bleedPx * 2;
+  const H = target.surfaceHeightPx - bleedPx * 2;
 
   const hasIllustrationEl = (pd.images ?? []).some((im) => im.kind === "illustration");
 
@@ -96,20 +188,8 @@ function PrintPage({
     .sort((a, b) => a.z - b.z);
 
   return (
-    <div
-      className={forExport ? "export-page" : "print-page"}
-      data-export-page={forExport ? page.id : undefined}
-      style={{
-        width: W,
-        height: H,
-        position: "relative",
-        overflow: "hidden",
-        background: "#fff",
-        // Force backgrounds/colors to print exactly as designed.
-        printColorAdjust: "exact",
-        WebkitPrintColorAdjust: "exact",
-      }}
-    >
+    <div style={{ position: "absolute", inset: 0 }}>
+      {/* Background layers fill the surface edge to edge, bleed included. */}
       {pd.background?.color && <div style={{ position: "absolute", inset: 0, background: pd.background.color }} />}
       {pd.background?.pattern && <PatternFill config={pd.background.pattern} />}
       {url && !hasIllustrationEl && (
@@ -126,39 +206,49 @@ function PrintPage({
           }}
         />
       )}
-      {stacked.map((el) => {
-        const w = el.rect.w * W;
-        const h = el.rect.h * H;
-        const wrapEffects =
-          el.shape || el.image
-            ? {
-                filter: cssFilter((el.shape ?? el.image)?.effects, H),
-                opacity: el.image ? el.image.opacity ?? el.image.effects?.opacity ?? 1 : undefined,
-              }
-            : {};
-        return (
-          <div
-            key={el.id}
-            style={{
-              position: "absolute",
-              left: 0,
-              top: 0,
-              width: w,
-              height: h,
-              transform: `translate(${el.rect.x * W}px, ${el.rect.y * H}px) rotate(${el.rotation ?? 0}deg)`,
-              ...wrapEffects,
-            }}
-          >
-            {el.box ? (
-              <TextBoxView box={el.box} pageHeight={H} w={w} h={h} aspect={W / H} />
-            ) : el.shape ? (
-              <ShapeSvg shape={el.shape} w={w} h={h} pageHeight={H} />
-            ) : el.image ? (
-              <PrintImage image={el.image} w={w} h={h} illustrationUrl={url ?? undefined} />
-            ) : null}
-          </div>
-        );
-      })}
+
+      {/* Trim layer: everything the reader must not lose to the knife. */}
+      <div style={{ position: "absolute", left: bleedPx, top: bleedPx, width: W, height: H }}>
+        {stacked.map((el) => {
+          const w = el.rect.w * W;
+          const h = el.rect.h * H;
+          const wrapEffects =
+            el.shape || el.image
+              ? {
+                  filter: cssFilter((el.shape ?? el.image)?.effects, H),
+                  opacity: el.image ? el.image.opacity ?? el.image.effects?.opacity ?? 1 : undefined,
+                }
+              : {};
+          return (
+            <div
+              key={el.id}
+              style={{
+                position: "absolute",
+                left: 0,
+                top: 0,
+                width: w,
+                height: h,
+                transform: `translate(${el.rect.x * W}px, ${el.rect.y * H}px) rotate(${el.rotation ?? 0}deg)`,
+                ...wrapEffects,
+              }}
+            >
+              {el.box ? (
+                <TextBoxView box={el.box} pageHeight={H} w={w} h={h} aspect={W / H} />
+              ) : el.shape ? (
+                <ShapeSvg shape={el.shape} w={w} h={h} pageHeight={H} />
+              ) : el.image ? (
+                <PrintImage
+                  image={el.image}
+                  w={w}
+                  h={h}
+                  illustrationUrl={url ?? undefined}
+                  artwork={artwork}
+                />
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -168,13 +258,16 @@ function PrintImage({
   w,
   h,
   illustrationUrl,
+  artwork,
 }: {
   image: ImageElement;
   w: number;
   h: number;
   illustrationUrl?: string;
+  artwork?: ResolvedArtwork;
 }) {
-  const assetUrl = useBlobUrl(image.kind === "asset" ? image.blobId : undefined);
+  const fetched = useBlobUrl(artwork || image.kind !== "asset" ? undefined : image.blobId);
+  const assetUrl = (image.blobId ? artwork?.[image.blobId] : undefined) ?? fetched;
   const src = image.kind === "illustration" ? illustrationUrl : assetUrl ?? undefined;
   if (!src) return null;
   const radius = (image.corner ?? 0) * Math.min(w, h);
@@ -231,6 +324,75 @@ function PrintImage({
           transformOrigin: pos,
         }}
       />
+    </div>
+  );
+}
+
+/**
+ * The printed spine: a coloured band with the title running down it, rendered
+ * in the book's own typeface.
+ *
+ * It's a DOM element rather than something drawn onto a canvas so it goes
+ * through the same font pipeline as every other page — the spine used to be
+ * drawn in hardcoded Georgia regardless of what the book was set in, which is
+ * the one piece of typography a person sees on a shelf.
+ */
+export function PrintSpine({
+  id,
+  widthPx,
+  heightPx,
+  text,
+  fontFamily,
+  background,
+  color,
+}: {
+  id: string;
+  widthPx: number;
+  heightPx: number;
+  text: string;
+  fontFamily: string;
+  background: string;
+  color: string;
+}) {
+  return (
+    <div
+      data-export-page={id}
+      className="export-page"
+      style={{
+        width: widthPx,
+        height: heightPx,
+        position: "relative",
+        overflow: "hidden",
+        background,
+        printColorAdjust: "exact",
+        WebkitPrintColorAdjust: "exact",
+      }}
+    >
+      {text.trim() && (
+        <div
+          style={{
+            position: "absolute",
+            top: "50%",
+            left: "50%",
+            // Rotated to read top-to-bottom, the convention for English-language
+            // spines. Sized against the band width so it can't touch the edges.
+            transform: "translate(-50%, -50%) rotate(90deg)",
+            transformOrigin: "center",
+            width: heightPx * 0.86,
+            textAlign: "center",
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "clip",
+            fontFamily,
+            fontWeight: 600,
+            fontSize: widthPx * 0.42,
+            lineHeight: 1,
+            color,
+          }}
+        >
+          {text}
+        </div>
+      )}
     </div>
   );
 }

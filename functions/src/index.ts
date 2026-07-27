@@ -33,6 +33,9 @@ export { cleanupAnonymousUsers } from "./cleanup";
 // Scheduled retry of paid orders whose print placement failed.
 export { retryFulfillments } from "./fulfillmentRetry";
 
+// Scheduled eviction of cached book renders nobody has come back to.
+export { cleanupStaleRenders } from "./renders";
+
 // Daily import of Firebase/GCP spend into the finance stream (BigQuery billing
 // export when configured, else a prorated monthly budget).
 export { importInfraCostsDaily } from "./infraCosts";

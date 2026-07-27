@@ -107,7 +107,35 @@ export function createAdminAssetHost(): AssetHost {
         resumable: false,
         metadata: { metadata: { firebaseStorageDownloadTokens: token } },
       });
-      return { url: downloadUrl(bucket.name, objectPath, token) };
+      return { url: downloadUrl(bucket.name, objectPath, token), path: objectPath };
     },
   };
+}
+
+/**
+ * Re-derive the public download URL for an object we uploaded earlier.
+ *
+ * The token lives in the object's own metadata, so a stored PATH is enough to
+ * rebuild a working link — and a path, unlike a link, is inert if it leaks
+ * (Storage rules deny `print-assets/**` to every client). That's what lets a
+ * cached render be recorded somewhere the owner can read without handing out a
+ * download that bypasses the gated, audited link endpoint.
+ *
+ * Returns null when the object is gone or was never token-tagged, so callers
+ * treat a cache entry as a miss instead of placing an order against a dead URL.
+ */
+export async function publicUrlForPath(objectPath: string): Promise<string | null> {
+  ensureAdmin();
+  const bucket = getStorage().bucket(storageBucketName());
+  try {
+    const file = bucket.file(objectPath);
+    const [metadata] = await file.getMetadata();
+    const token = (metadata.metadata?.firebaseStorageDownloadTokens as string | undefined)
+      ?.split(",")[0]
+      ?.trim();
+    if (!token) return null;
+    return downloadUrl(bucket.name, objectPath, token);
+  } catch {
+    return null;
+  }
 }

@@ -30,6 +30,7 @@ import { useFormatsForConfigSize } from "../hooks/useOfferableFormats";
 import { useStudio } from "./StudioContext";
 import { buildDisplaySpreads, type Entry } from "./SpreadEditor";
 import { getCursor } from "../../core/versioning";
+import { physicalPageCount } from "../../core/print/pagePlan";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { BookPreview } from "./BookPreview";
 
@@ -77,8 +78,14 @@ export function OrderStage() {
     () => units.filter((u) => !currentIllustration(project, u.id)).length,
     [project, units],
   );
-  const pageCount = pages.length;
-  const contentPages = pages.filter((p) => !p.isCover).length;
+  // Physical leaves, not editor pages: a spread prints as two, and pagination
+  // fillers print as one each. This is the number that gets priced and bound,
+  // so it's the number to show and to gate on.
+  const contentPages = useMemo(
+    () => physicalPageCount(project.screenplay ? getCursor(project.screenplay).content : null),
+    [project.screenplay],
+  );
+  const pageCount = contentPages;
   const bookProduct = bookProductForConfig(project.config);
   // The size only. The format's own label names a binding too, and that isn't
   // settled until checkout — announcing one here would be guessing.

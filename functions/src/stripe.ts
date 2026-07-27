@@ -20,6 +20,7 @@ import type Stripe from "stripe";
 import { serverConfig } from "./config";
 import { isAnonymousToken, isVerifiedToken, requireAuth, type AuthedRequest } from "./auth";
 import { createAdminAssetHost, printFileUnreachableReason } from "./assets";
+import { cachedDocumentUrl, documentKey } from "./renders";
 import { fulfillmentProvider } from "./lulu";
 import { persistCreatedOrder } from "./orders";
 import { getProductsConfig } from "./products";
@@ -162,6 +163,12 @@ interface CheckoutBody {
   merchantReference?: string;
   recipient: OrderDraft["recipient"];
   assets?: WireAsset[];
+  /**
+   * Content fingerprint of the render (see `core/print/fingerprint`). When the
+   * book has already been rendered, the cached files are used and `assets` is
+   * absent — a reorder of an unchanged book uploads nothing at all.
+   */
+  fingerprint?: string;
 }
 
 function clientError(res: Response, message: string, status = 400): void {
@@ -711,10 +718,24 @@ export function registerStripeUserRoutes(app: Express): void {
         return;
       }
 
-      // Upload print files NOW so they're hosted before payment; the webhook
-      // places the order from these URLs (it has no access to the blobs).
-      const host = createAdminAssetHost();
+      // Print files must be hosted BEFORE payment; the webhook places the order
+      // from these URLs (it has no access to the blobs).
+      //
+      // A cached render is preferred over anything the client sent: it was
+      // assembled server-side from the same rasters the digital edition uses,
+      // so reusing it is both cheaper and the only way the two editions stay
+      // identical for a book that hasn't changed.
       const sourceFileUrls: { interior?: string; cover?: string } = {};
+      if (body.fingerprint) {
+        const [interior, cover] = await Promise.all([
+          cachedDocumentUrl(uid, body.fingerprint, documentKey("interior")),
+          cachedDocumentUrl(uid, body.fingerprint, documentKey("cover", { sku: printSku, pages })),
+        ]);
+        if (interior) sourceFileUrls.interior = interior;
+        if (cover) sourceFileUrls.cover = cover;
+      }
+
+      const host = createAdminAssetHost();
       for (const a of body.assets ?? []) {
         const buf = Buffer.from(a.base64, "base64");
         const ext = (a.contentType ?? "").includes("pdf") ? "pdf" : "png";
@@ -724,7 +745,13 @@ export function registerStripeUserRoutes(app: Express): void {
         else sourceFileUrls.interior = url;
       }
       if (!sourceFileUrls.interior || !sourceFileUrls.cover) {
-        clientError(res, "We couldn't prepare your print files. Please try again.");
+        // Reached when a cached render was expected but has since been evicted
+        // (or never finished assembling). Say so: the fix is to render again,
+        // which is what re-opening the order dialog does.
+        clientError(
+          res,
+          "Your book needs to be prepared for printing again. Please close this and try ordering once more.",
+        );
         return;
       }
 
@@ -894,8 +921,10 @@ export function registerStripeUserRoutes(app: Express): void {
         currency?: string;
         pdfBase64?: string;
         contentType?: string;
+        /** Content fingerprint of an already-assembled render, if there is one. */
+        fingerprint?: string;
       };
-      if (!body.projectId || !body.pdfBase64) {
+      if (!body.projectId || !(body.pdfBase64 || body.fingerprint)) {
         clientError(res, "Missing ebook details.");
         return;
       }
@@ -917,10 +946,22 @@ export function registerStripeUserRoutes(app: Express): void {
       }
 
       const title = (body.title ?? "").trim() || "Your book";
-      const host = createAdminAssetHost();
-      const buf = Buffer.from(body.pdfBase64, "base64");
-      const blob = new Blob([buf], { type: body.contentType || "application/pdf" });
-      const { url: fileUrl } = await host.upload(blob, `ebook-${body.projectId}.pdf`);
+
+      // Prefer the cached render. A second purchase of an unchanged book (a
+      // gift, a re-download after a plan change) then costs nothing to prepare
+      // and is byte-identical to the first.
+      let fileUrl = body.fingerprint
+        ? await cachedDocumentUrl(uid, body.fingerprint, documentKey("ebook"))
+        : null;
+      if (!fileUrl) {
+        if (!body.pdfBase64) {
+          clientError(res, "The book hasn't finished rendering yet. Please try again.");
+          return;
+        }
+        const buf = Buffer.from(body.pdfBase64, "base64");
+        const blob = new Blob([buf], { type: body.contentType || "application/pdf" });
+        ({ url: fileUrl } = await createAdminAssetHost().upload(blob, `ebook-${body.projectId}.pdf`));
+      }
 
       const paymentId = randomUUID();
 

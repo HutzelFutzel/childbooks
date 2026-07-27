@@ -374,6 +374,15 @@ export interface BookProduct {
 /** An uploaded asset that a provider can fetch by URL. */
 export interface UploadedAsset {
   url: string;
+  /**
+   * Where the object lives in the store, when the host can say.
+   *
+   * A path is safe to persist somewhere the owner can read (it isn't fetchable
+   * without the token) and lets the backend re-derive a fresh public URL later
+   * — which is how a cached render is reused without ever writing a directly
+   * downloadable link into client-readable storage.
+   */
+  path?: string;
   /** Epoch ms after which the URL may stop working (best-effort). */
   expiresAt?: number;
 }

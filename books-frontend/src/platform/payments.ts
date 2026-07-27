@@ -92,17 +92,22 @@ async function errorMessage(res: Response, fallback: string): Promise<string> {
 export interface CheckoutInput {
   draft: OrderDraft;
   pageCount: number;
+  /**
+   * Content fingerprint of the render. The print files were assembled and
+   * stored server-side, so the order is placed against them rather than
+   * re-uploading tens of megabytes of PDF at checkout time.
+   */
+  fingerprint?: string;
 }
 
 /**
  * Start checkout for a print order. Returns the Stripe Checkout URL to redirect
- * to (the caller does `window.location.href = url`). The print files are uploaded
- * as part of this call so the order can be placed from the payment webhook.
+ * to (the caller does `window.location.href = url`).
  */
 export async function startOrderCheckout(
   input: CheckoutInput & { variant?: VariantSelection },
 ): Promise<{ url: string; paymentId: string }> {
-  const { draft, pageCount, variant } = input;
+  const { draft, pageCount, variant, fingerprint } = input;
   const assets = await Promise.all(draft.assets.map(assetToWire));
   const body = {
     // Format identity (base SKU). The server composes the print SKU from
@@ -117,6 +122,7 @@ export async function startOrderCheckout(
     merchantReference: draft.merchantReference,
     recipient: draft.recipient,
     assets,
+    fingerprint,
   };
   const res = await backendFetch("/checkout", {
     method: "POST",
@@ -229,18 +235,20 @@ export async function fetchEbookQuote(projectId: string, currency?: string): Pro
 }
 
 /**
- * Buy the digital edition (PDF). Uploads the rendered ebook file as part of the
- * call. Two outcomes: `{ url }` — a Stripe Checkout URL to redirect to (the
- * download unlocks after payment), or `{ granted: true }` — the buyer's plan
- * includes the ebook and the download was granted immediately.
+ * Buy the digital edition (PDF).
+ *
+ * The file itself isn't sent: it was assembled and stored server-side from the
+ * rendered pages, and `fingerprint` is how the server finds it. Two outcomes:
+ * `{ url }` — a Stripe Checkout URL to redirect to (the download unlocks after
+ * payment), or `{ granted: true }` — the buyer's plan includes the ebook and
+ * the download was granted immediately.
  */
 export async function startEbookCheckout(input: {
   projectId: string;
   title: string;
   currency: string;
-  pdf: Blob;
+  fingerprint: string;
 }): Promise<{ url: string } | { granted: true }> {
-  const bytes = new Uint8Array(await input.pdf.arrayBuffer());
   const res = await backendFetch("/checkout/ebook", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -248,8 +256,7 @@ export async function startEbookCheckout(input: {
       projectId: input.projectId,
       title: input.title,
       currency: input.currency,
-      contentType: input.pdf.type || "application/pdf",
-      pdfBase64: bytesToBase64(bytes),
+      fingerprint: input.fingerprint,
     }),
   });
   if (!res.ok) throw new Error(await errorMessage(res, "We couldn't start the ebook checkout."));

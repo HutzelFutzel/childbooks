@@ -20,6 +20,11 @@ import {
 } from "../../core/config/variants";
 import { buildOrderDraft } from "../../core/fulfillment/draft";
 import { bindingNoun, normalizePageCount } from "../../core/fulfillment";
+import { renderFingerprint } from "../../core/print/fingerprint";
+import { interiorLeafPlan, physicalPageCount } from "../../core/print/pagePlan";
+import { preflightInterior } from "../../core/print/preflight";
+import { coverDocumentKey, fetchRenderAvailability } from "../../platform/renders";
+import { getCursor } from "../../core/versioning";
 import { FulfillmentError } from "../../core/fulfillment/errors";
 import type {
   Recipient,
@@ -50,7 +55,7 @@ import { Modal } from "../components/Modal";
 import { Select } from "../components/Select";
 import { notify } from "../lib/notify";
 import type { DesignPage } from "../design/designInit";
-import { OrderAssetRunner, type OrderAssets } from "./orderAssets";
+import { OrderAssetRunner } from "./orderAssets";
 import { FormatPicker } from "./FormatPicker";
 import { VariantPicker } from "./VariantPicker";
 import {
@@ -194,8 +199,31 @@ export function OrderDialog({
   const preferredAddress = useProfileStore((s) => s.preferredAddress);
   const upsertAddress = useProfileStore((s) => s.upsertAddress);
 
-  const contentPages = pages.filter((p) => !p.isCover).length;
+  // The PHYSICAL page count, not the number of design pages. A double-page
+  // spread is one design page but two printed leaves, and a pagination filler
+  // is a printed leaf with no design page at all — counting editor pages
+  // priced books by a number the interior PDF never had.
+  const doc = useMemo(
+    () => (project.screenplay ? getCursor(project.screenplay).content : null),
+    [project.screenplay],
+  );
+  const contentPages = useMemo(() => physicalPageCount(doc), [doc]);
   const pageCount = normalizePageCount(product, contentPages);
+
+  // Placement problems the editor can't show, because it has no idea where the
+  // knife lands or where the binding curves. Advisory: the margins are comfort,
+  // not a cliff, and a deliberate bleed-to-edge word shouldn't block a sale.
+  const preflight = useMemo(
+    () =>
+      preflightInterior({
+        plan: interiorLeafPlan(doc),
+        design,
+        product,
+        hasArtwork: (pageId) => Boolean(pages.find((p) => p.id === pageId)?.blobId),
+        labelFor: (pageId) => pages.find((p) => p.id === pageId)?.label ?? "A page",
+      }),
+    [doc, design, product, pages],
+  );
 
   // Order limits for this format. The admin catalog is authoritative when set;
   // otherwise we fall back to the provider catalog's own page limits. The
@@ -227,6 +255,8 @@ export function OrderDialog({
   const [phase, setPhase] = useState<Phase>("form");
   const [status, setStatus] = useState("");
   const [coverDims, setCoverDims] = useState<{ widthMm: number; heightMm: number } | null>(null);
+  const [needsRender, setNeedsRender] = useState(false);
+  const fingerprint = useMemo(() => renderFingerprint(project, design), [project, design]);
 
   const [name, setName] = useState(DEV_PREFILL?.name ?? "");
   const [contactEmail, setContactEmail] = useState(email);
@@ -527,16 +557,28 @@ export function OrderDialog({
       setStatus("Calculating cover size…");
       const dims = await provider.getCoverDimensionsMm(printSku, pageCount);
       setCoverDims(dims);
+
+      // A book that hasn't changed since it was last ordered is already
+      // rendered and assembled on the server — the cover included, as long as
+      // the binding and page count still match the spine it was cut for.
+      setStatus("Checking your book…");
+      const availability = await fetchRenderAvailability(fingerprint);
+      if (availability.interior && availability.covers.includes(coverDocumentKey(printSku, pageCount))) {
+        await placeOrder();
+        return;
+      }
       setStatus("Rendering print files…");
-      // OrderAssetRunner mounts below once coverDims is set and calls onAssets.
+      setNeedsRender(true);
     } catch (err) {
       setPhase("form");
+      setCoverDims(null);
       notify.error(err);
     }
   }
 
-  async function onAssets(assets: OrderAssets) {
+  async function placeOrder() {
     try {
+      setNeedsRender(false);
       setPhase("submitting");
       setStatus("Redirecting to secure checkout…");
       const draft = buildOrderDraft({
@@ -544,9 +586,9 @@ export function OrderDialog({
         copies,
         recipient: recipient(),
         shippingMethod: shipping,
-        interior: assets.interior,
-        pageCount: assets.pageCount,
-        cover: assets.cover,
+        // No blobs: the print files were assembled server-side and are found
+        // by fingerprint.
+        pageCount,
         destinationCountry: country,
         currency: CURRENCY,
         merchantReference: project.id,
@@ -573,11 +615,12 @@ export function OrderDialog({
       // AFTER Stripe confirms payment (via webhook). Redirect to Stripe.
       // Send the SAME (normalized) page count the price preview used so the
       // charge matches what the customer was quoted.
-      const { url } = await startOrderCheckout({ draft, pageCount, variant });
+      const { url } = await startOrderCheckout({ draft, pageCount, variant, fingerprint });
       window.location.href = url;
     } catch (err) {
       setPhase("form");
       setCoverDims(null);
+      setNeedsRender(false);
       notify.error(err);
     }
   }
@@ -638,6 +681,32 @@ export function OrderDialog({
             <div className="flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-3 text-sm text-rose-700">
               <TriangleAlert className="mt-0.5 size-4 shrink-0" />
               <span>{requirementError}</span>
+            </div>
+          )}
+
+          {/* Print preflight — things that print "correctly" and still come out
+              wrong: text the trim will clip, a line that disappears into the
+              fold, a page with no artwork. Shown here because this is the last
+              moment before it costs money to be wrong. */}
+          {preflight.length > 0 && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800">
+              <p className="flex items-center gap-2 font-medium">
+                <TriangleAlert className="size-4 shrink-0" />
+                Worth a look before you print
+              </p>
+              <ul className="mt-1.5 space-y-1 pl-6 text-xs leading-relaxed">
+                {preflight.slice(0, 4).map((issue) => (
+                  <li key={`${issue.code}:${issue.pageId}`} className="list-disc">
+                    {issue.message}
+                  </li>
+                ))}
+              </ul>
+              {preflight.length > 4 && (
+                <p className="mt-1.5 pl-6 text-xs">…and {preflight.length - 4} more.</p>
+              )}
+              <p className="mt-2 pl-6 text-xs">
+                You can order anyway — these are judgement calls, not errors.
+              </p>
             </div>
           )}
 
@@ -859,18 +928,22 @@ export function OrderDialog({
         </div>
       }
 
-      {phase === "rendering" && coverDims && (
+      {needsRender && coverDims && (
         <OrderAssetRunner
           project={project}
           pages={pages}
           design={design}
+          fingerprint={fingerprint}
+          printSku={printSku}
           coverWidthMm={coverDims.widthMm}
           coverHeightMm={coverDims.heightMm}
+          orderedPageCount={pageCount}
           onProgress={setStatus}
-          onDone={onAssets}
+          onDone={() => void placeOrder()}
           onError={(err) => {
             setPhase("form");
             setCoverDims(null);
+            setNeedsRender(false);
             notify.error(err);
           }}
         />
