@@ -206,6 +206,52 @@ export function pickTier(tiers: PageTier[], pages: number): PageTier | undefined
 }
 
 /**
+ * One rung of a page-range ladder: "generate rows of `step` pages each, up to
+ * and including `upTo`". A ladder is a list of these, so a table can start
+ * fine-grained (e.g. every 10 pages to 100) and get coarser further out (every
+ * 100 pages to 1000) without the admin drawing each row by hand.
+ */
+export interface RangeBand {
+  upTo: number;
+  step: number;
+}
+
+/**
+ * Contiguous, gap-free {@link PageTier} rows from `startPage` through the last
+ * band's `upTo`, stepping by each band's `step` in turn.
+ *
+ * Gap-free matters beyond tidiness: {@link pickTier} does a first-match lookup
+ * and falls back to the LAST tier when nothing matches, so a hole between rows
+ * (e.g. from a bad step) would silently price whatever page count lands in it
+ * off the wrong tier instead of failing loudly. Bands are read in order and any
+ * band that doesn't advance past the current cursor (a non-positive step, or an
+ * `upTo` at or before where the previous band left off) is skipped rather than
+ * emitting a zero-width or backwards row.
+ */
+export function generateSteppedTiers(
+  startPage: number,
+  bands: RangeBand[],
+  currencies: CurrencyCode[],
+  seedPrices: Record<CurrencyCode, number> = {},
+): PageTier[] {
+  const tiers: PageTier[] = [];
+  let cursor = Math.max(1, Math.round(startPage));
+  for (const { upTo, step } of bands) {
+    const ceiling = Math.round(upTo);
+    const width = Math.round(step);
+    if (width < 1 || ceiling < cursor) continue;
+    while (cursor <= ceiling) {
+      const maxPages = Math.min(cursor + width - 1, ceiling);
+      const prices: Record<string, number> = {};
+      for (const c of currencies) prices[c] = seedPrices[c] ?? 0;
+      tiers.push({ minPages: cursor, maxPages, prices });
+      cursor = maxPages + 1;
+    }
+  }
+  return tiers;
+}
+
+/**
  * Per-unit price the admin set for this page bracket + currency, after the
  * (cosmetic) rounding rule and the price floor. This is the "sticker" — whether
  * it's tax-inclusive depends on the currency's tax behavior.

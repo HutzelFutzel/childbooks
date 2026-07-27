@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, Plus, RefreshCw, Ruler, Trash2, Wand2 } from "lucide-react";
+import { AlertTriangle, Layers, Plus, RefreshCw, Ruler, Trash2, Wand2 } from "lucide-react";
 import { Button } from "../../../components/Button";
 import { Field, Input } from "../../../components/Input";
 import { Select } from "../../../components/Select";
@@ -17,8 +17,10 @@ import {
   computeMargin,
   feeFor,
   feePercent,
+  generateSteppedTiers,
   suggestTierPrice,
   type MarginBreakdown,
+  type RangeBand,
 } from "../../../../core/config/productMath";
 import {
   cheapestVariant,
@@ -43,7 +45,7 @@ import {
   printWorstCaseImpact,
 } from "../../../../core/config/discountImpact";
 import { useAppConfigStore, type MarginPreview } from "../../../../state/appConfigStore";
-import { Grid, NumberField, Section, TabIntro, fmtMoney } from "./parts";
+import { Disclosure, Grid, NumberField, Section, TabIntro, fmtMoney } from "./parts";
 
 type Update = (fn: (p: ProductDefinition) => ProductDefinition) => void;
 
@@ -545,7 +547,152 @@ function TierTable({
           Add page range
         </Button>
       </div>
+      <RangeLadderBuilder
+        tiers={tiers}
+        setTiers={setTiers}
+        currencies={currencies}
+        defaultStart={product.conditions.pages.min}
+      />
     </div>
+  );
+}
+
+// ---- Page-range ladder generator -------------------------------------------
+
+/**
+ * Draws the row table without asking the admin to type each one by hand:
+ * a ladder of "up to page N, every S pages" steps, fine near the short end and
+ * coarser further out (e.g. every 10 pages to 100, then every 100 to 1000).
+ *
+ * Only generates the ROWS. Prices land at 0 (or copied forward, on append) —
+ * pairing this with "Apply to price rows" below fills every price in one move,
+ * which is the combination that makes this useful: draw the ladder, then price
+ * the whole ladder from a target margin.
+ */
+function RangeLadderBuilder({
+  tiers,
+  setTiers,
+  currencies,
+  defaultStart,
+}: {
+  tiers: PageTier[];
+  setTiers: (next: PageTier[]) => void;
+  currencies: CurrencyCode[];
+  defaultStart: number;
+}) {
+  const [mode, setMode] = useState<"append" | "replace">(tiers.length > 0 ? "append" : "replace");
+  const [startPage, setStartPage] = useState(defaultStart || 1);
+  const [bands, setBands] = useState<RangeBand[]>([
+    { upTo: 100, step: 10 },
+    { upTo: 1000, step: 100 },
+  ]);
+
+  const appendStart = tiers.length > 0 ? tiers[tiers.length - 1].maxPages + 1 : startPage;
+  const effectiveStart = mode === "append" ? appendStart : startPage;
+
+  const preview = useMemo(
+    () => generateSteppedTiers(effectiveStart, bands, currencies),
+    [effectiveStart, bands, currencies],
+  );
+
+  const patchBand = (i: number, patch: Partial<RangeBand>) =>
+    setBands(bands.map((b, idx) => (idx === i ? { ...b, ...patch } : b)));
+  const addBand = () => {
+    const last = bands[bands.length - 1];
+    setBands([...bands, last ? { upTo: last.upTo * 10, step: last.step * 10 } : { upTo: 100, step: 10 }]);
+  };
+  const removeBand = (i: number) => setBands(bands.filter((_, idx) => idx !== i));
+
+  const apply = () => {
+    if (preview.length === 0) {
+      toast.warning("No rows to generate — check the steps below.");
+      return;
+    }
+    const seedFrom = mode === "append" ? tiers[tiers.length - 1]?.prices : undefined;
+    const seedPrices: Record<string, number> = {};
+    for (const c of currencies) seedPrices[c] = seedFrom?.[c] ?? 0;
+    const generated = generateSteppedTiers(effectiveStart, bands, currencies, seedPrices);
+    setTiers(mode === "append" ? [...tiers, ...generated] : generated);
+    toast.success(
+      `Generated ${generated.length} page range${generated.length === 1 ? "" : "s"}${
+        seedFrom ? "" : " — set their prices, or use \"Apply to price rows\" below"
+      }.`,
+    );
+  };
+
+  return (
+    <Disclosure label="Generate page ranges">
+      <p className="text-[11px] leading-relaxed text-ink-400">
+        Draw a ladder of rows instead of adding them one at a time: fine steps near the short end, coarser steps
+        further out. Prices land at zero (or carried over, when appending) — use "Apply to price rows" below to fill
+        them all at once from a target margin.
+      </p>
+      <div className="flex flex-wrap items-end gap-3">
+        <Field label="Mode" className="w-44" hint={mode === "append" ? `Starts at page ${appendStart}` : undefined}>
+          <Select
+            value={mode}
+            onChange={(e) => setMode(e.target.value as "append" | "replace")}
+            options={[
+              { value: "append", label: "Append after last row" },
+              { value: "replace", label: "Replace all rows" },
+            ]}
+          />
+        </Field>
+        {mode === "replace" && (
+          <NumberField label="Start at page" value={startPage} min={1} onChange={setStartPage} className="w-32" />
+        )}
+      </div>
+      <div className="space-y-2">
+        {bands.map((b, i) => (
+          <div key={i} className="flex flex-wrap items-end gap-2">
+            <NumberField
+              label={i === 0 ? "Up to page" : "then up to"}
+              value={b.upTo}
+              min={1}
+              onChange={(n) => patchBand(i, { upTo: n })}
+              className="w-32"
+            />
+            <NumberField
+              label="every"
+              value={b.step}
+              min={1}
+              onChange={(n) => patchBand(i, { step: n })}
+              className="w-28"
+              suffix="pages"
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              leftIcon={<Trash2 className="size-3.5" />}
+              onClick={() => removeBand(i)}
+              aria-label="Remove step"
+              disabled={bands.length === 1}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <Button variant="ghost" size="sm" leftIcon={<Plus className="size-4" />} onClick={addBand}>
+          Add step
+        </Button>
+        <p className="text-[11px] text-ink-500">
+          {preview.length > 0
+            ? `Generates ${preview.length} row${preview.length === 1 ? "" : "s"}, pages ${preview[0].minPages}–${
+                preview[preview.length - 1].maxPages
+              }.`
+            : "Add at least one step that advances past the start page."}
+        </p>
+      </div>
+      <Button
+        variant="secondary"
+        size="sm"
+        leftIcon={<Layers className="size-4" />}
+        onClick={apply}
+        disabled={preview.length === 0}
+      >
+        {mode === "replace" ? `Replace with ${preview.length} rows` : `Append ${preview.length} rows`}
+      </Button>
+    </Disclosure>
   );
 }
 

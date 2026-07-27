@@ -37,6 +37,14 @@ service firebase.storage {
       allow write: if false;
     }
 
+    // Admin-managed blog cover images. World-readable so the public blog and the
+    // admin blog editor's preview can show them; written only by the backend
+    // (Admin SDK) after `requireAdmin`.
+    match /public/blog/{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     // Backend-managed print assets are written via the Admin SDK (which bypasses
     // rules) and handed to Lulu through signed URLs — no client access needed.
     match /{allPaths=**} {
