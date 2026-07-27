@@ -41,7 +41,15 @@ export function GuestMigrationDialog() {
       const result = await migrateGuestDrafts(pending.guestToken, [...selected]);
       await reloadProjects();
       const n = result.migrated.length;
-      if (n > 0) {
+      const lostImages = result.blobFailures ?? 0;
+      if (n > 0 && lostImages > 0) {
+        // Don't claim a clean import when art was left behind — those pages
+        // will show as empty and need regenerating.
+        notify.warning(
+          `${n} storybook${n === 1 ? "" : "s"} added, ${lostImages} image${lostImages === 1 ? "" : "s"} missing`,
+          "Some artwork couldn't be copied over. Open the book and regenerate those images.",
+        );
+      } else if (n > 0) {
         notify.success(
           `${n} storybook${n === 1 ? "" : "s"} added to your account`,
           result.skipped.length > 0 ? "Some were already in your account and were left as-is." : undefined,

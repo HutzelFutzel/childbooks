@@ -28,6 +28,8 @@
     "deploy": "node scripts/deploy.mjs",
     "setSecrets": "node scripts/set-secrets.mjs",
     "setSecrets:status": "node scripts/set-secrets.mjs status",
+    "setCors": "node scripts/set-cors.mjs",
+    "setCors:check": "node scripts/set-cors.mjs --check",
     "deploy:functions": "yarn build:functions && firebase deploy --only functions",
     "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes,storage"
   },

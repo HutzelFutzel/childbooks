@@ -42,7 +42,7 @@ import { serverConfig } from "./config";
 import { compositeMaskedRegion, downscaleReference } from "./imaging";
 import { backendPipelineEnv } from "./pipelineEnv";
 import { loadPromptContext, recordLatencySamples } from "./appConfig";
-import { resolveImageModels } from "./modelResolve";
+import { requireTier, resolveImageModels } from "./modelResolve";
 import { recordUsage, withUsage, type CallStats } from "./usage";
 import { featureAllowedForUser } from "./plans";
 import { ensureAfford, estimateForUser, settleActionCost } from "./sparks";
@@ -297,8 +297,10 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
     return;
   }
 
-  // Guests render on the cheap tier only and get no negative buffer.
-  const tier = caller.guest ? "quick" : normalizeImageTier(job.tier);
+  // Guests render on the cheap tier only and get no negative buffer. Everyone
+  // else must have stated a tier — the job fails loudly rather than rendering
+  // (and charging for) a quality the user never chose.
+  const tier = requireTier(job.tier, caller.guest);
   // Pre-check the whole batch is affordable (within the negative buffer) so we
   // don't dispatch work the user can't pay for; each task settles as it renders.
   const action = job.kind === "anchors" ? "anchorImage" : "pageIllustration";
@@ -740,6 +742,8 @@ export const runFanTask = onTaskDispatched<{ uid: string; jobId: string; taskId:
       }
     }
 
+    // `expandJob` validated this and persisted it onto the job doc (guests
+    // already downgraded), so this only re-reads a known-good value.
     const tier = normalizeImageTier(job.tier);
     const timeout = withTaskTimeout();
     try {

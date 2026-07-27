@@ -4,8 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Clock, Sparkles } from "lucide-react";
 import type { ImageActionId } from "../../core/ai/actions";
-import type { ImageTier } from "../../core/config/modelConfig";
-import { DEFAULT_IMAGE_TIER } from "../../core/config/modelConfig";
+import { IMAGE_TIERS, type ImageTier } from "../../core/config/modelConfig";
 import {
   estimateTaskRange,
   formatDurationRange,
@@ -66,12 +65,18 @@ export function GenerationOverlay({
 }: GenerationOverlayProps) {
   const latencyStats = useAppConfigStore((s) => s.latencyStats);
   const preferred = usePreferredImageTier();
-  const effectiveTier = tier ?? preferred ?? DEFAULT_IMAGE_TIER;
+  const effectiveTier = tier ?? preferred;
 
-  const estimate: DurationRange = useMemo(
-    () => estimateTaskRange(latencyStats, action, effectiveTier, "fresh", refCount),
-    [latencyStats, action, effectiveTier, refCount],
-  );
+  // With no tier known yet, span both so the readout brackets the real wait
+  // instead of promising the fast tier's timing.
+  const estimate: DurationRange = useMemo(() => {
+    const tiers = effectiveTier ? [effectiveTier] : IMAGE_TIERS;
+    const ranges = tiers.map((t) => estimateTaskRange(latencyStats, action, t, "fresh", refCount));
+    return {
+      minMs: Math.min(...ranges.map((r) => r.minMs)),
+      maxMs: Math.max(...ranges.map((r) => r.maxMs)),
+    };
+  }, [latencyStats, action, effectiveTier, refCount]);
 
   const [start] = useState(() => Date.now());
   const [now, setNow] = useState(() => Date.now());

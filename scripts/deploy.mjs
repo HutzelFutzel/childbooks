@@ -6,7 +6,8 @@
  * Does, in order:
  *   1. builds the functions bundle (esbuild)
  *   2. deploys functions + Firestore rules/indexes + Storage rules
- *   3. pings the deployed /health and /providers so you immediately see it's up
+ *   3. applies the Storage bucket's CORS policy (cors.json) if it's missing
+ *   4. pings the deployed /health and /providers so you immediately see it's up
  *
  * The Next.js frontend deploys via Firebase App Hosting's GitHub integration
  * (a push to the connected branch triggers a rollout), so it is intentionally
@@ -95,7 +96,7 @@ run("Check environment", "node", ["scripts/check-env.mjs"]);
 // 2. Build the backend bundle.
 run("Build functions", "yarn", ["build:functions"]);
 
-// 2. Deploy backend + rules + indexes (+ optional frontend).
+// 3. Deploy backend + rules + indexes (+ optional frontend).
 // Storage has no `storage:rules` sub-target (that syntax means a named deploy
 // target); the single-bucket rules deploy with the bare `storage` selector.
 const targets = ["functions", "firestore:rules", "firestore:indexes", "storage"];
@@ -109,7 +110,12 @@ run(
   ["--no-install", "firebase", "deploy", "--only", targets.join(","), "--project", PROJECT, "--non-interactive"],
 );
 
-// 3. Post-deploy health ping.
+// 4. Bucket CORS. `--only storage` deploys RULES; the bucket's CORS policy is a
+// separate property, and without it the browser can't download a single
+// generated image. Idempotent: applies only when the live policy is missing.
+run("Storage CORS", "node", ["scripts/set-cors.mjs", "--if-needed", ...(DRY ? ["--dry-run"] : [])]);
+
+// 5. Post-deploy health ping.
 if (!DRY) {
   console.log("\n▶ Verifying deployed backend");
   for (const path of ["/health", "/providers"]) {

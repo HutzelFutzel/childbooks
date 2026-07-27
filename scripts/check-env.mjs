@@ -13,6 +13,9 @@
  *      firebase CLI isn't authenticated.
  *   3. PUBLIC_APP_URL is among the configured values (Stripe redirects are
  *      built from it; the backend hard-fails checkout without it).
+ *   4. The Storage bucket's CORS policy allows the app's origins — without it
+ *      the browser can't download a single generated image (credential-free
+ *      preflight probe; `yarn setCors` fixes it).
  *
  * Run automatically by `yarn deploy` (scripts/deploy.mjs). In CI:
  *   node scripts/check-env.mjs --no-secrets   # config-file checks only
@@ -23,6 +26,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { secretNames, projectId, readEnvLocal } from "./set-secrets.mjs";
 import { appHostingEnv, APP_HOSTING_PATH } from "./apphosting-env.mjs";
+import { corsIsApplied, storageBucket } from "./set-cors.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const ARGS = new Set(process.argv.slice(2));
@@ -64,6 +68,21 @@ if (!existsSync(APP_HOSTING_PATH)) {
   }
   const emu = declared.get("NEXT_PUBLIC_USE_FIREBASE_EMULATORS");
   if (emu && emu !== "false") fail(`NEXT_PUBLIC_USE_FIREBASE_EMULATORS is "${emu}" — production must be "false".`);
+}
+
+// ---- 1b. Storage bucket CORS -------------------------------------------------
+// The client downloads every generated image straight from the bucket, so a
+// missing CORS policy silently blanks the whole studio. Credential-free probe
+// (a plain preflight), so this also runs in CI. `yarn deploy` repairs it.
+
+console.log("\n▶ Storage bucket CORS");
+{
+  const bucket = storageBucket();
+  const { results } = await corsIsApplied(bucket);
+  for (const r of results) {
+    if (r.allowed) ok(`${r.origin} may read gs://${bucket}.`);
+    else warn(`${r.origin} is blocked by gs://${bucket} CORS — images won't load. Run \`yarn setCors\`.`);
+  }
 }
 
 // ---- 2 + 3. Backend secrets (Cloud Secret Manager) --------------------------

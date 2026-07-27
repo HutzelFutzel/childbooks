@@ -4,8 +4,9 @@
  * Mirrors the `users/{uid}` profile doc and `users/{uid}/addresses` subcollection
  * into the UI (like {@link useOrdersStore} does for orders) and exposes the
  * mutations the checkout flow needs: save/remove an address and pick a default.
- * Watch when a full account is present; stop on sign-out so one identity's data
- * never leaks into another's session.
+ * Watched for every signed-in identity — guests included, since the profile is
+ * also where the image-quality preference lives and they generate too. Stop on
+ * sign-out so one identity's data never leaks into another's session.
  */
 import { create } from "zustand";
 import type { Unsubscribe } from "firebase/firestore";
@@ -43,6 +44,12 @@ interface ProfileState {
   addresses: SavedAddress[];
   /** True until the first address snapshot arrives. */
   loading: boolean;
+  /**
+   * True once the first profile snapshot has landed (even an empty one). Tells
+   * "this user has no saved preference" apart from "we haven't looked yet" —
+   * without it the tier gate would re-prompt users who already chose.
+   */
+  profileLoaded: boolean;
   profileUnsub: Unsubscribe | null;
   addressesUnsub: Unsubscribe | null;
 
@@ -74,13 +81,14 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
   profile: null,
   addresses: [],
   loading: false,
+  profileLoaded: false,
   profileUnsub: null,
   addressesUnsub: null,
 
   watch() {
     if (get().addressesUnsub) return;
     set({ loading: true });
-    const profileUnsub = subscribeProfile((profile) => set({ profile }));
+    const profileUnsub = subscribeProfile((profile) => set({ profile, profileLoaded: true }));
     const addressesUnsub = subscribeAddresses((addresses) => set({ addresses, loading: false }));
     set({ profileUnsub, addressesUnsub });
   },
@@ -92,6 +100,7 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
       profile: null,
       addresses: [],
       loading: false,
+      profileLoaded: false,
       profileUnsub: null,
       addressesUnsub: null,
     });
@@ -174,6 +183,28 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
     return byId ?? addresses[0];
   },
 }));
+
+/**
+ * Resolve once the first profile snapshot has arrived (or immediately if it
+ * already has). Generation gates await this so a click landing before the
+ * subscription warms up doesn't read a saved preference as "unset". Gives up
+ * after `timeoutMs` — a hung read must not block the user forever; the gate
+ * then just asks again.
+ */
+export function whenProfileLoaded(timeoutMs = 4000): Promise<void> {
+  if (useProfileStore.getState().profileLoaded) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      unsubscribe();
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    const unsubscribe = useProfileStore.subscribe((s) => {
+      if (s.profileLoaded) finish();
+    });
+  });
+}
 
 /** Re-export for convenience at call sites that render address labels. */
 export { addressSummary };

@@ -20,11 +20,12 @@ import { ensureAffordAction, InsufficientSparks, settleActionCost } from "./spar
 import { ensureWithinQuota, incrementQuota, QuotaExceeded } from "./quotas";
 import {
   apiKeyFor,
+  ImageTierRequired,
+  requireTier,
   resolveImageModels,
   resolveTextAction,
   ServiceUnavailable,
 } from "./modelResolve";
-import { normalizeImageTier } from "../../books-frontend/src/core/config/modelConfig";
 import { analyzeStory, generateAnchorDescription } from "../../books-frontend/src/core/pipeline/analysis";
 import { generateStoryDraft } from "../../books-frontend/src/core/pipeline/storyDraft";
 import { generateScreenplay } from "../../books-frontend/src/core/pipeline/screenplay";
@@ -69,6 +70,12 @@ function sendError(res: Response, err: unknown): void {
   }
   if (err instanceof ServiceUnavailable) {
     res.status(503).json({ error: { message: err.message } });
+    return;
+  }
+  if (err instanceof ImageTierRequired) {
+    // 400 — the client's tier gate should have caught this; say so plainly
+    // rather than silently rendering at a quality the user never chose.
+    res.status(400).json({ error: { message: err.message, code: "image_tier_required" } });
     return;
   }
   if (err instanceof QuotaExceeded) {
@@ -235,7 +242,7 @@ export function registerAiRoutes(app: Express): void {
       }
       // Guests render on the cheap tier only and get no negative buffer.
       const guest = isAnonymousToken(req.authToken);
-      const tier = guest ? "quick" : normalizeImageTier(rawTier);
+      const tier = requireTier(rawTier, guest);
       await ensureAffordAction(req.uid!, "anchorImage", tier, { noNegativeBuffer: guest });
       const [models, prompts] = await Promise.all([
         resolveImageModels("anchorImage", tier),
@@ -284,7 +291,7 @@ export function registerAiRoutes(app: Express): void {
       const action = cover ? "coverIllustration" : "pageIllustration";
       // Guests render on the cheap tier only and get no negative buffer.
       const guest = isAnonymousToken(req.authToken);
-      const tier = guest ? "quick" : normalizeImageTier(rawTier);
+      const tier = requireTier(rawTier, guest);
       // An "edit" is a re-roll carrying an instruction. These count against the
       // per-book edit quota (scoped to the project); fresh generations don't.
       const isEdit = typeof options?.edit === "string" && options.edit.trim().length > 0;
@@ -340,7 +347,7 @@ export function registerAiRoutes(app: Express): void {
       // title typography needs the high-quality tier, so it's forced on (unless
       // the caller is a guest, who can't use premium at all).
       const guest = isAnonymousToken(req.authToken);
-      const requested = guest ? "quick" : normalizeImageTier(rawTier);
+      const requested = requireTier(rawTier, guest);
       const bake = Boolean(front.bakeText && project.title.trim());
       const tier = !guest && bake ? "premium" : requested;
       await ensureAffordAction(req.uid!, "coverIllustration", tier, { noNegativeBuffer: guest });

@@ -8,7 +8,8 @@ import { serverConfig } from "./config";
 import { getModelConfig } from "./appConfig";
 import { ALL_PROVIDERS } from "../../books-frontend/src/core/providers";
 import {
-  DEFAULT_IMAGE_TIER,
+  GUEST_IMAGE_TIER,
+  parseImageTier,
   resolveImageModel,
   resolveTextModel,
   TEXT_SPEEDS,
@@ -21,7 +22,27 @@ import type { ModelSelection } from "../../books-frontend/src/core/types";
 
 export class ServiceUnavailable extends Error {}
 
+/** The caller didn't state which image quality to render at. */
+export class ImageTierRequired extends Error {
+  constructor() {
+    super("Choose an image quality (Fast or High-Quality) before generating.");
+  }
+}
+
 const UNAVAILABLE = "AI generation isn't available right now. It's being set up on the server.";
+
+/**
+ * The tier a request renders at. Guests are always downgraded to the guest tier
+ * (premium is account-only). For everyone else the choice must be explicit —
+ * defaulting here would spend a user's Sparks on a quality level they never
+ * picked, which is exactly what the client-side gate exists to prevent.
+ */
+export function requireTier(rawTier: unknown, guest: boolean): ImageTier {
+  if (guest) return GUEST_IMAGE_TIER;
+  const tier = parseImageTier(rawTier);
+  if (!tier) throw new ImageTierRequired();
+  return tier;
+}
 
 export function availability(): Record<ProviderId, boolean> {
   const cfg = serverConfig();
@@ -70,7 +91,7 @@ export async function resolveSuggestionModel(): Promise<ModelSelection> {
  */
 export async function resolveImageModels(
   imageAction: ImageActionId,
-  tier: ImageTier = DEFAULT_IMAGE_TIER,
+  tier: ImageTier,
 ): Promise<ResolvedModels> {
   const cfg = await getModelConfig();
   const a = availability();

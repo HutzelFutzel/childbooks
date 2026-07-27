@@ -11,6 +11,8 @@ export interface GuestMigrationResult {
   migrated: string[];
   /** Ids that were skipped (already present, or no longer found on the guest). */
   skipped: string[];
+  /** Images that couldn't be copied across — those pages arrive blank. */
+  blobFailures?: number;
 }
 
 export async function migrateGuestDrafts(

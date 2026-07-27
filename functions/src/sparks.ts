@@ -40,7 +40,7 @@ import {
 import { costForUsage, costKey } from "../../books-frontend/src/core/config/modelCosts";
 import { recentCostSamples } from "../../books-frontend/src/core/config/imageCostStats";
 import { ALL_IMAGE_ACTION_IDS, type ImageActionId } from "../../books-frontend/src/core/ai/actions";
-import { DEFAULT_IMAGE_TIER, type ImageTier } from "../../books-frontend/src/core/config/modelConfig";
+import { type ImageTier } from "../../books-frontend/src/core/config/modelConfig";
 import type { UsageEvent } from "./usage";
 
 function isImageAction(action: string): action is ImageActionId {
@@ -628,7 +628,7 @@ async function deductSparks(
 export async function estimateForUser(
   uid: string,
   action: string,
-  tier: ImageTier = DEFAULT_IMAGE_TIER,
+  tier: ImageTier,
 ): Promise<number> {
   const config = await getSparksConfig();
   if (!config.enabled) return 0;
@@ -654,7 +654,7 @@ export async function estimateForUser(
 export async function ensureAffordAction(
   uid: string,
   action: string,
-  tier: ImageTier = DEFAULT_IMAGE_TIER,
+  tier: ImageTier,
   opts: AffordOptions = {},
 ): Promise<void> {
   const estimate = await estimateForUser(uid, action, tier);

@@ -13,11 +13,7 @@ import {
   type CoverSpec,
   type ScreenplayDoc,
 } from "../../core/types";
-import {
-  DEFAULT_IMAGE_TIER,
-  DEFAULT_IMAGE_TIER_LABELS,
-  type ImageTier,
-} from "../../core/config/modelConfig";
+import { DEFAULT_IMAGE_TIER_LABELS, type ImageTier } from "../../core/config/modelConfig";
 import type { SparkEstimateRange } from "../../core/config/sparks";
 import { getCursor, selectVersion, updateNodeContent, allVersions } from "../../core/versioning";
 import { coverTextDrift, generateCoverWrap, generateIllustrationVersion } from "../../state/ai";
@@ -32,7 +28,7 @@ import { Drawer } from "../components/Drawer";
 import { Field, Input, Textarea } from "../components/Input";
 import { Toggle } from "../components/Toggle";
 import { VersionThumb } from "../components/VersionThumb";
-import { useTierSparkEstimate } from "../hooks/useTierEstimate";
+import { spanTierRanges, useTierSparkEstimate } from "../hooks/useTierEstimate";
 import { SparkEstimateCost } from "../layout/SparkCost";
 import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
@@ -74,11 +70,13 @@ export function CoverToolsDrawer() {
   const quickLabel = tierLabels?.quick?.trim() || DEFAULT_IMAGE_TIER_LABELS.quick;
 
   // Cost estimates track the tier that will ACTUALLY be used (baking forces the
-  // premium tier) and the number of variations requested.
-  const userTier = usePreferredImageTier() ?? DEFAULT_IMAGE_TIER;
+  // premium tier) and the number of variations requested. Before the user has
+  // chosen a tier, span both instead of quoting one they never picked.
+  const userTier = usePreferredImageTier();
   const quickRange = useTierSparkEstimate("coverIllustration", "quick");
   const premiumRange = useTierSparkEstimate("coverIllustration", "premium");
-  const rangeForTier = (t: ImageTier) => (t === "premium" ? premiumRange : quickRange);
+  const rangeForTier = (t: ImageTier | null) =>
+    t === "premium" ? premiumRange : t === "quick" ? quickRange : spanTierRanges([quickRange, premiumRange]);
 
   const doc = project.screenplay ? getCursor(project.screenplay).content : null;
   const front = doc?.frontCover;
@@ -86,7 +84,7 @@ export function CoverToolsDrawer() {
   const frontBake = Boolean(front?.bakeText);
   const frontDrift = coverTextDrift(project, COVER_FRONT_ID);
 
-  const frontTier: ImageTier = frontBake ? "premium" : userTier;
+  const frontTier: ImageTier | null = frontBake ? "premium" : userTier;
   const frontCostRange = scaleRange(rangeForTier(frontTier), versionCount);
   const backCostRange = scaleRange(rangeForTier(userTier), versionCount);
   const setCostRange = wrap
@@ -168,7 +166,7 @@ export function CoverToolsDrawer() {
   }
 
   async function generateFront() {
-    const tier = frontBake ? "premium" : requireImageTier();
+    const tier = frontBake ? "premium" : await requireImageTier();
     if (!tier) return;
     setBusy("front");
     try {
@@ -181,7 +179,7 @@ export function CoverToolsDrawer() {
   }
 
   async function generateBack() {
-    const tier = requireImageTier();
+    const tier = await requireImageTier();
     if (!tier) return;
     setBusy("back");
     try {
@@ -195,7 +193,7 @@ export function CoverToolsDrawer() {
 
   /** One continuous artwork, split into front + back — guaranteed to match. */
   async function generateWrapSet() {
-    const tier = frontBake ? "premium" : requireImageTier();
+    const tier = frontBake ? "premium" : await requireImageTier();
     if (!tier) return;
     setBusy("set");
     setPageGenerating(COVER_FRONT_ID, true);
@@ -216,7 +214,7 @@ export function CoverToolsDrawer() {
 
   async function generateSet() {
     if (wrap) return generateWrapSet();
-    const tier = requireImageTier();
+    const tier = await requireImageTier();
     if (!tier) return;
     const setFrontTier: ImageTier = frontBake ? "premium" : tier;
     setBusy("set");

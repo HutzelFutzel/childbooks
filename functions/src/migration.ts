@@ -16,8 +16,7 @@
 import express, { type Express, type Response } from "express";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
-import { getStorage } from "firebase-admin/storage";
-import { ensureAdmin } from "./storage";
+import { blobBucket, blobPath, ensureAdmin } from "./storage";
 import { isAnonymousToken, type AuthedRequest } from "./auth";
 
 const MAX_PROJECTS = 100;
@@ -42,16 +41,25 @@ function collectBlobIds(value: unknown, out = new Set<string>()): Set<string> {
   return out;
 }
 
-/** Copy one blob between user spaces; missing sources are skipped (best-effort). */
-async function copyBlob(fromUid: string, toUid: string, blobId: string): Promise<void> {
-  const bucket = getStorage().bucket();
-  const src = bucket.file(`users/${fromUid}/blobs/${blobId}`);
+/**
+ * Copy one blob between user spaces. Returns false when the copy failed, so the
+ * caller can report how much art didn't come across instead of silently handing
+ * the user a project full of blank pages.
+ */
+async function copyBlob(fromUid: string, toUid: string, blobId: string): Promise<boolean> {
+  // Always the resolved bucket: `getStorage().bucket()` would use the app's
+  // default, which can be the legacy `.appspot.com` bucket the client never
+  // reads — copies would "succeed" into a bucket nobody looks at.
+  const bucket = blobBucket();
+  const src = bucket.file(blobPath(fromUid, blobId));
   try {
-    await src.copy(bucket.file(`users/${toUid}/blobs/${blobId}`));
+    await src.copy(bucket.file(blobPath(toUid, blobId)));
+    return true;
   } catch (err) {
     // A missing blob (already GC'd, partial upload) shouldn't sink the project —
     // the affected image simply renders as absent, exactly as it did for the guest.
     console.warn(`[migration] blob copy skipped (${blobId}):`, (err as Error)?.message);
+    return false;
   }
 }
 
@@ -102,6 +110,8 @@ export function registerMigrationRoutes(app: Express): void {
       const db = getFirestore();
       const migrated: string[] = [];
       const skipped: string[] = [];
+      /** Images that didn't come across — reported so the UI can warn. */
+      let blobFailures = 0;
       for (const projectId of projectIds) {
         const docId = projectDocId(projectId);
         const srcSnap = await db.doc(`users/${fromUid}/store/${docId}`).get();
@@ -123,12 +133,20 @@ export function registerMigrationRoutes(app: Express): void {
           // Unparseable payload — copy the doc anyway; the client normalizes.
         }
         // Blobs first, then the doc, so the project never appears with missing art.
-        await Promise.all([...blobIds].map((id) => copyBlob(fromUid, uid, id)));
+        const copies = await Promise.all([...blobIds].map((id) => copyBlob(fromUid, uid, id)));
+        const failed = copies.filter((okCopy) => !okCopy).length;
+        if (failed > 0) {
+          blobFailures += failed;
+          console.error(
+            `[migration] ${failed}/${copies.length} blobs failed to copy for project ${projectId} ` +
+              `(${fromUid} → ${uid}) in bucket ${blobBucket().name}`,
+          );
+        }
         await dstRef.set(data);
         migrated.push(projectId);
       }
 
-      res.json({ migrated, skipped });
+      res.json({ migrated, skipped, blobFailures });
     } catch (err) {
       console.error("[migration] guest-draft import failed", err);
       res.status(500).json({ error: { message: "We couldn't import your drafts. Please try again." } });

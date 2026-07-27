@@ -11,7 +11,7 @@ import { Field, Input, Textarea } from "../components/Input";
 import { ImagePreview } from "../components/ImagePreview";
 import { Modal } from "../components/Modal";
 import { VersionThumb } from "../components/VersionThumb";
-import { useBlobUrl } from "../hooks/useBlobUrl";
+import { useBlobUrlState } from "../hooks/useBlobUrl";
 import { cn } from "../lib/cn";
 import { formatList } from "../lib/formatList";
 import { notify } from "../lib/notify";
@@ -52,7 +52,7 @@ export function AnchorEditor({
   const changedRefs = project && isStale ? changedAnchorsForAnchor(project, anchor.id) : [];
   const cursorId = anchor.versions?.cursorId;
   const cursorNode = cursorId ? anchor.versions!.nodes[cursorId] : undefined;
-  const cursorUrl = useBlobUrl(cursorNode?.content.blobId);
+  const { url: cursorUrl, status: cursorStatus } = useBlobUrlState(cursorNode?.content.blobId);
   const hasImage = Boolean(anchor.versions);
   const versions = anchor.versions ? allVersions(anchor.versions) : [];
   const TypeIcon = ANCHOR_TYPE_ICON[anchor.type];
@@ -137,7 +137,13 @@ export function AnchorEditor({
           refCount={anchor.containedIds?.length ?? 0}
           aspect={1}
           className="rounded-xl"
-          emptyLabel="No image yet — generate below"
+          emptyLabel={
+            // The version exists but its blob didn't come back: say so rather
+            // than pretending nothing was ever generated.
+            cursorStatus === "error" || cursorStatus === "missing"
+              ? "This image couldn't be loaded"
+              : "No image yet — generate below"
+          }
         />
         <div className="flex items-center gap-2 pt-2.5">
           <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600">

@@ -123,17 +123,22 @@ config. Two production prerequisites are easy to miss:
    method), plus any providers you offer (Email/Password, Google). Without
    Anonymous, guest-first sign-in fails and the app can't reach the backend.
 2. **Configure CORS on the Storage bucket** so the browser can download blobs
-   (`getBlob`) from your App Hosting origin. Use the SAME bucket as
-   `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` — for this project that's the modern
-   `<project>.firebasestorage.app` bucket, NOT the legacy `<project>.appspot.com`
-   one. Applying CORS to the wrong bucket leaves blobs unreadable (the version
-   node appears but the thumbnail/canvas stays empty):
+   (`getBlob`) from your App Hosting origin. This is a bucket property, so
+   `firebase deploy --only storage` (which ships storage *rules*) does not do
+   it. Without it every generation looks like it silently failed: the version
+   node appears, Sparks are spent, the object is in the bucket, and the
+   thumbnail/canvas stays empty.
 
    ```bash
-   # cors.json lives at the repo root; list every origin the app is served from.
-   gcloud storage buckets update gs://childbook-60f89.firebasestorage.app \
-     --cors-file=cors.json
+   yarn setCors          # apply cors.json to the bucket, then verify
+   yarn setCors:check    # verify only — no credentials needed, safe in CI
    ```
+
+   Add every origin the app is served from to `cors.json`. The script reads the
+   bucket from `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` in `apphosting.yaml`, so it
+   can't drift onto the legacy `<project>.appspot.com` bucket. `yarn deploy`
+   re-applies the policy whenever the live bucket is missing it, and
+   `yarn check:env` warns when an origin is blocked.
 
 ## Where do I put the Firebase private key?
 

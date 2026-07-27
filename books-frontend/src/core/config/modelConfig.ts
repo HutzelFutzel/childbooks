@@ -43,7 +43,15 @@ export const IMAGE_SPEED_LABELS: Record<ImageSpeed, string> = {
  */
 export type ImageTier = "quick" | "premium";
 export const IMAGE_TIERS: ImageTier[] = ["quick", "premium"];
-export const DEFAULT_IMAGE_TIER = "quick" as const satisfies ImageTier;
+
+/**
+ * The only tier guests can render on — premium is an account feature, and the
+ * server downgrades anonymous callers to this. It is deliberately NOT a
+ * fallback for signed-in users: everyone else must choose (see
+ * `requireImageTier`), so nobody silently spends Sparks on a tier they never
+ * picked.
+ */
+export const GUEST_IMAGE_TIER = "quick" as const satisfies ImageTier;
 
 /** Default display names for the tiers (admin-overridable via `imageTierLabels`). */
 export const DEFAULT_IMAGE_TIER_LABELS: Record<ImageTier, string> = {
@@ -51,9 +59,34 @@ export const DEFAULT_IMAGE_TIER_LABELS: Record<ImageTier, string> = {
   premium: "High-Quality",
 };
 
-/** Coerce an untrusted value to a valid tier, defaulting to the "quick" tier. */
+/** An untrusted value as a tier, or null when it isn't an explicit choice. */
+export function parseImageTier(value: unknown): ImageTier | null {
+  return value === "premium" || value === "quick" ? value : null;
+}
+
+/**
+ * Coerce an untrusted value to a valid tier. Only for DISPLAY paths (progress
+ * estimates on historical jobs); anything that spends Sparks must go through
+ * {@link parseImageTier} and refuse to guess.
+ */
 export function normalizeImageTier(value: unknown): ImageTier {
-  return value === "premium" ? "premium" : "quick";
+  return parseImageTier(value) ?? GUEST_IMAGE_TIER;
+}
+
+/**
+ * Is ANY image model configured for an available provider (regardless of tier)?
+ * Used to gate the generation UI before the user has picked a tier.
+ */
+export function resolveAnyImageModel(
+  cfg: ModelConfig,
+  action: ImageActionId,
+  isAvailable?: (p: ProviderId) => boolean,
+): ModelSelection | null {
+  for (const tier of IMAGE_TIERS) {
+    const sel = resolveImageModel(cfg, action, tier, isAvailable);
+    if (sel) return sel;
+  }
+  return null;
 }
 
 /** Stage 1: per-provider speed slots, each holding a concrete model id ("" = unset). */

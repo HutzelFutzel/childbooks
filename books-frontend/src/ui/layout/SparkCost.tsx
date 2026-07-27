@@ -4,16 +4,21 @@ import { Sparkles } from "lucide-react";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import type { SparkEstimateRange } from "../../core/config/sparks";
 import type { ImageActionId } from "../../core/ai/actions";
-import { DEFAULT_IMAGE_TIER } from "../../core/config/modelConfig";
+import { IMAGE_TIERS, type ImageTier } from "../../core/config/modelConfig";
 import { usePreferredImageTier } from "../../state/imageTier";
 import { usePlanActionMultiplier, useSubscriptionStore } from "../../state/subscriptionStore";
 import { activeSubscription } from "../../platform/subscriptions";
 import { findPublicPlanByPriceId, planActionMultiplier } from "../../core/config/plans";
-import { tierSparkRange, sumTierRanges } from "../hooks/useTierEstimate";
+import { spanTierRanges, tierSparkRange, sumTierRanges } from "../hooks/useTierEstimate";
 
-/** The effective image tier for previews (user's choice, else the default). */
-function useEffectiveTier() {
-  return usePreferredImageTier() ?? DEFAULT_IMAGE_TIER;
+/**
+ * The tiers a preview should price. Once the user has chosen, that's the one
+ * they'll be charged for; before then we span both rather than quote the cheap
+ * one as if it were decided.
+ */
+function usePreviewTiers(): ImageTier[] {
+  const tier = usePreferredImageTier();
+  return tier ? [tier] : IMAGE_TIERS;
 }
 
 /**
@@ -21,21 +26,23 @@ function useEffectiveTier() {
  * quality choice + the live cost window. Null when the economy is off.
  */
 export function useImageActionRange(action: ImageActionId): SparkEstimateRange | null {
-  const tier = useEffectiveTier();
+  const tiers = usePreviewTiers();
   const sparks = useAppConfigStore((s) => s.sparks);
   const modelCosts = useAppConfigStore((s) => s.modelCosts);
   const stats = useAppConfigStore((s) => s.imageCostStats);
   // modelConfig read inside tierSparkRange via resolveImageModelClient.
   useAppConfigStore((s) => s.modelConfig);
   const multiplier = usePlanActionMultiplier(action);
-  return tierSparkRange(sparks, modelCosts, stats, action, tier, multiplier);
+  return spanTierRanges(
+    tiers.map((t) => tierSparkRange(sparks, modelCosts, stats, action, t, multiplier)),
+  );
 }
 
 /** Tier-aware Spark estimate RANGE for a batch of image actions (summed). */
 export function useImageBatchRange(
   items: { action: ImageActionId; count: number }[],
 ): SparkEstimateRange | null {
-  const tier = useEffectiveTier();
+  const tiers = usePreviewTiers();
   const sparks = useAppConfigStore((s) => s.sparks);
   const modelCosts = useAppConfigStore((s) => s.modelCosts);
   const stats = useAppConfigStore((s) => s.imageCostStats);
@@ -50,7 +57,9 @@ export function useImageBatchRange(
     .filter((it) => it.count > 0)
     .map((it) => {
       const m = planActionMultiplier(plan, it.action);
-      const r = tierSparkRange(sparks, modelCosts, stats, it.action, tier, m);
+      const r = spanTierRanges(
+        tiers.map((t) => tierSparkRange(sparks, modelCosts, stats, it.action, t, m)),
+      );
       if (!r) return null;
       return { minSparks: r.minSparks * it.count, maxSparks: r.maxSparks * it.count };
     });

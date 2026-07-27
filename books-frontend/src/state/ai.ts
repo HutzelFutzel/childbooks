@@ -52,7 +52,7 @@ import {
 } from "../platform/aiClient";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../core/types";
 import { resolveImageModelClient, resolveModelsClient } from "../platform/aiResolve";
-import { DEFAULT_IMAGE_TIER, type ImageTier } from "../core/config/modelConfig";
+import { type ImageTier } from "../core/config/modelConfig";
 import { requireImageTier } from "./imageTierPrompt";
 import { useProjectsStore } from "./projectsStore";
 import { useSettingsStore } from "./settingsStore";
@@ -91,7 +91,7 @@ function requireKey(provider: "openai" | "google"): string {
  * gate the UI and to stamp job payloads; the server re-resolves authoritatively.
  * Throws a friendly auth error when nothing usable is configured.
  */
-export function getResolvedModels(tier: ImageTier = DEFAULT_IMAGE_TIER): ResolvedModels {
+export function getResolvedModels(tier: ImageTier): ResolvedModels {
   const models = resolveModelsClient(tier);
   if (!models) {
     throw new ProviderError(
@@ -162,7 +162,7 @@ export async function generateAnchorVersion(
   const anchor = project.anchors?.find((a) => a.id === anchorId);
   if (!anchor) throw new Error("Anchor not found.");
   const { tier, ...runOptions } = options;
-  const resolvedTier = tier ?? requireImageTier();
+  const resolvedTier = tier ?? (await requireImageTier());
   if (!resolvedTier) return;
   const render = await anchorImageRemote(
     project,
@@ -423,7 +423,7 @@ export async function generateIllustrationVersion(
   const project = useProjectsStore.getState().current();
   if (!project) throw new Error("No active project.");
   const { tier, ...runOptions } = options;
-  const resolvedTier = tier ?? requireImageTier();
+  const resolvedTier = tier ?? (await requireImageTier());
   if (!resolvedTier) return;
   const render = await illustrationRemote(
     project,
@@ -454,7 +454,7 @@ export async function generateIllustrationVersion(
 export async function generateCoverWrap(options: { tier?: ImageTier } = {}): Promise<boolean> {
   const project = useProjectsStore.getState().current();
   if (!project) throw new Error("No active project.");
-  const resolvedTier = options.tier ?? requireImageTier();
+  const resolvedTier = options.tier ?? (await requireImageTier());
   if (!resolvedTier) return false;
   const { front, back } = await coverWrapRemote(project, resolvedTier);
   // Record the baked title/subtitle/author on the front panel (the wrap bakes
@@ -493,7 +493,7 @@ export async function generateCoverWrap(options: { tier?: ImageTier } = {}): Pro
 export function buildIllustrationTask(
   project: Project,
   spread: ScreenplaySpread,
-  tier: ImageTier = DEFAULT_IMAGE_TIER,
+  tier: ImageTier,
 ): JobTask {
   const imageModel = resolveImageModelClient("pageIllustration", tier);
   if (!imageModel) {

@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { motion } from "framer-motion";
-import { ImageIcon } from "lucide-react";
-import { useBlobUrl } from "../hooks/useBlobUrl";
+import { ImageIcon, ImageOff } from "lucide-react";
+import { useBlobUrlState } from "../hooks/useBlobUrl";
 import { cn } from "../lib/cn";
 import { paintIn } from "../lib/motion";
 
@@ -32,15 +32,18 @@ export function BlobThumbnail({
   fallback,
   instant = false,
 }: BlobThumbnailProps) {
-  const url = useBlobUrl(blobId);
-  const loading = Boolean(blobId) && !url;
+  const { url, status } = useBlobUrlState(blobId);
+  // Only an in-flight fetch shimmers. A blob that is missing or that failed to
+  // download resolves to the empty state instead, so a broken bucket reads as
+  // "no image" rather than as "still working".
+  const failed = status === "error" || status === "missing";
 
   return (
     <div
       className={cn("relative overflow-hidden rounded-xl bg-ink-100", className)}
       style={{ aspectRatio: String(aspect) }}
     >
-      {loading ? (
+      {status === "loading" ? (
         <div className="shimmer absolute inset-0" aria-hidden />
       ) : url ? (
         <motion.img
@@ -52,8 +55,11 @@ export function BlobThumbnail({
           animate="visible"
         />
       ) : (
-        <div className="absolute inset-0 flex items-center justify-center text-ink-300">
-          {fallback ?? <ImageIcon className="size-6" />}
+        <div
+          className="absolute inset-0 flex items-center justify-center text-ink-300"
+          title={failed ? "This image couldn't be loaded." : undefined}
+        >
+          {failed ? <ImageOff className="size-6" /> : (fallback ?? <ImageIcon className="size-6" />)}
         </div>
       )}
     </div>

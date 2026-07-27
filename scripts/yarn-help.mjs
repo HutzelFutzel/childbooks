@@ -29,6 +29,8 @@ const ROOT_DESCRIPTIONS = {
   "deploy:rules": "Deploy Firestore rules/indexes and Storage rules only",
   setSecrets: "Push functions/.env.local → Secret Manager (+ GitHub allowlist)",
   "setSecrets:status": "Show which declared secrets exist in Secret Manager",
+  setCors: "Apply cors.json to the Storage bucket (blob downloads need it)",
+  "setCors:check": "Verify the bucket allows the app's origins (no credentials)",
   cmds: "Show this list of yarn scripts (preferred; `yarn help` is reserved by Yarn)",
   help: "Same as yarn cmds (use `yarn run help` — plain yarn help is Yarn CLI)",
 };

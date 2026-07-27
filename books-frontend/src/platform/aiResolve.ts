@@ -8,7 +8,6 @@
  * the backend has keys for (`settingsStore`).
  */
 import {
-  DEFAULT_IMAGE_TIER,
   resolveImageModel,
   resolveTextModel,
   type ImageTier,
@@ -32,18 +31,19 @@ export function resolveTextModelClient(action: TextActionId): ModelSelection | n
 
 export function resolveImageModelClient(
   action: ImageActionId,
-  tier: ImageTier = DEFAULT_IMAGE_TIER,
+  tier: ImageTier,
 ): ModelSelection | null {
   const cfg = useAppConfigStore.getState().modelConfig;
   return resolveImageModel(cfg, action, tier, availability());
 }
 
 /**
- * Build the `ResolvedModels` triple (text/image/anchor) used to gate the UI and
- * to fill job payloads for the given quality tier. Returns null when no usable
- * text+image model is configured for an available provider.
+ * Build the `ResolvedModels` triple (text/image/anchor) used to fill job
+ * payloads for the given quality tier. Returns null when no usable text+image
+ * model is configured for an available provider. The tier is always explicit —
+ * the user has picked one by the time anything is generated.
  */
-export function resolveModelsClient(tier: ImageTier = DEFAULT_IMAGE_TIER): ResolvedModels | null {
+export function resolveModelsClient(tier: ImageTier): ResolvedModels | null {
   const cfg = useAppConfigStore.getState().modelConfig;
   const avail = availability();
   const textModel = resolveTextModel(cfg, "screenplay", avail);

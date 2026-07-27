@@ -145,11 +145,24 @@ export async function createAnchorsJob(
   return ref.id;
 }
 
+/**
+ * Report a listener failure. A rejected snapshot listener (missing index,
+ * denied rule, dropped connection) otherwise just stops delivering: progress
+ * freezes and finished renders never reconcile, with nothing in the console to
+ * say why. These are the listeners the whole generation UI hangs off, so a
+ * failure has to be loud.
+ */
+function listenerFailed(what: string, err: unknown): void {
+  console.error(`[jobs] ${what} listener failed — live progress will stall.`, err);
+}
+
 /** Subscribe to a job document; the callback fires on every change. */
 export function subscribeJob(jobId: string, cb: (job: AnyJob | null) => void): Unsubscribe {
-  return onSnapshot(doc(getFirebaseDb(), `users/${uid()}/jobs`, jobId), (snap) => {
-    cb(snap.exists() ? (snap.data() as AnyJob) : null);
-  });
+  return onSnapshot(
+    doc(getFirebaseDb(), `users/${uid()}/jobs`, jobId),
+    (snap) => cb(snap.exists() ? (snap.data() as AnyJob) : null),
+    (err) => listenerFailed(`job ${jobId}`, err),
+  );
 }
 
 /**
@@ -164,9 +177,11 @@ export function subscribeProjectJobs(
     collection(getFirebaseDb(), `users/${uid()}/jobs`),
     where("projectId", "==", projectId),
   );
-  return onSnapshot(q, (snap) => {
-    cb(snap.docs.map((d) => ({ id: d.id, ...(d.data() as GenerationJob) })));
-  });
+  return onSnapshot(
+    q,
+    (snap) => cb(snap.docs.map((d) => ({ id: d.id, ...(d.data() as GenerationJob) }))),
+    (err) => listenerFailed(`jobs for project ${projectId}`, err),
+  );
 }
 
 /**
@@ -184,17 +199,23 @@ export function subscribeProjectTasks(
     where("uid", "==", uid()),
     where("projectId", "==", projectId),
   );
-  return onSnapshot(q, (snap) => {
-    cb(snap.docs.map((d) => d.data() as TaskDoc));
-  });
+  return onSnapshot(
+    q,
+    (snap) => cb(snap.docs.map((d) => d.data() as TaskDoc)),
+    // Most likely cause: the `tasks` collection-group index is missing. Without
+    // it no render ever lands in the project, so name it in the message.
+    (err) => listenerFailed(`tasks for project ${projectId} (needs the tasks collection-group index)`, err),
+  );
 }
 
 /** Subscribe to a single job's task subcollection. */
 export function subscribeJobTasks(jobId: string, cb: (tasks: TaskDoc[]) => void): Unsubscribe {
   const col = collection(getFirebaseDb(), `users/${uid()}/jobs/${jobId}/tasks`);
-  return onSnapshot(col, (snap) => {
-    cb(snap.docs.map((d) => d.data() as TaskDoc));
-  });
+  return onSnapshot(
+    col,
+    (snap) => cb(snap.docs.map((d) => d.data() as TaskDoc)),
+    (err) => listenerFailed(`tasks for job ${jobId}`, err),
+  );
 }
 
 /** One-shot read of a job's tasks (for eager reconcile before continuing). */

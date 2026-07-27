@@ -62,6 +62,20 @@ export function tierSparkRange(
   );
 }
 
+/**
+ * Widest range covering every candidate (min of mins, max of maxes). Used for
+ * previews shown BEFORE the user has picked a quality tier: spanning both tiers
+ * is honest about the spread, where quoting one tier's price would not be.
+ */
+export function spanTierRanges(ranges: (SparkEstimateRange | null)[]): SparkEstimateRange | null {
+  const valid = ranges.filter((r): r is SparkEstimateRange => r != null);
+  if (valid.length === 0) return null;
+  return {
+    minSparks: Math.min(...valid.map((r) => r.minSparks)),
+    maxSparks: Math.max(...valid.map((r) => r.maxSparks)),
+  };
+}
+
 /** Sum a batch of image action+tier ranges into one range (min sum, max sum). */
 export function sumTierRanges(ranges: (SparkEstimateRange | null)[]): SparkEstimateRange | null {
   const valid = ranges.filter((r): r is SparkEstimateRange => r != null);

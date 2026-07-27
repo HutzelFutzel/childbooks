@@ -2,11 +2,29 @@
   {
     "origin": [
       "https://childbook.studio",
+      "https://www.childbook.studio",
       "https://childbooks.studio",
+      "https://www.childbooks.studio",
       "https://childbooks--childbook-60f89.us-east4.hosted.app"
     ],
-    "method": ["GET"],
-    "responseHeader": ["Content-Type"],
+    "method": ["GET", "HEAD", "PUT", "POST", "DELETE"],
+    "responseHeader": [
+      "Content-Type",
+      "Content-Length",
+      "Content-Range",
+      "Range",
+      "Authorization",
+      "X-Firebase-Storage-Version",
+      "X-Firebase-GMPID",
+      "X-Firebase-AppCheck",
+      "X-Goog-Upload-Protocol",
+      "X-Goog-Upload-Command",
+      "X-Goog-Upload-Header-Content-Type",
+      "X-Goog-Upload-Header-Content-Length",
+      "X-Goog-Upload-Offset",
+      "X-Goog-Upload-Status",
+      "X-Goog-Upload-URL"
+    ],
     "maxAgeSeconds": 3600
   }
 ]

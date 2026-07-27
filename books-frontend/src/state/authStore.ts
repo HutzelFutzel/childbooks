@@ -296,6 +296,26 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 }));
 
+/**
+ * Resolve once the initial auth state has landed (guest sign-in included).
+ * Actions that must attribute a spend to an identity await this instead of
+ * reading a half-initialized `accessLevel`. Gives up after `timeoutMs`.
+ */
+export function whenAuthReady(timeoutMs = 6000): Promise<void> {
+  if (useAuthStore.getState().accessLevel !== "loading") return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      unsubscribe();
+      clearTimeout(timer);
+      resolve();
+    };
+    const timer = setTimeout(finish, timeoutMs);
+    const unsubscribe = useAuthStore.subscribe((s) => {
+      if (s.accessLevel !== "loading") finish();
+    });
+  });
+}
+
 /** Map a Firebase auth error to a friendly message. */
 export function authErrorMessage(err: unknown): string {
   const code = (err as { code?: string })?.code ?? "";

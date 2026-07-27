@@ -67,17 +67,23 @@ export function ensureAdmin(): void {
   }
 }
 
-function bucket() {
+/**
+ * The one bucket every backend Storage access goes through. Always pass the
+ * resolved name — a bare `getStorage().bucket()` uses the app's default bucket,
+ * which on older projects is the legacy `.appspot.com` one the client never
+ * reads from.
+ */
+export function blobBucket() {
   return getStorage().bucket(storageBucketName());
 }
 
-function blobPath(uid: string, id: string): string {
+export function blobPath(uid: string, id: string): string {
   return `users/${uid}/blobs/${id}`;
 }
 
 /** Download a blob's raw bytes. */
 export async function downloadBlob(uid: string, id: string): Promise<Buffer> {
-  const [buf] = await bucket().file(blobPath(uid, id)).download();
+  const [buf] = await blobBucket().file(blobPath(uid, id)).download();
   return buf;
 }
 
@@ -86,7 +92,7 @@ export async function downloadBlobBase64(
   uid: string,
   id: string,
 ): Promise<{ base64: string; mimeType: string }> {
-  const file = bucket().file(blobPath(uid, id));
+  const file = blobBucket().file(blobPath(uid, id));
   const [buf] = await file.download();
   let mimeType = "image/png";
   try {
@@ -106,7 +112,7 @@ export async function downloadBlobBase64(
 export async function downloadPublicBase64(
   storagePath: string,
 ): Promise<{ base64: string; mimeType: string }> {
-  const file = bucket().file(storagePath);
+  const file = blobBucket().file(storagePath);
   const [buf] = await file.download();
   let mimeType = "image/png";
   try {
@@ -125,13 +131,13 @@ export async function uploadBlob(
   contentType: string,
 ): Promise<string> {
   const id = randomUUID();
-  await bucket().file(blobPath(uid, id)).save(buf, { contentType, resumable: false });
+  await blobBucket().file(blobPath(uid, id)).save(buf, { contentType, resumable: false });
   return id;
 }
 
 /** Public download URL for an object, honoring Storage rules (read: true). */
 function publicMediaUrl(path: string): string {
-  const b = bucket();
+  const b = blobBucket();
   const encoded = encodeURIComponent(path);
   const emulatorHost = process.env.FIREBASE_STORAGE_EMULATOR_HOST || process.env.STORAGE_EMULATOR_HOST;
   if (emulatorHost) {
@@ -152,7 +158,7 @@ export async function uploadArtStyleImage(
 ): Promise<{ storagePath: string; publicUrl: string }> {
   const ext = (contentType.split("/")[1] || "png").replace(/[^a-z0-9]/gi, "") || "png";
   const storagePath = `public/artStyles/${encodeURIComponent(styleId)}/example-${randomUUID()}.${ext}`;
-  await bucket().file(storagePath).save(buf, { contentType, resumable: false });
+  await blobBucket().file(storagePath).save(buf, { contentType, resumable: false });
   return { storagePath, publicUrl: publicMediaUrl(storagePath) };
 }
 
@@ -171,7 +177,7 @@ export async function uploadCatalogPhoto(
   const safe = (s: string) => s.replace(/[^a-z0-9._-]/gi, "").slice(0, 80) || "other";
   const dir = [scope, ...segments].map(safe).join("/");
   const storagePath = `public/catalogMedia/${dir}/photo-${randomUUID()}.${extForMime(contentType)}`;
-  await bucket().file(storagePath).save(buf, { contentType: contentType || "image/jpeg", resumable: false });
+  await blobBucket().file(storagePath).save(buf, { contentType: contentType || "image/jpeg", resumable: false });
   return { storagePath, publicUrl: publicMediaUrl(storagePath) };
 }
 
@@ -192,7 +198,7 @@ export async function uploadBrandingWatermark(
   contentType: string,
 ): Promise<{ storagePath: string; publicUrl: string }> {
   const storagePath = `public/branding/watermark-${randomUUID()}.${extForMime(contentType)}`;
-  await bucket().file(storagePath).save(buf, { contentType: contentType || "image/svg+xml", resumable: false });
+  await blobBucket().file(storagePath).save(buf, { contentType: contentType || "image/svg+xml", resumable: false });
   return { storagePath, publicUrl: publicMediaUrl(storagePath) };
 }
 
@@ -208,7 +214,7 @@ export async function uploadBrandingAsset(
 ): Promise<{ storagePath: string; publicUrl: string }> {
   const safeSlot = slot.replace(/[^a-z0-9]/gi, "").slice(0, 40) || "asset";
   const storagePath = `public/branding/${safeSlot}-${randomUUID()}.${extForMime(contentType)}`;
-  await bucket().file(storagePath).save(buf, { contentType: contentType || "image/png", resumable: false });
+  await blobBucket().file(storagePath).save(buf, { contentType: contentType || "image/png", resumable: false });
   return { storagePath, publicUrl: publicMediaUrl(storagePath) };
 }
 
@@ -224,7 +230,7 @@ export async function uploadSiteImage(
 ): Promise<{ storagePath: string; publicUrl: string }> {
   const safeSlot = slot.replace(/[^a-z0-9]/gi, "").slice(0, 40) || "image";
   const storagePath = `public/site/${safeSlot}-${randomUUID()}.${extForMime(contentType)}`;
-  await bucket().file(storagePath).save(buf, { contentType: contentType || "image/png", resumable: false });
+  await blobBucket().file(storagePath).save(buf, { contentType: contentType || "image/png", resumable: false });
   return { storagePath, publicUrl: publicMediaUrl(storagePath) };
 }
 
@@ -240,14 +246,14 @@ export async function uploadBlogImage(
 ): Promise<{ storagePath: string; publicUrl: string }> {
   const safeSlug = slug.replace(/[^a-z0-9-]/gi, "").slice(0, 80) || "post";
   const storagePath = `public/blog/${safeSlug}-${randomUUID()}.${extForMime(contentType)}`;
-  await bucket().file(storagePath).save(buf, { contentType: contentType || "image/png", resumable: false });
+  await blobBucket().file(storagePath).save(buf, { contentType: contentType || "image/png", resumable: false });
   return { storagePath, publicUrl: publicMediaUrl(storagePath) };
 }
 
 /** Delete a previously uploaded object (best-effort). */
 export async function deletePublicObject(storagePath: string): Promise<void> {
   try {
-    await bucket().file(storagePath).delete();
+    await blobBucket().file(storagePath).delete();
   } catch {
     // already gone / not found
   }

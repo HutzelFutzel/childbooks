@@ -169,14 +169,14 @@ export async function generateAllAnchors(
 ): Promise<void> {
   const pending = (project.anchors ?? []).filter((a) => a.include && !currentAnchorImage(a));
   if (pending.length === 0) return;
-  const tier = requireImageTier();
+  const tier = await requireImageTier();
   if (!tier) return;
   if (!ensureBatchAffordable("anchorImage", pending.length)) return;
   pending.forEach((a) => setGen(a.id, true));
 
   let models: ResolvedModels;
   try {
-    models = getResolvedModels();
+    models = getResolvedModels(tier);
   } catch (err) {
     pending.forEach((a) => setGen(a.id, false));
     onError(err);
@@ -223,7 +223,7 @@ export async function generateAllPages(
 ): Promise<void> {
   const pending = illustrationUnits(project).filter((s) => !currentIllustration(project, s.id));
   if (pending.length === 0) return;
-  const tier = requireImageTier();
+  const tier = await requireImageTier();
   if (!tier) return;
   if (!ensureBatchAffordable("pageIllustration", pending.length)) return;
   pending.forEach((s) => setGen(s.id, true));
@@ -271,14 +271,18 @@ export async function refreshSpread(
   onError: (err: unknown) => void,
 ): Promise<void> {
   const isCover = spreadId === COVER_FRONT_ID || spreadId === COVER_BACK_ID;
-  const tier = requireImageTier();
+  const tier = await requireImageTier();
   if (!tier) return;
   if (!ensureBatchAffordable(isCover ? "coverIllustration" : "pageIllustration", 1)) return;
 
   try {
     const models = getResolvedModels(tier);
     const tasks: RefreshTask[] = [{ id: spreadId, status: "pending", options }];
-    await createRefreshJob(project, models, tasks, tier);
+    const jobId = await createRefreshJob(project, models, tasks, tier);
+    // Fire-and-forget: fold the result in from the job's OWN task subcollection
+    // rather than relying solely on the project-wide collection-group listener,
+    // and surface render failures that would otherwise pass silently.
+    void watchJob(jobId, project.id, { eagerReconcile: true, onError });
   } catch (err) {
     onError(err);
   }
@@ -306,7 +310,7 @@ export async function generateAnchorViaJob(
     onError(new Error("Anchor not found."));
     return;
   }
-  const tier = requireImageTier();
+  const tier = await requireImageTier();
   if (!tier) return;
 
   const missingChildren = containedAnchorsFor(anchor, project.anchors ?? []).filter(
@@ -325,8 +329,10 @@ export async function generateAnchorViaJob(
     // render failure would otherwise just silently clear the spinner. `watchJob`
     // surfaces both per-task and setup-phase errors, then unsubscribes itself
     // once the job is terminal (the per-anchor spinner is driven by the jobs
-    // store's `activeUnitIds`, so nothing to clear here).
-    void watchJob(jobId, project.id, { onError });
+    // store's `activeUnitIds`, so nothing to clear here). Reconciling eagerly
+    // from the job's own task subcollection means a single regeneration lands
+    // even if the project-wide collection-group listener is unavailable.
+    void watchJob(jobId, project.id, { eagerReconcile: true, onError });
   } catch (err) {
     onError(err);
   }
@@ -349,7 +355,7 @@ export async function updateStaleAnchors(
     return Boolean(a?.include && currentAnchorImage(a));
   });
   if (stale.length === 0) return 0;
-  const tier = requireImageTier();
+  const tier = await requireImageTier();
   if (!tier) return 0;
   if (!ensureBatchAffordable("anchorImage", stale.length)) return 0;
 
@@ -389,7 +395,7 @@ export async function refreshStalePages(
 ): Promise<number> {
   const stale = staleIllustrationSpreadIds(project);
   if (stale.length === 0) return 0;
-  const tier = requireImageTier();
+  const tier = await requireImageTier();
   if (!tier) return 0;
   try {
     const models = getResolvedModels(tier);

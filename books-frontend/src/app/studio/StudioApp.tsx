@@ -274,23 +274,26 @@ export default function StudioApp() {
     });
   }, [uid, accessLevel]);
 
-  // Mirror the profile + saved address book (full accounts only — the same gate
-  // as orders, since addresses exist to speed up reordering). Also stamp coarse
-  // profile metadata once per identity for convenience + light analytics.
+  // Mirror the profile + saved address book for EVERY signed-in identity: the
+  // profile also holds the image-quality preference, and guests generate too —
+  // without this their choice can't be read back and they'd be asked on every
+  // single generation. Session metadata stays a full-account stamp.
   useEffect(() => {
-    if (!uid || accessLevel !== "full") {
+    if (!uid || accessLevel === "loading") {
       stopProfile();
       return;
     }
     watchProfile();
-    const user = useAuthStore.getState().user;
-    void recordSession({
-      displayName: user?.displayName ?? null,
-      email: user?.email ?? null,
-      photoURL: user?.photoURL ?? null,
-      signupSource: user?.providerData?.[0]?.providerId ?? (user?.isAnonymous ? "guest" : null),
-      userAgent: typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 400) : null,
-    });
+    if (accessLevel === "full") {
+      const user = useAuthStore.getState().user;
+      void recordSession({
+        displayName: user?.displayName ?? null,
+        email: user?.email ?? null,
+        photoURL: user?.photoURL ?? null,
+        signupSource: user?.providerData?.[0]?.providerId ?? (user?.isAnonymous ? "guest" : null),
+        userAgent: typeof navigator !== "undefined" ? navigator.userAgent.slice(0, 400) : null,
+      });
+    }
     return () => stopProfile();
   }, [uid, accessLevel, watchProfile, stopProfile, recordSession]);
 
@@ -315,7 +318,9 @@ export default function StudioApp() {
         center={<JobProgress />}
         right={
           <>
-            {inProject && accessLevel === "full" && <ImageTierControl />}
+            {/* Guests choose a quality too (High-Quality shows locked), so the
+                control is visible to every resolved identity. */}
+            {inProject && <ImageTierControl />}
             {accessLevel !== "loading" && sparksEnabled && <SparksBadge />}
             <HelpButton />
             <AuthMenu />
