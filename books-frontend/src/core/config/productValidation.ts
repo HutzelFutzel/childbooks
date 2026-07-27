@@ -13,6 +13,7 @@ import {
   costTableIsEmpty,
   hasReachableDestination,
   isDestinationAllowed,
+  worstBreakEvenDiscountPct,
 } from "./productMath";
 import { bookMediaKey, resolvedPhotosFor, type CatalogMediaConfig } from "./catalogMedia";
 import { variantFromSku } from "../fulfillment/lulu/skuAxes";
@@ -72,6 +73,14 @@ export interface ValidateOptions {
    * warning in that case would cry wolf on every server-side validation.
    */
   media?: CatalogMediaConfig;
+  /**
+   * Active plans whose print discount this product has to be able to honour.
+   *
+   * Checkout clamps a plan discount to break-even, so an over-generous perk
+   * never loses money — it just silently isn't delivered. Passing the plans in
+   * turns that silence into a warning naming the product and the plan.
+   */
+  plans?: readonly { id: string; name: string; printDiscountPct: number }[];
 }
 
 /** Collect all configuration issues for a product. */
@@ -264,6 +273,28 @@ export function validateProduct(
     }
   }
 
+  // Plan print discounts this price can't actually honour.
+  //
+  // A warning rather than an error, deliberately: nothing here is unsafe. Checkout
+  // clamps the discount to break-even so the order still turns a profit, and the
+  // public projection publishes the clamped figure so the storefront advertises
+  // what it will charge. What's left is a promise the marketing makes and the
+  // price quietly shaves — which is the admin's to fix by raising the price or
+  // lowering the perk, and blocking the whole catalog over it would be worse than
+  // the mismatch.
+  const advertising = (opts.plans ?? []).filter((pl) => pl.printDiscountPct > 0);
+  if (advertising.length > 0 && !costTableIsEmpty(p.cost)) {
+    const headroom = worstBreakEvenDiscountPct(p, settings, Math.max(1, copies.min));
+    for (const plan of advertising) {
+      if (plan.printDiscountPct > headroom) {
+        warn(
+          "pricing",
+          `${plan.name} advertises ${plan.printDiscountPct}% off print, but this product only has ${headroom}% of headroom before it stops covering its costs — members will be charged the clamped discount instead. Raise the price or lower the plan's discount.`,
+        );
+      }
+    }
+  }
+
   // Shipping
   const enabledMethods = p.shipping.methods.filter((s) => s.enabled).map((s) => s.method);
   if (enabledMethods.length === 0) err("shipping.methods", "Enable at least one shipping method.");
@@ -369,11 +400,26 @@ export function validateProduct(
 /** How long a measured cost table is trusted before it's worth re-checking. */
 const STALE_COST_MS = 120 * 86_400_000;
 
-export function productErrors(p: ProductDefinition, settings: PricingSettings): ProductIssue[] {
-  return validateProduct(p, settings).filter((i) => i.level === "error");
+export function productErrors(
+  p: ProductDefinition,
+  settings: PricingSettings,
+  opts: ValidateOptions = {},
+): ProductIssue[] {
+  return validateProduct(p, settings, opts).filter((i) => i.level === "error");
 }
 
-/** A product can be offered to customers only when active and error-free. */
-export function isOfferable(p: ProductDefinition, settings: PricingSettings): boolean {
-  return p.status === "active" && productErrors(p, settings).length === 0;
+/**
+ * A product can be offered to customers only when active and error-free.
+ *
+ * Pass `opts.env` wherever the answer is acted on. Without it the SKU-verification
+ * check softens to a warning, so an unproven SKU reads as offerable — which is
+ * how an unverified product could reach the storefront and fail at print-job
+ * creation, after the customer had paid.
+ */
+export function isOfferable(
+  p: ProductDefinition,
+  settings: PricingSettings,
+  opts: ValidateOptions = {},
+): boolean {
+  return p.status === "active" && productErrors(p, settings, opts).length === 0;
 }

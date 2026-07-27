@@ -30,7 +30,7 @@ import { createLuluProvider } from "../../books-frontend/src/core/fulfillment/lu
 import { createAdminAssetHost } from "./assets";
 import { serverConfig } from "./config";
 import { getPlansConfig, reprojectPublicPlans } from "./plans";
-import { getProductsConfig } from "./products";
+import { getProductsConfig, reprojectPublicProducts } from "./products";
 import {
   verificationCoversPages,
   verificationFor,
@@ -414,8 +414,10 @@ export function registerRuntimeRoutes(app: Express): void {
         }
       }
       await setRuntimeEnv(target, req.uid);
-      // Re-derive the public plans doc so the storefront uses the new env's price ids.
+      // Re-derive the public plans doc so the storefront uses the new env's price ids,
+      // and the products doc so it offers only what's verified in the new print catalog.
       await reprojectPublicPlans().catch(() => {});
+      await reprojectPublicProducts().catch(() => {});
       res.json({ env: target, readiness });
     } catch (err) {
       res.status(500).json({ error: { message: (err as Error)?.message ?? "Failed to set runtime env." } });

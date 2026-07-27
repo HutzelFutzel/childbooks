@@ -10,6 +10,7 @@
  */
 import { useEffect, useState } from "react";
 import { BookOpen, Download, Loader2 } from "lucide-react";
+import { pageTrimForConfig } from "../../core/book";
 import type { BookDesign, Project } from "../../core/types";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import {
@@ -40,6 +41,10 @@ export function EbookDialog({
   design: BookDesign;
 }) {
   const baseCurrency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
+  // The PDF is rendered at the book's own trim (minus the print bleed), so the
+  // digital edition is the same book in the same shape — worth saying, since the
+  // size was chosen for a printed object.
+  const trim = pageTrimForConfig(project.config);
   const [phase, setPhase] = useState<Phase>("quote");
   const [status, setStatus] = useState("");
   const [quote, setQuote] = useState<EbookQuote | null>(null);
@@ -167,7 +172,8 @@ export function EbookDialog({
               <p className="text-sm font-semibold text-ink-800">{project.title} — digital edition</p>
               <p className="mt-0.5 text-xs text-ink-500">
                 A beautiful, high-quality PDF of your finished book — read it on any tablet, phone or
-                computer, forever.
+                computer, forever. Pages are the {trim.widthIn} × {trim.heightIn} in shape you
+                designed, so it reads exactly like the printed copy.
               </p>
             </div>
           </div>

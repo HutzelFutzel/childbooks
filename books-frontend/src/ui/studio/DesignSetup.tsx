@@ -7,10 +7,14 @@ import { DESIGN_QUESTIONS } from "../wizard/designQuestions";
 import { useStudio } from "./StudioContext";
 
 /**
- * The book-setup gate for the Design step: a guided size → format → layout flow
- * the first time (before any art is generated), and a summary hub on return.
+ * The book-setup gate for the Design step: the physical choices the page layout
+ * has to be built on, asked before any art exists, and a summary hub on return.
  * Confirming sets `designReady`, so subsequent visits open straight to the
  * canvas and this becomes reachable as a summary from the toolbar.
+ *
+ * Today that's the page size alone. Everything else about the printed object —
+ * binding, print tier, paper, cover finish — leaves the pages untouched and is
+ * asked at checkout instead, so nothing here is a decision made too early.
  */
 export function DesignSetup() {
   const { closeDesignSetup } = useStudio();
@@ -36,8 +40,8 @@ export function DesignSetup() {
           title={firstTime ? "Let's set up your book" : "Book setup"}
           subtitle={
             firstTime
-              ? "A few quick choices about the printed book before we lay out your pages."
-              : "Review your book's size, format and layout — edit anything you like."
+              ? "How big your pages are, before we lay them out."
+              : "Review your book's page size."
           }
           className="mb-8"
         />

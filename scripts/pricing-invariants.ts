@@ -16,6 +16,8 @@
 import {
   SUPPORTED_MARKETS,
   createDefaultPricingSettings,
+  findPublicProductBySlug,
+  formatSlug,
   normalizeProduct,
   seedProductsFromCatalog,
   type PricingSettings,
@@ -24,17 +26,23 @@ import {
 import {
   allowedMarketsFor,
   computeMargin,
+  computeRetailPrice,
   defaultShippingMethod,
   estimateShippingCost,
   hasUsableShippingCost,
   isDestinationAllowed,
   perPageCostFor,
+  publicUnitPrice,
+  simulatePublicOrder,
   suggestTierPrice,
   suggestVariantDeltas,
+  toPublicProduct,
+  worstBreakEvenDiscountPct,
 } from "../books-frontend/src/core/config/productMath";
 import {
   costVariantKey,
   enumerateVariants,
+  variantKey,
   variantPriceDelta,
 } from "../books-frontend/src/core/config/variants";
 import { saveBlockingIssues, validateProduct } from "../books-frontend/src/core/config/productValidation";
@@ -484,6 +492,172 @@ for (const target of [25, 45]) {
     unclear.length === 0,
     unclear[0],
   );
+}
+
+// ---- The public projection tells customers the truth ------------------------
+
+// The price simulator is a public promise: it shows a guest a number and says
+// that number is what checkout charges. It can only make that promise because it
+// recomputes the SAME arithmetic from the projection instead of approximating it,
+// and nothing but a check at more than one point can keep the two in step — a
+// projection that drops variant deltas, or rounds before the floor, agrees on the
+// display page count and diverges everywhere else.
+{
+  // Priced upgrades first. The seed catalog ships every option at a zero delta
+  // (nobody can price an upgrade before measuring what it costs), and against
+  // zeroes the equality below would hold even for a projection that dropped
+  // variant pricing entirely — passing while the simulator quietly undercharged
+  // for premium colour on every book.
+  const priced = normalizeProduct({
+    ...product,
+    variants: suggestVariantDeltas(product, settings, 35) ?? product.variants,
+  });
+  const deltas = enumerateVariants(priced.variants).map((v) =>
+    variantPriceDelta(priced.variants, v, currency, max),
+  );
+  check(
+    "the projection check is exercising non-zero variant deltas",
+    deltas.some((d) => Math.abs(d) > 0.01),
+  );
+
+  const publicProduct = toPublicProduct(priced, settings, {
+    offerable: true,
+    plans: [
+      { id: "storyteller", printDiscountPct: 10 },
+      { id: "dream-weaver", printDiscountPct: 20 },
+    ],
+  });
+
+  const priceMismatches: string[] = [];
+  for (const cur of settings.currencies) {
+    for (const pages of lengths) {
+      for (const variant of enumerateVariants(priced.variants)) {
+        const server = computeRetailPrice(priced, { currency: cur, pages, copies: 1, variant }, settings);
+        const shown = publicUnitPrice(publicProduct, settings, { currency: cur, pages, variant });
+        if (Math.abs(server - shown) > 1e-9) {
+          priceMismatches.push(`${cur} ${pages}p ${variantKey(variant)}: ${shown} vs ${server}`);
+        }
+      }
+    }
+  }
+  check(
+    "the simulated book price equals the price checkout charges",
+    priceMismatches.length === 0,
+    priceMismatches[0],
+  );
+
+  // Shipping is quoted live at checkout, so this can't be exact — but it has to
+  // be the same MODEL, scaling with copies off the same measured row. A published
+  // rate that ignored `perCopy` would quote one copy correctly and undercharge
+  // every larger order, which is exactly the failure the two-term shape exists
+  // to prevent.
+  const shippingMismatches: string[] = [];
+  for (const cur of settings.currencies) {
+    for (const country of allowedMarketsFor(product.shipping.destinations)) {
+      for (const copies of [1, 3, 10]) {
+        const method = defaultShippingMethod(product);
+        const quote = simulatePublicOrder(publicProduct, settings, {
+          currency: cur,
+          pages: min,
+          copies,
+          destinationCountry: country,
+          shippingMethod: method,
+        });
+        const server = computeMargin(
+          product,
+          { currency: cur, pages: min, copies, destinationCountry: country, shippingMethod: method },
+          settings,
+        ).shippingCharged;
+        if (quote.shipping == null || Math.abs(quote.shipping - server) > 0.02) {
+          shippingMismatches.push(
+            `${cur} ${country} ×${copies}: ${quote.shipping ?? "none"} vs ${server}`,
+          );
+        }
+      }
+    }
+  }
+  check(
+    "published shipping matches what checkout charges, at every quantity",
+    shippingMismatches.length === 0,
+    shippingMismatches[0],
+  );
+
+  // A refusal the provider gave us must reach the customer as a refusal. Read as
+  // "free" (the other way a zero could be interpreted) it would sell an order to
+  // a country the carrier won't serve.
+  const refused = publicProduct.shipping.rates.find(
+    (r) => r.country === "US" && r.method === "Standard",
+  );
+  check(
+    "a measured refusal is published as unavailable, not as free",
+    refused == null || refused.available === false,
+  );
+
+  // The whole point of a derived projection: it can be world-readable because
+  // there is nothing in it we mind being read. Checked against the serialized
+  // document rather than the type, since a stray spread is exactly how a cost
+  // field reaches Firestore while still typechecking.
+  //
+  // The key names are cost-table-only on purpose. `perPage` is deliberately NOT
+  // among them: it names a field on the cost table AND a field on a variant PRICE
+  // delta, which is public by necessity — the storefront can't price an upgrade
+  // without it. The cost table is caught structurally instead.
+  const serialized = JSON.stringify(publicProduct);
+  const leaked = [
+    "cost",
+    "fallbackCost",
+    "markupPct",
+    "basePerUnit",
+    "quantityBreaks",
+    "variantPerPage",
+    "measurement",
+  ].filter((key) => serialized.includes(`"${key}":`));
+  check("the public projection carries no cost internals", leaked.length === 0, leaked.join(", "));
+
+  // Plan discounts are published already clamped, so the storefront can multiply
+  // naively and still never advertise more than the price can carry.
+  const headroom = worstBreakEvenDiscountPct(product, settings, 1);
+  const overpromised = Object.entries(publicProduct.planPrintDiscountPct).filter(
+    ([, pct]) => pct > headroom + 1e-9,
+  );
+  check(
+    "no published plan discount exceeds the product's break-even headroom",
+    overpromised.length === 0,
+    overpromised.map(([id, pct]) => `${id} at ${pct}% vs ${headroom}%`).join(", "),
+  );
+
+  // And the clamp must not be silent: an admin who sets a perk the price can't
+  // pay for gets told, rather than discovering it from a support ticket.
+  const greedy = validateProduct(product, settings, {
+    plans: [{ id: "greedy", name: "Greedy", printDiscountPct: 99 }],
+  });
+  check(
+    "an unhonourable plan discount is reported to the admin",
+    greedy.some((i) => i.level === "warning" && i.message.includes("headroom")),
+  );
+}
+
+// ---- Public format URLs are stable and unambiguous --------------------------
+
+{
+  // The slug is derived from trim × binding because those identify a product and
+  // an id or a name does not. That only holds while the catalog really has one
+  // product per combination — if it ever doesn't, two formats silently share a
+  // URL and one of them becomes unreachable.
+  const slugs = seedProductsFromCatalog().map((p) => formatSlug(p.spec));
+  check(
+    "every seeded format has its own public URL",
+    new Set(slugs).size === slugs.length,
+    `${slugs.length - new Set(slugs).size} collisions`,
+  );
+
+  const publicProducts = seedProductsFromCatalog().map((p) =>
+    toPublicProduct(p, settings, { offerable: true }),
+  );
+  const roundTripped = publicProducts.every(
+    (p) => findPublicProductBySlug(publicProducts, formatSlug(p.spec))?.sku === p.sku,
+  );
+  check("a format URL resolves back to the format it names", roundTripped);
 }
 
 // ---- Report ----------------------------------------------------------------

@@ -10,7 +10,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { bookProductForConfig } from "../../core/book";
-import { ebookPlanPrice, findPublicProductForSku } from "../../core/config/products";
+import { ebookPlanPrice, findPublicProductForSku, formatSlug } from "../../core/config/products";
 import { findPublicPlanByPriceId } from "../../core/config/plans";
 import { activeSubscription } from "../../platform/subscriptions";
 import { currentIllustration } from "../../state/ai";
@@ -26,6 +26,7 @@ import { StageHeader } from "../components/StageHeader";
 import { fmtMoney } from "../admin/tabs/products/parts";
 import { OrderDialog } from "../checkout/OrderDialog";
 import { EbookDialog } from "../checkout/EbookDialog";
+import { useFormatsForConfigSize } from "../hooks/useOfferableFormats";
 import { useStudio } from "./StudioContext";
 import { buildDisplaySpreads, type Entry } from "./SpreadEditor";
 import { getCursor } from "../../core/versioning";
@@ -79,30 +80,80 @@ export function OrderStage() {
   const pageCount = pages.length;
   const contentPages = pages.filter((p) => !p.isCover).length;
   const bookProduct = bookProductForConfig(project.config);
-  const sizeLabel = bookProduct.label;
+  // The size only. The format's own label names a binding too, and that isn't
+  // settled until checkout — announcing one here would be guessing.
+  const sizeLabel = `${bookProduct.trim.widthIn} × ${bookProduct.trim.heightIn} in`;
 
   const catalogProduct = useMemo(
     () => findPublicProductForSku(publicProducts, bookProduct.sku),
     [publicProducts, bookProduct.sku],
   );
 
-  // Physical page limits for the chosen format. Falls back to the provider
-  // catalog's own limits when the admin catalog hasn't been configured yet.
-  const minPages = catalogProduct?.conditions.pages.min ?? bookProduct.minPages;
-  const maxPages = catalogProduct?.conditions.pages.max ?? bookProduct.maxPages;
-  const belowMinPages = contentPages < minPages;
-  const aboveMaxPages = contentPages > maxPages;
-  const printBlocked = belowMinPages || aboveMaxPages;
-  const printBlockedReason = belowMinPages
-    ? `This format needs at least ${minPages} pages — your book has ${contentPages}. Add ${minPages - contentPages} more before ordering a print copy.`
-    : aboveMaxPages
-      ? `This format allows up to ${maxPages} pages — your book has ${contentPages}. Remove some pages or choose another format.`
-      : null;
+  // Whether this book can be printed AT ALL, across every binding sold at its
+  // size — not whether the one binding it happens to be pointing at fits.
+  //
+  // The binding is chosen in checkout, so a 60-page book isn't "too long" just
+  // because saddle stitch stops at 48; it's too long only if nothing sold at this
+  // size will take it. Blocking on one binding here used to send people back to
+  // the design flow to change format, which meant re-opening the size question.
+  const { formats, offerable } = useFormatsForConfigSize(project.config);
+  const printable = useMemo(
+    () =>
+      formats.filter((f) => {
+        const entry = offerable.get(f.sku);
+        const min = entry?.conditions.pages.min ?? f.minPages;
+        const max = entry?.conditions.pages.max ?? f.maxPages;
+        return contentPages >= min && contentPages <= max;
+      }),
+    [formats, offerable, contentPages],
+  );
 
+  // Only the lengths NO binding accepts are a real dead end. Bounds come from the
+  // widest window on offer, so the advice names a number that actually helps.
+  //
+  // With no sellable formats (an empty or still-loading catalog) this falls back
+  // to the config's own format, which keeps the guard honest instead of letting
+  // an unprintable book through to a checkout that would refuse it.
+  const widest = useMemo(() => {
+    const candidates = formats.length > 0 ? formats : [bookProduct];
+    return candidates.reduce<{ min: number; max: number }>(
+      (acc, f) => {
+        const entry = offerable.get(f.sku) ?? (f === bookProduct ? catalogProduct : undefined);
+        const min = entry?.conditions.pages.min ?? f.minPages;
+        const max = entry?.conditions.pages.max ?? f.maxPages;
+        return { min: Math.min(acc.min, min), max: Math.max(acc.max, max) };
+      },
+      { min: Number.POSITIVE_INFINITY, max: 0 },
+    );
+  }, [formats, offerable, bookProduct, catalogProduct]);
+
+  const printBlocked = contentPages < widest.min || contentPages > widest.max;
+  const printBlockedReason = !printBlocked
+    ? null
+    : contentPages < widest.min
+      ? `The shortest book we can bind at this size is ${widest.min} pages — yours has ${contentPages}. Add ${widest.min - contentPages} more before ordering a print copy.`
+      : `The longest book we can bind at this size is ${widest.max} pages — yours has ${contentPages}. Remove some pages, or split it into two books.`;
+
+  // Entry price across the bindings that can actually take this book, since
+  // that's the cheapest copy the customer could really leave with.
   const printFromPrice = useMemo(() => {
+    const prices = printable
+      .map((f) => offerable.get(f.sku)?.prices[baseCurrency])
+      .filter((v): v is number => typeof v === "number" && v > 0);
+    if (prices.length > 0) return Math.min(...prices);
     const price = catalogProduct?.prices[baseCurrency];
     return typeof price === "number" && price > 0 ? price : null;
-  }, [catalogProduct, baseCurrency]);
+  }, [printable, offerable, catalogProduct, baseCurrency]);
+
+  // The signed-in buyer's own paid plan, if they have one. Resolved once and
+  // shared by the ebook price display and the price-calculator deep link below,
+  // so both agree on who "you" are rather than each re-deriving it and risking
+  // the two disagreeing after an edit to one.
+  const currentPlan = useMemo(() => {
+    const sub = activeSubscription(subscriptions);
+    const plan = sub ? findPublicPlanByPriceId(publicPlans, sub.priceId) : null;
+    return plan && !plan.isFree ? plan : null;
+  }, [subscriptions, publicPlans]);
 
   // Plan-aware ebook price (mirrors the server quote): the subscriber's plan
   // price replaces the sticker price when one is configured; 0 ⇒ included with
@@ -111,17 +162,41 @@ export function OrderStage() {
   const ebookDisplay = useMemo(() => {
     const listPrice = ebookSettings.prices[baseCurrency] ?? 0;
     if (listPrice <= 0) return null;
-    const sub = activeSubscription(subscriptions);
-    const plan = sub ? findPublicPlanByPriceId(publicPlans, sub.priceId) : null;
-    const planPrice = plan && !plan.isFree ? ebookPlanPrice(ebookSettings, plan.id, baseCurrency) : null;
+    const planPrice = currentPlan ? ebookPlanPrice(ebookSettings, currentPlan.id, baseCurrency) : null;
     const planApplied = planPrice != null && planPrice < listPrice;
     const price = planApplied ? planPrice : listPrice;
     return {
       price,
-      planName: planApplied && plan ? plan.name : null,
+      planName: planApplied && currentPlan ? currentPlan.name : null,
       included: planApplied && price <= 0,
     };
-  }, [ebookSettings, baseCurrency, subscriptions, publicPlans]);
+  }, [ebookSettings, baseCurrency, currentPlan]);
+
+  // The format to send someone to on the public price calculator: the one this
+  // project is actually configured for, when the admin still sells it, else
+  // whichever printable binding is — always an OFFERABLE entry (never the raw
+  // catalog lookup), so the link can't land on a page that 404s because the
+  // format it names has been withdrawn since. `offerable` already only holds
+  // offerable, active entries (see `useOfferableFormats`).
+  const priceLinkProduct = useMemo(
+    () =>
+      offerable.get(bookProduct.sku) ??
+      printable.map((f) => offerable.get(f.sku)).find((p) => p != null) ??
+      null,
+    [offerable, bookProduct.sku, printable],
+  );
+
+  // Carries the buyer's own plan along only when it actually discounts THIS
+  // format — a plan id the calculator can't apply would just fail to highlight
+  // any "Price as" row, which is silent enough to be worth avoiding rather than
+  // silent enough to ignore.
+  const priceLinkHref = useMemo(() => {
+    if (!priceLinkProduct) return null;
+    const path = `/print-pricing/${formatSlug(priceLinkProduct.spec)}`;
+    if (!currentPlan) return path;
+    const discounted = (priceLinkProduct.planPrintDiscountPct[currentPlan.id] ?? 0) > 0;
+    return discounted ? `${path}?plan=${encodeURIComponent(currentPlan.id)}` : path;
+  }, [priceLinkProduct, currentPlan]);
 
   const cover = pages.find((p) => p.id === COVER_FRONT_ID) ?? pages[0];
 
@@ -226,6 +301,11 @@ export function OrderStage() {
           title="Order a printed book"
           desc="Professionally printed, bound and shipped to your door."
           price={printFromPrice != null ? `from ${fmtMoney(printFromPrice, baseCurrency)} + shipping` : undefined}
+          priceLink={
+            priceLinkHref
+              ? { href: priceLinkHref, label: "See the exact price & shipping" }
+              : undefined
+          }
           cta="Order print"
           note={printBlocked ? printBlockedReason ?? undefined : purchaseNote}
           disabled={printBlocked}
@@ -292,6 +372,7 @@ function OptionCard({
   title,
   desc,
   price,
+  priceLink,
   cta,
   note,
   onClick,
@@ -304,6 +385,15 @@ function OptionCard({
   desc: string;
   /** Shown up front so nobody has to click to learn what it costs. */
   price?: string;
+  /**
+   * A way to see the number behind `price` in full before committing — the
+   * print card's "from $X + shipping" is an entry price, and this is where
+   * someone finds out what shipping to their own country actually is without
+   * opening checkout to ask. Opens in a new tab: the Studio is a full-screen
+   * editor a project is open in, so navigating away to check a price would
+   * cost the visitor their place in it.
+   */
+  priceLink?: { href: string; label: string };
   cta: string;
   /** Small line under the CTA (e.g. the account/verify requirement). */
   note?: string;
@@ -334,6 +424,16 @@ function OptionCard({
         <h3 className="text-sm font-bold text-ink-900">{title}</h3>
         <p className="mt-1 text-xs leading-relaxed text-ink-500">{desc}</p>
         {price && <p className="mt-2 text-sm font-bold text-ink-800">{price}</p>}
+        {priceLink && (
+          <a
+            href={priceLink.href}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-1 inline-block text-[11px] text-ink-400 underline decoration-ink-300 underline-offset-2 hover:text-brand-600"
+          >
+            {priceLink.label} ↗
+          </a>
+        )}
       </div>
       <Button
         variant={tone === "brand" ? "primary" : "secondary"}

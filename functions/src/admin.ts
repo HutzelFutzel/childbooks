@@ -284,6 +284,26 @@ function handleError(res: Response, err: unknown): void {
   res.status(500).json({ error: { message: (err as Error)?.message ?? "Request failed." } });
 }
 
+/**
+ * Refresh the public product projection after a plan changes.
+ *
+ * The projection publishes each plan's print discount already clamped to
+ * break-even, so a plan edit that nothing re-projected would leave the storefront
+ * quoting the old perk. Done here rather than inside `savePlansConfig` so the
+ * plans module doesn't have to import the products module (and vice versa).
+ *
+ * Best-effort: the plan itself is already saved, and failing the request would
+ * report a successful edit as an error. The next product save or settings change
+ * re-projects anyway.
+ */
+async function refreshProductsForPlans(): Promise<void> {
+  try {
+    await reprojectPublicProducts();
+  } catch (err) {
+    console.error("[admin] plan saved but the public product projection is stale:", err);
+  }
+}
+
 export function registerAdminRoutes(app: Express): void {
   const json = express.json({ limit: "25mb" });
 
@@ -1248,7 +1268,9 @@ export function registerAdminRoutes(app: Express): void {
   // Replace the whole plans config (reorder / bulk edits; no Stripe sync).
   app.put("/admin/config/plans", json, async (req: Request, res: Response) => {
     try {
-      res.json(await savePlansConfig(req.body));
+      const saved = await savePlansConfig(req.body);
+      await refreshProductsForPlans();
+      res.json(saved);
     } catch (err) {
       handleError(res, err);
     }
@@ -1257,7 +1279,9 @@ export function registerAdminRoutes(app: Express): void {
   // Create or update a single plan, reconciling it into Stripe (product+prices).
   app.post("/admin/config/plans", json, async (req: AuthedRequest, res: Response) => {
     try {
-      res.json(await upsertPlan(req.body, req.uid));
+      const saved = await upsertPlan(req.body, req.uid);
+      await refreshProductsForPlans();
+      res.json(saved);
     } catch (err) {
       handleError(res, err);
     }
@@ -1265,7 +1289,9 @@ export function registerAdminRoutes(app: Express): void {
 
   app.delete("/admin/config/plans/:id", async (req: Request, res: Response) => {
     try {
-      res.json(await deletePlan(String(req.params.id)));
+      const saved = await deletePlan(String(req.params.id));
+      await refreshProductsForPlans();
+      res.json(saved);
     } catch (err) {
       handleError(res, err);
     }

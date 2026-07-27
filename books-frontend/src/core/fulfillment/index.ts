@@ -15,6 +15,8 @@ export { buildOrderDraft, type BuildOrderDraftInput } from "./draft";
  */
 export {
   LULU_BOOK_PRODUCTS as BOOK_PRODUCTS,
+  bindingBlurb,
+  bindingNoun,
   findBookProduct,
   normalizePageCount,
 } from "./lulu/products";

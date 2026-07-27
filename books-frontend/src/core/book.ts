@@ -58,7 +58,18 @@ export function interiorPageCount(project: Project): number {
  * Print-format capabilities (spine, gutter, safe margins, …) for a project at
  * its current page count — the single input the editor uses to decide which
  * guides and controls to show.
+ *
+ * The gutter covers every binding this trim can be printed in, not just the one
+ * the config currently names: binding is chosen at checkout, so the layout has to
+ * survive whichever the customer picks. In practice that means "reserve a gutter
+ * if any binding at this size has one", since the inset itself depends only on
+ * page count.
  */
 export function formatCapabilitiesForProject(project: Project): FormatCapabilities {
-  return resolveFormatCapabilities(bookProductForConfig(project.config), interiorPageCount(project));
+  const product = bookProductForConfig(project.config);
+  const siblings = BOOK_PRODUCTS.filter(
+    (p) =>
+      p.trim.widthIn === product.trim.widthIn && p.trim.heightIn === product.trim.heightIn,
+  ).map((p) => p.binding);
+  return resolveFormatCapabilities(product, interiorPageCount(project), siblings);
 }

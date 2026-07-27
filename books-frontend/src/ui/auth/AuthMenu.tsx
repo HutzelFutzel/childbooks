@@ -2,6 +2,7 @@
 
 import {
   BookOpen,
+  Calculator,
   Cookie,
   CreditCard,
   Download,
@@ -102,6 +103,21 @@ export function AuthMenu() {
           <MenuDivider />
           <div className="py-1">
             <MenuSectionLabel>Resources</MenuSectionLabel>
+            {/*
+              New tab, like the other Resources links: this menu sits inside the
+              Studio, and the Studio is a full-screen editor a project is open
+              in — navigating someone away from it just to check a price would
+              cost them their place. See the print-pricing pages for why the
+              calculator itself needs no account: `ui/pricing/PriceSimulator`.
+            */}
+            <MenuItem
+              icon={<Calculator className="size-4" />}
+              label="Print pricing calculator"
+              href="/print-pricing"
+              openInNewTab
+              trailingIcon={<ExternalLink className="size-3.5" />}
+              onClick={close}
+            />
             <MenuItem
               icon={<BookOpen className="size-4" />}
               label="Blog"

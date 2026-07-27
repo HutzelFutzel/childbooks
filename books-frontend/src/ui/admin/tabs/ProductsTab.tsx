@@ -124,6 +124,10 @@ export function ProductsTab() {
   // Verification is per-environment, so validation needs to know which one is
   // being served before it can say whether a product is safe to offer.
   const runtime = useAdminHealth((s) => s.runtime);
+  // Plans advertise a print discount that checkout clamps to break-even. Handing
+  // them to validation turns a perk this price can't honour into a warning here,
+  // instead of a member quietly being charged more than the plan promised.
+  const publicPlans = useAppConfigStore((s) => s.plans.plans);
   const loadRuntime = useAdminHealth((s) => s.loadRuntime);
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
 
@@ -339,10 +343,24 @@ export function ProductsTab() {
     }
   };
 
+  const discountPlans = useMemo(
+    () =>
+      publicPlans
+        .filter((p) => p.status === "active" && p.entitlements.printDiscountPct > 0)
+        .map((p) => ({ id: p.id, name: p.name, printDiscountPct: p.entitlements.printDiscountPct })),
+    [publicPlans],
+  );
+
   const issues = useMemo(
     () =>
-      draft ? validateProduct(draft, settings, { media, ...(runtime ? { env: runtime.env } : {}) }) : [],
-    [draft, settings, runtime, media],
+      draft
+        ? validateProduct(draft, settings, {
+            media,
+            plans: discountPlans,
+            ...(runtime ? { env: runtime.env } : {}),
+          })
+        : [],
+    [draft, settings, runtime, media, discountPlans],
   );
   // Actionable errors (verify / calibrate) don't block saving — you must save a
   // product before you can run those tools against it.
@@ -433,8 +451,12 @@ export function ProductsTab() {
           ) : (
             <ul className="space-y-1.5">
               {products.map((p) => {
-                const offerable = isOfferable(p, settings);
-                const errCount = productErrors(p, settings).length;
+                // Must match the `env` passed below for `issues` (and what the
+                // server projects publicly) — otherwise this dot can show green
+                // for a product whose SKU was never verified in the live
+                // catalog, because an env-less check only warns about that.
+                const offerable = isOfferable(p, settings, runtime ? { env: runtime.env } : {});
+                const errCount = productErrors(p, settings, runtime ? { env: runtime.env } : {}).length;
                 return (
                   <li key={p.id}>
                     <button
@@ -468,7 +490,10 @@ export function ProductsTab() {
             <div className="space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <StatusDot status={draft.status} offerable={isOfferable(draft, settings)} />
+                  <StatusDot
+                    status={draft.status}
+                    offerable={isOfferable(draft, settings, runtime ? { env: runtime.env } : {})}
+                  />
                   <h2 className="text-base font-semibold text-ink-900">{draft.presentation.name || "Untitled"}</h2>
                 </div>
                 <div className="flex gap-2">

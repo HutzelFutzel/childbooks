@@ -578,10 +578,65 @@ export interface ProductsConfig {
 
 // ---- Public projection (no cost / fee / margin internals) ------------------
 
+/**
+ * How shipping is charged, with the cost internals removed.
+ *
+ * {@link ShippingPricing} carries `markupPct` and `fallbackCost` — our markup
+ * and a wholesale rate in the COST currency — which have no business in a
+ * world-readable document. The mode still ships because the storefront needs to
+ * say "free shipping"; every actual amount comes from {@link PublicShippingRate}
+ * instead, already converted and marked up.
+ */
+export type PublicShippingPricing = { mode: ShippingPricing["mode"] };
+
+/**
+ * What shipping COSTS THE CUSTOMER for one destination and speed, per currency.
+ *
+ * The customer-facing counterpart of {@link ShippingFallbackRow}: same
+ * `base + perCopy × copies` shape, but resolved through the product's pricing
+ * policy (markup for passthrough, the flat amount for flat, zero for free) and
+ * converted out of the cost currency. So it publishes what a checkout would
+ * quote, never what we pay.
+ *
+ * Keeping the two-term shape rather than a single scalar is the same decision
+ * the measurement makes: a flat number measured at three copies overcharges the
+ * person buying one and undercharges the person buying ten.
+ */
+export interface PublicShippingRate {
+  /** ISO-2 destination. */
+  country: string;
+  method: ShippingMethod;
+  /**
+   * Whether this speed reaches this country at all. False rows are published on
+   * purpose — a greyed-out option with a reason beats an option that works right
+   * up until the order is refused.
+   */
+  available: boolean;
+  /** Charged shipping = `base + perCopy × copies`, per currency. */
+  charged: Record<CurrencyCode, { base: number; perCopy: number }>;
+  /**
+   * Whether this rate came from a real measurement of this exact route and speed,
+   * as opposed to the product's catch-all fallback. Surfaced so a price preview
+   * can be honest about which of its two numbers is the softer one.
+   */
+  measured: boolean;
+}
+
 /** One product as the storefront sees it: prices resolved, internals stripped. */
 export interface PublicProduct {
   id: string;
   status: ProductStatus;
+  /**
+   * Whether this product is actually sellable right now: `active` AND free of
+   * configuration errors (verified SKU, measured costs, reachable shipping…).
+   *
+   * `status` alone is not enough. A product can be active and still be unorderable
+   * — an unverified SKU is refused at print-job creation, an unmeasured cost table
+   * can't be priced — so the storefront filters on this, not on `status`. Computed
+   * server-side against the active provider environment, because SKU verification
+   * is per-environment and only the server knows which one it is serving.
+   */
+  offerable: boolean;
   sortOrder: number;
   name: string;
   tagline?: string;
@@ -607,10 +662,24 @@ export interface PublicProduct {
   supportedCurrencies: CurrencyCode[];
   /** Per-currency tax behavior, so the storefront can label "incl. tax" correctly. */
   taxBehavior: Record<CurrencyCode, TaxBehavior>;
+  /**
+   * The print discount each plan's members ACTUALLY get, `planPrintDiscountPct[planId]`.
+   *
+   * Not simply `PlanEntitlements.printDiscountPct`: checkout clamps that to
+   * break-even so an order can never sell at a loss, and the clamp needs the cost
+   * table, which the storefront must never see. So the clamp is resolved here,
+   * once, against the worst scenario the product sells — exactly like `offerable`.
+   *
+   * The number is therefore safe to display: it can only under-promise. A plan
+   * absent from the record grants no print discount.
+   */
+  planPrintDiscountPct: Record<string, number>;
   shipping: {
     methods: ShippingMethodConfig[];
     destinations: GeoPolicy;
-    pricing: ShippingPricing;
+    pricing: PublicShippingPricing;
+    /** Charged shipping per destination + speed. See {@link PublicShippingRate}. */
+    rates: PublicShippingRate[];
   };
 }
 
@@ -1014,7 +1083,29 @@ export function normalizeProductsConfig(input: unknown): ProductsConfig {
 
 export function normalizePublicProductsConfig(input: unknown): PublicProductsConfig {
   const stored = (input ?? {}) as Partial<PublicProductsConfig>;
-  return { version: 1, products: Array.isArray(stored.products) ? stored.products : [] };
+  const products = Array.isArray(stored.products) ? stored.products : [];
+  return {
+    version: 1,
+    products: products.map((p) => ({
+      ...p,
+      // A projection written before `offerable` existed carries no verdict. Read it
+      // as the old rule (active ⇒ offered) rather than as "not offerable", so a
+      // catalog that hasn't been re-projected yet still sells instead of going dark.
+      offerable: typeof p.offerable === "boolean" ? p.offerable : p.status === "active",
+      // Absent on older projections. Empty means "no plan perks and no published
+      // shipping rates known", which reads as the honest undiscounted, shipping-
+      // unpriceable case rather than as free shipping — the storefront checks for
+      // a rate before quoting one.
+      planPrintDiscountPct:
+        p.planPrintDiscountPct && typeof p.planPrintDiscountPct === "object"
+          ? p.planPrintDiscountPct
+          : {},
+      shipping: {
+        ...p.shipping,
+        rates: Array.isArray(p.shipping?.rates) ? p.shipping.rates : [],
+      },
+    })),
+  };
 }
 
 // ---- Validation schema (used by the backend before persisting) -------------
@@ -1367,6 +1458,50 @@ export function findPublicProductForSku(
   const needle = (sku ?? "").trim();
   if (!needle) return undefined;
   return products.find((p) => p.sku === needle) ?? products.find((p) => sameFormat(p.sku, needle));
+}
+
+/**
+ * The products a customer may actually be shown and sold. The one gate every
+ * storefront surface (size picker, format picker, order stage) should pass its
+ * list through, so none of them can offer something checkout will refuse.
+ */
+export function offerablePublicProducts(
+  products: readonly PublicProduct[],
+): PublicProduct[] {
+  return products.filter((p) => p.status === "active" && p.offerable);
+}
+
+/**
+ * A product's URL segment for public pages: `8-5x8-5-hardcover`.
+ *
+ * Derived from the physical spec rather than from `id` or `presentation.name`,
+ * for two reasons. Ids are opaque (`lulu-m8kx2p-a91f-3`), which is neither
+ * readable nor a thing anyone would search for; names are admin-editable, so a
+ * copy tweak would change a URL that search engines and inbound links have
+ * already learned. Trim × binding is the product's identity — the catalog holds
+ * exactly one product per combination — so the slug is both stable and the words
+ * a person actually types.
+ */
+export function formatSlug(spec: Pick<ProductSpec, "pageTrim" | "binding">): string {
+  const n = (v: number) => String(Math.round(v * 10) / 10).replace(".", "-");
+  return `${n(spec.pageTrim.width)}x${n(spec.pageTrim.height)}-${spec.binding}`;
+}
+
+/**
+ * The product a public URL segment names, or undefined.
+ *
+ * First match wins. Trim × binding is unique in a well-formed catalog, so a
+ * collision means two products claim the same physical format — in which case
+ * serving the first (the projection is sorted by `sortOrder`) is deterministic,
+ * which is what a URL needs to be.
+ */
+export function findPublicProductBySlug(
+  products: readonly PublicProduct[],
+  slug: string,
+): PublicProduct | undefined {
+  const needle = (slug ?? "").trim().toLowerCase();
+  if (!needle) return undefined;
+  return products.find((p) => formatSlug(p.spec) === needle);
 }
 
 /**

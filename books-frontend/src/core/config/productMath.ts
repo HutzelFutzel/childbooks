@@ -19,6 +19,7 @@ import type {
   ProductDefinition,
   ProductShippingPolicy,
   PublicProduct,
+  PublicShippingRate,
   ShippingFallbackRow,
   TaxBehavior,
 } from "./products";
@@ -654,8 +655,17 @@ export function hasReachableDestination(policy: GeoPolicy): boolean {
 /**
  * Strip cost / fee / margin internals and bake resolved per-currency display
  * prices (at the configured display page count) for the storefront.
+ *
+ * `offerable` is passed in rather than computed here: it comes from
+ * `isOfferable`, which lives in `productValidation` and already depends on this
+ * module. Deciding it at the call site also keeps it honest about the provider
+ * environment being served, which only the server knows.
  */
-export function toPublicProduct(product: ProductDefinition, settings: PricingSettings): PublicProduct {
+export function toPublicProduct(
+  product: ProductDefinition,
+  settings: PricingSettings,
+  opts: { offerable: boolean; plans?: readonly PrintDiscountPlan[] },
+): PublicProduct {
   const displayPages = product.pricing.displayPages ?? product.conditions.pages.min;
   const prices: Record<CurrencyCode, number> = {};
   const taxBehavior: Record<CurrencyCode, TaxBehavior> = {};
@@ -667,6 +677,7 @@ export function toPublicProduct(product: ProductDefinition, settings: PricingSet
   return {
     id: product.id,
     status: product.status,
+    offerable: opts.offerable,
     sortOrder: product.sortOrder,
     name: product.presentation.name,
     tagline: product.presentation.tagline,
@@ -682,10 +693,327 @@ export function toPublicProduct(product: ProductDefinition, settings: PricingSet
     priceTiers: product.pricing.tiers,
     supportedCurrencies: settings.currencies,
     taxBehavior,
+    planPrintDiscountPct: projectPlanPrintDiscounts(product, settings, opts.plans ?? []),
     shipping: {
       methods: product.shipping.methods,
       destinations: product.shipping.destinations,
-      pricing: product.shipping.pricing,
+      // Mode only — `markupPct` and `fallbackCost` are ours, and `fallbackCost`
+      // is denominated in the cost currency besides.
+      pricing: { mode: product.shipping.pricing.mode },
+      rates: projectShippingRates(product, settings),
     },
+  };
+}
+
+/** The plan fields the print-discount clamp needs (satisfied by either plan shape). */
+export interface PrintDiscountPlan {
+  id: string;
+  printDiscountPct: number;
+}
+
+/**
+ * The print discount each plan's members really get, clamped to break-even.
+ *
+ * Checkout applies `min(plan%, breakEven%)` per order (see
+ * `effectivePrintDiscountPct`), and break-even needs the cost table. Rather than
+ * publish cost — or let the storefront advertise a discount checkout would
+ * shave — the clamp is resolved here across the scenario space the product
+ * sells and the WORST (most-clamped) result is published.
+ *
+ * Worst-case is the safe direction: the published number can only be lower than
+ * what a given order qualifies for, so the storefront under-promises and
+ * checkout comes in at or below it. In the normal case — a product priced to a
+ * healthy margin — nothing clamps and this is just the plan's own percentage.
+ */
+function projectPlanPrintDiscounts(
+  product: ProductDefinition,
+  settings: PricingSettings,
+  plans: readonly PrintDiscountPlan[],
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  const wanted = plans.filter((p) => p.printDiscountPct > 0);
+  if (wanted.length === 0) return out;
+
+  // One copy is the worst case: the processor's FIXED fee is amortized over the
+  // order, so a single-copy order has the least room and the tightest break-even.
+  const copies = Math.max(1, product.conditions.copies.min);
+  const headroom = worstBreakEvenDiscountPct(product, settings, copies);
+  for (const plan of wanted) {
+    out[plan.id] = Math.round(Math.min(plan.printDiscountPct, headroom) * 10) / 10;
+  }
+  return out;
+}
+
+/**
+ * The lowest break-even discount across every currency, page tier and variant
+ * the product offers — the deepest discount that is safe EVERYWHERE it sells.
+ *
+ * Evaluated at each tier's shortest book (its thinnest margin) and at the
+ * cheapest orderable variant, which is where a price first stops covering
+ * itself. Mirrors the sweep `validateProduct` already runs, for the same reason:
+ * a number that holds at the display page count can collapse at 400 pages.
+ */
+export function worstBreakEvenDiscountPct(
+  product: ProductDefinition,
+  settings: PricingSettings,
+  copies = 1,
+): number {
+  const { pages } = product.conditions;
+  const tiers = product.pricing.tiers;
+  const checkPoints =
+    tiers.length > 0 ? tiers.map((t) => Math.max(pages.min, t.minPages)) : [pages.min];
+  let worst = 100;
+  for (const currency of settings.currencies) {
+    for (const pg of checkPoints) {
+      const variant = cheapestVariant(product.variants, currency, pg);
+      try {
+        const m = computeMargin(product, { currency, pages: pg, copies, variant }, settings);
+        worst = Math.min(worst, m.breakEvenDiscountPct);
+      } catch {
+        // An unpriceable scenario tells us nothing about safe headroom; the
+        // other check points still bound it, and validation reports the cause.
+        continue;
+      }
+    }
+  }
+  return Math.max(0, worst);
+}
+
+/**
+ * Charged shipping for every destination × speed this product offers, per
+ * currency — the customer-facing projection of the measured rate matrix.
+ *
+ * Only the enabled speeds and the markets the geo policy actually allows, so the
+ * storefront can't quote a combination checkout would refuse. Rows come from the
+ * measurement when there is one (it scales with copies) and from the scalar
+ * fallback otherwise, which is exactly the precedence
+ * {@link estimateShippingCost} applies at checkout.
+ */
+export function projectShippingRates(
+  product: ProductDefinition,
+  settings: PricingSettings,
+): PublicShippingRate[] {
+  const { shipping } = product;
+  const methods = shipping.methods.filter((m) => m.enabled).map((m) => m.method);
+  const countries = allowedMarketsFor(shipping.destinations);
+  const rates: PublicShippingRate[] = [];
+
+  for (const country of countries) {
+    for (const method of methods) {
+      const row = shippingRowFor(shipping, country, method);
+      // A measured refusal is a fact about coverage worth publishing; an
+      // unmeasured route is not, and falls through to the scalar below.
+      if (row && !row.available) {
+        rates.push({ country, method, available: false, charged: {}, measured: true });
+        continue;
+      }
+      const charged: PublicShippingRate["charged"] = {};
+      for (const currency of settings.currencies) {
+        const terms = chargedShippingTerms(product, settings, row, currency);
+        if (terms) charged[currency] = terms;
+      }
+      rates.push({
+        country,
+        method,
+        available: true,
+        charged,
+        measured: row?.available === true,
+      });
+    }
+  }
+  return rates;
+}
+
+/**
+ * What one route costs the customer, as the two terms the projection publishes,
+ * or null when this product can't price shipping at all.
+ *
+ * Both terms are derived together because the policy that sets them is per-mode:
+ * passthrough scales with copies (so both terms are real), while flat charges one
+ * amount per order however many copies it holds (so the whole rate is the base).
+ * Passthrough is linear in cost, which is what makes distributing markup and FX
+ * across the terms exact rather than an approximation of a rounded total.
+ */
+function chargedShippingTerms(
+  product: ProductDefinition,
+  settings: PricingSettings,
+  row: ShippingFallbackRow | undefined,
+  currency: CurrencyCode,
+): { base: number; perCopy: number } | null {
+  const { pricing } = product.shipping;
+  switch (pricing.mode) {
+    case "free":
+      return { base: 0, perCopy: 0 };
+    case "flat":
+      // A price, not a cost: converted at the plain rate, since the FX buffer
+      // exists to overstate what we PAY and would overcharge here.
+      return {
+        base: round4(
+          (pricing.default * fxRate(settings, currency)) / fxRate(settings, pricing.currency),
+        ),
+        perCopy: 0,
+      };
+    case "passthrough": {
+      const fx = convertCostAmount(settings, 1, product.cost.currency, currency);
+      const markup = 1 + (pricing.markupPct ?? 0) / 100;
+      const base = row?.available ? row.base : (pricing.fallbackCost ?? 0);
+      const perCopy = row?.available ? row.perCopy : 0;
+      // Nothing measured and no fallback configured. Publishing zero here would
+      // read as free shipping on a product that in fact can't be shipped at any
+      // price; publishing nothing makes the storefront say so instead. Validation
+      // blocks offering a product in this state, so only drafts reach it.
+      if (base === 0 && perCopy === 0) return null;
+      return { base: round4(base * fx * markup), perCopy: round4(perCopy * fx * markup) };
+    }
+  }
+}
+
+function round4(n: number): number {
+  return Math.round(n * 10000) / 10000;
+}
+
+// ---- Public (storefront-side) pricing --------------------------------------
+
+/**
+ * Everything the storefront needs to price a hypothetical order. Deliberately
+ * the same shape as {@link PriceScenario} minus the cost-only fields, so a
+ * caller can move between the two without rethinking the inputs.
+ */
+export interface PublicPriceScenario {
+  currency: CurrencyCode;
+  pages: number;
+  copies: number;
+  variant?: VariantSelection;
+  destinationCountry?: string;
+  shippingMethod?: ShippingMethod;
+  /** Plan whose print discount to apply; omitted/unknown ⇒ list price. */
+  planId?: string | null;
+}
+
+/**
+ * The per-copy price a customer is charged, computed from the PUBLIC projection.
+ *
+ * Deliberately a re-expression of {@link computeRetailPrice} against
+ * {@link PublicProduct} rather than an approximation of it: retail price depends
+ * only on the page-tier table, the variant deltas, and the currency's rounding
+ * and floor — all of which the projection publishes. So this returns the exact
+ * figure checkout charges for the goods, which is the whole reason a public
+ * price simulator can be trusted.
+ */
+export function publicUnitPrice(
+  product: PublicProduct,
+  settings: PricingSettings,
+  scenario: Pick<PublicPriceScenario, "currency" | "pages" | "variant">,
+): number {
+  const { currency } = scenario;
+  const tiers = product.priceTiers ?? [];
+  const tier = pickTier(tiers, scenario.pages);
+  const base = tier?.prices[currency] ?? product.prices[currency] ?? 0;
+  const delta = variantPriceDelta(product.variants, scenario.variant, currency, scenario.pages);
+  const rounded = applyRounding(base + delta, settings.rounding[currency]);
+  return Math.max(rounded, settings.floorPrice[currency] ?? 0);
+}
+
+/** The published rate for a destination + speed, or undefined when none exists. */
+export function publicShippingRateFor(
+  product: PublicProduct,
+  country: string | undefined,
+  method: ShippingMethod | undefined,
+): PublicShippingRate | undefined {
+  if (!country || !method) return undefined;
+  const c = country.trim().toUpperCase();
+  return product.shipping.rates.find((r) => r.method === method && r.country.toUpperCase() === c);
+}
+
+/** The speeds this product is published as actually reaching a destination. */
+export function publicShippingMethodsFor(
+  product: PublicProduct,
+  country: string | undefined,
+): ShippingMethod[] {
+  const enabled = product.shipping.methods.filter((m) => m.enabled).map((m) => m.method);
+  if (!country) return enabled;
+  return enabled.filter((m) => publicShippingRateFor(product, country, m)?.available !== false);
+}
+
+/** One fully priced hypothetical order, in the customer's own terms. */
+export interface PublicQuote {
+  currency: CurrencyCode;
+  copies: number;
+  pages: number;
+  /** Per-copy list price, before any plan discount. */
+  listUnitPrice: number;
+  /** Per-copy price after the plan discount. */
+  unitPrice: number;
+  /** Plan discount actually applied (already clamped when projected). */
+  discountPct: number;
+  /** All copies at `unitPrice`. */
+  items: number;
+  /** Charged shipping, or null when this route has no published rate. */
+  shipping: number | null;
+  /** `items + shipping`, or null when shipping can't be priced. */
+  total: number | null;
+  taxBehavior: TaxBehavior;
+  /** Why shipping is null / soft, for the caller to say out loud. */
+  shippingNote: "measured" | "estimated" | "unavailable" | "unpriced";
+}
+
+/**
+ * Price a hypothetical order entirely from public data — the engine behind the
+ * price simulator, and the one place the storefront's arithmetic lives.
+ *
+ * The book price is exact (see {@link publicUnitPrice}). Shipping is the
+ * measured estimate, because the binding number comes from a live provider quote
+ * at checkout; `shippingNote` says which of the two the caller is looking at so
+ * the UI can label it honestly instead of implying a precision it doesn't have.
+ */
+export function simulatePublicOrder(
+  product: PublicProduct,
+  settings: PricingSettings,
+  scenario: PublicPriceScenario,
+): PublicQuote {
+  const copies = Math.max(1, Math.floor(scenario.copies));
+  const currency = scenario.currency;
+  const listUnitPrice = publicUnitPrice(product, settings, scenario);
+
+  const discountPct = Math.max(
+    0,
+    Math.min(100, scenario.planId ? (product.planPrintDiscountPct[scenario.planId] ?? 0) : 0),
+  );
+  const unitPrice =
+    discountPct > 0 ? round2(listUnitPrice * (1 - discountPct / 100)) : listUnitPrice;
+  const items = round2(unitPrice * copies);
+
+  const rate = publicShippingRateFor(product, scenario.destinationCountry, scenario.shippingMethod);
+  let shipping: number | null = null;
+  let shippingNote: PublicQuote["shippingNote"];
+  if (product.shipping.pricing.mode === "free") {
+    shipping = 0;
+    shippingNote = "measured";
+  } else if (!rate) {
+    shippingNote = "unpriced";
+  } else if (!rate.available) {
+    shippingNote = "unavailable";
+  } else {
+    const terms = rate.charged[currency];
+    if (!terms) {
+      shippingNote = "unpriced";
+    } else {
+      shipping = round2(terms.base + terms.perCopy * copies);
+      shippingNote = rate.measured ? "measured" : "estimated";
+    }
+  }
+
+  return {
+    currency,
+    copies,
+    pages: scenario.pages,
+    listUnitPrice,
+    unitPrice,
+    discountPct,
+    items,
+    shipping,
+    total: shipping == null ? null : round2(items + shipping),
+    taxBehavior: product.taxBehavior[currency] ?? "exclusive",
+    shippingNote,
   };
 }

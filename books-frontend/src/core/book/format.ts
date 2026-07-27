@@ -176,15 +176,27 @@ export interface FormatCapabilities {
   fullBleed: boolean;
 }
 
-/** Resolve the print capabilities for a product at a given interior page count. */
+/**
+ * Resolve the print capabilities for a product at a given interior page count.
+ *
+ * `alsoBindableAs` widens the gutter to cover bindings the book might still be
+ * printed in. The binding is chosen at checkout, so a design laid out for a
+ * gutterless coil binding would have text swallowed by the spine if the customer
+ * then picked a perfect-bound copy. Guides are for the worst case the reader can
+ * still choose; the cover geometry stays that of `product`, which is the format
+ * being previewed, and the print files resolve their own from the ordered SKU.
+ */
 export function resolveFormatCapabilities(
   product: BookProduct,
   pageCount: number,
+  alsoBindableAs: readonly Binding[] = [],
 ): FormatCapabilities {
   const pages = Math.max(product.minPages, Math.round(pageCount) || product.minPages);
   const hasSpine = bindingHasSpine(product.binding);
   const spine = spineWidthIn(product.binding, pages);
-  const hasGutter = bindingHasGutter(product.binding);
+  const candidates = [product.binding, ...alsoBindableAs];
+  const hasGutter = candidates.some(bindingHasGutter);
+  const gutter = Math.max(...candidates.map((b) => gutterInsetIn(b, pages)));
   return {
     binding: product.binding,
     bindingLabel: bindingLabel(product.binding),
@@ -200,7 +212,7 @@ export function resolveFormatCapabilities(
     spineWidthIn: spine,
     spineTextAllowed: hasSpine && pages > SPINE_TEXT_MIN_PAGES,
     hasGutter,
-    gutterInsetIn: gutterInsetIn(product.binding, pages),
+    gutterInsetIn: gutter,
     fullBleed: true,
   };
 }

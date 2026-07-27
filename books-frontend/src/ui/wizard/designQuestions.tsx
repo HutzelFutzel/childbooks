@@ -1,23 +1,15 @@
-import { useMemo } from "react";
-import { BookMarked, Ruler } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Ruler, TriangleAlert } from "lucide-react";
 import { bookSizeFromAspect } from "../../core/config/options";
-import { BOOK_PRODUCTS, type BookProduct } from "../../core/fulfillment";
 import { bookProductForConfig } from "../../core/book";
-import type { PublicProduct } from "../../core/config/products";
-import { useAppConfigStore } from "../../state/appConfigStore";
+import { useOfferableFormats, trimKey, type SizeOption } from "../hooks/useOfferableFormats";
+import { useProjectsStore } from "../../state/projectsStore";
 import { OptionCard } from "../components/OptionCard";
+import { Button } from "../components/Button";
 import type { BookConfig } from "../../core/types";
 import type { GuidedQuestion } from "./GuidedQuestions";
 import { BookSizeShape } from "./visuals";
 import type { StepProps } from "./steps/types";
-
-const BINDING_LABEL: Record<string, string> = {
-  casewrap: "Hardcover",
-  "linen-wrap": "Hardcover (linen)",
-  "perfect-bound": "Softcover",
-  "saddle-stitch": "Softcover (stapled)",
-  "coil-bound": "Coil-bound",
-};
 
 /** Format a trim in inches as a friendly "8.5 × 8.5 in" string. */
 function trimLabel(widthIn: number, heightIn: number): string {
@@ -31,16 +23,7 @@ function shapeLabel(aspect: number): string {
   return shape.charAt(0).toUpperCase() + shape.slice(1);
 }
 
-/** Stable key grouping products that share a physical trim (a "size"). */
-function trimKey(p: BookProduct): string {
-  return `${p.trim.widthIn}x${p.trim.heightIn}`;
-}
-
-/** Lowest configured price across currencies, formatted (best-effort). */
-function priceLabel(pp: PublicProduct): string | null {
-  const entries = Object.entries(pp.prices).filter(([, v]) => v > 0);
-  if (entries.length === 0) return null;
-  const [currency, amount] = entries.find(([c]) => c === "USD") ?? entries[0];
+function money(amount: number, currency: string): string {
   try {
     return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount);
   } catch {
@@ -48,80 +31,118 @@ function priceLabel(pp: PublicProduct): string | null {
   }
 }
 
-/**
- * The products offered to readers: those an admin activated in the configurator
- * (matched to the physical catalog), falling back to the whole catalog when
- * nothing is configured yet. Mirrors the old AudienceStep behavior.
- */
-function useOfferableProducts() {
-  const publicProducts = useAppConfigStore((s) => s.products.products);
-  return useMemo(() => {
-    const activeBySku = new Map(
-      publicProducts.filter((p) => p.status === "active").map((p) => [p.sku, p] as const),
-    );
-    const offerable = BOOK_PRODUCTS.filter((p) => activeBySku.has(p.sku));
-    const shown = offerable.length > 0 ? offerable : BOOK_PRODUCTS;
-    return { shown, activeBySku };
-  }, [publicProducts]);
-}
-
-/** Question 1 · physical size (trim + shape), independent of binding. */
-function SizeQuestion({ config, update }: StepProps) {
-  const { shown } = useOfferableProducts();
+/** Question 1 · physical size (trim), the one choice the design is built around. */
+function SizeQuestion({ config }: StepProps) {
+  const { sizes, purchasable, offerable, currency, catalogLoaded } = useOfferableFormats();
   const current = bookProductForConfig(config);
+  // Art is generated at the page's aspect ratio, so a different shape means every
+  // illustration is cropped to fit. That makes size the one decision this flow
+  // can't quietly revise on a return visit.
+  const artCount = useProjectsStore((s) => Object.keys(s.current()?.illustrations ?? {}).length);
+  // The store action rather than the `update` prop: this component writes from an
+  // effect, and the prop is a fresh closure on every render.
+  const update = useProjectsStore((s) => s.updateConfig);
+  const [confirming, setConfirming] = useState<SizeOption | null>(null);
 
-  // One card per distinct trim; the first product of each trim is representative.
-  const sizes = useMemo(() => {
-    const byTrim = new Map<string, BookProduct>();
-    for (const p of shown) if (!byTrim.has(trimKey(p))) byTrim.set(trimKey(p), p);
-    return [...byTrim.values()];
-  }, [shown]);
+  const currentOffered = offerable.has(current.sku);
+  const selectedKey = sizes.some((s) => s.key === trimKey(current)) ? trimKey(current) : null;
 
-  const selectSize = (rep: BookProduct) => {
-    // Keep the current binding if this trim offers it; otherwise take the first.
-    const sameTrim = shown.filter((p) => trimKey(p) === trimKey(rep));
-    const keep = sameTrim.find((p) => p.binding === current.binding) ?? sameTrim[0] ?? rep;
-    update({ productSku: keep.sku, bookSize: bookSizeFromAspect(keep.aspect) });
+  // Snap a project whose size is no longer sold onto one that is — but only
+  // before any art exists, where it costs nothing. After that the choice is the
+  // reader's to make (or not), so we explain it instead.
+  useEffect(() => {
+    if (!purchasable || currentOffered || artCount > 0) return;
+    const fallback = sizes[0];
+    if (!fallback) return;
+    void update({ productSku: fallback.rep.sku, bookSize: bookSizeFromAspect(fallback.rep.aspect) });
+  }, [purchasable, currentOffered, artCount, sizes, update]);
+
+  const apply = (size: SizeOption) => {
+    // Keep the current binding when this size is printed in it, so a reader who
+    // switches size and back doesn't silently change format too.
+    const keep = size.formats.find((p) => p.binding === current.binding) ?? size.rep;
+    void update({ productSku: keep.sku, bookSize: bookSizeFromAspect(keep.aspect) });
+    setConfirming(null);
+  };
+
+  const select = (size: SizeOption) => {
+    if (size.key === trimKey(current)) return;
+    // Only a change of shape re-crops the art; a same-aspect size never would.
+    if (artCount > 0 && size.rep.aspect !== current.aspect) setConfirming(size);
+    else apply(size);
   };
 
   return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      {sizes.map((product) => (
-        <OptionCard
-          key={trimKey(product)}
-          selected={trimKey(current) === trimKey(product)}
-          onSelect={() => selectSize(product)}
-          title={`${shapeLabel(product.aspect)} · ${trimLabel(product.trim.widthIn, product.trim.heightIn)}`}
-          description={`${shapeLabel(product.aspect)} pages — real printed dimensions.`}
-          visual={<BookSizeShape aspect={product.aspect} />}
-        />
-      ))}
-    </div>
-  );
-}
+    <div className="space-y-3">
+      {/* Nothing is on sale, so these are page shapes rather than things to buy.
+          Said plainly here instead of at the order step, where it would arrive
+          as a surprise after all the work. */}
+      {catalogLoaded && !purchasable && (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+          <span>
+            Printed copies aren't on sale right now, so pick whichever shape suits your story —
+            nothing is lost. You'll be able to order once printing is back.
+          </span>
+        </div>
+      )}
 
-/** Question 2 · format (binding + finish) among products sharing the size. */
-function FormatQuestion({ config, update }: StepProps) {
-  const { shown, activeBySku } = useOfferableProducts();
-  const current = bookProductForConfig(config);
-  const options = shown.filter((p) => trimKey(p) === trimKey(current));
+      {purchasable && !currentOffered && artCount > 0 && (
+        <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800">
+          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+          <span>
+            The size this book was started at ({trimLabel(current.trim.widthIn, current.trim.heightIn)})
+            isn't sold any more. Pick one below to make it printable — your {artCount} illustration
+            {artCount === 1 ? "" : "s"} will need re-generating to match the new shape.
+          </span>
+        </div>
+      )}
 
-  return (
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-      {options.map((product) => {
-        const configured = activeBySku.get(product.sku);
-        const price = configured ? priceLabel(configured) : null;
-        const base = `${BINDING_LABEL[product.binding] ?? product.binding} · ${product.finish}`;
-        return (
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {sizes.map((size) => (
           <OptionCard
-            key={product.sku}
-            selected={config.productSku === product.sku}
-            onSelect={() => update({ productSku: product.sku })}
-            title={configured?.name ?? product.label}
-            description={price ? `${base} · from ${price}` : base}
+            key={size.key}
+            selected={selectedKey === size.key}
+            onSelect={() => select(size)}
+            title={`${shapeLabel(size.rep.aspect)} · ${trimLabel(size.rep.trim.widthIn, size.rep.trim.heightIn)}`}
+            description={
+              size.cheapest != null
+                ? `Real printed dimensions · from ${money(size.cheapest, currency)}`
+                : "Real printed dimensions."
+            }
+            visual={<BookSizeShape aspect={size.rep.aspect} />}
           />
-        );
-      })}
+        ))}
+      </div>
+
+      {confirming && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800">
+          <p className="flex items-start gap-2">
+            <TriangleAlert className="mt-0.5 size-4 shrink-0" />
+            <span>
+              Your {artCount} illustration{artCount === 1 ? "" : "s"} {artCount === 1 ? "was" : "were"}{" "}
+              drawn for {shapeLabel(current.aspect).toLowerCase()} pages. Switching to{" "}
+              {shapeLabel(confirming.rep.aspect).toLowerCase()} keeps them, but they'll be cropped to
+              the new shape until you re-generate them.
+            </span>
+          </p>
+          <div className="mt-3 flex gap-2">
+            <Button size="sm" onClick={() => apply(confirming)}>
+              Change the size anyway
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setConfirming(null)}>
+              Keep {shapeLabel(current.aspect).toLowerCase()}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {purchasable && (
+        <p className="text-xs text-ink-400">
+          How the book is bound — hardcover, softcover, stapled — is chosen when you order, once
+          your book has a final page count to bind.
+        </p>
+      )}
     </div>
   );
 }
@@ -131,33 +152,23 @@ function sizeSummary(config: BookConfig): string {
   return `${shapeLabel(p.aspect)} · ${trimLabel(p.trim.widthIn, p.trim.heightIn)}`;
 }
 
-function formatSummary(config: BookConfig): string {
-  const p = bookProductForConfig(config);
-  return `${BINDING_LABEL[p.binding] ?? p.binding} · ${p.finish}`;
-}
-
 /**
- * The Design flow: the physical decisions that shape the printed book. Size and
- * format live here (not in Story) because anchors render square and screenplay
- * pacing no longer depends on trim, so nothing upstream needs them.
+ * The Design flow: the physical decisions that shape the printed book.
+ *
+ * Only one, and deliberately: the page size. It sets the aspect every
+ * illustration is generated at, so it has to be settled before any art exists —
+ * and it's the only physical choice that does. Binding, print tier, paper and
+ * cover finish change nothing about the pages, so they're asked at checkout,
+ * where the page count that constrains the binding is finally known.
  */
 export const DESIGN_QUESTIONS: GuidedQuestion[] = [
   {
     id: "size",
     title: "Choose your book size",
-    subtitle: "Real printed dimensions — this sets the physical page size.",
+    subtitle: "Real printed dimensions — this sets the shape of every page.",
     icon: Ruler,
     isAnswered: (c) => Boolean(c.productSku),
     summary: sizeSummary,
     render: (props) => <SizeQuestion {...props} />,
-  },
-  {
-    id: "format",
-    title: "Pick a format",
-    subtitle: "How the book is bound and finished.",
-    icon: BookMarked,
-    isAnswered: (c) => Boolean(c.productSku),
-    summary: formatSummary,
-    render: (props) => <FormatQuestion {...props} />,
   },
 ];

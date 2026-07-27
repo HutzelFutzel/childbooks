@@ -24,9 +24,16 @@ import {
   type PricingSettings,
   type ProductDefinition,
   type ProductsConfig,
+  type ProviderEnv,
   type PublicProductsConfig,
 } from "../../books-frontend/src/core/config/products";
-import { toPublicProduct } from "../../books-frontend/src/core/config/productMath";
+import {
+  toPublicProduct,
+  type PrintDiscountPlan,
+} from "../../books-frontend/src/core/config/productMath";
+import { isOfferable } from "../../books-frontend/src/core/config/productValidation";
+import { getPlansConfig } from "./plans";
+import { serverConfig } from "./config";
 
 const PRIVATE_DOC = "adminSettings/products";
 const PUBLIC_DOC = "appConfig/products";
@@ -49,15 +56,57 @@ async function readConfig(): Promise<ProductsConfig> {
   return value;
 }
 
-/** Build the public projection (resolved prices, internals stripped). */
-function projectPublic(config: ProductsConfig, settings: PricingSettings): PublicProductsConfig {
+/** The provider environment currently being served (runtime override aware). */
+function activeEnv(): ProviderEnv {
+  return serverConfig().fulfillment.lulu.env;
+}
+
+/**
+ * Build the public projection (resolved prices, internals stripped).
+ *
+ * Draft products are projected too — the storefront needs them to explain a
+ * format it can't sell yet — but each carries an `offerable` verdict decided
+ * here, against the environment we're actually serving. Only the storefront's
+ * offerable filter decides what a customer can pick.
+ *
+ * `plans` feeds the per-plan print discount, which is clamped to break-even
+ * during projection because the clamp needs the cost table and the storefront
+ * must never see it (see `toPublicProduct`).
+ */
+function projectPublic(
+  config: ProductsConfig,
+  settings: PricingSettings,
+  plans: readonly PrintDiscountPlan[],
+): PublicProductsConfig {
+  const env = activeEnv();
   return {
     version: 1,
     products: config.products
       .filter((p) => p.status !== "retired")
-      .map((p) => toPublicProduct(p, settings))
+      .map((p) =>
+        toPublicProduct(p, settings, { offerable: isOfferable(p, settings, { env }), plans }),
+      )
       .sort((a, b) => a.sortOrder - b.sortOrder),
   };
+}
+
+/**
+ * The active plans' print discounts, for the projection's break-even clamp.
+ *
+ * Only ACTIVE plans: a retired or draft plan grants nobody anything, and letting
+ * one publish a discount would advertise a perk that can't be bought. Failures
+ * are swallowed to no discounts — the safe direction, since the storefront then
+ * shows list prices rather than a discount checkout might not honour.
+ */
+async function printDiscountPlans(): Promise<PrintDiscountPlan[]> {
+  try {
+    const { plans } = await getPlansConfig();
+    return plans
+      .filter((p) => p.status === "active")
+      .map((p) => ({ id: p.id, printDiscountPct: p.entitlements.printDiscountPct }));
+  } catch {
+    return [];
+  }
 }
 
 /** Deep-strip `undefined` values (Firestore rejects them) without touching arrays' shape. */
@@ -68,26 +117,36 @@ function stripUndefined<T>(value: T): T {
 async function writeConfig(config: ProductsConfig): Promise<ProductsConfig> {
   ensureAdmin();
   const db = getFirestore();
-  const settings = await getPricingSettings();
+  const [settings, plans] = await Promise.all([getPricingSettings(), printDiscountPlans()]);
   await db.doc(PRIVATE_DOC).set(stripUndefined(config) as unknown as Record<string, unknown>, { merge: false });
   await db
     .doc(PUBLIC_DOC)
-    .set(stripUndefined(projectPublic(config, settings)) as unknown as Record<string, unknown>, { merge: false });
+    .set(stripUndefined(projectPublic(config, settings, plans)) as unknown as Record<string, unknown>, {
+      merge: false,
+    });
   cache = { value: config, at: Date.now() };
   return config;
 }
 
 /**
  * Regenerate the public projection from the current catalog + settings. Called
- * after pricing settings change (currencies/tax/fees affect resolved prices).
+ * after pricing settings change (currencies/tax/fees affect resolved prices),
+ * after a plan's print discount changes (the projection publishes the clamped
+ * discount per plan), and after the sandbox↔live toggle flips (SKU verification
+ * — and so offerability — is per-environment, and the two catalogs don't agree).
  */
 export async function reprojectPublicProducts(): Promise<void> {
-  const config = await readConfig();
-  const settings = await getPricingSettings();
+  const [config, settings, plans] = await Promise.all([
+    readConfig(),
+    getPricingSettings(),
+    printDiscountPlans(),
+  ]);
   const db = getFirestore();
   await db
     .doc(PUBLIC_DOC)
-    .set(stripUndefined(projectPublic(config, settings)) as unknown as Record<string, unknown>, { merge: false });
+    .set(stripUndefined(projectPublic(config, settings, plans)) as unknown as Record<string, unknown>, {
+      merge: false,
+    });
 }
 
 export function getProductsConfig(): Promise<ProductsConfig> {

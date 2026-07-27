@@ -180,6 +180,21 @@ const NO_COLOUR_ON_CREAM: VariantMatch[] = [
   { print: "standard-colour", paper: "60-uncoated-cream" },
 ];
 
+/**
+ * The word a customer knows a binding by ("hardcover", "paperback"). The single
+ * source for that vocabulary: the checkout format picker and the format's own
+ * label read it from here, so the two can't drift into naming the same book
+ * differently. Print-shop wording ("casewrap") lives in `book/format.ts`.
+ */
+export function bindingNoun(binding: Binding): string {
+  return BINDINGS_BY_ID[binding]?.noun ?? binding.replace("-", " ");
+}
+
+/** What a binding is like to hold, for the picker's one-line hint. */
+export function bindingBlurb(binding: Binding): string {
+  return BINDINGS_BY_ID[binding]?.blurb ?? "";
+}
+
 /** `Square hardcover · 8.5 × 8.5"` — generated, so no two formats drift apart. */
 function formatLabel(trim: TrimDef, binding: BindingDef): string {
   const size = `${trim.widthIn} × ${trim.heightIn}″`;

@@ -15,10 +15,11 @@ import {
   createDefaultVariantPolicy,
   firstAllowedVariant,
   normalizeVariantPolicy,
+  variantAllowed,
   type VariantSelection,
 } from "../../core/config/variants";
 import { buildOrderDraft } from "../../core/fulfillment/draft";
-import { normalizePageCount } from "../../core/fulfillment";
+import { bindingNoun, normalizePageCount } from "../../core/fulfillment";
 import { FulfillmentError } from "../../core/fulfillment/errors";
 import type {
   Recipient,
@@ -38,8 +39,10 @@ import { isDev } from "../../platform/runtime";
 import { activeSubscription } from "../../platform/subscriptions";
 import { useAuthStore } from "../../state/authStore";
 import { useProfileStore } from "../../state/profileStore";
+import { useProjectsStore } from "../../state/projectsStore";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useSubscriptionStore } from "../../state/subscriptionStore";
+import { useFormatsForConfigSize } from "../hooks/useOfferableFormats";
 import { Button } from "../components/Button";
 import { Field, Input } from "../components/Input";
 import { Modal } from "../components/Modal";
@@ -48,6 +51,7 @@ import { notify } from "../lib/notify";
 import { saveBlob } from "../design/bookExport";
 import type { DesignPage } from "../design/designInit";
 import { OrderAssetRunner, type OrderAssets } from "./orderAssets";
+import { FormatPicker } from "./FormatPicker";
 import { VariantPicker } from "./VariantPicker";
 
 type Phase = "form" | "rendering" | "submitting";
@@ -110,8 +114,19 @@ export function OrderDialog({
   design: BookDesign;
 }) {
   const provider = useMemo(() => createFulfillment(), []);
-  const product = bookProductForConfig(project.config);
   const email = useAuthStore((s) => s.user?.email ?? "");
+
+  // The book's SIZE is fixed by the design (every illustration was generated at
+  // its aspect). The BINDING isn't: the formats below all print the same pages at
+  // the same trim, so it's chosen here, where the final page count — the thing
+  // that decides which bindings can even take this book — is known.
+  const { formats, offerable: offerableCatalog } = useFormatsForConfigSize(project.config);
+  const designFormat = bookProductForConfig(project.config);
+  const updateConfig = useProjectsStore((s) => s.updateConfig);
+  const product = useMemo(
+    () => formats.find((f) => f.sku === project.config.productSku) ?? designFormat,
+    [formats, project.config.productSku, designFormat],
+  );
 
   // Subscription access gate. The backend is the authoritative check at
   // checkout; this mirrors it so we can disable ordering + explain why up front.
@@ -144,9 +159,17 @@ export function OrderDialog({
     [variantPolicy, catalogProduct, product.sku],
   );
   const [variant, setVariant] = useState<VariantSelection>(defaultVariant);
+  // Changing the binding changes which print/paper/finish options exist (saddle
+  // stitch has no standard-colour package, for one). Keep what the customer
+  // already chose wherever the new format still sells it, and only fall back to
+  // the default for the parts it doesn't.
   useEffect(() => {
-    setVariant(defaultVariant);
-  }, [defaultVariant]);
+    setVariant((prev) =>
+      variantAllowed(variantPolicy, prev)
+        ? prev
+        : firstAllowedVariant(variantPolicy, prev) ?? defaultVariant,
+    );
+  }, [variantPolicy, defaultVariant]);
 
   const printSku = useMemo(
     () => skuForVariant(product.sku, variant) ?? product.sku,
@@ -367,20 +390,42 @@ export function OrderDialog({
 
   // Format requirements (page count + copies) checked up front so a book that
   // can't be printed in this format never renders → uploads → fails at Stripe.
+  //
+  // The binding is picked in this dialog, so a length the chosen one won't take
+  // is a nudge towards a sibling that will — not the dead end it used to be,
+  // when the only cure was going back to the design flow and changing format
+  // there (which meant re-picking the size too).
+  const alternative = useMemo(
+    () =>
+      formats.find((f) => {
+        if (f.sku === product.sku) return false;
+        const entry = offerableCatalog.get(f.sku);
+        const min = entry?.conditions.pages.min ?? f.minPages;
+        const max = entry?.conditions.pages.max ?? f.maxPages;
+        return contentPages >= min && contentPages <= max;
+      }),
+    [formats, product.sku, offerableCatalog, contentPages],
+  );
+
   const requirementError = useMemo(() => {
+    const fix = alternative
+      ? ` ${capitalize(bindingNoun(alternative.binding))} takes a book this length — switch below.`
+      : "";
     if (contentPages < minPages) {
-      return `This format needs at least ${minPages} pages — your book has ${contentPages}. Add ${
-        minPages - contentPages
-      } more before ordering.`;
+      return `A ${bindingNoun(product.binding)} needs at least ${minPages} pages — your book has ${contentPages}.${
+        fix || ` Add ${minPages - contentPages} more before ordering.`
+      }`;
     }
     if (contentPages > maxPages) {
-      return `This format allows up to ${maxPages} pages — your book has ${contentPages}. Remove some pages or choose another format.`;
+      return `A ${bindingNoun(product.binding)} takes up to ${maxPages} pages — your book has ${contentPages}.${
+        fix || " Remove some pages before ordering."
+      }`;
     }
     if (copies > maxCopies) {
       return `You can order up to ${maxCopies} copies at a time.`;
     }
     return null;
-  }, [contentPages, minPages, maxPages, copies, maxCopies]);
+  }, [contentPages, minPages, maxPages, copies, maxCopies, product.binding, alternative]);
 
   const addressComplete = Boolean(
     name.trim() &&
@@ -548,10 +593,10 @@ export function OrderDialog({
               <Package className="size-4" />
             </span>
             <div className="min-w-0 text-sm">
-              <p className="font-medium text-ink-800">{product.label}</p>
+              <p className="font-medium text-ink-800">{project.title || "Your storybook"}</p>
               <p className="text-xs text-ink-500">
                 {product.trim.widthIn}×{product.trim.heightIn}″ · {pageCount} pages ·{" "}
-                {product.binding.replace("-", " ")}
+                {bindingNoun(product.binding)}
               </p>
             </div>
           </div>
@@ -575,6 +620,27 @@ export function OrderDialog({
               </span>
             </div>
           )}
+
+          {/* WHAT to make, before WHERE to send it: the binding, then how the
+              inside is printed and the cover finished. None of it touches the
+              designed pages — that's exactly why these are asked here and not
+              back in the design flow. */}
+          <FormatPicker
+            formats={formats}
+            catalog={offerableCatalog}
+            value={product.sku}
+            onChange={(sku) => void updateConfig({ productSku: sku })}
+            contentPages={contentPages}
+            currency={CURRENCY}
+          />
+
+          <VariantPicker
+            policy={variantPolicy}
+            value={variant}
+            onChange={setVariant}
+            currency={CURRENCY}
+            pages={pageCount}
+          />
 
           {/* Saved address picker — lets returning customers reuse an address. */}
           {savedAddresses.length > 0 && (
@@ -681,14 +747,6 @@ export function OrderDialog({
             Save this address for next time
           </label>
 
-          <VariantPicker
-            policy={variantPolicy}
-            value={variant}
-            onChange={setVariant}
-            currency={CURRENCY}
-            pages={pageCount}
-          />
-
           {/* Copies + shipping */}
           <div className="grid grid-cols-2 gap-3">
             <Field label="Copies" required>
@@ -767,6 +825,10 @@ export function OrderDialog({
       )}
     </Modal>
   );
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 function money(amount: string, currency: string): string {

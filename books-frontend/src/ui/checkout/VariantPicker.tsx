@@ -1,6 +1,6 @@
 "use client";
 
-import { primaryPhotoFor } from "../../core/config/catalogMedia";
+import { primaryPhotoFor, type CatalogMediaConfig } from "../../core/config/catalogMedia";
 import {
   VARIANT_AXES,
   VARIANT_AXIS_DEFS,
@@ -27,6 +27,7 @@ export function VariantPicker({
   onChange,
   currency = "USD",
   pages = 0,
+  media: mediaOverride,
   className,
 }: {
   policy: ProductVariantPolicy;
@@ -39,9 +40,17 @@ export function VariantPicker({
    * being ordered — a shared "+$4" would be a lie on anything but one length.
    */
   pages?: number;
+  /**
+   * Option photographs, for callers that already have them. The studio leaves
+   * this unset and reads the live config store; the marketing pages pass a
+   * server-fetched copy so a public page doesn't open twenty Firestore
+   * subscriptions to show a handful of thumbnails.
+   */
+  media?: CatalogMediaConfig;
   className?: string;
 }) {
-  const media = useAppConfigStore((s) => s.catalogMedia);
+  const storeMedia = useAppConfigStore((s) => s.catalogMedia);
+  const media = mediaOverride ?? storeMedia;
 
   // Hide axes with only one offered value — there's nothing to choose.
   const axes = VARIANT_AXES.filter((axis) => offeredValues(policy, axis).length > 1);
