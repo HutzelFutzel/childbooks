@@ -25,7 +25,11 @@ import type {
   PricingSettings,
   ProductDefinition,
 } from "../../books-frontend/src/core/config/products";
-import type { Quote, ShippingMethod } from "../../books-frontend/src/core/fulfillment/types";
+import type {
+  AddressValidation,
+  Quote,
+  ShippingMethod,
+} from "../../books-frontend/src/core/fulfillment/types";
 import { fulfillmentProvider } from "./lulu";
 
 export interface LiveCost {
@@ -35,6 +39,12 @@ export interface LiveCost {
   shippingCost?: number;
   /** The currency the provider quoted in, before conversion (diagnostics only). */
   quotedCurrency?: string;
+  /**
+   * The provider's verdict on the destination address, when it had one. Pricing
+   * has to send the full address anyway, so the carrier's normalization comes
+   * back for free — and it's the only chance to fix an address before payment.
+   */
+  addressValidation?: AddressValidation;
   /**
    * Why no usable live figures are available. Callers fall back to the static
    * cost table — and must refuse to sell when that table is empty too (see
@@ -61,6 +71,8 @@ export interface LiveCostRequest {
   destinationCountry: string;
   destinationState?: string;
   destinationLine1?: string;
+  /** Not price-affecting, but part of what the carrier validates. */
+  destinationLine2?: string;
   destinationCity?: string;
   destinationPostalCode?: string;
   /**
@@ -107,6 +119,7 @@ export async function fetchLiveCost(req: LiveCostRequest): Promise<LiveCost> {
       destinationCountry: req.destinationCountry,
       destinationState: req.destinationState,
       destinationLine1: req.destinationLine1,
+      destinationLine2: req.destinationLine2,
       destinationCity: req.destinationCity,
       destinationPostalCode: req.destinationPostalCode,
       shippingMethod: req.shippingMethod,
@@ -133,6 +146,10 @@ export async function fetchLiveCost(req: LiveCostRequest): Promise<LiveCost> {
     return { error: "Provider returned no quote for this destination.", errorKind: "refused" };
   }
 
+  // The address verdict is independent of the money, so it rides along even
+  // when the cost side of this quote turns out to be unusable below.
+  const addressValidation = quote.addressValidation;
+
   // Refuse rather than convert at a silent 1:1 (see the module note).
   const target = product.cost.currency;
   const quoted = [quote.items.currency, quote.shipping.currency];
@@ -140,12 +157,14 @@ export async function fetchLiveCost(req: LiveCostRequest): Promise<LiveCost> {
   if (unconvertible) {
     return {
       quotedCurrency: quote.items.currency,
+      addressValidation,
       error: `Provider quoted in ${unconvertible}, which has no FX rate in the catalog's pricing settings.`,
     };
   }
 
   return {
     quotedCurrency: quote.items.currency,
+    addressValidation,
     unitCost:
       convertCostAmount(settings, amount(quote.items.amount), quote.items.currency, target) /
       Math.max(1, copies),

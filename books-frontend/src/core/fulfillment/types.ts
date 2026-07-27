@@ -43,6 +43,45 @@ export interface Recipient {
   address: Address;
 }
 
+/** One thing a provider's address validation flagged about a submitted address. */
+export interface AddressWarning {
+  /** The provider's code for what it did, e.g. "REPLACED". */
+  code: string;
+  /** Human-readable description, usually naming the field and the change. */
+  message: string;
+  /** The address field the warning is about, when the provider names one. */
+  field?: string;
+}
+
+/**
+ * A corrected address the carrier database recommends. Partial because a
+ * provider only returns the fields it can normalize.
+ */
+export type SuggestedAddress = Partial<Address>;
+
+/**
+ * What a provider's address validation said about a destination.
+ *
+ * Carriers normalize addresses against their own database ("Road" → "Rd",
+ * ZIP+4, unit prefixes) and a mismatch can park a print job awaiting manual
+ * confirmation — after the customer has paid. So this travels with the price
+ * quote, where the customer is still typing and can still fix it.
+ */
+export interface AddressValidation {
+  warnings: AddressWarning[];
+  /** The corrected address, when it differs from what was submitted. */
+  suggested: SuggestedAddress | null;
+  /**
+   * `"error"` when the provider could not validate the address at all. That is
+   * not a style note: providers refuse to create a print job for an address
+   * their validation service rejects, so checkout must not proceed — there is no
+   * suggestion to accept, only an address to fix.
+   *
+   * `"warning"` means it has a correction to offer and would accept either.
+   */
+  severity: "warning" | "error";
+}
+
 /**
  * One print-ready file for an order item, bound to a named print area
  * (e.g. "default" for interior pages, "cover", "spine"). The blob is uploaded
@@ -108,6 +147,13 @@ export interface QuoteRequest {
    * placeholders so a quote can be produced before checkout.
    */
   destinationLine1?: string;
+  /**
+   * Apartment/suite line. Not price-affecting, but it IS part of what the
+   * carrier validates — quoting without it validates a different address than
+   * the one the order will ship to, which is how a "clean" quote turns into a
+   * held print job.
+   */
+  destinationLine2?: string;
   destinationCity?: string;
   destinationState?: string;
   destinationPostalCode?: string;
@@ -129,6 +175,12 @@ export interface Quote {
   /** Total cost of shipping. */
   shipping: Money;
   shipments: QuoteShipment[];
+  /**
+   * What the provider's address validation said about the destination it was
+   * asked to price. Present because pricing already sends the full address —
+   * so the correction is free, and arrives while the customer can still act.
+   */
+  addressValidation?: AddressValidation;
 }
 
 /**
@@ -197,6 +249,12 @@ export interface FulfillmentOrder {
   /** Human-readable issues reported by the provider, if any. */
   issues: string[];
   /**
+   * What the provider's address validation said about the address this order was
+   * placed with. A correction here means the job may be held for confirmation,
+   * so it has to reach the customer rather than only the provider's dashboard.
+   */
+  addressValidation?: AddressValidation;
+  /**
    * Print-ready files that were submitted for this order (public URLs), if
    * known. Lets the order be re-previewed later without re-rendering.
    */
@@ -238,6 +296,11 @@ export interface OrderRecord {
   statusMessage: string | null;
   charges: Money[];
   shipments: ShipmentInfo[];
+  /**
+   * The provider's verdict on the shipping address at placement time, when it
+   * flagged anything. Drives the "we're confirming your address" callout.
+   */
+  addressValidation: AddressValidation | null;
   /** Public URLs of the print-ready files submitted for this order. */
   fileUrls: { interior?: string; cover?: string };
   statusHistory: OrderStatusEntry[];

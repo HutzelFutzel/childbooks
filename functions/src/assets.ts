@@ -57,6 +57,39 @@ function downloadUrl(bucketName: string, objectPath: string, token: string): str
   return `${base}/v0/b/${bucketName}/o/${encoded}?alt=media&token=${token}`;
 }
 
+/**
+ * Confirm a print file is actually downloadable at the URL we're about to hand
+ * the print provider. Returns null when it is, or a reason when it isn't.
+ *
+ * This exists because the provider fetches these files ASYNCHRONOUSLY, minutes
+ * after the job is accepted — so an unreachable URL surfaces as a rejected print
+ * job with the customer already charged, which is the worst possible ordering.
+ * Checking costs one ranged request against a URL we just wrote, and it happens
+ * before the Stripe session exists, so a failure is a retryable checkout error
+ * rather than a refund.
+ *
+ * It catches the whole family at once: a stale `STORAGE_PUBLIC_BASE_URL`, a dev
+ * tunnel that rotated between runs, a bucket the emulator doesn't know about, a
+ * reorder pointing at files that have since been removed.
+ *
+ * A ranged GET rather than HEAD: it's the request shape a downloader actually
+ * makes, so a proxy that mishandles HEAD can't produce a false verdict either way.
+ */
+export async function printFileUnreachableReason(url: string): Promise<string | null> {
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: { Range: "bytes=0-0" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    // 206 for an honoured range, 200 for a server that ignored it.
+    if (res.ok || res.status === 206) return null;
+    return `HTTP ${res.status}`;
+  } catch (err) {
+    return err instanceof Error ? err.message : "request failed";
+  }
+}
+
 export function createAdminAssetHost(): AssetHost {
   ensureAdmin();
   const bucket = getStorage().bucket(storageBucketName());

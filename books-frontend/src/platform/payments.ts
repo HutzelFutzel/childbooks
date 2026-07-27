@@ -13,7 +13,12 @@
 import { collection, onSnapshot, type Unsubscribe } from "firebase/firestore";
 import { getFirebaseAuth, getFirebaseDb } from "../lib/firebase";
 import { backendFetch } from "./backend";
-import type { OrderDraft, PrintAsset, ShippingMethod } from "../core/fulfillment/types";
+import type {
+  AddressValidation,
+  OrderDraft,
+  PrintAsset,
+  ShippingMethod,
+} from "../core/fulfillment/types";
 import type { VariantSelection } from "../core/config/variants";
 
 export type PaymentStatus =
@@ -22,6 +27,13 @@ export type PaymentStatus =
   | "failed"
   | "refunded"
   | "partially_refunded";
+
+/**
+ * How far a paid print order has got towards the press. Written by the backend
+ * after payment, because placement happens in a webhook and can fail with the
+ * money already taken — "paid" on its own can't tell that story.
+ */
+export type FulfillmentState = "pending" | "placed" | "retrying" | "failed";
 
 export interface UserPaymentRecord {
   id: string;
@@ -34,6 +46,10 @@ export interface UserPaymentRecord {
   receiptUrl: string | null;
   refundedAmount: number;
   orderId: string | null;
+  /** Print orders only; null for every other kind of purchase. */
+  fulfillmentState: FulfillmentState | null;
+  /** A customer-facing explanation, set only when there's something to say. */
+  fulfillmentIssue: string | null;
   createdAt: number | null;
   updatedAt: number | null;
 }
@@ -124,6 +140,12 @@ export interface RetailPricePreview {
   items: number;
   shipping: number;
   total: number;
+  /**
+   * What the print provider's address validation made of the destination. Null
+   * when it had no comment. Pricing already sends the full address, so this
+   * costs nothing extra and arrives while the customer can still fix it.
+   */
+  addressValidation: AddressValidation | null;
 }
 
 /**
@@ -140,6 +162,12 @@ export async function fetchOrderPrice(input: {
   shippingMethod: ShippingMethod;
   destinationCountry: string;
   line1?: string;
+  /**
+   * Sent even though it can't change the price: it's part of what the carrier
+   * validates, and a quote that skipped it would clear an address the order
+   * isn't going to ship to.
+   */
+  line2?: string;
   city: string;
   state?: string;
   postalCode: string;
@@ -381,6 +409,8 @@ function toMs(value: unknown): number | null {
   return null;
 }
 
+const FULFILLMENT_STATES: FulfillmentState[] = ["pending", "placed", "retrying", "failed"];
+
 function mapPayment(id: string, d: Record<string, unknown>): UserPaymentRecord {
   const items = Array.isArray(d.items)
     ? (d.items as Record<string, unknown>[]).map((it) => ({
@@ -389,13 +419,29 @@ function mapPayment(id: string, d: Record<string, unknown>): UserPaymentRecord {
         quantity: typeof it.quantity === "number" ? it.quantity : 1,
       }))
     : [];
+  const kind =
+    d.kind === "subscription" || d.kind === "sparkPack" || d.kind === "sparkGift" || d.kind === "ebook"
+      ? d.kind
+      : ("order" as const);
+  const status = (typeof d.status === "string" ? d.status : "pending") as PaymentStatus;
   return {
     id: typeof d.id === "string" ? d.id : id,
-    kind:
-      d.kind === "subscription" || d.kind === "sparkPack" || d.kind === "sparkGift" || d.kind === "ebook"
-        ? d.kind
-        : "order",
-    status: (typeof d.status === "string" ? d.status : "pending") as PaymentStatus,
+    kind,
+    status,
+    // Orders placed before this field existed have none. A paid order with an
+    // order id is plainly at the press; one without is still on its way there —
+    // which beats showing nothing at all for the whole back catalogue.
+    fulfillmentState:
+      kind !== "order"
+        ? null
+        : FULFILLMENT_STATES.includes(d.fulfillmentState as FulfillmentState)
+          ? (d.fulfillmentState as FulfillmentState)
+          : typeof d.orderId === "string" && d.orderId
+            ? "placed"
+            : status === "paid"
+              ? "pending"
+              : null,
+    fulfillmentIssue: typeof d.fulfillmentIssue === "string" ? d.fulfillmentIssue : null,
     amount: typeof d.amount === "number" ? d.amount : 0,
     currency: typeof d.currency === "string" ? d.currency : "USD",
     description: typeof d.description === "string" ? d.description : "",

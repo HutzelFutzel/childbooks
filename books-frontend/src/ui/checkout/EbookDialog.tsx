@@ -19,6 +19,8 @@ import {
   type EbookQuote,
 } from "../../platform/payments";
 import { fetchDownloadLink } from "../../platform/downloads";
+import { useCheckoutUiStore } from "../../state/checkoutUiStore";
+import { PlanUpsell } from "../billing/PlanUpsell";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
 import type { DesignPage } from "../design/designInit";
@@ -41,6 +43,7 @@ export function EbookDialog({
   design: BookDesign;
 }) {
   const baseCurrency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
+  const openConfirmation = useCheckoutUiStore((s) => s.openConfirmation);
   // The PDF is rendered at the book's own trim (minus the print bleed), so the
   // digital edition is the same book in the same shape — worth saying, since the
   // size was chosen for a printed object.
@@ -108,10 +111,13 @@ export function EbookDialog({
         pdf,
       });
       if ("granted" in result) {
-        // Included with the plan — no payment step; the download is live now.
+        // Included with the plan — no payment step, so there's no Stripe redirect
+        // to bring the confirmation up. Open it directly: the download is the
+        // whole product, and it belongs on a screen with a button, not in a toast.
         setQuote((q) => (q ? { ...q, owned: true } : q));
         setPhase("ready");
-        notify.success("Your ebook is ready", "It's in your library — download it anytime.");
+        onClose();
+        openConfirmation({ kind: "ebook", projectId: project.id });
         return;
       }
       window.location.href = result.url;
@@ -204,6 +210,10 @@ export function EbookDialog({
               Includes your {quote.discountPct}% discount for owning the printed book.
             </p>
           )}
+          {/* One quiet line, never a step: a non-member can see what a plan would
+              cost them here without being pulled out of the purchase they came
+              for. Renders nothing for members, or if no plan is cheaper. */}
+          <PlanUpsell context="ebook" variant="inline" />
 
           {busy && (
             <div className="flex items-center gap-2 rounded-xl bg-ink-50 px-4 py-3 text-xs text-ink-500">

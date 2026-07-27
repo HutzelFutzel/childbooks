@@ -47,6 +47,7 @@ import {
 } from "../books-frontend/src/core/config/variants";
 import { saveBlockingIssues, validateProduct } from "../books-frontend/src/core/config/productValidation";
 import { variantFromSku } from "../books-frontend/src/core/fulfillment/lulu/skuAxes";
+import { mapAddressValidation } from "../books-frontend/src/core/fulfillment/lulu/wire";
 
 const failures: string[] = [];
 const checks: string[] = [];
@@ -658,6 +659,93 @@ for (const target of [25, 45]) {
     (p) => findPublicProductBySlug(publicProducts, formatSlug(p.spec))?.sku === p.sku,
   );
   check("a format URL resolves back to the format it names", roundTripped);
+}
+
+// ---- Address validation is read out of the provider's real payload ----------
+
+// The provider's cost response carries the carrier's verdict on the shipping
+// address, and checkout gates on it — an address it can't verify is one it will
+// refuse to print, after the customer has paid. So the mapper is checked against
+// the payload Lulu's own docs publish, quirks included: `warnings` arrives as a
+// bare object though the schema says array, `postcode` as a NUMBER though the
+// schema says string, and `state_code` as null. Trusting the schema here would
+// throw inside the pricing path.
+{
+  const documented = {
+    city: "Lübeck",
+    country_code: "DE",
+    is_business: false,
+    name: "Hans Dampf",
+    phone_number: "844-212-0689",
+    postcode: "23552",
+    state_code: "",
+    street1: "Holstenstr. 40",
+    street2: "",
+    warnings: {
+      type: "validation_warning",
+      path: "external",
+      code: "REPLACED",
+      message: "street1: Holstenstr. 40 -> Holstenstraße 40",
+    },
+    suggested_address: {
+      country_code: "DE",
+      state_code: null,
+      postcode: 23552,
+      city: "Lübeck",
+      street1: "Holstenstraße 40",
+      street2: null,
+    },
+  };
+
+  const v = mapAddressValidation(documented as never);
+  check("the carrier's address correction is read from the provider payload", v != null);
+  check(
+    "a single warning object is read as well as an array",
+    v?.warnings.length === 1 && v.warnings[0].code === "REPLACED",
+  );
+  check("the changed field is named from the warning message", v?.warnings[0].field === "street1");
+  check("a correctable address is a warning, not a blocker", v?.severity === "warning");
+  check(
+    "only the fields that actually differ are suggested",
+    v?.suggested?.line1 === "Holstenstraße 40" &&
+      v.suggested.townOrCity === undefined &&
+      v.suggested.countryCode === undefined,
+    JSON.stringify(v?.suggested),
+  );
+  check(
+    "a null suggestion doesn't propose deleting the field",
+    v?.suggested?.line2 === undefined && v.suggested.stateOrCounty === undefined,
+  );
+
+  // A numeric postcode must survive as a string rather than throwing.
+  const numericZip = mapAddressValidation({
+    postcode: "94304",
+    warnings: { code: "REPLACED", message: "postcode: 94304 -> 94304-2163" },
+    suggested_address: { postcode: 943042163 },
+  } as never);
+  check(
+    "a numeric postcode is coerced, not crashed on",
+    numericZip?.suggested?.postalOrZipCode === "943042163",
+  );
+
+  // An address the validator can't make sense of brings no suggestion. That's
+  // fatal — the provider won't create the print job — so it must not be
+  // presented as a cosmetic note.
+  const unverifiable = mapAddressValidation({
+    street1: "Nowhere",
+    warnings: { code: "INCOMPLETE", message: "street1: address could not be verified" },
+  } as never);
+  check("an unverifiable address is an error, not a suggestion", unverifiable?.severity === "error");
+
+  // A carrier that agrees with the customer must not produce a "did you mean?"
+  // prompt — Lulu echoes `suggested_address` even when it matches.
+  const agreeing = mapAddressValidation({
+    street1: "1850 Sand Hill Rd",
+    city: "Palo Alto",
+    postcode: "94304",
+    suggested_address: { street1: "1850 SAND HILL RD", city: "Palo Alto", postcode: "94304" },
+  } as never);
+  check("an unchanged suggestion is not offered as a choice", agreeing === undefined);
 }
 
 // ---- Report ----------------------------------------------------------------

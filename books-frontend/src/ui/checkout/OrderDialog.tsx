@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FileDown, Loader2, Package, ShieldCheck, TriangleAlert, Truck } from "lucide-react";
+import { Loader2, Package, ShieldCheck, TriangleAlert, Truck } from "lucide-react";
 import { bookProductForConfig } from "../../core/book";
 import { findPublicPlanByPriceId } from "../../core/config/plans";
 import {
@@ -43,20 +43,24 @@ import { useProjectsStore } from "../../state/projectsStore";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useSubscriptionStore } from "../../state/subscriptionStore";
 import { useFormatsForConfigSize } from "../hooks/useOfferableFormats";
+import { PlanUpsell } from "../billing/PlanUpsell";
 import { Button } from "../components/Button";
 import { Field, Input } from "../components/Input";
 import { Modal } from "../components/Modal";
 import { Select } from "../components/Select";
 import { notify } from "../lib/notify";
-import { saveBlob } from "../design/bookExport";
 import type { DesignPage } from "../design/designInit";
 import { OrderAssetRunner, type OrderAssets } from "./orderAssets";
 import { FormatPicker } from "./FormatPicker";
 import { VariantPicker } from "./VariantPicker";
+import {
+  AddressSuggestion,
+  suggestionKey,
+  type AddressChoice,
+  type EnteredAddress,
+} from "./AddressSuggestion";
 
 type Phase = "form" | "rendering" | "submitting";
-/** Whether the current render is for placing an order or downloading a proof. */
-type RenderIntent = "order" | "proof";
 
 /**
  * Fallback country list, used only before the catalog has loaded.
@@ -221,7 +225,6 @@ export function OrderDialog({
   }, [catalogProduct]);
 
   const [phase, setPhase] = useState<Phase>("form");
-  const [renderIntent, setRenderIntent] = useState<RenderIntent>("order");
   const [status, setStatus] = useState("");
   const [coverDims, setCoverDims] = useState<{ widthMm: number; heightMm: number } | null>(null);
 
@@ -252,6 +255,47 @@ export function OrderDialog({
   const [quoting, setQuoting] = useState(false);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const quoteSeq = useRef(0);
+
+  // Which address the customer settled on when the carrier suggested a different
+  // one. `"unreviewed"` blocks payment: an unanswered address question is how an
+  // order ends up held at the printer with the money already taken. The key is
+  // the suggestion itself, so editing the address asks again rather than carrying
+  // an answer over to a different question.
+  const [addressChoice, setAddressChoice] = useState<AddressChoice>("unreviewed");
+  const [reviewedSuggestion, setReviewedSuggestion] = useState("");
+
+  const enteredAddress: EnteredAddress = { line1, line2, city, region, postal, country };
+  const validation = quote?.addressValidation ?? null;
+  const pendingSuggestion = suggestionKey(validation);
+  const addressChoiceForSuggestion: AddressChoice =
+    pendingSuggestion && pendingSuggestion === reviewedSuggestion ? addressChoice : "unreviewed";
+  // Two reasons to hold checkout, and only two. An unanswered suggestion, and an
+  // address the provider says it cannot validate at all — it would refuse the
+  // print job, so letting the payment through would strand it. Everything else
+  // (a note about what got tidied up) is information, not a blocker.
+  const addressUnverifiable = validation?.severity === "error";
+  const addressNeedsReview =
+    addressUnverifiable ||
+    Boolean(validation?.suggested && addressChoiceForSuggestion === "unreviewed");
+
+  const applyAddressChoice = (next: EnteredAddress) => {
+    setLine1(next.line1);
+    setLine2(next.line2);
+    setCity(next.city);
+    setRegion(next.region);
+    setPostal(next.postal);
+    setCountry(next.country);
+    // Adopting the carrier's version detaches from the saved entry it came from,
+    // exactly as typing would — otherwise saving would overwrite it silently.
+    setSelectedAddressId("");
+    setReviewedSuggestion(pendingSuggestion);
+    setAddressChoice("suggested");
+  };
+
+  const keepEnteredAddress = () => {
+    setReviewedSuggestion(pendingSuggestion);
+    setAddressChoice("entered");
+  };
 
   // Enough of a destination to ask the provider for a price. Lulu requires a
   // city + postcode (and a state for many countries) to compute shipping.
@@ -304,6 +348,8 @@ export function OrderDialog({
   useEffect(() => {
     if (!open) {
       prefilledRef.current = false;
+      setAddressChoice("unreviewed");
+      setReviewedSuggestion("");
       return;
     }
     if (prefilledRef.current || DEV_PREFILL) return;
@@ -345,6 +391,9 @@ export function OrderDialog({
           shippingMethod: shipping,
           destinationCountry: country,
           line1,
+          // Not price-affecting, but the carrier validates it — quoting without
+          // it would clear an address the order isn't going to ship to.
+          line2,
           city,
           state: region,
           postalCode: postal,
@@ -370,7 +419,21 @@ export function OrderDialog({
       }
     }, 500);
     return () => clearTimeout(t);
-  }, [open, product.sku, variant, copies, country, line1, city, region, postal, shipping, canQuote, pageCount]);
+  }, [
+    open,
+    product.sku,
+    variant,
+    copies,
+    country,
+    line1,
+    line2,
+    city,
+    region,
+    postal,
+    shipping,
+    canQuote,
+    pageCount,
+  ]);
 
   function recipient(): Recipient {
     return {
@@ -436,30 +499,35 @@ export function OrderDialog({
       country &&
       copies >= 1,
   );
-  const canOrder = addressComplete && !requirementError;
+  const canOrder = addressComplete && !requirementError && !addressNeedsReview;
 
-  async function beginRender(intent: RenderIntent) {
+  async function beginRender() {
     if (requirementError) {
       notify.error(requirementError);
       return;
     }
-    if (intent === "order") {
-      if (!accessGate.ok) {
-        notify.error("This product is only available with a subscription. Upgrade your plan to order it.");
-        return;
-      }
-      if (!canOrder) {
-        notify.error("Add a recipient name, phone number and full shipping address.");
-        return;
-      }
+    if (!accessGate.ok) {
+      notify.error("This product is only available with a subscription. Upgrade your plan to order it.");
+      return;
+    }
+    if (addressUnverifiable) {
+      notify.error("This shipping address couldn't be verified. Please check and correct it.");
+      return;
+    }
+    if (addressNeedsReview) {
+      notify.error("The delivery carrier suggested an address correction — pick one before paying.");
+      return;
+    }
+    if (!canOrder) {
+      notify.error("Add a recipient name, phone number and full shipping address.");
+      return;
     }
     try {
-      setRenderIntent(intent);
       setPhase("rendering");
       setStatus("Calculating cover size…");
       const dims = await provider.getCoverDimensionsMm(printSku, pageCount);
       setCoverDims(dims);
-      setStatus(intent === "proof" ? "Rendering proof files…" : "Rendering print files…");
+      setStatus("Rendering print files…");
       // OrderAssetRunner mounts below once coverDims is set and calls onAssets.
     } catch (err) {
       setPhase("form");
@@ -467,33 +535,7 @@ export function OrderDialog({
     }
   }
 
-  // Render the print files but hand them to the browser as a download so the
-  // exact interior + wraparound cover PDFs Lulu receives can be proofed before
-  // paying (illustrations, bleed, spine, page order).
-  async function downloadProof(assets: OrderAssets) {
-    try {
-      const base = (project.title || "book").trim() || "book";
-      await saveBlob(`${base} — interior.pdf`, assets.interior);
-      if (assets.cover) await saveBlob(`${base} — cover.pdf`, assets.cover);
-      notify.success(
-        "Print proof downloaded",
-        assets.cover
-          ? "Check the interior and cover PDFs — this is exactly what gets printed."
-          : "Interior PDF saved. (No front cover is designed yet, so there's no cover file.)",
-      );
-    } catch (err) {
-      notify.error(err);
-    } finally {
-      setPhase("form");
-      setCoverDims(null);
-    }
-  }
-
   async function onAssets(assets: OrderAssets) {
-    if (renderIntent === "proof") {
-      await downloadProof(assets);
-      return;
-    }
     try {
       setPhase("submitting");
       setStatus("Redirecting to secure checkout…");
@@ -541,8 +583,6 @@ export function OrderDialog({
   }
 
   const busy = phase === "rendering" || phase === "submitting";
-  const proofing = phase === "rendering" && renderIntent === "proof";
-  const orderBusy = busy && renderIntent === "order";
 
   return (
     // Closing during "rendering" is allowed — it unmounts the asset runner and
@@ -555,33 +595,25 @@ export function OrderDialog({
       title="Order a printed book"
       size="max-w-xl"
       footer={
-        <div className="flex w-full flex-wrap items-center justify-between gap-2">
-          <Button
-            variant="secondary"
-            size="sm"
-            leftIcon={<FileDown className="size-4" />}
-            onClick={() => beginRender("proof")}
-            loading={proofing}
-            disabled={busy || Boolean(requirementError)}
-          >
-            {proofing ? "Preparing…" : "Download print proof"}
+        <div className="flex w-full items-center justify-end gap-2">
+          <Button variant="ghost" onClick={onClose} disabled={phase === "submitting"}>
+            Cancel
           </Button>
-          <div className="flex gap-2">
-            <Button variant="ghost" onClick={onClose} disabled={phase === "submitting"}>
-              Cancel
-            </Button>
-            <Button
-              onClick={() => beginRender("order")}
-              loading={orderBusy}
-              disabled={busy || !canOrder || !accessGate.ok}
-            >
-              {orderBusy && phase === "rendering"
-                ? "Preparing files…"
-                : orderBusy && phase === "submitting"
-                  ? "Redirecting…"
-                  : "Continue to payment"}
-            </Button>
-          </div>
+          <Button
+            onClick={() => void beginRender()}
+            loading={busy}
+            disabled={busy || !canOrder || !accessGate.ok}
+          >
+            {phase === "rendering"
+              ? "Preparing files…"
+              : phase === "submitting"
+                ? "Redirecting…"
+                : addressUnverifiable
+                  ? "Check your address"
+                  : addressNeedsReview
+                    ? "Confirm your address"
+                    : "Continue to payment"}
+          </Button>
         </div>
       }
     >
@@ -736,6 +768,19 @@ export function OrderDialog({
             </Field>
           </form>
 
+          {/* The carrier's verdict on the address, from the live quote. Asked
+              here — while it's still free — because a mismatch discovered after
+              payment parks the print job awaiting manual confirmation. */}
+          {validation && (
+            <AddressSuggestion
+              validation={validation}
+              entered={enteredAddress}
+              choice={addressChoiceForSuggestion}
+              onUseSuggested={applyAddressChoice}
+              onKeepEntered={keepEnteredAddress}
+            />
+          )}
+
           {/* Save this address for faster reordering next time. */}
           <label className="flex items-center gap-2 text-sm text-ink-600">
             <input
@@ -780,7 +825,14 @@ export function OrderDialog({
                 <Loader2 className="size-4 animate-spin" /> Getting a live quote…
               </div>
             ) : quote ? (
-              <QuoteLines quote={quote} />
+              <>
+                <QuoteLines quote={quote} />
+                {/* Only when the customer isn't already getting a member price —
+                    otherwise this would advertise a discount they have. */}
+                {quote.discountPct === 0 && (
+                  <PlanUpsell context="print" variant="inline" className="mt-2" />
+                )}
+              </>
             ) : quoteError ? (
               <p className="text-rose-500">{quoteError}</p>
             ) : (

@@ -50,6 +50,17 @@ export type PaymentStatus =
 export type PaymentKind = "order" | "subscription" | "sparkPack" | "sparkGift" | "ebook";
 
 /**
+ * How far a PAID print order has got towards the print provider — the one part
+ * of fulfillment the customer can see.
+ *
+ * Placement happens in a webhook and can fail after the money is taken, so
+ * "paid" alone is not enough to tell somebody what's happening to their book.
+ * `retrying` is deliberately distinct from `failed`: the sweep is still working
+ * on it and there is nothing for the customer to do yet.
+ */
+export type FulfillmentState = "pending" | "placed" | "retrying" | "failed";
+
+/**
  * What the webhook needs to deliver a purchased ebook AFTER payment: the
  * already-uploaded PDF's token URL plus the project it belongs to. Stored on
  * the admin payment doc only; once the payment settles the buyer gets a
@@ -158,6 +169,11 @@ export async function createPendingPayment(args: CreatePendingPaymentArgs): Prom
     receiptUrl: null,
     refundedAmount: 0,
     orderId: null,
+    // Only print orders have a fulfillment leg to report on; for everything else
+    // "paid" is the whole story and an always-pending field would just confuse.
+    ...(args.kind === "order"
+      ? { fulfillmentState: "pending" as FulfillmentState, fulfillmentIssue: null }
+      : {}),
     createdAt: now,
     updatedAt: now,
   });
@@ -230,20 +246,123 @@ export async function getAdminPayment(paymentId: string): Promise<AdminPaymentRe
 /**
  * Record a failed fulfillment attempt on the admin payment doc (retry state).
  * Clears the fulfillment claim so the scheduled retry can claim it again.
+ *
+ * Also mirrors a NEUTRAL state onto the buyer's own copy. The raw `error` is a
+ * provider diagnosis and stays admin-side; the customer gets a state and, once
+ * retries are spent, a message they can act on. Before this, a paid order whose
+ * placement failed looked identical to one on its way to the press.
  */
-export async function markFulfillmentFailed(paymentId: string, error: string): Promise<void> {
-  await db()
-    .doc(`payments/${paymentId}`)
-    .set(
-      {
-        fulfillmentAttempts: FieldValue.increment(1),
-        fulfillmentFailedAt: Date.now(),
-        lastFulfillmentError: error.slice(0, 1000),
-        fulfillmentClaimedAt: FieldValue.delete(),
-        events: FieldValue.arrayUnion({ at: Date.now(), type: "fulfillment.failed" }),
-      },
-      { merge: true },
-    );
+export async function markFulfillmentFailed(args: {
+  paymentId: string;
+  uid: string;
+  error: string;
+  /** True once the retry budget is spent — the customer needs to hear from us. */
+  exhausted: boolean;
+}): Promise<void> {
+  const now = Date.now();
+  await Promise.all([
+    db()
+      .doc(`payments/${args.paymentId}`)
+      .set(
+        {
+          fulfillmentAttempts: FieldValue.increment(1),
+          fulfillmentFailedAt: now,
+          lastFulfillmentError: args.error.slice(0, 1000),
+          fulfillmentClaimedAt: FieldValue.delete(),
+          fulfillmentState: args.exhausted ? "failed" : "retrying",
+          events: FieldValue.arrayUnion({ at: now, type: "fulfillment.failed" }),
+        },
+        { merge: true },
+      ),
+    args.uid
+      ? db()
+          .doc(`users/${args.uid}/payments/${args.paymentId}`)
+          .set(
+            {
+              fulfillmentState: args.exhausted ? "failed" : "retrying",
+              fulfillmentIssue: args.exhausted
+                ? "We couldn't send this book to the press. Our team is on it — " +
+                  "we'll email you, and you won't be charged twice."
+                : null,
+              updatedAt: FieldValue.serverTimestamp(),
+            },
+            { merge: true },
+          )
+      : Promise.resolve(),
+  ]);
+}
+
+/**
+ * The provider ACCEPTED a print job and then rejected it — bad print file, a
+ * destination it won't serve, a package it won't make. The customer has paid and
+ * nothing is being printed.
+ *
+ * This is a different shape of failure from {@link markFulfillmentFailed}: there
+ * the order never reached the provider, so the retry sweep could simply try
+ * again. Here a job id exists and `orderId` is set, which is precisely what the
+ * sweep (and {@link claimFulfillment}) treat as "done" — so a rejection was
+ * terminal and, worse, silent. Moving the dead job id aside re-arms the same
+ * bounded machinery instead of inventing a parallel one.
+ *
+ * The rejected order document is left intact: it's what happened, and support
+ * needs it. `supersededOrderIds` keeps the trail.
+ */
+export async function markFulfillmentRejected(args: {
+  paymentId: string;
+  uid: string;
+  /** The provider job that was rejected. */
+  orderId: string;
+  /** The provider's reason (admin-only; the customer gets neutral wording). */
+  reason: string;
+  /**
+   * Whether to re-arm the retry sweep. False for failures a retry can't fix, or
+   * where we can't be sure nothing was produced — those wait for a human.
+   */
+  replace: boolean;
+  /** True once the retry budget is spent. */
+  exhausted: boolean;
+}): Promise<void> {
+  const now = Date.now();
+  const state: FulfillmentState = args.exhausted || !args.replace ? "failed" : "retrying";
+  const adminPatch: Record<string, unknown> = {
+    fulfillmentState: state,
+    lastFulfillmentError: args.reason.slice(0, 1000),
+    rejectedOrderIds: FieldValue.arrayUnion(args.orderId),
+    events: FieldValue.arrayUnion({ at: now, type: "fulfillment.rejected" }),
+  };
+  if (args.replace && !args.exhausted) {
+    adminPatch.fulfillmentAttempts = FieldValue.increment(1);
+    adminPatch.fulfillmentFailedAt = now;
+    // Both of these are "already fulfilled" signals. Clearing them is what lets
+    // the sweep pick this payment up again; `rejectedOrderIds` above preserves
+    // the link to the job that died.
+    adminPatch.orderId = FieldValue.delete();
+    adminPatch.fulfillmentClaimedAt = FieldValue.delete();
+    adminPatch.supersededOrderIds = FieldValue.arrayUnion(args.orderId);
+  }
+
+  await Promise.all([
+    db().doc(`payments/${args.paymentId}`).set(adminPatch, { merge: true }),
+    args.uid
+      ? db()
+          .doc(`users/${args.uid}/payments/${args.paymentId}`)
+          .set(
+            {
+              fulfillmentState: state,
+              // Never the provider's words — they name our supplier and mean
+              // nothing to a customer. What they need is what we're doing about it.
+              fulfillmentIssue:
+                state === "retrying"
+                  ? "The press couldn't accept this book on the first try. We're sending it " +
+                    "again automatically — nothing for you to do, and you won't be charged twice."
+                  : "The press couldn't accept this book. Our team has been alerted and will " +
+                    "be in touch about a reprint or a refund. You won't be charged twice.",
+              updatedAt: FieldValue.serverTimestamp(),
+            },
+            { merge: true },
+          )
+      : Promise.resolve(),
+  ]);
 }
 
 /**
@@ -320,6 +439,8 @@ export interface UpdatePaymentArgs {
    * payments analytics can be sliced per market without re-reading Stripe.
    */
   billingCountry?: string | null;
+  /** Mirrored to the buyer's copy so they can see where their order stands. */
+  fulfillmentState?: FulfillmentState;
   event?: string;
 }
 
@@ -332,6 +453,13 @@ export async function updatePayment(args: UpdatePaymentArgs): Promise<void> {
   if (args.receiptUrl !== undefined) userPatch.receiptUrl = args.receiptUrl;
   if (args.refundedAmount !== undefined) userPatch.refundedAmount = args.refundedAmount;
   if (args.orderId !== undefined) userPatch.orderId = args.orderId;
+  if (args.fulfillmentState !== undefined) {
+    userPatch.fulfillmentState = args.fulfillmentState;
+    // Reaching a good state clears whatever the last failure told the customer.
+    if (args.fulfillmentState === "placed" || args.fulfillmentState === "pending") {
+      userPatch.fulfillmentIssue = null;
+    }
+  }
 
   const adminPatch: Record<string, unknown> = { ...userPatch };
   if (args.stripePaymentIntentId !== undefined) adminPatch.stripePaymentIntentId = args.stripePaymentIntentId;

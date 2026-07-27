@@ -212,6 +212,18 @@ async function startOrderTunnels() {
   }
   process.env.STORAGE_PUBLIC_BASE_URL = storageUrl;
   console.log(`[order] Storage tunnel: ${storageUrl} -> 127.0.0.1:${STORAGE_EMULATOR_PORT}`);
+  if (!domain) {
+    // Lulu downloads the print files MINUTES after accepting the job, so this
+    // hostname has to still resolve then. Without a reserved domain every restart
+    // rotates it, and any order placed before the restart is rejected with a 404
+    // on its interior PDF — after the test payment has gone through.
+    console.warn(
+      "[order] This tunnel has a RANDOM hostname, so it dies on the next restart.\n" +
+        "[order] An order placed before a restart will be REJECTED (404 on its print files),\n" +
+        "[order] because the provider fetches them minutes later. Reserve a free domain at\n" +
+        "[order] https://dashboard.ngrok.com/domains and set NGROK_DOMAIN in functions/.env.local.",
+    );
+  }
 
   // Functions tunnel + webhook (best-effort).
   let webhook = null;

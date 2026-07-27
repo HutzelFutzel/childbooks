@@ -16,8 +16,10 @@
 import { randomUUID } from "node:crypto";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
-import { sendOrderShippedEmail } from "./email/triggers";
+import { sendOrderFailedEmail, sendOrderShippedEmail } from "./email/triggers";
 import { getAdminSettings } from "./adminSettings";
+import { raiseAlert } from "./alerts";
+import { markFulfillmentRejected } from "./payments";
 import { productKey, recordFinanceEvent, toUsd } from "./finance";
 import { getProductsConfig } from "./products";
 import { normalizeCountry, UNKNOWN_COUNTRY } from "../../books-frontend/src/core/analytics/markets";
@@ -126,6 +128,10 @@ export async function persistCreatedOrder(args: PersistCreatedOrderArgs): Promis
     statusMessage: order.issues[0] ?? null,
     charges: stripUndefined(order.charges),
     shipments: stripUndefined(order.shipments),
+    // The provider's verdict on the shipping address. A correction here means
+    // the job may sit awaiting manual confirmation, so it belongs on the
+    // customer's own record — not just in the provider's dashboard.
+    addressValidation: order.addressValidation ? stripUndefined(order.addressValidation) : null,
     fileUrls: stripUndefined(order.printFiles ?? {}),
     statusHistory: [historyEntry],
     createdAt: now,
@@ -184,6 +190,11 @@ export async function applyOrderStatusUpdate(order: FulfillmentOrder): Promise<b
   if (!snap.exists) return false;
 
   const ownerUid = snap.get("ownerUid") as string | undefined;
+  // Read before writing: the rejection handling below must fire on the TRANSITION
+  // into a dead state, not on every re-post of the same status. Providers repeat
+  // webhooks, and re-arming a replacement order each time would print a book per
+  // delivery.
+  const previousStage = snap.get("stage") as string | undefined;
   const historyEntry = {
     at: Date.now(),
     stage: order.stage,
@@ -198,6 +209,11 @@ export async function applyOrderStatusUpdate(order: FulfillmentOrder): Promise<b
     shipments: stripUndefined(order.shipments),
     updatedAt: FieldValue.serverTimestamp(),
     statusHistory: FieldValue.arrayUnion(historyEntry),
+    // Only written when the provider has something to say: a later webhook
+    // carrying no verdict must not erase the one recorded at placement.
+    ...(order.addressValidation
+      ? { addressValidation: stripUndefined(order.addressValidation) }
+      : {}),
   };
 
   // Admin record additionally keeps the provider status name + raw payload.
@@ -238,6 +254,17 @@ export async function applyOrderStatusUpdate(order: FulfillmentOrder): Promise<b
     });
   }
 
+  // The provider took the job and then killed it. The customer has paid and no
+  // book is being made — the one status change that must never pass quietly.
+  if (order.stage === "error" && previousStage !== "error") {
+    await handleRejectedOrder({
+      order,
+      ownerUid: ownerUid ?? null,
+      paymentId: (snap.get("paymentId") as string | undefined) ?? null,
+      statusName: statusNameOf(order.raw),
+    });
+  }
+
   // Notify the customer when the provider reports the order shipped. Deduped on
   // the order id (the provider may re-post SHIPPED), best-effort — an email
   // failure must never fail the webhook ack.
@@ -255,6 +282,118 @@ export async function applyOrderStatusUpdate(order: FulfillmentOrder): Promise<b
     }
   }
   return true;
+}
+
+/**
+ * The retry budget a rejected order shares with placement failures. Mirrors
+ * `MAX_FULFILLMENT_ATTEMPTS` in `stripe.ts`; kept here to avoid importing the
+ * Stripe module (and its secrets) into the webhook path.
+ */
+const MAX_REPLACEMENT_ATTEMPTS = 5;
+
+/**
+ * React to a print job the provider rejected after accepting it.
+ *
+ * Three things have to happen, and none of them did before: a human is told
+ * (money moved, nothing is being printed), the customer's own records stop
+ * claiming the book is on its way, and the order is re-placed if a retry could
+ * plausibly fix it.
+ *
+ * Re-placement is deliberately limited to an explicit REJECTED verdict. That
+ * status means the provider declined to make the item, so there is no risk of
+ * printing a second copy of something already in production — which is exactly
+ * the risk a vaguer ERROR carries, so those wait for a person instead.
+ *
+ * Every step is best-effort: a failure here must not stop the webhook being
+ * acknowledged, or the provider will retry the delivery and we'd re-enter this
+ * path with the status change already recorded.
+ */
+async function handleRejectedOrder(args: {
+  order: FulfillmentOrder;
+  ownerUid: string | null;
+  paymentId: string | null;
+  statusName: string | null;
+}): Promise<void> {
+  const { order, ownerUid, paymentId, statusName } = args;
+  const reason = order.issues[0] ?? statusName ?? "The print provider rejected this order.";
+  const replaceable = (statusName ?? "").toUpperCase() === "REJECTED";
+
+  let attempt = 0;
+  let exhausted = false;
+  if (paymentId && ownerUid) {
+    try {
+      const paySnap = await db().doc(`payments/${paymentId}`).get();
+      attempt = ((paySnap.get("fulfillmentAttempts") as number | undefined) ?? 0) + 1;
+      exhausted = attempt >= MAX_REPLACEMENT_ATTEMPTS;
+      await markFulfillmentRejected({
+        paymentId,
+        uid: ownerUid,
+        orderId: order.id,
+        reason,
+        replace: replaceable,
+        exhausted,
+      });
+    } catch (err) {
+      console.error("[orders] could not record rejection on payment", paymentId, err);
+    }
+  }
+
+  const willRetry = replaceable && !exhausted && Boolean(paymentId && ownerUid);
+  try {
+    await raiseAlert({
+      // A paid order that is never going to arrive unless somebody acts.
+      severity: willRetry ? "warning" : "critical",
+      kind: "fulfillment.rejected",
+      message:
+        `Print order ${order.id} was REJECTED by the provider` +
+        (paymentId ? ` (payment ${paymentId})` : "") +
+        `: ${reason}. ` +
+        (willRetry
+          ? `Re-placing automatically (attempt ${attempt} of ${MAX_REPLACEMENT_ATTEMPTS}).`
+          : "NOT re-placed automatically — needs a reprint or a refund."),
+      meta: {
+        orderId: order.id,
+        paymentId,
+        uid: ownerUid,
+        statusName,
+        attempt,
+        autoReplacing: willRetry,
+      },
+      // Per rejected job, so a re-posted webhook can't spam but a genuine second
+      // rejection of a replacement job still surfaces.
+      ref: `${order.id}_rejected`,
+    });
+  } catch (err) {
+    console.error("[orders] rejection alert failed", order.id, err);
+  }
+
+  // Waste, not COGS: we paid for the render and the customer has nothing.
+  try {
+    await recordFinanceEvent({
+      category: "waste",
+      kind: "orderRejected",
+      amountUsd: 0,
+      uid: ownerUid ?? undefined,
+      ref: `${order.id}_rejected`,
+      meta: { orderId: order.id, paymentId, statusName, reason: reason.slice(0, 500) },
+    });
+  } catch (err) {
+    console.warn("[orders] rejection finance event failed", order.id, err);
+  }
+
+  // Once nothing more will be attempted automatically, tell the customer
+  // directly rather than leaving it to whether they revisit the order screen.
+  if (ownerUid && !willRetry) {
+    try {
+      await sendOrderFailedEmail({
+        uid: ownerUid,
+        orderRef: order.id,
+        paymentId: paymentId ?? order.id,
+      });
+    } catch (err) {
+      console.warn("[orders] order_failed email failed", order.id, err);
+    }
+  }
 }
 
 // ---- Print COGS booking (finance stream) ------------------------------------

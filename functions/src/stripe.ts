@@ -19,7 +19,7 @@ import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 import { serverConfig } from "./config";
 import { isAnonymousToken, isVerifiedToken, requireAuth, type AuthedRequest } from "./auth";
-import { createAdminAssetHost } from "./assets";
+import { createAdminAssetHost, printFileUnreachableReason } from "./assets";
 import { fulfillmentProvider } from "./lulu";
 import { persistCreatedOrder } from "./orders";
 import { getProductsConfig } from "./products";
@@ -51,7 +51,11 @@ import {
   effectivePrintDiscountPct,
   planEntitlements,
 } from "../../books-frontend/src/core/config/entitlements";
-import type { OrderDraft, ShippingMethod } from "../../books-frontend/src/core/fulfillment/types";
+import type {
+  AddressValidation,
+  OrderDraft,
+  ShippingMethod,
+} from "../../books-frontend/src/core/fulfillment/types";
 import {
   appBaseUrl,
   getStripe,
@@ -254,6 +258,7 @@ interface RetailPriceArgs {
   destinationCountry: string;
   address: {
     line1?: string;
+    line2?: string | null;
     townOrCity: string;
     stateOrCounty?: string | null;
     postalOrZipCode: string;
@@ -268,6 +273,11 @@ interface RetailPriceResult {
   /** Applied plan discount (already clamped to break-even). */
   discountPct: number;
   shippingCharged: number;
+  /**
+   * What the print provider's address validation said about the destination.
+   * Undefined when it said nothing (or we never got to ask).
+   */
+  addressValidation?: AddressValidation;
   /** The configured cost view of this scenario (calibration baseline). */
   estimatedCost: {
     amount: number;
@@ -333,6 +343,7 @@ async function priceRetailOrder(args: RetailPriceArgs): Promise<RetailPriceResul
     copies,
     destinationCountry: args.destinationCountry,
     destinationLine1: args.address.line1,
+    destinationLine2: args.address.line2 ?? undefined,
     destinationCity: args.address.townOrCity,
     destinationState: args.address.stateOrCounty ?? undefined,
     destinationPostalCode: args.address.postalOrZipCode,
@@ -412,7 +423,14 @@ async function priceRetailOrder(args: RetailPriceArgs): Promise<RetailPriceResul
     shippingSource: (live.shippingCost != null ? "live" : "table") as "live" | "table",
     productionSource: productionCostSource(product, live),
   };
-  return { unitPrice, listUnitPrice: margin.pricePerUnit, discountPct, shippingCharged, estimatedCost };
+  return {
+    unitPrice,
+    listUnitPrice: margin.pricePerUnit,
+    discountPct,
+    shippingCharged,
+    addressValidation: live.addressValidation,
+    estimatedCost,
+  };
 }
 
 /**
@@ -450,7 +468,7 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
   });
   if (refusal) return { ok: false, error: refusal };
 
-  const { unitPrice, shippingCharged, estimatedCost } = await priceRetailOrder({
+  const { unitPrice, shippingCharged, estimatedCost, addressValidation } = await priceRetailOrder({
     product,
     variant,
     printSku,
@@ -466,6 +484,49 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
 
   if (unitPrice <= 0) {
     return { ok: false, error: "This product isn't priced for ordering yet." };
+  }
+
+  // The provider downloads the print files LATER, on its own schedule, so a URL
+  // it can't fetch comes back as a rejected job with the customer already
+  // charged. Both callers funnel through here — a fresh checkout and a reorder
+  // reusing files from months ago — and both are still pre-payment at this
+  // point, so an unreachable file is a retryable error instead of a refund.
+  const unreachable = (
+    await Promise.all(
+      (["interior", "cover"] as const).map(async (part) => {
+        const url = args.sourceFileUrls[part];
+        if (!url) return `${part} file is missing`;
+        const reason = await printFileUnreachableReason(url);
+        return reason ? `${part} file is not downloadable (${reason})` : null;
+      }),
+    )
+  ).filter((v): v is string => v != null);
+  if (unreachable.length > 0) {
+    console.error(
+      `[stripe] checkout blocked — print files unreachable for ${printSku}: ${unreachable.join("; ")}`,
+    );
+    return {
+      ok: false,
+      error:
+        "We couldn't confirm your print files are ready. Please try again — " +
+        "if it keeps happening, contact us and we'll sort it out.",
+    };
+  }
+
+  // The print provider refuses jobs whose address its validation service can't
+  // confirm, so charging for one would strand a paid order. The dialog blocks
+  // this too, but the money is decided here — a client is not a gate.
+  if (addressValidation?.severity === "error") {
+    console.warn(
+      "[stripe] checkout blocked — unverifiable shipping address:",
+      addressValidation.warnings.map((w) => w.message).join("; "),
+    );
+    return {
+      ok: false,
+      error:
+        "We couldn't verify this shipping address with our delivery partner. " +
+        "Please check the street, city and postal code and try again.",
+    };
   }
 
   const paymentId = randomUUID();
@@ -540,7 +601,10 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     client_reference_id: paymentId,
     metadata: { paymentId, uid, kind: "order" },
     payment_intent_data: { metadata: { paymentId, uid, kind: "order" } },
-    success_url: `${appBaseUrl()}/studio?checkout=success&session_id={CHECKOUT_SESSION_ID}`,
+    // `payment` is what the confirmation screen keys on: it opens on our own
+    // payment id (not the Stripe session) so it can follow the record live —
+    // including the fulfillment leg, which happens after this redirect.
+    success_url: `${appBaseUrl()}/studio?checkout=success&payment=${paymentId}&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${appBaseUrl()}/studio?checkout=cancel`,
   });
 
@@ -713,6 +777,7 @@ export function registerStripeUserRoutes(app: Express): void {
         shippingMethod?: ShippingMethod;
         destinationCountry?: string;
         line1?: string;
+        line2?: string;
         city?: string;
         state?: string;
         postalCode?: string;
@@ -759,6 +824,7 @@ export function registerStripeUserRoutes(app: Express): void {
         destinationCountry: body.destinationCountry,
         address: {
           line1: body.line1,
+          line2: body.line2 ?? null,
           townOrCity: body.city,
           stateOrCounty: body.state ?? null,
           postalOrZipCode: body.postalCode,
@@ -773,6 +839,9 @@ export function registerStripeUserRoutes(app: Express): void {
         items: Math.round(priced.unitPrice * copies * 100) / 100,
         shipping: priced.shippingCharged,
         total: Math.round((priced.unitPrice * copies + priced.shippingCharged) * 100) / 100,
+        // The carrier's normalization of this address, so checkout can offer the
+        // correction while it's still free to make.
+        addressValidation: priced.addressValidation ?? null,
       });
     } catch (err) {
       if (err instanceof PricingUnavailableError) {
@@ -912,7 +981,7 @@ export function registerStripeUserRoutes(app: Express): void {
         client_reference_id: paymentId,
         metadata: { paymentId, uid, kind: "ebook" },
         payment_intent_data: { metadata: { paymentId, uid, kind: "ebook" } },
-        success_url: `${appBaseUrl()}/studio?ebook=success`,
+        success_url: `${appBaseUrl()}/studio?ebook=success&payment=${paymentId}&project=${encodeURIComponent(body.projectId)}`,
         cancel_url: `${appBaseUrl()}/studio?ebook=cancel`,
       });
 
@@ -1155,7 +1224,7 @@ export function registerStripeUserRoutes(app: Express): void {
         payment_intent_data: {
           metadata: { paymentId, uid, kind: "sparkPack", packId: pack.id, sparks: String(totalSparks) },
         },
-        success_url: `${appBaseUrl()}/studio?sparks=success`,
+        success_url: `${appBaseUrl()}/studio?sparks=success&payment=${paymentId}`,
         cancel_url: `${appBaseUrl()}/studio?sparks=cancel`,
       });
       await createPendingPayment({
@@ -1447,7 +1516,24 @@ async function fulfillPaidOrder(paymentId: string): Promise<void> {
       uid: payment.ownerUid,
       orderId: order.id,
       event: "order.placed",
+      fulfillmentState: "placed",
     });
+    // The address cleared validation at checkout, so a correction appearing HERE
+    // means something slipped through — and the provider may hold the job for
+    // manual confirmation while the customer is already charged. The customer
+    // sees it on their order; this is so a human does too.
+    const warnings = order.addressValidation?.warnings ?? [];
+    if (warnings.length > 0 || order.addressValidation?.suggested) {
+      await raiseAlert({
+        severity: "warning",
+        kind: "fulfillment.addressCorrected",
+        message:
+          `Print order ${order.id} (payment ${paymentId}) was accepted with an address correction: ` +
+          (warnings.map((w) => w.message).join("; ") || "a different address was suggested."),
+        meta: { paymentId, orderId: order.id, uid: payment.ownerUid },
+        ref: `${paymentId}_address`,
+      });
+    }
   } catch (err) {
     // The customer has paid; surface the failure for admin follow-up but don't
     // throw (a 500 makes Stripe retry, which won't fix a fulfillment error).
@@ -1455,8 +1541,13 @@ async function fulfillPaidOrder(paymentId: string): Promise<void> {
     // with backoff, and an admin alert is raised so a human sees it too.
     const message = (err as Error)?.message ?? "Unknown fulfillment error";
     console.error("[stripe] fulfillment after payment failed", paymentId, err);
-    await markFulfillmentFailed(paymentId, message);
     const attempt = payment.fulfillmentAttempts + 1;
+    await markFulfillmentFailed({
+      paymentId,
+      uid: payment.ownerUid,
+      error: message,
+      exhausted: attempt >= MAX_FULFILLMENT_ATTEMPTS,
+    });
     await raiseAlert({
       severity: attempt >= MAX_FULFILLMENT_ATTEMPTS ? "critical" : "warning",
       kind: "fulfillment.failed",

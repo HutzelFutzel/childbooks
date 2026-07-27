@@ -327,17 +327,26 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
 
     // Lulu's cost endpoint validates the FULL shipping address (street, city,
     // state, postcode, phone) even for a price check. Fields that don't affect
-    // the quote (name, street, phone) are filled with placeholders; the ones
-    // that do (country/state/postcode/city) use the caller's values.
+    // the quote (name, phone) are filled with placeholders; the ones that do
+    // (street/country/state/postcode/city) use the caller's values.
+    //
+    // `street2` is sent even though it doesn't move the price: the response
+    // carries the carrier's validation of this address, and validating "1850
+    // Sand Hill Road" without its "#18" clears an address the order won't
+    // actually ship to.
     const shippingAddress: LuluShippingAddress = {
       name: "Shipping Estimate",
       street1: req.destinationLine1?.trim() || "1 Main St",
+      street2: req.destinationLine2?.trim() || undefined,
       city: req.destinationCity?.trim() || "City",
       state_code: req.destinationState?.trim() || undefined,
       postcode: req.destinationPostalCode?.trim() || undefined,
       country_code: req.destinationCountry,
       phone_number: "0000000000",
     };
+    // With no real street there's nothing honest to say about the address: the
+    // carrier would be validating our placeholder. Prices are still fine.
+    const addressIsReal = Boolean(req.destinationLine1?.trim() && req.destinationCity?.trim());
 
     // If the caller pinned a method, quote just that; otherwise enumerate.
     const levels = req.shippingMethod ? [SHIPPING_LEVEL[req.shippingMethod]] : [...QUOTE_LEVELS];
@@ -357,7 +366,9 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
           "/print-job-cost-calculations/",
           { method: "POST", body: JSON.stringify(body) },
         );
-        outcomes.push({ method, quote: mapCostToQuote(json, level) });
+        const quote = mapCostToQuote(json, level);
+        if (!addressIsReal) delete quote.addressValidation;
+        outcomes.push({ method, quote });
       } catch (err) {
         const refused = err instanceof FulfillmentError && err.kind === "validation";
         outcomes.push({

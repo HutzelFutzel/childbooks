@@ -38,6 +38,8 @@ import { SparksBadge } from "@/ui/layout/SparksBadge";
 import { PlansDialog } from "@/ui/billing/PlansDialog";
 import { ImageTierControl } from "@/ui/settings/ImageTierControl";
 import { useAccountUiStore } from "@/state/accountUiStore";
+import { useCheckoutUiStore, type PurchaseKind } from "@/state/checkoutUiStore";
+import { PurchaseConfirmation } from "@/ui/checkout/PurchaseConfirmation";
 import { claimReferralCode } from "@/platform/payments";
 import { notify } from "@/ui/lib/notify";
 
@@ -72,6 +74,7 @@ export default function StudioApp() {
   const closeOrders = useAccountUiStore((s) => s.closeOrders);
   const downloadsOpen = useAccountUiStore((s) => s.downloadsOpen);
   const closeDownloads = useAccountUiStore((s) => s.closeDownloads);
+  const openConfirmation = useCheckoutUiStore((s) => s.openConfirmation);
 
   useEffect(() => {
     initAuth();
@@ -147,8 +150,11 @@ export default function StudioApp() {
     return () => stopSparks();
   }, [uid, accessLevel, watchSparks, stopSparks]);
 
-  // Surface the result of a Stripe Checkout redirect (success/cancel) once, then
-  // strip the query params so a refresh doesn't re-toast.
+  // Surface the result of a Stripe Checkout redirect. A SUCCESS opens the
+  // confirmation screen and leaves its params in place, so a refresh comes
+  // straight back to it (the screen clears them when dismissed). Only the
+  // cancellations — where there is nothing to follow — are toasts, and only
+  // those params are stripped here.
   useEffect(() => {
     if (typeof window === "undefined") return;
     const params = new URLSearchParams(window.location.search);
@@ -157,6 +163,8 @@ export default function StudioApp() {
     const sparks = params.get("sparks");
     const gift = params.get("gift");
     const ebook = params.get("ebook");
+    const paymentId = params.get("payment");
+    const projectId = params.get("project");
     const ref = params.get("ref");
     const hero = params.get("hero");
     // A referral landing (`?ref=CODE`) is remembered and claimed once the
@@ -178,46 +186,44 @@ export default function StudioApp() {
       }
     }
     if (!checkout && !subscription && !sparks && !gift && !ebook && !ref && !hero) return;
-    if (checkout === "success") {
-      notify.success(
-        "Payment received",
-        "Thanks! Your book is being sent to print — track it under Orders.",
-      );
-    } else if (checkout === "cancel") {
+
+    const success: PurchaseKind | null =
+      checkout === "success"
+        ? "order"
+        : ebook === "success"
+          ? "ebook"
+          : sparks === "success"
+            ? "sparks"
+            : gift === "success"
+              ? "gift"
+              : subscription === "success"
+                ? "subscription"
+                : null;
+
+    if (success) {
+      openConfirmation({ kind: success, paymentId, projectId });
+    } else if (
+      checkout === "cancel" ||
+      ebook === "cancel" ||
+      sparks === "cancel" ||
+      gift === "cancel" ||
+      subscription === "cancel"
+    ) {
       notify.info("Checkout cancelled", "No charge was made. You can try again anytime.");
-    } else if (subscription === "success") {
-      notify.success("Subscription active", "Your plan is now active.");
-    } else if (sparks === "success") {
-      notify.success("Sparks added", "Your Sparks have been topped up.");
-    } else if (sparks === "cancel") {
-      notify.info("Purchase cancelled", "No charge was made.");
-    } else if (gift === "success") {
-      notify.success(
-        "Gift purchased",
-        "Your gift code is ready — find it in your Sparks wallet under “Gifts you bought”.",
-      );
-    } else if (gift === "cancel") {
-      notify.info("Purchase cancelled", "No charge was made.");
-    } else if (ebook === "success") {
-      notify.success(
-        "Ebook purchased",
-        "Your digital edition is unlocked — download it from the Order step anytime.",
-      );
-    } else if (ebook === "cancel") {
-      notify.info("Purchase cancelled", "No charge was made.");
     }
-    params.delete("checkout");
-    params.delete("subscription");
-    params.delete("sparks");
-    params.delete("gift");
-    params.delete("ebook");
-    params.delete("payment");
+
+    // The confirmation screen owns its own params (it needs them to survive a
+    // refresh) and clears them on dismiss, so only the rest are cleaned up here.
+    if (!success) {
+      for (const key of ["checkout", "subscription", "sparks", "gift", "ebook", "payment", "project", "session_id"]) {
+        params.delete(key);
+      }
+    }
     params.delete("ref");
     params.delete("hero");
-    params.delete("session_id");
     const qs = params.toString();
     window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
-  }, []);
+  }, [openConfirmation]);
 
   // Fulfil the landing-page on-ramp: once the (guest) session and project list
   // are ready, create the promised storybook and drop the visitor straight into
@@ -354,6 +360,7 @@ export default function StudioApp() {
       {accessLevel === "full" && <DownloadsDialog open={downloadsOpen} onClose={closeDownloads} />}
       <SettingsDialog />
       <ImageTierPromptDialog />
+      <PurchaseConfirmation />
       <Toaster />
     </div>
     </MotionConfig>

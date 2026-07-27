@@ -12,12 +12,15 @@ import { collection, onSnapshot, type Unsubscribe } from "firebase/firestore";
 import { getFirebaseAuth, getFirebaseDb } from "../lib/firebase";
 import type {
   Address,
+  AddressValidation,
+  AddressWarning,
   Money,
   OrderRecord,
   OrderStage,
   OrderStatusEntry,
   ShipmentInfo,
   ShippingMethod,
+  SuggestedAddress,
 } from "../core/fulfillment/types";
 
 /** Normalize a Firestore Timestamp | number | null to epoch ms (or null). */
@@ -52,6 +55,48 @@ function mapAddress(value: unknown): Address {
     postalOrZipCode: asString(a.postalOrZipCode),
     countryCode: asString(a.countryCode),
   };
+}
+
+/** Only the address fields the provider suggested a change to are kept. */
+function mapSuggestedAddress(value: unknown): SuggestedAddress | null {
+  if (!value || typeof value !== "object") return null;
+  const a = value as Record<string, unknown>;
+  const out: SuggestedAddress = {};
+  const keys = [
+    "line1",
+    "line2",
+    "townOrCity",
+    "stateOrCounty",
+    "postalOrZipCode",
+    "countryCode",
+  ] as const;
+  for (const key of keys) {
+    if (typeof a[key] === "string" && a[key]) out[key] = a[key] as string;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function mapAddressValidation(value: unknown): AddressValidation | null {
+  if (!value || typeof value !== "object") return null;
+  const v = value as Record<string, unknown>;
+  const warnings: AddressWarning[] = Array.isArray(v.warnings)
+    ? (v.warnings as Record<string, unknown>[]).flatMap((w) => {
+        const message = asString(w.message);
+        if (!message) return [];
+        return [
+          {
+            code: asString(w.code, "WARNING"),
+            message,
+            ...(typeof w.field === "string" && w.field ? { field: w.field } : {}),
+          },
+        ];
+      })
+    : [];
+  const suggested = mapSuggestedAddress(v.suggested);
+  if (warnings.length === 0 && !suggested) return null;
+  // Records written before severity existed only ever carried correctable
+  // warnings (a fatal one would have blocked the order), so read them as such.
+  return { warnings, suggested, severity: v.severity === "error" ? "error" : "warning" };
 }
 
 function mapMoneyList(value: unknown): Money[] {
@@ -107,6 +152,7 @@ function mapOrder(id: string, data: Record<string, unknown>): OrderRecord {
     statusMessage: asStringOrNull(data.statusMessage),
     charges: mapMoneyList(data.charges),
     shipments: mapShipments(data.shipments),
+    addressValidation: mapAddressValidation(data.addressValidation),
     fileUrls: {
       interior: typeof files.interior === "string" ? files.interior : undefined,
       cover: typeof files.cover === "string" ? files.cover : undefined,

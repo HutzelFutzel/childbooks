@@ -11,25 +11,22 @@ import {
   XCircle,
 } from "lucide-react";
 import { Receipt } from "lucide-react";
+import { MapPin } from "lucide-react";
 import type { OrderRecord, OrderStage } from "../../core/fulfillment/types";
 import type { PaymentStatus, UserPaymentRecord } from "../../platform/payments";
 import { startReorderCheckout } from "../../platform/payments";
+import { FULFILLMENT_STATUS, STAGE_STATUS, orderHealth, orderNeedsAttention } from "./orderStatus";
 import { createFulfillment } from "../../platform/fulfillment";
 import { useOrdersStore } from "../../state/ordersStore";
 import { usePaymentsStore } from "../../state/paymentsStore";
+import { useAccountUiStore } from "../../state/accountUiStore";
+import { useCheckoutUiStore } from "../../state/checkoutUiStore";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
 import { Tabs } from "../components/Tabs";
 import { cn } from "../lib/cn";
 
-const STAGE: Record<OrderStage, { label: string; badge: string }> = {
-  draft: { label: "Draft", badge: "bg-ink-100 text-ink-600" },
-  onHold: { label: "Needs attention", badge: "bg-amber-100 text-amber-700" },
-  inProgress: { label: "In production", badge: "bg-sky-100 text-sky-700" },
-  complete: { label: "Complete", badge: "bg-emerald-100 text-emerald-700" },
-  cancelled: { label: "Cancelled", badge: "bg-ink-100 text-ink-500" },
-  error: { label: "Issue", badge: "bg-rose-100 text-rose-700" },
-};
+const STAGE = STAGE_STATUS;
 
 function money(amount: string, currency: string): string {
   const n = Number(amount);
@@ -145,6 +142,23 @@ function PaymentCard({ payment }: { payment: UserPaymentRecord }) {
   const [reordering, setReordering] = useState(false);
   const [reorderError, setReorderError] = useState<string | null>(null);
   const canReorder = payment.kind === "order" && payment.status === "paid";
+  const openConfirmation = useCheckoutUiStore((s) => s.openConfirmation);
+  const closeOrders = useAccountUiStore((s) => s.closeOrders);
+
+  // Cross-checked against the order, not just the payment's own state. Records
+  // written before `fulfillmentState` existed have it INFERRED as "placed" from
+  // the presence of an order id — which is exactly true of an order the printer
+  // later rejected, so trusting the payment alone would show those as fine.
+  const orders = useOrdersStore((s) => s.orders);
+  const order = payment.orderId ? orders.find((o) => o.id === payment.orderId) ?? null : null;
+  const health = payment.kind === "order" ? orderHealth(payment, order) : "ok";
+
+  // The confirmation screen is the order's status page, so it has to be
+  // reachable after the moment of purchase — not only from the Stripe redirect.
+  const viewStatus = () => {
+    closeOrders();
+    openConfirmation({ kind: "order", paymentId: payment.id });
+  };
 
   const reorder = async () => {
     setReordering(true);
@@ -183,18 +197,72 @@ function PaymentCard({ payment }: { payment: UserPaymentRecord }) {
         </p>
       )}
 
+      {/* Where a PAID print order stands with the press. Shown because placement
+          happens after payment and can fail with the money already taken — which
+          used to be invisible here until a "sorry" email hours later. */}
+      {payment.status === "paid" && payment.fulfillmentState && health !== "ok" && (
+        <FulfillmentNotice
+          state={health === "working" ? "retrying" : "failed"}
+          issue={payment.fulfillmentIssue}
+          className="mt-3"
+        />
+      )}
+      {payment.status === "paid" && payment.fulfillmentState === "pending" && health === "ok" && (
+        <FulfillmentNotice state="pending" issue={null} className="mt-3" />
+      )}
+
       {reorderError && <p className="mt-2 text-xs text-rose-600">{reorderError}</p>}
 
       {(payment.receiptUrl || canReorder) && (
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {payment.receiptUrl && <FileLink href={payment.receiptUrl} label="View receipt" />}
           {canReorder && (
-            <Button size="sm" variant="secondary" loading={reordering} onClick={() => void reorder()}>
-              Order again
-            </Button>
+            <>
+              <Button size="sm" variant="secondary" onClick={viewStatus}>
+                Order status
+              </Button>
+              <Button size="sm" variant="ghost" loading={reordering} onClick={() => void reorder()}>
+                Order again
+              </Button>
+            </>
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+const FULFILLMENT_TONE: Record<"info" | "success" | "warning" | "danger", string> = {
+  info: "border-sky-200 bg-sky-50 text-sky-800",
+  success: "border-emerald-200 bg-emerald-50 text-emerald-800",
+  warning: "border-amber-200 bg-amber-50 text-amber-800",
+  danger: "border-rose-200 bg-rose-50 text-rose-800",
+};
+
+/** One paid order's progress towards the press, in the customer's words. */
+export function FulfillmentNotice({
+  state,
+  issue,
+  className,
+}: {
+  state: NonNullable<UserPaymentRecord["fulfillmentState"]>;
+  issue: string | null;
+  className?: string;
+}) {
+  const s = FULFILLMENT_STATUS[state];
+  const Icon = state === "pending" ? Loader2 : state === "placed" ? CheckCircle2 : AlertTriangle;
+  return (
+    <div
+      className={cn(
+        "flex items-start gap-2 rounded-xl border px-3 py-2 text-xs",
+        FULFILLMENT_TONE[s.tone],
+        className,
+      )}
+    >
+      <Icon className={cn("mt-0.5 size-3.5 shrink-0", state === "pending" && "animate-spin")} />
+      <span>
+        <span className="font-semibold">{s.label}</span> — {issue ?? s.detail}
+      </span>
     </div>
   );
 }
@@ -208,7 +276,8 @@ function OrderCard({
 }) {
   const [openDetails, setOpenDetails] = useState(false);
   const stage = STAGE[order.stage] ?? STAGE.draft;
-  const needsAttention = order.stage === "onHold" || order.stage === "error";
+  const needsAttention = orderNeedsAttention(order.stage);
+  const correction = order.addressValidation?.suggested ?? null;
   const total = order.charges.reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
   const currency = order.charges[0]?.currency ?? "USD";
   const { address } = order.recipient;
@@ -240,11 +309,43 @@ function OrderCard({
         </span>
       </div>
 
-      {/* Attention banner — the actionable bit (bad address, page count, etc.) */}
+      {/* Attention banner — the actionable bit (bad address, page count, etc.).
+          Tone follows the stage so it can't read amber under a rose badge. */}
       {needsAttention && order.statusMessage && (
-        <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+        <div
+          className={cn(
+            "mt-3 flex items-start gap-2 rounded-xl border px-3 py-2 text-xs",
+            order.stage === "error"
+              ? "border-rose-200 bg-rose-50 text-rose-800"
+              : "border-amber-200 bg-amber-50 text-amber-800",
+          )}
+        >
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
           <span>{order.statusMessage}</span>
+        </div>
+      )}
+
+      {/* The carrier changed the address after we submitted it. Checkout asks
+          about this up front, so seeing it here means it slipped through — and
+          the customer deserves to know which address the book is going to. */}
+      {correction && (
+        <div className="mt-3 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <MapPin className="mt-0.5 size-3.5 shrink-0" />
+          <span>
+            The delivery carrier adjusted this address to{" "}
+            <span className="font-medium">
+              {[
+                correction.line1,
+                correction.line2,
+                correction.townOrCity,
+                correction.stateOrCounty,
+                correction.postalOrZipCode,
+              ]
+                .filter(Boolean)
+                .join(", ")}
+            </span>
+            . If that isn't right, contact us straight away — we can still stop the order.
+          </span>
         </div>
       )}
 
