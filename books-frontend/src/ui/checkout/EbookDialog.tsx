@@ -37,12 +37,23 @@ export function EbookDialog({
   onClose,
   project,
   design,
+  initialQuote = null,
 }: {
   open: boolean;
   onClose: () => void;
   project: Project;
   /** Only for the fingerprint now — the server renders from the saved book. */
   design: BookDesign;
+  /**
+   * A quote the caller already fetched (e.g. the order screen, so its "Get the
+   * ebook" card can read "Download your ebook" before this dialog ever opens).
+   * Seeds state so an owner doesn't see a "Checking the price…" flash for a
+   * fact already known. A fresh quote is still fetched in the background —
+   * price and ownership are server-authoritative and this is about to either
+   * charge money or grant a download, so the seed is a head start, not the
+   * final word.
+   */
+  initialQuote?: EbookQuote | null;
 }) {
   const baseCurrency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
   const openConfirmation = useCheckoutUiStore((s) => s.openConfirmation);
@@ -82,8 +93,11 @@ export function EbookDialog({
 
   useEffect(() => {
     if (!open) return;
-    setPhase("quote");
-    setQuote(null);
+    // A seeded quote already answers the question this phase exists to
+    // answer ("owned, included, or priced at X?") — skip straight to "ready"
+    // instead of flashing a spinner over an answer the caller already has.
+    setQuote(initialQuote ?? null);
+    setPhase(initialQuote ? "ready" : "quote");
     setError(null);
     let cancelled = false;
     void fetchEbookQuote(project.id, baseCurrency)
@@ -94,13 +108,19 @@ export function EbookDialog({
       })
       .catch((err) => {
         if (cancelled) return;
-        setError(err instanceof Error ? err.message : "We couldn't price the ebook.");
+        // Only surface the error if there was nothing to fall back on — a
+        // seeded quote means the background refresh merely failed to
+        // *improve* on an answer that's still good enough to act on.
+        if (!initialQuote) {
+          setError(err instanceof Error ? err.message : "We couldn't price the ebook.");
+        }
         setPhase("ready");
       });
     return () => {
       cancelled = true;
     };
-  }, [open, project.id, baseCurrency]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, project.id, baseCurrency, initialQuote]);
 
   /**
    * A book that hasn't changed since it was last rendered doesn't need to be

@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowLeft,
   BookOpenCheck,
+  Download,
   Eye,
   Loader2,
   ShoppingBag,
@@ -12,6 +13,8 @@ import {
 import { bookProductForConfig } from "../../core/book";
 import { ebookPlanPrice, findPublicProductForSku, formatSlug } from "../../core/config/products";
 import { findPublicPlanByPriceId } from "../../core/config/plans";
+import { renderFingerprint } from "../../core/print/fingerprint";
+import { fetchEbookQuote, type EbookQuote } from "../../platform/payments";
 import { activeSubscription } from "../../platform/subscriptions";
 import { currentIllustration } from "../../state/ai";
 import { useAppConfigStore } from "../../state/appConfigStore";
@@ -56,6 +59,34 @@ export function OrderStage() {
   const ebookSettings = useAppConfigStore((s) => s.pricingSettings.ebook);
   const publicPlans = useAppConfigStore((s) => s.plans.plans);
   const subscriptions = useSubscriptionStore((s) => s.subscriptions);
+
+  // Server-authoritative ebook ownership + price, fetched up front so the "Get
+  // the ebook" card can already read as "Download your ebook" for an owner —
+  // instead of only revealing that once they've clicked a button that looked
+  // like a purchase. `/checkout/*` requires a verified account, so this is
+  // skipped (and simply falls back to the catalog price below) for guests and
+  // unverified users, who can't own anything yet anyway.
+  const [ebookQuote, setEbookQuote] = useState<EbookQuote | null>(null);
+  useEffect(() => {
+    if (!ebookEnabled || accessLevel !== "full") {
+      setEbookQuote(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchEbookQuote(project.id, baseCurrency)
+      .then((q) => {
+        if (!cancelled) setEbookQuote(q);
+      })
+      .catch(() => {
+        // Best-effort — the card falls back to the plain catalog price, which
+        // is still correct for anyone who doesn't already own the ebook.
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ebookEnabled, accessLevel, project.id, baseCurrency]);
+  const ebookOwned = ebookQuote?.owned ?? false;
 
   // Purchases require a verified account (the backend enforces this too). The
   // studio itself is open to guests, so the gate lives on the buy buttons:
@@ -178,6 +209,13 @@ export function OrderStage() {
       included: planApplied && price <= 0,
     };
   }, [ebookSettings, baseCurrency, currentPlan]);
+
+  // Whether the owned ebook might be behind the current design (same check
+  // `EbookDialog` makes) — shown as a note on the card so an owner already
+  // knows a free refresh is waiting, instead of finding out only after
+  // opening the dialog.
+  const fingerprint = useMemo(() => renderFingerprint(project, design), [project, design]);
+  const ebookStale = ebookOwned && ebookQuote?.ownedFingerprint !== fingerprint;
 
   // The format to send someone to on the public price calculator: the one this
   // project is actually configured for, when the admin still sells it, else
@@ -320,21 +358,35 @@ export function OrderStage() {
         />
         {ebookEnabled && (
           <OptionCard
-            icon={<Tablet className="size-6" />}
-            tone="neutral"
-            title="Get the ebook"
-            desc="A high-quality PDF of your book — read it on any device, forever."
-            price={
-              ebookDisplay == null
-                ? undefined
-                : ebookDisplay.included
-                  ? `Included with your ${ebookDisplay.planName} plan`
-                  : ebookDisplay.planName
-                    ? `${fmtMoney(ebookDisplay.price, baseCurrency)} · ${ebookDisplay.planName} price`
-                    : fmtMoney(ebookDisplay.price, baseCurrency)
+            icon={ebookOwned ? <Download className="size-6" /> : <Tablet className="size-6" />}
+            tone={ebookOwned ? "brand" : "neutral"}
+            title={ebookOwned ? "Your ebook" : "Get the ebook"}
+            desc={
+              ebookOwned
+                ? "You already own the digital edition — download it any time, on any device."
+                : "A high-quality PDF of your book — read it on any device, forever."
             }
-            cta="Get the ebook"
-            note={purchaseNote}
+            price={
+              // Owning it is the whole story — showing a price alongside "already
+              // purchased" would just raise the question of why one's mentioned.
+              ebookOwned
+                ? "Already purchased"
+                : ebookDisplay == null
+                  ? undefined
+                  : ebookDisplay.included
+                    ? `Included with your ${ebookDisplay.planName} plan`
+                    : ebookDisplay.planName
+                      ? `${fmtMoney(ebookDisplay.price, baseCurrency)} · ${ebookDisplay.planName} price`
+                      : fmtMoney(ebookDisplay.price, baseCurrency)
+            }
+            cta={ebookOwned ? "Download your ebook" : "Get the ebook"}
+            note={
+              ebookOwned
+                ? ebookStale
+                  ? "Design updated since you bought this — a free refresh is ready inside."
+                  : "Find it anytime under Downloads in your account menu."
+                : purchaseNote
+            }
             onClick={() => requireFullAccount(() => setBuyingEbook(true))}
           />
         )}
@@ -362,6 +414,7 @@ export function OrderStage() {
         onClose={() => setBuyingEbook(false)}
         project={project}
         design={design}
+        initialQuote={ebookQuote}
       />
 
       <AnimatePresence>
