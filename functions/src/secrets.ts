@@ -11,7 +11,7 @@
  * For the emulator, put plain values in `functions/.env.local` (or
  * `functions/.secret.local`) instead.
  */
-import { defineSecret } from "firebase-functions/params";
+import { defineBoolean, defineSecret } from "firebase-functions/params";
 
 export const OPENAI_API_KEY = defineSecret("OPENAI_API_KEY");
 export const GOOGLE_API_KEY = defineSecret("GOOGLE_API_KEY");
@@ -69,24 +69,40 @@ const LIVE_SECRETS = [
 export const ALL_SECRETS = [...BASE_SECRETS, ...SANDBOX_SECRETS, ...LIVE_SECRETS];
 
 /**
+ * Gate for binding the live secrets, set via `LIVE_ENABLED=true` in
+ * `functions/.env.<projectId>` once you've added the live keys.
+ *
+ * IMPORTANT: this MUST be a Firebase "parameterized config" value
+ * (`defineBoolean`), not a plain `process.env.LIVE_ENABLED` read. Plain
+ * `.env.<projectId>` values are only injected into `process.env` for the
+ * ACTUALLY RUNNING deployed function (i.e. at request time) — they are NOT
+ * available while firebase-tools' deploy "discovery" step evaluates this
+ * file to decide the `secrets: [...]` array below. A plain read here always
+ * silently resolved to `false` at discovery time (even with `LIVE_ENABLED=true`
+ * committed), so `api` never actually got the live secrets bound, while
+ * `liveSecretsBound()` (called at runtime by the readiness check) correctly
+ * reported `true` — a very confusing split. `defineBoolean` uses the same
+ * discovery-time substitution mechanism as `defineSecret`, so it resolves
+ * correctly both at discovery time and at runtime.
+ */
+const LIVE_ENABLED = defineBoolean("LIVE_ENABLED", { default: false });
+
+/**
  * The secrets actually BOUND to the `api` function at deploy time.
  *
  * Firebase requires every bound secret to exist in Secret Manager, so binding
  * the live pair would force you to create live keys even while running sandbox.
- * We therefore bind the live secrets only when `LIVE_ENABLED=true` (set in
- * `functions/.env.<projectId>` once you've added the live keys). This value is
- * read at deploy "discovery" time, where the project env file is loaded.
+ * We therefore bind the live secrets only when `LIVE_ENABLED` is true.
  *
  * Consequence: to use live mode at runtime (incl. the admin sandbox↔live
  * toggle) you must have deployed with `LIVE_ENABLED=true` so the live secrets
  * are injected. The go-live readiness check enforces this before letting you flip.
  */
 export function boundSecrets() {
-  const liveEnabled = process.env.LIVE_ENABLED === "true";
-  return liveEnabled ? ALL_SECRETS : [...BASE_SECRETS, ...SANDBOX_SECRETS];
+  return LIVE_ENABLED.value() ? ALL_SECRETS : [...BASE_SECRETS, ...SANDBOX_SECRETS];
 }
 
 /** Whether the live secrets are bound in this deployment. */
 export function liveSecretsBound(): boolean {
-  return process.env.LIVE_ENABLED === "true";
+  return LIVE_ENABLED.value();
 }

@@ -24,6 +24,7 @@ export const SLACK_MESSAGE_IDS = [
   "referral_paid",
   "contact_form",
   "admin_alert",
+  "daily_summary",
 ] as const;
 
 export type SlackMessageKey = (typeof SLACK_MESSAGE_IDS)[number];
@@ -82,6 +83,13 @@ export const SLACK_MESSAGE_REGISTRY: Record<SlackMessageKey, SlackMessageMeta> =
     description:
       "Posted to #ops for operational alerts (fulfillment failures, refunds, grant abuse). Turning this off hides operational problems — leave on unless you have another alerting path.",
     channel: "ops",
+  },
+  daily_summary: {
+    id: "daily_summary",
+    label: "Daily KPI summary",
+    description:
+      "Posted to #growth once a day (evening) with signups, logins, revenue, orders and other headline KPIs for the day.",
+    channel: "growth",
   },
 };
 

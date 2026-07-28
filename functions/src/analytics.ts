@@ -668,7 +668,9 @@ function countTotals(
   };
 }
 
-async function computeOverview(
+/** Exported so the scheduled daily-summary job can reuse the same computation
+ * the admin dashboard uses, instead of re-implementing the metrics. */
+export async function computeOverview(
   from: number,
   to: number,
   settings: AdminSettings,
@@ -1312,7 +1314,7 @@ async function productDisplayNames(): Promise<Map<string, string>> {
  * data that was never queried. Signups come from the Auth scan so the funnel
  * starts at acquisition rather than at checkout.
  */
-async function computeFunnel(opts: {
+export async function computeFunnel(opts: {
   from: number;
   to: number;
   settings: AdminSettings;

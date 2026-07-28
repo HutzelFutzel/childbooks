@@ -48,6 +48,10 @@ export { importInfraCostsDaily } from "./infraCosts";
 // Auth blocking functions that log signup/login events for the admin dashboard.
 export { onBeforeCreate, onBeforeSignIn } from "./analyticsEvents";
 
+// Once-a-day Slack digest of headline KPIs (signups, logins, revenue, orders,
+// funnel leakage, open alerts) for the day that just ended.
+export { sendDailySummary } from "./dailySummary";
+
 export const api = onRequest(
   {
     // Image generation can take a while; allow generous time + memory.
