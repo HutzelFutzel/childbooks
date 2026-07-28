@@ -16,10 +16,11 @@ import { createPortal } from "react-dom";
 import type { RasterPage } from "../../core/print/assemble";
 import type { BookDesign } from "../../core/types";
 import {
-  blobToJpegBytes,
-  capturePageElement,
+  canvasLooksBlank,
+  canvasToJpegBytes,
+  capturePageCanvas,
   computeFontEmbedCss,
-  rasterLooksBlank,
+  releaseCanvas,
   waitForStageReady,
 } from "./bookExport";
 import { loadArtwork, spineColorsFrom, type LoadedArtwork } from "./artwork";
@@ -117,7 +118,7 @@ export function RenderStage({
         const fontEmbedCSS = await computeFontEmbedCss(stage);
 
         const rasters: RasterPage[] = [];
-        const all: { id: string; label: string; widthIn: number; heightIn: number; mustHaveInk: boolean }[] = [
+        const all: CaptureItem[] = [
           ...targets.map((t) => ({
             id: t.id,
             label: t.label,
@@ -131,7 +132,11 @@ export function RenderStage({
             // entirely, and a hidden layer is a design choice, not a failed
             // render. Only a page still expecting the FULL-BLEED illustration —
             // or a still-visible placed one — has to prove it actually painted.
-            mustHaveInk: hasExpectedInk(design, t.page.id, Boolean(t.page.blobId && loaded.artwork[t.page.blobId])),
+            mustHaveInk: hasExpectedInk(
+              design,
+              t.page.id,
+              Boolean(t.page.blobId && loaded.artwork[t.page.blobId]),
+            ),
           })),
           ...(spine
             ? [{ id: SPINE_CAPTURE_ID, label: "Spine", widthIn: spine.widthIn, heightIn: spine.heightIn, mustHaveInk: false }]
@@ -143,20 +148,11 @@ export function RenderStage({
           onProgress(`Rendering ${i + 1} of ${all.length}…`);
           const el = stage.querySelector<HTMLElement>(`[data-export-page="${cssEscape(item.id)}"]`);
           if (!el) throw new Error(`The book's ${item.label} could not be prepared for printing.`);
-          const blob = await capturePageElement(el, { fontEmbedCSS });
-          if (item.mustHaveInk && (await rasterLooksBlank(blob))) {
-            throw new Error(
-              `${item.label} came out blank. Its illustration didn't render — please try again.`,
-            );
-          }
-          rasters.push({
-            id: item.id,
-            label: item.label,
-            bytes: await blobToJpegBytes(blob),
-            mimeType: "image/jpeg",
-            widthIn: item.widthIn,
-            heightIn: item.heightIn,
-          });
+          rasters.push(await captureRaster(el, item, fontEmbedCSS));
+          // Hand the browser a turn between pages. Each one allocates a
+          // page-sized canvas; captured back to back with no yield, a long book
+          // gives it no chance to reclaim them.
+          await new Promise((r) => setTimeout(r, 0));
         }
 
         onDone(rasters);
@@ -203,11 +199,68 @@ export function RenderStage({
  */
 function hasExpectedInk(design: BookDesign, pageId: string, hasArt: boolean): boolean {
   if (!hasArt) return false;
-  const illustrationEls = (design.pages[pageId]?.images ?? []).filter((im) => im.kind === "illustration");
+  const illustrationEls = (design.pages[pageId]?.images ?? []).filter(
+    (im) => im.kind === "illustration",
+  );
   // No placed element ⇒ it's still the full-bleed background `PrintPage` draws
   // whenever a page has art and hasn't been made editable.
   if (illustrationEls.length === 0) return true;
   return illustrationEls.some((im) => !im.hidden);
+}
+
+/** What one capture target needs from the loop above. */
+interface CaptureItem {
+  id: string;
+  label: string;
+  widthIn: number;
+  heightIn: number;
+  mustHaveInk: boolean;
+}
+
+/**
+ * How many times to ask for a page before believing it's really empty.
+ *
+ * A page that must have ink and comes back white isn't a design that lost its
+ * artwork — the artwork is loaded and decoded by the time we get here, and the
+ * on-screen editor draws it from the same DOM. It's the rasterizer declining
+ * to paint, which it does under memory pressure and recovers from once given
+ * room. Failing the whole export on the first white page threw away an entire
+ * book's worth of work over a page that renders on the next attempt.
+ */
+const CAPTURE_ATTEMPTS = 3;
+
+/** Snapshot one page, retrying while it comes back empty. */
+async function captureRaster(
+  el: HTMLElement,
+  item: CaptureItem,
+  fontEmbedCSS: string,
+): Promise<RasterPage> {
+  for (let attempt = 1; ; attempt++) {
+    const canvas = await capturePageCanvas(el, { fontEmbedCSS });
+    try {
+      if (!item.mustHaveInk || !canvasLooksBlank(canvas)) {
+        return {
+          id: item.id,
+          label: item.label,
+          bytes: await canvasToJpegBytes(canvas),
+          mimeType: "image/jpeg",
+          widthIn: item.widthIn,
+          heightIn: item.heightIn,
+        };
+      }
+    } finally {
+      releaseCanvas(canvas);
+    }
+    if (attempt >= CAPTURE_ATTEMPTS) {
+      throw new Error(
+        `${item.label} came out blank. Its illustration didn't render — please try again.`,
+      );
+    }
+    // Wait out whatever stopped it painting: a macrotask for the collector to
+    // run in, then a settled frame, each attempt more patient than the last.
+    await new Promise((r) => setTimeout(r, 250 * attempt));
+    await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null))));
+  }
 }
 
 /** Minimal CSS.escape fallback for attribute selectors. */

@@ -5,7 +5,7 @@
  * snapshot is worth keeping. Document assembly lives in `core/print/assemble`
  * (shared with the backend); this half is unavoidably browser-only.
  */
-import { getFontEmbedCSS, toBlob } from "html-to-image";
+import { getFontEmbedCSS, toCanvas } from "html-to-image";
 
 /** Reject if `promise` doesn't settle within `ms` (prevents indefinite hangs). */
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -91,23 +91,35 @@ export async function waitForStageReady(
 }
 
 /**
- * Snapshot a single rendered page element to a PNG blob at its natural pixel
+ * Snapshot a single rendered page element to a canvas at its natural pixel
  * size (the element is already laid out at print resolution).
+ *
+ * A canvas rather than an encoded blob, deliberately. The pixels are wanted
+ * twice — once to check the page isn't empty, once as JPEG — and going through
+ * a PNG in between costs a ~9MB encode, a full re-decode and a second
+ * page-sized canvas for every page in the book. At 300dpi that is ~60MB of
+ * churn per page on top of the ~26MB the render itself needs, and the pages
+ * are captured back to back: a long book would drive the tab into the state
+ * where the rasterizer quietly draws NOTHING (an SVG image Chrome declines to
+ * rasterize resolves fine and paints nothing at all) — which is what a "page
+ * came out blank" failure at the end of a big export actually was.
  *
  * Note: `cacheBust` is intentionally NOT used — it appends a query string to
  * every URL, which corrupts the `blob:` URLs used for illustrations and can make
  * the underlying image load (and thus the export) hang forever. A hard timeout
  * guards against any other stall.
  */
-export async function capturePageElement(
+export async function capturePageCanvas(
   el: HTMLElement,
   opts: { fontEmbedCSS?: string; timeoutMs?: number } = {},
-): Promise<Blob> {
+): Promise<HTMLCanvasElement> {
   const width = el.offsetWidth;
   const height = el.offsetHeight;
-  const blob = await withTimeout(
-    toBlob(el, {
+  return withTimeout(
+    toCanvas(el, {
       pixelRatio: 1,
+      // Also what makes the JPEG safe to encode straight off this canvas: it
+      // leaves no transparent pixels, which a JPEG would otherwise turn black.
       backgroundColor: "#ffffff",
       width,
       height,
@@ -120,17 +132,17 @@ export async function capturePageElement(
     opts.timeoutMs ?? 45000,
     "Rendering a page",
   );
-  if (!blob) throw new Error("Failed to rasterize a page for export.");
-  return blob;
 }
 
-function loadImage(src: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error("Could not decode page raster."));
-    img.src = src;
-  });
+/**
+ * Drop a captured page's pixels now that it's encoded.
+ *
+ * Zeroing the dimensions frees the backing store immediately instead of
+ * leaving 26MB per page for the collector to get to whenever it feels like it.
+ */
+export function releaseCanvas(canvas: HTMLCanvasElement): void {
+  canvas.width = 0;
+  canvas.height = 0;
 }
 
 /**
@@ -144,21 +156,19 @@ function loadImage(src: string): Promise<HTMLImageElement> {
 const BLANK_LUMA_THRESHOLD = 250;
 const BLANK_PIXEL_RATIO = 0.995;
 
-/** True when nearly every pixel of the raster is white. */
-export async function rasterLooksBlank(blob: Blob): Promise<boolean> {
-  const url = URL.createObjectURL(blob);
+/** True when nearly every pixel of the captured page is white. */
+export function canvasLooksBlank(canvas: HTMLCanvasElement): boolean {
   try {
-    const img = await loadImage(url);
     // A small downsample is plenty: we're asking "is there anything here at
     // all", not measuring the artwork.
     const w = 48;
-    const h = Math.max(1, Math.round((img.naturalHeight / img.naturalWidth) * w));
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const h = Math.max(1, Math.round((canvas.height / canvas.width) * w));
+    const thumb = document.createElement("canvas");
+    thumb.width = w;
+    thumb.height = h;
+    const ctx = thumb.getContext("2d", { willReadFrequently: true });
     if (!ctx) return false;
-    ctx.drawImage(img, 0, 0, w, h);
+    ctx.drawImage(canvas, 0, 0, w, h);
     const { data } = ctx.getImageData(0, 0, w, h);
     let white = 0;
     const pixels = data.length / 4;
@@ -166,38 +176,24 @@ export async function rasterLooksBlank(blob: Blob): Promise<boolean> {
       const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
       if (luma >= BLANK_LUMA_THRESHOLD) white++;
     }
+    releaseCanvas(thumb);
     return white / pixels >= BLANK_PIXEL_RATIO;
   } catch {
     // If we can't tell, don't block the export on a guess.
     return false;
-  } finally {
-    URL.revokeObjectURL(url);
   }
 }
 
-/** Re-encode a captured PNG to JPEG bytes (much smaller for photographic art). */
-export async function blobToJpegBytes(blob: Blob, quality = 0.92): Promise<Uint8Array> {
-  const url = URL.createObjectURL(blob);
-  try {
-    const img = await loadImage(url);
-    const canvas = document.createElement("canvas");
-    canvas.width = img.naturalWidth;
-    canvas.height = img.naturalHeight;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("Canvas 2D context unavailable.");
-    // Flatten onto white: a JPEG has no alpha, and an unflattened transparent
-    // area encodes as black.
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0);
-    const jpeg = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/jpeg", quality),
-    );
-    if (!jpeg) throw new Error("Could not encode a page for the PDF.");
-    return new Uint8Array(await jpeg.arrayBuffer());
-  } finally {
-    URL.revokeObjectURL(url);
-  }
+/** Encode a captured page as JPEG bytes (much smaller for photographic art). */
+export async function canvasToJpegBytes(
+  canvas: HTMLCanvasElement,
+  quality = 0.92,
+): Promise<Uint8Array> {
+  const jpeg = await new Promise<Blob | null>((resolve) =>
+    canvas.toBlob(resolve, "image/jpeg", quality),
+  );
+  if (!jpeg) throw new Error("Could not encode a page for the PDF.");
+  return new Uint8Array(await jpeg.arrayBuffer());
 }
 
 /** Assemble captured pages into a zip of images, in reading order. */
