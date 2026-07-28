@@ -71,6 +71,14 @@ export interface EbookFulfillment {
   projectId: string;
   title: string;
   fileUrl: string;
+  /**
+   * Content fingerprint (see `core/print/fingerprint`) the PDF was rendered
+   * from, if known. Carried onto the download entitlement at delivery time so
+   * a later visit can tell whether the book's design has moved on since this
+   * copy was made — without it, an owned ebook can only ever be re-served,
+   * never refreshed.
+   */
+  fingerprint?: string | null;
 }
 
 /**

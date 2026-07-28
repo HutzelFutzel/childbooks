@@ -6,7 +6,9 @@
  * + ownership) → render the book to a screen-quality PDF → upload it as part
  * of `/checkout/ebook` → redirect to Stripe. The download unlocks only after
  * the payment webhook confirms funds. Already-owned books show a download
- * button instead.
+ * button instead — plus, when the fingerprint suggests the design has moved
+ * on since that copy was made, a free "update to your latest design" action
+ * that re-renders and swaps in a fresh PDF at no charge.
  */
 import { useEffect, useMemo, useState } from "react";
 import { BookOpen, Download, Loader2 } from "lucide-react";
@@ -57,6 +59,12 @@ export function EbookDialog({
   const [downloading, setDownloading] = useState(false);
   const [needsRender, setNeedsRender] = useState(false);
   const fingerprint = useMemo(() => renderFingerprint(project, design), [project, design]);
+  // Whether the owned copy might be behind the current design. Unknown for
+  // entitlements delivered before we tracked this (`ownedFingerprint` null) —
+  // treated as "maybe stale" rather than hidden, since offering a free,
+  // no-op refresh is harmless and the alternative is an ebook that can never
+  // be told apart from a design that moved on since it was made.
+  const mayBeStale = Boolean(quote?.owned) && quote?.ownedFingerprint !== fingerprint;
 
   // Owned ebooks are fetched through the gated, logged download endpoint (the
   // raw file URL is never exposed), so each download is authorized + recorded.
@@ -124,9 +132,11 @@ export function EbookDialog({
   async function checkout() {
     try {
       const included = quote?.included ?? false;
+      const owned = quote?.owned ?? false;
+      const free = included || owned;
       setNeedsRender(false);
       setPhase("redirecting");
-      setStatus(included ? "Adding it to your library…" : "Opening secure payment…");
+      setStatus(owned ? "Updating your ebook…" : free ? "Adding it to your library…" : "Opening secure payment…");
       const result = await startEbookCheckout({
         projectId: project.id,
         title: project.title,
@@ -134,10 +144,11 @@ export function EbookDialog({
         fingerprint,
       });
       if ("granted" in result) {
-        // Included with the plan — no payment step, so there's no Stripe redirect
-        // to bring the confirmation up. Open it directly: the download is the
-        // whole product, and it belongs on a screen with a button, not in a toast.
-        setQuote((q) => (q ? { ...q, owned: true } : q));
+        // Included with the plan, or a free refresh of an ebook already
+        // owned — either way there's no Stripe redirect to bring the
+        // confirmation up. Open it directly: the download is the whole
+        // product, and it belongs on a screen with a button, not in a toast.
+        setQuote((q) => (q ? { ...q, owned: true, ownedFingerprint: fingerprint } : q));
         setPhase("ready");
         onClose();
         openConfirmation({ kind: "ebook", projectId: project.id });
@@ -183,6 +194,34 @@ export function EbookDialog({
             Download your ebook
           </Button>
           <p className="text-xs text-ink-400">Find it anytime under Downloads in your account menu.</p>
+
+          {/* Owning the ebook used to mean being stuck with whatever PDF was
+              made at purchase time, forever — no amount of editing the design
+              afterward ever produced a new one. This re-renders and swaps in
+              the current design at no extra cost: it's the same ebook, just
+              caught up. */}
+          {mayBeStale && (
+            <div className="border-t border-ink-100 pt-4">
+              <p className="text-xs text-ink-500">
+                Changed the design since buying this? Get a fresh PDF with your latest edits — free,
+                since you already own it.
+              </p>
+              {busy && (
+                <div className="mt-3 flex items-center justify-center gap-2 rounded-xl bg-ink-50 px-4 py-3 text-xs text-ink-500">
+                  <Loader2 className="size-4 animate-spin text-brand-500" /> {status}
+                </div>
+              )}
+              {error && <p className="mt-2 text-xs text-rose-600">{error}</p>}
+              <Button
+                className="mt-3 w-full"
+                variant="secondary"
+                loading={busy}
+                onClick={() => void buy()}
+              >
+                {busy ? "One moment…" : "Update to your latest design"}
+              </Button>
+            </div>
+          )}
         </div>
       )}
 

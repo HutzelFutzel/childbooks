@@ -48,6 +48,13 @@ export interface EbookQuote {
   discountPct: number;
   /** Whether the buyer already owns this ebook (re-download instead of re-buy). */
   owned: boolean;
+  /**
+   * The content fingerprint the owned copy was rendered from, if known (older
+   * entitlements predate this field). Lets the client tell whether the design
+   * has changed since that render and offer a free refresh instead of only
+   * ever re-serving the original PDF.
+   */
+  ownedFingerprint: string | null;
   /** The buyer's plan, ONLY when it changed the price (drives the storefront wording). */
   planId: string | null;
   planName: string | null;
@@ -90,14 +97,15 @@ export async function priceEbook(
     listPrice,
     discountPct: 0,
     owned: false,
+    ownedFingerprint: null,
     planId: planApplied && paidPlan ? paidPlan.id : null,
     planName: planApplied && paidPlan ? paidPlan.presentation.name : null,
     included: false,
   };
   if (!base.enabled) return base;
 
-  const [owned, hasPrint] = await Promise.all([
-    ownsEbook(uid, projectId),
+  const [ownership, hasPrint] = await Promise.all([
+    ebookOwnership(uid, projectId),
     settings.printBundleDiscountPct > 0 && effective > 0
       ? hasPaidPrintOrder(uid, projectId)
       : Promise.resolve(false),
@@ -113,12 +121,30 @@ export async function priceEbook(
       discountPct = Math.round((1 - price / effective) * 100);
     }
   }
-  return { ...base, owned, discountPct, price, included: planApplied && price <= 0 };
+  return {
+    ...base,
+    owned: ownership.owned,
+    ownedFingerprint: ownership.fingerprint,
+    discountPct,
+    price,
+    included: planApplied && price <= 0,
+  };
 }
 
 export async function ownsEbook(uid: string, projectId: string): Promise<boolean> {
   const snap = await db().doc(`${downloadsCol(uid)}/${projectId}`).get();
   return snap.exists;
+}
+
+/** Ownership PLUS the fingerprint the owned copy was rendered from, if known. */
+async function ebookOwnership(
+  uid: string,
+  projectId: string,
+): Promise<{ owned: boolean; fingerprint: string | null }> {
+  const snap = await db().doc(`${downloadsCol(uid)}/${projectId}`).get();
+  if (!snap.exists) return { owned: false, fingerprint: null };
+  const d = snap.data() as Record<string, unknown>;
+  return { owned: true, fingerprint: typeof d.fingerprint === "string" ? d.fingerprint : null };
 }
 
 /**
@@ -131,7 +157,7 @@ export async function ownsEbook(uid: string, projectId: string): Promise<boolean
 export async function deliverPaidEbook(paymentId: string): Promise<void> {
   const payment = await getAdminPayment(paymentId);
   if (!payment || payment.kind !== "ebook" || !payment.ebook) return;
-  const { projectId, title, fileUrl } = payment.ebook;
+  const { projectId, title, fileUrl, fingerprint } = payment.ebook;
   if (!projectId || !fileUrl) return;
   const ref = db().doc(`${downloadsCol(payment.ownerUid)}/${projectId}`);
   const snap = await ref.get();
@@ -143,6 +169,10 @@ export async function deliverPaidEbook(paymentId: string): Promise<void> {
       projectId,
       title,
       paymentId,
+      // Which render this copy is: read on the NEXT quote to tell whether the
+      // design has moved on since. Re-delivery (a free update to an existing
+      // owner) overwrites this with the new fingerprint, same as `paymentId`.
+      fingerprint: fingerprint ?? null,
       purchasedAt: (existing?.purchasedAt as number) ?? Date.now(),
       downloadCount: (existing?.downloadCount as number) ?? 0,
       lastDownloadedAt: (existing?.lastDownloadedAt as number) ?? null,

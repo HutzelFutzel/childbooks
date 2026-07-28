@@ -907,7 +907,9 @@ export function registerStripeUserRoutes(app: Express): void {
 
   // Buy the digital edition: the client uploads the rendered PDF NOW (hosted
   // before payment, like print files); the webhook grants the download only
-  // after Stripe confirms payment. Price is server-authoritative.
+  // after Stripe confirms payment. Price is server-authoritative. Also
+  // doubles as the free "update my ebook" path for an owner whose design has
+  // changed since their copy was rendered (see `ownedSameVersion` below).
   app.post("/checkout/ebook", json, async (req: AuthedRequest, res: Response) => {
     try {
       if (!stripeConfigured()) {
@@ -940,8 +942,17 @@ export function registerStripeUserRoutes(app: Express): void {
         clientError(res, "Ebooks aren't available right now.");
         return;
       }
-      if (quote.owned) {
-        clientError(res, "You already own this ebook — download it from the order screen.");
+      // Owning the ebook only blocks a re-buy when nothing has changed since
+      // the copy on file was rendered — the buyer paid for the ebook, not for
+      // one specific render of it, so a design edit gets a free refresh below
+      // instead of leaving them stuck re-downloading the original forever.
+      const ownedSameVersion =
+        quote.owned &&
+        body.fingerprint != null &&
+        quote.ownedFingerprint != null &&
+        body.fingerprint === quote.ownedFingerprint;
+      if (ownedSameVersion) {
+        clientError(res, "This is already the latest version — download it from the order screen.");
         return;
       }
 
@@ -965,22 +976,37 @@ export function registerStripeUserRoutes(app: Express): void {
 
       const paymentId = randomUUID();
 
-      // Included with the buyer's plan (price 0): no Stripe session — record a
-      // zero-amount paid payment and grant the download entitlement directly.
-      if (quote.included || quote.price <= 0) {
-        const ebook: EbookFulfillment = { projectId: body.projectId, title, fileUrl };
+      // Included with the buyer's plan (price 0), or a free refresh of an
+      // ebook the buyer already owns: no Stripe session — record a
+      // zero-amount paid payment and (re-)grant the download entitlement
+      // directly, stamped with the fingerprint that produced this file so the
+      // NEXT quote can tell whether it's still current.
+      if (quote.included || quote.price <= 0 || quote.owned) {
+        const ebook: EbookFulfillment = {
+          projectId: body.projectId,
+          title,
+          fileUrl,
+          fingerprint: body.fingerprint ?? null,
+        };
         await createPendingPayment({
           paymentId,
           uid,
           kind: "ebook",
           amount: 0,
           currency,
-          description: `${title} — digital edition (included with ${quote.planName ?? "plan"})`,
+          description: quote.owned
+            ? `${title} — digital edition (updated)`
+            : `${title} — digital edition (included with ${quote.planName ?? "plan"})`,
           stripeSessionId: null,
           ebook,
           items: [{ label: `${title} — digital edition (PDF)`, amount: 0, quantity: 1 }],
         });
-        await updatePayment({ paymentId, uid, status: "paid", event: "ebook.plan_grant" });
+        await updatePayment({
+          paymentId,
+          uid,
+          status: "paid",
+          event: quote.owned ? "ebook.updated" : "ebook.plan_grant",
+        });
         await deliverPaidEbook(paymentId);
         res.json({ granted: true, paymentId });
         return;
@@ -1026,7 +1052,12 @@ export function registerStripeUserRoutes(app: Express): void {
         cancel_url: `${appBaseUrl()}/studio?ebook=cancel`,
       });
 
-      const ebook: EbookFulfillment = { projectId: body.projectId, title, fileUrl };
+      const ebook: EbookFulfillment = {
+        projectId: body.projectId,
+        title,
+        fileUrl,
+        fingerprint: body.fingerprint ?? null,
+      };
       await createPendingPayment({
         paymentId,
         uid,

@@ -216,6 +216,13 @@ export interface EbookQuote {
   discountPct: number;
   /** Whether the user already owns this ebook. */
   owned: boolean;
+  /**
+   * The content fingerprint the owned copy was rendered from, if known (older
+   * entitlements predate this field and read back `null`). Compared against
+   * the book's current fingerprint to offer a free refresh instead of only
+   * ever re-serving the original PDF.
+   */
+  ownedFingerprint: string | null;
   /** Download URL when owned (token-guarded; only revealed to the owner). */
   downloadUrl: string | null;
   /** The buyer's plan, ONLY when it changed the price (drives the wording). */
@@ -240,8 +247,10 @@ export async function fetchEbookQuote(projectId: string, currency?: string): Pro
  * The file itself isn't sent: it was assembled and stored server-side from the
  * rendered pages, and `fingerprint` is how the server finds it. Two outcomes:
  * `{ url }` — a Stripe Checkout URL to redirect to (the download unlocks after
- * payment), or `{ granted: true }` — the buyer's plan includes the ebook and
- * the download was granted immediately.
+ * payment), or `{ granted: true }` — no payment was needed, because either the
+ * buyer's plan includes the ebook, or they already own it and this is a free
+ * refresh onto their latest design (the server tells these apart from the
+ * fingerprint; the caller doesn't need to).
  */
 export async function startEbookCheckout(input: {
   projectId: string;
