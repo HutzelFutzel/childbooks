@@ -124,8 +124,14 @@ export function RenderStage({
             widthIn: t.widthIn,
             heightIn: t.heightIn,
             // A page whose design points at an illustration must not come out
-            // blank. A genuinely text-only page legitimately can.
-            mustHaveInk: Boolean(t.page.blobId && loaded.artwork[t.page.blobId]),
+            // blank. A genuinely text-only page legitimately can — and so can
+            // one whose illustration was made editable (`makeIllustrationEditable`)
+            // and then hidden from the Layers panel: that swaps the full-bleed
+            // background for a placed element `PrintPage` skips drawing
+            // entirely, and a hidden layer is a design choice, not a failed
+            // render. Only a page still expecting the FULL-BLEED illustration —
+            // or a still-visible placed one — has to prove it actually painted.
+            mustHaveInk: hasExpectedInk(design, t.page.id, Boolean(t.page.blobId && loaded.artwork[t.page.blobId])),
           })),
           ...(spine
             ? [{ id: SPINE_CAPTURE_ID, label: "Spine", widthIn: spine.widthIn, heightIn: spine.heightIn, mustHaveInk: false }]
@@ -180,6 +186,28 @@ export function RenderStage({
     </div>,
     document.body,
   );
+}
+
+/**
+ * Whether a page's design still expects its generated illustration to show up
+ * as ink, mirroring the same call `PrintPage` makes when it decides what to
+ * draw.
+ *
+ * A page with a source blob doesn't always draw it as the full-bleed
+ * background: once the user turns it into a movable/resizable element via
+ * "Adjust art", `PrintPage` draws that placed element INSTEAD, and — same as
+ * any other layer — the user can hide it from the Layers panel. A hidden
+ * illustration element is a page that's SUPPOSED to be blank of it, not a
+ * render that silently failed, so it must not trip the same alarm as a
+ * genuine artwork-didn't-load bug.
+ */
+function hasExpectedInk(design: BookDesign, pageId: string, hasArt: boolean): boolean {
+  if (!hasArt) return false;
+  const illustrationEls = (design.pages[pageId]?.images ?? []).filter((im) => im.kind === "illustration");
+  // No placed element ⇒ it's still the full-bleed background `PrintPage` draws
+  // whenever a page has art and hasn't been made editable.
+  if (illustrationEls.length === 0) return true;
+  return illustrationEls.some((im) => !im.hidden);
 }
 
 /** Minimal CSS.escape fallback for attribute selectors. */
