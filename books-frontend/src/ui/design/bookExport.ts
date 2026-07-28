@@ -1,42 +1,15 @@
 /**
- * Rasterizing rendered pages.
+ * Getting a laid-out page ready to be photographed.
  *
- * Snapshotting a laid-out page element to pixels, and the checks that a
- * snapshot is worth keeping. Document assembly lives in `core/print/assemble`
- * (shared with the backend); this half is unavoidably browser-only.
+ * All that's left of the browser's half of rendering. Pages used to be
+ * rasterized here too — serialized into an SVG image and drawn to a canvas by
+ * `html-to-image` — which quietly depended on how each browser treats images
+ * inside an SVG: WebKit refuses to load them, so Safari produced books with
+ * every illustration missing and nothing to indicate it. Rendering moved to
+ * headless Chrome on the server (`functions/src/renderJobs.ts`), which
+ * photographs the DOM directly, and this file kept only the one thing that
+ * still belongs in the page: knowing when it's finished loading.
  */
-import { getFontEmbedCSS, toCanvas } from "html-to-image";
-
-/** Reject if `promise` doesn't settle within `ms` (prevents indefinite hangs). */
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
-    promise.then(
-      (v) => {
-        clearTimeout(timer);
-        resolve(v);
-      },
-      (e) => {
-        clearTimeout(timer);
-        reject(e);
-      },
-    );
-  });
-}
-
-/**
- * Compute the embedded @font-face CSS once for the whole stage so every page
- * capture reuses it instead of re-fetching all book fonts per page. Returns an
- * empty string (fonts fall back) if it can't be produced in time.
- */
-export async function computeFontEmbedCss(node: HTMLElement): Promise<string> {
-  try {
-    return await withTimeout(getFontEmbedCSS(node), 20000, "Embedding fonts");
-  } catch (err) {
-    console.warn("Font embedding failed; exporting with fallback fonts.", err);
-    return "";
-  }
-}
 
 /**
  * Wait until web fonts are ready and every expected <img> inside `root` has
@@ -88,146 +61,4 @@ export async function waitForStageReady(
 
   // Two animation frames so the final layout/paint is settled before snapshot.
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(null))));
-}
-
-/**
- * Snapshot a single rendered page element to a canvas at its natural pixel
- * size (the element is already laid out at print resolution).
- *
- * A canvas rather than an encoded blob, deliberately. The pixels are wanted
- * twice — once to check the page isn't empty, once as JPEG — and going through
- * a PNG in between costs a ~9MB encode, a full re-decode and a second
- * page-sized canvas for every page in the book. At 300dpi that is ~60MB of
- * churn per page on top of the ~26MB the render itself needs, and the pages
- * are captured back to back: a long book would drive the tab into the state
- * where the rasterizer quietly draws NOTHING (an SVG image Chrome declines to
- * rasterize resolves fine and paints nothing at all) — which is what a "page
- * came out blank" failure at the end of a big export actually was.
- *
- * Note: `cacheBust` is intentionally NOT used — it appends a query string to
- * every URL, which corrupts the `blob:` URLs used for illustrations and can make
- * the underlying image load (and thus the export) hang forever. A hard timeout
- * guards against any other stall.
- */
-export async function capturePageCanvas(
-  el: HTMLElement,
-  opts: { fontEmbedCSS?: string; timeoutMs?: number } = {},
-): Promise<HTMLCanvasElement> {
-  const width = el.offsetWidth;
-  const height = el.offsetHeight;
-  return withTimeout(
-    toCanvas(el, {
-      pixelRatio: 1,
-      // Also what makes the JPEG safe to encode straight off this canvas: it
-      // leaves no transparent pixels, which a JPEG would otherwise turn black.
-      backgroundColor: "#ffffff",
-      width,
-      height,
-      style: { margin: "0" },
-      // Reuse the pre-computed font CSS; if absent, skip font embedding rather
-      // than re-fetching every face per page.
-      fontEmbedCSS: opts.fontEmbedCSS,
-      skipFonts: opts.fontEmbedCSS === undefined ? true : undefined,
-    }),
-    opts.timeoutMs ?? 45000,
-    "Rendering a page",
-  );
-}
-
-/**
- * Drop a captured page's pixels now that it's encoded.
- *
- * Zeroing the dimensions frees the backing store immediately instead of
- * leaving 26MB per page for the collector to get to whenever it feels like it.
- */
-export function releaseCanvas(canvas: HTMLCanvasElement): void {
-  canvas.width = 0;
-  canvas.height = 0;
-}
-
-/**
- * How white a captured page has to be before we call it empty.
- *
- * A page that is essentially all white when its design says it carries a
- * full-bleed illustration means the artwork didn't make it into the snapshot.
- * That used to ship — as a purchased ebook of blank pages with the text
- * floating on them — so it's now a hard failure at the point of capture.
- */
-const BLANK_LUMA_THRESHOLD = 250;
-const BLANK_PIXEL_RATIO = 0.995;
-
-/** True when nearly every pixel of the captured page is white. */
-export function canvasLooksBlank(canvas: HTMLCanvasElement): boolean {
-  try {
-    // A small downsample is plenty: we're asking "is there anything here at
-    // all", not measuring the artwork.
-    const w = 48;
-    const h = Math.max(1, Math.round((canvas.height / canvas.width) * w));
-    const thumb = document.createElement("canvas");
-    thumb.width = w;
-    thumb.height = h;
-    const ctx = thumb.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return false;
-    ctx.drawImage(canvas, 0, 0, w, h);
-    const { data } = ctx.getImageData(0, 0, w, h);
-    let white = 0;
-    const pixels = data.length / 4;
-    for (let i = 0; i < data.length; i += 4) {
-      const luma = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-      if (luma >= BLANK_LUMA_THRESHOLD) white++;
-    }
-    releaseCanvas(thumb);
-    return white / pixels >= BLANK_PIXEL_RATIO;
-  } catch {
-    // If we can't tell, don't block the export on a guess.
-    return false;
-  }
-}
-
-/** Encode a captured page as JPEG bytes (much smaller for photographic art). */
-export async function canvasToJpegBytes(
-  canvas: HTMLCanvasElement,
-  quality = 0.92,
-): Promise<Uint8Array> {
-  const jpeg = await new Promise<Blob | null>((resolve) =>
-    canvas.toBlob(resolve, "image/jpeg", quality),
-  );
-  if (!jpeg) throw new Error("Could not encode a page for the PDF.");
-  return new Uint8Array(await jpeg.arrayBuffer());
-}
-
-/** Assemble captured pages into a zip of images, in reading order. */
-export async function buildImagesZip(
-  pages: { label: string; blob: Blob }[],
-  extension = "png",
-): Promise<Blob> {
-  const JSZip = (await import("jszip")).default;
-  const zip = new JSZip();
-  const pad = String(pages.length).length;
-  pages.forEach((page, i) => {
-    const seq = String(i + 1).padStart(Math.max(2, pad), "0");
-    zip.file(`${seq}-${slug(page.label)}.${extension}`, page.blob);
-  });
-  return zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
-}
-
-function slug(label: string): string {
-  return label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "page";
-}
-
-/** Save a blob to disk via an anchor download. */
-export async function saveBlob(filename: string, blob: Blob): Promise<boolean> {
-  downloadInBrowser(filename, blob);
-  return true;
-}
-
-function downloadInBrowser(filename: string, blob: Blob): void {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }

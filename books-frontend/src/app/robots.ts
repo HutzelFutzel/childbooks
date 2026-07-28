@@ -8,7 +8,7 @@ export default async function robots(): Promise<MetadataRoute.Robots> {
   const seo = await getSeoConfig();
   return {
     rules: seo.robots.index
-      ? { userAgent: "*", allow: "/", disallow: ["/admin", "/studio"] }
+      ? { userAgent: "*", allow: "/", disallow: ["/admin", "/studio", "/internal"] }
       : { userAgent: "*", disallow: "/" },
     sitemap: `${seo.siteUrl}/sitemap.xml`,
     host: seo.siteUrl,

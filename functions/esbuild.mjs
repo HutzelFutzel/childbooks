@@ -19,7 +19,19 @@ const watch = process.argv.includes("--watch");
 
 // Real runtime deps that must stay external (native modules + Firebase SDKs).
 // These resolve from functions/node_modules at runtime.
-const external = ["firebase-admin", "firebase-functions", "express", "sharp", "zod", "stripe"];
+const external = [
+  "firebase-admin",
+  "firebase-functions",
+  "express",
+  "sharp",
+  "zod",
+  "stripe",
+  // The renderer's browser: `puppeteer-core` shells out to a Chrome binary and
+  // `@sparticuz/chromium` IS one (a ~50MB payload it unpacks at runtime), so
+  // both have to resolve from node_modules rather than be inlined here.
+  "puppeteer-core",
+  "@sparticuz/chromium",
+];
 
 const options = {
   entryPoints: ["src/index.ts"],

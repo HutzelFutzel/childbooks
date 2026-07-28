@@ -534,6 +534,20 @@ function persistLatest(get: ProjectsGet, set: ProjectsSet, id: string): Promise<
 }
 
 /**
+ * Wait for every queued save to land before reading the book back.
+ *
+ * Editing is fire-and-forget: a change lands in memory and the write follows.
+ * That's fine while the browser is the only one drawing the book — but the
+ * renderer works from the SAVED copy, so a render kicked off in the same
+ * breath as the last edit would photograph the previous version, or (since the
+ * fingerprint it was asked for wouldn't match what's on disk) refuse outright.
+ * Anyone about to hand the book to the server waits here first.
+ */
+export function flushProjectSaves(): Promise<void> {
+  return saveChain;
+}
+
+/**
  * Atomically apply `mutator` to the current project. The in-memory update runs
  * inside a functional `set`, so the mutator always sees the freshest state even
  * when many writes happen concurrently (no read-modify-write races / lost

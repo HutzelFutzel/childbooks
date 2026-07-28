@@ -25,6 +25,7 @@ import { registerAdminRoutes } from "./admin";
 import { registerGdprRoutes } from "./gdpr";
 import { registerHealthRoutes } from "./health";
 import { registerRenderRoutes } from "./renders";
+import { registerRenderJobRoutes } from "./renderJobs";
 import { registerRuntimeRoutes } from "./readiness";
 import { registerAnalyticsRoutes } from "./analytics";
 import {
@@ -106,6 +107,10 @@ export function createApp(): Express {
   registerGdprRoutes(app);
   registerHealthRoutes(app);
   registerRenderRoutes(app);
+  // Server-side rendering: `/account/...` for the owner who asked for it, and
+  // `/internal/render/...` for headless Chrome, which has no session and is
+  // authenticated by the job's single-use token instead.
+  registerRenderJobRoutes(app);
   registerRuntimeRoutes(app);
   registerAnalyticsRoutes(app);
   registerStripeUserRoutes(app);

@@ -94,7 +94,7 @@ export function documentKey(
 }
 
 /** A fingerprint is a cache key we generated; reject anything else outright. */
-function validFingerprint(value: unknown): value is string {
+export function validFingerprint(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{8,64}$/.test(value);
 }
 
@@ -137,10 +137,22 @@ async function touch(uid: string, fingerprint: string): Promise<void> {
 
 // ---- Writing the cache ------------------------------------------------------
 
+/** One rasterized page on its way into the cache. */
+export interface RasterUpload {
+  id: string;
+  role: RasterRole;
+  index: number;
+  label: string;
+  widthIn: number;
+  heightIn: number;
+  base64: string;
+  mimeType?: string;
+}
+
 async function storeRaster(
   uid: string,
   fingerprint: string,
-  raster: { id: string; role: RasterRole; index: number; label: string; widthIn: number; heightIn: number; base64: string; mimeType?: string },
+  raster: RasterUpload,
 ): Promise<RasterRecord> {
   const buf = Buffer.from(raster.base64, "base64");
   if (buf.byteLength > MAX_RASTER_BYTES) {
@@ -161,6 +173,103 @@ async function storeRaster(
     mimeType: raster.mimeType || "image/jpeg",
     path,
   };
+}
+
+/**
+ * Store a batch of rasterized pages against a fingerprint.
+ *
+ * Called by the server-side renderer as it captures pages, and (still) by the
+ * upload route. Same writes either way, so where the pixels came from can't
+ * change what the cache looks like afterwards.
+ */
+export async function saveRasters(
+  uid: string,
+  fingerprint: string,
+  projectId: string,
+  pages: RasterUpload[],
+): Promise<number> {
+  if (pages.length === 0) return 0;
+  const existing = await rastersRef(uid, fingerprint).count().get();
+  if (existing.data().count + pages.length > MAX_RASTERS) {
+    throw new Error("This book has too many pages to render.");
+  }
+
+  const now = Date.now();
+  await docRef(uid, fingerprint).set(
+    { projectId, createdAt: now, lastUsedAt: now },
+    { merge: true },
+  );
+
+  const stored = await Promise.all(pages.map((p) => storeRaster(uid, fingerprint, p)));
+  const batch = getFirestore().batch();
+  const panels: Record<string, RasterRecord> = {};
+  stored.forEach((record, i) => {
+    batch.set(rastersRef(uid, fingerprint).doc(sanitizeDocId(pages[i].id)), record);
+    // Cover panels are the one kind of raster worth keeping: they're what
+    // makes a re-spined cover cheap.
+    if (record.role.startsWith("cover-") || record.role === "spine") {
+      panels[record.role] = record;
+    }
+  });
+  await batch.commit();
+  if (Object.keys(panels).length > 0) {
+    await docRef(uid, fingerprint).set({ panels }, { merge: true });
+  }
+  return stored.length;
+}
+
+/** Which document to build out of a fingerprint's rasters. */
+export type DocumentRequest =
+  | { kind: "ebook" }
+  | { kind: "interior"; padToPages: number }
+  | {
+      kind: "cover";
+      sku?: string;
+      padToPages?: number;
+      cover: { widthIn: number; heightIn: number; panelWidthIn: number };
+    };
+
+/**
+ * Build one document from a fingerprint's rasters and record it on the index.
+ *
+ * Returns the cache key it was filed under, so a caller can hand that straight
+ * to {@link cachedDocumentUrl} without reconstructing it.
+ */
+export async function assembleDocument(
+  uid: string,
+  fingerprint: string,
+  request: DocumentRequest,
+): Promise<{ key: string; pageCount?: number }> {
+  if (request.kind === "ebook") {
+    const path = await assembleEbook(uid, fingerprint);
+    const key = documentKey("ebook");
+    await docRef(uid, fingerprint).set(
+      { documents: { [key]: path }, lastUsedAt: Date.now() },
+      { merge: true },
+    );
+    await discardRasters(uid, fingerprint, ["ebook"]);
+    return { key };
+  }
+
+  if (request.kind === "interior") {
+    const pad = Math.max(1, Math.floor(request.padToPages));
+    const { path, pageCount } = await assembleInterior(uid, fingerprint, pad);
+    const key = documentKey("interior");
+    await docRef(uid, fingerprint).set(
+      { documents: { [key]: path }, interiorPageCount: pageCount, lastUsedAt: Date.now() },
+      { merge: true },
+    );
+    await discardRasters(uid, fingerprint, ["interior"]);
+    return { key, pageCount };
+  }
+
+  const path = await assembleCover(uid, fingerprint, request.cover);
+  const key = documentKey("cover", { sku: request.sku, pages: request.padToPages });
+  await docRef(uid, fingerprint).set(
+    { documents: { [key]: path }, lastUsedAt: Date.now() },
+    { merge: true },
+  );
+  return { key };
 }
 
 async function readRaster(record: RasterRecord): Promise<RasterPage> {
@@ -265,8 +374,6 @@ function clientError(res: Response, message: string, status = 400): void {
 }
 
 export function registerRenderRoutes(app: Express): void {
-  const json = express.json({ limit: "60mb" });
-
   /**
    * What this book already has rendered.
    *
@@ -299,131 +406,6 @@ export function registerRenderRoutes(app: Express): void {
     }
   });
 
-  /** Upload a batch of rasterized pages for a fingerprint. */
-  app.post("/account/renders/:fingerprint/pages", json, async (req: AuthedRequest, res: Response) => {
-    try {
-      ensureAdmin();
-      const uid = req.uid!;
-      const { fingerprint } = req.params;
-      if (!validFingerprint(fingerprint)) {
-        clientError(res, "Unknown render.", 404);
-        return;
-      }
-      const body = (req.body ?? {}) as {
-        projectId?: string;
-        pages?: {
-          id: string;
-          role: RasterRole;
-          index: number;
-          label: string;
-          widthIn: number;
-          heightIn: number;
-          base64: string;
-          mimeType?: string;
-        }[];
-      };
-      const pages = body.pages ?? [];
-      if (pages.length === 0) {
-        clientError(res, "No pages were uploaded.");
-        return;
-      }
-
-      const existing = await rastersRef(uid, fingerprint).count().get();
-      if (existing.data().count + pages.length > MAX_RASTERS) {
-        clientError(res, "This book has too many pages to render.");
-        return;
-      }
-
-      const now = Date.now();
-      await docRef(uid, fingerprint).set(
-        { projectId: body.projectId ?? "", createdAt: now, lastUsedAt: now },
-        { merge: true },
-      );
-
-      const stored = await Promise.all(pages.map((p) => storeRaster(uid, fingerprint, p)));
-      const batch = getFirestore().batch();
-      const panels: Record<string, RasterRecord> = {};
-      stored.forEach((record, i) => {
-        batch.set(rastersRef(uid, fingerprint).doc(sanitizeDocId(pages[i].id)), record);
-        // Cover panels are the one kind of raster worth keeping: they're what
-        // makes a re-spined cover cheap.
-        if (record.role.startsWith("cover-") || record.role === "spine") {
-          panels[record.role] = record;
-        }
-      });
-      await batch.commit();
-      if (Object.keys(panels).length > 0) {
-        await docRef(uid, fingerprint).set({ panels }, { merge: true });
-      }
-
-      res.json({ stored: stored.length });
-    } catch (err) {
-      console.error("[renders] page upload failed", err);
-      clientError(res, (err as Error)?.message ?? "We couldn't save the rendered pages.", 500);
-    }
-  });
-
-  /** Assemble a document from the uploaded rasters and cache it. */
-  app.post("/account/renders/:fingerprint/assemble", json, async (req: AuthedRequest, res: Response) => {
-    try {
-      ensureAdmin();
-      const uid = req.uid!;
-      const { fingerprint } = req.params;
-      if (!validFingerprint(fingerprint)) {
-        clientError(res, "Unknown render.", 404);
-        return;
-      }
-      const body = (req.body ?? {}) as {
-        kind?: "ebook" | "interior" | "cover";
-        padToPages?: number;
-        sku?: string;
-        cover?: { widthIn: number; heightIn: number; panelWidthIn: number };
-      };
-
-      if (body.kind === "ebook") {
-        const path = await assembleEbook(uid, fingerprint);
-        await docRef(uid, fingerprint).set(
-          { documents: { [documentKey("ebook")]: path }, lastUsedAt: Date.now() },
-          { merge: true },
-        );
-        await discardRasters(uid, fingerprint, ["ebook"]);
-        res.json({ ok: true });
-        return;
-      }
-
-      if (body.kind === "interior") {
-        const pad = Math.max(1, Math.floor(body.padToPages ?? 0));
-        const { path, pageCount } = await assembleInterior(uid, fingerprint, pad);
-        await docRef(uid, fingerprint).set(
-          {
-            documents: { [documentKey("interior")]: path },
-            interiorPageCount: pageCount,
-            lastUsedAt: Date.now(),
-          },
-          { merge: true },
-        );
-        await discardRasters(uid, fingerprint, ["interior"]);
-        res.json({ ok: true, pageCount });
-        return;
-      }
-
-      if (body.kind === "cover" && body.cover) {
-        const path = await assembleCover(uid, fingerprint, body.cover);
-        const key = documentKey("cover", { sku: body.sku, pages: body.padToPages });
-        await docRef(uid, fingerprint).set(
-          { documents: { [key]: path }, lastUsedAt: Date.now() },
-          { merge: true },
-        );
-        res.json({ ok: true, key });
-        return;
-      }
-
-      clientError(res, "Unknown document.");
-    } catch (err) {
-      console.error("[renders] assembly failed", err);
-      clientError(res, (err as Error)?.message ?? "We couldn't assemble the book.", 500);
-    }
-  });
 }
 
 function sanitizeDocId(id: string): string {

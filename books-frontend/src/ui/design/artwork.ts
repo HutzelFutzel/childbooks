@@ -72,6 +72,56 @@ export async function loadArtwork(
   return { artwork, dispose };
 }
 
+/**
+ * The same thing, for a render pass that has URLs rather than a session.
+ *
+ * The server-side renderer runs in a browser with no account: it can't read a
+ * user's blobs out of Storage, so the backend hands it one URL per blob. They
+ * still become object URLs — a page must not depend on a network fetch landing
+ * before it's photographed, and canvas sampling of a cross-origin image would
+ * be blocked.
+ */
+export async function loadArtworkFromUrls(
+  sources: Record<string, string>,
+  onProgress?: (done: number, total: number) => void,
+): Promise<LoadedArtwork> {
+  const artwork: ResolvedArtwork = {};
+  const urls: string[] = [];
+  const ids = Object.keys(sources);
+  let done = 0;
+
+  const dispose = () => {
+    for (const url of urls) URL.revokeObjectURL(url);
+    urls.length = 0;
+  };
+
+  const queue = [...ids];
+  async function worker(): Promise<void> {
+    for (;;) {
+      const id = queue.shift();
+      if (id === undefined) return;
+      const res = await fetch(sources[id]);
+      if (!res.ok) throw new Error("One of this book's illustrations is missing.");
+      const url = URL.createObjectURL(await res.blob());
+      urls.push(url);
+      artwork[id] = url;
+      done += 1;
+      onProgress?.(done, ids.length);
+    }
+  }
+
+  try {
+    await Promise.all(
+      Array.from({ length: Math.min(FETCH_CONCURRENCY, queue.length) }, () => worker()),
+    );
+  } catch (err) {
+    dispose();
+    throw err instanceof Error ? err : new Error("We couldn't load this book's illustrations.");
+  }
+
+  return { artwork, dispose };
+}
+
 export interface SpineColors {
   background: string;
   text: string;

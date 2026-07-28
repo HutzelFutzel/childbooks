@@ -36,6 +36,11 @@ export { retryFulfillments } from "./fulfillmentRetry";
 // Scheduled eviction of cached book renders nobody has come back to.
 export { cleanupStaleRenders } from "./renders";
 
+// Server-side book rendering: the Cloud Tasks worker that drives headless
+// Chrome over a book's pages. Its own function because it needs a browser's
+// worth of memory and minutes of runtime, neither of which `api` should carry.
+export { runRenderJob } from "./renderJobs";
+
 // Daily import of Firebase/GCP spend into the finance stream (BigQuery billing
 // export when configured, else a prorated monthly budget).
 export { importInfraCostsDaily } from "./infraCosts";

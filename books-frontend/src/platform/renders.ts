@@ -1,19 +1,16 @@
 /**
- * Client half of the render cache.
+ * Client half of rendering: ask for a book, learn what's already made.
  *
- * A book is rasterized once. The pages go to the backend, which assembles the
- * interior, the cover and the digital edition from them and keeps the finished
- * PDFs — so buying an unchanged book a second time (a gift, a reorder, a
- * download after switching plans) costs a lookup instead of a minute of the
- * buyer's CPU, and every edition of that book is byte-identical.
+ * A book is rendered once, on the server, and every document made from it —
+ * the print interior, the wraparound cover, the digital edition — is assembled
+ * from that one pass and kept. So buying an unchanged book a second time (a
+ * gift, a reorder, a download after switching plans) costs a lookup rather
+ * than another render, and every edition of that book is byte-identical.
  *
  * The cache is addressed by content fingerprint, so it invalidates itself: any
  * edit that changes what the pages look like changes the key.
  */
 import { backendFetch } from "./backend";
-import type { RasterPage } from "../core/print/assemble";
-
-export type RasterRole = "interior" | "ebook" | "cover-front" | "cover-back" | "spine";
 
 export interface RenderAvailability {
   ebook: boolean;
@@ -53,71 +50,64 @@ export async function fetchRenderAvailability(fingerprint: string): Promise<Rend
   }
 }
 
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = "";
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
+/** How often to ask a running render how it's getting on. */
+const POLL_MS = 1500;
+
+/** Longer than any real book takes; past this something is wrong, not slow. */
+const RENDER_WAIT_MS = 10 * 60_000;
 
 /**
- * Roughly how much base64 to put in one request.
+ * Have the server render this book, and follow it until it's finished.
  *
- * The backend accepts 60MB, but a single failed 60MB POST costs the whole
- * upload; batching by size means a retry is cheap and progress is honest.
+ * The rendering itself used to happen right here, in the buyer's browser, and
+ * that made the book depend on which browser it was — Safari, unable to draw
+ * images inside the SVG the rasterizer built, produced books with no
+ * illustrations at all and no error to say so. Now one browser we control
+ * renders every book, and the client's whole job is to ask and wait.
  */
-const BATCH_BYTES = 12 * 1024 * 1024;
-
-export interface UploadPage {
-  raster: RasterPage;
-  role: RasterRole;
-  index: number;
-}
-
-/** Send rasterized pages to the backend, in size-bounded batches. */
-export async function uploadRenderPages(
-  fingerprint: string,
-  projectId: string,
-  pages: UploadPage[],
-  onProgress?: (done: number, total: number) => void,
-): Promise<void> {
-  const wire = pages.map(({ raster, role, index }) => ({
-    id: raster.id,
-    role,
-    index,
-    label: raster.label,
-    widthIn: raster.widthIn,
-    heightIn: raster.heightIn,
-    mimeType: raster.mimeType,
-    base64: bytesToBase64(raster.bytes),
-  }));
-
-  let batch: typeof wire = [];
-  let batchBytes = 0;
-  let sent = 0;
-
-  async function flush(): Promise<void> {
-    if (batch.length === 0) return;
-    const res = await backendFetch(`/account/renders/${encodeURIComponent(fingerprint)}/pages`, {
+export async function renderBook(input: {
+  fingerprint: string;
+  projectId: string;
+  documents: AssembleRequest[];
+  onProgress?: (step: string) => void;
+}): Promise<void> {
+  const start = await backendFetch(
+    `/account/renders/${encodeURIComponent(input.fingerprint)}/render`,
+    {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ projectId, pages: batch }),
-    });
-    if (!res.ok) throw new Error("We couldn't save the rendered pages. Please try again.");
-    sent += batch.length;
-    onProgress?.(sent, wire.length);
-    batch = [];
-    batchBytes = 0;
-  }
+      body: JSON.stringify({ projectId: input.projectId, documents: input.documents }),
+    },
+  );
+  if (!start.ok) throw new Error(await errorMessage(start, "We couldn't start rendering your book."));
+  const { jobId } = (await start.json()) as { jobId: string };
 
-  for (const page of wire) {
-    if (batchBytes + page.base64.length > BATCH_BYTES) await flush();
-    batch.push(page);
-    batchBytes += page.base64.length;
+  const deadline = Date.now() + RENDER_WAIT_MS;
+  for (;;) {
+    await new Promise((r) => setTimeout(r, POLL_MS));
+    if (Date.now() > deadline) throw new Error("Rendering your book is taking too long.");
+
+    const res = await backendFetch(`/account/render-jobs/${encodeURIComponent(jobId)}`);
+    // A dropped poll is not a failed render: keep watching until the deadline.
+    if (!res.ok) continue;
+    const job = (await res.json()) as {
+      status: "pending" | "running" | "done" | "error";
+      step: string;
+      error: string | null;
+    };
+    if (job.step) input.onProgress?.(job.step);
+    if (job.status === "done") return;
+    if (job.status === "error") throw new Error(job.error ?? "We couldn't render your book.");
   }
-  await flush();
+}
+
+async function errorMessage(res: Response, fallback: string): Promise<string> {
+  return (
+    (await res
+      .json()
+      .then((body: { error?: { message?: string } }) => body?.error?.message)
+      .catch(() => undefined)) ?? fallback
+  );
 }
 
 export interface AssembleRequest {
@@ -126,23 +116,4 @@ export interface AssembleRequest {
   padToPages?: number;
   sku?: string;
   cover?: { widthIn: number; heightIn: number; panelWidthIn: number };
-}
-
-/** Ask the backend to build a document from the uploaded pages. */
-export async function assembleRenderDocument(
-  fingerprint: string,
-  request: AssembleRequest,
-): Promise<void> {
-  const res = await backendFetch(`/account/renders/${encodeURIComponent(fingerprint)}/assemble`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(request),
-  });
-  if (!res.ok) {
-    const message = await res
-      .json()
-      .then((body: { error?: { message?: string } }) => body?.error?.message)
-      .catch(() => undefined);
-    throw new Error(message ?? "We couldn't assemble your book. Please try again.");
-  }
 }

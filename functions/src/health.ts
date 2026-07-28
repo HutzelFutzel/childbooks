@@ -241,7 +241,7 @@ function checkConfig(luluEnv: "sandbox" | "live", stripeEnv: "sandbox" | "live")
       id: "public-app-url",
       label: "Public app URL",
       status: "fail",
-      message: "PUBLIC_APP_URL is unset — Stripe Checkout/portal redirects can't be built, so every checkout will fail in production.",
+      message: "PUBLIC_APP_URL is unset — Stripe Checkout/portal redirects can't be built and the renderer has no page to open, so every checkout and every book render will fail in production.",
       fix: "Set PUBLIC_APP_URL to your deployed storefront origin (e.g. functions/.env.<projectId>).",
     });
   } else if (!appUrl.startsWith("https://")) {

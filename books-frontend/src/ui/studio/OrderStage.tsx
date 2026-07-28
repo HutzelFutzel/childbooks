@@ -361,7 +361,6 @@ export function OrderStage() {
         open={buyingEbook}
         onClose={() => setBuyingEbook(false)}
         project={project}
-        pages={pages}
         design={design}
       />
 

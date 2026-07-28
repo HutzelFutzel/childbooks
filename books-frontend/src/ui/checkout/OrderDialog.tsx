@@ -23,7 +23,7 @@ import { bindingNoun, normalizePageCount } from "../../core/fulfillment";
 import { renderFingerprint } from "../../core/print/fingerprint";
 import { interiorLeafPlan, physicalPageCount } from "../../core/print/pagePlan";
 import { preflightInterior } from "../../core/print/preflight";
-import { coverDocumentKey, fetchRenderAvailability } from "../../platform/renders";
+import { coverDocumentKey, fetchRenderAvailability, renderBook } from "../../platform/renders";
 import { getCursor } from "../../core/versioning";
 import { FulfillmentError } from "../../core/fulfillment/errors";
 import type {
@@ -44,7 +44,7 @@ import { isDev } from "../../platform/runtime";
 import { activeSubscription } from "../../platform/subscriptions";
 import { useAuthStore } from "../../state/authStore";
 import { useProfileStore } from "../../state/profileStore";
-import { useProjectsStore } from "../../state/projectsStore";
+import { flushProjectSaves, useProjectsStore } from "../../state/projectsStore";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useSubscriptionStore } from "../../state/subscriptionStore";
 import { useFormatsForConfigSize } from "../hooks/useOfferableFormats";
@@ -55,7 +55,7 @@ import { Modal } from "../components/Modal";
 import { Select } from "../components/Select";
 import { notify } from "../lib/notify";
 import type { DesignPage } from "../design/designInit";
-import { OrderAssetRunner } from "./orderAssets";
+import { buildCoverPlan } from "../design/printTargets";
 import { FormatPicker } from "./FormatPicker";
 import { VariantPicker } from "./VariantPicker";
 import {
@@ -66,6 +66,8 @@ import {
 } from "./AddressSuggestion";
 
 type Phase = "form" | "rendering" | "submitting";
+
+const MM_PER_IN = 25.4;
 
 /**
  * Fallback country list, used only before the catalog has loaded.
@@ -255,7 +257,6 @@ export function OrderDialog({
   const [phase, setPhase] = useState<Phase>("form");
   const [status, setStatus] = useState("");
   const [coverDims, setCoverDims] = useState<{ widthMm: number; heightMm: number } | null>(null);
-  const [needsRender, setNeedsRender] = useState(false);
   const fingerprint = useMemo(() => renderFingerprint(project, design), [project, design]);
 
   const [name, setName] = useState(DEV_PREFILL?.name ?? "");
@@ -561,14 +562,38 @@ export function OrderDialog({
       // A book that hasn't changed since it was last ordered is already
       // rendered and assembled on the server — the cover included, as long as
       // the binding and page count still match the spine it was cut for.
+      // The server renders the SAVED book, so the last edit has to be on disk
+      // before it looks — otherwise it prints the version before this one.
       setStatus("Checking your book…");
+      await flushProjectSaves();
       const availability = await fetchRenderAvailability(fingerprint);
-      if (availability.interior && availability.covers.includes(coverDocumentKey(printSku, pageCount))) {
-        await placeOrder();
-        return;
+      const cached =
+        availability.interior && availability.covers.includes(coverDocumentKey(printSku, pageCount));
+      if (!cached) {
+        // The panels are the book's own trim plus its outer bleed; the spine is
+        // whatever the provider's cover width leaves between them. Same split
+        // the renderer draws to, so the artwork lands where the fold is cut.
+        const { panelWidthIn } = buildCoverPlan(project, pages);
+        await renderBook({
+          fingerprint,
+          projectId: project.id,
+          documents: [
+            { kind: "interior", padToPages: pageCount },
+            {
+              kind: "cover",
+              sku: printSku,
+              padToPages: pageCount,
+              cover: {
+                widthIn: dims.widthMm / MM_PER_IN,
+                heightIn: dims.heightMm / MM_PER_IN,
+                panelWidthIn,
+              },
+            },
+          ],
+          onProgress: setStatus,
+        });
       }
-      setStatus("Rendering print files…");
-      setNeedsRender(true);
+      await placeOrder();
     } catch (err) {
       setPhase("form");
       setCoverDims(null);
@@ -578,7 +603,6 @@ export function OrderDialog({
 
   async function placeOrder() {
     try {
-      setNeedsRender(false);
       setPhase("submitting");
       setStatus("Redirecting to secure checkout…");
       const draft = buildOrderDraft({
@@ -620,7 +644,6 @@ export function OrderDialog({
     } catch (err) {
       setPhase("form");
       setCoverDims(null);
-      setNeedsRender(false);
       notify.error(err);
     }
   }
@@ -928,26 +951,6 @@ export function OrderDialog({
         </div>
       }
 
-      {needsRender && coverDims && (
-        <OrderAssetRunner
-          project={project}
-          pages={pages}
-          design={design}
-          fingerprint={fingerprint}
-          printSku={printSku}
-          coverWidthMm={coverDims.widthMm}
-          coverHeightMm={coverDims.heightMm}
-          orderedPageCount={pageCount}
-          onProgress={setStatus}
-          onDone={() => void placeOrder()}
-          onError={(err) => {
-            setPhase("form");
-            setCoverDims(null);
-            setNeedsRender(false);
-            notify.error(err);
-          }}
-        />
-      )}
     </Modal>
   );
 }

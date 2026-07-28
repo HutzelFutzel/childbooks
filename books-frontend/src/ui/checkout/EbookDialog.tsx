@@ -3,18 +3,18 @@
  * `PricingSettings.ebook` (enabled, per-currency price, print-bundle discount).
  *
  * Flow: fetch the server-authoritative quote (price + any print-owner discount
- * + ownership) → render the book to a screen-quality PDF → upload it as part
- * of `/checkout/ebook` → redirect to Stripe. The download unlocks only after
- * the payment webhook confirms funds. Already-owned books show a download
- * button instead — plus, when the fingerprint suggests the design has moved
- * on since that copy was made, a free "update to your latest design" action
- * that re-renders and swaps in a fresh PDF at no charge.
+ * + ownership) → have the server render the book to a screen-quality PDF →
+ * `/checkout/ebook` → redirect to Stripe. The download unlocks only after the
+ * payment webhook confirms funds. Already-owned books show a download button
+ * instead — plus, when the fingerprint suggests the design has moved on since
+ * that copy was made, a free "update to your latest design" action that
+ * re-renders and swaps in a fresh PDF at no charge.
  */
 import { useEffect, useMemo, useState } from "react";
 import { BookOpen, Download, Loader2 } from "lucide-react";
 import { pageTrimForConfig } from "../../core/book";
 import { renderFingerprint } from "../../core/print/fingerprint";
-import { fetchRenderAvailability } from "../../platform/renders";
+import { fetchRenderAvailability, renderBook } from "../../platform/renders";
 import type { BookDesign, Project } from "../../core/types";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import {
@@ -24,12 +24,11 @@ import {
 } from "../../platform/payments";
 import { fetchDownloadLink } from "../../platform/downloads";
 import { useCheckoutUiStore } from "../../state/checkoutUiStore";
+import { flushProjectSaves } from "../../state/projectsStore";
 import { PlanUpsell } from "../billing/PlanUpsell";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
-import type { DesignPage } from "../design/designInit";
 import { notify } from "../lib/notify";
-import { EbookAssetRunner } from "./orderAssets";
 
 type Phase = "quote" | "ready" | "rendering" | "redirecting";
 
@@ -37,13 +36,12 @@ export function EbookDialog({
   open,
   onClose,
   project,
-  pages,
   design,
 }: {
   open: boolean;
   onClose: () => void;
   project: Project;
-  pages: DesignPage[];
+  /** Only for the fingerprint now — the server renders from the saved book. */
   design: BookDesign;
 }) {
   const baseCurrency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
@@ -57,7 +55,6 @@ export function EbookDialog({
   const [quote, setQuote] = useState<EbookQuote | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
-  const [needsRender, setNeedsRender] = useState(false);
   const fingerprint = useMemo(() => renderFingerprint(project, design), [project, design]);
   // Whether the owned copy might be behind the current design. Unknown for
   // entitlements delivered before we tracked this (`ownedFingerprint` null) —
@@ -116,13 +113,19 @@ export function EbookDialog({
     setPhase("rendering");
     setStatus("Preparing your book…");
     try {
+      // The server renders the SAVED book, so the last edit has to be on disk
+      // before it looks — otherwise it renders the version before this one.
+      await flushProjectSaves();
       const availability = await fetchRenderAvailability(fingerprint);
-      if (availability.ebook) {
-        await checkout();
-        return;
+      if (!availability.ebook) {
+        await renderBook({
+          fingerprint,
+          projectId: project.id,
+          documents: [{ kind: "ebook" }],
+          onProgress: setStatus,
+        });
       }
-      setStatus("Rendering your book…");
-      setNeedsRender(true);
+      await checkout();
     } catch (err) {
       setPhase("ready");
       setError(err instanceof Error ? err.message : "We couldn't prepare your book.");
@@ -134,7 +137,6 @@ export function EbookDialog({
       const included = quote?.included ?? false;
       const owned = quote?.owned ?? false;
       const free = included || owned;
-      setNeedsRender(false);
       setPhase("redirecting");
       setStatus(owned ? "Updating your ebook…" : free ? "Adding it to your library…" : "Opening secure payment…");
       const result = await startEbookCheckout({
@@ -157,7 +159,6 @@ export function EbookDialog({
       window.location.href = result.url;
     } catch (err) {
       setPhase("ready");
-      setNeedsRender(false);
       setError(err instanceof Error ? err.message : "We couldn't start checkout.");
     }
   }
@@ -165,10 +166,10 @@ export function EbookDialog({
   const busy = phase === "rendering" || phase === "redirecting";
 
   return (
-    // Closing during "rendering" is allowed — it unmounts the asset runner and
-    // safely abandons the render (nothing has been uploaded or charged yet), so
-    // a hung render can never trap the user. Only the brief "redirecting" step
-    // (checkout request in flight) is locked.
+    // Closing during "rendering" is allowed — the render is the server's job
+    // now and finishes (or fails) on its own, cached either way, so walking
+    // away costs nothing and a slow render can never trap the user. Only the
+    // brief "redirecting" step (checkout request in flight) is locked.
     <Modal
       open={open}
       onClose={phase === "redirecting" ? () => {} : onClose}
@@ -304,21 +305,6 @@ export function EbookDialog({
         <p className="py-6 text-center text-sm text-rose-600">{error}</p>
       )}
 
-      {needsRender && (
-        <EbookAssetRunner
-          project={project}
-          pages={pages}
-          design={design}
-          fingerprint={fingerprint}
-          onProgress={setStatus}
-          onDone={() => void checkout()}
-          onError={(err) => {
-            setPhase("ready");
-            setNeedsRender(false);
-            notify.error(err);
-          }}
-        />
-      )}
     </Modal>
   );
 }

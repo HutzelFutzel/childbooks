@@ -62,7 +62,8 @@ export function maskKey(key: string): string {
 }
 
 /**
- * The storefront base URL for Checkout/portal redirects. In production a
+ * The storefront base URL for Checkout/portal redirects — and for the render
+ * page headless Chrome opens, which is served by that same app. In production a
  * missing PUBLIC_APP_URL is a hard error — silently falling back to localhost
  * would send paying customers to a dead URL after payment. The emulator keeps
  * the dev default (the Next dev server on :1420).
