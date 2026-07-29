@@ -8,6 +8,7 @@ import { useAdminAnalytics } from "../../../state/adminAnalyticsStore";
 import { useAdminFinance } from "../../../state/adminFinanceStore";
 import { useAdminMarket } from "../../../state/adminMarketStore";
 import { useAdminPayments } from "../../../state/adminPaymentsStore";
+import { useAdminTab, type AnalysisTabId } from "../adminTabStore";
 import { Button } from "../../components/Button";
 import { Tabs } from "../../components/Tabs";
 import { Kpis } from "./Kpis";
@@ -18,19 +19,21 @@ import { SettingsCard } from "./SettingsCard";
 import { PaymentsAnalysis } from "./PaymentsAnalysis";
 import { FinanceAnalysis } from "./FinanceAnalysis";
 import { ProductsAnalysis } from "./ProductsAnalysis";
+import { ReferralsAnalysis } from "./ReferralsAnalysis";
 import { MarketPicker } from "./MarketPicker";
 import { MarketsCard } from "./MarketsCard";
 import { FunnelCard } from "./FunnelCard";
 import { downloadCsv } from "./csv";
 import { fmtRelative } from "./format";
 
-type Section = "users" | "products" | "payments" | "finance";
+type Section = AnalysisTabId;
 
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "users", label: "Users" },
   { id: "products", label: "Products" },
   { id: "payments", label: "Payments" },
   { id: "finance", label: "Finance" },
+  { id: "referrals", label: "Referrals" },
 ];
 
 const TIMEFRAMES: { id: Timeframe; label: string }[] = [
@@ -93,7 +96,11 @@ export function AnalysisTab() {
   const knownMarkets = useAdminMarket((s) => s.known);
 
   const [, forceTick] = useState(0);
-  const [section, setSection] = useState<Section>("users");
+  // Lifted to the nav store (not local state) so other tabs can deep-link
+  // straight to a specific Analysis section, e.g. Configuration → Referrals'
+  // "see the funnel" cross-link.
+  const section = useAdminTab((s) => s.analysisTab);
+  const setSection = useAdminTab((s) => s.setAnalysisTab);
 
   useEffect(() => {
     void init();
@@ -169,6 +176,7 @@ export function AnalysisTab() {
       {section === "products" && <ProductsAnalysis />}
       {section === "payments" && <PaymentsAnalysis />}
       {section === "finance" && <FinanceAnalysis />}
+      {section === "referrals" && <ReferralsAnalysis />}
 
       {section === "users" && (
         <div className="space-y-5">

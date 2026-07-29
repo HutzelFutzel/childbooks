@@ -38,6 +38,7 @@ import {
 } from "../../../books-frontend/src/core/config/referral";
 import { sendReferralRewardEmail } from "../email/triggers";
 import { notifySlack } from "../notify";
+import { hasActiveSubscription } from "../plans";
 import { grantSparks } from "../sparks";
 import { bumpStat, rewardCostToday } from "./stats";
 import { activeSubscription, applyFreeMonths } from "./stripeRewards";
@@ -93,6 +94,19 @@ async function estimateCost(reward: Reward, uid: string): Promise<number> {
 
 /** Whether this payout has to wait for a human, and why. */
 async function holdReason(args: ApplyRewardArgs, cost: number): Promise<string | null> {
+  // Checked here — AFTER the claim, not before it in `payRule` — so a referrer
+  // who isn't (yet) a subscriber gets a reward doc that's visibly held rather
+  // than no reward at all. The admin can release it once they resubscribe, or
+  // once they've decided the check no longer applies; skipping the claim
+  // entirely would make that reward simply vanish with no trace.
+  if (
+    args.side === "referrer" &&
+    args.rule.conditions.referrerMustBeSubscriber &&
+    !(await hasActiveSubscription(args.uid))
+  ) {
+    return "This rule only pays the referrer while they have an active membership, and they don't right now.";
+  }
+
   const config = await getReferralConfig();
 
   if (args.side === "referrer") {

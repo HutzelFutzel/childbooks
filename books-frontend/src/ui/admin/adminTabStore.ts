@@ -36,6 +36,9 @@ export type ConfigTabId =
 /** Segments within the combined Catalog tab (things sold once). */
 export type CatalogSegment = "print" | "ebook" | "packs";
 
+/** Sub-tabs within the Analysis section. */
+export type AnalysisTabId = "users" | "products" | "payments" | "finance" | "referrals";
+
 /** Sub-tabs within the Marketing section. */
 export type MarketingTabId = "seo" | "blog" | "branding";
 
@@ -82,6 +85,7 @@ interface AdminNavState {
   configTab: ConfigTabId;
   /** Which sub-section of the Catalog tab is showing. */
   catalogSegment: CatalogSegment;
+  analysisTab: AnalysisTabId;
   marketingTab: MarketingTabId;
   communicationTab: CommunicationTabId;
   legalTab: LegalTabId;
@@ -91,6 +95,9 @@ interface AdminNavState {
   /** Jump straight to a Catalog segment (used by the overview cross-links). */
   openCatalog: (segment: CatalogSegment) => void;
   setCatalogSegment: (segment: CatalogSegment) => void;
+  /** Jump straight to an Analysis sub-tab (used by cross-links from Configuration). */
+  openAnalysis: (tab: AnalysisTabId) => void;
+  setAnalysisTab: (tab: AnalysisTabId) => void;
   setMarketingTab: (tab: MarketingTabId) => void;
   setCommunicationTab: (tab: CommunicationTabId) => void;
   setLegalTab: (tab: LegalTabId) => void;
@@ -104,6 +111,7 @@ export const useAdminTab = create<AdminNavState>((set) => ({
   configGroup: "business",
   configTab: "overview",
   catalogSegment: "print",
+  analysisTab: "users",
   marketingTab: "seo",
   communicationTab: "transactional-emails",
   legalTab: "documents",
@@ -117,6 +125,8 @@ export const useAdminTab = create<AdminNavState>((set) => ({
   openCatalog: (catalogSegment) =>
     set({ configTab: "catalog", configGroup: "business", catalogSegment }),
   setCatalogSegment: (catalogSegment) => set({ catalogSegment }),
+  openAnalysis: (analysisTab) => set({ section: "analysis", analysisTab }),
+  setAnalysisTab: (analysisTab) => set({ analysisTab }),
   setMarketingTab: (marketingTab) => set({ marketingTab }),
   setCommunicationTab: (communicationTab) => set({ communicationTab }),
   setLegalTab: (legalTab) => set({ legalTab }),

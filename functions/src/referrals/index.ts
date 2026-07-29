@@ -12,6 +12,7 @@ import { getReferralConfig } from "../appConfig";
 import {
   freezeTerms,
   inviteTeaser,
+  notesForSide,
   type InvitationView,
   type ReferralOverview,
   type RewardView,
@@ -57,6 +58,7 @@ function invitationView(invitation: InvitationDoc): InvitationView {
     acceptedAt: invitation.acceptedAt,
     progress: invitation.progress,
     referrerSummary: invitation.terms.referrerSummary,
+    referrerNotes: notesForSide(invitation.terms, "referrer"),
     remindersSent: invitation.remindersSent,
     rewarded: invitation.rewardedCount > 0,
   };
@@ -107,6 +109,8 @@ export async function referralOverview(uid: string): Promise<ReferralOverview> {
     teaser: inviteTeaser(terms),
     referrerSummary: terms.referrerSummary,
     referredSummary: terms.referredSummary,
+    referrerNotes: notesForSide(terms, "referrer"),
+    referredNotes: notesForSide(terms, "referred"),
     canInvite: eligibility.canInvite,
     cannotInviteReason: eligibility.reason,
     invitationsLeftToday: left,

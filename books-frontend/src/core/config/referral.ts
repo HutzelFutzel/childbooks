@@ -336,6 +336,64 @@ export function summarizeSide(terms: ReferralTerms, side: RewardSide): string {
   return `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`;
 }
 
+function ordinal(n: number): string {
+  const v = n % 100;
+  if (v >= 11 && v <= 13) return `${n}th`;
+  switch (n % 10) {
+    case 1:
+      return `${n}st`;
+    case 2:
+      return `${n}nd`;
+    case 3:
+      return `${n}rd`;
+    default:
+      return `${n}th`;
+  }
+}
+
+/**
+ * Caveats a rule's trigger doesn't say out loud on its own. `describeTrigger`
+ * only names WHEN a reward fires; a rule can also require something that copy
+ * never mentions — a minimum spend, the invited person verifying first, which
+ * renewal, or (referrer-only) staying a subscriber. Surfaced as footnotes so a
+ * promise never reads as more unconditional than it actually pays out.
+ */
+export function conditionNotes(rule: RewardRule, side: RewardSide): string[] {
+  const { conditions, trigger } = rule;
+  const notes: string[] = [];
+
+  const spendGated = trigger === "first_purchase" || trigger === "subscription_started" || trigger === "subscription_renewed";
+  if (spendGated && conditions.minPurchaseAmount > 0) {
+    notes.push("only once their purchase clears the program's minimum spend");
+  }
+  if (trigger === "subscription_renewed" && conditions.nthInvoice > 2) {
+    notes.push(`on their ${ordinal(conditions.nthInvoice)} membership invoice, not the first renewal`);
+  }
+  // Redundant with the trigger's own wording when the trigger IS verification.
+  if (conditions.referredMustBeVerified && trigger !== "email_verified") {
+    notes.push("once they've verified their email");
+  }
+  if (side === "referrer" && conditions.referrerMustBeSubscriber) {
+    notes.push("only pays while you have an active membership when they convert");
+  }
+  return notes;
+}
+
+/** Every distinct caveat across a side's rules, in rule order, never repeated. */
+export function notesForSide(terms: ReferralTerms, side: RewardSide): string[] {
+  const seen = new Set<string>();
+  const notes: string[] = [];
+  for (const { rule } of rewardsForSide(terms, side)) {
+    for (const note of conditionNotes(rule, side)) {
+      if (!seen.has(note)) {
+        seen.add(note);
+        notes.push(note);
+      }
+    }
+  }
+  return notes;
+}
+
 /** Short both-sides teaser for buttons and banners ("They get X, you get Y"). */
 export function inviteTeaser(terms: ReferralTerms): string {
   const referred = rewardsForSide(terms, "referred")[0];
@@ -382,6 +440,8 @@ export interface InvitationView {
   progress: InvitationProgress;
   /** Frozen promise for the inviter, e.g. "100 Sparks when they first buy". */
   referrerSummary: string;
+  /** Caveats that promise doesn't say out loud (see {@link conditionNotes}). */
+  referrerNotes: string[];
   /** How many reminder emails have gone out (capped at one). */
   remindersSent: number;
   /** True when at least one reward has actually been granted for it. */
@@ -423,6 +483,9 @@ export interface ReferralOverview {
   teaser: string;
   referrerSummary: string;
   referredSummary: string;
+  /** Caveats each summary doesn't say out loud (see {@link conditionNotes}). */
+  referrerNotes: string[];
+  referredNotes: string[];
   /** False when this account may not send invitations (unverified, or no purchase yet). */
   canInvite: boolean;
   /** Why not, when `canInvite` is false. */

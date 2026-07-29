@@ -19,7 +19,6 @@ import {
   type RewardSide,
   type RewardTrigger,
 } from "../../../books-frontend/src/core/config/referral";
-import { hasActiveSubscription } from "../plans";
 import { applyReward } from "./rewards";
 import { bumpStat, type StatField } from "./stats";
 import { INVITATIONS, db, getInvitation, type InvitationDoc } from "./store";
@@ -123,9 +122,10 @@ async function payRule(
   for (const { side, uid, counterpart } of sides) {
     const reward = side === "referrer" ? rule.referrer : rule.referred;
     if (!reward) continue;
-    if (side === "referrer" && rule.conditions.referrerMustBeSubscriber && !(await hasActiveSubscription(uid))) {
-      continue;
-    }
+    // `referrerMustBeSubscriber` is checked INSIDE applyReward (see holdReason),
+    // not here: skipping it here would mean no reward document ever exists, so
+    // it never shows up anywhere for the inviter to see or an admin to release
+    // once they do subscribe. Held, not silently dropped.
     await applyReward({
       invitation,
       rule,

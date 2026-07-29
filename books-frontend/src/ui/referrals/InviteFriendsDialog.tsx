@@ -232,19 +232,30 @@ function Offer({ overview }: { overview: ReferralOverview }) {
       <p className="mt-1 text-sm text-ink-600">{overview.subline}</p>
       <div className="mt-3 grid gap-2 sm:grid-cols-2">
         {overview.referredSummary && (
-          <BenefitCard label="Your friend gets" value={overview.referredSummary} />
+          <BenefitCard label="Your friend gets" value={overview.referredSummary} notes={overview.referredNotes} />
         )}
-        {overview.referrerSummary && <BenefitCard label="You get" value={overview.referrerSummary} />}
+        {overview.referrerSummary && (
+          <BenefitCard label="You get" value={overview.referrerSummary} notes={overview.referrerNotes} />
+        )}
       </div>
     </div>
   );
 }
 
-function BenefitCard({ label, value }: { label: string; value: string }) {
+function BenefitCard({ label, value, notes }: { label: string; value: string; notes?: string[] }) {
   return (
     <div className="rounded-xl bg-white/80 px-3 py-2">
       <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">{label}</div>
       <div className="text-sm font-medium text-ink-800">{value}</div>
+      {notes && notes.length > 0 && (
+        <ul className="mt-1 space-y-0.5">
+          {notes.map((note) => (
+            <li key={note} className="text-[11px] text-ink-400">
+              * {note}
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -306,6 +317,9 @@ function InvitationRow({ invitation }: { invitation: InvitationView }) {
           {/* The promise this invitation was SENT under — not today's offer. */}
           {invitation.referrerSummary && (
             <p className="mt-0.5 text-xs text-ink-500">You earn {invitation.referrerSummary}</p>
+          )}
+          {invitation.referrerNotes.length > 0 && (
+            <p className="mt-0.5 text-[11px] text-ink-400">* {invitation.referrerNotes.join(" · ")}</p>
           )}
         </div>
         <span

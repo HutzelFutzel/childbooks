@@ -7,7 +7,9 @@
  *   1. Program config — master switch, reward rules, limits, eligibility, copy.
  *   2. Business impact — worst-case cost of the whole ladder, using the same
  *      engines as the rest of the admin (grantLiabilityUsd + discountImpact).
- *   3. Funnel stats — invites → accept → purchase → payout, plus top inviters.
+ *   3. Held payouts — rewards a limit or a failed delivery stopped, waiting on
+ *      a human. Live funnel stats (invites → accept → purchase) moved to
+ *      Analysis → Referrals, since they're a metrics view, not a setting.
  *
  * Saving is refused when the impact engine raises a `block` warning (e.g. a
  * Spark reward on a pre-payment trigger, or a free-month rule without the
@@ -29,7 +31,6 @@ import {
   createRewardRule,
   describeReward,
   freezeTerms,
-  funnelRates,
   inviteTeaser,
   rewardAllowedForSide,
   rewardAllowedForTrigger,
@@ -115,14 +116,15 @@ export function ReferralsTab() {
   const plans = useAppConfigStore((s) => s.plans.plans);
   const loadAdminProducts = useAppConfigStore((s) => s.loadAdminProducts);
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
+  const openAnalysis = useAdminTab((s) => s.openAnalysis);
 
   const [draft, setDraft] = useState<ReferralConfig>(stored);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [products, setProducts] = useState<ProductDefinition[]>([]);
+  // Only held.length matters here — the full funnel view lives in Analysis → Referrals.
   const [stats, setStats] = useState<ReferralStatsSummary | null>(null);
-  const [statsLoading, setStatsLoading] = useState(false);
   const [voiding, setVoiding] = useState(false);
 
   useEffect(() => {
@@ -150,11 +152,9 @@ export function ReferralsTab() {
   }, [stored, dirty]);
 
   useEffect(() => {
-    setStatsLoading(true);
     void loadStats()
       .then(setStats)
-      .catch(() => setStats(null))
-      .finally(() => setStatsLoading(false));
+      .catch(() => setStats(null));
   }, [loadStats]);
 
   const set = (patch: Partial<ReferralConfig>) => {
@@ -415,7 +415,17 @@ export function ReferralsTab() {
         onResolved={() => void loadStats().then(setStats).catch(() => {})}
       />
 
-      <StatsPanel stats={stats} loading={statsLoading} baseCurrency={settings.baseCurrency} />
+      <ImpactNote>
+        Looking for invite funnel numbers (sent → accepted → purchased) or the top-inviters leaderboard? They moved to{" "}
+        <button
+          type="button"
+          className="font-semibold underline"
+          onClick={() => openAnalysis("referrals")}
+        >
+          Analysis → Referrals
+        </button>
+        .
+      </ImpactNote>
     </div>
   );
 }
@@ -845,92 +855,3 @@ function HeldRewardsPanel({
   );
 }
 
-// ---- Stats ------------------------------------------------------------------
-
-function StatsPanel({
-  stats,
-  loading,
-  baseCurrency,
-}: {
-  stats: ReferralStatsSummary | null;
-  loading: boolean;
-  baseCurrency: string;
-}) {
-  if (loading) {
-    return (
-      <Section title="Funnel (last 30 days)" hint="Invites sent → accepted → purchased → rewards paid.">
-        <p className="text-xs text-ink-400">Loading…</p>
-      </Section>
-    );
-  }
-  if (!stats) {
-    return (
-      <Section title="Funnel (last 30 days)" hint="Invites sent → accepted → purchased → rewards paid.">
-        <p className="text-xs text-ink-400">Could not load stats.</p>
-      </Section>
-    );
-  }
-  const t = stats.totals;
-  const rates = funnelRates(t);
-  return (
-    <Section
-      title="Funnel (last 30 days)"
-      hint="Invites sent → accepted → purchased → rewards paid. Cost per paying customer is the number that decides whether to keep the program."
-    >
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard label="Invites sent" value={String(t.invitesSent)} />
-        <StatCard label="Accepted" value={String(t.invitesAccepted)} note={`${rates.acceptRate}% of sent`} />
-        <StatCard label="First purchase" value={String(t.purchased)} note={`${rates.purchaseRate}% of accepted`} />
-        <StatCard
-          label="Cost / paying customer"
-          value={fmtMoney(rates.costPerPayingCustomer, baseCurrency)}
-          note={`${t.rewardsGranted} rewards · ${fmtMoney(t.rewardCost, baseCurrency)} total`}
-        />
-      </div>
-      <div className="grid gap-2 sm:grid-cols-3">
-        <StatCard label="Verified" value={String(t.verified)} />
-        <StatCard label="First book finished" value={String(t.activated)} />
-        <StatCard label="Clawbacks" value={String(t.clawbacks)} />
-      </div>
-      {stats.pendingReview > 0 && (
-        <ImpactNote>
-          <span className="font-semibold">{stats.pendingReview}</span> reward
-          {stats.pendingReview === 1 ? " is" : "s are"} waiting on a decision — see Held payouts above.
-        </ImpactNote>
-      )}
-      {stats.topInviters.length > 0 && (
-        <div className="overflow-x-auto rounded-lg ring-1 ring-inset ring-ink-100">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-ink-50 text-[11px] uppercase tracking-wide text-ink-500">
-              <tr>
-                <th className="px-2.5 py-1.5 font-semibold">Inviter</th>
-                <th className="px-2.5 py-1.5 font-semibold">Sent</th>
-                <th className="px-2.5 py-1.5 font-semibold">Accepted</th>
-                <th className="px-2.5 py-1.5 font-semibold">Rewarded</th>
-                <th className="px-2.5 py-1.5 font-semibold">Cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stats.topInviters.map((row) => (
-                <tr key={row.uid} className="border-t border-ink-100">
-                  <td className="px-2.5 py-1.5 text-ink-700">
-                    {row.email ?? row.uid.slice(0, 8)}
-                    {row.needsReview && (
-                      <span className="ml-1.5 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-800">
-                        review
-                      </span>
-                    )}
-                  </td>
-                  <td className="px-2.5 py-1.5">{row.sent}</td>
-                  <td className="px-2.5 py-1.5">{row.accepted}</td>
-                  <td className="px-2.5 py-1.5">{row.rewarded}</td>
-                  <td className="px-2.5 py-1.5">{fmtMoney(row.cost, baseCurrency)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </Section>
-  );
-}
