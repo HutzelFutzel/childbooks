@@ -15,6 +15,7 @@ const ROOT_DESCRIPTIONS = {
   dev: "Next.js frontend dev server (port 1420)",
   "dev:backend": "Functions build + Firebase emulators (--all, --order, --stripe)",
   "dev:all": "Frontend + backend dev (same as dev:backend --all)",
+  "dev:order": "dev:all + Stripe webhooks + print-order status polling",
   build: "Build functions bundle, then the Next.js app",
   "build:web": "Production build of the Next.js frontend",
   "build:functions": "esbuild bundle for Firebase Functions",

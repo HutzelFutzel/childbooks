@@ -10,7 +10,7 @@ import { onRequest } from "firebase-functions/v2/https";
 import { setGlobalOptions } from "firebase-functions/v2";
 import { createApp } from "./app";
 import { ensureAdmin } from "./storage";
-import { boundSecrets } from "./secrets";
+import { ALL_SECRETS } from "./secrets";
 
 // Initialize the Admin SDK at module load (cold start), BEFORE any function
 // runs. Firestore triggers (onGenerationJob) need an initialized default app to
@@ -32,6 +32,10 @@ export { cleanupAnonymousUsers } from "./cleanup";
 
 // Scheduled retry of paid orders whose print placement failed.
 export { retryFulfillments } from "./fulfillmentRetry";
+
+// Scheduled reconciliation of print-order status against the provider — the
+// safety net for status webhooks that were missed or deactivated.
+export { syncPrintOrders } from "./printSyncJob";
 
 // Scheduled eviction of cached book renders nobody has come back to.
 export { cleanupStaleRenders } from "./renders";
@@ -57,7 +61,15 @@ export const api = onRequest(
     // Image generation can take a while; allow generous time + memory.
     timeoutSeconds: 300,
     memory: "1GiB",
-    secrets: boundSecrets(),
+    // Bind every secret unconditionally (same as the job/scheduled functions
+    // below) rather than gating on a LIVE_ENABLED flag. Firebase's deploy
+    // "discovery" step loads this file and evaluates the `secrets: [...]`
+    // array BEFORE any parameter/secret values are resolved — so any
+    // conditional logic here that depends on a param's `.value()` (booleans
+    // included, not just secrets) silently sees only its compile-time
+    // default, never the real `.env.<projectId>` value. See git history /
+    // secrets.ts for the two approaches that were tried and didn't work.
+    secrets: ALL_SECRETS,
     cors: true,
   },
   createApp(),

@@ -5,7 +5,9 @@
       "https://www.childbook.studio",
       "https://childbooks.studio",
       "https://www.childbooks.studio",
-      "https://childbooks--childbook-60f89.us-east4.hosted.app"
+      "https://childbooks--childbook-60f89.us-east4.hosted.app",
+      "http://localhost:1420",
+      "http://127.0.0.1:1420"
     ],
     "method": ["GET", "HEAD", "PUT", "POST", "DELETE"],
     "responseHeader": [

@@ -61,16 +61,28 @@ export type PaymentKind = "order" | "subscription" | "sparkPack" | "sparkGift" |
 export type FulfillmentState = "pending" | "placed" | "retrying" | "failed";
 
 /**
- * What the webhook needs to deliver a purchased ebook AFTER payment: the
- * already-uploaded PDF's token URL plus the project it belongs to. Stored on
- * the admin payment doc only; once the payment settles the buyer gets a
+ * What the webhook needs to deliver a purchased ebook AFTER payment: where the
+ * already-uploaded PDF lives plus the project it belongs to. Stored on the
+ * admin payment doc only; once the payment settles the buyer gets a
  * `users/{uid}/downloads/{projectId}` entitlement and fetches the file through
- * the gated download-link endpoint (the URL itself stays off the client doc).
+ * the gated download-link endpoint (the location stays off the client doc).
  */
 export interface EbookFulfillment {
   projectId: string;
   title: string;
-  fileUrl: string;
+  /**
+   * Storage OBJECT PATH of the PDF. The download link is rebuilt from this on
+   * every request (`publicUrlForPath`), which is what keeps an entitlement
+   * valid across a bucket or host change and keeps the link revocable — delete
+   * the object's download token and every previously handed-out URL dies.
+   */
+  filePath?: string;
+  /**
+   * Absolute download URL, as written by ebook payments made BEFORE `filePath`
+   * existed. Read-only fallback: never set on new payments, because a stored
+   * absolute URL outlives the hostname it was built from.
+   */
+  fileUrl?: string;
   /**
    * Content fingerprint (see `core/print/fingerprint`) the PDF was rendered
    * from, if known. Carried onto the download entitlement at delivery time so

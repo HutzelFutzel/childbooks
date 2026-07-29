@@ -68,6 +68,8 @@ if (!existsSync(APP_HOSTING_PATH)) {
   }
   const emu = declared.get("NEXT_PUBLIC_USE_FIREBASE_EMULATORS");
   if (emu && emu !== "false") fail(`NEXT_PUBLIC_USE_FIREBASE_EMULATORS is "${emu}" — production must be "false".`);
+  const storageEmu = declared.get("NEXT_PUBLIC_USE_STORAGE_EMULATOR");
+  if (storageEmu && storageEmu !== "false") fail(`NEXT_PUBLIC_USE_STORAGE_EMULATOR is "${storageEmu}" — production must be "false".`);
 }
 
 // ---- 1b. Storage bucket CORS -------------------------------------------------

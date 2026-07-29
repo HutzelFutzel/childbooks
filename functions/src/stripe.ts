@@ -20,7 +20,7 @@ import type Stripe from "stripe";
 import { serverConfig } from "./config";
 import { isAnonymousToken, isVerifiedToken, requireAuth, type AuthedRequest } from "./auth";
 import { createAdminAssetHost, printFileUnreachableReason } from "./assets";
-import { cachedDocumentUrl, documentKey } from "./renders";
+import { cachedDocumentPath, cachedDocumentUrl, documentKey } from "./renders";
 import { fulfillmentProvider } from "./lulu";
 import { persistCreatedOrder } from "./orders";
 import { getProductsConfig } from "./products";
@@ -961,17 +961,29 @@ export function registerStripeUserRoutes(app: Express): void {
       // Prefer the cached render. A second purchase of an unchanged book (a
       // gift, a re-download after a plan change) then costs nothing to prepare
       // and is byte-identical to the first.
-      let fileUrl = body.fingerprint
-        ? await cachedDocumentUrl(uid, body.fingerprint, documentKey("ebook"))
+      //
+      // The PATH is what gets persisted, not a URL: the entitlement outlives any
+      // particular hostname, and every download re-derives the link (see
+      // `logDownloadAndResolveUrl`).
+      let filePath = body.fingerprint
+        ? await cachedDocumentPath(uid, body.fingerprint, documentKey("ebook"))
         : null;
-      if (!fileUrl) {
+      if (!filePath) {
         if (!body.pdfBase64) {
           clientError(res, "The book hasn't finished rendering yet. Please try again.");
           return;
         }
         const buf = Buffer.from(body.pdfBase64, "base64");
         const blob = new Blob([buf], { type: body.contentType || "application/pdf" });
-        ({ url: fileUrl } = await createAdminAssetHost().upload(blob, `ebook-${body.projectId}.pdf`));
+        const uploaded = await createAdminAssetHost().upload(blob, `ebook-${body.projectId}.pdf`);
+        // `AssetHost.path` is optional in general; the admin host always reports
+        // it, and without one there'd be nothing for a download to resolve.
+        if (!uploaded.path) {
+          console.error("[stripe] ebook upload returned no object path");
+          clientError(res, "We couldn't prepare your download. Please try again.", 500);
+          return;
+        }
+        filePath = uploaded.path;
       }
 
       const paymentId = randomUUID();
@@ -985,7 +997,7 @@ export function registerStripeUserRoutes(app: Express): void {
         const ebook: EbookFulfillment = {
           projectId: body.projectId,
           title,
-          fileUrl,
+          filePath,
           fingerprint: body.fingerprint ?? null,
         };
         await createPendingPayment({
@@ -1055,7 +1067,7 @@ export function registerStripeUserRoutes(app: Express): void {
       const ebook: EbookFulfillment = {
         projectId: body.projectId,
         title,
-        fileUrl,
+        filePath,
         fingerprint: body.fingerprint ?? null,
       };
       await createPendingPayment({

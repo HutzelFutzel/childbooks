@@ -18,6 +18,13 @@
  * headers, a configured one echoes the origin back. The probe also requests the
  * `authorization` header the Firebase SDK sends, so a config that forgets it in
  * `responseHeader` (and would therefore still fail in the browser) is caught.
+ *
+ * cors.json includes the localhost dev origin on purpose: local development runs
+ * against the REAL bucket (only Auth/Firestore/Functions/Pub-Sub are emulated, so
+ * that print files and ebook links are publicly fetchable), which means the dev
+ * server downloads images through the same CORS-checked XHR the deployed app does.
+ * CORS is not an authorization boundary — Storage rules and the Firebase token
+ * still decide what a caller may read.
  */
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";

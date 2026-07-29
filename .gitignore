@@ -16,6 +16,11 @@ dist/
 out/
 functions/lib/
 
+# Repo-scoped gcloud config (dev Application Default Credentials). Kept out of
+# ~/.config/gcloud so signing in for this project can't repoint the credentials
+# your other Google projects use. Contains an OAuth refresh token — never commit.
+.gcloud/
+
 # Firebase emulator persisted data + logs
 .emulator-data/
 # One-off manual `firebase emulators:export` dumps

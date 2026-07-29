@@ -18,6 +18,7 @@
  */
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
+import { publicUrlForPath } from "./assets";
 import {
   getAdminPayment,
   hasPaidPrintOrder,
@@ -157,8 +158,8 @@ async function ebookOwnership(
 export async function deliverPaidEbook(paymentId: string): Promise<void> {
   const payment = await getAdminPayment(paymentId);
   if (!payment || payment.kind !== "ebook" || !payment.ebook) return;
-  const { projectId, title, fileUrl, fingerprint } = payment.ebook;
-  if (!projectId || !fileUrl) return;
+  const { projectId, title, filePath, fileUrl, fingerprint } = payment.ebook;
+  if (!projectId || !(filePath || fileUrl)) return;
   const ref = db().doc(`${downloadsCol(payment.ownerUid)}/${projectId}`);
   const snap = await ref.get();
   const existing = snap.data() as Record<string, unknown> | undefined;
@@ -227,12 +228,20 @@ export async function logDownloadAndResolveUrl(
   if (!snap.exists) return null;
   const d = snap.data() as Record<string, unknown>;
 
-  // The file URL is kept off the client-readable entitlement; resolve it from
-  // the (admin-only) payment record that granted this download.
+  // The file location is kept off the client-readable entitlement; resolve it
+  // from the (admin-only) payment record that granted this download, then build
+  // the link fresh. Deriving it per request rather than replaying a stored URL
+  // is what keeps an entitlement working after the bucket or storage host
+  // changes, and keeps the link revocable — clearing the object's download
+  // token invalidates everything handed out before.
   const paymentId = (d.paymentId as string) ?? "";
   if (!paymentId) return null;
   const payment = await getAdminPayment(paymentId);
-  const fileUrl = payment && payment.ownerUid === uid ? payment.ebook?.fileUrl ?? null : null;
+  if (!payment || payment.ownerUid !== uid) return null;
+  const fileUrl = payment.ebook?.filePath
+    ? await publicUrlForPath(payment.ebook.filePath)
+    : // Entitlements granted before paths were stored carry an absolute URL.
+      payment.ebook?.fileUrl ?? null;
   if (!fileUrl) return null;
 
   const at = Date.now();

@@ -122,7 +122,7 @@ function sendError(res: Response, err: unknown): void {
  * Admin callers ARE allowed to see the real provider error (they're trusted and
  * need it to operate webhooks), unlike the neutralized client-facing `sendError`.
  */
-function sendAdminError(res: Response, err: unknown): void {
+export function sendAdminError(res: Response, err: unknown): void {
   if (err instanceof FulfillmentError) {
     const status = err.status ?? (err.kind === "config" ? 503 : 502);
     console.error("[fulfillment-admin]", err.kind, status, err.message, err.details ?? "");

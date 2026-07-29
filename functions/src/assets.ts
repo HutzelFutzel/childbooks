@@ -13,11 +13,12 @@
  * piece of object metadata — no signer required — and works identically with
  * ADC, a key, or the emulator.
  *
- * NOTE: in the Storage emulator the URL points at localhost, which Lulu cannot
- * reach. For local end-to-end testing, expose the Storage emulator through a
- * tunnel (e.g. `ngrok http 9199`) and set `STORAGE_PUBLIC_BASE_URL` to the
- * tunnel origin — `downloadUrl` will emit that host so Lulu can fetch the files.
- * Otherwise, exercise real orders against a deployed (dev) project.
+ * NOTE: local development runs against the REAL Storage bucket (only Auth,
+ * Firestore, Functions and Pub/Sub are emulated) precisely so these URLs are
+ * fetchable by the print provider — see `scripts/dev-emulators.mjs`. Opting into
+ * the Storage emulator with `USE_STORAGE_EMULATOR=true` makes them localhost
+ * URLs, which the browser can still read (so ebooks work) but Lulu cannot, so
+ * print checkout fails its pre-payment reachability check by design.
  */
 import { randomUUID } from "node:crypto";
 import { getStorage } from "firebase-admin/storage";
@@ -37,23 +38,17 @@ function normalizeBase(value: string): string {
 /**
  * Build a public Firebase download URL for an object guarded by a token.
  *
- * Host resolution (first match wins):
- *   1. `STORAGE_PUBLIC_BASE_URL` — explicit override, e.g. a tunnel in front of
- *      the Storage emulator so Lulu can reach local files end-to-end.
- *   2. `FIREBASE_STORAGE_EMULATOR_HOST` — set by the emulator suite (localhost;
- *      NOT reachable by external services like Lulu).
- *   3. `https://firebasestorage.googleapis.com` — the real, deployed default.
+ * `FIREBASE_STORAGE_EMULATOR_HOST` is set by the emulator suite only when the
+ * Storage emulator is actually running; otherwise this is the real, deployed
+ * host — which is the case in local dev too.
  */
 function downloadUrl(bucketName: string, objectPath: string, token: string): string {
   const encoded = encodeURIComponent(objectPath);
-  const override = process.env.STORAGE_PUBLIC_BASE_URL;
   const emulatorHost =
     process.env.FIREBASE_STORAGE_EMULATOR_HOST || process.env.STORAGE_EMULATOR_HOST;
-  const base = override
-    ? normalizeBase(override)
-    : emulatorHost
-      ? normalizeBase(emulatorHost)
-      : "https://firebasestorage.googleapis.com";
+  const base = emulatorHost
+    ? normalizeBase(emulatorHost)
+    : "https://firebasestorage.googleapis.com";
   return `${base}/v0/b/${bucketName}/o/${encoded}?alt=media&token=${token}`;
 }
 
@@ -68,9 +63,9 @@ function downloadUrl(bucketName: string, objectPath: string, token: string): str
  * before the Stripe session exists, so a failure is a retryable checkout error
  * rather than a refund.
  *
- * It catches the whole family at once: a stale `STORAGE_PUBLIC_BASE_URL`, a dev
- * tunnel that rotated between runs, a bucket the emulator doesn't know about, a
- * reorder pointing at files that have since been removed.
+ * It catches the whole family at once: a bucket the caller can't actually serve
+ * from, a local run that emulated Storage (localhost URLs the provider can't
+ * fetch), a reorder pointing at files that have since been removed.
  *
  * A ranged GET rather than HEAD: it's the request shape a downloader actually
  * makes, so a proxy that mishandles HEAD can't produce a false verdict either way.

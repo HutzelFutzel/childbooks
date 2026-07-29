@@ -16,6 +16,7 @@
     "dev": "yarn workspace books-frontend dev",
     "dev:backend": "node scripts/dev.mjs",
     "dev:all": "node scripts/dev.mjs --all",
+    "dev:order": "node scripts/dev.mjs --all --order",
     "build:web": "yarn workspace books-frontend build",
     "build:functions": "yarn workspace functions build",
     "build": "yarn build:functions && yarn build:web",
@@ -35,7 +36,6 @@
     "deploy:rules": "firebase deploy --only firestore:rules,firestore:indexes,storage"
   },
   "devDependencies": {
-    "@ngrok/ngrok": "^1.7.0",
     "concurrently": "^9.1.0",
     "firebase-tools": "^13.29.1"
   },

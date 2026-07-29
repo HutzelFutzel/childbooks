@@ -7,7 +7,9 @@
  *   GET  /providers/models        server-side model discovery      (open, cached)
  *   *    /print/*                  print fulfillment endpoints      (verified)
  *   POST /print-webhook           provider status callback         (HMAC-signed)
+ *   POST /internal/print/sync     pull order status                (emulator only)
  *   *    /admin/print/webhooks    status-webhook management        (admin)
+ *   POST /admin/print/sync        pull order status now            (admin)
  *
  * Every request runs through `attachUser` (verifies the Firebase ID token if
  * present). `/print` additionally `requireVerified` (a verified, non-anonymous
@@ -18,6 +20,7 @@ import express, { type Express } from "express";
 import { attachUser, requireAdmin, requireAuth, requireVerified } from "./auth";
 import { registerProviderRoutes } from "./providers";
 import { registerLuluRoutes, registerPrintWebhookRoute } from "./lulu";
+import { registerPrintSyncAdminRoutes, registerPrintSyncDevRoute } from "./printSync";
 import { registerAiRoutes } from "./ai";
 import { registerMigrationRoutes } from "./migration";
 import { registerAuthRoutes } from "./authRoutes";
@@ -60,6 +63,10 @@ export function createApp(): Express {
   // + `requireVerified` guard below so the provider can reach it tokenless.
   registerPrintWebhookRoute(app);
 
+  // The same status updates, PULLED, for local dev where the webhook above can
+  // never be delivered (no public URL). No-ops outside the emulator.
+  registerPrintSyncDevRoute(app);
+
   // Stripe's event webhook — tokenless (authenticated by signature), so it MUST
   // be registered before the `/checkout` + `requireVerified` guard below.
   registerStripeWebhookRoute(app);
@@ -98,6 +105,7 @@ export function createApp(): Express {
   app.use("/admin", requireVerified, requireAdmin);
 
   registerLuluRoutes(app);
+  registerPrintSyncAdminRoutes(app);
   registerAiRoutes(app);
   registerMigrationRoutes(app);
   registerAuthRoutes(app);

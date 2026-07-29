@@ -41,19 +41,34 @@ export function useEmulators(): boolean {
   return process.env.NODE_ENV !== "production";
 }
 
+/**
+ * Storage is the one emulator dev does NOT use by default: the backend hands
+ * print files to the print provider and ebook links to buyers, and both must be
+ * fetchable from outside this machine (and outlive a restart), which emulated
+ * Storage URLs — `127.0.0.1` — are not. Client and backend must agree on which
+ * bucket they're talking to or the browser reads an empty bucket, so this mirrors
+ * `USE_STORAGE_EMULATOR` on the backend side.
+ */
+export function useStorageEmulator(): boolean {
+  if (!useEmulators()) return false;
+  return process.env.NEXT_PUBLIC_USE_STORAGE_EMULATOR === "true";
+}
+
 let app: FirebaseApp | null = null;
 
 export function getFirebaseApp(): FirebaseApp {
   if (app) return app;
   // In dev against the emulators the public config may be blank. Provide
-  // fallbacks so the SDK doesn't throw — the emulators don't validate the key,
-  // and Storage needs *some* bucket name (the emulator accepts any).
+  // fallbacks so the SDK doesn't throw — the emulators don't validate the key.
+  // The bucket fallback mirrors the backend's `storageBucketName()` derivation
+  // (`<projectId>.firebasestorage.app`), NOT the legacy `.appspot.com` name:
+  // dev talks to the real bucket, so a mismatch here reads an empty one.
   const projectId = config.projectId || "childbook-60f89";
   const opts = {
     ...config,
     apiKey: config.apiKey || "demo-emulator-key",
     projectId,
-    storageBucket: config.storageBucket || `${projectId}.appspot.com`,
+    storageBucket: config.storageBucket || `${projectId}.firebasestorage.app`,
   };
   app = getApps().length ? getApp() : initializeApp(opts);
   return app;
@@ -91,7 +106,7 @@ let storage: FirebaseStorage | null = null;
 export function getFirebaseStorage(): FirebaseStorage {
   if (storage) return storage;
   storage = getFbStorage(getFirebaseApp());
-  if (useEmulators()) {
+  if (useStorageEmulator()) {
     connectStorageEmulator(storage, EMULATOR_HOST, STORAGE_EMULATOR_PORT);
   }
   return storage;

@@ -116,14 +116,35 @@ export async function cachedDocumentUrl(
   fingerprint: string,
   key: string,
 ): Promise<string | null> {
+  const path = await cachedDocumentPath(uid, fingerprint, key);
+  if (!path) return null;
+  const url = await publicUrlForPath(path);
+  if (url) void touch(uid, fingerprint);
+  return url;
+}
+
+/**
+ * The cached document's OBJECT PATH, for callers that persist a reference to it
+ * rather than fetching it now (ebook entitlements). A path stays correct across
+ * a bucket or host change, which an absolute URL does not — so anything stored
+ * long-term keeps the path and resolves it per request.
+ *
+ * Verifies the object still exists, so a caller can't record a reference to a
+ * file that cleanup has already evicted.
+ */
+export async function cachedDocumentPath(
+  uid: string,
+  fingerprint: string,
+  key: string,
+): Promise<string | null> {
   if (!validFingerprint(fingerprint)) return null;
   const snap = await docRef(uid, fingerprint).get();
   const data = snap.data() as RenderDoc | undefined;
   const path = data?.documents?.[key];
   if (!path) return null;
-  const url = await publicUrlForPath(path);
-  if (url) void touch(uid, fingerprint);
-  return url;
+  if (!(await publicUrlForPath(path))) return null;
+  void touch(uid, fingerprint);
+  return path;
 }
 
 /** Record that a render was used, so cleanup keeps what people come back to. */

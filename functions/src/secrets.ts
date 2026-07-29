@@ -69,40 +69,33 @@ const LIVE_SECRETS = [
 export const ALL_SECRETS = [...BASE_SECRETS, ...SANDBOX_SECRETS, ...LIVE_SECRETS];
 
 /**
- * Gate for binding the live secrets, set via `LIVE_ENABLED=true` in
- * `functions/.env.<projectId>` once you've added the live keys.
+ * Flag set via `LIVE_ENABLED=true` in `functions/.env.<projectId>` once
+ * you've added the live keys, used ONLY to report readiness at runtime (see
+ * `liveSecretsBound()` below) — it does NOT gate which secrets get bound.
  *
- * IMPORTANT: this MUST be a Firebase "parameterized config" value
- * (`defineBoolean`), not a plain `process.env.LIVE_ENABLED` read. Plain
- * `.env.<projectId>` values are only injected into `process.env` for the
- * ACTUALLY RUNNING deployed function (i.e. at request time) — they are NOT
- * available while firebase-tools' deploy "discovery" step evaluates this
- * file to decide the `secrets: [...]` array below. A plain read here always
- * silently resolved to `false` at discovery time (even with `LIVE_ENABLED=true`
- * committed), so `api` never actually got the live secrets bound, while
- * `liveSecretsBound()` (called at runtime by the readiness check) correctly
- * reported `true` — a very confusing split. `defineBoolean` uses the same
- * discovery-time substitution mechanism as `defineSecret`, so it resolves
- * correctly both at discovery time and at runtime.
+ * NOTE ON WHY IT CAN'T GATE SECRET BINDING: `api` used to bind only
+ * BASE_SECRETS + SANDBOX_SECRETS unless this flag was true, to avoid forcing
+ * live keys to exist for sandbox-only deploys. That doesn't work: Firebase's
+ * deploy "discovery" step loads this file and evaluates the function's
+ * `secrets: [...]` array BEFORE any parameter/secret has a real resolved
+ * value — so ANY conditional logic here that branches on a param's
+ * `.value()` (this includes plain `process.env.LIVE_ENABLED` reads AND
+ * `defineBoolean(...).value()` reads — both were tried) silently sees only
+ * a fallback (`undefined`/the compile-time `default`), never the actual
+ * `.env.<projectId>` value. The deploy succeeds without error, it just
+ * silently binds the wrong (sandbox-only) secret set every time, no matter
+ * what the `.env` file says. `api` now binds `ALL_SECRETS` unconditionally
+ * (see index.ts), matching the other functions in this file's callers
+ * (`jobs.ts`, `fulfillmentRetry.ts`, `printSyncJob.ts`), which sidesteps the
+ * issue entirely since it needs no conditional logic to resolve at all.
+ *
+ * `.value()` DOES resolve correctly for params/secrets read at RUNTIME
+ * (i.e. inside a request/handler body, after the function has cold-started)
+ * — that's why `liveSecretsBound()` below still works fine.
  */
 const LIVE_ENABLED = defineBoolean("LIVE_ENABLED", { default: false });
 
-/**
- * The secrets actually BOUND to the `api` function at deploy time.
- *
- * Firebase requires every bound secret to exist in Secret Manager, so binding
- * the live pair would force you to create live keys even while running sandbox.
- * We therefore bind the live secrets only when `LIVE_ENABLED` is true.
- *
- * Consequence: to use live mode at runtime (incl. the admin sandbox↔live
- * toggle) you must have deployed with `LIVE_ENABLED=true` so the live secrets
- * are injected. The go-live readiness check enforces this before letting you flip.
- */
-export function boundSecrets() {
-  return LIVE_ENABLED.value() ? ALL_SECRETS : [...BASE_SECRETS, ...SANDBOX_SECRETS];
-}
-
-/** Whether the live secrets are bound in this deployment. */
+/** Whether live mode is enabled for this deployment (runtime-only check). */
 export function liveSecretsBound(): boolean {
   return LIVE_ENABLED.value();
 }
