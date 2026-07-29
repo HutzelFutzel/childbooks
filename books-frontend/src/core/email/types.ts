@@ -183,9 +183,10 @@ export interface EmailTemplateVarsMap {
    * published address — without it, the visitor has only our word that anything
    * happened. `ref` is the human-quotable reference they can cite if they follow
    * up; `topic` is the resolved label (e.g. "Billing, refund, or subscription"),
-   * not the raw submitted id.
+   * not the raw submitted id; `message` is echoed back so they have a record of
+   * what they sent.
    */
-  contact_form_ack: { name?: string; ref: string; topic?: string };
+  contact_form_ack: { name?: string; ref: string; topic?: string; message: string };
   /**
    * Sent to users when a legal document changes materially. A service message
    * about the account's governing policy — transactional, NOT gated on marketing

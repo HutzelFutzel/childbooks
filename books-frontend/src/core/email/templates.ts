@@ -412,22 +412,23 @@ export const RENDERERS: { [Id in keyof EmailTemplateVarsMap]: TemplateRenderer<I
 
   contact_form_ack: (vars, ctx) => {
     const subject = `We got your message · ${vars.ref}`;
+    const replyLine =
+      "We try to reply within 24 hours, but it can occasionally take a little longer — thanks for your patience.";
     const body = [
       heading("We got your message", ctx.brand),
       paragraph(
         `${greeting(vars.name)} thanks for reaching out${
           vars.topic ? ` about <strong>${escapeHtml(vars.topic)}</strong>` : ""
-        }. We'll reply to this email within one business day.`,
+        }. ${replyLine}`,
       ),
-      calloutBox(
-        `Your reference: <strong style="font-family:monospace;">${escapeHtml(vars.ref)}</strong>`,
-        ctx.brand,
+      calloutBox(escapeHtml(vars.message).replace(/\n/g, "<br/>"), ctx.brand),
+      paragraph(
+        `Your reference: <strong style="font-family:monospace;">${escapeHtml(vars.ref)}</strong> — mention it if you follow up and we'll find your message right away.`,
       ),
-      paragraph("Mention it if you follow up and we'll find your message right away."),
     ].join("\n");
     const text = `${greeting(vars.name)}\n\nThanks for reaching out${
       vars.topic ? ` about ${vars.topic}` : ""
-    }. We'll reply to this email within one business day.\n\nYour reference: ${vars.ref}\nMention it if you follow up and we'll find your message right away.`;
+    }. ${replyLine}\n\nYour message:\n${vars.message}\n\nYour reference: ${vars.ref}\nMention it if you follow up and we'll find your message right away.`;
     return assemble(ctx, subject, `We got your message · ${vars.ref}`, body, text);
   },
 

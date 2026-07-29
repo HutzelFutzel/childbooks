@@ -163,7 +163,7 @@ export function registerContactRoutes(app: Express): void {
         templateId: "contact_form_ack",
         to: email,
         dedupeKey: saved.ref,
-        vars: { name, ref: saved.ref, topic: meta.label },
+        vars: { name, ref: saved.ref, topic: meta.label, message },
       });
 
       // 9. Optional email copy, only if an inbox was explicitly configured.

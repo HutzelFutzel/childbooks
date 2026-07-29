@@ -197,7 +197,12 @@ export const EMAIL_TEMPLATE_REGISTRY: Registry = {
       "form a credible replacement for a published email address. Includes their reference.",
     category: "transactional",
     defaultSenderKey: "support",
-    sample: { name: "Jamie", ref: "CB-7F2A9C", topic: "Question about printing" },
+    sample: {
+      name: "Jamie",
+      ref: "CB-7F2A9C",
+      topic: "Question about printing",
+      message: "Hi! I'd love to know how long shipping takes to Germany. Thanks!",
+    },
   },
   policy_update: {
     id: "policy_update",

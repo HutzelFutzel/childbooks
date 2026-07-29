@@ -83,8 +83,8 @@ export function ContactForm({ privacyUrl, bare = false }: { privacyUrl?: string;
         </span>
         <h2 className="text-lg font-semibold text-ink-900">Message received</h2>
         <p className="max-w-sm text-sm text-ink-500">
-          We&apos;ll reply to <span className="font-medium text-ink-700">{email}</span>{" "}
-          within one business day.
+          We try to reply to <span className="font-medium text-ink-700">{email}</span> within 24
+          hours, but it can occasionally take a little longer.
         </p>
         {ref && (
           <p className="mt-1 text-sm text-ink-500">
