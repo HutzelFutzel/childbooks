@@ -584,6 +584,67 @@ export async function adminAdjustSparks(
 }
 
 /**
+ * Take back Sparks from a grant that shouldn't have happened (a referral reward
+ * whose purchase was refunded or disputed).
+ *
+ * Two rules make this safe to run automatically:
+ *   - It NEVER drives the balance below zero. Sparks already spent bought real
+ *     provider work; clawing them back would leave a legitimate refunder unable
+ *     to generate, which is a worse outcome than eating the loss.
+ *   - It's idempotent on `ref`, so a repeated refund webhook debits once.
+ *
+ * Returns how many Sparks were actually recovered (0 when they were all spent,
+ * or when this ref was already reversed).
+ */
+export async function reverseGrantedSparks(args: {
+  uid: string;
+  amount: number;
+  reason: string;
+  ref: string;
+}): Promise<number> {
+  if (args.amount <= 0) return 0;
+  ensureAdmin();
+  const userRef = db().doc(`users/${args.uid}`);
+  const ledgerRef = userRef.collection("sparksLedger").doc(`adjust_${args.ref}`);
+
+  const debited = await db().runTransaction(async (tx) => {
+    if ((await tx.get(ledgerRef)).exists) return 0;
+    const userSnap = await tx.get(userRef);
+    if (!userSnap.exists) return 0;
+    const lots = await readLots(tx, args.uid);
+    const current = (userSnap.get("sparkBalance") as number) ?? 0;
+    const recover = Math.min(args.amount, Math.max(0, current));
+    if (recover <= 0) return 0;
+    const balanceAfter = current - recover;
+    consumeLots(tx, args.uid, lots, recover);
+    tx.set(userRef, { sparkBalance: balanceAfter }, { merge: true });
+    tx.set(ledgerRef, {
+      type: "adjust",
+      amount: -recover,
+      balanceAfter,
+      reason: args.reason,
+      source: "adjust",
+      ref: args.ref,
+      at: Date.now(),
+    });
+    return recover;
+  });
+
+  if (debited > 0) {
+    await recordFinanceEvent({
+      category: "sparks",
+      kind: "sparkSpend",
+      amountUsd: 0,
+      uid: args.uid,
+      sparks: -debited,
+      ref: `adjust_${args.ref}`,
+      meta: { source: "adjust", reason: args.reason },
+    });
+  }
+  return debited;
+}
+
+/**
  * Deduct Sparks (allowed to dip into the negative buffer) + append a ledger
  * entry, consuming lots FIFO. Returns the paid/free breakdown of the spend.
  */

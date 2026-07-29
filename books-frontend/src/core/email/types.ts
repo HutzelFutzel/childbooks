@@ -29,6 +29,10 @@ export const EMAIL_TEMPLATE_IDS = [
   "gift_purchased",
   "gift_received",
   "gift_claimed",
+  "referral_invite",
+  "referral_invite_sent",
+  "referral_invite_accepted",
+  "referral_reminder",
   "referral_reward",
   "contact_form",
   "policy_update",
@@ -111,7 +115,60 @@ export interface EmailTemplateVarsMap {
   gift_purchased: { name?: string; sparks: number; code: string; recipientEmail?: string };
   gift_received: { sparks: number; code: string; message?: string; senderName?: string; claimUrl?: string };
   gift_claimed: { name?: string; sparks: number; balance?: number };
-  referral_reward: { name?: string; sparks: number; kind: "referrer" | "referred" };
+  /**
+   * The invitation itself, sent to an address the inviter typed. Person-to-person
+   * and one-off (with its own decline link, which suppresses the address
+   * permanently), so it's transactional rather than marketing — the same footing
+   * as `gift_received`, which also goes to someone who has no account yet.
+   *
+   * `benefit` is the frozen promise from the invitation's terms, never re-derived
+   * from the live config.
+   */
+  referral_invite: {
+    inviterName?: string;
+    benefit: string;
+    acceptUrl: string;
+    declineUrl: string;
+    message?: string;
+    expiresOn?: string;
+  };
+  /** Receipt for the inviter: what was promised, to whom, and their share link. */
+  referral_invite_sent: {
+    name?: string;
+    recipientEmail: string;
+    benefit: string;
+    inviteUrl: string;
+  };
+  /** The moment worth celebrating: someone accepted, here's what's still to come. */
+  referral_invite_accepted: {
+    name?: string;
+    friendName?: string;
+    benefit: string;
+    /** What still has to happen before the reward lands. */
+    pending?: string;
+  };
+  /** One nudge, sent once, to an invitation that was never opened. */
+  referral_reminder: {
+    inviterName?: string;
+    benefit: string;
+    acceptUrl: string;
+    declineUrl: string;
+    expiresOn?: string;
+  };
+  /**
+   * A reward landed. `benefit` describes it in words ("100 Sparks", "15% off your
+   * next book") because rewards are no longer only Sparks; `sparks`/`balance`
+   * stay optional so a Spark reward can still show the new balance.
+   */
+  referral_reward: {
+    name?: string;
+    kind: "referrer" | "referred";
+    benefit: string;
+    sparks?: number;
+    balance?: number;
+    /** How to use it, when the reward isn't simply added to the balance. */
+    howToUse?: string;
+  };
   /** Sent to the support inbox when a visitor submits the public contact form. */
   contact_form: { fromName: string; fromEmail: string; topic?: string; message: string };
   /**

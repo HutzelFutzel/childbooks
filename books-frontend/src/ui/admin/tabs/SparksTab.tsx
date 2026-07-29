@@ -41,6 +41,7 @@ export function SparksTab() {
   const baseCurrency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
   const save = useAppConfigStore((s) => s.saveSparksConfig);
   const openCatalog = useAdminTab((s) => s.openCatalog);
+  const setConfigTab = useAdminTab((s) => s.setConfigTab);
 
   const [draft, setDraft] = useState<SparksConfig>(stored);
   const [dirty, setDirty] = useState(false);
@@ -164,38 +165,19 @@ export function SparksTab() {
 
       <Section
         title="Referral rewards"
-        hint="Both sides get Sparks when the referred user makes their FIRST payment (any pack, order or subscription). Payment-gated so codes can't be farmed with throwaway accounts."
-        action={
-          <Toggle
-            checked={draft.referral.enabled}
-            onChange={(v) => set({ referral: { ...draft.referral, enabled: v } })}
-            label="Enable referrals"
-          />
-        }
+        hint="Invite-a-friend now lives under its own tab — rules, discounts, free months, impact math and funnel stats."
       >
-        <Grid cols={2}>
-          <NumberField
-            label="Referrer reward"
-            value={draft.referral.referrerSparks}
-            step="10"
-            suffix="✦"
-            onChange={(n) => set({ referral: { ...draft.referral, referrerSparks: n } })}
-          />
-          <NumberField
-            label="Referred-user reward"
-            value={draft.referral.referredSparks}
-            step="10"
-            suffix="✦"
-            onChange={(n) => set({ referral: { ...draft.referral, referredSparks: n } })}
-          />
-        </Grid>
-        <p className="text-[11px] text-ink-400">
-          Worst-case cost per successful referral:{" "}
-          {fmtMoney(
-            grantLiabilityUsd(draft, draft.referral.referrerSparks + draft.referral.referredSparks),
-            baseCurrency,
-          )}{" "}
-          in provider spend — paid only after the referred user has already paid you money.
+        <p className="text-[11px] text-ink-500">
+          The legacy Sparks-only knobs here are kept for backwards compatibility with older config docs; the live
+          program is configured under{" "}
+          <button
+            type="button"
+            className="font-semibold text-brand-700 underline"
+            onClick={() => setConfigTab("referrals")}
+          >
+            Referrals
+          </button>
+          .
         </p>
       </Section>
 

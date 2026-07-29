@@ -145,17 +145,122 @@ export async function sendGiftClaimedEmail(args: {
   });
 }
 
+/**
+ * The invitation email. Sent to an address that may not have an account, so the
+ * recipient is an explicit `to` and the dedupe key is the invitation — one
+ * invitation, one email, however many times the send path retries.
+ */
+export async function sendReferralInviteEmail(args: {
+  to: string;
+  inviterName?: string | null;
+  benefit: string;
+  acceptUrl: string;
+  declineUrl: string;
+  message?: string | null;
+  expiresOn?: string | null;
+  invitationId: string;
+}): Promise<boolean> {
+  const result = await sendTemplatedEmail({
+    templateId: "referral_invite",
+    to: args.to,
+    vars: {
+      inviterName: args.inviterName ?? undefined,
+      benefit: args.benefit,
+      acceptUrl: args.acceptUrl,
+      declineUrl: args.declineUrl,
+      message: args.message ?? undefined,
+      expiresOn: args.expiresOn ?? undefined,
+    },
+    dedupeKey: `invite_${args.invitationId}`,
+  });
+  return result.ok;
+}
+
+/** The one reminder an unopened invitation ever gets. */
+export async function sendReferralReminderEmail(args: {
+  to: string;
+  inviterName?: string | null;
+  benefit: string;
+  acceptUrl: string;
+  declineUrl: string;
+  expiresOn?: string | null;
+  invitationId: string;
+}): Promise<boolean> {
+  const result = await sendTemplatedEmail({
+    templateId: "referral_reminder",
+    to: args.to,
+    vars: {
+      inviterName: args.inviterName ?? undefined,
+      benefit: args.benefit,
+      acceptUrl: args.acceptUrl,
+      declineUrl: args.declineUrl,
+      expiresOn: args.expiresOn ?? undefined,
+    },
+    dedupeKey: `reminder_${args.invitationId}`,
+  });
+  return result.ok;
+}
+
+/** Receipt to the inviter, so both sides know what was promised. */
+export async function sendReferralInviteSentEmail(args: {
+  uid: string;
+  recipientEmail: string;
+  benefit: string;
+  inviteUrl: string;
+  invitationId: string;
+}): Promise<void> {
+  await sendTemplatedEmail({
+    templateId: "referral_invite_sent",
+    uid: args.uid,
+    vars: { recipientEmail: args.recipientEmail, benefit: args.benefit, inviteUrl: args.inviteUrl },
+    dedupeKey: `invite_sent_${args.invitationId}`,
+  });
+}
+
+export async function sendReferralAcceptedEmail(args: {
+  uid: string;
+  friendName?: string | null;
+  benefit: string;
+  pending?: string | null;
+  invitationId: string;
+}): Promise<void> {
+  await sendTemplatedEmail({
+    templateId: "referral_invite_accepted",
+    uid: args.uid,
+    vars: {
+      friendName: args.friendName ?? undefined,
+      benefit: args.benefit,
+      pending: args.pending ?? undefined,
+    },
+    dedupeKey: `accepted_${args.invitationId}`,
+  });
+}
+
+/**
+ * A granted reward. `benefit` is the frozen description ("100 Sparks", "15% off
+ * your next book"), and `rewardId` is the dedupe key — the same id the reward
+ * document uses, so a re-run can't re-notify.
+ */
 export async function sendReferralRewardEmail(args: {
   uid: string;
-  sparks: number;
   kind: "referrer" | "referred";
-  refUid: string;
+  benefit: string;
+  sparks?: number;
+  balance?: number;
+  howToUse?: string;
+  rewardId: string;
 }): Promise<void> {
   await sendTemplatedEmail({
     templateId: "referral_reward",
     uid: args.uid,
-    vars: { sparks: args.sparks, kind: args.kind },
-    dedupeKey: `referral_${args.refUid}_${args.kind}`,
+    vars: {
+      kind: args.kind,
+      benefit: args.benefit,
+      sparks: args.sparks,
+      balance: args.balance,
+      howToUse: args.howToUse,
+    },
+    dedupeKey: args.rewardId,
   });
 }
 

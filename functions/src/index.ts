@@ -56,6 +56,10 @@ export { onBeforeCreate, onBeforeSignIn } from "./analyticsEvents";
 // funnel leakage, open alerts) for the day that just ended.
 export { sendDailySummary } from "./dailySummary";
 
+// Hourly referral-invitation sweep: the one reminder an untouched invitation
+// gets, and the expiry flip for invitations that timed out.
+export { sweepReferralInvitations } from "./referrals/job";
+
 export const api = onRequest(
   {
     // Image generation can take a while; allow generous time + memory.

@@ -18,6 +18,7 @@ export type ConfigTabId =
   | "catalog" // things you sell once: print books, the ebook, Spark packs
   | "memberships" // subscription plans (incl. member ebook pricing)
   | "sparks" // the Sparks economy internals (peg, grants, action pricing)
+  | "referrals" // invite-a-friend program (rules, impact, funnel)
   | "financial" // currencies, FX, fees, rounding, tax — the money plumbing
   | "discounts" // sale planner: per-item break-even & safe max discount + slider
   // AI pipeline group.
@@ -52,7 +53,7 @@ export const CONFIG_GROUPS: {
   {
     id: "business",
     label: "Business",
-    tabs: ["overview", "catalog", "memberships", "sparks", "financial", "discounts"],
+    tabs: ["overview", "catalog", "memberships", "sparks", "referrals", "financial", "discounts"],
   },
   {
     id: "ai",

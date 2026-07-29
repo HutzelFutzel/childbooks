@@ -77,13 +77,21 @@ service cloud.firestore {
     }
 
     // Referral attribution + reward state are backend-authoritative too (set
-    // via /account/referral routes and the Stripe webhook). A client patching
-    // its own profile must never introduce or alter them.
+    // via /referrals/* routes and the Stripe webhook). A client patching its
+    // own profile must never introduce or alter them.
+    //
+    // `referralRewardCount` is the one the lifetime cap reads, so a client that
+    // could reset it would grant itself unlimited rewarded referrals;
+    // `firstBookCompletedAt` is what makes the activation trigger fire once.
     function referralFieldsUnchanged() {
       return fieldUnchanged('referralCode')
         && fieldUnchanged('referredBy')
         && fieldUnchanged('referredAt')
-        && fieldUnchanged('referralRewardedAt');
+        && fieldUnchanged('referralInvitationId')
+        && fieldUnchanged('referralRewardedAt')
+        && fieldUnchanged('referralRewardCount')
+        && fieldUnchanged('referredAsGuest')
+        && fieldUnchanged('firstBookCompletedAt');
     }
 
     function fieldUnchanged(f) {

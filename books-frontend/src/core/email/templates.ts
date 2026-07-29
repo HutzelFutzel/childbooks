@@ -254,20 +254,138 @@ export const RENDERERS: { [Id in keyof EmailTemplateVarsMap]: TemplateRenderer<I
     return assemble(ctx, subject, "Gift redeemed", body, text);
   },
 
+  referral_invite: (vars, ctx) => {
+    const from = vars.inviterName ? escapeHtml(vars.inviterName) : "A friend";
+    const subject = `${from} invited you to make a picture book`;
+    const body = [
+      heading("You've been invited", ctx.brand),
+      paragraph(
+        `${from} thinks you'd love ${escapeHtml(ctx.brand.brandName)} — write, illustrate and print your own ` +
+          `children's picture book, with characters that stay themselves from page to page.`,
+      ),
+      vars.message ? calloutBox(`"${escapeHtml(vars.message)}"`, ctx.brand) : "",
+      vars.benefit
+        ? calloutBox(`Your welcome gift: <strong>${escapeHtml(vars.benefit)}</strong>.`, ctx.brand)
+        : "",
+      button("Accept the invitation", vars.acceptUrl, ctx.brand),
+      vars.expiresOn ? paragraph(`This invitation is good until ${escapeHtml(vars.expiresOn)}.`) : "",
+      // The decline link is the whole compliance story for an email to someone
+      // who never signed up: one click and we never write to them again.
+      paragraph(
+        `Not interested? <a href="${escapeHtml(vars.declineUrl)}" style="color:#64748b;">Decline this invitation</a> ` +
+          `and we won't email you about ${escapeHtml(ctx.brand.brandName)} again.`,
+      ),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const text = [
+      `${vars.inviterName ?? "A friend"} invited you to make a picture book on ${ctx.brand.brandName}.`,
+      vars.message ? `\n"${vars.message}"` : "",
+      vars.benefit ? `\nYour welcome gift: ${vars.benefit}.` : "",
+      `\nAccept: ${vars.acceptUrl}`,
+      vars.expiresOn ? `This invitation is good until ${vars.expiresOn}.` : "",
+      `\nNot interested? Decline (and never hear from us again): ${vars.declineUrl}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    return assemble(ctx, subject, `${vars.inviterName ?? "A friend"} invited you`, body, text);
+  },
+
+  referral_invite_sent: (vars, ctx) => {
+    const subject = `Your invitation to ${vars.recipientEmail} is on its way`;
+    const body = [
+      heading("Invitation sent", ctx.brand),
+      paragraph(`${greeting(vars.name)} we've emailed your invitation to ${escapeHtml(vars.recipientEmail)}.`),
+      vars.benefit
+        ? calloutBox(`Your reward: <strong>${escapeHtml(vars.benefit)}</strong>.`, ctx.brand)
+        : "",
+      paragraph("You can also share your personal link with anyone else — it works the same way:"),
+      calloutBox(`<span style="word-break:break-all;">${escapeHtml(vars.inviteUrl)}</span>`, ctx.brand),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const text = `${greeting(vars.name)}\n\nYour invitation to ${vars.recipientEmail} is on its way.${
+      vars.benefit ? `\nYour reward: ${vars.benefit}.` : ""
+    }\n\nYour personal link: ${vars.inviteUrl}`;
+    return assemble(ctx, subject, "Invitation sent", body, text);
+  },
+
+  referral_invite_accepted: (vars, ctx) => {
+    const who = vars.friendName ? escapeHtml(vars.friendName) : "Someone you invited";
+    const subject = `${vars.friendName ?? "Your friend"} joined ${ctx.brand.brandName}`;
+    const body = [
+      heading("Your friend joined!", ctx.brand),
+      paragraph(`${greeting(vars.name)} ${who} accepted your invitation — lovely.`),
+      vars.benefit
+        ? calloutBox(
+            `<strong>${escapeHtml(vars.benefit)}</strong>${
+              vars.pending ? ` — it lands after ${escapeHtml(vars.pending)}.` : "."
+            }`,
+            ctx.brand,
+          )
+        : "",
+      button("Invite someone else", `${ctx.brand.siteUrl}/studio?invite=1`, ctx.brand),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const text = `${greeting(vars.name)}\n\n${vars.friendName ?? "Someone you invited"} accepted your invitation.${
+      vars.benefit ? `\n${vars.benefit}${vars.pending ? ` — it lands after ${vars.pending}.` : "."}` : ""
+    }\n\nInvite someone else: ${ctx.brand.siteUrl}/studio?invite=1`;
+    return assemble(ctx, subject, "Your friend joined", body, text);
+  },
+
+  referral_reminder: (vars, ctx) => {
+    const from = vars.inviterName ? escapeHtml(vars.inviterName) : "A friend";
+    const subject = `Still time to accept ${vars.inviterName ?? "your friend"}'s invitation`;
+    const body = [
+      heading("Your invitation is still open", ctx.brand),
+      paragraph(`${from} invited you to make a picture book on ${escapeHtml(ctx.brand.brandName)}.`),
+      vars.benefit ? calloutBox(`Your welcome gift: <strong>${escapeHtml(vars.benefit)}</strong>.`, ctx.brand) : "",
+      button("Accept the invitation", vars.acceptUrl, ctx.brand),
+      vars.expiresOn ? paragraph(`After ${escapeHtml(vars.expiresOn)} the invitation expires.`) : "",
+      paragraph(
+        `This is the only reminder we'll send. You can also ` +
+          `<a href="${escapeHtml(vars.declineUrl)}" style="color:#64748b;">decline</a> to hear nothing further.`,
+      ),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const text = [
+      `${vars.inviterName ?? "A friend"} invited you to make a picture book on ${ctx.brand.brandName}.`,
+      vars.benefit ? `Your welcome gift: ${vars.benefit}.` : "",
+      `Accept: ${vars.acceptUrl}`,
+      vars.expiresOn ? `After ${vars.expiresOn} the invitation expires.` : "",
+      `This is the only reminder we'll send. Decline: ${vars.declineUrl}`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    return assemble(ctx, subject, "Your invitation is still open", body, text);
+  },
+
   referral_reward: (vars, ctx) => {
-    const subject = `You earned ${sparks(vars.sparks)}`;
+    const subject = `You earned ${vars.benefit}`;
     const reason =
       vars.kind === "referrer"
-        ? "Someone you invited just made their first purchase — thank you for spreading the word!"
-        : "Welcome! Here's a little something to get you started, thanks to your friend's invite.";
+        ? "Someone you invited hit a milestone — thank you for spreading the word!"
+        : "Welcome! Here's the reward from your friend's invitation.";
     const body = [
-      heading("You earned Sparks!", ctx.brand),
+      heading("Your reward is here", ctx.brand),
       paragraph(`${greeting(vars.name)} ${reason}`),
-      calloutBox(`<strong>${sparks(vars.sparks)}</strong> have been added to your account.`, ctx.brand),
+      calloutBox(
+        `<strong>${escapeHtml(vars.benefit)}</strong>${
+          vars.balance != null ? `<br/>New balance: <strong>${sparks(vars.balance)}</strong>` : ""
+        }`,
+        ctx.brand,
+      ),
+      vars.howToUse ? paragraph(escapeHtml(vars.howToUse)) : "",
       button("Start creating", `${ctx.brand.siteUrl}/studio`, ctx.brand),
-    ].join("\n");
-    const text = `${greeting(vars.name)}\n\n${reason}\n${sparks(vars.sparks)} added to your account.\n\nStudio: ${ctx.brand.siteUrl}/studio`;
-    return assemble(ctx, subject, "You earned Sparks", body, text);
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const text = `${greeting(vars.name)}\n\n${reason}\n${vars.benefit}${
+      vars.balance != null ? `\nNew balance: ${sparks(vars.balance)}` : ""
+    }${vars.howToUse ? `\n${vars.howToUse}` : ""}\n\nStudio: ${ctx.brand.siteUrl}/studio`;
+    return assemble(ctx, subject, "Your reward is here", body, text);
   },
 
   contact_form: (vars, ctx) => {

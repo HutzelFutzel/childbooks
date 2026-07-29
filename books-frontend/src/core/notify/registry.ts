@@ -21,6 +21,7 @@ export const SLACK_MESSAGE_IDS = [
   "purchase",
   "subscription_started",
   "subscription_cancelled",
+  "referral_accepted",
   "referral_paid",
   "contact_form",
   "admin_alert",
@@ -65,10 +66,16 @@ export const SLACK_MESSAGE_REGISTRY: Record<SlackMessageKey, SlackMessageMeta> =
     description: "Posted to #growth when a subscription is cancelled.",
     channel: "growth",
   },
+  referral_accepted: {
+    id: "referral_accepted",
+    label: "Referral accepted",
+    description: "Posted to #growth when someone joins through an invitation — the referral funnel's leading signal.",
+    channel: "growth",
+  },
   referral_paid: {
     id: "referral_paid",
     label: "Referral paid out",
-    description: "Posted to #growth when a referral reward is paid after a first purchase.",
+    description: "Posted to #growth when a referral reward is granted to either side.",
     channel: "growth",
   },
   contact_form: {

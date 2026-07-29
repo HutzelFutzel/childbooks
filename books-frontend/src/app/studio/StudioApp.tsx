@@ -40,7 +40,8 @@ import { ImageTierControl } from "@/ui/settings/ImageTierControl";
 import { useAccountUiStore } from "@/state/accountUiStore";
 import { useCheckoutUiStore, type PurchaseKind } from "@/state/checkoutUiStore";
 import { PurchaseConfirmation } from "@/ui/checkout/PurchaseConfirmation";
-import { claimReferralCode } from "@/platform/payments";
+import { claimPendingReferral, rememberReferralCode } from "@/platform/referrals";
+import { InviteFriendsDialog } from "@/ui/referrals/InviteFriendsDialog";
 import { notify } from "@/ui/lib/notify";
 
 export default function StudioApp() {
@@ -74,6 +75,9 @@ export default function StudioApp() {
   const closeOrders = useAccountUiStore((s) => s.closeOrders);
   const downloadsOpen = useAccountUiStore((s) => s.downloadsOpen);
   const closeDownloads = useAccountUiStore((s) => s.closeDownloads);
+  const inviteOpen = useAccountUiStore((s) => s.inviteOpen);
+  const closeInvite = useAccountUiStore((s) => s.closeInvite);
+  const openInvite = useAccountUiStore((s) => s.openInvite);
   const openConfirmation = useCheckoutUiStore((s) => s.openConfirmation);
 
   useEffect(() => {
@@ -167,15 +171,12 @@ export default function StudioApp() {
     const projectId = params.get("project");
     const ref = params.get("ref");
     const hero = params.get("hero");
-    // A referral landing (`?ref=CODE`) is remembered and claimed once the
-    // visitor has a full account (see the claim effect below).
-    if (ref) {
-      try {
-        localStorage.setItem("pendingReferralCode", ref);
-      } catch {
-        /* storage unavailable — the invite just doesn't stick */
-      }
-    }
+    const invite = params.get("invite");
+    // A referral landing (`?ref=CODE`) is remembered until there's an identity to
+    // attach it to (see the claim effect below).
+    if (ref) rememberReferralCode(ref);
+    // `?invite=1` — where the "invite someone else" button in our own emails lands.
+    if (invite) openInvite();
     // A landing-page on-ramp (`?hero=Name`) is remembered until the guest
     // session + project list are ready, then a storybook is created for them.
     if (hero) {
@@ -185,7 +186,7 @@ export default function StudioApp() {
         /* storage unavailable — they just land on the library */
       }
     }
-    if (!checkout && !subscription && !sparks && !gift && !ebook && !ref && !hero) return;
+    if (!checkout && !subscription && !sparks && !gift && !ebook && !ref && !hero && !invite) return;
 
     const success: PurchaseKind | null =
       checkout === "success"
@@ -221,9 +222,10 @@ export default function StudioApp() {
     }
     params.delete("ref");
     params.delete("hero");
+    params.delete("invite");
     const qs = params.toString();
     window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
-  }, [openConfirmation]);
+  }, [openConfirmation, openInvite]);
 
   // Fulfil the landing-page on-ramp: once the (guest) session and project list
   // are ready, create the promised storybook and drop the visitor straight into
@@ -247,29 +249,16 @@ export default function StudioApp() {
     void createProject(`${heroName}'s Storybook`);
   }, [uid, projectsLoaded, accessLevel, createProject]);
 
-  // Claim a remembered referral code once the user has a full account. The
-  // backend rejects self-referrals/stale accounts softly; clearing on any
-  // attempt keeps this one-shot.
+  // Attach a remembered referral code to whatever identity exists NOW — guest
+  // included. Attribution has to happen while the invite link is still the reason
+  // this person is here; the reward triggers are what stay gated on proof. Re-runs
+  // on every identity change (guest → account) until the backend gives a final
+  // answer, which is what makes a two-session signup still count.
   useEffect(() => {
-    if (!uid || accessLevel !== "full") return;
-    let pending: string | null = null;
-    try {
-      pending = localStorage.getItem("pendingReferralCode");
-    } catch {
-      return;
-    }
-    if (!pending) return;
-    try {
-      localStorage.removeItem("pendingReferralCode");
-    } catch {
-      /* ignore */
-    }
-    void claimReferralCode(pending).then((ok) => {
-      if (ok) {
-        notify.success(
-          "Invite accepted",
-          "You'll both receive bonus Sparks after your first purchase.",
-        );
+    if (!uid || accessLevel === "loading") return;
+    void claimPendingReferral().then((outcome) => {
+      if (outcome === "attributed") {
+        notify.success("Invite accepted", "Your friend's invitation is linked to your account.");
       }
     });
   }, [uid, accessLevel]);
@@ -363,6 +352,11 @@ export default function StudioApp() {
       <PlansDialog />
       {accessLevel === "full" && <OrdersDialog open={ordersOpen} onClose={closeOrders} />}
       {accessLevel === "full" && <DownloadsDialog open={downloadsOpen} onClose={closeDownloads} />}
+      {/* Unverified accounts see the offer too — the dialog explains what they
+          still need to do rather than hiding the feature until they do it. */}
+      {accessLevel !== "loading" && accessLevel !== "guest" && (
+        <InviteFriendsDialog open={inviteOpen} onClose={closeInvite} />
+      )}
       <SettingsDialog />
       <ImageTierPromptDialog />
       <PurchaseConfirmation />

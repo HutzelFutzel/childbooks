@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { BookOpen, CreditCard, Sparkles, Tablet, Coins, ArrowRight, Percent } from "lucide-react";
+import { BookOpen, CreditCard, Sparkles, Tablet, Coins, ArrowRight, Percent, Users } from "lucide-react";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { sparkUnitEconomics } from "../../../core/config/economics";
 import {
@@ -9,6 +9,7 @@ import {
   storewideSafeDiscount,
   DISCOUNT_ITEM_LABELS,
 } from "../../../core/config/discountImpact";
+import { freezeTerms, inviteTeaser } from "../../../core/config/referral";
 import type { ProductDefinition } from "../../../core/config/products";
 import { useAdminTab } from "../adminTabStore";
 import { ConfigHealthPanel } from "./ConfigHealthPanel";
@@ -26,6 +27,7 @@ export function BusinessOverviewTab() {
   const products = useAppConfigStore((s) => s.products.products);
   const pricing = useAppConfigStore((s) => s.pricingSettings);
   const sparks = useAppConfigStore((s) => s.sparks);
+  const referral = useAppConfigStore((s) => s.referral);
   const loadAdminProducts = useAppConfigStore((s) => s.loadAdminProducts);
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
   const openCatalog = useAdminTab((s) => s.openCatalog);
@@ -207,6 +209,34 @@ export function BusinessOverviewTab() {
                 "Grant ladder",
                 `${(sparks.grants.guestSparks + sparks.grants.signupBonusSparks + sparks.grants.verifyBonusSparks).toLocaleString()} ✦`,
                 "Free Sparks a fully-verified new user receives.",
+              ],
+            ]}
+          />
+        )}
+      </OverviewCard>
+
+      {/* Referrals */}
+      <OverviewCard
+        icon={<Users className="size-4" />}
+        title="Referrals"
+        subtitle="Invite-a-friend rewards — terms freeze onto each invitation when sent"
+        onEdit={() => setConfigTab("referrals")}
+        editLabel="Edit referrals"
+      >
+        {!referral.enabled ? (
+          <Empty>The referral program is off. Turn it on under Referrals.</Empty>
+        ) : (
+          <Table
+            head={["Setting", "Value"]}
+            rows={[
+              ["Status", "On"],
+              ["Live offer", inviteTeaser(freezeTerms(referral))],
+              ["Enabled rules", String(referral.rules.filter((r) => r.enabled).length)],
+              [
+                "Daily payout budget",
+                referral.limits.dailyBudgetAmount > 0
+                  ? fmtMoney(referral.limits.dailyBudgetAmount, base)
+                  : "Uncapped",
               ],
             ]}
           />

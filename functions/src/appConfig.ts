@@ -134,6 +134,12 @@ import {
   normalizeCookieConfig,
   type CookieConfig,
 } from "../../books-frontend/src/core/config/cookieConfig";
+import {
+  normalizeReferralConfig,
+  referralConfigFromLegacy,
+  referralConfigSchema,
+  type ReferralConfig,
+} from "../../books-frontend/src/core/config/referral";
 
 const MODELS_DOC = "appConfig/models";
 const ART_STYLES_DOC = "appConfig/artStyles";
@@ -143,6 +149,7 @@ const MODEL_COSTS_DOC = "appConfig/modelCosts";
 const MODEL_COSTS_PUBLIC_DOC = "appConfig/modelCostsPublic";
 const PRICING_SETTINGS_DOC = "appConfig/pricingSettings";
 const SPARKS_DOC = "appConfig/sparks";
+const REFERRAL_DOC = "appConfig/referral";
 const BRANDING_DOC = "appConfig/branding";
 const SEO_DOC = "appConfig/seo";
 const SITE_IMAGES_DOC = "appConfig/siteImages";
@@ -220,6 +227,20 @@ export function getPricingSettings(): Promise<PricingSettings> {
 }
 export function getSparksConfig(): Promise<SparksConfig> {
   return readDoc(SPARKS_DOC, normalizeSparksConfig);
+}
+
+/**
+ * The referral program config. Deployments that configured the OLD payment-gated
+ * referral (`sparks.referral`) before the rules engine existed have no
+ * `appConfig/referral` doc yet — those keep paying exactly the rewards they were
+ * configured for, projected onto an equivalent single-rule program, until an
+ * admin saves the new one.
+ */
+export async function getReferralConfig(): Promise<ReferralConfig> {
+  const stored = await readDoc(REFERRAL_DOC, (raw) => (raw === undefined ? null : normalizeReferralConfig(raw)));
+  if (stored) return stored;
+  const sparks = await getSparksConfig();
+  return referralConfigFromLegacy(sparks.referral);
 }
 export function getBrandingConfig(): Promise<BrandingConfig> {
   return readDoc(BRANDING_DOC, normalizeBrandingConfig);
@@ -445,6 +466,14 @@ export async function saveSparksConfig(input: unknown): Promise<SparksConfig> {
   const parsed = sparksConfigSchema.parse(input);
   const normalized = normalizeSparksConfig(parsed);
   await writeDoc(SPARKS_DOC, normalized);
+  return normalized;
+}
+
+/** Validate + persist the referral program (world-readable appConfig doc). */
+export async function saveReferralConfig(input: unknown): Promise<ReferralConfig> {
+  const parsed = referralConfigSchema.parse(input);
+  const normalized = normalizeReferralConfig(parsed);
+  await writeDoc(REFERRAL_DOC, normalized);
   return normalized;
 }
 

@@ -8,6 +8,9 @@
  *   *    /print/*                  print fulfillment endpoints      (verified)
  *   POST /print-webhook           provider status callback         (HMAC-signed)
  *   POST /internal/print/sync     pull order status                (emulator only)
+ *   GET  /invite/preview          what an invitation promises      (open)
+ *   POST /invite/decline          opt an address out for good      (open)
+ *   *    /referrals/*             invite, accept, overview         (any identity)
  *   *    /admin/print/webhooks    status-webhook management        (admin)
  *   POST /admin/print/sync        pull order status now            (admin)
  *
@@ -40,6 +43,7 @@ import { registerEmailWebhookRoute } from "./email/webhook";
 import { registerContactRoutes } from "./contact";
 import { registerBlogRoutes } from "./blog";
 import { registerBlogStatsAdminRoutes, registerBlogTrackingRoute } from "./blogStats";
+import { registerReferralPublicRoutes, registerReferralUserRoutes } from "./referrals/routes";
 
 export function createApp(): Express {
   const app = express();
@@ -85,6 +89,10 @@ export function createApp(): Express {
   // reach it; it only writes anonymous aggregates (see blogStats.ts).
   registerBlogTrackingRoute(app);
 
+  // Invitation preview + decline — tokenless by necessity: the invited person has
+  // no account, and the decline link is the program's whole opt-out story.
+  registerReferralPublicRoutes(app);
+
   // Protected surfaces — registered before their route handlers so the guard
   // runs first. Fulfillment + payments require a verified, non-anonymous
   // account; `/ai` only requires *some* authenticated identity (guests and
@@ -102,6 +110,11 @@ export function createApp(): Express {
   // Post-signup welcome + email verification: signed-in but NOT-yet-verified
   // accounts must reach these (verifying is the point), so `requireAuth` only.
   app.use("/auth", requireAuth);
+  // Referrals: any signed-in identity, guests included. Accepting an invitation
+  // has to work at the guest stage (that's when the link is followed) and the
+  // invite screen explains what's still missing rather than 403-ing, so the
+  // stricter checks live in the handlers.
+  app.use("/referrals", requireAuth);
   app.use("/admin", requireVerified, requireAdmin);
 
   registerLuluRoutes(app);
@@ -123,6 +136,7 @@ export function createApp(): Express {
   registerAnalyticsRoutes(app);
   registerStripeUserRoutes(app);
   registerStripeAdminRoutes(app);
+  registerReferralUserRoutes(app);
 
   return app;
 }

@@ -39,6 +39,7 @@ import type {
   PricingSettings,
   ProductDefinition,
 } from "../../books-frontend/src/core/config/products";
+import type { DiscountItemType } from "../../books-frontend/src/core/config/discountImpact";
 import {
   findProductForSku,
   planMeetsAccess,
@@ -107,7 +108,17 @@ import {
 } from "../../books-frontend/src/core/analytics/markets";
 import { raiseAlert } from "./alerts";
 import { notifySlack, money } from "./notify";
-import { claimReferralCode, ensureReferralCode, maybeRewardReferral } from "./referrals";
+import {
+  clawbackForRef,
+  discountedAmount,
+  effectivePercentOff,
+  finalizeDiscountsForPayment,
+  findRedeemableDiscount,
+  onReferralEvent,
+  onSubscriptionInvoicePaid,
+  planDiscountCoupon,
+  reserveDiscount,
+} from "./referrals";
 import { claimGift, createPaidGift, listGiftsBought, newGiftCode } from "./gifts";
 import {
   intervalForPriceId,
@@ -173,6 +184,44 @@ interface CheckoutBody {
 
 function clientError(res: Response, message: string, status = 400): void {
   res.status(status).json({ error: { message } });
+}
+
+/**
+ * An earned referral discount to apply to this purchase, already reserved for
+ * `paymentId` — or null when the buyer has none, or none that can be honored.
+ *
+ * Two clamps make it safe to hand a percentage to a customer months after the
+ * program was configured: the catalog-wide `maxDiscountPct`, and whatever
+ * headroom is left below break-even after the buyer's plan discount. If those
+ * leave nothing, no reward is consumed — a discount that would have to be
+ * silently reduced to 0 is better saved for a purchase that can carry it.
+ */
+async function earnedReferralDiscount(args: {
+  uid: string;
+  itemType: DiscountItemType;
+  paymentId: string;
+  settings: PricingSettings;
+  /** Amount the discount would come off (for the cost bookkeeping). */
+  amount: number;
+  /** Discount % the buyer's plan already applied. */
+  appliedPct?: number;
+  /** Deepest TOTAL discount that still breaks even (default: unbounded). */
+  breakEvenPct?: number;
+}): Promise<{ percentOff: number; summary: string } | null> {
+  try {
+    const earned = await findRedeemableDiscount(args.uid, args.itemType);
+    if (!earned) return null;
+    const headroom = Math.max(0, (args.breakEvenPct ?? 100) - (args.appliedPct ?? 0));
+    const percentOff = Math.min(effectivePercentOff(earned.percentOff, args.settings), headroom);
+    if (percentOff <= 0) return null;
+    const discount = args.amount - discountedAmount(args.amount, percentOff);
+    if (!(await reserveDiscount(earned.rewardId, args.paymentId, discount))) return null;
+    return { percentOff, summary: earned.summary };
+  } catch (err) {
+    // A referral perk must never be the reason a purchase can't be started.
+    console.warn("[stripe] referral discount lookup failed", err);
+    return null;
+  }
 }
 
 /**
@@ -279,6 +328,12 @@ interface RetailPriceResult {
   listUnitPrice: number;
   /** Applied plan discount (already clamped to break-even). */
   discountPct: number;
+  /**
+   * The deepest TOTAL discount on the book price that still breaks even. An
+   * earned referral discount stacks on top of the plan discount only as far as
+   * this allows.
+   */
+  breakEvenDiscountPct: number;
   shippingCharged: number;
   /**
    * What the print provider's address validation said about the destination.
@@ -434,6 +489,7 @@ async function priceRetailOrder(args: RetailPriceArgs): Promise<RetailPriceResul
     unitPrice,
     listUnitPrice: margin.pricePerUnit,
     discountPct,
+    breakEvenDiscountPct: margin.breakEvenDiscountPct,
     shippingCharged,
     addressValidation: live.addressValidation,
     estimatedCost,
@@ -475,7 +531,14 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
   });
   if (refusal) return { ok: false, error: refusal };
 
-  const { unitPrice, shippingCharged, estimatedCost, addressValidation } = await priceRetailOrder({
+  const {
+    unitPrice: planPrice,
+    shippingCharged,
+    estimatedCost,
+    addressValidation,
+    discountPct,
+    breakEvenDiscountPct,
+  } = await priceRetailOrder({
     product,
     variant,
     printSku,
@@ -489,9 +552,24 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     address: recipient.address,
   });
 
-  if (unitPrice <= 0) {
+  if (planPrice <= 0) {
     return { ok: false, error: "This product isn't priced for ordering yet." };
   }
+
+  // The payment id is minted here (rather than just before the session) because
+  // an earned discount is RESERVED against it — the reservation is what makes the
+  // reward single-use across an abandoned checkout.
+  const paymentId = randomUUID();
+  const referral = await earnedReferralDiscount({
+    uid,
+    itemType: "print",
+    paymentId,
+    settings,
+    amount: planPrice * copies,
+    appliedPct: discountPct,
+    breakEvenPct: breakEvenDiscountPct,
+  });
+  const unitPrice = referral ? discountedAmount(planPrice, referral.percentOff) : planPrice;
 
   // The provider downloads the print files LATER, on its own schedule, so a URL
   // it can't fetch comes back as a rejected job with the customer already
@@ -536,7 +614,6 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     };
   }
 
-  const paymentId = randomUUID();
   const customerId = await ensureCustomer(uid, args.email);
 
   const taxBehavior = settings.tax.perCurrency[currency]?.behavior ?? "exclusive";
@@ -552,7 +629,12 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
         tax_behavior: hasTax ? taxBehavior : undefined,
         product_data: {
           name: product.presentation.name,
-          description: product.presentation.tagline || undefined,
+          // The reward is spelled out on the line item, because a price that's
+          // quietly lower than the storefront's reads as a bug to the buyer.
+          description:
+            [product.presentation.tagline || null, referral ? `Invite reward applied: ${referral.summary}` : null]
+              .filter(Boolean)
+              .join(" · ") || undefined,
           tax_code: taxCode,
           metadata: { sku: printSku },
         },
@@ -1028,6 +1110,17 @@ export function registerStripeUserRoutes(app: Express): void {
       const taxCode = settings.ebook.taxCode;
       const hasTax = Boolean(taxCode);
 
+      // The digital edition has no unit cost to protect, so the only clamp that
+      // matters is the catalog-wide maximum discount.
+      const referral = await earnedReferralDiscount({
+        uid,
+        itemType: "ebook",
+        paymentId,
+        settings,
+        amount: quote.price,
+      });
+      const price = referral ? discountedAmount(quote.price, referral.percentOff) : quote.price;
+
       const session = await createCheckoutSession({
         mode: "payment",
         customer: customerId,
@@ -1039,7 +1132,7 @@ export function registerStripeUserRoutes(app: Express): void {
             quantity: 1,
             price_data: {
               currency: currency.toLowerCase(),
-              unit_amount: toMinor(quote.price, currency),
+              unit_amount: toMinor(price, currency),
               tax_behavior: hasTax ? taxBehavior : undefined,
               product_data: {
                 name: `${title} — digital edition (PDF)`,
@@ -1049,6 +1142,7 @@ export function registerStripeUserRoutes(app: Express): void {
                     quote.discountPct > 0
                       ? `Includes your ${quote.discountPct}% print-owner discount.`
                       : null,
+                    referral ? `Invite reward applied: ${referral.summary}.` : null,
                   ]
                     .filter(Boolean)
                     .join(" ") || undefined,
@@ -1074,13 +1168,13 @@ export function registerStripeUserRoutes(app: Express): void {
         paymentId,
         uid,
         kind: "ebook",
-        amount: quote.price,
+        amount: price,
         currency,
         description: `${title} — digital edition`,
         stripeSessionId: session.id,
         stripeCustomerId: customerId,
         ebook,
-        items: [{ label: `${title} — digital edition (PDF)`, amount: quote.price, quantity: 1 }],
+        items: [{ label: `${title} — digital edition (PDF)`, amount: price, quantity: 1 }],
       });
 
       res.json({ url: session.url, paymentId });
@@ -1239,6 +1333,10 @@ export function registerStripeUserRoutes(app: Express): void {
       }
 
       const customerId = await ensureCustomer(uid, req.authToken?.email);
+      // Membership is the one place a referral discount has to be a real Stripe
+      // coupon: Stripe generates the invoice, so we can't just quote less.
+      const subscriptionRef = randomUUID();
+      const referral = await planDiscountCoupon(uid, subscriptionRef);
       // `createCheckoutSession` retries without automatic tax if Stripe Tax
       // isn't activated, so subscriptions collect tax when possible but never
       // hard-fail because of tax configuration.
@@ -1248,9 +1346,15 @@ export function registerStripeUserRoutes(app: Express): void {
         customer_update: { address: "auto", name: "auto" },
         automatic_tax: { enabled: true },
         line_items: [{ price: priceId, quantity: 1 }],
-        metadata: { uid, kind: "subscription" },
+        ...(referral ? { discounts: [{ coupon: referral.couponId }] } : {}),
+        metadata: {
+          uid,
+          kind: "subscription",
+          // The reservation ref, so the invoice webhook can settle the reward.
+          ...(referral ? { referralRef: subscriptionRef } : {}),
+        },
         // Stamp uid on the subscription so invoice grants can attribute Sparks.
-        subscription_data: { metadata: { uid } },
+        subscription_data: { metadata: { uid, ...(referral ? { referralRef: subscriptionRef } : {}) } },
         success_url: `${appBaseUrl()}/studio?subscription=success`,
         cancel_url: `${appBaseUrl()}/studio?subscription=cancel`,
       });
@@ -1290,6 +1394,14 @@ export function registerStripeUserRoutes(app: Express): void {
       const totalSparks = packTotalSparks(pack);
       const paymentId = randomUUID();
       const customerId = await ensureCustomer(uid, req.authToken?.email);
+      const referral = await earnedReferralDiscount({
+        uid,
+        itemType: "pack",
+        paymentId,
+        settings: await getPricingSettings(),
+        amount: price,
+      });
+      const chargedPrice = referral ? discountedAmount(price, referral.percentOff) : price;
       const session = await createCheckoutSession({
         mode: "payment",
         customer: customerId,
@@ -1298,8 +1410,11 @@ export function registerStripeUserRoutes(app: Express): void {
             quantity: 1,
             price_data: {
               currency: currency.toLowerCase(),
-              unit_amount: toMinor(price, currency),
-              product_data: { name: `${totalSparks} Sparks (${pack.label})` },
+              unit_amount: toMinor(chargedPrice, currency),
+              product_data: {
+                name: `${totalSparks} Sparks (${pack.label})`,
+                description: referral ? `Invite reward applied: ${referral.summary}.` : undefined,
+              },
             },
           },
         ],
@@ -1315,12 +1430,12 @@ export function registerStripeUserRoutes(app: Express): void {
         paymentId,
         uid,
         kind: "sparkPack",
-        amount: price,
+        amount: chargedPrice,
         currency,
         description: `${totalSparks} Sparks`,
         stripeSessionId: session.id,
         stripeCustomerId: customerId,
-        items: [{ label: `${totalSparks} Sparks`, amount: price, quantity: 1 }],
+        items: [{ label: `${totalSparks} Sparks`, amount: chargedPrice, quantity: 1 }],
       });
       res.json({ url: session.url, paymentId });
     } catch (err) {
@@ -1432,33 +1547,9 @@ export function registerStripeUserRoutes(app: Express): void {
     }
   });
 
-  // The caller's shareable referral code (minted lazily).
-  app.get("/account/referral", async (req: AuthedRequest, res: Response) => {
-    try {
-      const code = await ensureReferralCode(req.uid!);
-      const config = await getSparksConfig();
-      res.json({
-        code,
-        enabled: config.enabled && config.referral.enabled,
-        referrerSparks: config.referral.referrerSparks,
-        referredSparks: config.referral.referredSparks,
-      });
-    } catch (err) {
-      clientError(res, (err as Error)?.message ?? "Could not load your referral code.", 500);
-    }
-  });
-
-  // A new user attaches the code that referred them (reward fires on their
-  // first payment — see the webhook).
-  app.post("/account/referral/claim", json, async (req: AuthedRequest, res: Response) => {
-    try {
-      const { code } = (req.body ?? {}) as { code?: string };
-      const ok = await claimReferralCode(req.uid!, code ?? "");
-      res.json({ ok });
-    } catch {
-      res.json({ ok: false });
-    }
-  });
+  // The referral program's own routes live in `referrals/routes.ts` (invite,
+  // accept, decline, overview) — they're a feature surface of their own, not a
+  // payments concern.
 
   // Claim every starter-grant ladder rung the caller qualifies for (guest →
   // signup → verify; each rung idempotent). Deliberately OUTSIDE the /account
@@ -1467,12 +1558,16 @@ export function registerStripeUserRoutes(app: Express): void {
   app.post("/sparks/claim", requireAuth, json, async (req: AuthedRequest, res: Response) => {
     try {
       const { ensureGrantLadder } = await import("./sparks");
+      const verified = isVerifiedToken(req.authToken);
       await ensureGrantLadder({
         uid: req.uid!,
         anonymous: isAnonymousToken(req.authToken),
-        verified: isVerifiedToken(req.authToken),
+        verified,
         ip: req.ip,
       });
+      // The same "did they verify yet?" question the grant ladder asks, so this
+      // is where the referral program learns it too. Idempotent downstream.
+      if (verified) await onReferralEvent(req.uid!, "email_verified");
       res.json({ ok: true });
     } catch {
       res.json({ ok: false });
@@ -1919,7 +2014,21 @@ async function grantSubscriptionSparks(invoice: Stripe.Invoice): Promise<void> {
         productId,
         ref: invoice.id,
       });
-      await maybeRewardReferral(uid);
+      // Referral triggers for membership. The hook counts paid invoices to tell
+      // "became a member" from "renewed" (and which renewal), and settles any
+      // referral coupon that rode along on the checkout. Both ids are read
+      // defensively for the same reason `subMeta` is: the field's shape moves
+      // between API versions.
+      const subRef = (invoice as unknown as { subscription?: string | { id?: string } | null }).subscription;
+      const subscriptionId = typeof subRef === "string" ? subRef : (subRef?.id ?? null);
+      if (subscriptionId) {
+        await onSubscriptionInvoicePaid({ uid, subscriptionId, invoiceId: invoice.id, amount: gross });
+      }
+      // `subtotal` is the invoice BEFORE the coupon, so it's what the referral
+      // discount actually cost us — `amount_paid` is what's left after it.
+      if (typeof subMeta?.referralRef === "string") {
+        await finalizeDiscountsForPayment(subMeta.referralRef, toMajor(invoice.subtotal ?? 0, currency));
+      }
     }
   } catch (err) {
     console.warn("[stripe] subscription Spark grant failed", err);
@@ -1994,7 +2103,6 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
             });
             await sendSparksPurchasedEmail({ uid, sparks, paymentId });
           }
-          await maybeRewardReferral(uid);
         } else if (kind === "sparkGift") {
           const sparks = Number(session.metadata?.sparks ?? 0);
           const giftCode = (session.metadata?.giftCode as string) || "";
@@ -2023,10 +2131,8 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
               });
             }
           }
-          await maybeRewardReferral(uid);
         } else if (kind === "ebook") {
           await deliverPaidEbook(paymentId);
-          await maybeRewardReferral(uid);
         } else {
           await fulfillPaidOrder(paymentId);
           const order = await getAdminPayment(paymentId);
@@ -2036,8 +2142,13 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
             itemLabel: "Your custom picture book",
             paymentId,
           });
-          await maybeRewardReferral(uid);
         }
+        // Any money at all counts as the referred user's first purchase. Safe to
+        // call on every purchase: a reward exists once per invitation, rule and
+        // side, so the second purchase can't re-pay. Also settles the earned
+        // discount (if any) that this payment consumed.
+        await onReferralEvent(uid, "first_purchase", { ref: paymentId, amount: gross });
+        await finalizeDiscountsForPayment(paymentId);
       }
       return;
     }
@@ -2141,7 +2252,8 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
       } else {
         await fulfillPaidOrder(paymentId);
       }
-      await maybeRewardReferral(uid);
+      await onReferralEvent(uid, "first_purchase", { ref: paymentId, amount: gross });
+      await finalizeDiscountsForPayment(paymentId);
 
       // Celebratory ping (#growth). Deduped on the paymentId so a webhook retry
       // (or the checkout.session.completed safety-net) can't double-post.
@@ -2175,7 +2287,20 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
       const charge = event.data.object as Stripe.Charge;
       const piId = typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id;
       const paymentId = piId ? await findPaymentIdByStripeId("stripePaymentIntentId", piId) : null;
-      if (!paymentId) return;
+      if (!paymentId) {
+        // A refunded MEMBERSHIP invoice has no payment document of its own —
+        // Stripe raises those invoices itself — so the referral reward it paid is
+        // keyed on the invoice id instead. Without this branch, "reward when they
+        // subscribe" could never be reversed, which is the whole attack.
+        const invoiceRef = (charge as unknown as { invoice?: string | { id?: string } | null }).invoice;
+        const invoiceId = typeof invoiceRef === "string" ? invoiceRef : (invoiceRef?.id ?? null);
+        if (invoiceId && charge.amount_refunded >= charge.amount) {
+          await clawbackForRef(invoiceId, "membership invoice refunded").catch((err) => {
+            console.warn("[stripe] referral clawback failed", err);
+          });
+        }
+        return;
+      }
       const payment = await getAdminPayment(paymentId);
       if (!payment) return;
       const refunded = toMajor(charge.amount_refunded, charge.currency);
@@ -2223,6 +2348,14 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
       // longer owns it; a later re-purchase grants a fresh one).
       if (fullyRefunded && payment.kind === "ebook") {
         await revokeRefundedEbook(paymentId);
+      }
+      // Take back any referral reward this purchase paid out — buy, collect the
+      // bonus, refund is the cheapest attack on the program. Only on a FULL
+      // refund: a partial (e.g. a shipping goodwill credit) is still a sale.
+      if (fullyRefunded) {
+        await clawbackForRef(paymentId, "purchase refunded").catch((err) => {
+          console.warn("[stripe] referral clawback failed", err);
+        });
       }
       // A refunded print order may already be at (or past) the printer —
       // fulfillment isn't auto-cancelled, so a human must decide what to do.

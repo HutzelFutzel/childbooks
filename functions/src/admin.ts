@@ -15,6 +15,8 @@ import {
   getPricingSettings,
   getSeoConfig,
   getSparksConfig,
+  getReferralConfig,
+  saveReferralConfig,
   getEmailConfig,
   saveEmailConfig,
   getSlackConfig,
@@ -53,6 +55,13 @@ import {
   removeCatalogPhoto,
 } from "./appConfig";
 import { deletePlan, getPlansConfig, savePlansConfig, syncAllPlansToStripe, upsertPlan } from "./plans";
+import {
+  blockInvitation,
+  referralStatsSummary,
+  releaseReward,
+  voidHeldReward,
+  voidUnacceptedInvitations,
+} from "./referrals";
 import type { BillingEnv } from "../../books-frontend/src/core/config/plans";
 import {
   deletePublicObject,
@@ -1012,6 +1021,98 @@ export function registerAdminRoutes(app: Express): void {
   app.put("/admin/config/sparks", json, async (req: Request, res: Response) => {
     try {
       res.json(await saveSparksConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- Referral program -----------------------------------------------------
+
+  app.get("/admin/config/referral", async (_req, res) => {
+    try {
+      res.json(await getReferralConfig());
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.put("/admin/config/referral", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveReferralConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // The funnel report. Defaults to the last 30 days, which is what the dashboard
+  // opens on.
+  app.get("/admin/referrals/stats", async (req: Request, res: Response) => {
+    try {
+      const to = Number(req.query.to) || Date.now();
+      const from = Number(req.query.from) || to - 30 * 86_400_000;
+      res.json(await referralStatsSummary(from, to));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // The abuse lever: void an invitation and reverse whatever it paid out.
+  app.post("/admin/referrals/invitations/:id/block", json, async (req: Request, res: Response) => {
+    try {
+      const reason = typeof req.body?.reason === "string" ? req.body.reason.slice(0, 200) : "blocked by admin";
+      await blockInvitation(String(req.params.id), reason);
+      res.json({ ok: true });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // The held-payout queue's two verdicts. A reward parked by the lifetime cap or
+  // the daily budget is waiting on a human decision, so both of them have to be
+  // reachable — otherwise "held for review" is just a slower "lost".
+  app.post("/admin/referrals/rewards/:id/release", json, async (req: Request, res: Response) => {
+    try {
+      const outcome = await releaseReward(String(req.params.id));
+      if (outcome === "not_found") {
+        res.status(404).json({ error: { message: "That reward no longer exists." } });
+        return;
+      }
+      if (outcome === "not_held") {
+        res.status(400).json({ error: { message: "That reward isn't waiting for review." } });
+        return;
+      }
+      res.json({ ok: outcome === "granted", outcome });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.post("/admin/referrals/rewards/:id/decline", json, async (req: Request, res: Response) => {
+    try {
+      const reason = typeof req.body?.reason === "string" ? req.body.reason.slice(0, 200) : "declined by admin";
+      const outcome = await voidHeldReward(String(req.params.id), reason);
+      if (outcome === "not_found") {
+        res.status(404).json({ error: { message: "That reward no longer exists." } });
+        return;
+      }
+      if (outcome === "not_held") {
+        res.status(400).json({ error: { message: "That reward isn't waiting for review." } });
+        return;
+      }
+      res.json({ ok: true, outcome });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Misconfiguration emergency: void every still-unaccepted invitation so the
+  // frozen (wrong) terms stop being claimable. Accepted ones stay honored.
+  app.post("/admin/referrals/void-unaccepted", json, async (req: Request, res: Response) => {
+    try {
+      const reason =
+        typeof req.body?.reason === "string" ? req.body.reason.slice(0, 200) : "voided by admin";
+      const voided = await voidUnacceptedInvitations(reason);
+      res.json({ ok: true, voided });
     } catch (err) {
       handleError(res, err);
     }

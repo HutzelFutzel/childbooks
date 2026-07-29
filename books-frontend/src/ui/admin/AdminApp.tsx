@@ -19,6 +19,7 @@ import {
   ShieldAlert,
   Sparkles,
   Stamp,
+  Users,
   CreditCard,
   Gauge,
   HeartPulse,
@@ -74,6 +75,7 @@ import { FinancialTab } from "./tabs/FinancialTab";
 import { DiscountPlannerTab } from "./tabs/DiscountPlannerTab";
 import { PlansTab } from "./tabs/PlansTab";
 import { SparksTab } from "./tabs/SparksTab";
+import { ReferralsTab } from "./tabs/ReferralsTab";
 import { CostIntelligenceTab } from "./tabs/CostIntelligenceTab";
 import { SystemHealthTab } from "./tabs/SystemHealthTab";
 import { SeoTab } from "./tabs/marketing/SeoTab";
@@ -109,6 +111,7 @@ const CONFIG_TAB_META: Record<
   catalog: { label: "Catalog", icon: <Package className="size-4" /> },
   memberships: { label: "Memberships", icon: <CreditCard className="size-4" /> },
   sparks: { label: "Sparks economy", icon: <Sparkles className="size-4" /> },
+  referrals: { label: "Referrals", icon: <Users className="size-4" /> },
   financial: { label: "Financial settings", icon: <Coins className="size-4" /> },
   discounts: { label: "Discount planner", icon: <Percent className="size-4" /> },
   // AI pipeline
@@ -145,6 +148,8 @@ function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
       return <PlansTab />;
     case "sparks":
       return <SparksTab />;
+    case "referrals":
+      return <ReferralsTab />;
     case "financial":
       return <FinancialTab />;
     case "discounts":

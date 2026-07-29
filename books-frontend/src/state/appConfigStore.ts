@@ -65,6 +65,13 @@ import {
   type SparksConfig,
 } from "../core/config/sparks";
 import {
+  createDefaultReferralConfig,
+  normalizeReferralConfig,
+  referralConfigFromLegacy,
+  type ReferralConfig,
+  type ReferralStatsSummary,
+} from "../core/config/referral";
+import {
   normalizePublicPlansConfig,
   type BillingEnv,
   type PlanDefinition,
@@ -279,6 +286,14 @@ interface AppConfigState {
   pricingSettings: PricingSettings;
   /** The Sparks economy (world-readable; also used by the admin editor). */
   sparks: SparksConfig;
+  /** The referral program (world-readable so the studio can show the live offer). */
+  referral: ReferralConfig;
+  /**
+   * False when `appConfig/referral` hasn't been written yet, in which case
+   * `referral` is the projection of the legacy `sparks.referral` settings — the
+   * same fallback the backend applies.
+   */
+  referralDocExists: boolean;
   /** Public subscription plans (storefront-facing; no Stripe internals). */
   plans: PublicPlansConfig;
   /** Global branding (the share watermark asset + appearance). */
@@ -324,6 +339,15 @@ interface AppConfigState {
   saveModelCosts: (table: ModelCostTable) => Promise<void>;
   savePricingSettings: (settings: PricingSettings) => Promise<void>;
   saveSparksConfig: (config: SparksConfig) => Promise<void>;
+  /** Authoritative config (projects legacy sparks.referral when no doc exists yet). */
+  loadReferralConfig: () => Promise<ReferralConfig>;
+  saveReferralConfig: (config: ReferralConfig) => Promise<void>;
+  /** Funnel report for the referral program (admin-only). */
+  loadReferralStats: (from?: number, to?: number) => Promise<ReferralStatsSummary>;
+  /** Pay out a reward the limits held for review, or decline it for good. */
+  resolveHeldReward: (rewardId: string, verdict: "release" | "decline") => Promise<void>;
+  /** Void every still-unaccepted invitation (misconfiguration emergency). */
+  voidUnacceptedInvitations: (reason?: string) => Promise<number>;
   saveSeoConfig: (config: SeoConfig) => Promise<void>;
   savePrompts: (config: PromptsConfig) => Promise<void>;
   saveEmailConfig: (config: EmailConfig) => Promise<void>;
@@ -491,6 +515,8 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   products: { version: 1, products: [] },
   pricingSettings: createDefaultPricingSettings(),
   sparks: createDefaultSparksConfig(),
+  referral: createDefaultReferralConfig(),
+  referralDocExists: false,
   plans: { version: 1, plans: [] },
   branding: createDefaultBrandingConfig(),
   seo: createDefaultSeoConfig(),
@@ -540,7 +566,23 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
         set({ pricingSettings: normalizePricingSettings(snap.exists() ? snap.data() : undefined) });
       }),
       onSnapshot(doc(db, "appConfig", "sparks"), (snap) => {
-        set({ sparks: normalizeSparksConfig(snap.exists() ? snap.data() : undefined) });
+        const sparks = normalizeSparksConfig(snap.exists() ? snap.data() : undefined);
+        set({ sparks });
+        // The legacy projection is derived from this doc, so a Sparks change has
+        // to re-derive it (either doc can arrive first).
+        if (!get().referralDocExists) set({ referral: referralConfigFromLegacy(sparks.referral) });
+      }),
+      onSnapshot(doc(db, "appConfig", "referral"), (snap) => {
+        // The backend projects the OLD `sparks.referral` settings until an admin
+        // saves the new program once, so the client has to project them too —
+        // otherwise the invite entry points stay hidden on a program that is
+        // live server-side.
+        set({ referralDocExists: snap.exists() });
+        set({
+          referral: snap.exists()
+            ? normalizeReferralConfig(snap.data())
+            : referralConfigFromLegacy(get().sparks.referral),
+        });
       }),
       onSnapshot(doc(db, "appConfig", "plans"), (snap) => {
         set({ plans: normalizePublicPlansConfig(snap.exists() ? snap.data() : undefined) });
@@ -633,6 +675,62 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
 
   async saveSparksConfig(config) {
     await putJson("/admin/config/sparks", config);
+  },
+
+  async loadReferralConfig() {
+    const res = await backendFetch("/admin/config/referral");
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load referral config.");
+    const config = normalizeReferralConfig(await res.json());
+    set({ referral: config });
+    return config;
+  },
+
+  async saveReferralConfig(config) {
+    set({
+      referral: normalizeReferralConfig(await putJson("/admin/config/referral", config)),
+      // The doc now exists, so the legacy projection must stop overwriting it.
+      referralDocExists: true,
+    });
+  },
+
+  async loadReferralStats(from, to) {
+    const params = new URLSearchParams();
+    if (from != null) params.set("from", String(from));
+    if (to != null) params.set("to", String(to));
+    const qs = params.toString();
+    const res = await backendFetch(`/admin/referrals/stats${qs ? `?${qs}` : ""}`);
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load referral stats.");
+    return (await res.json()) as ReferralStatsSummary;
+  },
+
+  async resolveHeldReward(rewardId, verdict) {
+    const res = await backendFetch(`/admin/referrals/rewards/${encodeURIComponent(rewardId)}/${verdict}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(verdict === "decline" ? { reason: "declined from Referrals tab" } : {}),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not update this reward.");
+    const json = (await res.json()) as { ok?: boolean; outcome?: string };
+    // A release can come straight back as held — the reason it couldn't be
+    // delivered (a cancelled membership) is on the reward for the next look.
+    if (json.ok === false) {
+      throw new Error(
+        json.outcome === "held"
+          ? "Still can't be delivered — check the note on the reward."
+          : "Could not release this reward.",
+      );
+    }
+  },
+
+  async voidUnacceptedInvitations(reason) {
+    const res = await backendFetch("/admin/referrals/void-unaccepted", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason: reason ?? "voided by admin" }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not void invitations.");
+    const json = (await res.json()) as { voided?: number };
+    return json.voided ?? 0;
   },
 
   async saveSeoConfig(config) {

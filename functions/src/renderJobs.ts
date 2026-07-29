@@ -49,6 +49,7 @@ import {
   type DocumentRequest,
   type RasterRole,
 } from "./renders";
+import { markFirstBookCompleted } from "./referrals";
 
 /** How long a job's page token stays usable. Renders take a minute, not an hour. */
 const TOKEN_TTL_MS = 30 * 60_000;
@@ -424,6 +425,10 @@ async function renderJob(uid: string, jobId: string): Promise<void> {
       { merge: true },
     );
     logger.info("[render] finished", { jobId, pages: captures.length, ms: Date.now() - started });
+    // A rendered book is the most honest "they actually made something" signal we
+    // have, so it's what the referral program's activation trigger keys on. Only
+    // the first one counts (see markFirstBookCompleted); never throws.
+    await markFirstBookCompleted(uid);
   } catch (err) {
     const message = (err as Error)?.message ?? "We couldn't render your book.";
     logger.error("[render] failed", { jobId, err: message });

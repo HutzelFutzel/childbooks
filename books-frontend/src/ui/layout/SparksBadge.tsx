@@ -15,11 +15,11 @@ import {
   buySparkGift,
   buySparkPack,
   claimSparkGift,
-  getReferralInfo,
   listMyGifts,
-  type ReferralInfo,
   type SparkGiftSummary,
 } from "../../platform/payments";
+import { fetchReferralOverview, type ReferralOverview } from "../../platform/referrals";
+import { useAccountUiStore } from "../../state/accountUiStore";
 import { packTotalSparks } from "../../core/config/sparks";
 import { fmtMoney } from "../admin/tabs/products/parts";
 import { useImageActionRange } from "./SparkCost";
@@ -293,21 +293,29 @@ export function SparksBadge() {
 }
 
 /**
- * The wallet's "gifts & invites" block: redeem a gift code, share your referral
- * link (when the program is on), and see the claim codes of gifts you bought.
- * Loaded lazily when the wallet opens; failures degrade to just the redeemer.
+ * The wallet's "gifts & invites" block: redeem a gift code, an entry point into
+ * the invite screen carrying the live offer, any invite rewards still waiting to
+ * be used, and the claim codes of gifts you bought. Loaded lazily when the wallet
+ * opens; failures degrade to just the redeemer.
  */
 function GiftsAndInvites({ open }: { open: boolean }) {
   const [code, setCode] = useState("");
   const [claiming, setClaiming] = useState(false);
-  const [referral, setReferral] = useState<ReferralInfo | null>(null);
+  const [referral, setReferral] = useState<ReferralOverview | null>(null);
   const [gifts, setGifts] = useState<SparkGiftSummary[]>([]);
+  const openInvite = useAccountUiStore((s) => s.openInvite);
 
   useEffect(() => {
     if (!open) return;
-    getReferralInfo().then(setReferral).catch(() => setReferral(null));
+    fetchReferralOverview().then(setReferral).catch(() => setReferral(null));
     listMyGifts().then(setGifts).catch(() => setGifts([]));
   }, [open]);
+
+  // Discounts earned by inviting apply themselves at checkout, so the only thing
+  // worth surfacing here is that they EXIST and when they lapse.
+  const usableRewards = (referral?.rewards ?? []).filter(
+    (r) => r.status === "granted" && !r.used && r.expiresAt !== null,
+  );
 
   const claim = async () => {
     if (!code.trim()) return;
@@ -321,16 +329,6 @@ function GiftsAndInvites({ open }: { open: boolean }) {
     } finally {
       setClaiming(false);
     }
-  };
-
-  const copyReferralLink = () => {
-    if (!referral) return;
-    // Point at the studio, where the ref param is captured and later claimed.
-    const link = `${window.location.origin}/studio?ref=${referral.code}`;
-    void navigator.clipboard.writeText(link).then(
-      () => toast.success("Invite link copied!"),
-      () => toast.error("Could not copy the link."),
-    );
   };
 
   return (
@@ -361,20 +359,46 @@ function GiftsAndInvites({ open }: { open: boolean }) {
 
       {/* Referral program */}
       {referral?.enabled && (
-        <button
-          type="button"
-          onClick={copyReferralLink}
-          className="flex w-full items-center justify-between gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-left text-xs text-emerald-800 transition hover:bg-emerald-100"
-        >
-          <span className="flex items-center gap-1.5">
-            <Users className="size-3.5 shrink-0" />
-            Invite a friend — you get {referral.referrerSparks} ✦, they get {referral.referredSparks} ✦
-            on their first purchase.
-          </span>
-          <span className="flex shrink-0 items-center gap-1 font-mono font-semibold">
-            {referral.code} <Copy className="size-3" />
-          </span>
-        </button>
+        <div className="space-y-1.5">
+          <button
+            type="button"
+            onClick={openInvite}
+            className="flex w-full items-center justify-between gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-left text-xs text-emerald-800 transition hover:bg-emerald-100"
+          >
+            <span className="flex items-center gap-1.5">
+              <Users className="size-3.5 shrink-0" />
+              {referral.teaser || referral.headline || "Invite a friend"}
+            </span>
+            <span className="shrink-0 font-semibold">Invite →</span>
+          </button>
+          {usableRewards.length > 0 && (
+            <div className="space-y-1">
+              {usableRewards.map((r) => (
+                <div
+                  key={r.id}
+                  className="rounded-lg bg-emerald-50/60 px-3 py-1.5 text-[11px] text-emerald-800"
+                >
+                  <span className="font-semibold">{r.summary}</span>
+                  {r.expiresAt ? (
+                    <span className="text-emerald-700/80">
+                      {" "}
+                      · use by {new Date(r.expiresAt).toLocaleDateString()}
+                    </span>
+                  ) : null}
+                  <span className="block text-emerald-700/70">Applies automatically at checkout.</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {(referral.rewards ?? [])
+            .filter((r) => r.status === "pending")
+            .slice(0, 3)
+            .map((r) => (
+              <div key={r.id} className="rounded-lg bg-ink-50/70 px-3 py-1.5 text-[11px] text-ink-500">
+                <span className="font-medium text-ink-700">+{r.summary}</span> pending — unlocks {r.unlocks}
+              </div>
+            ))}
+        </div>
       )}
 
       {/* Gifts this user bought */}

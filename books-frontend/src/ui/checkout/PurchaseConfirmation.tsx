@@ -33,6 +33,7 @@ import {
   Sparkles,
   TriangleAlert,
   Truck,
+  Users,
   X,
 } from "lucide-react";
 import type { OrderRecord } from "../../core/fulfillment/types";
@@ -45,7 +46,9 @@ import { usePaymentsStore } from "../../state/paymentsStore";
 import { useSparksStore } from "../../state/sparksStore";
 import { useDownloadsStore } from "../../state/downloadsStore";
 import { useAccountUiStore } from "../../state/accountUiStore";
+import { useAppConfigStore } from "../../state/appConfigStore";
 import { createFulfillment } from "../../platform/fulfillment";
+import { inviteTeaser, freezeTerms } from "../../core/config/referral";
 import { PlanUpsell, type UpsellContext } from "../billing/PlanUpsell";
 import { Button } from "../components/Button";
 import { Celebrate } from "../components/Celebrate";
@@ -141,6 +144,8 @@ export function PurchaseConfirmation() {
 
             <ConfirmationUpsell kind={confirmation.kind} paymentId={confirmation.paymentId} />
 
+            <InviteAfterPurchase onInvite={dismiss} />
+
             <div className="mt-8 flex justify-center">
               <Button variant="ghost" onClick={dismiss} rightIcon={<ArrowRight className="size-4" />}>
                 Back to your book
@@ -154,12 +159,37 @@ export function PurchaseConfirmation() {
   );
 }
 
+/** Pride-moment invite CTA — the highest-converting placement for the program. */
+function InviteAfterPurchase({ onInvite }: { onInvite: () => void }) {
+  const referral = useAppConfigStore((s) => s.referral);
+  const openInvite = useAccountUiStore((s) => s.openInvite);
+  if (!referral.enabled) return null;
+  const teaser = inviteTeaser(freezeTerms(referral));
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        onInvite();
+        openInvite();
+      }}
+      className="mt-6 flex w-full items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/80 px-4 py-3 text-left transition hover:bg-emerald-50"
+    >
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700">
+        <Users className="size-5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-semibold text-emerald-900">Know another parent who&apos;d love this?</span>
+        <span className="block text-xs text-emerald-800/80">{teaser}</span>
+      </span>
+      <ArrowRight className="size-4 shrink-0 text-emerald-700" />
+    </button>
+  );
+}
+
 /**
  * The post-purchase membership offer, withheld when the purchase is in trouble.
- *
- * A confirmation screen is a good place to offer a plan; a confirmation screen
- * that is currently explaining why someone's book didn't make it onto the press
- * is not. Selling into that moment reads as not having noticed.
+ * A confirmation screen is a good place to offer a plan; one that's currently
+ * explaining why someone's book didn't make it onto the press is not.
  */
 function ConfirmationUpsell({ kind, paymentId }: { kind: PurchaseKind; paymentId: string | null }) {
   const context = UPSELL_CONTEXT[kind];

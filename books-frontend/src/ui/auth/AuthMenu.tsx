@@ -11,6 +11,7 @@ import {
   Package,
   Settings,
   Shield,
+  Users,
 } from "lucide-react";
 import { useAuthStore } from "../../state/authStore";
 import { useAccountUiStore } from "../../state/accountUiStore";
@@ -43,6 +44,9 @@ export function AuthMenu() {
   const openSettings = useAccountUiStore((s) => s.openSettings);
   const openOrders = useAccountUiStore((s) => s.openOrders);
   const openDownloads = useAccountUiStore((s) => s.openDownloads);
+  const openInvite = useAccountUiStore((s) => s.openInvite);
+  const accessLevel = useAuthStore((s) => s.accessLevel);
+  const referralEnabled = useAppConfigStore((s) => s.referral.enabled);
   const openPlans = useBillingUiStore((s) => s.openPlans);
   const openCookiePreferences = useConsentStore((s) => s.openPreferences);
   const legal = useAppConfigStore((s) => s.legal);
@@ -98,6 +102,13 @@ export function AuthMenu() {
               count={unseenDownloads}
               onClick={() => { close(); openDownloads(); }}
             />
+            {referralEnabled && accessLevel !== "guest" && (
+              <MenuItem
+                icon={<Users className="size-4" />}
+                label="Invite friends"
+                onClick={() => { close(); openInvite(); }}
+              />
+            )}
           </div>
 
           <MenuDivider />

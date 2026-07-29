@@ -361,36 +361,6 @@ export async function claimSparkGift(code: string): Promise<number> {
   return json.sparks ?? 0;
 }
 
-export interface ReferralInfo {
-  code: string;
-  enabled: boolean;
-  referrerSparks: number;
-  referredSparks: number;
-}
-
-/** The signed-in user's shareable referral code + current reward amounts. */
-export async function getReferralInfo(): Promise<ReferralInfo> {
-  const res = await backendFetch("/account/referral");
-  if (!res.ok) throw new Error(await errorMessage(res, "Could not load your referral code."));
-  return (await res.json()) as ReferralInfo;
-}
-
-/** Attach the referral code that brought this user here (best-effort). */
-export async function claimReferralCode(code: string): Promise<boolean> {
-  try {
-    const res = await backendFetch("/account/referral/claim", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code }),
-    });
-    if (!res.ok) return false;
-    const json = (await res.json()) as { ok?: boolean };
-    return json.ok === true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Claim every starter-grant ladder rung the caller qualifies for (guest →
  * signup → verify). Each rung is granted once; safe to call repeatedly.
