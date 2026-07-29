@@ -23,12 +23,21 @@ export const GOOGLE_API_KEY = defineSecret("GOOGLE_API_KEY");
 export const ZEPTOMAIL_TOKEN = defineSecret("ZEPTOMAIL_TOKEN");
 export const ZEPTOMAIL_WEBHOOK_SECRET = defineSecret("ZEPTOMAIL_WEBHOOK_SECRET");
 
-// Slack incoming-webhook URL(s) for event notifications (signups, purchases,
-// ops alerts). Environment-agnostic and best-effort — `notifySlack` no-ops when
-// unset — but note that binding a secret requires it to EXIST in Secret Manager
-// at deploy time, so create it (`yarn setSecrets`) before the next deploy.
-// SLACK_OPS_WEBHOOK_URL is optional; ops alerts fall back to SLACK_WEBHOOK_URL.
+// Slack incoming-webhook URL(s) for event notifications — one per channel (see
+// notify.ts / core/notify/registry.ts). Environment-agnostic and best-effort —
+// `notifySlack` no-ops when unset — but note that binding a secret requires it
+// to EXIST in Secret Manager at deploy time, so create it (`yarn setSecrets`)
+// before the next deploy.
+//   SLACK_WEBHOOK_URL          #growth — required; every other channel falls
+//                              back to this one when its own URL is unset, so
+//                              a single webhook works out of the box.
+//   SLACK_OPS_WEBHOOK_URL      #ops — optional.
+//   SLACK_CONTACT_WEBHOOK_URL  #contact — optional.
+// (CI/CD pings use a SEPARATE SLACK_CI_WEBHOOK_URL that lives only in GitHub
+// Actions secrets, not here — see scripts/set-secrets.mjs.)
 export const SLACK_WEBHOOK_URL = defineSecret("SLACK_WEBHOOK_URL");
+export const SLACK_OPS_WEBHOOK_URL = defineSecret("SLACK_OPS_WEBHOOK_URL");
+export const SLACK_CONTACT_WEBHOOK_URL = defineSecret("SLACK_CONTACT_WEBHOOK_URL");
 
 // Lulu uses separate OAuth credentials per environment. `serverEnv` selects the
 // pair matching LULU_ENV; the legacy LULU_CLIENT_KEY/SECRET act as a fallback.
@@ -51,6 +60,8 @@ const BASE_SECRETS = [
   ZEPTOMAIL_TOKEN,
   ZEPTOMAIL_WEBHOOK_SECRET,
   SLACK_WEBHOOK_URL,
+  SLACK_OPS_WEBHOOK_URL,
+  SLACK_CONTACT_WEBHOOK_URL,
 ];
 const SANDBOX_SECRETS = [
   LULU_SANDBOX_CLIENT_KEY,

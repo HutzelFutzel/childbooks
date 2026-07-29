@@ -13,7 +13,7 @@
  */
 
 /** Which Slack channel a message posts to (drives which webhook URL is used). */
-export type SlackChannel = "growth" | "ops";
+export type SlackChannel = "growth" | "ops" | "contact";
 
 /** Every distinct Slack message the product can send. Order drives the admin list. */
 export const SLACK_MESSAGE_IDS = [
@@ -81,8 +81,8 @@ export const SLACK_MESSAGE_REGISTRY: Record<SlackMessageKey, SlackMessageMeta> =
   contact_form: {
     id: "contact_form",
     label: "Contact form submission",
-    description: "Posted to #growth when a visitor submits the public contact form.",
-    channel: "growth",
+    description: "Posted to #contact when a visitor submits the public contact form.",
+    channel: "contact",
   },
   admin_alert: {
     id: "admin_alert",

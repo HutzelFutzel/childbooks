@@ -16,6 +16,7 @@ import { Section } from "../products/parts";
 const CHANNEL_LABEL: Record<SlackChannel, string> = {
   growth: "#growth",
   ops: "#ops",
+  contact: "#contact",
 };
 
 /**
@@ -73,11 +74,13 @@ export function SlackTab() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-2xl text-xs leading-relaxed text-ink-500">
-          Slack notifications for growth + operational events. Each message can be
-          turned off individually (all default on); the change is stored in Firebase
-          and applied immediately — no deploy. The webhook URLs live in Cloud Secret
-          Manager (<code>SLACK_WEBHOOK_URL</code> for #growth,{" "}
-          <code>SLACK_OPS_WEBHOOK_URL</code> for #ops).
+          Slack notifications for growth, operational, and contact events. Each
+          message can be turned off individually (all default on); the change is
+          stored in Firebase and applied immediately — no deploy. The webhook URLs
+          live in Cloud Secret Manager (<code>SLACK_WEBHOOK_URL</code> for #growth,{" "}
+          <code>SLACK_OPS_WEBHOOK_URL</code> for #ops,{" "}
+          <code>SLACK_CONTACT_WEBHOOK_URL</code> for #contact — any left unset falls
+          back to #growth's webhook).
         </p>
         <div className="flex gap-2">
           {dirty && (
@@ -121,6 +124,15 @@ export function SlackTab() {
             onClick={() => onTest("ops")}
           >
             Test #ops
+          </Button>
+          <Button
+            variant="secondary"
+            size="sm"
+            leftIcon={<Send className="size-3.5" />}
+            loading={testing === "contact"}
+            onClick={() => onTest("contact")}
+          >
+            Test #contact
           </Button>
         </div>
       </Section>

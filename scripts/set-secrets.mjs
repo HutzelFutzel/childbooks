@@ -38,13 +38,17 @@ export function projectId() {
 }
 
 /**
- * The subset of secrets that ALSO belong in GitHub Actions (for the CI/CD Slack
- * pings). Deliberately tiny: the workflows don't need your AI/Stripe/Lulu keys —
- * the running function reads those from Secret Manager — so copying them into a
- * second store would only widen the leak surface. `.env.local` stays the single
- * source of truth; `yarn setSecrets` fans this allowlist out to GitHub too.
+ * The subset of secrets that ONLY belong in GitHub Actions (for the CI/CD Slack
+ * pings, #ci-cd) — as opposed to `secretNames()` below, which is pushed to
+ * Cloud Secret Manager for the running functions. Deliberately tiny: the
+ * workflows don't need your AI/Stripe/Lulu/app-Slack keys, so copying them into
+ * a second store would only widen the leak surface. `.env.local` stays the
+ * single source of truth; `yarn setSecrets` fans this allowlist out to GitHub
+ * too. (Note: SLACK_CI_WEBHOOK_URL is intentionally NOT a `defineSecret` in
+ * secrets.ts — CI/CD doesn't run inside a Cloud Function, so it has no reason
+ * to live in Secret Manager or be bound to `api`.)
  */
-export const GITHUB_ACTION_SECRETS = ["SLACK_WEBHOOK_URL"];
+export const GITHUB_ACTION_SECRETS = ["SLACK_CI_WEBHOOK_URL"];
 
 /**
  * Every secret name declared in functions/src/secrets.ts. Parsed from the

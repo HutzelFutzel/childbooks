@@ -9,11 +9,12 @@
  *     and swallowed — this function never throws.
  *
  * Config (Cloud Secret Manager, injected into process.env; see secrets.ts):
- *   - SLACK_WEBHOOK_URL      required for any ping.
- *   - SLACK_OPS_WEBHOOK_URL  optional. Operational alerts use it when set,
- *                            otherwise they fall back to SLACK_WEBHOOK_URL — so
- *                            a single webhook / single channel works out of the
- *                            box, and you can split #growth / #ops later.
+ *   - SLACK_WEBHOOK_URL          required for any ping — #growth.
+ *   - SLACK_OPS_WEBHOOK_URL      optional — #ops.
+ *   - SLACK_CONTACT_WEBHOOK_URL  optional — #contact.
+ * Any channel whose own URL is unset falls back to SLACK_WEBHOOK_URL, so a
+ * single webhook / single channel works out of the box, and you can split
+ * channels out later just by setting the matching secret.
  */
 import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
@@ -22,7 +23,7 @@ import { slackMessageEnabled } from "../../books-frontend/src/core/config/slackC
 import type { SlackMessageKey } from "../../books-frontend/src/core/notify/registry";
 
 /** Which Slack channel a message is for (drives which webhook is used). */
-export type NotifyChannel = "growth" | "ops";
+export type NotifyChannel = "growth" | "ops" | "contact";
 
 /** Why a Slack ping was (or wasn't) delivered — surfaced by the test action. */
 export type NotifyResult =
@@ -33,6 +34,9 @@ export type NotifyResult =
 function webhookFor(channel: NotifyChannel): string | undefined {
   if (channel === "ops") {
     return process.env.SLACK_OPS_WEBHOOK_URL || process.env.SLACK_WEBHOOK_URL || undefined;
+  }
+  if (channel === "contact") {
+    return process.env.SLACK_CONTACT_WEBHOOK_URL || process.env.SLACK_WEBHOOK_URL || undefined;
   }
   return process.env.SLACK_WEBHOOK_URL || undefined;
 }

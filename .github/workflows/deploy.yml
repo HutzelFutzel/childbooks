@@ -22,9 +22,9 @@ name: Deploy
 #                         Admin, Cloud Run Admin, Service Account User, Firebase
 #                         Rules Admin, Cloud Datastore Index Admin, and Secret
 #                         Manager Secret Accessor (for check-env + secret binding).
-#     SLACK_WEBHOOK_URL — (optional) Slack incoming webhook for failure pings.
-#                         If unset, GitHub's built-in email/mobile notifications
-#                         for failed runs still apply.
+#     SLACK_CI_WEBHOOK_URL — (optional) Slack incoming webhook (#ci-cd) for
+#                         deploy start/result pings. If unset, GitHub's built-in
+#                         email/mobile notifications for failed runs still apply.
 #   Firebase console: point the App Hosting backend's connected branch at
 #     `release` (not `main`).
 #   Branch protection on `main`: require the CI checks to pass before merge.
@@ -51,15 +51,15 @@ jobs:
     env:
       PROJECT_ID: childbook-60f89
       BACKEND_URL: https://us-central1-childbook-60f89.cloudfunctions.net/api
-      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      SLACK_CI_WEBHOOK_URL: ${{ secrets.SLACK_CI_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v4
 
-      # Ping Slack as soon as a deploy kicks off — the matching result ping
-      # ("Notify Slack (deploy result)") posts at the end. Two independent
+      # Ping Slack (#ci-cd) as soon as a deploy kicks off — the matching result
+      # ping ("Notify Slack (deploy result)") posts at the end. Two independent
       # messages (start + end), since an incoming webhook can't edit/thread.
       - name: Notify Slack (deploy started)
-        if: env.SLACK_WEBHOOK_URL != ''
+        if: env.SLACK_CI_WEBHOOK_URL != ''
         env:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -68,7 +68,7 @@ jobs:
           ${COMMIT_MSG%%$'\n'*}
           by ${GITHUB_ACTOR} · ${RUN_URL}"
           payload=$(printf '{"text": %s}' "$(printf '%s' "$text" | jq -Rs .)")
-          curl -fsS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
+          curl -fsS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_CI_WEBHOOK_URL"
 
       - uses: actions/setup-node@v4
         with:
@@ -140,11 +140,11 @@ jobs:
         id: promote
         run: git push --force origin HEAD:release
 
-      # Report the outcome to Slack on SUCCESS and FAILURE. Runs always so a
-      # failure at any step above still pings; skipped only when no webhook is
-      # configured (GitHub's own failed-run emails still cover you).
+      # Report the outcome to Slack (#ci-cd) on SUCCESS and FAILURE. Runs always
+      # so a failure at any step above still pings; skipped only when no webhook
+      # is configured (GitHub's own failed-run emails still cover you).
       - name: Notify Slack (deploy result)
-        if: always() && env.SLACK_WEBHOOK_URL != ''
+        if: always() && env.SLACK_CI_WEBHOOK_URL != ''
         env:
           STATUS: ${{ job.status }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
@@ -176,4 +176,4 @@ jobs:
           ${COMMIT_MSG%%$'\n'*}
           by ${GITHUB_ACTOR} · ${RUN_URL}"
           payload=$(printf '{"text": %s}' "$(printf '%s' "$text" | jq -Rs .)")
-          curl -fsS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
+          curl -fsS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_CI_WEBHOOK_URL"

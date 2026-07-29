@@ -1206,7 +1206,8 @@ export function registerAdminRoutes(app: Express): void {
   app.post("/admin/slack/test", json, async (req: AuthedRequest, res: Response) => {
     try {
       const channel = ((req.body ?? {}) as { channel?: string }).channel;
-      const target: SlackChannel = channel === "ops" ? "ops" : "growth";
+      const target: SlackChannel =
+        channel === "ops" ? "ops" : channel === "contact" ? "contact" : "growth";
       const who = req.authToken?.email ?? req.uid ?? "an admin";
       const result = await notifySlack({
         channel: target,
@@ -1214,13 +1215,16 @@ export function registerAdminRoutes(app: Express): void {
         text: `🔔 Test notification — Slack is wired up correctly (sent from the admin dashboard by ${who}).`,
       });
       if (!result.sent) {
+        const secretName: Record<SlackChannel, string> = {
+          growth: "SLACK_WEBHOOK_URL",
+          ops: "SLACK_OPS_WEBHOOK_URL",
+          contact: "SLACK_CONTACT_WEBHOOK_URL",
+        };
         res.status(502).json({
           error: {
             message:
               result.reason === "not_configured"
-                ? `No webhook is configured for #${target}. Set the ${
-                    target === "ops" ? "SLACK_OPS_WEBHOOK_URL" : "SLACK_WEBHOOK_URL"
-                  } secret and deploy.`
+                ? `No webhook is configured for #${target}. Set the ${secretName[target]} secret and deploy.`
                 : `Slack test failed (${result.reason}).`,
           },
         });

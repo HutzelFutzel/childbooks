@@ -19,7 +19,7 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     env:
-      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+      SLACK_CI_WEBHOOK_URL: ${{ secrets.SLACK_CI_WEBHOOK_URL }}
     steps:
       - uses: actions/checkout@v4
 
@@ -77,14 +77,14 @@ jobs:
       - name: Check environment (config only)
         run: node scripts/check-env.mjs --no-secrets
 
-      # Ping Slack only when CI fails on `main` (a red PR is the author's problem;
-      # a red `main` is everyone's). Skipped when no webhook is configured.
+      # Ping Slack (#ci-cd) only when CI fails on `main` (a red PR is the author's
+      # problem; a red `main` is everyone's). Skipped when no webhook is configured.
       - name: Notify Slack on failure
-        if: failure() && github.ref == 'refs/heads/main' && env.SLACK_WEBHOOK_URL != ''
+        if: failure() && github.ref == 'refs/heads/main' && env.SLACK_CI_WEBHOOK_URL != ''
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           text="❌ CI failed on *main* — ${GITHUB_REPOSITORY}@${GITHUB_SHA:0:7}
           by ${GITHUB_ACTOR} · ${RUN_URL}"
           payload=$(printf '{"text": %s}' "$(printf '%s' "$text" | jq -Rs .)")
-          curl -fsS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
+          curl -fsS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_CI_WEBHOOK_URL"

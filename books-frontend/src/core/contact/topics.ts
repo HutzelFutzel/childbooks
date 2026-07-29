@@ -3,15 +3,15 @@
  * visitor can be writing to us about".
  *
  * Imported by BOTH the public form (which renders the select) and the backend
- * (which validates the submitted id, picks the Slack channel, and stores the
- * topic on the message so the admin inbox can filter by it). Keep this module
- * pure: no React, no Firebase, no Node APIs.
+ * (which validates the submitted id and stores the topic on the message so the
+ * admin inbox can filter by it). Keep this module pure: no React, no Firebase,
+ * no Node APIs.
  *
- * A topic is a ROUTING decision, not just a label — it's why the select replaced
- * the old free-text field. An urgent order problem should land in #ops even
- * though most contact traffic belongs in #growth.
+ * Every topic notifies the same #contact Slack channel (see
+ * core/notify/registry.ts) — topic is a LABEL for the admin inbox, not a
+ * routing decision. `timeSensitive` still flags legally time-boxed topics
+ * (e.g. GDPR) within that single channel rather than splitting them off.
  */
-import type { SlackChannel } from "../notify/registry";
 
 /** Order drives the select. `other` is the fallback for anything unrecognized. */
 export const CONTACT_TOPIC_IDS = [
@@ -33,8 +33,6 @@ export interface ContactTopicMeta {
   id: ContactTopicId;
   /** Shown in the select. */
   label: string;
-  /** Which Slack channel the notification posts to. */
-  channel: SlackChannel;
   /**
    * Marks topics carrying a legal deadline — GDPR data-subject requests must be
    * answered within one month (Art. 12(3)), so they're flagged in the admin
@@ -47,33 +45,27 @@ export const CONTACT_TOPIC_REGISTRY: Record<ContactTopicId, ContactTopicMeta> = 
   order: {
     id: "order",
     label: "Problem with an order",
-    channel: "ops",
   },
   billing: {
     id: "billing",
     label: "Billing, refund, or subscription",
-    channel: "ops",
   },
   bug: {
     id: "bug",
     label: "Something is broken",
-    channel: "ops",
   },
   privacy: {
     id: "privacy",
     label: "Privacy or data request",
-    channel: "ops",
     timeSensitive: true,
   },
   press: {
     id: "press",
     label: "Press or partnership",
-    channel: "growth",
   },
   other: {
     id: "other",
     label: "Something else",
-    channel: "growth",
   },
 };
 

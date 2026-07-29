@@ -33,6 +33,7 @@ import { appCheckRejects } from "../appCheck";
 import type { AuthedRequest } from "../auth";
 import { contactTopic } from "../../../books-frontend/src/core/contact/topics";
 import { checkSenderDomain, consumeRateLimit, fingerprint, looksAutomated } from "./abuse";
+import { contactAccountContext, formatAccountLine } from "./enrich";
 import {
   isContactMessageStatus,
   listContactMessages,
@@ -137,16 +138,23 @@ export function registerContactRoutes(app: Express): void {
         userAgent: req.get("user-agent")?.slice(0, 300) ?? null,
       });
 
-      // 7. Notify a human. Best-effort — the record above is the guarantee.
-      void notifySlack({
-        channel: meta.channel,
-        messageKey: "contact_form",
-        ref: saved.ref,
-        text:
-          `✉️ ${saved.ref} · ${meta.label}${meta.timeSensitive ? " ⏱" : ""}\n` +
-          `${name} <${email}>${req.uid ? ` · uid ${req.uid}` : ""}\n` +
-          message.slice(0, 500),
-      });
+      // 7. Notify a human. Best-effort — the record above is the guarantee. The
+      //    account line (signed-in/verified/lifetime revenue/last purchase) is
+      //    an extra async lookup, so it's wrapped in its own IIFE rather than
+      //    awaited inline — it must never delay the response to the visitor.
+      void (async () => {
+        const account = await contactAccountContext(req.uid);
+        await notifySlack({
+          channel: "contact",
+          messageKey: "contact_form",
+          ref: saved.ref,
+          text:
+            `✉️ ${saved.ref} · ${meta.label}${meta.timeSensitive ? " ⏱" : ""}\n` +
+            `${name} <${email}>${req.uid ? ` · uid ${req.uid}` : ""}\n` +
+            `${formatAccountLine(account)}\n` +
+            message.slice(0, 500),
+        });
+      })().catch((err) => console.error("[contact] slack notify failed", err));
 
       // 8. Acknowledge to the SUBMITTER — the trust signal that makes the form a
       //    credible substitute for a published address. Best-effort: the ref
