@@ -132,7 +132,7 @@ export function ProductsTab() {
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
 
   const [products, setProducts] = useState<ProductDefinition[]>([]);
-  const [verifying, setVerifying] = useState(false);
+  const [verifyingEnv, setVerifyingEnv] = useState<ProviderEnv | null>(null);
   const [measuring, setMeasuring] = useState(false);
   const [measureProgress, setMeasureProgress] = useState<{
     done: number;
@@ -252,10 +252,14 @@ export function ProductsTab() {
     }
   };
 
-  const onVerifyAll = async () => {
-    setVerifying(true);
+  // Sandbox and live are separate Lulu catalogues, so each needs its own
+  // pass — this can (and for live, must) run before that env is the active
+  // one; see `productsReadiness()` / the go-live readiness check, which
+  // needs a LIVE verdict recorded before the sandbox↔live toggle can flip.
+  const onVerifyAll = async (env: ProviderEnv) => {
+    setVerifyingEnv(env);
     try {
-      const s = await verifyProductsFn(runtime ? { env: runtime.env } : undefined);
+      const s = await verifyProductsFn({ env });
       applyCatalog(s.config);
       const parts = [`${s.ok} verified`];
       if (s.rejected) parts.push(`${s.rejected} rejected`);
@@ -266,7 +270,7 @@ export function ProductsTab() {
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Verification failed.");
     } finally {
-      setVerifying(false);
+      setVerifyingEnv(null);
     }
   };
 
@@ -379,11 +383,12 @@ export function ProductsTab() {
       <TabIntro
         elsewhere={
           <>
-            Verifying SKUs and measuring costs run against the{" "}
-            <span className="font-medium">{runtime?.env ?? "active"}</span> print catalog, because
-            sandbox and live are separate catalogues — the sandbox/live switch itself lives under{" "}
-            <span className="font-medium">System health</span>. Currencies, payment fees and tax that
-            turn these prices into margins are set once under{" "}
+            Sandbox and live are separate print catalogues, so <span className="font-medium">Verify</span>{" "}
+            always lets you target either one — including live, before you switch over — but{" "}
+            <span className="font-medium">Measure costs</span> only runs against the{" "}
+            <span className="font-medium">{runtime?.env ?? "active"}</span> one. The sandbox/live switch
+            itself lives under <span className="font-medium">System health</span>. Currencies, payment
+            fees and tax that turn these prices into margins are set once under{" "}
             <span className="font-medium">Financial settings</span>.
           </>
         }
@@ -416,15 +421,24 @@ export function ProductsTab() {
               Seed
             </Button>
           </div>
-          <ActionButton
-            show={products.length > 0}
-            icon={<BadgeCheck className="size-4" />}
-            label={`Verify all against ${runtime?.env ?? "…"}`}
-            explainer={`Asks the printer to price every SKU, which is the only way to find out whether it really exists. A rejected SKU fails at print time — after the customer has paid — so nothing is offered for sale until it passes here. Sandbox and live are separate catalogues, so this proves ${runtime?.env ?? "the active environment"} only.`}
-            busy={verifying}
-            disabledReason={dirty ? "Save your changes first — verification runs against the saved catalog." : null}
-            onClick={onVerifyAll}
-          />
+          {PROVIDER_ENVS.map((env) => (
+            <ActionButton
+              key={env}
+              show={products.length > 0}
+              icon={<BadgeCheck className="size-4" />}
+              label={`Verify all against ${env}${runtime?.env === env ? " (active)" : ""}`}
+              explainer={`Asks the printer to price every SKU, which is the only way to find out whether it really exists. A rejected SKU fails at print time — after the customer has paid — so nothing is offered for sale until it passes here. Sandbox and live are separate catalogues verified independently — this always probes ${env}, regardless of which one is currently active.`}
+              busy={verifyingEnv === env}
+              disabledReason={
+                dirty
+                  ? "Save your changes first — verification runs against the saved catalog."
+                  : verifyingEnv != null && verifyingEnv !== env
+                    ? `Already verifying against ${verifyingEnv}…`
+                    : null
+              }
+              onClick={() => onVerifyAll(env)}
+            />
+          ))}
           <ActionButton
             show={products.length > 0}
             icon={<Ruler className="size-4" />}
