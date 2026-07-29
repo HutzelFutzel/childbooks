@@ -8,9 +8,12 @@ import { Field, Input, Textarea } from "../../components/Input";
 import { Select } from "../../components/Select";
 import { Toggle } from "../../components/Toggle";
 import { useAppConfigStore } from "../../../state/appConfigStore";
+import { useAdminHealth } from "../../../state/adminHealthStore";
 import {
+  BILLING_ENVS,
   BILLING_INTERVALS,
   createDefaultPlan,
+  type BillingEnv,
   type PlanDefinition,
   type PlanStatus,
 } from "../../../core/config/plans";
@@ -59,12 +62,18 @@ export function PlansTab() {
   const pricingSettings = useAppConfigStore((s) => s.pricingSettings);
   const savePricingSettings = useAppConfigStore((s) => s.savePricingSettings);
   const sparksConfig = useAppConfigStore((s) => s.sparks);
+  const runtime = useAdminHealth((s) => s.runtime);
+  const loadRuntime = useAdminHealth((s) => s.loadRuntime);
 
   const [plans, setPlans] = useState<PlanDefinition[]>([]);
   const [products, setProducts] = useState<ProductDefinition[]>([]);
   const [loading, setLoading] = useState(true);
-  const [syncing, setSyncing] = useState(false);
+  const [syncingEnv, setSyncingEnv] = useState<BillingEnv | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!runtime) void loadRuntime();
+  }, [runtime, loadRuntime]);
 
   useEffect(() => {
     void (async () => {
@@ -131,16 +140,21 @@ export function PlansTab() {
     }
   };
 
-  const onSync = async () => {
-    setSyncing(true);
+  // Sandbox and live are separate Stripe ledgers, so each needs its own prices
+  // — this can (and for live, must) run before that env is the active one, the
+  // same "prove it before you switch" pattern as the Products tab's per-env
+  // Verify buttons. That's what lets you create live prices for the go-live
+  // readiness check without ever flipping the sandbox↔live toggle.
+  const onSync = async (env: BillingEnv) => {
+    setSyncingEnv(env);
     try {
-      const config = await syncPlans();
+      const config = await syncPlans(env);
       setPlans(config.plans);
-      toast.success("All plans re-synced to Stripe.");
+      toast.success(`All plans re-synced to ${env} Stripe.`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not sync.");
     } finally {
-      setSyncing(false);
+      setSyncingEnv(null);
     }
   };
 
@@ -163,10 +177,21 @@ export function PlansTab() {
         perks; Stripe owns the billing, and saving syncs the plan&apos;s Stripe product + prices.
       </TabIntro>
 
-      <div className="flex items-center justify-end gap-2">
-        <Button variant="secondary" size="sm" leftIcon={<RefreshCw className="size-3.5" />} loading={syncing} onClick={onSync}>
-          Sync all to Stripe
-        </Button>
+      <div className="flex flex-wrap items-center justify-end gap-2">
+        {BILLING_ENVS.map((env) => (
+          <Button
+            key={env}
+            variant="secondary"
+            size="sm"
+            leftIcon={<RefreshCw className="size-3.5" />}
+            loading={syncingEnv === env}
+            disabled={syncingEnv != null && syncingEnv !== env}
+            title={`Reconcile every plan's Stripe product + prices against ${env}, regardless of which environment is currently active.`}
+            onClick={() => onSync(env)}
+          >
+            Sync all to {env} Stripe{runtime?.env === env ? " (active)" : ""}
+          </Button>
+        ))}
         <Button size="sm" leftIcon={<Plus className="size-3.5" />} onClick={addPlan}>
           New plan
         </Button>

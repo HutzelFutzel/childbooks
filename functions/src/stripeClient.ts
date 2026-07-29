@@ -10,30 +10,56 @@
  * key) transparently builds a fresh client on the next call.
  */
 import Stripe from "stripe";
+import { loadServerConfig } from "../../books-frontend/src/core/config/serverEnv";
+import type { BillingEnv } from "../../books-frontend/src/core/config/plans";
 import { serverConfig } from "./config";
 
-let cached: { key: string; client: Stripe } | null = null;
+const clientsByKey = new Map<string, Stripe>();
 
-/** Whether Stripe is configured at all (a secret key is present). */
+function clientFor(key: string): Stripe {
+  const trimmed = key.trim();
+  if (!trimmed) throw new StripeNotConfiguredError();
+  const existing = clientsByKey.get(trimmed);
+  if (existing) return existing;
+  // Omit apiVersion so the SDK uses the version its types are built for; the
+  // account's default API version still governs webhook event shapes.
+  const client = new Stripe(trimmed, { appInfo: { name: "childbooks" } });
+  clientsByKey.set(trimmed, client);
+  return client;
+}
+
+/** Whether Stripe is configured at all (a secret key is present) for the ACTIVE environment. */
 export function stripeConfigured(): boolean {
   return Boolean(serverConfig().stripe.secretKey.trim());
 }
 
 /**
- * The Stripe client for the active environment. Throws a typed-ish error when no
- * secret key is configured so callers can surface a clear 503.
+ * The Stripe client for the active environment (honors the sandbox↔live
+ * runtime toggle). Throws a typed-ish error when no secret key is configured
+ * so callers can surface a clear 503.
  */
 export function getStripe(): Stripe {
-  const key = serverConfig().stripe.secretKey.trim();
-  if (!key) {
-    throw new StripeNotConfiguredError();
-  }
-  if (cached && cached.key === key) return cached.client;
-  // Omit apiVersion so the SDK uses the version its types are built for; the
-  // account's default API version still governs webhook event shapes.
-  const client = new Stripe(key, { appInfo: { name: "childbooks" } });
-  cached = { key, client };
-  return client;
+  return clientFor(serverConfig().stripe.secretKey);
+}
+
+/**
+ * The Stripe secret key configured for an EXPLICIT environment, ignoring
+ * whatever the sandbox↔live runtime toggle currently has active. Mirrors
+ * `readiness.ts`'s `configFor()` — used by tooling (plan price sync) that
+ * must reconcile against live before flipping the toggle.
+ */
+function keyFor(env: BillingEnv): string {
+  return loadServerConfig(process.env as Record<string, string | undefined>, { envOverride: env }).stripe.secretKey;
+}
+
+/** Whether Stripe is configured for a SPECIFIC environment (not just the active one). */
+export function stripeConfiguredFor(env: BillingEnv): boolean {
+  return Boolean(keyFor(env).trim());
+}
+
+/** The Stripe client for a SPECIFIC environment, regardless of which is active. */
+export function getStripeFor(env: BillingEnv): Stripe {
+  return clientFor(keyFor(env));
 }
 
 export class StripeNotConfiguredError extends Error {

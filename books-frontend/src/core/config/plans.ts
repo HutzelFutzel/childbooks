@@ -28,6 +28,9 @@ export type BillingInterval = "month" | "year";
  *  id that doesn't exist in the active mode. */
 export type BillingEnv = "sandbox" | "live";
 
+/** Both billing environments — sandbox and live are separate Stripe ledgers. */
+export const BILLING_ENVS: BillingEnv[] = ["sandbox", "live"];
+
 export const BILLING_INTERVALS: BillingInterval[] = ["month", "year"];
 
 /** One concrete Stripe price for a (currency, interval) combination. */

@@ -66,6 +66,7 @@ import {
 } from "../core/config/sparks";
 import {
   normalizePublicPlansConfig,
+  type BillingEnv,
   type PlanDefinition,
   type PlansConfig,
   type PublicPlansConfig,
@@ -382,7 +383,8 @@ interface AppConfigState {
   savePlan: (plan: PlanDefinition) => Promise<PlanDefinition>;
   savePlansConfig: (config: PlansConfig) => Promise<PlansConfig>;
   deletePlanById: (id: string) => Promise<PlansConfig>;
-  syncPlans: () => Promise<PlansConfig>;
+  /** `env` targets a specific Stripe environment (default: whichever is active). */
+  syncPlans: (env?: BillingEnv) => Promise<PlansConfig>;
 
   /** Per-action cost intelligence (avg/high/low + frequency + realized margin + time-series). */
   loadActionCosts: (opts: {
@@ -721,8 +723,12 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     return (await res.json()) as PlansConfig;
   },
 
-  async syncPlans() {
-    const res = await backendFetch("/admin/config/plans/sync", { method: "POST" });
+  async syncPlans(env) {
+    const res = await backendFetch("/admin/config/plans/sync", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(env ? { env } : {}),
+    });
     if (!res.ok) throw new Error((await safeError(res)) ?? "Could not sync plans.");
     return (await res.json()) as PlansConfig;
   },

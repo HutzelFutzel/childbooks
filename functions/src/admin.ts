@@ -52,8 +52,8 @@ import {
   patchCatalogPhoto,
   removeCatalogPhoto,
 } from "./appConfig";
-import { deletePlan, getPlansConfig, savePlansConfig, syncPlanToStripe, upsertPlan } from "./plans";
-import { normalizePlan } from "../../books-frontend/src/core/config/plans";
+import { deletePlan, getPlansConfig, savePlansConfig, syncAllPlansToStripe, upsertPlan } from "./plans";
+import type { BillingEnv } from "../../books-frontend/src/core/config/plans";
 import {
   deletePublicObject,
   uploadArtStyleImage,
@@ -1297,12 +1297,17 @@ export function registerAdminRoutes(app: Express): void {
     }
   });
 
-  // Re-sync every plan to Stripe (drift repair / "Sync now"). Returns the config.
-  app.post("/admin/config/plans/sync", json, async (_req: Request, res: Response) => {
+  // Re-sync every plan to Stripe (drift repair / "Sync now"). Returns the
+  // config. `env` (optional; "sandbox" | "live") targets a SPECIFIC Stripe
+  // environment regardless of which one the sandbox↔live toggle currently has
+  // active — this is how you create live prices before flipping to live (the
+  // same "prove it before you switch" pattern as `/admin/config/products/verify`).
+  app.post("/admin/config/plans/sync", json, async (req: Request, res: Response) => {
     try {
-      const config = await getPlansConfig();
-      const synced = await Promise.all(config.plans.map((p) => syncPlanToStripe(normalizePlan(p))));
-      res.json(await savePlansConfig({ version: 1, plans: synced }));
+      const body = (req.body ?? {}) as { env?: string };
+      const targetEnv: BillingEnv | undefined =
+        body.env === "live" ? "live" : body.env === "sandbox" ? "sandbox" : undefined;
+      res.json(await syncAllPlansToStripe(targetEnv));
     } catch (err) {
       handleError(res, err);
     }

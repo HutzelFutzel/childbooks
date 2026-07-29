@@ -16,7 +16,7 @@
  */
 import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
-import { getStripe, stripeConfigured } from "./stripeClient";
+import { getStripe, getStripeFor, stripeConfigured, stripeConfiguredFor } from "./stripeClient";
 import { serverConfig } from "./config";
 import {
   BILLING_INTERVALS,
@@ -121,13 +121,18 @@ export function defaultPlansConfig(): PlansConfig {
  * one archived) when the amount, currency, interval or active flag drifts from
  * Stripe — Prices are immutable, so editing means replace. The free plan and an
  * unconfigured Stripe account are passed through untouched.
+ *
+ * `targetEnv` lets a caller reconcile against a SPECIFIC environment (e.g.
+ * "live") regardless of which one the sandbox↔live runtime toggle currently
+ * has active — this is what lets you create live Stripe prices ahead of
+ * flipping the toggle (see `/admin/config/plans/sync`), the same way print SKU
+ * verification can target live while still serving sandbox. Defaults to the
+ * active environment, matching the normal save-a-plan flow.
  */
-export async function syncPlanToStripe(plan: PlanDefinition): Promise<PlanDefinition> {
-  if (plan.isFree || !stripeConfigured()) return plan;
-  const stripe = getStripe();
-  // Stripe test and live are separate ledgers, so we reconcile against the
-  // ACTIVE environment and store the resulting ids in that env's slot only.
-  const env = activeEnv();
+export async function syncPlanToStripe(plan: PlanDefinition, targetEnv?: BillingEnv): Promise<PlanDefinition> {
+  const env = targetEnv ?? activeEnv();
+  if (plan.isFree || !stripeConfiguredFor(env)) return plan;
+  const stripe = getStripeFor(env);
 
   const name = plan.presentation.name || "Subscription plan";
   const description = plan.presentation.tagline || plan.presentation.description || undefined;
@@ -222,6 +227,18 @@ export async function upsertPlan(input: unknown, uid?: string): Promise<PlanDefi
     idx === -1 ? [...current.plans, synced] : current.plans.map((p) => (p.id === synced.id ? synced : p));
   await writeConfig({ version: 1, plans });
   return synced;
+}
+
+/**
+ * Re-sync every active-billing plan into a SPECIFIC Stripe environment
+ * (defaults to whichever is active) and persist the result. This is how you
+ * create the live Stripe prices/products ahead of flipping the sandbox↔live
+ * toggle — the go-live readiness check requires them to already exist.
+ */
+export async function syncAllPlansToStripe(targetEnv?: BillingEnv): Promise<PlansConfig> {
+  const config = await readConfig();
+  const synced = await Promise.all(config.plans.map((p) => syncPlanToStripe(normalizePlan(p), targetEnv)));
+  return writeConfig({ version: 1, plans: synced });
 }
 
 export async function deletePlan(id: string): Promise<PlansConfig> {
