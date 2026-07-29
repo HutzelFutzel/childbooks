@@ -66,6 +66,18 @@ if (!existsSync(APP_HOSTING_PATH)) {
     else if (!value) fail(`${name} is declared but empty in apphosting.yaml.`);
     else ok(`${name} is set.`);
   }
+  // App Check is optional but load-bearing once configured, and an empty site key
+  // silently disables the only real bot gate on the public contact endpoint. Warn
+  // rather than fail: a deployment without App Check is degraded, not broken.
+  const appCheckKey = declared.get("NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY");
+  if (!appCheckKey) {
+    warn(
+      "NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY is empty — App Check is OFF, so the public " +
+        "contact form has no bot gate (see functions/.env.example → App Check).",
+    );
+  } else {
+    ok("NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY is set.");
+  }
   const emu = declared.get("NEXT_PUBLIC_USE_FIREBASE_EMULATORS");
   if (emu && emu !== "false") fail(`NEXT_PUBLIC_USE_FIREBASE_EMULATORS is "${emu}" — production must be "false".`);
   const storageEmu = declared.get("NEXT_PUBLIC_USE_STORAGE_EMULATOR");

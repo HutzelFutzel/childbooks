@@ -158,7 +158,11 @@ const SITE_CONTENT_DOC = "appConfig/siteContent";
 const PROMPTS_DOC = "appConfig/prompts";
 const IMAGE_COST_STATS_DOC = "appConfig/imageCostStats";
 const LATENCY_STATS_DOC = "appConfig/latencyStats";
-const EMAIL_CONFIG_DOC = "appConfig/emailConfig";
+// NOT under `appConfig/*`: that namespace is world-readable, and this doc holds
+// the support inbox, the contact recipient and every sender identity. See
+// `getEmailConfig` for the one-time migration off the old public path.
+const EMAIL_CONFIG_DOC = "adminSettings/emailConfig";
+const LEGACY_EMAIL_CONFIG_DOC = "appConfig/emailConfig";
 const EMAIL_STATS_DOC = "appConfig/emailStats";
 const SLACK_CONFIG_DOC = "appConfig/slackConfig";
 const LEGAL_DOC = "appConfig/legal";
@@ -315,7 +319,37 @@ export async function recordImageCostSample(
 
 // ---- Email (system + marketing) --------------------------------------------
 
-export function getEmailConfig(): Promise<EmailConfig> {
+/** Once-per-instance guard for the legacy-path migration below. */
+let emailConfigMigrated = false;
+
+/**
+ * Move the email config off the world-readable `appConfig/emailConfig` path.
+ *
+ * Any deployment configured before the move still has its real addresses in the
+ * public doc, so copy them across (only if the private doc doesn't exist yet —
+ * a later admin save must win) and delete the public copy. Best-effort and once
+ * per instance: a failure here leaves the old doc in place, and the next cold
+ * start retries.
+ */
+async function migrateEmailConfigOffPublicPath(): Promise<void> {
+  ensureAdmin();
+  const db = getFirestore();
+  const legacy = await db.doc(LEGACY_EMAIL_CONFIG_DOC).get();
+  if (!legacy.exists) return;
+  const current = await db.doc(EMAIL_CONFIG_DOC).get();
+  if (!current.exists) {
+    await writeDoc(EMAIL_CONFIG_DOC, normalizeEmailConfig(legacy.data()));
+  }
+  await db.doc(LEGACY_EMAIL_CONFIG_DOC).delete();
+}
+
+export async function getEmailConfig(): Promise<EmailConfig> {
+  if (!emailConfigMigrated) {
+    emailConfigMigrated = true;
+    await migrateEmailConfigOffPublicPath().catch(() => {
+      emailConfigMigrated = false; // retry on the next call
+    });
+  }
   return readDoc(EMAIL_CONFIG_DOC, normalizeEmailConfig);
 }
 
@@ -327,7 +361,7 @@ export function defaultEmailConfig(): EmailConfig {
   return createDefaultEmailConfig();
 }
 
-/** Validate + persist the email config (world-readable appConfig doc). */
+/** Validate + persist the email config (admin-only doc; never client-readable). */
 export async function saveEmailConfig(input: unknown): Promise<EmailConfig> {
   const parsed = emailConfigSchema.parse(input);
   const normalized = normalizeEmailConfig({ ...parsed, updatedAt: Date.now() });

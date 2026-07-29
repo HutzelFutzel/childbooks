@@ -7,11 +7,12 @@
  * per-template enable toggles + subject overrides + optional send delay, the
  * daily send cap, and the contact/legal footer shown in every email.
  *
- * Stored at the world-readable `appConfig/emailConfig` doc (the values here — a
- * noreply address, a support email, a postal address — appear in outgoing email
- * anyway, so there's nothing secret). The ZeptoMail API token + webhook secret
- * are NOT here; they live in Cloud Secret Manager. Writes go only through the
- * admin-gated backend (`/admin/config/email`).
+ * Stored at `adminSettings/emailConfig`, which is NOT client-readable: the
+ * inbox addresses here (support, contact recipient, sender identities) are
+ * exactly what an address harvester wants, and a world-readable doc hands them
+ * over in bulk without even loading the site. Both reads and writes go through
+ * the admin-gated backend (`/admin/config/email`). The ZeptoMail API token +
+ * webhook secret are not here either; they live in Cloud Secret Manager.
  */
 import { z } from "zod";
 import {
@@ -47,9 +48,13 @@ export interface EmailGlobalSettings {
   enabled: boolean;
   /** Copyright / legal line shown in the footer. */
   footerText: string;
-  /** Support email shown (and used as mailto) in the footer. */
+  /**
+   * Support inbox for internal use (e.g. the contact-form test send). NOT
+   * rendered in outgoing email — the footer links to `/contact` instead of
+   * printing this address, so it never ends up in a recipient's mail client.
+   */
   supportEmail: string;
-  /** Help/contact page URL shown in the footer. */
+  /** Extra "Help center" link shown in the footer, alongside the fixed /contact link. */
   supportUrl: string;
   /** Base URL for one-click unsubscribe (marketing only). Empty disables it. */
   unsubscribeUrl: string;
@@ -59,7 +64,13 @@ export interface EmailGlobalSettings {
   maxDailySends: number;
   /** Whether the public contact form accepts submissions. */
   contactEnabled: boolean;
-  /** Inbox that contact-form submissions are delivered to (falls back to support). */
+  /**
+   * OPTIONAL email copy of contact-form submissions. Empty by default and
+   * intentionally so: submissions are stored in Firestore and announced on
+   * Slack, so no inbox has to be exposed to receive them. Set this only if you
+   * also want them in a mailbox — whatever you put here is the address that
+   * receives whatever gets past the form's abuse checks.
+   */
   contactRecipient: string;
 }
 
@@ -92,12 +103,16 @@ export function createDefaultEmailConfig(): EmailConfig {
       enabled: true,
       footerText: `© ${new Date().getFullYear()} Childbook Studio`,
       supportEmail: `hello@${DEFAULT_DOMAIN}`,
-      supportUrl: `https://${DEFAULT_DOMAIN}/help`,
+      // Empty by default: the fixed "Contact us" link (→ /contact) already
+      // covers it, and the old default pointed at a /help route that doesn't
+      // exist. Set this once there's an actual help center to link to —
+      // pointing it at /contact too would just duplicate the other link.
+      supportUrl: "",
       unsubscribeUrl: `https://${DEFAULT_DOMAIN}/unsubscribe`,
       physicalAddress: "",
       maxDailySends: 0,
       contactEnabled: true,
-      contactRecipient: `hello@${DEFAULT_DOMAIN}`,
+      contactRecipient: "",
     },
     senders: {
       default: `Childbook Studio <noreply@${DEFAULT_DOMAIN}>`,

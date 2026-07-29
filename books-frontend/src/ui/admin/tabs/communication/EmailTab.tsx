@@ -7,7 +7,6 @@ import { Button } from "../../../components/Button";
 import { Field, Input, Textarea } from "../../../components/Input";
 import { Select } from "../../../components/Select";
 import { Toggle } from "../../../components/Toggle";
-import { backendFetch } from "../../../../platform/backend";
 import { useAppConfigStore } from "../../../../state/appConfigStore";
 import type { EmailConfig, EmailTemplateSettings } from "../../../../core/config/emailConfig";
 import { sumRecentDays, zeroCounts } from "../../../../core/config/emailStats";
@@ -32,17 +31,22 @@ function pct(part: number, whole: number): string {
 }
 
 /**
- * Communication → Transactional emails. Edits the world-readable
- * `appConfig/emailConfig` (senders, master switch, per-template toggles +
+ * Communication → Transactional emails. Edits the admin-only
+ * `adminSettings/emailConfig` (senders, master switch, per-template toggles +
  * subject overrides + send delay, footer, daily cap), shows live ZeptoMail
  * delivery statistics from `appConfig/emailStats`, previews each code template
  * with the live brand kit, and sends test emails.
+ *
+ * The config is FETCHED here rather than read from a Firestore subscription: it
+ * holds the support inbox, the contact recipient and the sender identities, so
+ * it must never be world-readable (see `appConfigStore.subscribe`).
  */
 export function EmailTab() {
   const stored = useAppConfigStore((s) => s.emailConfig);
   const stats = useAppConfigStore((s) => s.emailStats);
   const branding = useAppConfigStore((s) => s.branding);
   const seo = useAppConfigStore((s) => s.seo);
+  const load = useAppConfigStore((s) => s.loadEmailConfig);
   const save = useAppConfigStore((s) => s.saveEmailConfig);
   const sendTest = useAppConfigStore((s) => s.sendTestEmail);
   const sendTestContact = useAppConfigStore((s) => s.sendTestContact);
@@ -59,19 +63,21 @@ export function EmailTab() {
     if (!dirty) setDraft(stored);
   }, [stored, dirty]);
 
-  // One-off: learn whether the ZeptoMail token secret is present.
+  // Fetch the admin-only config (there is no public subscription to read it
+  // from) and learn whether the ZeptoMail token secret is present.
   useEffect(() => {
     let alive = true;
-    backendFetch("/admin/config/email")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => {
-        if (alive && j) setConfigured(Boolean((j as { configured?: boolean }).configured));
+    load()
+      .then(({ configured: isConfigured }) => {
+        if (alive) setConfigured(isConfigured);
       })
-      .catch(() => {});
+      .catch((err: unknown) => {
+        if (alive) toast.error(err instanceof Error ? err.message : "Could not load email settings.");
+      });
     return () => {
       alive = false;
     };
-  }, []);
+  }, [load]);
 
   const set = (patch: Partial<EmailConfig>) => {
     setDraft((d) => ({ ...d, ...patch }));
@@ -219,12 +225,13 @@ export function EmailTab() {
         </label>
         <Grid cols={2}>
           <TextField
-            label="Support email (footer + reply target)"
+            label="Support email (internal — not shown in outgoing email)"
             value={draft.global.supportEmail}
             onChange={(v) => setGlobal({ supportEmail: v })}
           />
           <TextField
-            label="Help / contact URL"
+            label="Extra help center URL (optional — footer always links /contact too)"
+            placeholder="leave empty if you have no separate help center"
             value={draft.global.supportUrl}
             onChange={(v) => setGlobal({ supportUrl: v })}
           />
@@ -258,7 +265,7 @@ export function EmailTab() {
       {/* ---- Contact form ---- */}
       <Section
         title="Contact form"
-        hint="The public /contact page delivers messages here. Reply-to is set to the sender, so you can respond directly."
+        hint="Submissions from /contact are stored and posted to Slack, so no inbox has to be published to receive them. The email copy below is optional — leave it empty to keep contact traffic out of a mailbox entirely."
         action={
           <Button
             variant="secondary"
@@ -280,7 +287,8 @@ export function EmailTab() {
           Contact form enabled {draft.global.contactEnabled ? "" : "— the form rejects submissions"}
         </label>
         <TextField
-          label="Contact inbox (where submissions are delivered)"
+          label="Email copy of submissions (optional — empty means Slack only)"
+          placeholder="leave empty to receive no email"
           value={draft.global.contactRecipient}
           onChange={(v) => setGlobal({ contactRecipient: v })}
         />

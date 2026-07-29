@@ -15,13 +15,19 @@
  * injects for upstream calls.
  */
 import { signInAnonymously } from "firebase/auth";
-import { getFirebaseAuth } from "../lib/firebase";
+import { appCheckToken, getFirebaseAuth } from "../lib/firebase";
 
 const PROJECT_ID = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "childbook-60f89";
 const EMULATOR_DEFAULT = `http://127.0.0.1:5001/${PROJECT_ID}/us-central1/api`;
 
 /** Header the backend reads the Firebase ID token from. */
 export const AUTH_TOKEN_HEADER = "X-Auth-Token";
+
+/**
+ * Header the backend reads the App Check attestation from. The standard name the
+ * Firebase SDKs use — already allowlisted in `cors.json`.
+ */
+export const APP_CHECK_HEADER = "X-Firebase-AppCheck";
 
 /**
  * Resolved lazily, on the first request — NOT at module scope. This module is
@@ -91,13 +97,19 @@ async function recoverSession(): Promise<boolean> {
 }
 
 /**
- * Merge the auth token header into an existing `HeadersInit`. Use this for any
- * request that targets the backend so it carries the caller's identity.
+ * Merge the auth + App Check headers into an existing `HeadersInit`. Use this for
+ * any request that targets the backend so it carries the caller's identity and
+ * proof that it came from a real instance of this app.
+ *
+ * Both are attached whenever available and both are optional: the ID token is
+ * absent when signed out, and the App Check token is absent when App Check isn't
+ * configured. Fetched in parallel so an unattested request never pays twice.
  */
 export async function withAuthHeaders(headers?: HeadersInit): Promise<Headers> {
   const merged = new Headers(headers);
-  const token = await currentIdToken();
+  const [token, attestation] = await Promise.all([currentIdToken(), appCheckToken()]);
   if (token) merged.set(AUTH_TOKEN_HEADER, token);
+  if (attestation) merged.set(APP_CHECK_HEADER, attestation);
   return merged;
 }
 

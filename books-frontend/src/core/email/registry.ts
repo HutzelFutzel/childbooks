@@ -189,6 +189,16 @@ export const EMAIL_TEMPLATE_REGISTRY: Registry = {
       message: "Hi! I'd love to know how long shipping takes to Germany. Thanks!",
     },
   },
+  contact_form_ack: {
+    id: "contact_form_ack",
+    label: "Contact form received (to sender)",
+    description:
+      "Sent to the visitor right after their contact-form message is accepted — the trust signal that makes the " +
+      "form a credible replacement for a published email address. Includes their reference.",
+    category: "transactional",
+    defaultSenderKey: "support",
+    sample: { name: "Jamie", ref: "CB-7F2A9C", topic: "Question about printing" },
+  },
   policy_update: {
     id: "policy_update",
     label: "Policy update notice",

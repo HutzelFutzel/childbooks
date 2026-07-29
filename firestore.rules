@@ -131,11 +131,16 @@ service cloud.firestore {
     // Global, admin-managed configuration (model config, art-style examples…).
     // World-readable so the wizard + client can resolve them; writes only ever
     // happen through the backend (Admin SDK) after `requireAdmin`.
-    // Exception: the raw provider rate table (`modelCosts`) is admin-only —
-    // the storefront reads the derived `modelCostsPublic` projection instead
-    // (flat per-image estimates, written by the backend on every save).
+    // Exceptions, admin-only:
+    //   - `modelCosts`, the raw provider rate table — the storefront reads the
+    //     derived `modelCostsPublic` projection instead (flat per-image
+    //     estimates, written by the backend on every save).
+    //   - `emailConfig`, which MOVED to `adminSettings/emailConfig` because it
+    //     holds every inbox address the product uses. The backend deletes the old
+    //     doc on its first read after deploy; this keeps it unreadable in the
+    //     meantime, and keeps the path shut if anything ever recreates it.
     match /appConfig/{doc} {
-      allow read: if doc != 'modelCosts' || isAdmin();
+      allow read: if !(doc in ['modelCosts', 'emailConfig']) || isAdmin();
       allow write: if false;
     }
 
@@ -162,10 +167,30 @@ service cloud.firestore {
       }
     }
 
-    // Admin dashboard settings (exclusion lists, timezone, refresh interval).
-    // Holds the email/domain exclusion list, so — unlike `appConfig/*` — it must
-    // NEVER be world-readable. Read/written only via the admin-gated backend.
+    // Admin dashboard settings (exclusion lists, timezone, refresh interval) and
+    // the email config. Holds the analytics exclusion list plus every inbox
+    // address the product uses — the support inbox, the contact recipient and the
+    // sender identities — so unlike `appConfig/*` it must NEVER be world-readable:
+    // a public config doc hands an address harvester the whole set in one read,
+    // without even loading the site. Read/written only via the admin-gated
+    // backend (`/admin/config/email`).
     match /adminSettings/{doc} {
+      allow read, write: if false;
+    }
+
+    // Contact-form submissions — the system of record for the public form (the
+    // site publishes no email address, so this is the primary support channel).
+    // Contains the sender's name, address and message, so it is never client-
+    // readable; the admin dashboard reads it through the admin-gated backend.
+    match /contactMessages/{ref} {
+      allow read, write: if false;
+    }
+
+    // Fixed-window rate-limit counters for the tokenless contact endpoint. Keys
+    // are hashed before use as document ids, so these hold no addresses — just
+    // opaque counters. Written only by the backend; a Firestore TTL policy on
+    // `expiresAt` reaps them.
+    match /contactRateLimits/{key} {
       allow read, write: if false;
     }
 

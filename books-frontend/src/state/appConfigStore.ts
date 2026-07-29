@@ -308,7 +308,11 @@ interface AppConfigState {
   catalogMedia: CatalogMediaConfig;
   /** Admin-editable LLM prompt templates. */
   prompts: PromptsConfig;
-  /** System + marketing email config (senders, toggles, footer). */
+  /**
+   * System + marketing email config (senders, toggles, footer). Admin-only —
+   * it holds the support inbox and contact recipient, so it is NOT part of the
+   * public snapshot set; call {@link loadEmailConfig} to populate it.
+   */
   emailConfig: EmailConfig;
   /** Aggregate email delivery statistics (sent/delivered/opened/bounced…). */
   emailStats: EmailStats;
@@ -350,6 +354,11 @@ interface AppConfigState {
   voidUnacceptedInvitations: (reason?: string) => Promise<number>;
   saveSeoConfig: (config: SeoConfig) => Promise<void>;
   savePrompts: (config: PromptsConfig) => Promise<void>;
+  /**
+   * Fetch the admin-only email config. Also reports whether the ZeptoMail token
+   * secret is present, so the editor can warn when sending is unconfigured.
+   */
+  loadEmailConfig: () => Promise<{ config: EmailConfig; configured: boolean }>;
   saveEmailConfig: (config: EmailConfig) => Promise<void>;
   /** Send a template with its sample vars to a test recipient (admin by default). */
   sendTestEmail: (templateId: EmailTemplateId, to?: string) => Promise<void>;
@@ -607,9 +616,10 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       onSnapshot(doc(db, "appConfig", "prompts"), (snap) => {
         set({ prompts: normalizePromptsConfig(snap.exists() ? snap.data() : undefined) });
       }),
-      onSnapshot(doc(db, "appConfig", "emailConfig"), (snap) => {
-        set({ emailConfig: normalizeEmailConfig(snap.exists() ? snap.data() : undefined) });
-      }),
+      // NOTE: `emailConfig` is deliberately NOT subscribed here. It holds the
+      // support inbox, the contact recipient and every sender identity, so it
+      // lives in an admin-only doc and is fetched by the admin editor via
+      // `loadEmailConfig()` instead of being streamed to every visitor.
       onSnapshot(doc(db, "appConfig", "emailStats"), (snap) => {
         set({ emailStats: normalizeEmailStats(snap.exists() ? snap.data() : undefined) });
       }),
@@ -739,6 +749,15 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
 
   async savePrompts(config) {
     set({ prompts: normalizePromptsConfig(await putJson("/admin/config/prompts", config)) });
+  },
+
+  async loadEmailConfig() {
+    const res = await backendFetch("/admin/config/email");
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load email settings.");
+    const json = (await res.json()) as { config?: unknown; configured?: boolean };
+    const config = normalizeEmailConfig(json.config);
+    set({ emailConfig: config });
+    return { config, configured: Boolean(json.configured) };
   },
 
   async saveEmailConfig(config) {

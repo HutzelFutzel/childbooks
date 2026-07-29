@@ -28,6 +28,7 @@ import {
   MessageSquareText,
   MessagesSquare,
   Hash,
+  Inbox,
   Mail,
   Type,
   Scale,
@@ -81,6 +82,7 @@ import { SystemHealthTab } from "./tabs/SystemHealthTab";
 import { SeoTab } from "./tabs/marketing/SeoTab";
 import { BlogTab } from "./tabs/marketing/BlogTab";
 import { BrandingTab } from "./tabs/marketing/BrandingTab";
+import { ContactInboxTab } from "./tabs/communication/ContactInboxTab";
 import { EmailTab } from "./tabs/communication/EmailTab";
 import { SlackTab } from "./tabs/communication/SlackTab";
 import { LegalDocsTab } from "./tabs/legal/LegalDocsTab";
@@ -134,6 +136,7 @@ const MARKETING_TABS = [
 ];
 
 const COMMUNICATION_TABS = [
+  { id: "contact", label: "Contact inbox", icon: <Inbox className="size-4" /> },
   { id: "transactional-emails", label: "Transactional Emails", icon: <Mail className="size-4" /> },
   { id: "admin-slack", label: "Admin Slack", icon: <Hash className="size-4" /> },
 ];
@@ -392,6 +395,7 @@ export default function AdminApp() {
                       value={communicationTab}
                       onChange={(id) => setCommunicationTab(id as CommunicationTabId)}
                     />
+                    {communicationTab === "contact" && <ContactInboxTab />}
                     {communicationTab === "transactional-emails" && <EmailTab />}
                     {communicationTab === "admin-slack" && <SlackTab />}
                   </div>

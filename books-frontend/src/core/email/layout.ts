@@ -88,11 +88,16 @@ function headerHtml(brand: RenderContext["brand"]): string {
 function footerHtml(ctx: RenderContext): string {
   const { footer, brand, category } = ctx;
   const links: string[] = [];
-  if (footer.supportEmail) {
+  // NOT a `mailto:` to `footer.supportEmail`: printing the raw address in every
+  // outgoing email hands it to every recipient's mail client (and every forward,
+  // archive, and breach) forever. Reply-To already carries it for anyone who
+  // just hits reply — this link is for anyone who doesn't have this email in
+  // front of them, so it goes to the public form instead of a mailbox.
+  if (brand.siteUrl) {
     links.push(
-      `Questions? <a href="mailto:${escapeHtml(footer.supportEmail)}" style="color:${escapeHtml(
+      `Questions? <a href="${escapeHtml(`${brand.siteUrl}/contact`)}" target="_blank" style="color:${escapeHtml(
         brand.primaryColor,
-      )};text-decoration:underline;">${escapeHtml(footer.supportEmail)}</a>`,
+      )};text-decoration:underline;">Contact us</a>`,
     );
   }
   if (footer.supportUrl) {
@@ -184,7 +189,9 @@ export function renderTextLayout(opts: {
   const { ctx, bodyText } = opts;
   const lines: string[] = [ctx.brand.brandName.toUpperCase(), "", bodyText.trim(), ""];
   lines.push("—");
-  if (ctx.footer.supportEmail) lines.push(`Questions? ${ctx.footer.supportEmail}`);
+  // Mirrors the HTML footer: the contact PAGE, not the raw support address —
+  // see the comment in `footerHtml` for why.
+  if (ctx.brand.siteUrl) lines.push(`Questions? Contact us: ${ctx.brand.siteUrl}/contact`);
   if (ctx.footer.supportUrl) lines.push(`Help center: ${ctx.footer.supportUrl}`);
   if (ctx.footer.footerText) lines.push(ctx.footer.footerText);
   if (ctx.footer.physicalAddress) lines.push(ctx.footer.physicalAddress);

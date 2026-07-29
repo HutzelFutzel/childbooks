@@ -1,25 +1,54 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertCircle, CheckCircle2, Send } from "lucide-react";
 import { Button } from "../components/Button";
 import { Field, Input, Textarea } from "../components/Input";
+import { Select } from "../components/Select";
 import { backendFetch } from "../../platform/backend";
+import { useAuthStore } from "../../state/authStore";
+import { CONTACT_TOPICS, type ContactTopicId } from "../../core/contact/topics";
 
 /**
  * Public contact form. Posts to the tokenless backend `/contact` endpoint, which
- * emails the admin's configured contact inbox (reply-to = the sender). Includes a
- * hidden honeypot field (`company`) that real users leave blank.
+ * stores the message, announces it on Slack, and replies with a ticket reference.
+ *
+ * This is the ONLY published way to reach support — the site deliberately shows
+ * no email address — so the form has to earn the trust a `mailto:` link gets for
+ * free. That's what the reference on the success screen is for: something the
+ * visitor can quote, as proof the message landed somewhere real.
+ *
+ * Anti-spam pieces that need the form's cooperation: an off-screen honeypot field
+ * (`company`) and `elapsedMs`, which lets the backend reject submissions completed
+ * impossibly fast. Both are speed bumps — App Check is the real gate.
  */
 export function ContactForm({ privacyUrl, bare = false }: { privacyUrl?: string; bare?: boolean }) {
+  const user = useAuthStore((s) => s.user);
+  const signedIn = Boolean(user && !user.isAnonymous);
+
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
-  const [topic, setTopic] = useState("");
+  const [topic, setTopic] = useState<ContactTopicId>("other");
   const [message, setMessage] = useState("");
   const [company, setCompany] = useState(""); // honeypot
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false);
+  const [ref, setRef] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // How long the form has been open, sent as a DURATION so the backend never has
+  // to compare our clock to its own. Monotonic where available, so a system clock
+  // change mid-session can't distort it either.
+  const openedAt = useRef(typeof performance !== "undefined" ? performance.now() : Date.now());
+  const elapsedMs = () =>
+    Math.round((typeof performance !== "undefined" ? performance.now() : Date.now()) - openedAt.current);
+
+  // Prefill from the account so a signed-in user doesn't retype what we know.
+  // Their message is still tied to their uid server-side via the ID token.
+  useEffect(() => {
+    if (!signedIn || !user) return;
+    setName((n) => n || user.displayName || "");
+    setEmail((e) => e || user.email || "");
+  }, [signedIn, user]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,7 +58,7 @@ export function ContactForm({ privacyUrl, bare = false }: { privacyUrl?: string;
       const res = await backendFetch("/contact", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, topic, message, company }),
+        body: JSON.stringify({ name, email, topic, message, company, elapsedMs: elapsedMs() }),
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as
@@ -37,7 +66,8 @@ export function ContactForm({ privacyUrl, bare = false }: { privacyUrl?: string;
           | null;
         throw new Error(body?.error?.message ?? "Could not send your message.");
       }
-      setDone(true);
+      const body = (await res.json().catch(() => null)) as { ref?: string } | null;
+      setRef(body?.ref ?? "");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not send your message.");
     } finally {
@@ -45,16 +75,25 @@ export function ContactForm({ privacyUrl, bare = false }: { privacyUrl?: string;
     }
   };
 
-  if (done) {
+  if (ref !== null) {
     return (
       <div className="flex flex-col items-center gap-3 rounded-2xl border border-ink-100 bg-white p-8 text-center">
         <span className="flex size-12 items-center justify-center rounded-2xl bg-green-100 text-green-600">
           <CheckCircle2 className="size-6" />
         </span>
-        <h2 className="text-lg font-semibold text-ink-900">Message sent</h2>
+        <h2 className="text-lg font-semibold text-ink-900">Message received</h2>
         <p className="max-w-sm text-sm text-ink-500">
-          Thanks for reaching out — we&apos;ll get back to you by email as soon as we can.
+          We&apos;ll reply to <span className="font-medium text-ink-700">{email}</span>{" "}
+          within one business day.
         </p>
+        {ref && (
+          <p className="mt-1 text-sm text-ink-500">
+            Your reference:{" "}
+            <span className="rounded-lg bg-ink-50 px-2 py-1 font-mono text-sm font-semibold text-ink-800">
+              {ref}
+            </span>
+          </p>
+        )}
       </div>
     );
   }
@@ -75,7 +114,7 @@ export function ContactForm({ privacyUrl, bare = false }: { privacyUrl?: string;
         <Field label="Your name" required>
           <Input value={name} onChange={(e) => setName(e.target.value)} required autoComplete="name" />
         </Field>
-        <Field label="Email" required>
+        <Field label="Email" required hint={signedIn ? "From your account — edit if you'd rather we replied elsewhere." : undefined}>
           <Input
             type="email"
             value={email}
@@ -87,11 +126,11 @@ export function ContactForm({ privacyUrl, bare = false }: { privacyUrl?: string;
         </Field>
       </div>
 
-      <Field label="Topic">
-        <Input
+      <Field label="What's this about?" required>
+        <Select
           value={topic}
-          onChange={(e) => setTopic(e.target.value)}
-          placeholder="What's this about?"
+          onChange={(e) => setTopic(e.target.value as ContactTopicId)}
+          options={CONTACT_TOPICS.map((t) => ({ value: t.id, label: t.label }))}
         />
       </Field>
 
@@ -105,11 +144,17 @@ export function ContactForm({ privacyUrl, bare = false }: { privacyUrl?: string;
         />
       </Field>
 
-      {/* Honeypot: hidden from users, visible to bots. */}
-      <div aria-hidden="true" className="hidden">
+      {/*
+        Honeypot: positioned off-screen rather than `display:none`, because the
+        scripts worth catching skip hidden inputs specifically as a trap check.
+        Kept out of the tab order and hidden from assistive tech.
+      */}
+      <div aria-hidden="true" className="absolute left-[-9999px] top-auto h-px w-px overflow-hidden">
         <label>
           Company
           <input
+            type="text"
+            name="company"
             tabIndex={-1}
             autoComplete="off"
             value={company}

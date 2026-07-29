@@ -35,6 +35,7 @@ export const EMAIL_TEMPLATE_IDS = [
   "referral_reminder",
   "referral_reward",
   "contact_form",
+  "contact_form_ack",
   "policy_update",
 ] as const;
 
@@ -75,10 +76,15 @@ export interface BrandContext {
   siteUrl: string;
 }
 
-/** The footer/contact block shown in every email, from `appConfig/emailConfig`. */
+/** The footer/contact block shown in every email, from `adminSettings/emailConfig`. */
 export interface EmailFooterContext {
   footerText: string;
+  /**
+   * Carried through for internal callers (e.g. `contactRecipient` fallback);
+   * deliberately NOT rendered in the footer — see `footerHtml` in `layout.ts`.
+   */
   supportEmail: string;
+  /** Optional extra "Help center" link; the footer's `/contact` link is always shown too. */
   supportUrl: string;
   /** One-click unsubscribe URL — only rendered for marketing emails. */
   unsubscribeUrl: string | null;
@@ -171,6 +177,15 @@ export interface EmailTemplateVarsMap {
   };
   /** Sent to the support inbox when a visitor submits the public contact form. */
   contact_form: { fromName: string; fromEmail: string; topic?: string; message: string };
+  /**
+   * Sent to the SUBMITTER right after `/contact` accepts their message. This is
+   * the trust signal that makes a contact form a credible substitute for a
+   * published address — without it, the visitor has only our word that anything
+   * happened. `ref` is the human-quotable reference they can cite if they follow
+   * up; `topic` is the resolved label (e.g. "Billing, refund, or subscription"),
+   * not the raw submitted id.
+   */
+  contact_form_ack: { name?: string; ref: string; topic?: string };
   /**
    * Sent to users when a legal document changes materially. A service message
    * about the account's governing policy — transactional, NOT gated on marketing

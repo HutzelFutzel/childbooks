@@ -7,6 +7,12 @@
  */
 import { getApp, getApps, initializeApp, type FirebaseApp } from "firebase/app";
 import { getAnalytics, isSupported, type Analytics } from "firebase/analytics";
+import {
+  getToken as getAppCheckToken,
+  initializeAppCheck,
+  ReCaptchaEnterpriseProvider,
+  type AppCheck,
+} from "firebase/app-check";
 import { connectAuthEmulator, getAuth, type Auth } from "firebase/auth";
 import {
   connectFirestoreEmulator,
@@ -28,6 +34,9 @@ const config = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
   measurementId: process.env.NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID,
 };
+
+/** reCAPTCHA Enterprise site key for App Check. Empty ⇒ App Check is inert. */
+const APP_CHECK_SITE_KEY = process.env.NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY;
 
 const AUTH_EMULATOR_URL = "http://127.0.0.1:9099";
 const EMULATOR_HOST = "127.0.0.1";
@@ -110,6 +119,59 @@ export function getFirebaseStorage(): FirebaseStorage {
     connectStorageEmulator(storage, EMULATOR_HOST, STORAGE_EMULATOR_PORT);
   }
   return storage;
+}
+
+let appCheckPromise: Promise<AppCheck | null> | null = null;
+
+/**
+ * Initialize App Check (browser only, memoized).
+ *
+ * NOT gated on cookie consent, unlike {@link initAnalytics}. App Check is a
+ * fraud-prevention measure protecting the public contact endpoint, not analytics
+ * — and gating it on consent would make it trivially bypassable, since declining
+ * cookies would also switch off the abuse defense. It's processed under
+ * legitimate interest as a strictly necessary security function.
+ *
+ * Resolves to null (a silent no-op) when no site key is configured or when
+ * running against the emulators, which have no App Check backend to verify
+ * tokens against — the backend's `verifyAppCheck` skips emulated requests to
+ * match.
+ */
+export function initAppCheck(): Promise<AppCheck | null> {
+  if (appCheckPromise) return appCheckPromise;
+  appCheckPromise = (async () => {
+    if (typeof window === "undefined") return null;
+    if (useEmulators()) return null;
+    if (!APP_CHECK_SITE_KEY) return null;
+    try {
+      return initializeAppCheck(getFirebaseApp(), {
+        provider: new ReCaptchaEnterpriseProvider(APP_CHECK_SITE_KEY),
+        isTokenAutoRefreshEnabled: true,
+      });
+    } catch {
+      return null;
+    }
+  })();
+  return appCheckPromise;
+}
+
+/**
+ * The current App Check token, or null when App Check isn't configured/available.
+ *
+ * Callers attach this to backend requests themselves: the Cloud Functions
+ * endpoints are plain `fetch` targets, not Firebase SDK calls, so the SDK's
+ * automatic header injection doesn't apply. Never throws — a missing token must
+ * degrade to an unattested request rather than blocking the call, because
+ * enforcement is staged on the backend.
+ */
+export async function appCheckToken(): Promise<string | null> {
+  const appCheck = await initAppCheck();
+  if (!appCheck) return null;
+  try {
+    return (await getAppCheckToken(appCheck, /* forceRefresh */ false)).token;
+  } catch {
+    return null;
+  }
 }
 
 let analyticsPromise: Promise<Analytics | null> | null = null;

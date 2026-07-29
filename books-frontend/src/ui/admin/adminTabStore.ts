@@ -43,7 +43,7 @@ export type AnalysisTabId = "users" | "products" | "payments" | "finance" | "ref
 export type MarketingTabId = "seo" | "blog" | "branding";
 
 /** Sub-tabs within the Communication section. */
-export type CommunicationTabId = "transactional-emails" | "admin-slack";
+export type CommunicationTabId = "contact" | "transactional-emails" | "admin-slack";
 
 /** Sub-tabs within the Legal & Privacy section. */
 export type LegalTabId = "documents" | "cookies" | "gdpr";
@@ -113,7 +113,10 @@ export const useAdminTab = create<AdminNavState>((set) => ({
   catalogSegment: "print",
   analysisTab: "users",
   marketingTab: "seo",
-  communicationTab: "transactional-emails",
+  // Contact first: it's the only inbox for the public form (the site publishes
+  // no email address), so unread submissions are the thing most worth surfacing
+  // by default when an admin opens Communication.
+  communicationTab: "contact",
   legalTab: "documents",
   setSection: (section) => set({ section }),
   setConfigGroup: (configGroup) => {

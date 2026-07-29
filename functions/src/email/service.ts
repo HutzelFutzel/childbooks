@@ -3,7 +3,7 @@
  * backend calls to send a system email.
  *
  * It resolves the live brand kit (`appConfig/branding` + `appConfig/seo`) and
- * the admin email config (`appConfig/emailConfig`), honors the master switch +
+ * the admin email config (`adminSettings/emailConfig`), honors the master switch +
  * per-template toggle + daily cap, renders the template (code templates in
  * `core/email`), sends via ZeptoMail, records telemetry, and de-duplicates on an
  * optional idempotency key so webhook-retried triggers can't double-send.

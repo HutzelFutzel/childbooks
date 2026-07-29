@@ -81,3 +81,15 @@ env:
   - variable: NEXT_PUBLIC_FIREBASE_MEASUREMENT_ID
     value: "G-GFM5K4GD8W"
     availability: [BUILD, RUNTIME]
+
+  # App Check reCAPTCHA Enterprise site key — the bot gate on the public contact
+  # endpoint. Public by design (it's a site key, like the Firebase API key above).
+  #
+  # EMPTY = App Check is inert: the client mints no token and the backend logs the
+  # miss without rejecting. To turn it on, register a reCAPTCHA Enterprise
+  # provider under Firebase console → App Check, paste the site key here, redeploy
+  # the frontend (Next inlines NEXT_PUBLIC_* at BUILD time, so a runtime-only
+  # change does nothing), then set APP_CHECK_ENFORCED=true on the backend.
+  - variable: NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY
+    value: ""
+    availability: [BUILD, RUNTIME]

@@ -40,7 +40,7 @@ import {
   registerStripeWebhookRoute,
 } from "./stripe";
 import { registerEmailWebhookRoute } from "./email/webhook";
-import { registerContactRoutes } from "./contact";
+import { registerContactAdminRoutes, registerContactRoutes } from "./contact/routes";
 import { registerBlogRoutes } from "./blog";
 import { registerBlogStatsAdminRoutes, registerBlogTrackingRoute } from "./blogStats";
 import { registerReferralPublicRoutes, registerReferralUserRoutes } from "./referrals/routes";
@@ -80,8 +80,9 @@ export function createApp(): Express {
   registerEmailWebhookRoute(app);
 
   // Public contact form — tokenless (the marketing site has no Firebase
-  // session), rate-limited + honeypot-guarded. Registered before the auth
-  // guards so visitors can reach it.
+  // session), gated by App Check + a Firestore-backed rate limit. Registered
+  // before the auth guards so visitors can reach it; `attachUser` still ran, so
+  // a signed-in sender is identified without requiring a session.
   registerContactRoutes(app);
 
   // Public blog analytics beacon — tokenless + cookieless (no consent needed).
@@ -123,6 +124,7 @@ export function createApp(): Express {
   registerMigrationRoutes(app);
   registerAuthRoutes(app);
   registerAdminRoutes(app);
+  registerContactAdminRoutes(app);
   registerBlogRoutes(app);
   registerBlogStatsAdminRoutes(app);
   registerGdprRoutes(app);
