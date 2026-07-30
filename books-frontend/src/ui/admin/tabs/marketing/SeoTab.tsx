@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Plus, Trash2, Search, Share2 } from "lucide-react";
+import { GripVertical, Plus, Trash2, Search, Share2 } from "lucide-react";
 import { Button } from "../../../components/Button";
 import { Field, Input, Textarea } from "../../../components/Input";
 import { Select } from "../../../components/Select";
 import { Toggle } from "../../../components/Toggle";
+import { cn } from "../../../lib/cn";
 import { useAppConfigStore } from "../../../../state/appConfigStore";
 import type { SeoConfig, SeoFaqItem } from "../../../../core/config/seo";
 import { Grid, Section, TextField } from "../products/parts";
@@ -33,6 +34,8 @@ export function SeoTab() {
   const [draft, setDraft] = useState<SeoConfig>(stored);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [faqDragIdx, setFaqDragIdx] = useState<number | null>(null);
+  const [faqOverIdx, setFaqOverIdx] = useState<number | null>(null);
 
   useEffect(() => {
     if (!dirty) setDraft(stored);
@@ -49,6 +52,22 @@ export function SeoTab() {
 
   const addFaq = () => set({ faq: [...draft.faq, { question: "", answer: "" }] });
   const removeFaq = (idx: number) => set({ faq: draft.faq.filter((_, i) => i !== idx) });
+
+  /** Index of the FAQ row under the given viewport point, via the `data-faq-idx` marker. */
+  const faqIdxAt = (x: number, y: number): number | null => {
+    const el = document.elementFromPoint(x, y);
+    const row = el?.closest("[data-faq-idx]") as HTMLElement | null;
+    const raw = row?.getAttribute("data-faq-idx");
+    return raw != null ? Number(raw) : null;
+  };
+
+  const moveFaq = (from: number, to: number) => {
+    if (from === to) return;
+    const next = [...draft.faq];
+    const [moved] = next.splice(from, 1);
+    next.splice(to > from ? to - 1 : to, 0, moved);
+    set({ faq: next });
+  };
 
   const keywordsText = useMemo(() => draft.keywords.join(", "), [draft.keywords]);
   const sameAsText = useMemo(() => draft.organization.sameAs.join("\n"), [draft.organization.sameAs]);
@@ -256,7 +275,7 @@ export function SeoTab() {
       {/* ---- FAQ (single source of truth) ---- */}
       <Section
         title="FAQ"
-        hint="Shown on the landing page AND emitted as FAQPage structured data (rich results). One source of truth."
+        hint="Shown on the landing page (in this order) AND emitted as FAQPage structured data (rich results). Drag the handle to reorder. One source of truth."
         action={
           <Button variant="secondary" size="sm" leftIcon={<Plus className="size-3.5" />} onClick={addFaq}>
             Add question
@@ -265,26 +284,65 @@ export function SeoTab() {
       >
         <div className="space-y-2">
           {draft.faq.map((item, idx) => (
-            <div key={idx} className="space-y-2 rounded-lg bg-white p-2.5 ring-1 ring-inset ring-ink-100">
-              <div className="flex items-start gap-2">
-                <Input
-                  value={item.question}
-                  placeholder="Question"
-                  onChange={(e) => setFaq(idx, { question: e.target.value })}
-                />
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  leftIcon={<Trash2 className="size-3.5" />}
-                  onClick={() => removeFaq(idx)}
+            <div key={idx} data-faq-idx={idx} className="relative">
+              {faqOverIdx === idx && faqDragIdx !== null && faqDragIdx !== idx && (
+                <div className="absolute inset-x-1 -top-1.5 z-10 h-0.5 rounded-full bg-brand-500" />
+              )}
+              <div
+                className={cn(
+                  "space-y-2 rounded-lg bg-white p-2.5 ring-1 ring-inset ring-ink-100 transition",
+                  faqDragIdx === idx && "opacity-40",
+                )}
+              >
+                <div className="flex items-start gap-2">
+                  <button
+                    type="button"
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      e.currentTarget.setPointerCapture(e.pointerId);
+                      setFaqDragIdx(idx);
+                    }}
+                    onPointerMove={(e) => {
+                      if (faqDragIdx === null) return;
+                      const over = faqIdxAt(e.clientX, e.clientY);
+                      setFaqOverIdx(over !== null && over !== faqDragIdx ? over : null);
+                    }}
+                    onPointerUp={(e) => {
+                      if (faqDragIdx !== null) {
+                        const to = faqIdxAt(e.clientX, e.clientY);
+                        if (to !== null) moveFaq(faqDragIdx, to);
+                      }
+                      setFaqDragIdx(null);
+                      setFaqOverIdx(null);
+                    }}
+                    onPointerCancel={() => {
+                      setFaqDragIdx(null);
+                      setFaqOverIdx(null);
+                    }}
+                    title="Drag to reorder"
+                    className="mt-2.5 flex touch-none cursor-grab items-center text-ink-300 transition hover:text-brand-600 active:cursor-grabbing"
+                  >
+                    <GripVertical className="size-4" />
+                  </button>
+                  <Input
+                    value={item.question}
+                    placeholder="Question"
+                    onChange={(e) => setFaq(idx, { question: e.target.value })}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    leftIcon={<Trash2 className="size-3.5" />}
+                    onClick={() => removeFaq(idx)}
+                  />
+                </div>
+                <Textarea
+                  rows={2}
+                  value={item.answer}
+                  placeholder="Answer"
+                  onChange={(e) => setFaq(idx, { answer: e.target.value })}
                 />
               </div>
-              <Textarea
-                rows={2}
-                value={item.answer}
-                placeholder="Answer"
-                onChange={(e) => setFaq(idx, { answer: e.target.value })}
-              />
             </div>
           ))}
           {draft.faq.length === 0 && <p className="text-xs text-ink-400">No FAQ entries yet.</p>}
