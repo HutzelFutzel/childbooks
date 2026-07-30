@@ -1,19 +1,19 @@
 name: Deploy
 
-# Single, gated release pipeline for a push to `main`. Everything ships through
-# GitHub so a deploy is only ever as good as the checks that precede it:
+# BACKEND deploy pipeline for a push to `main`:
 #
-#   build + typecheck  →  full env/secret check  →  deploy backend  →  health
-#   check  →  promote the vetted commit to `release` (frontend rollout)
+#   build functions  →  full env/secret check  →  deploy backend  →  health check
 #
-# What deploys where:
+# What deploys where — these are two INDEPENDENT pipelines:
 #   - BACKEND  (this workflow): the `api` Cloud Function (+ scheduled/trigger
 #     functions), Firestore rules + indexes, and Storage rules. Firebase skips
 #     functions whose code is unchanged, so running on every push is cheap.
-#   - FRONTEND (Firebase App Hosting): App Hosting watches the **`release`**
-#     branch and builds the Next.js app on every push to it. The final step here
-#     fast-forwards `release` to this commit ONLY after all checks pass — so the
-#     frontend never rolls out a commit the pipeline hasn't vetted.
+#   - FRONTEND (Firebase App Hosting): the backend `childbooks` watches `main`
+#     itself (`rolloutPolicy.codebaseBranch`) and starts building seconds after
+#     a push, in parallel with this workflow. It is NOT gated on anything here,
+#     so a green run below says nothing about the frontend — that's what
+#     `rollout-watch.yml` is for. This workflow therefore does not typecheck or
+#     build the frontend either; `ci.yml` does that on the same push.
 #
 # ── One-time setup (see the repo README / the summary in chat) ──────────────
 #   Repo secrets (Settings → Secrets and variables → Actions):
@@ -21,13 +21,15 @@ name: Deploy
 #     GCP_DEPLOY_SA     — deploy service account email. Roles: Cloud Functions
 #                         Admin, Cloud Run Admin, Service Account User, Firebase
 #                         Rules Admin, Cloud Datastore Index Admin, and Secret
-#                         Manager Secret Accessor (for check-env + secret binding).
+#                         Manager Secret Accessor (for check-env + secret
+#                         binding). `roles/firebase.admin` also covers the
+#                         App Hosting reads `rollout-watch.yml` needs.
 #     SLACK_CI_WEBHOOK_URL — (optional) Slack incoming webhook (#ci-cd) for
 #                         deploy start/result pings. If unset, GitHub's built-in
 #                         email/mobile notifications for failed runs still apply.
-#   Firebase console: point the App Hosting backend's connected branch at
-#     `release` (not `main`).
 #   Branch protection on `main`: require the CI checks to pass before merge.
+#     This is the ONLY thing standing between a bad commit and the live site,
+#     since App Hosting rolls out `main` regardless of what happens here.
 #
 # Secrets (OpenAI/Gemini/Lulu/Stripe keys) are NOT set here — set them once with
 # `yarn setSecrets` / `firebase functions:secrets:set`. A deploy binds the latest
@@ -46,7 +48,7 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # to fast-forward the `release` branch
+      contents: read
       id-token: write # required for Workload Identity Federation
     env:
       PROJECT_ID: childbook-60f89
@@ -78,26 +80,13 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
-      # ── Gate: it must build & typecheck before anything is deployed ─────────
-      - name: Typecheck frontend
-        id: typecheck
-        run: yarn workspace books-frontend typecheck
-
+      # ── Gate: it must build before anything is deployed ────────────────────
+      # Frontend typecheck/build live in `ci.yml`, which runs on this same push
+      # in parallel. Repeating them here would only delay the backend deploy —
+      # the frontend rollout doesn't wait for this workflow either way.
       - name: Build functions
         id: build_functions
         run: yarn build:functions
-
-      # NEXT_PUBLIC_* are inlined at build time and only App Hosting applies
-      # apphosting.yaml's env automatically — load it so the build below matches
-      # the one `release` will get.
-      - name: Load frontend build env (apphosting.yaml)
-        run: node scripts/apphosting-env.mjs >> "$GITHUB_ENV"
-
-      # Same build App Hosting will run for `release`; catching it here means we
-      # never promote a commit the frontend can't build.
-      - name: Build web
-        id: build_web
-        run: yarn build:web
 
       - name: Authenticate to Google Cloud
         id: auth
@@ -133,13 +122,6 @@ jobs:
           done
           echo "Backend is up."
 
-      # All green → promote this exact commit to `release`, which App Hosting
-      # watches to roll out the frontend. Force-push is safe: `release` is a
-      # deploy pointer that only ever tracks vetted `main` commits.
-      - name: Promote to release (frontend rollout)
-        id: promote
-        run: git push --force origin HEAD:release
-
       # Report the outcome to Slack (#ci-cd) on SUCCESS and FAILURE. Runs always
       # so a failure at any step above still pings; skipped only when no webhook
       # is configured (GitHub's own failed-run emails still cover you).
@@ -153,20 +135,17 @@ jobs:
           # Name the first step that failed (for a helpful message).
           failed=""
           for entry in \
-            "typecheck:${{ steps.typecheck.outcome }}" \
             "build functions:${{ steps.build_functions.outcome }}" \
-            "build web:${{ steps.build_web.outcome }}" \
             "google auth:${{ steps.auth.outcome }}" \
             "env check:${{ steps.checkenv.outcome }}" \
             "deploy backend:${{ steps.deploy.outcome }}" \
-            "health check:${{ steps.health.outcome }}" \
-            "promote release:${{ steps.promote.outcome }}"; do
+            "health check:${{ steps.health.outcome }}"; do
             name="${entry%%:*}"; outcome="${entry##*:}"
             if [ "$outcome" = "failure" ]; then failed="$name"; break; fi
           done
 
           case "$STATUS" in
-            success)   emoji="✅"; detail="Backend deployed · \`release\` promoted (frontend rolling out)";;
+            success)   emoji="✅"; detail="Backend deployed (frontend rolls out separately — see Rollout watch)";;
             cancelled) emoji="⚠️"; detail="Run cancelled";;
             *)         emoji="❌"; detail="Failed at *${failed:-unknown step}* — open the logs";;
           esac

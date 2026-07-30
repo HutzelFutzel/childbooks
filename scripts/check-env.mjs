@@ -66,14 +66,23 @@ if (!existsSync(APP_HOSTING_PATH)) {
     else if (!value) fail(`${name} is declared but empty in apphosting.yaml.`);
     else ok(`${name} is set.`);
   }
-  // App Check is optional but load-bearing once configured, and an empty site key
-  // silently disables the only real bot gate on the public contact endpoint. Warn
-  // rather than fail: a deployment without App Check is degraded, not broken.
-  const appCheckKey = declared.get("NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY");
-  if (!appCheckKey) {
+  // An empty `value:` makes App Hosting reject the whole FILE
+  // (`fah/invalid-apphosting-yaml`), so the build dies ~40s in, before it starts,
+  // and the site keeps serving the previous release while everything here stays
+  // green. Nothing downstream catches it — App Hosting builds `main` on its own
+  // trigger — so a variable without a value must be omitted, never declared empty.
+  for (const [name, value] of declared) {
+    if (value === "") {
+      fail(`${name} is declared with an empty value in apphosting.yaml — App Hosting rejects the whole file. Omit the variable instead.`);
+    }
+  }
+  // App Check is optional but load-bearing once configured, and no site key means
+  // the only real bot gate on the public contact endpoint is off. Warn rather than
+  // fail: a deployment without App Check is degraded, not broken.
+  if (!declared.has("NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY")) {
     warn(
-      "NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY is empty — App Check is OFF, so the public " +
-        "contact form has no bot gate (see functions/.env.example → App Check).",
+      "NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY is not set in apphosting.yaml — App Check is OFF, " +
+        "so the public contact form has no bot gate (see functions/.env.example → App Check).",
     );
   } else {
     ok("NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY is set.");

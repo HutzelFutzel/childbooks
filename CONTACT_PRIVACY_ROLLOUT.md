@@ -178,5 +178,5 @@ speculatively.
 
 Nothing above needs a manual `firebase deploy`. `.github/workflows/deploy.yml`
 auto-deploys functions + Firestore rules/indexes + storage rules on every push
-to `main`, then promotes the `release` branch (which Firebase App Hosting
-auto-builds for the frontend). Merging to `main` is the only "deploy" step.
+to `main`, and Firebase App Hosting builds the frontend from `main` in
+parallel. Merging to `main` is the only "deploy" step.

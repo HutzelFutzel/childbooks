@@ -2,9 +2,9 @@ name: CI
 
 # The PR gate: verify the whole monorepo builds, typechecks, and is
 # configuration-sane before code can reach `main`. Make these required status
-# checks in branch protection so nothing merges red — the Deploy workflow (and
-# the App Hosting frontend rollout it promotes to `release`) trust that `main`
-# is always green.
+# checks in branch protection so nothing merges red — this is the ONLY gate on
+# the live site, because App Hosting builds and rolls out `main` on its own
+# trigger seconds after a push, without waiting for any workflow here.
 on:
   pull_request:
     branches: [main]

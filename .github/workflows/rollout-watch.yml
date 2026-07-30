@@ -1,0 +1,114 @@
+name: Rollout watch
+
+# Did the FRONTEND actually ship?
+#
+# App Hosting builds the Next.js app on its own trigger — the backend
+# `childbooks` watches `main` (`rolloutPolicy.codebaseBranch`) and starts a build
+# seconds after every push, outside this repo's pipeline. Nothing in `ci.yml` or
+# `deploy.yml` can see the result, so a rejected `apphosting.yaml` or a failed
+# build leaves the live site serving the PREVIOUS release while every GitHub
+# check stays green. That exact failure went unnoticed for a day and six pushes
+# (2026-07-29 → 07-30) because "Deploy: success" says nothing about the frontend.
+#
+# This job waits for the build of THIS commit and pings Slack if it doesn't go
+# live. It runs in parallel with everything else, so it adds no time to any other
+# workflow — it just keeps running after they've finished.
+#
+# Reads only. No extra IAM: GCP_DEPLOY_SA already holds `roles/firebase.admin`,
+# which includes `firebaseapphosting.builds.list`/`.get`. If that ever stops being
+# true the job says "couldn't verify" instead of claiming the site is broken.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: rollout-watch-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # required for Workload Identity Federation
+      contents: read
+    env:
+      API: https://firebaseapphosting.googleapis.com/v1beta/projects/childbook-60f89/locations/us-east4/backends/childbooks
+      SLACK_CI_WEBHOOK_URL: ${{ secrets.SLACK_CI_WEBHOOK_URL }}
+    steps:
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+          token_format: access_token # exposes steps.auth.outputs.access_token
+
+      # Builds carry the commit (`source.codebase.hash`), so this tracks OUR commit
+      # instead of "the newest build" — no guessing by timestamp, and a concurrent
+      # push can't make us report on the wrong one.
+      #
+      # Note the states: a live BUILD is READY (it's the ROLLOUT that reports
+      # SUCCEEDED), and an invalid apphosting.yaml lands in FAILED after ~40s,
+      # while a genuine build takes ~5min.
+      - name: Wait for the App Hosting build of this commit
+        id: build
+        env:
+          TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          set -uo pipefail
+          for _ in $(seq 1 44); do
+            code=$(curl -sS -o /tmp/builds.json -w '%{http_code}' \
+              -H "Authorization: Bearer $TOKEN" "$API/builds?pageSize=100" || echo 000)
+
+            # No permission to look is a SETUP problem, not a deploy failure —
+            # say so plainly instead of raising a false alarm about the site.
+            if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+              echo "verdict=unverified" >> "$GITHUB_OUTPUT"
+              echo "::warning::Cannot read App Hosting builds (HTTP $code). Grant roles/firebaseapphosting.viewer to the deploy service account."
+              exit 0
+            fi
+            if [ "$code" != "200" ]; then echo "transient HTTP $code"; sleep 15; continue; fi
+
+            build=$(jq -c --arg sha "$GITHUB_SHA" \
+              '[.builds[]? | select(.source.codebase.hash == $sha)] | sort_by(.createTime) | last // {}' \
+              /tmp/builds.json)
+            state=$(jq -r '.state // "PENDING"' <<<"$build")
+            echo "build state: $state"
+
+            case "$state" in
+              READY)
+                echo "verdict=live" >> "$GITHUB_OUTPUT"
+                echo "Frontend build is live."
+                exit 0;;
+              FAILED)
+                reason=$(jq -r '.error.message // "unknown"' <<<"$build" | tr -d '\r' | tr '\n' ' ')
+                echo "reason=$reason" >> "$GITHUB_OUTPUT"
+                echo "logs=$(jq -r '.buildLogsUri // ""' <<<"$build")" >> "$GITHUB_OUTPUT"
+                echo "::error::App Hosting build FAILED — $reason"
+                exit 1;;
+            esac
+            sleep 15
+          done
+          echo "reason=timed out after 11min waiting for the build to finish" >> "$GITHUB_OUTPUT"
+          echo "::error::Timed out waiting for the App Hosting build."
+          exit 1
+
+      # Only fires when the frontend did NOT go live. Success is silent: the whole
+      # point is that a stale site stops being invisible, not more green noise.
+      - name: Notify Slack (frontend did not deploy)
+        if: failure() && env.SLACK_CI_WEBHOOK_URL != ''
+        env:
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
+          REASON: ${{ steps.build.outputs.reason }}
+          LOGS: ${{ steps.build.outputs.logs }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          text="🚨 FRONTEND DID NOT DEPLOY — ${GITHUB_REPOSITORY}@${GITHUB_SHA:0:7}
+          The live site is still serving the previous build.
+          ${COMMIT_MSG%%$'\n'*}
+          ${REASON:-see the run log}
+          ${LOGS:+Build logs: $LOGS}
+          by ${GITHUB_ACTOR} · ${RUN_URL}"
+          payload=$(printf '{"text": %s}' "$(printf '%s' "$text" | jq -Rs .)")
+          curl -fsS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_CI_WEBHOOK_URL"

@@ -1,13 +1,17 @@
 # Firebase App Hosting configuration for the Next.js web app.
 # Docs: https://firebase.google.com/docs/app-hosting/configure
 #
-# ── Release branch ───────────────────────────────────────────────────────────
-# Point this App Hosting backend's connected branch at **`release`** (Firebase
-# console → App Hosting → your backend → settings). The `.github/workflows/
-# deploy.yml` pipeline fast-forwards `release` to a `main` commit only after it
-# has built, typechecked, passed the env/secret check, deployed the backend, and
-# health-checked it — so the frontend only ever rolls out vetted commits. Never
-# push to `release` by hand.
+# ── How the frontend deploys ─────────────────────────────────────────────────
+# The App Hosting backend `childbooks` watches **`main`** directly
+# (`rolloutPolicy.codebaseBranch`), so it starts building a few seconds after
+# every push — in PARALLEL with CI, not after it. Nothing in this repo gates it:
+# a commit that fails CI still rolls out, and a build that fails leaves the site
+# silently serving the previous one. `.github/workflows/rollout-watch.yml` is the
+# only thing that reports on it, so trust its Slack ping over a green Deploy run.
+#
+# The corollary for THIS file: a mistake here can't be caught downstream. Every
+# env entry needs a real value (see the App Check note at the bottom) —
+# `yarn check:env` validates that on every PR, which is the only gate there is.
 #
 # ── Monorepo note ────────────────────────────────────────────────────────────
 # This repo is a Yarn workspaces monorepo (books-frontend + functions). App
@@ -83,13 +87,16 @@ env:
     availability: [BUILD, RUNTIME]
 
   # App Check reCAPTCHA Enterprise site key — the bot gate on the public contact
-  # endpoint. Public by design (it's a site key, like the Firebase API key above).
+  # endpoint — belongs here as NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY, public by
+  # design (it's a site key, like the Firebase API key above).
   #
-  # EMPTY = App Check is inert: the client mints no token and the backend logs the
-  # miss without rejecting. To turn it on, register a reCAPTCHA Enterprise
-  # provider under Firebase console → App Check, paste the site key here, redeploy
-  # the frontend (Next inlines NEXT_PUBLIC_* at BUILD time, so a runtime-only
-  # change does nothing), then set APP_CHECK_ENFORCED=true on the backend.
-  - variable: NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY
-    value: ""
-    availability: [BUILD, RUNTIME]
+  # It is deliberately ABSENT rather than empty: App Hosting rejects the entire
+  # file when an env entry declares an empty `value:`, which fails the build
+  # before it starts and leaves the site serving the previous release. An absent
+  # variable is what makes App Check inert — the client mints no token and the
+  # backend logs the miss without rejecting.
+  #
+  # To turn it on: register a reCAPTCHA Enterprise provider under Firebase
+  # console → App Check, add the variable here with the site key, push (Next
+  # inlines NEXT_PUBLIC_* at BUILD time, so a runtime-only change does nothing),
+  # then set APP_CHECK_ENFORCED=true on the backend.
