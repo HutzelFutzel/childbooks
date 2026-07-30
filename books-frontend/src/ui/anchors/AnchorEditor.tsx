@@ -2,15 +2,14 @@ import { useState } from "react";
 import {
   Check,
   ChevronDown,
+  Dices,
   Eye,
   EyeOff,
-  GitBranch,
   Pencil,
   RefreshCw,
-  RotateCcw,
+  SendHorizontal,
   Sparkles,
   Trash2,
-  Wand2,
   X,
 } from "lucide-react";
 import type { Anchor } from "../../core/types";
@@ -280,6 +279,31 @@ export function AnchorEditor({
         </div>
       )}
 
+      {/* Refine lives right under the photo — like commenting on it — and is
+          kept physically apart from the description below. The two used to
+          share one control surface (an "edit" text box next to an editable
+          description), which was a real trap: applying a typed tweak
+          deliberately ignores the description (so it can't undo the tweak),
+          so an edited description could silently vanish the moment someone
+          also typed a refine and hit the old "Apply edit" button. Separating
+          them spatially makes that combination impossible to reach by
+          accident instead of just less likely. */}
+      {hasImage && (
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1">
+            <span className="text-xs font-medium text-ink-500">Refine</span>
+            <InfoHint topic="refineImage" />
+          </div>
+          <RefineBar
+            value={edit}
+            onChange={setEdit}
+            disabled={generating}
+            onSend={() => void generate({ edit, useReference: true })}
+            onShuffle={() => void generate({ useReference: true })}
+          />
+        </div>
+      )}
+
       {versions.length > 0 && (
         <div>
           <p className="mb-1.5 text-xs font-medium text-ink-500">
@@ -332,65 +356,24 @@ export function AnchorEditor({
       </Field>
 
       <CreativeDirectionField
-        anchorName={anchor.name}
         value={anchor.userGuidance ?? ""}
         onChange={(v) => void updateAnchor(anchor.id, { userGuidance: v })}
       />
 
-      {!hasImage ? (
-        <Button
-          className="w-full"
-          loading={generating}
-          leftIcon={<Sparkles className="size-4" />}
-          onClick={() => void generate()}
-        >
-          Generate reference sheet
-        </Button>
-      ) : (
-        <div className="space-y-3">
-          <Field
-            label="Refine this version"
-            hint="A one-off tweak to the image above — not saved, just makes one new version."
-          >
-            <Input
-              value={edit}
-              onChange={(e) => setEdit(e.target.value)}
-              placeholder="e.g. make her smile, add a red scarf…"
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && edit.trim() && !generating) {
-                  void generate({ edit, useReference: true });
-                }
-              }}
-            />
-          </Field>
-          {/* One button, not two — "Apply edit" and "Regenerate" were the same
-              action (re-render this version) with different inputs, so the
-              label just follows whichever one applies: type a tweak and it
-              applies it; leave it blank and it starts over from scratch. */}
-          <Button
-            variant="secondary"
-            className="w-full"
-            loading={generating}
-            leftIcon={
-              edit.trim() ? <GitBranch className="size-4" /> : <RotateCcw className="size-4" />
-            }
-            onClick={() =>
-              void generate(edit.trim() ? { edit, useReference: true } : { useReference: false })
-            }
-          >
-            {edit.trim() ? "Apply edit" : "Regenerate"}
-          </Button>
-          <Button
-            variant="ghost"
-            className="w-full"
-            loading={generating}
-            leftIcon={<Wand2 className="size-4" />}
-            onClick={() => void generate({ useReference: true })}
-          >
-            Variation (keep likeness)
-          </Button>
-        </div>
-      )}
+      {/* The one button here always means the same thing: (re)build the sheet
+          from this description, from scratch, ignoring the current image.
+          One-off tweaks to the image that's already there live in the
+          "Refine" bar under the photo instead — the two are kept apart
+          rather than layered into the same control (see the note above it). */}
+      <Button
+        className="w-full"
+        variant={hasImage ? "secondary" : "primary"}
+        loading={generating}
+        leftIcon={<Sparkles className="size-4" />}
+        onClick={() => void generate(hasImage ? { useReference: false } : {})}
+      >
+        {hasImage ? "Redesign from this description" : "Generate reference sheet"}
+      </Button>
     </div>
   );
 
@@ -500,59 +483,112 @@ export function AnchorEditor({
  * optional field, collapsed by default when empty, says exactly what happens:
  * leave it blank for a free AI take, or add specifics if you have them.
  *
- * The one-line caption below the label is always visible (not just behind the
- * `(?)` hint) — it's what actually answers "what is this for", and how it
- * differs from "Refine this version" below, without an extra click.
+ * Deliberately just one line, with no permanent caption or card chrome — this
+ * is a niche, rarely-touched control, so it shouldn't compete visually with
+ * the description/refine controls above and below it. The explanation lives
+ * entirely behind the `(?)` hint, one click away for whoever actually needs
+ * it, instead of being printed for everyone every time.
  */
 function CreativeDirectionField({
-  anchorName,
   value,
   onChange,
 }: {
-  anchorName: string;
   value: string;
   onChange: (v: string) => void;
 }) {
   const [open, setOpen] = useState(Boolean(value.trim()));
 
   return (
-    <div className="overflow-hidden rounded-xl border border-ink-100">
+    <div className="space-y-2">
       {/* The info hint is a real `<button>` (via `Popover`) — kept OUTSIDE the
-          accordion toggle button, since nesting a button inside a button is
-          invalid HTML and would fire both click handlers at once. */}
-      <div className="flex items-start gap-1.5 px-3 py-2.5 transition hover:bg-ink-50">
+          toggle button, since nesting a button inside a button is invalid
+          HTML and would fire both click handlers at once. */}
+      <div className="flex items-center gap-1">
         <button
           type="button"
           onClick={() => setOpen((v) => !v)}
-          className="flex flex-1 items-start justify-between gap-2 text-left"
+          className="flex items-center gap-1.5 text-xs font-medium text-ink-500 transition hover:text-brand-600"
         >
-          <span className="space-y-0.5">
-            <span className="flex items-center gap-1.5 text-sm font-medium text-ink-700">
-              <Pencil className="size-3.5 text-ink-400" />
-              Creative direction
-              <span className="text-xs font-normal text-ink-400">(optional)</span>
-            </span>
-            <span className="block text-xs leading-relaxed text-ink-400">
-              Details to keep every time {anchorName}&rsquo;s art is (re)created — outfit, colors,
-              personality. Leave blank to let the AI design freely.
-            </span>
-          </span>
-          <ChevronDown
-            className={cn("mt-1 size-4 shrink-0 text-ink-400 transition", open && "rotate-180")}
-          />
+          <ChevronDown className={cn("size-3.5 shrink-0 transition", open && "rotate-180")} />
+          Creative direction
+          <span className="font-normal text-ink-400">(optional)</span>
         </button>
-        <InfoHint topic="creativeDirection" className="mt-0.5" />
+        <InfoHint topic="creativeDirection" />
       </div>
       {open && (
-        <div className="border-t border-ink-100 p-3 pt-2.5">
-          <Textarea
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            rows={3}
-            placeholder="e.g. always wears a red raincoat, cheerful and a little clumsy, warm honey-brown fur…"
-          />
-        </div>
+        <Textarea
+          autoFocus={!value.trim()}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          rows={3}
+          placeholder="e.g. always wears a red raincoat, cheerful and a little clumsy, warm honey-brown fur…"
+        />
       )}
+    </div>
+  );
+}
+
+/**
+ * The refine bar: a slim, chat-like control sitting right under the photo —
+ * "comment on this photo" — kept physically apart from the description field
+ * below so the two can never be mistaken for one combined control (see the
+ * note where this is rendered). Typing a tweak and sending it edits the
+ * current image in place; the dice next to it makes a fresh variation with
+ * the same likeness and no typed instruction, replacing what used to be a
+ * separate full-width "Variation" button for something used far less often
+ * than the send action.
+ */
+function RefineBar({
+  value,
+  onChange,
+  disabled,
+  onSend,
+  onShuffle,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  disabled: boolean;
+  onSend: () => void;
+  onShuffle: () => void;
+}) {
+  const canSend = value.trim().length > 0 && !disabled;
+  return (
+    <div className="flex items-center gap-1 rounded-full bg-white py-1 pl-3.5 pr-1 shadow-soft ring-1 ring-inset ring-ink-200 transition focus-within:ring-brand-400">
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && canSend) onSend();
+        }}
+        disabled={disabled}
+        placeholder="Tell it what to tweak…"
+        className="h-8 min-w-0 flex-1 bg-transparent text-sm text-ink-800 placeholder:text-ink-400 focus:outline-none disabled:opacity-60"
+      />
+      <button
+        type="button"
+        onClick={onShuffle}
+        disabled={disabled}
+        title="New variation — same likeness, no instructions"
+        aria-label="New variation — same likeness, no instructions"
+        className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-400 transition hover:bg-ink-100 hover:text-ink-700 disabled:pointer-events-none disabled:opacity-40"
+      >
+        <Dices className="size-4" />
+      </button>
+      <button
+        type="button"
+        onClick={onSend}
+        disabled={!canSend}
+        title="Apply this tweak to the image above"
+        aria-label="Apply this tweak to the image above"
+        className={cn(
+          "flex size-8 shrink-0 items-center justify-center rounded-full transition disabled:pointer-events-none disabled:opacity-40",
+          canSend
+            ? "bg-brand-600 text-(--color-brand-foreground) hover:bg-brand-700"
+            : "bg-ink-100 text-ink-300",
+        )}
+      >
+        <SendHorizontal className="size-4" />
+      </button>
     </div>
   );
 }

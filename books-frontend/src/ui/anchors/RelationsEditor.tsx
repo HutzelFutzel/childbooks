@@ -209,16 +209,6 @@ export function RelationsEditor({
         </button>
       </div>
 
-      {/* Always visible (not just behind the hint) — this is what actually
-          answers "what is this for" the instant you look at it. */}
-      <p className="text-xs leading-relaxed text-ink-400">
-        <span className="font-medium text-ink-500">Contains</span> draws it inside, matched exactly
-        (e.g. a bed in a room).{" "}
-        <span className="font-medium text-ink-500">Relates</span> just notes a resemblance or
-        connection — never drawn separately. Links are two-way (they show on both subjects) and add
-        a little generation time & Sparks.
-      </p>
-
       {storySuggestions.length > 0 && (
         <div className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-2">
           <p className="text-xs text-brand-800">From your story:</p>
@@ -331,14 +321,7 @@ export function RelationsEditor({
             );
           })}
         </div>
-      ) : (
-        !managing && (
-          <p className="text-xs leading-relaxed text-ink-400">
-            No relationships yet — link the characters, places or objects that belong with{" "}
-            {anchor.name}.
-          </p>
-        )
-      )}
+      ) : null}
 
       {managing && (
         <div className="space-y-2 rounded-xl border border-ink-100 bg-ink-50/60 p-3">
