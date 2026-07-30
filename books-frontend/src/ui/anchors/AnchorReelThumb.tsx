@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import type { Anchor } from "../../core/types";
-import { currentAnchorImage } from "../../state/ai";
+import { anchorThumbBlobId, currentAnchorImage } from "../../state/ai";
 import { BlobThumbnail } from "../components/BlobThumbnail";
 import { GenerationOverlay } from "../generation/GenerationOverlay";
 import { cn } from "../lib/cn";
@@ -14,6 +14,8 @@ export interface AnchorReelThumbProps {
    *  the cursor leaves the reel without a click. Gets a visibly lighter
    *  treatment than `committed` so it never reads as "this is now picked". */
   previewing?: boolean;
+  /** Excluded from generation — still listed, but visibly set aside. */
+  skipped?: boolean;
   generating?: boolean;
   /** Click / tap / keyboard focus — always commits the selection. */
   onSelect: () => void;
@@ -36,6 +38,7 @@ export function AnchorReelThumb({
   anchor,
   committed,
   previewing = false,
+  skipped = false,
   generating = false,
   onSelect,
   onMouseEnter,
@@ -58,8 +61,11 @@ export function AnchorReelThumb({
       onClick={onSelect}
       onFocus={onSelect}
       onMouseEnter={onMouseEnter}
-      title={anchor.name}
-      className="group flex shrink-0 flex-col items-center gap-1.5 rounded-xl"
+      title={skipped ? `${anchor.name} — skipped` : anchor.name}
+      className={cn(
+        "group flex shrink-0 flex-col items-center gap-1.5 rounded-xl transition",
+        skipped && "opacity-40 saturate-0 hover:opacity-70",
+      )}
     >
       {/* The portrait scales up smoothly when spotlighted — a separate
           `motion` element from the outer button so this "pop" and the reel's
@@ -85,7 +91,7 @@ export function AnchorReelThumb({
           <GenerationOverlay action="anchorImage" compact />
         ) : (
           <BlobThumbnail
-            blobId={image?.blobId}
+            blobId={anchorThumbBlobId(anchor)}
             alt={anchor.name}
             instant
             className="absolute inset-0 size-full rounded-none"
@@ -112,7 +118,9 @@ export function AnchorReelThumb({
         >
           {anchor.name}
         </span>
-        <span className="text-[10px] capitalize leading-tight text-ink-400">{anchor.type}</span>
+        <span className="text-[10px] capitalize leading-tight text-ink-400">
+          {skipped ? "Skipped" : anchor.type}
+        </span>
       </span>
     </motion.button>
   );

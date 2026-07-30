@@ -76,13 +76,19 @@ export function useBookGeneration() {
     };
     setBusy(true);
     try {
-      await generateAllAnchors(useProjectsStore.getState().current()!, setAnchorGenerating, onError, signal);
-      if (!signal.aborted) {
-        await generateAllPages(useProjectsStore.getState().current()!, setPageGenerating, onError, signal);
-      }
+      // A refused batch (no tier chosen, or not enough Sparks) stops the whole
+      // run: pages cost more than the anchors we already couldn't pay for, and
+      // the gate's own dialog is the message the user needs to see.
+      const started = await generateAllAnchors(useProjectsStore.getState().current()!, setAnchorGenerating, onError, signal);
+      const pagesStarted =
+        started && !signal.aborted
+          ? await generateAllPages(useProjectsStore.getState().current()!, setPageGenerating, onError, signal)
+          : started;
 
       if (signal.aborted) {
         notify.info("Generation cancelled", "Anything already finished was kept.");
+      } else if (!started || !pagesStarted) {
+        // The gate already explained itself on screen.
       } else if (failures === 0) {
         notify.success("Your book is generated", "Tap any page to refine the art or layout.");
       } else {

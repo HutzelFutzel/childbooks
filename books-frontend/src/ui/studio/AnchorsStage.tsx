@@ -7,6 +7,7 @@ import {
   Loader2,
   Lock,
   Plus,
+  Ruler,
   Sparkles,
   UserPlus,
   Users,
@@ -28,6 +29,7 @@ import { useMediaQuery } from "../hooks/useMediaQuery";
 import { ImportAnchorsDialog } from "./ImportAnchorsDialog";
 import { AnchorEditor } from "../anchors/AnchorEditor";
 import { AnchorReelThumb } from "../anchors/AnchorReelThumb";
+import { CastLineup } from "../anchors/CastLineup";
 import { Button } from "../components/Button";
 import { Celebrate } from "../components/Celebrate";
 import { SparkEstimateCost, useImageBatchRange } from "../layout/SparkCost";
@@ -35,6 +37,7 @@ import { useResolvedModels } from "../hooks/useResolvedModels";
 import { notify } from "../lib/notify";
 import { useStudio } from "./StudioContext";
 import { generateAllAnchors } from "./studioGen";
+import { cn } from "../lib/cn";
 
 const ANALYSIS_PHASES: PipelinePhase[] = [
   { id: "read", label: "Reading your story", icon: BookOpen },
@@ -83,6 +86,7 @@ export function AnchorsStage() {
   const [analyzing, setAnalyzing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [celebrate, setCelebrate] = useState(false);
+  const [lineupOpen, setLineupOpen] = useState(false);
 
   // Character transfer: gateable feature — free until an admin lists it on a
   // plan, then subscriber-only. Other projects with a cast must exist to show it.
@@ -92,21 +96,43 @@ export function AnchorsStage() {
     s.projects.some((p) => p.id !== project.id && (p.anchors?.length ?? 0) > 0),
   );
 
-  const anchors = (project.anchors ?? []).filter((a) => a.include);
+  // The reel shows every anchor, including skipped ones (dimmed): hiding them
+  // outright would make "skip" a one-way door with no way back to the toggle.
+  // Everything about progress and generation counts only the included ones.
+  const allAnchors = project.anchors ?? [];
+  const anchors = allAnchors.filter((a) => a.include);
   const ready = anchors.filter((a) => currentAnchorImage(a)).length;
+  // Two characters with art is the point at which "how big is everyone next to
+  // each other" becomes a question that can be asked at all.
+  const canCompareSizes =
+    anchors.filter((a) => a.type === "character" && currentAnchorImage(a)).length >= 2;
   const allReady = anchors.length > 0 && ready === anchors.length;
   const analysisPending = !project.analysis;
   // Nothing left to generate — either every reference is ready, or the story
   // simply has no characters/places to draw.
   const canProceed = allReady || (Boolean(project.analysis) && anchors.length === 0);
+  // Whether the "everyone's ready, go design pages" moment has already been
+  // acknowledged. Starts settled if the cast was already complete when this
+  // screen loaded (nothing "just happened" then) and flips back to
+  // unsettled right when a fresh `generateAll()` finishes, so THAT moment
+  // still gets the bold announcement. Once the user deliberately does
+  // anything else here — picks a different character, edits one, asks for a
+  // regenerate — it settles again: they're back to browsing/editing the
+  // cast, and a CTA that keeps floating over whatever they're looking at
+  // reads as nagging rather than helpful.
+  const [settled, setSettled] = useState(canProceed);
+  function settleFloat() {
+    if (!settled) setSettled(true);
+  }
   // The bottom bar only earns its bold, floating-over-the-page treatment at
   // the two moments that genuinely need it: before anything's been made (it's
-  // the obvious first move) and once everything's ready (it's the obvious
-  // next one). In between, generating references is just one thing among
-  // several the user might do while browsing the cast, so the bar settles
-  // into the normal flow instead of hovering over whichever anchor they're
-  // actually looking at.
-  const floatingBar = ready === 0 || canProceed;
+  // the obvious first move) and the instant everything becomes ready (it's
+  // the obvious next one, until acknowledged). In between — and after that
+  // moment's been acknowledged — generating/editing references is just one
+  // thing among several the user might do while browsing the cast, so the
+  // bar settles into the normal flow instead of hovering over whichever
+  // anchor they're actually looking at.
+  const floatingBar = ready === 0 || (canProceed && !settled);
 
   const batchRange = useImageBatchRange([
     { action: "anchorImage", count: Math.max(0, anchors.length - ready) },
@@ -128,23 +154,28 @@ export function AnchorsStage() {
   const [previewId, setPreviewId] = useState<string | null>(null);
   const selectedAnchorId = selection.kind === "anchor" ? selection.anchorId : null;
   const activeAnchorId = previewId ?? selectedAnchorId;
-  const activeAnchor = anchors.find((a) => a.id === activeAnchorId) ?? null;
+  // Looked up across ALL anchors, not just included ones — a skipped anchor is
+  // still selectable in the reel, and its editor is the only place to un-skip.
+  const activeAnchor = allAnchors.find((a) => a.id === activeAnchorId) ?? null;
 
   function commitSelect(anchorId: string) {
     swapSourceRef.current = "click";
     setPreviewId(null);
     select({ kind: "anchor", anchorId });
+    // A deliberate pick from the reel — the clearest sign the user is back to
+    // browsing/editing the cast rather than reacting to "you're done!".
+    settleFloat();
   }
 
   // Keep the stage useful: focus the first character when arriving here with
   // nothing (relevant) selected.
   useEffect(() => {
-    if (anchors.length === 0) return;
-    if (!selectedAnchorId || !anchors.some((a) => a.id === selectedAnchorId)) {
-      commitSelect(anchors[0].id);
+    if (allAnchors.length === 0) return;
+    if (!selectedAnchorId || !allAnchors.some((a) => a.id === selectedAnchorId)) {
+      commitSelect((anchors[0] ?? allAnchors[0]).id);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [anchors.length, selectedAnchorId]);
+  }, [allAnchors.length, selectedAnchorId]);
 
   // Hover-preview: only on devices with a real pointer, and debounced so
   // sweeping the cursor across the reel doesn't thrash the stage below. This
@@ -208,7 +239,7 @@ export function AnchorsStage() {
     let failures = 0;
     setBusy(true);
     try {
-      await generateAllAnchors(
+      const started = await generateAllAnchors(
         useProjectsStore.getState().current()!,
         setAnchorGenerating,
         (err) => {
@@ -218,9 +249,19 @@ export function AnchorsStage() {
         },
         signal,
       );
-      if (!signal.aborted && failures === 0) {
+      if (started && !signal.aborted && failures === 0) {
         notify.success("Cast is ready", "Tap any character to refine its look.");
         setCelebrate(true);
+        // This is the moment the floating bar exists for — announce it even
+        // if an earlier auto-select (or a prior visit) had already settled it.
+        setSettled(false);
+        // The natural moment to check sizes: everyone now has art, and this is
+        // the only screen where relative height can actually be judged. Only
+        // worth showing when there are at least two people to compare.
+        const cast = (useProjectsStore.getState().current()?.anchors ?? []).filter(
+          (a) => a.type === "character" && a.include,
+        );
+        if (cast.length >= 2) setLineupOpen(true);
       }
     } finally {
       setBusy(false);
@@ -265,12 +306,13 @@ export function AnchorsStage() {
             onMouseLeave={endPreview}
           >
             <AnimatePresence initial={false}>
-              {anchors.map((anchor) => (
+              {allAnchors.map((anchor) => (
                 <AnchorReelThumb
                   key={anchor.id}
                   anchor={anchor}
                   committed={selectedAnchorId === anchor.id}
                   previewing={previewId === anchor.id}
+                  skipped={!anchor.include}
                   generating={generatingAnchors.has(anchor.id) || activeJobUnitIds.has(anchor.id)}
                   onSelect={() => commitSelect(anchor.id)}
                   onMouseEnter={() => previewOnHover(anchor.id)}
@@ -311,6 +353,11 @@ export function AnchorsStage() {
               swapSourceRef.current === "hover" ? { duration: 0 } : { duration: 0.25, ease: "easeOut" }
             }
             className="relative overflow-hidden rounded-3xl bg-aurora p-4 sm:p-6"
+            // Any real interaction with the editor itself (typing a tweak,
+            // hitting Regenerate…) settles the floating CTA exactly like a
+            // reel click does — the user doesn't have to leave the field
+            // they're in just to make the overlay stop crowding it.
+            onPointerDownCapture={settleFloat}
           >
             <AnimatePresence mode="popLayout" initial={false}>
               {activeAnchor ? (
@@ -333,7 +380,7 @@ export function AnchorsStage() {
                     setGenerating={(v) => setAnchorGenerating(activeAnchor.id, v)}
                   />
                 </motion.div>
-              ) : anchors.length === 0 ? (
+              ) : allAnchors.length === 0 ? (
                 <EmptyStage />
               ) : null}
             </AnimatePresence>
@@ -343,7 +390,19 @@ export function AnchorsStage() {
 
       <ImportAnchorsDialog open={importing} onClose={() => setImporting(false)} project={project} />
 
-      <div className="mt-4 flex justify-center">
+      <div className="mt-4 flex justify-center gap-1">
+        {canCompareSizes && (
+          <button
+            onClick={() => setLineupOpen((v) => !v)}
+            className={cn(
+              "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition hover:bg-ink-100 hover:text-brand-600",
+              lineupOpen ? "text-brand-600" : "text-ink-500",
+            )}
+          >
+            <Ruler className="size-3.5" />
+            {lineupOpen ? "Hide size check" : "Check everyone's size"}
+          </button>
+        )}
         <button
           onClick={() => void reanalyze()}
           className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-ink-500 transition hover:bg-ink-100 hover:text-brand-600"
@@ -352,6 +411,15 @@ export function AnchorsStage() {
           Re-read the story
         </button>
       </div>
+
+      {/* Inline, not a modal: sizing is something worth rechecking after every
+          regeneration, and a popup that has to be reopened each time would
+          fight that more than help it. */}
+      <CastLineup
+        open={lineupOpen && canCompareSizes}
+        onClose={() => setLineupOpen(false)}
+        anchors={project.anchors ?? []}
+      />
 
       <StickyActionBar
         floating={floatingBar}

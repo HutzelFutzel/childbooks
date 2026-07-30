@@ -58,12 +58,26 @@ export function Popover({
 }: PopoverProps) {
   const [open, setOpen] = useState(false);
   const [style, setStyle] = useState<CSSProperties | null>(null);
+  // The side actually used, which can differ from the requested `side` once a
+  // trigger near an edge of the screen is measured. Reset to the preferred
+  // side each time the popover opens, so a trigger that's since scrolled into
+  // room goes back to its normal side rather than staying flipped forever.
+  const [effectiveSide, setEffectiveSide] = useState(side);
+  // Mirrors `effectiveSide` for the scroll/resize handlers below: those are
+  // registered once per open (see the effect's dependency array) and would
+  // otherwise close over whatever side was current at that moment, silently
+  // undoing a later flip on the next scroll event. A ref always reads current.
+  const effectiveSideRef = useRef(side);
   const anchorRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Flip (and horizontal clamp) at most once per open — otherwise a panel that
+  // doesn't fit on EITHER side (taller than the viewport) would bounce back
+  // and forth chasing room that doesn't exist anywhere.
+  const adjustedRef = useRef(false);
   const id = useId();
 
-  function reposition() {
+  function reposition(sideToUse: "top" | "bottom" = effectiveSideRef.current) {
     const el = anchorRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
@@ -71,7 +85,7 @@ export function Popover({
     // assumes the panel's own size) so the browser resolves the edge against
     // whatever size the panel actually renders at — no measuring needed.
     const next: CSSProperties = { position: "fixed" };
-    if (side === "top") next.bottom = window.innerHeight - rect.top + GAP;
+    if (sideToUse === "top") next.bottom = window.innerHeight - rect.top + GAP;
     else next.top = rect.bottom + GAP;
     if (align === "start") next.left = rect.left;
     else if (align === "center") {
@@ -83,7 +97,10 @@ export function Popover({
 
   useLayoutEffect(() => {
     if (!open) return;
-    reposition();
+    adjustedRef.current = false;
+    effectiveSideRef.current = side;
+    setEffectiveSide(side);
+    reposition(side);
     const onScroll = () => reposition();
     const onResize = () => reposition();
     window.addEventListener("scroll", onScroll, { passive: true, capture: true });
@@ -94,6 +111,54 @@ export function Popover({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, side, align]);
+
+  // After the panel has actually rendered at its real size, check whether it
+  // fits where it landed and correct once: flip vertically if the preferred
+  // side has no room (only when the OTHER side genuinely has more — a panel
+  // taller than the viewport shouldn't flip forever), and clamp horizontally
+  // so a panel near the screen edge never renders partly off-screen. This is
+  // what actually keeps a help popover on an anchor near the top of the page
+  // fully readable, instead of trusting the CSS-only estimate in `reposition`.
+  useLayoutEffect(() => {
+    if (!open || !style || adjustedRef.current) return;
+    const anchorEl = anchorRef.current;
+    const panelEl = panelRef.current;
+    if (!anchorEl || !panelEl) return;
+    const anchorRect = anchorEl.getBoundingClientRect();
+    const panelRect = panelEl.getBoundingClientRect();
+    const margin = 8;
+
+    const topRoom = anchorRect.top - GAP;
+    const bottomRoom = window.innerHeight - anchorRect.bottom - GAP;
+    let nextSide = effectiveSide;
+    if (effectiveSide === "top" && panelRect.height > topRoom && bottomRoom > topRoom) {
+      nextSide = "bottom";
+    } else if (effectiveSide === "bottom" && panelRect.height > bottomRoom && topRoom > bottomRoom) {
+      nextSide = "top";
+    }
+
+    if (nextSide !== effectiveSide) {
+      adjustedRef.current = true;
+      effectiveSideRef.current = nextSide;
+      setEffectiveSide(nextSide);
+      reposition(nextSide);
+      return;
+    }
+
+    // Horizontal clamp: keep the panel fully within the viewport regardless
+    // of which side it ended up on.
+    let left = panelRect.left;
+    if (left < margin) left = margin;
+    const maxLeft = window.innerWidth - panelRect.width - margin;
+    if (left > maxLeft) left = Math.max(margin, maxLeft);
+    if (Math.abs(left - panelRect.left) > 0.5) {
+      adjustedRef.current = true;
+      setStyle((prev) => (prev ? { ...prev, left, right: undefined, transform: undefined } : prev));
+    } else {
+      adjustedRef.current = true;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, style, effectiveSide]);
 
   useEffect(() => {
     if (!open) return;

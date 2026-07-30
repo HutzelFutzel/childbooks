@@ -38,16 +38,18 @@ function ImageFrame({
   ratio,
   className,
   sizes,
+  fit,
 }: {
   url: string;
   alt: string;
   ratio: string;
   className?: string;
   sizes: string;
+  fit: "contain" | "cover";
 }) {
   return (
     <div style={{ aspectRatio: ratio }} className={cn("relative w-full overflow-hidden rounded-2xl", className)}>
-      <Image src={url} alt={alt} fill sizes={sizes} className="object-contain" />
+      <Image src={url} alt={alt} fill sizes={sizes} className={fit === "cover" ? "object-cover" : "object-contain"} />
     </div>
   );
 }
@@ -68,6 +70,7 @@ export function EditableImage({
   serverUrl,
   alt,
   sizes = "(max-width: 1024px) 100vw, 600px",
+  fit = "contain",
 }: {
   slotId: SiteImageSlot;
   label: string;
@@ -78,6 +81,12 @@ export function EditableImage({
   serverUrl?: string;
   alt?: string;
   sizes?: string;
+  /**
+   * `"contain"` (default) letterboxes so the whole image is always visible —
+   * right for transparent-background illustrations. `"cover"` crops to fill
+   * the frame edge-to-edge — right for photos (e.g. a founder portrait).
+   */
+  fit?: "contain" | "cover";
 }) {
   const editing = useEditMode((s) => s.enabled);
   const storeAsset = useAppConfigStore((s) => s.siteImages.images[slotId]);
@@ -94,7 +103,7 @@ export function EditableImage({
   // Public (non-editing) render — identical to the original placeholder flow.
   if (!editing) {
     return url ? (
-      <ImageFrame url={url} alt={altText} ratio={ratio} className={className} sizes={sizes} />
+      <ImageFrame url={url} alt={altText} ratio={ratio} className={className} sizes={sizes} fit={fit} />
     ) : (
       <GraphicPlaceholder label={label} ratio={ratio} hint={hint} className={className} />
     );
@@ -155,9 +164,13 @@ export function EditableImage({
       {pending ? (
         // Local preview of the dropped file (blob URL — not yet uploaded).
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={pending.previewUrl} alt="" className="absolute inset-0 size-full object-contain" />
+        <img
+          src={pending.previewUrl}
+          alt=""
+          className={cn("absolute inset-0 size-full", fit === "cover" ? "object-cover" : "object-contain")}
+        />
       ) : url ? (
-        <Image src={url} alt={altText} fill sizes={sizes} className="object-contain" />
+        <Image src={url} alt={altText} fill sizes={sizes} className={fit === "cover" ? "object-cover" : "object-contain"} />
       ) : (
         <div className="flex size-full flex-col items-center justify-center gap-2 bg-brand-50/60 bg-grid p-6 text-center">
           <span className="flex size-10 items-center justify-center rounded-xl bg-white/80 text-brand-500 shadow-soft">

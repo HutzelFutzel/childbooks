@@ -19,7 +19,8 @@ export type SiteImageSlot =
   | "hero.card2"
   | "how.step1"
   | "how.step2"
-  | "how.step3";
+  | "how.step3"
+  | "founder.photo";
 
 export const SITE_IMAGE_SLOTS: SiteImageSlot[] = [
   "hero.main",
@@ -28,6 +29,7 @@ export const SITE_IMAGE_SLOTS: SiteImageSlot[] = [
   "how.step1",
   "how.step2",
   "how.step3",
+  "founder.photo",
 ];
 
 export function isSiteImageSlot(v: unknown): v is SiteImageSlot {

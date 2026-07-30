@@ -1,6 +1,20 @@
 import { useState } from "react";
-import { Check, ChevronDown, GitBranch, Pencil, RefreshCw, RotateCcw, Sparkles, Wand2, X } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Eye,
+  EyeOff,
+  GitBranch,
+  Pencil,
+  RefreshCw,
+  RotateCcw,
+  Sparkles,
+  Trash2,
+  Wand2,
+  X,
+} from "lucide-react";
 import type { Anchor } from "../../core/types";
+import { layoutOf, sheetAspect, sheetSpecFor } from "../../core/pipeline/anchorLayout";
 import { selectVersion, allVersions, getCursor } from "../../core/versioning";
 import { changedAnchorsForAnchor, staleAnchorIds } from "../../state/ai";
 import { useJobsStore } from "../../state/jobsStore";
@@ -36,9 +50,11 @@ export function AnchorEditor({
 }) {
   const updateAnchor = useProjectsStore((s) => s.updateAnchor);
   const renameAnchor = useProjectsStore((s) => s.renameAnchor);
+  const removeAnchor = useProjectsStore((s) => s.removeAnchor);
   const deleteAnchorVersion = useProjectsStore((s) => s.deleteAnchorVersion);
   const project = useProjectsStore((s) => s.current());
   const [edit, setEdit] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmRevertId, setConfirmRevertId] = useState<string | null>(null);
   const [renaming, setRenaming] = useState(false);
   const [renameValue, setRenameValue] = useState(anchor.name);
@@ -50,10 +66,23 @@ export function AnchorEditor({
 
   const isStale = Boolean(project && anchor.versions && staleAnchorIds(project).includes(anchor.id));
   const changedRefs = project && isStale ? changedAnchorsForAnchor(project, anchor.id) : [];
+  // The anchor's own signature is recorded as a self-entry (see `renderAnchor`)
+  // so editing THIS anchor's description after it has art also flags it stale
+  // — surfaced separately so "Arthur changed" doesn't read as if some other
+  // anchor named Arthur is to blame.
+  const selfChanged = changedRefs.some((a) => a.id === anchor.id);
+  const otherChangedRefs = changedRefs.filter((a) => a.id !== anchor.id);
   const cursorId = anchor.versions?.cursorId;
   const cursorNode = cursorId ? anchor.versions!.nodes[cursorId] : undefined;
   const { url: cursorUrl, status: cursorStatus } = useBlobUrlState(cursorNode?.content.blobId);
   const hasImage = Boolean(anchor.versions);
+  // Sheets predating the layout contract (or a version generated under an
+  // older spec) have no recorded layout; the spec for the anchor's CURRENT
+  // shape is the best guess then. Bipedal sheets render landscape (three
+  // columns fit more comfortably wide than square), so previewing the full,
+  // uncropped sheet at a hardcoded square aspect cropped/squashed it.
+  const fallbackLayout = layoutOf(sheetSpecFor(anchor));
+  const cursorAspect = sheetAspect(cursorNode?.content.layout ?? fallbackLayout);
   const versions = anchor.versions ? allVersions(anchor.versions) : [];
   const TypeIcon = ANCHOR_TYPE_ICON[anchor.type];
 
@@ -135,7 +164,7 @@ export function AnchorEditor({
           loading={generating}
           loadingAction="anchorImage"
           refCount={anchor.containedIds?.length ?? 0}
-          aspect={1}
+          aspect={cursorAspect}
           className="rounded-xl"
           emptyLabel={
             // The version exists but its blob didn't come back: say so rather
@@ -197,16 +226,48 @@ export function AnchorEditor({
               <Pencil className="size-3 shrink-0 text-ink-300 opacity-0 transition group-hover:opacity-100" />
             </button>
           )}
+          {/* Two basics that were simply missing: a story analysis sometimes
+              invents a subject nobody wants, and there was no way to drop it or
+              to keep it in the story without spending Sparks drawing it. */}
+          <button
+            type="button"
+            onClick={() => void updateAnchor(anchor.id, { include: !anchor.include })}
+            title={anchor.include ? "Skip — don't draw this one" : "Include this one again"}
+            aria-label={anchor.include ? "Skip this subject" : "Include this subject"}
+            className="flex size-7 shrink-0 items-center justify-center rounded-md text-ink-400 transition hover:bg-ink-100 hover:text-ink-700"
+          >
+            {anchor.include ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
+          </button>
+          <button
+            type="button"
+            onClick={() => setConfirmDelete(true)}
+            title={`Remove ${anchor.name}`}
+            aria-label={`Remove ${anchor.name}`}
+            className="flex size-7 shrink-0 items-center justify-center rounded-md text-ink-400 transition hover:bg-red-50 hover:text-red-600"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
         </div>
       </div>
+
+      {!anchor.include && (
+        <p className="rounded-lg bg-ink-100 px-3 py-2 text-xs text-ink-500">
+          Skipped — no reference art will be made for {anchor.name}, and they won&rsquo;t be
+          offered on pages.
+        </p>
+      )}
 
       {isStale && (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
           <span className="flex items-center gap-1.5 text-xs text-amber-800">
             <RefreshCw className="size-3.5 shrink-0" />
-            {changedRefs.length > 0
-              ? `${formatList(changedRefs.map((a) => a.name))} changed since this was generated.`
-              : "A referenced character or object changed since this was generated."}
+            {selfChanged && otherChangedRefs.length > 0
+              ? `Its own description and ${formatList(otherChangedRefs.map((a) => a.name))} changed since this was generated.`
+              : selfChanged
+                ? "Its description changed since this was generated."
+                : otherChangedRefs.length > 0
+                  ? `${formatList(otherChangedRefs.map((a) => a.name))} changed since this was generated.`
+                  : "A referenced character or object changed since this was generated."}
           </span>
           <Button
             size="sm"
@@ -242,6 +303,7 @@ export function AnchorEditor({
                 active={node.id === cursorId}
                 onClick={() => selectVer(node.id)}
                 onDelete={() => deleteVer(node.id)}
+                aspect={sheetAspect(node.content.layout ?? fallbackLayout)}
               />
             ))}
           </div>
@@ -250,9 +312,25 @@ export function AnchorEditor({
     </div>
   );
 
-  // --- Controls: creative direction, generate / refine / regenerate. -------
+  // --- Controls: description, creative direction, generate / refine. -------
   const controls = (
     <div className={cn("space-y-3", layout === "stacked" && "border-t border-ink-100 pt-4")}>
+      {/* The description drives the art, so it has to be editable here. It used
+          to be read-only, which left a user who disagreed with the AI's take no
+          way to fix it except writing a correction in a different box and
+          hoping the two got reconciled. */}
+      <Field
+        label="What they look like"
+        hint="Written from your story. Edit it directly if anything's off."
+      >
+        <Textarea
+          value={anchor.description}
+          onChange={(e) => void updateAnchor(anchor.id, { description: e.target.value })}
+          rows={3}
+          placeholder="e.g. a small girl with dark curls, red rain boots and a yellow coat"
+        />
+      </Field>
+
       <CreativeDirectionField
         anchorName={anchor.name}
         value={anchor.userGuidance ?? ""}
@@ -324,6 +402,38 @@ export function AnchorEditor({
     />
   );
 
+  const deleteModal = (
+    <Modal
+      open={confirmDelete}
+      onClose={() => setConfirmDelete(false)}
+      title={`Remove ${anchor.name}?`}
+      size="max-w-md"
+      footer={
+        <>
+          <Button variant="ghost" onClick={() => setConfirmDelete(false)}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => {
+              setConfirmDelete(false);
+              void removeAnchor(anchor.id);
+            }}
+          >
+            Remove
+          </Button>
+        </>
+      }
+    >
+      <p className="text-sm leading-relaxed text-ink-600">
+        This removes <span className="font-medium text-ink-800">{anchor.name}</span> from your cast
+        along with any reference art. Pages already illustrated with them keep their artwork.
+        {" "}
+        To keep them in the story but skip the artwork, use{" "}
+        <span className="font-medium text-ink-800">Skip</span> instead.
+      </p>
+    </Modal>
+  );
+
   const revertModal = (
     <Modal
       open={confirmRevertId !== null}
@@ -365,6 +475,7 @@ export function AnchorEditor({
           {relations}
         </div>
         {revertModal}
+        {deleteModal}
       </div>
     );
   }
@@ -375,6 +486,7 @@ export function AnchorEditor({
       {controls}
       {relations}
       {revertModal}
+      {deleteModal}
     </div>
   );
 }

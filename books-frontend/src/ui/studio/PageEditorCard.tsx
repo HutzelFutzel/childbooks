@@ -27,6 +27,7 @@ import {
 } from "../../core/book/format";
 import { allVersions, getCursor, selectVersion, updateNodeContent } from "../../core/versioning";
 import {
+  anchorThumbBlobId,
   changedAnchorsForSpread,
   generateIllustrationVersion,
   staleAnchorIds,
@@ -780,8 +781,9 @@ function AnchorToggle({
   active: boolean;
   onClick: () => void;
 }) {
-  const blobId = anchor.versions?.nodes[anchor.versions.cursorId]?.content.blobId;
-  const url = useBlobUrl(blobId);
+  // The close-up crop, not the full sheet: a six-cell reference sheet rendered
+  // into a 16px circle is unreadable.
+  const url = useBlobUrl(anchorThumbBlobId(anchor));
   return (
     <button onClick={onClick} className="transition active:scale-95" title={active ? "On this page" : "Add to this page"}>
       <Badge tone={active ? "brand" : "neutral"} className={active ? "" : "opacity-60"}>

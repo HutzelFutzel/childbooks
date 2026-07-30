@@ -39,7 +39,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     system: [
       blk(
         "role",
-        "You are a children's-book art director. Analyze the story and identify every subject that must look IDENTICAL each time it appears so the illustrations stay consistent. Include recurring CHARACTERS (people, animals, creatures), important PLACES/settings, and significant recurring OBJECTS. Skip one-off background details that never need to match. For each, write a concise but vivid visual description (appearance, colors, distinguishing features) grounded in the story; infer sensible details where the story is silent. Describe only the subject itself — do NOT mention the art style, medium, or rendering technique (that is applied separately). When a subject's appearance is defined by its relationship to another subject (e.g. a sibling, or an object that belongs in a place), reference that other subject by its exact name in the description so the relationship is preserved. Rank importance: high = central/appears often, medium = recurring, low = minor but still needs consistency. Also write a 1-2 sentence summary of the story's visual world.",
+        "You are a children's-book art director. Analyze the story and identify every subject that must look IDENTICAL each time it appears so the illustrations stay consistent. Include recurring CHARACTERS (people, animals, creatures), important PLACES/settings, and significant recurring OBJECTS. Skip one-off background details that never need to match. For each, write a concise but vivid visual description (appearance, colors, distinguishing features) grounded in the story; infer sensible details where the story is silent. Describe only the subject itself — do NOT mention the art style, medium, or rendering technique (that is applied separately). When a subject's appearance is defined by its relationship to another subject (e.g. a sibling, or an object that belongs in a place), reference that other subject by its exact name in the description so the relationship is preserved. Rank importance: high = central/appears often, medium = recurring, low = minor but still needs consistency. For CHARACTERS ONLY, also set two extra fields. \"bodyPlan\" is the character's gross body layout: \"bipedal\" for anyone who stands upright on two legs (people, robots, a bear in a waistcoat, a standing toy), \"quadruped\" for four-legged animals that walk on all fours, \"avian\" for birds, \"aquatic\" for fish and other swimming or serpentine bodies, \"amorphous\" for everything without a clear limbed body (a cloud, a teapot with a face, a blob). \"heightCm\" is the character's approximate real-world standing height in centimetres — use ordinary real proportions for their age and species (a 5-year-old child is about 110, an adult woman about 165, an adult man about 178, a house cat about 25 at the shoulder). OMIT heightCm entirely when the story gives you no basis to judge; a wrong size is worse than none. Leave both fields out for places and objects. Separately, list the RELATIONS between the subjects you identified, referring to them by their exact names — these exist ONLY to make the artwork consistent, never to record the plot's family tree or social roles. Use kind \"contains\" when one place or object physically holds another that you also listed as a subject (a specific bed inside a specific bedroom, a specific lamp on a specific desk) — never for characters, and never nested more than one level deep; look actively for these, since a container drawn without its listed contents already inside it is a continuity error. Use kind \"relates\" when two subjects should be DESIGNED side by side because their APPEARANCES are visually linked: family members who share a visible trait, a pet whose coloring matches its owner's palette, a character and an object they always wear. The \"note\" on a \"relates\" edge must be a VISUAL design instruction completing the sentence \"<from> ... <to>\" — describe the shared trait itself, e.g. \"has the same curly red hair and freckles as\", \"is drawn in a matching blue-and-white palette to\" or \"wears a smaller copy of the same striped scarf as\". NEVER write a note that is only a kinship or social label with no visual content — \"is the father of\", \"is the twin of\" and \"is the mother of\" are all WRONG because they say nothing an illustrator can draw differently; if a family link is the reason two subjects should match, name the resemblance instead (\"has the same rounded nose and green eyes as\", not \"is the mother of\"). Only list relations the story genuinely supports; an empty list is a perfectly good answer. Also write a 1-2 sentence summary of the story's visual world.",
       ),
     ],
     user: [
@@ -114,6 +114,22 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk(
         "ask",
         'Locate each of these subjects in the image and return its tightest bounding box:\n{{list}}\n\nReturn {"subjects": [{"id", "found", "x", "y", "width", "height"}, ...]} with one entry per id above, where (x, y) is the TOP-LEFT corner and width/height the size, all normalized 0..1. For any subject not clearly visible, set "found": false.',
+      ),
+    ],
+  },
+
+  // core/pipeline/localize.ts → countSheetPanels (grid-count repair check)
+  "gridCheck/count": {
+    system: [
+      blk(
+        "role",
+        "You are a precise vision system that counts distinct picture panels in a reference sheet. Reply with JSON only.",
+      ),
+    ],
+    user: [
+      blk(
+        "ask",
+        'This image is meant to be a grid of exactly {{expectedCount}} separate panels/cells, each a different view of "{{subjectName}}" separated by plain white gutters. Count how many distinct panels are ACTUALLY drawn — ignore whether each one matches the subject correctly, just count separate panel regions bounded by white space. Return {"count": <integer>}.',
       ),
     ],
   },
@@ -203,18 +219,23 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     single: [
       blk(
         "angleCharacter",
-        'full-body character reference sheet showing the same character from multiple angles (front, three-quarter, side, and back), consistent proportions and design of "{{anchorName}}".',
+        'A character reference sheet of "{{anchorName}}", laid out as a strict grid of exactly {{cellCount}} equal cells ({{gridShape}}), read left to right then top to bottom, evenly spaced with generous white gutters between them. Draw exactly one view per cell — no more, no fewer — in exactly this order: {{viewList}}. It is the SAME character in every cell: identical face, hair, body, proportions, colors and outfit, with only the camera angle or framing changing. Draw every whole-body cell at the same scale, as if photographed from the same distance, with the feet on a common baseline and the top of the head at the same height.',
         "isCharacter",
       ),
       blk(
         "anglePlace",
-        'environment reference sheet showing the SAME location from a few key viewpoints (wide establishing view and one or two closer angles). Every viewpoint must show the IDENTICAL space — identical architecture, furniture, wall décor, props, layout and color palette. Only the camera angle changes between views; never add, remove, move or alter any element from one view to another of "{{anchorName}}".',
+        'An environment reference sheet of "{{anchorName}}", laid out as a strict grid of exactly {{cellCount}} equal cells ({{gridShape}}), read top to bottom, evenly spaced with generous white gutters between them. Draw exactly one view per cell — no more, no fewer — in exactly this order: {{viewList}}. Every cell must show the IDENTICAL space: identical architecture, furniture, wall décor, props, layout and color palette. Only the camera angle changes between cells; never add, remove, move or alter any element from one view to another.',
         "isPlace",
       ),
       blk(
         "angleObject",
-        'object reference sheet showing the SAME item from multiple angles (front, side, three-quarter). Keep identical shape, proportions, materials, markings and colors across every angle; only the viewpoint changes of "{{anchorName}}".',
+        'An object reference sheet of "{{anchorName}}", laid out as a strict grid of exactly {{cellCount}} equal cells ({{gridShape}}), read left to right then top to bottom, evenly spaced with generous white gutters between them. Draw exactly one view per cell — no more, no fewer — in exactly this order: {{viewList}}. Keep identical shape, proportions, materials, markings and colors across every cell; only the viewpoint changes. Draw every cell at the same scale, as if photographed from the same distance.',
         "isObject",
+      ),
+      blk(
+        "gridRepair",
+        "IMPORTANT CORRECTION: a previous attempt at this exact sheet drew {{actualPanelCount}} panels instead of the required {{cellCount}}. This is critical — this time draw EXACTLY {{cellCount}} panels, no more and no fewer, one per listed view, arranged in the grid described above.",
+        "hasGridRepair",
       ),
       blk("description", "{{description}}"),
       blk("userGuidance", "{{userGuidance}}", "hasUserGuidance"),
@@ -246,7 +267,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk("style", "Art style: {{artStyle}}."),
       blk(
         "background",
-        "Plain pure-white seamless background, even soft studio lighting, no text, no labels, no watermark, clearly separated angles.",
+        "Plain pure-white seamless background in every cell, even soft studio lighting, and no cast shadow or ground shadow beneath the subject. Nothing but the subject on white: no text, labels, captions, names, numbers, color swatches, measurement lines, arrows, callouts, grid lines, frames, borders or watermark anywhere in the image.",
       ),
       blk("revision", "Revision: {{edit}}.", "hasEdit"),
     ],
@@ -264,9 +285,12 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "keep",
-        "Keep everything else exactly the same: {{identity}}, the multi-angle layout, framing, lighting and the plain white background. Do not add, remove, restyle or redesign anything the change does not explicitly require.",
+        "Keep everything else exactly the same: {{identity}}, the exact grid layout with the same number of cells in the same order, the framing and scale of every cell, the lighting and the plain white background. Do not add, remove, reorder, resize, restyle or redesign anything the change does not explicitly require.",
       ),
-      blk("noText", "No text, labels or watermark."),
+      blk(
+        "noText",
+        "No text, labels, captions, color swatches, measurement lines, arrows, borders or watermark, and no shadow under the subject.",
+      ),
     ],
   },
 
@@ -304,6 +328,11 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "settings",
         "These places/objects must match their reference images EXACTLY — {{settingsList}}. Keep the same architecture, layout, furniture, props, materials and colors; only the camera angle or viewpoint may change. Do not redesign, rearrange, add or remove their elements unless this page's description explicitly says the setting changed.",
         "hasSettings",
+      ),
+      blk(
+        "heights",
+        "Relative sizes: {{heightsList}} Each character's own reference sheet is drawn to fill its own frame, so the sheets say NOTHING about how big these characters are next to each other — use the sizes stated here instead, and keep them exact wherever two characters share the frame, whoever is nearer the camera.",
+        "hasHeights",
       ),
       blk("described", "Also feature these subjects: {{describedList}}.", "hasDescribed"),
       blk(
@@ -649,6 +678,25 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
     ],
   },
   {
+    actionId: "gridCheck",
+    label: "Reference-sheet panel count (vision)",
+    description:
+      "After a reference sheet renders, counts its actual panels so a mismatch against the requested grid can trigger one repair retry.",
+    kind: "text",
+    templates: [
+      {
+        key: "gridCheck/count",
+        label: "Count panels",
+        description: "Count the distinct view panels actually drawn on a just-rendered sheet.",
+        variables: [
+          V("subjectName", "Anchor name.", "Amanda"),
+          V("expectedCount", "Panels the grid was asked for.", "6"),
+        ],
+        sampleFlags: {},
+      },
+    ],
+  },
+  {
     actionId: "editIntent",
     label: "Edit intent resolution",
     description: "Classifies a user's free-text page edit into structured remove/replace/refresh operations.",
@@ -692,6 +740,13 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
         variables: [
           V("anchorName", "Anchor name.", "Amanda"),
           V("anchorType", "Anchor type.", "place"),
+          V("cellCount", "Number of cells in the sheet grid.", "6"),
+          V("gridShape", "Grid shape of the sheet.", "3 columns by 2 rows"),
+          V(
+            "viewList",
+            "Ordered view per cell.",
+            "(1) the full body from the front, standing straight, arms relaxed at the sides, (2) the full body from a three-quarter front angle (turned about 45 degrees)",
+          ),
           V("description", "The anchor's visual description.", "a curious girl with red boots"),
           V("userGuidance", "Optional extra user guidance.", "always wearing a green scarf"),
           V("containedList", "Contained anchors (place/object).", "the bed (a wooden bunk bed)"),
@@ -700,6 +755,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("legend", "Ordered reference-image legend.", "(1) an art-style reference, (2) Hospital bed (must match this reference exactly)"),
           V("artStyle", "Resolved art-style overlay.", STYLE_SAMPLE),
           V("edit", "Optional revision instruction.", "make her smile"),
+          V("actualPanelCount", "Panels actually drawn last attempt (repair retry only).", "8"),
         ],
         sampleFlags: {
           isCharacter: true,
@@ -712,6 +768,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           hasStyleRef: false,
           hasEdit: false,
           hasLegend: false,
+          hasGridRepair: false,
         },
       },
       {
@@ -743,6 +800,11 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("illustrationBrief", "The page's illustration brief.", "Amanda peeks under the bed."),
           V("charactersList", "Referenced characters with descriptions.", "Amanda (a curious girl)"),
           V("settingsList", "Referenced places/objects.", "the bedroom (a cozy attic room)"),
+          V(
+            "heightsList",
+            "Relative sizes of the characters on this page.",
+            "Dad is the tallest; Amanda comes up to the waist of Dad (approximate real heights: Dad 178cm, Amanda 112cm).",
+          ),
           V("describedList", "Anchors mentioned by description only.", "Bruno (a small dog)"),
           V("embeddedList", "Containment pairs on this page.", "Hospital bed appears INSIDE Hospital room"),
           V("legend", "Ordered reference-image legend.", "(1) Amanda, (2) the current page of this book"),
@@ -762,6 +824,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           hasStyleRef: false,
           hasCharacters: true,
           hasSettings: false,
+          hasHeights: true,
           hasDescribed: false,
           hasEmbedded: false,
           hasReferenced: true,

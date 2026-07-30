@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Clock, Gauge, Lock, Sparkles, Zap } from "lucide-react";
+import { AlertTriangle, Check, Clock, Gauge, Lock, Sparkles, Zap } from "lucide-react";
 import {
   DEFAULT_IMAGE_TIER_LABELS,
   IMAGE_TIERS,
@@ -12,6 +12,7 @@ import {
 } from "../../core/config/latencyStats";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useAuthStore } from "../../state/authStore";
+import { InfoHint } from "../components/InfoHint";
 import { formatSparkRange, useTierSparkEstimate } from "../hooks/useTierEstimate";
 
 /** One-line pitch for each tier, shown under its name. */
@@ -46,52 +47,65 @@ function TierCard({
   );
 
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
-      className={
-        "flex w-full flex-col gap-1.5 rounded-xl p-3 text-left ring-1 ring-inset transition " +
-        (selected
-          ? "bg-brand-50 ring-2 ring-brand-400"
-          : locked
-            ? "bg-ink-50/60 ring-ink-100 hover:ring-ink-300"
-            : "bg-white ring-ink-100 hover:ring-ink-300")
-      }
-    >
-      <div className="flex items-center justify-between gap-2">
-        <span className="flex items-center gap-1.5 text-sm font-semibold text-ink-800">
-          {tier === "quick" ? (
-            <Zap className="size-4 text-amber-500" />
-          ) : (
-            <Sparkles className="size-4 text-brand-500" />
-          )}
-          {label}
-        </span>
-        {selected ? (
-          <span className="flex items-center gap-1 text-[11px] font-semibold text-brand-600">
-            <Check className="size-3.5" /> Selected
-          </span>
-        ) : locked ? (
-          <span className="flex items-center gap-1 rounded bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold text-ink-500">
-            <Lock className="size-3" /> Sign in
-          </span>
-        ) : priceText ? (
-          <span className="rounded bg-ink-50 px-1.5 py-0.5 text-[10px] font-medium text-ink-500">
-            {priceText}
-          </span>
-        ) : null}
-      </div>
-      <p className="text-xs leading-relaxed text-ink-500">{TIER_BLURB[tier]}</p>
-      <span className="inline-flex w-fit items-center gap-1 rounded bg-ink-50 px-1.5 py-0.5 text-[10px] font-medium text-ink-500">
-        <Clock className="size-3" /> {timeText} per image
-      </span>
-      {selected && priceText && (
-        <span className="mt-0.5 inline-flex w-fit items-center gap-1 rounded bg-white/70 px-1.5 py-0.5 text-[10px] font-medium text-brand-700 ring-1 ring-inset ring-brand-100">
-          <Gauge className="size-3" /> about {priceText} per page
-        </span>
+    <div className="relative">
+      {/* A sibling of the `<button>` below, not a child — an interactive
+          popover trigger nested inside the card's own `<button>` would be
+          invalid HTML (buttons can't nest) and would fire tier-selection on
+          every hover-triggered tap. */}
+      {tier === "quick" && (
+        <InfoHint
+          topic="fastTierConsistency"
+          icon={AlertTriangle}
+          className="absolute right-3 top-3 text-amber-500"
+        />
       )}
-    </button>
+      <button
+        type="button"
+        onClick={onSelect}
+        aria-pressed={selected}
+        className={
+          "flex w-full flex-col gap-1.5 rounded-xl p-3 text-left ring-1 ring-inset transition " +
+          (selected
+            ? "bg-brand-50 ring-2 ring-brand-400"
+            : locked
+              ? "bg-ink-50/60 ring-ink-100 hover:ring-ink-300"
+              : "bg-white ring-ink-100 hover:ring-ink-300")
+        }
+      >
+        <div className="flex items-center justify-between gap-2 pr-4">
+          <span className="flex items-center gap-1.5 text-sm font-semibold text-ink-800">
+            {tier === "quick" ? (
+              <Zap className="size-4 text-amber-500" />
+            ) : (
+              <Sparkles className="size-4 text-brand-500" />
+            )}
+            {label}
+          </span>
+          {selected ? (
+            <span className="flex items-center gap-1 text-[11px] font-semibold text-brand-600">
+              <Check className="size-3.5" /> Selected
+            </span>
+          ) : locked ? (
+            <span className="flex items-center gap-1 rounded bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold text-ink-500">
+              <Lock className="size-3" /> Sign in
+            </span>
+          ) : priceText ? (
+            <span className="rounded bg-ink-50 px-1.5 py-0.5 text-[10px] font-medium text-ink-500">
+              {priceText}
+            </span>
+          ) : null}
+        </div>
+        <p className="text-xs leading-relaxed text-ink-500">{TIER_BLURB[tier]}</p>
+        <span className="inline-flex w-fit items-center gap-1 rounded bg-ink-50 px-1.5 py-0.5 text-[10px] font-medium text-ink-500">
+          <Clock className="size-3" /> {timeText} per image
+        </span>
+        {selected && priceText && (
+          <span className="mt-0.5 inline-flex w-fit items-center gap-1 rounded bg-white/70 px-1.5 py-0.5 text-[10px] font-medium text-brand-700 ring-1 ring-inset ring-brand-100">
+            <Gauge className="size-3" /> about {priceText} per page
+          </span>
+        )}
+      </button>
+    </div>
   );
 }
 

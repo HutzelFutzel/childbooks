@@ -14,6 +14,7 @@ import { resolveArtStyleText } from "../prompts/style";
 import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderSinglePrompt } from "../prompts/render";
 import type { Anchor, ArtStyleSelection } from "../types";
+import { gridShapeText, sheetSpecFor, viewListText } from "./anchorLayout";
 import { withRetry } from "./retry";
 
 export interface BuildAnchorPromptInput {
@@ -62,6 +63,13 @@ export interface BuildAnchorPromptInput {
    * without per-image labels (OpenAI) bind each image to its purpose.
    */
   legend?: string;
+  /**
+   * Set on a repair retry: how many panels the PREVIOUS attempt actually drew
+   * (per {@link countSheetPanels}), when it didn't match the requested grid.
+   * Naming the actual miss is far more corrective than repeating the same
+   * instruction verbatim a second time.
+   */
+  actualPanelCount?: number;
   /** Admin prompt overlays (art-style descriptions). */
   prompts?: PromptContext;
 }
@@ -79,6 +87,7 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
     editFromImage = false,
     hasStyleRef = false,
     legend,
+    actualPanelCount,
     prompts,
   } = input;
   const config = resolvePromptsConfig(prompts);
@@ -125,11 +134,15 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
   // duplicated context — only inject the untagged ones.
   const covered = new Set([...contained, ...relatedAnchors].map((a) => a.id));
   const mentioned = mentionedAnchors.filter((a) => !covered.has(a.id));
+  const spec = sheetSpecFor(anchor);
 
   return renderSinglePrompt(config, "anchorImage/default", {
     vars: {
       anchorName: anchor.name,
       anchorType: anchor.type,
+      cellCount: String(spec.views.length),
+      gridShape: gridShapeText(spec),
+      viewList: viewListText(spec),
       description: anchor.description.trim(),
       userGuidance: anchor.userGuidance?.trim() ?? "",
       containedList: listOf(contained),
@@ -138,6 +151,7 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
       artStyle: styleText,
       edit: edit?.trim() ?? "",
       legend: legend ?? "",
+      actualPanelCount: String(actualPanelCount ?? ""),
     },
     flags: {
       isCharacter: anchor.type === "character",
@@ -150,6 +164,7 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
       hasStyleRef,
       hasEdit: isEdit,
       hasLegend: Boolean(legend?.trim()),
+      hasGridRepair: typeof actualPanelCount === "number",
     },
   });
 }
@@ -161,13 +176,19 @@ export interface GenerateAnchorImageInput {
   references?: ReferenceImage[];
   signal?: AbortSignal;
   providerId: ProviderId;
+  /**
+   * Canvas for the sheet, from the layout spec. A six-cell grid on a square
+   * canvas leaves each figure too few pixels for the one job the sheet has, so
+   * the canvas follows the grid rather than being fixed at 1024x1024.
+   */
+  size?: string;
 }
 
 /** Generate one anchor image with retry. */
 export async function generateAnchorImage(
   input: GenerateAnchorImageInput,
 ): Promise<ImageResult> {
-  const { prompt, creds, model, references, signal, providerId } = input;
+  const { prompt, creds, model, references, signal, providerId, size } = input;
   const provider = getImageProvider(providerId);
   // One retry only — see generateIllustrationImage for the rationale.
   return withRetry(
@@ -175,7 +196,7 @@ export async function generateAnchorImage(
       provider.generateImage(creds, {
         model,
         prompt,
-        size: "1024x1024",
+        size: size ?? "1024x1024",
         references,
         signal,
       }),

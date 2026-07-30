@@ -83,6 +83,11 @@ export function reconcileAnchorIds(next: Anchor[], prev: Anchor[]): Anchor[] {
       relatedIds: match.relatedIds,
       relatedNotes: match.relatedNotes,
       versions: a.versions ?? match.versions,
+      // A height the user set in the lineup is customization, not a
+      // story-derived fact, so a fresh analysis must not overwrite it.
+      ...(match.heightUserSet
+        ? { heightCm: match.heightCm, heightUserSet: true }
+        : {}),
     };
   });
 }

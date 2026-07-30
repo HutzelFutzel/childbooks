@@ -65,6 +65,8 @@ import {
   type SubjectBox,
 } from "./localize";
 import { effectiveAnchorIds } from "../book/anchorRefs";
+import { heightFractions } from "../book/anchorScale";
+import { cellBox } from "./anchorLayout";
 import { anchorSignature, currentAnchorImage, currentReferenceUses } from "./provenance";
 import type { PromptContext } from "../prompts/context";
 
@@ -85,6 +87,37 @@ export interface CompositeOps {
     box: { x: number; y: number; width: number; height: number };
     paddingFrac?: number;
   }): Promise<{ base64: string; mimeType: string }>;
+  /**
+   * Force a reference sheet's background to pure white by flood-filling inward
+   * from the border. Optional: hosts that can't process pixels return the image
+   * unchanged, and the sheet is simply used as generated.
+   */
+  flattenSheetBackground?(input: {
+    base64: string;
+    mimeType: string;
+  }): Promise<{ base64: string; mimeType: string }>;
+  /**
+   * Crop one normalized cell of a reference sheet to a square thumbnail.
+   * Optional; returns null when the host can't crop or the cell is empty.
+   */
+  cropThumbnail?(input: {
+    base64: string;
+    mimeType: string;
+    box: { x: number; y: number; width: number; height: number };
+  }): Promise<{ base64: string; mimeType: string } | null>;
+  /**
+   * Compose the given characters side by side on one ground line at their true
+   * relative heights — a size chart the illustration model can read directly.
+   * Optional; returns null when a chart can't be built.
+   */
+  buildScaleChart?(input: {
+    figures: {
+      base64: string;
+      mimeType: string;
+      box: { x: number; y: number; width: number; height: number };
+      heightFraction: number;
+    }[];
+  }): Promise<{ base64: string; mimeType: string } | null>;
 }
 
 /** Injected capabilities the orchestration needs from its host platform. */
@@ -1155,6 +1188,7 @@ export async function renderIllustration(
   // whole page. Skipped for inpainting: the mask aligns to the FIRST reference
   // image, so that slot must stay the page being edited.
   let hasStyleRef = false;
+  let hasScaleChart = false;
   if (!inpaint) {
     const needsSheet = (a: Anchor): boolean => {
       if (!hasCompositionRef) return true; // fresh render: send everything
@@ -1179,9 +1213,13 @@ export async function renderIllustration(
         sheetAnchors.map(async (a) => {
           const img = currentAnchorImage(a);
           const raw = img ? await env.loadBlob(img.blobId) : null;
+          if (!raw) return null;
           // Reference-only payload: downscale so 4-6 full-res sheets don't
-          // balloon the request into provider-stalling territory.
-          return raw ? await asRefPayload(env, raw) : null;
+          // balloon the request into provider-stalling territory. The full-res
+          // original is kept alongside it because the size chart crops a single
+          // cell out of the sheet and then enlarges it — cropping the already
+          // downscaled copy would leave the chart visibly soft.
+          return { payload: await asRefPayload(env, raw), raw };
         }),
       ),
     ]);
@@ -1189,12 +1227,53 @@ export async function renderIllustration(
       references.push(styleRef);
       hasStyleRef = true;
     }
+
+    // A size chart for the characters on this page, from the sheets we just
+    // loaded. Assembled here (not per anchor) because relative height only
+    // means anything within one scene's cast, and inserted before the subject
+    // sheets so the legend order stays easy to state.
+    const fractions = heightFractions(anchors);
+    if (fractions.size >= 2 && env.composite.buildScaleChart) {
+      const figures = sheetAnchors
+        .map((a, i) => {
+          const fraction = fractions.get(a.id);
+          const data = anchorData[i];
+          const layout = currentAnchorImage(a)?.layout;
+          // Needs a recorded grid to know which cell holds the whole body;
+          // sheets predating the layout contract sit this one out.
+          if (!fraction || !data || !layout) return null;
+          return {
+            base64: data.raw.base64,
+            mimeType: data.raw.mimeType,
+            box: cellBox(layout, layout.bodyCell),
+            heightFraction: fraction,
+          };
+        })
+        .filter((f): f is NonNullable<typeof f> => f !== null);
+      if (figures.length >= 2) {
+        try {
+          const chart = await env.composite.buildScaleChart({ figures });
+          if (chart) {
+            references.push({
+              base64: chart.base64,
+              mimeType: chart.mimeType,
+              label: "relative sizes of the characters, drawn on one ground line",
+              role: "scale",
+            });
+            hasScaleChart = true;
+          }
+        } catch {
+          // Best-effort — the prompt still states the proportions in words.
+        }
+      }
+    }
+
     sheetAnchors.forEach((a, i) => {
       const data = anchorData[i];
       if (data) {
         references.push({
-          base64: data.base64,
-          mimeType: data.mimeType,
+          base64: data.payload.base64,
+          mimeType: data.payload.mimeType,
           label: `${a.name} (${a.description})`,
           role: "subject",
         });
@@ -1400,6 +1479,7 @@ export async function renderIllustration(
     describedAnchors,
     removedAnchors,
     hasStyleRef,
+    hasScaleChart,
     hasCompositionRef,
     maskMode,
     // Cover-only: bake the title/subtitle/author typography into the artwork.

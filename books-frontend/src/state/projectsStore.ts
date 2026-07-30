@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import type {
   Anchor,
+  AnchorRelationSuggestion,
   BookConfig,
   BookDesign,
   CoverSpec,
@@ -19,7 +20,7 @@ import {
   updateNodeContent,
   type VersionTree,
 } from "../core/versioning";
-import { reconcileAnchorIds } from "../core/book/anchorRefs";
+import { normalizeAnchorName, reconcileAnchorIds } from "../core/book/anchorRefs";
 import { collectProjectImageBlobIds } from "../core/book/blobRefs";
 import { textFromParagraphs, wordParagraphs } from "../core/design";
 import { COVER_FRONT_ID, createDefaultConfig, STAGE_ORDER } from "../core/types";
@@ -27,6 +28,19 @@ import { ProjectConflictError } from "../core/storage/repositories";
 import { getRepos } from "./repos";
 import { removeBlob } from "./blobs";
 import { useSettingsStore } from "./settingsStore";
+
+/** Consume one relation suggestion, whether it was accepted or dismissed. */
+function withoutRelation(
+  analysis: StoryAnalysis | undefined,
+  fromId: string,
+  toId: string,
+): StoryAnalysis | undefined {
+  if (!analysis?.relations) return analysis;
+  const relations = analysis.relations.filter(
+    (r) => !(r.fromId === fromId && r.toId === toId),
+  );
+  return { ...analysis, relations };
+}
 
 function genId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -79,7 +93,16 @@ interface ProjectsState {
   goToStage: (stage: ProjectStage) => Promise<void>;
   advanceStage: (stage: ProjectStage) => Promise<void>;
 
-  setAnalysis: (analysis: StoryAnalysis, anchors: Anchor[]) => Promise<void>;
+  setAnalysis: (
+    analysis: StoryAnalysis,
+    anchors: Anchor[],
+    /** Proposed relations by anchor NAME — resolved to ids after reconciliation. */
+    relations?: { from: string; to: string; kind: "contains" | "relates"; note?: string }[],
+  ) => Promise<void>;
+  /** Apply a pending relation suggestion to the anchors and consume it. */
+  acceptRelationSuggestion: (fromId: string, toId: string) => Promise<void>;
+  /** Drop a pending relation suggestion without applying it. */
+  dismissRelationSuggestion: (fromId: string, toId: string) => Promise<void>;
   setAnchors: (anchors: Anchor[]) => Promise<void>;
   updateAnchor: (anchorId: string, patch: Partial<Anchor>) => Promise<void>;
   /**
@@ -231,14 +254,72 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     }));
   },
 
-  async setAnalysis(analysis, anchors) {
+  async setAnalysis(analysis, anchors, relations) {
     // Re-analysis mints fresh anchors; preserve the ids (and images) of anchors
     // whose name is unchanged so existing screenplay/illustration references —
     // which point at anchors by id — don't drift and get silently ignored.
+    await mutateCurrent(get, set, (p) => {
+      const reconciled = reconcileAnchorIds(anchors, p.anchors ?? []);
+      // Relations arrive keyed by name because the server never sees our ids,
+      // and reconciliation can change an id anyway — so they are resolved here,
+      // after the final id assignment, and dropped if they don't resolve.
+      const byName = new Map(reconciled.map((a) => [normalizeAnchorName(a.name), a]));
+      const suggestions = (relations ?? [])
+        .map((r) => {
+          const from = byName.get(normalizeAnchorName(r.from));
+          const to = byName.get(normalizeAnchorName(r.to));
+          if (!from || !to || from.id === to.id) return null;
+          // Already linked (a previous run's suggestion was accepted, or the
+          // user made the link by hand) — nothing left to suggest.
+          const linked =
+            (from.containedIds ?? []).includes(to.id) ||
+            (to.containedIds ?? []).includes(from.id) ||
+            (from.relatedIds ?? []).includes(to.id) ||
+            (to.relatedIds ?? []).includes(from.id);
+          if (linked) return null;
+          return {
+            fromId: from.id,
+            toId: to.id,
+            kind: r.kind,
+            ...(r.note ? { note: r.note } : {}),
+          };
+        })
+        .filter((r): r is AnchorRelationSuggestion => r !== null);
+      return {
+        ...p,
+        analysis: { ...analysis, ...(suggestions.length ? { relations: suggestions } : {}) },
+        anchors: reconciled,
+      };
+    });
+  },
+
+  async acceptRelationSuggestion(fromId, toId) {
+    await mutateCurrent(get, set, (p) => {
+      const suggestion = p.analysis?.relations?.find(
+        (r) => r.fromId === fromId && r.toId === toId,
+      );
+      if (!suggestion) return p;
+      const anchors = (p.anchors ?? []).map((a) => {
+        if (a.id !== fromId) return a;
+        if (suggestion.kind === "contains") {
+          return { ...a, containedIds: [...new Set([...(a.containedIds ?? []), toId])] };
+        }
+        return {
+          ...a,
+          relatedIds: [...new Set([...(a.relatedIds ?? []), toId])],
+          ...(suggestion.note
+            ? { relatedNotes: { ...(a.relatedNotes ?? {}), [toId]: suggestion.note } }
+            : {}),
+        };
+      });
+      return { ...p, anchors, analysis: withoutRelation(p.analysis, fromId, toId) };
+    });
+  },
+
+  async dismissRelationSuggestion(fromId, toId) {
     await mutateCurrent(get, set, (p) => ({
       ...p,
-      analysis,
-      anchors: reconcileAnchorIds(anchors, p.anchors ?? []),
+      analysis: withoutRelation(p.analysis, fromId, toId),
     }));
   },
 

@@ -32,6 +32,7 @@ Two kinds of graphics:
 | `hero.main` | `Hero.tsx` | Illustrated open storybook / sample spread | ~1200×900, transparent |
 | `hero.card1`, `hero.card2` | `Hero.tsx` | Sample page thumbnails | ~400×500 each |
 | `how.step1`, `how.step2`, `how.step3` | `HowItWorks.tsx` | Spot illustrations: writing / illustrating / printing | ~1600×1000 each (16:10) |
+| `founder.photo` | `FounderStory.tsx` | Founder portrait, plain background | ~800×800 (1:1) |
 
 ## Notes
 - Until an image is uploaded, each slot still renders a labeled

@@ -21,6 +21,7 @@ import { ContactDialog } from "@/ui/contact/ContactDialog";
 import { HelpButton } from "@/ui/contact/HelpButton";
 import { SettingsDialog } from "@/ui/settings/SettingsDialog";
 import { ImageTierPromptDialog } from "@/ui/settings/ImageTierPromptDialog";
+import { SparksShortfallDialog } from "@/ui/layout/SparksShortfallDialog";
 import { ProjectWorkspace } from "@/ui/project/ProjectWorkspace";
 import { useProjectsStore } from "@/state/projectsStore";
 import { useSettingsStore } from "@/state/settingsStore";
@@ -359,6 +360,7 @@ export default function StudioApp() {
       )}
       <SettingsDialog />
       <ImageTierPromptDialog />
+      <SparksShortfallDialog />
       <PurchaseConfirmation />
       <Toaster />
     </div>

@@ -10,6 +10,7 @@ import { Hero } from "../ui/marketing/Hero";
 import { TrustStrip } from "../ui/marketing/TrustStrip";
 import { HowItWorks } from "../ui/marketing/HowItWorks";
 import { Features } from "../ui/marketing/Features";
+import { FounderStory } from "../ui/marketing/FounderStory";
 import { Pricing } from "../ui/marketing/Pricing";
 import { Faq } from "../ui/marketing/Faq";
 import { CtaBand } from "../ui/marketing/CtaBand";
@@ -100,6 +101,7 @@ export default async function Home() {
         <TrustStrip text={text} />
         <HowItWorks images={images} text={text} />
         <Features text={text} />
+        <FounderStory images={images} text={text} />
         <Pricing initial={plans} />
         <Faq items={seo.faq} />
         <CtaBand text={text} />

@@ -133,6 +133,34 @@ export type AnchorType = "character" | "place" | "object";
 export type AnchorImportance = "high" | "medium" | "low";
 export type AnchorMode = "creative" | "describe";
 
+/**
+ * The gross body layout of a character. Mechanically load-bearing rather than
+ * descriptive: it selects which turnaround angles a reference sheet asks for
+ * (front/three-quarter/side/back only makes sense for something that stands)
+ * and whether the subject can stand on the height-comparison ground line.
+ * `species` prose lives in the description; this is only the shape.
+ */
+export type BodyPlan = "bipedal" | "quadruped" | "avian" | "aquatic" | "amorphous";
+
+export const BODY_PLANS: BodyPlan[] = [
+  "bipedal",
+  "quadruped",
+  "avian",
+  "aquatic",
+  "amorphous",
+];
+
+/**
+ * Body plans that stand upright on a ground line, so heights are comparable.
+ * Birds are included — most picture-book birds (owls, ducks, penguins) are
+ * drawn perched/standing, not mid-flight, so they compare the same way a
+ * biped or quadruped does. Only `aquatic` (swims, no ground contact) and
+ * `amorphous` (no defined footing) are excluded.
+ */
+export function standsOnGround(plan: BodyPlan | undefined): boolean {
+  return plan === undefined || plan === "bipedal" || plan === "quadruped" || plan === "avian";
+}
+
 /** A stored, generated anchor image (the payload of a version-tree node). */
 export interface AnchorImage {
   blobId: string;
@@ -143,6 +171,41 @@ export interface AnchorImage {
    * image — so we can warn when one of those related anchors later changes.
    */
   references?: ReferenceUse[];
+  /**
+   * Square close-up crop of this sheet (head-and-shoulders for characters),
+   * derived from the sheet's own pixels — never generated — so it can never
+   * depict a different-looking subject than the reference it summarizes.
+   * Absent on sheets rendered before thumbnails existed, or when the crop
+   * failed; callers fall back to the full sheet.
+   */
+  thumbBlobId?: string;
+  /**
+   * Layout the sheet was rendered against, so a crop knows where each view
+   * sits. Absent on sheets predating the fixed-grid contract.
+   */
+  layout?: AnchorSheetLayout;
+}
+
+/**
+ * The grid a reference sheet was generated against. Stored per image (not per
+ * anchor) because it is a property of those specific pixels: an older version
+ * in the tree may have used a different layout, and reverting to it must still
+ * crop correctly.
+ */
+export interface AnchorSheetLayout {
+  columns: number;
+  rows: number;
+  /** Canvas the sheet was requested at, so a cell's aspect ratio is derivable. */
+  width: number;
+  height: number;
+  /** Cell index (reading order) holding the head close-up, when the grid has one. */
+  headCell?: number;
+  /**
+   * Cell index (reading order) holding the canonical whole-subject view — the
+   * one that best identifies it standing on its own. Front for a biped, side
+   * profile for a quadruped or fish. Used for the height lineup.
+   */
+  bodyCell: number;
 }
 
 /** Records which reference (anchor) version was used to render an illustration. */
@@ -232,6 +295,26 @@ export interface Anchor {
   /** Description derived from the story analysis (editable). */
   description: string;
   importance: AnchorImportance;
+  /**
+   * Character-only: gross body layout, inferred by the story analysis. Selects
+   * the turnaround angles the reference sheet asks for. Undefined on anchors
+   * created before this existed — treated as `bipedal`.
+   */
+  bodyPlan?: BodyPlan;
+  /**
+   * Character-only: approximate real-world height in centimetres, inferred at
+   * analysis time and adjustable by the user through the cast lineup. Drives
+   * relative sizing in page illustrations; never shown as a number in the UI.
+   * Undefined when the story gives nothing to infer from — the analysis leaves
+   * it blank rather than guessing.
+   */
+  heightCm?: number;
+  /**
+   * True once the user has adjusted `heightCm` in the cast lineup. Re-analysis
+   * refreshes story-derived heights but must not silently undo a size the user
+   * chose deliberately.
+   */
+  heightUserSet?: boolean;
   /** Whether the system creatively designs it, or the user describes it. */
   mode: AnchorMode;
   /** Optional user creative direction for this specific anchor. */
@@ -263,11 +346,29 @@ export interface Anchor {
   versions?: VersionTree<AnchorImage>;
 }
 
+/**
+ * A relationship the story analysis believes exists between two anchors.
+ *
+ * Held as a *suggestion* rather than written straight onto the anchors: a
+ * relation drives generation ordering and staleness cascades, so a wrong edge
+ * applied silently causes confusing regenerations later. The user accepts or
+ * dismisses it, and either way the suggestion is consumed.
+ */
+export interface AnchorRelationSuggestion {
+  fromId: string;
+  toId: string;
+  kind: "contains" | "relates";
+  /** For "relates": the predicate, e.g. "is the father of". */
+  note?: string;
+}
+
 export interface StoryAnalysis {
   summary: string;
   generatedAt: number;
   /** Model used, for display. */
   model?: string;
+  /** Pending relationship suggestions, consumed as the user accepts/dismisses. */
+  relations?: AnchorRelationSuggestion[];
 }
 
 /** One unit of the book: a single page or a double-page spread. */

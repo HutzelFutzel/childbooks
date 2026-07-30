@@ -5,7 +5,14 @@
  * the client does.
  */
 import { serverConfig } from "./config";
-import { buildHoleMask, compositeMaskedRegion, downscaleReference } from "./imaging";
+import {
+  buildHoleMask,
+  buildScaleChart,
+  compositeMaskedRegion,
+  cropSheetThumbnail,
+  downscaleReference,
+  flattenSheetBackground,
+} from "./imaging";
 import { downloadBlobBase64, downloadPublicBase64, uploadBlob } from "./storage";
 import { withStep } from "./usage";
 import type { PipelineEnv } from "../../books-frontend/src/core/pipeline/illustrationRun";
@@ -104,6 +111,24 @@ export function backendPipelineEnv(
           paddingFrac: input.paddingFrac,
         });
         return { base64: bufToB64(out), mimeType: "image/png" };
+      },
+      async flattenSheetBackground(input) {
+        const out = await flattenSheetBackground(b64ToBuf(input.base64));
+        return { base64: bufToB64(out), mimeType: "image/png" };
+      },
+      async cropThumbnail(input) {
+        const out = await cropSheetThumbnail(b64ToBuf(input.base64), input.box);
+        return out ? { base64: bufToB64(out.buf), mimeType: out.mimeType } : null;
+      },
+      async buildScaleChart(input) {
+        const out = await buildScaleChart(
+          input.figures.map((f) => ({
+            buf: b64ToBuf(f.base64),
+            box: f.box,
+            heightFraction: f.heightFraction,
+          })),
+        );
+        return out ? { base64: bufToB64(out), mimeType: "image/png" } : null;
       },
     },
     prompts,

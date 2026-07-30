@@ -75,8 +75,10 @@ export interface ReferenceImage {
    *     object/place contained in the subject being drawn).
    *   - "style": an art-style exemplar — only its rendering technique/palette/
    *     texture should be copied, never its subjects, layout or composition.
+   *   - "scale": a size chart of several characters on one ground line — only
+   *     their relative heights should be copied, never their poses or spacing.
    */
-  role?: "subject" | "composition" | "relation" | "style";
+  role?: "subject" | "composition" | "relation" | "style" | "scale";
 }
 
 export interface ImageRequest {

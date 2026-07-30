@@ -249,6 +249,9 @@ export const googleImageProvider: ImageProvider = {
       } else if (ref.role === "style") {
         label =
           "ART-STYLE reference — copy ONLY its visual style: medium, rendering technique, linework, shading, color palette, texture and finish. Do NOT copy its subjects, characters, objects, composition or layout:";
+      } else if (ref.role === "scale") {
+        label =
+          "SIZE CHART — these characters are drawn side by side on one ground line at their correct heights relative to each other. Copy ONLY those proportions; ignore its poses, spacing, blank background and flat arrangement:";
       } else if (ref.role === "relation") {
         label = `Context reference — this is ${ref.label ?? "a related subject"}, mentioned in the instructions. Match it where the instruction relates this subject to it (e.g. shared traits, or an item that appears in the scene):`;
       } else {

@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { ArrowLeftRight, Check, Link2, Pencil, Plus, Search, X } from "lucide-react";
-import type { Anchor } from "../../core/types";
+import type { Anchor, AnchorRelationSuggestion } from "../../core/types";
+import { useProjectsStore } from "../../state/projectsStore";
 import {
+  anchorThumbBlobId,
   containersOf,
-  currentAnchorImage,
   relatedAnchorsFor,
   relationNote,
   relationOwner,
@@ -46,6 +47,9 @@ export function RelationsEditor({
    *  the other anchor, so editing it from here writes to that owner. */
   update: (anchorId: string, patch: Partial<Anchor>) => void;
 }) {
+  const analysis = useProjectsStore((s) => s.current()?.analysis);
+  const acceptRelation = useProjectsStore((s) => s.acceptRelationSuggestion);
+  const dismissRelation = useProjectsStore((s) => s.dismissRelationSuggestion);
   const [managing, setManaging] = useState(false);
   const [query, setQuery] = useState("");
   // Which "Relates" chip's note is currently being edited, and its draft text
@@ -67,6 +71,19 @@ export function RelationsEditor({
   // Anchors that contain THIS one — shown as read-only "Contained in X" chips.
   const containers = containersOf(anchor, all);
   const suggestions = suggestLinkedAnchors(anchor, all);
+  // Relations the story analysis proposed that touch THIS anchor, in either
+  // direction. They stay proposals until accepted: a wrong edge silently
+  // applied would reorder generation and cascade staleness later on.
+  const storySuggestions = (analysis?.relations ?? [])
+    .filter((r) => r.fromId === anchor.id || r.toId === anchor.id)
+    .map((suggestion) => {
+      const outbound = suggestion.fromId === anchor.id;
+      const other = byId.get(outbound ? suggestion.toId : suggestion.fromId);
+      return other ? { suggestion, other, outbound } : null;
+    })
+    .filter((s): s is { suggestion: AnchorRelationSuggestion; other: Anchor; outbound: boolean } =>
+      s !== null,
+    );
   const linkedCount = contained.size + related.size + containers.length;
   const linkedAnchors = others.filter(
     (o) => contained.has(o.id) || related.has(o.id) || containers.some((c) => c.id === o.id),
@@ -202,6 +219,51 @@ export function RelationsEditor({
         a little generation time & Sparks.
       </p>
 
+      {storySuggestions.length > 0 && (
+        <div className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-2">
+          <p className="text-xs text-brand-800">From your story:</p>
+          <div className="mt-2 flex flex-col gap-1.5">
+            {storySuggestions.map(({ suggestion, other, outbound }) => (
+              <div
+                key={`${suggestion.fromId}:${suggestion.toId}`}
+                className="flex items-center gap-2 rounded-lg bg-white/70 px-2 py-1.5"
+              >
+                <RelationAvatar anchor={other} />
+                <span className="min-w-0 flex-1 truncate text-xs text-ink-700">
+                  {suggestion.kind === "contains"
+                    ? outbound
+                      ? `Contains ${other.name}`
+                      : `Contained in ${other.name}`
+                    : (suggestion.note
+                        ? outbound
+                          ? `${anchor.name} ${suggestion.note} ${other.name}`
+                          : `${other.name} ${suggestion.note} ${anchor.name}`
+                        : `Related to ${other.name}`)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => acceptRelation(suggestion.fromId, suggestion.toId)}
+                  className="rounded-md px-1.5 py-1 text-brand-600 transition hover:bg-brand-100"
+                  aria-label="Accept this relationship"
+                  title="Add this relationship"
+                >
+                  <Check className="size-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => dismissRelation(suggestion.fromId, suggestion.toId)}
+                  className="rounded-md px-1.5 py-1 text-ink-400 transition hover:bg-ink-100"
+                  aria-label="Dismiss this relationship"
+                  title="Not right — dismiss"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {suggestions.length > 0 && (
         <div className="rounded-lg border border-brand-200 bg-brand-50 px-3 py-2">
           <p className="text-xs text-brand-800">
@@ -327,7 +389,7 @@ function RelationAvatar({ anchor, size = "size-6" }: { anchor: Anchor; size?: st
   const Icon = ANCHOR_TYPE_ICON[anchor.type];
   return (
     <BlobThumbnail
-      blobId={currentAnchorImage(anchor)?.blobId}
+      blobId={anchorThumbBlobId(anchor)}
       alt={anchor.name}
       instant
       className={cn(size, "shrink-0 rounded-full")}

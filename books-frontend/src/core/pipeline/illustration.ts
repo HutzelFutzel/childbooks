@@ -16,6 +16,7 @@ import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderSinglePrompt } from "../prompts/render";
 import type { Anchor, BookConfig, ScreenplaySpread } from "../types";
 import { getBookLayout, type PageSide } from "../book/layouts";
+import { relativeHeightsText } from "../book/anchorScale";
 import { withRetry } from "./retry";
 
 /**
@@ -82,6 +83,8 @@ export interface BuildIllustrationPromptInput {
    * rendering style should be matched, but never its subjects/composition).
    */
   hasStyleRef?: boolean;
+  /** A relative-size chart was prepended to the references. */
+  hasScaleChart?: boolean;
   /**
    * Whether the current page illustration is appended as the FINAL reference
    * image (used for edits, to preserve composition).
@@ -130,6 +133,7 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
     keptAnchors = [],
     embeddedPairs = [],
     hasStyleRef = false,
+    hasScaleChart = false,
     hasCompositionRef = false,
     maskMode = false,
     bakeText = false,
@@ -165,6 +169,15 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
   const characters = referencedAnchors.filter((a) => a.type === "character");
   const settings = referencedAnchors.filter((a) => a.type !== "character");
 
+  // Everyone on the page, whether they arrive as a reference sheet, a kept
+  // subject or a description — they all get drawn, so they all need to be the
+  // right size relative to each other.
+  const heightsList = relativeHeightsText([
+    ...referencedAnchors,
+    ...keptAnchors,
+    ...describedAnchors,
+  ]);
+
   // Reference-image legend: the provider receives images in a fixed order (an
   // optional art-style exemplar first, then each named subject, then the page
   // image). Spelling out that order lets the model bind each reference to the
@@ -172,6 +185,11 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
   // `renderIllustration`.
   const legendNames: string[] = [];
   if (hasStyleRef) legendNames.push("an art-style reference (match its style only, not its content)");
+  if (hasScaleChart) {
+    legendNames.push(
+      "a size chart showing the characters side by side on one ground line at their correct relative heights (copy those proportions; ignore its poses, spacing and blank background)",
+    );
+  }
   legendNames.push(...referencedAnchors.map((a) => a.name));
   if (hasCompositionRef) {
     legendNames.push(maskMode ? "the page being edited" : "the current page of this book");
@@ -211,6 +229,7 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
       illustrationBrief: spread.illustration.trim(),
       charactersList: listOf(characters),
       settingsList: listOf(settings),
+      heightsList,
       describedList: listOf(describedAnchors),
       embeddedList,
       legend,
@@ -230,6 +249,7 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
       hasStyleRef,
       hasCharacters: characters.length > 0,
       hasSettings: settings.length > 0,
+      hasHeights: Boolean(heightsList),
       hasDescribed: describedAnchors.length > 0,
       hasEmbedded: embeddedPairs.length > 0,
       hasReferenced: referencedAnchors.length > 0,

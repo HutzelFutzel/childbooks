@@ -70,6 +70,14 @@ export const HELP: Record<string, HelpTopic> = {
     title: "Version history",
     body: "Every generation is saved. Click any thumbnail to revert, or refine from it to branch a new version. Switching a character's version marks the pages that used it as needing an update.",
   },
+  fastTierConsistency: {
+    title: "Fast can look a little different each time",
+    body: "The Fast tier trades reference-matching accuracy for speed: a character's outfit, colors or proportions can drift slightly from their reference art, and from one generation to the next.",
+    points: [
+      "Good for drafting a layout or trying an idea quickly.",
+      "Switch to High-Quality before your final render — it matches references far more closely and auto-repairs small flaws.",
+    ],
+  },
   layoutQuietZone: {
     title: "How text sits on the page",
     body: "Illustrations are generated full-bleed with a calm area on the outer edge of each page, where your words sit. On left pages the text is on the left; on right pages it's on the right.",

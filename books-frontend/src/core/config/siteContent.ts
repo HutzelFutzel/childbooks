@@ -50,6 +50,11 @@ export const SITE_TEXT_SLOTS = [
   "features.4.body",
   "features.5.title",
   "features.5.body",
+  // Founder story
+  "founder.eyebrow",
+  "founder.quote",
+  "founder.name",
+  "founder.role",
   // Closing CTA band
   "cta.heading",
   "cta.subhead",

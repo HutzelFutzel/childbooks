@@ -18,12 +18,35 @@ const anchorItemSchema = z.object({
   type: z.enum(["character", "place", "object"]),
   description: z.string(),
   importance: z.enum(["high", "medium", "low"]),
+  /** Characters only; ignored for places/objects. */
+  bodyPlan: z.enum(["bipedal", "quadruped", "avian", "aquatic", "amorphous"]).nullish(),
+  /**
+   * Characters only. Nullable on purpose: a confidently wrong height is worse
+   * than none, so the model is told to omit it rather than guess.
+   */
+  heightCm: z.number().nullish(),
+});
+
+const relationItemSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  kind: z.enum(["contains", "relates"]),
+  note: z.string().nullish(),
 });
 
 const analysisSchema = z.object({
   summary: z.string(),
   anchors: z.array(anchorItemSchema),
+  relations: z.array(relationItemSchema).nullish(),
 });
+
+/** A proposed relation, still keyed by anchor NAME as the model reported it. */
+export interface AnalyzedRelation {
+  from: string;
+  to: string;
+  kind: "contains" | "relates";
+  note?: string;
+}
 
 export type AnalysisResult = z.infer<typeof analysisSchema>;
 
@@ -40,10 +63,59 @@ export interface AnalyzeStoryInput {
   prompts?: PromptContext;
 }
 
+/**
+ * Reject relations the model shouldn't have proposed, rather than trusting the
+ * output. The rules mirror what the relations editor enforces by hand: a
+ * character is never *contained* in anything, containment nests only one level
+ * deep, and nothing links to itself or to a subject that doesn't exist.
+ */
+function validateRelations(
+  raw: { from: string; to: string; kind: "contains" | "relates"; note?: string | null }[],
+  anchors: Anchor[],
+): AnalyzedRelation[] {
+  const byName = new Map<string, Anchor>();
+  for (const a of anchors) byName.set(a.name.trim().toLowerCase(), a);
+
+  const out: AnalyzedRelation[] = [];
+  const seen = new Set<string>();
+  // Tracks accepted containment so a second edge can't create a second level.
+  const isContained = new Set<string>();
+  const isContainer = new Set<string>();
+
+  for (const r of raw) {
+    const from = byName.get(r.from?.trim().toLowerCase() ?? "");
+    const to = byName.get(r.to?.trim().toLowerCase() ?? "");
+    if (!from || !to || from.id === to.id) continue;
+
+    // One edge per unordered pair, whichever direction arrives first.
+    const key = [from.id, to.id].sort().join("|");
+    if (seen.has(key)) continue;
+
+    if (r.kind === "contains") {
+      // A character can neither be drawn inside something nor act as a
+      // container — its sheet is a turnaround, not a scene.
+      if (from.type === "character" || to.type === "character") continue;
+      // Depth 2 would mean matching a reference inside a reference.
+      if (isContained.has(from.id) || isContainer.has(to.id)) continue;
+      isContainer.add(from.id);
+      isContained.add(to.id);
+    }
+
+    seen.add(key);
+    out.push({
+      from: from.name,
+      to: to.name,
+      kind: r.kind,
+      ...(r.note?.trim() ? { note: r.note.trim() } : {}),
+    });
+  }
+  return out;
+}
+
 /** Run the story analysis and return editable anchors + a short summary. */
 export async function analyzeStory(
   input: AnalyzeStoryInput,
-): Promise<{ summary: string; anchors: Anchor[] }> {
+): Promise<{ summary: string; anchors: Anchor[]; relations: AnalyzedRelation[] }> {
   const { story, config, creds, model, signal, prompts } = input;
   const provider = getTextProvider(config.textModel!.provider);
   const age = AGE_RANGES.find((a) => a.id === config.ageRangeId)?.label ?? config.ageRangeId;
@@ -69,17 +141,30 @@ export async function analyzeStory(
     { signal },
   );
 
-  const anchors: Anchor[] = result.anchors.map((a) => ({
-    id: uid(),
-    name: a.name,
-    type: a.type as AnchorType,
-    description: a.description,
-    importance: a.importance as AnchorImportance,
-    mode: "creative",
-    include: true,
-  }));
+  const anchors: Anchor[] = result.anchors.map((a) => {
+    const isCharacter = a.type === "character";
+    // Body plan and height only mean anything for characters; a model that
+    // fills them in for a place or object is answering a question we didn't
+    // ask, so drop them rather than letting them reach the sheet prompt.
+    const height = isCharacter && typeof a.heightCm === "number" ? a.heightCm : undefined;
+    return {
+      id: uid(),
+      name: a.name,
+      type: a.type as AnchorType,
+      description: a.description,
+      importance: a.importance as AnchorImportance,
+      mode: "creative",
+      include: true,
+      ...(isCharacter && a.bodyPlan ? { bodyPlan: a.bodyPlan } : {}),
+      ...(height && height > 0 ? { heightCm: Math.round(height) } : {}),
+    } satisfies Anchor;
+  });
 
-  return { summary: result.summary, anchors };
+  return {
+    summary: result.summary,
+    anchors,
+    relations: validateRelations(result.relations ?? [], anchors),
+  };
 }
 
 export interface GenerateAnchorDescriptionInput {

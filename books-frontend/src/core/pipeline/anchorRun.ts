@@ -8,7 +8,7 @@
  * the client and in the backend worker.
  */
 import type { ReferenceImage } from "../providers/types";
-import type { Anchor, AnchorImage, Project, ReferenceUse } from "../types";
+import type { Anchor, AnchorImage, AnchorSheetLayout, Project, ReferenceUse } from "../types";
 import {
   addVersion,
   createVersionTree,
@@ -17,6 +17,7 @@ import {
   type VersionTree,
 } from "../versioning";
 import { buildAnchorPrompt, generateAnchorImage } from "./anchors";
+import { cellBox, layoutOf, sheetSpecFor } from "./anchorLayout";
 import {
   containedAnchorsFor,
   linkedAnchorsFor,
@@ -31,7 +32,7 @@ import {
   type PipelineEnv,
 } from "./illustrationRun";
 import { resolveMentionedAnchors } from "./intentResolve";
-import { locateEmbeddedObsolete, type SubjectBox } from "./localize";
+import { countSheetPanels, locateEmbeddedObsolete, type SubjectBox } from "./localize";
 
 export interface AnchorRunOptions {
   /** Extra revision instruction, e.g. "make her smile". */
@@ -51,6 +52,10 @@ export interface AnchorRender {
   prompt: string;
   label: string;
   parentId?: string;
+  /** Square close-up crop of the sheet, when one could be derived. */
+  thumbBlobId?: string;
+  /** Grid this sheet was rendered against, so later crops can find a cell. */
+  layout?: AnchorSheetLayout;
 }
 
 /** Wrap an anchor render into a (new or extended) version tree. Pure. */
@@ -62,6 +67,8 @@ export function applyAnchorRender(
     blobId: render.blobId,
     mimeType: render.mimeType,
     references: render.references,
+    ...(render.thumbBlobId ? { thumbBlobId: render.thumbBlobId } : {}),
+    ...(render.layout ? { layout: render.layout } : {}),
   };
   const next = tree
     ? addVersion(tree, content, {
@@ -217,7 +224,8 @@ export async function renderAnchor(
   });
   const legend = legendNames.map((name, i) => `(${i + 1}) ${name}`).join(", ");
 
-  const prompt = buildAnchorPrompt({
+  const spec = sheetSpecFor(anchor);
+  let prompt = buildAnchorPrompt({
     anchor,
     artStyle: project.config.artStyle,
     containedAnchors,
@@ -240,8 +248,71 @@ export async function renderAnchor(
       providerId: imageModel.provider,
       references: references.length ? references : undefined,
       signal: options.signal,
+      size: spec.size,
     }),
   );
+
+  // Grid-count repair: the prompt above already demands an exact cell count,
+  // but text instructions baked into an image-generation call aren't reliably
+  // obeyed — observed with Gemini Flash rendering 6 or 8 panels for the same
+  // 6-cell layout, inconsistently between runs. One cheap follow-up vision
+  // call catches a miscount before the sheet is saved (and before the
+  // embedded-dedup/thumbnail-crop steps below, which both assume the grid is
+  // correct); on a mismatch, regenerate ONCE, this time naming the actual
+  // miss — a far stronger corrective than repeating the same instruction.
+  // Skipped for single-cell layouts (nothing to miscount) and for edit-from-
+  // image (a minimal edit of an already-laid-out sheet, whose prompt has no
+  // corrective slot to retry into — the check would just spend Sparks with no
+  // fix path). Best-effort throughout: a failed check just leaves the first
+  // sheet as-is rather than blocking the render on a check that can't answer.
+  if (spec.views.length > 1 && !editFromImage) {
+    try {
+      const checkModel = env.models.bindingModel ?? env.models.textModel;
+      const checkKey = env.apiKeyFor(checkModel.provider);
+      const actualCount = await runStep("gridCheck", () =>
+        countSheetPanels({
+          sheetBase64: result.base64,
+          sheetMime: result.mimeType,
+          subjectName: anchor.name,
+          expectedCount: spec.views.length,
+          creds: { apiKey: checkKey },
+          model: checkModel.id,
+          providerId: checkModel.provider,
+          prompts: env.prompts,
+          signal: options.signal,
+        }),
+      );
+      if (actualCount !== null && actualCount !== spec.views.length) {
+        prompt = buildAnchorPrompt({
+          anchor,
+          artStyle: project.config.artStyle,
+          containedAnchors,
+          relatedAnchors,
+          relatedNotes,
+          mentionedAnchors,
+          edit: options.edit,
+          editFromImage,
+          hasStyleRef: Boolean(styleRef),
+          legend: references.length > 0 ? legend : undefined,
+          actualPanelCount: actualCount,
+          prompts: env.prompts,
+        });
+        result = await runStep("image", () =>
+          generateAnchorImage({
+            prompt,
+            creds: { apiKey: key },
+            model: imageModel.id,
+            providerId: imageModel.provider,
+            references: references.length ? references : undefined,
+            signal: options.signal,
+            size: spec.size,
+          }),
+        );
+      }
+    } catch {
+      // Best-effort — keep the unchecked sheet rather than failing the render.
+    }
+  }
 
   // Embedded de-dup on reference sheets: when this place/object contains other
   // anchors, erase generic default instances (e.g. a default bed) that conflict
@@ -284,7 +355,7 @@ export async function renderAnchor(
           config: project.config,
           imageModel,
           imageKey: key,
-          size: "1024x1024",
+          size: spec.size,
           env,
           signal: options.signal,
           step: "embedded",
@@ -297,22 +368,73 @@ export async function renderAnchor(
     }
   }
 
+  // Make the white background true rather than merely requested. The prompt
+  // asks for it, but the art-style reference simultaneously tells the model to
+  // match the exemplar's texture and finish, and a textured exemplar wins often
+  // enough to matter. Thumbnail crops and the cast lineup are both built on the
+  // assumption of white, so it gets enforced here.
+  //
+  // Places are exempt: their cells are full scenes that legitimately run to the
+  // cell edge, and flood-filling inward from the border would eat the artwork.
+  if (anchor.type !== "place" && env.composite.flattenSheetBackground) {
+    try {
+      const flattened = await env.composite.flattenSheetBackground({
+        base64: result.base64,
+        mimeType: result.mimeType,
+      });
+      result = { ...result, base64: flattened.base64, mimeType: flattened.mimeType };
+    } catch {
+      // Best-effort: an un-flattened sheet still works everywhere.
+    }
+  }
+
   const blobId = await env.saveImage(result.base64, result.mimeType);
+
+  // Thumbnail: a crop of the sheet's own pixels, never a second generation.
+  // Prefer the head close-up cell; fall back to the canonical whole-subject
+  // cell for grids without one (objects, places).
+  let thumbBlobId: string | undefined;
+  const layout = layoutOf(spec);
+  if (env.composite.cropThumbnail) {
+    try {
+      const cell = spec.headCell ?? spec.bodyCell;
+      const thumb = await env.composite.cropThumbnail({
+        base64: result.base64,
+        mimeType: result.mimeType,
+        box: cellBox(layout, cell),
+      });
+      if (thumb) thumbBlobId = await env.saveImage(thumb.base64, thumb.mimeType);
+    } catch {
+      // The UI falls back to the full sheet when there's no thumbnail.
+    }
+  }
+
   const relatedIdSet = new Set(relatedAnchors.map((r) => r.id));
   return {
     blobId,
     mimeType: result.mimeType,
+    thumbBlobId,
+    layout,
     // Provenance: contained anchors were used as IMAGES (track their version),
     // related anchors as TEXT only (track just the signature, so a sibling's
-    // image regeneration doesn't flag this sheet stale).
-    references: linked.map((r) => ({
-      anchorId: r.id,
-      versionId: r.versions?.cursorId,
-      signature: anchorSignature(r),
-      ...(relatedIdSet.has(r.id) && !containedAnchors.some((c) => c.id === r.id)
-        ? { textOnly: true }
-        : {}),
-    })),
+    // image regeneration doesn't flag this sheet stale). Plus a self-entry:
+    // without recording the anchor's OWN signature at generation time, editing
+    // its own description after the sheet exists had nothing to compare
+    // against, so the portrait never flagged itself as out of date — the
+    // description box could say one thing and the art another, forever.
+    // `textOnly` because there's no separate "version of yourself" to track;
+    // only the text signature drift matters here.
+    references: [
+      { anchorId: anchor.id, signature: anchorSignature(anchor), textOnly: true },
+      ...linked.map((r) => ({
+        anchorId: r.id,
+        versionId: r.versions?.cursorId,
+        signature: anchorSignature(r),
+        ...(relatedIdSet.has(r.id) && !containedAnchors.some((c) => c.id === r.id)
+          ? { textOnly: true }
+          : {}),
+      })),
+    ],
     prompt,
     label: options.edit?.trim() || (isIteration ? "Variation" : "Initial"),
     parentId: sourceNodeId,

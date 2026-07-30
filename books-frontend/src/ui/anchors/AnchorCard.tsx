@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
 import { Box, Check, MapPin, User } from "lucide-react";
 import type { Anchor, AnchorType } from "../../core/types";
-import { currentAnchorImage } from "../../state/ai";
+import { anchorThumbBlobId, currentAnchorImage } from "../../state/ai";
 import { BlobThumbnail } from "../components/BlobThumbnail";
 import { GenerationOverlay } from "../generation/GenerationOverlay";
 import { cn } from "../lib/cn";
@@ -61,7 +61,7 @@ export function AnchorCard({
           <GenerationOverlay action="anchorImage" compact />
         ) : (
           <BlobThumbnail
-            blobId={image?.blobId}
+            blobId={anchorThumbBlobId(anchor)}
             alt={anchor.name}
             className="absolute inset-0 size-full rounded-none"
             fallback={

@@ -10,18 +10,36 @@ import type { Anchor, AnchorImage, ReferenceUse } from "../types";
 import { getCursor } from "../versioning";
 
 /**
- * A stable signature of an anchor's text inputs (description / guidance / mode).
- * When this changes, a page using the anchor should be considered stale even if
- * the image version id did not change.
+ * A stable signature of an anchor's text inputs (description / guidance / mode
+ * / body plan). When this changes, a page using the anchor should be considered
+ * stale even if the image version id did not change.
+ *
+ * `heightCm` is deliberately excluded: resizing a character changes how big
+ * they are drawn on a page, not what they look like, so it must not invalidate
+ * a reference sheet the user is happy with.
  */
 export function anchorSignature(a: Anchor): string {
-  return [a.description ?? "", a.userGuidance ?? "", a.mode ?? ""].join("\u0000");
+  return [a.description ?? "", a.userGuidance ?? "", a.mode ?? "", a.bodyPlan ?? ""].join(
+    "\u0000",
+  );
 }
 
 /** Current image content for an anchor, if any. */
 export function currentAnchorImage(anchor: Anchor): AnchorImage | null {
   if (!anchor.versions) return null;
   return getCursor(anchor.versions).content;
+}
+
+/**
+ * Blob to show wherever an anchor appears SMALL (cast reel, page chips, the
+ * lineup). Prefers the close-up crop; falls back to the full reference sheet
+ * for versions rendered before thumbnails existed — a multi-cell sheet shrunk
+ * into a 20px circle is nearly unreadable, but it is better than a blank.
+ */
+export function anchorThumbBlobId(anchor: Anchor): string | undefined {
+  const image = currentAnchorImage(anchor);
+  if (!image) return undefined;
+  return image.thumbBlobId ?? image.blobId;
 }
 
 /**

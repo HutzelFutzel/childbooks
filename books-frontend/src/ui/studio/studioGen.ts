@@ -27,28 +27,45 @@ import { reconcileTasksNow } from "../../state/jobsStore";
 import { useProjectsStore } from "../../state/projectsStore";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useSparksStore } from "../../state/sparksStore";
-import { useSparksUiStore } from "../../state/sparksUiStore";
-import { estimateForAction, type SparkActionId } from "../../core/config/sparks";
+import { warnBatchShortfall } from "../../state/sparksShortfallPrompt";
+import { estimateForAction } from "../../core/config/sparks";
+import type { ImageActionId } from "../../core/ai/actions";
 import { currentActionMultiplier } from "../../state/subscriptionStore";
 import { requireImageTier } from "../../state/imageTierPrompt";
 
 /**
  * Mirror the server's pre-flight Spark check on the client so a batch we can't
- * afford opens the top-up wallet immediately (instead of enqueuing a job that
- * silently errors). The server remains authoritative. Returns false when the
- * batch can't start within the negative buffer.
+ * afford explains itself immediately (instead of enqueuing a job that silently
+ * errors). The server remains authoritative. Returns false when the batch can't
+ * start within the negative buffer.
+ *
+ * Prices with `estimateForAction` rather than the richer tier-aware range the
+ * buttons preview, because this has to agree with the server's reserve: quoting
+ * a shortfall the server then disagrees with would send the user to buy an
+ * amount that still doesn't let the batch run.
  */
-function ensureBatchAffordable(action: SparkActionId, count: number): boolean {
+function ensureBatchAffordable(action: ImageActionId, count: number): boolean {
   const { sparks } = useAppConfigStore.getState();
   if (!sparks.enabled || count <= 0) return true;
-  const estimate = estimateForAction(sparks, action, currentActionMultiplier(action)) * count;
+  const perUnit = estimateForAction(sparks, action, currentActionMultiplier(action));
+  const estimate = perUnit * count;
   if (estimate <= 0) return true;
   const balance = useSparksStore.getState().balance;
-  if (balance - estimate < -sparks.maxNegativeSparks) {
-    useSparksUiStore.getState().openWallet(Math.max(1, estimate - balance));
-    return false;
-  }
-  return true;
+  if (balance - estimate >= -sparks.maxNegativeSparks) return true;
+
+  // How far the wallet actually goes, so the warning can say "enough for 6 of
+  // them" instead of only naming a price. The buffer is part of the spendable
+  // amount here for the same reason the check above allows it.
+  const spendable = balance + sparks.maxNegativeSparks;
+  warnBatchShortfall({
+    action,
+    requested: count,
+    affordable: perUnit > 0 ? Math.max(0, Math.floor(spendable / perUnit)) : 0,
+    estimate,
+    balance,
+    shortfall: Math.max(1, Math.ceil(estimate - balance)),
+  });
+  return false;
 }
 
 // Re-exported for existing UI imports (moved to the state layer).
@@ -160,18 +177,22 @@ async function waitForAnchorImages(ids: string[], signal?: AbortSignal): Promise
  * queue: enqueue one anchors job (the worker honors the dependency graph), track
  * progress to drive the per-anchor spinners, then wait until results have been
  * folded back into the project. Runs server-side and survives a refresh.
+ *
+ * Returns false when a gate refused the batch before it started — no tier
+ * chosen, or not enough Sparks. Both cases already put an explanation on screen,
+ * so the caller must stay quiet rather than report success over the top of it.
  */
 export async function generateAllAnchors(
   project: Project,
   setGen: SetGen,
   onError: (err: unknown) => void,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<boolean> {
   const pending = (project.anchors ?? []).filter((a) => a.include && !currentAnchorImage(a));
-  if (pending.length === 0) return;
+  if (pending.length === 0) return true;
   const tier = await requireImageTier();
-  if (!tier) return;
-  if (!ensureBatchAffordable("anchorImage", pending.length)) return;
+  if (!tier) return false;
+  if (!ensureBatchAffordable("anchorImage", pending.length)) return false;
   pending.forEach((a) => setGen(a.id, true));
 
   let models: ResolvedModels;
@@ -180,7 +201,7 @@ export async function generateAllAnchors(
   } catch (err) {
     pending.forEach((a) => setGen(a.id, false));
     onError(err);
-    return;
+    return true;
   }
 
   const tasks: AnchorTask[] = pending.map((a) => ({ id: a.id, status: "pending" }));
@@ -204,6 +225,7 @@ export async function generateAllAnchors(
   } finally {
     pending.forEach((a) => setGen(a.id, false));
   }
+  return true;
 }
 
 /**
@@ -214,18 +236,21 @@ export async function generateAllAnchors(
  * every other path) and the jobs store folds results into the version trees.
  * Because the work runs server-side, it continues even if the browser is closed;
  * this call simply tracks the job for the current session.
+ *
+ * Returns false when a gate refused the batch, exactly as
+ * {@link generateAllAnchors} does.
  */
 export async function generateAllPages(
   project: Project,
   setGen: SetGen,
   onError: (err: unknown) => void,
   signal?: AbortSignal,
-): Promise<void> {
+): Promise<boolean> {
   const pending = illustrationUnits(project).filter((s) => !currentIllustration(project, s.id));
-  if (pending.length === 0) return;
+  if (pending.length === 0) return true;
   const tier = await requireImageTier();
-  if (!tier) return;
-  if (!ensureBatchAffordable("pageIllustration", pending.length)) return;
+  if (!tier) return false;
+  if (!ensureBatchAffordable("pageIllustration", pending.length)) return false;
   pending.forEach((s) => setGen(s.id, true));
 
   // Enqueue one job; the backend worker renders every task. Results are applied
@@ -250,6 +275,7 @@ export async function generateAllPages(
   } finally {
     pending.forEach((s) => setGen(s.id, false));
   }
+  return true;
 }
 
 /**

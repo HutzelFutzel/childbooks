@@ -102,6 +102,259 @@ export async function splitWrapCover(
 }
 
 /**
+ * Force a reference sheet's background to pure white.
+ *
+ * The prompt asks for "plain pure-white seamless background", but a prompt is a
+ * request, not a guarantee — and it actively conflicts with the art-style
+ * reference, which tells the model to match the exemplar's "texture and
+ * finish". A watercolour style reference reliably bleeds cream paper grain into
+ * the background. Since thumbnail crops and the height lineup are built on the
+ * assumption of white, we make it true instead of asking for it.
+ *
+ * Flood fills inward from the image border rather than thresholding globally:
+ * a global "light pixels are background" rule shreds a character wearing a
+ * white dress into disconnected fragments, because it cannot tell the dress
+ * from the paper. Only background reachable from the edge is cleared.
+ *
+ * Returns the original bytes unchanged on any failure — a slightly grey sheet
+ * is much better than a failed render.
+ */
+export async function flattenSheetBackground(
+  buf: Buffer,
+  opts: { tolerance?: number } = {},
+): Promise<Buffer> {
+  // Distance from pure white (per channel) still considered background. Loose
+  // enough for JPEG ringing and faint paper texture, tight enough to leave
+  // shaded white clothing alone.
+  const tolerance = opts.tolerance ?? 26;
+  try {
+    const { data, width: w, height: h } = await rawRGBA(buf);
+    const isLight = (i: number) =>
+      data[i] >= 255 - tolerance &&
+      data[i + 1] >= 255 - tolerance &&
+      data[i + 2] >= 255 - tolerance;
+
+    // Iterative flood fill (an explicit stack, not recursion — a 1536x1024
+    // background is ~1.5M pixels and would blow the call stack).
+    const seen = new Uint8Array(w * h);
+    const stack: number[] = [];
+    const push = (x: number, y: number) => {
+      if (x < 0 || y < 0 || x >= w || y >= h) return;
+      const p = y * w + x;
+      if (seen[p]) return;
+      seen[p] = 1;
+      if (isLight(p * 4)) stack.push(p);
+    };
+    for (let x = 0; x < w; x++) {
+      push(x, 0);
+      push(x, h - 1);
+    }
+    for (let y = 0; y < h; y++) {
+      push(0, y);
+      push(w - 1, y);
+    }
+    while (stack.length > 0) {
+      const p = stack.pop()!;
+      const x = p % w;
+      const y = (p - x) / w;
+      const i = p * 4;
+      data[i] = 255;
+      data[i + 1] = 255;
+      data[i + 2] = 255;
+      data[i + 3] = 255;
+      push(x - 1, y);
+      push(x + 1, y);
+      push(x, y - 1);
+      push(x, y + 1);
+    }
+    return await sharp(data, { raw: { width: w, height: h, channels: 4 } })
+      .png()
+      .toBuffer();
+  } catch {
+    return buf;
+  }
+}
+
+/**
+ * Crop one cell of a reference sheet down to a square thumbnail.
+ *
+ * A crop rather than a generated portrait: a model asked to "make a thumbnail
+ * of this character" produces a NEW image, so the thumbnail would show someone
+ * subtly different from the reference it stands for — which defeats its only
+ * purpose. Cropping is pixel-identical by construction, costs no Sparks and
+ * adds no latency.
+ *
+ * `box` is the cell's normalized rectangle. The crop is tightened to the ink
+ * inside that cell (the drawn subject rarely fills its cell), then squared off
+ * around the subject's centre so faces don't end up against an edge.
+ */
+export async function cropSheetThumbnail(
+  buf: Buffer,
+  box: { x: number; y: number; width: number; height: number },
+  opts: { size?: number; tolerance?: number } = {},
+): Promise<{ buf: Buffer; mimeType: string } | null> {
+  const out = opts.size ?? 256;
+  const tolerance = opts.tolerance ?? 26;
+  try {
+    const meta = await sharp(buf).metadata();
+    const iw = meta.width ?? 0;
+    const ih = meta.height ?? 0;
+    if (!iw || !ih) return null;
+
+    const cellLeft = Math.max(0, Math.round(box.x * iw));
+    const cellTop = Math.max(0, Math.round(box.y * ih));
+    const cellW = Math.min(iw - cellLeft, Math.round(box.width * iw));
+    const cellH = Math.min(ih - cellTop, Math.round(box.height * ih));
+    if (cellW < 8 || cellH < 8) return null;
+
+    const cell = await sharp(buf)
+      .extract({ left: cellLeft, top: cellTop, width: cellW, height: cellH })
+      .toBuffer();
+
+    // Tighten to the drawn content within the cell.
+    const { data } = await rawRGBA(cell, cellW, cellH);
+    let minX = cellW;
+    let minY = cellH;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < cellH; y++) {
+      for (let x = 0; x < cellW; x++) {
+        const i = (y * cellW + x) * 4;
+        const light =
+          data[i] >= 255 - tolerance &&
+          data[i + 1] >= 255 - tolerance &&
+          data[i + 2] >= 255 - tolerance;
+        if (light || data[i + 3] < 8) continue;
+        if (x < minX) minX = x;
+        if (x > maxX) maxX = x;
+        if (y < minY) minY = y;
+        if (y > maxY) maxY = y;
+      }
+    }
+    // Empty cell (the model left it blank) — nothing worth showing.
+    if (maxX < 0 || maxY < 0) return null;
+
+    const inkW = maxX - minX + 1;
+    const inkH = maxY - minY + 1;
+    const cx = minX + inkW / 2;
+    const cy = minY + inkH / 2;
+    const side = Math.min(cellW, cellH, Math.round(Math.max(inkW, inkH) * 1.18));
+    const left = Math.max(0, Math.min(cellW - side, Math.round(cx - side / 2)));
+    const top = Math.max(0, Math.min(cellH - side, Math.round(cy - side / 2)));
+
+    const thumb = await sharp(cell)
+      .extract({ left, top, width: side, height: side })
+      .resize(out, out, { fit: "cover", kernel: "lanczos3" })
+      .flatten({ background: "#ffffff" })
+      .webp({ quality: 82 })
+      .toBuffer();
+    return { buf: thumb, mimeType: "image/webp" };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build a single "size chart": the given characters standing side by side on a
+ * common ground line, each drawn at their true height relative to the tallest.
+ *
+ * This is how relative size gets communicated to the illustration model. The
+ * alternatives are both worse. Words alone ("she comes up to his chest") are
+ * routinely ignored because the reference sheets say otherwise — every sheet is
+ * generated filling its own canvas, so a toddler's reference is exactly as big
+ * as an adult's. Shrinking each character's own sheet to fix that would destroy
+ * the thing the sheet is for: at 40% of a six-cell grid there aren't enough
+ * pixels left to carry a face. One extra composite image costs one reference
+ * slot and leaves every likeness sheet at full fidelity.
+ *
+ * Each entry contributes one cell of its sheet (the whole-body view), trimmed
+ * to its ink so the figure's drawn height — not the empty space around it —
+ * is what gets scaled.
+ *
+ * Returns null when fewer than two figures survive, since a chart of one
+ * subject compares nothing.
+ */
+export async function buildScaleChart(
+  entries: {
+    buf: Buffer;
+    /** Normalized cell rectangle of the whole-body view within the sheet. */
+    box: { x: number; y: number; width: number; height: number };
+    /** Height relative to the tallest character in the set (0..1]. */
+    heightFraction: number;
+  }[],
+  opts: { height?: number; gap?: number; tolerance?: number } = {},
+): Promise<Buffer | null> {
+  const canvasH = opts.height ?? 768;
+  const gap = opts.gap ?? 32;
+  const tolerance = opts.tolerance ?? 26;
+  try {
+    const figures: { buf: Buffer; width: number; height: number }[] = [];
+    for (const entry of entries) {
+      const meta = await sharp(entry.buf).metadata();
+      const iw = meta.width ?? 0;
+      const ih = meta.height ?? 0;
+      if (!iw || !ih) continue;
+
+      const left = Math.max(0, Math.round(entry.box.x * iw));
+      const top = Math.max(0, Math.round(entry.box.y * ih));
+      const cw = Math.min(iw - left, Math.round(entry.box.width * iw));
+      const ch = Math.min(ih - top, Math.round(entry.box.height * ih));
+      if (cw < 8 || ch < 8) continue;
+
+      // Trim the white margin around the figure, so the scaling applies to the
+      // character's own height rather than to how much of its cell it happened
+      // to fill.
+      const cell = await sharp(entry.buf)
+        .extract({ left, top, width: cw, height: ch })
+        .trim({ threshold: tolerance })
+        .toBuffer();
+
+      const trimmed = await sharp(cell).metadata();
+      const tw = trimmed.width ?? 0;
+      const th = trimmed.height ?? 0;
+      if (!tw || !th) continue;
+
+      const targetH = Math.max(
+        16,
+        Math.round(canvasH * Math.max(0.08, Math.min(1, entry.heightFraction))),
+      );
+      const targetW = Math.max(8, Math.round((tw / th) * targetH));
+      figures.push({
+        buf: await sharp(cell)
+          .resize(targetW, targetH, { fit: "fill", kernel: "lanczos3" })
+          .toBuffer(),
+        width: targetW,
+        height: targetH,
+      });
+    }
+    if (figures.length < 2) return null;
+
+    const canvasW =
+      figures.reduce((sum, f) => sum + f.width, 0) + gap * (figures.length + 1);
+    let x = gap;
+    const layers = figures.map((f) => {
+      const layer = { input: f.buf, left: x, top: canvasH - f.height };
+      x += f.width + gap;
+      return layer;
+    });
+
+    return await sharp({
+      create: {
+        width: canvasW,
+        height: canvasH,
+        channels: 4,
+        background: { r: 255, g: 255, b: 255, alpha: 1 },
+      },
+    })
+      .composite(layers)
+      .png()
+      .toBuffer();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Paste `edited` over `original` only where `mask` is painted (transparent),
  * keeping every other pixel byte-identical to the original. Returns a PNG.
  */

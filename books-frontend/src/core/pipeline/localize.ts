@@ -337,6 +337,65 @@ export async function locateEmbeddedObsolete(
   return out;
 }
 
+const panelCountSchema = z.object({
+  count: z.number(),
+});
+
+export interface CountSheetPanelsInput {
+  sheetBase64: string;
+  sheetMime: string;
+  subjectName: string;
+  expectedCount: number;
+  creds: ProviderCredentials;
+  model: string;
+  providerId: ProviderId;
+  signal?: AbortSignal;
+  prompts?: PromptContext;
+}
+
+/**
+ * Counts how many distinct view panels a just-rendered reference sheet
+ * actually contains. The generation prompt already asks for an exact grid
+ * ("draw exactly N cells, no more, no fewer"), but vision-image models don't
+ * reliably obey a cell count baked into text — observed with Gemini Flash
+ * rendering 6 or 8 panels for the same 6-cell instruction, inconsistently
+ * between runs. A cheap follow-up vision call closes that loop: the caller
+ * compares the result to what was requested and, on a mismatch, retries the
+ * render once with the actual count named in the prompt.
+ *
+ * Returns null when the vision call itself fails — callers then assume the
+ * request was honored rather than looping on a check that can't answer.
+ */
+export async function countSheetPanels(input: CountSheetPanelsInput): Promise<number | null> {
+  const provider = getTextProvider(input.providerId);
+  const { system, user } = renderTextPrompt(resolvePromptsConfig(input.prompts), "gridCheck/count", {
+    vars: {
+      subjectName: input.subjectName,
+      expectedCount: String(input.expectedCount),
+    },
+  });
+  try {
+    const res = await withRetry(
+      () =>
+        provider.generateStructured(input.creds, {
+          model: input.model,
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ],
+          schema: panelCountSchema,
+          temperature: 0,
+          images: [{ base64: input.sheetBase64, mimeType: input.sheetMime }],
+          signal: input.signal,
+        }),
+      { signal: input.signal, retries: 1 },
+    );
+    return Math.round(res.count);
+  } catch {
+    return null;
+  }
+}
+
 export interface LocateSubjectInput {
   pageBase64: string;
   pageMime: string;

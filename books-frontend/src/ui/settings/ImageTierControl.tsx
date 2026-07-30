@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Sparkles, Zap } from "lucide-react";
+import { AlertTriangle, ChevronDown, Sparkles, Zap } from "lucide-react";
 import {
   DEFAULT_IMAGE_TIER_LABELS,
   type ImageTier,
 } from "../../core/config/modelConfig";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { setPreferredImageTier, usePreferredImageTier } from "../../state/imageTier";
+import { InfoHint } from "../components/InfoHint";
 import { ImageTierPicker } from "./ImageTierPicker";
 
 /**
@@ -63,6 +64,18 @@ export function ImageTierControl() {
         <span className="hidden sm:inline">{unset ? "Choose quality" : label(tier)}</span>
         <ChevronDown className={"size-3.5 transition-transform " + (open ? "rotate-180" : "")} />
       </button>
+
+      {/* Outside the button (not nested inside it) so hovering to read the
+          warning doesn't also toggle the quality popover open. Only shown once
+          Fast is the active choice — this is a heads-up about the tier
+          they're about to spend Sparks on, not a reason to avoid picking it. */}
+      {tier === "quick" && (
+        <InfoHint
+          topic="fastTierConsistency"
+          icon={AlertTriangle}
+          className="absolute -right-1 -top-1 size-3.5 rounded-full bg-white text-amber-500 shadow-sm ring-1 ring-amber-200 hover:text-amber-600"
+        />
+      )}
 
       {open && (
         <div

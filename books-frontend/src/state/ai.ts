@@ -59,7 +59,7 @@ import { useSettingsStore } from "./settingsStore";
 import { useAppConfigStore } from "./appConfigStore";
 
 // Re-exported for existing UI imports (moved to the platform-agnostic core).
-export { currentAnchorImage } from "../core/pipeline/provenance";
+export { anchorThumbBlobId, currentAnchorImage } from "../core/pipeline/provenance";
 export {
   containedAnchorsFor,
   containersOf,
@@ -107,11 +107,12 @@ export async function analyzeCurrentStory(signal?: AbortSignal): Promise<void> {
   const project = useProjectsStore.getState().current();
   if (!project) throw new Error("No active project.");
 
-  const { summary, anchors, model } = await analyzeStoryRemote(project, signal);
+  const { summary, anchors, model, relations } = await analyzeStoryRemote(project, signal);
 
   await useProjectsStore.getState().setAnalysis(
     { summary, generatedAt: Date.now(), model },
     anchors,
+    relations,
   );
 }
 
@@ -273,7 +274,8 @@ export function staleAnchorIds(project: Project): string[] {
     let isStale = used.some((u) => {
       const r = byId.get(u.anchorId);
       if (!r) return true;
-      // Text-only uses (related anchors) don't care about image versions.
+      // Text-only uses (related anchors, and the anchor's own self-entry —
+      // see `renderAnchor`) don't care about image versions.
       if (!u.textOnly && (r.versions?.cursorId ?? undefined) !== u.versionId) return true;
       if (u.signature !== undefined && u.signature !== anchorSignature(r)) return true;
       return false;
@@ -282,10 +284,14 @@ export function staleAnchorIds(project: Project): string[] {
     // removed) — the sheet no longer reflects the declared relationships.
     // Uses the SAME bidirectional definition the renderer records with
     // (`linkedAnchorsFor`), so an incoming relates edge created from the other
-    // anchor doesn't read as a perpetual mismatch here.
+    // anchor doesn't read as a perpetual mismatch here. The anchor's own
+    // self-entry is excluded from both sides — it's never a "link" — so it
+    // can't manufacture a permanent one-item mismatch.
     if (!isStale) {
       const currentLinks = new Set(linkedAnchorsFor(a, anchors).map((r) => r.id));
-      const recorded = new Set(used.map((u) => u.anchorId).filter((id) => byId.has(id)));
+      const recorded = new Set(
+        used.map((u) => u.anchorId).filter((id) => id !== a.id && byId.has(id)),
+      );
       isStale =
         currentLinks.size !== recorded.size ||
         [...currentLinks].some((id) => !recorded.has(id));
