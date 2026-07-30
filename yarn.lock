@@ -297,6 +297,17 @@
     idb "7.1.1"
     tslib "^2.1.0"
 
+"@firebase/app@^0.15.0":
+  version "0.15.1"
+  resolved "https://registry.yarnpkg.com/@firebase/app/-/app-0.15.1.tgz#2d5eb26abf388dc32aea5763eb26e0698d5401ca"
+  integrity sha512-iD9+Z5HcPo0Uop5f72/VYMeXwKucBhW7iFrISkJFvQ+lSZikTNgTz0FgAtaaTkAG0pEZSnCymA2Fu49n0rcufQ==
+  dependencies:
+    "@firebase/component" "0.7.3"
+    "@firebase/logger" "0.5.1"
+    "@firebase/util" "1.15.1"
+    idb "7.1.1"
+    tslib "^2.1.0"
+
 "@firebase/auth-compat@0.6.8":
   version "0.6.8"
   resolved "https://registry.yarnpkg.com/@firebase/auth-compat/-/auth-compat-0.6.8.tgz#09d828421a9ec1edcde60cd86785a29cad9b5720"
