@@ -29,6 +29,13 @@ interface ConsentState {
 
   /** Load the stored decision for the given active version (idempotent-ish). */
   hydrate: (version: string) => void;
+  /**
+   * Show the banner if the visitor still hasn't decided. `ConsentManager`
+   * calls this after the admin-configured entrance delay — it never affects
+   * whether tracking is allowed (Consent Mode stays denied-by-default the
+   * entire time), only when the prompt becomes visible.
+   */
+  showBanner: () => void;
   /** Persist a decision, apply Consent Mode, and close the banner. */
   decide: (choice: ConsentChoice) => void;
   acceptAll: () => void;
@@ -55,13 +62,20 @@ export const useConsentStore = create<ConsentState>((set, get) => ({
       decided: valid,
       analytics: valid ? record!.analytics : false,
       marketing: valid ? record!.marketing : false,
-      // Show the banner when there's no valid decision for this version.
-      open: !valid,
+      // Never auto-open here: when there's no valid decision, `ConsentManager`
+      // calls `showBanner()` after the configured entrance delay instead.
+      open: false,
     });
     // If a valid prior decision exists, re-apply Consent Mode for this session.
     if (valid && record) {
       updateConsentMode({ analytics: record.analytics, marketing: record.marketing });
     }
+  },
+
+  showBanner() {
+    // Guard against a stale timer firing after the visitor already decided
+    // (e.g. via the footer link, or another tab) during the delay window.
+    if (!get().decided) set({ open: true });
   },
 
   decide(choice) {

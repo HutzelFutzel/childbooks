@@ -12,7 +12,14 @@ import { OPTIONAL_COOKIE_CATEGORIES, type CookieConfig } from "../../core/config
  * inherits the live brand color (the `brand-*` tokens are driven by the admin's
  * branding). Offers Accept all / Reject all on the same level (GDPR requires
  * rejecting to be as easy as accepting) plus a Customize panel with per-category
- * toggles. Copy comes from the admin cookie config.
+ * toggles. Copy + labels come from the admin cookie config.
+ *
+ * Visual hierarchy: Accept all and Reject non-essential are always the SAME
+ * button size and both a single click — only color/weight differ (Accept is
+ * the filled primary action, Reject a plain outlined one). Differing button
+ * *size* between accept/reject is a named example of a deceptive "Hindering"
+ * pattern in EDPB guidance, so that's intentionally never varied here; only the
+ * optional, non-mandatory "Customize" path is styled as a lower-key text link.
  */
 export function CookieBanner({
   config,
@@ -37,11 +44,7 @@ export function CookieBanner({
   if (!open) return null;
 
   const policyUrl = cookiePolicyUrl || privacyUrl;
-
-  const CATEGORY_LABELS: Record<(typeof OPTIONAL_COOKIE_CATEGORIES)[number], string> = {
-    analytics: "Analytics",
-    marketing: "Marketing",
-  };
+  const labels = config.buttonLabels;
 
   return (
     <div
@@ -67,7 +70,7 @@ export function CookieBanner({
                     rel="noreferrer"
                     className="font-medium text-brand-600 hover:underline"
                   >
-                    Learn more
+                    {labels.learnMore}
                   </a>
                 )}
               </p>
@@ -77,7 +80,9 @@ export function CookieBanner({
               <div className="space-y-2 rounded-xl bg-ink-50/70 p-3">
                 <label className="flex items-start justify-between gap-3 opacity-70">
                   <span className="min-w-0">
-                    <span className="text-xs font-semibold text-ink-800">Strictly necessary</span>
+                    <span className="text-xs font-semibold text-ink-800">
+                      {config.categoryLabels.necessary}
+                    </span>
                     <span className="mt-0.5 block text-[11px] leading-relaxed text-ink-400">
                       {config.categoryText.necessary}
                     </span>
@@ -87,7 +92,9 @@ export function CookieBanner({
                 {OPTIONAL_COOKIE_CATEGORIES.map((cat) => (
                   <label key={cat} className="flex items-start justify-between gap-3">
                     <span className="min-w-0">
-                      <span className="text-xs font-semibold text-ink-800">{CATEGORY_LABELS[cat]}</span>
+                      <span className="text-xs font-semibold text-ink-800">
+                        {config.categoryLabels[cat]}
+                      </span>
                       <span className="mt-0.5 block text-[11px] leading-relaxed text-ink-400">
                         {config.categoryText[cat]}
                       </span>
@@ -95,28 +102,41 @@ export function CookieBanner({
                     <Toggle
                       checked={choice[cat]}
                       onChange={(v) => setChoice((c) => ({ ...c, [cat]: v }))}
-                      label={`${CATEGORY_LABELS[cat]} enabled`}
+                      label={`${config.categoryLabels[cat]} enabled`}
                     />
                   </label>
                 ))}
               </div>
             )}
 
-            <div className="flex flex-wrap items-center gap-2">
-              <Button size="sm" onClick={acceptAll}>
-                Accept all
-              </Button>
-              <Button size="sm" variant="secondary" onClick={rejectAll}>
-                Reject non-essential
-              </Button>
+            <div className="flex flex-wrap items-center gap-3">
+              {/* The two mandatory, equal-weight actions: same size, one click each. */}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button size="sm" className="font-semibold" onClick={acceptAll}>
+                  {labels.acceptAll}
+                </Button>
+                <Button size="sm" variant="secondary" onClick={rejectAll}>
+                  {labels.rejectAll}
+                </Button>
+              </div>
+              {/* Optional, non-mandatory third path — styled lower-key on purpose;
+                  it adds a choice, it never stands in for Reject above. */}
               {customizing ? (
-                <Button size="sm" variant="ghost" onClick={() => decide(choice)}>
-                  Save choices
-                </Button>
+                <button
+                  type="button"
+                  onClick={() => decide(choice)}
+                  className="text-[11px] font-medium text-ink-500 hover:text-ink-700 hover:underline"
+                >
+                  {labels.save}
+                </button>
               ) : (
-                <Button size="sm" variant="ghost" onClick={() => setCustomizing(true)}>
-                  Customize
-                </Button>
+                <button
+                  type="button"
+                  onClick={() => setCustomizing(true)}
+                  className="text-[11px] font-medium text-ink-500 hover:text-ink-700 hover:underline"
+                >
+                  {labels.customize}
+                </button>
               )}
               {decided && (
                 <button
@@ -124,7 +144,7 @@ export function CookieBanner({
                   onClick={() => useConsentStore.getState().close()}
                   className="ml-auto text-[11px] font-medium text-ink-400 hover:text-ink-600"
                 >
-                  Close
+                  {labels.close}
                 </button>
               )}
             </div>

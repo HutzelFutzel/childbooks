@@ -16,6 +16,11 @@ import type { CookieConfig } from "../../core/config/cookieConfig";
  *
  * When cookie consent is disabled in the admin config, the banner never shows and
  * analytics stays off (fail-closed).
+ *
+ * `config.entranceDelayMs` (admin-tunable, capped at `MAX_ENTRANCE_DELAY_MS`)
+ * only controls WHEN an undecided visitor sees the prompt — Consent Mode
+ * defaults are applied immediately regardless, so tracking stays blocked for
+ * the full delay window either way.
  */
 export function ConsentManager({
   config,
@@ -27,6 +32,7 @@ export function ConsentManager({
   cookiePolicyUrl?: string;
 }) {
   const hydrate = useConsentStore((s) => s.hydrate);
+  const showBanner = useConsentStore((s) => s.showBanner);
   const hydrated = useConsentStore((s) => s.hydrated);
   const analyticsGranted = useConsentStore((s) => s.analytics);
   const decided = useConsentStore((s) => s.decided);
@@ -36,6 +42,16 @@ export function ConsentManager({
     initConsentModeDefaults();
     hydrate(config.consentVersion);
   }, [hydrate, config.consentVersion]);
+
+  // Reveal the banner after the configured entrance delay, once we know the
+  // visitor hasn't already decided. `showBanner` re-checks `decided` itself,
+  // so a stale timer from a prior render can't reopen an already-closed banner.
+  useEffect(() => {
+    if (!hydrated || decided) return;
+    const delayMs = Math.max(0, config.entranceDelayMs || 0);
+    const timer = window.setTimeout(showBanner, delayMs);
+    return () => window.clearTimeout(timer);
+  }, [hydrated, decided, config.entranceDelayMs, showBanner]);
 
   // Load analytics only after explicit analytics consent.
   useEffect(() => {
