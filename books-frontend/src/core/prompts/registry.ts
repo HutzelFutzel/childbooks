@@ -376,8 +376,30 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "isCover",
       ),
       blk(
+        "layoutCalmBand",
+        "Composition: the story text is laid over this illustration, so {{calmRegions}} must stay calm and free of important subjects, faces or busy detail.",
+        "layoutCalmBand",
+      ),
+      // Kept adjacent to the block above so "that area" can't be misread as the
+      // focal region, which the next block introduces.
+      blk(
+        "regionTreatment",
+        "Treat that area so it {{regionTreatment}}.",
+        "hasRegionTreatment",
+      ),
+      blk(
+        "layoutFocal",
+        "Place the main subject and focal action in {{focalRegion}}.",
+        "layoutCalmBand",
+      ),
+      blk(
+        "layoutInsetArt",
+        "This illustration is placed BESIDE the text rather than underneath it, so no space needs reserving: compose a {{artAspect}} image that fills its own frame edge to edge, with the main subject well inside the frame.",
+        "layoutInsetArt",
+      ),
+      blk(
         "layoutNote",
-        "Leave clean, uncluttered negative space for a separate text block: {{layoutNote}}.",
+        "Also follow this page's own composition note: {{layoutNote}}.",
         "hasLayoutNote",
       ),
       blk(
@@ -387,6 +409,13 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk("style", "Art style: {{artStyle}}."),
       blk("closing", "Children's picture-book illustration, cohesive composition, no watermark."),
+      // Restated last: compositional constraints get diluted in the middle of a
+      // long prompt, and this is the one the page's readability depends on.
+      blk(
+        "layoutCalmRestate",
+        "Most important: keep {{calmRegions}} calm and uncluttered.",
+        "layoutCalmBand",
+      ),
       blk(
         "tailMaskEdit",
         "Inpainting edit: only modify the transparent (masked) region of the LAST reference image — apply this change there: {{edit}}. Keep every pixel outside the mask exactly identical (same characters, colors, lighting, and composition).",
@@ -811,7 +840,23 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("castNames", "The closed cast of allowed names.", "Amanda, Bruno"),
           V("removedList", "Subjects to remove.", "the cat"),
           V("keptList", "Unchanged subjects locked to the previous version (no sheet re-sent).", "Bruno"),
-          V("layoutNote", "Where the text block should sit.", "bottom band"),
+          V("layoutNote", "The screenplay's own composition note for this page.", "a quiet bedtime moment, low camera"),
+          V(
+            "calmRegions",
+            "Compiled from the layout's text rectangles — never write this by hand.",
+            "the right third of the image (66%–100% across, 6%–94% down)",
+          ),
+          V(
+            "focalRegion",
+            "Where the focal action goes, compiled from the same geometry.",
+            "the left two thirds of the image (0%–66% across, 0%–100% down)",
+          ),
+          V(
+            "regionTreatment",
+            "How the artwork should look where the text sits (from the slot's treatment).",
+            "holds soft, gently varying background tones and nothing else",
+          ),
+          V("artAspect", "Inset-art only: the shape the artwork is composed for.", "portrait"),
           V("artStyle", "Resolved art-style overlay.", STYLE_SAMPLE),
           V("bakeTextInstruction", "Cover typography to render into the art.", 'the title "Mila\'s Big Day"'),
           V("edit", "Revision instruction.", "make it night-time"),
@@ -833,6 +878,9 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           hasKept: false,
           hasLayoutNote: true,
           layoutGeneric: false,
+          layoutCalmBand: true,
+          hasRegionTreatment: true,
+          layoutInsetArt: false,
           bakeText: false,
           isCover: false,
           tailMaskEdit: false,

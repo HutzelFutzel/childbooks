@@ -28,6 +28,7 @@ export type ConfigTabId =
   | "costs"
   // Creative defaults group.
   | "artStyles"
+  | "layouts"
   | "ageWriting"
   | "typography"
   // Operations group.
@@ -66,7 +67,7 @@ export const CONFIG_GROUPS: {
   {
     id: "creative",
     label: "Creative defaults",
-    tabs: ["artStyles", "ageWriting", "typography"],
+    tabs: ["artStyles", "layouts", "ageWriting", "typography"],
   },
   {
     id: "operations",

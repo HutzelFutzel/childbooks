@@ -10,6 +10,19 @@ import { layoutTextBox } from "./konva/textLayout";
 const VH = 1000;
 
 /**
+ * A justified line is deliberately stretched to land exactly on `inner.w`
+ * (that's the point of justification), but summing a repeating-decimal
+ * per-space stretch amount means the result can overshoot the target by a
+ * few ULPs (e.g. 560.0000000000001 vs. 560). Without slack, the fit search
+ * below — an exact `<=` boundary check — sees that as "doesn't fit" and
+ * reads it as a real overflow, which throws off the whole binary search
+ * (it needs "fits"/"doesn't fit" to be monotonic in font size). This is
+ * many orders of magnitude smaller than any real overflow, which is at
+ * least a partial glyph wide.
+ */
+const WIDTH_EPS = 0.01;
+
+/**
  * Smallest font (as a fraction of page height) auto-fit will shrink to before it
  * gives up and lets the box clip. Keeps text readable; overflow past this point
  * is surfaced with an indicator instead of unreadable glyphs.
@@ -62,7 +75,7 @@ export function fitFontSizePct(box: TextBox, pageAspect: number): number {
   for (let i = 0; i < 26; i++) {
     const mid = (lo + hi) / 2;
     const m = measure(box, mid * VH, inner);
-    if (m.height <= inner.h && m.width <= inner.w) {
+    if (m.height <= inner.h && m.width <= inner.w + WIDTH_EPS) {
       best = mid;
       lo = mid;
     } else {
@@ -73,22 +86,32 @@ export function fitFontSizePct(box: TextBox, pageAspect: number): number {
 }
 
 /**
- * Effective base font size (px) for a box, honoring auto-fit.
+ * Effective font size for a box as a fraction of page height, honoring
+ * auto-fit — this is the size that's *actually rendered*, as opposed to
+ * `box.fontSizePct`, which is just the size the author last asked for (the
+ * "requested" size auto-fit shrinks/grows from). UI that shows a live pt
+ * value (the Inspector's size field) should read this, not `fontSizePct`
+ * directly, or the number goes stale the moment auto-fit kicks in.
  *
- * By default auto-fit only *shrinks* the author's chosen `fontSizePct` to avoid
- * clipping — it never grows text beyond the intended size. With `autoFitGrow`
- * the font instead fills the box in both directions (grow *and* shrink), which
- * is handy for titles/captions. Shrinking stops at {@link MIN_FONT_PCT}; below
+ * By default auto-fit only *shrinks* the requested size to avoid clipping —
+ * it never grows text beyond the intended size. With `autoFitGrow` the font
+ * instead fills the box in both directions (grow *and* shrink), which is
+ * handy for titles/captions. Shrinking stops at {@link MIN_FONT_PCT}; below
  * that the text is allowed to overflow (and the editor shows an overflow
  * indicator) rather than becoming unreadable.
  */
-export function effectiveBaseSize(box: TextBox, pageAspect: number, pageHeight: number): number {
+export function effectiveFontSizePct(box: TextBox, pageAspect: number): number {
   let pct = box.fontSizePct;
   if (box.autoFit) {
     const fit = Math.max(MIN_FONT_PCT, fitFontSizePct(box, pageAspect));
     pct = box.autoFitGrow ? fit : Math.min(pct, fit);
   }
-  return pct * pageHeight;
+  return pct;
+}
+
+/** Effective base font size (px) for a box, honoring auto-fit. See {@link effectiveFontSizePct}. */
+export function effectiveBaseSize(box: TextBox, pageAspect: number, pageHeight: number): number {
+  return effectiveFontSizePct(box, pageAspect) * pageHeight;
 }
 
 /**
@@ -122,7 +145,12 @@ export function minContentWidthPct(box: TextBox, pageAspect: number): number {
   // word then tells us the tightest column that avoids mid-word clipping.
   const wide: TextBox = { ...box, rect: { ...box.rect, w: 4 } };
   const inner = innerFor(wide, pageAspect, 1e6);
-  const words = layoutTextBox(wide, box.fontSizePct * VH, inner);
+  // Resizing a text box is allowed to shrink the font (manual resize flips
+  // auto-fit on), so the width floor is always the widest word at the
+  // *smallest* font auto-fit will use — never the current/requested size,
+  // which would stop the drag while there's still plenty of room to shrink.
+  const fontPct = Math.min(box.fontSizePct, MIN_FONT_PCT);
+  const words = layoutTextBox(wide, fontPct * VH, inner);
   let widest = 0;
   for (const wd of words) widest = Math.max(widest, wd.width);
   const pageWidth = pageAspect * VH;

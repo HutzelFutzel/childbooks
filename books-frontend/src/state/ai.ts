@@ -9,6 +9,7 @@ import {
 } from "../core/pipeline/illustration";
 import {
   applyIllustrationRender,
+  resolveLayoutPlan,
   type IllustrationRunOptions,
 } from "../core/pipeline/illustrationRun";
 import {
@@ -540,6 +541,10 @@ export function buildIllustrationTask(
   const presetId = project.config.artStyle?.presetId ?? undefined;
   const hasStyleRef = Boolean(presetId && artStyles?.examples?.[presetId]);
 
+  // The same plan the interactive path and the design editor use, so a bulk
+  // render can't compose its pages differently from a single one.
+  const layoutPlan = resolveLayoutPlan(project, spread);
+
   const prompt = buildIllustrationPrompt({
     spread,
     config: project.config,
@@ -554,6 +559,7 @@ export function buildIllustrationTask(
     coverTitle: spread.coverTitle,
     coverSubtitle: spread.coverSubtitle,
     coverAuthor: spread.coverAuthor,
+    layoutPlan,
     prompts: {
       artStyles,
       templates: useAppConfigStore.getState().prompts,
@@ -564,7 +570,7 @@ export function buildIllustrationTask(
     provider: imageModel.provider,
     model: imageModel.id,
     prompt,
-    size: chooseImageSize(spread.kind, project.config),
+    size: chooseImageSize(spread.kind, project.config, layoutPlan, imageModel.provider),
     references: references.length ? references : undefined,
     ...(hasStyleRef && presetId ? { stylePresetId: presetId } : {}),
   };

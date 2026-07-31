@@ -57,8 +57,17 @@ export function TextBoxView({
     flexDirection: "column",
     justifyContent:
       box.vAlign === "top" ? "flex-start" : box.vAlign === "bottom" ? "flex-end" : "center",
+    // Justified paragraphs stretch to the box's full width anyway (each <p>
+    // below is explicitly width: 100%), but "stretch" here keeps the wrapper's
+    // own alignment intent honest for anyone reading/extending this later.
     alignItems:
-      box.align === "left" ? "flex-start" : box.align === "right" ? "flex-end" : "center",
+      box.align === "left"
+        ? "flex-start"
+        : box.align === "right"
+          ? "flex-end"
+          : box.align === "justify"
+            ? "stretch"
+            : "center",
     padding: pad,
     textAlign: box.align,
     color: colors.text,

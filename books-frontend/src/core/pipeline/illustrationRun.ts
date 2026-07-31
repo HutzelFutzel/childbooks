@@ -49,7 +49,9 @@ import {
 } from "./illustration";
 import { embeddedPairsAmong } from "../book/anchorGraph";
 import { paginate } from "./pagination";
-import type { PageSide } from "../book/layouts";
+import type { CompositionMode, LayoutPlan, PageSide } from "../book/layouts";
+import { planPageLayout } from "../book/pageLayout";
+import { capabilitiesFor, type CapabilityOverrides } from "../config/modelCapabilities";
 import {
   canonicalEditText,
   IntentAmbiguousError,
@@ -153,6 +155,11 @@ export interface PipelineEnv {
   /** Admin-managed prompt overlays (art styles, age writing). */
   prompts?: PromptContext;
   /**
+   * Admin corrections to the shipped image-model capability table. Model
+   * behaviour changes faster than deploys, so what a model can do is data.
+   */
+  modelCapabilities?: CapabilityOverrides;
+  /**
    * Optional step tagger for cost attribution: wraps an internal pipeline step
    * (e.g. "image", "binding", "localize") so its provider calls are metered
    * under that step while still rolling up into the action's combined cost.
@@ -192,6 +199,9 @@ export interface IllustrationRender {
   depicted?: DepictedSubject[];
   /** Parent version to branch from (the source node), if any. */
   parentId?: string;
+  /** The layout / composition mode this artwork was composed for. */
+  layoutId?: string;
+  compositionMode?: CompositionMode;
 }
 
 /** Wrap a render into a (new or extended) version tree. Pure. */
@@ -207,6 +217,8 @@ export function applyIllustrationRender(
     prompt: render.prompt,
     ...(render.bakedText ? { bakedText: render.bakedText } : {}),
     ...(render.depicted ? { depicted: render.depicted } : {}),
+    ...(render.layoutId ? { layoutId: render.layoutId } : {}),
+    ...(render.compositionMode ? { compositionMode: render.compositionMode } : {}),
   };
   const next = tree
     ? addVersion(tree, content, {
@@ -259,6 +271,25 @@ function resolvePageSide(project: Project, spread: ScreenplaySpread): PageSide |
     const pages = paginate(getCursor(tree).content).pageMap.get(spread.id);
     if (!pages || pages.length === 0) return undefined;
     return pages[0] % 2 === 1 ? "right" : "left";
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The layout plan this page's artwork must be composed for — the same plan the
+ * design editor lays text out with. Covers are excluded: their composition is
+ * driven by the cover spec, not the interior layout.
+ */
+export function resolveLayoutPlan(
+  project: Project,
+  spread: ScreenplaySpread,
+): LayoutPlan | undefined {
+  if (isCoverSpread(spread)) return undefined;
+  const side = resolvePageSide(project, spread);
+  if (!side) return undefined;
+  try {
+    return planPageLayout(project, { side, textLength: spread.text?.length ?? 0 });
   } catch {
     return undefined;
   }
@@ -405,7 +436,9 @@ async function bindAndRepairPage(args: {
     return { image, depicted: [] };
   }
   const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
-  const canRepair = imageModel.provider === "openai";
+  // Repairing a duplicate subject paints over one region and leaves the rest
+  // untouched, which needs the same mask support the surgical edits do.
+  const canRepair = capabilitiesFor(imageModel, env.modelCapabilities).maskEditing;
 
   // Vision models only need to LOCATE subjects (normalized boxes), so a
   // downscaled copy keeps the payload small without affecting the result.
@@ -1016,11 +1049,11 @@ export async function renderIllustration(
 
   const imageModel = env.models.imageModel;
   const key = env.apiKeyFor(imageModel.provider);
-  // In-place rectangle surgery needs a real inpainting mask, which only the
-  // OpenAI edits endpoint supports. On other providers (Gemini regenerates the
-  // whole frame, so composited rectangles misalign) every surgical path falls
-  // through to a whole-page, composition-preserving regeneration.
-  const surgicalCapable = imageModel.provider === "openai";
+  // In-place rectangle surgery needs a real inpainting mask. Which models offer
+  // one is model knowledge, not a provider assumption, so it comes from the
+  // capability table; models without it fall through to a whole-page,
+  // composition-preserving regeneration.
+  const surgicalCapable = capabilitiesFor(imageModel, env.modelCapabilities).maskEditing;
 
   // Resolve the spread's anchors in their declared order, so reference images
   // line up with how they're enumerated in the prompt.
@@ -1466,6 +1499,8 @@ export async function renderIllustration(
     if (structured) return structured;
   }
 
+  const layoutPlan = resolveLayoutPlan(project, spread);
+
   const prompt = buildIllustrationPrompt({
     spread,
     config: project.config,
@@ -1492,15 +1527,16 @@ export async function renderIllustration(
     // typos corrected); the user's raw text otherwise.
     edit: promptEdit,
     prompts: env.prompts,
-    // Keep a calm, text-safe band on this page's outer edge (active layout).
-    pageSide: resolvePageSide(project, spread),
+    // Where the text sits on this page — the prompt's composition instructions
+    // are compiled from this plan's rectangles (active layout).
+    layoutPlan,
   });
 
   const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
   const result = await runStep("image", () =>
     generateIllustrationImage({
       prompt,
-      size: chooseImageSize(spread.kind, project.config),
+      size: chooseImageSize(spread.kind, project.config, layoutPlan, imageModel.provider),
       creds: { apiKey: key },
       model: imageModel.id,
       providerId: imageModel.provider,
@@ -1542,7 +1578,7 @@ export async function renderIllustration(
     config: project.config,
     imageModel,
     imageKey: key,
-    size: chooseImageSize(spread.kind, project.config),
+    size: chooseImageSize(spread.kind, project.config, layoutPlan, imageModel.provider),
     env,
     signal: options.signal,
   });
@@ -1556,6 +1592,9 @@ export async function renderIllustration(
     textMode: spread.textMode,
     depicted,
     parentId: sourceNodeId,
+    ...(layoutPlan
+      ? { layoutId: layoutPlan.layoutId, compositionMode: layoutPlan.mode }
+      : {}),
   };
 }
 

@@ -57,7 +57,7 @@ export function Footer({
             )}
           </Link>
           <p className="mt-4 max-w-xs text-sm text-ink-500">
-            Write, illustrate, and print custom children&apos;s picture books with AI.
+            Write, illustrate, and print personalized children&apos;s picture books with AI.
           </p>
         </div>
 

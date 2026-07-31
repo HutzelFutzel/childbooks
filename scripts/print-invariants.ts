@@ -38,6 +38,18 @@ import type {
   ScreenplaySpread,
 } from "../books-frontend/src/core/types";
 import { createVersionTree } from "../books-frontend/src/core/versioning";
+import {
+  allBookLayouts,
+  layoutPromptFacts,
+  validateLayouts,
+  PAGE_SIDES,
+} from "../books-frontend/src/core/book/layouts";
+import { validateTreatments } from "../books-frontend/src/core/book/treatments";
+import { bindingSideFor } from "../books-frontend/src/core/book/pageLayout";
+import { computePageGuides, resolveFormatCapabilities } from "../books-frontend/src/core/book/format";
+import { chooseImageSize } from "../books-frontend/src/core/pipeline/illustration";
+import { bookSizeFromAspect } from "../books-frontend/src/core/config/options";
+import { defaultTemplate, PROMPT_ACTIONS } from "../books-frontend/src/core/prompts/registry";
 
 const failures: string[] = [];
 const checks: string[] = [];
@@ -493,6 +505,152 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
     config: { ...base.config, productSku: saddle.sku },
   } as Project;
   check("changing the format invalidates the render", renderFingerprint(reformatted, design) !== first);
+}
+
+// ---- Page layouts ----------------------------------------------------------
+//
+// A layout is the one thing that decides both where the text is drawn AND what
+// the image model is told to keep clear for it. When those two disagree, every
+// page still renders — the words just land on top of a face. None of that is
+// visible to a typecheck, so the catalog is asserted here instead.
+
+{
+  for (const problem of validateLayouts()) check(`layout catalog: ${problem}`, false);
+  for (const problem of validateTreatments()) check(`treatment catalog: ${problem}`, false);
+  check("the layout catalog is self-consistent", validateLayouts().length === 0);
+  check("the treatment catalog is self-consistent", validateTreatments().length === 0);
+
+  for (const layout of allBookLayouts()) {
+    for (const product of [square, saddle] as BookProduct[]) {
+      const caps = resolveFormatCapabilities(product, product.minPages);
+      for (const side of PAGE_SIDES) {
+        const spread = side === "spread";
+        const { safe } = computePageGuides({ caps, spread, bindingSide: bindingSideFor(side) });
+        const plan = layout.plan({
+          side,
+          safe,
+          aspect: spread ? product.aspect * 2 : product.aspect,
+          trim: product.trim,
+          isCover: false,
+          mode: "full-bleed",
+        });
+        const label = `${layout.id} · ${product.sku} · ${side}`;
+
+        // Text outside the safe area is trimmed off by the printer, and a
+        // fraction-of-the-page rect is exactly how that happens on a trim whose
+        // margin isn't the fraction the layout was authored against.
+        for (const slot of plan.slots) {
+          const r = slot.pageRect;
+          check(
+            `${label}: slot "${slot.id}" stays inside the printable safe area`,
+            r.x >= safe.x - 1e-9 &&
+              r.y >= safe.y - 1e-9 &&
+              r.x + r.w <= safe.x + safe.w + 1e-9 &&
+              r.y + r.h <= safe.y + safe.h + 1e-9,
+          );
+        }
+
+        // The prompt must actually say where the calm band is. An empty
+        // description means the model is told nothing and the text lands on
+        // whatever the model felt like painting there.
+        const surfaceAspect = spread ? product.aspect * 2 : product.aspect;
+        const facts = layoutPromptFacts(plan, surfaceAspect);
+        if (plan.slots.some((s) => s.role === "text")) {
+          check(`${label}: the prompt describes the calm region`, facts.calmRegions.length > 0);
+          check(`${label}: the prompt describes where the focal action goes`, facts.focalRegion.length > 0);
+          // A slot running the full printable height must read as a column
+          // ("the right third"), not a vague "block on the right side" — that
+          // phrasing is what the model actually acts on.
+          const fullHeight = plan.slots.some(
+            (s) => s.role === "text" && s.pageRect.h >= safe.h - 1e-9,
+          );
+          check(
+            `${label}: the calm region names a page position, not just numbers`,
+            /third|quarter|half|fifth|sixth|eighth|band|block|column|whole/.test(facts.calmRegions),
+          );
+          if (fullHeight) {
+            check(
+              `${label}: a full-height text column is described as a column`,
+              !/block/.test(facts.calmRegions),
+              facts.calmRegions,
+            );
+          }
+        }
+
+        // Inset art that overlaps the text would be covered by it.
+        const inset = layout.plan({
+          side,
+          safe,
+          aspect: surfaceAspect,
+          trim: product.trim,
+          isCover: false,
+          mode: "inset-art",
+        });
+        if (inset.mode === "inset-art") {
+          for (const slot of inset.slots.filter((s) => s.role === "text")) {
+            const a = inset.artRect;
+            const t = slot.pageRect;
+            const overlaps =
+              a.x < t.x + t.w && t.x < a.x + a.w && a.y < t.y + t.h && t.y < a.y + a.h;
+            check(`${label}: inset artwork doesn't run under the text`, !overlaps);
+          }
+          check(
+            `${label}: inset artwork is a usable shape`,
+            inset.artRect.w > 0.2 && inset.artRect.h > 0.2,
+          );
+        }
+      }
+    }
+  }
+
+  // The generated canvas must match the shape of the region it fills, or the
+  // page crops it — the failure that looks like "the model ignored my prompt".
+  for (const product of [square, saddle] as BookProduct[]) {
+    const config = { productSku: product.sku, bookSize: bookSizeFromAspect(product.aspect) };
+    const [w, h] = chooseImageSize("single", config).split("x").map(Number);
+    const requested = w / h;
+    check(
+      `${product.sku}: a full-page render is generated at roughly the page shape`,
+      Math.abs(requested - product.aspect) / product.aspect < 0.3,
+      `asked for ${requested.toFixed(2)}, page is ${product.aspect.toFixed(2)}`,
+    );
+  }
+
+  // Every variable the layout blocks interpolate has to be declared, or the
+  // admin prompt editor renders `{{calmRegions}}` as literal text to the model.
+  {
+    const metas = PROMPT_ACTIONS.flatMap((a) => a.templates);
+    check("every prompt template is described to the admin editor", metas.length > 0);
+
+    for (const meta of metas) {
+      const template = defaultTemplate(meta.key);
+      // Text prompts split into system/user; image prompts are one `single` list.
+      const blocks = [
+        ...(template.system ?? []),
+        ...(template.user ?? []),
+        ...(template.single ?? []),
+      ];
+      check(`${meta.key} resolves to a shipped template`, blocks.length > 0);
+      if (blocks.length === 0) continue;
+
+      const declared = new Set(meta.variables.map((v) => v.name));
+      const used = new Set(
+        blocks.flatMap((b) => [...b.text.matchAll(/\{\{(\w+)\}\}/g)]).map((m) => m[1]),
+      );
+      for (const name of used) {
+        check(`${meta.key} declares {{${name}}}`, declared.has(name));
+      }
+
+      const flags = new Set(Object.keys(meta.sampleFlags));
+      for (const block of blocks) {
+        if (!block.enabledWhen) continue;
+        // A predicate may be negated ("!isSpread"); either polarity is driven
+        // by the same sample flag.
+        const flag = block.enabledWhen.replace(/^!/, "");
+        check(`${meta.key} can preview the "${block.id}" block`, flags.has(flag));
+      }
+    }
+  }
 }
 
 // ---- Report ----------------------------------------------------------------

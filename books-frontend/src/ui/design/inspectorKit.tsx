@@ -12,9 +12,11 @@ import {
   ArrowUpToLine,
   Check,
   ChevronDown,
+  ClipboardPaste,
   Copy,
   Lock,
   MoveVertical,
+  Paintbrush,
   Trash2,
   Unlock,
 } from "lucide-react";
@@ -69,23 +71,27 @@ export function IconButton({
   title,
   danger,
   active,
+  disabled,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   title: string;
   danger?: boolean;
   active?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
       title={title}
       onClick={onClick}
+      disabled={disabled}
       className={cn(
         "flex size-8 items-center justify-center rounded-lg border text-sm transition",
         active
           ? "border-brand-500 bg-brand-50 text-brand-700"
           : "border-ink-200 text-ink-600 hover:bg-ink-50",
         danger && "hover:border-red-300 hover:bg-red-50 hover:text-red-600",
+        disabled && "pointer-events-none opacity-40",
       )}
     >
       {children}
@@ -205,17 +211,39 @@ export function ActionBar({
   onDuplicate,
   onToggleLock,
   onDelete,
+  onCopyStyle,
+  onPasteStyle,
+  canPasteStyle,
 }: {
   locked?: boolean;
   onDuplicate: () => void;
   onToggleLock: () => void;
   onDelete: () => void;
+  /** Text-box-only "format painter": copy this element's styling to a clipboard. */
+  onCopyStyle?: () => void;
+  /** Apply a previously-copied element's styling onto this one. */
+  onPasteStyle?: () => void;
+  canPasteStyle?: boolean;
 }) {
   return (
     <div className="flex items-center gap-1">
       <IconButton title="Duplicate" onClick={onDuplicate}>
         <Copy className="size-4" />
       </IconButton>
+      {onCopyStyle && (
+        <IconButton title="Copy style" onClick={onCopyStyle}>
+          <Paintbrush className="size-4" />
+        </IconButton>
+      )}
+      {onPasteStyle && (
+        <IconButton
+          title={canPasteStyle ? "Paste style" : "Copy a text box's style first"}
+          onClick={onPasteStyle}
+          disabled={!canPasteStyle}
+        >
+          <ClipboardPaste className="size-4" />
+        </IconButton>
+      )}
       <IconButton title={locked ? "Unlock" : "Lock"} onClick={onToggleLock}>
         {locked ? <Lock className="size-4" /> : <Unlock className="size-4" />}
       </IconButton>

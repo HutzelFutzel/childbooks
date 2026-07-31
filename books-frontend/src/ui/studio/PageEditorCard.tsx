@@ -48,7 +48,11 @@ import { notify } from "../lib/notify";
 import { PageStage } from "../design/PageStage";
 import { GenerationOverlay } from "../generation/GenerationOverlay";
 import { InfoHint } from "../components/InfoHint";
-import { defaultIllustrationFocus, type DesignPage } from "../design/designInit";
+import {
+  defaultIllustrationFocus,
+  illustrationMatchesLayout,
+  type DesignPage,
+} from "../design/designInit";
 import type { SpanRef } from "../design/TextBoxView";
 import { useStudio } from "./StudioContext";
 import { coverSpread, refreshSpread } from "./studioGen";
@@ -251,6 +255,7 @@ export function PageControls({
   // stored id no longer matches the current anchor set.
   const activeIds = effectiveAnchorIds(anchors, subjectRef);
   const changedHere = stale && cursor ? changedAnchorsForSpread(project, page.id) : [];
+  const layoutStale = !illustrationMatchesLayout(project, page);
   // Order guard: a changed reference that is ITSELF stale (its own linked
   // anchors changed) would bake an outdated sheet into this page — surface the
   // right order instead of letting the update silently use the old design.
@@ -368,6 +373,7 @@ export function PageControls({
           </Badge>
         )}
         {stale && cursor && <Badge tone="accent">Reference changed</Badge>}
+        {layoutStale && cursor && <Badge tone="accent">Layout changed</Badge>}
         <div className="ml-auto flex items-center gap-1">
           <ToolButton title="Add text box" onClick={() => addBox(page.id)} icon={<Plus className="size-3.5" />}>
             Text
@@ -423,6 +429,28 @@ export function PageControls({
         <>
           {genSpread.text.trim() && !coverMode && (
             <p className="line-clamp-2 text-sm italic text-ink-500">"{genSpread.text.trim()}"</p>
+          )}
+
+          {/* The prompt and the canvas shape both come from the layout, so art
+              drawn for a different one has its calm band in the wrong place —
+              it looks fine until the text lands on top of a face. */}
+          {layoutStale && cursor && !stale && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="flex items-center gap-1.5 text-xs text-amber-800">
+                  <RefreshCw className="size-3.5 shrink-0" />
+                  This artwork was drawn for a different layout.
+                </span>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  leftIcon={<RefreshCw className="size-4" />}
+                  onClick={() => void update()}
+                >
+                  Redraw
+                </Button>
+              </div>
+            </div>
           )}
 
           {stale && cursor && (

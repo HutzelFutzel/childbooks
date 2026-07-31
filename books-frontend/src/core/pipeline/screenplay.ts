@@ -6,7 +6,6 @@ import { z } from "zod";
 import {
   AGE_RANGES,
   GRAPHICS_DENSITY,
-  LAYOUT_TEMPLATES,
   SPREAD_USAGE,
   TEXT_HANDLING,
   TEXT_PLACEMENT,
@@ -60,10 +59,7 @@ function label<T extends { id: string; label: string }>(
 }
 
 function describeConfig(config: BookConfig): string {
-  const layout =
-    config.layoutId === "auto"
-      ? "Choose the most fitting layout per page"
-      : label(LAYOUT_TEMPLATES, config.layoutId);
+  const layout = getBookLayout(config.layoutId).label;
   return [
     `Age range: ${label(AGE_RANGES, config.ageRangeId)}.`,
     ...(ageBandHasReadingModes(config.ageRangeId) && config.readingModeId

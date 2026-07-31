@@ -118,6 +118,9 @@ export function ElementPanel({
           onChange={(patch) => studio.patchBox(pageId, box.id, patch)}
           onDelete={() => studio.deleteBox(pageId, box.id)}
           onDuplicate={() => studio.duplicateBox(pageId, box.id)}
+          onCopyStyle={() => studio.copyBoxStyle(pageId, box.id)}
+          onPasteStyle={() => studio.pasteBoxStyle(pageId, box.id)}
+          canPasteStyle={studio.hasCopiedBoxStyle}
         />
       </PanelShell>
     );

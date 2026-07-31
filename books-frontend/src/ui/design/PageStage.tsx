@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Minus, Plus as PlusIcon } from "lucide-react";
 import Konva from "konva";
 import type { KonvaEventObject } from "konva/lib/Node";
@@ -20,14 +20,14 @@ import {
   editorToParagraphs,
   paragraphsToHtml,
 } from "./richText";
-import { KonvaTextBox } from "./konva/KonvaTextBox";
+import { KonvaTextBox, type KonvaTextBoxHandle } from "./konva/KonvaTextBox";
 import { KonvaImageElement } from "./konva/KonvaImageElement";
 import { KonvaShape } from "./ShapeRender";
 import { useImage } from "./konva/useImage";
 import { usePatternImage } from "./konva/usePatternImage";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { getPreset } from "./presets";
-import { effectiveBaseSize, fitBoxHeightPct, minContentWidthPct } from "./textFit";
+import { effectiveBaseSize, minContentWidthPct } from "./textFit";
 import { isBubble } from "./shapes";
 import type { SpanRef } from "./TextBoxView";
 
@@ -35,6 +35,43 @@ const MIN_PX = 16;
 const SNAP_PX = 6;
 /** Rotation raster: snap to every 15° (0,15,…,345) when snapping is on. */
 const ROTATION_SNAPS = Array.from({ length: 24 }, (_, i) => i * 15);
+
+/**
+ * Konva Groups size themselves from their children, and `getClientRect` ignores
+ * clipping — so overflowing text inflates the Transformer far beyond the box.
+ * Mirror Shape.getClientRect: local rect is `{0,0,width,height}`. Critical:
+ * honour `skipTransform` — the Transformer requests the local rect and applies
+ * absolute transform + offset itself; transforming here too double-counts
+ * offset and shifts the handles away from the text (and can NaN mid-drag).
+ */
+function pinGroupClientRect(node: Konva.Group) {
+  if ((node as Konva.Group & { __clientRectPinned?: boolean }).__clientRectPinned) return;
+  (node as Konva.Group & { __clientRectPinned?: boolean }).__clientRectPinned = true;
+  node.getClientRect = function getPinnedClientRect(config: { skipTransform?: boolean; relativeTo?: Konva.Node } = {}) {
+    const width = this.width();
+    const height = this.height();
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      return { x: 0, y: 0, width: 0, height: 0 };
+    }
+    const rect = { x: 0, y: 0, width, height };
+    if (config.skipTransform) return rect;
+    return this._transformedRect(rect, config.relativeTo);
+  };
+}
+
+function finiteOr(n: number, fallback: number) {
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/** Recover from a corrupt rect (e.g. NaNs written by a bad transform). */
+function sanitizeRect(rect: NormRect): NormRect {
+  const x = finiteOr(rect.x, 0.1);
+  const y = finiteOr(rect.y, 0.1);
+  const w = Math.max(0.05, finiteOr(rect.w, 0.4));
+  const h = Math.max(0.05, finiteOr(rect.h, 0.2));
+  if (x === rect.x && y === rect.y && w === rect.w && h === rect.h) return rect;
+  return { x, y, w, h };
+}
 
 export type ElementKind = "text" | "shape" | "image";
 export interface ElementRef {
@@ -49,6 +86,31 @@ export interface GeomPatch {
   tailY?: number;
   /** New target/min height for auto-height text boxes (set on resize). */
   minHeightPct?: number;
+  /**
+   * Text boxes only: dragging a box's *height* is an explicit "this box is this
+   * tall" instruction, so the box stops hugging its text and starts fitting the
+   * text into the box instead (see the resize handling in `onTransformEnd`).
+   */
+  autoHeight?: boolean;
+  autoFit?: boolean;
+}
+
+/**
+ * A second independent background/illustration surface, drawn in the right
+ * half of the stage when present — for the merged two-page editor
+ * (`PairPageStage.tsx`), where two facing single pages share one canvas but
+ * each still has its own art/background. Absent, the stage behaves exactly as
+ * a normal single-surface page.
+ */
+export interface SecondSurface {
+  imageUrl?: string;
+  illustrationFocus?: { x: number; y: number };
+  background?: PageDesign["background"];
+  printGuides?: {
+    safe: NormRect;
+    gutter: { x: number; w: number } | null;
+    barcode?: NormRect | null;
+  } | null;
 }
 
 interface StageElement {
@@ -84,6 +146,7 @@ export function PageStage({
   dropId,
   showGutter = false,
   printGuides = null,
+  rightSurface,
   chromeless = false,
   snap = true,
   grid = false,
@@ -112,9 +175,10 @@ export function PageStage({
    * Turn the page's full-bleed illustration into a movable element so it can be
    * repositioned. Invoked when the user double-clicks the background art (no
    * illustration element yet); the stage then auto-enters reframe on the new
-   * element so "reposition the art" is a single gesture.
+   * element so "reposition the art" is a single gesture. `side` is which half
+   * was clicked ("left" always, when there's no `rightSurface`).
    */
-  onAdjustArt?: () => void;
+  onAdjustArt?: (side: "left" | "right") => void;
   selectedSpan?: SpanRef | null;
   onSelectSpan?: (ref: SpanRef | null) => void;
   /** Commit new plain text for a text box (double-click to edit in place). */
@@ -139,6 +203,12 @@ export function PageStage({
     gutter: { x: number; w: number } | null;
     barcode?: NormRect | null;
   } | null;
+  /**
+   * A second background/illustration surface drawn in the right half of the
+   * stage — two facing single pages sharing one canvas (see `SecondSurface`).
+   * `aspect` must already be doubled (two page-widths) when this is set.
+   */
+  rightSurface?: SecondSurface;
   /** Drop the page's own frame chrome (rounding/ring/shadow) so a wrapper can
    * provide a single shared frame (e.g. two facing pages in one spread). */
   chromeless?: boolean;
@@ -159,13 +229,22 @@ export function PageStage({
   const [reframeId, setReframeId] = useState<string | null>(null);
   // Screen position for the whole-box character toolbar (recomputed on scroll).
   const [boxBarPos, setBoxBarPos] = useState<{ x: number; y: number } | null>(null);
-  const [liveResize, setLiveResize] = useState<{ id: string; sx: number; sy: number } | null>(null);
   const [guides, setGuides] = useState<{ x: number[]; y: number[] }>({ x: [], y: [] });
   const groupRefs = useRef<Map<string, Konva.Group>>(new Map());
+  const textBoxRefs = useRef<Map<string, KonvaTextBoxHandle>>(new Map());
   const trRef = useRef<Konva.Transformer>(null);
+  /**
+   * Id of the element whose Transformer is currently active. Kept in a ref
+   * (not state) so transform frames never re-render React — re-rendering mid-
+   * drag was resetting the group's centre from the pre-drag rect and making
+   * the opposite corner jump instead of the box resizing.
+   */
+  const transformingIdRef = useRef<string | null>(null);
 
   const image = useImage(imageUrl);
   const bgPattern = usePatternImage(pageDesign.background?.pattern);
+  const rightImage = useImage(rightSurface?.imageUrl);
+  const rightBgPattern = usePatternImage(rightSurface?.background?.pattern);
 
   useLayoutEffect(() => {
     const el = containerRef.current;
@@ -191,43 +270,63 @@ export function PageStage({
 
   // Text boxes, shapes and images share one z-stack so they interleave naturally.
   const elements: StageElement[] = [
-    ...pageDesign.textBoxes.map((b) => ({
-      id: b.id,
-      kind: "text" as const,
-      z: b.z,
-      rect: b.rect,
-      rotation: b.rotation,
-      locked: b.locked,
-      hidden: b.hidden,
-      box: b,
-    })),
-    ...(pageDesign.shapes ?? []).map((s) => ({
-      id: s.id,
-      kind: "shape" as const,
-      z: s.z,
-      rect: s.rect,
-      rotation: s.rotation,
-      locked: s.locked,
-      hidden: s.hidden,
-      shape: s,
-    })),
-    ...(pageDesign.images ?? []).map((im) => ({
-      id: im.id,
-      kind: "image" as const,
-      z: im.z,
-      rect: im.rect,
-      rotation: im.rotation,
-      locked: im.locked,
-      hidden: im.hidden,
-      image: im,
-    })),
+    ...pageDesign.textBoxes.map((b) => {
+      const rect = sanitizeRect(b.rect);
+      return {
+        id: b.id,
+        kind: "text" as const,
+        z: b.z,
+        rect,
+        rotation: Number.isFinite(b.rotation) ? b.rotation : 0,
+        locked: b.locked,
+        hidden: b.hidden,
+        box: rect === b.rect ? b : { ...b, rect },
+      };
+    }),
+    ...(pageDesign.shapes ?? []).map((s) => {
+      const rect = sanitizeRect(s.rect);
+      return {
+        id: s.id,
+        kind: "shape" as const,
+        z: s.z,
+        rect,
+        rotation: Number.isFinite(s.rotation) ? s.rotation : 0,
+        locked: s.locked,
+        hidden: s.hidden,
+        shape: rect === s.rect ? s : { ...s, rect },
+      };
+    }),
+    ...(pageDesign.images ?? []).map((im) => {
+      const rect = sanitizeRect(im.rect);
+      return {
+        id: im.id,
+        kind: "image" as const,
+        z: im.z,
+        rect,
+        rotation: Number.isFinite(im.rotation) ? im.rotation : 0,
+        locked: im.locked,
+        hidden: im.hidden,
+        image: rect === im.rect ? im : { ...im, rect },
+      };
+    }),
   ]
     .filter((el) => !el.hidden)
     .sort((a, b) => a.z - b.z);
 
   // When the generated illustration has been turned into a movable element,
-  // suppress the full-bleed background so it isn't drawn twice.
-  const hasIllustrationEl = (pageDesign.images ?? []).some((im) => im.kind === "illustration");
+  // suppress the full-bleed background so it isn't drawn twice. With a
+  // `rightSurface`, `pageDesign` holds BOTH halves' elements (merged into one
+  // combined space), so each half's flag is scoped by which half the movable
+  // illustration's rect center actually sits in.
+  const hasIllustrationEl = (pageDesign.images ?? []).some(
+    (im) =>
+      im.kind === "illustration" && (!rightSurface || im.rect.x + im.rect.w / 2 < 0.5),
+  );
+  const hasIllustrationElRight = rightSurface
+    ? (pageDesign.images ?? []).some(
+        (im) => im.kind === "illustration" && im.rect.x + im.rect.w / 2 >= 0.5,
+      )
+    : false;
 
   // Keep the transformer attached to (and synced with) the selected element's
   // group. Re-running on any design change also refreshes the handle box after
@@ -239,7 +338,9 @@ export function PageStage({
       editable && selectedId && selectedId !== editingId && selectedId !== reframeId
         ? groupRefs.current.get(selectedId) ?? null
         : null;
+    if (node) pinGroupClientRect(node);
     tr.nodes(node ? [node] : []);
+    tr.forceUpdate();
     tr.getLayer()?.batchDraw();
   }, [editable, selectedId, editingId, reframeId, W, H, pageDesign]);
 
@@ -251,20 +352,32 @@ export function PageStage({
   // Double-clicking the background art asks the host to materialize the
   // illustration as a movable element; once it appears we auto-enter reframe so
   // repositioning the art is a single gesture rather than a multi-step flow.
-  const pendingReframe = useRef(false);
-  function requestAdjustArt() {
-    if (!editable || !onAdjustArt || !imageUrl || hasIllustrationEl) return;
-    pendingReframe.current = true;
-    onAdjustArt();
+  // `side` tracks WHICH half was double-clicked so, with a `rightSurface`, the
+  // right art (which may already have its own movable element) isn't confused
+  // with the left one once both exist.
+  const pendingReframe = useRef<"left" | "right" | false>(false);
+  function requestAdjustArt(xFrac: number) {
+    const useRight = Boolean(rightSurface) && xFrac >= 0.5;
+    const url = useRight ? rightSurface?.imageUrl : imageUrl;
+    const already = useRight ? hasIllustrationElRight : hasIllustrationEl;
+    if (!editable || !onAdjustArt || !url || already) return;
+    pendingReframe.current = useRight ? "right" : "left";
+    onAdjustArt(useRight ? "right" : "left");
   }
   useEffect(() => {
     if (!pendingReframe.current) return;
-    const illus = (pageDesign.images ?? []).find((im) => im.kind === "illustration");
-    if (illus && illus.fit !== "contain") {
+    const side = pendingReframe.current;
+    const illus = (pageDesign.images ?? []).find(
+      (im) =>
+        im.kind === "illustration" &&
+        im.fit !== "contain" &&
+        (side === "right") === (Boolean(rightSurface) && im.rect.x + im.rect.w / 2 >= 0.5),
+    );
+    if (illus) {
       pendingReframe.current = false;
       setReframeId(illus.id);
     }
-  }, [pageDesign]);
+  }, [pageDesign, rightSurface]);
 
   // Preload fonts used anywhere on the page.
   useEffect(() => {
@@ -274,13 +387,19 @@ export function PageStage({
     }
   }, [pageDesign.textBoxes]);
 
+  // With a `rightSurface`, each half's own "cover" crop is computed against
+  // its OWN width (half the stage), not the full combined width.
+  const surfaceW = rightSurface ? W / 2 : W;
   const imageCrop = image
+    ? coverCrop(image.naturalWidth || image.width, image.naturalHeight || image.height, surfaceW, H, illustrationFocus)
+    : undefined;
+  const rightImageCrop = rightImage
     ? coverCrop(
-        image.naturalWidth || image.width,
-        image.naturalHeight || image.height,
-        W,
+        rightImage.naturalWidth || rightImage.width,
+        rightImage.naturalHeight || rightImage.height,
+        surfaceW,
         H,
-        illustrationFocus,
+        rightSurface?.illustrationFocus,
       )
     : undefined;
 
@@ -299,10 +418,6 @@ export function PageStage({
     editable && selectedId ? pageDesign.textBoxes.find((b) => b.id === selectedId) : undefined;
   const selMinWidthPx =
     selectedTextBox && W > 0 ? minContentWidthPct(selectedTextBox, aspect) * W : 0;
-  // Auto-height boxes can't be dragged shorter than their text — the min height
-  // is the content height at the current font.
-  const selMinHeightPx =
-    selectedTextBox?.autoHeight && H > 0 ? fitBoxHeightPct(selectedTextBox, aspect) * H : 0;
 
   // The whole-box character toolbar shows whenever a text box is selected but
   // not being edited in place (editing shows the word-level toolbar instead).
@@ -472,19 +587,27 @@ export function PageStage({
               if (e.target === e.target.getStage()) clearSelection();
             }}
             onDblClick={(e: KonvaEventObject<MouseEvent>) => {
-              if (e.target === e.target.getStage()) requestAdjustArt();
+              const stage = e.target.getStage();
+              if (e.target !== stage) return;
+              const pos = stage?.getPointerPosition();
+              requestAdjustArt(pos && W > 0 ? pos.x / W : 0);
             }}
             onDblTap={(e: KonvaEventObject<Event>) => {
-              if (e.target === e.target.getStage()) requestAdjustArt();
+              const stage = e.target.getStage();
+              if (e.target !== stage) return;
+              const pos = stage?.getPointerPosition();
+              requestAdjustArt(pos && W > 0 ? pos.x / W : 0);
             }}
           >
             <Layer>
               {pageDesign.background?.color && (
-                <Rect width={W} height={H} fill={pageDesign.background.color} listening={false} />
+                <Rect x={0} y={0} width={surfaceW} height={H} fill={pageDesign.background.color} listening={false} />
               )}
               {pageDesign.background?.pattern && bgPattern && (
                 <Rect
-                  width={W}
+                  x={0}
+                  y={0}
+                  width={surfaceW}
                   height={H}
                   fillPatternImage={bgPattern.image}
                   fillPatternRepeat="repeat"
@@ -498,7 +621,50 @@ export function PageStage({
                 />
               )}
               {image && imageCrop && !hasIllustrationEl && (
-                <KonvaImage image={image} width={W} height={H} crop={imageCrop} listening={false} />
+                <KonvaImage image={image} x={0} y={0} width={surfaceW} height={H} crop={imageCrop} listening={false} />
+              )}
+
+              {rightSurface && (
+                <>
+                  {rightSurface.background?.color && (
+                    <Rect
+                      x={surfaceW}
+                      y={0}
+                      width={surfaceW}
+                      height={H}
+                      fill={rightSurface.background.color}
+                      listening={false}
+                    />
+                  )}
+                  {rightSurface.background?.pattern && rightBgPattern && (
+                    <Rect
+                      x={surfaceW}
+                      y={0}
+                      width={surfaceW}
+                      height={H}
+                      fillPatternImage={rightBgPattern.image}
+                      fillPatternRepeat="repeat"
+                      fillPatternScale={{
+                        x: rightSurface.background.pattern.scale || 1,
+                        y: rightSurface.background.pattern.scale || 1,
+                      }}
+                      fillPatternRotation={rightSurface.background.pattern.rotation || 0}
+                      opacity={rightSurface.background.pattern.opacity ?? 1}
+                      listening={false}
+                    />
+                  )}
+                  {rightImage && rightImageCrop && !hasIllustrationElRight && (
+                    <KonvaImage
+                      image={rightImage}
+                      x={surfaceW}
+                      y={0}
+                      width={surfaceW}
+                      height={H}
+                      crop={rightImageCrop}
+                      listening={false}
+                    />
+                  )}
+                </>
               )}
 
               {grid &&
@@ -526,18 +692,40 @@ export function PageStage({
                   if (selectedId !== el.id) onSelectSpan?.(null);
                   onSelectElement({ id: el.id, kind: el.kind });
                 };
+                // If something else re-renders the stage mid-transform, keep
+                // reading the live node attrs so we don't stomp the Transformer.
+                const node = groupRefs.current.get(el.id);
+                const liveSx = node ? node.scaleX() : 1;
+                const liveSy = node ? node.scaleY() : 1;
+                const transforming =
+                  transformingIdRef.current === el.id &&
+                  !!node &&
+                  Number.isFinite(liveSx) &&
+                  Number.isFinite(liveSy) &&
+                  (Math.abs(liveSx - 1) > 1e-6 || Math.abs(liveSy - 1) > 1e-6);
+                const restX = (rect.x + rect.w / 2) * W;
+                const restY = (rect.y + rect.h / 2) * H;
+                const restRot = el.rotation ?? 0;
                 return (
                   <Group
                     key={el.id}
-                    ref={(node) => {
-                      if (node) groupRefs.current.set(el.id, node);
-                      else groupRefs.current.delete(el.id);
+                    ref={(n) => {
+                      if (n) {
+                        groupRefs.current.set(el.id, n);
+                        pinGroupClientRect(n);
+                      } else {
+                        groupRefs.current.delete(el.id);
+                      }
                     }}
-                    x={(rect.x + rect.w / 2) * W}
-                    y={(rect.y + rect.h / 2) * H}
-                    offsetX={w / 2}
-                    offsetY={h / 2}
-                    rotation={el.rotation ?? 0}
+                    x={finiteOr(transforming && node ? node.x() : restX, restX)}
+                    y={finiteOr(transforming && node ? node.y() : restY, restY)}
+                    width={finiteOr(w, 0)}
+                    height={finiteOr(h, 0)}
+                    offsetX={finiteOr(w / 2, 0)}
+                    offsetY={finiteOr(h / 2, 0)}
+                    rotation={finiteOr(transforming && node ? node.rotation() : restRot, restRot)}
+                    scaleX={finiteOr(transforming && node ? liveSx : 1, 1)}
+                    scaleY={finiteOr(transforming && node ? liveSy : 1, 1)}
                     opacity={opacity}
                     draggable={editable && !el.locked && reframeId !== el.id}
                     onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
@@ -594,79 +782,97 @@ export function PageStage({
                       });
                     }}
                     onTransform={(e: KonvaEventObject<Event>) => {
-                      // While *resizing* a text box, capture the live scale so the
-                      // words reflow at constant size against the new box (handled
-                      // by KonvaTextBox's counter-scale). We never touch the node's
-                      // transform here, so the Transformer keeps owning position +
-                      // scale and there's no jitter. Pure rotation (scale == 1) is
-                      // ignored to avoid needless re-renders mid-rotation.
+                      // Mark only — never setState here. Mid-drag React updates
+                      // fight the Transformer (resetting the centre) and make the
+                      // opposite corner jump instead of the box resizing.
+                      transformingIdRef.current = el.id;
+                      // Counter-scale the words imperatively so glyphs aren't
+                      // stretched with the Transformer's non-uniform scale.
                       if (el.kind !== "text") return;
-                      const node = e.target as Konva.Group;
-                      const sx = node.scaleX();
-                      const sy = node.scaleY();
-                      if (sx === 1 && sy === 1) return;
-                      setLiveResize((prev) =>
-                        prev && prev.id === el.id && prev.sx === sx && prev.sy === sy
-                          ? prev
-                          : { id: el.id, sx, sy },
-                      );
+                      const n = e.target as Konva.Group;
+                      textBoxRefs.current.get(el.id)?.setLiveScale(n.scaleX(), n.scaleY());
                     }}
                     onTransformEnd={(e: KonvaEventObject<Event>) => {
                       // The transformer scales the node; convert that scale into a
-                      // new normalized rect and reset the node scale to 1. Text then
-                      // reflows at a constant font size (size is page-relative, not
-                      // scaled), while shapes/images keep their new dimensions.
-                      setLiveResize(null);
-                      const node = e.target as Konva.Group;
-                      const scaleX = node.scaleX();
-                      const scaleY = node.scaleY();
+                      // new normalized rect and reset the node scale to 1.
+                      const n = e.target as Konva.Group;
+                      const scaleX = n.scaleX();
+                      const scaleY = n.scaleY();
+                      // Clear the live counter-scale before baking size — text
+                      // will reflow at identity scale under the new rect.
+                      textBoxRefs.current.get(el.id)?.setLiveScale(1, 1);
+                      // Stage not measured yet, or a bad transform produced NaNs —
+                      // reset scale and bail rather than writing Infinity/NaN.
+                      if (
+                        !(W > 0 && H > 0) ||
+                        !Number.isFinite(scaleX) ||
+                        !Number.isFinite(scaleY) ||
+                        !Number.isFinite(n.x()) ||
+                        !Number.isFinite(n.y())
+                      ) {
+                        n.scaleX(1);
+                        n.scaleY(1);
+                        transformingIdRef.current = null;
+                        return;
+                      }
                       const newW = Math.max(MIN_PX, rect.w * W * scaleX);
                       const newH = Math.max(MIN_PX, rect.h * H * scaleY);
-                      node.scaleX(1);
-                      node.scaleY(1);
+                      const nextRect = {
+                        x: n.x() / W - newW / W / 2,
+                        y: n.y() / H - newH / H / 2,
+                        w: newW / W,
+                        h: newH / H,
+                      };
+                      // Bake size into the node BEFORE clearing scale, so there's
+                      // no frame where scale=1 still has the old width/height at
+                      // the new centre (that flash is the "text offset" / jump).
+                      n.width(newW);
+                      n.height(newH);
+                      n.offsetX(newW / 2);
+                      n.offsetY(newH / 2);
+                      n.scaleX(1);
+                      n.scaleY(1);
+                      transformingIdRef.current = null;
+                      trRef.current?.forceUpdate();
+                      if (
+                        !Number.isFinite(nextRect.x) ||
+                        !Number.isFinite(nextRect.y) ||
+                        !Number.isFinite(nextRect.w) ||
+                        !Number.isFinite(nextRect.h)
+                      ) {
+                        return;
+                      }
+                      const resized =
+                        Math.abs(scaleX - 1) > 1e-6 || Math.abs(scaleY - 1) > 1e-6;
                       onChangeElement(el.id, el.kind, {
-                        rotation: node.rotation(),
-                        rect: {
-                          x: node.x() / W - newW / W / 2,
-                          y: node.y() / H - newH / H / 2,
-                          w: newW / W,
-                          h: newH / H,
-                        },
-                        // For auto-height boxes a *vertical* drag sets the new target
-                        // floor (room to breathe); patchBox keeps the rendered height
-                        // at max(target, content). Width-only drags leave the floor
-                        // alone so re-wrapping can still shrink the box to its text.
-                        ...(el.box?.autoHeight && scaleY !== 1
-                          ? { minHeightPct: newH / H }
+                        rotation: finiteOr(n.rotation(), el.rotation ?? 0),
+                        rect: nextRect,
+                        // Any manual resize of a text box means "this box is this
+                        // size": stop auto-height from restoring content height
+                        // (which moves the opposite edge) and fit the font into
+                        // the new box instead — same as Canva / PowerPoint.
+                        ...(el.kind === "text" && resized
+                          ? { autoHeight: false, autoFit: true }
                           : {}),
                       });
                     }}
                   >
                     {el.box ? (
-                      (() => {
-                        const live = liveResize?.id === el.id ? liveResize : null;
-                        const sx = live ? live.sx : 1;
-                        const sy = live ? live.sy : 1;
-                        // During a live resize, fit against the visual (scaled)
-                        // box so auto-fit grows/shrinks the font in real time.
-                        const fitBox = live
-                          ? { ...el.box, rect: { ...el.box.rect, w: el.box.rect.w * sx, h: el.box.rect.h * sy } }
-                          : el.box;
-                        return (
-                          <KonvaTextBox
-                            box={el.box}
-                            w={w}
-                            h={h}
-                            baseSize={effectiveBaseSize(fitBox, aspect, H)}
-                            pageHeight={H}
-                            hideText={editable && editingId === el.id}
-                            showOverflow={editable}
-                            liveScaleX={sx}
-                            liveScaleY={sy}
-                            selectedSpan={selectedId === el.id ? selectedSpan : null}
-                          />
-                        );
-                      })()
+                      <KonvaTextBox
+                        ref={(handle) => {
+                          if (handle) textBoxRefs.current.set(el.id, handle);
+                          else textBoxRefs.current.delete(el.id);
+                        }}
+                        box={el.box}
+                        w={w}
+                        h={h}
+                        baseSize={effectiveBaseSize(el.box, aspect, H)}
+                        pageHeight={H}
+                        pageAspect={aspect}
+                        hideText={editable && editingId === el.id}
+                        showOverflow={editable}
+                        selectedSpan={selectedId === el.id ? selectedSpan : null}
+                      />
                     ) : el.shape ? (
                       <KonvaShape shape={el.shape} w={w} h={h} pageHeight={H} />
                     ) : el.image ? (
@@ -741,57 +947,61 @@ export function PageStage({
                 </>
               )}
 
-              {printGuides && W > 0 && H > 0 && (
-                <>
-                  {printGuides.gutter && (
-                    <Rect
-                      x={printGuides.gutter.x * W}
-                      y={0}
-                      width={printGuides.gutter.w * W}
-                      height={H}
-                      fill="rgba(244,63,94,0.10)"
-                      listening={false}
-                    />
-                  )}
-                  <Rect
-                    x={printGuides.safe.x * W}
-                    y={printGuides.safe.y * H}
-                    width={printGuides.safe.w * W}
-                    height={printGuides.safe.h * H}
-                    stroke="rgba(16,185,129,0.85)"
-                    strokeWidth={1}
-                    dash={[6, 5]}
-                    listening={false}
-                  />
-                  {printGuides.barcode && (
-                    <>
+              {W > 0 &&
+                H > 0 &&
+                [printGuides ? { g: printGuides, x0: 0 } : null, rightSurface?.printGuides ? { g: rightSurface.printGuides, x0: surfaceW } : null]
+                  .filter((entry): entry is { g: NonNullable<typeof printGuides>; x0: number } => entry !== null)
+                  .map(({ g, x0 }, i) => (
+                    <Fragment key={i}>
+                      {g.gutter && (
+                        <Rect
+                          x={x0 + g.gutter.x * surfaceW}
+                          y={0}
+                          width={g.gutter.w * surfaceW}
+                          height={H}
+                          fill="rgba(244,63,94,0.10)"
+                          listening={false}
+                        />
+                      )}
                       <Rect
-                        x={printGuides.barcode.x * W}
-                        y={printGuides.barcode.y * H}
-                        width={printGuides.barcode.w * W}
-                        height={printGuides.barcode.h * H}
-                        fill="rgba(15,23,42,0.06)"
-                        stroke="rgba(15,23,42,0.45)"
+                        x={x0 + g.safe.x * surfaceW}
+                        y={g.safe.y * H}
+                        width={g.safe.w * surfaceW}
+                        height={g.safe.h * H}
+                        stroke="rgba(16,185,129,0.85)"
                         strokeWidth={1}
-                        dash={[4, 4]}
+                        dash={[6, 5]}
                         listening={false}
                       />
-                      <Text
-                        x={printGuides.barcode.x * W}
-                        y={printGuides.barcode.y * H}
-                        width={printGuides.barcode.w * W}
-                        height={printGuides.barcode.h * H}
-                        text={"Barcode area\n(reserved)"}
-                        align="center"
-                        verticalAlign="middle"
-                        fontSize={11}
-                        fill="rgba(15,23,42,0.55)"
-                        listening={false}
-                      />
-                    </>
-                  )}
-                </>
-              )}
+                      {g.barcode && (
+                        <>
+                          <Rect
+                            x={x0 + g.barcode.x * surfaceW}
+                            y={g.barcode.y * H}
+                            width={g.barcode.w * surfaceW}
+                            height={g.barcode.h * H}
+                            fill="rgba(15,23,42,0.06)"
+                            stroke="rgba(15,23,42,0.45)"
+                            strokeWidth={1}
+                            dash={[4, 4]}
+                            listening={false}
+                          />
+                          <Text
+                            x={x0 + g.barcode.x * surfaceW}
+                            y={g.barcode.y * H}
+                            width={g.barcode.w * surfaceW}
+                            height={g.barcode.h * H}
+                            text={"Barcode area\n(reserved)"}
+                            align="center"
+                            verticalAlign="middle"
+                            fontSize={11}
+                            fill="rgba(15,23,42,0.55)"
+                            listening={false}
+                          />
+                        </>
+                      )}
+                    </Fragment>
+                  ))}
 
               {showGutter && W > 0 && H > 0 && (
                 <>
@@ -828,10 +1038,31 @@ export function PageStage({
                   borderStroke="rgba(99,102,241,0.9)"
                   anchorStroke="rgba(99,102,241,0.9)"
                   boundBoxFunc={(oldBox, newBox) => {
+                    // Height is never floored for text: shrinking a box vertically
+                    // is how you shrink its text (the font auto-fits). Width still
+                    // stops at the widest word so nothing gets sliced in half.
+                    // Clamp axes independently — returning `oldBox` wholesale when
+                    // only width undershoots would also reject a valid height
+                    // change (corner drags), which feels like the box refusing to
+                    // resize at all.
                     const minW = Math.max(MIN_PX, selMinWidthPx);
-                    const minH = Math.max(MIN_PX, selMinHeightPx);
-                    if (newBox.width < minW || newBox.height < minH) return oldBox;
-                    return newBox;
+                    let { x, y, width, height } = newBox;
+                    if (width < minW) {
+                      // Keep the edge that didn't move planted: if the left edge
+                      // shifted (dragging left/ corners), pin the right edge;
+                      // otherwise pin the left.
+                      if (Math.abs(x - oldBox.x) > Math.abs(x + width - (oldBox.x + oldBox.width))) {
+                        x = oldBox.x + oldBox.width - minW;
+                      }
+                      width = minW;
+                    }
+                    if (height < MIN_PX) {
+                      if (Math.abs(y - oldBox.y) > Math.abs(y + height - (oldBox.y + oldBox.height))) {
+                        y = oldBox.y + oldBox.height - MIN_PX;
+                      }
+                      height = MIN_PX;
+                    }
+                    return { ...newBox, x, y, width, height };
                   }}
                 />
               )}
@@ -1003,7 +1234,13 @@ function InlineTextEditor({
             justifyContent:
               box.vAlign === "top" ? "flex-start" : box.vAlign === "bottom" ? "flex-end" : "center",
             alignItems:
-              box.align === "left" ? "flex-start" : box.align === "right" ? "flex-end" : "center",
+              box.align === "left"
+                ? "flex-start"
+                : box.align === "right"
+                  ? "flex-end"
+                  : box.align === "justify"
+                    ? "stretch"
+                    : "center",
             padding: pad,
             overflow: "hidden",
           }}

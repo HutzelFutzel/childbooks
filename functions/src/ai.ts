@@ -39,7 +39,7 @@ import { bookProductForConfig } from "../../books-frontend/src/core/book";
 import { splitWrapCover } from "./imaging";
 import { uploadBlob } from "./storage";
 import { IntentAmbiguousError } from "../../books-frontend/src/core/pipeline/intentResolve";
-import { loadPromptContext } from "./appConfig";
+import { loadModelCapabilities, loadPromptContext } from "./appConfig";
 import { latencyKindOf, recordTaskLatency } from "./latency";
 import { containedAnchorsFor } from "../../books-frontend/src/core/book/anchorGraph";
 import { effectiveAnchorIds } from "../../books-frontend/src/core/book/anchorRefs";
@@ -244,11 +244,12 @@ export function registerAiRoutes(app: Express): void {
       const guest = isAnonymousToken(req.authToken);
       const tier = requireTier(rawTier, guest);
       await ensureAffordAction(req.uid!, "anchorImage", tier, { noNegativeBuffer: guest });
-      const [models, prompts] = await Promise.all([
+      const [models, prompts, caps] = await Promise.all([
         resolveImageModels("anchorImage", tier),
         loadPromptContext(),
+        loadModelCapabilities(),
       ]);
-      const env = backendPipelineEnv(req.uid!, models, prompts);
+      const env = backendPipelineEnv(req.uid!, models, prompts, caps);
       const startedAt = Date.now();
       const { value, events, stats } = await withUsage(() =>
         renderAnchor(project, anchor, options ?? {}, env),
@@ -297,11 +298,12 @@ export function registerAiRoutes(app: Express): void {
       const isEdit = typeof options?.edit === "string" && options.edit.trim().length > 0;
       if (isEdit) await ensureWithinQuota(req.uid!, "editsPerBook", project.id);
       await ensureAffordAction(req.uid!, action, tier, { noNegativeBuffer: guest });
-      const [models, prompts] = await Promise.all([
+      const [models, prompts, caps] = await Promise.all([
         resolveImageModels(cover ? "coverIllustration" : "pageIllustration", tier),
         loadPromptContext(),
+        loadModelCapabilities(),
       ]);
-      const env = backendPipelineEnv(req.uid!, models, prompts);
+      const env = backendPipelineEnv(req.uid!, models, prompts, caps);
       const startedAt = Date.now();
       const { value, events, stats } = await withUsage(() =>
         renderIllustration(project, spread, options ?? {}, env),
@@ -351,11 +353,12 @@ export function registerAiRoutes(app: Express): void {
       const bake = Boolean(front.bakeText && project.title.trim());
       const tier = !guest && bake ? "premium" : requested;
       await ensureAffordAction(req.uid!, "coverIllustration", tier, { noNegativeBuffer: guest });
-      const [models, prompts] = await Promise.all([
+      const [models, prompts, caps] = await Promise.all([
         resolveImageModels("coverIllustration", tier),
         loadPromptContext(),
+        loadModelCapabilities(),
       ]);
-      const env = backendPipelineEnv(req.uid!, models, prompts);
+      const env = backendPipelineEnv(req.uid!, models, prompts, caps);
       const startedAt = Date.now();
       const { value, events, stats } = await withUsage(() =>
         renderCoverWrapImage(

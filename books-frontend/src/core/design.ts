@@ -66,11 +66,11 @@ export interface ElementEffects {
 
 export interface TextParagraph {
   spans: TextSpan[];
-  align?: "left" | "center" | "right";
+  align?: HAlign;
 }
 
 export type VAlign = "top" | "center" | "bottom";
-export type HAlign = "left" | "center" | "right";
+export type HAlign = "left" | "center" | "right" | "justify";
 
 /** An editable, draggable text box placed on a page. */
 export interface TextBox {
@@ -108,6 +108,12 @@ export interface TextBox {
    * into the art" can remove exactly them (and leave any user-added boxes).
    */
   role?: "book-title" | "book-subtitle";
+  /**
+   * The layout slot this box was seeded from (`LayoutSlot.id`). Boxes carrying
+   * one are layout-owned: switching layout moves them to the new slot's
+   * rectangle. Boxes without one were added by the user and are never moved.
+   */
+  slotId?: string;
   /** Hidden from the page (still listed in Layers). */
   hidden?: boolean;
   /** Shadow / blur effects. */
@@ -120,13 +126,12 @@ export interface TextBox {
    */
   autoFitGrow?: boolean;
   /**
-   * When true, the box height is `max(minHeightPct, content height)`: it grows
-   * as the user types and can't be dragged shorter than the content (so text
-   * always fits), but the user *can* drag it taller to give the text room to
-   * breathe — that dragged height becomes {@link minHeightPct}, the new target
-   * floor. Width stays user-controlled and text wraps within it. This is the
-   * opposite of {@link autoFit} (which resizes the font to a fixed box), so the
-   * two shouldn't both be enabled on the same box.
+   * When true, the box height is `max(minHeightPct, content height)`: it hugs
+   * its text, growing as the user types, and narrowing it re-wraps the text
+   * into a taller box. Dragging the box's *height* ends this mode — that's an
+   * explicit "this box is this tall", so the box switches to {@link autoFit}
+   * and fits the text to the box from then on. This is the opposite of
+   * {@link autoFit}, so the two are never both enabled on the same box.
    */
   autoHeight?: boolean;
   /**
@@ -232,9 +237,21 @@ export interface PageDesign {
   shapes?: ShapeElement[];
   /** Placed images: uploaded assets + a repositioned generated illustration. */
   images?: ImageElement[];
+  /**
+   * The layout and composition mode this page was last laid out with. Compared
+   * against the project's active ones to decide whether the page needs
+   * re-laying out; absent on pages seeded before layouts were switchable.
+   */
+  layoutId?: string;
+  compositionMode?: "full-bleed" | "inset-art";
 }
 
+/** Bumped when the saved design shape changes in a way that needs migrating. */
+export const DESIGN_VERSION = 1;
+
 export interface BookDesign {
+  /** Schema version of the saved design (see {@link DESIGN_VERSION}). */
+  version?: number;
   /** Default font for new boxes. */
   defaultFontFamily: string;
   /** Age-based default size as a fraction of page height. */
@@ -247,7 +264,12 @@ export function createDefaultDesign(
   fontFamily: string,
   fontSizePct: number,
 ): BookDesign {
-  return { defaultFontFamily: fontFamily, defaultFontSizePct: fontSizePct, pages: {} };
+  return {
+    version: DESIGN_VERSION,
+    defaultFontFamily: fontFamily,
+    defaultFontSizePct: fontSizePct,
+    pages: {},
+  };
 }
 
 /** Plain-text helper: build a single paragraph from a string. */

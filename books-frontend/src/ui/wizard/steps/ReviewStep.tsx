@@ -3,13 +3,13 @@ import { Sparkles } from "lucide-react";
 import {
   AGE_RANGES,
   GRAPHICS_DENSITY,
-  LAYOUT_TEMPLATES,
   SPREAD_USAGE,
   TEXT_HANDLING,
   TEXT_PLACEMENT,
 } from "../../../core/config/options";
 import { ageBandHasReadingModes, readingModeLabel } from "../../../core/config/ageWritingCatalog";
 import { bookProductForConfig } from "../../../core/book";
+import { resolveLayoutById } from "../../../core/book/layoutCatalog";
 import { selectModels } from "../../../core/models/registry";
 import { resolveArtStyleLabel } from "../../../core/prompts/style";
 import { useAppConfigStore } from "../../../state/appConfigStore";
@@ -33,6 +33,7 @@ export function ReviewStep({ config }: StepProps) {
   const providerAvailable = useSettingsStore((s) => s.providerAvailable);
   const discovery = useSettingsStore((s) => s.discovery);
   const artStyles = useAppConfigStore((s) => s.artStyles);
+  const layouts = useAppConfigStore((s) => s.layouts);
   const models = useMemo(
     () => selectModels(discovery, (p) => providerAvailable[p]),
     [discovery, providerAvailable],
@@ -72,7 +73,7 @@ export function ReviewStep({ config }: StepProps) {
           <Row label="Spreads" value={find(SPREAD_USAGE, config.spreadUsage)} />
           <Row label="Text handling" value={find(TEXT_HANDLING, config.textHandling)} />
           <Row label="Text placement" value={find(TEXT_PLACEMENT, config.textPlacement)} />
-          <Row label="Layout" value={find(LAYOUT_TEMPLATES, config.layoutId)} />
+          <Row label="Layout" value={resolveLayoutById(config.layoutId, layouts).label} />
         </dl>
       </div>
 

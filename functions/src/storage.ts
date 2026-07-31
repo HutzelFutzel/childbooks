@@ -163,6 +163,24 @@ export async function uploadArtStyleImage(
 }
 
 /**
+ * Upload a layout showcase image to the world-readable
+ * `public/layouts/{layoutId}/...` space and return its path + public URL.
+ *
+ * Layouts keep several (a page shape and side each), so unlike an art-style
+ * example these accumulate rather than replace; deletion is explicit.
+ */
+export async function uploadLayoutImage(
+  layoutId: string,
+  buf: Buffer,
+  contentType: string,
+): Promise<{ storagePath: string; publicUrl: string }> {
+  const ext = (contentType.split("/")[1] || "png").replace(/[^a-z0-9]/gi, "") || "png";
+  const storagePath = `public/layouts/${encodeURIComponent(layoutId)}/example-${randomUUID()}.${ext}`;
+  await blobBucket().file(storagePath).save(buf, { contentType, resumable: false });
+  return { storagePath, publicUrl: publicMediaUrl(storagePath) };
+}
+
+/**
  * Upload a catalog picture — of a print option, a book, the digital edition or a
  * Spark pack — to the world-readable `public/catalogMedia/{scope}/{id}/...`
  * space. The caller passes an already-parsed key; the segments are sanitized

@@ -14,8 +14,11 @@ import {
   useState,
 } from "react";
 import { textFromParagraphs, wordParagraphs } from "../../core/design";
+import type { PageSide } from "../../core/book/layouts";
 import {
+  COVER_BACK_ID,
   COVER_FRONT_ID,
+  DESIGN_VERSION,
   type BookDesign,
   type ImageElement,
   type PageDesign,
@@ -27,12 +30,15 @@ import {
 } from "../../core/types";
 import type { AssetItem } from "../../core/settings";
 import { useProjectsStore } from "../../state/projectsStore";
+import { getCursor } from "../../core/versioning";
 import {
   buildDesignPages,
   defaultDesign,
   defaultIllustrationFocus,
   newImageId,
   newTextBoxId,
+  pagesNeedingRelayout,
+  relayoutPageDesign,
   seedPageDesign,
   type DesignPage,
 } from "../design/designInit";
@@ -41,6 +47,8 @@ import { newShapeId, shapeStyleDefaults } from "../design/shapes";
 import { fitBoxHeightPct, fitFontSizePct } from "../design/textFit";
 import type { SpanRef } from "../design/TextBoxView";
 import { notify } from "../lib/notify";
+import { buildDisplaySpreads, type DisplaySpread, type Entry, type SpreadSide } from "./spreadModel";
+import type { PageSubject } from "./PageEditorCard";
 import { computeProgress, type StudioStep } from "./studioSteps";
 
 export type Selection =
@@ -142,13 +150,44 @@ interface StudioContextValue {
   toggleGuides: () => void;
 
   // selection-scoped helpers (drive keyboard shortcuts + copy/paste)
+  /** Any element kind (text box, shape, image) can be copied/cut/pasted. */
   copySelection: () => void;
   cutSelection: () => void;
-  pasteAt: (target: { pageId: string; point: Point } | null) => void;
+  /**
+   * Paste the clipboard "in place": onto the currently visible page that sits
+   * on the same physical side (left/right) it was copied from, at the exact
+   * same position — or, when pasted back onto its own page, at a small offset
+   * so the copy doesn't sit exactly on top of the original.
+   */
+  pasteSelection: () => void;
+  hasClipboard: boolean;
   deleteSelected: () => void;
   duplicateSelected: () => void;
   reorderSelected: (dir: -1 | 1) => void;
   nudgeSelected: (dx: number, dy: number) => void;
+  /**
+   * Reassigns one element from one page to another, with `rect` already
+   * expressed in the destination page's own normalized space. Used by the
+   * merged two-page editor when a drag crosses the fold between two facing
+   * single pages.
+   */
+  moveElementToPage: (
+    kind: "box" | "shape" | "image",
+    fromPageId: string,
+    toPageId: string,
+    elementId: string,
+    rect: NRect,
+  ) => void;
+
+  /**
+   * "Format painter" for text boxes: copies one box's styling (font, colors,
+   * fill/stroke, effects, alignment, …) — everything except its content,
+   * position and identity — onto another box.
+   */
+  copyBoxStyle: (pageId: string, boxId: string) => void;
+  pasteBoxStyle: (pageId: string, boxId: string) => void;
+  /** Whether a box style is currently on the clipboard, ready to paste. */
+  hasCopiedBoxStyle: boolean;
 
   setPageBackground: (pageId: string, patch: Partial<NonNullable<PageDesign["background"]>>) => void;
 
@@ -239,10 +278,83 @@ function offsetRect(rect: NRect): NRect {
   };
 }
 
-type ClipboardEntry =
-  | { kind: "box"; pageId: string; box: TextBox }
-  | { kind: "shape"; pageId: string; shape: ShapeElement }
-  | { kind: "image"; pageId: string; image: ImageElement };
+/**
+ * Per-kind array accessors for every element that can live on a page. Every
+ * selection-scoped operation (copy, paste, cross-page drag, …) is written
+ * once against this table instead of once per kind — adding a future element
+ * kind is then a matter of adding one entry here, not touching every
+ * operation that already works for text boxes, shapes and images.
+ */
+const ELEMENT_KINDS = {
+  box: {
+    list: (pd: PageDesign): TextBox[] => pd.textBoxes,
+    withList: (pd: PageDesign, list: TextBox[]): PageDesign => ({ ...pd, textBoxes: list }),
+    newId: newTextBoxId,
+  },
+  shape: {
+    list: (pd: PageDesign): ShapeElement[] => pd.shapes ?? [],
+    withList: (pd: PageDesign, list: ShapeElement[]): PageDesign => ({ ...pd, shapes: list }),
+    newId: newShapeId,
+  },
+  image: {
+    list: (pd: PageDesign): ImageElement[] => pd.images ?? [],
+    withList: (pd: PageDesign, list: ImageElement[]): PageDesign => ({ ...pd, images: list }),
+    newId: newImageId,
+  },
+} as const;
+
+type ElementKind = keyof typeof ELEMENT_KINDS;
+type ElementOf<K extends ElementKind> = ReturnType<(typeof ELEMENT_KINDS)[K]["list"]>[number];
+
+function elementsOfKind<K extends ElementKind>(pd: PageDesign, kind: K): ElementOf<K>[] {
+  return ELEMENT_KINDS[kind].list(pd) as ElementOf<K>[];
+}
+
+function withElementsOfKind<K extends ElementKind>(
+  pd: PageDesign,
+  kind: K,
+  list: ElementOf<K>[],
+): PageDesign {
+  const withList = ELEMENT_KINDS[kind].withList as (pd: PageDesign, list: unknown[]) => PageDesign;
+  return withList(pd, list);
+}
+
+function newIdFor(kind: ElementKind): string {
+  return ELEMENT_KINDS[kind].newId();
+}
+
+/** A selection that refers to a copyable/pastable element on a page. */
+type ElementSelection = Extract<Selection, { kind: "box" | "shape" | "image" }>;
+
+function isElementSelection(sel: Selection): sel is ElementSelection {
+  return sel.kind === "box" || sel.kind === "shape" || sel.kind === "image";
+}
+
+function selectionElementId(sel: ElementSelection): string {
+  return sel.kind === "box" ? sel.boxId : sel.kind === "shape" ? sel.shapeId : sel.imageId;
+}
+
+type ClipboardEntry = {
+  [K in ElementKind]: { kind: K; pageId: string; side: PageSide; element: ElementOf<K> };
+}[ElementKind];
+
+/**
+ * The subset of `TextBox` that makes up its *style* rather than its content,
+ * position or identity — what "copy style / paste style" carries over.
+ * Deliberately excludes: id, rect, z (geometry/identity), paragraphs
+ * (content), locked/hidden (per-box state), name/role/slotId (identity /
+ * data bindings that shouldn't jump to another box).
+ */
+type TextBoxStyle = Omit<
+  TextBox,
+  "id" | "rect" | "z" | "paragraphs" | "locked" | "name" | "role" | "slotId" | "hidden"
+>;
+
+function styleOf(box: TextBox): TextBoxStyle {
+  const { id, rect, z, paragraphs, locked, name, role, slotId, hidden, ...style } =
+    structuredClone(box);
+  return style;
+}
 
 const Ctx = createContext<StudioContextValue | null>(null);
 
@@ -294,18 +406,85 @@ export function StudioProvider({
   const pages = useMemo(() => buildDesignPages(project), [project]);
   const design = project.design ?? null;
 
-  // Ensure a design layer exists, then seed any unseeded pages once so every
-  // page starts with its narrative text laid out (design-everything-at-once).
+  // --- "what's on screen" resolution (drives paste-in-place) --------------
+  //
+  // Mirrors `BookCanvas.tsx`'s own entries/display-spread build so the
+  // provider can answer "which page is currently showing on the left/right"
+  // without any UI component needing to hand it that information explicitly.
+  const doc = project.screenplay ? getCursor(project.screenplay).content : null;
+
+  const entries = useMemo<Entry[]>(() => {
+    if (!doc) return [];
+    const spreadById = new Map(doc.spreads.map((s) => [s.id, s]));
+    const out: Entry[] = [];
+    for (const page of pages) {
+      let subject: PageSubject | undefined;
+      if (page.id === COVER_FRONT_ID && doc.frontCover) {
+        subject = { kind: "cover", coverId: COVER_FRONT_ID, cover: doc.frontCover };
+      } else if (page.id === COVER_BACK_ID && doc.backCover) {
+        subject = { kind: "cover", coverId: COVER_BACK_ID, cover: doc.backCover };
+      } else {
+        const spread = spreadById.get(page.id);
+        if (spread) subject = { kind: "spread", spread };
+      }
+      if (subject) out.push({ page, subject });
+    }
+    return out;
+  }, [doc, pages]);
+
+  const displays = useMemo<DisplaySpread[]>(
+    () => (doc ? buildDisplaySpreads(doc, entries) : []),
+    [doc, entries],
+  );
+
+  const activeDisp = useMemo<DisplaySpread | null>(
+    () => displays.find((d) => d.id === editingDispId) ?? displays[0] ?? null,
+    [displays, editingDispId],
+  );
+
+  /**
+   * The page id currently showing on a given physical side of the open
+   * spread — used to paste an element onto "the same side" it was copied
+   * from. Falls back to whichever page IS showing when there's no exact
+   * side match (e.g. the open spread is a single lone page).
+   */
+  const pageIdForSide = useCallback(
+    (side: PageSide): string | undefined => {
+      if (!activeDisp) return undefined;
+      if (activeDisp.kind === "full") return activeDisp.entry.page.id;
+      const pageOf = (s: SpreadSide) => (s.kind === "page" ? s.entry.page : undefined);
+      const left = pageOf(activeDisp.left);
+      const right = pageOf(activeDisp.right);
+      if (side === "left") return left?.id ?? right?.id;
+      if (side === "right") return right?.id ?? left?.id;
+      return left?.id ?? right?.id;
+    },
+    [activeDisp],
+  );
+
+  // Ensure a design layer exists, then seed any unseeded pages so every page
+  // starts with its narrative text laid out (design-everything-at-once), and
+  // re-flow any page still laid out for a layout the book has since left.
+  //
+  // Re-layout only moves boxes tagged with the slot they were seeded from;
+  // anything the reader added themselves is left exactly where they put it.
   useEffect(() => {
     if (!design) {
       void setDesign(defaultDesign(project));
       return;
     }
     const missing = pages.filter((p) => !design.pages[p.id]);
-    if (missing.length === 0) return;
+    const stale = pagesNeedingRelayout(design, pages);
+    const needsVersion = design.version !== DESIGN_VERSION;
+    if (missing.length === 0 && stale.length === 0 && !needsVersion) return;
+
     const nextPages = { ...design.pages };
     for (const p of missing) nextPages[p.id] = seedPageDesign(design, p);
-    void setDesign({ ...design, pages: nextPages });
+    for (const p of stale) {
+      const current = nextPages[p.id];
+      if (current) nextPages[p.id] = relayoutPageDesign(design, p, current);
+    }
+    void setDesign({ ...design, version: DESIGN_VERSION, pages: nextPages });
   }, [design, pages, project, setDesign]);
 
   // The project title is the single source of truth for the front cover: keep
@@ -453,7 +632,15 @@ export function StudioProvider({
             // Auto-height boxes render at max(target floor, content height): they
             // grow as text is added and can never be shorter than the text, but a
             // larger user-set target (minHeightPct) leaves room to breathe.
-            if (next.autoHeight && affectsHeight && aspect) {
+            // Skip when the patch itself turns auto-height off (a manual resize)
+            // — otherwise we'd restore content height and the opposite edge of
+            // the box would jump instead of the font shrinking to fit.
+            if (
+              next.autoHeight &&
+              patch.autoHeight !== false &&
+              affectsHeight &&
+              aspect
+            ) {
               const contentH = fitBoxHeightPct(next, aspect);
               const h = Math.max(contentH, next.minHeightPct ?? 0);
               const y = Math.max(0, Math.min(1 - h, next.rect.y));
@@ -895,19 +1082,42 @@ export function StudioProvider({
   // --- selection-scoped helpers & clipboard -------------------------------
 
   const clipboard = useRef<ClipboardEntry | null>(null);
+  const boxStyleClipboard = useRef<TextBoxStyle | null>(null);
+  const [hasCopiedBoxStyle, setHasCopiedBoxStyle] = useState(false);
+
+  const copyBoxStyle = useCallback(
+    (pageId: string, boxId: string) => {
+      const box = design?.pages[pageId]?.textBoxes.find((b) => b.id === boxId);
+      if (!box) return;
+      boxStyleClipboard.current = styleOf(box);
+      setHasCopiedBoxStyle(true);
+      notify.info("Style copied", "Select another text box and paste the style onto it.");
+    },
+    [design],
+  );
+
+  const pasteBoxStyle = useCallback(
+    (pageId: string, boxId: string) => {
+      const style = boxStyleClipboard.current;
+      if (!style) return;
+      patchBox(pageId, boxId, structuredClone(style));
+    },
+    [patchBox],
+  );
+
+  const [hasClipboard, setHasClipboard] = useState(false);
 
   const copySelection = useCallback(() => {
-    if (selection.kind === "box") {
-      const b = design?.pages[selection.pageId]?.textBoxes.find((x) => x.id === selection.boxId);
-      if (b) clipboard.current = { kind: "box", pageId: selection.pageId, box: structuredClone(b) };
-    } else if (selection.kind === "shape") {
-      const s = design?.pages[selection.pageId]?.shapes?.find((x) => x.id === selection.shapeId);
-      if (s) clipboard.current = { kind: "shape", pageId: selection.pageId, shape: structuredClone(s) };
-    } else if (selection.kind === "image") {
-      const im = design?.pages[selection.pageId]?.images?.find((x) => x.id === selection.imageId);
-      if (im) clipboard.current = { kind: "image", pageId: selection.pageId, image: structuredClone(im) };
-    }
-  }, [selection, design]);
+    if (!isElementSelection(selection)) return;
+    const { kind, pageId } = selection;
+    const id = selectionElementId(selection);
+    const pd = design?.pages[pageId];
+    const el = pd ? elementsOfKind(pd, kind).find((e) => e.id === id) : undefined;
+    if (!el) return;
+    const side: PageSide = pages.find((p) => p.id === pageId)?.outerSide ?? "spread";
+    clipboard.current = { kind, pageId, side, element: structuredClone(el) } as ClipboardEntry;
+    setHasClipboard(true);
+  }, [selection, design, pages]);
 
   const deleteSelected = useCallback(() => {
     if (selection.kind === "box") deleteBox(selection.pageId, selection.boxId);
@@ -951,48 +1161,66 @@ export function StudioProvider({
     [selection, design, patchBox, patchShape, patchImage],
   );
 
-  const pasteAt = useCallback(
-    (target: { pageId: string; point: Point } | null) => {
-      const entry = clipboard.current;
-      if (!entry || !design) return;
-      const pageId = target?.pageId ?? entry.pageId;
-      if (entry.kind === "box") {
-        const src = entry.box;
-        const copy: TextBox = {
-          ...structuredClone(src),
-          id: newTextBoxId(),
-          rect: target ? centeredRect(src.rect.w, src.rect.h, target.point) : offsetRect(src.rect),
-          z: topZ(design.pages[pageId]) + 1,
-        };
-        commit((d) => mutatePage(d, pageId, (pd) => ({ ...pd, textBoxes: [...pd.textBoxes, copy] })));
-        setSelection({ kind: "box", pageId, boxId: copy.id, span: null });
-      } else if (entry.kind === "shape") {
-        const src = entry.shape;
-        const copy: ShapeElement = {
-          ...structuredClone(src),
-          id: newShapeId(),
-          rect: target ? centeredRect(src.rect.w, src.rect.h, target.point) : offsetRect(src.rect),
-          z: topZ(design.pages[pageId]) + 1,
-        };
-        commit((d) =>
-          mutatePage(d, pageId, (pd) => ({ ...pd, shapes: [...(pd.shapes ?? []), copy] })),
-        );
-        setSelection({ kind: "shape", pageId, shapeId: copy.id });
-      } else {
-        const src = entry.image;
-        const copy: ImageElement = {
-          ...structuredClone(src),
-          id: newImageId(),
-          rect: target ? centeredRect(src.rect.w, src.rect.h, target.point) : offsetRect(src.rect),
-          z: topZ(design.pages[pageId]) + 1,
-        };
-        commit((d) =>
-          mutatePage(d, pageId, (pd) => ({ ...pd, images: [...(pd.images ?? []), copy] })),
-        );
-        setSelection({ kind: "image", pageId, imageId: copy.id });
+  const pasteSelection = useCallback(() => {
+    const entry = clipboard.current;
+    if (!entry || !design) return;
+    // Land on the page currently showing on the same physical side it was
+    // copied from — falling back to whichever page is showing, and finally to
+    // the source page itself (e.g. pasting back into an unrelated project
+    // state) — so paste always has *some* destination.
+    const targetPageId = pageIdForSide(entry.side) ?? entry.pageId;
+    const samePage = targetPageId === entry.pageId;
+    const rect = samePage ? offsetRect(entry.element.rect) : entry.element.rect;
+    const id = newIdFor(entry.kind);
+    const copy = { ...structuredClone(entry.element), id, rect, z: topZ(design.pages[targetPageId]) + 1 };
+    commit((d) =>
+      mutatePage(d, targetPageId, (pd) =>
+        withElementsOfKind(pd, entry.kind, [...elementsOfKind(pd, entry.kind), copy]),
+      ),
+    );
+    if (entry.kind === "box") setSelection({ kind: "box", pageId: targetPageId, boxId: id, span: null });
+    else if (entry.kind === "shape") setSelection({ kind: "shape", pageId: targetPageId, shapeId: id });
+    else setSelection({ kind: "image", pageId: targetPageId, imageId: id });
+  }, [design, commit, mutatePage, pageIdForSide]);
+
+  const moveElementToPage = useCallback(
+    (kind: ElementKind, fromPageId: string, toPageId: string, elementId: string, rect: NRect) => {
+      if (fromPageId === toPageId) {
+        // Staying on the same page is just a normal rect patch — route through
+        // the per-kind patcher so kind-specific logic (e.g. a text box's
+        // auto-height re-clamp) stays centralized in one place.
+        if (kind === "box") patchBox(fromPageId, elementId, { rect });
+        else if (kind === "shape") patchShape(fromPageId, elementId, { rect });
+        else patchImage(fromPageId, elementId, { rect });
+        return;
       }
+      commit((d) => {
+        const fromPd = d.pages[fromPageId] ?? { textBoxes: [] };
+        const list = elementsOfKind(fromPd, kind);
+        const el = list.find((e) => e.id === elementId);
+        if (!el) return d;
+        d.pages[fromPageId] = withElementsOfKind(
+          fromPd,
+          kind,
+          list.filter((e) => e.id !== elementId),
+        );
+        const toPd = d.pages[toPageId] ?? { textBoxes: [] };
+        d.pages[toPageId] = withElementsOfKind(toPd, kind, [
+          ...elementsOfKind(toPd, kind),
+          { ...el, rect, z: topZ(toPd) + 1 },
+        ]);
+        return d;
+      });
+      setSelection((sel) => {
+        if (!isElementSelection(sel) || sel.kind !== kind || selectionElementId(sel) !== elementId) {
+          return sel;
+        }
+        if (sel.kind === "box") return { kind: "box", pageId: toPageId, boxId: elementId, span: null };
+        if (sel.kind === "shape") return { kind: "shape", pageId: toPageId, shapeId: elementId };
+        return { kind: "image", pageId: toPageId, imageId: elementId };
+      });
     },
-    [design, commit, mutatePage],
+    [commit, patchBox, patchShape, patchImage],
   );
 
   const pageDesign = useCallback(
@@ -1065,11 +1293,16 @@ export function StudioProvider({
         toggleGuides: () => setGuides((v) => !v),
         copySelection,
         cutSelection,
-        pasteAt,
+        pasteSelection,
+        hasClipboard,
         deleteSelected,
         duplicateSelected,
         reorderSelected,
         nudgeSelected,
+        moveElementToPage,
+        copyBoxStyle,
+        pasteBoxStyle,
+        hasCopiedBoxStyle,
         setPageBackground,
         generatingAnchors,
         generatingPages,

@@ -12,7 +12,7 @@ import { PageStage } from "../design/PageStage";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { defaultIllustrationFocus, type DesignPage } from "../design/designInit";
 import { useStudio } from "./StudioContext";
-import type { DisplaySpread, Entry, SpreadSide } from "./SpreadEditor";
+import { DeadPageFill, type DisplaySpread, type Entry, type SpreadSide } from "./SpreadEditor";
 
 const FOLD_GRADIENT =
   "linear-gradient(to right, rgba(15,23,42,0) 0%, rgba(15,23,42,0.12) 42%, rgba(15,23,42,0.2) 50%, rgba(15,23,42,0.12) 58%, rgba(15,23,42,0) 100%)";
@@ -144,6 +144,13 @@ function PreviewHalf({ side, aspect }: { side: SpreadSide; aspect: number }) {
     return (
       <div className="relative min-w-0 flex-1">
         <PreviewPage entry={side.entry} />
+      </div>
+    );
+  }
+  if (side.kind === "edge") {
+    return (
+      <div className="relative flex min-w-0 flex-1 items-center justify-center">
+        <DeadPageFill aspect={aspect} />
       </div>
     );
   }

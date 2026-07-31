@@ -1,12 +1,12 @@
 /**
  * Global keyboard shortcuts for the Studio. Mounted once inside the provider.
- * Operates on the current selection: delete, duplicate, copy/cut/paste (pasting
- * at the cursor's page when it's over one), nudge with arrows, z-order, undo/redo
- * and escape-to-deselect. Ignores events while typing in inputs/textareas.
+ * Operates on the current selection: delete, duplicate, copy/cut/paste
+ * (in place — see `StudioContext.pasteSelection`), nudge with arrows, z-order,
+ * undo/redo and escape-to-deselect. Ignores events while typing in
+ * inputs/textareas.
  */
 import { useEffect, useRef } from "react";
 import { useStudio } from "./StudioContext";
-import { pageDropTargetAt } from "./StudioDnd";
 
 function isTypingTarget(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -17,15 +17,6 @@ export function useStudioHotkeys() {
   const studio = useStudio();
   const studioRef = useRef(studio);
   studioRef.current = studio;
-  const mouse = useRef({ x: 0, y: 0 });
-
-  useEffect(() => {
-    const onMove = (e: PointerEvent) => {
-      mouse.current = { x: e.clientX, y: e.clientY };
-    };
-    window.addEventListener("pointermove", onMove);
-    return () => window.removeEventListener("pointermove", onMove);
-  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -61,7 +52,7 @@ export function useStudioHotkeys() {
             return;
           case "v":
             e.preventDefault();
-            s.pasteAt(pageDropTargetAt(mouse.current.x, mouse.current.y));
+            s.pasteSelection();
             return;
           case "d":
             if (hasEl) {

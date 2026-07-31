@@ -41,7 +41,7 @@ import "./providerHttp";
 import { serverConfig } from "./config";
 import { compositeMaskedRegion, downscaleReference } from "./imaging";
 import { backendPipelineEnv } from "./pipelineEnv";
-import { loadPromptContext, recordLatencySamples } from "./appConfig";
+import { loadModelCapabilities, loadPromptContext, recordLatencySamples } from "./appConfig";
 import { requireTier, resolveImageModels } from "./modelResolve";
 import { recordUsage, withUsage, type CallStats } from "./usage";
 import { featureAllowedForUser } from "./plans";
@@ -552,11 +552,12 @@ async function renderTask(
   tier: ImageTier,
   signal: AbortSignal,
 ): Promise<{ result: TaskResult; stats: TaskStats }> {
-  const [models, prompts] = await Promise.all([
+  const [models, prompts, caps] = await Promise.all([
     resolveImageModels(modelRoleFor(job.kind), tier),
     loadPromptContext(),
+    loadModelCapabilities(),
   ]);
-  const env = backendPipelineEnv(uid, models, prompts);
+  const env = backendPipelineEnv(uid, models, prompts, caps);
   const startedAt = Date.now();
 
   if (job.kind === "image") {

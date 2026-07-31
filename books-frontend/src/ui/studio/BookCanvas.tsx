@@ -41,6 +41,7 @@ import { CoverToolsDrawer } from "./CoverStudio";
 import { ElementPanel, elementPanelHasContent } from "./ElementPanel";
 import { PageFilmstrip } from "./PageFilmstrip";
 import { PageControls, PageMenu, PageStagePanel } from "./PageEditorCard";
+import { PairPageStagePanel } from "./PairPageStage";
 import { useStudio } from "./StudioContext";
 import { refreshSpread } from "./studioGen";
 import { useBookGeneration } from "./useBookGeneration";
@@ -52,6 +53,7 @@ import {
   FOLD_GRADIENT,
   HalfFrame,
   isBlankEntry,
+  isPlainPagePair,
   sideAspect,
   useEntryStatus,
   COVER_META,
@@ -553,8 +555,17 @@ function ActiveSpreadStage({
         <SideChip side={disp.right} stale={stale} onOpenIllustration={onOpenIllustration} />
       </div>
       <div className="relative mx-auto flex overflow-hidden rounded-2xl bg-white shadow-lifted ring-1 ring-ink-200">
-        <HalfFrame side={disp.left} aspect={sideAspect(disp.left, disp.right)} half="left" />
-        <HalfFrame side={disp.right} aspect={sideAspect(disp.left, disp.right)} half="right" />
+        {isPlainPagePair(disp) ? (
+          // Two ordinary facing pages share one interactive canvas so an
+          // element can be dragged straight across the fold (e.g. page 4 → 5
+          // on the same sheet) instead of stopping at the page edge.
+          <PairPageStagePanel left={disp.left.entry} right={disp.right.entry} />
+        ) : (
+          <>
+            <HalfFrame side={disp.left} aspect={sideAspect(disp.left, disp.right)} half="left" />
+            <HalfFrame side={disp.right} aspect={sideAspect(disp.left, disp.right)} half="right" />
+          </>
+        )}
         <div
           className="pointer-events-none absolute inset-y-0 left-1/2 w-10 -translate-x-1/2"
           style={{ background: FOLD_GRADIENT }}
@@ -587,6 +598,16 @@ function SideChip({
     return (
       <span className="rounded-full bg-ink-50 px-3 py-1.5 text-xs text-ink-400 ring-1 ring-ink-100">
         {side.label} · Blank
+      </span>
+    );
+  }
+  if (side.kind === "edge") {
+    return (
+      <span
+        className="rounded-full bg-ink-50 px-3 py-1.5 text-xs text-ink-300 ring-1 ring-ink-100"
+        title="The printed book doesn't have a page on this side."
+      >
+        No page here
       </span>
     );
   }

@@ -30,6 +30,9 @@ import {
   restoreBrandingAsset,
   restoreWatermark,
   saveArtStylesConfig,
+  saveLayoutsConfig,
+  addLayoutExample,
+  removeLayoutExample,
   saveAgeWritingConfig,
   saveTypographyConfig,
   saveBrandingInfo,
@@ -66,6 +69,7 @@ import type { BillingEnv } from "../../books-frontend/src/core/config/plans";
 import {
   deletePublicObject,
   uploadArtStyleImage,
+  uploadLayoutImage,
   uploadBrandingAsset,
   uploadBrandingWatermark,
   uploadCatalogPhoto,
@@ -116,6 +120,7 @@ import { getAuth } from "firebase-admin/auth";
 import { sendTemplatedEmail } from "./email/service";
 import { emailConfigured } from "./email/sender";
 import { legalLinkByRole, type LegalRole } from "../../books-frontend/src/core/config/legal";
+import { isKnownLayoutId } from "../../books-frontend/src/core/book/layouts";
 import {
   EMAIL_TEMPLATE_REGISTRY,
 } from "../../books-frontend/src/core/email/registry";
@@ -351,6 +356,14 @@ export function registerAdminRoutes(app: Express): void {
     }
   });
 
+  app.put("/admin/config/layouts", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveLayoutsConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
   app.put("/admin/config/age-writing", json, async (req: Request, res: Response) => {
     try {
       res.json(await saveAgeWritingConfig(req.body));
@@ -474,6 +487,58 @@ export function registerAdminRoutes(app: Express): void {
         updatedAt: Date.now(),
       });
       res.json(config);
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- Page layouts --------------------------------------------------------
+
+  // Add a showcase image for a layout. Body: { base64, mimeType, shape?, side?, alt? }.
+  app.post("/admin/layouts/:layoutId/image", json, async (req: Request, res: Response) => {
+    try {
+      const layoutId = String(req.params.layoutId);
+      if (!isKnownLayoutId(layoutId)) {
+        res.status(400).json({ error: { message: `Unknown layout "${layoutId}".` } });
+        return;
+      }
+      const { base64, mimeType, shape, side, alt } = (req.body ?? {}) as {
+        base64?: string;
+        mimeType?: string;
+        shape?: string;
+        side?: string;
+        alt?: string;
+      };
+      if (!base64 || !mimeType) {
+        res.status(400).json({ error: { message: "base64 and mimeType are required." } });
+        return;
+      }
+      const buf = Buffer.from(base64, "base64");
+      const { storagePath, publicUrl } = await uploadLayoutImage(layoutId, buf, mimeType);
+      const config = await addLayoutExample(layoutId, {
+        imageUrl: publicUrl,
+        storagePath,
+        updatedAt: Date.now(),
+        ...(shape === "square" || shape === "landscape" || shape === "portrait" ? { shape } : {}),
+        ...(side === "left" || side === "right" || side === "spread" ? { side } : {}),
+        ...(alt ? { alt: alt.slice(0, 300) } : {}),
+      });
+      res.json(config);
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.delete("/admin/layouts/:layoutId/image", json, async (req: Request, res: Response) => {
+    try {
+      const layoutId = String(req.params.layoutId);
+      const storagePath = String((req.body ?? {}).storagePath ?? "");
+      if (!storagePath) {
+        res.status(400).json({ error: { message: "storagePath is required." } });
+        return;
+      }
+      await deletePublicObject(storagePath);
+      res.json(await removeLayoutExample(layoutId, storagePath));
     } catch (err) {
       handleError(res, err);
     }

@@ -11,6 +11,7 @@ import {
   DollarSign,
   Image as ImageIcon,
   LayoutDashboard,
+  LayoutTemplate,
   Loader2,
   Megaphone,
   Package,
@@ -66,6 +67,7 @@ import {
 } from "./adminTabStore";
 import { ModelConfigTab } from "./tabs/ModelConfigTab";
 import { ArtStylesTab } from "./tabs/ArtStylesTab";
+import { LayoutsTab } from "./tabs/LayoutsTab";
 import { AgeWritingTab } from "./tabs/AgeWritingTab";
 import { TypographyTab } from "./tabs/TypographyTab";
 import { PromptsTab } from "./tabs/PromptsTab";
@@ -123,6 +125,7 @@ const CONFIG_TAB_META: Record<
   costs: { label: "Cost intelligence", icon: <Gauge className="size-4" /> },
   // Creative defaults
   artStyles: { label: "Art styles", icon: <ImageIcon className="size-4" /> },
+  layouts: { label: "Page layouts", icon: <LayoutTemplate className="size-4" /> },
   ageWriting: { label: "Age writing", icon: <BookOpen className="size-4" /> },
   typography: { label: "Typography", icon: <Type className="size-4" /> },
   // Operations
@@ -163,6 +166,8 @@ function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
       return <ModelConfigTab />;
     case "artStyles":
       return <ArtStylesTab />;
+    case "layouts":
+      return <LayoutsTab />;
     case "ageWriting":
       return <AgeWritingTab />;
     case "typography":

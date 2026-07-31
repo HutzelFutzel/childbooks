@@ -1,11 +1,16 @@
-import { useEffect, useState } from "react";
-import { Ruler, TriangleAlert } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { LayoutTemplate, Ruler, TriangleAlert } from "lucide-react";
 import { bookSizeFromAspect } from "../../core/config/options";
 import { bookProductForConfig } from "../../core/book";
+import { getBookLayout, isKnownLayoutId } from "../../core/book/layouts";
+import { layoutAvailability, resolveLayoutById, resolvedLayouts } from "../../core/book/layoutCatalog";
 import { useOfferableFormats, trimKey, type SizeOption } from "../hooks/useOfferableFormats";
+import { useAppConfigStore } from "../../state/appConfigStore";
 import { useProjectsStore } from "../../state/projectsStore";
 import { OptionCard } from "../components/OptionCard";
 import { Button } from "../components/Button";
+import { LayoutSchematic } from "../design/LayoutSchematic";
+import { cn } from "../lib/cn";
 import type { BookConfig } from "../../core/types";
 import type { GuidedQuestion } from "./GuidedQuestions";
 import { BookSizeShape } from "./visuals";
@@ -153,13 +158,90 @@ function sizeSummary(config: BookConfig): string {
 }
 
 /**
- * The Design flow: the physical decisions that shape the printed book.
+ * Question 2 · where the words sit on the page.
  *
- * Only one, and deliberately: the page size. It sets the aspect every
- * illustration is generated at, so it has to be settled before any art exists —
- * and it's the only physical choice that does. Binding, print tier, paper and
- * cover finish change nothing about the pages, so they're asked at checkout,
- * where the page count that constrains the binding is finally known.
+ * Asked after the size, because availability depends on it: a layout with a
+ * one-third text column is unreadable on a small square trim, and it says so
+ * rather than disappearing. Unavailable layouts stay visible with their reason
+ * — a reader who came looking for one deserves to learn why they can't have it.
+ */
+function LayoutQuestion({ config }: StepProps) {
+  const layoutsConfig = useAppConfigStore((s) => s.layouts);
+  const update = useProjectsStore((s) => s.updateConfig);
+  const artCount = useProjectsStore((s) => Object.keys(s.current()?.illustrations ?? {}).length);
+  const product = bookProductForConfig(config);
+  const shape = bookSizeFromAspect(product.aspect);
+
+  const options = useMemo(
+    () => resolvedLayouts(layoutsConfig, shape),
+    [layoutsConfig, shape],
+  );
+  const selectedId = resolveLayoutById(config.layoutId, layoutsConfig).id;
+
+  // Only one layout ships today; a picker of one is noise, so it renders as a
+  // plain description until there's a real choice to make.
+  const single = options.length === 1;
+
+  return (
+    <div className="space-y-3">
+      <div className={cn("grid gap-3", single ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-2")}>
+        {options.map((option) => {
+          const availability = layoutAvailability(option, { product, config: layoutsConfig });
+          const example = option.examples[0];
+          return (
+            <OptionCard
+              key={option.id}
+              selected={option.id === selectedId}
+              disabled={!availability.ok}
+              onSelect={() => void update({ layoutId: option.id })}
+              title={option.label}
+              description={
+                availability.ok ? option.description : (availability as { reason: string }).reason
+              }
+              visual={
+                example ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={example.imageUrl}
+                    alt={example.alt ?? `${option.label} example`}
+                    className="h-20 w-full rounded-lg object-cover"
+                  />
+                ) : (
+                  <LayoutSchematic
+                    layout={option.layout}
+                    product={product}
+                    mode={option.defaultMode}
+                  />
+                )
+              }
+            />
+          );
+        })}
+      </div>
+
+      {artCount > 0 && !single && (
+        <p className="text-xs text-ink-400">
+          Changing the layout moves the story text and leaves your artwork in place — pages whose
+          art was composed for the old layout are flagged so you can re-generate them.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function layoutSummary(config: BookConfig): string {
+  return getBookLayout(config.layoutId).label;
+}
+
+/**
+ * The Design flow: the decisions the pages themselves are built on.
+ *
+ * The page size sets the aspect every illustration is generated at, and the
+ * layout decides where the words sit and what the image model is told to keep
+ * clear for them. Both have to be settled before any art exists; everything
+ * else about the printed object — binding, print tier, paper, cover finish —
+ * leaves the pages untouched and is asked at checkout, where the page count
+ * that constrains the binding is finally known.
  */
 export const DESIGN_QUESTIONS: GuidedQuestion[] = [
   {
@@ -170,5 +252,14 @@ export const DESIGN_QUESTIONS: GuidedQuestion[] = [
     isAnswered: (c) => Boolean(c.productSku),
     summary: sizeSummary,
     render: (props) => <SizeQuestion {...props} />,
+  },
+  {
+    id: "layout",
+    title: "Where the words go",
+    subtitle: "How each page divides between the story text and the illustration.",
+    icon: LayoutTemplate,
+    isAnswered: (c) => isKnownLayoutId(c.layoutId),
+    summary: layoutSummary,
+    render: (props) => <LayoutQuestion {...props} />,
   },
 ];

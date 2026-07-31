@@ -3,9 +3,9 @@
  * spread + book settings, picks a fitting canvas size, and renders the image
  * using the chosen anchors as reference images for visual consistency.
  */
-import { bookSizeFromAspect } from "../config/options";
 import { bookProductForConfig } from "../book";
 import { getImageProvider } from "../providers";
+import type { ProviderId } from "../config/options";
 import type {
   ImageResult,
   ProviderCredentials,
@@ -15,29 +15,70 @@ import { resolveArtStyleText } from "../prompts/style";
 import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderSinglePrompt } from "../prompts/render";
 import type { Anchor, BookConfig, ScreenplaySpread } from "../types";
-import { getBookLayout, type PageSide } from "../book/layouts";
+import { layoutPromptFacts, type LayoutPlan } from "../book/layouts";
 import { relativeHeightsText } from "../book/anchorScale";
 import { withRetry } from "./retry";
 
+/** Canvas sizes the OpenAI image endpoint accepts, with their aspect ratios. */
+const OPENAI_SIZES: [string, number][] = [
+  ["1024x1536", 1024 / 1536],
+  ["1024x1024", 1],
+  ["1536x1024", 1536 / 1024],
+];
+
+function nearestSize(options: [string, number][], target: number): string {
+  let best = options[0];
+  for (const opt of options) {
+    if (Math.abs(opt[1] - target) < Math.abs(best[1] - target)) best = opt;
+  }
+  return best[0];
+}
+
+/** A "WxH" whose ratio is exactly `aspect` (Gemini reads the ratio, not the px). */
+function exactRatioSize(aspect: number): string {
+  const base = 1024;
+  return aspect >= 1
+    ? `${Math.round(base * aspect)}x${base}`
+    : `${base}x${Math.round(base / aspect)}`;
+}
+
 /**
- * Choose a provider-friendly canvas size for a page/spread. The page shape is
- * derived from the chosen product's real trim aspect (so e.g. a comic-book trim
- * renders portrait, not square), then mapped to the nearest supported size.
+ * The aspect the generated artwork should have: the page surface for full-bleed
+ * art, or the art rectangle's own shape when the layout places art beside the
+ * text. Derived from the plan rather than hardcoded per page shape, so a new
+ * layout gets correctly-shaped art with no change here.
+ */
+export function renderAspect(
+  kind: ScreenplaySpread["kind"],
+  config: Pick<BookConfig, "bookSize" | "productSku">,
+  plan?: LayoutPlan | null,
+): number {
+  const pageAspect = bookProductForConfig(config).aspect;
+  const surface = kind === "spread" ? pageAspect * 2 : pageAspect;
+  if (plan?.mode === "inset-art") {
+    return (plan.artRect.w * surface) / plan.artRect.h;
+  }
+  return surface;
+}
+
+/**
+ * Choose a provider-friendly canvas size for a page/spread.
+ *
+ * OpenAI accepts three fixed sizes, so the target is snapped to the nearest.
+ * Gemini reads only an aspect ratio and snaps to its own finer set of nine, so
+ * it is handed the true ratio instead of one pre-rounded to a page shape — which
+ * means the fast model can actually fit an unusual art rectangle more closely
+ * than the premium one.
  */
 export function chooseImageSize(
   kind: ScreenplaySpread["kind"],
   config: Pick<BookConfig, "bookSize" | "productSku">,
+  plan?: LayoutPlan | null,
+  provider?: ProviderId,
 ): string {
-  if (kind === "spread") return "1536x1024"; // wide double-page
-  const shape = bookSizeFromAspect(bookProductForConfig(config).aspect);
-  switch (shape) {
-    case "portrait":
-      return "1024x1536";
-    case "landscape":
-      return "1536x1024";
-    default:
-      return "1024x1024";
-  }
+  const target = renderAspect(kind, config, plan);
+  if (provider === "google") return exactRatioSize(target);
+  return nearestSize(OPENAI_SIZES, target);
 }
 
 export interface BuildIllustrationPromptInput {
@@ -114,11 +155,12 @@ export interface BuildIllustrationPromptInput {
   /** Admin prompt overlays (art-style descriptions). */
   prompts?: PromptContext;
   /**
-   * Which physical side this page sits on, so the active layout can tell the
-   * model where to keep a calm, text-safe band. Undefined (e.g. covers) skips
-   * the layout guidance.
+   * The active layout's resolved plan for this page. Everything the prompt says
+   * about where text sits is compiled from its geometry, so the instruction can
+   * never drift from the rectangle the editor actually uses. Undefined (e.g.
+   * covers) skips the layout guidance.
    */
-  pageSide?: PageSide;
+  layoutPlan?: LayoutPlan | null;
 }
 
 export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): string {
@@ -143,7 +185,7 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
     isCover = false,
     edit,
     prompts,
-    pageSide,
+    layoutPlan,
   } = input;
   const styleText = resolveArtStyleText(config.artStyle, prompts);
 
@@ -157,13 +199,12 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
   const bakeTextActive = bakeParts.length > 0;
   const bakeTextInstruction = bakeParts.join(", ");
 
-  // Structural layout guidance (keep the outer-edge text band calm) is folded
-  // into the layoutNote the template already renders, so the model reserves
-  // space for text without any template change. Covers pass no side ⇒ skipped.
-  const layoutGuidance = pageSide ? getBookLayout(config.layoutId).imageGuidance(pageSide) : "";
-  const combinedLayoutNote = [layoutGuidance, spread.layoutNote.trim()]
-    .filter(Boolean)
-    .join(" ");
+  // Structural layout facts are COMPILED from the plan's rectangles (see
+  // `layoutPromptFacts`) rather than written by hand, so widening a text column
+  // rewrites the instruction automatically. Baking cover text replaces the
+  // reserve-space instruction entirely, so it suppresses these.
+  const facts = layoutPlan ? layoutPromptFacts(layoutPlan, renderAspect(spread.kind, config)) : null;
+  const pageNote = spread.layoutNote.trim();
   const listOf = (arr: Anchor[]) => arr.map((a) => `${a.name} (${a.description})`).join("; ");
 
   const characters = referencedAnchors.filter((a) => a.type === "character");
@@ -235,7 +276,11 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
       legend,
       castNames: castNames.join(", "),
       removedList: removedAnchors.map((a) => a.name).join(", "),
-      layoutNote: combinedLayoutNote,
+      layoutNote: pageNote,
+      calmRegions: facts?.calmRegions ?? "",
+      focalRegion: facts?.focalRegion ?? "",
+      regionTreatment: facts?.treatmentInstruction ?? "",
+      artAspect: facts?.artAspectLabel ?? "",
       artStyle: styleText,
       bakeTextInstruction,
       edit: edit?.trim() ?? "",
@@ -258,8 +303,13 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
       hasKept: keptAnchors.length > 0,
       // When baking cover text, suppress the "leave clean negative space" +
       // "no text" clauses and instead instruct the model to render typography.
-      hasLayoutNote: Boolean(combinedLayoutNote) && !bakeTextActive,
-      layoutGeneric: !Boolean(combinedLayoutNote) && !bakeTextActive,
+      hasLayoutNote: Boolean(pageNote) && !bakeTextActive,
+      layoutGeneric: !facts && !pageNote && !bakeTextActive,
+      // Keep a calm band for overlay text (full-bleed art), or compose the art
+      // to fill its own frame (inset art) — never both.
+      layoutCalmBand: Boolean(facts?.hasCalmBand) && !bakeTextActive,
+      hasRegionTreatment: Boolean(facts?.treatmentInstruction) && !bakeTextActive,
+      layoutInsetArt: Boolean(facts?.isInsetArt) && !bakeTextActive,
       bakeText: bakeTextActive,
       isCover,
       tailMaskEdit,

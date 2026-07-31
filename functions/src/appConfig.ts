@@ -140,9 +140,17 @@ import {
   referralConfigSchema,
   type ReferralConfig,
 } from "../../books-frontend/src/core/config/referral";
+import {
+  layoutsConfigSchema,
+  normalizeLayoutsConfig,
+  type LayoutExample,
+  type LayoutsConfig,
+} from "../../books-frontend/src/core/config/layouts";
+import type { CapabilityOverrides } from "../../books-frontend/src/core/config/modelCapabilities";
 
 const MODELS_DOC = "appConfig/models";
 const ART_STYLES_DOC = "appConfig/artStyles";
+const LAYOUTS_DOC = "appConfig/layouts";
 const AGE_WRITING_DOC = "appConfig/ageWriting";
 const TYPOGRAPHY_DOC = "appConfig/typography";
 const MODEL_COSTS_DOC = "appConfig/modelCosts";
@@ -203,6 +211,9 @@ export function getModelConfig(): Promise<ModelConfig> {
 }
 export function getArtStylesConfig(): Promise<ArtStylesConfig> {
   return readDoc(ART_STYLES_DOC, normalizeArtStylesConfig);
+}
+export function getLayoutsConfig(): Promise<LayoutsConfig> {
+  return readDoc(LAYOUTS_DOC, normalizeLayoutsConfig);
 }
 export function getAgeWritingConfig(): Promise<AgeWritingConfig> {
   return readDoc(AGE_WRITING_DOC, normalizeAgeWritingConfig);
@@ -442,6 +453,14 @@ export async function saveCookieConfig(input: unknown): Promise<CookieConfig> {
   return normalized;
 }
 
+/**
+ * Admin corrections to the shipped image-model capability table. Lives on the
+ * layouts doc because that's where the model-behaviour knowledge is curated.
+ */
+export async function loadModelCapabilities(): Promise<CapabilityOverrides> {
+  return (await getLayoutsConfig()).capabilities ?? {};
+}
+
 /** Admin-managed prompt overlays used by text and image pipelines. */
 export async function loadPromptContext(): Promise<PromptContext> {
   const [artStyles, ageWriting, templates] = await Promise.all([
@@ -531,6 +550,13 @@ export async function saveArtStylesConfig(input: unknown): Promise<ArtStylesConf
   const parsed = artStylesConfigSchema.parse(input);
   const normalized = normalizeArtStylesConfig(parsed);
   await writeDoc(ART_STYLES_DOC, normalized);
+  return normalized;
+}
+
+export async function saveLayoutsConfig(input: unknown): Promise<LayoutsConfig> {
+  const parsed = layoutsConfigSchema.parse(input);
+  const normalized = normalizeLayoutsConfig(parsed);
+  await writeDoc(LAYOUTS_DOC, normalized);
   return normalized;
 }
 
@@ -838,5 +864,43 @@ export async function setArtStyleExample(
     examples: { ...current.examples, [styleId]: example },
   });
   await writeDoc(ART_STYLES_DOC, next);
+  return next;
+}
+
+/** Append a showcase image to a layout (used by the image-upload route). */
+export async function addLayoutExample(
+  layoutId: string,
+  example: Omit<LayoutExample, "order">,
+): Promise<LayoutsConfig> {
+  const current = await getLayoutsConfig();
+  const override = current.overrides[layoutId] ?? {};
+  const examples = [...(override.examples ?? [])];
+  const order = examples.reduce((max, e) => Math.max(max, e.order), -1) + 1;
+  examples.push({ ...example, order });
+  const next = normalizeLayoutsConfig({
+    ...current,
+    overrides: { ...current.overrides, [layoutId]: { ...override, examples } },
+  });
+  await writeDoc(LAYOUTS_DOC, next);
+  return next;
+}
+
+/** Remove one showcase image from a layout by its storage path. */
+export async function removeLayoutExample(
+  layoutId: string,
+  storagePath: string,
+): Promise<LayoutsConfig> {
+  const current = await getLayoutsConfig();
+  const override = current.overrides[layoutId];
+  if (!override?.examples) return current;
+  const examples = override.examples
+    .filter((e) => e.storagePath !== storagePath)
+    // Keep `order` dense so the admin list can't develop gaps over time.
+    .map((e, i) => ({ ...e, order: i }));
+  const next = normalizeLayoutsConfig({
+    ...current,
+    overrides: { ...current.overrides, [layoutId]: { ...override, examples } },
+  });
+  await writeDoc(LAYOUTS_DOC, next);
   return next;
 }

@@ -1,5 +1,5 @@
 import { Image as ImageIcon, Type } from "lucide-react";
-import type { GraphicsDensity, LayoutTemplate, SpreadUsage } from "../../core/config/options";
+import type { GraphicsDensity, SpreadUsage } from "../../core/config/options";
 import { cn } from "../lib/cn";
 
 /**
@@ -43,63 +43,6 @@ export function BookSizeShape({ aspect }: { aspect: number }) {
         className="rounded-md bg-brand-100 ring-2 ring-brand-300"
         style={{ width: w, height: h }}
       />
-    </div>
-  );
-}
-
-function Region({
-  kind,
-  style,
-}: {
-  kind: "text" | "graphic";
-  style: React.CSSProperties;
-}) {
-  return (
-    <div
-      className={cn(
-        "absolute flex items-center justify-center rounded-[3px]",
-        kind === "graphic" ? "bg-brand-200/70 text-brand-700" : "bg-accent-100 text-accent-600",
-      )}
-      style={style}
-    >
-      {kind === "graphic" ? <ImageIcon className="size-3.5" /> : <Type className="size-3.5" />}
-    </div>
-  );
-}
-
-/** Schematic diagram of a layout template's regions. */
-export function LayoutDiagram({ template }: { template: LayoutTemplate }) {
-  if (template.id === "auto" || template.regions.length === 0) {
-    return (
-      <div className="flex h-20 items-center justify-center rounded-lg bg-gradient-to-br from-brand-50 to-accent-50 text-xs font-medium text-brand-600">
-        Auto layout
-      </div>
-    );
-  }
-  const isSpread = template.spread;
-  return (
-    <div className="flex h-20 items-center justify-center gap-1 rounded-lg bg-ink-50 p-2">
-      <div
-        className="relative h-full rounded-md bg-white ring-1 ring-ink-200"
-        style={{ width: isSpread ? "100%" : "62%" }}
-      >
-        {isSpread && (
-          <div className="absolute left-1/2 top-0 h-full w-px -translate-x-1/2 bg-ink-200" />
-        )}
-        {template.regions.map((r, i) => (
-          <Region
-            key={i}
-            kind={r.kind}
-            style={{
-              left: `${r.x * 100}%`,
-              top: `${r.y * 100}%`,
-              width: `${r.w * 100}%`,
-              height: `${r.h * 100}%`,
-              padding: "2px",
-            }}
-          />
-        ))}
-      </div>
     </div>
   );
 }

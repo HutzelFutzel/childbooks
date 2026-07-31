@@ -44,6 +44,18 @@ export function useDnd(): DndValue {
 
 const DRAG_THRESHOLD = 6;
 
+/** Separator encoding a merged two-page drop target — see `pairDropId`. */
+const PAIR_DROP_SEP = "::pair::";
+
+/**
+ * The `data-page-drop` value for a merged two-page surface (`PairPageStage`):
+ * one shared drop zone that still resolves to whichever real page (left or
+ * right half) the point actually falls on — see `pageDropTargetAt`.
+ */
+export function pairDropId(leftPageId: string, rightPageId: string): string {
+  return `${leftPageId}${PAIR_DROP_SEP}${rightPageId}`;
+}
+
 /**
  * Hit-test a viewport point against the page surfaces (`data-page-drop`) and
  * return the page id plus the normalized (0..1) point within it. Shared by the
@@ -53,13 +65,16 @@ export function pageDropTargetAt(x: number, y: number): { pageId: string; point:
   for (const el of document.elementsFromPoint(x, y)) {
     if (el instanceof HTMLElement && el.dataset.pageDrop) {
       const r = el.getBoundingClientRect();
-      return {
-        pageId: el.dataset.pageDrop,
-        point: {
-          x: Math.max(0, Math.min(1, (x - r.left) / r.width)),
-          y: Math.max(0, Math.min(1, (y - r.top) / r.height)),
-        },
-      };
+      const fx = Math.max(0, Math.min(1, (x - r.left) / r.width));
+      const fy = Math.max(0, Math.min(1, (y - r.top) / r.height));
+      const rawId = el.dataset.pageDrop;
+      if (rawId.includes(PAIR_DROP_SEP)) {
+        const [leftId, rightId] = rawId.split(PAIR_DROP_SEP);
+        return fx < 0.5
+          ? { pageId: leftId, point: { x: fx * 2, y: fy } }
+          : { pageId: rightId, point: { x: (fx - 0.5) * 2, y: fy } };
+      }
+      return { pageId: rawId, point: { x: fx, y: fy } };
     }
   }
   return null;

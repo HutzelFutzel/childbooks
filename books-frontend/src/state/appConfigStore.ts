@@ -21,6 +21,11 @@ import {
   type ArtStylesConfig,
 } from "../core/config/artStyles";
 import {
+  createDefaultLayoutsConfig,
+  normalizeLayoutsConfig,
+  type LayoutsConfig,
+} from "../core/config/layouts";
+import {
   createDefaultAgeWritingConfig,
   normalizeAgeWritingConfig,
   type AgeWritingConfig,
@@ -262,6 +267,8 @@ export interface SkuVerifySummary {
 interface AppConfigState {
   modelConfig: ModelConfig;
   artStyles: ArtStylesConfig;
+  /** Admin overlay for the structural page layouts (titles, sizes, showcase). */
+  layouts: LayoutsConfig;
   ageWriting: AgeWritingConfig;
   /** Age/format-aware font-size recommendation coefficients. */
   typography: TypographyConfig;
@@ -338,6 +345,14 @@ interface AppConfigState {
   // Admin writes (enforced server-side; the snapshot reflects the result).
   saveModelConfig: (config: ModelConfig) => Promise<void>;
   saveArtStyles: (config: ArtStylesConfig) => Promise<void>;
+  saveLayouts: (config: LayoutsConfig) => Promise<void>;
+  /** Upload a showcase image for a layout; returns the stored example. */
+  uploadLayoutImage: (
+    layoutId: string,
+    base64: string,
+    mimeType: string,
+    meta?: { shape?: string; side?: string; alt?: string },
+  ) => Promise<void>;
   saveAgeWriting: (config: AgeWritingConfig) => Promise<void>;
   saveTypography: (config: TypographyConfig) => Promise<void>;
   saveModelCosts: (table: ModelCostTable) => Promise<void>;
@@ -515,6 +530,7 @@ async function safeError(res: Response): Promise<string | null> {
 export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   modelConfig: createDefaultModelConfig(),
   artStyles: createDefaultArtStylesConfig(),
+  layouts: createDefaultLayoutsConfig(),
   ageWriting: createDefaultAgeWritingConfig(),
   typography: createDefaultTypographyConfig(),
   modelCosts: createDefaultModelCostTable(),
@@ -550,6 +566,9 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       }, () => set({ loaded: true })),
       onSnapshot(doc(db, "appConfig", "artStyles"), (snap) => {
         set({ artStyles: normalizeArtStylesConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "layouts"), (snap) => {
+        set({ layouts: normalizeLayoutsConfig(snap.exists() ? snap.data() : undefined) });
       }),
       onSnapshot(doc(db, "appConfig", "ageWriting"), (snap) => {
         set({ ageWriting: normalizeAgeWritingConfig(snap.exists() ? snap.data() : undefined) });
@@ -665,6 +684,10 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
 
   async saveArtStyles(config) {
     await putJson("/admin/config/art-styles", config);
+  },
+
+  async saveLayouts(config) {
+    await putJson("/admin/config/layouts", config);
   },
 
   async saveAgeWriting(config) {
@@ -866,6 +889,15 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ base64, mimeType }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Upload failed.");
+  },
+
+  async uploadLayoutImage(layoutId, base64, mimeType, meta) {
+    const res = await backendFetch(`/admin/layouts/${encodeURIComponent(layoutId)}/image`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ base64, mimeType, ...meta }),
     });
     if (!res.ok) throw new Error((await safeError(res)) ?? "Upload failed.");
   },

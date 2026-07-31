@@ -54,7 +54,7 @@ export function layoutTextBox(
   inner: { x: number; y: number; w: number; h: number },
 ): PositionedWord[] {
   const c = ctx();
-  const lines: { toks: Tok[]; height: number }[] = [];
+  const lines: { toks: Tok[]; height: number; lastOfParagraph: boolean }[] = [];
 
   for (let p = 0; p < box.paragraphs.length; p++) {
     const para = box.paragraphs[p];
@@ -62,8 +62,11 @@ export function layoutTextBox(
     let lineWidth = 0;
     let maxFont = 0;
 
-    const flush = () => {
-      lines.push({ toks: line, height: box.lineHeight * (maxFont || baseSize) });
+    // `lastOfParagraph` is only true for the flush that ends the paragraph
+    // (not one forced by wrapping) — justify uses this to leave a paragraph's
+    // final line unstretched, same as every other text editor.
+    const flush = (lastOfParagraph = false) => {
+      lines.push({ toks: line, height: box.lineHeight * (maxFont || baseSize), lastOfParagraph });
       line = [];
       lineWidth = 0;
       maxFont = 0;
@@ -114,7 +117,7 @@ export function layoutTextBox(
         maxFont = Math.max(maxFont, fontSize);
       }
     }
-    flush(); // every paragraph ends a line (keeps empty paragraphs spaced)
+    flush(true); // every paragraph ends a line (keeps empty paragraphs spaced)
   }
 
   const totalHeight = lines.reduce((s, l) => s + l.height, 0);
@@ -141,18 +144,30 @@ export function layoutTextBox(
 
     const para = box.paragraphs[ln.toks[0]?.p ?? 0];
     const align = para?.align ?? box.align;
+
+    // Canvas has no native justify, so we stretch the gaps between words
+    // ourselves. Only interior (wrapped) lines with more than one word are
+    // stretched — a paragraph's last line (or any single-line paragraph)
+    // stays left-aligned instead of being force-spread edge to edge, matching
+    // Word/Docs/InDesign convention.
+    const spaceToks = ln.toks.slice(0, lastReal + 1).filter((t) => t.space);
+    const justify = align === "justify" && !ln.lastOfParagraph && spaceToks.length > 0;
+    const extraPerSpace = justify ? Math.max(0, inner.w - contentWidth) / spaceToks.length : 0;
+
+    // "justify" (and an unstretched justify line) both start flush left, same
+    // as "left"; only "right"/"center" shift the line's starting position.
     let x =
-      align === "left"
-        ? inner.x
-        : align === "right"
-          ? inner.x + inner.w - contentWidth
-          : inner.x + (inner.w - contentWidth) / 2;
+      align === "right"
+        ? inner.x + inner.w - contentWidth
+        : align === "center"
+          ? inner.x + (inner.w - contentWidth) / 2
+          : inner.x;
 
     for (const tok of ln.toks) {
       tok.x = x;
       tok.y = y;
       tok.lineHeight = ln.height;
-      x += tok.width;
+      x += tok.width + (justify && tok.space ? extraPerSpace : 0);
       const { space, ...word } = tok;
       void space;
       out.push(word);

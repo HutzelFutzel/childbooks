@@ -17,6 +17,7 @@ import type {
 import type { ReadingModeId } from "./config/ageWritingCatalog";
 import type { VersionTree } from "./versioning";
 import type { BookDesign } from "./design";
+import { DEFAULT_BOOK_LAYOUT_ID, type CompositionMode } from "./book/layouts";
 
 export type { ProviderId, Modality, ModelTier } from "./config/options";
 
@@ -80,8 +81,14 @@ export interface BookConfig {
   spreadUsage: SpreadUsage;
   textHandling: TextHandling;
   textPlacement: TextPlacement;
-  /** Layout template id (or "auto"). */
+  /** Structural page layout id (see `core/book/layouts`). */
   layoutId: string;
+  /**
+   * How the artwork relates to the page: filling it (with the text region kept
+   * calm) or generated beside the text. Unset ⇒ the layout's own default, so
+   * older projects keep the full-bleed behaviour they were made with.
+   */
+  compositionMode?: CompositionMode;
   /**
    * Whether the reader has confirmed the physical book setup (size / format /
    * layout) in the Design step at least once. Until then, entering Design shows
@@ -110,7 +117,7 @@ export function createDefaultConfig(): BookConfig {
     spreadUsage: "single",
     textHandling: "creative",
     textPlacement: "separate",
-    layoutId: "graphic-left-text-right",
+    layoutId: DEFAULT_BOOK_LAYOUT_ID,
   };
 }
 
@@ -279,6 +286,13 @@ export interface IllustrationImage extends AnchorImage {
    * the version and stays correct when the user reverts to it.
    */
   depicted?: DepictedSubject[];
+  /**
+   * The layout and composition mode this artwork was generated for. The prompt
+   * and the canvas shape both depend on them, so a page whose layout changed
+   * afterwards has art that no longer matches the page it sits on.
+   */
+  layoutId?: string;
+  compositionMode?: CompositionMode;
 }
 
 export interface Anchor {
@@ -525,3 +539,4 @@ export type {
   HAlign,
   VAlign,
 } from "./design";
+export { DESIGN_VERSION } from "./design";

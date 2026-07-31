@@ -19,6 +19,7 @@ import type { PipelineEnv } from "../../books-frontend/src/core/pipeline/illustr
 import type { ResolvedModels } from "../../books-frontend/src/core/models/registry";
 import type { ProviderId } from "../../books-frontend/src/core/config/options";
 import type { PromptContext } from "../../books-frontend/src/core/prompts/context";
+import type { CapabilityOverrides } from "../../books-frontend/src/core/config/modelCapabilities";
 
 function apiKeyFor(provider: ProviderId): string {
   const cfg = serverConfig();
@@ -79,10 +80,12 @@ export function backendPipelineEnv(
   uid: string,
   models: ResolvedModels,
   prompts?: PromptContext,
+  modelCapabilities?: CapabilityOverrides,
 ): PipelineEnv {
   return {
     models,
     apiKeyFor,
+    modelCapabilities,
     loadBlob: (id) => downloadBlobBase64(uid, id),
     saveImage: (base64, mimeType) => uploadBlob(uid, b64ToBuf(base64), mimeType),
     loadStyleImage: (presetId) => loadStyleImageFor(prompts, presetId),
