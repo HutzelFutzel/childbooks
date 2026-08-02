@@ -2,6 +2,8 @@
 
 import { motion } from "framer-motion";
 import { BookOpen } from "lucide-react";
+import type { PageDesign } from "../../core/types";
+import { CompositedPage, pageDesignHasContent } from "../design/CompositedPage";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { cn } from "../lib/cn";
 
@@ -13,6 +15,11 @@ export interface BookMockupProps {
   /** Optional title, overlaid only when showing the fallback/placeholder so a
    *  book stays recognizable before it has its own cover art. */
   title?: string;
+  /**
+   * Front-cover page design (text boxes, shapes, …). When present with content,
+   * the cover face is composited exactly as printed.
+   */
+  pageDesign?: PageDesign;
   /** Cover width / height aspect ratio. */
   aspect: number;
   /** Front-cover width in px (height derives from the aspect). Default 160. */
@@ -28,13 +35,23 @@ const DEPTH = 14;
  * the "hold it in your hands" moment on the Order stage. Angled slightly open
  * with a printed spine and a paper block; straightens a touch on hover.
  */
-export function BookMockup({ blobId, fallbackUrl, title, aspect, width = 160, className }: BookMockupProps) {
+export function BookMockup({
+  blobId,
+  fallbackUrl,
+  title,
+  pageDesign,
+  aspect,
+  width = 160,
+  className,
+}: BookMockupProps) {
   const blobUrl = useBlobUrl(blobId);
   // The real cover (blob) wins; otherwise fall back to the branded default.
   const url = blobUrl ?? fallbackUrl ?? null;
-  // Only stamp the title when there's no real cover art — a generated cover
-  // already carries the book's identity.
-  const showTitle = !!title && !blobUrl;
+  const height = width / aspect;
+  const composite = pageDesignHasContent(pageDesign);
+  // Only stamp the title when there's no real cover art and no designed
+  // overlays — a generated/composited cover already carries the book's identity.
+  const showTitle = !!title && !blobUrl && !composite;
 
   return (
     <div className={cn("mx-auto", className)} style={{ perspective: "1100px" }}>
@@ -70,8 +87,23 @@ export function BookMockup({ blobId, fallbackUrl, title, aspect, width = 160, cl
           className="absolute inset-0 overflow-hidden rounded-r-md rounded-l-sm bg-ink-100 shadow-lifted ring-1 ring-black/10"
           style={{ transform: `translateZ(${DEPTH / 2}px)` }}
         >
-          {url ? (
-            <img src={url} alt="Front cover" className="size-full object-cover" />
+          {composite && pageDesign ? (
+            <CompositedPage
+              pageDesign={pageDesign}
+              surfaceWidthPx={width}
+              surfaceHeightPx={height}
+              illustrationBlobId={blobId}
+              illustrationUrl={url}
+              // Covers bias crop to the top — same as print/export.
+              illustrationFocus={{ x: 0.5, y: 0 }}
+            />
+          ) : url ? (
+            <img
+              src={url}
+              alt="Front cover"
+              className="size-full object-cover"
+              style={{ objectPosition: "50% 0%" }}
+            />
           ) : (
             <div className="flex size-full flex-col items-center justify-center gap-1.5 text-ink-300">
               <BookOpen className="size-6" />

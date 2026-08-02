@@ -292,7 +292,12 @@ export function OrderStage() {
 
       <div className="relative flex flex-col items-center gap-6 rounded-3xl border border-ink-100 bg-aurora p-6 shadow-soft sm:flex-row sm:items-center">
         <Celebrate play={celebrate} />
-        <BookMockup blobId={cover?.blobId} aspect={cover?.aspect ?? 1} className="shrink-0 py-2" />
+        <BookMockup
+          blobId={cover?.blobId}
+          pageDesign={project.design?.pages[COVER_FRONT_ID]}
+          aspect={cover?.aspect ?? 1}
+          className="shrink-0 py-2"
+        />
         <div className="flex min-w-0 flex-1 flex-col justify-center gap-3 text-center sm:text-left">
           <div>
             <h2 className="truncate text-lg font-bold text-ink-900">{project.title}</h2>

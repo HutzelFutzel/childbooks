@@ -87,6 +87,7 @@ export function ProjectCard({ project, onOpen, onDelete }: ProjectCardProps) {
           blobId={coverBlobId}
           fallbackUrl={fallbackUrl}
           title={coverBlobId ? undefined : project.title}
+          pageDesign={project.design?.pages[COVER_FRONT_ID]}
           aspect={aspect}
           width={176}
         />

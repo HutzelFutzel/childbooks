@@ -1,21 +1,8 @@
-import type { BookDesign, ImageElement, ShapeElement, TextBox } from "../../core/types";
+import type { BookDesign } from "../../core/types";
+import { CompositedPage, type ResolvedArtwork } from "./CompositedPage";
 import { defaultIllustrationFocus, type DesignPage } from "./designInit";
-import { useBlobUrl } from "../hooks/useBlobUrl";
-import { cssFilter } from "./effects";
-import { PatternFill } from "./patterns";
-import { ShapeSvg } from "./ShapeRender";
-import { TextBoxView } from "./TextBoxView";
 
-/**
- * Resolved artwork for a render pass: blob id -> object URL.
- *
- * Export passes resolve every blob BEFORE the stage mounts and hand the result
- * in here, so a page renders its illustration on its first paint. Fetching per
- * page from inside the component (which is what the on-screen path still does)
- * leaves a gap between mount and artwork that a capture loop will happily
- * rasterize straight through.
- */
-export type ResolvedArtwork = Record<string, string>;
+export type { ResolvedArtwork };
 
 /**
  * One thing to capture: a page drawn onto a surface, optionally showing only a
@@ -101,6 +88,7 @@ function PrintTargetView({
   forExport: boolean;
 }) {
   const clip = target.clip;
+  const pd = design.pages[target.page.id] ?? { textBoxes: [] };
   return (
     <div
       className={forExport ? "export-page" : "print-page"}
@@ -125,205 +113,16 @@ function PrintTargetView({
           height: target.surfaceHeightPx,
         }}
       >
-        <PrintPage target={target} design={design} artwork={artwork} />
-      </div>
-    </div>
-  );
-}
-
-interface Stacked {
-  id: string;
-  z: number;
-  rect: { x: number; y: number; w: number; h: number };
-  rotation?: number;
-  hidden?: boolean;
-  box?: TextBox;
-  shape?: ShapeElement;
-  image?: ImageElement;
-}
-
-/**
- * A page surface: full-bleed background layers filling the whole surface, and
- * the designed elements laid out against the TRIM box inside it.
- *
- * That split is the whole point of bleed. Artwork runs past the cut line so
- * there's no white sliver if the knife wanders; text and placed elements stay
- * on the trim box, at the physical position they were designed at, whether or
- * not this pass includes bleed.
- */
-function PrintPage({
-  target,
-  design,
-  artwork,
-}: {
-  target: PrintTarget;
-  design: BookDesign;
-  artwork?: ResolvedArtwork;
-}) {
-  const { page, bleedPx } = target;
-  // Only fetch when nothing was pre-resolved: passing `undefined` keeps the
-  // hook call unconditional (and inert) on the export path.
-  const fetched = useBlobUrl(artwork ? undefined : page.blobId);
-  const url = (page.blobId ? artwork?.[page.blobId] : undefined) ?? fetched;
-
-  const pd = design.pages[page.id] ?? { textBoxes: [] };
-  const W = target.surfaceWidthPx - bleedPx * 2;
-  const H = target.surfaceHeightPx - bleedPx * 2;
-
-  const hasIllustrationEl = (pd.images ?? []).some((im) => im.kind === "illustration");
-
-  // Keep the full-bleed crop consistent with the editor: covers anchor to the
-  // top so a baked-in title isn't shaved when the art overflows the trim.
-  const bgFocus = defaultIllustrationFocus(page);
-  const bgObjectPosition = bgFocus
-    ? `${(bgFocus.x * 100).toFixed(2)}% ${(bgFocus.y * 100).toFixed(2)}%`
-    : undefined;
-
-  const stacked: Stacked[] = [
-    ...pd.textBoxes.map((b) => ({ id: b.id, z: b.z, rect: b.rect, rotation: b.rotation, hidden: b.hidden, box: b })),
-    ...(pd.shapes ?? []).map((s) => ({ id: s.id, z: s.z, rect: s.rect, rotation: s.rotation, hidden: s.hidden, shape: s })),
-    ...(pd.images ?? []).map((im) => ({ id: im.id, z: im.z, rect: im.rect, rotation: im.rotation, hidden: im.hidden, image: im })),
-  ]
-    .filter((el) => !el.hidden)
-    .sort((a, b) => a.z - b.z);
-
-  return (
-    <div style={{ position: "absolute", inset: 0 }}>
-      {/* Background layers fill the surface edge to edge, bleed included. */}
-      {pd.background?.color && <div style={{ position: "absolute", inset: 0, background: pd.background.color }} />}
-      {pd.background?.pattern && <PatternFill config={pd.background.pattern} />}
-      {url && !hasIllustrationEl && (
-        <img
-          src={url}
-          alt=""
-          style={{
-            position: "absolute",
-            inset: 0,
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-            objectPosition: bgObjectPosition,
-          }}
-        />
-      )}
-
-      {/* Trim layer: everything the reader must not lose to the knife. */}
-      <div style={{ position: "absolute", left: bleedPx, top: bleedPx, width: W, height: H }}>
-        {stacked.map((el) => {
-          const w = el.rect.w * W;
-          const h = el.rect.h * H;
-          const wrapEffects =
-            el.shape || el.image
-              ? {
-                  filter: cssFilter((el.shape ?? el.image)?.effects, H),
-                  opacity: el.image ? el.image.opacity ?? el.image.effects?.opacity ?? 1 : undefined,
-                }
-              : {};
-          return (
-            <div
-              key={el.id}
-              style={{
-                position: "absolute",
-                left: 0,
-                top: 0,
-                width: w,
-                height: h,
-                transform: `translate(${el.rect.x * W}px, ${el.rect.y * H}px) rotate(${el.rotation ?? 0}deg)`,
-                ...wrapEffects,
-              }}
-            >
-              {el.box ? (
-                <TextBoxView box={el.box} pageHeight={H} w={w} h={h} aspect={W / H} />
-              ) : el.shape ? (
-                <ShapeSvg shape={el.shape} w={w} h={h} pageHeight={H} />
-              ) : el.image ? (
-                <PrintImage
-                  image={el.image}
-                  w={w}
-                  h={h}
-                  illustrationUrl={url ?? undefined}
-                  artwork={artwork}
-                />
-              ) : null}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function PrintImage({
-  image,
-  w,
-  h,
-  illustrationUrl,
-  artwork,
-}: {
-  image: ImageElement;
-  w: number;
-  h: number;
-  illustrationUrl?: string;
-  artwork?: ResolvedArtwork;
-}) {
-  const fetched = useBlobUrl(artwork || image.kind !== "asset" ? undefined : image.blobId);
-  const assetUrl = (image.blobId ? artwork?.[image.blobId] : undefined) ?? fetched;
-  const src = image.kind === "illustration" ? illustrationUrl : assetUrl ?? undefined;
-  if (!src) return null;
-  const radius = (image.corner ?? 0) * Math.min(w, h);
-  // A rescaled illustration shown whole leaves blank bars in print too — fill
-  // them with a blurred, zoomed copy so the printed page matches the editor.
-  const showBackdrop = image.fit === "contain" && image.kind === "illustration";
-  if (showBackdrop) {
-    return (
-      <div style={{ position: "relative", width: w, height: h, overflow: "hidden", borderRadius: radius }}>
-        <img
-          src={src}
-          alt=""
-          style={{
-            position: "absolute",
-            inset: 0,
-            width: w,
-            height: h,
-            objectFit: "cover",
-            filter: `blur(${h * 0.04}px)`,
-            transform: "scale(1.1)",
-            opacity: 0.85,
-          }}
-        />
-        <img
-          src={src}
-          alt=""
-          style={{ position: "relative", width: w, height: h, objectFit: "contain" }}
+        <CompositedPage
+          pageDesign={pd}
+          surfaceWidthPx={target.surfaceWidthPx}
+          surfaceHeightPx={target.surfaceHeightPx}
+          bleedPx={target.bleedPx}
+          illustrationBlobId={target.page.blobId}
+          artwork={artwork}
+          illustrationFocus={defaultIllustrationFocus(target.page)}
         />
       </div>
-    );
-  }
-  if (image.fit === "contain") {
-    return (
-      <img src={src} alt="" style={{ width: w, height: h, objectFit: "contain", borderRadius: radius }} />
-    );
-  }
-  // cover: object-position handles the focal point; an extra transform scale
-  // (anchored at the same point) applies the zoom, matching the editor's crop.
-  const zoom = Math.max(1, image.zoom ?? 1);
-  const fx = image.focus?.x ?? 0.5;
-  const fy = image.focus?.y ?? 0.5;
-  const pos = `${(fx * 100).toFixed(2)}% ${(fy * 100).toFixed(2)}%`;
-  return (
-    <div style={{ position: "relative", width: w, height: h, overflow: "hidden", borderRadius: radius }}>
-      <img
-        src={src}
-        alt=""
-        style={{
-          width: w,
-          height: h,
-          objectFit: "cover",
-          objectPosition: pos,
-          transform: zoom > 1 ? `scale(${zoom})` : undefined,
-          transformOrigin: pos,
-        }}
-      />
     </div>
   );
 }
