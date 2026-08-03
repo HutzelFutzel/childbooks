@@ -13,7 +13,8 @@ import type {
 } from "../../core/types";
 import { fontStack, loadFont } from "../typography/fonts";
 import { cn } from "../lib/cn";
-import { TextStyleBar, type TextStyleKey } from "./TextStyleBar";
+import { TextStyleBar, type TextBoxToolbarChrome, type TextStyleKey } from "./TextStyleBar";
+import type { ReadingModeId } from "../../core/config/ageWritingCatalog";
 import {
   applyInlineColor,
   applyInlineCommand,
@@ -142,6 +143,7 @@ export function PageStage({
   onEditText,
   onEditRichText,
   onStyleBox,
+  textToolbar,
   editable = true,
   dropId,
   showGutter = false,
@@ -186,7 +188,37 @@ export function PageStage({
   /** Commit styled paragraphs (preferred; preserves per-range styling). */
   onEditRichText?: (id: string, paragraphs: TextParagraph[]) => void;
   /** Apply a whole-box style patch (used by the floating character toolbar). */
-  onStyleBox?: (id: string, patch: Partial<TextBox>) => void;
+  onStyleBox?: (
+    id: string,
+    patch: Partial<TextBox>,
+    opts?: { coalesce?: string },
+  ) => void;
+  /**
+   * Canva-style whole-box chrome (font/size/align/⋯ More). When provided with
+   * `onStyleBox`, the floating bar becomes the primary text editor — no side
+   * inspector needed for everyday styling.
+   */
+  textToolbar?: {
+    pageWidthIn: number;
+    pageHeightIn: number;
+    ageRangeId?: string;
+    readingModeId?: ReadingModeId | null;
+    onDuplicate: (boxId: string) => void;
+    onDelete: (boxId: string) => void;
+    onToggleLock: (boxId: string) => void;
+    onCopyStyle: (boxId: string) => void;
+    onPasteStyle: (boxId: string) => void;
+    canPasteStyle: boolean;
+    /** Close a coalesced undo gesture (slider drag / colour scrub). */
+    onGestureEnd: () => void;
+    /**
+     * Discard an in-progress inline edit session that was live-synced into
+     * history (one undo step).
+     */
+    onDiscardEdit: () => void;
+    undo: () => void;
+    redo: () => void;
+  };
   editable?: boolean;
   /** Marks the sized page surface as a drop target for the sidebar element pool. */
   dropId?: string;
@@ -419,8 +451,8 @@ export function PageStage({
   const selMinWidthPx =
     selectedTextBox && W > 0 ? minContentWidthPct(selectedTextBox, aspect) * W : 0;
 
-  // The whole-box character toolbar shows whenever a text box is selected but
-  // not being edited in place (editing shows the word-level toolbar instead).
+  // Same Canva toolbar whether the box is selected or being edited — editing
+  // owns its own bar instance so character styles can target the live selection.
   const showBoxBar = Boolean(
     editable && selectedTextBox && onStyleBox && editingId !== selectedId,
   );
@@ -453,49 +485,72 @@ export function PageStage({
     };
   }, [boxBarId, W, H, pageDesign]);
 
-  // Style state for the whole-box toolbar: a mark is "active" only when every
-  // span carries it, "mixed" when some do — mirroring word processors.
+  // Character marks are active when every non-empty span carries them — the
+  // selected box *is* the selection in Canva terms.
   const boxSpans = (selectedTextBox?.paragraphs.flatMap((p) => p.spans) ?? []).filter(
     (s) => s.text.length > 0,
   );
   const spanAll = (fn: (s: (typeof boxSpans)[number]) => boolean) =>
     boxSpans.length > 0 && boxSpans.every(fn);
-  const spanSome = (fn: (s: (typeof boxSpans)[number]) => boolean) =>
-    boxSpans.some(fn);
-  const boxHasWordOverrides = boxSpans.some(
-    (s) => s.color !== undefined || (s.sizeMul !== undefined && s.sizeMul !== 1),
-  );
+
+  const mapSpans = (fn: (s: (typeof boxSpans)[number]) => (typeof boxSpans)[number]) =>
+    selectedTextBox!.paragraphs.map((p) => ({
+      ...p,
+      spans: p.spans.map(fn),
+    }));
 
   const toggleBoxStyle = (key: TextStyleKey) => {
     if (!selectedTextBox || !onStyleBox) return;
     const next = !spanAll((s) => Boolean(s[key]));
     onStyleBox(selectedTextBox.id, {
-      paragraphs: selectedTextBox.paragraphs.map((p) => ({
-        ...p,
-        spans: p.spans.map((s) => ({ ...s, [key]: next })),
-      })),
+      paragraphs: mapSpans((s) => ({ ...s, [key]: next })),
     });
   };
   const setBoxColor = (color: string) => {
     if (!selectedTextBox || !onStyleBox) return;
-    // Box colour is authoritative: clear per-word colours so it applies evenly.
+    // Uniform colour for the selection (whole box): drop span colour overrides.
     onStyleBox(selectedTextBox.id, {
       color,
-      paragraphs: selectedTextBox.paragraphs.map((p) => ({
-        ...p,
-        spans: p.spans.map((s) => ({ ...s, color: undefined })),
-      })),
+      paragraphs: mapSpans((s) => ({ ...s, color: undefined })),
     });
   };
-  const resetBoxWordStyles = () => {
+
+  /** Box chrome patches; size changes also clear leftover per-span size multipliers. */
+  const patchSelectedBox = (patch: Partial<TextBox>, opts?: { coalesce?: string }) => {
     if (!selectedTextBox || !onStyleBox) return;
-    onStyleBox(selectedTextBox.id, {
-      paragraphs: selectedTextBox.paragraphs.map((p) => ({
-        ...p,
-        spans: p.spans.map((s) => ({ ...s, color: undefined, sizeMul: undefined })),
-      })),
-    });
+    if (patch.fontSizePct !== undefined) {
+      onStyleBox(
+        selectedTextBox.id,
+        {
+          ...patch,
+          paragraphs: mapSpans((s) => ({ ...s, sizeMul: undefined })),
+        },
+        opts,
+      );
+      return;
+    }
+    onStyleBox(selectedTextBox.id, patch, opts);
   };
+
+  const boxChrome: TextBoxToolbarChrome | undefined =
+    selectedTextBox && textToolbar && onStyleBox
+      ? {
+          box: selectedTextBox,
+          pageWidthIn: textToolbar.pageWidthIn,
+          pageHeightIn: textToolbar.pageHeightIn,
+          surfaceAspect: aspect,
+          ageRangeId: textToolbar.ageRangeId,
+          readingModeId: textToolbar.readingModeId,
+          onPatch: patchSelectedBox,
+          onGestureEnd: textToolbar.onGestureEnd,
+          onDuplicate: () => textToolbar.onDuplicate(selectedTextBox.id),
+          onDelete: () => textToolbar.onDelete(selectedTextBox.id),
+          onToggleLock: () => textToolbar.onToggleLock(selectedTextBox.id),
+          onCopyStyle: () => textToolbar.onCopyStyle(selectedTextBox.id),
+          onPasteStyle: () => textToolbar.onPasteStyle(selectedTextBox.id),
+          canPasteStyle: textToolbar.canPasteStyle,
+        }
+      : undefined;
 
   const reframeEl = reframeId
     ? (pageDesign.images ?? []).find((im) => im.id === reframeId)
@@ -1076,12 +1131,62 @@ export function PageStage({
             W={W}
             H={H}
             baseSize={effectiveBaseSize(editingBox, aspect, H)}
-            onCommit={(paragraphs) => {
-              if (onEditRichText) onEditRichText(editingBox.id, paragraphs);
-              else onEditText?.(editingBox.id, paragraphs.map((p) => p.spans.map((s) => s.text).join("")).join("\n\n"));
+            chrome={
+              textToolbar && onStyleBox
+                ? {
+                    box: editingBox,
+                    pageWidthIn: textToolbar.pageWidthIn,
+                    pageHeightIn: textToolbar.pageHeightIn,
+                    surfaceAspect: aspect,
+                    ageRangeId: textToolbar.ageRangeId,
+                    readingModeId: textToolbar.readingModeId,
+                    onPatch: (patch, opts) => {
+                      if (patch.fontSizePct !== undefined) {
+                        onStyleBox(
+                          editingBox.id,
+                          {
+                            ...patch,
+                            paragraphs: editingBox.paragraphs.map((p) => ({
+                              ...p,
+                              spans: p.spans.map((s) => ({ ...s, sizeMul: undefined })),
+                            })),
+                          },
+                          opts,
+                        );
+                        return;
+                      }
+                      onStyleBox(editingBox.id, patch, opts);
+                    },
+                    onGestureEnd: textToolbar.onGestureEnd,
+                    onDuplicate: () => textToolbar.onDuplicate(editingBox.id),
+                    onDelete: () => {
+                      textToolbar.onDelete(editingBox.id);
+                      setEditingId(null);
+                    },
+                    onToggleLock: () => textToolbar.onToggleLock(editingBox.id),
+                    onCopyStyle: () => textToolbar.onCopyStyle(editingBox.id),
+                    onPasteStyle: () => textToolbar.onPasteStyle(editingBox.id),
+                    canPasteStyle: textToolbar.canPasteStyle,
+                  }
+                : undefined
+            }
+            onLiveSync={
+              onStyleBox
+                ? (paragraphs) =>
+                    onStyleBox(editingBox.id, { paragraphs }, { coalesce: `edit-${editingBox.id}` })
+                : undefined
+            }
+            onCommit={() => {
+              textToolbar?.onGestureEnd();
               setEditingId(null);
             }}
-            onCancel={() => setEditingId(null)}
+            onCancel={(discarded) => {
+              if (discarded) textToolbar?.onDiscardEdit();
+              else textToolbar?.onGestureEnd();
+              setEditingId(null);
+            }}
+            onUndo={() => textToolbar?.undo()}
+            onRedo={() => textToolbar?.redo()}
           />
         )}
 
@@ -1103,19 +1208,13 @@ export function PageStage({
         <TextStyleBar
           x={boxBarPos.x}
           y={boxBarPos.y}
-          scopeLabel="Whole text box"
           bold={spanAll((s) => Boolean(s.bold))}
           italic={spanAll((s) => Boolean(s.italic))}
           underline={spanAll((s) => Boolean(s.underline))}
-          boldMixed={spanSome((s) => Boolean(s.bold)) && !spanAll((s) => Boolean(s.bold))}
-          italicMixed={spanSome((s) => Boolean(s.italic)) && !spanAll((s) => Boolean(s.italic))}
-          underlineMixed={
-            spanSome((s) => Boolean(s.underline)) && !spanAll((s) => Boolean(s.underline))
-          }
           color={selectedTextBox.color}
           onToggle={toggleBoxStyle}
           onColor={setBoxColor}
-          onReset={boxHasWordOverrides ? resetBoxWordStyles : undefined}
+          chrome={boxChrome}
         />
       )}
     </div>
@@ -1127,31 +1226,47 @@ export function PageStage({
  * renderer (chrome stays on the canvas behind it; this only owns the words), so
  * editing is true WYSIWYG: same font, size, color, alignment, padding and
  * preset text style as the printed page.
+ *
+ * Live-syncs into design history (one coalesced undo step for the session) so
+ * B/I/U/colour/typing are undoable. Escape discards that step.
  */
 function InlineTextEditor({
   box,
   W,
   H,
   baseSize,
+  chrome,
+  onLiveSync,
   onCommit,
   onCancel,
+  onUndo,
+  onRedo,
 }: {
   box: TextBox;
   W: number;
   H: number;
   baseSize: number;
-  onCommit: (paragraphs: TextParagraph[]) => void;
-  onCancel: () => void;
+  chrome?: TextBoxToolbarChrome;
+  /** Push current editor paragraphs into the design (coalesced undo). */
+  onLiveSync?: (paragraphs: TextParagraph[]) => void;
+  onCommit: () => void;
+  /** `discarded` true when the user cancelled a dirty session (Escape). */
+  onCancel: (discarded: boolean) => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
   const done = useRef(false);
-  const [toolbar, setToolbar] = useState<{
-    x: number;
-    y: number;
-    bold: boolean;
-    italic: boolean;
-    underline: boolean;
-  } | null>(null);
+  const dirty = useRef(false);
+  const [marks, setMarks] = useState({ bold: false, italic: false, underline: false });
+  const [barPos, setBarPos] = useState<{ x: number; y: number } | null>(null);
+
+  const syncLive = () => {
+    if (!ref.current || !onLiveSync) return;
+    dirty.current = true;
+    onLiveSync(editorToParagraphs(ref.current));
+  };
 
   useEffect(() => {
     const el = ref.current;
@@ -1166,39 +1281,86 @@ function InlineTextEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Show a formatting toolbar above any non-collapsed selection in the editor.
+  // Pin the toolbar above the text box (Canva), not the ephemeral selection rect.
+  useEffect(() => {
+    const update = () => {
+      const wrap = wrapRef.current;
+      if (!wrap) {
+        setBarPos(null);
+        return;
+      }
+      const r = wrap.getBoundingClientRect();
+      setBarPos({ x: r.left + r.width / 2, y: r.top });
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [box.rect.x, box.rect.y, box.rect.w, box.rect.h, W, H]);
+
+  // Keep B/I/U toggles in sync with the current selection / typing state.
   useEffect(() => {
     const onSel = () => {
       const el = ref.current;
       const sel = window.getSelection();
-      if (!el || !sel || sel.rangeCount === 0 || sel.isCollapsed) {
-        setToolbar(null);
-        return;
-      }
-      const range = sel.getRangeAt(0);
-      if (!el.contains(range.commonAncestorContainer)) {
-        setToolbar(null);
-        return;
-      }
-      const rect = range.getBoundingClientRect();
-      setToolbar({
-        x: rect.left + rect.width / 2,
-        y: rect.top,
+      if (!el || !sel || sel.rangeCount === 0) return;
+      if (!el.contains(sel.anchorNode) && !el.contains(sel.focusNode)) return;
+      setMarks({
         bold: document.queryCommandState("bold"),
         italic: document.queryCommandState("italic"),
         underline: document.queryCommandState("underline"),
       });
     };
     document.addEventListener("selectionchange", onSel);
+    onSel();
     return () => document.removeEventListener("selectionchange", onSel);
   }, []);
 
-  function finish(commit: boolean) {
+  function finish(save: boolean) {
     if (done.current) return;
     done.current = true;
-    if (commit && ref.current) onCommit(editorToParagraphs(ref.current));
-    else onCancel();
+    if (save) {
+      // Flush final DOM into the coalesced step only when the session changed.
+      if (dirty.current && ref.current && onLiveSync) {
+        onLiveSync(editorToParagraphs(ref.current));
+      }
+      onCommit();
+    } else {
+      onCancel(dirty.current);
+    }
   }
+
+  // ⌘Z / ⌘⇧Z → design undo/redo (not the browser's contentEditable stack).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey)) return;
+      const key = e.key.toLowerCase();
+      const isUndo = key === "z" && !e.shiftKey;
+      const isRedo = key === "y" || (key === "z" && e.shiftKey);
+      if (!isUndo && !isRedo) return;
+      const el = ref.current;
+      if (!el || (e.target !== el && !el.contains(e.target as Node))) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (done.current) return;
+      if (isUndo) {
+        if (dirty.current) finish(false);
+        else {
+          finish(true);
+          onUndo?.();
+        }
+      } else {
+        finish(true);
+        onRedo?.();
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const preset = getPreset(box.presetId);
   const colors = {
@@ -1210,9 +1372,14 @@ function InlineTextEditor({
   const boxH = box.rect.h * H;
   const pad = (box.padding ?? preset.padding) * Math.min(boxW, boxH);
 
+  // While editing, chrome must reflect the live box; keep onPatch bound to the
+  // latest box identity from the parent-built chrome object.
+  const liveChrome = chrome ? { ...chrome, box } : undefined;
+
   return (
     <>
       <div
+        ref={wrapRef}
         style={{
           position: "absolute",
           left: box.rect.x * W,
@@ -1250,7 +1417,19 @@ function InlineTextEditor({
             contentEditable
             suppressContentEditableWarning
             spellCheck={false}
-            onBlur={() => finish(true)}
+            onInput={syncLive}
+            onBlur={(e) => {
+              // Keep editing alive when the floating toolbar (portaled) is clicked.
+              const next = e.relatedTarget as Node | null;
+              if (next && document.body.contains(next)) {
+                const bar = (next as HTMLElement).closest?.("[data-text-style-bar]");
+                if (bar) {
+                  ref.current?.focus();
+                  return;
+                }
+              }
+              finish(true);
+            }}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
                 e.preventDefault();
@@ -1281,23 +1460,30 @@ function InlineTextEditor({
           />
         </div>
       </div>
-      {toolbar && (
+      {barPos && (
         <TextStyleBar
-          x={toolbar.x}
-          y={toolbar.y}
-          scopeLabel="Selected words"
-          bold={toolbar.bold}
-          italic={toolbar.italic}
-          underline={toolbar.underline}
+          x={barPos.x}
+          y={barPos.y}
+          bold={marks.bold}
+          italic={marks.italic}
+          underline={marks.underline}
           color={box.color}
           onToggle={(key) => {
             applyInlineCommand(key);
             ref.current?.focus();
+            setMarks({
+              bold: document.queryCommandState("bold"),
+              italic: document.queryCommandState("italic"),
+              underline: document.queryCommandState("underline"),
+            });
+            syncLive();
           }}
           onColor={(c) => {
             applyInlineColor(c);
             ref.current?.focus();
+            syncLive();
           }}
+          chrome={liveChrome}
         />
       )}
     </>

@@ -18,7 +18,7 @@ import type { Anchor, CoverSpec, ScreenplaySpread } from "../../core/types";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { wordParagraphs } from "../../core/design";
 import { effectiveAnchorIds } from "../../core/book/anchorRefs";
-import { formatCapabilitiesForProject } from "../../core/book";
+import { bookProductForConfig, formatCapabilitiesForProject } from "../../core/book";
 import {
   computeBarcodeZone,
   computePageGuides,
@@ -95,11 +95,20 @@ export function PageStagePanel({
     patchShape,
     patchImage,
     makeIllustrationEditable,
+    duplicateBox,
+    deleteBox,
+    copyBoxStyle,
+    pasteBoxStyle,
+    hasCopiedBoxStyle,
+    endHistoryGesture,
+    undo,
+    redo,
     snap,
     grid,
     guides,
     generatingPages,
   } = useStudio();
+  const trim = bookProductForConfig(project.config).trim;
 
   const coverMode = subject.kind === "cover";
   const blank = subject.kind === "spread" && !!subject.spread.blankCanvas;
@@ -185,7 +194,29 @@ export function PageStagePanel({
         patchBox(page.id, id, { paragraphs: wordParagraphs(value) })
       }
       onEditRichText={(id, paragraphs) => patchBox(page.id, id, { paragraphs })}
-      onStyleBox={(id, patch) => patchBox(page.id, id, patch)}
+      onStyleBox={(id, patch, opts) => patchBox(page.id, id, patch, opts)}
+      textToolbar={{
+        pageWidthIn: trim.widthIn,
+        pageHeightIn: trim.heightIn,
+        ageRangeId: project.config.ageRangeId,
+        readingModeId: project.config.readingModeId,
+        onDuplicate: (boxId) => duplicateBox(page.id, boxId),
+        onDelete: (boxId) => deleteBox(page.id, boxId),
+        onToggleLock: (boxId) => {
+          const box = pageDesign(page.id).textBoxes.find((b) => b.id === boxId);
+          if (box) patchBox(page.id, boxId, { locked: !box.locked });
+        },
+        onCopyStyle: (boxId) => copyBoxStyle(page.id, boxId),
+        onPasteStyle: (boxId) => pasteBoxStyle(page.id, boxId),
+        canPasteStyle: hasCopiedBoxStyle,
+        onGestureEnd: endHistoryGesture,
+        onDiscardEdit: () => {
+          undo();
+          endHistoryGesture();
+        },
+        undo,
+        redo,
+      }}
       selectedSpan={selectedSpan}
       onSelectSpan={(ref: SpanRef | null) => {
         if (selection.kind === "box" && onThisPage)

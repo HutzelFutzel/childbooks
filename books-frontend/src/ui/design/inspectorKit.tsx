@@ -178,6 +178,7 @@ export function Slider({
   step,
   value,
   onChange,
+  onGestureEnd,
   format,
 }: {
   label: string;
@@ -186,6 +187,8 @@ export function Slider({
   step: number;
   value: number;
   onChange: (v: number) => void;
+  /** Fired when a drag ends — pair with coalesced history commits. */
+  onGestureEnd?: () => void;
   format?: (v: number) => string;
 }) {
   return (
@@ -198,6 +201,8 @@ export function Slider({
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
+        onPointerUp={onGestureEnd}
+        onPointerCancel={onGestureEnd}
         className="flex-1"
       />
       {format && <span className="w-8 shrink-0 text-right tabular-nums">{format(value)}</span>}

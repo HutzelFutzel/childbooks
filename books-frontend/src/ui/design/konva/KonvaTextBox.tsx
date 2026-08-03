@@ -1,12 +1,18 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
-import Konva from "konva";
 import { Group, Rect, Text } from "react-konva";
 import type { TextBox } from "../../../core/types";
 import { loadFont } from "../../typography/fonts";
-import { konvaShadow } from "../effects";
+import {
+  effectiveBackdropBlur,
+  konvaShadow,
+  shadowCastsOnText,
+  textBoxPlateRadius,
+} from "../effects";
 import { getPreset } from "../presets";
 import { effectiveBaseSize } from "../textFit";
 import { chromeFor } from "./chrome";
+import { KonvaBackdropBlur } from "./KonvaBackdropBlur";
+import { KonvaBoxShadow } from "./KonvaBoxShadow";
 import { layoutTextBox } from "./textLayout";
 import { usePatternImage } from "./usePatternImage";
 import type { SpanRef } from "../TextBoxView";
@@ -148,7 +154,7 @@ export const KonvaTextBox = forwardRef<
 
   const shadowed = box.presetId === "shadowed";
   const effectShadow = konvaShadow(box.effects, pageHeight);
-  const presetShadow = shadowed
+  const presetTextShadow = shadowed
     ? {
         shadowColor: "black",
         shadowOpacity: 0.55,
@@ -156,34 +162,39 @@ export const KonvaTextBox = forwardRef<
         shadowOffsetY: liveBaseSize * 0.05,
       }
     : null;
-  const shadowProps = effectShadow ?? presetShadow;
+  // Effects text target (or legacy) → glyph shadow; else keep the "shadowed" preset look.
+  const textShadowProps = shadowCastsOnText(box.effects)
+    ? effectShadow
+    : box.effects?.shadow
+      ? null
+      : presetTextShadow;
 
-  // Soft "frosted" blur of the whole box (chrome + background + words). Konva
-  // needs an offscreen cache to run a filter; we skip it mid-resize (the cache
-  // would rebuild every frame) and re-apply once the box settles.
-  const contentRef = useRef<Konva.Group>(null);
-  const blurPx = (box.effects?.blur ?? 0) * pageHeight;
-  const canBlur = blurPx > 0 && !resizing && !hideText;
-  useEffect(() => {
-    const node = contentRef.current;
-    if (!node) return;
-    if (canBlur) {
-      node.cache();
-      node.filters([Konva.Filters.Blur]);
-      node.blurRadius(blurPx);
-    } else {
-      node.filters([]);
-      node.clearCache();
-    }
-    node.getLayer()?.batchDraw();
-  }, [canBlur, blurPx, w, h, box, liveBaseSize, selectedSpan, resizing]);
+  const backdropBlurPx = effectiveBackdropBlur(box) * pageHeight;
+  const plateRadius = textBoxPlateRadius(box.presetId, w, h);
 
   return (
     <>
       {/* Invisible hit/drag surface so the whole box reacts to clicks. */}
       <Rect width={w} height={h} fill="#fff" opacity={0} />
 
-      <Group ref={contentRef} listening={false}>
+      <KonvaBoxShadow
+        w={w}
+        h={h}
+        presetId={box.presetId}
+        effects={box.effects}
+        pageHeight={pageHeight}
+      />
+
+      {/* Frost what's behind the plate; buffer is stage-sized, sampled live. */}
+      <KonvaBackdropBlur
+        w={w}
+        h={h}
+        blurPx={backdropBlurPx}
+        cornerRadius={plateRadius}
+        pauseRebake={resizing}
+      />
+
+      <Group listening={false}>
         {chromeFor(box.presetId, w, h, colors)}
 
         {box.pattern && pattern && (
@@ -237,7 +248,7 @@ export const KonvaTextBox = forwardRef<
                     height={word.lineHeight}
                     verticalAlign="middle"
                     listening={false}
-                    {...(shadowProps ?? {})}
+                    {...(textShadowProps ?? {})}
                   />
                 </Group>
               );

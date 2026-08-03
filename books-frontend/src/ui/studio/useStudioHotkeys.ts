@@ -20,24 +20,25 @@ export function useStudioHotkeys() {
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (isTypingTarget(e.target)) return;
       const s = studioRef.current;
       const sel = s.selection;
       const hasEl = sel.kind === "box" || sel.kind === "shape" || sel.kind === "image";
       const mod = e.metaKey || e.ctrlKey;
       const key = e.key.toLowerCase();
 
+      // Design undo/redo always wins — including inside inputs / contentEditable
+      // (inline text editing handles ⌘Z itself and stopPropagation's first).
+      if (mod && (key === "z" || key === "y")) {
+        e.preventDefault();
+        if (key === "y" || e.shiftKey) s.redo();
+        else s.undo();
+        return;
+      }
+
+      if (isTypingTarget(e.target)) return;
+
       if (mod) {
         switch (key) {
-          case "z":
-            e.preventDefault();
-            if (e.shiftKey) s.redo();
-            else s.undo();
-            return;
-          case "y":
-            e.preventDefault();
-            s.redo();
-            return;
           case "c":
             if (hasEl) {
               e.preventDefault();

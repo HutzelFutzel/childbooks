@@ -565,10 +565,17 @@ async function gcBlobsIfUnreferenced(
  * disk. Each save writes the LATEST in-memory snapshot of the project, so once
  * all queued saves drain the stored copy always reflects every applied change.
  * Failures don't break the chain (next saves still run).
+ *
+ * Rapid edits (sliders, colour drags) are debounced so we don't rewrite storage
+ * on every pointer sample; {@link flushProjectSaves} forces any pending write.
  */
 let saveChain: Promise<void> = Promise.resolve();
 let saveRetryTimer: ReturnType<typeof setTimeout> | null = null;
 const SAVE_RETRY_MS = 10_000;
+const SAVE_DEBOUNCE_MS = 350;
+const saveDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pendingPersist = new Map<string, { get: ProjectsGet; set: ProjectsSet }>();
+const persistWaiters = new Map<string, Array<() => void>>();
 
 function persistLatest(get: ProjectsGet, set: ProjectsSet, id: string): Promise<void> {
   const next = saveChain.then(async () => {
@@ -614,6 +621,30 @@ function persistLatest(get: ProjectsGet, set: ProjectsSet, id: string): Promise<
   return next;
 }
 
+/** Coalesce rapid mutations into one storage write shortly after editing settles. */
+function schedulePersist(get: ProjectsGet, set: ProjectsSet, id: string): Promise<void> {
+  pendingPersist.set(id, { get, set });
+  const prev = saveDebounceTimers.get(id);
+  if (prev) clearTimeout(prev);
+  return new Promise((resolve) => {
+    const waiters = persistWaiters.get(id) ?? [];
+    waiters.push(resolve);
+    persistWaiters.set(id, waiters);
+    saveDebounceTimers.set(
+      id,
+      setTimeout(() => {
+        saveDebounceTimers.delete(id);
+        pendingPersist.delete(id);
+        const ready = persistWaiters.get(id) ?? [];
+        persistWaiters.delete(id);
+        void persistLatest(get, set, id).finally(() => {
+          for (const w of ready) w();
+        });
+      }, SAVE_DEBOUNCE_MS),
+    );
+  });
+}
+
 /**
  * Wait for every queued save to land before reading the book back.
  *
@@ -625,6 +656,17 @@ function persistLatest(get: ProjectsGet, set: ProjectsSet, id: string): Promise<
  * Anyone about to hand the book to the server waits here first.
  */
 export function flushProjectSaves(): Promise<void> {
+  for (const [id, { get, set }] of [...pendingPersist]) {
+    const t = saveDebounceTimers.get(id);
+    if (t) clearTimeout(t);
+    saveDebounceTimers.delete(id);
+    pendingPersist.delete(id);
+    const ready = persistWaiters.get(id) ?? [];
+    persistWaiters.delete(id);
+    void persistLatest(get, set, id).finally(() => {
+      for (const w of ready) w();
+    });
+  }
   return saveChain;
 }
 
@@ -662,5 +704,5 @@ function mutateProject(
     };
   });
   if (!found) return Promise.resolve();
-  return persistLatest(get, set, id);
+  return schedulePersist(get, set, id);
 }

@@ -1,5 +1,5 @@
 import { RotateCcw } from "lucide-react";
-import type { ElementEffects, ImageElement } from "../../core/types";
+import type { ImageElement } from "../../core/types";
 import { cn } from "../lib/cn";
 import { EffectsControls } from "./EffectsControls";
 import { ActionBar, AlignPad, type AlignEdge, Section, Slider } from "./inspectorKit";
@@ -8,16 +8,19 @@ import { ActionBar, AlignPad, type AlignEdge, Section, Slider } from "./inspecto
 export function ImageInspector({
   image,
   onChange,
+  onGestureEnd,
   onDelete,
   onDuplicate,
   onAlign,
 }: {
   image: ImageElement;
-  onChange: (patch: Partial<ImageElement>) => void;
+  onChange: (patch: Partial<ImageElement>, opts?: { coalesce?: string }) => void;
+  onGestureEnd?: () => void;
   onDelete: () => void;
   onDuplicate: () => void;
   onAlign: (edge: AlignEdge) => void;
 }) {
+  const coalesce = (key: string) => ({ coalesce: `${key}-${image.id}` });
   const isFill = image.fit !== "contain";
   const zoom = Math.max(1, image.zoom ?? 1);
   const focus = image.focus ?? { x: 0.5, y: 0.5 };
@@ -65,7 +68,8 @@ export function ImageInspector({
           max={0.5}
           step={0.02}
           value={image.corner ?? 0}
-          onChange={(corner) => onChange({ corner: corner || undefined })}
+          onChange={(corner) => onChange({ corner: corner || undefined }, coalesce("corner"))}
+          onGestureEnd={onGestureEnd}
         />
       </Section>
 
@@ -94,7 +98,8 @@ export function ImageInspector({
             max={3}
             step={0.05}
             value={zoom}
-            onChange={(z) => onChange({ zoom: z <= 1.001 ? undefined : z })}
+            onChange={(z) => onChange({ zoom: z <= 1.001 ? undefined : z }, coalesce("zoom"))}
+            onGestureEnd={onGestureEnd}
             format={(z) => `${z.toFixed(1)}×`}
           />
           <Slider
@@ -103,7 +108,8 @@ export function ImageInspector({
             max={1}
             step={0.02}
             value={focus.x}
-            onChange={(x) => onChange({ focus: { x, y: focus.y } })}
+            onChange={(x) => onChange({ focus: { x, y: focus.y } }, coalesce("focus"))}
+            onGestureEnd={onGestureEnd}
             format={(v) => `${Math.round(v * 100)}`}
           />
           <Slider
@@ -112,7 +118,8 @@ export function ImageInspector({
             max={1}
             step={0.02}
             value={focus.y}
-            onChange={(y) => onChange({ focus: { x: focus.x, y } })}
+            onChange={(y) => onChange({ focus: { x: focus.x, y } }, coalesce("focus"))}
+            onGestureEnd={onGestureEnd}
             format={(v) => `${Math.round(v * 100)}`}
           />
         </Section>
@@ -126,7 +133,10 @@ export function ImageInspector({
         <EffectsControls
           effects={image.effects}
           showOpacity
-          onChange={(effects: ElementEffects | undefined) => onChange({ effects })}
+          onChange={(effects, meta) =>
+            onChange({ effects }, meta?.coalesce ? coalesce("effects") : undefined)
+          }
+          onGestureEnd={onGestureEnd}
         />
       </Section>
     </div>

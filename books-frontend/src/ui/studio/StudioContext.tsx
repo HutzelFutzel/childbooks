@@ -45,11 +45,14 @@ import {
 import { getPreset } from "../design/presets";
 import { newShapeId, shapeStyleDefaults } from "../design/shapes";
 import { fitBoxHeightPct, fitFontSizePct } from "../design/textFit";
+import type { TextEditSection } from "../design/TextEditPanel";
 import type { SpanRef } from "../design/TextBoxView";
 import { notify } from "../lib/notify";
 import { buildDisplaySpreads, type DisplaySpread, type Entry, type SpreadSide } from "./spreadModel";
 import type { PageSubject } from "./PageEditorCard";
 import { computeProgress, type StudioStep } from "./studioSteps";
+
+export type { TextEditSection } from "../design/TextEditPanel";
 
 export type Selection =
   | { kind: "none" }
@@ -60,6 +63,16 @@ export type Selection =
   | { kind: "anchor"; anchorId: string };
 
 export type AlignEdge = "left" | "hcenter" | "right" | "top" | "vcenter" | "bottom";
+
+/** Options for design mutations that participate in undo/redo. */
+export type HistoryOpts = {
+  /**
+   * When set, consecutive mutations with the same key merge into one undo step
+   * (slider drags, an inline text-edit session). Cleared by {@link endHistoryGesture}
+   * or by any mutation without a matching key.
+   */
+  coalesce?: string;
+};
 
 /** A normalized point on a page (0..1 in each axis). */
 export interface Point {
@@ -92,6 +105,14 @@ interface StudioContextValue {
   selectedImage: ImageElement | null;
 
   /**
+   * Canva-style docked edit panel for text boxes (Effects / Background / More).
+   * Opened from the floating toolbar so controls never cover the selection.
+   */
+  textEditSection: TextEditSection | null;
+  openTextEdit: (section: TextEditSection) => void;
+  closeTextEdit: () => void;
+
+  /**
    * The display-spread id currently open in the Design stage's main canvas —
    * i.e. page navigation. Only one spread is ever mounted as a live Konva
    * editor at a time; every other page is just a static filmstrip thumbnail.
@@ -102,8 +123,18 @@ interface StudioContextValue {
   // design ops (page-scoped)
   undo: () => void;
   redo: () => void;
+  /**
+   * End a coalesced history gesture (slider drag, inline edit session). The next
+   * mutation starts a fresh undo step.
+   */
+  endHistoryGesture: () => void;
   addBox: (pageId: string, center?: Point) => void;
-  patchBox: (pageId: string, boxId: string, patch: Partial<TextBox>) => void;
+  patchBox: (
+    pageId: string,
+    boxId: string,
+    patch: Partial<TextBox>,
+    opts?: HistoryOpts,
+  ) => void;
   patchSpan: (pageId: string, boxId: string, ref: SpanRef, patch: Partial<TextSpan>) => void;
   deleteBox: (pageId: string, boxId: string) => void;
   duplicateBox: (pageId: string, boxId: string) => void;
@@ -112,7 +143,12 @@ interface StudioContextValue {
 
   // shape ops (page-scoped)
   addShape: (pageId: string, kind: ShapeKind, center?: Point) => void;
-  patchShape: (pageId: string, shapeId: string, patch: Partial<ShapeElement>) => void;
+  patchShape: (
+    pageId: string,
+    shapeId: string,
+    patch: Partial<ShapeElement>,
+    opts?: HistoryOpts,
+  ) => void;
   deleteShape: (pageId: string, shapeId: string) => void;
   duplicateShape: (pageId: string, shapeId: string) => void;
   reorderShape: (pageId: string, shapeId: string, dir: -1 | 1) => void;
@@ -120,7 +156,12 @@ interface StudioContextValue {
 
   // image ops (page-scoped)
   addAssetImage: (pageId: string, asset: AssetItem, center?: Point) => void;
-  patchImage: (pageId: string, imageId: string, patch: Partial<ImageElement>) => void;
+  patchImage: (
+    pageId: string,
+    imageId: string,
+    patch: Partial<ImageElement>,
+    opts?: HistoryOpts,
+  ) => void;
   deleteImage: (pageId: string, imageId: string) => void;
   duplicateImage: (pageId: string, imageId: string) => void;
   alignImage: (pageId: string, imageId: string, edge: AlignEdge) => void;
@@ -376,6 +417,7 @@ export function StudioProvider({
   const setDesign = useProjectsStore((s) => s.setDesign);
 
   const [selection, setSelection] = useState<Selection>({ kind: "none" });
+  const [textEditSection, setTextEditSection] = useState<TextEditSection | null>(null);
   const [editingDispId, setEditingDispId] = useState<string | null>(null);
   const [generatingAnchors, setGA] = useState<Set<string>>(new Set());
   const [generatingPages, setGP] = useState<Set<string>>(new Set());
@@ -387,6 +429,8 @@ export function StudioProvider({
   const [grid, setGrid] = useState(false);
   const [guides, setGuides] = useState(true);
   const history = useRef<{ past: BookDesign[]; future: BookDesign[] }>({ past: [], future: [] });
+  /** Active coalesce key — see {@link HistoryOpts.coalesce}. */
+  const coalesceKey = useRef<string | null>(null);
   const genAbort = useRef<AbortController | null>(null);
 
   const startGeneration = useCallback(() => {
@@ -548,13 +592,22 @@ export function StudioProvider({
   const openCoverStudio = useCallback(() => setCoverStudioOpen(true), []);
   const closeCoverStudio = useCallback(() => setCoverStudioOpen(false), []);
 
-  const select = useCallback((sel: Selection) => setSelection(sel), []);
+  const select = useCallback((sel: Selection) => {
+    setSelection(sel);
+    if (sel.kind !== "box") setTextEditSection(null);
+  }, []);
+
+  const openTextEdit = useCallback((section: TextEditSection) => {
+    setTextEditSection(section);
+  }, []);
+  const closeTextEdit = useCallback(() => setTextEditSection(null), []);
 
   // Entering/leaving focused edit clears element selection so the inspector
   // never shows controls for an element whose editor is no longer on screen.
   const setEditingDisp = useCallback((id: string | null) => {
     setEditingDispId(id);
     setSelection({ kind: "none" });
+    setTextEditSection(null);
   }, []);
 
   const setAnchorGenerating = useCallback((id: string, on: boolean) => {
@@ -574,13 +627,22 @@ export function StudioProvider({
     });
   }, []);
 
+  const endHistoryGesture = useCallback(() => {
+    coalesceKey.current = null;
+  }, []);
+
   const commit = useCallback(
-    (mutate: (d: BookDesign) => BookDesign) => {
+    (mutate: (d: BookDesign) => BookDesign, opts?: HistoryOpts) => {
       const cur = useProjectsStore.getState().current()?.design;
       if (!cur) return;
-      history.current.past.push(cur);
-      if (history.current.past.length > 80) history.current.past.shift();
-      history.current.future = [];
+      const key = opts?.coalesce;
+      const merging = key != null && key === coalesceKey.current;
+      if (!merging) {
+        history.current.past.push(cur);
+        if (history.current.past.length > 80) history.current.past.shift();
+        history.current.future = [];
+      }
+      coalesceKey.current = key ?? null;
       void setDesign(mutate(structuredClone(cur)));
     },
     [setDesign],
@@ -590,6 +652,7 @@ export function StudioProvider({
     const cur = useProjectsStore.getState().current()?.design;
     const past = history.current.past;
     if (!cur || past.length === 0) return;
+    coalesceKey.current = null;
     history.current.future.push(cur);
     void setDesign(past.pop()!);
   }, [setDesign]);
@@ -598,6 +661,7 @@ export function StudioProvider({
     const cur = useProjectsStore.getState().current()?.design;
     const future = history.current.future;
     if (!cur || future.length === 0) return;
+    coalesceKey.current = null;
     history.current.past.push(cur);
     void setDesign(future.pop()!);
   }, [setDesign]);
@@ -612,7 +676,7 @@ export function StudioProvider({
   );
 
   const patchBox = useCallback(
-    (pageId: string, boxId: string, patch: Partial<TextBox>) => {
+    (pageId: string, boxId: string, patch: Partial<TextBox>, opts?: HistoryOpts) => {
       const aspect = pages.find((p) => p.id === pageId)?.aspect;
       // Fields whose change alters how tall the text lays out.
       const affectsHeight =
@@ -623,32 +687,34 @@ export function StudioProvider({
         "fontFamily" in patch ||
         "minHeightPct" in patch ||
         "rect" in patch;
-      commit((d) =>
-        mutatePage(d, pageId, (pd) => ({
-          ...pd,
-          textBoxes: pd.textBoxes.map((b) => {
-            if (b.id !== boxId) return b;
-            let next = { ...b, ...patch };
-            // Auto-height boxes render at max(target floor, content height): they
-            // grow as text is added and can never be shorter than the text, but a
-            // larger user-set target (minHeightPct) leaves room to breathe.
-            // Skip when the patch itself turns auto-height off (a manual resize)
-            // — otherwise we'd restore content height and the opposite edge of
-            // the box would jump instead of the font shrinking to fit.
-            if (
-              next.autoHeight &&
-              patch.autoHeight !== false &&
-              affectsHeight &&
-              aspect
-            ) {
-              const contentH = fitBoxHeightPct(next, aspect);
-              const h = Math.max(contentH, next.minHeightPct ?? 0);
-              const y = Math.max(0, Math.min(1 - h, next.rect.y));
-              next = { ...next, rect: { ...next.rect, h, y } };
-            }
-            return next;
-          }),
-        })),
+      commit(
+        (d) =>
+          mutatePage(d, pageId, (pd) => ({
+            ...pd,
+            textBoxes: pd.textBoxes.map((b) => {
+              if (b.id !== boxId) return b;
+              let next = { ...b, ...patch };
+              // Auto-height boxes render at max(target floor, content height): they
+              // grow as text is added and can never be shorter than the text, but a
+              // larger user-set target (minHeightPct) leaves room to breathe.
+              // Skip when the patch itself turns auto-height off (a manual resize)
+              // — otherwise we'd restore content height and the opposite edge of
+              // the box would jump instead of the font shrinking to fit.
+              if (
+                next.autoHeight &&
+                patch.autoHeight !== false &&
+                affectsHeight &&
+                aspect
+              ) {
+                const contentH = fitBoxHeightPct(next, aspect);
+                const h = Math.max(contentH, next.minHeightPct ?? 0);
+                const y = Math.max(0, Math.min(1 - h, next.rect.y));
+                next = { ...next, rect: { ...next.rect, h, y } };
+              }
+              return next;
+            }),
+          })),
+        opts,
       );
     },
     [commit, mutatePage, pages],
@@ -784,12 +850,14 @@ export function StudioProvider({
   );
 
   const patchShape = useCallback(
-    (pageId: string, shapeId: string, patch: Partial<ShapeElement>) => {
-      commit((d) =>
-        mutatePage(d, pageId, (pd) => ({
-          ...pd,
-          shapes: (pd.shapes ?? []).map((s) => (s.id === shapeId ? { ...s, ...patch } : s)),
-        })),
+    (pageId: string, shapeId: string, patch: Partial<ShapeElement>, opts?: HistoryOpts) => {
+      commit(
+        (d) =>
+          mutatePage(d, pageId, (pd) => ({
+            ...pd,
+            shapes: (pd.shapes ?? []).map((s) => (s.id === shapeId ? { ...s, ...patch } : s)),
+          })),
+        opts,
       );
     },
     [commit, mutatePage],
@@ -879,12 +947,14 @@ export function StudioProvider({
   );
 
   const patchImage = useCallback(
-    (pageId: string, imageId: string, patch: Partial<ImageElement>) => {
-      commit((d) =>
-        mutatePage(d, pageId, (pd) => ({
-          ...pd,
-          images: (pd.images ?? []).map((im) => (im.id === imageId ? { ...im, ...patch } : im)),
-        })),
+    (pageId: string, imageId: string, patch: Partial<ImageElement>, opts?: HistoryOpts) => {
+      commit(
+        (d) =>
+          mutatePage(d, pageId, (pd) => ({
+            ...pd,
+            images: (pd.images ?? []).map((im) => (im.id === imageId ? { ...im, ...patch } : im)),
+          })),
+        opts,
       );
     },
     [commit, mutatePage],
@@ -1254,10 +1324,14 @@ export function StudioProvider({
         selectedBox,
         selectedShape,
         selectedImage,
+        textEditSection,
+        openTextEdit,
+        closeTextEdit,
         editingDispId,
         setEditingDisp,
         undo,
         redo,
+        endHistoryGesture,
         addBox,
         patchBox,
         patchSpan,

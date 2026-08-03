@@ -90,23 +90,20 @@ export function fitFontSizePct(box: TextBox, pageAspect: number): number {
  * auto-fit — this is the size that's *actually rendered*, as opposed to
  * `box.fontSizePct`, which is just the size the author last asked for (the
  * "requested" size auto-fit shrinks/grows from). UI that shows a live pt
- * value (the Inspector's size field) should read this, not `fontSizePct`
+ * value (the floating size stepper) should read this, not `fontSizePct`
  * directly, or the number goes stale the moment auto-fit kicks in.
  *
- * By default auto-fit only *shrinks* the requested size to avoid clipping —
- * it never grows text beyond the intended size. With `autoFitGrow` the font
- * instead fills the box in both directions (grow *and* shrink), which is
- * handy for titles/captions. Shrinking stops at {@link MIN_FONT_PCT}; below
- * that the text is allowed to overflow (and the editor shows an overflow
- * indicator) rather than becoming unreadable.
+ * Shrink-to-fit is always on: the requested size is never rendered larger than
+ * the box can hold. With `autoFitGrow` the font instead fills the box in both
+ * directions (grow *and* shrink), which is handy for titles/captions.
+ * Shrinking stops at {@link MIN_FONT_PCT}; below that the text is allowed to
+ * overflow (and the editor shows an overflow indicator) rather than becoming
+ * unreadable. The legacy `autoFit` flag is ignored for rendering.
  */
 export function effectiveFontSizePct(box: TextBox, pageAspect: number): number {
-  let pct = box.fontSizePct;
-  if (box.autoFit) {
-    const fit = Math.max(MIN_FONT_PCT, fitFontSizePct(box, pageAspect));
-    pct = box.autoFitGrow ? fit : Math.min(pct, fit);
-  }
-  return pct;
+  const pct = box.fontSizePct;
+  const fit = Math.max(MIN_FONT_PCT, fitFontSizePct(box, pageAspect));
+  return box.autoFitGrow ? fit : Math.min(pct, fit);
 }
 
 /** Effective base font size (px) for a box, honoring auto-fit. See {@link effectiveFontSizePct}. */

@@ -530,6 +530,7 @@ export type {
   ShapeKind,
   ImageElement,
   ElementEffects,
+  ShadowTarget,
   TextBox,
   TextParagraph,
   TextSpan,

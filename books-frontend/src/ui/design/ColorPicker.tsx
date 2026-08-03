@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { RgbaColorPicker } from "react-colorful";
 import { Pipette } from "lucide-react";
 import { useSettingsStore } from "../../state/settingsStore";
@@ -44,7 +45,22 @@ function Swatch({ color, onClick }: { color: string; onClick: () => void }) {
   );
 }
 
-/** A compact swatch that opens an RGBA picker with hex + alpha + pipette. */
+function colorsEqual(a: string, b: string): boolean {
+  const pa = parseColor(a);
+  const pb = parseColor(b);
+  return (
+    Math.round(pa.r) === Math.round(pb.r) &&
+    Math.round(pa.g) === Math.round(pb.g) &&
+    Math.round(pa.b) === Math.round(pb.b) &&
+    Math.abs(pa.a - pb.a) < 0.001
+  );
+}
+
+/**
+ * Compact swatch that opens a portaled RGBA picker.
+ * Dragging the picker only updates a local draft; the parent `onChange` runs
+ * when the popover closes (or when a swatch / eyedropper commits immediately).
+ */
 export function ColorField({
   label,
   value,
@@ -57,25 +73,94 @@ export function ColorField({
   allowAlpha?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  const rgba = parseColor(value);
+  const [draft, setDraft] = useState<RGBA>(() => parseColor(value));
+  const [menuPos, setMenuPos] = useState<{ left: number; top: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const draftRef = useRef(draft);
+  const valueRef = useRef(value);
   const colorHistory = useSettingsStore((s) => s.settings.colorHistory);
   const pushColor = useSettingsStore((s) => s.pushColor);
 
+  draftRef.current = draft;
+  valueRef.current = value;
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const pushColorRef = useRef(pushColor);
+  pushColorRef.current = pushColor;
+  const allowAlphaRef = useRef(allowAlpha);
+  allowAlphaRef.current = allowAlpha;
+  /** When true, the open-effect cleanup must not persist the draft (Escape). */
+  const discardOnCloseRef = useRef(false);
+
+  const commitDraft = (next: RGBA) => {
+    const css = toRgbaString(allowAlphaRef.current ? next : { ...next, a: 1 });
+    if (colorsEqual(css, valueRef.current)) return;
+    onChangeRef.current(css);
+    pushColorRef.current(css);
+  };
+
+  const close = (commit: boolean) => {
+    discardOnCloseRef.current = !commit;
+    if (commit) commitDraft(draftRef.current);
+    setOpen(false);
+    setMenuPos(null);
+  };
+
+  // Keep the closed swatch in sync with external value.
+  useEffect(() => {
+    if (!open) setDraft(parseColor(value));
+  }, [value, open]);
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    setDraft(parseColor(value));
+    const place = () => {
+      const el = triggerRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const menuW = 224; // w-56
+      const menuH = 360;
+      let left = r.left;
+      let top = r.bottom + 4;
+      if (left + menuW > window.innerWidth - 8) left = Math.max(8, window.innerWidth - menuW - 8);
+      if (top + menuH > window.innerHeight - 8) top = Math.max(8, r.top - menuH - 4);
+      setMenuPos({ left, top });
+    };
+    place();
+    window.addEventListener("resize", place);
+    window.addEventListener("scroll", place, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      window.removeEventListener("scroll", place, true);
+    };
+  }, [open, value]);
+
   useEffect(() => {
     if (!open) return;
+    discardOnCloseRef.current = false;
     const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-        pushColor(value);
-      }
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      close(true);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close(false);
     };
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open, value, pushColor]);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+      // Unmount while open (panel swap): keep the draft unless Escape discarded it.
+      // Normal close(true) already committed — colorsEqual makes a second pass a no-op.
+      if (!discardOnCloseRef.current) commitDraft(draftRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- open session; commit via refs
+  }, [open]);
 
-  function set(next: RGBA) {
-    onChange(toRgbaString(allowAlpha ? next : { ...next, a: 1 }));
+  function setDraftColor(next: RGBA) {
+    setDraft(allowAlpha ? next : { ...next, a: 1 });
   }
 
   const hasEyeDropper = typeof window !== "undefined" && "EyeDropper" in window;
@@ -86,18 +171,23 @@ export function ColorField({
     try {
       const res = await new Ctor().open();
       const picked = parseColor(res.sRGBHex);
-      set({ ...picked, a: rgba.a });
+      const next = { ...picked, a: draft.a };
+      setDraftColor(next);
+      commitDraft(next);
     } catch {
       /* user cancelled */
     }
   }
 
+  const display = open ? toRgbaString(draft) : value;
+
   return (
-    <div ref={ref} className="relative">
+    <div className="relative">
       {label && <span className="mb-1 block text-xs font-medium text-ink-500">{label}</span>}
       <button
+        ref={triggerRef}
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => (open ? close(true) : setOpen(true))}
         className="flex items-center gap-2 rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs transition hover:border-brand-300"
       >
         <span
@@ -109,75 +199,116 @@ export function ColorField({
             backgroundPosition: "0 0,4px 4px",
           }}
         >
-          <span className="block size-full rounded" style={{ background: value }} />
+          <span className="block size-full rounded" style={{ background: display }} />
         </span>
-        <span className="font-mono text-ink-600">{toHex(rgba)}</span>
+        <span className="font-mono text-ink-600">{toHex(open ? draft : parseColor(value))}</span>
       </button>
 
-      {open && (
-        <div className="absolute z-40 mt-1 w-56 rounded-xl border border-ink-200 bg-white p-3 shadow-lifted">
-          <RgbaColorPicker color={rgba} onChange={(c) => set(c)} />
-          <div className="mt-3 flex items-center gap-2">
-            <input
-              value={toHex(rgba)}
-              onChange={(e) => {
-                const p = parseColor(e.target.value);
-                set({ ...p, a: rgba.a });
-              }}
-              className="w-24 rounded-md border border-ink-200 px-2 py-1 font-mono text-xs"
-            />
-            {allowAlpha && (
-              <label className="flex items-center gap-1 text-xs text-ink-500">
-                A
-                <input
-                  type="number"
-                  min={0}
-                  max={100}
-                  value={Math.round(rgba.a * 100)}
-                  onChange={(e) => set({ ...rgba, a: Number(e.target.value) / 100 })}
-                  className="w-14 rounded-md border border-ink-200 px-1.5 py-1 text-xs"
-                />
-              </label>
-            )}
-            <button
-              type="button"
-              title={hasEyeDropper ? "Sample a color from anywhere" : "Pipette not supported in this browser"}
-              disabled={!hasEyeDropper}
-              onClick={() => void pickFromScreen()}
-              className={cn(
-                "ml-auto rounded-md p-1.5 transition",
-                hasEyeDropper ? "text-ink-500 hover:bg-ink-100 hover:text-brand-600" : "text-ink-300",
+      {open &&
+        menuPos &&
+        createPortal(
+          <div
+            ref={menuRef}
+            data-color-picker-popover
+            className="fixed z-90 w-56 rounded-xl border border-ink-200 bg-white p-3 shadow-lifted"
+            style={{ left: menuPos.left, top: menuPos.top }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <RgbaColorPicker color={draft} onChange={(c) => setDraftColor(c)} />
+            <div className="mt-3 flex items-center gap-2">
+              <input
+                value={toHex(draft)}
+                onChange={(e) => {
+                  const p = parseColor(e.target.value);
+                  setDraftColor({ ...p, a: draft.a });
+                }}
+                onBlur={() => commitDraft(draftRef.current)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.currentTarget.blur();
+                    close(true);
+                  }
+                }}
+                className="w-24 rounded-md border border-ink-200 px-2 py-1 font-mono text-xs"
+              />
+              {allowAlpha && (
+                <label className="flex items-center gap-1 text-xs text-ink-500">
+                  A
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={Math.round(draft.a * 100)}
+                    onChange={(e) =>
+                      setDraftColor({ ...draft, a: Number(e.target.value) / 100 })
+                    }
+                    onBlur={() => commitDraft(draftRef.current)}
+                    className="w-14 rounded-md border border-ink-200 px-1.5 py-1 text-xs"
+                  />
+                </label>
               )}
-            >
-              <Pipette className="size-4" />
-            </button>
-          </div>
+              <button
+                type="button"
+                title={
+                  hasEyeDropper
+                    ? "Sample a color from anywhere"
+                    : "Pipette not supported in this browser"
+                }
+                disabled={!hasEyeDropper}
+                onClick={() => void pickFromScreen()}
+                className={cn(
+                  "ml-auto rounded-md p-1.5 transition",
+                  hasEyeDropper
+                    ? "text-ink-500 hover:bg-ink-100 hover:text-brand-600"
+                    : "text-ink-300",
+                )}
+              >
+                <Pipette className="size-4" />
+              </button>
+            </div>
 
-          {colorHistory.length > 0 && (
+            {colorHistory.length > 0 && (
+              <div className="mt-3">
+                <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-ink-400">
+                  Recent
+                </span>
+                <div className="flex flex-wrap gap-1">
+                  {colorHistory.map((c) => (
+                    <Swatch
+                      key={c}
+                      color={c}
+                      onClick={() => {
+                        const next = parseColor(c);
+                        setDraftColor(next);
+                        commitDraft(next);
+                      }}
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="mt-3">
               <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-ink-400">
-                Recent
+                Palette
               </span>
               <div className="flex flex-wrap gap-1">
-                {colorHistory.map((c) => (
-                  <Swatch key={c} color={c} onClick={() => onChange(c)} />
+                {STARTER_PALETTE.map((c) => (
+                  <Swatch
+                    key={c}
+                    color={c}
+                    onClick={() => {
+                      const next = parseColor(c);
+                      setDraftColor(allowAlpha ? next : { ...next, a: 1 });
+                      commitDraft(allowAlpha ? next : { ...next, a: 1 });
+                    }}
+                  />
                 ))}
               </div>
             </div>
-          )}
-
-          <div className="mt-3">
-            <span className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-ink-400">
-              Palette
-            </span>
-            <div className="flex flex-wrap gap-1">
-              {STARTER_PALETTE.map((c) => (
-                <Swatch key={c} color={c} onClick={() => onChange(c)} />
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

@@ -45,6 +45,18 @@ export interface TextSpan {
 }
 
 /**
+ * Where a text-box drop shadow is cast. Shapes/images ignore this and always
+ * shadow the whole element.
+ * - `box` — the plate (works with a transparent fill via CSS `box-shadow` /
+ *   a Konva shadow plate)
+ * - `text` — glyphs only
+ * - `both` — plate + glyphs
+ *
+ * Legacy shadows with no `target` are treated as `text` (prior canvas behavior).
+ */
+export type ShadowTarget = "box" | "text" | "both";
+
+/**
  * Visual effects applicable to any element (text box, shape, image). Rendered
  * identically on the live canvas (Konva) and in print (CSS) so exports match.
  */
@@ -57,8 +69,14 @@ export interface ElementEffects {
     offsetX: number;
     offsetY: number;
     opacity: number;
+    /** Text boxes only; see {@link ShadowTarget}. */
+    target?: ShadowTarget;
   };
-  /** Gaussian blur of the element itself, as a fraction of page height. */
+  /**
+   * Gaussian blur of the element itself, as a fraction of page height.
+   * Used by shapes/images. Text boxes use {@link TextBox.backdropBlur} instead
+   * (frost what's behind the plate — not the glyphs).
+   */
   blur?: number;
   /** Element opacity 0..1 (text & image elements). */
   opacity?: number;
@@ -116,9 +134,19 @@ export interface TextBox {
   slotId?: string;
   /** Hidden from the page (still listed in Layers). */
   hidden?: boolean;
-  /** Shadow / blur effects. */
+  /**
+   * Frosted-glass blur of content *behind* this box (illustration, page bg,
+   * lower elements), as a fraction of page height. Does not blur the text or
+   * chrome. Legacy books may still have the old content blur on
+   * `effects.blur`; renderers treat that as a fallback for this field.
+   */
+  backdropBlur?: number;
+  /** Shadow / opacity effects (legacy content blur lives on effects.blur). */
   effects?: ElementEffects;
-  /** When true, font auto-shrinks to fit the box (never clips). */
+  /**
+   * Legacy flag — shrink-to-fit is always applied at render time. Kept so older
+   * projects round-trip cleanly; new code should not rely on toggling this.
+   */
   autoFit?: boolean;
   /**
    * When auto-fit is on, also *grow* the font to fill the box (not just shrink).

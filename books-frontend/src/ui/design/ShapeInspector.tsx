@@ -9,16 +9,19 @@ import { cn } from "../lib/cn";
 export function ShapeInspector({
   shape,
   onChange,
+  onGestureEnd,
   onDelete,
   onDuplicate,
   onAlign,
 }: {
   shape: ShapeElement;
-  onChange: (patch: Partial<ShapeElement>) => void;
+  onChange: (patch: Partial<ShapeElement>, opts?: { coalesce?: string }) => void;
+  onGestureEnd?: () => void;
   onDelete: () => void;
   onDuplicate: () => void;
   onAlign: (edge: AlignEdge) => void;
 }) {
+  const coalesce = (key: string) => ({ coalesce: `${key}-${shape.id}` });
   return (
     <div className="space-y-4 p-4">
       <ActionBar
@@ -56,7 +59,8 @@ export function ShapeInspector({
           max={0.03}
           step={0.001}
           value={shape.strokeWidth ?? 0}
-          onChange={(strokeWidth) => onChange({ strokeWidth })}
+          onChange={(strokeWidth) => onChange({ strokeWidth }, coalesce("strokeWidth"))}
+          onGestureEnd={onGestureEnd}
         />
         <Slider
           label="Opacity"
@@ -64,7 +68,8 @@ export function ShapeInspector({
           max={1}
           step={0.02}
           value={shape.opacity ?? 1}
-          onChange={(opacity) => onChange({ opacity })}
+          onChange={(opacity) => onChange({ opacity }, coalesce("opacity"))}
+          onGestureEnd={onGestureEnd}
           format={(v) => `${Math.round(v * 100)}`}
         />
       </Section>
@@ -78,7 +83,8 @@ export function ShapeInspector({
               max={0.5}
               step={0.01}
               value={shape.corner ?? 0.16}
-              onChange={(corner) => onChange({ corner })}
+              onChange={(corner) => onChange({ corner }, coalesce("corner"))}
+              onGestureEnd={onGestureEnd}
             />
           )}
           {hasPoints(shape.kind) && (
@@ -88,7 +94,8 @@ export function ShapeInspector({
               max={12}
               step={1}
               value={shape.points ?? 5}
-              onChange={(points) => onChange({ points: Math.round(points) })}
+              onChange={(points) => onChange({ points: Math.round(points) }, coalesce("points"))}
+              onGestureEnd={onGestureEnd}
             />
           )}
           {isBubble(shape.kind) && (
@@ -99,7 +106,8 @@ export function ShapeInspector({
                 max={1.2}
                 step={0.01}
                 value={shape.tailX ?? 0.3}
-                onChange={(tailX) => onChange({ tailX })}
+                onChange={(tailX) => onChange({ tailX }, coalesce("tail"))}
+                onGestureEnd={onGestureEnd}
               />
               <Slider
                 label="Tail ↕"
@@ -107,7 +115,8 @@ export function ShapeInspector({
                 max={1.6}
                 step={0.01}
                 value={shape.tailY ?? 1.32}
-                onChange={(tailY) => onChange({ tailY })}
+                onChange={(tailY) => onChange({ tailY }, coalesce("tail"))}
+                onGestureEnd={onGestureEnd}
               />
               <p className="mt-1.5 text-[11px] text-ink-400">
                 Tip: drag the dot on the bubble's tail to point it at whoever is speaking.
@@ -124,7 +133,10 @@ export function ShapeInspector({
       <Section title="Effects" collapsible defaultOpen={!!shape.effects}>
         <EffectsControls
           effects={shape.effects}
-          onChange={(effects: ElementEffects | undefined) => onChange({ effects })}
+          onChange={(effects, meta) =>
+            onChange({ effects }, meta?.coalesce ? coalesce("effects") : undefined)
+          }
+          onGestureEnd={onGestureEnd}
         />
       </Section>
     </div>

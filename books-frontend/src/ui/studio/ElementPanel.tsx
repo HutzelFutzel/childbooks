@@ -1,13 +1,13 @@
 /**
- * The floating contextual panel that replaces the old permanent right
- * sidebar. It only exists on screen when there's something to say: selecting
- * a text box / shape / image pops it open with that element's styling
- * controls, and it closes the moment you deselect. It never reserves layout
- * space — it's an overlay anchored near the canvas, not a docked pane.
+ * Floating contextual panel for shapes, images, layers, and the Canva-style
+ * text edit sheet (Effects / Background). Everyday text styling stays on the
+ * floating TextStyleBar so this panel never covers the selection for quick
+ * edits. Overlay — does not reserve layout space.
  */
 import { useState } from "react";
 import { motion } from "framer-motion";
 import {
+  Blend,
   Eye,
   EyeOff,
   GripVertical,
@@ -15,18 +15,26 @@ import {
   Layers as LayersIcon,
   Lock,
   Shapes,
+  Square,
   Type,
   Unlock,
   X,
 } from "lucide-react";
 import { textFromParagraphs } from "../../core/design";
-import { bookProductForConfig } from "../../core/book";
 import { cn } from "../lib/cn";
 import { popIn } from "../lib/motion";
-import { Inspector } from "../design/Inspector";
 import { ImageInspector } from "../design/ImageInspector";
 import { ShapeInspector } from "../design/ShapeInspector";
+import { TextEditPanel, type TextEditSection } from "../design/TextEditPanel";
 import { useStudio, type Selection } from "./StudioContext";
+
+const TEXT_SECTION_META: Record<
+  TextEditSection,
+  { title: string; icon: React.ReactNode }
+> = {
+  effects: { title: "Effects", icon: <Blend className="size-4" /> },
+  background: { title: "Background", icon: <Square className="size-4" /> },
+};
 
 /** Card shell shared by every mode: header with an icon/title + close, then content. */
 function PanelShell({
@@ -88,7 +96,7 @@ export function ElementPanel({
   onClose: () => void;
 }) {
   const studio = useStudio();
-  const { selection, project } = studio;
+  const { selection, textEditSection } = studio;
 
   // Closing an element's inspector always dismisses the whole floating panel
   // (not just the element) — deselect AND clear any pending layers request, so
@@ -98,29 +106,24 @@ export function ElementPanel({
     onClose();
   };
 
-  if (selection.kind === "box" && studio.selectedBox) {
+  // Text edit sheet: opened from the floating toolbar (Effects / Background)
+  // so deep controls sit beside the canvas, never over the selected text.
+  if (selection.kind === "box" && studio.selectedBox && textEditSection) {
     const box = studio.selectedBox;
     const pageId = selection.pageId;
-    const trim = bookProductForConfig(project.config).trim;
+    const meta = TEXT_SECTION_META[textEditSection];
     return (
       <PanelShell
-        icon={<Type className="size-4" />}
-        title="Text box"
+        icon={meta.icon}
+        title={meta.title}
         subtitle={studio.pages.find((p) => p.id === pageId)?.label}
-        onClose={() => dismiss(pageId)}
+        onClose={() => studio.closeTextEdit()}
       >
-        <Inspector
+        <TextEditPanel
           box={box}
-          pageWidthIn={trim.widthIn}
-          pageHeightIn={trim.heightIn}
-          ageRangeId={project.config.ageRangeId}
-          readingModeId={project.config.readingModeId}
-          onChange={(patch) => studio.patchBox(pageId, box.id, patch)}
-          onDelete={() => studio.deleteBox(pageId, box.id)}
-          onDuplicate={() => studio.duplicateBox(pageId, box.id)}
-          onCopyStyle={() => studio.copyBoxStyle(pageId, box.id)}
-          onPasteStyle={() => studio.pasteBoxStyle(pageId, box.id)}
-          canPasteStyle={studio.hasCopiedBoxStyle}
+          section={textEditSection}
+          onPatch={(patch, opts) => studio.patchBox(pageId, box.id, patch, opts)}
+          onGestureEnd={studio.endHistoryGesture}
         />
       </PanelShell>
     );
@@ -138,7 +141,8 @@ export function ElementPanel({
       >
         <ShapeInspector
           shape={shape}
-          onChange={(patch) => studio.patchShape(pageId, shape.id, patch)}
+          onChange={(patch, opts) => studio.patchShape(pageId, shape.id, patch, opts)}
+          onGestureEnd={studio.endHistoryGesture}
           onDelete={() => studio.deleteShape(pageId, shape.id)}
           onDuplicate={() => studio.duplicateShape(pageId, shape.id)}
           onAlign={(edge) => studio.alignShape(pageId, shape.id, edge)}
@@ -159,7 +163,8 @@ export function ElementPanel({
       >
         <ImageInspector
           image={image}
-          onChange={(patch) => studio.patchImage(pageId, image.id, patch)}
+          onChange={(patch, opts) => studio.patchImage(pageId, image.id, patch, opts)}
+          onGestureEnd={studio.endHistoryGesture}
           onDelete={() => studio.deleteImage(pageId, image.id)}
           onDuplicate={() => studio.duplicateImage(pageId, image.id)}
           onAlign={(edge) => studio.alignImage(pageId, image.id, edge)}
@@ -351,6 +356,11 @@ function LayersPanel({ pageId }: { pageId: string }) {
 }
 
 /** Whether the floating panel has anything to show right now. */
-export function elementPanelHasContent(selection: Selection, wantLayers: boolean): boolean {
-  return selection.kind === "box" || selection.kind === "shape" || selection.kind === "image" || wantLayers;
+export function elementPanelHasContent(
+  selection: Selection,
+  wantLayers: boolean,
+  textEditOpen = false,
+): boolean {
+  if (selection.kind === "box" && textEditOpen) return true;
+  return selection.kind === "shape" || selection.kind === "image" || wantLayers;
 }

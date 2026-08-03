@@ -1,7 +1,8 @@
 /**
  * Bridges the {@link TextParagraph} model and a `contentEditable` surface so the
- * inline editor can preserve per-range styling (bold/italic/underline/strike/
- * color/size) across edits, and apply new styling to arbitrary selections.
+ * inline editor can preserve per-range character styles (bold/italic/underline/
+ * colour) across edits. Scope follows the live selection — Canva-style; there
+ * is no separate "box style" vs "word style" mode in the UI.
  */
 import type { TextParagraph, TextSpan } from "../../core/types";
 

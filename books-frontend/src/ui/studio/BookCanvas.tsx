@@ -80,6 +80,8 @@ export function BookCanvas() {
     pages,
     selection,
     select,
+    textEditSection,
+    closeTextEdit,
     editingDispId,
     setEditingDisp,
     undo,
@@ -274,12 +276,15 @@ export function BookCanvas() {
 
           <div className="pointer-events-none absolute inset-x-3 bottom-24 z-40 flex justify-center sm:inset-x-auto sm:bottom-auto sm:right-4 sm:top-4 sm:justify-end">
             <AnimatePresence>
-              {elementPanelHasContent(selection, layersOpen) && (
+              {elementPanelHasContent(selection, layersOpen, !!textEditSection) && (
                 <ElementPanel
                   key="panel"
                   wantLayers={layersOpen}
                   activePageId={activePageId}
-                  onClose={() => setLayersOpen(false)}
+                  onClose={() => {
+                    setLayersOpen(false);
+                    closeTextEdit();
+                  }}
                 />
               )}
             </AnimatePresence>

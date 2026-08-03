@@ -20,7 +20,7 @@
 import { useMemo } from "react";
 import type { NormRect, PageDesign } from "../../core/types";
 import { wordParagraphs } from "../../core/design";
-import { formatCapabilitiesForProject } from "../../core/book";
+import { bookProductForConfig, formatCapabilitiesForProject } from "../../core/book";
 import { computePageGuides } from "../../core/book/format";
 import { getCursor } from "../../core/versioning";
 import { defaultIllustrationFocus } from "../design/designInit";
@@ -64,11 +64,20 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
     patchImage,
     makeIllustrationEditable,
     moveElementToPage,
+    duplicateBox,
+    deleteBox,
+    copyBoxStyle,
+    pasteBoxStyle,
+    hasCopiedBoxStyle,
+    endHistoryGesture,
+    undo,
+    redo,
     snap,
     grid,
     guides,
     generatingPages,
   } = useStudio();
+  const trim = bookProductForConfig(project.config).trim;
 
   const leftPd = pageDesign(left.page.id);
   const rightPd = pageDesign(right.page.id);
@@ -197,7 +206,32 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
       onEditRichText={(id, paragraphs) =>
         patchBox(elementOwner.get(id) ?? left.page.id, id, { paragraphs })
       }
-      onStyleBox={(id, patch) => patchBox(elementOwner.get(id) ?? left.page.id, id, patch)}
+      onStyleBox={(id, patch, opts) =>
+        patchBox(elementOwner.get(id) ?? left.page.id, id, patch, opts)
+      }
+      textToolbar={{
+        pageWidthIn: trim.widthIn,
+        pageHeightIn: trim.heightIn,
+        ageRangeId: project.config.ageRangeId,
+        readingModeId: project.config.readingModeId,
+        onDuplicate: (boxId) => duplicateBox(elementOwner.get(boxId) ?? left.page.id, boxId),
+        onDelete: (boxId) => deleteBox(elementOwner.get(boxId) ?? left.page.id, boxId),
+        onToggleLock: (boxId) => {
+          const pageId = elementOwner.get(boxId) ?? left.page.id;
+          const box = pageDesign(pageId).textBoxes.find((b) => b.id === boxId);
+          if (box) patchBox(pageId, boxId, { locked: !box.locked });
+        },
+        onCopyStyle: (boxId) => copyBoxStyle(elementOwner.get(boxId) ?? left.page.id, boxId),
+        onPasteStyle: (boxId) => pasteBoxStyle(elementOwner.get(boxId) ?? left.page.id, boxId),
+        canPasteStyle: hasCopiedBoxStyle,
+        onGestureEnd: endHistoryGesture,
+        onDiscardEdit: () => {
+          undo();
+          endHistoryGesture();
+        },
+        undo,
+        redo,
+      }}
       selectedSpan={selectedSpan}
       onSelectSpan={(ref: SpanRef | null) => {
         if (selection.kind === "box" && onEitherPage) {
