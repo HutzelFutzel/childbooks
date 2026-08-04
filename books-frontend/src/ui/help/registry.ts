@@ -62,17 +62,16 @@ export const HELP: Record<string, HelpTopic> = {
     title: "Creative direction",
     body: "Extra details you want kept every time this reference art is (re)created — outfit, colors, personality, vibe. Leave it blank and the AI designs freely from the story.",
     points: [
-      "Baked into the design brief for every from-scratch generation — the first \u201cGenerate\u201d and any later \u201cRedesign\u201d.",
-      "Different from the refine bar under the photo, which is a one-off tweak to the image you already have (e.g. \u201cmake her smile\u201d) — it isn't saved anywhere, it just makes one new version.",
+      "Baked into the design brief for every from-scratch generation — the first Generate and any later Start over from the description.",
+      "Different from Change this picture above, which tweaks or re-rolls the image you already have without rewriting the look brief.",
     ],
   },
   refineImage: {
-    title: "Refine this image",
-    body: "Type a tweak (e.g. \u201cmake her smile, add a red scarf\u201d) and send it to apply just that change to the image above.",
+    title: "Change this picture",
+    body: "Same control as page art: type a tweak and Apply change, or leave the box empty and tap New version for a fresh drawing of the same look.",
     points: [
       "Uses the current image as the base — the description below is intentionally ignored so it can't undo the change you just asked for.",
-      "Leave the box empty and tap the dice for a fresh variation that keeps the same likeness.",
-      "To start over from scratch instead, edit the description below and use \u201cRedesign\u201d.",
+      "To rebuild from scratch instead, edit the description and use Start over from the description.",
     ],
   },
   versions: {

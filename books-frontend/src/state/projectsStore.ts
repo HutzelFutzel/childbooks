@@ -99,6 +99,8 @@ interface ProjectsState {
     /** Proposed relations by anchor NAME — resolved to ids after reconciliation. */
     relations?: { from: string; to: string; kind: "contains" | "relates"; note?: string }[],
   ) => Promise<void>;
+  /** Patch fields on the current analysis without re-running the AI. */
+  patchAnalysis: (patch: Partial<StoryAnalysis>) => Promise<void>;
   /** Apply a pending relation suggestion to the anchors and consume it. */
   acceptRelationSuggestion: (fromId: string, toId: string) => Promise<void>;
   /** Drop a pending relation suggestion without applying it. */
@@ -296,6 +298,12 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         anchors: reconciled,
       };
     });
+  },
+
+  async patchAnalysis(patch) {
+    await mutateCurrent(get, set, (p) =>
+      p.analysis ? { ...p, analysis: { ...p.analysis, ...patch } } : p,
+    );
   },
 
   async acceptRelationSuggestion(fromId, toId) {

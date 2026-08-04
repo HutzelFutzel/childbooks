@@ -381,6 +381,11 @@ export interface StoryAnalysis {
   generatedAt: number;
   /** Model used, for display. */
   model?: string;
+  /**
+   * Story text that produced this analysis. Used to offer "Re-read story" only
+   * when the user has edited the story since the cast was last derived.
+   */
+  sourceStoryText?: string;
   /** Pending relationship suggestions, consumed as the user accepts/dismisses. */
   relations?: AnchorRelationSuggestion[];
 }

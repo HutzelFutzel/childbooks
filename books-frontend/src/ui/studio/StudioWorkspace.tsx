@@ -83,10 +83,11 @@ function StudioInner({ project }: { project: Project }) {
             ) : (
               <BookCanvas />
             )
+          ) : step === "anchors" ? (
+            <AnchorsStage />
           ) : (
             <div className="min-h-0 flex-1 overflow-y-auto">
               {step === "story" && <StoryStage />}
-              {step === "anchors" && <AnchorsStage />}
               {step === "order" && <OrderStage />}
             </div>
           )}

@@ -2,14 +2,13 @@ import { useState } from "react";
 import {
   Check,
   ChevronDown,
-  Dices,
   Eye,
   EyeOff,
   Pencil,
   RefreshCw,
-  SendHorizontal,
   Sparkles,
   Trash2,
+  Wand2,
   X,
 } from "lucide-react";
 import type { Anchor } from "../../core/types";
@@ -23,7 +22,8 @@ import { InfoHint } from "../components/InfoHint";
 import { Field, Input, Textarea } from "../components/Input";
 import { ImagePreview } from "../components/ImagePreview";
 import { Modal } from "../components/Modal";
-import { VersionThumb } from "../components/VersionThumb";
+import { VersionHistoryList } from "../components/VersionHistoryList";
+import { SparkEstimateCost, useImageActionRange } from "../layout/SparkCost";
 import { useBlobUrlState } from "../hooks/useBlobUrl";
 import { cn } from "../lib/cn";
 import { formatList } from "../lib/formatList";
@@ -36,16 +36,18 @@ export function AnchorEditor({
   anchor,
   generating: generatingProp,
   setGenerating,
-  /** "split" pins the portrait (art + caption + versions) beside the controls
-   *  on wide screens — used by the Characters stage's big spotlight. "stacked"
-   *  (default) keeps everything in one column — used by the narrow context
-   *  rail while designing pages. */
+  /**
+   * - `stacked` — portrait + controls in one column (legacy / narrow).
+   * - `split` — portrait beside controls (legacy wide spotlight).
+   * - `stage` — large reference art for the Design · Cast canvas.
+   * - `dock` — description / generate / versions / relations for the side dock.
+   */
   layout = "stacked",
 }: {
   anchor: Anchor;
   generating: boolean;
   setGenerating: (v: boolean) => void;
-  layout?: "stacked" | "split";
+  layout?: "stacked" | "split" | "stage" | "dock";
 }) {
   const updateAnchor = useProjectsStore((s) => s.updateAnchor);
   const renameAnchor = useProjectsStore((s) => s.renameAnchor);
@@ -75,6 +77,7 @@ export function AnchorEditor({
   const cursorNode = cursorId ? anchor.versions!.nodes[cursorId] : undefined;
   const { url: cursorUrl, status: cursorStatus } = useBlobUrlState(cursorNode?.content.blobId);
   const hasImage = Boolean(anchor.versions);
+  const sparkRange = useImageActionRange("anchorImage");
   // Sheets predating the layout contract (or a version generated under an
   // older spec) have no recorded layout; the spec for the anchor's CURRENT
   // shape is the best guess then. Bipedal sheets render landscape (three
@@ -279,66 +282,44 @@ export function AnchorEditor({
         </div>
       )}
 
-      {/* Refine lives right under the photo — like commenting on it — and is
-          kept physically apart from the description below. The two used to
-          share one control surface (an "edit" text box next to an editable
-          description), which was a real trap: applying a typed tweak
-          deliberately ignores the description (so it can't undo the tweak),
-          so an edited description could silently vanish the moment someone
-          also typed a refine and hit the old "Apply edit" button. Separating
-          them spatially makes that combination impossible to reach by
-          accident instead of just less likely. */}
+      {/* Picture changes live under the photo (same Apply change / New version
+          pattern as page art). Description edits stay below so a typed tweak
+          can't be confused with rewriting the look brief. */}
       {hasImage && (
-        <div className="space-y-1.5">
-          <div className="flex items-center gap-1">
-            <span className="text-xs font-medium text-ink-500">Refine</span>
-            <InfoHint topic="refineImage" />
-          </div>
-          <RefineBar
-            value={edit}
-            onChange={setEdit}
-            disabled={generating}
-            onSend={() => void generate({ edit, useReference: true })}
-            onShuffle={() => void generate({ useReference: true })}
-          />
-        </div>
+        <PictureChangeControls
+          edit={edit}
+          setEdit={setEdit}
+          generating={generating}
+          sparkRange={sparkRange}
+          onApply={() => void generate({ edit, useReference: true })}
+          onNewVersion={() => void generate({ useReference: true })}
+        />
       )}
 
       {versions.length > 0 && (
-        <div>
-          <p className="mb-1.5 text-xs font-medium text-ink-500">
-            Version history — click to revert or branch from any point
-          </p>
-          {/* `overflow-x-auto` also computes `overflow-y: auto` (not `visible`)
-              per the CSS spec, so the active ring's box-shadow gets clipped
-              without room on every side — `-mx-1 px-1 pt-1` gives it that room,
-              matching the pattern used for the casting reel. `overflow-y-hidden`
-              pins that forced axis explicitly closed instead of leaving it as a
-              live (if usually empty) scroll region — with a single version, the
-              hover-only delete button pokes a few px past the thumb's own box,
-              which registered as real scrollable overflow the instant you
-              hovered it, even though there was never anything to scroll to. */}
-          <div className="-mx-1 flex gap-2 overflow-x-auto overflow-y-hidden px-1 pb-1 pt-1">
-            {versions.map((node, i) => (
-              <VersionThumb
-                key={node.id}
-                blobId={node.content.blobId}
-                index={i + 1}
-                active={node.id === cursorId}
-                onClick={() => selectVer(node.id)}
-                onDelete={() => deleteVer(node.id)}
-                aspect={sheetAspect(node.content.layout ?? fallbackLayout)}
-              />
-            ))}
-          </div>
-        </div>
+        <VersionHistoryList
+          items={versions.map((node, i) => ({
+            id: node.id,
+            blobId: node.content.blobId,
+            index: i + 1,
+            aspect: sheetAspect(node.content.layout ?? fallbackLayout),
+          }))}
+          activeId={cursorId}
+          onSelect={selectVer}
+          onDelete={deleteVer}
+        />
       )}
     </div>
   );
 
   // --- Controls: description, creative direction, generate / refine. -------
   const controls = (
-    <div className={cn("space-y-3", layout === "stacked" && "border-t border-ink-100 pt-4")}>
+    <div
+      className={cn(
+        "space-y-3",
+        layout === "stacked" && "border-t border-ink-100 pt-4",
+      )}
+    >
       {/* The description drives the art, so it has to be editable here. It used
           to be read-only, which left a user who disagreed with the AI's take no
           way to fix it except writing a correction in a different box and
@@ -360,20 +341,28 @@ export function AnchorEditor({
         onChange={(v) => void updateAnchor(anchor.id, { userGuidance: v })}
       />
 
-      {/* The one button here always means the same thing: (re)build the sheet
-          from this description, from scratch, ignoring the current image.
-          One-off tweaks to the image that's already there live in the
-          "Refine" bar under the photo instead — the two are kept apart
-          rather than layered into the same control (see the note above it). */}
-      <Button
-        className="w-full"
-        variant={hasImage ? "secondary" : "primary"}
-        loading={generating}
-        leftIcon={<Sparkles className="size-4" />}
-        onClick={() => void generate(hasImage ? { useReference: false } : {})}
-      >
-        {hasImage ? "Redesign from this description" : "Generate reference sheet"}
-      </Button>
+      {/* First generate is primary. Once art exists, from-scratch rebuild is a
+          secondary link — same role as Pages' "different scene", not "New version". */}
+      {!hasImage ? (
+        <Button
+          className="w-full"
+          loading={generating}
+          leftIcon={<Sparkles className="size-4" />}
+          onClick={() => void generate({})}
+        >
+          Generate reference sheet
+          <SparkEstimateCost range={sparkRange} />
+        </Button>
+      ) : (
+        <button
+          type="button"
+          className="text-left text-[11px] font-medium text-brand-600 hover:text-brand-700"
+          disabled={generating}
+          onClick={() => void generate({ useReference: false })}
+        >
+          Start over from the description →
+        </button>
+      )}
     </div>
   );
 
@@ -448,6 +437,144 @@ export function AnchorEditor({
       </p>
     </Modal>
   );
+
+  if (layout === "stage") {
+    return (
+      <>
+        <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3">
+          <div className="relative flex min-h-0 w-full max-w-xl flex-1 flex-col justify-center">
+            <div className="overflow-hidden bg-white shadow-lifted ring-1 ring-ink-200">
+              <ImagePreview
+                src={cursorUrl}
+                loading={generating}
+                loadingAction="anchorImage"
+                refCount={anchor.containedIds?.length ?? 0}
+                aspect={cursorAspect}
+                emptyLabel={
+                  cursorStatus === "error" || cursorStatus === "missing"
+                    ? "This image couldn't be loaded"
+                    : "No image yet — generate in the side panel"
+                }
+              />
+            </div>
+          </div>
+
+          <div className="flex w-full max-w-xl items-center gap-2 rounded-xl bg-white/95 px-3 py-2 shadow-soft ring-1 ring-ink-200 backdrop-blur">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+              <TypeIcon className="size-4" />
+            </span>
+            {renaming ? (
+              <div className="flex min-w-0 flex-1 items-center gap-1">
+                <Input
+                  autoFocus
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commitRename();
+                    if (e.key === "Escape") setRenaming(false);
+                  }}
+                  onBlur={commitRename}
+                  className="h-8 px-2 text-sm"
+                />
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={startRename}
+                title="Rename"
+                className="group flex min-w-0 flex-1 items-center gap-1.5 text-left"
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-semibold text-ink-800">
+                    {anchor.name}
+                  </span>
+                  <span className="text-[11px] capitalize text-ink-400">{anchor.type}</span>
+                </span>
+                <Pencil className="size-3.5 shrink-0 text-ink-300 opacity-0 transition group-hover:opacity-100" />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => void updateAnchor(anchor.id, { include: !anchor.include })}
+              title={anchor.include ? "Skip — don't draw this one" : "Include this one again"}
+              className="flex size-8 shrink-0 items-center justify-center rounded-lg text-ink-400 transition hover:bg-ink-100 hover:text-ink-700"
+            >
+              {anchor.include ? <Eye className="size-4" /> : <EyeOff className="size-4" />}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmDelete(true)}
+              title={`Remove ${anchor.name}`}
+              className="flex size-8 shrink-0 items-center justify-center rounded-lg text-ink-400 transition hover:bg-red-50 hover:text-red-600"
+            >
+              <Trash2 className="size-4" />
+            </button>
+          </div>
+
+          {!anchor.include && (
+            <p className="max-w-xl rounded-lg bg-ink-100 px-3 py-2 text-xs text-ink-500">
+              Skipped — no reference art will be made for {anchor.name}.
+            </p>
+          )}
+
+          {isStale && (
+            <div className="flex w-full max-w-xl flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+              <span className="flex items-center gap-1.5 text-xs text-amber-800">
+                <RefreshCw className="size-3.5 shrink-0" />
+                Look is out of date
+              </span>
+              <Button
+                size="sm"
+                loading={generating}
+                leftIcon={<RefreshCw className="size-4" />}
+                onClick={() => void generate({ useReference: true })}
+              >
+                Update
+              </Button>
+            </div>
+          )}
+        </div>
+        {revertModal}
+        {deleteModal}
+      </>
+    );
+  }
+
+  if (layout === "dock") {
+    return (
+      <>
+        <div className="space-y-5 p-4">
+          {hasImage && (
+            <PictureChangeControls
+              edit={edit}
+              setEdit={setEdit}
+              generating={generating}
+              sparkRange={sparkRange}
+              onApply={() => void generate({ edit, useReference: true })}
+              onNewVersion={() => void generate({ useReference: true })}
+            />
+          )}
+          {controls}
+          {versions.length > 0 && (
+            <VersionHistoryList
+              items={versions.map((node, i) => ({
+                id: node.id,
+                blobId: node.content.blobId,
+                index: i + 1,
+                aspect: sheetAspect(node.content.layout ?? fallbackLayout),
+              }))}
+              activeId={cursorId}
+              onSelect={selectVer}
+              onDelete={deleteVer}
+            />
+          )}
+          {relations}
+        </div>
+        {revertModal}
+        {deleteModal}
+      </>
+    );
+  }
 
   if (layout === "split") {
     return (
@@ -529,66 +656,72 @@ function CreativeDirectionField({
 }
 
 /**
- * The refine bar: a slim, chat-like control sitting right under the photo —
- * "comment on this photo" — kept physically apart from the description field
- * below so the two can never be mistaken for one combined control (see the
- * note where this is rendered). Typing a tweak and sending it edits the
- * current image in place; the dice next to it makes a fresh variation with
- * the same likeness and no typed instruction, replacing what used to be a
- * separate full-width "Variation" button for something used far less often
- * than the send action.
+ * Same morphing CTA as page art: typed text → Apply change; empty → New version.
+ * Avoids spending a generation that ignores a half-typed edit.
  */
-function RefineBar({
-  value,
-  onChange,
-  disabled,
-  onSend,
-  onShuffle,
+function PictureChangeControls({
+  edit,
+  setEdit,
+  generating,
+  sparkRange,
+  onApply,
+  onNewVersion,
 }: {
-  value: string;
-  onChange: (v: string) => void;
-  disabled: boolean;
-  onSend: () => void;
-  onShuffle: () => void;
+  edit: string;
+  setEdit: (v: string) => void;
+  generating: boolean;
+  sparkRange: ReturnType<typeof useImageActionRange>;
+  onApply: () => void;
+  onNewVersion: () => void;
 }) {
-  const canSend = value.trim().length > 0 && !disabled;
+  const hasEdit = edit.trim().length > 0;
   return (
-    <div className="flex items-center gap-1 rounded-full bg-white py-1 pl-3.5 pr-1 shadow-soft ring-1 ring-inset ring-ink-200 transition focus-within:ring-brand-400">
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && canSend) onSend();
-        }}
-        disabled={disabled}
-        placeholder="Tell it what to tweak…"
-        className="h-8 min-w-0 flex-1 bg-transparent text-sm text-ink-800 placeholder:text-ink-400 focus:outline-none disabled:opacity-60"
-      />
-      <button
-        type="button"
-        onClick={onShuffle}
-        disabled={disabled}
-        title="New variation — same likeness, no instructions"
-        aria-label="New variation — same likeness, no instructions"
-        className="flex size-8 shrink-0 items-center justify-center rounded-full text-ink-400 transition hover:bg-ink-100 hover:text-ink-700 disabled:pointer-events-none disabled:opacity-40"
-      >
-        <Dices className="size-4" />
-      </button>
-      <button
-        type="button"
-        onClick={onSend}
-        disabled={!canSend}
-        title="Apply this tweak to the image above"
-        aria-label="Apply this tweak to the image above"
-        className={cn(
-          "flex size-8 shrink-0 items-center justify-center rounded-full transition disabled:pointer-events-none disabled:opacity-40",
-          canSend
-            ? "bg-brand-600 text-(--color-brand-foreground) hover:bg-brand-700"
-            : "bg-ink-100 text-ink-300",
-        )}
-      >
-        <SendHorizontal className="size-4" />
-      </button>
+    <div className="space-y-3">
+      <div>
+        <div className="mb-1.5 flex items-center gap-1">
+          <p className="text-xs font-medium text-ink-600">Change this picture</p>
+          <InfoHint topic="refineImage" />
+        </div>
+        <Input
+          value={edit}
+          onChange={(e) => setEdit(e.target.value)}
+          placeholder="bigger smile, red scarf…"
+          disabled={generating}
+          onKeyDown={(e) => {
+            if (e.key !== "Enter" || generating) return;
+            if (hasEdit) onApply();
+            else onNewVersion();
+          }}
+        />
+        <p className="mt-1.5 text-[11px] leading-snug text-ink-400">
+          {hasEdit
+            ? "Applies your tweak to the current drawing — same look."
+            : "Leave blank for a fresh drawing of the same look, or type a small tweak."}
+        </p>
+      </div>
+      {hasEdit ? (
+        <Button
+          className="w-full"
+          variant="secondary"
+          loading={generating}
+          leftIcon={<Sparkles className="size-4" />}
+          onClick={onApply}
+        >
+          Apply change
+          <SparkEstimateCost range={sparkRange} />
+        </Button>
+      ) : (
+        <Button
+          className="w-full"
+          variant="secondary"
+          loading={generating}
+          leftIcon={<Wand2 className="size-4" />}
+          onClick={onNewVersion}
+        >
+          New version
+          <SparkEstimateCost range={sparkRange} />
+        </Button>
+      )}
     </div>
   );
 }

@@ -111,7 +111,13 @@ export async function analyzeCurrentStory(signal?: AbortSignal): Promise<void> {
   const { summary, anchors, model, relations } = await analyzeStoryRemote(project, signal);
 
   await useProjectsStore.getState().setAnalysis(
-    { summary, generatedAt: Date.now(), model },
+    {
+      summary,
+      generatedAt: Date.now(),
+      model,
+      // Snapshot so Cast can offer re-read only when the story text drifts.
+      sourceStoryText: project.config.storyText,
+    },
     anchors,
     relations,
   );

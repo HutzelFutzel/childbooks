@@ -9,7 +9,7 @@ import type { Anchor, ImageElement } from "../../core/types";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
 import { Field, Input, Textarea } from "../components/Input";
-import { VersionThumb } from "../components/VersionThumb";
+import { VersionHistoryList } from "../components/VersionHistoryList";
 import { Badge } from "../components/Badge";
 import { InfoHint } from "../components/InfoHint";
 import { SparkEstimateCost } from "../layout/SparkCost";
@@ -757,23 +757,17 @@ function VersionsSection({ illo }: { illo: ReturnType<typeof usePageIllustration
   }
   return (
     <div className="p-4">
-      <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
-        {versions.map((node, i) => (
-          <VersionThumb
-            key={node.id}
-            blobId={node.content.blobId}
-            index={i + 1}
-            size="sm"
-            hideIndex
-            active={node.id === tree?.cursorId}
-            onClick={() => setVersion(node.id)}
-            onDelete={() => deleteVersion(node.id)}
-          />
-        ))}
-      </div>
-      <p className="mt-2 text-[11px] text-ink-400">
-        Click a thumb to restore. New edits always add a version.
-      </p>
+      <VersionHistoryList
+        hideTitle
+        items={versions.map((node, i) => ({
+          id: node.id,
+          blobId: node.content.blobId,
+          index: i + 1,
+        }))}
+        activeId={tree?.cursorId}
+        onSelect={setVersion}
+        onDelete={deleteVersion}
+      />
     </div>
   );
 }
