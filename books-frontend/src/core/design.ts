@@ -217,9 +217,9 @@ export interface ShapeElement {
 }
 
 /**
- * A placed raster image: an uploaded asset, or the page's generated
- * illustration once the user repositions/scales it (kind "illustration",
- * which reads its bitmap from the page's current illustration blob).
+ * A placed raster image: an uploaded asset, or a bound AI illustration slot
+ * (kind "illustration"). The bitmap comes from `project.illustrations[slotId]`
+ * where {@link resolveIllustrationSlotId} yields the slot.
  */
 export interface ImageElement {
   id: string;
@@ -227,10 +227,24 @@ export interface ImageElement {
   rotation?: number;
   z: number;
   kind: "asset" | "illustration";
+  /**
+   * Stable AI-art slot this element displays. Matches the job task id and the
+   * key in `project.illustrations`. When omitted (legacy), the page id is used
+   * — one primary illustration per page. Future multi-art pages give each
+   * element its own slot id so loading/reconcile target the right frame.
+   */
+  illustrationId?: string;
   /** Asset blob id (assets only; illustration pulls from the page blob). */
   blobId?: string;
   /** How the bitmap fills its rect. */
   fit: "cover" | "contain";
+  /**
+   * When {@link fit} is `"contain"`, what to do with leftover bars:
+   * - `"blur"` — soft letterbox filled with a blurred zoom of the same image
+   * - `"none"` — leave the bars transparent (page shows through)
+   * Undefined keeps the legacy default: blur for illustrations, none for assets.
+   */
+  fitBackdrop?: "blur" | "none";
   /**
    * Extra scale applied on top of the base {@link fit} (1 = none). Lets the user
    * zoom into the bitmap without resizing the rect. Combined with {@link focus}
@@ -241,7 +255,8 @@ export interface ImageElement {
   /**
    * Focal point (normalized 0..1 of the bitmap) kept centred in the rect when
    * the scaled bitmap overflows. Defaults to the centre `{ x: 0.5, y: 0.5 }`.
-   * Mirrors CSS `object-position`.
+   * Mirrors CSS `object-position`. Used in Fill (`cover`) to pan which part
+   * of the picture stays visible when aspect ratios differ.
    */
   focus?: { x: number; y: number };
   opacity?: number;
@@ -327,4 +342,18 @@ export function textFromParagraphs(paragraphs: TextParagraph[]): string {
   return paragraphs
     .map((p) => p.spans.map((s) => s.text).join(""))
     .join("\n\n");
+}
+
+/**
+ * Resolve the durable AI-art slot for an illustration element. Job tasks and
+ * `project.illustrations` are keyed by this id so loading survives refresh and
+ * multi-art pages can target the correct frame.
+ */
+export function resolveIllustrationSlotId(
+  el: Pick<ImageElement, "kind" | "illustrationId">,
+  pageId: string,
+): string {
+  if (el.kind !== "illustration") return pageId;
+  const slot = el.illustrationId?.trim();
+  return slot || pageId;
 }

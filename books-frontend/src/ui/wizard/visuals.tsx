@@ -32,15 +32,30 @@ export function StyleSwatch({ swatch, imageUrl }: { swatch: string; imageUrl?: s
 }
 
 /** A page shape rendered at the given aspect ratio. */
-export function BookSizeShape({ aspect }: { aspect: number }) {
-  // Normalize so the larger dimension is ~64px.
-  const max = 64;
+export function BookSizeShape({
+  aspect,
+  size = "md",
+}: {
+  aspect: number;
+  /** `sm` fits a compact dock row; `md` is the wizard card visual. */
+  size?: "sm" | "md";
+}) {
+  // Normalize so the larger dimension matches the slot.
+  const max = size === "sm" ? 28 : 64;
   const w = aspect >= 1 ? max : Math.round(max * aspect);
   const h = aspect >= 1 ? Math.round(max / aspect) : max;
   return (
-    <div className="flex h-20 items-center justify-center">
+    <div
+      className={cn(
+        "flex items-center justify-center",
+        size === "sm" ? "size-10 shrink-0" : "h-20",
+      )}
+    >
       <div
-        className="rounded-md bg-brand-100 ring-2 ring-brand-300"
+        className={cn(
+          "bg-brand-100 ring-brand-300",
+          size === "sm" ? "rounded-sm ring-1" : "rounded-md ring-2",
+        )}
         style={{ width: w, height: h }}
       />
     </div>

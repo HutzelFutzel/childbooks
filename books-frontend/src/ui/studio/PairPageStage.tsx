@@ -27,7 +27,6 @@ import { defaultIllustrationFocus } from "../design/designInit";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { useJobsStore } from "../../state/jobsStore";
 import { PageStage, type ElementKind as StageElementKind, type GeomPatch } from "../design/PageStage";
-import { GenerationOverlay } from "../generation/GenerationOverlay";
 import type { SpanRef } from "../design/TextBoxView";
 import { useStudio } from "./StudioContext";
 import { pairDropId } from "./StudioDnd";
@@ -49,6 +48,16 @@ function fromCombinedRect(rect: NormRect, isRight: boolean): NormRect {
   return { x: (rect.x - (isRight ? 0.5 : 0)) * 2, y: rect.y, w: rect.w * 2, h: rect.h };
 }
 
+/** Keep a combined-space rect inside its owner half (page art can't cross the fold). */
+function clampCombinedRectToHalf(rect: NormRect, ownerIsRight: boolean): NormRect {
+  const minX = ownerIsRight ? 0.5 : 0;
+  const maxX = ownerIsRight ? 1 : 0.5;
+  const maxW = maxX - minX;
+  const w = Math.min(rect.w, maxW);
+  const x = Math.max(minX, Math.min(maxX - w, rect.x));
+  return { x, y: rect.y, w, h: rect.h };
+}
+
 function mapElements<T extends { rect: NormRect }>(list: T[], isRight: boolean): T[] {
   return list.map((el) => ({ ...el, rect: toCombinedRect(el.rect, isRight) }));
 }
@@ -62,10 +71,14 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
     patchBox,
     patchShape,
     patchImage,
-    makeIllustrationEditable,
+    selectIllustration,
+    pendingReframeImageId,
+    clearPendingReframe,
     moveElementToPage,
     duplicateBox,
     deleteBox,
+    duplicateImage,
+    deleteImage,
     copyBoxStyle,
     pasteBoxStyle,
     hasCopiedBoxStyle,
@@ -127,7 +140,12 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
   const rightJobActive = useJobsStore((s) => s.activeUnitIds.has(right.page.id));
   const leftGenerating = (generatingPages.has(left.page.id) || leftJobActive) && !leftBlank;
   const rightGenerating = (generatingPages.has(right.page.id) || rightJobActive) && !rightBlank;
-  const overlayEntry = leftGenerating ? left : rightGenerating ? right : null;
+  const leftRefCount =
+    (left.subject.kind === "spread" ? left.subject.spread.anchorIds : left.subject.cover.anchorIds)
+      ?.length ?? 0;
+  const rightRefCount =
+    (right.subject.kind === "spread" ? right.subject.spread.anchorIds : right.subject.cover.anchorIds)
+      ?.length ?? 0;
 
   const onEitherPage =
     (selection.kind === "box" || selection.kind === "shape" || selection.kind === "image") &&
@@ -162,6 +180,7 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
         printGuides: rightGuides,
       }}
       dropId={pairDropId(left.page.id, right.page.id)}
+      fillParent
       snap={snap}
       grid={grid}
       printGuides={leftGuides}
@@ -184,6 +203,22 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
           const centerX = patch.rect.x + patch.rect.w / 2;
           const isRight = centerX >= 0.5;
           const destId = isRight ? right.page.id : left.page.id;
+          const ownerIsRight = ownerId === right.page.id;
+
+          // Page AI art stays on its page — clamp to the owner half instead of
+          // reassigning ownership (which swapped bitmaps / left ghosts).
+          if (destId !== ownerId && modelKind === "image") {
+            const im = pageDesign(ownerId).images?.find((x) => x.id === id);
+            if (im?.kind === "illustration") {
+              const clamped = clampCombinedRectToHalf(patch.rect, ownerIsRight);
+              applyPatch(ownerId, id, modelKind, {
+                ...patch,
+                rect: fromCombinedRect(clamped, ownerIsRight),
+              });
+              return;
+            }
+          }
+
           const localRect = fromCombinedRect(patch.rect, isRight);
           if (destId === ownerId) {
             // No crossing: one normal patch (keeps rotation/minHeightPct, if
@@ -198,8 +233,28 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
         }
         applyPatch(ownerId, id, modelKind, patch);
       }}
-      onReframeImage={(id, patch) => patchImage(elementOwner.get(id) ?? left.page.id, id, patch)}
-      onAdjustArt={(side) => makeIllustrationEditable(side === "right" ? right.page.id : left.page.id)}
+      onReframeImage={(id, patch) => {
+        const ownerId = elementOwner.get(id) ?? left.page.id;
+        if (!patch.rect) {
+          patchImage(ownerId, id, patch);
+          return;
+        }
+        // Overlay works in combined stage space; store page-local rects.
+        const ownerIsRight = ownerId === right.page.id;
+        const clamped = clampCombinedRectToHalf(patch.rect, ownerIsRight);
+        patchImage(ownerId, id, {
+          ...patch,
+          rect: fromCombinedRect(clamped, ownerIsRight),
+        });
+      }}
+      onSelectArt={(side) => selectIllustration(side === "right" ? right.page.id : left.page.id)}
+      onAdjustArt={(side) =>
+        selectIllustration(side === "right" ? right.page.id : left.page.id, {
+          enterReframe: true,
+        })
+      }
+      autoReframeId={pendingReframeImageId}
+      onAutoReframeConsumed={clearPendingReframe}
       onEditText={(id, value) =>
         patchBox(elementOwner.get(id) ?? left.page.id, id, { paragraphs: wordParagraphs(value) })
       }
@@ -232,24 +287,45 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
         undo,
         redo,
       }}
+      imageToolbar={{
+        pageIdForImage: (imageId) => elementOwner.get(imageId) ?? left.page.id,
+        onPatch: (imageId, patch, opts) =>
+          patchImage(elementOwner.get(imageId) ?? left.page.id, imageId, patch, opts),
+        onDuplicate: (imageId) =>
+          duplicateImage(elementOwner.get(imageId) ?? left.page.id, imageId),
+        onDelete: (imageId) => deleteImage(elementOwner.get(imageId) ?? left.page.id, imageId),
+        onToggleLock: (imageId) => {
+          const pageId = elementOwner.get(imageId) ?? left.page.id;
+          const im = pageDesign(pageId).images?.find((x) => x.id === imageId);
+          if (im) patchImage(pageId, imageId, { locked: !im.locked });
+        },
+      }}
       selectedSpan={selectedSpan}
       onSelectSpan={(ref: SpanRef | null) => {
         if (selection.kind === "box" && onEitherPage) {
           select({ kind: "box", pageId: selection.pageId, boxId: selection.boxId, span: ref });
         }
       }}
-      overlay={
-        overlayEntry ? (
-          <GenerationOverlay
-            action="pageIllustration"
-            refCount={
-              (overlayEntry.subject.kind === "spread" ? overlayEntry.subject.spread.anchorIds : undefined)
-                ?.length ?? 0
+      artBusy={{
+        ...(leftGenerating
+          ? {
+              left: {
+                action: "pageIllustration" as const,
+                refCount: leftRefCount,
+                illustrationId: left.page.id,
+              },
             }
-            className="rounded-xl"
-          />
-        ) : undefined
-      }
+          : {}),
+        ...(rightGenerating
+          ? {
+              right: {
+                action: "pageIllustration" as const,
+                refCount: rightRefCount,
+                illustrationId: right.page.id,
+              },
+            }
+          : {}),
+      }}
     />
   );
 }

@@ -43,6 +43,11 @@ import { effectiveBackdropBlur } from "./effects";
 import { effectiveFontSizePct } from "./textFit";
 import { useStudio } from "../studio/StudioContext";
 import type { TextEditSection } from "./TextEditPanel";
+import {
+  floatingBarPortalProps,
+  type FloatingBarPlacement,
+} from "./floatingBarPlacement";
+import { PortalToolbarFlyout } from "./toolbarFlyout";
 
 const FONT_CATEGORY_ORDER: FontCategory[] = ["rounded", "sans", "serif", "hand"];
 
@@ -77,8 +82,7 @@ export type TextBoxToolbarChrome = {
  * Effects / Background / style / duplicate live under More.
  */
 export function TextStyleBar({
-  x,
-  y,
+  placement,
   bold,
   italic,
   underline,
@@ -87,8 +91,7 @@ export function TextStyleBar({
   onColor,
   chrome,
 }: {
-  x: number;
-  y: number;
+  placement: FloatingBarPlacement;
   bold: boolean;
   italic: boolean;
   underline: boolean;
@@ -97,11 +100,12 @@ export function TextStyleBar({
   onColor: (c: string) => void;
   chrome?: TextBoxToolbarChrome;
 }) {
+  const portal = floatingBarPortalProps(placement);
   return createPortal(
     <div
       data-text-style-bar
-      className="fixed z-80 -translate-x-1/2 -translate-y-full"
-      style={{ left: x, top: y - 10 }}
+      className={portal.className}
+      style={portal.style}
       // Keep the caret / box selection alive when a control is clicked.
       onMouseDown={(e) => e.preventDefault()}
     >
@@ -158,7 +162,7 @@ export function TextStyleBar({
 
 /** Overflow menu: Effects / Background (docked panel) + style / duplicate. */
 function MoreMenu({ chrome }: { chrome: TextBoxToolbarChrome }) {
-  const { textEditSection, openTextEdit, closeTextEdit } = useStudio();
+  const { textEditSection, toggleTextEdit } = useStudio();
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
@@ -167,18 +171,8 @@ function MoreMenu({ chrome }: { chrome: TextBoxToolbarChrome }) {
     effectiveBackdropBlur(chrome.box) > 0;
   const hasEffects = !!chrome.box.effects?.shadow;
 
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
-
   const openPanel = (section: TextEditSection) => {
-    if (textEditSection === section) closeTextEdit();
-    else openTextEdit(section);
+    toggleTextEdit(section);
     setOpen(false);
   };
 
@@ -191,53 +185,57 @@ function MoreMenu({ chrome }: { chrome: TextBoxToolbarChrome }) {
       >
         <MoreHorizontal className="size-4" />
       </Toggle>
-      {open && (
-        <div className="absolute right-0 top-full z-20 mt-1 min-w-44 rounded-xl border border-ink-200 bg-white py-1 shadow-lifted">
-          <MenuItem
-            icon={<Blend className="size-4" />}
-            label="Effects"
-            active={textEditSection === "effects" || hasEffects}
-            onClick={() => openPanel("effects")}
-          />
-          <MenuItem
-            icon={
-              <Square
-                className="size-4"
-                style={hasBg ? { fill: chrome.box.fill, color: chrome.box.fill } : undefined}
-              />
-            }
-            label="Background"
-            active={textEditSection === "background" || hasBg}
-            onClick={() => openPanel("background")}
-          />
-          <div className="my-1 border-t border-ink-100" />
-          <MenuItem
-            icon={<Paintbrush className="size-4" />}
-            label="Copy style"
-            onClick={() => {
-              chrome.onCopyStyle();
-              setOpen(false);
-            }}
-          />
-          <MenuItem
-            icon={<ClipboardPaste className="size-4" />}
-            label="Paste style"
-            disabled={!chrome.canPasteStyle}
-            onClick={() => {
-              chrome.onPasteStyle();
-              setOpen(false);
-            }}
-          />
-          <MenuItem
-            icon={<Copy className="size-4" />}
-            label="Duplicate"
-            onClick={() => {
-              chrome.onDuplicate();
-              setOpen(false);
-            }}
-          />
-        </div>
-      )}
+      <PortalToolbarFlyout
+        open={open}
+        onClose={() => setOpen(false)}
+        triggerRef={rootRef}
+        align="end"
+        className="min-w-44 overflow-hidden py-1"
+      >
+        <MenuItem
+          icon={<Blend className="size-4" />}
+          label="Effects"
+          active={textEditSection === "effects" || hasEffects}
+          onClick={() => openPanel("effects")}
+        />
+        <MenuItem
+          icon={
+            <Square
+              className="size-4"
+              style={hasBg ? { fill: chrome.box.fill, color: chrome.box.fill } : undefined}
+            />
+          }
+          label="Background"
+          active={textEditSection === "background" || hasBg}
+          onClick={() => openPanel("background")}
+        />
+        <div className="my-1 border-t border-ink-100" />
+        <MenuItem
+          icon={<Paintbrush className="size-4" />}
+          label="Copy style"
+          onClick={() => {
+            chrome.onCopyStyle();
+            setOpen(false);
+          }}
+        />
+        <MenuItem
+          icon={<ClipboardPaste className="size-4" />}
+          label="Paste style"
+          disabled={!chrome.canPasteStyle}
+          onClick={() => {
+            chrome.onPasteStyle();
+            setOpen(false);
+          }}
+        />
+        <MenuItem
+          icon={<Copy className="size-4" />}
+          label="Duplicate"
+          onClick={() => {
+            chrome.onDuplicate();
+            setOpen(false);
+          }}
+        />
+      </PortalToolbarFlyout>
     </div>
   );
 }
@@ -401,37 +399,31 @@ function AlignMenu({
   ];
   const current = opts.find((o) => o.id === value) ?? opts[0];
 
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
-
   return (
     <div ref={rootRef} className="relative shrink-0">
       <Toggle label={current.title} active={open} onClick={() => setOpen((o) => !o)}>
         {current.icon}
       </Toggle>
-      {open && (
-        <div className="absolute left-0 top-full z-20 mt-1 flex gap-0.5 rounded-xl border border-ink-200 bg-white p-1 shadow-lifted">
-          {opts.map((o) => (
-            <Toggle
-              key={o.id}
-              label={o.title}
-              active={value === o.id}
-              onClick={() => {
-                onChange(o.id);
-                setOpen(false);
-              }}
-            >
-              {o.icon}
-            </Toggle>
-          ))}
-        </div>
-      )}
+      <PortalToolbarFlyout
+        open={open}
+        onClose={() => setOpen(false)}
+        triggerRef={rootRef}
+        className="flex gap-0.5 p-1"
+      >
+        {opts.map((o) => (
+          <Toggle
+            key={o.id}
+            label={o.title}
+            active={value === o.id}
+            onClick={() => {
+              onChange(o.id);
+              setOpen(false);
+            }}
+          >
+            {o.icon}
+          </Toggle>
+        ))}
+      </PortalToolbarFlyout>
     </div>
   );
 }
@@ -453,37 +445,31 @@ function VAlignMenu({
   ];
   const current = opts.find((o) => o.id === value) ?? opts[1];
 
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
-
   return (
     <div ref={rootRef} className="relative shrink-0">
       <Toggle label={current.title} active={open} onClick={() => setOpen((o) => !o)}>
         {current.icon}
       </Toggle>
-      {open && (
-        <div className="absolute left-0 top-full z-20 mt-1 flex gap-0.5 rounded-xl border border-ink-200 bg-white p-1 shadow-lifted">
-          {opts.map((o) => (
-            <Toggle
-              key={o.id}
-              label={o.title}
-              active={value === o.id}
-              onClick={() => {
-                onChange(o.id);
-                setOpen(false);
-              }}
-            >
-              {o.icon}
-            </Toggle>
-          ))}
-        </div>
-      )}
+      <PortalToolbarFlyout
+        open={open}
+        onClose={() => setOpen(false)}
+        triggerRef={rootRef}
+        className="flex gap-0.5 p-1"
+      >
+        {opts.map((o) => (
+          <Toggle
+            key={o.id}
+            label={o.title}
+            active={value === o.id}
+            onClick={() => {
+              onChange(o.id);
+              setOpen(false);
+            }}
+          >
+            {o.icon}
+          </Toggle>
+        ))}
+      </PortalToolbarFlyout>
     </div>
   );
 }
@@ -570,7 +556,7 @@ function FontField({ value, onChange }: { value: string; onChange: (family: stri
         createPortal(
           <div
             ref={menuRef}
-            className="fixed z-90 overflow-hidden rounded-xl border border-ink-200 bg-white shadow-lifted"
+            className="fixed z-100 overflow-hidden rounded-xl border border-ink-200 bg-white shadow-lifted"
             style={{ left: menuPos.left, top: menuPos.top, width: menuPos.width }}
             onMouseDown={(e) => e.stopPropagation()}
           >

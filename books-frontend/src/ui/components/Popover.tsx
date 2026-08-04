@@ -228,7 +228,7 @@ export function Popover({
                 onMouseEnter={openOnHover ? hoverEnter : undefined}
                 onMouseLeave={openOnHover ? hoverLeave : undefined}
                 className={cn(
-                  "z-50 rounded-2xl border border-ink-200 bg-white p-3 shadow-lifted",
+                  "z-100 rounded-2xl border border-ink-200 bg-white p-3 shadow-lifted",
                   alignCls,
                   panelClassName ?? "w-72",
                 )}

@@ -34,7 +34,7 @@ export function DesignSetup() {
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-5 py-8">
         <StageHeader
-          eyebrow="Step 3 · Design"
+          eyebrow="Design · Pages"
           eyebrowIcon={LayoutTemplate}
           tone="brand"
           title={firstTime ? "Let's set up your book" : "Book setup"}

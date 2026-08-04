@@ -540,4 +540,4 @@ export type {
   HAlign,
   VAlign,
 } from "./design";
-export { DESIGN_VERSION } from "./design";
+export { DESIGN_VERSION, resolveIllustrationSlotId } from "./design";

@@ -27,9 +27,19 @@ export function ImageInspector({
   const framed = zoom > 1 || focus.x !== 0.5 || focus.y !== 0.5;
 
   const fitOptions: { id: ImageElement["fit"]; label: string; hint: string }[] = [
-    { id: "cover", label: "Fill", hint: "Fills the frame — edges may be cropped" },
-    { id: "contain", label: "Fit", hint: "Shows the whole picture — may leave a soft border" },
+    {
+      id: "cover",
+      label: "Fill",
+      hint: "Fills the frame — double-click to drag which part shows",
+    },
+    {
+      id: "contain",
+      label: "Fit",
+      hint: "Shows the whole picture — choose leftover bars below",
+    },
   ];
+  const softFill =
+    (image.fitBackdrop ?? (image.kind === "illustration" ? "blur" : "none")) === "blur";
 
   return (
     <div className="space-y-4 p-4">
@@ -73,6 +83,33 @@ export function ImageInspector({
         />
       </Section>
 
+      {!isFill && (
+        <Section title="Leftover space">
+          <div className="inline-flex rounded-lg border border-ink-200">
+            {(
+              [
+                { id: "blur" as const, label: "Soft fill" },
+                { id: "none" as const, label: "Transparent" },
+              ] as const
+            ).map((opt, i) => (
+              <button
+                key={opt.id}
+                onClick={() => onChange({ fitBackdrop: opt.id })}
+                className={cn(
+                  "px-3 py-1.5 text-xs transition first:rounded-l-lg last:rounded-r-lg",
+                  i > 0 && "border-l border-ink-200",
+                  (opt.id === "blur" ? softFill : !softFill)
+                    ? "bg-brand-50 text-brand-700"
+                    : "text-ink-600 hover:bg-ink-50",
+                )}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </Section>
+      )}
+
       {isFill && (
         <Section
           title="Framing"
@@ -89,8 +126,8 @@ export function ImageInspector({
           }
         >
           <p className="mb-2 text-[11px] leading-snug text-ink-400">
-            Tip: double-click the picture on the page to drag it around and see
-            what's hidden outside the frame.
+            Double-click the picture (or use Position) to drag which part stays
+            in frame when the aspect ratios differ.
           </p>
           <Slider
             label="Zoom"

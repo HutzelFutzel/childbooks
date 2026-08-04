@@ -26,13 +26,11 @@ export function StudioWorkspace({ project }: { project: Project }) {
 }
 
 function StudioInner({ project }: { project: Project }) {
-  const { step, designSetupOpen, closeDesignSetup, closeCoverStudio } = useStudio();
+  const { step, designSetupOpen, closeDesignSetup, closeToolPanel } = useStudio();
   const models = useResolvedModels();
   useStudioHotkeys();
 
-  // The Design step shows its book-setup flow the first time (until confirmed)
-  // and whenever the reader reopens it; otherwise it opens straight to the
-  // canvas. Read live so confirming immediately reveals the canvas.
+  // First-time Design gate only — later Setup visits use the docked side panel.
   const designReady = useProjectsStore((s) => s.current()?.config.designReady ?? false);
   const showDesignSetup = step === "edit" && (!designReady || designSetupOpen);
 
@@ -67,12 +65,11 @@ function StudioInner({ project }: { project: Project }) {
     }
   }, [inStudio, models, project.analysis, project.screenplay]);
 
-  // Reset the design-setup / cover-studio overlays whenever the step changes, so
-  // leaving and returning to Design behaves predictably.
+  // Reset design-setup / docked tool overlays when the step changes.
   useEffect(() => {
     closeDesignSetup();
-    closeCoverStudio();
-  }, [step, closeDesignSetup, closeCoverStudio]);
+    closeToolPanel();
+  }, [step, closeDesignSetup, closeToolPanel]);
 
   return (
     <StudioDndProvider>

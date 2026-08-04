@@ -1,8 +1,9 @@
 /**
  * Shared state for the unified Studio workspace: the designable page list, the
- * app-owned design layer (text boxes / patterns) with undo-redo, the current
- * selection (which drives the contextual inspector), and per-item generation
- * progress. One provider wraps the sidebar, the book canvas and the inspector.
+ * app-owned design layer (text boxes / patterns) with undo-redo (shared with
+ * page add/remove/move/duplicate), the current selection (which drives the
+ * contextual inspector), and per-item generation progress. One provider wraps
+ * the sidebar, the book canvas and the inspector.
  */
 import {
   createContext,
@@ -46,13 +47,24 @@ import { getPreset } from "../design/presets";
 import { newShapeId, shapeStyleDefaults } from "../design/shapes";
 import { fitBoxHeightPct, fitFontSizePct } from "../design/textFit";
 import type { TextEditSection } from "../design/TextEditPanel";
+import type { ImageEditSection } from "../design/ImageEditPanel";
 import type { SpanRef } from "../design/TextBoxView";
-import { notify } from "../lib/notify";
+import { notify, toast } from "../lib/notify";
 import { buildDisplaySpreads, type DisplaySpread, type Entry, type SpreadSide } from "./spreadModel";
 import type { PageSubject } from "./PageEditorCard";
 import { computeProgress, type StudioStep } from "./studioSteps";
+import {
+  applyStudioSnapshot,
+  bindStudioProjectCommit,
+  takeStudioSnapshot,
+  type StudioSnapshot,
+} from "./studioUndo";
 
 export type { TextEditSection } from "../design/TextEditPanel";
+export type { ImageEditSection } from "../design/ImageEditPanel";
+
+/** Docked tools opened from the Add dock (mutually exclusive). */
+export type StudioToolPanel = "layers" | "view" | "setup";
 
 export type Selection =
   | { kind: "none" }
@@ -92,6 +104,15 @@ function centeredRect(w: number, h: number, center?: Point): NRect {
   };
 }
 
+/** Prefer the largest / lowest-z illustration when deduping ghost copies. */
+function pickCanonicalIllustration(illus: ImageElement[]): ImageElement {
+  return [...illus].sort((a, b) => {
+    const area = (im: ImageElement) => im.rect.w * im.rect.h;
+    const d = area(b) - area(a);
+    return d !== 0 ? d : a.z - b.z;
+  })[0];
+}
+
 interface StudioContextValue {
   project: Project;
   pages: DesignPage[];
@@ -110,7 +131,47 @@ interface StudioContextValue {
    */
   textEditSection: TextEditSection | null;
   openTextEdit: (section: TextEditSection) => void;
+  /** Open section, or close the dock if that section is already open. */
+  toggleTextEdit: (section: TextEditSection) => void;
   closeTextEdit: () => void;
+
+  /**
+   * Canva-style docked edit panel for images / page illustrations (Refine,
+   * Characters, Scene, Versions, Effects, Frame). Opened from ImageStyleBar.
+   */
+  imageEditSection: ImageEditSection | null;
+  openImageEdit: (section: ImageEditSection) => void;
+  /** Open section, or close the dock if that section is already open. */
+  toggleImageEdit: (section: ImageEditSection) => void;
+  closeImageEdit: () => void;
+  /**
+   * Optional blocker for leaving the image edit sheet (e.g. dirty cast draft).
+   * Return true to allow immediately; return false and call `proceed` later
+   * after confirm. Pass null to clear.
+   */
+  setImageEditCloseGuard: (
+    guard: ((proceed: () => void) => boolean) | null,
+  ) => void;
+
+  /**
+   * Docked tool panel from the Add dock (Arrange / View / Setup). Opening one
+   * dismisses edit sheets so the tool stays reachable; selection is kept.
+   */
+  toolPanel: StudioToolPanel | null;
+  openToolPanel: (panel: StudioToolPanel) => void;
+  closeToolPanel: () => void;
+  toggleToolPanel: (panel: StudioToolPanel) => void;
+  /** Convenience: open the Arrange (layers) panel. */
+  openLayersPanel: () => void;
+
+  /**
+   * Ensure the page's full-bleed AI art is a selectable ImageElement and select
+   * it. Optionally enter crop/reframe (used by double-click / Crop).
+   */
+  selectIllustration: (pageId: string, opts?: { enterReframe?: boolean }) => void;
+  /** Image id the stage should auto-enter reframe for (one-shot). */
+  pendingReframeImageId: string | null;
+  clearPendingReframe: () => void;
 
   /**
    * The display-spread id currently open in the Design stage's main canvas —
@@ -129,6 +190,11 @@ interface StudioContextValue {
    */
   endHistoryGesture: () => void;
   addBox: (pageId: string, center?: Point) => void;
+  /**
+   * Smart Text dock action: on an empty page prefer screenplay story text, then
+   * a recently removed box; otherwise a blank text box.
+   */
+  addText: (pageId: string, center?: Point) => void;
   patchBox: (
     pageId: string,
     boxId: string,
@@ -166,12 +232,14 @@ interface StudioContextValue {
   duplicateImage: (pageId: string, imageId: string) => void;
   alignImage: (pageId: string, imageId: string, edge: AlignEdge) => void;
   /** Turn the page's generated illustration into a movable/scalable element. */
-  makeIllustrationEditable: (pageId: string) => void;
+  makeIllustrationEditable: (pageId: string, opts?: { enterReframe?: boolean }) => void;
 
   // layers (page-scoped, across all element kinds)
   moveLayer: (pageId: string, id: string, dir: -1 | 1) => void;
   /** Reassign the whole stack from a top-first ordering (drag-to-reorder). */
   setLayerOrder: (pageId: string, orderedIdsTopFirst: string[]) => void;
+  /** Pin a layer to the front (top) or back (bottom) of the stack. */
+  sendLayerToEdge: (pageId: string, id: string, edge: "front" | "back") => void;
   setLayerHidden: (pageId: string, id: string, hidden: boolean) => void;
   setLayerLocked: (pageId: string, id: string, locked: boolean) => void;
 
@@ -251,22 +319,12 @@ interface StudioContextValue {
   openSetup: () => void;
 
   /**
-   * Whether the Design step is showing its book-setup flow (size/format/layout)
-   * rather than the canvas. It opens automatically the first time (until the
-   * reader confirms), and can be reopened from the canvas as a summary.
+   * Whether the Design step is showing its first-time book-setup gate rather
+   * than the canvas. After designReady, Setup reopens as a docked side panel.
    */
   designSetupOpen: boolean;
   openDesignSetup: () => void;
   closeDesignSetup: () => void;
-
-  /**
-   * Whether the dedicated Cover Studio (front + back cover, shown together as a
-   * wrap) is open over the main canvas. Opened from a cover cell in the rail or
-   * the toolbar "Covers" action.
-   */
-  coverStudioOpen: boolean;
-  openCoverStudio: () => void;
-  closeCoverStudio: () => void;
 }
 
 /** Highest z across all elements on a page (text boxes + shapes + images). */
@@ -418,17 +476,30 @@ export function StudioProvider({
 
   const [selection, setSelection] = useState<Selection>({ kind: "none" });
   const [textEditSection, setTextEditSection] = useState<TextEditSection | null>(null);
+  const [imageEditSection, setImageEditSection] = useState<ImageEditSection | null>(null);
+  const [toolPanel, setToolPanel] = useState<StudioToolPanel | null>(null);
+  /** When set, PageStage should auto-enter reframe for this illustration image id. */
+  const [pendingReframeImageId, setPendingReframeImageId] = useState<string | null>(null);
+  /**
+   * Per-page lock so click + dblclick (or two rapid selects) can't each create
+   * an illustration ImageElement before the store re-render lands.
+   */
+  const illustrationEnsureLock = useRef<Map<string, string>>(new Map());
+  /** Soft-deleted text boxes per page (most recent last), for Undo / Add text. */
+  const textTrash = useRef<Map<string, TextBox[]>>(new Map());
   const [editingDispId, setEditingDispId] = useState<string | null>(null);
   const [generatingAnchors, setGA] = useState<Set<string>>(new Set());
   const [generatingPages, setGP] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [step, setStepRaw] = useState<StudioStep>(initialStep);
   const [designSetupOpen, setDesignSetupOpen] = useState(false);
-  const [coverStudioOpen, setCoverStudioOpen] = useState(false);
   const [snap, setSnap] = useState(true);
   const [grid, setGrid] = useState(false);
   const [guides, setGuides] = useState(true);
-  const history = useRef<{ past: BookDesign[]; future: BookDesign[] }>({ past: [], future: [] });
+  const history = useRef<{ past: StudioSnapshot[]; future: StudioSnapshot[] }>({
+    past: [],
+    future: [],
+  });
   /** Active coalesce key — see {@link HistoryOpts.coalesce}. */
   const coalesceKey = useRef<string | null>(null);
   const genAbort = useRef<AbortController | null>(null);
@@ -574,8 +645,15 @@ export function StudioProvider({
               : "Design your pages before ordering a printed book.",
           );
         } else if (next === "edit" && live.stage === "studio") {
-          // Setup is done but the screenplay hasn't finished auto-drafting.
-          notify.info("Your pages are still being written", "Give it a moment, then try again.");
+          if (!progress.anchors.done) {
+            notify.info(
+              "Finish the cast first",
+              "Create reference looks for your characters and places, then design the pages.",
+            );
+          } else {
+            // Cast is done but the screenplay hasn't finished auto-drafting.
+            notify.info("Your pages are still being written", "Give it a moment, then try again.");
+          }
         } else {
           notify.info("One step at a time", "Finish the Story step first.");
         }
@@ -587,20 +665,108 @@ export function StudioProvider({
   );
 
   const openSetup = useCallback(() => setStep("story"), [setStep]);
-  const openDesignSetup = useCallback(() => setDesignSetupOpen(true), []);
   const closeDesignSetup = useCallback(() => setDesignSetupOpen(false), []);
-  const openCoverStudio = useCallback(() => setCoverStudioOpen(true), []);
-  const closeCoverStudio = useCallback(() => setCoverStudioOpen(false), []);
 
   const select = useCallback((sel: Selection) => {
     setSelection(sel);
     if (sel.kind !== "box") setTextEditSection(null);
+    if (sel.kind !== "image") setImageEditSection(null);
   }, []);
 
   const openTextEdit = useCallback((section: TextEditSection) => {
     setTextEditSection(section);
+    setImageEditSection(null);
+    setToolPanel(null);
   }, []);
   const closeTextEdit = useCallback(() => setTextEditSection(null), []);
+  const toggleTextEdit = useCallback(
+    (section: TextEditSection) => {
+      if (textEditSection === section) {
+        setTextEditSection(null);
+        return;
+      }
+      openTextEdit(section);
+    },
+    [textEditSection, openTextEdit],
+  );
+
+  const imageEditCloseGuard = useRef<((proceed: () => void) => boolean) | null>(null);
+  const setImageEditCloseGuard = useCallback(
+    (guard: ((proceed: () => void) => boolean) | null) => {
+      imageEditCloseGuard.current = guard;
+    },
+    [],
+  );
+
+  const runWithImageEditGuard = useCallback((proceed: () => void) => {
+    const guard = imageEditCloseGuard.current;
+    if (guard && !guard(proceed)) return;
+    proceed();
+  }, []);
+
+  const openImageEdit = useCallback(
+    (section: ImageEditSection) => {
+      // Re-selecting the open section is a no-op (don't trip the dirty guard).
+      if (imageEditSection === section) return;
+      runWithImageEditGuard(() => {
+        setImageEditSection(section);
+        setTextEditSection(null);
+        setToolPanel(null);
+      });
+    },
+    [runWithImageEditGuard, imageEditSection],
+  );
+  const closeImageEdit = useCallback(() => {
+    runWithImageEditGuard(() => setImageEditSection(null));
+  }, [runWithImageEditGuard]);
+  const toggleImageEdit = useCallback(
+    (section: ImageEditSection) => {
+      if (imageEditSection === section) {
+        closeImageEdit();
+        return;
+      }
+      openImageEdit(section);
+    },
+    [imageEditSection, closeImageEdit, openImageEdit],
+  );
+
+  const openToolPanel = useCallback(
+    (panel: StudioToolPanel) => {
+      runWithImageEditGuard(() => {
+        setToolPanel(panel);
+        setTextEditSection(null);
+        setImageEditSection(null);
+      });
+    },
+    [runWithImageEditGuard],
+  );
+  const closeToolPanel = useCallback(() => setToolPanel(null), []);
+  const toggleToolPanel = useCallback(
+    (panel: StudioToolPanel) => {
+      if (toolPanel === panel) {
+        setToolPanel(null);
+        return;
+      }
+      openToolPanel(panel);
+    },
+    [toolPanel, openToolPanel],
+  );
+  const openLayersPanel = useCallback(() => openToolPanel("layers"), [openToolPanel]);
+
+  /**
+   * First-time gate uses the full-page flow; later visits toggle the docked
+   * Setup panel (same control opens and closes).
+   */
+  const openDesignSetup = useCallback(() => {
+    const ready =
+      useProjectsStore.getState().projects.find((p) => p.id === project.id)?.config.designReady ??
+      project.config.designReady;
+    if (!ready) {
+      setDesignSetupOpen(true);
+      return;
+    }
+    toggleToolPanel("setup");
+  }, [project.id, project.config.designReady, toggleToolPanel]);
 
   // Entering/leaving focused edit clears element selection so the inspector
   // never shows controls for an element whose editor is no longer on screen.
@@ -608,6 +774,8 @@ export function StudioProvider({
     setEditingDispId(id);
     setSelection({ kind: "none" });
     setTextEditSection(null);
+    setImageEditSection(null);
+    setToolPanel(null);
   }, []);
 
   const setAnchorGenerating = useCallback((id: string, on: boolean) => {
@@ -631,40 +799,90 @@ export function StudioProvider({
     coalesceKey.current = null;
   }, []);
 
+  const pushHistory = useCallback((p: Project) => {
+    history.current.past.push(takeStudioSnapshot(p));
+    if (history.current.past.length > 80) history.current.past.shift();
+    history.current.future = [];
+  }, []);
+
+  /** Clear selection when its page no longer exists after undo/redo. */
+  const sanitizeSelection = useCallback((p: Project) => {
+    setSelection((sel) => {
+      if (sel.kind === "none" || sel.kind === "anchor") return sel;
+      const pageId = sel.pageId;
+      const spreads = p.screenplay ? getCursor(p.screenplay).content.spreads : [];
+      const known = new Set<string>([
+        ...spreads.map((s) => s.id),
+        COVER_FRONT_ID,
+        COVER_BACK_ID,
+      ]);
+      if (known.has(pageId)) return sel;
+      return { kind: "none" };
+    });
+  }, []);
+
   const commit = useCallback(
     (mutate: (d: BookDesign) => BookDesign, opts?: HistoryOpts) => {
-      const cur = useProjectsStore.getState().current()?.design;
-      if (!cur) return;
+      const p = useProjectsStore.getState().current();
+      if (!p?.design) return;
       const key = opts?.coalesce;
       const merging = key != null && key === coalesceKey.current;
-      if (!merging) {
-        history.current.past.push(cur);
-        if (history.current.past.length > 80) history.current.past.shift();
-        history.current.future = [];
-      }
+      if (!merging) pushHistory(p);
       coalesceKey.current = key ?? null;
-      void setDesign(mutate(structuredClone(cur)));
+      void setDesign(mutate(structuredClone(p.design)));
     },
-    [setDesign],
+    [pushHistory, setDesign],
   );
 
+  /**
+   * Full-project mutation as one undo step (page add/remove/move/duplicate).
+   * Snapshots design + screenplay + illustrations together.
+   */
+  const commitProject = useCallback(
+    (mutate: (p: Project) => Project) => {
+      const p = useProjectsStore.getState().current();
+      if (!p) return;
+      pushHistory(p);
+      coalesceKey.current = null;
+      void useProjectsStore.getState().patchCurrent(mutate);
+    },
+    [pushHistory],
+  );
+
+  // Let pageOps (and other non-React callers) share this undo stack.
+  useEffect(() => bindStudioProjectCommit(commitProject), [commitProject]);
+
   const undo = useCallback(() => {
-    const cur = useProjectsStore.getState().current()?.design;
+    const p = useProjectsStore.getState().current();
     const past = history.current.past;
-    if (!cur || past.length === 0) return;
+    if (!p || past.length === 0) return;
     coalesceKey.current = null;
-    history.current.future.push(cur);
-    void setDesign(past.pop()!);
-  }, [setDesign]);
+    history.current.future.push(takeStudioSnapshot(p));
+    const snap = past.pop()!;
+    void useProjectsStore
+      .getState()
+      .patchCurrent((cur) => applyStudioSnapshot(cur, snap))
+      .then(() => {
+        const next = useProjectsStore.getState().current();
+        if (next) sanitizeSelection(next);
+      });
+  }, [sanitizeSelection]);
 
   const redo = useCallback(() => {
-    const cur = useProjectsStore.getState().current()?.design;
+    const p = useProjectsStore.getState().current();
     const future = history.current.future;
-    if (!cur || future.length === 0) return;
+    if (!p || future.length === 0) return;
     coalesceKey.current = null;
-    history.current.past.push(cur);
-    void setDesign(future.pop()!);
-  }, [setDesign]);
+    history.current.past.push(takeStudioSnapshot(p));
+    const snap = future.pop()!;
+    void useProjectsStore
+      .getState()
+      .patchCurrent((cur) => applyStudioSnapshot(cur, snap))
+      .then(() => {
+        const next = useProjectsStore.getState().current();
+        if (next) sanitizeSelection(next);
+      });
+  }, [sanitizeSelection]);
 
   const mutatePage = useCallback(
     (d: BookDesign, pageId: string, fn: (pd: PageDesign) => PageDesign): BookDesign => {
@@ -741,7 +959,7 @@ export function StudioProvider({
   );
 
   const addBox = useCallback(
-    (pageId: string, center?: Point) => {
+    (pageId: string, center?: Point, text = "New text") => {
       if (!design) return;
       const preset = getPreset("card");
       const box: TextBox = {
@@ -755,7 +973,7 @@ export function StudioProvider({
         align: "center",
         vAlign: "center",
         lineHeight: 1.25,
-        paragraphs: wordParagraphs("New text"),
+        paragraphs: wordParagraphs(text),
         fill: preset.defaults.fill,
         stroke: preset.defaults.stroke,
         padding: preset.padding,
@@ -773,8 +991,62 @@ export function StudioProvider({
     [commit, design, mutatePage, pages],
   );
 
+  const restoreDeletedBox = useCallback(
+    (pageId: string, boxId?: string) => {
+      const list = textTrash.current.get(pageId) ?? [];
+      if (list.length === 0) return false;
+      const idx = boxId ? list.findIndex((b) => b.id === boxId) : list.length - 1;
+      if (idx < 0) return false;
+      const box = list[idx];
+      const next = [...list.slice(0, idx), ...list.slice(idx + 1)];
+      if (next.length === 0) textTrash.current.delete(pageId);
+      else textTrash.current.set(pageId, next);
+      commit((d) => {
+        const pd = d.pages[pageId] ?? { textBoxes: [] };
+        // Skip if an undo already put it back.
+        if (pd.textBoxes.some((b) => b.id === box.id)) return d;
+        return mutatePage(d, pageId, (p) => ({
+          ...p,
+          textBoxes: [...p.textBoxes, { ...box, z: topZ(p) + 1 }],
+        }));
+      });
+      setSelection({ kind: "box", pageId, boxId: box.id, span: null });
+      return true;
+    },
+    [commit, mutatePage],
+  );
+
+  const addText = useCallback(
+    (pageId: string, center?: Point) => {
+      if (!design) return;
+      const pd = design.pages[pageId] ?? { textBoxes: [] };
+      const page = pages.find((p) => p.id === pageId);
+      const seed = page?.seedText?.trim() ?? "";
+      const storyOnPage =
+        !!seed &&
+        pd.textBoxes.some((b) => {
+          const t = textFromParagraphs(b.paragraphs).trim();
+          return Boolean(b.slotId) || t === seed;
+        });
+
+      // Prefer screenplay text when it's missing; else recently removed on an
+      // empty page; else a blank box.
+      if (seed && !storyOnPage) {
+        addBox(pageId, center, seed);
+        return;
+      }
+      if (pd.textBoxes.length === 0 && restoreDeletedBox(pageId)) return;
+      addBox(pageId, center);
+    },
+    [addBox, design, pages, restoreDeletedBox],
+  );
+
   const deleteBox = useCallback(
     (pageId: string, boxId: string) => {
+      const box = design?.pages[pageId]?.textBoxes.find((b) => b.id === boxId);
+      if (!box) return;
+      const list = textTrash.current.get(pageId) ?? [];
+      textTrash.current.set(pageId, [...list, structuredClone(box)].slice(-10));
       commit((d) =>
         mutatePage(d, pageId, (pd) => ({
           ...pd,
@@ -782,8 +1054,17 @@ export function StudioProvider({
         })),
       );
       setSelection({ kind: "page", pageId });
+      toast("Text removed", {
+        description: "You can bring it back anytime.",
+        action: {
+          label: "Undo",
+          onClick: () => {
+            restoreDeletedBox(pageId, boxId);
+          },
+        },
+      });
     },
-    [commit, mutatePage],
+    [commit, design, mutatePage, restoreDeletedBox],
   );
 
   const duplicateBox = useCallback(
@@ -962,21 +1243,38 @@ export function StudioProvider({
 
   const deleteImage = useCallback(
     (pageId: string, imageId: string) => {
+      const im = design?.pages[pageId]?.images?.find((x) => x.id === imageId);
       commit((d) =>
         mutatePage(d, pageId, (pd) => ({
           ...pd,
-          images: (pd.images ?? []).filter((im) => im.id !== imageId),
+          images: (pd.images ?? []).filter((x) => x.id !== imageId),
         })),
       );
+      // Allow a fresh materialize after the page-art frame is removed.
+      illustrationEnsureLock.current.delete(pageId);
       setSelection({ kind: "page", pageId });
+      // Clearing page art keeps the illustrations version tree for Restore.
+      if (im?.kind === "illustration") {
+        const hasHistory = Boolean(useProjectsStore.getState().current()?.illustrations?.[pageId]);
+        notify.info(
+          "Art cleared from page",
+          hasHistory ? "Earlier versions are still saved — Restore anytime." : undefined,
+        );
+      }
     },
-    [commit, mutatePage],
+    [commit, design, mutatePage],
   );
 
   const duplicateImage = useCallback(
     (pageId: string, imageId: string) => {
       const src = design?.pages[pageId]?.images?.find((im) => im.id === imageId);
       if (!src) return;
+      // Page AI art is a singleton per page — duplicating it stacks ghost copies
+      // of the same bitmap. Use Edit / New version instead.
+      if (src.kind === "illustration") {
+        notify.info("Can't duplicate page art", "Use Edit or New version instead.");
+        return;
+      }
       const copy: ImageElement = {
         ...structuredClone(src),
         id: newImageId(),
@@ -998,29 +1296,114 @@ export function StudioProvider({
     [design, patchImage],
   );
 
+  /**
+   * Ensure exactly one selectable illustration ImageElement on the page and
+   * select it. Uses a per-page lock + store-latest read inside `commit` so
+   * click/dblclick races can't create stacked ghost copies.
+   * Never changes `z` on an existing frame (generation must not reshuffle layers).
+   * New frames are created at the back (`bottomZ - 1`) under text/shapes.
+   */
   const makeIllustrationEditable = useCallback(
-    (pageId: string) => {
-      if (!design) return;
-      const pd = design.pages[pageId];
-      if (pd?.images?.some((im) => im.kind === "illustration")) return;
-      // Start the movable illustration from the same crop the passive full-bleed
-      // used (top-biased on covers), so "Adjust art" doesn't jump the framing.
+    (pageId: string, opts?: { enterReframe?: boolean }) => {
+      const finish = (imageId: string) => {
+        illustrationEnsureLock.current.set(pageId, imageId);
+        setSelection({ kind: "image", pageId, imageId });
+        setTextEditSection(null);
+        if (opts?.enterReframe) setPendingReframeImageId(imageId);
+      };
+
+      const lockedId = illustrationEnsureLock.current.get(pageId);
+      if (lockedId) {
+        finish(lockedId);
+        // Still dedupe if older ghosts linger in the store.
+        commit((d) => {
+          const illus = (d.pages[pageId]?.images ?? []).filter((im) => im.kind === "illustration");
+          if (illus.length <= 1) return d;
+          const keep = illus.find((im) => im.id === lockedId) ?? pickCanonicalIllustration(illus);
+          return mutatePage(d, pageId, (p) => ({
+            ...p,
+            images: (p.images ?? []).filter(
+              (im) => im.kind !== "illustration" || im.id === keep.id,
+            ),
+          }));
+        });
+        return;
+      }
+
+      // Reserve the lock before commit so a nested/rapid second call can't
+      // also decide to create.
+      const latest = useProjectsStore.getState().current()?.design?.pages[pageId];
+      const existing = (latest?.images ?? []).filter((im) => im.kind === "illustration");
+      if (existing.length > 0) {
+        const keep = pickCanonicalIllustration(existing);
+        finish(keep.id);
+        // Dedupe ghosts + backfill durable slot id on legacy elements.
+        if (existing.length > 1 || !keep.illustrationId) {
+          commit((d) =>
+            mutatePage(d, pageId, (p) => ({
+              ...p,
+              images: (p.images ?? [])
+                .filter((im) => im.kind !== "illustration" || im.id === keep.id)
+                .map((im) =>
+                  im.id === keep.id && im.kind === "illustration" && !im.illustrationId
+                    ? { ...im, illustrationId: pageId }
+                    : im,
+                ),
+            })),
+          );
+        }
+        return;
+      }
+
+      if (!useProjectsStore.getState().current()?.design) return;
+
       const page = pages.find((p) => p.id === pageId);
       const focus = page ? defaultIllustrationFocus(page) : undefined;
       const img: ImageElement = {
         id: newImageId(),
         kind: "illustration",
+        // Primary slot == page/spread id (job task + illustrations tree key).
+        illustrationId: pageId,
         rect: { x: 0, y: 0, w: 1, h: 1 },
-        z: bottomZ(pd) - 1,
+        z: bottomZ(latest) - 1,
         fit: "cover",
         ...(focus ? { focus } : {}),
         name: "Illustration",
       };
-      commit((d) => mutatePage(d, pageId, (p) => ({ ...p, images: [...(p.images ?? []), img] })));
-      setSelection({ kind: "image", pageId, imageId: img.id });
+      // Lock with the new id before the async store write lands.
+      finish(img.id);
+      commit((d) => {
+        const pd = d.pages[pageId] ?? { textBoxes: [] };
+        const illus = (pd.images ?? []).filter((im) => im.kind === "illustration");
+        // Another writer won the race — keep theirs, drop our provisional id.
+        if (illus.length > 0) {
+          const keep = pickCanonicalIllustration(illus);
+          illustrationEnsureLock.current.set(pageId, keep.id);
+          setSelection({ kind: "image", pageId, imageId: keep.id });
+          return mutatePage(d, pageId, (p) => ({
+            ...p,
+            images: (p.images ?? []).filter(
+              (im) => im.kind !== "illustration" || im.id === keep.id,
+            ),
+          }));
+        }
+        return mutatePage(d, pageId, (p) => ({
+          ...p,
+          images: [...(p.images ?? []), img],
+        }));
+      });
     },
-    [commit, design, mutatePage, pages],
+    [commit, mutatePage, pages],
   );
+
+  const selectIllustration = useCallback(
+    (pageId: string, opts?: { enterReframe?: boolean }) => {
+      makeIllustrationEditable(pageId, opts);
+    },
+    [makeIllustrationEditable],
+  );
+
+  const clearPendingReframe = useCallback(() => setPendingReframeImageId(null), []);
 
   // --- layers (across all element kinds) ----------------------------------
 
@@ -1071,6 +1454,27 @@ export function StudioProvider({
       );
     },
     [commit, mutatePage],
+  );
+
+  const sendLayerToEdge = useCallback(
+    (pageId: string, id: string, edge: "front" | "back") => {
+      const pd = design?.pages[pageId];
+      if (!pd) return;
+      const order = [
+        ...pd.textBoxes.map((b) => ({ id: b.id, z: b.z })),
+        ...(pd.shapes ?? []).map((s) => ({ id: s.id, z: s.z })),
+        ...(pd.images ?? []).map((im) => ({ id: im.id, z: im.z })),
+      ]
+        .sort((a, b) => b.z - a.z)
+        .map((r) => r.id);
+      const from = order.indexOf(id);
+      if (from < 0) return;
+      order.splice(from, 1);
+      if (edge === "front") order.unshift(id);
+      else order.push(id);
+      setLayerOrder(pageId, order);
+    },
+    [design, setLayerOrder],
   );
 
   const patchAnyById = useCallback(
@@ -1184,6 +1588,10 @@ export function StudioProvider({
     const pd = design?.pages[pageId];
     const el = pd ? elementsOfKind(pd, kind).find((e) => e.id === id) : undefined;
     if (!el) return;
+    if (kind === "image" && (el as ImageElement).kind === "illustration") {
+      notify.info("Can't copy page art", "Page illustrations stay on their page.");
+      return;
+    }
     const side: PageSide = pages.find((p) => p.id === pageId)?.outerSide ?? "spread";
     clipboard.current = { kind, pageId, side, element: structuredClone(el) } as ClipboardEntry;
     setHasClipboard(true);
@@ -1234,6 +1642,10 @@ export function StudioProvider({
   const pasteSelection = useCallback(() => {
     const entry = clipboard.current;
     if (!entry || !design) return;
+    if (entry.kind === "image" && (entry.element as ImageElement).kind === "illustration") {
+      notify.info("Can't paste page art", "Page illustrations stay on their page.");
+      return;
+    }
     // Land on the page currently showing on the same physical side it was
     // copied from — falling back to whichever page is showing, and finally to
     // the source page itself (e.g. pasting back into an unrelated project
@@ -1263,6 +1675,14 @@ export function StudioProvider({
         else if (kind === "shape") patchShape(fromPageId, elementId, { rect });
         else patchImage(fromPageId, elementId, { rect });
         return;
+      }
+      // Page AI art is bound to its illustration unit — never migrate across
+      // facing pages (that swapped art / left ghost copies on pair stages).
+      // PairPageStage clamps the drag on its side; this is the safety net.
+      if (kind === "image") {
+        const fromPd = useProjectsStore.getState().current()?.design?.pages[fromPageId];
+        const el = fromPd?.images?.find((im) => im.id === elementId);
+        if (el?.kind === "illustration") return;
       }
       commit((d) => {
         const fromPd = d.pages[fromPageId] ?? { textBoxes: [] };
@@ -1326,13 +1746,28 @@ export function StudioProvider({
         selectedImage,
         textEditSection,
         openTextEdit,
+        toggleTextEdit,
         closeTextEdit,
+        imageEditSection,
+        openImageEdit,
+        toggleImageEdit,
+        closeImageEdit,
+        setImageEditCloseGuard,
+        toolPanel,
+        openToolPanel,
+        closeToolPanel,
+        toggleToolPanel,
+        openLayersPanel,
+        selectIllustration,
+        pendingReframeImageId,
+        clearPendingReframe,
         editingDispId,
         setEditingDisp,
         undo,
         redo,
         endHistoryGesture,
         addBox,
+        addText,
         patchBox,
         patchSpan,
         deleteBox,
@@ -1353,6 +1788,7 @@ export function StudioProvider({
         makeIllustrationEditable,
         moveLayer,
         setLayerOrder,
+        sendLayerToEdge,
         setLayerHidden,
         setLayerLocked,
         fitTextToBox,
@@ -1392,9 +1828,6 @@ export function StudioProvider({
         designSetupOpen,
         openDesignSetup,
         closeDesignSetup,
-        coverStudioOpen,
-        openCoverStudio,
-        closeCoverStudio,
       }
     : null;
 

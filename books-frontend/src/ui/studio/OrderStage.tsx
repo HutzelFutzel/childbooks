@@ -38,7 +38,7 @@ import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { BookPreview } from "./BookPreview";
 
 /**
- * Step 4 · Order. The finish line: flip through the book, order a professionally
+ * Step 3 · Order. The finish line: flip through the book, order a professionally
  * printed & bound copy, or buy the digital edition (ebook PDF).
  */
 export function OrderStage() {
@@ -283,7 +283,7 @@ export function OrderStage() {
   return (
     <div className="mx-auto w-full max-w-3xl px-5 py-8">
       <StageHeader
-        eyebrow="Step 4 · Order"
+        eyebrow="Step 3 · Order"
         eyebrowIcon={BookOpenCheck}
         tone="mint"
         title="Your book is ready"

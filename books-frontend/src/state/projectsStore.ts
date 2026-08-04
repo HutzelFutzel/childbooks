@@ -138,6 +138,11 @@ interface ProjectsState {
 
   setDesign: (design: BookDesign) => Promise<void>;
   updatePageDesign: (pageId: string, patch: Partial<PageDesign>) => Promise<void>;
+  /**
+   * Atomically patch the current project. Used by studio undo (restore a
+   * snapshot) and by page ops that touch screenplay + design together.
+   */
+  patchCurrent: (mutator: (p: Project) => Project) => Promise<void>;
 }
 
 export const useProjectsStore = create<ProjectsState>((set, get) => ({
@@ -469,6 +474,10 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         },
       };
     });
+  },
+
+  async patchCurrent(mutator) {
+    await mutateCurrent(get, set, mutator);
   },
 
 }));

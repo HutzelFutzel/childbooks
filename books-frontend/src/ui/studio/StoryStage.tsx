@@ -8,6 +8,7 @@ import { bookConfigSchema } from "../wizard/schema";
 import { GuidedQuestions } from "../wizard/GuidedQuestions";
 import { STORY_QUESTIONS } from "../wizard/storyQuestions";
 import { useStudio } from "./StudioContext";
+import { preferredDesignStep } from "./studioSteps";
 
 /**
  * Step 1 · Story. A guided, one-question-at-a-time flow (age → story → style)
@@ -33,7 +34,8 @@ export function StoryStage() {
       return;
     }
     if (firstRun) void advanceStage("studio");
-    setStep("anchors");
+    // After story, land on Cast until references are done, then Pages.
+    setStep(preferredDesignStep(project));
   }
 
   if (!config) return null;
@@ -58,7 +60,7 @@ export function StoryStage() {
         config={config}
         update={update}
         mode={firstRun ? "guided" : "review"}
-        finishLabel="Create characters"
+        finishLabel="Continue to design"
         onFinish={handleContinue}
         canFinish={ready}
       />
@@ -69,9 +71,9 @@ export function StoryStage() {
             variant="ghost"
             size="sm"
             leftIcon={<ArrowLeft className="size-4" />}
-            onClick={() => setStep("anchors")}
+            onClick={() => setStep(preferredDesignStep(project))}
           >
-            Back to characters
+            Back to design
           </Button>
         </div>
       )}

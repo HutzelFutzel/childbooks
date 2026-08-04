@@ -1,9 +1,6 @@
 /**
- * The Cover tools drawer: text fields + the cover generation flow (matching
- * wrap / front / back, optional bake-into-art, and a 1–3 variation picker),
- * shown in a side drawer over the canvas. The covers themselves are edited
- * directly on the canvas like any other page — this drawer is just the
- * cover-specific controls, so the editor never feels like a separate mode.
+ * Cover-specific tools (text, bake-into-art, continuous wrap, variations).
+ * Nested under the Edit sheet's Cover tab when the active page is a cover.
  */
 import { useState } from "react";
 import { Info, RefreshCw, RotateCcw, Sparkles, Wand2 } from "lucide-react";
@@ -24,10 +21,10 @@ import { requireImageTier } from "../../state/imageTierPrompt";
 import { useProjectsStore } from "../../state/projectsStore";
 import { Button } from "../components/Button";
 import { Callout } from "../components/Callout";
-import { Drawer } from "../components/Drawer";
 import { Field, Input, Textarea } from "../components/Input";
 import { Toggle } from "../components/Toggle";
 import { VersionThumb } from "../components/VersionThumb";
+import { applyCoverBakeText, buildDesignPages } from "../design/designInit";
 import { spanTierRanges, useTierSparkEstimate } from "../hooks/useTierEstimate";
 import { SparkEstimateCost } from "../layout/SparkCost";
 import { cn } from "../lib/cn";
@@ -52,9 +49,9 @@ function sumRange(
   return { minSparks: a.minSparks + b.minSparks, maxSparks: a.maxSparks + b.maxSparks };
 }
 
-/** The cover-specific tools, shown in a side drawer over the canvas. */
-export function CoverToolsDrawer() {
-  const { project, coverStudioOpen, closeCoverStudio, setPageGenerating } = useStudio();
+/** Cover text, bake, wrap, and generate controls — nested inside Edit on covers. */
+export function CoverToolsPanel({ embedded = false }: { embedded?: boolean }) {
+  const { project, setPageGenerating, selectIllustration } = useStudio();
   const setScreenplay = useProjectsStore((s) => s.setScreenplay);
   const setBookTitle = useProjectsStore((s) => s.setBookTitle);
   const setDesign = useProjectsStore((s) => s.setDesign);
@@ -63,15 +60,10 @@ export function CoverToolsDrawer() {
   const [wrap, setWrap] = useState(true);
   const [busy, setBusy] = useState<null | "front" | "back" | "set">(null);
 
-  // Tier display names follow the admin config (renaming "Fast"/"High-Quality"
-  // in the dashboard updates this copy automatically).
   const tierLabels = useAppConfigStore((s) => s.modelConfig.imageTierLabels);
   const premiumLabel = tierLabels?.premium?.trim() || DEFAULT_IMAGE_TIER_LABELS.premium;
   const quickLabel = tierLabels?.quick?.trim() || DEFAULT_IMAGE_TIER_LABELS.quick;
 
-  // Cost estimates track the tier that will ACTUALLY be used (baking forces the
-  // premium tier) and the number of variations requested. Before the user has
-  // chosen a tier, span both instead of quoting one they never picked.
   const userTier = usePreferredImageTier();
   const quickRange = useTierSparkEstimate("coverIllustration", "quick");
   const premiumRange = useTierSparkEstimate("coverIllustration", "premium");
@@ -91,7 +83,6 @@ export function CoverToolsDrawer() {
     ? scaleRange(rangeForTier(frontTier), versionCount)
     : sumRange(frontCostRange, backCostRange);
 
-  /** Patch a cover spec on the current screenplay doc (single writer). */
   async function patchCover(coverId: string, patch: Partial<CoverSpec>) {
     const tree = project.screenplay;
     if (!tree) return;
@@ -102,29 +93,23 @@ export function CoverToolsDrawer() {
     await setScreenplay(updateNodeContent(tree, tree.cursorId, next));
   }
 
-  /** Toggle baked text on the front cover, syncing the overlay text boxes. */
   async function setFrontBake(on: boolean) {
     await patchCover(COVER_FRONT_ID, { bakeText: on });
-    const design = useProjectsStore.getState().current()?.design;
-    if (!design) return;
-    const nextPages = { ...design.pages };
-    if (on) {
-      const pd = nextPages[COVER_FRONT_ID];
-      if (pd) {
-        nextPages[COVER_FRONT_ID] = {
-          ...pd,
-          textBoxes: pd.textBoxes.filter(
-            (b) => b.role !== "book-title" && b.role !== "book-subtitle",
-          ),
-        };
-      }
-    } else {
-      delete nextPages[COVER_FRONT_ID];
-    }
-    await setDesign({ ...design, pages: nextPages });
+    // Never delete the page design — that orphaned selection and closed Edit.
+    // Only strip/restore the title overlays while keeping images intact.
+    const current = useProjectsStore.getState().current();
+    const design = current?.design;
+    const pd = design?.pages[COVER_FRONT_ID];
+    if (!current || !design || !pd) return;
+    const page = buildDesignPages(current).find((p) => p.id === COVER_FRONT_ID);
+    if (!page) return;
+    const nextPd = applyCoverBakeText(design, page, pd, on);
+    await setDesign({
+      ...design,
+      pages: { ...design.pages, [COVER_FRONT_ID]: nextPd },
+    });
   }
 
-  /** Revert the title/subtitle/author fields back to what the artwork shows. */
   async function revertCoverText(baked: { title?: string; subtitle?: string; author?: string }) {
     await setBookTitle(project.id, baked.title ?? "");
     await patchCover(COVER_FRONT_ID, {
@@ -133,10 +118,10 @@ export function CoverToolsDrawer() {
     });
   }
 
-  /** Generate `count` variations of one cover at `tier`, sequentially. */
   async function genCover(coverId: string, count: number, tier: ImageTier) {
     const spec = coverId === COVER_FRONT_ID ? doc?.frontCover : doc?.backCover;
     if (!spec) return;
+    selectIllustration(coverId);
     setPageGenerating(coverId, true);
     try {
       for (let i = 0; i < count; i++) {
@@ -147,7 +132,6 @@ export function CoverToolsDrawer() {
     }
   }
 
-  /** Make the back cover continue the front: shared subjects + continuation brief. */
   async function makeBackContinueFront() {
     if (!front || !back) return;
     const anchorIds = Array.from(new Set([...(front.anchorIds ?? []), ...(back.anchorIds ?? [])]));
@@ -191,11 +175,13 @@ export function CoverToolsDrawer() {
     }
   }
 
-  /** One continuous artwork, split into front + back — guaranteed to match. */
   async function generateWrapSet() {
     const tier = frontBake ? "premium" : await requireImageTier();
     if (!tier) return;
     setBusy("set");
+    // Materialize frames for busy veils; keep selection on the front (usual start).
+    selectIllustration(COVER_BACK_ID);
+    selectIllustration(COVER_FRONT_ID);
     setPageGenerating(COVER_FRONT_ID, true);
     setPageGenerating(COVER_BACK_ID, true);
     try {
@@ -231,211 +217,170 @@ export function CoverToolsDrawer() {
 
   const anyBusy = busy !== null;
 
+  if (!doc) {
+    return (
+      <p className={cn("text-xs leading-relaxed text-ink-400", !embedded && "p-4")}>
+        Draft your book first — cover tools appear once the screenplay is ready.
+      </p>
+    );
+  }
+
   return (
-    <Drawer
-      open={coverStudioOpen}
-      onClose={closeCoverStudio}
-      side="right"
-      title="Cover tools"
-      widthClass="max-w-md"
-    >
-      {!doc ? (
-        <div className="p-6 text-center text-sm text-ink-400">
-          Draft your book first — the covers appear here once the screenplay is ready.
-        </div>
-      ) : (
-        <div className="space-y-5 p-4">
-          <p className="text-xs leading-relaxed text-ink-500">
-            Edit the covers right on the page — click the art to reposition it, or add and style text
-            boxes. Use the tools below to write the cover text and generate matching artwork.
-          </p>
-
-          {frontDrift && (
-            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-              <div className="flex items-start gap-2.5">
-                <RefreshCw className="mt-0.5 size-4 shrink-0 text-amber-700" />
-                <div className="min-w-0 flex-1 space-y-2.5">
-                  <p className="text-sm text-amber-800">
-                    The cover text changed since the artwork was made. The title is now{" "}
-                    <span className="font-semibold">“{frontDrift.current.title || "—"}”</span>, but the
-                    cover still shows{" "}
-                    <span className="font-semibold">“{frontDrift.baked.title || "—"}”</span>. Because
-                    the title is painted into the art, it only updates when you regenerate.
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      size="sm"
-                      loading={busy === "set"}
-                      disabled={anyBusy}
-                      leftIcon={<Sparkles className="size-4" />}
-                      onClick={() => void generateSet()}
-                    >
-                      Regenerate cover
-                      <SparkEstimateCost range={setCostRange} />
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      disabled={anyBusy}
-                      leftIcon={<RotateCcw className="size-4" />}
-                      onClick={() => void revertCoverText(frontDrift.baked)}
-                    >
-                      Revert text to the artwork
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Text fields */}
-          <section className="space-y-3 rounded-2xl border border-ink-100 bg-white p-4">
-            <div>
-              <h3 className="text-sm font-semibold text-ink-800">Cover text</h3>
-              <p className="mt-0.5 text-xs text-ink-500">
-                Only the book title is required — the subtitle, author and blurb are all optional.
+    <div className={cn("space-y-3", !embedded && "p-4")}>
+      {frontDrift && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
+          <div className="flex items-start gap-2">
+            <RefreshCw className="mt-0.5 size-3.5 shrink-0 text-amber-700" />
+            <div className="min-w-0 flex-1 space-y-2">
+              <p className="text-[11px] leading-relaxed text-amber-800">
+                Title is now <span className="font-semibold">“{frontDrift.current.title || "—"}”</span>{" "}
+                but the art still shows{" "}
+                <span className="font-semibold">“{frontDrift.baked.title || "—"}”</span>.
               </p>
-            </div>
-            <Field label="Book title" required hint="Shown on the front cover and used everywhere.">
-              <Input
-                value={project.title}
-                onChange={(e) => void setBookTitle(project.id, e.target.value)}
-                placeholder="Your book's title"
-              />
-            </Field>
-            <Field label="Subtitle (optional)">
-              <Input
-                value={front?.subtitle ?? ""}
-                onChange={(e) => void patchCover(COVER_FRONT_ID, { subtitle: e.target.value })}
-                placeholder="A gentle bedtime adventure"
-              />
-            </Field>
-            <Field label="Author (optional)">
-              <Input
-                value={front?.author ?? ""}
-                onChange={(e) => void patchCover(COVER_FRONT_ID, { author: e.target.value })}
-                placeholder="by …"
-              />
-            </Field>
-            <Field label="Back-cover blurb (optional)">
-              <Textarea
-                rows={3}
-                value={back?.title ?? ""}
-                onChange={(e) => void patchCover(COVER_BACK_ID, { title: e.target.value })}
-                placeholder="A short blurb for the back of the book…"
-              />
-            </Field>
-          </section>
-
-          {/* Baked text */}
-          <section className="space-y-3 rounded-2xl border border-ink-100 bg-white p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold text-ink-800">Render the title into the artwork</h3>
-                <p className="mt-0.5 text-xs leading-relaxed text-ink-500">
-                  Let the illustrator draw the title (plus subtitle &amp; author, if set) as part of
-                  the cover art, instead of a plain text overlay.
-                </p>
-              </div>
-              <Toggle checked={frontBake} onChange={(v) => void setFrontBake(v)} label="Bake title into art" />
-            </div>
-            {frontBake && (
-              <Callout tone="brand" icon={Info}>
-                Baked-in text needs the {premiumLabel} model, so the front cover will be generated at{" "}
-                {premiumLabel} even if your default is {quickLabel}.
-              </Callout>
-            )}
-          </section>
-
-          {/* Continuous wrap */}
-          <section className="space-y-3 rounded-2xl border border-ink-100 bg-white p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold text-ink-800">Continuous wrap</h3>
-                <p className="mt-0.5 text-xs leading-relaxed text-ink-500">
-                  Paint the front &amp; back as one continuous artwork so the covers flow into each
-                  other — it also costs a single generation instead of two.
-                </p>
-              </div>
-              <Toggle checked={wrap} onChange={setWrap} label="Generate as one wrap" />
-            </div>
-          </section>
-
-          {/* Variations */}
-          <section className="space-y-3 rounded-2xl border border-ink-100 bg-white p-4">
-            <h3 className="text-sm font-semibold text-ink-800">Variations to generate</h3>
-            <div className="flex gap-2">
-              {([1, 2, 3] as const).map((n) => (
-                <button
-                  key={n}
-                  onClick={() => setVersionCount(n)}
-                  className={cn(
-                    "flex-1 rounded-xl border px-3 py-2 text-sm font-semibold transition",
-                    versionCount === n
-                      ? "border-brand-400 bg-brand-50 text-brand-700"
-                      : "border-ink-200 text-ink-500 hover:border-brand-300",
-                  )}
+              <div className="flex flex-wrap gap-1.5">
+                <Button
+                  size="sm"
+                  loading={busy === "set"}
+                  disabled={anyBusy}
+                  leftIcon={<Sparkles className="size-3.5" />}
+                  onClick={() => void generateSet()}
                 >
-                  {n}
-                </button>
-              ))}
+                  Regenerate
+                  <SparkEstimateCost range={setCostRange} />
+                </Button>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={anyBusy}
+                  leftIcon={<RotateCcw className="size-3.5" />}
+                  onClick={() => void revertCoverText(frontDrift.baked)}
+                >
+                  Revert text
+                </Button>
+              </div>
             </div>
-            <p className="text-xs text-ink-400">
-              Generate up to three options per cover, then pick your favourite below.
-            </p>
-          </section>
-
-          {/* Actions */}
-          <section className="space-y-2">
-            <Button
-              className="w-full"
-              loading={busy === "set"}
-              disabled={anyBusy}
-              leftIcon={<Sparkles className="size-4" />}
-              onClick={() => void generateSet()}
-            >
-              {wrap ? "Generate matching wrap cover" : "Generate matching cover set"}
-              <SparkEstimateCost range={setCostRange} />
-            </Button>
-            <div className="grid grid-cols-2 gap-2">
-              <Button
-                variant="secondary"
-                loading={busy === "front"}
-                disabled={anyBusy || wrap}
-                leftIcon={<Wand2 className="size-4" />}
-                onClick={() => void generateFront()}
-              >
-                Front only
-                <SparkEstimateCost range={frontCostRange} />
-              </Button>
-              <Button
-                variant="secondary"
-                loading={busy === "back"}
-                disabled={anyBusy || wrap}
-                leftIcon={<Wand2 className="size-4" />}
-                onClick={() => void generateBack()}
-              >
-                Back only
-                <SparkEstimateCost range={backCostRange} />
-              </Button>
-            </div>
-            {wrap && (
-              <p className="text-center text-xs text-ink-400">
-                Turn off “Continuous wrap” to generate a single cover on its own.
-              </p>
-            )}
-          </section>
-
-          {/* Version pickers */}
-          <CoverVersions coverId={COVER_FRONT_ID} label="Front cover options" />
-          <CoverVersions coverId={COVER_BACK_ID} label="Back cover options" />
+          </div>
         </div>
       )}
-    </Drawer>
+
+      <section className="space-y-2">
+        <Field label="Book title" required>
+          <Input
+            value={project.title}
+            onChange={(e) => void setBookTitle(project.id, e.target.value)}
+            placeholder="Your book's title"
+          />
+        </Field>
+        <Field label="Subtitle">
+          <Input
+            value={front?.subtitle ?? ""}
+            onChange={(e) => void patchCover(COVER_FRONT_ID, { subtitle: e.target.value })}
+            placeholder="Optional"
+          />
+        </Field>
+        <Field label="Author">
+          <Input
+            value={front?.author ?? ""}
+            onChange={(e) => void patchCover(COVER_FRONT_ID, { author: e.target.value })}
+            placeholder="Optional"
+          />
+        </Field>
+        <Field label="Back blurb">
+          <Textarea
+            rows={2}
+            value={back?.title ?? ""}
+            onChange={(e) => void patchCover(COVER_BACK_ID, { title: e.target.value })}
+            placeholder="Optional"
+          />
+        </Field>
+      </section>
+
+      <section className="space-y-2">
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-ink-700">Bake title into art</p>
+            <p className="text-[11px] text-ink-400">Painted in the illustration</p>
+          </div>
+          <Toggle checked={frontBake} onChange={(v) => void setFrontBake(v)} label="Bake title into art" />
+        </div>
+        {frontBake && (
+          <Callout tone="brand" icon={Info}>
+            Uses {premiumLabel} (not {quickLabel}).
+          </Callout>
+        )}
+        <div className="flex items-center justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs font-medium text-ink-700">Continuous wrap</p>
+            <p className="text-[11px] text-ink-400">One art for front &amp; back</p>
+          </div>
+          <Toggle checked={wrap} onChange={setWrap} label="Generate as one wrap" />
+        </div>
+      </section>
+
+      <section className="space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <p className="text-xs font-medium text-ink-700">Variations</p>
+          <div className="flex gap-1">
+            {([1, 2, 3] as const).map((n) => (
+              <button
+                key={n}
+                type="button"
+                onClick={() => setVersionCount(n)}
+                className={cn(
+                  "size-8 rounded-lg border text-xs font-semibold transition",
+                  versionCount === n
+                    ? "border-brand-400 bg-brand-50 text-brand-700"
+                    : "border-ink-200 text-ink-500 hover:border-brand-300",
+                )}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <Button
+          className="w-full"
+          loading={busy === "set"}
+          disabled={anyBusy}
+          leftIcon={<Sparkles className="size-4" />}
+          onClick={() => void generateSet()}
+        >
+          {wrap ? "Matching wrap" : "Matching set"}
+          <SparkEstimateCost range={setCostRange} />
+        </Button>
+        {!wrap && (
+          <div className="grid grid-cols-2 gap-2">
+            <Button
+              variant="secondary"
+              loading={busy === "front"}
+              disabled={anyBusy}
+              leftIcon={<Wand2 className="size-4" />}
+              onClick={() => void generateFront()}
+            >
+              Front
+              <SparkEstimateCost range={frontCostRange} />
+            </Button>
+            <Button
+              variant="secondary"
+              loading={busy === "back"}
+              disabled={anyBusy}
+              leftIcon={<Wand2 className="size-4" />}
+              onClick={() => void generateBack()}
+            >
+              Back
+              <SparkEstimateCost range={backCostRange} />
+            </Button>
+          </div>
+        )}
+      </section>
+
+      <CoverVersions coverId={COVER_FRONT_ID} label="Front options" />
+      <CoverVersions coverId={COVER_BACK_ID} label="Back options" />
+    </div>
   );
 }
 
-/** Version-history strip for one cover, so the user can pick the best option. */
 function CoverVersions({ coverId, label }: { coverId: string; label: string }) {
   const project = useProjectsStore((s) => s.current());
   const tree = project?.illustrations?.[coverId];
@@ -453,8 +398,8 @@ function CoverVersions({ coverId, label }: { coverId: string; label: string }) {
   };
 
   return (
-    <div className="rounded-2xl border border-ink-100 bg-white p-4">
-      <h3 className="mb-2 text-sm font-semibold text-ink-800">{label}</h3>
+    <div className="space-y-1.5">
+      <p className="text-xs font-medium text-ink-700">{label}</p>
       <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1">
         {versions.map((node, i) => (
           <VersionThumb

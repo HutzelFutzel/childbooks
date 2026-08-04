@@ -54,7 +54,7 @@ function uid(): string {
 }
 
 /**
- * Step 2 · Characters. A "casting reel" of every character & place the story
+ * Design · Cast. A "casting reel" of every character & place the story
  * needs, small enough to take in the whole cast at a glance; whichever one is
  * active gets the big spotlight underneath — its reference art, version
  * history and generation controls — instead of a separate sidebar you have
@@ -272,7 +272,7 @@ export function AnchorsStage() {
     <div className="relative mx-auto w-full max-w-5xl px-5 py-8">
       <Celebrate play={celebrate} />
       <StageHeader
-        eyebrow="Step 2 · Characters"
+        eyebrow="Design · Cast"
         eyebrowIcon={ImagePlus}
         tone="sky"
         title="Meet your cast"
@@ -446,7 +446,7 @@ export function AnchorsStage() {
             rightIcon={<ArrowRight className="size-5" />}
             onClick={() => setStep("edit")}
           >
-            Design the pages
+            Continue to pages
           </Button>
         ) : (
           <Button

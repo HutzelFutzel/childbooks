@@ -210,7 +210,7 @@ export function ColorField({
           <div
             ref={menuRef}
             data-color-picker-popover
-            className="fixed z-90 w-56 rounded-xl border border-ink-200 bg-white p-3 shadow-lifted"
+            className="fixed z-100 w-56 rounded-xl border border-ink-200 bg-white p-3 shadow-lifted"
             style={{ left: menuPos.left, top: menuPos.top }}
             onMouseDown={(e) => e.stopPropagation()}
           >

@@ -1,23 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   BookText,
   Check,
   CheckCircle2,
   Eye,
-  Grid3x3,
+  History,
   Image as ImageIcon,
   Layers as LayersIcon,
+  LayoutTemplate,
   Loader2,
-  Magnet,
-  Maximize2,
   Redo2,
   RefreshCw,
   LayoutGrid,
   ShoppingCart,
   SlidersHorizontal,
   Sparkles,
-  SquareDashed,
   Type,
   Undo2,
   Users,
@@ -28,24 +26,24 @@ import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { getCursor } from "../../core/versioning";
 import { staleIllustrationSpreadIds } from "../../state/ai";
 import { Button } from "../components/Button";
-import { Drawer } from "../components/Drawer";
 import { EmptyState } from "../components/EmptyState";
 import { Popover } from "../components/Popover";
-import { SparkEstimateCost } from "../layout/SparkCost";
+import { SparkEstimateCost, useImageActionRange } from "../layout/SparkCost";
 import { PipelineStepper, type PipelinePhase } from "../generation/PipelineStepper";
 import { useResolvedModels } from "../hooks/useResolvedModels";
 import { notify } from "../lib/notify";
 import { cn } from "../lib/cn";
+import { springSoft } from "../lib/motion";
 import { AssetsLibrary } from "./AssetsLibrary";
-import { CoverToolsDrawer } from "./CoverStudio";
 import { ElementPanel, elementPanelHasContent } from "./ElementPanel";
 import { PageFilmstrip } from "./PageFilmstrip";
-import { PageControls, PageMenu, PageStagePanel } from "./PageEditorCard";
+import { PageMenu, PageStagePanel } from "./PageEditorCard";
 import { PairPageStagePanel } from "./PairPageStage";
-import { useStudio } from "./StudioContext";
-import { refreshSpread } from "./studioGen";
+import { useStudio, type StudioToolPanel } from "./StudioContext";
+import { refreshSpread, updateAnchorsThenSpread } from "./studioGen";
 import { useBookGeneration } from "./useBookGeneration";
 import { BookPreview } from "./BookPreview";
+import { changedAnchorsForSpread, staleAnchorIds } from "../../state/ai";
 import {
   buildDisplaySpreads,
   coverSideOf,
@@ -68,12 +66,6 @@ const SCREENPLAY_PHASES: PipelinePhase[] = [
   { id: "pages", label: "Laying out the pages", icon: LayoutGrid },
 ];
 
-/** What the illustration drawer is currently scoped to. */
-interface IllustratingTarget {
-  entry: Entry;
-  label: string;
-}
-
 export function BookCanvas() {
   const {
     project,
@@ -82,21 +74,39 @@ export function BookCanvas() {
     select,
     textEditSection,
     closeTextEdit,
+    imageEditSection,
+    closeImageEdit,
+    selectIllustration,
+    openImageEdit,
+    toolPanel,
+    toggleToolPanel,
+    closeToolPanel,
     editingDispId,
     setEditingDisp,
     undo,
     redo,
     setStep,
     openDesignSetup,
-    openCoverStudio,
   } = useStudio();
   const models = useResolvedModels();
   const [previewing, setPreviewing] = useState(false);
-  const [illustrating, setIllustrating] = useState<IllustratingTarget | null>(null);
-  const [layersOpen, setLayersOpen] = useState(false);
+
+  /** Toggle docked illustration tools for a page (same control opens/closes). */
+  function openIllustrationTools(entry: Entry, section: "refine" | "characters" | "scene" = "refine") {
+    const pageId = entry.page.id;
+    const alreadyOpen =
+      selection.kind === "image" &&
+      selection.pageId === pageId &&
+      imageEditSection === section;
+    if (alreadyOpen) {
+      closeImageEdit();
+      return;
+    }
+    selectIllustration(pageId);
+    openImageEdit(section);
+  }
 
   const doc = project.screenplay ? getCursor(project.screenplay).content : null;
-  const anchors = (project.anchors ?? []).filter((a) => a.include);
   const staleIds = useMemo(() => new Set(staleIllustrationSpreadIds(project)), [project]);
   const isStale = (pageId: string) => staleIds.has(pageId);
 
@@ -138,6 +148,15 @@ export function BookCanvas() {
     if (selection.kind !== "none" && "pageId" in selection) return selection.pageId;
     return activeDisp ? displayEntries(activeDisp)[0]?.entry.page.id : undefined;
   }, [selection, activeDisp]);
+
+  /** Every live page on the open canvas — powers the Arrange panel. */
+  const arrangePages = useMemo(() => {
+    if (!activeDisp) return [];
+    return displayEntries(activeDisp).map(({ entry, label }) => ({
+      id: entry.page.id,
+      label,
+    }));
+  }, [activeDisp]);
 
   if (!doc) {
     return (
@@ -184,37 +203,35 @@ export function BookCanvas() {
             <Redo2 className="size-4" />
           </button>
           <span className="mx-0.5 h-5 w-px bg-ink-200" />
-          {/* One labelled "View" menu for layers + editor aids, on every size. */}
-          <ViewMenu
-            layersOpen={layersOpen}
-            onToggleLayers={() => {
-              const elementSelected =
-                selection.kind === "box" || selection.kind === "shape" || selection.kind === "image";
-              if (elementSelected) select({ kind: "none" });
-              setLayersOpen((v) => elementSelected || !v);
-            }}
-          />
           <Button
             size="sm"
             variant="secondary"
             leftIcon={<SlidersHorizontal className="size-4" />}
-            onClick={openDesignSetup}
-            title="Book size, format & layout"
+            onClick={() => toggleToolPanel("view")}
+            title="Snapping, grid & print guides"
+            aria-pressed={toolPanel === "view"}
+            className={
+              toolPanel === "view"
+                ? "border-brand-200 bg-brand-50 text-brand-700 ring-brand-200"
+                : undefined
+            }
           >
-            <span className="hidden sm:inline">Setup</span>
+            <span className="hidden sm:inline">View</span>
           </Button>
           <Button
             size="sm"
             variant="secondary"
-            leftIcon={<BookText className="size-4" />}
-            onClick={() => {
-              // Jump the canvas to the front cover, then open the cover tools.
-              if (displays.some((d) => d.id === "disp-front")) setEditingDisp("disp-front");
-              openCoverStudio();
-            }}
-            title="Cover text & artwork tools"
+            leftIcon={<LayoutTemplate className="size-4" />}
+            onClick={openDesignSetup}
+            title="Book size"
+            aria-pressed={toolPanel === "setup"}
+            className={
+              toolPanel === "setup"
+                ? "border-brand-200 bg-brand-50 text-brand-700 ring-brand-200"
+                : undefined
+            }
           >
-            <span className="hidden sm:inline">Covers</span>
+            <span className="hidden sm:inline">Setup</span>
           </Button>
           <Button
             size="sm"
@@ -240,79 +257,77 @@ export function BookCanvas() {
           stale={isStale}
         />
 
-        <div className="relative min-h-0 flex-1">
-          <div
-            className="absolute inset-0 overflow-y-auto bg-grid px-4 py-8 sm:px-8"
-            onMouseDown={(e) => {
-              // Click anywhere in the empty canvas area (outside the page surface
-              // and the floating element toolbox, which is a separate subtree) to
-              // deselect. Clicks on the page itself are handled by the Konva stage.
-              const elementSelected =
-                selection.kind === "box" || selection.kind === "shape" || selection.kind === "image";
-              if (!elementSelected) return;
-              // React routes synthetic events through the component tree, so clicks
-              // on portaled overlays (the floating text toolbar, colour popovers)
-              // bubble here even though they live in document.body. Ignore anything
-              // that isn't a real DOM descendant of this scroll area.
-              if (!(e.currentTarget as HTMLElement).contains(e.target as Node)) return;
-              if ((e.target as HTMLElement).closest("[data-editor-surface]")) return;
-              select({ kind: "none" });
-            }}
-          >
-            {activeDisp ? (
-              <ActiveSpreadStage
-                disp={activeDisp}
-                stale={isStale}
-                onOpenIllustration={(entry, label) => setIllustrating({ entry, label })}
+        {/* Stage + inspector dock as siblings so the panel never covers chips. */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-row">
+          <div className="relative min-h-0 min-w-0 flex-1">
+            <div
+              className="absolute inset-0 flex flex-col bg-grid px-3 pb-20 pt-3 sm:px-5 sm:pt-4"
+              onMouseDown={(e) => {
+                // Click anywhere in the empty canvas area (outside the page surface
+                // and the floating element toolbox, which is a separate subtree) to
+                // deselect. Clicks on the page itself are handled by the Konva stage.
+                const elementSelected =
+                  selection.kind === "box" ||
+                  selection.kind === "shape" ||
+                  selection.kind === "image";
+                if (!elementSelected) return;
+                // React routes synthetic events through the component tree, so clicks
+                // on portaled overlays (the floating text toolbar, colour popovers)
+                // bubble here even though they live in document.body. Ignore anything
+                // that isn't a real DOM descendant of this scroll area.
+                if (!(e.currentTarget as HTMLElement).contains(e.target as Node)) return;
+                if ((e.target as HTMLElement).closest("[data-editor-surface]")) return;
+                select({ kind: "none" });
+              }}
+            >
+              {activeDisp ? (
+                <ActiveSpreadStage
+                  disp={activeDisp}
+                  stale={isStale}
+                  onOpenIllustration={(entry) => openIllustrationTools(entry)}
+                />
+              ) : (
+                <div className="flex min-h-0 flex-1 items-center justify-center">
+                  <EmptyState
+                    icon={Sparkles}
+                    title="No pages yet"
+                    description="Add a page from the rail on the left."
+                  />
+                </div>
+              )}
+            </div>
+
+            {activeDisp && (
+              <AddDock
+                activePageId={activePageId}
+                toolPanel={toolPanel}
+                onToggleTool={toggleToolPanel}
               />
-            ) : (
-              <EmptyState icon={Sparkles} title="No pages yet" description="Add a page from the rail on the left." />
             )}
           </div>
 
-          {activeDisp && (
-            <AddDock activePageId={activePageId} onOpenIllustration={setIllustrating} activeDisp={activeDisp} />
-          )}
-
-          <div className="pointer-events-none absolute inset-x-3 bottom-24 z-40 flex justify-center sm:inset-x-auto sm:bottom-auto sm:right-4 sm:top-4 sm:justify-end">
-            <AnimatePresence>
-              {elementPanelHasContent(selection, layersOpen, !!textEditSection) && (
+          <AnimatePresence>
+            {elementPanelHasContent(
+              selection,
+              toolPanel,
+              !!textEditSection,
+              !!imageEditSection,
+            ) && (
+              <InspectorDock key="inspector-dock">
                 <ElementPanel
-                  key="panel"
-                  wantLayers={layersOpen}
-                  activePageId={activePageId}
+                  toolPanel={toolPanel}
+                  arrangePages={arrangePages}
                   onClose={() => {
-                    setLayersOpen(false);
+                    closeToolPanel();
                     closeTextEdit();
+                    closeImageEdit();
                   }}
                 />
-              )}
-            </AnimatePresence>
-          </div>
+              </InspectorDock>
+            )}
+          </AnimatePresence>
         </div>
       </div>
-
-      <Drawer
-        open={illustrating !== null}
-        onClose={() => setIllustrating(null)}
-        side="right"
-        title="Illustration"
-        widthClass="max-w-md"
-      >
-        {illustrating && (
-          <div className="p-4">
-            <PageControls
-              page={illustrating.entry.page}
-              subject={illustrating.entry.subject}
-              anchors={anchors}
-              stale={isStale(illustrating.entry.page.id)}
-              label={illustrating.label}
-            />
-          </div>
-        )}
-      </Drawer>
-
-      <CoverToolsDrawer />
 
       <AnimatePresence>
         {previewing && displays.length > 0 && (
@@ -323,104 +338,29 @@ export function BookCanvas() {
   );
 }
 
-/**
- * The single "View" menu: layers + the editor aids (snap / grid / print
- * guides). One labelled, discoverable place for all of these, available on
- * every screen size — replacing the desktop-only bare icon toggles.
- */
-function ViewMenu({
-  layersOpen,
-  onToggleLayers,
-}: {
-  layersOpen: boolean;
-  onToggleLayers: () => void;
-}) {
-  const { snap, grid, guides, toggleSnap, toggleGrid, toggleGuides } = useStudio();
-  const anyOn = snap || grid || guides;
-  return (
-    <Popover
-      side="bottom"
-      align="end"
-      panelClassName="w-60 p-1.5"
-      trigger={
-        <span
-          title="Layers, snapping, grid & print guides"
-          className={cn(
-            "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-2 text-sm font-medium transition",
-            anyOn || layersOpen
-              ? "border-brand-200 bg-brand-50 text-brand-700"
-              : "border-ink-200 bg-white text-ink-700 hover:bg-ink-50",
-          )}
-        >
-          <SlidersHorizontal className="size-4" />
-          <span className="hidden sm:inline">View</span>
-        </span>
-      }
-    >
-      {(close) => (
-        <div className="flex flex-col gap-0.5">
-          <ViewRow
-            icon={<LayersIcon className="size-4" />}
-            label="Layers on this page"
-            active={layersOpen}
-            onClick={() => {
-              onToggleLayers();
-              close();
-            }}
-          />
-          <div className="my-1 h-px bg-ink-100" />
-          <ViewRow
-            icon={<Magnet className="size-4" />}
-            label="Snap to guides"
-            active={snap}
-            onClick={toggleSnap}
-          />
-          <ViewRow icon={<Grid3x3 className="size-4" />} label="Grid" active={grid} onClick={toggleGrid} />
-          <ViewRow
-            icon={<SquareDashed className="size-4" />}
-            label="Print guides"
-            hint="Safe area + gutter"
-            active={guides}
-            onClick={toggleGuides}
-          />
-        </div>
-      )}
-    </Popover>
-  );
-}
+const INSPECTOR_DOCK_W = 320; // Tailwind w-80
 
-function ViewRow({
-  icon,
-  label,
-  hint,
-  active,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  hint?: string;
-  active: boolean;
-  onClick: () => void;
-}) {
+/**
+ * Layout-docked inspector. Springs width 0→320 so the stage resizes with it.
+ * Inner pane is a fixed width; the outer clips — avoids the media-query mismatch
+ * that left the dock at height 0 on desktop.
+ */
+function InspectorDock({ children }: { children: React.ReactNode }) {
   return (
-    <button
-      onClick={onClick}
-      className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition hover:bg-ink-50"
+    <motion.aside
+      initial={{ width: 0 }}
+      animate={{ width: INSPECTOR_DOCK_W }}
+      exit={{ width: 0 }}
+      transition={springSoft}
+      className="h-full min-h-0 shrink-0 self-stretch overflow-hidden border-l border-ink-100 bg-white"
     >
-      <span className="text-ink-400">{icon}</span>
-      <span className="min-w-0 flex-1 leading-tight">
-        <span className="block text-sm font-medium text-ink-700">{label}</span>
-        {hint && <span className="block text-[11px] text-ink-400">{hint}</span>}
-      </span>
-      <span
-        className={cn(
-          "flex size-4 shrink-0 items-center justify-center rounded border transition",
-          active ? "border-brand-500 bg-brand-500 text-white" : "border-ink-300 text-transparent",
-        )}
+      <div
+        className="flex h-full min-h-0 flex-col"
+        style={{ width: INSPECTOR_DOCK_W }}
       >
-        <Check className="size-3" strokeWidth={3} />
-      </span>
-    </button>
+        {children}
+      </div>
+    </motion.aside>
   );
 }
 
@@ -492,11 +432,10 @@ function NextActionChip() {
 }
 
 /**
- * The whole active spread, big and always interactive — a cover treatment for
- * covers, one wide frame for a true double-page spread, or two facing single
- * pages with a fold. A small floating chip sits above each live page: its
- * label, a one-tap generate/update action, and the entry point into the
- * illustration drawer.
+ * The whole active spread, sized to fill the stage (Canva-style fit) — a cover
+ * treatment for covers, one wide frame for a true double-page spread, or two
+ * facing single pages with a fold. A small chip sits above each live page with
+ * contextual art actions.
  */
 function ActiveSpreadStage({
   disp,
@@ -505,76 +444,161 @@ function ActiveSpreadStage({
 }: {
   disp: DisplaySpread;
   stale: (pageId: string) => boolean;
-  onOpenIllustration: (entry: Entry, label: string) => void;
+  onOpenIllustration: (entry: Entry) => void;
 }) {
   if (disp.cover && disp.kind === "pair") {
     const side = coverSideOf(disp);
     const meta = COVER_META[disp.cover];
     if (!side || side.kind !== "page") {
       return (
-        <div className="mx-auto w-full max-w-sm py-16 text-center text-sm text-ink-400">
+        <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-ink-400">
           No {meta.title.toLowerCase()} yet.
         </div>
       );
     }
     return (
-      <div className="mx-auto w-full max-w-sm">
-        <div className="mb-3 flex justify-center">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div
+          className="relative z-10 mb-2 flex shrink-0 justify-center"
+          data-floating-bar-obstacle
+        >
           <PageChip
             entry={side.entry}
             label={meta.title}
             stale={stale}
-            onOpenIllustration={() => onOpenIllustration(side.entry, meta.title)}
+            onOpenIllustration={() => onOpenIllustration(side.entry)}
           />
         </div>
-        <div className="relative overflow-hidden rounded-2xl bg-white shadow-lifted ring-2 ring-brand-200">
-          <PageStagePanel page={side.entry.page} subject={side.entry.subject} chromeless />
-        </div>
-        <p className="mt-3 text-center text-xs text-ink-400">{meta.hint}</p>
+        <StageFitFrame ring="brand">
+          <PageStagePanel
+            page={side.entry.page}
+            subject={side.entry.subject}
+            chromeless
+            fitParent
+          />
+        </StageFitFrame>
+        <p className="mt-2 shrink-0 text-center text-xs text-ink-400">{meta.hint}</p>
       </div>
     );
   }
 
   if (disp.kind === "full") {
     return (
-      <div className="mx-auto w-full max-w-4xl">
-        <div className="mb-3 flex justify-center">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <div
+          className="relative z-10 mb-2 flex shrink-0 justify-center"
+          data-floating-bar-obstacle
+        >
           <PageChip
             entry={disp.entry}
             label={disp.label}
             stale={stale}
-            onOpenIllustration={() => onOpenIllustration(disp.entry, disp.label)}
+            onOpenIllustration={() => onOpenIllustration(disp.entry)}
           />
         </div>
-        <div className="relative mx-auto overflow-hidden rounded-2xl bg-white shadow-lifted ring-1 ring-ink-200">
-          <PageStagePanel page={disp.entry.page} subject={disp.entry.subject} chromeless />
-        </div>
+        <StageFitFrame>
+          <PageStagePanel
+            page={disp.entry.page}
+            subject={disp.entry.subject}
+            chromeless
+            fitParent
+          />
+        </StageFitFrame>
       </div>
     );
   }
 
+  const pairAspect = sideAspect(disp.left, disp.right) * 2;
+
   return (
-    <div className="mx-auto w-full max-w-4xl">
-      <div className="mb-3 flex items-center justify-between gap-3">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div
+        className="relative z-10 mb-2 flex shrink-0 items-center justify-between gap-3"
+        data-floating-bar-obstacle
+      >
         <SideChip side={disp.left} stale={stale} onOpenIllustration={onOpenIllustration} />
         <SideChip side={disp.right} stale={stale} onOpenIllustration={onOpenIllustration} />
       </div>
-      <div className="relative mx-auto flex overflow-hidden rounded-2xl bg-white shadow-lifted ring-1 ring-ink-200">
-        {isPlainPagePair(disp) ? (
-          // Two ordinary facing pages share one interactive canvas so an
-          // element can be dragged straight across the fold (e.g. page 4 → 5
-          // on the same sheet) instead of stopping at the page edge.
-          <PairPageStagePanel left={disp.left.entry} right={disp.right.entry} />
-        ) : (
-          <>
-            <HalfFrame side={disp.left} aspect={sideAspect(disp.left, disp.right)} half="left" />
-            <HalfFrame side={disp.right} aspect={sideAspect(disp.left, disp.right)} half="right" />
-          </>
-        )}
-        <div
-          className="pointer-events-none absolute inset-y-0 left-1/2 w-10 -translate-x-1/2"
-          style={{ background: FOLD_GRADIENT }}
-        />
+      <StageFitFrame aspect={pairAspect}>
+        <div className="relative flex h-full w-full">
+          {isPlainPagePair(disp) ? (
+            // Two ordinary facing pages share one interactive canvas so an
+            // element can be dragged straight across the fold (e.g. page 4 → 5
+            // on the same sheet) instead of stopping at the page edge.
+            <PairPageStagePanel left={disp.left.entry} right={disp.right.entry} />
+          ) : (
+            <>
+              <HalfFrame side={disp.left} aspect={sideAspect(disp.left, disp.right)} half="left" />
+              <HalfFrame side={disp.right} aspect={sideAspect(disp.left, disp.right)} half="right" />
+            </>
+          )}
+          <div
+            className="pointer-events-none absolute inset-y-0 left-1/2 w-10 -translate-x-1/2"
+            style={{ background: FOLD_GRADIENT }}
+          />
+        </div>
+      </StageFitFrame>
+    </div>
+  );
+}
+
+/**
+ * Host that fills the stage. Single pages: `data-stage-fit` on the host so
+ * PageStage can contain-fit. Facing pairs: pass `aspect` to size the chrome
+ * box; children then fill that box.
+ */
+function StageFitFrame({
+  children,
+  aspect,
+  ring = "ink",
+}: {
+  children: React.ReactNode;
+  /** When set, sizes the chrome box to this aspect (e.g. facing pair). */
+  aspect?: number;
+  ring?: "ink" | "brand";
+}) {
+  const hostRef = useRef<HTMLDivElement>(null);
+  const [box, setBox] = useState<{ w: number; h: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (aspect == null) {
+      setBox(null);
+      return;
+    }
+    const host = hostRef.current;
+    if (!host) return;
+    const update = () => {
+      const pw = host.clientWidth;
+      const ph = host.clientHeight;
+      if (pw <= 0 || ph <= 0) return;
+      let w = pw;
+      let h = w / aspect;
+      if (h > ph) {
+        h = ph;
+        w = h * aspect;
+      }
+      setBox({ w: Math.floor(w), h: Math.floor(h) });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(host);
+    return () => ro.disconnect();
+  }, [aspect]);
+
+  const chromeCls = cn(
+    "overflow-hidden bg-white shadow-lifted",
+    ring === "brand" ? "ring-2 ring-brand-200" : "ring-1 ring-ink-200",
+    aspect == null && "w-max max-h-full max-w-full",
+  );
+
+  return (
+    <div
+      ref={hostRef}
+      data-stage-fit={aspect == null ? "" : undefined}
+      className="relative flex min-h-0 w-full flex-1 items-center justify-center"
+    >
+      <div className={chromeCls} style={box ? { width: box.w, height: box.h } : undefined}>
+        {children}
       </div>
     </div>
   );
@@ -587,7 +611,7 @@ function SideChip({
 }: {
   side: SpreadSide;
   stale: (pageId: string) => boolean;
-  onOpenIllustration: (entry: Entry, label: string) => void;
+  onOpenIllustration: (entry: Entry) => void;
 }) {
   if (side.kind === "page") {
     return (
@@ -595,7 +619,7 @@ function SideChip({
         entry={side.entry}
         label={side.label}
         stale={stale}
-        onOpenIllustration={() => onOpenIllustration(side.entry, side.label)}
+        onOpenIllustration={() => onOpenIllustration(side.entry)}
       />
     );
   }
@@ -619,7 +643,14 @@ function SideChip({
   return <span aria-hidden />;
 }
 
-/** The floating per-page chip: label, one-tap generate/update, illustration drawer entry, page menu. */
+/**
+ * Per-page chip above the canvas: contextual art actions live here so the page
+ * surface stays free for editing text/layout.
+ *
+ * - No art on page: Quick generate (starts now) · Generate… (opens edit tools) · Restore
+ * - Art present + stale: warning + Update
+ * - Art present + ready: status only (edit via selecting the art)
+ */
 function PageChip({
   entry,
   label,
@@ -631,54 +662,108 @@ function PageChip({
   stale: (pageId: string) => boolean;
   onOpenIllustration: () => void;
 }) {
-  const { project, setPageGenerating, makeIllustrationEditable, pageDesign } = useStudio();
+  const { project, setPageGenerating, selectIllustration, pageDesign } = useStudio();
   const blank = isBlankEntry(entry);
   const status = useEntryStatus(entry, stale);
   const page = entry.page;
-  // Once there's real art on the page and it isn't already a movable element,
-  // offer a visible way to reposition/crop it (the double-click gesture alone
-  // is undiscoverable).
-  const alreadyEditable = (pageDesign(page.id).images ?? []).some((im) => im.kind === "illustration");
-  const canReposition = !blank && !alreadyEditable && (status === "ready" || status === "stale");
+  const coverMode = entry.subject.kind === "cover";
+  const sparkRange = useImageActionRange(coverMode ? "coverIllustration" : "pageIllustration");
 
-  async function quick(options: { useReference?: boolean } = {}) {
+  const hasFrame = (pageDesign(page.id).images ?? []).some((im) => im.kind === "illustration");
+  const tree = project.illustrations?.[page.id];
+  const cursor = tree ? getCursor(tree).content : null;
+  const hasHistory = Boolean(cursor?.blobId);
+  const noArtOnPage = !blank && !hasFrame;
+
+  async function quickGenerate(options: { useReference?: boolean } = {}) {
+    selectIllustration(page.id);
     setPageGenerating(page.id, true);
     try {
-      await refreshSpread(project, page.id, options, (err) => notify.error(err));
+      if (options.useReference) {
+        const changed = changedAnchorsForSpread(project, page.id);
+        const staleSet = new Set(staleAnchorIds(project));
+        const staleRefs = changed.filter((a) => staleSet.has(a.id)).map((a) => a.id);
+        if (staleRefs.length > 0) {
+          await updateAnchorsThenSpread(project, page.id, staleRefs, (err) => notify.error(err));
+        } else {
+          await refreshSpread(project, page.id, options, (err) => notify.error(err));
+        }
+      } else {
+        await refreshSpread(project, page.id, {}, (err) => notify.error(err));
+      }
     } finally {
       setPageGenerating(page.id, false);
     }
   }
 
   return (
-    <div className="inline-flex max-w-full items-center gap-1 rounded-full bg-white/95 px-2 py-1 shadow-soft ring-1 ring-ink-200 backdrop-blur-sm">
+    <div className="inline-flex max-w-full items-center gap-0.5 rounded-full bg-white/95 px-2 py-1 shadow-soft ring-1 ring-ink-200 backdrop-blur-sm">
       <span className="truncate px-1 text-xs font-semibold text-ink-700">{label}</span>
       {!blank && (
         <>
-          {status === "missing" && (
-            <ChipButton title="Generate illustration" onClick={() => void quick()} tone="brand">
-              <Sparkles className="size-3.5" />
-            </ChipButton>
+          {status === "generating" && (
+            <span className="inline-flex items-center gap-1 px-1.5 text-[11px] font-medium text-brand-600">
+              <Loader2 className="size-3.5 animate-spin" />
+              <span className="hidden sm:inline">Generating…</span>
+            </span>
           )}
-          {status === "stale" && (
-            <ChipButton
-              title="Update illustration"
-              onClick={() => void quick({ useReference: true })}
-              tone="accent"
-            >
-              <RefreshCw className="size-3.5" />
-            </ChipButton>
+
+          {noArtOnPage && status !== "generating" && (
+            <>
+              <ChipButton
+                label="Quick"
+                title="Quick generate — starts now with current settings"
+                onClick={() => void quickGenerate()}
+                tone="brand"
+              >
+                <Sparkles className="size-3.5" />
+                {sparkRange && (
+                  <span className="hidden sm:inline">
+                    <SparkEstimateCost range={sparkRange} />
+                  </span>
+                )}
+              </ChipButton>
+              <ChipButton
+                label="Generate…"
+                title="Open edit tools — adjust cast, scene, or cover options first"
+                onClick={onOpenIllustration}
+              >
+                <Wand2 className="size-3.5" />
+              </ChipButton>
+              {hasHistory && (
+                <ChipButton
+                  label="Restore"
+                  title="Put the last saved version back on the page"
+                  onClick={() => selectIllustration(page.id)}
+                >
+                  <History className="size-3.5" />
+                </ChipButton>
+              )}
+            </>
           )}
-          {status === "generating" && <Loader2 className="size-3.5 animate-spin text-brand-500" />}
-          {status === "ready" && <Check className="size-3.5 text-emerald-500" />}
-          {canReposition && (
-            <ChipButton title="Move, resize or crop the art" onClick={() => makeIllustrationEditable(page.id)}>
-              <Maximize2 className="size-3.5" />
-            </ChipButton>
+
+          {hasFrame && status === "stale" && (
+            <>
+              <span
+                className="hidden max-w-36 truncate px-1 text-[11px] font-medium text-amber-700 sm:inline"
+                title="Characters or places on this page changed since the art was made"
+              >
+                Outdated
+              </span>
+              <ChipButton
+                label="Update"
+                title="Update scene for changed characters & places"
+                onClick={() => void quickGenerate({ useReference: true })}
+                tone="accent"
+              >
+                <RefreshCw className="size-3.5" />
+              </ChipButton>
+            </>
           )}
-          <ChipButton title="Illustration, anchors & art direction" onClick={onOpenIllustration}>
-            <Wand2 className="size-3.5" />
-          </ChipButton>
+
+          {hasFrame && status === "ready" && (
+            <Check className="mx-1 size-3.5 text-emerald-500" aria-label="Art ready" />
+          )}
         </>
       )}
       {entry.subject.kind === "spread" && <PageMenu spreadId={entry.subject.spread.id} />}
@@ -690,85 +775,82 @@ function ChipButton({
   children,
   onClick,
   title,
+  label,
   tone,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   title: string;
+  label?: string;
   tone?: "brand" | "accent";
 }) {
   return (
     <button
+      type="button"
       onClick={onClick}
       title={title}
       className={cn(
-        "rounded-full p-1.5 transition",
-        tone === "brand" && "text-brand-600 hover:bg-brand-50",
-        tone === "accent" && "text-accent-600 hover:bg-accent-50",
-        !tone && "text-ink-400 hover:bg-ink-100 hover:text-ink-700",
+        "inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold transition",
+        tone === "brand" && "bg-brand-50 text-brand-700 ring-1 ring-brand-200 hover:bg-brand-100",
+        tone === "accent" && "bg-amber-50 text-amber-800 ring-1 ring-amber-200 hover:bg-amber-100",
+        !tone && "text-ink-600 hover:bg-ink-100",
       )}
     >
       {children}
+      {label && <span>{label}</span>}
     </button>
   );
 }
 
-/** Floating "Add" dock — the entry point for new text boxes & images, always
- * pinned near the bottom of the stage so it never competes with the canvas. */
+/** Floating "Add" dock — page-local tools (text, image, arrange). */
 function AddDock({
   activePageId,
-  onOpenIllustration,
-  activeDisp,
+  toolPanel,
+  onToggleTool,
 }: {
   activePageId?: string;
-  onOpenIllustration: (t: IllustratingTarget) => void;
-  activeDisp: DisplaySpread;
+  toolPanel: StudioToolPanel | null;
+  onToggleTool: (panel: StudioToolPanel) => void;
 }) {
-  const { addBox, addAssetImage, makeIllustrationEditable, pageDesign } = useStudio();
+  const { addText, addAssetImage } = useStudio();
   const pageId = activePageId;
-  // "Adjust art" only helps once there's a generated illustration to move; hide
-  // it once the illustration has already been turned into a movable element.
-  const alreadyEditable = pageId
-    ? (pageDesign(pageId).images ?? []).some((im) => im.kind === "illustration")
-    : false;
 
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-4 z-30 flex justify-center">
-      <div className="pointer-events-auto flex items-center gap-1 rounded-full bg-white/95 p-1.5 shadow-lifted ring-1 ring-ink-200 backdrop-blur-sm">
+      <div
+        className="pointer-events-auto flex items-center gap-1 rounded-full bg-white/95 p-1.5 shadow-lifted ring-1 ring-ink-200 backdrop-blur-sm"
+        data-floating-bar-obstacle
+      >
         <DockButton
           icon={<Type className="size-4" />}
           label="Text"
+          title="Add story text, or a blank text box"
           disabled={!pageId}
-          onClick={() => pageId && addBox(pageId)}
+          onClick={() => pageId && addText(pageId)}
         />
         <Popover
           side="top"
           align="center"
           panelClassName="w-64"
           trigger={
-            <span className="flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium text-ink-600 transition hover:bg-ink-100">
-              <ImageIcon className="size-4" /> <span className="hidden sm:inline">Image</span>
+            <span
+              title="Upload or place saved pictures"
+              className="flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium text-ink-600 transition hover:bg-ink-100"
+            >
+              <ImageIcon className="size-4" /> <span className="hidden sm:inline">Assets</span>
             </span>
           }
         >
           <AssetsLibrary onPlace={pageId ? (asset) => addAssetImage(pageId, asset) : undefined} />
         </Popover>
-        <DockButton
-          icon={<Maximize2 className="size-4" />}
-          label="Move art"
-          title="Move, resize or crop the illustration"
-          disabled={!pageId || alreadyEditable}
-          onClick={() => pageId && makeIllustrationEditable(pageId)}
-        />
         <span className="mx-0.5 h-5 w-px bg-ink-200" />
         <DockButton
-          icon={<Wand2 className="size-4" />}
-          label="Illustration"
-          disabled={!activePageId}
-          onClick={() => {
-            const first = displayEntries(activeDisp)[0];
-            if (first) onOpenIllustration({ entry: first.entry, label: first.label });
-          }}
+          icon={<LayersIcon className="size-4" />}
+          label="Arrange"
+          title="Reorder layers on the pages in this canvas"
+          active={toolPanel === "layers"}
+          disabled={!pageId}
+          onClick={() => onToggleTool("layers")}
         />
       </div>
     </div>
@@ -781,12 +863,14 @@ function DockButton({
   title,
   onClick,
   disabled,
+  active,
 }: {
   icon: React.ReactNode;
   label: string;
   title?: string;
   onClick: () => void;
   disabled?: boolean;
+  active?: boolean;
 }) {
   return (
     <motion.button
@@ -794,7 +878,12 @@ function DockButton({
       onClick={onClick}
       disabled={disabled}
       title={title ?? label}
-      className="flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium text-ink-600 transition hover:bg-ink-100 disabled:pointer-events-none disabled:opacity-40"
+      className={cn(
+        "flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium transition disabled:pointer-events-none disabled:opacity-40",
+        active
+          ? "bg-brand-50 text-brand-700 ring-1 ring-brand-200"
+          : "text-ink-600 hover:bg-ink-100",
+      )}
     >
       {icon} <span className="hidden sm:inline">{label}</span>
     </motion.button>

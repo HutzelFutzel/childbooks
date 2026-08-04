@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Minus, Plus as PlusIcon } from "lucide-react";
+import { createPortal } from "react-dom";
+import { Check, Crop, Minus, Plus as PlusIcon } from "lucide-react";
 import Konva from "konva";
 import type { KonvaEventObject } from "konva/lib/Node";
 import { Circle, Group, Image as KonvaImage, Layer, Line, Rect, Stage, Text, Transformer } from "react-konva";
@@ -11,9 +12,17 @@ import type {
   TextBox,
   TextParagraph,
 } from "../../core/types";
+import type { ImageActionId } from "../../core/ai/actions";
 import { fontStack, loadFont } from "../typography/fonts";
 import { cn } from "../lib/cn";
 import { TextStyleBar, type TextBoxToolbarChrome, type TextStyleKey } from "./TextStyleBar";
+import { ImageStyleBar, type ImageToolbarChrome } from "./ImageStyleBar";
+import {
+  placeFloatingBar,
+  queryFloatingBarObstacles,
+  floatingBarPortalProps,
+  type FloatingBarPlacement,
+} from "./floatingBarPlacement";
 import type { ReadingModeId } from "../../core/config/ageWritingCatalog";
 import {
   applyInlineColor,
@@ -23,6 +32,7 @@ import {
 } from "./richText";
 import { KonvaTextBox, type KonvaTextBoxHandle } from "./konva/KonvaTextBox";
 import { KonvaImageElement } from "./konva/KonvaImageElement";
+import { KonvaArtBusyVeil } from "./konva/KonvaArtBusyVeil";
 import { KonvaShape } from "./ShapeRender";
 import { useImage } from "./konva/useImage";
 import { usePatternImage } from "./konva/usePatternImage";
@@ -36,6 +46,15 @@ const MIN_PX = 16;
 const SNAP_PX = 6;
 /** Rotation raster: snap to every 15° (0,15,…,345) when snapping is on. */
 const ROTATION_SNAPS = Array.from({ length: 24 }, (_, i) => i * 15);
+
+/** Busy-state for one illustration surface (left page / right half). */
+export type ArtBusySpec = {
+  action: ImageActionId;
+  refCount?: number;
+  compact?: boolean;
+  /** Durable slot id (job task / illustrations tree key). Defaults to page id. */
+  illustrationId?: string;
+};
 
 /**
  * Konva Groups size themselves from their children, and `getClientRect` ignores
@@ -138,22 +157,36 @@ export function PageStage({
   onChangeElement,
   onReframeImage,
   onAdjustArt,
+  onSelectArt,
+  autoReframeId,
+  onAutoReframeConsumed,
   selectedSpan,
   onSelectSpan,
   onEditText,
   onEditRichText,
   onStyleBox,
   textToolbar,
+  imageToolbar,
   editable = true,
   dropId,
   showGutter = false,
   printGuides = null,
   rightSurface,
   chromeless = false,
+  /**
+   * Size the page to contain within `[data-stage-fit]` (Canva-style stage fit).
+   * Use for single pages in the live studio.
+   */
+  fitParent = false,
+  /** Fill a parent that already has an explicit size (facing-page chrome). */
+  fillParent = false,
   snap = true,
   grid = false,
   gridSize = 0.05,
   overlay,
+  artBusy,
+  emptyArt,
+  emptyArtRight,
 }: {
   pageDesign: PageDesign;
   imageUrl?: string;
@@ -168,11 +201,13 @@ export function PageStage({
   onSelectElement: (ref: ElementRef | null) => void;
   onChangeElement: (id: string, kind: ElementKind, patch: GeomPatch) => void;
   /**
-   * Commit a non-destructive reframe (zoom + focal point) for an image element.
-   * Driven by double-click "reframe" mode, which shows the hidden overflow and
-   * lets the user drag to pan / scroll to zoom.
+   * Commit crop/reframe for an image: zoom + focal point and/or the frame rect.
+   * Driven by double-click crop mode (corner resize, pan, scroll zoom).
    */
-  onReframeImage?: (id: string, patch: { zoom?: number; focus?: { x: number; y: number } }) => void;
+  onReframeImage?: (
+    id: string,
+    patch: { zoom?: number; focus?: { x: number; y: number }; rect?: NormRect },
+  ) => void;
   /**
    * Turn the page's full-bleed illustration into a movable element so it can be
    * repositioned. Invoked when the user double-clicks the background art (no
@@ -181,6 +216,41 @@ export function PageStage({
    * was clicked ("left" always, when there's no `rightSurface`).
    */
   onAdjustArt?: (side: "left" | "right") => void;
+  /**
+   * Single-click the background art: materialize (if needed) and select the
+   * page illustration so the floating ImageStyleBar appears — Canva-style.
+   */
+  onSelectArt?: (side: "left" | "right") => void;
+  /** One-shot: enter reframe for this image id when it exists on the stage. */
+  autoReframeId?: string | null;
+  onAutoReframeConsumed?: () => void;
+  /**
+   * Canva-style whole-image chrome. When provided, selecting an image shows
+   * the floating ImageStyleBar instead of dumping framing into a side panel.
+   */
+  imageToolbar?: {
+    pageIdForImage: (imageId: string) => string;
+    onPatch: (
+      imageId: string,
+      patch: Partial<ImageElement>,
+      opts?: { coalesce?: string },
+    ) => void;
+    onDuplicate: (imageId: string) => void;
+    onDelete: (imageId: string) => void;
+    onToggleLock: (imageId: string) => void;
+  };
+  /** Empty-state CTA when the (left) page has no illustration yet. */
+  emptyArt?: React.ReactNode;
+  /** Pair stages: empty-state CTA for the right half. */
+  emptyArtRight?: React.ReactNode;
+  /**
+   * In-flight AI art for one or both halves. Non-blocking veil clipped to the
+   * illustration element (or the full half/page when no element exists yet).
+   */
+  artBusy?: {
+    left?: ArtBusySpec;
+    right?: ArtBusySpec;
+  };
   selectedSpan?: SpanRef | null;
   onSelectSpan?: (ref: SpanRef | null) => void;
   /** Commit new plain text for a text box (double-click to edit in place). */
@@ -244,23 +314,28 @@ export function PageStage({
   /** Drop the page's own frame chrome (rounding/ring/shadow) so a wrapper can
    * provide a single shared frame (e.g. two facing pages in one spread). */
   chromeless?: boolean;
+  /** Contain within `[data-stage-fit]` (studio stage). Off for width-sized thumbs. */
+  fitParent?: boolean;
+  /** Fill a parent that already has an explicit pixel size. */
+  fillParent?: boolean;
   /** Snap to page/element edges & centers while dragging. */
   snap?: boolean;
   /** Show an alignment grid and snap to it. */
   grid?: boolean;
   /** Grid spacing as a fraction of page width. */
   gridSize?: number;
-  /** Optional overlay rendered over the sized page surface (e.g. a generation
-   *  progress overlay while the illustration is rendering). */
+  /** Optional misc overlay over the sized page surface. Prefer {@link artBusy}. */
   overlay?: React.ReactNode;
 }) {
+  const wrapRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
   const [, setFontTick] = useState(0);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [reframeId, setReframeId] = useState<string | null>(null);
-  // Screen position for the whole-box character toolbar (recomputed on scroll).
-  const [boxBarPos, setBoxBarPos] = useState<{ x: number; y: number } | null>(null);
+  // Screen placement for selection toolbars (recomputed on scroll/resize).
+  const [boxBarPos, setBoxBarPos] = useState<FloatingBarPlacement | null>(null);
+  const [imageBarPos, setImageBarPos] = useState<FloatingBarPlacement | null>(null);
   const [guides, setGuides] = useState<{ x: number[]; y: number[] }>({ x: [], y: [] });
   const groupRefs = useRef<Map<string, Konva.Group>>(new Map());
   const textBoxRefs = useRef<Map<string, KonvaTextBoxHandle>>(new Map());
@@ -281,12 +356,48 @@ export function PageStage({
   useLayoutEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+
+    if (fitParent) {
+      const frame =
+        (wrapRef.current?.closest("[data-stage-fit]") as HTMLElement | null) ??
+        wrapRef.current?.parentElement;
+      if (!frame) return;
+      const update = () => {
+        const pw = frame.clientWidth;
+        const ph = frame.clientHeight;
+        if (pw <= 0) {
+          setSize({ w: 0, h: 0 });
+          return;
+        }
+        const safeAspect = aspect > 0 ? aspect : 1;
+        let w = pw;
+        let h = w / safeAspect;
+        if (ph > 0 && h > ph) {
+          h = ph;
+          w = h * safeAspect;
+        }
+        w = Math.max(1, Math.floor(w));
+        h = Math.max(1, Math.floor(h));
+        el.style.width = `${w}px`;
+        el.style.height = `${h}px`;
+        setSize({ w, h });
+      };
+      update();
+      const ro = new ResizeObserver(update);
+      ro.observe(frame);
+      return () => {
+        ro.disconnect();
+        el.style.width = "";
+        el.style.height = "";
+      };
+    }
+
     const update = () => setSize({ w: el.clientWidth, h: el.clientHeight });
     update();
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [aspect]);
+  }, [aspect, fitParent]);
 
   // Redraw once webfonts finish loading so glyph metrics are correct.
   useEffect(() => {
@@ -388,13 +499,31 @@ export function PageStage({
   // right art (which may already have its own movable element) isn't confused
   // with the left one once both exist.
   const pendingReframe = useRef<"left" | "right" | false>(false);
+  function sideFromX(xFrac: number): "left" | "right" {
+    return Boolean(rightSurface) && xFrac >= 0.5 ? "right" : "left";
+  }
+  function artPresent(side: "left" | "right") {
+    return Boolean(side === "right" ? rightSurface?.imageUrl : imageUrl);
+  }
+  function hasArtElement(side: "left" | "right") {
+    return side === "right" ? hasIllustrationElRight : hasIllustrationEl;
+  }
+  /** First click on passive full-bleed art: materialize + select (once). */
+  function requestSelectArt(xFrac: number) {
+    const side = sideFromX(xFrac);
+    if (!editable || !artPresent(side) || hasArtElement(side)) return;
+    if (onSelectArt) onSelectArt(side);
+    else if (onAdjustArt) onAdjustArt(side);
+  }
+  /** Double-click passive full-bleed: materialize and enter reframe. */
   function requestAdjustArt(xFrac: number) {
-    const useRight = Boolean(rightSurface) && xFrac >= 0.5;
-    const url = useRight ? rightSurface?.imageUrl : imageUrl;
-    const already = useRight ? hasIllustrationElRight : hasIllustrationEl;
-    if (!editable || !onAdjustArt || !url || already) return;
-    pendingReframe.current = useRight ? "right" : "left";
-    onAdjustArt(useRight ? "right" : "left");
+    const side = sideFromX(xFrac);
+    if (!editable || !artPresent(side)) return;
+    // Element already exists — reframe is handled by the element's own dblclick.
+    if (hasArtElement(side)) return;
+    pendingReframe.current = side;
+    if (onAdjustArt) onAdjustArt(side);
+    else if (onSelectArt) onSelectArt(side);
   }
   useEffect(() => {
     if (!pendingReframe.current) return;
@@ -410,6 +539,15 @@ export function PageStage({
       setReframeId(illus.id);
     }
   }, [pageDesign, rightSurface]);
+
+  // Host-requested reframe (Crop button / selectIllustration enterReframe).
+  useEffect(() => {
+    if (!autoReframeId) return;
+    const exists = (pageDesign.images ?? []).some((im) => im.id === autoReframeId);
+    if (!exists) return;
+    setReframeId(autoReframeId);
+    onAutoReframeConsumed?.();
+  }, [autoReframeId, pageDesign, onAutoReframeConsumed]);
 
   // Preload fonts used anywhere on the page.
   useEffect(() => {
@@ -472,7 +610,17 @@ export function PageStage({
       }
       const b = node.getClientRect({ relativeTo: stage });
       const r = container.getBoundingClientRect();
-      setBoxBarPos({ x: r.left + b.x + b.width / 2, y: r.top + b.y });
+      setBoxBarPos(
+        placeFloatingBar({
+          anchor: {
+            left: r.left + b.x,
+            top: r.top + b.y,
+            right: r.left + b.x + b.width,
+            bottom: r.top + b.y + b.height,
+          },
+          obstacles: queryFloatingBarObstacles(),
+        }),
+      );
     };
     update();
     // Scroll events don't bubble, so listen in the capture phase to catch the
@@ -484,6 +632,81 @@ export function PageStage({
       window.removeEventListener("resize", update);
     };
   }, [boxBarId, W, H, pageDesign]);
+
+  const selectedImageEl =
+    editable && selectedId && imageToolbar
+      ? (pageDesign.images ?? []).find((im) => im.id === selectedId)
+      : undefined;
+  const showImageBar = Boolean(
+    selectedImageEl && imageToolbar && selectedId !== reframeId,
+  );
+  const imageBarId = showImageBar ? selectedId : null;
+  useEffect(() => {
+    if (!imageBarId) {
+      setImageBarPos(null);
+      return;
+    }
+    const update = () => {
+      const container = containerRef.current;
+      const node = groupRefs.current.get(imageBarId);
+      const stage = node?.getStage();
+      const obstacles = queryFloatingBarObstacles();
+      if (!container || !node || !stage) {
+        // Full-bleed art may not have a group node yet on the first frame —
+        // fall back to a thin strip at the page top so placement can flip.
+        if (container) {
+          const r = container.getBoundingClientRect();
+          setImageBarPos(
+            placeFloatingBar({
+              anchor: {
+                left: r.left,
+                top: r.top,
+                right: r.right,
+                bottom: r.top + 24,
+              },
+              obstacles,
+            }),
+          );
+        } else {
+          setImageBarPos(null);
+        }
+        return;
+      }
+      const b = node.getClientRect({ relativeTo: stage });
+      const r = container.getBoundingClientRect();
+      setImageBarPos(
+        placeFloatingBar({
+          anchor: {
+            left: r.left + b.x,
+            top: r.top + b.y,
+            right: r.left + b.x + b.width,
+            bottom: r.top + b.y + b.height,
+          },
+          obstacles,
+        }),
+      );
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [imageBarId, W, H, pageDesign]);
+
+  const imageChrome: ImageToolbarChrome | undefined =
+    selectedImageEl && imageToolbar
+      ? {
+          image: selectedImageEl,
+          pageId: imageToolbar.pageIdForImage(selectedImageEl.id),
+          onPatch: (patch, opts) => imageToolbar.onPatch(selectedImageEl.id, patch, opts),
+          onCrop: () => setReframeId(selectedImageEl.id),
+          onDuplicate: () => imageToolbar.onDuplicate(selectedImageEl.id),
+          onDelete: () => imageToolbar.onDelete(selectedImageEl.id),
+          onToggleLock: () => imageToolbar.onToggleLock(selectedImageEl.id),
+        }
+      : undefined;
 
   // Character marks are active when every non-empty span carries them — the
   // selected box *is* the selection in Canva terms.
@@ -620,26 +843,56 @@ export function PageStage({
   }
 
   return (
-    <div className="flex w-full items-center justify-center">
+    <div
+      ref={wrapRef}
+      className={cn(
+        "flex w-full items-center justify-center",
+        (fitParent || fillParent) && "h-full min-h-0 max-h-full",
+      )}
+    >
       <div
         ref={containerRef}
         data-page-drop={dropId}
         data-editor-surface=""
         className={cn(
-          "relative max-h-[70vh] w-full overflow-hidden bg-white",
-          !chromeless && "rounded-xl shadow-soft ring-1 ring-ink-200",
+          "relative overflow-hidden bg-white",
+          fitParent && "max-h-full max-w-full",
+          fillParent && "h-full w-full",
+          !fitParent && !fillParent && "h-auto max-h-[70vh] w-full",
+          !chromeless && "shadow-soft ring-1 ring-ink-200",
         )}
-        style={{ aspectRatio: String(aspect) }}
+        style={fitParent || fillParent ? undefined : { aspectRatio: String(aspect) }}
       >
         {W > 0 && H > 0 && (
           <Stage
             width={W}
             height={H}
             onMouseDown={(e: KonvaEventObject<MouseEvent>) => {
-              if (e.target === e.target.getStage()) clearSelection();
+              // Empty-stage click: materialize passive art once, otherwise deselect.
+              // Never re-select an existing illustration element from the stage —
+              // that made resized art feel "sticky" and raced double-creates.
+              if (e.target !== e.target.getStage()) return;
+              const stage = e.target.getStage();
+              const pos = stage?.getPointerPosition();
+              const xFrac = pos && W > 0 ? pos.x / W : 0;
+              const side = sideFromX(xFrac);
+              if (artPresent(side) && !hasArtElement(side) && (onSelectArt || onAdjustArt)) {
+                requestSelectArt(xFrac);
+                return;
+              }
+              clearSelection();
             }}
             onTouchStart={(e: KonvaEventObject<TouchEvent>) => {
-              if (e.target === e.target.getStage()) clearSelection();
+              if (e.target !== e.target.getStage()) return;
+              const stage = e.target.getStage();
+              const pos = stage?.getPointerPosition();
+              const xFrac = pos && W > 0 ? pos.x / W : 0;
+              const side = sideFromX(xFrac);
+              if (artPresent(side) && !hasArtElement(side) && (onSelectArt || onAdjustArt)) {
+                requestSelectArt(xFrac);
+                return;
+              }
+              clearSelection();
             }}
             onDblClick={(e: KonvaEventObject<MouseEvent>) => {
               const stage = e.target.getStage();
@@ -675,8 +928,22 @@ export function PageStage({
                   listening={false}
                 />
               )}
-              {image && imageCrop && !hasIllustrationEl && (
+              {/* Legacy full-bleed paint for previews only. In the editor, a
+                  missing illustration frame means cleared/empty — never a ghost. */}
+              {image && imageCrop && !hasIllustrationEl && !editable && (
                 <KonvaImage image={image} x={0} y={0} width={surfaceW} height={H} crop={imageCrop} listening={false} />
+              )}
+              {/* Busy veil under the element stack when page art isn't a layer yet. */}
+              {artBusy?.left && !hasIllustrationEl && (
+                <KonvaArtBusyVeil
+                  x={0}
+                  y={0}
+                  w={surfaceW}
+                  h={H}
+                  action={artBusy.left.action}
+                  refCount={artBusy.left.refCount}
+                  compact={artBusy.left.compact}
+                />
               )}
 
               {rightSurface && (
@@ -708,7 +975,7 @@ export function PageStage({
                       listening={false}
                     />
                   )}
-                  {rightImage && rightImageCrop && !hasIllustrationElRight && (
+                  {rightImage && rightImageCrop && !hasIllustrationElRight && !editable && (
                     <KonvaImage
                       image={rightImage}
                       x={surfaceW}
@@ -717,6 +984,17 @@ export function PageStage({
                       height={H}
                       crop={rightImageCrop}
                       listening={false}
+                    />
+                  )}
+                  {artBusy?.right && !hasIllustrationElRight && (
+                    <KonvaArtBusyVeil
+                      x={surfaceW}
+                      y={0}
+                      w={surfaceW}
+                      h={H}
+                      action={artBusy.right.action}
+                      refCount={artBusy.right.refCount}
+                      compact={artBusy.right.compact}
                     />
                   )}
                 </>
@@ -761,6 +1039,9 @@ export function PageStage({
                 const restX = (rect.x + rect.w / 2) * W;
                 const restY = (rect.y + rect.h / 2) * H;
                 const restRot = el.rotation ?? 0;
+                const artBusySpec = el.image
+                  ? imageElementBusySpec(el.image, artBusy, Boolean(rightSurface))
+                  : null;
                 return (
                   <Group
                     key={el.id}
@@ -936,7 +1217,18 @@ export function PageStage({
                         w={w}
                         h={h}
                         pageHeight={H}
-                        illustrationUrl={imageUrl}
+                        illustrationUrl={
+                          // Pair stages: each half has its own AI art. Pick URL by
+                          // which half the element's center sits in — never feed
+                          // the left page's bitmap to a right-page illustration.
+                          rightSurface && el.image.rect.x + el.image.rect.w / 2 >= 0.5
+                            ? rightSurface.imageUrl
+                            : imageUrl
+                        }
+                        generating={!!artBusySpec}
+                        busyAction={artBusySpec?.action}
+                        busyRefCount={artBusySpec?.refCount}
+                        busyCompact={artBusySpec?.compact}
                       />
                     ) : null}
 
@@ -1195,19 +1487,34 @@ export function PageStage({
             el={reframeEl}
             W={W}
             H={H}
-            illustrationUrl={imageUrl}
+            containerEl={containerRef.current}
+            illustrationUrl={
+              rightSurface && reframeEl.rect.x + reframeEl.rect.w / 2 >= 0.5
+                ? rightSurface.imageUrl
+                : imageUrl
+            }
             onChange={(patch) => onReframeImage(reframeEl.id, patch)}
             onDone={() => setReframeId(null)}
           />
         )}
 
         {overlay}
+
+        {/* Empty CTA when there's no illustration frame — including after Clear
+            art (version history may still exist). */}
+        {editable && emptyArt && !hasIllustrationEl && !artBusy?.left && emptyArt}
+        {editable &&
+          emptyArtRight &&
+          rightSurface &&
+          !hasIllustrationElRight &&
+          !artBusy?.right && (
+            <div className="absolute inset-0 left-1/2 z-20">{emptyArtRight}</div>
+          )}
       </div>
 
       {showBoxBar && boxBarPos && selectedTextBox && (
         <TextStyleBar
-          x={boxBarPos.x}
-          y={boxBarPos.y}
+          placement={boxBarPos}
           bold={spanAll((s) => Boolean(s.bold))}
           italic={spanAll((s) => Boolean(s.italic))}
           underline={spanAll((s) => Boolean(s.underline))}
@@ -1216,6 +1523,10 @@ export function PageStage({
           onColor={setBoxColor}
           chrome={boxChrome}
         />
+      )}
+
+      {showImageBar && imageBarPos && imageChrome && (
+        <ImageStyleBar placement={imageBarPos} chrome={imageChrome} />
       )}
     </div>
   );
@@ -1260,7 +1571,7 @@ function InlineTextEditor({
   const done = useRef(false);
   const dirty = useRef(false);
   const [marks, setMarks] = useState({ bold: false, italic: false, underline: false });
-  const [barPos, setBarPos] = useState<{ x: number; y: number } | null>(null);
+  const [barPos, setBarPos] = useState<FloatingBarPlacement | null>(null);
 
   const syncLive = () => {
     if (!ref.current || !onLiveSync) return;
@@ -1281,7 +1592,7 @@ function InlineTextEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Pin the toolbar above the text box (Canva), not the ephemeral selection rect.
+  // Pin the toolbar to the text box (Canva), flipping below page chips / dock.
   useEffect(() => {
     const update = () => {
       const wrap = wrapRef.current;
@@ -1290,7 +1601,12 @@ function InlineTextEditor({
         return;
       }
       const r = wrap.getBoundingClientRect();
-      setBarPos({ x: r.left + r.width / 2, y: r.top });
+      setBarPos(
+        placeFloatingBar({
+          anchor: { left: r.left, top: r.top, right: r.right, bottom: r.bottom },
+          obstacles: queryFloatingBarObstacles(),
+        }),
+      );
     };
     update();
     window.addEventListener("scroll", update, true);
@@ -1462,8 +1778,7 @@ function InlineTextEditor({
       </div>
       {barPos && (
         <TextStyleBar
-          x={barPos.x}
-          y={barPos.y}
+          placement={barPos}
           bold={marks.bold}
           italic={marks.italic}
           underline={marks.underline}
@@ -1490,16 +1805,32 @@ function InlineTextEditor({
   );
 }
 
+type ReframePatch = {
+  zoom?: number;
+  focus?: { x: number; y: number };
+  rect?: NormRect;
+};
+
+type CropCorner = "tl" | "tr" | "bl" | "br";
+
+/** Minimum crop frame size (normalized + px floor). */
+const CROP_MIN_NORM = 0.08;
+const CROP_MIN_PX = 48;
+
 /**
- * Drag-to-reframe overlay for a "Fill" image: renders the full bitmap ghosted
- * so the user can see what's cropped, with the in-frame slice at full opacity.
- * Drag pans the focal point; the wheel (or the on-screen buttons) zooms. This is
- * a non-destructive crop — only `zoom`/`focus` change, never the rect.
+ * Crop / reframe overlay for a "Fill" image:
+ * - Corner handles resize the frame (`rect`)
+ * - Drag inside pans the focal point; wheel / slider zooms
+ * - Ghosted overflow shows what's outside the frame
+ *
+ * The Konva transformer is hidden while this is open. A portaled crop bar
+ * replaces it so selection never feels gone (and survives overflow:hidden).
  */
 function ReframeOverlay({
   el,
   W,
   H,
+  containerEl,
   illustrationUrl,
   onChange,
   onDone,
@@ -1507,14 +1838,23 @@ function ReframeOverlay({
   el: ImageElement;
   W: number;
   H: number;
+  /** Page surface element — used to place the portaled crop bar in viewport space. */
+  containerEl: HTMLElement | null;
   illustrationUrl?: string;
-  onChange: (patch: { zoom?: number; focus?: { x: number; y: number } }) => void;
+  onChange: (patch: ReframePatch) => void;
   onDone: () => void;
 }) {
   const assetUrl = useBlobUrl(el.kind === "asset" ? el.blobId : undefined);
   const url = el.kind === "illustration" ? illustrationUrl : assetUrl ?? undefined;
   const image = useImage(url);
-  const drag = useRef<{ x: number; y: number; fx: number; fy: number } | null>(null);
+  const panDrag = useRef<{ x: number; y: number; fx: number; fy: number } | null>(null);
+  const resizeDrag = useRef<{
+    corner: CropCorner;
+    startX: number;
+    startY: number;
+    origin: NormRect;
+  } | null>(null);
+  const [barPos, setBarPos] = useState<FloatingBarPlacement | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1527,6 +1867,42 @@ function ReframeOverlay({
     return () => document.removeEventListener("keydown", onKey);
   }, [onDone]);
 
+  // Keep the crop bar pinned to the frame in viewport coords (survives
+  // overflow:hidden on the page surface + scroll of the canvas). Flips below
+  // when page chips / dock would collide.
+  useEffect(() => {
+    const update = () => {
+      if (!containerEl) {
+        setBarPos(null);
+        return;
+      }
+      const r = containerEl.getBoundingClientRect();
+      const fl = el.rect.x * W;
+      const ft = el.rect.y * H;
+      const fw = el.rect.w * W;
+      const fh = el.rect.h * H;
+      setBarPos(
+        placeFloatingBar({
+          anchor: {
+            left: r.left + fl,
+            top: r.top + ft,
+            right: r.left + fl + fw,
+            bottom: r.top + ft + fh,
+          },
+          barHeight: 48,
+          obstacles: queryFloatingBarObstacles(),
+        }),
+      );
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [containerEl, el.rect.x, el.rect.y, el.rect.w, el.rect.h, W, H]);
+
   const fx = el.focus?.x ?? 0.5;
   const fy = el.focus?.y ?? 0.5;
   const zoom = Math.max(1, el.zoom ?? 1);
@@ -1536,6 +1912,7 @@ function ReframeOverlay({
   const fh = el.rect.h * H;
   const fl = el.rect.x * W;
   const ft = el.rect.y * H;
+  const radius = (el.corner ?? 0) * Math.min(fw, fh);
 
   const iw = image ? image.naturalWidth || image.width : 0;
   const ih = image ? image.naturalHeight || image.height : 0;
@@ -1556,29 +1933,93 @@ function ReframeOverlay({
     onChange({ zoom: next <= 1.001 ? undefined : Number(next.toFixed(3)) });
   }
 
+  function resizeFromCorner(corner: CropCorner, clientX: number, clientY: number, origin: NormRect) {
+    if (!containerEl || W <= 0 || H <= 0) return;
+    const bounds = containerEl.getBoundingClientRect();
+    // Pointer in normalized stage space.
+    const px = clampN((clientX - bounds.left) / W, 0, 1);
+    const py = clampN((clientY - bounds.top) / H, 0, 1);
+    const minW = Math.max(CROP_MIN_NORM, CROP_MIN_PX / W);
+    const minH = Math.max(CROP_MIN_NORM, CROP_MIN_PX / H);
+
+    let left = origin.x;
+    let top = origin.y;
+    let right = origin.x + origin.w;
+    let bottom = origin.y + origin.h;
+
+    if (corner.includes("l")) left = Math.min(px, right - minW);
+    if (corner.includes("r")) right = Math.max(px, left + minW);
+    if (corner.includes("t")) top = Math.min(py, bottom - minH);
+    if (corner.includes("b")) bottom = Math.max(py, top + minH);
+
+    left = clampN(left, 0, 1 - minW);
+    top = clampN(top, 0, 1 - minH);
+    right = clampN(right, left + minW, 1);
+    bottom = clampN(bottom, top + minH, 1);
+
+    onChange({
+      rect: {
+        x: left,
+        y: top,
+        w: right - left,
+        h: bottom - top,
+      },
+    });
+  }
+
+  function startResize(corner: CropCorner, e: React.PointerEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    resizeDrag.current = {
+      corner,
+      startX: e.clientX,
+      startY: e.clientY,
+      origin: { ...el.rect },
+    };
+  }
+
+  const handleClass = (pos: CropCorner) => {
+    const base =
+      "absolute z-40 size-4 rounded-sm border-[3px] border-brand-500 bg-white shadow-sm touch-none";
+    if (pos === "tl") return cn(base, "left-0 top-0 -translate-x-1/2 -translate-y-1/2 cursor-nwse-resize");
+    if (pos === "tr") return cn(base, "right-0 top-0 translate-x-1/2 -translate-y-1/2 cursor-nesw-resize");
+    if (pos === "bl") return cn(base, "bottom-0 left-0 -translate-x-1/2 translate-y-1/2 cursor-nesw-resize");
+    return cn(base, "bottom-0 right-0 translate-x-1/2 translate-y-1/2 cursor-nwse-resize");
+  };
+
+  const cropBarPortal = barPos ? floatingBarPortalProps(barPos) : null;
+
   return (
     <>
       {/* Dim backdrop; clicking it (outside the frame) finishes. */}
       <div
-        className="absolute inset-0 z-20 bg-ink-900/40"
+        className="absolute inset-0 z-20 bg-ink-900/45"
         onMouseDown={(e) => {
           if (e.target === e.currentTarget) onDone();
         }}
       />
       <div
-        className="absolute z-30 cursor-move select-none overflow-visible ring-2 ring-brand-400"
-        style={{ left: fl, top: ft, width: fw, height: fh, borderRadius: (el.corner ?? 0) * Math.min(fw, fh) }}
+        className="absolute z-30 cursor-move select-none overflow-visible shadow-[0_0_0_2px_rgba(255,255,255,0.95),0_0_0_4px_rgb(99_102_241)]"
+        style={{ left: fl, top: ft, width: fw, height: fh, borderRadius: radius }}
         onWheel={(e) => {
           e.preventDefault();
           const next = clampN(zoom * (1 - e.deltaY * 0.0015), 1, 4);
           setZoom(next);
         }}
         onPointerDown={(e) => {
-          (e.target as HTMLElement).setPointerCapture(e.pointerId);
-          drag.current = { x: e.clientX, y: e.clientY, fx, fy };
+          // Corner handles stopPropagation; anything else pans content.
+          if (resizeDrag.current) return;
+          (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+          panDrag.current = { x: e.clientX, y: e.clientY, fx, fy };
         }}
         onPointerMove={(e) => {
-          const d = drag.current;
+          const resize = resizeDrag.current;
+          if (resize) {
+            resizeFromCorner(resize.corner, e.clientX, e.clientY, resize.origin);
+            return;
+          }
+          const d = panDrag.current;
           if (!d || !dw || !dh) return;
           const dx = e.clientX - d.x;
           const dy = e.clientY - d.y;
@@ -1590,8 +2031,13 @@ function ReframeOverlay({
           });
         }}
         onPointerUp={(e) => {
-          (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-          drag.current = null;
+          try {
+            (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
+          } catch {
+            /* not capturing */
+          }
+          panDrag.current = null;
+          resizeDrag.current = null;
         }}
       >
         {/* Ghosted full bitmap (shows the hidden overflow). */}
@@ -1616,43 +2062,95 @@ function ReframeOverlay({
             />
           )}
         </div>
+        {(["tl", "tr", "bl", "br"] as CropCorner[]).map((pos) => (
+          <button
+            key={pos}
+            type="button"
+            aria-label={`Resize ${pos}`}
+            title="Drag to resize crop"
+            className={handleClass(pos)}
+            onPointerDown={(e) => startResize(pos, e)}
+            onPointerMove={(e) => {
+              const resize = resizeDrag.current;
+              if (!resize || resize.corner !== pos) return;
+              resizeFromCorner(resize.corner, e.clientX, e.clientY, resize.origin);
+            }}
+            onPointerUp={(e) => {
+              try {
+                (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+              } catch {
+                /* not capturing */
+              }
+              resizeDrag.current = null;
+            }}
+          />
+        ))}
       </div>
-      {/* Floating controls under the frame. */}
-      <div
-        className="absolute z-40 flex -translate-x-1/2 items-center gap-1 rounded-full border border-ink-200 bg-white/95 px-1.5 py-1 shadow-lifted"
-        style={{ left: fl + fw / 2, top: ft + fh + 8 }}
-      >
-        <button
-          title="Zoom out"
-          className="flex size-7 items-center justify-center rounded-full text-ink-600 hover:bg-ink-100"
-          onClick={() => setZoom(clampN(zoom - 0.2, 1, 4))}
-        >
-          <Minus className="size-4" />
-        </button>
-        <input
-          type="range"
-          min={1}
-          max={4}
-          step={0.05}
-          value={zoom}
-          onChange={(e) => setZoom(Number(e.target.value))}
-          className="w-28"
-        />
-        <button
-          title="Zoom in"
-          className="flex size-7 items-center justify-center rounded-full text-ink-600 hover:bg-ink-100"
-          onClick={() => setZoom(clampN(zoom + 0.2, 1, 4))}
-        >
-          <PlusIcon className="size-4" />
-        </button>
-        <span className="mx-1 h-5 w-px bg-ink-200" />
-        <button
-          className="rounded-full px-3 py-1 text-xs font-semibold text-brand-700 hover:bg-brand-50"
-          onClick={onDone}
-        >
-          Done
-        </button>
-      </div>
+
+      {cropBarPortal &&
+        createPortal(
+          <div
+            data-image-crop-bar
+            className={cropBarPortal.className}
+            style={cropBarPortal.style}
+            onMouseDown={(e) => {
+              // Don't block range-slider / button interaction (preventDefault on
+              // the wrapper was killing scrubbing).
+              if ((e.target as HTMLElement).closest("input, button, select, textarea, a")) return;
+              e.preventDefault();
+            }}
+          >
+            <div className="flex items-center gap-1 rounded-xl border border-brand-200 bg-white/98 p-1 shadow-lifted backdrop-blur">
+              <span className="flex items-center gap-1.5 rounded-lg bg-brand-50 px-2.5 py-1.5 text-xs font-semibold text-brand-700">
+                <Crop className="size-3.5" />
+                Cropping
+              </span>
+              <span className="hidden px-1 text-[11px] text-ink-400 sm:inline">
+                Corners resize · drag to pan · Esc
+              </span>
+              <span className="mx-0.5 h-5 w-px shrink-0 bg-ink-200" />
+              <button
+                type="button"
+                title="Zoom out"
+                className="flex size-8 items-center justify-center rounded-lg text-ink-600 hover:bg-ink-100"
+                onClick={() => setZoom(clampN(zoom - 0.2, 1, 4))}
+              >
+                <Minus className="size-4" />
+              </button>
+              <input
+                type="range"
+                min={1}
+                max={4}
+                step={0.05}
+                value={zoom}
+                title={`${zoom.toFixed(1)}×`}
+                onChange={(e) => setZoom(Number(e.target.value))}
+                className="w-24"
+              />
+              <button
+                type="button"
+                title="Zoom in"
+                className="flex size-8 items-center justify-center rounded-lg text-ink-600 hover:bg-ink-100"
+                onClick={() => setZoom(clampN(zoom + 0.2, 1, 4))}
+              >
+                <PlusIcon className="size-4" />
+              </button>
+              <span className="w-8 text-center text-[11px] font-medium tabular-nums text-ink-500">
+                {zoom.toFixed(1)}×
+              </span>
+              <span className="mx-0.5 h-5 w-px shrink-0 bg-ink-200" />
+              <button
+                type="button"
+                className="inline-flex items-center gap-1 rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700"
+                onClick={onDone}
+              >
+                <Check className="size-3.5" />
+                Done
+              </button>
+            </div>
+          </div>,
+          document.body,
+        )}
     </>
   );
 }
@@ -1692,4 +2190,21 @@ function coverCrop(
   const x = clampN((iw - cropW) * fx, 0, Math.max(0, iw - cropW));
   const y = clampN((ih - cropH) * fy, 0, Math.max(0, ih - cropH));
   return { x, y, width: cropW, height: cropH };
+}
+
+/** Busy spec for an illustration element, if that slot is generating. */
+function imageElementBusySpec(
+  im: ImageElement,
+  artBusy: { left?: ArtBusySpec; right?: ArtBusySpec } | undefined,
+  paired: boolean,
+): ArtBusySpec | null {
+  if (!artBusy || im.kind !== "illustration") return null;
+  const onRight = paired && im.rect.x + im.rect.w / 2 >= 0.5;
+  const spec = onRight ? artBusy.right : artBusy.left;
+  if (!spec) return null;
+  // Prefer durable slot match; legacy elements without illustrationId follow the half.
+  if (spec.illustrationId && im.illustrationId) {
+    return im.illustrationId === spec.illustrationId ? spec : null;
+  }
+  return spec;
 }

@@ -408,6 +408,51 @@ export async function updateStaleAnchors(
 }
 
 /**
+ * Update specific character/place looks (with `useReference`), wait for them to
+ * land, then refresh a page/cover scene. Used when a page's cast looks are
+ * themselves stale — so "Update scene" can chain the right order without
+ * sending the user to the Cast substep.
+ */
+export async function updateAnchorsThenSpread(
+  project: Project,
+  spreadId: string,
+  anchorIds: string[],
+  onError: (err: unknown) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const ids = [...new Set(anchorIds)].filter((id) => {
+    const a = project.anchors?.find((x) => x.id === id);
+    return Boolean(a?.include && currentAnchorImage(a));
+  });
+  if (ids.length > 0) {
+    const tier = await requireImageTier();
+    if (!tier) return;
+    if (!ensureBatchAffordable("anchorImage", ids.length)) return;
+    try {
+      const models = getResolvedModels(tier);
+      const tasks: AnchorTask[] = ids.map((id) => ({
+        id,
+        status: "pending",
+        options: { useReference: true },
+      }));
+      const jobId = await createAnchorsJob(project, models, tasks, tier);
+      await watchJob(jobId, project.id, { signal, eagerReconcile: true, onError });
+      if (!signal?.aborted) {
+        const finalTasks = await fetchJobTasks(jobId);
+        await reconcileTasksNow(finalTasks, project.id);
+      }
+    } catch (err) {
+      onError(err);
+      return;
+    }
+  }
+  if (signal?.aborted) return;
+  // Re-read project so the page refresh sees the new look sheets.
+  const fresh = useProjectsStore.getState().current() ?? project;
+  await refreshSpread(fresh, spreadId, { useReference: true }, onError);
+}
+
+/**
  * Refresh every illustration whose anchors changed since it was generated,
  * server-side: enqueue one pipeline-refresh job (which carries a project
  * snapshot + resolved models) and let the worker re-run the full illustration

@@ -116,14 +116,14 @@ export function BookPreview({
 function PreviewSpread({ disp }: { disp: DisplaySpread }) {
   if (disp.kind === "full") {
     return (
-      <div className="relative w-full overflow-hidden rounded-xl bg-white shadow-lifted">
+      <div className="relative w-full overflow-hidden bg-white shadow-lifted">
         <PreviewPage entry={disp.entry} />
       </div>
     );
   }
   const aspect = sideAspect(disp.left, disp.right);
   return (
-    <div className="relative flex w-full overflow-hidden rounded-xl bg-white shadow-lifted">
+    <div className="relative flex w-full overflow-hidden bg-white shadow-lifted">
       <PreviewHalf side={disp.left} aspect={aspect} />
       <PreviewHalf side={disp.right} aspect={aspect} />
       <div

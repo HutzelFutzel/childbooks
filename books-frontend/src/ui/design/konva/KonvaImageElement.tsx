@@ -2,9 +2,11 @@ import { useEffect, useRef } from "react";
 import Konva from "konva";
 import { Group, Image as KonvaImage, Rect } from "react-konva";
 import type { ImageElement } from "../../../core/types";
+import type { ImageActionId } from "../../../core/ai/actions";
 import { useBlobUrl } from "../../hooks/useBlobUrl";
 import { konvaShadow } from "../effects";
 import { useImage } from "./useImage";
+import { KonvaArtBusyVeil } from "./KonvaArtBusyVeil";
 
 /** Konva contents for a placed image (positioned by the owning <Group>). */
 export function KonvaImageElement({
@@ -13,6 +15,10 @@ export function KonvaImageElement({
   h,
   pageHeight,
   illustrationUrl,
+  generating,
+  busyAction,
+  busyRefCount,
+  busyCompact,
 }: {
   el: ImageElement;
   w: number;
@@ -20,6 +26,11 @@ export function KonvaImageElement({
   pageHeight: number;
   /** URL for the page's generated illustration (used by kind "illustration"). */
   illustrationUrl?: string;
+  /** Show an in-layer generation veil (must not change element z). */
+  generating?: boolean;
+  busyAction?: ImageActionId;
+  busyRefCount?: number;
+  busyCompact?: boolean;
 }) {
   const assetUrl = useBlobUrl(el.kind === "asset" ? el.blobId : undefined);
   const url = el.kind === "illustration" ? illustrationUrl : assetUrl ?? undefined;
@@ -34,10 +45,10 @@ export function KonvaImageElement({
   const iw = image ? image.naturalWidth || image.width : 0;
   const ih = image ? image.naturalHeight || image.height : 0;
 
-  // A rescaled illustration shown whole ("contain") can leave blank bars; fill
-  // them with a blurred, zoomed copy of the same art so the gap reads as an
-  // intentional backdrop rather than empty page (the classic letterbox look).
-  const showBackdrop = Boolean(image && el.fit === "contain" && el.kind === "illustration");
+  // Fit ("contain") can leave blank bars. Optional soft letterbox fills them
+  // with a blurred zoom of the same art; "none" leaves them transparent.
+  const backdropMode = el.fitBackdrop ?? (el.kind === "illustration" ? "blur" : "none");
+  const showBackdrop = Boolean(image && el.fit === "contain" && backdropMode === "blur");
   const backdropBlurPx = pageHeight * 0.04;
 
   // Gaussian blur needs an offscreen cache; (re)build it when relevant inputs change.
@@ -130,6 +141,19 @@ export function KonvaImageElement({
             {...shadow}
           />
         </Group>
+      )}
+      {/* Soft placeholder when generating before the first bitmap lands. */}
+      {!image && generating && (
+        <Rect width={w} height={h} fill="#EDE8DF" listening={false} />
+      )}
+      {generating && (
+        <KonvaArtBusyVeil
+          w={w}
+          h={h}
+          action={busyAction ?? "pageIllustration"}
+          refCount={busyRefCount ?? 0}
+          compact={busyCompact}
+        />
       )}
     </>
   );

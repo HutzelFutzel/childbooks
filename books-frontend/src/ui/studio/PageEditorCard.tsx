@@ -1,61 +1,38 @@
 import { useMemo, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
 import {
-  ChevronDown,
   Copy,
-  GitBranch,
   MoreHorizontal,
   MoveDown,
   MoveUp,
-  Plus,
-  RefreshCw,
-  RotateCcw,
   Sparkles,
   Trash2,
+  Users,
   Wand2,
 } from "lucide-react";
 import type { Anchor, CoverSpec, ScreenplaySpread } from "../../core/types";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { wordParagraphs } from "../../core/design";
-import { effectiveAnchorIds } from "../../core/book/anchorRefs";
 import { bookProductForConfig, formatCapabilitiesForProject } from "../../core/book";
 import {
   computeBarcodeZone,
   computePageGuides,
-  SPINE_TEXT_MIN_PAGES,
   type BindingSide,
 } from "../../core/book/format";
-import { allVersions, getCursor, selectVersion, updateNodeContent } from "../../core/versioning";
-import {
-  anchorThumbBlobId,
-  changedAnchorsForSpread,
-  generateIllustrationVersion,
-  staleAnchorIds,
-} from "../../state/ai";
-import { IntentAmbiguousError } from "../../platform/aiClient";
-import { useProjectsStore } from "../../state/projectsStore";
+import { getCursor } from "../../core/versioning";
 import { useJobsStore } from "../../state/jobsStore";
-import { Badge } from "../components/Badge";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
-import { Field, Input, Textarea } from "../components/Input";
-import { VersionThumb } from "../components/VersionThumb";
+import { Popover } from "../components/Popover";
 import { useBlobUrl } from "../hooks/useBlobUrl";
-import { SparkEstimateCost, useImageActionRange } from "../layout/SparkCost";
-import { formatList } from "../lib/formatList";
 import { cn } from "../lib/cn";
-import { notify } from "../lib/notify";
 import { PageStage } from "../design/PageStage";
-import { GenerationOverlay } from "../generation/GenerationOverlay";
-import { InfoHint } from "../components/InfoHint";
 import {
   defaultIllustrationFocus,
-  illustrationMatchesLayout,
   type DesignPage,
 } from "../design/designInit";
 import type { SpanRef } from "../design/TextBoxView";
 import { useStudio } from "./StudioContext";
-import { coverSpread, refreshSpread } from "./studioGen";
+import { coverSpread } from "./studioGen";
 import { duplicateSpread, moveSpread, removeSpread } from "./pageOps";
 
 export type PageSubject =
@@ -79,12 +56,18 @@ export function PageStagePanel({
   subject,
   chromeless = false,
   bindingSide,
+  fitParent = false,
+  fillParent = false,
 }: {
   page: DesignPage;
   subject: PageSubject;
   chromeless?: boolean;
   /** Which edge binds into the spine (for the gutter guide on single pages). */
   bindingSide?: BindingSide;
+  /** Contain within the stage host (single pages). */
+  fitParent?: boolean;
+  /** Fill a pre-sized chrome box (facing halves). */
+  fillParent?: boolean;
 }) {
   const {
     project,
@@ -94,9 +77,13 @@ export function PageStagePanel({
     patchBox,
     patchShape,
     patchImage,
-    makeIllustrationEditable,
+    selectIllustration,
+    pendingReframeImageId,
+    clearPendingReframe,
     duplicateBox,
     deleteBox,
+    duplicateImage,
+    deleteImage,
     copyBoxStyle,
     pasteBoxStyle,
     hasCopiedBoxStyle,
@@ -165,6 +152,8 @@ export function PageStagePanel({
       illustrationFocus={defaultIllustrationFocus(page)}
       dropId={page.id}
       chromeless={chromeless}
+      fitParent={fitParent}
+      fillParent={fillParent}
       snap={snap}
       grid={grid}
       showGutter={isSpread}
@@ -189,7 +178,10 @@ export function PageStagePanel({
             : patchImage(page.id, id, patch)
       }
       onReframeImage={(id, patch) => patchImage(page.id, id, patch)}
-      onAdjustArt={() => makeIllustrationEditable(page.id)}
+      onSelectArt={() => selectIllustration(page.id)}
+      onAdjustArt={() => selectIllustration(page.id, { enterReframe: true })}
+      autoReframeId={pendingReframeImageId}
+      onAutoReframeConsumed={clearPendingReframe}
       onEditText={(id, value) =>
         patchBox(page.id, id, { paragraphs: wordParagraphs(value) })
       }
@@ -217,566 +209,167 @@ export function PageStagePanel({
         undo,
         redo,
       }}
+      imageToolbar={{
+        pageIdForImage: () => page.id,
+        onPatch: (imageId, patch, opts) => patchImage(page.id, imageId, patch, opts),
+        onDuplicate: (imageId) => duplicateImage(page.id, imageId),
+        onDelete: (imageId) => deleteImage(page.id, imageId),
+        onToggleLock: (imageId) => {
+          const im = pageDesign(page.id).images?.find((x) => x.id === imageId);
+          if (im) patchImage(page.id, imageId, { locked: !im.locked });
+        },
+      }}
       selectedSpan={selectedSpan}
       onSelectSpan={(ref: SpanRef | null) => {
         if (selection.kind === "box" && onThisPage)
           select({ kind: "box", pageId: page.id, boxId: selection.boxId, span: ref });
       }}
-      overlay={
-        generating && !blank ? (
-          <GenerationOverlay
-            action={coverMode ? "coverIllustration" : "pageIllustration"}
-            refCount={subjectRefCount}
-            compact={chromeless}
-            className="rounded-xl"
-          />
-        ) : undefined
+      artBusy={
+        generating && !blank
+          ? {
+              left: {
+                action: coverMode ? "coverIllustration" : "pageIllustration",
+                refCount: subjectRefCount,
+                compact: chromeless,
+                illustrationId: page.id,
+              },
+            }
+          : undefined
       }
     />
   );
 }
 
 /**
- * The editing controls for one page: per-page toolbar (add text/shape, page
- * menu), illustration generation + version history, anchors, and the
- * collapsible art-direction brief.
+ * Legacy drawer shell for page illustration tools. Prefer the Canva-style
+ * floating ImageStyleBar + docked ImageEditPanel opened from the canvas.
+ * Kept as a compact fallback that jumps into that flow.
  */
 export function PageControls({
   page,
-  subject,
-  anchors,
-  stale,
   label,
 }: {
   page: DesignPage;
   subject: PageSubject;
   anchors: Anchor[];
   stale: boolean;
-  /** Overrides the displayed page label (e.g. physical page number). */
   label?: string;
 }) {
-  const { project, addBox, generatingPages, setPageGenerating } = useStudio();
-  const setScreenplay = useProjectsStore((s) => s.setScreenplay);
-  const updateSpread = useProjectsStore((s) => s.updateSpread);
-  const setBookTitle = useProjectsStore((s) => s.setBookTitle);
-  const [edit, setEdit] = useState("");
-  const [showBrief, setShowBrief] = useState(false);
-  const [intentPick, setIntentPick] = useState<{
-    edit: string;
-    candidates: { anchorId: string; name: string; brief?: string }[];
-  } | null>(null);
+  const {
+    selection,
+    selectIllustration,
+    openImageEdit,
+    closeImageEdit,
+    imageEditSection,
+  } = useStudio();
 
-  const coverMode = subject.kind === "cover";
-  const blank = subject.kind === "spread" && !!subject.spread.blankCanvas;
-  const genSpread = genSpreadFor(subject);
-  const caps = useMemo(() => formatCapabilitiesForProject(project), [project]);
-
-  const tree = project.illustrations?.[page.id];
-  const cursor = tree ? getCursor(tree).content : null;
-  const versions = tree ? allVersions(tree) : [];
-  // A background refresh/generate job for this unit keeps the "working" state on
-  // (driven by real job state) after the brief local enqueue spinner clears.
-  const jobActive = useJobsStore((s) => s.activeUnitIds.has(genSpread.id));
-  const generating = generatingPages.has(page.id) || jobActive;
-  const sparkRange = useImageActionRange(coverMode ? "coverIllustration" : "pageIllustration");
-
-  const subjectRef = subject.kind === "spread" ? subject.spread : subject.cover;
-  const anchorIds = subjectRef.anchorIds;
-  // Active state heals drifted ids by name so the right tags light up even if a
-  // stored id no longer matches the current anchor set.
-  const activeIds = effectiveAnchorIds(anchors, subjectRef);
-  const changedHere = stale && cursor ? changedAnchorsForSpread(project, page.id) : [];
-  const layoutStale = !illustrationMatchesLayout(project, page);
-  // Order guard: a changed reference that is ITSELF stale (its own linked
-  // anchors changed) would bake an outdated sheet into this page — surface the
-  // right order instead of letting the update silently use the old design.
-  const staleRefNames = useMemo(() => {
-    if (changedHere.length === 0) return [];
-    const staleSet = new Set(staleAnchorIds(project));
-    return changedHere.filter((a) => staleSet.has(a.id)).map((a) => a.name);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, stale, cursor?.blobId]);
-
-  /** Patch the underlying screenplay subject (a content spread or a cover spec). */
-  function patchSubject(patch: Partial<ScreenplaySpread> & Partial<CoverSpec>) {
-    if (subject.kind === "spread") {
-      void updateSpread(subject.spread.id, patch);
+  function toggleIllustrationTools(section: "refine" | "characters" | "scene") {
+    const alreadyOpen =
+      selection.kind === "image" &&
+      selection.pageId === page.id &&
+      imageEditSection === section;
+    if (alreadyOpen) {
+      closeImageEdit();
       return;
     }
-    const t = project.screenplay;
-    if (!t) return;
-    const doc = structuredClone(getCursor(t).content);
-    const key = subject.coverId === COVER_FRONT_ID ? "frontCover" : "backCover";
-    const base: CoverSpec = doc[key] ?? { title: "", subtitle: "", illustration: "", anchorIds: [] };
-    doc[key] = { ...base, ...patch } as CoverSpec;
-    void setScreenplay(updateNodeContent(t, t.cursorId, doc));
-  }
-
-  function toggleAnchor(id: string) {
-    const has = anchorIds.includes(id);
-    patchSubject({ anchorIds: has ? anchorIds.filter((a) => a !== id) : [...anchorIds, id] });
-  }
-
-  async function generate(options: Parameters<typeof generateIllustrationVersion>[1] = {}) {
-    // Fresh generation / plain regeneration runs through the job queue: only
-    // the enqueue is awaited (fast), the render continues server-side even if
-    // the tab closes, and the result folds in on reconcile. Text edits stay on
-    // the interactive path because they can require the "which subject did you
-    // mean?" disambiguation dialog.
-    if (!options.edit?.trim() && !options.mask) {
-      setPageGenerating(page.id, true);
-      try {
-        await refreshSpread(project, genSpread.id, {}, (err) => notify.error(err));
-      } finally {
-        setPageGenerating(page.id, false);
-      }
-      return;
-    }
-    setPageGenerating(page.id, true);
-    try {
-      let target = genSpread;
-      if (!coverMode && options.edit?.trim()) {
-        const lower = options.edit.toLowerCase();
-        const toAdd = anchors.filter(
-          (a) => !anchorIds.includes(a.id) && lower.includes(a.name.toLowerCase()),
-        );
-        if (toAdd.length > 0) {
-          const ids = [...anchorIds, ...toAdd.map((a) => a.id)];
-          await updateSpread(genSpread.id, { anchorIds: ids });
-          target = { ...genSpread, anchorIds: ids };
-        }
-      }
-      await generateIllustrationVersion(target, options);
-      setEdit("");
-      setIntentPick(null);
-    } catch (err) {
-      if (err instanceof IntentAmbiguousError) {
-        setIntentPick({
-          edit: options.edit?.trim() || edit.trim(),
-          candidates: err.candidates,
-        });
-        return;
-      }
-      notify.error(err);
-    } finally {
-      setPageGenerating(page.id, false);
-    }
-  }
-
-  async function applyIntentPick(anchorId: string) {
-    if (!intentPick) return;
-    await generate({
-      edit: intentPick.edit,
-      useReference: true,
-      intentTargetAnchorId: anchorId,
-    });
-  }
-
-  /**
-   * Refresh this page/cover after a referenced anchor changed. Unlike the inline
-   * generate paths, this only ENQUEUES the (slower, surgical) refresh as a job and
-   * returns immediately, so the button never blocks for the whole render. Progress
-   * shows in the global indicator; the per-spread "updating" state is driven by the
-   * jobs store's `activeUnitIds`; the result is folded in on reconcile. The brief
-   * local spinner just covers the gap until the job appears in the jobs snapshot.
-   */
-  async function update() {
-    setPageGenerating(page.id, true);
-    try {
-      await refreshSpread(project, genSpread.id, { useReference: true }, (err) => notify.error(err));
-    } finally {
-      setPageGenerating(page.id, false);
-    }
+    selectIllustration(page.id);
+    openImageEdit(section);
   }
 
   return (
-    <div className="flex min-w-0 flex-col gap-3">
-      {/* Per-page toolbar */}
-      <div className="flex items-center gap-2">
-        <span className="truncate text-sm font-semibold text-ink-800">{label ?? page.label}</span>
-        {page.isCover ? (
-          <Badge tone="brand">Cover</Badge>
-        ) : blank ? (
-          <Badge tone="neutral">Blank page</Badge>
-        ) : (
-          <Badge tone={genSpread.kind === "spread" ? "accent" : "neutral"}>
-            {genSpread.kind === "spread" ? "Double spread" : "Single page"}
-          </Badge>
-        )}
-        {stale && cursor && <Badge tone="accent">Reference changed</Badge>}
-        {layoutStale && cursor && <Badge tone="accent">Layout changed</Badge>}
-        <div className="ml-auto flex items-center gap-1">
-          <ToolButton title="Add text box" onClick={() => addBox(page.id)} icon={<Plus className="size-3.5" />}>
-            Text
-          </ToolButton>
-          {subject.kind === "spread" && <PageMenu spreadId={subject.spread.id} />}
-        </div>
-      </div>
-
-      {/* Format-aware hint: what the binding implies for this page. */}
-      {coverMode && (
-        <p className="text-xs leading-relaxed text-ink-400">
-          {caps.hasSpine ? (
-            <>
-              {caps.bindingLabel}: spine ≈ {caps.spineWidthIn.toFixed(2)}in at {caps.pageCount} pages.{" "}
-              {caps.spineTextAllowed
-                ? "Spine text is allowed."
-                : `Add spine text only above ${SPINE_TEXT_MIN_PAGES} pages.`}
-            </>
-          ) : (
-            <>{caps.bindingLabel}: no printed spine — design the front &amp; back cover only.</>
-          )}
-          {subject.kind === "cover" && subject.coverId === COVER_BACK_ID && (
-            <> A barcode area is reserved at the bottom-right — keep art &amp; text clear of it.</>
-          )}
-        </p>
-      )}
-
-      {/* Version history */}
-      {versions.length > 0 && (
-        <div className="-mx-1 flex gap-2 overflow-x-auto overflow-y-hidden px-1 pb-1 pt-1">
-          {versions.map((node, i) => (
-            <VersionThumb
-              key={node.id}
-              blobId={node.content.blobId}
-              index={i + 1}
-              size="sm"
-              hideIndex
-              active={node.id === tree?.cursorId}
-              onClick={() => tree && void setIllustrationVersion(page.id, node.id)}
-              onDelete={() => deleteIllustrationVersion(page.id, node.id)}
-            />
-          ))}
-        </div>
-      )}
-
-      {blank ? (
-        <p className="text-xs leading-relaxed text-ink-400">
-          A blank page. Add <span className="font-medium text-ink-500">Text</span> or a{" "}
-          <span className="font-medium text-ink-500">Shape</span> above (or double-click text on the
-          page to edit it), and set a background or pattern from the inspector on the right.
-        </p>
-      ) : (
-        <>
-          {genSpread.text.trim() && !coverMode && (
-            <p className="line-clamp-2 text-sm italic text-ink-500">"{genSpread.text.trim()}"</p>
-          )}
-
-          {/* The prompt and the canvas shape both come from the layout, so art
-              drawn for a different one has its calm band in the wrong place —
-              it looks fine until the text lands on top of a face. */}
-          {layoutStale && cursor && !stale && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="flex items-center gap-1.5 text-xs text-amber-800">
-                  <RefreshCw className="size-3.5 shrink-0" />
-                  This artwork was drawn for a different layout.
-                </span>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  leftIcon={<RefreshCw className="size-4" />}
-                  onClick={() => void update()}
-                >
-                  Redraw
-                </Button>
-              </div>
-            </div>
-          )}
-
-          {stale && cursor && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <span className="flex items-center gap-1.5 text-xs text-amber-800">
-                  <RefreshCw className="size-3.5 shrink-0" />
-                  {changedHere.length > 0
-                    ? `${formatList(changedHere.map((a) => a.name))} changed.`
-                    : "The characters & places on this page changed."}
-                </span>
-                <Button
-                  size="sm"
-                  loading={generating}
-                  leftIcon={<RefreshCw className="size-4" />}
-                  onClick={() => void update()}
-                >
-                  Update
-                </Button>
-              </div>
-              {staleRefNames.length > 0 && (
-                <p className="mt-1 text-[11px] leading-relaxed text-amber-700">
-                  Heads up: {formatList(staleRefNames)}{" "}
-                  {staleRefNames.length === 1 ? "has" : "have"} pending reference updates of{" "}
-                  {staleRefNames.length === 1 ? "its" : "their"} own — update{" "}
-                  {staleRefNames.length === 1 ? "it" : "them"} first (in the sidebar) so this page
-                  gets the newest design.
-                </p>
-              )}
-            </div>
-          )}
-
-          {/* Anchors used on this page */}
-          {anchors.length > 0 && (
-            <div>
-              {/* div, not p: InfoHint's popover renders a <div> inside (invalid in <p>) */}
-              <div className="mb-1.5 flex items-center gap-1 text-xs font-medium text-ink-500">
-                {coverMode ? "Featured characters & places" : "Characters & places here"}
-                <InfoHint topic="pageAnchors" />
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {anchors.map((a) => (
-                  <AnchorToggle
-                    key={a.id}
-                    anchor={a}
-                    active={activeIds.includes(a.id)}
-                    onClick={() => toggleAnchor(a.id)}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Generation controls */}
-          <div className="space-y-2">
-            {!cursor ? (
-              <Button
-                className="w-full"
-                loading={generating}
-                leftIcon={<Sparkles className="size-4" />}
-                onClick={() => void generate()}
-              >
-                Generate illustration
-                <SparkEstimateCost range={sparkRange} />
-              </Button>
-            ) : (
-              <>
-                <Input
-                  value={edit}
-                  onChange={(e) => setEdit(e.target.value)}
-                  placeholder="Refine, e.g. warmer light, add a butterfly…"
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && edit.trim() && !generating)
-                      void generate({ edit, useReference: true });
-                  }}
-                />
-                <div className="grid grid-cols-2 gap-2">
-                  <Button
-                    variant="secondary"
-                    loading={generating}
-                    leftIcon={<GitBranch className="size-4" />}
-                    disabled={!edit.trim()}
-                    onClick={() => void generate({ edit, useReference: true })}
-                  >
-                    Apply edit
-                    <SparkEstimateCost range={sparkRange} />
-                  </Button>
-                  <Button
-                    variant="secondary"
-                    loading={generating}
-                    leftIcon={<RotateCcw className="size-4" />}
-                    onClick={() => void generate()}
-                  >
-                    Regenerate
-                    <SparkEstimateCost range={sparkRange} />
-                  </Button>
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* Art direction (collapsible) */}
-          <div className="rounded-xl border border-ink-100">
-            <button
-              onClick={() => setShowBrief((v) => !v)}
-              className="flex w-full items-center justify-between px-3 py-2 text-left"
-            >
-              <span className="flex items-center gap-1.5 text-xs font-semibold text-ink-600">
-                <Wand2 className="size-3.5 text-ink-400" /> Art direction
-                <span className="font-normal text-ink-400">(AI inputs)</span>
-              </span>
-              <ChevronDown
-                className={cn("size-4 text-ink-400 transition-transform", showBrief && "rotate-180")}
-              />
-            </button>
-            <AnimatePresence initial={false}>
-              {showBrief && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: "auto", opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.2, ease: "easeInOut" }}
-                  className="overflow-hidden"
-                >
-                  <div className="space-y-3 border-t border-ink-100 px-3 py-3">
-                    {coverMode && subject.kind === "cover" ? (
-                      <>
-                        <Field
-                          label={subject.coverId === COVER_FRONT_ID ? "Book title" : "Blurb"}
-                          hint={
-                            subject.coverId === COVER_FRONT_ID
-                              ? "Linked to the story title & project name"
-                              : undefined
-                          }
-                        >
-                          <Input
-                            value={
-                              subject.coverId === COVER_FRONT_ID
-                                ? project.title
-                                : subject.cover.title ?? ""
-                            }
-                            onChange={(e) =>
-                              subject.coverId === COVER_FRONT_ID
-                                ? setBookTitle(project.id, e.target.value)
-                                : patchSubject({ title: e.target.value })
-                            }
-                          />
-                        </Field>
-                        <Field label="Subtitle">
-                          <Input
-                            value={subject.cover.subtitle ?? ""}
-                            onChange={(e) => patchSubject({ subtitle: e.target.value })}
-                          />
-                        </Field>
-                      </>
-                    ) : (
-                      <Field label="Story text (drives the illustration)">
-                        <Textarea
-                          rows={2}
-                          value={genSpread.text}
-                          onChange={(e) => patchSubject({ text: e.target.value })}
-                        />
-                      </Field>
-                    )}
-                    <Field label="Illustration brief">
-                      <Textarea
-                        rows={2}
-                        value={genSpread.illustration}
-                        onChange={(e) => patchSubject({ illustration: e.target.value })}
-                        placeholder="What the picture shows…"
-                      />
-                    </Field>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        </>
-      )}
-
-      <Modal
-        open={intentPick !== null}
-        onClose={() => setIntentPick(null)}
-        title="Which subject did you mean?"
-        size="max-w-md"
+    <div className="flex min-w-0 flex-col gap-3 p-1">
+      <p className="text-sm font-semibold text-ink-800">{label ?? page.label}</p>
+      <p className="text-xs leading-relaxed text-ink-500">
+        Select the illustration on the page to edit it — use the floating bar for
+        Position, Edit, and who’s in the picture. Deep controls open beside the canvas.
+      </p>
+      <Button
+        className="w-full"
+        leftIcon={<Wand2 className="size-4" />}
+        onClick={() => toggleIllustrationTools("refine")}
       >
-        {intentPick && (
-          <div className="space-y-3">
-            <p className="text-sm text-ink-600">{intentPick.edit}</p>
-            <div className="flex flex-col gap-2">
-              {intentPick.candidates.map((c) => (
-                <Button
-                  key={c.anchorId}
-                  variant="secondary"
-                  loading={generating}
-                  className="justify-start"
-                  onClick={() => void applyIntentPick(c.anchorId)}
-                >
-                  {c.name}
-                  {c.brief ? (
-                    <span className="ml-1 truncate font-normal text-ink-400">— {c.brief}</span>
-                  ) : null}
-                </Button>
-              ))}
-            </div>
-          </div>
-        )}
-      </Modal>
+        Open illustration tools
+      </Button>
+      <div className="grid grid-cols-2 gap-2">
+        <Button
+          variant="secondary"
+          leftIcon={<Users className="size-4" />}
+          onClick={() => toggleIllustrationTools("characters")}
+        >
+          In this picture
+        </Button>
+        <Button
+          variant="secondary"
+          leftIcon={<Sparkles className="size-4" />}
+          onClick={() => toggleIllustrationTools("scene")}
+        >
+          Scene
+        </Button>
+      </div>
     </div>
   );
 }
 
-/** Move the illustration version cursor for a page. */
-function setIllustrationVersion(pageId: string, nodeId: string) {
-  const project = useProjectsStore.getState().current();
-  const tree = project?.illustrations?.[pageId];
-  if (!tree) return;
-  void useProjectsStore.getState().setIllustration(pageId, selectVersion(tree, nodeId));
-}
-
-/** Delete one illustration version (and reclaim its image blob). */
-function deleteIllustrationVersion(pageId: string, nodeId: string) {
-  void useProjectsStore.getState().deleteIllustrationVersion(pageId, nodeId);
-}
-
-function ToolButton({
-  children,
-  icon,
-  onClick,
-  title,
-}: {
-  children: React.ReactNode;
-  icon: React.ReactNode;
-  onClick: () => void;
-  title: string;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      title={title}
-      className="flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-ink-500 transition hover:bg-ink-100 hover:text-brand-600"
-    >
-      {icon} {children}
-    </button>
-  );
-}
-
-/** Per-page actions: move, duplicate, delete. */
+/** Per-page actions: move, duplicate, delete. Portaled so it isn't buried under the canvas. */
 export function PageMenu({ spreadId }: { spreadId: string }) {
-  const [open, setOpen] = useState(false);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
-  function run(fn: () => void) {
-    fn();
-    setOpen(false);
-  }
   return (
-    <div className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        title="Page options"
-        className="rounded-lg p-1.5 text-ink-400 transition hover:bg-ink-100 hover:text-ink-700"
+    <>
+      <Popover
+        side="bottom"
+        align="end"
+        panelClassName="w-40 p-1"
+        trigger={
+          <span
+            title="Page options"
+            className="inline-flex rounded-lg p-1.5 text-ink-400 transition hover:bg-ink-100 hover:text-ink-700"
+          >
+            <MoreHorizontal className="size-4" />
+          </span>
+        }
       >
-        <MoreHorizontal className="size-4" />
-      </button>
-      <AnimatePresence>
-        {open && (
-          <>
-            <button className="fixed inset-0 z-30 cursor-default" onClick={() => setOpen(false)} aria-label="Close" />
-            <motion.div
-              initial={{ opacity: 0, y: -6, scale: 0.97 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -6, scale: 0.97 }}
-              transition={{ duration: 0.14 }}
-              className="absolute right-0 z-40 mt-1 w-40 overflow-hidden rounded-xl border border-ink-200 bg-white py-1 shadow-lifted"
+        {(close) => (
+          <div className="flex flex-col">
+            <MenuItem
+              icon={<MoveUp className="size-4" />}
+              onClick={() => {
+                moveSpread(spreadId, -1);
+                close();
+              }}
             >
-              <MenuItem icon={<MoveUp className="size-4" />} onClick={() => run(() => moveSpread(spreadId, -1))}>
-                Move up
-              </MenuItem>
-              <MenuItem icon={<MoveDown className="size-4" />} onClick={() => run(() => moveSpread(spreadId, 1))}>
-                Move down
-              </MenuItem>
-              <MenuItem icon={<Copy className="size-4" />} onClick={() => run(() => duplicateSpread(spreadId))}>
-                Duplicate
-              </MenuItem>
-              <MenuItem
-                icon={<Trash2 className="size-4" />}
-                danger
-                onClick={() => run(() => setConfirmingDelete(true))}
-              >
-                Delete
-              </MenuItem>
-            </motion.div>
-          </>
+              Move up
+            </MenuItem>
+            <MenuItem
+              icon={<MoveDown className="size-4" />}
+              onClick={() => {
+                moveSpread(spreadId, 1);
+                close();
+              }}
+            >
+              Move down
+            </MenuItem>
+            <MenuItem
+              icon={<Copy className="size-4" />}
+              onClick={() => {
+                duplicateSpread(spreadId);
+                close();
+              }}
+            >
+              Duplicate
+            </MenuItem>
+            <MenuItem
+              icon={<Trash2 className="size-4" />}
+              danger
+              onClick={() => {
+                setConfirmingDelete(true);
+                close();
+              }}
+            >
+              Delete
+            </MenuItem>
+          </div>
         )}
-      </AnimatePresence>
+      </Popover>
 
       <Modal
         open={confirmingDelete}
@@ -800,10 +393,11 @@ export function PageMenu({ spreadId }: { spreadId: string }) {
         }
       >
         <p className="text-sm text-ink-600">
-          This removes the page and its generated art from the book. This can't be undone.
+          This removes the page and its generated art from the book. You can undo
+          if you change your mind.
         </p>
       </Modal>
-    </div>
+    </>
   );
 }
 
@@ -827,28 +421,6 @@ function MenuItem({
       )}
     >
       {icon} {children}
-    </button>
-  );
-}
-
-function AnchorToggle({
-  anchor,
-  active,
-  onClick,
-}: {
-  anchor: Anchor;
-  active: boolean;
-  onClick: () => void;
-}) {
-  // The close-up crop, not the full sheet: a six-cell reference sheet rendered
-  // into a 16px circle is unreadable.
-  const url = useBlobUrl(anchorThumbBlobId(anchor));
-  return (
-    <button onClick={onClick} className="transition active:scale-95" title={active ? "On this page" : "Add to this page"}>
-      <Badge tone={active ? "brand" : "neutral"} className={active ? "" : "opacity-60"}>
-        {url ? <img src={url} alt="" className="-ml-0.5 size-4 rounded-full object-cover" /> : null}
-        {anchor.name}
-      </Badge>
     </button>
   );
 }

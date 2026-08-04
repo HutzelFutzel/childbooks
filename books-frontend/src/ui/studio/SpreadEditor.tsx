@@ -21,7 +21,6 @@ import { Ban } from "lucide-react";
 import { useJobsStore } from "../../state/jobsStore";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { PageStage } from "../design/PageStage";
-import { GenerationOverlay } from "../generation/GenerationOverlay";
 import { defaultIllustrationFocus } from "../design/designInit";
 import { useStudio } from "./StudioContext";
 import { PageStagePanel } from "./PageEditorCard";
@@ -83,11 +82,12 @@ export function HalfFrame({
 }) {
   if (side.kind === "page") {
     return (
-      <div className="relative flex min-w-0 flex-1 items-center justify-center">
+      <div className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center">
         <PageStagePanel
           page={side.entry.page}
           subject={side.entry.subject}
           chromeless
+          fillParent
           bindingSide={half === "left" ? "right" : "left"}
         />
       </div>
@@ -95,13 +95,13 @@ export function HalfFrame({
   }
   if (side.kind === "edge") {
     return (
-      <div className="relative flex min-w-0 flex-1 items-center justify-center overflow-hidden rounded-xl">
+      <div className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden">
         <DeadPageFill aspect={aspect} />
       </div>
     );
   }
   return (
-    <div className="relative flex min-w-0 flex-1 items-center justify-center">
+    <div className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center">
       <div className="flex w-full items-center justify-center" style={{ aspectRatio: String(aspect) }}>
         <span className="text-[11px] font-medium text-ink-300">Blank page</span>
       </div>
@@ -137,15 +137,17 @@ export function PagePreview({ entry, compact }: { entry: Entry; compact?: boolea
       selectedId={null}
       onSelectElement={() => {}}
       onChangeElement={() => {}}
-      overlay={
-        generating && !blank ? (
-          <GenerationOverlay
-            action={coverMode ? "coverIllustration" : "pageIllustration"}
-            refCount={refCount}
-            compact={compact ?? true}
-            className="rounded-xl"
-          />
-        ) : undefined
+      artBusy={
+        generating && !blank
+          ? {
+              left: {
+                action: coverMode ? "coverIllustration" : "pageIllustration",
+                refCount,
+                compact: compact ?? true,
+                illustrationId: page.id,
+              },
+            }
+          : undefined
       }
     />
   );

@@ -4,8 +4,10 @@
  * (a big single spread in the main stage), and this rail is how you jump
  * between pages, see at a glance what still needs art, reorder by dragging,
  * and insert new pages.
+ *
+ * Width is user-resizable (drag the right edge) and persisted locally.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { BookOpen, GripVertical, Loader2, Plus, RefreshCw, Sparkles } from "lucide-react";
 import { Popover } from "../components/Popover";
 import { cn } from "../lib/cn";
@@ -16,6 +18,19 @@ import {
   type DisplaySpread,
 } from "./SpreadEditor";
 import { insertSpreadAt, moveSpreadBefore } from "./pageOps";
+
+const WIDTH_KEY = "childbooks.filmstripWidth";
+const WIDTH_MIN = 140;
+const WIDTH_MAX = 280;
+const WIDTH_DEFAULT = 176;
+
+function readStoredWidth(): number {
+  if (typeof window === "undefined") return WIDTH_DEFAULT;
+  const raw = window.localStorage.getItem(WIDTH_KEY);
+  const n = raw ? Number(raw) : NaN;
+  if (!Number.isFinite(n)) return WIDTH_DEFAULT;
+  return Math.min(WIDTH_MAX, Math.max(WIDTH_MIN, Math.round(n)));
+}
 
 export function PageFilmstrip({
   displays,
@@ -30,6 +45,12 @@ export function PageFilmstrip({
 }) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
+  const [width, setWidth] = useState(WIDTH_DEFAULT);
+  const resizing = useRef<{ startX: number; startW: number } | null>(null);
+
+  useEffect(() => {
+    setWidth(readStoredWidth());
+  }, []);
 
   function cellIdAt(x: number, y: number): string | null {
     const el = document.elementFromPoint(x, y);
@@ -58,10 +79,47 @@ export function PageFilmstrip({
     setOverId(null);
   }
 
+  function onResizePointerDown(e: React.PointerEvent<HTMLDivElement>) {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    resizing.current = { startX: e.clientX, startW: width };
+  }
+
+  function onResizePointerMove(e: React.PointerEvent<HTMLDivElement>) {
+    if (!resizing.current) return;
+    const next = Math.min(
+      WIDTH_MAX,
+      Math.max(WIDTH_MIN, Math.round(resizing.current.startW + (e.clientX - resizing.current.startX))),
+    );
+    setWidth(next);
+  }
+
+  function endResize(e: React.PointerEvent<HTMLDivElement>) {
+    if (!resizing.current) return;
+    const next = Math.min(
+      WIDTH_MAX,
+      Math.max(
+        WIDTH_MIN,
+        Math.round(resizing.current.startW + (e.clientX - resizing.current.startX)),
+      ),
+    );
+    resizing.current = null;
+    setWidth(next);
+    window.localStorage.setItem(WIDTH_KEY, String(next));
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      /* already released */
+    }
+  }
+
   const lastInsert = displays.length ? displays[displays.length - 1].endInsertIndex : 0;
 
   return (
-    <div className="flex h-full w-36 shrink-0 flex-col border-r border-ink-100 bg-white sm:w-44">
+    <div
+      className="relative flex h-full shrink-0 flex-col border-r border-ink-100 bg-white"
+      style={{ width }}
+    >
       <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-2.5 py-3">
         {displays.length === 0 && <InsertRow at={0} />}
         {displays.map((disp) => {
@@ -87,6 +145,23 @@ export function PageFilmstrip({
           );
         })}
         {displays.length > 0 && <InsertRow at={lastInsert} />}
+      </div>
+
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-valuemin={WIDTH_MIN}
+        aria-valuemax={WIDTH_MAX}
+        aria-valuenow={width}
+        aria-label="Resize page list"
+        title="Drag to resize"
+        className="group absolute inset-y-0 -right-1 z-20 flex w-2 cursor-col-resize touch-none justify-center"
+        onPointerDown={onResizePointerDown}
+        onPointerMove={onResizePointerMove}
+        onPointerUp={endResize}
+        onPointerCancel={endResize}
+      >
+        <span className="w-px bg-transparent transition group-hover:bg-brand-300 group-active:bg-brand-400" />
       </div>
     </div>
   );

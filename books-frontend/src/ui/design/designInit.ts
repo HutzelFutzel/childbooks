@@ -232,6 +232,58 @@ function textForSlot(slot: ResolvedSlot, page: DesignPage): string {
 }
 
 /**
+ * Toggle baked cover text on an existing page design: remove or restore the
+ * title/subtitle overlays without deleting the page (images, custom boxes,
+ * selection all stay intact).
+ */
+export function applyCoverBakeText(
+  design: BookDesign,
+  page: DesignPage,
+  pageDesign: PageDesign,
+  bakeText: boolean,
+): PageDesign {
+  if (bakeText) {
+    return {
+      ...pageDesign,
+      textBoxes: pageDesign.textBoxes.filter(
+        (b) => b.role !== "book-title" && b.role !== "book-subtitle",
+      ),
+    };
+  }
+
+  const boxes = [...pageDesign.textBoxes];
+  let nextZ = Math.max(0, ...boxes.map((b) => b.z)) + 1;
+
+  if (!boxes.some((b) => b.role === "book-title") && page.seedTitle?.trim()) {
+    const titleBox = makeTextBox({
+      rect: { x: 0.1, y: 0.08, w: 0.8, h: 0.2 },
+      text: page.seedTitle,
+      family: design.defaultFontFamily,
+      sizePct: Math.min(0.13, design.defaultFontSizePct * 1.7),
+      presetId: "shadowed",
+      z: nextZ++,
+    });
+    if (page.id === COVER_FRONT_ID) titleBox.role = "book-title";
+    boxes.push(titleBox);
+  }
+
+  if (!boxes.some((b) => b.role === "book-subtitle") && page.seedSubtitle?.trim()) {
+    const subtitleBox = makeTextBox({
+      rect: { x: 0.15, y: 0.3, w: 0.7, h: 0.12 },
+      text: page.seedSubtitle,
+      family: design.defaultFontFamily,
+      sizePct: design.defaultFontSizePct,
+      presetId: "shadowed",
+      z: nextZ++,
+    });
+    subtitleBox.role = "book-subtitle";
+    boxes.push(subtitleBox);
+  }
+
+  return { ...pageDesign, textBoxes: boxes };
+}
+
+/**
  * Returns a seeded PageDesign for a page (used the first time it's opened). Only
  * seeds boxes for pages with overlay text or cover titles.
  */
