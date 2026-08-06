@@ -100,6 +100,16 @@ service cloud.firestore {
             && request.resource.data[f] == resource.data[f]);
     }
 
+    // Metering rollups the backend keeps on the profile doc: the per-user
+    // project sequence counter and lifetime cost/spend totals. They feed admin
+    // reporting and the "which book is this for them" number, so a client that
+    // could rewrite them could rewrite the analysis.
+    function meteringFieldsUnchanged() {
+      return fieldUnchanged('projectCounter')
+        && fieldUnchanged('projectCount')
+        && fieldUnchanged('lifetime');
+    }
+
     // Profile root doc + saved address book. Owner-only, with field validation
     // on writes. The broad `users/{uid}/**` read rule above does NOT cover the
     // `users/{uid}` doc itself (the recursive wildcard needs >=1 extra segment),
@@ -108,7 +118,7 @@ service cloud.firestore {
     match /users/{uid} {
       allow read: if signedInAs(uid);
       allow write: if signedInAs(uid) && isValidProfile(request.resource.data)
-        && sparkBalanceUnchanged() && referralFieldsUnchanged();
+        && sparkBalanceUnchanged() && referralFieldsUnchanged() && meteringFieldsUnchanged();
     }
     match /users/{uid}/addresses/{addressId} {
       allow create, update: if signedInAs(uid) && isValidAddress(request.resource.data);
@@ -142,6 +152,18 @@ service cloud.firestore {
     match /appConfig/{doc} {
       allow read: if !(doc in ['modelCosts', 'emailConfig']) || isAdmin();
       allow write: if false;
+    }
+
+    // Metering: the server-owned project mirrors and the per-user-call action
+    // run records. Both are cross-user collections holding provider cost and
+    // margin, and both are written and read exclusively through the Admin SDK
+    // (which bypasses rules). Denied explicitly rather than by default so the
+    // intent survives any future rule edit.
+    match /projects/{doc} {
+      allow read, write: if false;
+    }
+    match /actionRuns/{doc} {
+      allow read, write: if false;
     }
 
     // Blog / articles. Full post bodies live in their own collection (they'd

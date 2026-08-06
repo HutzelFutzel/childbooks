@@ -52,6 +52,13 @@ export interface JobLease {
    * started" (re-expand) from "started, some tasks left" (re-enqueue ready).
    */
   expanded?: boolean;
+  /**
+   * Server-written: the Spark estimate each task in this batch was checked
+   * against at expand time. Recorded next to the eventual charge on the action
+   * run, so a quote that systematically undershoots is visible instead of only
+   * being felt by the user.
+   */
+  quotedSparks?: number;
 }
 
 /** A reference image, addressed by its blob id in `users/{uid}/blobs/{id}`. */

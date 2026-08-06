@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowDown, ArrowUp, EyeOff, Search, Sparkles } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Copy, EyeOff, Search, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
 import type { AnalyticsUserRow, UserSort } from "../../../core/analytics/types";
@@ -142,6 +142,7 @@ export function UsersTable() {
                       <span className="text-amber-500">unverified</span>
                     )}
                   </div>
+                  <UidChip uid={u.uid} />
                 </td>
                 <td className="px-4 py-2.5">
                   {u.country ? (
@@ -208,6 +209,32 @@ export function UsersTable() {
 
       <AdjustSparksModal target={adjustTarget} onClose={() => setAdjustTarget(null)} />
     </div>
+  );
+}
+
+/**
+ * The Firebase UID, click-to-copy. It's the key every other system uses —
+ * Firestore paths, Stripe metadata, support tickets — so an admin looking at a
+ * user almost always needs it, and retyping a 28-character opaque id by hand
+ * from the console is how the wrong account gets touched.
+ */
+function UidChip({ uid }: { uid: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        void navigator.clipboard.writeText(uid).then(() => {
+          setCopied(true);
+          window.setTimeout(() => setCopied(false), 1200);
+        });
+      }}
+      title={`Copy UID — ${uid}`}
+      className="mt-0.5 inline-flex items-center gap-1 font-mono text-[10px] text-ink-300 hover:text-ink-600"
+    >
+      {copied ? <Check className="size-2.5" /> : <Copy className="size-2.5" />}
+      {uid}
+    </button>
   );
 }
 

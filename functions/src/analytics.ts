@@ -32,7 +32,26 @@ import { printCostCalibration } from "./orders";
 import { importInfraCosts } from "./infraCosts";
 import { deleteCustomCost, listCustomCosts, sweepCustomCosts, upsertCustomCost } from "./customCosts";
 import { getProductsConfig } from "./products";
+import {
+  getProjectMirror,
+  listProjectMirrors,
+  projectDocKey,
+  projectFinanceIndex,
+  summarizeProjects,
+  summarizeUsers,
+  type ProjectMilestone,
+  type ProjectQuery,
+} from "./projects";
+import {
+  getActionRun,
+  getRunCalls,
+  listActionRuns,
+  type RunKind,
+  type RunOutcome,
+} from "./actionRun";
+import { percentile } from "./stats";
 import { toUsd } from "./finance";
+import type { ImageTier } from "../../books-frontend/src/core/config/modelConfig";
 import { priceForAction } from "../../books-frontend/src/core/config/sparks";
 import {
   MULTI_ZONE_COUNTRIES,
@@ -970,12 +989,6 @@ function costGroupKey(action: string, tier: "quick" | "premium" | null): string 
   return tier ? `${action}::${tier}` : action;
 }
 
-function percentile(sorted: number[], p: number): number {
-  if (sorted.length === 0) return 0;
-  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil((p / 100) * sorted.length) - 1));
-  return sorted[idx];
-}
-
 function round4(n: number): number {
   return Math.round(n * 10000) / 10000;
 }
@@ -1666,6 +1679,148 @@ export function registerAnalyticsRoutes(app: Express): void {
     try {
       const days = Number(req.query.days) || 90;
       res.json(await printCostCalibration(days));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- Projects & action runs -----------------------------------------------
+
+  /** Read the optional books-report slicers off the query string. */
+  const projectFiltersFrom = (req: Request): Partial<ProjectQuery> => {
+    const str = (k: string) => String(req.query[k] ?? "").trim() || undefined;
+    const int = (k: string) => {
+      const raw = str(k);
+      if (raw === undefined) return undefined;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : undefined;
+    };
+    return {
+      milestoneReached: str("milestoneReached") as ProjectMilestone | undefined,
+      milestoneMissing: str("milestoneMissing") as ProjectMilestone | undefined,
+      imageModel: str("imageModel"),
+      tier: str("tier") as ImageTier | undefined,
+      artStyleKey: str("artStyleKey"),
+      productSku: str("productSku"),
+      ageRangeId: str("ageRangeId"),
+      minPages: int("minPages"),
+      maxPages: int("maxPages"),
+      minCast: int("minCast"),
+      maxCast: int("maxCast"),
+      minImages: int("minImages"),
+      maxImages: int("maxImages"),
+    };
+  };
+
+  // Per-project P&L and behaviour. Joins the server-owned project mirrors with
+  // one pass over the finance stream, so the table below shows what each book
+  // cost us, what it earned, and how the user got there.
+  app.get("/admin/projects", async (req: Request, res: Response) => {
+    try {
+      const { from, to } = parseRange(req);
+      const uid = String(req.query.uid ?? "").trim() || undefined;
+      const limit = Number(req.query.limit) || 200;
+      const allocateSubscriptions = req.query.allocateSubscriptions === "true";
+      const [mirrors, finance] = await Promise.all([
+        listProjectMirrors({
+          uid,
+          limit,
+          // The window is on activity, so this reads as "books worked on in
+          // this period" rather than "the most recent books, whenever".
+          fromMs: from,
+          toMs: to,
+          ...projectFiltersFrom(req),
+        }),
+        projectFinanceIndex({ fromMs: from, toMs: to, uid, allocateSubscriptions }),
+      ]);
+      const rows = mirrors.map((m) => ({
+        ...m,
+        key: projectDocKey(m.uid, m.projectId),
+        pnl: finance.byProject.get(projectDocKey(m.uid, m.projectId)) ?? null,
+      }));
+      res.json({
+        projects: rows,
+        // Distributions and the per-user cut are derived from the same filtered
+        // set, so the three views of this page can never disagree.
+        stats: summarizeProjects(mirrors, finance.byProject),
+        users: summarizeUsers(mirrors, finance.byProject),
+        // A full page means there is more behind it, and the distributions only
+        // describe what was loaded — say so rather than implying a population.
+        truncated: mirrors.length >= limit,
+        unallocatedSubscriptionUsd: finance.unallocatedSubscriptionUsd,
+        capped: finance.capped,
+      });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // One project in full: mirror, P&L, and the action runs behind it.
+  app.get("/admin/projects/:key", async (req: Request, res: Response) => {
+    try {
+      const key = String(req.params.key);
+      const mirror = await getProjectMirror(key);
+      if (!mirror) {
+        res.status(404).json({ error: { message: "Project not found." } });
+        return;
+      }
+      // Scoped to the book's own lifetime rather than the dashboard's timeframe:
+      // opening one book means you want its whole story, and starting at its
+      // creation keeps the finance scan bounded without cutting anything off.
+      const from = Math.min(mirror.createdAt || Date.now(), mirror.firstActionAt || Date.now());
+      const to = Date.now();
+      const [finance, runs] = await Promise.all([
+        projectFinanceIndex({
+          fromMs: from,
+          toMs: to,
+          uid: mirror.uid,
+          allocateSubscriptions: req.query.allocateSubscriptions === "true",
+        }),
+        listActionRuns({
+          fromMs: from,
+          toMs: to,
+          uid: mirror.uid,
+          projectId: mirror.projectId,
+          limit: 500,
+        }),
+      ]);
+      res.json({ project: mirror, pnl: finance.byProject.get(key) ?? null, runs });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // The user-call level cost log: one row per thing someone clicked, with what
+  // it cost us, what we charged, and what we absorbed.
+  app.get("/admin/runs", async (req: Request, res: Response) => {
+    try {
+      const { from, to } = parseRange(req);
+      const runs = await listActionRuns({
+        fromMs: from,
+        toMs: to,
+        uid: String(req.query.uid ?? "").trim() || undefined,
+        projectId: String(req.query.projectId ?? "").trim() || undefined,
+        action: String(req.query.action ?? "").trim() || undefined,
+        tier: (String(req.query.tier ?? "").trim() || undefined) as ImageTier | undefined,
+        kind: (String(req.query.kind ?? "").trim() || undefined) as RunKind | undefined,
+        outcome: (String(req.query.outcome ?? "").trim() || undefined) as RunOutcome | undefined,
+        limit: Number(req.query.limit) || 200,
+      });
+      res.json({ runs });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Drill into one run: the individual provider calls it was made of.
+  app.get("/admin/runs/:runId", async (req: Request, res: Response) => {
+    try {
+      const run = await getActionRun(String(req.params.runId));
+      if (!run) {
+        res.status(404).json({ error: { message: "Run not found." } });
+        return;
+      }
+      res.json({ run, calls: await getRunCalls(run.uid, run.runId) });
     } catch (err) {
       handleError(res, err);
     }

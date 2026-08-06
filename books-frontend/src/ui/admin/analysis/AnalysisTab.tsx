@@ -8,7 +8,7 @@ import { useAdminAnalytics } from "../../../state/adminAnalyticsStore";
 import { useAdminFinance } from "../../../state/adminFinanceStore";
 import { useAdminMarket } from "../../../state/adminMarketStore";
 import { useAdminPayments } from "../../../state/adminPaymentsStore";
-import { useAdminTab, type AnalysisTabId } from "../adminTabStore";
+import { ANALYSIS_GROUPS, useAdminTab, type AnalysisGroupId, type AnalysisTabId } from "../adminTabStore";
 import { Button } from "../../components/Button";
 import { Tabs } from "../../components/Tabs";
 import { Kpis } from "./Kpis";
@@ -18,6 +18,8 @@ import { UsersTable } from "./UsersTable";
 import { SettingsCard } from "./SettingsCard";
 import { PaymentsAnalysis } from "./PaymentsAnalysis";
 import { FinanceAnalysis } from "./FinanceAnalysis";
+import { CostsAnalysis } from "./CostsAnalysis";
+import { ProjectsAnalysis } from "./ProjectsAnalysis";
 import { ProductsAnalysis } from "./ProductsAnalysis";
 import { ReferralsAnalysis } from "./ReferralsAnalysis";
 import { AffiliatesAnalysis } from "./AffiliatesAnalysis";
@@ -25,18 +27,20 @@ import { MarketPicker } from "./MarketPicker";
 import { MarketsCard } from "./MarketsCard";
 import { FunnelCard } from "./FunnelCard";
 import { downloadCsv } from "./csv";
-import { fmtRelative } from "./format";
+import { fmtRelative, toDateInput } from "./format";
 
 type Section = AnalysisTabId;
 
-const SECTIONS: { id: Section; label: string }[] = [
-  { id: "users", label: "Users" },
-  { id: "products", label: "Products" },
-  { id: "payments", label: "Payments" },
-  { id: "finance", label: "Finance" },
-  { id: "referrals", label: "Referrals" },
-  { id: "affiliates", label: "Affiliates" },
-];
+const SECTION_LABELS: Record<Section, string> = {
+  users: "Users",
+  projects: "Books",
+  costs: "Costs",
+  finance: "Finance",
+  payments: "Payments",
+  products: "Products",
+  referrals: "Referrals",
+  affiliates: "Affiliates",
+};
 
 const TIMEFRAMES: { id: Timeframe; label: string }[] = [
   { id: "today", label: "Today" },
@@ -61,12 +65,6 @@ const METRIC_LABEL: Record<ActivityMetric, string> = {
   signups: "Signups",
   logins: "Logins",
 };
-
-function toDateInput(ms: number): string {
-  const d = new Date(ms);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
 
 export function AnalysisTab() {
   const init = useAdminAnalytics((s) => s.init);
@@ -103,6 +101,8 @@ export function AnalysisTab() {
   // "see the funnel" cross-link.
   const section = useAdminTab((s) => s.analysisTab);
   const setSection = useAdminTab((s) => s.setAnalysisTab);
+  const group = useAdminTab((s) => s.analysisGroup);
+  const setGroup = useAdminTab((s) => s.setAnalysisGroup);
 
   useEffect(() => {
     void init();
@@ -148,9 +148,26 @@ export function AnalysisTab() {
 
   return (
     <div className="space-y-5">
-      {/* Section + the dashboard-wide market filter, which every section honours. */}
+      {/* Group pills, then the tabs within that group, then the dashboard-wide
+          market filter that every section honours. */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <Tabs items={SECTIONS} value={section} onChange={(id) => setSection(id as Section)} />
+        <div className="flex flex-wrap gap-2">
+          {ANALYSIS_GROUPS.map((g) => (
+            <button
+              key={g.id}
+              type="button"
+              onClick={() => setGroup(g.id as AnalysisGroupId)}
+              className={
+                "rounded-full px-3 py-1.5 text-xs font-semibold transition-colors " +
+                (group === g.id
+                  ? "bg-brand-600 text-white shadow-sm"
+                  : "bg-white text-ink-600 ring-1 ring-inset ring-ink-100 hover:bg-ink-50")
+              }
+            >
+              {g.label}
+            </button>
+          ))}
+        </div>
         <MarketPicker
           value={country}
           markets={knownMarkets}
@@ -158,6 +175,15 @@ export function AnalysisTab() {
           disabled={loading}
         />
       </div>
+
+      <Tabs
+        items={(ANALYSIS_GROUPS.find((g) => g.id === group) ?? ANALYSIS_GROUPS[0]).tabs.map((id) => ({
+          id,
+          label: SECTION_LABELS[id],
+        }))}
+        value={section}
+        onChange={(id) => setSection(id as Section)}
+      />
 
       {country && (
         <div className="flex items-center gap-2 rounded-xl bg-brand-50 px-3.5 py-2 text-sm text-brand-800 ring-1 ring-brand-100">
@@ -175,6 +201,8 @@ export function AnalysisTab() {
         </div>
       )}
 
+      {section === "projects" && <ProjectsAnalysis />}
+      {section === "costs" && <CostsAnalysis />}
       {section === "products" && <ProductsAnalysis />}
       {section === "payments" && <PaymentsAnalysis />}
       {section === "finance" && <FinanceAnalysis />}

@@ -77,6 +77,23 @@ async function postAi<T>(path: string, body: unknown, signal?: AbortSignal): Pro
   return (await res.json()) as T;
 }
 
+/**
+ * Tell the backend a project exists and where the user is in it.
+ *
+ * Books live in the user's own KV space, so the backend otherwise only learns
+ * about one when it renders something for it — which makes abandoned projects
+ * invisible to analysis, and those are the ones worth understanding. Fire and
+ * forget: this is telemetry, and a failed beacon must never surface to the
+ * person writing a story.
+ */
+export function touchProjectRemote(args: {
+  projectId: string;
+  stage?: string;
+  title?: string;
+}): void {
+  void postAi<{ ok: boolean }>("/ai/project-touch", args).catch(() => {});
+}
+
 /** Strip non-serializable fields (AbortSignal) from run options for the wire. */
 function serializableOptions<T extends { signal?: AbortSignal }>(options: T): Omit<T, "signal"> {
   const { signal: _signal, ...rest } = options;

@@ -49,12 +49,15 @@ export function SparksBadge() {
   const openAuthDialog = useAuthStore((s) => s.openAuthDialog);
   const [busy, setBusy] = useState<string | null>(null);
 
-  // Glint the ✦ whenever the balance changes (grant or spend) — the little
-  // "fairy dust" moment. Keyed remount restarts the one-shot CSS animation.
+  // Glint the ✦ when Sparks ARRIVE — the little "fairy dust" moment. Spends
+  // deliberately pass unannounced: animating every deduction turns the pill
+  // into a meter the user watches drain, which makes a creative tool feel like
+  // a taxi. Running out is still surfaced, by the amber state below, at the
+  // point where it actually affects them.
   const prevBalance = useRef<number | null>(null);
   const [glintKey, setGlintKey] = useState(0);
   useEffect(() => {
-    if (prevBalance.current !== null && prevBalance.current !== balance) {
+    if (prevBalance.current !== null && balance > prevBalance.current) {
       setGlintKey((k) => k + 1);
     }
     prevBalance.current = balance;
@@ -120,10 +123,13 @@ export function SparksBadge() {
       <button
         type="button"
         onClick={() => openWallet()}
-        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold ring-1 ring-inset transition ${
+        // Quiet by default, loud only when it matters: the balance stays a
+        // neutral, low-contrast pill until it can't cover the next render, and
+        // only then turns amber.
+        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm ring-1 ring-inset transition ${
           low
-            ? "bg-amber-50 text-amber-700 ring-amber-200 hover:bg-amber-100"
-            : "bg-magic-100 text-magic-700 ring-magic-300/50 hover:bg-magic-300/40"
+            ? "bg-amber-50 font-semibold text-amber-700 ring-amber-200 hover:bg-amber-100"
+            : "bg-white/60 font-medium text-ink-500 ring-ink-200/70 hover:bg-white hover:text-ink-700"
         }`}
         title="Your Sparks"
       >

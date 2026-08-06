@@ -41,7 +41,7 @@ import { costForUsage, costKey } from "../../books-frontend/src/core/config/mode
 import { recentCostSamples } from "../../books-frontend/src/core/config/imageCostStats";
 import { ALL_IMAGE_ACTION_IDS, type ImageActionId } from "../../books-frontend/src/core/ai/actions";
 import { type ImageTier } from "../../books-frontend/src/core/config/modelConfig";
-import type { UsageEvent } from "./usage";
+import { splitBillable, type UsageEvent } from "./usage";
 
 function isImageAction(action: string): action is ImageActionId {
   return (ALL_IMAGE_ACTION_IDS as string[]).includes(action);
@@ -471,6 +471,16 @@ async function usdForEvents(events: UsageEvent[]): Promise<number> {
 export interface SettleOptions {
   /** The project the action belongs to (stamped on ledger + finance events). */
   projectId?: string;
+  /** The action run this settlement belongs to (see `actionRun.ts`). */
+  runId?: string;
+}
+
+/** What one settlement actually charged, for the run record. */
+export interface SettleResult {
+  sparks: number;
+  /** USD of billable provider cost the price was derived from. */
+  costUsd: number;
+  breakdown: SpendBreakdown | null;
 }
 
 /**
@@ -485,17 +495,20 @@ export async function settleActionCost(
   action: string,
   events: UsageEvent[],
   opts: SettleOptions = {},
-): Promise<number> {
+): Promise<SettleResult> {
   try {
     const config = await getSparksConfig();
-    if (!config.enabled) return 0;
+    if (!config.enabled) return { sparks: 0, costUsd: 0, breakdown: null };
+    // Only what the user asked for reaches the wallet — repair passes are ours.
+    // Split here rather than at the call sites so a direct caller can't skip it.
+    const { billable } = splitBillable(events);
     const [costUsd, multiplier] = await Promise.all([
-      usdForEvents(events),
+      usdForEvents(billable),
       actionMultiplier(uid, action),
     ]);
     const price = priceForAction(config, action, costUsd, multiplier);
-    if (price <= 0) return 0;
-    const breakdown = await deductSparks(uid, price, action, opts.projectId);
+    if (price <= 0) return { sparks: 0, costUsd, breakdown: null };
+    const breakdown = await deductSparks(uid, price, action, opts.projectId, opts.runId);
     await recordFinanceEvent({
       category: "sparks",
       kind: "sparkSpend",
@@ -510,9 +523,10 @@ export async function settleActionCost(
         unfundedSparks: breakdown.unfundedSparks,
         paidUsd: breakdown.paidUsd,
         freeBySource: breakdown.freeBySource,
+        ...(opts.runId ? { runId: opts.runId } : {}),
       },
     });
-    return price;
+    return { sparks: price, costUsd, breakdown };
   } catch (err) {
     // Never break generation — but a user who wasn't charged is a revenue leak,
     // so make it loud: error log + a waste marker the dashboard surfaces.
@@ -528,9 +542,13 @@ export async function settleActionCost(
       amountUsd: 0,
       uid,
       projectId: opts.projectId,
-      meta: { action, error: (err as Error)?.message ?? String(err) },
+      meta: {
+        action,
+        error: (err as Error)?.message ?? String(err),
+        ...(opts.runId ? { runId: opts.runId } : {}),
+      },
     });
-    return 0;
+    return { sparks: 0, costUsd: 0, breakdown: null };
   }
 }
 
@@ -653,6 +671,7 @@ async function deductSparks(
   amount: number,
   reason: string,
   projectId?: string,
+  runId?: string,
 ): Promise<SpendBreakdown> {
   ensureAdmin();
   const userRef = db().doc(`users/${uid}`);
@@ -670,9 +689,14 @@ async function deductSparks(
       balanceAfter,
       reason,
       ...(projectId ? { projectId } : {}),
+      ...(runId ? { runId } : {}),
       paidSparks: breakdown.paidSparks,
       freeSparks: breakdown.freeSparks + breakdown.unfundedSparks,
       paidUsd: breakdown.paidUsd,
+      // Which grants funded the free half (starter / referral / subscription …).
+      // The per-project subsidy report reads this, so it has to survive on the
+      // ledger rather than only in the finance event's meta.
+      freeBySource: breakdown.freeBySource,
       at: Date.now(),
     });
     return breakdown;
@@ -711,15 +735,22 @@ export async function estimateForUser(
   return estimateForAction(config, action, multiplier);
 }
 
-/** Convenience: the affordability estimate for a single action, then ensure it. */
+/**
+ * Convenience: the affordability estimate for a single action, then ensure it.
+ * Returns the estimate so the caller can record what the user was quoted
+ * alongside what they were finally charged — a quote that routinely undershoots
+ * the charge is the most damaging kind of pricing bug, and it's invisible
+ * unless both numbers are stored on the same record.
+ */
 export async function ensureAffordAction(
   uid: string,
   action: string,
   tier: ImageTier,
   opts: AffordOptions = {},
-): Promise<void> {
+): Promise<number> {
   const estimate = await estimateForUser(uid, action, tier);
   await ensureAfford(uid, estimate, opts);
+  return estimate;
 }
 
 export type { SparksConfig };

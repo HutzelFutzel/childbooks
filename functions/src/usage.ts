@@ -42,6 +42,24 @@ export interface UsageEvent {
   durationMs?: number;
 }
 
+/**
+ * Steps that exist to fix the model's OWN output rather than to produce what
+ * the user asked for: the anchor grid-count re-render, the duplicate-subject
+ * erase, the embedded-anchor cleanup, and the panel-count vision check that
+ * triggers them. They are metered, attributed and reported like every other
+ * call — they just never reach the user's wallet. A reader shouldn't pay for
+ * the model drawing a character twice.
+ */
+export const NON_BILLABLE_STEPS = new Set(["gridCheck", "imageRepair", "dedupe", "embedded"]);
+
+/**
+ * Chargeable calls of the primary `image` step per action. `generateImage` is
+ * wrapped in `withRetry`, so a call that bills but returns unusable output can
+ * produce a second priced event under the same label; capping here means that
+ * retry lands on us rather than on the user.
+ */
+const MAX_BILLABLE_IMAGE_CALLS = 1;
+
 /** Provider-call counters collected alongside usage events (incl. failures). */
 export interface CallStats {
   /** Every provider HTTP attempt made inside the scope (incl. retries). */
@@ -82,6 +100,41 @@ export function withUsage<T>(
  */
 export function withStep<T>(step: string, fn: () => Promise<T>): Promise<T> {
   return stepStorage.run(step, fn);
+}
+
+export interface BillableSplit {
+  /** Events the user pays for — the work they actually requested. */
+  billable: UsageEvent[];
+  /** Internal quality-control work, absorbed by us (see {@link NON_BILLABLE_STEPS}). */
+  unbilled: UsageEvent[];
+}
+
+/**
+ * Split one action's provider calls into what the user asked for and what the
+ * pipeline did to repair its own output. Pure, so both the settle path and the
+ * estimate window can apply the exact same rule and never disagree about what
+ * a render "costs".
+ */
+export function splitBillable(events: UsageEvent[]): BillableSplit {
+  const billable: UsageEvent[] = [];
+  const unbilled: UsageEvent[] = [];
+  let imageCalls = 0;
+  for (const e of events) {
+    const step = e.step ?? "";
+    if (NON_BILLABLE_STEPS.has(step)) {
+      unbilled.push(e);
+      continue;
+    }
+    if (step === "image") {
+      imageCalls += 1;
+      if (imageCalls > MAX_BILLABLE_IMAGE_CALLS) {
+        unbilled.push(e);
+        continue;
+      }
+    }
+    billable.push(e);
+  }
+  return { billable, unbilled };
 }
 
 function push(event: UsageEvent): void {
@@ -286,7 +339,45 @@ export interface RecordUsageOptions {
   isEdit?: boolean;
   /** Provider call/failure counters from the same `withUsage` scope. */
   stats?: CallStats;
+  /** The action run these calls belong to (see `actionRun.ts`). */
+  runId?: string;
+  /** This project's 1-based sequence number for the user, when known. */
+  projectSeq?: number;
 }
+
+/** Priced totals for one action's calls — the input to the run record + settle. */
+export interface UsageTotals {
+  /** Every priced call, charged or not. */
+  totalUsd: number;
+  /** The portion the user pays for. */
+  billableUsd: number;
+  /** Internal quality-control cost we absorb. */
+  unbilledUsd: number;
+  /** False when any model had no configured rate (totals are a lower bound). */
+  knownCost: boolean;
+  costByStep: Record<string, number>;
+  callsByStep: Record<string, number>;
+  /** `${provider}:${model}` of the first image call, for the estimate window. */
+  imageModelKey: string | null;
+  /** Total tokens across every call. */
+  tokens: number;
+}
+
+function emptyTotals(): UsageTotals {
+  return {
+    totalUsd: 0,
+    billableUsd: 0,
+    unbilledUsd: 0,
+    knownCost: true,
+    costByStep: {},
+    callsByStep: {},
+    imageModelKey: null,
+    tokens: 0,
+  };
+}
+
+/** How long raw per-call line items are kept (a TTL policy reads `expiresAt`). */
+const USAGE_TTL_MS = 180 * 86_400_000;
 
 /**
  * Price the collected usage events and persist them under the user's space.
@@ -300,8 +391,8 @@ export async function recordUsage(
   events: UsageEvent[],
   tier?: ImageTier,
   opts: RecordUsageOptions = {},
-): Promise<void> {
-  if (!uid) return;
+): Promise<UsageTotals> {
+  if (!uid) return emptyTotals();
   try {
     ensureAdmin();
     const costs = await getModelCostTable();
@@ -311,6 +402,12 @@ export async function recordUsage(
     const usageCol = db.collection(`users/${uid}/usage`);
     const aggRef = db.doc(`users/${uid}/usageAggregates/${period}`);
 
+    // The user pays for what they asked for; repair passes are on us. Both are
+    // written as line items — only the billable half reaches the wallet.
+    const { unbilled } = splitBillable(events);
+    const unbilledSet = new Set(unbilled);
+
+    const totals = emptyTotals();
     let totalCost = 0;
     let knownCost = true;
     let totalTokens = 0;
@@ -318,8 +415,17 @@ export async function recordUsage(
     const batch = db.batch();
     for (const e of events) {
       const cost = costForUsage(costs.models[costKey(e.provider, e.model)], e.usage);
+      const billable = !unbilledSet.has(e);
       if (cost == null) knownCost = false;
-      else totalCost += cost;
+      else {
+        totalCost += cost;
+        if (billable) totals.billableUsd += cost;
+        else totals.unbilledUsd += cost;
+        const step = e.step ?? "unlabeled";
+        totals.costByStep[step] = round6((totals.costByStep[step] ?? 0) + cost);
+      }
+      const stepKey = e.step ?? "unlabeled";
+      totals.callsByStep[stepKey] = (totals.callsByStep[stepKey] ?? 0) + 1;
       if (e.modality === "image" && !imageModelKey) imageModelKey = costKey(e.provider, e.model);
       const tokens =
         (e.usage.inputTokens ?? 0) +
@@ -334,6 +440,9 @@ export async function recordUsage(
         modality: e.modality,
         usage: e.usage,
         costUsd: cost,
+        // Whether this call reached the user's wallet — the QC tax is the sum
+        // of everything marked false.
+        billable,
         // Per-step attribution so an admin can break one action's combined cost
         // into its steps (e.g. image vs binding vs localize).
         ...(e.step ? { step: e.step } : {}),
@@ -342,9 +451,20 @@ export async function recordUsage(
         // Stamp the tier on image line items so cost intelligence can facet by it.
         ...(tier && e.modality === "image" ? { tier } : {}),
         ...(opts.projectId ? { projectId: opts.projectId } : {}),
+        // Line items roll up into `actionRuns`, which are kept indefinitely;
+        // the raw calls age out under a TTL policy on this field.
+        ...(opts.runId ? { runId: opts.runId } : {}),
+        ...(typeof opts.projectSeq === "number" ? { projectSeq: opts.projectSeq } : {}),
         at,
+        expiresAt: at + USAGE_TTL_MS,
       });
     }
+    totals.totalUsd = round6(totalCost);
+    totals.billableUsd = round6(totals.billableUsd);
+    totals.unbilledUsd = round6(totals.unbilledUsd);
+    totals.knownCost = knownCost;
+    totals.imageModelKey = imageModelKey;
+    totals.tokens = totalTokens;
     const failures = opts.stats?.failures ?? 0;
     if (events.length > 0 || failures > 0) {
       batch.set(
@@ -372,7 +492,33 @@ export async function recordUsage(
         amountUsd: -totalCost,
         uid,
         projectId: opts.projectId,
-        meta: { action, ...(tier ? { tier } : {}), ...(knownCost ? {} : { partial: true }) },
+        ...(opts.runId ? { ref: `providerCost_${opts.runId}` } : {}),
+        meta: {
+          action,
+          ...(tier ? { tier } : {}),
+          ...(knownCost ? {} : { partial: true }),
+          ...(opts.runId ? { runId: opts.runId } : {}),
+          ...(typeof opts.projectSeq === "number" ? { projectSeq: opts.projectSeq } : {}),
+        },
+      });
+    }
+    // The repair passes we chose to absorb. Booked as waste (not as a Spark
+    // discount) so "what our quality control costs us" is one query away
+    // instead of buried in the difference between two other numbers.
+    if (totals.unbilledUsd > 0) {
+      await recordFinanceEvent({
+        category: "waste",
+        kind: "qcCost",
+        amountUsd: 0, // the dollars are already booked by `providerCost` above
+        uid,
+        projectId: opts.projectId,
+        meta: {
+          action,
+          ...(tier ? { tier } : {}),
+          unbilledUsd: totals.unbilledUsd,
+          steps: unbilled.map((e) => e.step ?? "unlabeled"),
+          ...(opts.runId ? { runId: opts.runId } : {}),
+        },
       });
     }
     // Failed/timed-out provider attempts: persisted as waste markers so the
@@ -391,19 +537,30 @@ export async function recordUsage(
     // Feed the rolling window that powers Spark estimate ranges. Only a fully
     // priced, FRESH render qualifies: partial costs would skew the range, and
     // edit re-rolls carry extra sub-calls that don't represent a fresh render.
-    if (tier && knownCost && totalCost > 0 && isImageAction(action) && !opts.isEdit) {
+    //
+    // The sample is the BILLABLE total, not the full one: this window drives
+    // both the quoted price and the pre-flight reserve, so feeding it repair
+    // costs we never charge would quote users a price they'll never pay — and
+    // `ensureAfford` would block them at it.
+    if (tier && knownCost && totals.billableUsd > 0 && isImageAction(action) && !opts.isEdit) {
       // Sanity clamp: a sample wildly above the model's nominal per-image rate
       // is a misconfigured cost entry or an outlier batch — don't poison the
       // window (and with it the pre-flight reserve) for the next 10 calls.
       const nominal = imageModelKey
         ? costForUsage(costs.models[imageModelKey], { images: 1, size: "1024x1024" })
         : null;
-      const outlier = nominal != null && nominal > 0 && totalCost > nominal * 10;
+      const outlier = nominal != null && nominal > 0 && totals.billableUsd > nominal * 10;
       if (!outlier) {
-        await recordImageCostSample(action, tier, totalCost, imageModelKey ?? undefined);
+        await recordImageCostSample(action, tier, totals.billableUsd, imageModelKey ?? undefined);
       }
     }
+    return totals;
   } catch {
     // Metering must never break generation.
+    return emptyTotals();
   }
+}
+
+function round6(n: number): number {
+  return Math.round(n * 1e6) / 1e6;
 }

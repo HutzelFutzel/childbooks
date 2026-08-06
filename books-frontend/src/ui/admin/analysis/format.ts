@@ -64,6 +64,29 @@ export function fmtRelative(ms: number | null): string {
   return `${d}d ago`;
 }
 
+/** A duration in ms as the coarsest unit that still reads precisely. */
+export function fmtDuration(ms: number | null): string {
+  if (ms == null || ms <= 0) return "—";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `${(ms / 3_600_000).toFixed(1)}h`;
+  return `${(ms / 86_400_000).toFixed(1)}d`;
+}
+
+/** A 0–1 ratio as a percentage. */
+export function fmtPct(ratio: number | null, digits = 0): string {
+  if (ratio == null || !Number.isFinite(ratio)) return "—";
+  return `${(ratio * 100).toFixed(digits)}%`;
+}
+
+/** `YYYY-MM-DD` for a date input, in local time. */
+export function toDateInput(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 export const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /** A short source/provider label (mirrors the backend mapping). */

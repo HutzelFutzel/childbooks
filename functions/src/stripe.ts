@@ -102,6 +102,7 @@ import {
   recordTaxRemitted,
   toUsd,
 } from "./finance";
+import { stampMilestone } from "./projects";
 import {
   normalizeCountry,
   UNKNOWN_COUNTRY,
@@ -2249,6 +2250,13 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
           ...(dims.destinationCountry ? { destinationCountry: dims.destinationCountry } : {}),
         },
       });
+
+      // Close the project funnel: a paid print/ebook order is the last
+      // milestone a book can reach, and the one every conversion rate is
+      // measured against.
+      if (uid && projectId && (kind === "order" || kind === "ebook")) {
+        await stampMilestone(uid, projectId, "ordered").catch(() => {});
+      }
 
       // Safety net in case checkout.session.completed was missed: grants and
       // fulfillment are all idempotent on the paymentId, so double-fire is safe.

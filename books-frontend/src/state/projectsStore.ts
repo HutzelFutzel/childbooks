@@ -31,6 +31,7 @@ import {
 } from "../core/types";
 import { ProjectConflictError } from "../core/storage/repositories";
 import { getRepos } from "./repos";
+import { touchProjectRemote } from "../platform/aiClient";
 import { removeBlob } from "./blobs";
 import { useSettingsStore } from "./settingsStore";
 
@@ -206,6 +207,10 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     };
     const { projects } = await getRepos();
     const saved = await projects.save(project);
+    // Register the book with the backend now, so a project that's started and
+    // abandoned still appears in analysis instead of only counting once it
+    // makes its first (paid) AI call.
+    touchProjectRemote({ projectId: saved.id, stage: saved.stage, title: saved.title });
     set((state) => ({
       projects: [saved, ...state.projects],
       ...(open ? { currentId: saved.id } : {}),
@@ -273,6 +278,10 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       furthestStage:
         stageIndex(stage) > stageIndex(p.furthestStage) ? stage : p.furthestStage,
     }));
+    const current = get().current();
+    if (current) {
+      touchProjectRemote({ projectId: current.id, stage, title: current.title });
+    }
   },
 
   async setAnalysis(analysis, anchors, relations) {

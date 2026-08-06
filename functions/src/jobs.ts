@@ -43,9 +43,10 @@ import { compositeMaskedRegion, downscaleReference } from "./imaging";
 import { backendPipelineEnv } from "./pipelineEnv";
 import { loadModelCapabilities, loadPromptContext, recordLatencySamples } from "./appConfig";
 import { requireTier, resolveImageModels } from "./modelResolve";
-import { recordUsage, withUsage, type CallStats } from "./usage";
+import { withUsage, type CallStats } from "./usage";
+import { meterAndSettle, runKindOf } from "./actionRun";
 import { featureAllowedForUser } from "./plans";
-import { ensureAfford, estimateForUser, settleActionCost } from "./sparks";
+import { ensureAfford, estimateForUser } from "./sparks";
 import { normalizeImageTier, type ImageTier } from "../../books-frontend/src/core/config/modelConfig";
 import { ALL_SECRETS } from "./secrets";
 import { downloadBlob, ensureAdmin, uploadBlob } from "./storage";
@@ -54,7 +55,7 @@ import { containedAnchorsFor } from "../../books-frontend/src/core/book/anchorGr
 import { effectiveAnchorIds } from "../../books-frontend/src/core/book/anchorRefs";
 import { spreadsById } from "../../books-frontend/src/core/book/units";
 import { DISPATCH_KEY } from "../../books-frontend/src/core/config/latencyStats";
-import { latencyKindOf as kindOf, recordTaskLatency } from "./latency";
+import { latencyKindOf as kindOf } from "./latency";
 import {
   applyAnchorRender,
   renderAnchor,
@@ -305,7 +306,8 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
   // Pre-check the whole batch is affordable (within the negative buffer) so we
   // don't dispatch work the user can't pay for; each task settles as it renders.
   const action = job.kind === "anchors" ? "anchorImage" : "pageIllustration";
-  await ensureAfford(uid, (await estimateForUser(uid, action, tier)) * specs.length, {
+  const quotedSparks = await estimateForUser(uid, action, tier);
+  await ensureAfford(uid, quotedSparks * specs.length, {
     noNegativeBuffer: caller.guest,
   });
 
@@ -338,6 +340,9 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
     progress: { total: specs.length, completed: 0, failed: 0 },
     // Persist the (possibly guest-downgraded) tier so workers render with it.
     tier,
+    // What each task in this batch was quoted at, so the worker can record the
+    // quote next to the eventual charge on the run.
+    quotedSparks,
     // Persist the feature-gated snapshot so workers render against it.
     ...(job.kind !== "image" ? { project: (job as PipelineRefreshJob | AnchorsJob).project } : {}),
   });
@@ -446,16 +451,22 @@ async function enqueueReadyDependents(
  * are resolved server-side (the client-supplied values on the request are
  * ignored) so generation can't be escalated to a costlier model.
  */
-async function runImageTask(
-  uid: string,
-  req: ImageRenderRequest,
-  model: ResolvedModels["imageModel"],
-  tier: ImageTier,
-  action: "pageIllustration" | "coverIllustration",
-  projectId: string | undefined,
-  loadStyle: (presetId?: string) => Promise<{ base64: string; mimeType: string } | null>,
-  signal: AbortSignal,
-): Promise<{ blobId: string; mimeType: string; stats: CallStats }> {
+async function runImageTask(args: {
+  uid: string;
+  req: ImageRenderRequest;
+  model: ResolvedModels["imageModel"];
+  tier: ImageTier;
+  action: "pageIllustration" | "coverIllustration";
+  projectId: string | undefined;
+  loadStyle: (presetId?: string) => Promise<{ base64: string; mimeType: string } | null>;
+  signal: AbortSignal;
+  jobId: string;
+  taskId: string;
+  startedAt: number;
+  quotedSparks?: number;
+}): Promise<{ blobId: string; mimeType: string; stats: CallStats }> {
+  const { uid, req, model, tier, action, projectId, loadStyle, signal, jobId, taskId, startedAt } =
+    args;
   const canShrink = !req.maskBlobId;
   const references: ReferenceImage[] = await Promise.all(
     (req.references ?? []).map(async (r): Promise<ReferenceImage> => {
@@ -509,8 +520,22 @@ async function runImageTask(
     ),
   );
   const isEdit = Boolean(req.composite || req.maskBlobId);
-  await recordUsage(uid, action, events, tier, { projectId, isEdit, stats });
-  await settleActionCost(uid, action, events, { projectId });
+  await meterAndSettle({
+    uid,
+    action,
+    tier,
+    events,
+    stats,
+    projectId,
+    kind: isEdit ? "edit" : "fresh",
+    jobId,
+    targetId: taskId,
+    source: "worker",
+    quotedSparks: args.quotedSparks,
+    startedAt,
+    models: { image: model },
+    latency: { kind: isEdit ? "edit" : "fresh", refs: req.references?.length ?? 0 },
+  });
 
   let finalBuf: Buffer = Buffer.from(result.base64, "base64");
   let mimeType = result.mimeType;
@@ -545,9 +570,10 @@ async function hydrateAnchorDeps(
   }
 }
 
-/** Render one task through its kind's pipeline; records usage + latency. */
+/** Render one task through its kind's pipeline; meters, settles and records it. */
 async function renderTask(
   uid: string,
+  jobId: string,
   job: AnyJob,
   task: TaskDoc,
   tier: ImageTier,
@@ -576,27 +602,23 @@ async function renderTask(
       }
       return hit;
     };
-    const { blobId, mimeType, stats } = await runImageTask(
+    const { blobId, mimeType, stats } = await runImageTask({
       uid,
       req,
-      models.imageModel,
+      model: models.imageModel,
       tier,
       action,
       projectId,
       loadStyle,
       signal,
-    );
-    const ms = Date.now() - startedAt;
-    await recordTaskLatency(
-      action,
-      tier,
-      req.composite || req.maskBlobId ? "edit" : "fresh",
-      req.references?.length ?? 0,
-      ms,
-    );
+      jobId,
+      taskId: task.id,
+      startedAt,
+      quotedSparks: job.quotedSparks,
+    });
     return {
       result: stampImageProvenance({ blobId, mimeType }, tier, models.imageModel),
-      stats: { ms, ...stats },
+      stats: { ms: Date.now() - startedAt, ...stats },
     };
   }
 
@@ -611,20 +633,31 @@ async function renderTask(
     const { value: render, events, stats } = await withUsage(() =>
       renderIllustration(project, spread, { ...(task.options ?? {}), signal }, env),
     );
-    await recordUsage(uid, action, events, tier, { projectId, isEdit, stats });
-    await settleActionCost(uid, action, events, { projectId });
-    if (!render) throw new Error("Nothing to render for this spread.");
-    const ms = Date.now() - startedAt;
-    await recordTaskLatency(
+    await meterAndSettle({
+      uid,
       action,
       tier,
-      kindOf(task.options),
-      effectiveAnchorIds(project.anchors, spread).length,
-      ms,
-    );
+      events,
+      stats,
+      projectId,
+      project,
+      kind: runKindOf(task.options, isEdit),
+      jobId,
+      targetId: task.id,
+      source: "worker",
+      quotedSparks: job.quotedSparks,
+      startedAt,
+      models: { image: models.imageModel, text: models.textModel },
+      latency: {
+        kind: kindOf(task.options),
+        refs: effectiveAnchorIds(project.anchors, spread).length,
+      },
+      ...(render ? {} : { outcome: "failed" as const, errorCode: "emptyRender" }),
+    });
+    if (!render) throw new Error("Nothing to render for this spread.");
     return {
       result: stampImageProvenance(render, tier, models.imageModel),
-      stats: { ms, ...stats },
+      stats: { ms: Date.now() - startedAt, ...stats },
     };
   }
 
@@ -635,19 +668,29 @@ async function renderTask(
   const { value: render, events, stats } = await withUsage(() =>
     renderAnchor(project, anchor, { ...(task.options ?? {}), signal }, env),
   );
-  await recordUsage(uid, "anchorImage", events, tier, { projectId, isEdit, stats });
-  await settleActionCost(uid, "anchorImage", events, { projectId });
-  const ms = Date.now() - startedAt;
-  await recordTaskLatency(
-    "anchorImage",
+  await meterAndSettle({
+    uid,
+    action: "anchorImage",
     tier,
-    kindOf(task.options),
-    containedAnchorsFor(anchor, project.anchors ?? []).length,
-    ms,
-  );
+    events,
+    stats,
+    projectId,
+    project,
+    kind: runKindOf(task.options, isEdit),
+    jobId,
+    targetId: task.id,
+    source: "worker",
+    quotedSparks: job.quotedSparks,
+    startedAt,
+    models: { image: models.anchorImageModel, text: models.textModel },
+    latency: {
+      kind: kindOf(task.options),
+      refs: containedAnchorsFor(anchor, project.anchors ?? []).length,
+    },
+  });
   return {
     result: stampImageProvenance(render, tier, models.anchorImageModel),
-    stats: { ms, ...stats },
+    stats: { ms: Date.now() - startedAt, ...stats },
   };
 }
 
@@ -758,7 +801,7 @@ export const runFanTask = onTaskDispatched<{ uid: string; jobId: string; taskId:
     const tier = normalizeImageTier(job.tier);
     const timeout = withTaskTimeout();
     try {
-      const { result, stats } = await renderTask(uid, job, task, tier, timeout.signal);
+      const { result, stats } = await renderTask(uid, jobId, job, task, tier, timeout.signal);
       await taskRef.update({
         status: "done",
         result,

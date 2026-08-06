@@ -15,8 +15,10 @@
 import express, { type Express, type Response } from "express";
 import { isAnonymousToken, type AuthedRequest } from "./auth";
 import { backendPipelineEnv } from "./pipelineEnv";
-import { recordUsage, withUsage } from "./usage";
-import { ensureAffordAction, InsufficientSparks, settleActionCost } from "./sparks";
+import { withUsage } from "./usage";
+import { meterAndSettle, runKindOf } from "./actionRun";
+import { touchProject } from "./projects";
+import { ensureAffordAction, InsufficientSparks } from "./sparks";
 import { ensureWithinQuota, incrementQuota, QuotaExceeded } from "./quotas";
 import {
   apiKeyFor,
@@ -44,7 +46,7 @@ import {
 import { stampImageProvenance } from "../../books-frontend/src/core/pipeline/imageProvenance";
 import { IntentAmbiguousError } from "../../books-frontend/src/core/pipeline/intentResolve";
 import { loadModelCapabilities, loadPromptContext } from "./appConfig";
-import { latencyKindOf, recordTaskLatency } from "./latency";
+import { latencyKindOf } from "./latency";
 import { containedAnchorsFor } from "../../books-frontend/src/core/book/anchorGraph";
 import { effectiveAnchorIds } from "../../books-frontend/src/core/book/anchorRefs";
 import {
@@ -134,6 +136,7 @@ export function registerAiRoutes(app: Express): void {
         return;
       }
       const [model, prompts] = await Promise.all([resolveText("storyDraft"), loadPromptContext()]);
+      const startedAt = Date.now();
       const { value, events, stats } = await withUsage(() =>
         generateStoryDraft({
           brief,
@@ -143,9 +146,17 @@ export function registerAiRoutes(app: Express): void {
           prompts,
         }),
       );
-      await recordUsage(req.uid!, "storyDraft", events, undefined, {
-        projectId: project.id,
+      await meterAndSettle({
+        uid: req.uid!,
+        action: "storyDraft",
+        events,
         stats,
+        projectId: project.id,
+        project,
+        kind: "fresh",
+        source: "sync",
+        startedAt,
+        models: { text: model },
       });
       res.json(value);
     } catch (err) {
@@ -162,6 +173,7 @@ export function registerAiRoutes(app: Express): void {
         return;
       }
       const [model, prompts] = await Promise.all([resolveText("storyCheck"), loadPromptContext()]);
+      const startedAt = Date.now();
       const { value, events, stats } = await withUsage(() =>
         checkStoryFit({
           story,
@@ -171,9 +183,17 @@ export function registerAiRoutes(app: Express): void {
           prompts,
         }),
       );
-      await recordUsage(req.uid!, "storyCheck", events, undefined, {
-        projectId: project.id,
+      await meterAndSettle({
+        uid: req.uid!,
+        action: "storyCheck",
+        events,
         stats,
+        projectId: project.id,
+        project,
+        kind: "fresh",
+        source: "sync",
+        startedAt,
+        models: { text: model },
       });
       res.json(value);
     } catch (err) {
@@ -185,6 +205,7 @@ export function registerAiRoutes(app: Express): void {
     try {
       const { project } = req.body as { project: Project };
       const [model, prompts] = await Promise.all([resolveText("storyAnalysis"), loadPromptContext()]);
+      const startedAt = Date.now();
       const { value, events, stats } = await withUsage(() =>
         analyzeStory({
           story: project.config.storyText,
@@ -194,9 +215,17 @@ export function registerAiRoutes(app: Express): void {
           prompts,
         }),
       );
-      await recordUsage(req.uid!, "storyAnalysis", events, undefined, {
-        projectId: project.id,
+      await meterAndSettle({
+        uid: req.uid!,
+        action: "storyAnalysis",
+        events,
         stats,
+        projectId: project.id,
+        project,
+        kind: "fresh",
+        source: "sync",
+        startedAt,
+        models: { text: model },
       });
       res.json({ ...value, model: model.id });
     } catch (err) {
@@ -214,6 +243,7 @@ export function registerAiRoutes(app: Express): void {
       }
       const model = await resolveText("anchorDescription");
       const prompts = await loadPromptContext();
+      const startedAt = Date.now();
       const { value, events, stats } = await withUsage(() =>
         generateAnchorDescription({
           story: project.config.storyText,
@@ -228,9 +258,18 @@ export function registerAiRoutes(app: Express): void {
           prompts,
         }),
       );
-      await recordUsage(req.uid!, "anchorDescription", events, undefined, {
-        projectId: project.id,
+      await meterAndSettle({
+        uid: req.uid!,
+        action: "anchorDescription",
+        events,
         stats,
+        projectId: project.id,
+        project,
+        kind: "fresh",
+        targetId: anchorId,
+        source: "sync",
+        startedAt,
+        models: { text: model },
       });
       res.json({ description: value });
     } catch (err) {
@@ -246,6 +285,7 @@ export function registerAiRoutes(app: Express): void {
         previous?: ScreenplayDoc;
       };
       const [model, prompts] = await Promise.all([resolveText("screenplay"), loadPromptContext()]);
+      const startedAt = Date.now();
       const { value, events, stats } = await withUsage(() =>
         generateScreenplay({
           config: withTextModel(project.config, model),
@@ -257,9 +297,17 @@ export function registerAiRoutes(app: Express): void {
           prompts,
         }),
       );
-      await recordUsage(req.uid!, "screenplay", events, undefined, {
-        projectId: project.id,
+      await meterAndSettle({
+        uid: req.uid!,
+        action: "screenplay",
+        events,
         stats,
+        projectId: project.id,
+        project,
+        kind: edit?.trim() ? "edit" : "fresh",
+        source: "sync",
+        startedAt,
+        models: { text: model },
       });
       res.json(value);
     } catch (err) {
@@ -285,7 +333,9 @@ export function registerAiRoutes(app: Express): void {
       // Guests render on the cheap tier only and get no negative buffer.
       const guest = isAnonymousToken(req.authToken);
       const tier = requireTier(rawTier, guest);
-      await ensureAffordAction(req.uid!, "anchorImage", tier, { noNegativeBuffer: guest });
+      const quotedSparks = await ensureAffordAction(req.uid!, "anchorImage", tier, {
+        noNegativeBuffer: guest,
+      });
       const [models, prompts, caps] = await Promise.all([
         resolveImageModels("anchorImage", tier),
         loadPromptContext(),
@@ -297,20 +347,25 @@ export function registerAiRoutes(app: Express): void {
         renderAnchor(project, anchor, options ?? {}, env),
       );
       const isAnchorEdit = typeof options?.edit === "string" && options.edit.trim().length > 0;
-      await recordUsage(req.uid!, "anchorImage", events, tier, {
-        projectId: project.id,
-        isEdit: isAnchorEdit,
-        stats,
-      });
-      await settleActionCost(req.uid!, "anchorImage", events, { projectId: project.id });
-      // Feed the rolling latency window that powers client time estimates.
-      await recordTaskLatency(
-        "anchorImage",
+      await meterAndSettle({
+        uid: req.uid!,
+        action: "anchorImage",
         tier,
-        latencyKindOf(options),
-        containedAnchorsFor(anchor, project.anchors ?? []).length,
-        Date.now() - startedAt,
-      );
+        events,
+        stats,
+        projectId: project.id,
+        project,
+        kind: runKindOf(options, isAnchorEdit),
+        targetId: anchorId,
+        source: "sync",
+        quotedSparks,
+        startedAt,
+        models: { image: models.anchorImageModel, text: models.textModel },
+        latency: {
+          kind: latencyKindOf(options),
+          refs: containedAnchorsFor(anchor, project.anchors ?? []).length,
+        },
+      });
       res.json(stampImageProvenance(value, tier, models.anchorImageModel));
     } catch (err) {
       sendError(res, err);
@@ -355,7 +410,9 @@ export function registerAiRoutes(app: Express): void {
       // per-book edit quota (scoped to the project); fresh generations don't.
       const isEdit = typeof options?.edit === "string" && options.edit.trim().length > 0;
       if (isEdit) await ensureWithinQuota(req.uid!, "editsPerBook", project.id);
-      await ensureAffordAction(req.uid!, action, tier, { noNegativeBuffer: guest });
+      const quotedSparks = await ensureAffordAction(req.uid!, action, tier, {
+        noNegativeBuffer: guest,
+      });
       const [models, prompts, caps] = await Promise.all([
         resolveImageModels(cover ? "coverIllustration" : "pageIllustration", tier),
         loadPromptContext(),
@@ -373,23 +430,32 @@ export function registerAiRoutes(app: Express): void {
         }
         return renderIllustration(project, spread, options ?? {}, env);
       });
-      await recordUsage(req.uid!, action, events, tier, {
-        projectId: project.id,
-        isEdit: isEdit || Boolean(options?.mask),
+      await meterAndSettle({
+        uid: req.uid!,
+        action,
+        tier,
+        events,
         stats,
+        projectId: project.id,
+        project,
+        // A manual mask is an edit for both pricing history and bucketing.
+        kind: runKindOf(options, isEdit || Boolean(options?.mask)),
+        targetId: spreadId,
+        source: "sync",
+        quotedSparks,
+        startedAt,
+        models: { image: models.imageModel, text: models.textModel },
+        ...(value
+          ? {
+              latency: {
+                kind: options?.mask ? ("edit" as const) : latencyKindOf(options),
+                refs: effectiveAnchorIds(project.anchors, spread).length,
+              },
+            }
+          : {}),
       });
-      await settleActionCost(req.uid!, action, events, { projectId: project.id });
       if (isEdit) await incrementQuota(req.uid!, "editsPerBook", project.id);
-      // Feed the rolling latency window that powers client time estimates.
-      // A manual mask is an edit for bucketing purposes.
       if (value) {
-        await recordTaskLatency(
-          action,
-          tier,
-          options?.mask ? "edit" : latencyKindOf(options),
-          effectiveAnchorIds(project.anchors, spread).length,
-          Date.now() - startedAt,
-        );
         res.json(stampImageProvenance(value, tier, models.imageModel));
         return;
       }
@@ -399,6 +465,35 @@ export function registerAiRoutes(app: Express): void {
     }
   });
 
+  // --- Project mirror --------------------------------------------------------
+
+  /**
+   * Register a project with the backend and report where the user is in it.
+   *
+   * Books are created and progressed entirely client-side, so without this a
+   * project only becomes visible to analysis once it makes its first AI call —
+   * which hides exactly the projects that matter most: the abandoned ones. The
+   * client calls this on create and on stage changes. Everything it sends is
+   * stored as untrusted `reported` data; the money numbers still come only from
+   * what the backend metered itself.
+   */
+  app.post("/ai/project-touch", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const { projectId, stage, title } = req.body as {
+        projectId?: string;
+        stage?: string;
+        title?: string;
+      };
+      if (!projectId) {
+        res.status(400).json({ error: { message: "projectId is required." } });
+        return;
+      }
+      await touchProject({ uid: req.uid!, projectId, stage, title });
+      res.json({ ok: true });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
 }
 
 /** Resolve a spread (or a cover pseudo-spread) from the project snapshot. */

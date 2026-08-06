@@ -84,7 +84,6 @@ import { PlansTab } from "./tabs/PlansTab";
 import { SparksTab } from "./tabs/SparksTab";
 import { ReferralsTab } from "./tabs/ReferralsTab";
 import { AffiliatesTab } from "./tabs/AffiliatesTab";
-import { CostIntelligenceTab } from "./tabs/CostIntelligenceTab";
 import { SystemHealthTab } from "./tabs/SystemHealthTab";
 import { SeoTab } from "./tabs/marketing/SeoTab";
 import { BlogTab } from "./tabs/marketing/BlogTab";
@@ -129,7 +128,6 @@ const CONFIG_TAB_META: Record<
   models: { label: "Models", icon: <Cpu className="size-4" /> },
   modelCosts: { label: "Model costs", icon: <DollarSign className="size-4" /> },
   prompts: { label: "Prompts", icon: <MessageSquareText className="size-4" /> },
-  costs: { label: "Cost intelligence", icon: <Gauge className="size-4" /> },
   // Creative defaults
   artStyles: { label: "Art styles", icon: <ImageIcon className="size-4" /> },
   layouts: { label: "Page layouts", icon: <LayoutTemplate className="size-4" /> },
@@ -171,8 +169,6 @@ function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
       return <FinancialTab />;
     case "discounts":
       return <DiscountPlannerTab />;
-    case "costs":
-      return <CostIntelligenceTab />;
     case "models":
       return <ModelConfigTab />;
     case "artStyles":

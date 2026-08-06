@@ -342,7 +342,9 @@ export async function renderAnchor(
           actualPanelCount: actualCount,
           prompts: env.prompts,
         });
-        result = await runStep("image", () =>
+        // Labelled apart from the first render: this one exists because the
+        // model miscounted, so the backend meters it but doesn't charge for it.
+        result = await runStep("imageRepair", () =>
           generateAnchorImage({
             prompt,
             creds: { apiKey: key },

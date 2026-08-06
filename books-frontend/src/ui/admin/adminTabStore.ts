@@ -22,11 +22,11 @@ export type ConfigTabId =
   | "affiliates" // Rewardful affiliate program (master switch + what earns)
   | "financial" // currencies, FX, fees, rounding, tax — the money plumbing
   | "discounts" // sale planner: per-item break-even & safe max discount + slider
-  // AI pipeline group.
+  // AI pipeline group. (Cost *reporting* lives in Analysis → Costs; this group
+  // only holds the knobs that set what things cost.)
   | "models"
   | "modelCosts"
   | "prompts"
-  | "costs"
   // Creative defaults group.
   | "artStyles"
   | "layouts"
@@ -39,8 +39,42 @@ export type ConfigTabId =
 /** Segments within the combined Catalog tab (things sold once). */
 export type CatalogSegment = "print" | "ebook" | "packs";
 
+/** Analysis section groups (second-level nav, mirroring Configuration). */
+export type AnalysisGroupId = "people" | "money" | "growth";
+
 /** Sub-tabs within the Analysis section. */
-export type AnalysisTabId = "users" | "products" | "payments" | "finance" | "referrals" | "affiliates";
+export type AnalysisTabId =
+  // Who is using it and what they're making.
+  | "users"
+  | "projects"
+  // What it costs and what it earns.
+  | "costs"
+  | "finance"
+  | "payments"
+  | "products"
+  // Where new users come from.
+  | "referrals"
+  | "affiliates";
+
+/**
+ * Analysis is grouped rather than shown as one long tab strip: an admin
+ * arrives with a question ("who's using this", "are we making money", "is the
+ * referral program working") and the groups answer it before they have to read
+ * eight tab labels.
+ */
+export const ANALYSIS_GROUPS: {
+  id: AnalysisGroupId;
+  label: string;
+  tabs: AnalysisTabId[];
+}[] = [
+  { id: "people", label: "People & books", tabs: ["users", "projects"] },
+  { id: "money", label: "Money", tabs: ["costs", "finance", "payments", "products"] },
+  { id: "growth", label: "Growth", tabs: ["referrals", "affiliates"] },
+];
+
+export function analysisGroupForTab(tab: AnalysisTabId): AnalysisGroupId {
+  return ANALYSIS_GROUPS.find((g) => g.tabs.includes(tab))?.id ?? "people";
+}
 
 /** Sub-tabs within the Marketing section. */
 export type MarketingTabId = "seo" | "blog" | "branding" | "qrCodes";
@@ -73,7 +107,7 @@ export const CONFIG_GROUPS: {
   {
     id: "ai",
     label: "AI pipeline",
-    tabs: ["models", "modelCosts", "prompts", "costs"],
+    tabs: ["models", "modelCosts", "prompts"],
   },
   {
     id: "creative",
@@ -97,6 +131,7 @@ interface AdminNavState {
   configTab: ConfigTabId;
   /** Which sub-section of the Catalog tab is showing. */
   catalogSegment: CatalogSegment;
+  analysisGroup: AnalysisGroupId;
   analysisTab: AnalysisTabId;
   marketingTab: MarketingTabId;
   communicationTab: CommunicationTabId;
@@ -111,6 +146,7 @@ interface AdminNavState {
   openConfigTab: (tab: ConfigTabId) => void;
   /** Jump straight to an Analysis sub-tab (used by cross-links from Configuration). */
   openAnalysis: (tab: AnalysisTabId) => void;
+  setAnalysisGroup: (group: AnalysisGroupId) => void;
   setAnalysisTab: (tab: AnalysisTabId) => void;
   setMarketingTab: (tab: MarketingTabId) => void;
   setCommunicationTab: (tab: CommunicationTabId) => void;
@@ -125,6 +161,7 @@ export const useAdminTab = create<AdminNavState>((set) => ({
   configGroup: "business",
   configTab: "overview",
   catalogSegment: "print",
+  analysisGroup: "people",
   analysisTab: "users",
   marketingTab: "seo",
   // Contact first: it's the only inbox for the public form (the site publishes
@@ -144,8 +181,14 @@ export const useAdminTab = create<AdminNavState>((set) => ({
   setCatalogSegment: (catalogSegment) => set({ catalogSegment }),
   openConfigTab: (configTab) =>
     set({ section: "configuration", configTab, configGroup: configGroupForTab(configTab) }),
-  openAnalysis: (analysisTab) => set({ section: "analysis", analysisTab }),
-  setAnalysisTab: (analysisTab) => set({ analysisTab }),
+  openAnalysis: (analysisTab) =>
+    set({ section: "analysis", analysisTab, analysisGroup: analysisGroupForTab(analysisTab) }),
+  setAnalysisGroup: (analysisGroup) => {
+    const first = ANALYSIS_GROUPS.find((g) => g.id === analysisGroup)?.tabs[0];
+    set({ analysisGroup, ...(first ? { analysisTab: first } : {}) });
+  },
+  setAnalysisTab: (analysisTab) =>
+    set({ analysisTab, analysisGroup: analysisGroupForTab(analysisTab) }),
   setMarketingTab: (marketingTab) => set({ marketingTab }),
   setCommunicationTab: (communicationTab) => set({ communicationTab }),
   setLegalTab: (legalTab) => set({ legalTab }),

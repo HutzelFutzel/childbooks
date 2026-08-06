@@ -23,6 +23,22 @@
         { "fieldPath": "status", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "projects",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uid", "order": "ASCENDING" },
+        { "fieldPath": "lastActionAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "financeEvents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uid", "order": "ASCENDING" },
+        { "fieldPath": "at", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [
@@ -44,6 +60,13 @@
       "fieldPath": "lastUsedAt",
       "indexes": [
         { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }
+      ]
+    },
+    {
+      "collectionGroup": "usage",
+      "fieldPath": "runId",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION" }
       ]
     }
   ]
