@@ -9,6 +9,7 @@ import { useAdminFinance } from "../../../state/adminFinanceStore";
 import { useAdminMarket } from "../../../state/adminMarketStore";
 import { useAdminPayments } from "../../../state/adminPaymentsStore";
 import { ANALYSIS_GROUPS, useAdminTab, type AnalysisGroupId, type AnalysisTabId } from "../adminTabStore";
+import { ANALYSIS_TAB_META } from "../adminNav";
 import { Button } from "../../components/Button";
 import { Tabs } from "../../components/Tabs";
 import { Kpis } from "./Kpis";
@@ -30,17 +31,6 @@ import { downloadCsv } from "./csv";
 import { fmtRelative, toDateInput } from "./format";
 
 type Section = AnalysisTabId;
-
-const SECTION_LABELS: Record<Section, string> = {
-  users: "Users",
-  projects: "Books",
-  costs: "Costs",
-  finance: "Finance",
-  payments: "Payments",
-  products: "Products",
-  referrals: "Referrals",
-  affiliates: "Affiliates",
-};
 
 const TIMEFRAMES: { id: Timeframe; label: string }[] = [
   { id: "today", label: "Today" },
@@ -176,10 +166,15 @@ export function AnalysisTab() {
         />
       </div>
 
+      <p className="text-xs text-ink-400">
+        {(ANALYSIS_GROUPS.find((g) => g.id === group) ?? ANALYSIS_GROUPS[0]).description}
+      </p>
+
       <Tabs
         items={(ANALYSIS_GROUPS.find((g) => g.id === group) ?? ANALYSIS_GROUPS[0]).tabs.map((id) => ({
           id,
-          label: SECTION_LABELS[id],
+          label: ANALYSIS_TAB_META[id].label,
+          icon: ANALYSIS_TAB_META[id].icon,
         }))}
         value={section}
         onChange={(id) => setSection(id as Section)}

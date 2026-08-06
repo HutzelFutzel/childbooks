@@ -1,48 +1,8 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import {
-  ArrowLeft,
-  BarChart3,
-  BookOpen,
-  Coins,
-  Cpu,
-  DollarSign,
-  Image as ImageIcon,
-  LayoutDashboard,
-  LayoutTemplate,
-  Loader2,
-  Megaphone,
-  Package,
-  Percent,
-  Settings2,
-  ShieldAlert,
-  Sparkles,
-  Stamp,
-  Users,
-  CreditCard,
-  Gauge,
-  HeartPulse,
-  Search,
-  Newspaper,
-  MessageSquareText,
-  MessagesSquare,
-  Hash,
-  Inbox,
-  Mail,
-  Type,
-  Scale,
-  FileText,
-  Cookie,
-  UserX,
-  Rocket,
-  FlaskConical,
-  Handshake,
-  Wand2,
-  QrCode,
-  PartyPopper,
-} from "lucide-react";
+import { ArrowLeft, ChevronRight, FlaskConical, Loader2, Rocket, Search, ShieldAlert } from "lucide-react";
 import { Button } from "@/ui/components/Button";
 import { Tabs } from "@/ui/components/Tabs";
 import { Toaster } from "@/ui/components/Toaster";
@@ -62,6 +22,7 @@ import { useAccountUiStore } from "@/state/accountUiStore";
 import { useAppConfigStore } from "@/state/appConfigStore";
 import {
   useAdminTab,
+  ANALYSIS_GROUPS,
   CONFIG_GROUPS,
   type AdminSection,
   type ConfigGroupId,
@@ -69,6 +30,15 @@ import {
   type CommunicationTabId,
   type LegalTabId,
 } from "./adminTabStore";
+import {
+  SECTIONS,
+  CONFIG_TAB_META,
+  ANALYSIS_TAB_META,
+  MARKETING_TABS,
+  COMMUNICATION_TABS,
+  LEGAL_TABS,
+} from "./adminNav";
+import { CommandPalette } from "./CommandPalette";
 import { ModelConfigTab } from "./tabs/ModelConfigTab";
 import { ArtStylesTab } from "./tabs/ArtStylesTab";
 import { LayoutsTab } from "./tabs/LayoutsTab";
@@ -98,61 +68,6 @@ import { LegalDocsTab } from "./tabs/legal/LegalDocsTab";
 import { CookieConsentTab } from "./tabs/legal/CookieConsentTab";
 import { GdprTab } from "./tabs/legal/GdprTab";
 import { AnalysisTab } from "./analysis/AnalysisTab";
-
-const SECTIONS: { id: AdminSection; label: string; icon: ReactNode; description: string }[] = [
-  { id: "analysis", label: "Analysis", icon: <BarChart3 className="size-4" />, description: "Usage, signups and active users across the product." },
-  { id: "configuration", label: "Configuration", icon: <Settings2 className="size-4" />, description: "Global app configuration. Changes apply to everyone immediately." },
-  { id: "marketing", label: "Marketing", icon: <Megaphone className="size-4" />, description: "Campaigns and growth tools." },
-  { id: "communication", label: "Communication", icon: <MessagesSquare className="size-4" />, description: "Transactional email and Slack notifications." },
-  { id: "legal", label: "Legal & Privacy", icon: <Scale className="size-4" />, description: "Legal documents, cookie consent, and GDPR data requests." },
-];
-
-const LEGAL_TABS = [
-  { id: "documents", label: "Documents", icon: <FileText className="size-4" /> },
-  { id: "cookies", label: "Cookies", icon: <Cookie className="size-4" /> },
-  { id: "gdpr", label: "Data requests", icon: <UserX className="size-4" /> },
-];
-
-const CONFIG_TAB_META: Record<
-  ConfigTabId,
-  { label: string; icon: ReactNode }
-> = {
-  // Business
-  overview: { label: "Overview", icon: <LayoutDashboard className="size-4" /> },
-  catalog: { label: "Catalog", icon: <Package className="size-4" /> },
-  memberships: { label: "Memberships", icon: <CreditCard className="size-4" /> },
-  sparks: { label: "Sparks economy", icon: <Sparkles className="size-4" /> },
-  referrals: { label: "Referrals", icon: <Users className="size-4" /> },
-  affiliates: { label: "Affiliates", icon: <Handshake className="size-4" /> },
-  financial: { label: "Financial settings", icon: <Coins className="size-4" /> },
-  discounts: { label: "Discount planner", icon: <Percent className="size-4" /> },
-  // AI pipeline
-  models: { label: "Models", icon: <Cpu className="size-4" /> },
-  modelCosts: { label: "Model costs", icon: <DollarSign className="size-4" /> },
-  prompts: { label: "Prompts", icon: <MessageSquareText className="size-4" /> },
-  // Creative defaults
-  artStyles: { label: "Art styles", icon: <ImageIcon className="size-4" /> },
-  layouts: { label: "Page layouts", icon: <LayoutTemplate className="size-4" /> },
-  ageWriting: { label: "Age writing", icon: <BookOpen className="size-4" /> },
-  storyCraft: { label: "Story craft", icon: <Wand2 className="size-4" /> },
-  typography: { label: "Typography", icon: <Type className="size-4" /> },
-  // Operations
-  system: { label: "System health", icon: <HeartPulse className="size-4" /> },
-};
-
-const MARKETING_TABS = [
-  { id: "announcements", label: "Announcements", icon: <PartyPopper className="size-4" /> },
-  { id: "seo", label: "SEO", icon: <Search className="size-4" /> },
-  { id: "blog", label: "Blog", icon: <Newspaper className="size-4" /> },
-  { id: "branding", label: "Branding", icon: <Stamp className="size-4" /> },
-  { id: "qrCodes", label: "QR codes", icon: <QrCode className="size-4" /> },
-];
-
-const COMMUNICATION_TABS = [
-  { id: "contact", label: "Contact inbox", icon: <Inbox className="size-4" /> },
-  { id: "transactional-emails", label: "Transactional Emails", icon: <Mail className="size-4" /> },
-  { id: "admin-slack", label: "Admin Slack", icon: <Hash className="size-4" /> },
-];
 
 function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
   switch (tab) {
@@ -258,8 +173,14 @@ export default function AdminApp() {
   const setCommunicationTab = useAdminTab((s) => s.setCommunicationTab);
   const legalTab = useAdminTab((s) => s.legalTab);
   const setLegalTab = useAdminTab((s) => s.setLegalTab);
+  // Only needed here for the breadcrumb — AnalysisTab owns its own copies for
+  // rendering its group pills.
+  const analysisGroup = useAdminTab((s) => s.analysisGroup);
+  const setAnalysisGroup = useAdminTab((s) => s.setAnalysisGroup);
+  const analysisTab = useAdminTab((s) => s.analysisTab);
   const ordersOpen = useAccountUiStore((s) => s.ordersOpen);
   const closeOrders = useAccountUiStore((s) => s.closeOrders);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => {
     initAuth();
@@ -279,6 +200,47 @@ export default function AdminApp() {
     label: CONFIG_TAB_META[id].label,
     icon: CONFIG_TAB_META[id].icon,
   }));
+
+  // A persistent "you are here" trail — the deep nav (section → group → tab)
+  // is otherwise only visible in the pill row you clicked to get there, which
+  // scrolls out of the way once you're reading a tab's content. Segments with
+  // an `onClick` jump back up a level (e.g. clicking the group name resets to
+  // that group's first tab); the leaf segment is inert.
+  const breadcrumb: { label: string; onClick?: () => void }[] = (() => {
+    switch (section) {
+      case "configuration":
+        return [
+          { label: "Configuration" },
+          { label: activeGroup.label, onClick: () => setConfigGroup(activeGroup.id) },
+          { label: CONFIG_TAB_META[configTab].label },
+        ];
+      case "analysis": {
+        const group = ANALYSIS_GROUPS.find((g) => g.id === analysisGroup) ?? ANALYSIS_GROUPS[0];
+        return [
+          { label: "Analysis" },
+          { label: group.label, onClick: () => setAnalysisGroup(group.id) },
+          { label: ANALYSIS_TAB_META[analysisTab].label },
+        ];
+      }
+      case "marketing":
+        return [
+          { label: "Marketing" },
+          { label: MARKETING_TABS.find((t) => t.id === marketingTab)?.label ?? "" },
+        ];
+      case "communication":
+        return [
+          { label: "Communication" },
+          { label: COMMUNICATION_TABS.find((t) => t.id === communicationTab)?.label ?? "" },
+        ];
+      case "legal":
+        return [
+          { label: "Legal & Privacy" },
+          { label: LEGAL_TABS.find((t) => t.id === legalTab)?.label ?? "" },
+        ];
+      default:
+        return [{ label: active.label }];
+    }
+  })();
 
   return (
     <div
@@ -329,6 +291,17 @@ export default function AdminApp() {
               <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
                 Admin
               </p>
+              <button
+                type="button"
+                onClick={() => setPaletteOpen(true)}
+                className="mb-3 flex w-full items-center gap-2 rounded-lg bg-ink-50 px-3 py-2 text-xs font-medium text-ink-400 ring-1 ring-inset ring-ink-100 transition hover:bg-ink-100 hover:text-ink-600"
+              >
+                <Search className="size-3.5" />
+                Search
+                <kbd className="ml-auto rounded border border-ink-200 bg-white px-1 py-0.5 text-[10px] font-semibold text-ink-400">
+                  ⌘K
+                </kbd>
+              </button>
               <nav className="space-y-1">
                 {SECTIONS.map((s) => (
                   <button
@@ -359,6 +332,26 @@ export default function AdminApp() {
               </div>
 
               <div className="mx-auto w-full max-w-5xl px-5 py-8">
+                <nav className="mb-2 flex flex-wrap items-center gap-1 text-xs font-medium text-ink-400">
+                  {breadcrumb.map((crumb, i) => (
+                    <span key={i} className="flex items-center gap-1">
+                      {i > 0 && <ChevronRight className="size-3 shrink-0" />}
+                      {crumb.onClick ? (
+                        <button
+                          type="button"
+                          onClick={crumb.onClick}
+                          className="rounded px-0.5 transition-colors hover:text-ink-600 hover:underline"
+                        >
+                          {crumb.label}
+                        </button>
+                      ) : (
+                        <span className={i === breadcrumb.length - 1 ? "text-ink-600" : undefined}>
+                          {crumb.label}
+                        </span>
+                      )}
+                    </span>
+                  ))}
+                </nav>
                 <header className="mb-6">
                   <h1 className="text-xl font-bold text-ink-900">{active.label}</h1>
                   <p className="text-sm text-ink-500">{active.description}</p>
@@ -383,6 +376,7 @@ export default function AdminApp() {
                         </button>
                       ))}
                     </div>
+                    <p className="text-xs text-ink-400">{activeGroup.description}</p>
                     <Tabs
                       items={groupTabs}
                       value={configTab}
@@ -442,6 +436,7 @@ export default function AdminApp() {
       <SettingsDialog />
       <PlansDialog />
       <OrdersDialog open={ordersOpen} onClose={closeOrders} />
+      {isAdmin && <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />}
       <Toaster />
     </div>
   );

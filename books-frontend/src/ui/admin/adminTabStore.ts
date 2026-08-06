@@ -65,11 +65,28 @@ export type AnalysisTabId =
 export const ANALYSIS_GROUPS: {
   id: AnalysisGroupId;
   label: string;
+  /** One-line orientation shown under the group pills, mirroring `CONFIG_GROUPS`. */
+  description: string;
   tabs: AnalysisTabId[];
 }[] = [
-  { id: "people", label: "People & books", tabs: ["users", "projects"] },
-  { id: "money", label: "Money", tabs: ["costs", "finance", "payments", "products"] },
-  { id: "growth", label: "Growth", tabs: ["referrals", "affiliates"] },
+  {
+    id: "people",
+    label: "People & books",
+    description: "Who's using the product and what they're making.",
+    tabs: ["users", "projects"],
+  },
+  {
+    id: "money",
+    label: "Money",
+    description: "What it costs to run, what it earns, and how each product line performs.",
+    tabs: ["costs", "finance", "payments", "products"],
+  },
+  {
+    id: "growth",
+    label: "Growth",
+    description: "Where new users come from, and whether the referral/affiliate programs pay off.",
+    tabs: ["referrals", "affiliates"],
+  },
 ];
 
 export function analysisGroupForTab(tab: AnalysisTabId): AnalysisGroupId {
@@ -88,11 +105,16 @@ export type LegalTabId = "documents" | "cookies" | "gdpr";
 export const CONFIG_GROUPS: {
   id: ConfigGroupId;
   label: string;
+  /** One-line orientation shown under the group pills — the "what lives here"
+   * answer for a group an admin hasn't opened before. */
+  description: string;
   tabs: ConfigTabId[];
 }[] = [
   {
     id: "business",
     label: "Business",
+    description:
+      "Everything that makes money: what you sell, how memberships work, and the plumbing (currencies, discounts) behind every price.",
     tabs: [
       "overview",
       "catalog",
@@ -107,16 +129,20 @@ export const CONFIG_GROUPS: {
   {
     id: "ai",
     label: "AI pipeline",
+    description: "What each generation actually costs to produce, and the prompts that drive it.",
     tabs: ["models", "modelCosts", "prompts"],
   },
   {
     id: "creative",
     label: "Creative defaults",
+    description:
+      "Defaults for the creative pipeline — art direction, page layout, age-appropriate writing and story structure.",
     tabs: ["artStyles", "layouts", "ageWriting", "storyCraft", "typography"],
   },
   {
     id: "operations",
     label: "Operations",
+    description: "Runtime health and the sandbox/live billing switch.",
     tabs: ["system"],
   },
 ];
@@ -151,6 +177,11 @@ interface AdminNavState {
   setMarketingTab: (tab: MarketingTabId) => void;
   setCommunicationTab: (tab: CommunicationTabId) => void;
   setLegalTab: (tab: LegalTabId) => void;
+  /** Jump straight to a Marketing/Communication/Legal tab from anywhere (e.g.
+   * the command palette) — the flat-section equivalent of `openConfigTab`. */
+  openMarketingTab: (tab: MarketingTabId) => void;
+  openCommunicationTab: (tab: CommunicationTabId) => void;
+  openLegalTab: (tab: LegalTabId) => void;
 }
 
 /** Admin navigation state, lifted to a store so views can cross-link (e.g. a
@@ -192,4 +223,7 @@ export const useAdminTab = create<AdminNavState>((set) => ({
   setMarketingTab: (marketingTab) => set({ marketingTab }),
   setCommunicationTab: (communicationTab) => set({ communicationTab }),
   setLegalTab: (legalTab) => set({ legalTab }),
+  openMarketingTab: (marketingTab) => set({ section: "marketing", marketingTab }),
+  openCommunicationTab: (communicationTab) => set({ section: "communication", communicationTab }),
+  openLegalTab: (legalTab) => set({ section: "legal", legalTab }),
 }));
