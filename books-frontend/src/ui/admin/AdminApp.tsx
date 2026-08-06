@@ -41,6 +41,7 @@ import {
   Handshake,
   Wand2,
   QrCode,
+  PartyPopper,
 } from "lucide-react";
 import { Button } from "@/ui/components/Button";
 import { Tabs } from "@/ui/components/Tabs";
@@ -89,6 +90,7 @@ import { SeoTab } from "./tabs/marketing/SeoTab";
 import { BlogTab } from "./tabs/marketing/BlogTab";
 import { BrandingTab } from "./tabs/marketing/BrandingTab";
 import { QrCodesTab } from "./tabs/marketing/QrCodesTab";
+import { AnnouncementsTab } from "./tabs/marketing/AnnouncementsTab";
 import { ContactInboxTab } from "./tabs/communication/ContactInboxTab";
 import { EmailTab } from "./tabs/communication/EmailTab";
 import { SlackTab } from "./tabs/communication/SlackTab";
@@ -139,6 +141,7 @@ const CONFIG_TAB_META: Record<
 };
 
 const MARKETING_TABS = [
+  { id: "announcements", label: "Announcements", icon: <PartyPopper className="size-4" /> },
   { id: "seo", label: "SEO", icon: <Search className="size-4" /> },
   { id: "blog", label: "Blog", icon: <Newspaper className="size-4" /> },
   { id: "branding", label: "Branding", icon: <Stamp className="size-4" /> },
@@ -397,6 +400,7 @@ export default function AdminApp() {
                       value={marketingTab}
                       onChange={(id) => setMarketingTab(id as typeof marketingTab)}
                     />
+                    {marketingTab === "announcements" && <AnnouncementsTab />}
                     {marketingTab === "seo" && <SeoTab />}
                     {marketingTab === "blog" && <BlogTab />}
                     {marketingTab === "branding" && <BrandingTab />}

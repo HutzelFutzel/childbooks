@@ -211,6 +211,11 @@ import {
   normalizeCookieConfig,
   type CookieConfig,
 } from "../core/config/cookieConfig";
+import {
+  createDefaultAnnouncementsConfig,
+  normalizeAnnouncementsConfig,
+  type AnnouncementsConfig,
+} from "../core/config/announcements";
 import type { BlogImage, BlogIndex, BlogPost } from "../core/config/blog";
 import type { BlogStats, BlogStatsListItem } from "../core/config/blogStats";
 import type { SlackChannel } from "../core/notify/registry";
@@ -407,6 +412,8 @@ interface AppConfigState {
   legal: LegalConfig;
   /** Cookie consent banner config (copy, categories, consent version). */
   cookieConfig: CookieConfig;
+  /** Marketing announcement banners (Marketing → Announcements). */
+  announcements: AnnouncementsConfig;
   loaded: boolean;
   unsubs: Unsubscribe[];
   adminCostsUnsub: Unsubscribe | null;
@@ -470,6 +477,7 @@ interface AppConfigState {
   /** Email every user about a material change to a legal document (bulk send). */
   notifyPolicyUpdate: (role: LegalRole) => Promise<{ recipients: number; sent: number }>;
   saveCookieConfig: (config: CookieConfig) => Promise<void>;
+  saveAnnouncementsConfig: (config: AnnouncementsConfig) => Promise<void>;
   /** Send a sample contact-form message to the configured contact inbox. */
   sendTestContact: () => Promise<void>;
   uploadArtStyleImage: (styleId: string, base64: string, mimeType: string) => Promise<void>;
@@ -653,6 +661,7 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   slackConfig: createDefaultSlackConfig(),
   legal: createDefaultLegalConfig(),
   cookieConfig: createDefaultCookieConfig(),
+  announcements: createDefaultAnnouncementsConfig(),
   loaded: false,
   unsubs: [],
 
@@ -755,6 +764,9 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       }),
       onSnapshot(doc(db, "appConfig", "cookieConfig"), (snap) => {
         set({ cookieConfig: normalizeCookieConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "announcements"), (snap) => {
+        set({ announcements: normalizeAnnouncementsConfig(snap.exists() ? snap.data() : undefined) });
       }),
     ];
     set({ unsubs });
@@ -963,6 +975,10 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
 
   async saveCookieConfig(config) {
     set({ cookieConfig: normalizeCookieConfig(await putJson("/admin/config/cookies", config)) });
+  },
+
+  async saveAnnouncementsConfig(config) {
+    set({ announcements: normalizeAnnouncementsConfig(await putJson("/admin/config/announcements", config)) });
   },
 
   async sendTestContact() {

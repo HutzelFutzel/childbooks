@@ -28,6 +28,8 @@ import {
   saveLegalConfig,
   getCookieConfig,
   saveCookieConfig,
+  getAnnouncementsConfig,
+  saveAnnouncementsConfig,
   deleteBrandingAssetVersion,
   deleteWatermarkVersion,
   restoreBrandingAsset,
@@ -1601,6 +1603,24 @@ export function registerAdminRoutes(app: Express): void {
   app.put("/admin/config/cookies", json, async (req: Request, res: Response) => {
     try {
       res.json(await saveCookieConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- Marketing announcements -----------------------------------------------
+
+  app.get("/admin/config/announcements", async (_req, res) => {
+    try {
+      res.json(await getAnnouncementsConfig());
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.put("/admin/config/announcements", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveAnnouncementsConfig(req.body));
     } catch (err) {
       handleError(res, err);
     }

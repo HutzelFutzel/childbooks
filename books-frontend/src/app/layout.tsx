@@ -11,12 +11,14 @@ import "@fontsource/fredoka/600.css";
 import "@fontsource/fredoka/700.css";
 import { AffiliateTracking } from "../ui/affiliates/AffiliateTracking";
 import { ConsentManager } from "../ui/consent/ConsentManager";
+import { AnnouncementBanner } from "../ui/marketing/AnnouncementBanner";
 import { AuthInit } from "../ui/auth/AuthInit";
 import { DevEnvironmentBanner } from "../ui/layout/DevEnvironmentBanner";
 import { getBrandingConfig } from "../server/branding";
 import { getCookieConfig } from "../server/cookieConfig";
 import { getLegalConfig } from "../server/legal";
 import { getSeoConfig } from "../server/seo";
+import { getAnnouncementsConfig } from "../server/announcements";
 import { legalUrlByRole } from "../core/config/legal";
 import { brandingThemeVars } from "../ui/lib/color";
 
@@ -74,10 +76,11 @@ export default async function RootLayout({
   // Derive the whole palette from the admin's brand colors and inject it as
   // inline CSS variables on <html>, so every `bg-brand-*` / `text-accent-*`
   // utility reflects branding with no flash of the default purple.
-  const [branding, cookieConfig, legal] = await Promise.all([
+  const [branding, cookieConfig, legal, announcements] = await Promise.all([
     getBrandingConfig(),
     getCookieConfig(),
     getLegalConfig(),
+    getAnnouncementsConfig(),
   ]);
   const themeVars = brandingThemeVars(branding);
 
@@ -98,6 +101,9 @@ export default async function RootLayout({
             nothing until the visitor allows it (and nothing at all unless a
             Rewardful key is configured). */}
         <AffiliateTracking />
+        {/* Marketing → Announcements. Renders nothing on Studio/Admin/internal
+            routes — see the component's own comment. */}
+        <AnnouncementBanner config={announcements} />
       </body>
     </html>
   );

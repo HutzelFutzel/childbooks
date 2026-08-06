@@ -167,6 +167,12 @@ import {
   type CookieConfig,
 } from "../../books-frontend/src/core/config/cookieConfig";
 import {
+  announcementsConfigSchema,
+  createDefaultAnnouncementsConfig,
+  normalizeAnnouncementsConfig,
+  type AnnouncementsConfig,
+} from "../../books-frontend/src/core/config/announcements";
+import {
   normalizeReferralConfig,
   referralConfigFromLegacy,
   referralConfigSchema,
@@ -220,6 +226,7 @@ const AFFILIATE_CONFIG_DOC = "adminSettings/affiliates";
 const SLACK_CONFIG_DOC = "appConfig/slackConfig";
 const LEGAL_DOC = "appConfig/legal";
 const COOKIE_CONFIG_DOC = "appConfig/cookieConfig";
+const ANNOUNCEMENTS_DOC = "appConfig/announcements";
 
 const CACHE_TTL_MS = 30_000;
 
@@ -501,6 +508,24 @@ export async function saveCookieConfig(input: unknown): Promise<CookieConfig> {
   const parsed = cookieConfigSchema.parse(input);
   const normalized = normalizeCookieConfig({ ...parsed, updatedAt: Date.now() });
   await writeDoc(COOKIE_CONFIG_DOC, normalized);
+  return normalized;
+}
+
+// ---- Marketing announcements ------------------------------------------------
+
+export function getAnnouncementsConfig(): Promise<AnnouncementsConfig> {
+  return readDoc(ANNOUNCEMENTS_DOC, normalizeAnnouncementsConfig);
+}
+
+export function defaultAnnouncementsConfig(): AnnouncementsConfig {
+  return createDefaultAnnouncementsConfig();
+}
+
+/** Validate + persist the announcement banners (world-readable appConfig doc). */
+export async function saveAnnouncementsConfig(input: unknown): Promise<AnnouncementsConfig> {
+  const parsed = announcementsConfigSchema.parse(input);
+  const normalized = normalizeAnnouncementsConfig({ ...parsed, updatedAt: Date.now() });
+  await writeDoc(ANNOUNCEMENTS_DOC, normalized);
   return normalized;
 }
 

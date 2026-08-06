@@ -77,7 +77,7 @@ export function analysisGroupForTab(tab: AnalysisTabId): AnalysisGroupId {
 }
 
 /** Sub-tabs within the Marketing section. */
-export type MarketingTabId = "seo" | "blog" | "branding" | "qrCodes";
+export type MarketingTabId = "seo" | "blog" | "branding" | "qrCodes" | "announcements";
 
 /** Sub-tabs within the Communication section. */
 export type CommunicationTabId = "contact" | "transactional-emails" | "admin-slack";
