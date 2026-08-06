@@ -41,6 +41,7 @@ import {
   renderIllustration,
   type IllustrationRunOptions,
 } from "../../books-frontend/src/core/pipeline/illustrationRun";
+import { stampImageProvenance } from "../../books-frontend/src/core/pipeline/imageProvenance";
 import { IntentAmbiguousError } from "../../books-frontend/src/core/pipeline/intentResolve";
 import { loadModelCapabilities, loadPromptContext } from "./appConfig";
 import { latencyKindOf, recordTaskLatency } from "./latency";
@@ -310,7 +311,7 @@ export function registerAiRoutes(app: Express): void {
         containedAnchorsFor(anchor, project.anchors ?? []).length,
         Date.now() - startedAt,
       );
-      res.json(value);
+      res.json(stampImageProvenance(value, tier, models.anchorImageModel));
     } catch (err) {
       sendError(res, err);
     }
@@ -389,6 +390,8 @@ export function registerAiRoutes(app: Express): void {
           effectiveAnchorIds(project.anchors, spread).length,
           Date.now() - startedAt,
         );
+        res.json(stampImageProvenance(value, tier, models.imageModel));
+        return;
       }
       res.json(value);
     } catch (err) {

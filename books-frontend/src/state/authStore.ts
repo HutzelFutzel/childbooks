@@ -7,9 +7,11 @@ import {
   linkWithPopup,
   onAuthStateChanged,
   signInAnonymously,
+  signInWithCredential,
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut as firebaseSignOut,
+  type AuthError,
   type User,
 } from "firebase/auth";
 import { doc, getDoc } from "firebase/firestore";
@@ -223,7 +225,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const auth = getFirebaseAuth();
     const current = auth.currentUser;
     const provider = new GoogleAuthProvider();
-    const draft = current?.isAnonymous ? await snapshotGuestDrafts(current) : null;
+    // Open the popup in the same turn as the click. Awaiting anything first
+    // (e.g. getIdToken) breaks the browser's user-gesture chain and the popup
+    // gets blocked — which feels like "I have to click twice."
     if (current?.isAnonymous) {
       try {
         await linkWithPopup(current, provider);
@@ -235,10 +239,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         return; // linked in place → same uid, drafts preserved, Google verified
       } catch (err) {
         if (!isIdentityCollision(err)) throw err;
-        // Google account already exists — sign in and offer migration. This is an
-        // existing account, so we do NOT re-record consent (would clobber prefs).
-        await signInWithPopup(auth, provider);
-        if (draft && draft.projects.length > 0) set({ pendingMigration: draft });
+        // Google account already exists — sign in with the credential from the
+        // failed link instead of opening a second popup (browsers block that).
+        // Snapshot drafts first while we're still the anonymous guest.
+        const draft = await snapshotGuestDrafts(current);
+        const credential = GoogleAuthProvider.credentialFromError(err as AuthError);
+        if (credential) {
+          await signInWithCredential(auth, credential);
+        } else {
+          // Rare fallback if Firebase didn't attach a credential to the error.
+          await signInWithPopup(auth, provider);
+        }
+        // Existing account — do NOT re-record consent (would clobber prefs).
+        if (draft.projects.length > 0) set({ pendingMigration: draft });
         return;
       }
     }

@@ -61,6 +61,7 @@ import {
   type AnchorRender,
 } from "../../books-frontend/src/core/pipeline/anchorRun";
 import { renderIllustration } from "../../books-frontend/src/core/pipeline/illustrationRun";
+import { stampImageProvenance } from "../../books-frontend/src/core/pipeline/imageProvenance";
 import { withRetry } from "../../books-frontend/src/core/pipeline/retry";
 import { getImageProvider } from "../../books-frontend/src/core/providers";
 import type {
@@ -593,7 +594,10 @@ async function renderTask(
       req.references?.length ?? 0,
       ms,
     );
-    return { result: { blobId, mimeType }, stats: { ms, ...stats } };
+    return {
+      result: stampImageProvenance({ blobId, mimeType }, tier, models.imageModel),
+      stats: { ms, ...stats },
+    };
   }
 
   const project = (job as PipelineRefreshJob | AnchorsJob).project;
@@ -618,7 +622,10 @@ async function renderTask(
       effectiveAnchorIds(project.anchors, spread).length,
       ms,
     );
-    return { result: render, stats: { ms, ...stats } };
+    return {
+      result: stampImageProvenance(render, tier, models.imageModel),
+      stats: { ms, ...stats },
+    };
   }
 
   // anchors
@@ -638,7 +645,10 @@ async function renderTask(
     containedAnchorsFor(anchor, project.anchors ?? []).length,
     ms,
   );
-  return { result: render, stats: { ms, ...stats } };
+  return {
+    result: stampImageProvenance(render, tier, models.anchorImageModel),
+    stats: { ms, ...stats },
+  };
 }
 
 // ---------------------------------------------------------------------------

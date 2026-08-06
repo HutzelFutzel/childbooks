@@ -79,11 +79,11 @@ export const HELP: Record<string, HelpTopic> = {
     body: "Every generation is saved. Click any thumbnail to revert, or refine from it to branch a new version. Switching a character's version marks the pages that used it as needing an update.",
   },
   fastTierConsistency: {
-    title: "Fast can look a little different each time",
-    body: "The Fast tier trades reference-matching accuracy for speed: a character's outfit, colors or proportions can drift slightly from their reference art, and from one generation to the next.",
+    title: "Fast is for drafting",
+    body: "The Fast tier trades fidelity for speed: characters can drift from their reference art, and generations often show unexpected or unwanted artifacts (odd hands, warped props, messy details).",
     points: [
-      "Good for drafting a layout or trying an idea quickly.",
-      "Switch to High-Quality before your final render — it matches references far more closely and auto-repairs small flaws.",
+      "Great for laying out the book and trying ideas quickly.",
+      "Switch to High-Quality for real designing and final art — it matches references far more closely and auto-repairs small flaws.",
     ],
   },
   layoutQuietZone: {

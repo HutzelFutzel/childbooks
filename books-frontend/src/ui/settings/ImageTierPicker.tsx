@@ -18,9 +18,9 @@ import { formatSparkRange, useTierSparkEstimate } from "../hooks/useTierEstimate
 /** One-line pitch for each tier, shown under its name. */
 const TIER_BLURB: Record<ImageTier, string> = {
   quick:
-    "Draft quality in under a minute per image — perfect for laying out the book and trying ideas. Characters can drift a little from their references.",
+    "Draft quality in under a minute per image — great for layout and ideas. Expect occasional artifacts and characters drifting from their references.",
   premium:
-    "Slower per image (a few minutes), but subjects match their references much more closely and flaws get auto-repaired — best for the final book.",
+    "Slower per image (a few minutes), but subjects match their references much more closely and flaws get auto-repaired — best for real designing and the final book.",
 };
 
 function TierCard({

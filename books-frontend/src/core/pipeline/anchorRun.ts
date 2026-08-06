@@ -65,6 +65,10 @@ export interface AnchorRender {
   layout?: AnchorSheetLayout;
   /** Art style these pixels were drawn in (see `artStyleKey`). */
   artStyleKey?: string;
+  /** Quality tier used for this render (stamped at the host boundary). */
+  imageTier?: AnchorImage["imageTier"];
+  /** Concrete model used for this render (stamped at the host boundary). */
+  imageModel?: AnchorImage["imageModel"];
 }
 
 /** Wrap an anchor render into a (new or extended) version tree. Pure. */
@@ -79,6 +83,8 @@ export function applyAnchorRender(
     ...(render.thumbBlobId ? { thumbBlobId: render.thumbBlobId } : {}),
     ...(render.layout ? { layout: render.layout } : {}),
     ...(render.artStyleKey ? { artStyleKey: render.artStyleKey } : {}),
+    ...(render.imageTier ? { imageTier: render.imageTier } : {}),
+    ...(render.imageModel ? { imageModel: render.imageModel } : {}),
   };
   const next = tree
     ? addVersion(tree, content, {

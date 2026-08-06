@@ -635,7 +635,12 @@ export function buildIllustrationTask(
 export async function applyIllustrationResult(
   project: Project,
   spread: ScreenplaySpread,
-  result: { blobId: string; mimeType: string },
+  result: {
+    blobId: string;
+    mimeType: string;
+    imageTier?: IllustrationImage["imageTier"];
+    imageModel?: IllustrationImage["imageModel"];
+  },
   prompt: string,
   referenceUses?: ReferenceUse[],
 ): Promise<void> {
@@ -647,6 +652,8 @@ export async function applyIllustrationResult(
       currentReferenceUses(project.anchors, effectiveAnchorIds(project.anchors, spread)),
     textMode: spread.textMode,
     prompt,
+    ...(result.imageTier ? { imageTier: result.imageTier } : {}),
+    ...(result.imageModel ? { imageModel: result.imageModel } : {}),
   };
   const tree = project.illustrations?.[spread.id];
   const versions = tree

@@ -18,6 +18,7 @@ import { changedAnchorsForAnchor, staleAnchorIds } from "../../state/ai";
 import { useJobsStore } from "../../state/jobsStore";
 import { useProjectsStore } from "../../state/projectsStore";
 import { Button } from "../components/Button";
+import { FastDraftBanner } from "../components/FastDraftBanner";
 import { InfoHint } from "../components/InfoHint";
 import { Field, Input, Textarea } from "../components/Input";
 import { ImagePreview } from "../components/ImagePreview";
@@ -282,6 +283,8 @@ export function AnchorEditor({
         </div>
       )}
 
+      {cursorNode?.content.imageTier === "quick" && <FastDraftBanner />}
+
       {/* Picture changes live under the photo (same Apply change / New version
           pattern as page art). Description edits stay below so a typed tweak
           can't be confused with rewriting the look brief. */}
@@ -544,6 +547,7 @@ export function AnchorEditor({
     return (
       <>
         <div className="space-y-5 p-4">
+          {cursorNode?.content.imageTier === "quick" && <FastDraftBanner />}
           {hasImage && (
             <PictureChangeControls
               edit={edit}

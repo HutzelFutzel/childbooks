@@ -14,6 +14,7 @@ import type {
   TextHandling,
   TextPlacement,
 } from "./config/options";
+import type { ImageTier } from "./config/modelConfig";
 import type { ReadingModeId } from "./config/ageWritingCatalog";
 import type { StoryMode } from "./config/storyCraftCatalog";
 import type { VersionTree } from "./versioning";
@@ -21,6 +22,7 @@ import type { BookDesign } from "./design";
 import { DEFAULT_BOOK_LAYOUT_ID, type CompositionMode } from "./book/layouts";
 
 export type { ProviderId, Modality, ModelTier } from "./config/options";
+export type { ImageTier } from "./config/modelConfig";
 
 /** A concrete model the user can pick, resolved from discovery + catalog. */
 export interface ModelInfo {
@@ -279,6 +281,17 @@ export interface AnchorImage {
    * transfer resumable/idempotent. Absent on images predating the stamp.
    */
   artStyleKey?: string;
+  /**
+   * User-facing quality tier used to generate these pixels (`quick` = Fast,
+   * `premium` = High-Quality). Lets the studio warn when the active version was
+   * drafted on Fast. Absent on images predating the stamp.
+   */
+  imageTier?: ImageTier;
+  /**
+   * Concrete image model that produced these pixels (provider + id). Audit /
+   * debugging — the tier is the stable UX signal when admin rebinds slots.
+   */
+  imageModel?: ModelSelection;
 }
 
 /**

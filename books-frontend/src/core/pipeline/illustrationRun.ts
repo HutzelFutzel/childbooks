@@ -228,6 +228,10 @@ export interface IllustrationRender {
   compositionMode?: CompositionMode;
   /** Art style these pixels were drawn in (see `artStyleKey`). */
   artStyleKey?: string;
+  /** Quality tier used for this render (stamped at the host boundary). */
+  imageTier?: IllustrationImage["imageTier"];
+  /** Concrete model used for this render (stamped at the host boundary). */
+  imageModel?: IllustrationImage["imageModel"];
 }
 
 /** Wrap a render into a (new or extended) version tree. Pure. */
@@ -246,6 +250,8 @@ export function applyIllustrationRender(
     ...(render.layoutId ? { layoutId: render.layoutId } : {}),
     ...(render.compositionMode ? { compositionMode: render.compositionMode } : {}),
     ...(render.artStyleKey ? { artStyleKey: render.artStyleKey } : {}),
+    ...(render.imageTier ? { imageTier: render.imageTier } : {}),
+    ...(render.imageModel ? { imageModel: render.imageModel } : {}),
   };
   const next = tree
     ? addVersion(tree, content, {

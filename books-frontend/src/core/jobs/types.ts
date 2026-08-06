@@ -12,7 +12,7 @@ import type { ImageTier } from "../config/modelConfig";
 import type { ResolvedModels } from "../models/registry";
 import type { AnchorRender } from "../pipeline/anchorRun";
 import type { IllustrationRender } from "../pipeline/illustrationRun";
-import type { Project, ReferenceUse } from "../types";
+import type { ModelSelection, Project, ReferenceUse } from "../types";
 
 export type JobStatus = "pending" | "running" | "done" | "error";
 
@@ -209,7 +209,13 @@ export type AnyJob = GenerationJob | PipelineRefreshJob | AnchorsJob;
 
 /** Kind-specific render output stored on a finished {@link TaskDoc}. */
 export type TaskResult =
-  | { blobId: string; mimeType: string } // image
+  | {
+      blobId: string;
+      mimeType: string;
+      /** Quality tier + model stamped by the worker (optional on legacy results). */
+      imageTier?: ImageTier;
+      imageModel?: ModelSelection;
+    } // image
   | IllustrationRender // refresh
   | AnchorRender; // anchors
 
