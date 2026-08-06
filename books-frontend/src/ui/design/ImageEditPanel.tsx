@@ -1,36 +1,70 @@
 /**
  * Docked Canva-style edit sheets for page illustrations. Everyday actions live
  * on the floating ImageStyleBar; deep controls (refine, cast, scene, versions,
- * effects) open here. Cover-specific options nest inside Refine when on a cover.
+ * effects) open here. Covers share the same tweak / new-version refine flow
+ * once art exists; CoverToolsPanel is for first generate + title/bake/wrap setup.
  */
-import { useEffect, useMemo, useState } from "react";
-import { MapPin, RefreshCw, Sparkles, Wand2 } from "lucide-react";
-import type { Anchor, ImageElement } from "../../core/types";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, RefreshCw, Sparkles, Wand2 } from "lucide-react";
+import type { ImageElement } from "../../core/types";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
 import { Field, Input, Textarea } from "../components/Input";
 import { VersionHistoryList } from "../components/VersionHistoryList";
 import { Badge } from "../components/Badge";
-import { InfoHint } from "../components/InfoHint";
 import { SparkEstimateCost } from "../layout/SparkCost";
 import { formatList } from "../lib/formatList";
-import { useBlobUrl } from "../hooks/useBlobUrl";
-import { anchorThumbBlobId } from "../../state/ai";
+import { useBufferedText } from "../hooks/useBufferedText";
+import { CastPicker } from "./CastPicker";
 import { EffectsControls } from "./EffectsControls";
 import { AlignPad, type AlignEdge, Section, Slider } from "./inspectorKit";
 import { CoverToolsPanel } from "../studio/CoverStudio";
 import { usePageIllustration } from "../studio/usePageIllustration";
-import { useStudio } from "../studio/StudioContext";
+import { useStudioPanelStore } from "../studio/studioPanelStore";
 import { cn } from "../lib/cn";
-
-function sameIdSet(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false;
-  const set = new Set(a);
-  return b.every((id) => set.has(id));
-}
 
 const SCENE_BRIEF_PLACEHOLDER =
   "Ava peeks under the bed; warm lantern light; curious, not scared";
+
+/** Scene brief with local buffering so typing doesn't rewrite the studio every key. */
+function SceneBriefField({
+  label,
+  value,
+  onCommit,
+  hint,
+  flushRef,
+}: {
+  label: string;
+  value: string;
+  onCommit: (value: string) => void;
+  hint?: string;
+  /** Optional handle so a Generate button can flush before starting a job. */
+  flushRef?: React.MutableRefObject<(() => void) | null>;
+}) {
+  const field = useBufferedText(value, onCommit);
+  useEffect(() => {
+    if (!flushRef) return;
+    flushRef.current = field.flush;
+    return () => {
+      flushRef.current = null;
+    };
+  }, [flushRef, field.flush]);
+  return (
+    <>
+      <Field label={label}>
+        <Textarea
+          rows={3}
+          value={field.value}
+          onChange={(e) => field.onChange(e.target.value)}
+          onFocus={field.onFocus}
+          onBlur={field.onBlur}
+          placeholder={SCENE_BRIEF_PLACEHOLDER}
+        />
+      </Field>
+      {hint ? <p className="text-[11px] leading-snug text-ink-400">{hint}</p> : null}
+    </>
+  );
+}
 
 export type ImageEditSection =
   | "refine"
@@ -49,16 +83,24 @@ export function ImageEditPanel({
   onAlign,
 }: {
   pageId: string;
-  image: ImageElement;
+  /** Absent when opening generate tools on a page that has no art/frame yet. */
+  image: ImageElement | null;
   section: ImageEditSection;
   onPatch: (patch: Partial<ImageElement>, opts?: { coalesce?: string }) => void;
   onGestureEnd: () => void;
   onAlign: (edge: AlignEdge) => void;
 }) {
   const illo = usePageIllustration(pageId);
-  const isIllustration = image.kind === "illustration";
+  const isIllustration = !image || image.kind === "illustration";
 
   if (section === "effects") {
+    if (!image) {
+      return (
+        <p className="p-4 text-xs leading-relaxed text-ink-400">
+          Generate an illustration before editing effects.
+        </p>
+      );
+    }
     return (
       <div className="p-4">
         <EffectsControls
@@ -77,6 +119,13 @@ export function ImageEditPanel({
   }
 
   if (section === "frame") {
+    if (!image) {
+      return (
+        <p className="p-4 text-xs leading-relaxed text-ink-400">
+          Generate an illustration before framing it.
+        </p>
+      );
+    }
     return (
       <FrameSection
         image={image}
@@ -250,43 +299,22 @@ function FrameSection({
 }
 
 function RefineSection({ illo }: { illo: ReturnType<typeof usePageIllustration> }) {
-  const [coverTab, setCoverTab] = useState<"picture" | "cover">("picture");
-  const { coverMode, intentPick, setIntentPick, generating, applyIntentPick } = illo;
+  const { coverMode, cursor, intentPick, setIntentPick, generating, applyIntentPick } = illo;
+
+  // Empty cover: full cover setup + generate. Once art exists, same tweak /
+  // new-version flow as interior pages, with cover setup tucked underneath.
+  if (coverMode && !cursor) {
+    return (
+      <div className="p-4">
+        <CoverToolsPanel embedded />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col">
-      {coverMode && (
-        <div className="flex gap-1 border-b border-ink-100 px-3 pt-3">
-          {(
-            [
-              { id: "picture" as const, label: "Picture" },
-              { id: "cover" as const, label: "Cover" },
-            ] as const
-          ).map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setCoverTab(tab.id)}
-              className={cn(
-                "-mb-px border-b-2 px-3 py-2 text-xs font-semibold transition",
-                coverTab === tab.id
-                  ? "border-brand-500 text-brand-700"
-                  : "border-transparent text-ink-400 hover:text-ink-700",
-              )}
-            >
-              {tab.label}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {coverMode && coverTab === "cover" ? (
-        <div className="p-4">
-          <CoverToolsPanel embedded />
-        </div>
-      ) : (
-        <PictureRefineBody illo={illo} />
-      )}
+      <PictureRefineBody illo={illo} />
+      {coverMode && cursor ? <CoverSetupDisclosure /> : null}
 
       <Modal
         open={intentPick !== null}
@@ -320,10 +348,44 @@ function RefineSection({ illo }: { illo: ReturnType<typeof usePageIllustration> 
   );
 }
 
-/** Generate / refine / new-version controls shared by pages and covers. */
+/** Title / bake / wrap / matching-set — secondary once the cover already has art. */
+function CoverSetupDisclosure() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="border-t border-ink-100">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left transition hover:bg-ink-50"
+      >
+        <span className="min-w-0">
+          <span className="block text-xs font-semibold text-ink-700">Cover setup</span>
+          <span className="block text-[11px] text-ink-400">
+            Title, bake, wrap &amp; matching set
+          </span>
+        </span>
+        <ChevronDown
+          className={cn(
+            "size-4 shrink-0 text-ink-400 transition",
+            open && "rotate-180",
+          )}
+        />
+      </button>
+      {open ? (
+        <div className="border-t border-ink-100 px-4 pb-4 pt-3">
+          <CoverToolsPanel embedded variant="setup" />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Generate / refine / new-version controls for page + cover illustrations. */
 function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustration> }) {
-  const { openImageEdit } = useStudio();
+  const openImageEdit = useStudioPanelStore((s) => s.openImageEdit);
+  const sceneFlushRef = useRef<(() => void) | null>(null);
   const {
+    coverMode,
     cursor,
     generating,
     sparkRange,
@@ -338,21 +400,42 @@ function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustrati
     staleRefAnchors,
     updateScene,
     redrawLayout,
-    coverMode,
+    genSpread,
+    patchSubject,
   } = illo;
+
+  const subjectLabel = coverMode ? "cover" : "picture";
 
   return (
     <div className="space-y-3 p-4">
+      <CastPicker illo={illo} defaultOpen={!cursor} />
+
       {!cursor ? (
-        <Button
-          className="w-full"
-          loading={generating}
-          leftIcon={<Sparkles className="size-4" />}
-          onClick={() => void generate()}
-        >
-          {coverMode ? "Generate cover" : "Generate"}
-          <SparkEstimateCost range={sparkRange} />
-        </Button>
+        <>
+          {genSpread && (
+            <SceneBriefField
+              label={
+                coverMode ? "Cover scene" : "What’s happening in the picture"
+              }
+              value={genSpread.illustration}
+              onCommit={(illustration) => void patchSubject({ illustration })}
+              hint="Describe the moment — who, where, what they’re doing. Skip “generate an image of…” or style instructions."
+              flushRef={sceneFlushRef}
+            />
+          )}
+          <Button
+            className="w-full"
+            loading={generating}
+            leftIcon={<Sparkles className="size-4" />}
+            onClick={() => {
+              sceneFlushRef.current?.();
+              void generate();
+            }}
+          >
+            {coverMode ? "Generate cover" : "Generate illustration"}
+            <SparkEstimateCost range={sparkRange} />
+          </Button>
+        </>
       ) : (
         <>
           {layoutStale && !isStale && (
@@ -368,23 +451,31 @@ function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustrati
               message={
                 changedHere.length > 0
                   ? `${formatList(changedHere.map((a) => a.name))} changed.`
-                  : "Characters & places on this page changed."
+                  : coverMode
+                    ? "Characters & places on this cover changed."
+                    : "Characters & places on this page changed."
               }
               action={
-                staleRefAnchors.length > 0 ? "Update looks, then scene" : "Update scene"
+                staleRefAnchors.length > 0
+                  ? "Update looks, then scene"
+                  : coverMode
+                    ? "Update cover"
+                    : "Update scene"
               }
               loading={generating}
               onAction={() => void updateScene()}
               hint={
                 staleRefAnchors.length > 0
                   ? `Will refresh ${formatList(staleRefAnchors.map((a) => a.name))} first.`
-                  : undefined
+                  : "Cast or looks changed — update when you’ve finished editing."
               }
             />
           )}
 
           <div>
-            <p className="mb-1.5 text-xs font-medium text-ink-600">Change this picture</p>
+            <p className="mb-1.5 text-xs font-medium text-ink-600">
+              Change this {subjectLabel}
+            </p>
             <Input
               value={edit}
               onChange={(e) => setEdit(e.target.value)}
@@ -442,247 +533,17 @@ function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustrati
 }
 
 function CharactersSection({ illo }: { illo: ReturnType<typeof usePageIllustration> }) {
-  const {
-    anchors,
-    activeIds,
-    drawnAnchorIds,
-    coverMode,
-    isStale,
-    staleRefAnchors,
-    updateScene,
-    generating,
-    sparkRange,
-    setActiveAnchors,
-    cursor,
-    changedHere,
-  } = illo;
-  const { setImageEditCloseGuard } = useStudio();
-
-  const [draftIds, setDraftIds] = useState(activeIds);
-  const [discardOpen, setDiscardOpen] = useState(false);
-  const [pendingProceed, setPendingProceed] = useState<(() => void) | null>(null);
-
-  const dirty = !sameIdSet(draftIds, activeIds);
-  const differsFromArt =
-    !!cursor && drawnAnchorIds.length > 0 && !sameIdSet(draftIds, drawnAnchorIds);
-
-  // Stay in sync with commits when the user isn't mid-edit.
-  useEffect(() => {
-    if (!dirty) setDraftIds(activeIds);
-  }, [activeIds, dirty]);
-
-  useEffect(() => {
-    setImageEditCloseGuard((proceed) => {
-      if (!dirty) return true;
-      setPendingProceed(() => proceed);
-      setDiscardOpen(true);
-      return false;
-    });
-    return () => setImageEditCloseGuard(null);
-  }, [dirty, setImageEditCloseGuard]);
-
-  const staleLookIds = useMemo(() => {
-    const ids = new Set(changedHere.map((a) => a.id));
-    for (const a of staleRefAnchors) ids.add(a.id);
-    return ids;
-  }, [changedHere, staleRefAnchors]);
-
-  const draftSet = useMemo(() => new Set(draftIds), [draftIds]);
-  const committedSet = useMemo(() => new Set(activeIds), [activeIds]);
-
-  const diff = useMemo(() => {
-    const name = (id: string) => anchors.find((a) => a.id === id)?.name ?? "Someone";
-    const added = draftIds.filter((id) => !committedSet.has(id)).map(name);
-    const removed = activeIds.filter((id) => !draftSet.has(id)).map(name);
-    return { added, removed };
-  }, [draftIds, activeIds, anchors, committedSet, draftSet]);
-
-  function toggleDraft(id: string) {
-    setDraftIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
-    );
-  }
-
-  function cancelDraft() {
-    setDraftIds(activeIds);
-  }
-
-  function matchPicture() {
-    setDraftIds(drawnAnchorIds);
-  }
-
-  async function applyAndUpdate() {
-    if (dirty) await setActiveAnchors(draftIds);
-    await updateScene();
-  }
-
-  if (anchors.length === 0) {
-    return (
-      <p className="p-4 text-xs leading-relaxed text-ink-400">
-        No characters or places in the cast yet. Add them in the Characters step.
-      </p>
-    );
-  }
-
-  const characters = anchors.filter((a) => a.type !== "place");
-  const places = anchors.filter((a) => a.type === "place");
-
   return (
-    <div className="space-y-3 p-4">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1 text-xs font-medium text-ink-500">
-          {coverMode ? "Featured on this cover" : "Who’s in this picture"}
-          <InfoHint topic="pageAnchors" />
-        </div>
-        <span className="rounded-full bg-ink-100 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-ink-600">
-          {draftIds.length}
-        </span>
-      </div>
-
-      {characters.length > 0 && (
-        <CastGroup
-          label="Characters"
-          anchors={characters}
-          draftSet={draftSet}
-          staleLookIds={staleLookIds}
-          onToggle={toggleDraft}
-        />
-      )}
-      {places.length > 0 && (
-        <CastGroup
-          label="Places"
-          anchors={places}
-          draftSet={draftSet}
-          staleLookIds={staleLookIds}
-          onToggle={toggleDraft}
-        />
-      )}
-
-      {(diff.added.length > 0 || diff.removed.length > 0) && (
-        <p className="text-[11px] leading-snug text-ink-500">
-          {diff.added.length > 0 && <>Added {formatList(diff.added)}</>}
-          {diff.added.length > 0 && diff.removed.length > 0 && " · "}
-          {diff.removed.length > 0 && <>Removed {formatList(diff.removed)}</>}
-        </p>
-      )}
-
-      <p className="text-[11px] leading-snug text-ink-400">
-        Tap to include or leave out. Changes stay local until you update the picture.
-      </p>
-
-      {differsFromArt && (
-        <button
-          type="button"
-          className="text-left text-[11px] font-medium text-brand-600 hover:text-brand-700"
-          onClick={matchPicture}
-        >
-          Match the picture
-        </button>
-      )}
-
-      {(dirty || isStale) && (
-        <div className="flex gap-2">
-          {dirty && (
-            <Button
-              className="flex-1"
-              size="sm"
-              variant="secondary"
-              disabled={generating}
-              onClick={cancelDraft}
-            >
-              Cancel
-            </Button>
-          )}
-          <Button
-            className="flex-1"
-            size="sm"
-            loading={generating}
-            leftIcon={<RefreshCw className="size-4" />}
-            onClick={() => void applyAndUpdate()}
-          >
-            Update picture
-            <SparkEstimateCost range={sparkRange} />
-          </Button>
-        </div>
-      )}
-
-      <Modal
-        open={discardOpen}
-        onClose={() => {
-          setDiscardOpen(false);
-          setPendingProceed(null);
-        }}
-        title="Discard cast changes?"
-        size="max-w-sm"
-        footer={
-          <>
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                setDiscardOpen(false);
-                setPendingProceed(null);
-              }}
-            >
-              Keep editing
-            </Button>
-            <Button
-              size="sm"
-              onClick={() => {
-                const go = pendingProceed;
-                setDiscardOpen(false);
-                setPendingProceed(null);
-                cancelDraft();
-                go?.();
-              }}
-            >
-              Discard
-            </Button>
-          </>
-        }
-      >
-        <p className="text-sm text-ink-600">
-          You changed who’s in the picture, but haven’t updated the art yet.
-        </p>
-      </Modal>
-    </div>
-  );
-}
-
-function CastGroup({
-  label,
-  anchors,
-  draftSet,
-  staleLookIds,
-  onToggle,
-}: {
-  label: string;
-  anchors: Anchor[];
-  draftSet: Set<string>;
-  staleLookIds: Set<string>;
-  onToggle: (id: string) => void;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <p className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">{label}</p>
-      <div className="grid grid-cols-3 gap-2">
-        {anchors.map((a) => (
-          <PortraitChip
-            key={a.id}
-            anchor={a}
-            active={draftSet.has(a.id)}
-            lookStale={staleLookIds.has(a.id)}
-            onClick={() => onToggle(a.id)}
-          />
-        ))}
-      </div>
+    <div className="p-4">
+      <CastPicker illo={illo} collapsible={false} />
     </div>
   );
 }
 
 function SceneSection({ illo }: { illo: ReturnType<typeof usePageIllustration> }) {
-  const { openImageEdit } = useStudio();
+  const openImageEdit = useStudioPanelStore((s) => s.openImageEdit);
   const {
+    coverMode,
     subject,
     genSpread,
     patchSubject,
@@ -710,18 +571,12 @@ function SceneSection({ illo }: { illo: ReturnType<typeof usePageIllustration> }
         </div>
       )}
 
-      <Field label="What’s happening in the picture">
-        <Textarea
-          rows={3}
-          value={genSpread.illustration}
-          onChange={(e) => patchSubject({ illustration: e.target.value })}
-          placeholder={SCENE_BRIEF_PLACEHOLDER}
-        />
-      </Field>
-      <p className="text-[11px] leading-snug text-ink-400">
-        Describe the moment — who, where, what they’re doing. Skip “generate an
-        image of…” or style instructions.
-      </p>
+      <SceneBriefField
+        label={coverMode ? "Cover scene" : "What’s happening in the picture"}
+        value={genSpread.illustration}
+        onCommit={(illustration) => void patchSubject({ illustration })}
+        hint="Describe the moment — who, where, what they’re doing. Skip “generate an image of…” or style instructions."
+      />
 
       {cursor ? (
         <Button
@@ -804,67 +659,5 @@ function StatusBanner({
       </div>
       {hint && <p className="mt-1 text-[11px] leading-relaxed text-amber-700">{hint}</p>}
     </div>
-  );
-}
-
-function PortraitChip({
-  anchor,
-  active,
-  lookStale,
-  onClick,
-}: {
-  anchor: Anchor;
-  active: boolean;
-  lookStale?: boolean;
-  onClick: () => void;
-}) {
-  const url = useBlobUrl(anchorThumbBlobId(anchor));
-  const isPlace = anchor.type === "place";
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={active ? "In this picture — click to remove" : "Add to this picture"}
-      className={cn(
-        "flex flex-col items-center gap-1.5 rounded-xl px-1.5 py-2 transition active:scale-[0.98]",
-        active ? "bg-brand-50 ring-1 ring-inset ring-brand-200" : "bg-ink-50/80 hover:bg-ink-100",
-      )}
-    >
-      <span className="relative">
-        <span
-          className={cn(
-            "flex size-12 items-center justify-center overflow-hidden rounded-full bg-ink-100",
-            active ? "ring-2 ring-brand-500 ring-offset-2 ring-offset-brand-50" : "opacity-55 grayscale",
-            lookStale && active && "ring-amber-500",
-          )}
-        >
-          {url ? (
-            <img src={url} alt="" className="size-full object-cover" />
-          ) : isPlace ? (
-            <MapPin className="size-5 text-ink-400" />
-          ) : (
-            <span className="text-sm font-semibold text-ink-400">
-              {anchor.name.slice(0, 1).toUpperCase()}
-            </span>
-          )}
-        </span>
-        {lookStale && active && (
-          <span className="absolute -right-0.5 -top-0.5 size-2.5 rounded-full bg-amber-400 ring-2 ring-white" />
-        )}
-        {isPlace && (
-          <span className="absolute -bottom-0.5 -right-0.5 flex size-4 items-center justify-center rounded-full bg-white shadow-sm ring-1 ring-ink-100">
-            <MapPin className="size-2.5 text-ink-500" />
-          </span>
-        )}
-      </span>
-      <span
-        className={cn(
-          "line-clamp-2 w-full text-center text-[11px] font-medium leading-tight",
-          active ? "text-brand-800" : "text-ink-400",
-        )}
-      >
-        {anchor.name}
-      </span>
-    </button>
   );
 }

@@ -276,3 +276,49 @@ export async function deletePublicObject(storagePath: string): Promise<void> {
     // already gone / not found
   }
 }
+
+/**
+ * Upload a rendered QR code image to the world-readable
+ * `public/qrcodes/{id}/render-...` space and return its path + public URL.
+ * `id` only shapes the filename (sanitized), never the ACL.
+ */
+export async function uploadQrCode(
+  id: string,
+  buf: Buffer,
+  contentType: string,
+): Promise<{ storagePath: string; publicUrl: string }> {
+  const safeId = id.replace(/[^a-z0-9-]/gi, "").slice(0, 60) || "qr";
+  const storagePath = `public/qrcodes/${safeId}/render-${randomUUID()}.${extForMime(contentType)}`;
+  await blobBucket().file(storagePath).save(buf, { contentType, resumable: false });
+  return { storagePath, publicUrl: publicMediaUrl(storagePath) };
+}
+
+/**
+ * Upload the source logo image a QR code's center was composited from — a copy
+ * kept independent of whatever branding asset it might have been picked from,
+ * so a later change there doesn't retroactively change an already-saved code.
+ */
+export async function uploadQrLogo(
+  id: string,
+  buf: Buffer,
+  contentType: string,
+): Promise<{ storagePath: string; publicUrl: string }> {
+  const safeId = id.replace(/[^a-z0-9-]/gi, "").slice(0, 60) || "qr";
+  const storagePath = `public/qrcodes/${safeId}/logo-${randomUUID()}.${extForMime(contentType)}`;
+  await blobBucket().file(storagePath).save(buf, { contentType, resumable: false });
+  return { storagePath, publicUrl: publicMediaUrl(storagePath) };
+}
+
+/**
+ * Fetch a public image's bytes over HTTP (e.g. an existing branding asset's
+ * `imageUrl`) so it can be re-uploaded as an independent copy or composited
+ * in-memory. Used only for admin-picked, already-public URLs — never
+ * user-supplied ones.
+ */
+export async function fetchPublicBytes(url: string): Promise<{ buffer: Buffer; contentType: string }> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Could not fetch the image at ${url} (${res.status}).`);
+  const contentType = res.headers.get("content-type") || "image/png";
+  const buffer = Buffer.from(await res.arrayBuffer());
+  return { buffer, contentType };
+}

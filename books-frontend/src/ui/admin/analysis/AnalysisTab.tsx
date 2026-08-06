@@ -20,6 +20,7 @@ import { PaymentsAnalysis } from "./PaymentsAnalysis";
 import { FinanceAnalysis } from "./FinanceAnalysis";
 import { ProductsAnalysis } from "./ProductsAnalysis";
 import { ReferralsAnalysis } from "./ReferralsAnalysis";
+import { AffiliatesAnalysis } from "./AffiliatesAnalysis";
 import { MarketPicker } from "./MarketPicker";
 import { MarketsCard } from "./MarketsCard";
 import { FunnelCard } from "./FunnelCard";
@@ -34,6 +35,7 @@ const SECTIONS: { id: Section; label: string }[] = [
   { id: "payments", label: "Payments" },
   { id: "finance", label: "Finance" },
   { id: "referrals", label: "Referrals" },
+  { id: "affiliates", label: "Affiliates" },
 ];
 
 const TIMEFRAMES: { id: Timeframe; label: string }[] = [
@@ -177,6 +179,7 @@ export function AnalysisTab() {
       {section === "payments" && <PaymentsAnalysis />}
       {section === "finance" && <FinanceAnalysis />}
       {section === "referrals" && <ReferralsAnalysis />}
+      {section === "affiliates" && <AffiliatesAnalysis />}
 
       {section === "users" && (
         <div className="space-y-5">

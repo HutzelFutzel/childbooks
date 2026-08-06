@@ -200,6 +200,29 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Local mirror of the Rewardful account (campaigns, affiliates, commissions,
+    // payouts) plus the processed-webhook log. Rewardful is the source of truth;
+    // these copies exist for the admin dashboard and to join commissions to our
+    // own payments. They hold affiliates' names, emails and earnings, so they're
+    // backend-only — the dashboard reads them through the admin-gated routes.
+    // (The catch-all below would already deny these; they're spelled out because
+    // money and third-party personal data deserve to be obvious, not implied.)
+    match /affiliateCampaigns/{doc} {
+      allow read, write: if false;
+    }
+    match /affiliatePartners/{doc} {
+      allow read, write: if false;
+    }
+    match /affiliateCommissions/{doc} {
+      allow read, write: if false;
+    }
+    match /affiliatePayouts/{doc} {
+      allow read, write: if false;
+    }
+    match /affiliateWebhookEvents/{doc} {
+      allow read, write: if false;
+    }
+
     // Everything else is denied to direct client access.
     match /{document=**} {
       allow read, write: if false;

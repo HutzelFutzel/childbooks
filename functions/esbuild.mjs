@@ -31,6 +31,16 @@ const external = [
   // both have to resolve from node_modules rather than be inlined here.
   "puppeteer-core",
   "@sparticuz/chromium",
+  // The QR code styling renderer's DOM stand-in: jsdom ships a
+  // `xhr-sync-worker.js` file its synchronous XMLHttpRequest path locates via
+  // `require.resolve` at runtime relative to its own location in
+  // node_modules — bundling it breaks that lookup (esbuild warns about this
+  // exact pattern). Keeping it external also skips inlining its considerable
+  // dependency tree (cssstyle, parse5, whatwg-url, …) into every cold start.
+  "jsdom",
+  // Pulls in `qrcode-generator` as its own dependency — external so that
+  // stays out of the bundle too rather than needing to be listed here itself.
+  "qr-code-styling",
 ];
 
 const options = {

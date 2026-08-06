@@ -1,6 +1,7 @@
 /**
- * Cover-specific tools (text, bake-into-art, continuous wrap, variations).
- * Nested under the Edit sheet's Cover tab when the active page is a cover.
+ * Cover-specific tools (text, bake-into-art, matching front/back, variations).
+ * Used as the empty-cover refine sheet, or as a secondary “Cover setup”
+ * disclosure once art exists (page-like tweaks live in ImageEditPanel).
  */
 import { useState } from "react";
 import { Info, RefreshCw, RotateCcw, Sparkles, Wand2 } from "lucide-react";
@@ -24,12 +25,15 @@ import { Callout } from "../components/Callout";
 import { Field, Input, Textarea } from "../components/Input";
 import { Toggle } from "../components/Toggle";
 import { VersionThumb } from "../components/VersionThumb";
+import { CastPicker } from "../design/CastPicker";
 import { applyCoverBakeText, buildDesignPages } from "../design/designInit";
+import { useBufferedText } from "../hooks/useBufferedText";
 import { spanTierRanges, useTierSparkEstimate } from "../hooks/useTierEstimate";
 import { SparkEstimateCost } from "../layout/SparkCost";
 import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
 import { useStudio } from "./StudioContext";
+import { usePageIllustration } from "./usePageIllustration";
 
 const CONTINUATION_MARKER = "wrap-around back panel";
 
@@ -49,11 +53,24 @@ function sumRange(
   return { minSparks: a.minSparks + b.minSparks, maxSparks: a.maxSparks + b.maxSparks };
 }
 
-/** Cover text, bake, wrap, and generate controls — nested inside Edit on covers. */
-export function CoverToolsPanel({ embedded = false }: { embedded?: boolean }) {
-  const { project, setPageGenerating, selectIllustration } = useStudio();
+/**
+ * Cover text, bake, wrap, and generate controls.
+ * - `full` (default): first-generate sheet (also used when the cover has no art).
+ * - `setup`: secondary disclosure under page-like refine once art exists —
+ *   skips the stale banner (parent refine already shows it) and keeps title /
+ *   bake / wrap / matching generate.
+ */
+export function CoverToolsPanel({
+  embedded = false,
+  variant = "full",
+}: {
+  embedded?: boolean;
+  variant?: "full" | "setup";
+}) {
+  const { project, selection, setPageGenerating, selectIllustration } = useStudio();
   const setScreenplay = useProjectsStore((s) => s.setScreenplay);
   const setBookTitle = useProjectsStore((s) => s.setBookTitle);
+  const setCoverSubtitle = useProjectsStore((s) => s.setCoverSubtitle);
   const setDesign = useProjectsStore((s) => s.setDesign);
 
   const [versionCount, setVersionCount] = useState<1 | 2 | 3>(1);
@@ -79,9 +96,14 @@ export function CoverToolsPanel({ embedded = false }: { embedded?: boolean }) {
   const frontTier: ImageTier | null = frontBake ? "premium" : userTier;
   const frontCostRange = scaleRange(rangeForTier(frontTier), versionCount);
   const backCostRange = scaleRange(rangeForTier(userTier), versionCount);
-  const setCostRange = wrap
-    ? scaleRange(rangeForTier(frontTier), versionCount)
-    : sumRange(frontCostRange, backCostRange);
+  // The matching-pair flow (`generateCoverWrap`) is TWO full renders under the
+  // hood — front, then a true outpaint continuation of it for the back. The
+  // continuation needs a mask-capable model, which only the premium tier
+  // offers, so the WHOLE pair always renders at premium regardless of the
+  // user's saved preference (see `generateWrapSet`) — its estimate is double a
+  // premium-tier render, not scaled to whatever tier the user last picked.
+  const wrapCostRange = scaleRange(rangeForTier("premium"), versionCount * 2);
+  const setCostRange = wrap ? wrapCostRange : sumRange(frontCostRange, backCostRange);
 
   async function patchCover(coverId: string, patch: Partial<CoverSpec>) {
     const tree = project.screenplay;
@@ -112,16 +134,54 @@ export function CoverToolsPanel({ embedded = false }: { embedded?: boolean }) {
 
   async function revertCoverText(baked: { title?: string; subtitle?: string; author?: string }) {
     await setBookTitle(project.id, baked.title ?? "");
-    await patchCover(COVER_FRONT_ID, {
-      subtitle: baked.subtitle ?? "",
-      author: baked.author ?? "",
-    });
+    await setCoverSubtitle(project.id, baked.subtitle ?? "");
+    await patchCover(COVER_FRONT_ID, { author: baked.author ?? "" });
+  }
+
+  /** Scene brief for the cover currently open in the studio (front or back). */
+  const activeCoverId =
+    selection.kind !== "none" &&
+    selection.kind !== "anchor" &&
+    "pageId" in selection &&
+    (selection.pageId === COVER_FRONT_ID || selection.pageId === COVER_BACK_ID)
+      ? selection.pageId
+      : COVER_FRONT_ID;
+  const activeCover = activeCoverId === COVER_BACK_ID ? back : front;
+  const coverIllo = usePageIllustration(activeCoverId);
+
+  // Buffer toolbox text so typing doesn't mutate the whole studio every key.
+  const titleField = useBufferedText(project.title, (v) => {
+    void setBookTitle(project.id, v);
+  });
+  const subtitleField = useBufferedText(front?.subtitle ?? "", (v) => {
+    void setCoverSubtitle(project.id, v);
+  });
+  const authorField = useBufferedText(front?.author ?? "", (v) => {
+    void patchCover(COVER_FRONT_ID, { author: v });
+  });
+  const blurbField = useBufferedText(back?.title ?? "", (v) => {
+    void patchCover(COVER_BACK_ID, { title: v });
+  });
+  const sceneField = useBufferedText(activeCover?.illustration ?? "", (v) => {
+    void patchCover(activeCoverId, { illustration: v });
+  });
+
+  function flushTextFields() {
+    titleField.flush();
+    subtitleField.flush();
+    authorField.flush();
+    blurbField.flush();
+    sceneField.flush();
   }
 
   async function genCover(coverId: string, count: number, tier: ImageTier) {
-    const spec = coverId === COVER_FRONT_ID ? doc?.frontCover : doc?.backCover;
+    // Always read the latest screenplay — buffered scene/title edits may have
+    // just flushed in this same tick.
+    const live = useProjectsStore.getState().current();
+    const liveDoc = live?.screenplay ? getCursor(live.screenplay).content : null;
+    const spec = coverId === COVER_FRONT_ID ? liveDoc?.frontCover : liveDoc?.backCover;
     if (!spec) return;
-    selectIllustration(coverId);
+    selectIllustration(coverId, { createIfMissing: true });
     setPageGenerating(coverId, true);
     try {
       for (let i = 0; i < count; i++) {
@@ -133,15 +193,23 @@ export function CoverToolsPanel({ embedded = false }: { embedded?: boolean }) {
   }
 
   async function makeBackContinueFront() {
-    if (!front || !back) return;
-    const anchorIds = Array.from(new Set([...(front.anchorIds ?? []), ...(back.anchorIds ?? [])]));
-    const alreadyLinked = back.illustration.includes(CONTINUATION_MARKER);
+    const live = useProjectsStore.getState().current();
+    const liveDoc = live?.screenplay ? getCursor(live.screenplay).content : null;
+    const liveFront = liveDoc?.frontCover;
+    const liveBack = liveDoc?.backCover;
+    if (!liveFront || !liveBack) return;
+    const anchorIds = Array.from(
+      new Set([...(liveFront.anchorIds ?? []), ...(liveBack.anchorIds ?? [])]),
+    );
+    const alreadyLinked = liveBack.illustration.includes(CONTINUATION_MARKER);
     const illustration = alreadyLinked
-      ? back.illustration
+      ? liveBack.illustration
       : [
-          back.illustration.trim(),
+          liveBack.illustration.trim(),
           `Continue the same setting, colour palette, characters and art style as the front cover — this is the ${CONTINUATION_MARKER} of the same book.`,
-          front.illustration.trim() ? `The front cover shows: ${front.illustration.trim()}` : "",
+          liveFront.illustration.trim()
+            ? `The front cover shows: ${liveFront.illustration.trim()}`
+            : "",
           "Keep the bottom-right corner calm and simple — plain, uncluttered background there with no objects, symbols or graphics.",
         ]
           .filter(Boolean)
@@ -150,6 +218,7 @@ export function CoverToolsPanel({ embedded = false }: { embedded?: boolean }) {
   }
 
   async function generateFront() {
+    flushTextFields();
     const tier = frontBake ? "premium" : await requireImageTier();
     if (!tier) return;
     setBusy("front");
@@ -163,6 +232,7 @@ export function CoverToolsPanel({ embedded = false }: { embedded?: boolean }) {
   }
 
   async function generateBack() {
+    flushTextFields();
     const tier = await requireImageTier();
     if (!tier) return;
     setBusy("back");
@@ -176,17 +246,30 @@ export function CoverToolsPanel({ embedded = false }: { embedded?: boolean }) {
   }
 
   async function generateWrapSet() {
-    const tier = frontBake ? "premium" : await requireImageTier();
-    if (!tier) return;
+    flushTextFields();
+    // The back cover is a true outpaint continuation of the front's real edge
+    // pixels, which needs a mask-capable model — only the premium tier offers
+    // that (see `renderCoverContinuation`). Forced unconditionally, like baked
+    // text, rather than asking `requireImageTier()` for the user's saved
+    // preference: a quick-tier "match" would silently fall back to a lesser
+    // (non-continuous) result.
+    const tier: ImageTier = "premium";
     setBusy("set");
     // Materialize frames for busy veils; keep selection on the front (usual start).
-    selectIllustration(COVER_BACK_ID);
-    selectIllustration(COVER_FRONT_ID);
-    setPageGenerating(COVER_FRONT_ID, true);
-    setPageGenerating(COVER_BACK_ID, true);
+    selectIllustration(COVER_BACK_ID, { createIfMissing: true });
+    selectIllustration(COVER_FRONT_ID, { createIfMissing: true });
     try {
       for (let i = 0; i < versionCount; i++) {
-        const ok = await generateCoverWrap({ tier });
+        // Only the cover actually in flight shows a loading veil: front while
+        // it renders, then back once the front settles — never both for the
+        // whole pair, or a finished front would sit there looking "stuck".
+        setPageGenerating(COVER_FRONT_ID, true);
+        const ok = await generateCoverWrap({
+          tier,
+          onFrontSettled: () => setPageGenerating(COVER_FRONT_ID, false),
+          onBackStart: () => setPageGenerating(COVER_BACK_ID, true),
+        });
+        setPageGenerating(COVER_BACK_ID, false);
         if (!ok) break;
       }
     } catch (err) {
@@ -200,6 +283,7 @@ export function CoverToolsPanel({ embedded = false }: { embedded?: boolean }) {
 
   async function generateSet() {
     if (wrap) return generateWrapSet();
+    flushTextFields();
     const tier = await requireImageTier();
     if (!tier) return;
     const setFrontTier: ImageTier = frontBake ? "premium" : tier;
@@ -225,8 +309,29 @@ export function CoverToolsPanel({ embedded = false }: { embedded?: boolean }) {
     );
   }
 
+  const setupOnly = variant === "setup";
+
   return (
     <div className={cn("space-y-3", !embedded && "p-4")}>
+      {!setupOnly && coverIllo.isStale && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs text-amber-800">
+              Cast or looks changed — update when you’ve finished editing.
+            </span>
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={coverIllo.generating}
+              leftIcon={<RefreshCw className="size-4" />}
+              onClick={() => void coverIllo.updateScene()}
+            >
+              Update cover
+              <SparkEstimateCost range={coverIllo.sparkRange} />
+            </Button>
+          </div>
+        </div>
+      )}
       {frontDrift && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">
           <div className="flex items-start gap-2">
@@ -266,33 +371,62 @@ export function CoverToolsPanel({ embedded = false }: { embedded?: boolean }) {
       <section className="space-y-2">
         <Field label="Book title" required>
           <Input
-            value={project.title}
-            onChange={(e) => void setBookTitle(project.id, e.target.value)}
+            value={titleField.value}
+            onChange={(e) => titleField.onChange(e.target.value)}
+            onFocus={titleField.onFocus}
+            onBlur={titleField.onBlur}
             placeholder="Your book's title"
           />
         </Field>
         <Field label="Subtitle">
           <Input
-            value={front?.subtitle ?? ""}
-            onChange={(e) => void patchCover(COVER_FRONT_ID, { subtitle: e.target.value })}
+            value={subtitleField.value}
+            onChange={(e) => subtitleField.onChange(e.target.value)}
+            onFocus={subtitleField.onFocus}
+            onBlur={subtitleField.onBlur}
             placeholder="Optional"
           />
         </Field>
         <Field label="Author">
           <Input
-            value={front?.author ?? ""}
-            onChange={(e) => void patchCover(COVER_FRONT_ID, { author: e.target.value })}
+            value={authorField.value}
+            onChange={(e) => authorField.onChange(e.target.value)}
+            onFocus={authorField.onFocus}
+            onBlur={authorField.onBlur}
             placeholder="Optional"
           />
         </Field>
         <Field label="Back blurb">
           <Textarea
             rows={2}
-            value={back?.title ?? ""}
-            onChange={(e) => void patchCover(COVER_BACK_ID, { title: e.target.value })}
+            value={blurbField.value}
+            onChange={(e) => blurbField.onChange(e.target.value)}
+            onFocus={blurbField.onFocus}
+            onBlur={blurbField.onBlur}
             placeholder="Optional"
           />
         </Field>
+        <Field
+          label={
+            activeCoverId === COVER_BACK_ID ? "Back cover scene" : "Cover scene"
+          }
+        >
+          <Textarea
+            rows={3}
+            value={sceneField.value}
+            onChange={(e) => sceneField.onChange(e.target.value)}
+            onFocus={sceneField.onFocus}
+            onBlur={sceneField.onBlur}
+            placeholder="Ava under a glowing moon; warm night colours; curious, not scared"
+          />
+        </Field>
+        <p className="text-[11px] leading-snug text-ink-400">
+          Describe the cover moment — who, where, the mood. Skip “generate an
+          image of…” or style instructions.
+        </p>
+
+        {/* Cast lives in the page-like refine body when setup is secondary. */}
+        {!setupOnly && <CastPicker illo={coverIllo} defaultOpen={!coverIllo.cursor} />}
       </section>
 
       <section className="space-y-2">
@@ -310,11 +444,16 @@ export function CoverToolsPanel({ embedded = false }: { embedded?: boolean }) {
         )}
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <p className="text-xs font-medium text-ink-700">Continuous wrap</p>
-            <p className="text-[11px] text-ink-400">One art for front &amp; back</p>
+            <p className="text-xs font-medium text-ink-700">Match back to front</p>
+            <p className="text-[11px] text-ink-400">Back continues the front's scene</p>
           </div>
-          <Toggle checked={wrap} onChange={setWrap} label="Generate as one wrap" />
+          <Toggle checked={wrap} onChange={setWrap} label="Generate a matching back cover" />
         </div>
+        {wrap && (
+          <Callout tone="brand" icon={Info}>
+            Uses {premiumLabel} (not {quickLabel}) — a true continuation needs it.
+          </Callout>
+        )}
       </section>
 
       <section className="space-y-2">
@@ -346,7 +485,7 @@ export function CoverToolsPanel({ embedded = false }: { embedded?: boolean }) {
           leftIcon={<Sparkles className="size-4" />}
           onClick={() => void generateSet()}
         >
-          {wrap ? "Matching wrap" : "Matching set"}
+          {wrap ? "Matching pair" : "Matching set"}
           <SparkEstimateCost range={setCostRange} />
         </Button>
         {!wrap && (

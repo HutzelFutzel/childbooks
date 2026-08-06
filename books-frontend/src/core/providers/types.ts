@@ -77,8 +77,12 @@ export interface ReferenceImage {
    *     texture should be copied, never its subjects, layout or composition.
    *   - "scale": a size chart of several characters on one ground line — only
    *     their relative heights should be copied, never their poses or spacing.
+   *   - "restyleBase": the image being re-rendered in a new art style. Its
+   *     CONTENT must be reproduced exactly (subjects, layout, poses, framing);
+   *     only the rendering technique changes. Never "match this exactly", which
+   *     would preserve the very style we're replacing.
    */
-  role?: "subject" | "composition" | "relation" | "style" | "scale";
+  role?: "subject" | "composition" | "relation" | "style" | "scale" | "restyleBase";
 }
 
 export interface ImageRequest {
@@ -100,6 +104,13 @@ export interface ImageRequest {
    * varies; ignored by providers that lack a mask/edit endpoint.
    */
   mask?: ReferenceImage;
+  /**
+   * Whether rendered text belongs in the output (cover typography). Default
+   * false, which lets providers that interleave caption text parts with the
+   * reference images (Gemini) close with a hard "never draw these captions"
+   * instruction — without it, labels get baked into the artwork.
+   */
+  allowText?: boolean;
   signal?: AbortSignal;
 }
 

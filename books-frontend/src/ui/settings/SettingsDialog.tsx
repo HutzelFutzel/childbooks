@@ -6,6 +6,7 @@ import { Button } from "../components/Button";
 import { useAuthStore, userLabel, userSecondaryLine } from "../../state/authStore";
 import { useAccountUiStore } from "../../state/accountUiStore";
 import { usePreferredImageTier, setPreferredImageTier } from "../../state/imageTier";
+import { useProfileStore } from "../../state/profileStore";
 import { ImageTierPicker } from "./ImageTierPicker";
 
 function Section({
@@ -46,6 +47,7 @@ export function SettingsDialog() {
   const user = useAuthStore((s) => s.user);
   const signOutUser = useAuthStore((s) => s.signOutUser);
   const tier = usePreferredImageTier();
+  const profileLoaded = useProfileStore((s) => s.profileLoaded);
 
   return (
     <Modal open={open} onClose={close} title="Settings" size="max-w-lg">
@@ -55,7 +57,7 @@ export function SettingsDialog() {
           title="Image quality"
           hint="Applies to every image you generate. You can switch anytime — even per image."
         >
-          {tier === null && (
+          {profileLoaded && tier === null && (
             <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
               You haven&apos;t picked a default yet. Choose one below — you&apos;ll be able to change
               it here or right on any generate button.

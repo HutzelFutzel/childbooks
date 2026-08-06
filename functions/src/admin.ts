@@ -5,6 +5,7 @@
  * (clients never write the config docs directly — the rules deny it).
  */
 import express, { type Express, type Request, type Response } from "express";
+import sharp from "sharp";
 import { ZodError } from "zod";
 import type { AuthedRequest } from "./auth";
 import {
@@ -17,6 +18,8 @@ import {
   getSparksConfig,
   getReferralConfig,
   saveReferralConfig,
+  getAffiliateConfig,
+  saveAffiliateConfig,
   getEmailConfig,
   saveEmailConfig,
   getSlackConfig,
@@ -34,6 +37,7 @@ import {
   addLayoutExample,
   removeLayoutExample,
   saveAgeWritingConfig,
+  saveStoryCraftConfig,
   saveTypographyConfig,
   saveBrandingInfo,
   saveModelConfig,
@@ -45,6 +49,14 @@ import {
   setArtStyleExample,
   setBrandingAsset,
   setBrandingWatermark,
+  getQrCodesConfig,
+  saveQrCode,
+  deleteQrCode,
+  restoreQrCodeVersion,
+  deleteQrCodeVersion,
+  previewQrCode,
+  type QrCodeSaveInput,
+  type QrLogoInput,
   getSiteImagesConfig,
   getSiteContentConfig,
   setSiteImage,
@@ -88,6 +100,12 @@ import {
   isSiteImageSlot,
   type SiteImageSlot,
 } from "../../books-frontend/src/core/config/siteImages";
+import {
+  QR_CORNER_STYLES,
+  QR_DOT_STYLES,
+  type QrCornerStyle,
+  type QrDotStyle,
+} from "../../books-frontend/src/core/config/qrCodes";
 import {
   deleteProduct,
   getProductsConfig,
@@ -372,6 +390,14 @@ export function registerAdminRoutes(app: Express): void {
     }
   });
 
+  app.put("/admin/config/story-craft", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveStoryCraftConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
   app.put("/admin/config/typography", json, async (req: Request, res: Response) => {
     try {
       res.json(await saveTypographyConfig(req.body));
@@ -564,7 +590,9 @@ export function registerAdminRoutes(app: Express): void {
   });
 
   // Upload (replace) a single brand image asset.
-  // Body: { slot, base64, mimeType, alt? } where slot ∈ logo|logoDark|icon|favicon|ogImage.
+  // Body: { slot, base64, mimeType, alt? } where slot is any of BRAND_ASSET_SLOTS
+  // (logo/icon/favicon/social image, the default covers, and the permanent
+  // backcover logo — see `core/config/branding.ts`).
   app.post("/admin/branding/asset", json, async (req: Request, res: Response) => {
     try {
       const { slot, base64, mimeType, alt } = (req.body ?? {}) as {
@@ -590,6 +618,18 @@ export function registerAdminRoutes(app: Express): void {
       const asset: BrandAsset = { imageUrl: publicUrl, storagePath, updatedAt: Date.now() };
       const nextAlt = typeof alt === "string" ? alt : existing?.alt;
       if (typeof nextAlt === "string") asset.alt = nextAlt;
+      // Persist the file's own height÷width so the studio's backcover-logo print
+      // guide (and anything else that needs the true shape) doesn't have to
+      // re-download the image just to measure it.
+      try {
+        const meta = await sharp(buf).metadata();
+        if (meta.width && meta.height && meta.width > 0) {
+          asset.aspect = meta.height / meta.width;
+        }
+      } catch {
+        // SVGs and odd formats sometimes can't be measured — the guide falls
+        // back to a default wide shape in that case.
+      }
       res.json(await setBrandingAsset(slot as BrandAssetSlot, asset));
     } catch (err) {
       handleError(res, err);
@@ -723,6 +763,156 @@ export function registerAdminRoutes(app: Express): void {
       }
       await deletePublicObject(storagePath);
       res.json(await deleteWatermarkVersion(storagePath));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- QR code library (Marketing → QR codes) -------------------------------
+
+  app.get("/admin/qrcodes", async (_req: Request, res: Response) => {
+    try {
+      res.json(await getQrCodesConfig());
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Everything but `data` falls back to a sane default, so a partial body from
+  // an older client still renders something rather than 500ing outright.
+  function parseQrCodeSaveInput(body: unknown): QrCodeSaveInput {
+    const b = (body ?? {}) as Record<string, unknown>;
+    const data = typeof b.data === "string" ? b.data.trim() : "";
+    if (!data) throw new Error("Enter a URL or text to encode.");
+    const rawLogo = b.logo;
+    let logo: QrLogoInput | null = null;
+    if (rawLogo && typeof rawLogo === "object") {
+      const l = rawLogo as Record<string, unknown>;
+      const sizePct = typeof l.sizePct === "number" ? l.sizePct : 0.2;
+      const quietPct = typeof l.quietPct === "number" ? l.quietPct : 0.22;
+      const quietColor = typeof l.quietColor === "string" && l.quietColor ? l.quietColor : "#ffffff";
+      if (l.source === "keep") {
+        logo = { source: "keep", sizePct, quietPct, quietColor };
+      } else if (l.source === "brandingAsset") {
+        if (typeof l.brandingSlot !== "string" || !l.brandingSlot) {
+          throw new Error("A branding-asset logo needs a slot to copy from.");
+        }
+        logo = {
+          source: "brandingAsset",
+          brandingSlot: l.brandingSlot as BrandAssetSlot,
+          sizePct,
+          quietPct,
+          quietColor,
+        };
+      } else if (l.source === "upload") {
+        if (typeof l.base64 !== "string" || !l.base64 || typeof l.mimeType !== "string" || !l.mimeType) {
+          throw new Error("A logo upload needs base64 and mimeType.");
+        }
+        logo = {
+          source: "upload",
+          base64: l.base64,
+          mimeType: l.mimeType,
+          sizePct,
+          quietPct,
+          quietColor,
+        };
+      } else {
+        throw new Error('A logo needs a valid source ("upload", "brandingAsset", or "keep").');
+      }
+    }
+    return {
+      id: typeof b.id === "string" && b.id ? b.id : undefined,
+      name: typeof b.name === "string" && b.name.trim() ? b.name.trim() : "Untitled QR code",
+      data,
+      errorCorrectionLevel: (["L", "M", "Q", "H"] as const).includes(
+        b.errorCorrectionLevel as "L" | "M" | "Q" | "H",
+      )
+        ? (b.errorCorrectionLevel as QrCodeSaveInput["errorCorrectionLevel"])
+        : "M",
+      margin: typeof b.margin === "number" ? b.margin : 4,
+      scalePx: typeof b.scalePx === "number" ? b.scalePx : 512,
+      colorDark: typeof b.colorDark === "string" ? b.colorDark : "#000000",
+      colorLight: typeof b.colorLight === "string" ? b.colorLight : "#ffffff",
+      format: b.format === "svg" ? "svg" : "png",
+      version: typeof b.version === "number" ? b.version : null,
+      maskPattern: typeof b.maskPattern === "number" ? b.maskPattern : null,
+      dotsStyle: (QR_DOT_STYLES as readonly string[]).includes(b.dotsStyle as string)
+        ? (b.dotsStyle as QrDotStyle)
+        : "square",
+      cornerSquareStyle: (QR_CORNER_STYLES as readonly string[]).includes(b.cornerSquareStyle as string)
+        ? (b.cornerSquareStyle as QrCornerStyle)
+        : null,
+      cornerDotStyle: (QR_CORNER_STYLES as readonly string[]).includes(b.cornerDotStyle as string)
+        ? (b.cornerDotStyle as QrCornerStyle)
+        : null,
+      logo,
+    };
+  }
+
+  // Create a new QR code (renders + uploads immediately).
+  app.post("/admin/qrcodes", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveQrCode(parseQrCodeSaveInput(req.body)));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Update an existing QR code's options/data and re-render it.
+  app.put("/admin/qrcodes/:id", json, async (req: Request, res: Response) => {
+    try {
+      const input = parseQrCodeSaveInput(req.body);
+      res.json(await saveQrCode({ ...input, id: String(req.params.id) }));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Render without saving — powers the live preview as controls change, with
+  // no Storage write and no history entry created per keystroke.
+  app.post("/admin/qrcodes/preview", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await previewQrCode(parseQrCodeSaveInput(req.body)));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Delete a QR code entirely — unlike a branding slot, there is nothing left
+  // to restore it onto, so its rendered files are cleaned up too.
+  app.delete("/admin/qrcodes/:id", async (req: Request, res: Response) => {
+    try {
+      res.json(await deleteQrCode(String(req.params.id)));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Restore a previous render by its storage path (no re-render — the file
+  // already exists).
+  app.post("/admin/qrcodes/:id/restore", json, async (req: Request, res: Response) => {
+    try {
+      const { storagePath } = (req.body ?? {}) as { storagePath?: string };
+      if (!storagePath) {
+        res.status(400).json({ error: { message: "storagePath is required." } });
+        return;
+      }
+      res.json(await restoreQrCodeVersion(String(req.params.id), storagePath));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Permanently delete one historical render (removes the file too).
+  app.post("/admin/qrcodes/:id/version/delete", json, async (req: Request, res: Response) => {
+    try {
+      const { storagePath } = (req.body ?? {}) as { storagePath?: string };
+      if (!storagePath) {
+        res.status(400).json({ error: { message: "storagePath is required." } });
+        return;
+      }
+      await deletePublicObject(storagePath);
+      res.json(await deleteQrCodeVersion(String(req.params.id), storagePath));
     } catch (err) {
       handleError(res, err);
     }
@@ -1104,6 +1294,26 @@ export function registerAdminRoutes(app: Express): void {
   app.put("/admin/config/referral", json, async (req: Request, res: Response) => {
     try {
       res.json(await saveReferralConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- Affiliate program ----------------------------------------------------
+
+  // Which purchase kinds each Rewardful campaign may pay a commission on. Rates,
+  // caps and payouts are Rewardful's; this is the one part it can't express.
+  app.get("/admin/config/affiliates", async (_req, res) => {
+    try {
+      res.json(await getAffiliateConfig());
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.put("/admin/config/affiliates", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveAffiliateConfig(req.body));
     } catch (err) {
       handleError(res, err);
     }

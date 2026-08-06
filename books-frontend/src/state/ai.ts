@@ -47,11 +47,11 @@ import {
   analyzeStoryRemote,
   anchorDescriptionRemote,
   anchorImageRemote,
-  coverWrapRemote,
   illustrationRemote,
   screenplayRemote,
 } from "../platform/aiClient";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../core/types";
+import { coverSpread } from "./bookUnits";
 import { resolveImageModelClient, resolveModelsClient } from "../platform/aiResolve";
 import { type ImageTier } from "../core/config/modelConfig";
 import { requireImageTier } from "./imageTierPrompt";
@@ -351,39 +351,47 @@ export function changedAnchorNamesForSpreads(
 }
 
 /**
- * Returns the ids of illustrated spreads whose recorded references no longer
- * match the anchors' current state: the selected image version changed, the
- * descriptive text changed, or the anchor was removed entirely.
+ * Whether one spread/cover illustration is out of date vs current anchors.
+ * Prefer this over {@link staleIllustrationSpreadIds} in per-page UI hot paths.
  */
-export function staleIllustrationSpreadIds(project: Project): string[] {
+export function isIllustrationStale(project: Project, spreadId: string): boolean {
+  const tree = project.illustrations?.[spreadId];
+  if (!tree) return false;
   const byId = new Map((project.anchors ?? []).map((a) => [a.id, a]));
-  const units = spreadsById(project);
-  const stale: string[] = [];
-  for (const [spreadId, tree] of Object.entries(project.illustrations ?? {})) {
-    const content = getCursor(tree).content;
-    const used = content.references ?? [];
-    let isStale = used.some((u) => {
+  const content = getCursor(tree).content;
+  const used = content.references ?? [];
+  if (
+    used.some((u) => {
       const a = byId.get(u.anchorId);
       if (!a) return true; // anchor was deleted
       if (!u.textOnly && (a.versions?.cursorId ?? undefined) !== u.versionId) return true;
       // Only compare signatures for records that carry one (back-compat).
       if (u.signature !== undefined && u.signature !== anchorSignature(a)) return true;
       return false;
-    });
-    // Anchors were toggled on/off the page since the render: the recorded
-    // reference set no longer matches the page's current anchor set.
-    if (!isStale) {
-      const spread = units.get(spreadId);
-      if (spread) {
-        const current = new Set(
-          effectiveAnchorIds(project.anchors, spread).filter((id) => byId.has(id)),
-        );
-        const recorded = new Set(used.map((u) => u.anchorId).filter((id) => byId.has(id)));
-        isStale =
-          current.size !== recorded.size || [...current].some((id) => !recorded.has(id));
-      }
-    }
-    if (isStale) stale.push(spreadId);
+    })
+  ) {
+    return true;
+  }
+  // Anchors were toggled on/off the page since the render: the recorded
+  // reference set no longer matches the page's current anchor set.
+  const spread = spreadsById(project).get(spreadId);
+  if (!spread) return false;
+  const current = new Set(
+    effectiveAnchorIds(project.anchors, spread).filter((id) => byId.has(id)),
+  );
+  const recorded = new Set(used.map((u) => u.anchorId).filter((id) => byId.has(id)));
+  return current.size !== recorded.size || [...current].some((id) => !recorded.has(id));
+}
+
+/**
+ * Returns the ids of illustrated spreads whose recorded references no longer
+ * match the anchors' current state: the selected image version changed, the
+ * descriptive text changed, or the anchor was removed entirely.
+ */
+export function staleIllustrationSpreadIds(project: Project): string[] {
+  const stale: string[] = [];
+  for (const spreadId of Object.keys(project.illustrations ?? {})) {
+    if (isIllustrationStale(project, spreadId)) stale.push(spreadId);
   }
   return stale;
 }
@@ -459,40 +467,68 @@ export async function generateIllustrationVersion(
 }
 
 /**
- * Generate both covers as one continuous wrap image (split server-side into a
- * front + back panel) and fold each panel into its cover's version tree. One
- * generation → guaranteed-matching covers. Returns false when the tier prompt
- * was opened (no generation happened yet).
+ * Generate the front cover, then the back cover referencing the freshly
+ * rendered front for visual continuity (same setting/palette/lighting), and
+ * fold each into its cover's version tree. Two correctly-shaped renders,
+ * guaranteed to match — rather than one double-wide canvas cropped in half.
+ *
+ * Deliberately TWO separate `/ai/illustration` requests (front first, folded
+ * in immediately; then back, referencing the front's blob id) rather than one
+ * combined backend call: a single request doing both renders sequentially
+ * could run past the function's timeout, failing the whole pair with no
+ * partial progress (and nothing to show for it). This way the front shows up
+ * on canvas the moment it's ready, and each request is bounded to a single
+ * render.
+ *
+ * `onFrontSettled`/`onBackStart` fire right at the front→back handoff, so a
+ * caller tracking per-cover busy state (e.g. canvas loading veils) can clear
+ * the front's and raise the back's exactly when each is actually in flight,
+ * instead of holding both "generating" for the whole pair.
+ *
+ * Returns false when the tier prompt was opened (no generation happened yet).
  */
-export async function generateCoverWrap(options: { tier?: ImageTier } = {}): Promise<boolean> {
+export async function generateCoverWrap(options: {
+  tier?: ImageTier;
+  onFrontSettled?: () => void;
+  onBackStart?: () => void;
+} = {}): Promise<boolean> {
   const project = useProjectsStore.getState().current();
   if (!project) throw new Error("No active project.");
   const resolvedTier = options.tier ?? (await requireImageTier());
   if (!resolvedTier) return false;
-  const { front, back } = await coverWrapRemote(project, resolvedTier);
-  // Record the baked title/subtitle/author on the front panel (the wrap bakes
-  // text into the front/right half only), for later drift detection.
-  const frontCover = project.screenplay
-    ? getCursor(project.screenplay).content.frontCover
+  const doc = project.screenplay ? getCursor(project.screenplay).content : undefined;
+  const frontSpec = doc?.frontCover;
+  const backSpec = doc?.backCover;
+  if (!frontSpec || !backSpec) throw new Error("Both covers must be drafted first.");
+
+  // FRONT — an ordinary front-cover generation, folded into its version tree
+  // (and shown on canvas) as soon as it's ready, before the back even starts.
+  await generateIllustrationVersion(coverSpread(COVER_FRONT_ID, frontSpec), { tier: resolvedTier });
+  options.onFrontSettled?.();
+
+  // BACK — references the front's freshly-saved image (by blob id, since the
+  // client never gets the raw pixels back, only a blob id/URL) so it continues
+  // the same scene/palette/lighting. Re-read the project first: the front
+  // fold above is the single writer of truth for its tree/blob id.
+  const afterFront = useProjectsStore.getState().current();
+  const frontBlobId = afterFront?.illustrations?.[COVER_FRONT_ID]
+    ? getCursor(afterFront.illustrations[COVER_FRONT_ID]).content.blobId
     : undefined;
-  if (frontCover?.bakeText && project.title.trim()) {
-    front.bakedText = {
-      title: project.title,
-      subtitle: frontCover.subtitle,
-      author: frontCover.author,
-    };
-  }
-  // Re-read the project so we fold onto the freshest trees (single writer).
-  const store = useProjectsStore.getState();
-  const cur = store.current() ?? project;
-  await store.setIllustration(
-    COVER_FRONT_ID,
-    applyIllustrationRender(cur.illustrations?.[COVER_FRONT_ID], front),
-  );
-  const cur2 = store.current() ?? cur;
-  await store.setIllustration(
+  if (!afterFront || !frontBlobId) return true; // front didn't render; nothing to continue
+
+  options.onBackStart?.();
+  const render = await illustrationRemote(
+    afterFront,
     COVER_BACK_ID,
-    applyIllustrationRender(cur2.illustrations?.[COVER_BACK_ID], back),
+    {},
+    resolvedTier,
+    frontBlobId,
+  );
+  if (!render) return true;
+  const afterBack = useProjectsStore.getState().current() ?? afterFront;
+  await useProjectsStore.getState().setIllustration(
+    COVER_BACK_ID,
+    applyIllustrationRender(afterBack.illustrations?.[COVER_BACK_ID], render),
   );
   return true;
 }

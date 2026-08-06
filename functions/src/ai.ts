@@ -28,16 +28,19 @@ import {
 } from "./modelResolve";
 import { analyzeStory, generateAnchorDescription } from "../../books-frontend/src/core/pipeline/analysis";
 import { generateStoryDraft } from "../../books-frontend/src/core/pipeline/storyDraft";
+import { checkStoryFit } from "../../books-frontend/src/core/pipeline/storyFit";
+import {
+  briefBlockers,
+  isBriefReady,
+  storyBriefSchema,
+} from "../../books-frontend/src/core/story/brief";
 import { generateScreenplay } from "../../books-frontend/src/core/pipeline/screenplay";
 import { renderAnchor, type AnchorRunOptions } from "../../books-frontend/src/core/pipeline/anchorRun";
 import {
-  renderCoverWrapImage,
+  renderCoverContinuation,
   renderIllustration,
   type IllustrationRunOptions,
 } from "../../books-frontend/src/core/pipeline/illustrationRun";
-import { bookProductForConfig } from "../../books-frontend/src/core/book";
-import { splitWrapCover } from "./imaging";
-import { uploadBlob } from "./storage";
 import { IntentAmbiguousError } from "../../books-frontend/src/core/pipeline/intentResolve";
 import { loadModelCapabilities, loadPromptContext } from "./appConfig";
 import { latencyKindOf, recordTaskLatency } from "./latency";
@@ -52,6 +55,7 @@ import {
   type Project,
   type ScreenplayDoc,
   type ScreenplaySpread,
+  type StoryBrief,
 } from "../../books-frontend/src/core/types";
 
 const resolveText = resolveTextAction;
@@ -109,20 +113,29 @@ export function registerAiRoutes(app: Express): void {
 
   app.post("/ai/story-draft", json, async (req: AuthedRequest, res: Response) => {
     try {
-      const { project, heroName, theme } = req.body as {
-        project: Project;
-        heroName: string;
-        theme?: string;
-      };
-      if (!heroName?.trim()) {
-        res.status(400).json({ error: { message: "A hero name is required." } });
+      const { project, brief: rawBrief } = req.body as { project: Project; brief: unknown };
+      // Never let a client-supplied brief reach a prompt unchecked: the mode
+      // selects the template, and the theme/device ids index the admin catalog.
+      const parsed = storyBriefSchema.safeParse(rawBrief);
+      if (!parsed.success) {
+        res.status(400).json({ error: { message: "That story brief isn't valid." } });
+        return;
+      }
+      const brief = parsed.data as StoryBrief;
+      if (brief.mode === "own") {
+        res.status(400).json({ error: { message: "This mode writes its own story." } });
+        return;
+      }
+      if (!isBriefReady(brief)) {
+        res.status(400).json({
+          error: { message: briefBlockers(brief)[0] ?? "The story brief is incomplete." },
+        });
         return;
       }
       const [model, prompts] = await Promise.all([resolveText("storyDraft"), loadPromptContext()]);
       const { value, events, stats } = await withUsage(() =>
         generateStoryDraft({
-          heroName,
-          theme,
+          brief,
           config: withTextModel(project.config, model),
           creds: { apiKey: apiKeyFor(model.provider) },
           model: model.id,
@@ -130,6 +143,34 @@ export function registerAiRoutes(app: Express): void {
         }),
       );
       await recordUsage(req.uid!, "storyDraft", events, undefined, {
+        projectId: project.id,
+        stats,
+      });
+      res.json(value);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  app.post("/ai/story-fit", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const { project } = req.body as { project: Project };
+      const story = project.config.storyText?.trim() ?? "";
+      if (story.length < 20) {
+        res.status(400).json({ error: { message: "There's no story to check yet." } });
+        return;
+      }
+      const [model, prompts] = await Promise.all([resolveText("storyCheck"), loadPromptContext()]);
+      const { value, events, stats } = await withUsage(() =>
+        checkStoryFit({
+          story,
+          config: withTextModel(project.config, model),
+          creds: { apiKey: apiKeyFor(model.provider) },
+          model: model.id,
+          prompts,
+        }),
+      );
+      await recordUsage(req.uid!, "storyCheck", events, undefined, {
         projectId: project.id,
         stats,
       });
@@ -277,11 +318,21 @@ export function registerAiRoutes(app: Express): void {
 
   app.post("/ai/illustration", json, async (req: AuthedRequest, res: Response) => {
     try {
-      const { project, spreadId, options, tier: rawTier } = req.body as {
+      const { project, spreadId, options, tier: rawTier, coverContinuationBlobId } = req.body as {
         project: Project;
         spreadId: string;
         options?: IllustrationRunOptions;
         tier?: string;
+        /**
+         * Cover-pair generation only: blob id of the already-rendered FRONT
+         * cover. When present, the back cover is rendered as a true outpaint
+         * continuation of the front's real edge pixels (`renderCoverContinuation`)
+         * instead of a normal `renderIllustration` call. Sent as its own
+         * request (front, then back) rather than combined into one, so
+         * neither render risks the function's timeout the way a single
+         * "generate both" request used to.
+         */
+        coverContinuationBlobId?: string;
       };
       const spread = findSpread(project, spreadId);
       if (!spread) {
@@ -292,7 +343,13 @@ export function registerAiRoutes(app: Express): void {
       const action = cover ? "coverIllustration" : "pageIllustration";
       // Guests render on the cheap tier only and get no negative buffer.
       const guest = isAnonymousToken(req.authToken);
-      const tier = requireTier(rawTier, guest);
+      // A genuinely continuous back cover needs a mask-capable model, which
+      // only the premium tier offers (see `renderCoverContinuation`) — force
+      // it regardless of what the client asked for. Guests still get their
+      // usual tier from `requireTier`; the render then fails with a clear
+      // message rather than silently falling back to a lesser result.
+      const tier =
+        coverContinuationBlobId && !guest ? "premium" : requireTier(rawTier, guest);
       // An "edit" is a re-roll carrying an instruction. These count against the
       // per-book edit quota (scoped to the project); fresh generations don't.
       const isEdit = typeof options?.edit === "string" && options.edit.trim().length > 0;
@@ -305,9 +362,16 @@ export function registerAiRoutes(app: Express): void {
       ]);
       const env = backendPipelineEnv(req.uid!, models, prompts, caps);
       const startedAt = Date.now();
-      const { value, events, stats } = await withUsage(() =>
-        renderIllustration(project, spread, options ?? {}, env),
-      );
+      const { value, events, stats } = await withUsage(async () => {
+        if (coverContinuationBlobId) {
+          const front = await env.loadBlob(coverContinuationBlobId);
+          if (!front) throw new Error("The front cover couldn't be loaded for continuation.");
+          return renderCoverContinuation(project, spread, front, env, {
+            signal: undefined,
+          });
+        }
+        return renderIllustration(project, spread, options ?? {}, env);
+      });
       await recordUsage(req.uid!, action, events, tier, {
         projectId: project.id,
         isEdit: isEdit || Boolean(options?.mask),
@@ -332,93 +396,6 @@ export function registerAiRoutes(app: Express): void {
     }
   });
 
-  // Generate BOTH covers as one continuous wrap image, then split it into a
-  // front + back panel. One generation → guaranteed-matching covers at ~half
-  // the cost of rendering them separately.
-  app.post("/ai/cover-wrap", json, async (req: AuthedRequest, res: Response) => {
-    try {
-      const { project, tier: rawTier } = req.body as { project: Project; tier?: string };
-      const doc = currentScreenplay(project);
-      const front = doc?.frontCover;
-      const back = doc?.backCover;
-      if (!front || !back) {
-        res.status(400).json({ error: { message: "Both covers must be drafted first." } });
-        return;
-      }
-      // Guests render on the cheap tier only and get no negative buffer. Baked
-      // title typography needs the high-quality tier, so it's forced on (unless
-      // the caller is a guest, who can't use premium at all).
-      const guest = isAnonymousToken(req.authToken);
-      const requested = requireTier(rawTier, guest);
-      const bake = Boolean(front.bakeText && project.title.trim());
-      const tier = !guest && bake ? "premium" : requested;
-      await ensureAffordAction(req.uid!, "coverIllustration", tier, { noNegativeBuffer: guest });
-      const [models, prompts, caps] = await Promise.all([
-        resolveImageModels("coverIllustration", tier),
-        loadPromptContext(),
-        loadModelCapabilities(),
-      ]);
-      const env = backendPipelineEnv(req.uid!, models, prompts, caps);
-      const startedAt = Date.now();
-      const { value, events, stats } = await withUsage(() =>
-        renderCoverWrapImage(
-          project,
-          {
-            frontIllustration: front.illustration,
-            backIllustration: back.illustration,
-            anchorIds: Array.from(new Set([...(front.anchorIds ?? []), ...(back.anchorIds ?? [])])),
-            anchorNames: Array.from(
-              new Set([...(front.anchorNames ?? []), ...(back.anchorNames ?? [])]),
-            ),
-            bakeText: bake,
-            coverTitle: project.title,
-            coverSubtitle: front.subtitle,
-            coverAuthor: front.author,
-          },
-          env,
-        ),
-      );
-      await recordUsage(req.uid!, "coverIllustration", events, tier, {
-        projectId: project.id,
-        stats,
-      });
-      await settleActionCost(req.uid!, "coverIllustration", events, { projectId: project.id });
-      await recordTaskLatency("coverIllustration", tier, "fresh", 0, Date.now() - startedAt);
-
-      // Split the wide wrap into its two panels and persist each as a blob.
-      // Crop each panel to the book's real trim aspect so the saved cover
-      // matches the page shape (otherwise the editor's cover-crop clips the
-      // outer edges, cutting off baked-in title text).
-      const wrapBuf = Buffer.from(value.base64, "base64");
-      const panelAspect = bookProductForConfig(project.config).aspect;
-      const { front: frontBuf, back: backBuf } = await splitWrapCover(wrapBuf, { panelAspect });
-      const [frontBlobId, backBlobId] = await Promise.all([
-        uploadBlob(req.uid!, frontBuf, "image/png"),
-        uploadBlob(req.uid!, backBuf, "image/png"),
-      ]);
-
-      res.json({
-        front: {
-          blobId: frontBlobId,
-          mimeType: "image/png",
-          references: value.references,
-          prompt: value.prompt,
-          label: "Wrap",
-          textMode: bake ? "in-image" : "overlay",
-        },
-        back: {
-          blobId: backBlobId,
-          mimeType: "image/png",
-          references: value.references,
-          prompt: value.prompt,
-          label: "Wrap",
-          textMode: "overlay",
-        },
-      });
-    } catch (err) {
-      sendError(res, err);
-    }
-  });
 }
 
 /** Resolve a spread (or a cover pseudo-spread) from the project snapshot. */

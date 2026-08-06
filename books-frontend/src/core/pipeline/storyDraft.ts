@@ -1,17 +1,22 @@
 /**
- * Story draft: the quick-start path. Given a hero name (from the landing
- * on-ramp) and an optional theme, write a complete first story the author can
- * edit — so the Story stage is never a blank page.
+ * Story draft: turns a {@link StoryBrief} into a complete first story the
+ * author can edit. Two shapes of input share this one pipeline —
+ *   - `guided`   — one name plus a theme, the fastest path to a real book;
+ *   - `co-write` — the real cast, occasion, when and where.
+ * The `own` mode never comes here; it goes to `storyFit` for an advisory read.
+ *
+ * Age-appropriateness is enforced from two sides: the age band's Story-craft
+ * rules go into the prompt, and the returned draft is checked against them,
+ * with one repair retry when it misses.
  */
 import { z } from "zod";
-import { AGE_RANGES } from "../config/options";
 import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
-import type { BookConfig } from "../types";
+import type { BookConfig, StoryBrief } from "../types";
 import { withRetry } from "./retry";
-import { resolveAgeLlmGuidance } from "../prompts/age";
-import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
-import { renderTextPrompt } from "../prompts/render";
+import type { PromptContext } from "../prompts/context";
+import { buildStoryDraftPrompt } from "../prompts/story";
+import { inspectDraft, issueScore } from "./storyValidate";
 
 const storyDraftSchema = z.object({
   title: z.string(),
@@ -20,23 +25,8 @@ const storyDraftSchema = z.object({
 
 export type StoryDraft = z.infer<typeof storyDraftSchema>;
 
-/** Age-appropriate story length bounds (whole-book word counts). */
-function wordBounds(ageRangeId: string): { min: number; max: number } {
-  switch (ageRangeId) {
-    case "0-2":
-      return { min: 60, max: 140 };
-    case "3-5":
-      return { min: 150, max: 320 };
-    case "6-8":
-      return { min: 300, max: 600 };
-    default:
-      return { min: 450, max: 900 };
-  }
-}
-
 export interface GenerateStoryDraftInput {
-  heroName: string;
-  theme?: string;
+  brief: StoryBrief;
   config: BookConfig;
   creds: ProviderCredentials;
   model: string;
@@ -44,41 +34,40 @@ export interface GenerateStoryDraftInput {
   prompts?: PromptContext;
 }
 
-/** Write a complete first story (+ title) starring the hero. */
+/** Write a complete story (+ title) from the brief. */
 export async function generateStoryDraft(input: GenerateStoryDraftInput): Promise<StoryDraft> {
-  const { heroName, theme, config, creds, model, signal, prompts } = input;
+  const { brief, config, creds, model, signal, prompts } = input;
   const provider = getTextProvider(config.textModel!.provider);
-  const age = AGE_RANGES.find((a) => a.id === config.ageRangeId)?.label ?? config.ageRangeId;
-  const ageGuidance = resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, prompts);
-  const bounds = wordBounds(config.ageRangeId);
 
-  const { system, user } = renderTextPrompt(resolvePromptsConfig(prompts), "storyDraft", {
-    vars: {
-      age,
-      ageGuidance,
-      heroName: heroName.trim(),
-      theme: theme?.trim() ?? "",
-      minWords: String(bounds.min),
-      maxWords: String(bounds.max),
-    },
-    flags: { hasTheme: Boolean(theme?.trim()) },
-  });
+  const write = async (repairInstruction?: string): Promise<StoryDraft> => {
+    const { system, user } = buildStoryDraftPrompt(config, brief, prompts, repairInstruction);
+    const result = await withRetry(
+      () =>
+        provider.generateStructured<StoryDraft>(creds, {
+          model,
+          schema: storyDraftSchema,
+          schemaName: "story_draft",
+          temperature: 0.8,
+          messages: [
+            { role: "system", content: system },
+            { role: "user", content: user },
+          ],
+          signal,
+        }),
+      { signal },
+    );
+    return { title: result.title.trim(), story: result.story.trim() };
+  };
 
-  const result = await withRetry(
-    () =>
-      provider.generateStructured<StoryDraft>(creds, {
-        model,
-        schema: storyDraftSchema,
-        schemaName: "story_draft",
-        temperature: 0.8,
-        messages: [
-          { role: "system", content: system },
-          { role: "user", content: user },
-        ],
-        signal,
-      }),
-    { signal },
-  );
+  const { craft } = buildStoryDraftPrompt(config, brief, prompts);
+  const first = await write();
+  const firstIssues = inspectDraft(first.story, brief, craft.structure);
+  if (!firstIssues.repairInstruction) return first;
 
-  return { title: result.title.trim(), story: result.story.trim() };
+  // One repair pass, then keep whichever attempt is closer to the rules — a
+  // second miss is still a perfectly readable story, and a third call would
+  // cost more than the difference is worth.
+  const second = await write(firstIssues.repairInstruction);
+  const secondIssues = inspectDraft(second.story, brief, craft.structure);
+  return issueScore(secondIssues) <= issueScore(firstIssues) ? second : first;
 }

@@ -30,6 +30,17 @@ export function resolveArtStyleText(
   return parts.join(". ");
 }
 
+/**
+ * Stable identity of an art-style selection, stamped onto every rendered image
+ * so the studio can tell which artwork is still in an older look. Compares
+ * preset + custom direction only — admin wording changes don't invalidate art.
+ */
+export function artStyleKey(style: ArtStyleSelection | undefined): string {
+  const preset = style?.presetId ?? "custom";
+  const custom = (style?.customDescription ?? "").trim();
+  return custom ? `${preset}|${custom}` : preset;
+}
+
 /** Resolve the display title for a preset, honoring the admin label override. */
 export function resolveArtStyleLabel(
   presetId: string,

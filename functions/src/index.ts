@@ -60,6 +60,13 @@ export { sendDailySummary } from "./dailySummary";
 // gets, and the expiry flip for invitations that timed out.
 export { sweepReferralInvitations } from "./referrals/job";
 
+/**
+ * Nightly Rewardful reconcile — keeps the affiliate mirror and the commission
+ * costs in the ledger true even when a webhook was missed (they're unsigned and
+ * only retried for three days).
+ */
+export { syncAffiliates } from "./affiliates/job";
+
 export const api = onRequest(
   {
     // Image generation can take a while; allow generous time + memory.

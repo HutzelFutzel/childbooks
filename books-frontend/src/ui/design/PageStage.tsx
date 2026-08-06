@@ -1,5 +1,4 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { Check, Crop, Minus, Plus as PlusIcon } from "lucide-react";
 import Konva from "konva";
 import type { KonvaEventObject } from "konva/lib/Node";
@@ -17,10 +16,10 @@ import { fontStack, loadFont } from "../typography/fonts";
 import { cn } from "../lib/cn";
 import { TextStyleBar, type TextBoxToolbarChrome, type TextStyleKey } from "./TextStyleBar";
 import { ImageStyleBar, type ImageToolbarChrome } from "./ImageStyleBar";
+import { FloatingBarPortal } from "./FloatingBarPortal";
 import {
   placeFloatingBar,
   queryFloatingBarObstacles,
-  floatingBarPortalProps,
   type FloatingBarPlacement,
 } from "./floatingBarPlacement";
 import type { ReadingModeId } from "../../core/config/ageWritingCatalog";
@@ -130,6 +129,7 @@ export interface SecondSurface {
     safe: NormRect;
     gutter: { x: number; w: number } | null;
     barcode?: NormRect | null;
+    logo?: NormRect | null;
   } | null;
 }
 
@@ -296,14 +296,16 @@ export function PageStage({
   showGutter?: boolean;
   /**
    * Print-safety guides: a dashed safe-area rectangle (keep text/important art
-   * inside), an optional translucent gutter band on the binding side, and an
-   * optional reserved barcode zone (back cover). Normalized to the page surface
-   * (0..1). Null hides them.
+   * inside), an optional translucent gutter band on the binding side, an
+   * optional reserved barcode zone (back cover), and an optional reserved
+   * backcover-logo zone (back cover). Normalized to the page surface (0..1).
+   * Null hides them.
    */
   printGuides?: {
     safe: NormRect;
     gutter: { x: number; w: number } | null;
     barcode?: NormRect | null;
+    logo?: NormRect | null;
   } | null;
   /**
    * A second background/illustration surface drawn in the right half of the
@@ -439,19 +441,31 @@ export function PageStage({
         shape: rect === s.rect ? s : { ...s, rect },
       };
     }),
-    ...(pageDesign.images ?? []).map((im) => {
-      const rect = sanitizeRect(im.rect);
-      return {
-        id: im.id,
-        kind: "image" as const,
-        z: im.z,
-        rect,
-        rotation: Number.isFinite(im.rotation) ? im.rotation : 0,
-        locked: im.locked,
-        hidden: im.hidden,
-        image: rect === im.rect ? im : { ...im, rect },
-      };
-    }),
+    ...(pageDesign.images ?? [])
+      // Skip empty illustration ghosts (no pixels, not generating) — they were
+      // a full-page invisible hit target that opened crop/zoom on double-click.
+      .filter((im) => {
+        if (im.kind !== "illustration") return true;
+        const onRight = Boolean(rightSurface) && im.rect.x + im.rect.w / 2 >= 0.5;
+        const url = onRight ? rightSurface?.imageUrl : imageUrl;
+        if (url) return true;
+        return Boolean(
+          imageElementBusySpec(im, artBusy, Boolean(rightSurface)),
+        );
+      })
+      .map((im) => {
+        const rect = sanitizeRect(im.rect);
+        return {
+          id: im.id,
+          kind: "image" as const,
+          z: im.z,
+          rect,
+          rotation: Number.isFinite(im.rotation) ? im.rotation : 0,
+          locked: im.locked,
+          hidden: im.hidden,
+          image: rect === im.rect ? im : { ...im, rect },
+        };
+      }),
   ]
     .filter((el) => !el.hidden)
     .sort((a, b) => a.z - b.z);
@@ -461,24 +475,37 @@ export function PageStage({
   // `rightSurface`, `pageDesign` holds BOTH halves' elements (merged into one
   // combined space), so each half's flag is scoped by which half the movable
   // illustration's rect center actually sits in.
-  const hasIllustrationEl = (pageDesign.images ?? []).some(
-    (im) =>
-      im.kind === "illustration" && (!rightSurface || im.rect.x + im.rect.w / 2 < 0.5),
-  );
+  // Only count frames that actually have art (or are generating) — empty
+  // ghosts must not hide the page surface or steal clicks.
+  const hasIllustrationEl = (pageDesign.images ?? []).some((im) => {
+    if (im.kind !== "illustration") return false;
+    if (rightSurface && im.rect.x + im.rect.w / 2 >= 0.5) return false;
+    return Boolean(imageUrl) || Boolean(imageElementBusySpec(im, artBusy, Boolean(rightSurface)));
+  });
   const hasIllustrationElRight = rightSurface
-    ? (pageDesign.images ?? []).some(
-        (im) => im.kind === "illustration" && im.rect.x + im.rect.w / 2 >= 0.5,
-      )
+    ? (pageDesign.images ?? []).some((im) => {
+        if (im.kind !== "illustration") return false;
+        if (im.rect.x + im.rect.w / 2 < 0.5) return false;
+        return (
+          Boolean(rightSurface.imageUrl) ||
+          Boolean(imageElementBusySpec(im, artBusy, true))
+        );
+      })
     : false;
 
   // Keep the transformer attached to (and synced with) the selected element's
-  // group. Re-running on any design change also refreshes the handle box after
-  // inspector-driven edits (align/resize/rotate).
+  // group. Re-running on design change refreshes handles after inspector edits
+  // (align/resize/rotate). Skip while inline-editing text — the transformer is
+  // empty then, and live typing used to force a full layer redraw every sync.
   useEffect(() => {
     const tr = trRef.current;
     if (!tr) return;
+    if (editingId) {
+      tr.nodes([]);
+      return;
+    }
     const node =
-      editable && selectedId && selectedId !== editingId && selectedId !== reframeId
+      editable && selectedId && selectedId !== reframeId
         ? groupRefs.current.get(selectedId) ?? null
         : null;
     if (node) pinGroupClientRect(node);
@@ -532,22 +559,26 @@ export function PageStage({
       (im) =>
         im.kind === "illustration" &&
         im.fit !== "contain" &&
-        (side === "right") === (Boolean(rightSurface) && im.rect.x + im.rect.w / 2 >= 0.5),
+        (side === "right") === (Boolean(rightSurface) && im.rect.x + im.rect.w / 2 >= 0.5) &&
+        imageElementHasPixels(im, imageUrl, rightSurface),
     );
     if (illus) {
       pendingReframe.current = false;
       setReframeId(illus.id);
     }
-  }, [pageDesign, rightSurface]);
+  }, [pageDesign, rightSurface, imageUrl]);
 
   // Host-requested reframe (Crop button / selectIllustration enterReframe).
   useEffect(() => {
     if (!autoReframeId) return;
-    const exists = (pageDesign.images ?? []).some((im) => im.id === autoReframeId);
-    if (!exists) return;
+    const im = (pageDesign.images ?? []).find((x) => x.id === autoReframeId);
+    if (!im || !imageElementHasPixels(im, imageUrl, rightSurface)) {
+      onAutoReframeConsumed?.();
+      return;
+    }
     setReframeId(autoReframeId);
     onAutoReframeConsumed?.();
-  }, [autoReframeId, pageDesign, onAutoReframeConsumed]);
+  }, [autoReframeId, pageDesign, onAutoReframeConsumed, imageUrl, rightSurface]);
 
   // Preload fonts used anywhere on the page.
   useEffect(() => {
@@ -701,7 +732,11 @@ export function PageStage({
           image: selectedImageEl,
           pageId: imageToolbar.pageIdForImage(selectedImageEl.id),
           onPatch: (patch, opts) => imageToolbar.onPatch(selectedImageEl.id, patch, opts),
-          onCrop: () => setReframeId(selectedImageEl.id),
+          onCrop: () => {
+            if (!imageElementHasPixels(selectedImageEl, imageUrl, rightSurface)) return;
+            setReframeId(selectedImageEl.id);
+          },
+          canCrop: imageElementHasPixels(selectedImageEl, imageUrl, rightSurface),
           onDuplicate: () => imageToolbar.onDuplicate(selectedImageEl.id),
           onDelete: () => imageToolbar.onDelete(selectedImageEl.id),
           onToggleLock: () => imageToolbar.onToggleLock(selectedImageEl.id),
@@ -1074,7 +1109,12 @@ export function PageStage({
                     }}
                     onDblClick={(e: KonvaEventObject<MouseEvent>) => {
                       if (el.locked || !editable) return;
-                      if (el.image && el.image.fit !== "contain" && onReframeImage) {
+                      if (
+                        el.image &&
+                        el.image.fit !== "contain" &&
+                        onReframeImage &&
+                        imageElementHasPixels(el.image, imageUrl, rightSurface)
+                      ) {
                         e.cancelBubble = true;
                         select();
                         setReframeId(el.id);
@@ -1087,7 +1127,12 @@ export function PageStage({
                     }}
                     onDblTap={(e: KonvaEventObject<Event>) => {
                       if (el.locked || !editable) return;
-                      if (el.image && el.image.fit !== "contain" && onReframeImage) {
+                      if (
+                        el.image &&
+                        el.image.fit !== "contain" &&
+                        onReframeImage &&
+                        imageElementHasPixels(el.image, imageUrl, rightSurface)
+                      ) {
                         e.cancelBubble = true;
                         select();
                         setReframeId(el.id);
@@ -1347,6 +1392,33 @@ export function PageStage({
                           />
                         </>
                       )}
+                      {g.logo && (
+                        <>
+                          <Rect
+                            x={x0 + g.logo.x * surfaceW}
+                            y={g.logo.y * H}
+                            width={g.logo.w * surfaceW}
+                            height={g.logo.h * H}
+                            fill="rgba(15,23,42,0.06)"
+                            stroke="rgba(15,23,42,0.45)"
+                            strokeWidth={1}
+                            dash={[4, 4]}
+                            listening={false}
+                          />
+                          <Text
+                            x={x0 + g.logo.x * surfaceW}
+                            y={g.logo.y * H}
+                            width={g.logo.w * surfaceW}
+                            height={g.logo.h * H}
+                            text={"Backcover logo\n(reserved)"}
+                            align="center"
+                            verticalAlign="middle"
+                            fontSize={11}
+                            fill="rgba(15,23,42,0.55)"
+                            listening={false}
+                          />
+                        </>
+                      )}
                     </Fragment>
                   ))}
 
@@ -1501,7 +1573,8 @@ export function PageStage({
         {overlay}
 
         {/* Empty CTA when there's no illustration frame — including after Clear
-            art (version history may still exist). */}
+            art (version history may still exist). Split text+art layouts keep
+            the page chip / floating bar instead so text stays editable. */}
         {editable && emptyArt && !hasIllustrationEl && !artBusy?.left && emptyArt}
         {editable &&
           emptyArtRight &&
@@ -1538,8 +1611,8 @@ export function PageStage({
  * editing is true WYSIWYG: same font, size, color, alignment, padding and
  * preset text style as the printed page.
  *
- * Live-syncs into design history (one coalesced undo step for the session) so
- * B/I/U/colour/typing are undoable. Escape discards that step.
+ * Commits into design history on blur / toolbar formatting (one coalesced undo
+ * step for the session). Escape discards that step when anything was written.
  */
 function InlineTextEditor({
   box,
@@ -1570,12 +1643,23 @@ function InlineTextEditor({
   const wrapRef = useRef<HTMLDivElement>(null);
   const done = useRef(false);
   const dirty = useRef(false);
+  const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [marks, setMarks] = useState({ bold: false, italic: false, underline: false });
   const [barPos, setBarPos] = useState<FloatingBarPlacement | null>(null);
 
-  const syncLive = () => {
+  /**
+   * Push editor DOM into the design store. Typing does NOT live-sync — each
+   * store write re-rendered the whole studio/Konva tree and felt laggy. We only
+   * flush on toolbar formatting (immediate) and when the session ends.
+   */
+  const syncLive = (immediate = false) => {
     if (!ref.current || !onLiveSync) return;
     dirty.current = true;
+    if (!immediate) return;
+    if (syncTimer.current) {
+      clearTimeout(syncTimer.current);
+      syncTimer.current = null;
+    }
     onLiveSync(editorToParagraphs(ref.current));
   };
 
@@ -1638,6 +1722,10 @@ function InlineTextEditor({
   function finish(save: boolean) {
     if (done.current) return;
     done.current = true;
+    if (syncTimer.current) {
+      clearTimeout(syncTimer.current);
+      syncTimer.current = null;
+    }
     if (save) {
       // Flush final DOM into the coalesced step only when the session changed.
       if (dirty.current && ref.current && onLiveSync) {
@@ -1701,7 +1789,11 @@ function InlineTextEditor({
           left: box.rect.x * W,
           top: box.rect.y * H,
           width: box.rect.w * W,
-          height: box.rect.h * H,
+          // Auto-height boxes grow with content locally while typing (no store
+          // sync per keystroke). Fixed-height boxes keep their design rect.
+          ...(box.autoHeight
+            ? { minHeight: box.rect.h * H, height: "auto" }
+            : { height: box.rect.h * H }),
           transform: box.rotation ? `rotate(${box.rotation}deg)` : undefined,
           transformOrigin: "center center",
           boxShadow: "0 0 0 2px rgba(99,102,241,0.9)",
@@ -1710,8 +1802,6 @@ function InlineTextEditor({
       >
         <div
           style={{
-            position: "absolute",
-            inset: 0,
             display: "flex",
             flexDirection: "column",
             justifyContent:
@@ -1725,7 +1815,7 @@ function InlineTextEditor({
                     ? "stretch"
                     : "center",
             padding: pad,
-            overflow: "hidden",
+            ...(box.autoHeight ? {} : { position: "absolute", inset: 0, overflow: "hidden" }),
           }}
         >
           <div
@@ -1733,7 +1823,9 @@ function InlineTextEditor({
             contentEditable
             suppressContentEditableWarning
             spellCheck={false}
-            onInput={syncLive}
+            onInput={() => {
+              dirty.current = true;
+            }}
             onBlur={(e) => {
               // Keep editing alive when the floating toolbar (portaled) is clicked.
               const next = e.relatedTarget as Node | null;
@@ -1791,12 +1883,12 @@ function InlineTextEditor({
               italic: document.queryCommandState("italic"),
               underline: document.queryCommandState("underline"),
             });
-            syncLive();
+            syncLive(true);
           }}
           onColor={(c) => {
             applyInlineColor(c);
             ref.current?.focus();
-            syncLive();
+            syncLive(true);
           }}
           chrome={liveChrome}
         />
@@ -1988,8 +2080,6 @@ function ReframeOverlay({
     return cn(base, "bottom-0 right-0 translate-x-1/2 translate-y-1/2 cursor-nwse-resize");
   };
 
-  const cropBarPortal = barPos ? floatingBarPortalProps(barPos) : null;
-
   return (
     <>
       {/* Dim backdrop; clicking it (outside the frame) finishes. */}
@@ -2087,70 +2177,67 @@ function ReframeOverlay({
         ))}
       </div>
 
-      {cropBarPortal &&
-        createPortal(
-          <div
-            data-image-crop-bar
-            className={cropBarPortal.className}
-            style={cropBarPortal.style}
-            onMouseDown={(e) => {
-              // Don't block range-slider / button interaction (preventDefault on
-              // the wrapper was killing scrubbing).
-              if ((e.target as HTMLElement).closest("input, button, select, textarea, a")) return;
-              e.preventDefault();
-            }}
-          >
-            <div className="flex items-center gap-1 rounded-xl border border-brand-200 bg-white/98 p-1 shadow-lifted backdrop-blur">
-              <span className="flex items-center gap-1.5 rounded-lg bg-brand-50 px-2.5 py-1.5 text-xs font-semibold text-brand-700">
-                <Crop className="size-3.5" />
-                Cropping
-              </span>
-              <span className="hidden px-1 text-[11px] text-ink-400 sm:inline">
-                Corners resize · drag to pan · Esc
-              </span>
-              <span className="mx-0.5 h-5 w-px shrink-0 bg-ink-200" />
-              <button
-                type="button"
-                title="Zoom out"
-                className="flex size-8 items-center justify-center rounded-lg text-ink-600 hover:bg-ink-100"
-                onClick={() => setZoom(clampN(zoom - 0.2, 1, 4))}
-              >
-                <Minus className="size-4" />
-              </button>
-              <input
-                type="range"
-                min={1}
-                max={4}
-                step={0.05}
-                value={zoom}
-                title={`${zoom.toFixed(1)}×`}
-                onChange={(e) => setZoom(Number(e.target.value))}
-                className="w-24"
-              />
-              <button
-                type="button"
-                title="Zoom in"
-                className="flex size-8 items-center justify-center rounded-lg text-ink-600 hover:bg-ink-100"
-                onClick={() => setZoom(clampN(zoom + 0.2, 1, 4))}
-              >
-                <PlusIcon className="size-4" />
-              </button>
-              <span className="w-8 text-center text-[11px] font-medium tabular-nums text-ink-500">
-                {zoom.toFixed(1)}×
-              </span>
-              <span className="mx-0.5 h-5 w-px shrink-0 bg-ink-200" />
-              <button
-                type="button"
-                className="inline-flex items-center gap-1 rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700"
-                onClick={onDone}
-              >
-                <Check className="size-3.5" />
-                Done
-              </button>
-            </div>
-          </div>,
-          document.body,
-        )}
+      {barPos && (
+        <FloatingBarPortal
+          placement={barPos}
+          data-image-crop-bar=""
+          onMouseDown={(e) => {
+            // Don't block range-slider / button interaction (preventDefault on
+            // the wrapper was killing scrubbing).
+            if ((e.target as HTMLElement).closest("input, button, select, textarea, a")) return;
+            e.preventDefault();
+          }}
+        >
+          <div className="flex items-center gap-1 rounded-xl border border-brand-200 bg-white/98 p-1 shadow-lifted backdrop-blur">
+            <span className="flex items-center gap-1.5 rounded-lg bg-brand-50 px-2.5 py-1.5 text-xs font-semibold text-brand-700">
+              <Crop className="size-3.5" />
+              Cropping
+            </span>
+            <span className="hidden px-1 text-[11px] text-ink-400 sm:inline">
+              Corners resize · drag to pan · Esc
+            </span>
+            <span className="mx-0.5 h-5 w-px shrink-0 bg-ink-200" />
+            <button
+              type="button"
+              title="Zoom out"
+              className="flex size-8 items-center justify-center rounded-lg text-ink-600 hover:bg-ink-100"
+              onClick={() => setZoom(clampN(zoom - 0.2, 1, 4))}
+            >
+              <Minus className="size-4" />
+            </button>
+            <input
+              type="range"
+              min={1}
+              max={4}
+              step={0.05}
+              value={zoom}
+              title={`${zoom.toFixed(1)}×`}
+              onChange={(e) => setZoom(Number(e.target.value))}
+              className="w-24"
+            />
+            <button
+              type="button"
+              title="Zoom in"
+              className="flex size-8 items-center justify-center rounded-lg text-ink-600 hover:bg-ink-100"
+              onClick={() => setZoom(clampN(zoom + 0.2, 1, 4))}
+            >
+              <PlusIcon className="size-4" />
+            </button>
+            <span className="w-8 text-center text-[11px] font-medium tabular-nums text-ink-500">
+              {zoom.toFixed(1)}×
+            </span>
+            <span className="mx-0.5 h-5 w-px shrink-0 bg-ink-200" />
+            <button
+              type="button"
+              className="inline-flex items-center gap-1 rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700"
+              onClick={onDone}
+            >
+              <Check className="size-3.5" />
+              Done
+            </button>
+          </div>
+        </FloatingBarPortal>
+      )}
     </>
   );
 }
@@ -2207,4 +2294,15 @@ function imageElementBusySpec(
     return im.illustrationId === spec.illustrationId ? spec : null;
   }
   return spec;
+}
+
+/** Crop/zoom only makes sense when the element has pixels to frame. */
+function imageElementHasPixels(
+  im: ImageElement,
+  imageUrl: string | undefined,
+  rightSurface: SecondSurface | undefined,
+): boolean {
+  if (im.kind === "asset") return Boolean(im.blobId);
+  const onRight = Boolean(rightSurface) && im.rect.x + im.rect.w / 2 >= 0.5;
+  return Boolean(onRight ? rightSurface?.imageUrl : imageUrl);
 }

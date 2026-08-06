@@ -4,16 +4,19 @@
  * Owns the visual identity that appears across the marketing site, the studio
  * top bar, public share pages, and social/SEO metadata: the brand name +
  * tagline, the logo set (light/dark), the square icon, the favicon source, the
- * social share (OG) image, the brand colors, and the share watermark.
+ * social share (OG) image, the brand colors, the share watermark, and the
+ * backcover logo.
  *
  * Every image asset is uploaded to world-readable public storage and referenced
  * here by URL, so any of them can be swapped from the admin UI without a deploy.
  * Stored at the world-readable `appConfig/branding` doc and read live by the
  * client, the studio, and the server (landing metadata + favicon + JSON-LD).
  *
- * Whether a given shared book actually shows the watermark is a per-book flag
- * denormalized at publish time from the publisher's plan entitlement
- * (`removeWatermark`); this config only owns the asset + its appearance.
+ * Whether a given shared book actually shows the (removable) share watermark is
+ * a per-book flag denormalized at publish time from the publisher's plan
+ * entitlement (`removeWatermark`); this config only owns that asset + its
+ * appearance. The backcover logo has no such entitlement — see
+ * {@link BrandingConfig.backCoverLogo}.
  */
 export interface BrandingWatermark {
   /** Public URL of the uploaded watermark asset (SVG preferred). */
@@ -35,6 +38,12 @@ export interface BrandAsset {
   storagePath?: string;
   /** Alt/description text (used for the social image + accessibility). */
   alt?: string;
+  /**
+   * Intrinsic height÷width of the uploaded file. Used by the backcover logo
+   * print guide (and anywhere else that needs the asset's true shape) so the
+   * editor doesn't have to re-load the image just to measure it.
+   */
+  aspect?: number;
   updatedAt: number;
 }
 
@@ -56,7 +65,8 @@ export type BrandAssetSlot =
   | "defaultCoverFrontWide"
   | "defaultCoverBackWide"
   | "defaultCoverFrontPortrait"
-  | "defaultCoverBackPortrait";
+  | "defaultCoverBackPortrait"
+  | "backCoverLogo";
 
 export const BRAND_ASSET_SLOTS: BrandAssetSlot[] = [
   "logo",
@@ -70,6 +80,7 @@ export const BRAND_ASSET_SLOTS: BrandAssetSlot[] = [
   "defaultCoverBackWide",
   "defaultCoverFrontPortrait",
   "defaultCoverBackPortrait",
+  "backCoverLogo",
 ];
 
 /** Brand colors (hex). `primary` also drives the browser theme color. */
@@ -106,6 +117,14 @@ export interface BrandingConfig {
   defaultCoverFrontPortrait: BrandAsset | null;
   /** Fallback back cover for portrait (tall) books. */
   defaultCoverBackPortrait: BrandAsset | null;
+  /**
+   * The permanent backcover logo — stamped bottom-left on every printed book's
+   * back panel and every ebook's back cover page at render time. Unlike
+   * {@link watermark} (the share watermark), this one has no opacity/scale
+   * knobs and no entitlement to remove it: it's baked into the print/ebook PDF
+   * on the server, so nothing the customer does in the studio can take it off.
+   */
+  backCoverLogo: BrandAsset | null;
   /** Brand colors. */
   colors: BrandColors;
   /** The share watermark, or null when none is configured. */
@@ -136,6 +155,7 @@ export function createDefaultBrandingConfig(): BrandingConfig {
     defaultCoverBackWide: null,
     defaultCoverFrontPortrait: null,
     defaultCoverBackPortrait: null,
+    backCoverLogo: null,
     colors: { primary: "#f96a4d", accent: "#f79b04" },
     watermark: null,
     assetHistory: {},
@@ -166,6 +186,10 @@ function normalizeAsset(input: unknown): BrandAsset | null {
   };
   if (typeof a.storagePath === "string") asset.storagePath = a.storagePath;
   if (typeof a.alt === "string") asset.alt = a.alt.slice(0, 300);
+  if (typeof a.aspect === "number" && Number.isFinite(a.aspect) && a.aspect > 0) {
+    // Cap absurd ratios so a bad measurement can't blow up layout.
+    asset.aspect = Math.min(8, Math.max(0.05, a.aspect));
+  }
   return asset;
 }
 
@@ -241,6 +265,7 @@ export function normalizeBrandingConfig(input: unknown): BrandingConfig {
     defaultCoverBackWide: normalizeAsset(b.defaultCoverBackWide),
     defaultCoverFrontPortrait: normalizeAsset(b.defaultCoverFrontPortrait),
     defaultCoverBackPortrait: normalizeAsset(b.defaultCoverBackPortrait),
+    backCoverLogo: normalizeAsset(b.backCoverLogo),
     colors: {
       primary: hex(colors.primary, d.colors.primary),
       accent: hex(colors.accent, d.colors.accent),

@@ -134,6 +134,13 @@ export interface BuildIllustrationPromptInput {
   /** Whether an inpainting mask is supplied (restrict change to masked area). */
   maskMode?: boolean;
   /**
+   * Art-style transfer: re-render the page's existing artwork in the book's new
+   * style, keeping the scene identical. Selects a dedicated template — the
+   * normal refresh tail explicitly forbids restyling, which is exactly wrong
+   * here.
+   */
+  restyle?: boolean;
+  /**
    * Cover-only: render the title/subtitle/author typography INTO the artwork
    * (typographic cover) instead of reserving clean space for overlay text.
    */
@@ -178,6 +185,7 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
     hasScaleChart = false,
     hasCompositionRef = false,
     maskMode = false,
+    restyle = false,
     bakeText = false,
     coverTitle,
     coverSubtitle,
@@ -188,6 +196,28 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
     layoutPlan,
   } = input;
   const styleText = resolveArtStyleText(config.artStyle, prompts);
+
+  if (restyle) {
+    const restyleLegend = [
+      ...(hasStyleRef ? ["an art-style reference (match its style only, not its content)"] : []),
+      ...referencedAnchors.map((a) => a.name),
+      "the page being re-rendered",
+    ]
+      .map((name, i) => `(${i + 1}) ${name}`)
+      .join(", ");
+    return renderSinglePrompt(resolvePromptsConfig(prompts), "pageIllustration/restyle", {
+      vars: {
+        charactersList: referencedAnchors.map((a) => `${a.name} (${a.description})`).join("; "),
+        legend: restyleLegend,
+        artStyle: styleText,
+      },
+      flags: {
+        hasStyleRef,
+        hasReferenced: referencedAnchors.length > 0,
+        bakeText: Boolean(bakeText && (coverTitle ?? "").trim()),
+      },
+    });
+  }
 
   // Assemble the human-readable typography instruction when baking cover text.
   const bakeParts: string[] = [];
@@ -406,6 +436,25 @@ export function buildRemoveRegionPrompt(input: {
   });
 }
 
+/**
+ * Prompt for the back-cover-continuation outpaint (see `renderCoverContinuation`
+ * in `illustrationRun.ts`). The ONLY reference image is a seed canvas that
+ * already contains a strip of the FRONT cover's real edge pixels, pasted flush
+ * against the seam side of an otherwise-blank canvas, with a mask protecting
+ * that strip. This asks the model to extend it into the rest of the (masked)
+ * frame as one continuous scene.
+ */
+export function buildCoverContinuationPrompt(input: {
+  config: BookConfig;
+  prompts?: PromptContext;
+}): string {
+  const { config, prompts } = input;
+  const styleText = resolveArtStyleText(config.artStyle, prompts);
+  return renderSinglePrompt(resolvePromptsConfig(prompts), "pageIllustration/coverContinuation", {
+    vars: { artStyle: styleText },
+  });
+}
+
 export async function generateIllustrationImage(input: {
   prompt: string;
   size: string;
@@ -415,9 +464,12 @@ export async function generateIllustrationImage(input: {
   references?: ReferenceImage[];
   mask?: ReferenceImage;
   quality?: "low" | "medium" | "high" | "auto";
+  /** Cover typography is being rendered into the art — keep text allowed. */
+  allowText?: boolean;
   signal?: AbortSignal;
 }): Promise<ImageResult> {
-  const { prompt, size, creds, model, providerId, references, mask, quality, signal } = input;
+  const { prompt, size, creds, model, providerId, references, mask, quality, allowText, signal } =
+    input;
   const provider = getImageProvider(providerId);
   // Image calls are the slow, user-visible ones: one retry only, so a stalled
   // provider fails the render in bounded time instead of silently burning
@@ -431,6 +483,7 @@ export async function generateIllustrationImage(input: {
         references,
         mask,
         quality,
+        allowText,
         signal,
       }),
     { retries: 1, signal },

@@ -357,3 +357,49 @@ export function resolveIllustrationSlotId(
   const slot = el.illustrationId?.trim();
   return slot || pageId;
 }
+
+function newIllustrationElementId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return `im_${crypto.randomUUID()}`;
+  }
+  return `im_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Ensure the page has a selectable illustration ImageElement so new art paints
+ * on the live canvas (editable stages only draw AI art through that element,
+ * not as a passive full-bleed). No-op when a frame already exists — clearing
+ * art removes the frame on purpose and must not recreate it here.
+ */
+export function withIllustrationFrame(
+  design: BookDesign,
+  pageId: string,
+  opts?: { focus?: { x: number; y: number }; rect?: NormRect },
+): BookDesign {
+  const pd = design.pages[pageId] ?? { textBoxes: [] };
+  if ((pd.images ?? []).some((im) => im.kind === "illustration")) return design;
+
+  const zs = [
+    ...pd.textBoxes.map((b) => b.z),
+    ...(pd.shapes ?? []).map((s) => s.z),
+    ...(pd.images ?? []).map((im) => im.z),
+  ];
+  const z = (zs.length ? Math.min(...zs) : 0) - 1;
+  const img: ImageElement = {
+    id: newIllustrationElementId(),
+    kind: "illustration",
+    illustrationId: pageId,
+    rect: opts?.rect ?? { x: 0, y: 0, w: 1, h: 1 },
+    z,
+    fit: "cover",
+    name: "Illustration",
+    ...(opts?.focus ? { focus: opts.focus } : {}),
+  };
+  return {
+    ...design,
+    pages: {
+      ...design.pages,
+      [pageId]: { ...pd, images: [...(pd.images ?? []), img] },
+    },
+  };
+}

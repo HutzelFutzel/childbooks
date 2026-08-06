@@ -19,18 +19,110 @@ function blk(id: string, text: string, enabledWhen?: string): PromptBlock {
 // ---- Default templates (ported verbatim from the pipeline builders) --------
 
 const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
-  // core/pipeline/storyDraft.ts → generateStoryDraft
-  storyDraft: {
+  // core/pipeline/storyDraft.ts → generateStoryDraft (mode: "guided")
+  "storyDraft/guided": {
     system: [
       blk(
         "role",
-        "You are a beloved children's picture-book author. Write a complete, original short story for a picture book starring the given hero. The story must have a clear beginning, a gentle adventure or problem in the middle, and a warm, satisfying ending. Give the hero one or two memorable companions and a vivid setting. Use concrete, visual scenes an illustrator can paint — avoid abstract narration. {{ageGuidance}} Keep the whole story between {{minWords}} and {{maxWords}} words. Also invent a catchy, short book title. Do not include chapter headings, page numbers, or any commentary — return only the title and the story text.",
+        "You are a beloved children's picture-book author. Write a complete, original short story for a picture book starring the given hero. The story must have a clear beginning, a gentle adventure or problem in the middle, and a warm, satisfying ending. Give the hero one or two memorable companions and a vivid setting. Use concrete, visual scenes an illustrator can paint — avoid abstract narration.",
+      ),
+      blk("ageGuidance", "{{ageGuidance}}"),
+      blk(
+        "structure",
+        "STRUCTURE: keep the whole story between {{minWords}} and {{maxWords}} words — this is a hard requirement, not a suggestion. Move through roughly {{beats}} distinct story beats so the book paces well across its pages.",
+      ),
+      blk("sentences", "Keep sentences at or under {{maxSentenceWords}} words.", "hasSentenceLimit"),
+      blk("protagonist", "{{protagonistGuidance}}"),
+      blk("device", "STYLISTIC DEVICE (follow it throughout): {{deviceGuidance}}", "hasDevice"),
+      blk("safety", "NEVER include: {{safetyList}}. {{safetyNote}}"),
+      blk(
+        "output",
+        "Also invent a catchy, short book title. Separate each story beat with a blank line, so the story reads as short paragraphs rather than one unbroken block — this also marks where a page turn could happen. Do not include chapter headings, page numbers, author notes, or any commentary — return only the title and the story text.",
       ),
     ],
     user: [
       blk("age", "Target age range: {{age}}."),
-      blk("hero", 'The hero of the story is "{{heroName}}".'),
-      blk("theme", "The story should be about: {{theme}}.", "hasTheme"),
+      blk("hero", "{{heroLine}}"),
+      blk("theme", "The story should be about: {{themeGuidance}}", "hasTheme"),
+      blk("setting", "Setting: {{settingGuidance}}", "hasSetting"),
+      blk(
+        "repair",
+        "\nA previous attempt was rejected: {{repairInstruction}} Write the story again, fixing exactly that while keeping the same characters and the same kind of story.",
+        "isRepair",
+      ),
+    ],
+  },
+
+  // core/pipeline/storyDraft.ts → generateStoryDraft (mode: "co-write")
+  "storyDraft/coWrite": {
+    system: [
+      blk(
+        "role",
+        "You are a beloved children's picture-book author writing a personalised book for a real family. The author has given you the real people, the real occasion and the real place — treat every detail they supplied as fact and build the story around it. Use every named person; give each one something to do that fits who they are. Invent freely around those facts to make a proper story with a clear beginning, a problem or adventure in the middle, and a warm, satisfying ending. Use concrete, visual scenes an illustrator can paint.",
+      ),
+      blk("ageGuidance", "{{ageGuidance}}"),
+      blk(
+        "structure",
+        "STRUCTURE: keep the whole story between {{minWords}} and {{maxWords}} words — this is a hard requirement, not a suggestion. Move through roughly {{beats}} distinct story beats so the book paces well across its pages.",
+      ),
+      blk("sentences", "Keep sentences at or under {{maxSentenceWords}} words.", "hasSentenceLimit"),
+      blk("protagonist", "{{protagonistGuidance}}"),
+      blk(
+        "names",
+        "Spell every supplied name EXACTLY as the author wrote it, every time. Never rename, shorten or substitute a person. Respect the stated relationships between them precisely — if two people are twins, they are twins throughout.",
+      ),
+      blk("device", "STYLISTIC DEVICE (follow it throughout): {{deviceGuidance}}", "hasDevice"),
+      blk("safety", "NEVER include: {{safetyList}}. {{safetyNote}}"),
+      blk(
+        "output",
+        "Also invent a catchy, short book title that suits this particular family. Separate each story beat with a blank line, so the story reads as short paragraphs rather than one unbroken block — this also marks where a page turn could happen. Do not include chapter headings, page numbers, author notes, or any commentary — return only the title and the story text.",
+      ),
+    ],
+    user: [
+      blk("age", "Target age range: {{age}}."),
+      blk("cast", "WHO IS IN THE STORY:\n{{cast}}"),
+      blk("occasion", "\nWHAT HAPPENS: {{occasion}}"),
+      blk("when", "WHEN: {{when}}", "hasWhen"),
+      blk("where", "WHERE: {{where}}", "hasWhere"),
+      blk("theme", "\nThe story should be about: {{themeGuidance}}", "hasTheme"),
+      blk("setting", "Setting guidance: {{settingGuidance}}", "hasSetting"),
+      blk("mustInclude", "\nMUST BE IN THE STORY: {{mustInclude}}", "hasMustInclude"),
+      blk(
+        "repair",
+        "\nA previous attempt was rejected: {{repairInstruction}} Write the story again, fixing exactly that while keeping the same people, occasion and place.",
+        "isRepair",
+      ),
+    ],
+  },
+
+  // core/pipeline/storyFit.ts → checkStoryFit (the author's own text)
+  "storyCheck/ageFit": {
+    system: [
+      blk(
+        "role",
+        "You are a warm, encouraging children's-book editor giving a quick, friendly first read of a manuscript for a specific age. There is no single correct way to write for children — you are a supportive collaborator sharing an honest impression, never a judge applying rules. The author is keeping every word exactly as written; you are not proposing edits, and nothing you say will change their story.",
+      ),
+      blk(
+        "criteria",
+        "Loosely consider: whether the vocabulary and sentence length feel comfortable for the age; whether the length is roughly typical for a book at this age; whether the emotional content feels comfortable; and whether there's enough concrete detail for an illustrator to draw from. Treat all of this as gentle observation, not a checklist — wonderful books bend every one of these often, and on purpose.",
+      ),
+      blk("ageGuidance", "For reference, this age band usually reads like: {{ageGuidance}}"),
+      blk(
+        "structure",
+        "Books at this age are typically {{minWords}}–{{maxWords}} words, but there's real range in practice — length alone is never a problem worth dwelling on.",
+      ),
+      blk(
+        "safety",
+        "If — and only if — something genuinely stands out, you could gently mention: {{safetyList}}. Most stories won't need this at all.",
+      ),
+      blk(
+        "output",
+        'Return a verdict of "good" (feels like a comfortable fit as-is), "minor" (a good fit, with a couple of small friendly thoughts) or "mismatch" (reads like it leans toward quite a different age — which may be exactly what the author intended, so say this warmly and with curiosity, never as a correction). Write one warm, short headline first. Then give at most three short notes, each phrased as a gentle observation or something the author might enjoy considering — never as an instruction, a requirement, or a fix. If the story already feels lovely for this age, say so warmly and return no notes.',
+      ),
+    ],
+    user: [
+      blk("age", "Target age range: {{age}}. The story is {{actualWords}} words."),
+      blk("story", "\nSTORY:\n{{story}}"),
     ],
   },
 
@@ -45,6 +137,11 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     user: [
       blk("age", "Target age range: {{age}}."),
       blk("ageGuidance", "{{ageGuidance}}"),
+      blk(
+        "castHints",
+        "\nThe author wrote this story about REAL people and told us who they are. Treat this as ground truth for their names, ages and relationships — prefer it over anything you infer from the prose, and use the ages to get each character's proportions right:\n{{castHints}}",
+        "hasCastHints",
+      ),
       blk("story", "\nSTORY:\n{{story}}"),
     ],
   },
@@ -294,6 +391,75 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     ],
   },
 
+  // core/pipeline/anchors.ts → buildAnchorPrompt (art-style transfer)
+  "anchorImage/restyle": {
+    single: [
+      blk(
+        "intro",
+        'Re-render the provided reference sheet of "{{anchorName}}" in a different art style.',
+      ),
+      blk(
+        "preserve",
+        "Reproduce the sheet's CONTENT exactly: the same subject with the same identity, face, hair, body proportions, outfit and item colors; the same {{cellCount}} cells in the same grid ({{gridShape}}) and the same order; the same view, pose, expression, framing and scale in every cell; the same plain pure-white background.",
+      ),
+      blk(
+        "styleRef",
+        "One reference image is an ART-STYLE reference: match ONLY its visual style — medium, rendering technique, linework, shading, color palette, texture and finish. Do NOT copy its subjects or layout.",
+        "hasStyleRef",
+      ),
+      blk("style", "Render everything in this art style instead: {{artStyle}}."),
+      blk(
+        "nothingElse",
+        "Change NOTHING else. Do not add, remove, replace, reorder, resize or re-pose anything; do not restyle the subject's design, clothing or colors beyond what the new rendering technique itself implies; do not change the number of cells.",
+      ),
+      blk(
+        "noText",
+        "Nothing but the subject on white: no text, labels, captions, names, numbers, colour swatches, measurement lines, arrows, callouts, grid lines, frames, borders or watermark anywhere in the image. Never render any part of these instructions into the picture.",
+      ),
+    ],
+  },
+
+  // core/pipeline/illustration.ts → buildIllustrationPrompt (art-style transfer)
+  "pageIllustration/restyle": {
+    single: [
+      blk("intro", "Re-render this children's-book page illustration in a different art style."),
+      blk(
+        "preserve",
+        "The BASE IMAGE is the current version of this page. Reproduce it exactly: the same scene, composition, camera angle, framing, cropping, subject placement, poses, expressions, scale, lighting direction, background elements and props.",
+      ),
+      blk(
+        "styleRef",
+        "One reference image is an ART-STYLE reference: match ONLY its visual style — medium, rendering technique, linework, shading, color palette, texture and finish. Do NOT copy its subjects, characters, objects, composition or layout.",
+        "hasStyleRef",
+      ),
+      blk("style", "Render everything in this art style instead: {{artStyle}}."),
+      blk(
+        "characters",
+        "The named subjects also have updated reference sheets attached — {{charactersList}}. Each subject must keep the position, pose and scale it has in the base image, while its design matches its own updated sheet.",
+        "hasReferenced",
+      ),
+      blk(
+        "legend",
+        "The reference images are provided in this exact order: {{legend}}. Use each one only for its stated purpose.",
+        "hasReferenced",
+      ),
+      blk(
+        "nothingElse",
+        "Change NOTHING else. Do not add, remove, move, duplicate or re-pose any character, object or background element; do not re-crop, zoom or re-frame; do not alter the story content of the picture. Only the rendering style changes.",
+      ),
+      blk(
+        "noText",
+        "Do NOT render any text, letters, captions, words, numbers or watermark, and never render any part of these instructions into the picture.",
+        "!bakeText",
+      ),
+      blk(
+        "bakeText",
+        "Keep the cover typography that is already in the base image — the same words, spelling, placement and hierarchy — but re-letter it to suit the new art style.",
+        "bakeText",
+      ),
+    ],
+  },
+
   // core/pipeline/illustration.ts → buildIllustrationPrompt
   "pageIllustration/default": {
     single: [
@@ -499,6 +665,35 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk("style", "Art style: {{artStyle}}."),
     ],
   },
+
+  // core/pipeline/illustration.ts → buildCoverContinuationPrompt (back-cover
+  // outpaint continuation of the front, see `renderCoverContinuation`)
+  "pageIllustration/coverContinuation": {
+    single: [
+      blk(
+        "intro",
+        "You are painting the BACK COVER of a children's picture book so it physically continues the FRONT COVER's scene across the spine.",
+      ),
+      blk(
+        "seam",
+        "The image already contains a strip of the FRONT COVER's real pixels, pasted flush against the edge that touches the spine — that is the transparent (masked) region's starting edge.",
+      ),
+      blk(
+        "task",
+        "Extend that exact scene into the rest of the frame (the transparent/masked region): continue the SAME setting, time of day, color palette, lighting and art style outward from the visible strip, as one seamless continuous picture. Do NOT draw a distinct or different scene, and do NOT mirror, repeat or reproduce the front cover's own composition or character placement.",
+      ),
+      blk(
+        "calm",
+        "Keep the far corner (away from the seam) calm and simple — plain, uncluttered background there, since a blurb goes there.",
+      ),
+      blk(
+        "noBadges",
+        "This is a book cover: do NOT draw any barcode, QR code, ISBN, price tag, sticker, label, logo, badge, stamp, watermark or user-interface graphic anywhere in the image.",
+      ),
+      blk("noText", "Do NOT render any text, letters, captions, words, or numbers in the image."),
+      blk("style", "Art style: {{artStyle}}."),
+    ],
+  },
 };
 
 /** Shared, reusable sub-prompts referenced via `{{> id}}`. (None ship by default;
@@ -554,27 +749,109 @@ const V = (name: string, description: string, sample: string): PromptVariableMet
 
 const AGE_SAMPLE = "Keep sentences short and the vocabulary simple.";
 const STYLE_SAMPLE = "soft watercolor children's book illustration";
+const THEME_SAMPLE =
+  "A bedtime adventure that starts in a real bedroom, drifts into imagination, and lands safely back in bed.";
+const DEVICE_SAMPLE =
+  "Give the story one memorable refrain that returns at each turning point so the child can join in.";
+const SETTING_SAMPLE = "Set it in a friendly wood full of animals and dappled light.";
+const PROTAGONIST_SAMPLE =
+  "The hero should be about 4–6 years old — a touch older than the reader, which is who a preschooler wants to be.";
+const SAFETY_SAMPLE = "graphic violence or injury, sexual content of any kind, unresolved fear at the end";
 
 export const PROMPT_ACTIONS: PromptActionMeta[] = [
   {
     actionId: "storyDraft",
     label: "Story draft",
-    description: "Writes a first story from a hero name + theme (the quick-start path).",
+    description:
+      "Writes the story. Two variants: guided (one or more names + a theme) and co-write (the real cast, occasion and place). Both are constrained by the age band's Story craft rules.",
     kind: "text",
     templates: [
       {
-        key: "storyDraft",
-        label: "Draft",
-        description: "System + user prompt for proposing a complete first story.",
+        key: "storyDraft/guided",
+        label: "Guided (write it for me)",
+        description:
+          "One or more names plus an optional theme → a complete story. The lightest path in the Story step.",
         variables: [
           V("age", "Target age-range label.", "3–5"),
           V("ageGuidance", "Age-band writing guidance overlay.", AGE_SAMPLE),
-          V("heroName", "The hero's name from the quick-start.", "Mila"),
-          V("theme", "The chosen story theme, when picked.", "a bedtime adventure"),
+          V(
+            "heroLine",
+            "A ready-made sentence naming the hero(es) — singular or plural, grammar already resolved.",
+            'The book is for a child called "Mila", who is the hero of the story.',
+          ),
+          V("themeGuidance", "The chosen theme's guidance (or the reader's own words).", THEME_SAMPLE),
+          V("settingGuidance", "The chosen setting's guidance, when picked.", SETTING_SAMPLE),
+          V("deviceGuidance", "The chosen stylistic device's guidance.", DEVICE_SAMPLE),
+          V("protagonistGuidance", "Hero-age rule from Story craft.", PROTAGONIST_SAMPLE),
           V("minWords", "Lower bound for story length.", "150"),
-          V("maxWords", "Upper bound for story length.", "300"),
+          V("maxWords", "Upper bound for story length.", "320"),
+          V("beats", "Target number of story beats.", "5"),
+          V("maxSentenceWords", "Sentence-length ceiling for the band.", "16"),
+          V("safetyList", "Comma-joined 'avoid' list from Story craft.", SAFETY_SAMPLE),
+          V("safetyNote", "Closing safety sentence from Story craft.", "Tension must resolve warmly."),
+          V("repairInstruction", "Why the previous attempt was rejected (retry only).", "it was 512 words, which is over the 320-word limit."),
         ],
-        sampleFlags: { hasTheme: true },
+        sampleFlags: { hasTheme: true, hasSetting: false, hasDevice: true, hasSentenceLimit: true, isRepair: false },
+      },
+      {
+        key: "storyDraft/coWrite",
+        label: "Co-write (write it together)",
+        description:
+          "The real cast with their relationships, the occasion, when and where → a personalised story.",
+        variables: [
+          V("age", "Target age-range label.", "6–8"),
+          V("ageGuidance", "Age-band writing guidance overlay.", AGE_SAMPLE),
+          V("cast", "The named cast, one per line with roles and ages.", "- Arthur (her twin brother; 6 years old)\n- Amanda (the hero; 6 years old)\n- Luca (the neighbour's boy; 8 years old)"),
+          V("occasion", "What happens, in the author's words.", "Their first sleepover in the treehouse."),
+          V("when", "When it happens.", "The last warm evening of the summer holidays."),
+          V("where", "Where it happens.", "The treehouse at the bottom of Grandad's garden."),
+          V("mustInclude", "Anything the author insists appears.", "Amanda's yellow torch."),
+          V("themeGuidance", "The chosen theme's guidance.", THEME_SAMPLE),
+          V("settingGuidance", "The chosen setting's guidance, when picked.", SETTING_SAMPLE),
+          V("deviceGuidance", "The chosen stylistic device's guidance.", DEVICE_SAMPLE),
+          V("protagonistGuidance", "Hero-age rule from Story craft.", PROTAGONIST_SAMPLE),
+          V("minWords", "Lower bound for story length.", "300"),
+          V("maxWords", "Upper bound for story length.", "600"),
+          V("beats", "Target number of story beats.", "7"),
+          V("maxSentenceWords", "Sentence-length ceiling for the band.", "22"),
+          V("safetyList", "Comma-joined 'avoid' list from Story craft.", SAFETY_SAMPLE),
+          V("safetyNote", "Closing safety sentence from Story craft.", "The ending must leave the reader hopeful."),
+          V("repairInstruction", "Why the previous attempt was rejected (retry only).", "it left out Luca, who must appear."),
+        ],
+        sampleFlags: {
+          hasTheme: true,
+          hasSetting: false,
+          hasDevice: true,
+          hasSentenceLimit: true,
+          hasWhen: true,
+          hasWhere: true,
+          hasMustInclude: true,
+          isRepair: false,
+        },
+      },
+    ],
+  },
+  {
+    actionId: "storyCheck",
+    label: "Story age-fit check",
+    description:
+      "A warm, optional read of a story the author wrote themselves — never a gate, never a rule, and never a rewrite. Purely an encouraging second opinion the author can take or leave.",
+    kind: "text",
+    templates: [
+      {
+        key: "storyCheck/ageFit",
+        label: "Age fit",
+        description: "A friendly headline plus up to three gentle, optional observations — phrased as suggestions, never instructions.",
+        variables: [
+          V("age", "Target age-range label.", "3–5"),
+          V("ageGuidance", "Age-band writing guidance overlay.", AGE_SAMPLE),
+          V("story", "The author's story text.", "Once upon a time…"),
+          V("actualWords", "Measured word count of the story.", "412"),
+          V("minWords", "Lower bound for story length.", "150"),
+          V("maxWords", "Upper bound for story length.", "320"),
+          V("safetyList", "Comma-joined 'avoid' list from Story craft.", SAFETY_SAMPLE),
+        ],
+        sampleFlags: {},
       },
     ],
   },
@@ -592,8 +869,13 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("age", "Target age-range label.", "6–8"),
           V("ageGuidance", "Age-band writing guidance overlay.", AGE_SAMPLE),
           V("story", "The author's story text.", "Once upon a time…"),
+          V(
+            "castHints",
+            "The real cast from a co-written story, with ages and relationships.",
+            "- Amanda (the hero; 6 years old)\n- Arthur (her twin brother; 6 years old)",
+          ),
         ],
-        sampleFlags: {},
+        sampleFlags: { hasCastHints: true },
       },
     ],
   },
@@ -812,6 +1094,19 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
         ],
         sampleFlags: { hasMentioned: false },
       },
+      {
+        key: "anchorImage/restyle",
+        label: "Art-style transfer",
+        description:
+          "Re-render an existing sheet in a new art style, keeping identity, grid and poses identical.",
+        variables: [
+          V("anchorName", "Anchor name.", "Amanda"),
+          V("cellCount", "Number of cells in the sheet grid.", "6"),
+          V("gridShape", "Grid shape of the sheet.", "3 columns by 2 rows"),
+          V("artStyle", "Resolved art-style overlay (the NEW style).", STYLE_SAMPLE),
+        ],
+        sampleFlags: { hasStyleRef: true },
+      },
     ],
   },
   {
@@ -890,6 +1185,18 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
         },
       },
       {
+        key: "pageIllustration/restyle",
+        label: "Art-style transfer",
+        description:
+          "Re-render an existing page in a new art style, keeping composition, poses and content identical.",
+        variables: [
+          V("charactersList", "Subjects on the page with updated sheets.", "Amanda (a curious girl)"),
+          V("legend", "Ordered reference-image legend.", "(1) an art-style reference, (2) Amanda, (3) the page being re-rendered"),
+          V("artStyle", "Resolved art-style overlay (the NEW style).", STYLE_SAMPLE),
+        ],
+        sampleFlags: { hasStyleRef: true, hasReferenced: true, bakeText: false },
+      },
+      {
         key: "pageIllustration/modifySubject",
         label: "Surgical subject modify",
         description: "Change one attribute of a subject in place, keeping the rest pixel-identical.",
@@ -924,6 +1231,14 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("region", "The region holding the duplicate.", "the transparent (masked) region"),
           V("artStyle", "Resolved art-style overlay.", STYLE_SAMPLE),
         ],
+        sampleFlags: {},
+      },
+      {
+        key: "pageIllustration/coverContinuation",
+        label: "Cover continuation (outpaint)",
+        description:
+          "Extend the front cover's real edge pixels into the back cover as one continuous scene across the spine.",
+        variables: [V("artStyle", "Resolved art-style overlay.", STYLE_SAMPLE)],
         sampleFlags: {},
       },
     ],

@@ -9,6 +9,7 @@ import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import type { Anchor, AnchorImportance, AnchorType, BookConfig } from "../types";
 import { withRetry } from "./retry";
+import { briefOf, castPromptLines } from "../story/brief";
 import { resolveAgeLlmGuidance } from "../prompts/age";
 import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderTextPrompt } from "../prompts/render";
@@ -120,9 +121,14 @@ export async function analyzeStory(
   const provider = getTextProvider(config.textModel!.provider);
   const age = AGE_RANGES.find((a) => a.id === config.ageRangeId)?.label ?? config.ageRangeId;
   const ageTextPrompt = resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, prompts);
+  // A co-written story was built from real people the author already described.
+  // Handing those facts back saves the model from re-inferring ages and family
+  // links from prose — the two things it most often gets wrong here.
+  const castHints = castPromptLines(briefOf(config));
 
   const { system, user } = renderTextPrompt(resolvePromptsConfig(prompts), "storyAnalysis", {
-    vars: { age, ageGuidance: ageTextPrompt, story: story.trim() },
+    vars: { age, ageGuidance: ageTextPrompt, story: story.trim(), castHints },
+    flags: { hasCastHints: config.storyBrief?.mode === "co-write" && castHints.length > 0 },
   });
 
   const result = await withRetry(

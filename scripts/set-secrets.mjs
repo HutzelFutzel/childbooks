@@ -76,6 +76,9 @@ export function secretNames() {
 export function groupOf(name) {
   if (name.startsWith("LULU_")) return name.includes("LIVE") ? "Lulu (live)" : "Lulu (sandbox)";
   if (name.startsWith("STRIPE_")) return name.includes("LIVE") ? "Stripe (live)" : "Stripe (sandbox)";
+  if (name.startsWith("REWARDFUL_")) return "Rewardful (affiliates)";
+  if (name.startsWith("SLACK_")) return "Slack";
+  if (name.startsWith("ZEPTOMAIL_")) return "Email (ZeptoMail)";
   return "AI providers";
 }
 

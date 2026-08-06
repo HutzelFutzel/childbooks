@@ -1,4 +1,13 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   BookText,
@@ -19,7 +28,6 @@ import {
   Type,
   Undo2,
   Users,
-  Wand2,
   X,
 } from "lucide-react";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
@@ -28,18 +36,19 @@ import { staleIllustrationSpreadIds } from "../../state/ai";
 import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { Popover } from "../components/Popover";
-import { SparkEstimateCost, useImageActionRange } from "../layout/SparkCost";
+import { SparkEstimateCost } from "../layout/SparkCost";
 import { PipelineStepper, type PipelinePhase } from "../generation/PipelineStepper";
 import { useResolvedModels } from "../hooks/useResolvedModels";
 import { notify } from "../lib/notify";
 import { cn } from "../lib/cn";
-import { springSoft } from "../lib/motion";
 import { AssetsLibrary } from "./AssetsLibrary";
+import { useDesignChapterHosts } from "./DesignChapterHosts";
 import { ElementPanel, elementPanelHasContent } from "./ElementPanel";
 import { PageFilmstrip } from "./PageFilmstrip";
 import { PageMenu, PageStagePanel } from "./PageEditorCard";
 import { PairPageStagePanel } from "./PairPageStage";
-import { useStudio, type StudioToolPanel } from "./StudioContext";
+import { useStudio } from "./StudioContext";
+import { useStudioPanelStore, type StudioToolPanel } from "./studioPanelStore";
 import { refreshSpread, updateAnchorsThenSpread } from "./studioGen";
 import { useBookGeneration } from "./useBookGeneration";
 import { BookPreview } from "./BookPreview";
@@ -72,15 +81,7 @@ export function BookCanvas() {
     pages,
     selection,
     select,
-    textEditSection,
-    closeTextEdit,
-    imageEditSection,
-    closeImageEdit,
     selectIllustration,
-    openImageEdit,
-    toolPanel,
-    toggleToolPanel,
-    closeToolPanel,
     editingDispId,
     setEditingDisp,
     undo,
@@ -88,27 +89,42 @@ export function BookCanvas() {
     setStep,
     openDesignSetup,
   } = useStudio();
+  const textEditSection = useStudioPanelStore((s) => s.textEditSection);
+  const imageEditSection = useStudioPanelStore((s) => s.imageEditSection);
+  const toolPanel = useStudioPanelStore((s) => s.toolPanel);
+  const closeImageEdit = useStudioPanelStore((s) => s.closeImageEdit);
+  const closeTextEdit = useStudioPanelStore((s) => s.closeTextEdit);
+  const closeToolPanel = useStudioPanelStore((s) => s.closeToolPanel);
+  const toggleToolPanel = useStudioPanelStore((s) => s.toggleToolPanel);
+  const chapterHosts = useDesignChapterHosts();
   const models = useResolvedModels();
   const [previewing, setPreviewing] = useState(false);
 
   /** Toggle docked illustration tools for a page (same control opens/closes). */
-  function openIllustrationTools(entry: Entry, section: "refine" | "characters" | "scene" = "refine") {
-    const pageId = entry.page.id;
-    const alreadyOpen =
-      selection.kind === "image" &&
-      selection.pageId === pageId &&
-      imageEditSection === section;
-    if (alreadyOpen) {
-      closeImageEdit();
-      return;
-    }
-    selectIllustration(pageId);
-    openImageEdit(section);
-  }
+  const openIllustrationTools = useCallback(
+    (entry: Entry, section: "refine" | "characters" | "scene" = "refine") => {
+      const pageId = entry.page.id;
+      const panel = useStudioPanelStore.getState();
+      const alreadyOpen =
+        (selection.kind === "image" || selection.kind === "page") &&
+        selection.pageId === pageId &&
+        panel.imageEditSection === section;
+      if (alreadyOpen) {
+        panel.closeImageEdit();
+        return;
+      }
+      // With art: select/create the illustration frame. Without art: select the
+      // page only and purge empty ghost frames — never invent a croppable
+      // empty illustration just to open the toolbox.
+      selectIllustration(pageId);
+      panel.openImageEdit(section);
+    },
+    [selection, selectIllustration],
+  );
 
   const doc = project.screenplay ? getCursor(project.screenplay).content : null;
   const staleIds = useMemo(() => new Set(staleIllustrationSpreadIds(project)), [project]);
-  const isStale = (pageId: string) => staleIds.has(pageId);
+  const isStale = useCallback((pageId: string) => staleIds.has(pageId), [staleIds]);
 
   const entries = useMemo<Entry[]>(() => {
     if (!doc) return [];
@@ -248,14 +264,24 @@ export function BookCanvas() {
         </div>
       </div>
 
-      {/* Body: filmstrip + single big spread stage */}
+      {/* Body: filmstrip (portaled into Design chapter rail when hosted) + stage */}
       <div className="flex min-h-0 flex-1">
-        <PageFilmstrip
-          displays={displays}
-          activeId={activeDisp?.id ?? null}
-          onSelect={(id) => setEditingDisp(id)}
-          stale={isStale}
-        />
+        {(() => {
+          const inChapters = chapterHosts !== null;
+          const filmstrip = (
+            <PageFilmstrip
+              embedded={inChapters}
+              displays={displays}
+              activeId={activeDisp?.id ?? null}
+              onSelect={(id) => setEditingDisp(id)}
+              stale={isStale}
+            />
+          );
+          if (!inChapters) return filmstrip;
+          return chapterHosts.pagesHost
+            ? createPortal(filmstrip, chapterHosts.pagesHost)
+            : null;
+        })()}
 
         {/* Stage + inspector dock as siblings so the panel never covers chips. */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-row">
@@ -341,23 +367,21 @@ export function BookCanvas() {
 const INSPECTOR_DOCK_W = 320; // Tailwind w-80
 
 /**
- * Layout-docked inspector. Springs width 0→320 so the stage resizes with it.
- * Inner pane is a fixed width; the outer clips — avoids the media-query mismatch
- * that left the dock at height 0 on desktop.
+ * Layout-docked inspector. Width snaps in one step (no spring) so the Konva
+ * stage ResizeObserver fires once — animating width was re-laying out the
+ * canvas every animation frame and felt laggy when opening tools.
  */
 function InspectorDock({ children }: { children: React.ReactNode }) {
   return (
     <motion.aside
-      initial={{ width: 0 }}
-      animate={{ width: INSPECTOR_DOCK_W }}
-      exit={{ width: 0 }}
-      transition={springSoft}
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.14, ease: "easeOut" }}
       className="h-full min-h-0 shrink-0 self-stretch overflow-hidden border-l border-ink-100 bg-white"
+      style={{ width: INSPECTOR_DOCK_W }}
     >
-      <div
-        className="flex h-full min-h-0 flex-col"
-        style={{ width: INSPECTOR_DOCK_W }}
-      >
+      <div className="flex h-full min-h-0 flex-col" style={{ width: INSPECTOR_DOCK_W }}>
         {children}
       </div>
     </motion.aside>
@@ -437,7 +461,7 @@ function NextActionChip() {
  * facing single pages with a fold. A small chip sits above each live page with
  * contextual art actions.
  */
-function ActiveSpreadStage({
+const ActiveSpreadStage = memo(function ActiveSpreadStage({
   disp,
   stale,
   onOpenIllustration,
@@ -540,7 +564,7 @@ function ActiveSpreadStage({
       </StageFitFrame>
     </div>
   );
-}
+});
 
 /**
  * Host that fills the stage. Single pages: `data-stage-fit` on the host so
@@ -647,7 +671,8 @@ function SideChip({
  * Per-page chip above the canvas: contextual art actions live here so the page
  * surface stays free for editing text/layout.
  *
- * - No art on page: Quick generate (starts now) · Generate… (opens edit tools) · Restore
+ * - No art yet: Generate illustration/cover (opens toolbox — never auto-starts)
+ * - Cleared art with history: Restore
  * - Art present + stale: warning + Update
  * - Art present + ready: status only (edit via selecting the art)
  */
@@ -667,29 +692,24 @@ function PageChip({
   const status = useEntryStatus(entry, stale);
   const page = entry.page;
   const coverMode = entry.subject.kind === "cover";
-  const sparkRange = useImageActionRange(coverMode ? "coverIllustration" : "pageIllustration");
 
   const hasFrame = (pageDesign(page.id).images ?? []).some((im) => im.kind === "illustration");
   const tree = project.illustrations?.[page.id];
   const cursor = tree ? getCursor(tree).content : null;
   const hasHistory = Boolean(cursor?.blobId);
-  const noArtOnPage = !blank && !hasFrame;
+  const needsArt = !blank && !hasHistory;
 
-  async function quickGenerate(options: { useReference?: boolean } = {}) {
+  async function updateStaleArt() {
     selectIllustration(page.id);
     setPageGenerating(page.id, true);
     try {
-      if (options.useReference) {
-        const changed = changedAnchorsForSpread(project, page.id);
-        const staleSet = new Set(staleAnchorIds(project));
-        const staleRefs = changed.filter((a) => staleSet.has(a.id)).map((a) => a.id);
-        if (staleRefs.length > 0) {
-          await updateAnchorsThenSpread(project, page.id, staleRefs, (err) => notify.error(err));
-        } else {
-          await refreshSpread(project, page.id, options, (err) => notify.error(err));
-        }
+      const changed = changedAnchorsForSpread(project, page.id);
+      const staleSet = new Set(staleAnchorIds(project));
+      const staleRefs = changed.filter((a) => staleSet.has(a.id)).map((a) => a.id);
+      if (staleRefs.length > 0) {
+        await updateAnchorsThenSpread(project, page.id, staleRefs, (err) => notify.error(err));
       } else {
-        await refreshSpread(project, page.id, {}, (err) => notify.error(err));
+        await refreshSpread(project, page.id, { useReference: true }, (err) => notify.error(err));
       }
     } finally {
       setPageGenerating(page.id, false);
@@ -708,38 +728,29 @@ function PageChip({
             </span>
           )}
 
-          {noArtOnPage && status !== "generating" && (
-            <>
-              <ChipButton
-                label="Quick"
-                title="Quick generate — starts now with current settings"
-                onClick={() => void quickGenerate()}
-                tone="brand"
-              >
-                <Sparkles className="size-3.5" />
-                {sparkRange && (
-                  <span className="hidden sm:inline">
-                    <SparkEstimateCost range={sparkRange} />
-                  </span>
-                )}
-              </ChipButton>
-              <ChipButton
-                label="Generate…"
-                title="Open edit tools — adjust cast, scene, or cover options first"
-                onClick={onOpenIllustration}
-              >
-                <Wand2 className="size-3.5" />
-              </ChipButton>
-              {hasHistory && (
-                <ChipButton
-                  label="Restore"
-                  title="Put the last saved version back on the page"
-                  onClick={() => selectIllustration(page.id)}
-                >
-                  <History className="size-3.5" />
-                </ChipButton>
-              )}
-            </>
+          {needsArt && status !== "generating" && (
+            <ChipButton
+              label={coverMode ? "Generate cover" : "Generate illustration"}
+              title={
+                coverMode
+                  ? "Open cover tools — set title options, then generate"
+                  : "Open illustration tools — check cast & scene, then generate"
+              }
+              onClick={onOpenIllustration}
+              tone="brand"
+            >
+              <Sparkles className="size-3.5" />
+            </ChipButton>
+          )}
+
+          {!needsArt && !hasFrame && status !== "generating" && (
+            <ChipButton
+              label="Restore"
+              title="Put the last saved version back on the page"
+              onClick={() => selectIllustration(page.id)}
+            >
+              <History className="size-3.5" />
+            </ChipButton>
           )}
 
           {hasFrame && status === "stale" && (
@@ -753,7 +764,7 @@ function PageChip({
               <ChipButton
                 label="Update"
                 title="Update scene for changed characters & places"
-                onClick={() => void quickGenerate({ useReference: true })}
+                onClick={() => void updateStaleArt()}
                 tone="accent"
               >
                 <RefreshCw className="size-3.5" />

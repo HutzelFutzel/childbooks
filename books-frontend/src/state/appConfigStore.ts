@@ -31,6 +31,11 @@ import {
   type AgeWritingConfig,
 } from "../core/config/ageWriting";
 import {
+  createDefaultStoryCraftConfig,
+  normalizeStoryCraftConfig,
+  type StoryCraftConfig,
+} from "../core/config/storyCraft";
+import {
   createDefaultTypographyConfig,
   normalizeTypographyConfig,
   type TypographyConfig,
@@ -77,6 +82,13 @@ import {
   type ReferralStatsSummary,
 } from "../core/config/referral";
 import {
+  createDefaultAffiliateConfig,
+  normalizeAffiliateConfig,
+  type AffiliateConfig,
+  type AffiliateOverview,
+  type AffiliateSyncStatus,
+} from "../core/config/affiliates";
+import {
   normalizePublicPlansConfig,
   type BillingEnv,
   type PlanDefinition,
@@ -90,6 +102,62 @@ import {
   type BrandColors,
   type BrandingConfig,
 } from "../core/config/branding";
+import {
+  createDefaultQrCodesConfig,
+  findQrCode,
+  normalizeQrCodesConfig,
+  type QrCode,
+  type QrCodesConfig,
+  type QrCornerStyle,
+  type QrDotStyle,
+  type QrErrorCorrectionLevel,
+  type QrFormat,
+} from "../core/config/qrCodes";
+
+/** What the admin form sends to create, update, or preview a QR code. */
+export interface QrCodeInput {
+  /** Present when previewing/downloading an already-saved code — lets the
+   *  backend resolve a `"keep"` logo against that code's own stored copy.
+   *  Ignored by create/update (those get the id from the URL instead). */
+  id?: string;
+  name: string;
+  data: string;
+  errorCorrectionLevel: QrErrorCorrectionLevel;
+  margin: number;
+  scalePx: number;
+  colorDark: string;
+  colorLight: string;
+  format: QrFormat;
+  /** QR version 1..40, or null to auto-select the smallest that fits. */
+  version: number | null;
+  /** Mask pattern 0..7, or null to auto-select the best-scoring one. Ignored
+   *  once any styling below is turned on. */
+  maskPattern: number | null;
+  /** Data-module ("cell") shape — "square" keeps the plain classic look. */
+  dotsStyle: QrDotStyle;
+  /** Outer-ring eye shape, or null to match `dotsStyle`. */
+  cornerSquareStyle: QrCornerStyle | null;
+  /** Inner eye-dot shape, or null to match `dotsStyle`. */
+  cornerDotStyle: QrCornerStyle | null;
+  logo:
+    | { source: "keep"; sizePct: number; quietPct: number; quietColor: string }
+    | {
+        source: "upload";
+        base64: string;
+        mimeType: string;
+        sizePct: number;
+        quietPct: number;
+        quietColor: string;
+      }
+    | {
+        source: "brandingAsset";
+        brandingSlot: BrandAssetSlot;
+        sizePct: number;
+        quietPct: number;
+        quietColor: string;
+      }
+    | null;
+}
 import {
   createDefaultSeoConfig,
   normalizeSeoConfig,
@@ -270,6 +338,8 @@ interface AppConfigState {
   /** Admin overlay for the structural page layouts (titles, sizes, showcase). */
   layouts: LayoutsConfig;
   ageWriting: AgeWritingConfig;
+  /** Per-age-band story themes, stylistic devices and drafting rules. */
+  storyCraft: StoryCraftConfig;
   /** Age/format-aware font-size recommendation coefficients. */
   typography: TypographyConfig;
   /**
@@ -301,10 +371,18 @@ interface AppConfigState {
    * same fallback the backend applies.
    */
   referralDocExists: boolean;
+  /**
+   * The affiliate scope map. NOT a live snapshot like the rest: it lives in the
+   * admin-only `adminSettings/affiliates` doc, so it's fetched through the
+   * backend when the admin tab opens.
+   */
+  affiliates: AffiliateConfig;
   /** Public subscription plans (storefront-facing; no Stripe internals). */
   plans: PublicPlansConfig;
   /** Global branding (the share watermark asset + appearance). */
   branding: BrandingConfig;
+  /** The admin-built QR code library (Marketing → QR codes). */
+  qrCodes: QrCodesConfig;
   /** Marketing SEO config (landing-page metadata + structured data). */
   seo: SeoConfig;
   /** Landing-page illustrations (inline drag-&-drop editor). */
@@ -354,6 +432,7 @@ interface AppConfigState {
     meta?: { shape?: string; side?: string; alt?: string },
   ) => Promise<void>;
   saveAgeWriting: (config: AgeWritingConfig) => Promise<void>;
+  saveStoryCraft: (config: StoryCraftConfig) => Promise<void>;
   saveTypography: (config: TypographyConfig) => Promise<void>;
   saveModelCosts: (table: ModelCostTable) => Promise<void>;
   savePricingSettings: (settings: PricingSettings) => Promise<void>;
@@ -367,6 +446,13 @@ interface AppConfigState {
   resolveHeldReward: (rewardId: string, verdict: "release" | "decline") => Promise<void>;
   /** Void every still-unaccepted invitation (misconfiguration emergency). */
   voidUnacceptedInvitations: (reason?: string) => Promise<number>;
+  /** The affiliate scope map (admin-only doc, so an explicit fetch). */
+  loadAffiliateConfig: () => Promise<AffiliateConfig>;
+  saveAffiliateConfig: (config: AffiliateConfig) => Promise<void>;
+  /** Everything the affiliate dashboard shows, read from the local mirror. */
+  loadAffiliateOverview: (ping?: boolean) => Promise<AffiliateOverview>;
+  /** Pull Rewardful now instead of waiting for tonight's reconcile. */
+  syncAffiliates: (prune?: boolean) => Promise<AffiliateSyncStatus>;
   saveSeoConfig: (config: SeoConfig) => Promise<void>;
   savePrompts: (config: PromptsConfig) => Promise<void>;
   /**
@@ -424,6 +510,16 @@ interface AppConfigState {
   removeWatermark: () => Promise<void>;
   restoreWatermark: (storagePath: string) => Promise<void>;
   deleteWatermarkVersion: (storagePath: string) => Promise<void>;
+
+  // QR code library (Marketing → QR codes) — a named, reusable set of QR codes
+  // rendered by our own generator, any of which other features can point at by id.
+  createQrCode: (input: QrCodeInput) => Promise<QrCode>;
+  updateQrCode: (id: string, input: QrCodeInput) => Promise<QrCode>;
+  deleteQrCode: (id: string) => Promise<void>;
+  restoreQrCodeVersion: (id: string, storagePath: string) => Promise<void>;
+  deleteQrCodeVersion: (id: string, storagePath: string) => Promise<void>;
+  /** Render without saving — no Storage write, no history entry. */
+  previewQrCode: (input: QrCodeInput) => Promise<{ contentType: string; base64: string }>;
 
   // Subscription plans (admin). The PUBLIC projection lives in `plans`; the full
   // config (incl. Stripe ids) is fetched on demand from the backend.
@@ -532,6 +628,7 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   artStyles: createDefaultArtStylesConfig(),
   layouts: createDefaultLayoutsConfig(),
   ageWriting: createDefaultAgeWritingConfig(),
+  storyCraft: createDefaultStoryCraftConfig(),
   typography: createDefaultTypographyConfig(),
   modelCosts: createDefaultModelCostTable(),
   adminModelCosts: createDefaultModelCostTable(),
@@ -542,8 +639,10 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   sparks: createDefaultSparksConfig(),
   referral: createDefaultReferralConfig(),
   referralDocExists: false,
+  affiliates: createDefaultAffiliateConfig(),
   plans: { version: 1, plans: [] },
   branding: createDefaultBrandingConfig(),
+  qrCodes: createDefaultQrCodesConfig(),
   seo: createDefaultSeoConfig(),
   siteImages: createDefaultSiteImagesConfig(),
   siteContent: createDefaultSiteContentConfig(),
@@ -572,6 +671,9 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       }),
       onSnapshot(doc(db, "appConfig", "ageWriting"), (snap) => {
         set({ ageWriting: normalizeAgeWritingConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "storyCraft"), (snap) => {
+        set({ storyCraft: normalizeStoryCraftConfig(snap.exists() ? snap.data() : undefined) });
       }),
       onSnapshot(doc(db, "appConfig", "typography"), (snap) => {
         set({ typography: normalizeTypographyConfig(snap.exists() ? snap.data() : undefined) });
@@ -617,6 +719,9 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       }),
       onSnapshot(doc(db, "appConfig", "branding"), (snap) => {
         set({ branding: normalizeBrandingConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "qrCodes"), (snap) => {
+        set({ qrCodes: normalizeQrCodesConfig(snap.exists() ? snap.data() : undefined) });
       }),
       onSnapshot(doc(db, "appConfig", "seo"), (snap) => {
         set({ seo: normalizeSeoConfig(snap.exists() ? snap.data() : undefined) });
@@ -694,6 +799,10 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     await putJson("/admin/config/age-writing", config);
   },
 
+  async saveStoryCraft(config) {
+    set({ storyCraft: normalizeStoryCraftConfig(await putJson("/admin/config/story-craft", config)) });
+  },
+
   async saveTypography(config) {
     set({ typography: normalizeTypographyConfig(await putJson("/admin/config/typography", config)) });
   },
@@ -724,6 +833,34 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       // The doc now exists, so the legacy projection must stop overwriting it.
       referralDocExists: true,
     });
+  },
+
+  async loadAffiliateConfig() {
+    const res = await backendFetch("/admin/config/affiliates");
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load the affiliate config.");
+    const config = normalizeAffiliateConfig(await res.json());
+    set({ affiliates: config });
+    return config;
+  },
+
+  async saveAffiliateConfig(config) {
+    set({ affiliates: normalizeAffiliateConfig(await putJson("/admin/config/affiliates", config)) });
+  },
+
+  async loadAffiliateOverview(ping = false) {
+    const res = await backendFetch(`/admin/affiliates/overview${ping ? "?ping=1" : ""}`);
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load the affiliate overview.");
+    const overview = (await res.json()) as AffiliateOverview;
+    // The overview carries the authoritative config, so the editor and the
+    // dashboard can never disagree about what's currently in scope.
+    set({ affiliates: normalizeAffiliateConfig(overview.config) });
+    return overview;
+  },
+
+  async syncAffiliates(prune = false) {
+    const res = await backendFetch(`/admin/affiliates/sync${prune ? "?prune=1" : ""}`, { method: "POST" });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Sync failed.");
+    return (await res.json()) as AffiliateSyncStatus;
   },
 
   async loadReferralStats(from, to) {
@@ -1076,6 +1213,70 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     });
     if (!res.ok) throw new Error((await safeError(res)) ?? "Could not delete version.");
     set({ branding: normalizeBrandingConfig(await res.json()) });
+  },
+
+  async createQrCode(input) {
+    const res = await backendFetch("/admin/qrcodes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not create the QR code.");
+    const qrCodes = normalizeQrCodesConfig(await res.json());
+    set({ qrCodes });
+    const created = qrCodes.codes[qrCodes.codes.length - 1];
+    if (!created) throw new Error("The QR code was saved but could not be found.");
+    return created;
+  },
+
+  async updateQrCode(id, input) {
+    const res = await backendFetch(`/admin/qrcodes/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not update the QR code.");
+    const qrCodes = normalizeQrCodesConfig(await res.json());
+    set({ qrCodes });
+    const updated = findQrCode(qrCodes, id);
+    if (!updated) throw new Error("The QR code was saved but could not be found.");
+    return updated;
+  },
+
+  async deleteQrCode(id) {
+    const res = await backendFetch(`/admin/qrcodes/${encodeURIComponent(id)}`, { method: "DELETE" });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not delete the QR code.");
+    set({ qrCodes: normalizeQrCodesConfig(await res.json()) });
+  },
+
+  async restoreQrCodeVersion(id, storagePath) {
+    const res = await backendFetch(`/admin/qrcodes/${encodeURIComponent(id)}/restore`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ storagePath }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not restore that version.");
+    set({ qrCodes: normalizeQrCodesConfig(await res.json()) });
+  },
+
+  async deleteQrCodeVersion(id, storagePath) {
+    const res = await backendFetch(`/admin/qrcodes/${encodeURIComponent(id)}/version/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ storagePath }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not delete that version.");
+    set({ qrCodes: normalizeQrCodesConfig(await res.json()) });
+  },
+
+  async previewQrCode(input) {
+    const res = await backendFetch("/admin/qrcodes/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not render a preview.");
+    return (await res.json()) as { contentType: string; base64: string };
   },
 
   async loadAdminPosts() {

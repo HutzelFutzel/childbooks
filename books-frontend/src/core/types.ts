@@ -15,6 +15,7 @@ import type {
   TextPlacement,
 } from "./config/options";
 import type { ReadingModeId } from "./config/ageWritingCatalog";
+import type { StoryMode } from "./config/storyCraftCatalog";
 import type { VersionTree } from "./versioning";
 import type { BookDesign } from "./design";
 import { DEFAULT_BOOK_LAYOUT_ID, type CompositionMode } from "./book/layouts";
@@ -48,9 +49,64 @@ export interface ArtStyleSelection {
   customDescription?: string;
 }
 
+/** One named person or creature the story is about (co-write mode). */
+export interface StoryCastMember {
+  id: string;
+  name: string;
+  /** Who they are: "the hero", "her twin brother", "the neighbour's dog". */
+  role?: string;
+  /** Age in years, when the author knows it — keeps the cast believable. */
+  age?: number;
+  /** Anything else worth knowing: "loves dinosaurs", "always loses a shoe". */
+  note?: string;
+}
+
+/**
+ * What the reader told us before the story existed. Persisted alongside the
+ * text (rather than living in component state) so the draft is reproducible:
+ * regenerating, switching age band, or reopening the project a week later all
+ * still know how this story came to be.
+ */
+export interface StoryBrief {
+  mode: StoryMode;
+  /** Catalog id from the age band's theme list, or null when custom/none. */
+  themeId?: string | null;
+  customTheme?: string;
+  /** Catalog id from the age band's stylistic-device list. */
+  deviceId?: string | null;
+  customDevice?: string;
+  /** Catalog id from the age band's setting list (co-write only). */
+  settingId?: string | null;
+  customSetting?: string;
+  /** Guided mode: one or more names the story is built around. */
+  heroNames?: string[];
+  /** Co-write mode: everyone who appears, with their relationships. */
+  cast?: StoryCastMember[];
+  /** Co-write mode: what's happening — a birthday, a first day, a move. */
+  occasion?: string;
+  /** Co-write mode: when it happens ("the morning of her 6th birthday"). */
+  when?: string;
+  /** Co-write mode: where it happens, in the author's own words. */
+  where?: string;
+  /** Co-write mode: anything else the author insists must be in the story. */
+  mustInclude?: string;
+  /** When the current `storyText` was generated from this brief. */
+  generatedAt?: number;
+  /**
+   * Signature of the brief that produced the current `storyText` (see
+   * `storyBriefSignature`). Lets the UI tell "you changed the brief since this
+   * draft" from "this draft is current" without diffing by hand.
+   */
+  generatedSignature?: string;
+  /** Age band the current draft was written for, to detect an audience change. */
+  generatedForAge?: string;
+}
+
 /** Everything captured by the setup wizard. */
 export interface BookConfig {
   storyText: string;
+  /** How the story was written, and the inputs that produced it. */
+  storyBrief?: StoryBrief;
   textModel: ModelSelection | null;
   /**
    * Primary image model, used for page/cover illustrations (where editing
@@ -97,6 +153,32 @@ export interface BookConfig {
    * intro on their next Design visit.
    */
   designReady?: boolean;
+  /**
+   * Whether the reader has confirmed the art style in Design · Cast. New projects
+   * set this to `false` when leaving Story so Cast opens on the style gate.
+   * `undefined` = legacy project (treat as already confirmed).
+   */
+  styleReady?: boolean;
+  /**
+   * An in-flight art-style transfer. Persisted (rather than held in component
+   * state) so the cascade survives a reload: cast sheets are re-rendered first,
+   * then the pages that use them. Cleared once every listed unit carries the
+   * target style key.
+   */
+  styleRenew?: StyleRenewPlan;
+}
+
+/** A running "move all existing art to the new style" operation. */
+export interface StyleRenewPlan {
+  /** Target style stamp (see `artStyleKey`) every listed unit must reach. */
+  styleKey: string;
+  /** Which half of the cascade is running — cast sheets, then page artwork. */
+  phase: "cast" | "pages";
+  /** Anchor ids that had artwork when the transfer started. */
+  castIds: string[];
+  /** Illustration-unit ids (spreads + covers) that had artwork at that point. */
+  pageIds: string[];
+  startedAt: number;
 }
 
 export function createDefaultConfig(): BookConfig {
@@ -123,8 +205,8 @@ export function createDefaultConfig(): BookConfig {
 
 /**
  * The high-level mode a project is in.
- *   - `setup`  — first-run configuration (story + style), before the studio opens.
- *   - `studio` — the single unified workspace where everything is designed at once.
+ *   - `setup`  — first-run story configuration (audience + text), before the studio.
+ *   - `studio` — the single unified workspace (Design cast/pages, Order, …).
  */
 export type ProjectStage = "setup" | "studio";
 
@@ -191,6 +273,12 @@ export interface AnchorImage {
    * sits. Absent on sheets predating the fixed-grid contract.
    */
   layout?: AnchorSheetLayout;
+  /**
+   * The art style these pixels were drawn in (see `artStyleKey`). Lets a style
+   * change tell exactly which artwork still needs re-rendering, and makes the
+   * transfer resumable/idempotent. Absent on images predating the stamp.
+   */
+  artStyleKey?: string;
 }
 
 /**
@@ -525,6 +613,7 @@ export function summarize(p: Project): ProjectSummary {
 /** Re-exported for convenience by consumers needing the age range object. */
 export type { AgeRange, BookSize, GraphicsDensity, SpreadUsage, TextHandling, TextPlacement };
 export type { ReadingModeId } from "./config/ageWritingCatalog";
+export type { StoryMode } from "./config/storyCraftCatalog";
 
 /** Re-export the Final Design layer types for one-stop importing. */
 export type {

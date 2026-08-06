@@ -69,6 +69,10 @@ interface RenderState {
   captures: CaptureSpec[];
   design: BookDesign;
   artwork: LoadedArtwork;
+  /** The admin-configured backcover logo's public URL, or null if unset. */
+  backCoverLogoUrl: string | null;
+  /** Intrinsic height÷width of the backcover logo (drives the 2 cm edge rule). */
+  backCoverLogoAspect: number | null;
   spine?: {
     widthPx: number;
     heightPx: number;
@@ -143,6 +147,8 @@ export function ServerRenderStage() {
         design={state.design}
         artwork={state.artwork.artwork}
         forExport
+        backCoverLogoUrl={state.backCoverLogoUrl}
+        backCoverLogoAspect={state.backCoverLogoAspect}
       />
       {state.spine && (
         <PrintSpine
@@ -193,6 +199,8 @@ async function prepare(): Promise<RenderState> {
     fingerprint: string;
     documents: DocumentRequest[];
     project: Project;
+    backCoverLogoUrl: string | null;
+    backCoverLogoAspect: number | null;
   };
 
   const project = payload.project;
@@ -277,7 +285,15 @@ async function prepare(): Promise<RenderState> {
     spineRequest = { ...spineRequest, background: colors.background, color: colors.text };
   }
 
-  return { targets, captures, design, artwork, spine: spineRequest };
+  return {
+    targets,
+    captures,
+    design,
+    artwork,
+    backCoverLogoUrl: payload.backCoverLogoUrl,
+    backCoverLogoAspect: payload.backCoverLogoAspect,
+    spine: spineRequest,
+  };
 }
 
 /** Describe one target for the renderer. */

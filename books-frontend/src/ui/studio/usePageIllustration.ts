@@ -12,8 +12,8 @@ import { allVersions, getCursor, selectVersion, updateNodeContent } from "../../
 import {
   changedAnchorsForSpread,
   generateIllustrationVersion,
+  isIllustrationStale,
   staleAnchorIds,
-  staleIllustrationSpreadIds,
 } from "../../state/ai";
 import { IntentAmbiguousError } from "../../platform/aiClient";
 import { useProjectsStore } from "../../state/projectsStore";
@@ -106,8 +106,17 @@ export function usePageIllustration(pageId: string) {
     return out;
   }, [cursor?.references, anchors]);
 
-  const changedHere = cursor ? changedAnchorsForSpread(project, pageId) : [];
-  const isStale = !!cursor && staleIllustrationSpreadIds(project).includes(pageId);
+  const changedHere = useMemo(
+    () => (cursor ? changedAnchorsForSpread(project, pageId) : []),
+    // Recompute when the art or the project's anchors/screenplay change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [project.anchors, project.illustrations, project.screenplay, pageId, cursor?.blobId],
+  );
+  const isStale = useMemo(
+    () => !!cursor && isIllustrationStale(project, pageId),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [project.anchors, project.illustrations, project.screenplay, pageId, cursor?.blobId],
+  );
   const layoutStale = page ? !illustrationMatchesLayout(project, page) : false;
 
   const staleRefAnchors = useMemo(() => {
@@ -115,7 +124,7 @@ export function usePageIllustration(pageId: string) {
     const staleSet = new Set(staleAnchorIds(project));
     return changedHere.filter((a) => staleSet.has(a.id));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [project, isStale, cursor?.blobId]);
+  }, [project.anchors, isStale, cursor?.blobId, changedHere]);
 
   async function patchSubject(patch: Partial<ScreenplaySpread> & Partial<CoverSpec>) {
     if (!subject) return;
@@ -152,16 +161,21 @@ export function usePageIllustration(pageId: string) {
   /** Bind a durable illustration frame before enqueueing work so loading attaches to it. */
   function ensureArtFrame() {
     if (blank) return;
-    selectIllustration(pageId);
+    // Allow an empty frame only for in-flight generation (veil / job target).
+    selectIllustration(pageId, { createIfMissing: true });
   }
 
   async function generate(options: Parameters<typeof generateIllustrationVersion>[1] = {}) {
-    if (!genSpread) return;
+    // Prefer the live project — scene text may have just flushed from a buffered field.
+    const live = useProjectsStore.getState().current() ?? project;
+    const liveSubject = subjectForPage(pageId, live);
+    const liveSpread = liveSubject ? genSpreadFor(liveSubject) : genSpread;
+    if (!liveSpread) return;
     ensureArtFrame();
     if (!options.edit?.trim() && !options.mask) {
       setPageGenerating(pageId, true);
       try {
-        await refreshSpread(project, genSpread.id, {}, (err) => notify.error(err));
+        await refreshSpread(live, liveSpread.id, {}, (err) => notify.error(err));
       } finally {
         setPageGenerating(pageId, false);
       }
@@ -169,7 +183,7 @@ export function usePageIllustration(pageId: string) {
     }
     setPageGenerating(pageId, true);
     try {
-      let target = genSpread;
+      let target = liveSpread;
       if (!coverMode && options.edit?.trim()) {
         const lower = options.edit.toLowerCase();
         const toAdd = anchors.filter(
@@ -177,8 +191,8 @@ export function usePageIllustration(pageId: string) {
         );
         if (toAdd.length > 0) {
           const ids = [...anchorIds, ...toAdd.map((a) => a.id)];
-          await updateSpread(genSpread.id, { anchorIds: ids });
-          target = { ...genSpread, anchorIds: ids };
+          await updateSpread(liveSpread.id, { anchorIds: ids });
+          target = { ...liveSpread, anchorIds: ids };
         }
       }
       await generateIllustrationVersion(target, options);

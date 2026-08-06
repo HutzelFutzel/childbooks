@@ -293,7 +293,7 @@ export async function generateAllPages(
 export async function refreshSpread(
   project: Project,
   spreadId: string,
-  options: { useReference?: boolean; edit?: string; fromNodeId?: string },
+  options: { useReference?: boolean; edit?: string; fromNodeId?: string; restyle?: boolean },
   onError: (err: unknown) => void,
 ): Promise<void> {
   const isCover = spreadId === COVER_FRONT_ID || spreadId === COVER_BACK_ID;
@@ -328,7 +328,7 @@ export async function refreshSpread(
 export async function generateAnchorViaJob(
   project: Project,
   anchorId: string,
-  options: { useReference?: boolean; edit?: string; fromNodeId?: string },
+  options: { useReference?: boolean; edit?: string; fromNodeId?: string; restyle?: boolean },
   onError: (err: unknown) => void,
 ): Promise<void> {
   const anchor = (project.anchors ?? []).find((a) => a.id === anchorId);

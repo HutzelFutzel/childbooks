@@ -37,11 +37,14 @@ export function PageFilmstrip({
   activeId,
   onSelect,
   stale,
+  /** Fill a parent host (Design chapter accordion) — no own width / chrome. */
+  embedded = false,
 }: {
   displays: DisplaySpread[];
   activeId: string | null;
   onSelect: (id: string) => void;
   stale: (pageId: string) => boolean;
+  embedded?: boolean;
 }) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
@@ -49,8 +52,9 @@ export function PageFilmstrip({
   const resizing = useRef<{ startX: number; startW: number } | null>(null);
 
   useEffect(() => {
+    if (embedded) return;
     setWidth(readStoredWidth());
-  }, []);
+  }, [embedded]);
 
   function cellIdAt(x: number, y: number): string | null {
     const el = document.elementFromPoint(x, y);
@@ -115,38 +119,45 @@ export function PageFilmstrip({
 
   const lastInsert = displays.length ? displays[displays.length - 1].endInsertIndex : 0;
 
+  const list = (
+    <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-2.5 py-3">
+      {displays.length === 0 && <InsertRow at={0} />}
+      {displays.map((disp) => {
+        const reorderable = contentSpreadIds(disp).length > 0;
+        return (
+          <FilmstripCell
+            key={disp.id}
+            disp={disp}
+            active={disp.id === activeId}
+            stale={stale}
+            reorderable={reorderable}
+            dragging={dragId === disp.id}
+            dropBefore={overId === disp.id && dragId !== null && dragId !== disp.id}
+            onSelect={() => onSelect(disp.id)}
+            onGrabStart={() => reorderable && setDragId(disp.id)}
+            onGrabMove={handleMove}
+            onGrabEnd={handleUp}
+            onGrabCancel={() => {
+              setDragId(null);
+              setOverId(null);
+            }}
+          />
+        );
+      })}
+      {displays.length > 0 && <InsertRow at={lastInsert} />}
+    </div>
+  );
+
+  if (embedded) {
+    return <div className="flex h-full min-h-0 w-full flex-col bg-white">{list}</div>;
+  }
+
   return (
     <div
       className="relative flex h-full shrink-0 flex-col border-r border-ink-100 bg-white"
       style={{ width }}
     >
-      <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto px-2.5 py-3">
-        {displays.length === 0 && <InsertRow at={0} />}
-        {displays.map((disp) => {
-          const reorderable = contentSpreadIds(disp).length > 0;
-          return (
-            <FilmstripCell
-              key={disp.id}
-              disp={disp}
-              active={disp.id === activeId}
-              stale={stale}
-              reorderable={reorderable}
-              dragging={dragId === disp.id}
-              dropBefore={overId === disp.id && dragId !== null && dragId !== disp.id}
-              onSelect={() => onSelect(disp.id)}
-              onGrabStart={() => reorderable && setDragId(disp.id)}
-              onGrabMove={handleMove}
-              onGrabEnd={handleUp}
-              onGrabCancel={() => {
-                setDragId(null);
-                setOverId(null);
-              }}
-            />
-          );
-        })}
-        {displays.length > 0 && <InsertRow at={lastInsert} />}
-      </div>
-
+      {list}
       <div
         role="separator"
         aria-orientation="vertical"

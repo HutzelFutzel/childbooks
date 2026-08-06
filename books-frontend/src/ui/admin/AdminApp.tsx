@@ -38,6 +38,9 @@ import {
   UserX,
   Rocket,
   FlaskConical,
+  Handshake,
+  Wand2,
+  QrCode,
 } from "lucide-react";
 import { Button } from "@/ui/components/Button";
 import { Tabs } from "@/ui/components/Tabs";
@@ -69,6 +72,7 @@ import { ModelConfigTab } from "./tabs/ModelConfigTab";
 import { ArtStylesTab } from "./tabs/ArtStylesTab";
 import { LayoutsTab } from "./tabs/LayoutsTab";
 import { AgeWritingTab } from "./tabs/AgeWritingTab";
+import { StoryCraftTab } from "./tabs/StoryCraftTab";
 import { TypographyTab } from "./tabs/TypographyTab";
 import { PromptsTab } from "./tabs/PromptsTab";
 import { ModelCostsTab } from "./tabs/ModelCostsTab";
@@ -79,11 +83,13 @@ import { DiscountPlannerTab } from "./tabs/DiscountPlannerTab";
 import { PlansTab } from "./tabs/PlansTab";
 import { SparksTab } from "./tabs/SparksTab";
 import { ReferralsTab } from "./tabs/ReferralsTab";
+import { AffiliatesTab } from "./tabs/AffiliatesTab";
 import { CostIntelligenceTab } from "./tabs/CostIntelligenceTab";
 import { SystemHealthTab } from "./tabs/SystemHealthTab";
 import { SeoTab } from "./tabs/marketing/SeoTab";
 import { BlogTab } from "./tabs/marketing/BlogTab";
 import { BrandingTab } from "./tabs/marketing/BrandingTab";
+import { QrCodesTab } from "./tabs/marketing/QrCodesTab";
 import { ContactInboxTab } from "./tabs/communication/ContactInboxTab";
 import { EmailTab } from "./tabs/communication/EmailTab";
 import { SlackTab } from "./tabs/communication/SlackTab";
@@ -116,6 +122,7 @@ const CONFIG_TAB_META: Record<
   memberships: { label: "Memberships", icon: <CreditCard className="size-4" /> },
   sparks: { label: "Sparks economy", icon: <Sparkles className="size-4" /> },
   referrals: { label: "Referrals", icon: <Users className="size-4" /> },
+  affiliates: { label: "Affiliates", icon: <Handshake className="size-4" /> },
   financial: { label: "Financial settings", icon: <Coins className="size-4" /> },
   discounts: { label: "Discount planner", icon: <Percent className="size-4" /> },
   // AI pipeline
@@ -127,6 +134,7 @@ const CONFIG_TAB_META: Record<
   artStyles: { label: "Art styles", icon: <ImageIcon className="size-4" /> },
   layouts: { label: "Page layouts", icon: <LayoutTemplate className="size-4" /> },
   ageWriting: { label: "Age writing", icon: <BookOpen className="size-4" /> },
+  storyCraft: { label: "Story craft", icon: <Wand2 className="size-4" /> },
   typography: { label: "Typography", icon: <Type className="size-4" /> },
   // Operations
   system: { label: "System health", icon: <HeartPulse className="size-4" /> },
@@ -136,6 +144,7 @@ const MARKETING_TABS = [
   { id: "seo", label: "SEO", icon: <Search className="size-4" /> },
   { id: "blog", label: "Blog", icon: <Newspaper className="size-4" /> },
   { id: "branding", label: "Branding", icon: <Stamp className="size-4" /> },
+  { id: "qrCodes", label: "QR codes", icon: <QrCode className="size-4" /> },
 ];
 
 const COMMUNICATION_TABS = [
@@ -156,6 +165,8 @@ function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
       return <SparksTab />;
     case "referrals":
       return <ReferralsTab />;
+    case "affiliates":
+      return <AffiliatesTab />;
     case "financial":
       return <FinancialTab />;
     case "discounts":
@@ -170,6 +181,8 @@ function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
       return <LayoutsTab />;
     case "ageWriting":
       return <AgeWritingTab />;
+    case "storyCraft":
+      return <StoryCraftTab />;
     case "typography":
       return <TypographyTab />;
     case "prompts":
@@ -391,6 +404,7 @@ export default function AdminApp() {
                     {marketingTab === "seo" && <SeoTab />}
                     {marketingTab === "blog" && <BlogTab />}
                     {marketingTab === "branding" && <BrandingTab />}
+                    {marketingTab === "qrCodes" && <QrCodesTab />}
                   </div>
                 )}
                 {section === "communication" && (

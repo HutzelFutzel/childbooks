@@ -67,12 +67,15 @@ export function OrderStage() {
   // skipped (and simply falls back to the catalog price below) for guests and
   // unverified users, who can't own anything yet anyway.
   const [ebookQuote, setEbookQuote] = useState<EbookQuote | null>(null);
+  const [ebookQuoteLoading, setEbookQuoteLoading] = useState(false);
   useEffect(() => {
     if (!ebookEnabled || accessLevel !== "full") {
       setEbookQuote(null);
+      setEbookQuoteLoading(false);
       return;
     }
     let cancelled = false;
+    setEbookQuoteLoading(true);
     void fetchEbookQuote(project.id, baseCurrency)
       .then((q) => {
         if (!cancelled) setEbookQuote(q);
@@ -80,6 +83,10 @@ export function OrderStage() {
       .catch(() => {
         // Best-effort — the card falls back to the plain catalog price, which
         // is still correct for anyone who doesn't already own the ebook.
+        if (!cancelled) setEbookQuote(null);
+      })
+      .finally(() => {
+        if (!cancelled) setEbookQuoteLoading(false);
       });
     return () => {
       cancelled = true;
@@ -365,33 +372,43 @@ export function OrderStage() {
           <OptionCard
             icon={ebookOwned ? <Download className="size-6" /> : <Tablet className="size-6" />}
             tone={ebookOwned ? "brand" : "neutral"}
-            title={ebookOwned ? "Your ebook" : "Get the ebook"}
+            title={
+              ebookQuoteLoading ? "Checking your ebook…" : ebookOwned ? "Your ebook" : "Get the ebook"
+            }
             desc={
-              ebookOwned
-                ? "You already own the digital edition — download it any time, on any device."
-                : "A high-quality PDF of your book — read it on any device, forever."
+              ebookQuoteLoading
+                ? "Looking up whether you already own the digital edition."
+                : ebookOwned
+                  ? "You already own the digital edition — download it any time, on any device."
+                  : "A high-quality PDF of your book — read it on any device, forever."
             }
             price={
               // Owning it is the whole story — showing a price alongside "already
               // purchased" would just raise the question of why one's mentioned.
-              ebookOwned
-                ? "Already purchased"
-                : ebookDisplay == null
-                  ? undefined
-                  : ebookDisplay.included
-                    ? `Included with your ${ebookDisplay.planName} plan`
-                    : ebookDisplay.planName
-                      ? `${fmtMoney(ebookDisplay.price, baseCurrency)} · ${ebookDisplay.planName} price`
-                      : fmtMoney(ebookDisplay.price, baseCurrency)
+              ebookQuoteLoading
+                ? undefined
+                : ebookOwned
+                  ? "Already purchased"
+                  : ebookDisplay == null
+                    ? undefined
+                    : ebookDisplay.included
+                      ? `Included with your ${ebookDisplay.planName} plan`
+                      : ebookDisplay.planName
+                        ? `${fmtMoney(ebookDisplay.price, baseCurrency)} · ${ebookDisplay.planName} price`
+                        : fmtMoney(ebookDisplay.price, baseCurrency)
             }
             cta={ebookOwned ? "Download your ebook" : "Get the ebook"}
             note={
-              ebookOwned
-                ? ebookStale
-                  ? "Design updated since you bought this — a free refresh is ready inside."
-                  : "Find it anytime under Downloads in your account menu."
-                : purchaseNote
+              ebookQuoteLoading
+                ? undefined
+                : ebookOwned
+                  ? ebookStale
+                    ? "Design updated since you bought this — a free refresh is ready inside."
+                    : "Find it anytime under Downloads in your account menu."
+                  : purchaseNote
             }
+            loading={ebookQuoteLoading}
+            disabled={ebookQuoteLoading}
             onClick={() => requireFullAccount(() => setBuyingEbook(true))}
           />
         )}

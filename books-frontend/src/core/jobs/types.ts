@@ -140,7 +140,7 @@ export interface RefreshTask {
   status: JobStatus;
   error?: string;
   /** A subset of `IllustrationRunOptions` that is JSON-serializable. */
-  options?: { useReference?: boolean; edit?: string; fromNodeId?: string };
+  options?: { useReference?: boolean; edit?: string; fromNodeId?: string; restyle?: boolean };
   /** Render output for the client to fold into the version tree. */
   result?: IllustrationRender;
   stats?: TaskStats;
@@ -178,7 +178,7 @@ export interface AnchorTask {
   status: JobStatus;
   error?: string;
   /** A subset of `AnchorRunOptions` that is JSON-serializable. */
-  options?: { useReference?: boolean; edit?: string; fromNodeId?: string };
+  options?: { useReference?: boolean; edit?: string; fromNodeId?: string; restyle?: boolean };
   result?: AnchorRender;
   stats?: TaskStats;
 }
@@ -241,7 +241,7 @@ export interface TaskDoc {
   /** image-kind payload (pre-assembled request). */
   request?: ImageRenderRequest;
   /** refresh/anchor-kind payload (pipeline options). */
-  options?: { useReference?: boolean; edit?: string; fromNodeId?: string };
+  options?: { useReference?: boolean; edit?: string; fromNodeId?: string; restyle?: boolean };
   /** image-kind provenance, stamped onto the version on reconcile. */
   referenceUses?: ReferenceUse[];
   /** kind-specific render output (present when `status === "done"`). */

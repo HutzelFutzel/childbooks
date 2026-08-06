@@ -44,6 +44,9 @@ import { registerContactAdminRoutes, registerContactRoutes } from "./contact/rou
 import { registerBlogRoutes } from "./blog";
 import { registerBlogStatsAdminRoutes, registerBlogTrackingRoute } from "./blogStats";
 import { registerReferralPublicRoutes, registerReferralUserRoutes } from "./referrals/routes";
+import { registerAffiliateRoutes } from "./affiliates";
+import { registerAffiliateWebhookRoute } from "./affiliates/webhook";
+import { registerAffiliateAdminRoutes } from "./affiliates/admin";
 
 export function createApp(): Express {
   const app = express();
@@ -78,6 +81,12 @@ export function createApp(): Express {
   // ZeptoMail's delivery-event webhook — tokenless (verified by signature when
   // configured). Registered here so it's reachable without a Firebase token.
   registerEmailWebhookRoute(app);
+
+  // Rewardful's event webhook. Rewardful does NOT sign its webhooks, so this one
+  // is authenticated by a secret token in the URL and treats the payload as an
+  // untrusted "something changed" ping — every object is re-fetched from their
+  // REST API before it's stored (see affiliates/webhook.ts).
+  registerAffiliateWebhookRoute(app);
 
   // Public contact form — tokenless (the marketing site has no Firebase
   // session), gated by App Check + a Firestore-backed rate limit. Registered
@@ -116,6 +125,10 @@ export function createApp(): Express {
   // invite screen explains what's still missing rather than 403-ing, so the
   // stricter checks live in the handlers.
   app.use("/referrals", requireAuth);
+  // Affiliate attribution: same reasoning as referrals — the affiliate link is
+  // followed long before there's a real account, so a guest identity must be
+  // able to record the referral it arrived with.
+  app.use("/affiliates", requireAuth);
   app.use("/admin", requireVerified, requireAdmin);
 
   registerLuluRoutes(app);
@@ -139,6 +152,8 @@ export function createApp(): Express {
   registerStripeUserRoutes(app);
   registerStripeAdminRoutes(app);
   registerReferralUserRoutes(app);
+  registerAffiliateRoutes(app);
+  registerAffiliateAdminRoutes(app);
 
   return app;
 }

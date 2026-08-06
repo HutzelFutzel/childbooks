@@ -9,6 +9,7 @@ import "@fontsource/inter/700.css";
 import "@fontsource/fredoka/500.css";
 import "@fontsource/fredoka/600.css";
 import "@fontsource/fredoka/700.css";
+import { AffiliateTracking } from "../ui/affiliates/AffiliateTracking";
 import { ConsentManager } from "../ui/consent/ConsentManager";
 import { AuthInit } from "../ui/auth/AuthInit";
 import { DevEnvironmentBanner } from "../ui/layout/DevEnvironmentBanner";
@@ -93,6 +94,10 @@ export default async function RootLayout({
           privacyUrl={legalUrlByRole(legal, "privacy") || undefined}
           cookiePolicyUrl={legalUrlByRole(legal, "cookies") || undefined}
         />
+        {/* Affiliate attribution — gated on the marketing category, so it loads
+            nothing until the visitor allows it (and nothing at all unless a
+            Rewardful key is configured). */}
+        <AffiliateTracking />
       </body>
     </html>
   );

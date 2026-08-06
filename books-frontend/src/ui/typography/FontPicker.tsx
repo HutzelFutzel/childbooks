@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ChevronDown, Type } from "lucide-react";
-import { CATEGORY_LABEL, FONTS, type FontCategory, fontStack, getFont, loadFont } from "./fonts";
+import { CATEGORY_LABEL, FONT_CATEGORY_ORDER, FONTS, fontStack, getFont, loadFont } from "./fonts";
 import { cn } from "../lib/cn";
 
 /**
@@ -36,8 +36,6 @@ export function FontPicker({
     return () => document.removeEventListener("mousedown", onDocClick);
   }, [open]);
 
-  const groups: FontCategory[] = ["rounded", "sans", "serif", "hand"];
-
   return (
     <div ref={ref} className={cn("relative", className)}>
       <button
@@ -56,7 +54,7 @@ export function FontPicker({
 
       {open && (
         <div className="absolute z-30 mt-1 max-h-80 w-72 overflow-y-auto rounded-xl border border-ink-200 bg-white p-1 shadow-lifted">
-          {groups.map((cat) => (
+          {FONT_CATEGORY_ORDER.map((cat) => (
             <div key={cat}>
               <p className="px-2 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
                 {CATEGORY_LABEL[cat]}

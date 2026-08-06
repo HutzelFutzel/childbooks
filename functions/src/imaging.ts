@@ -44,64 +44,6 @@ export async function downscaleReference(
 }
 
 /**
- * Split a wide "wrap" cover into its two printed panels and upscale each so a
- * single generation yields print-usable front + back covers.
- *
- * The wrap is generated as one continuous landscape image (back on the LEFT,
- * front on the RIGHT); slicing it in half at the centre gives two panels that
- * already share lighting, palette and scene (true continuity). Each half is
- * upscaled back up to `targetWidth` — the print-resolution safeguard for the
- * "generate one, split it" approach.
- *
- * When `panelAspect` (width/height of the book's trim) is given, each half is
- * first centre-cropped to that exact aspect before upscaling, so the saved
- * panel matches the page shape and the editor's object-fit:cover no longer
- * crops off (baked-in) content at the edges. Returns PNG buffers.
- */
-export async function splitWrapCover(
-  buf: Buffer,
-  opts: { targetWidth?: number; panelAspect?: number } = {},
-): Promise<{ back: Buffer; front: Buffer }> {
-  const targetWidth = opts.targetWidth ?? 1024;
-  const meta = await sharp(buf).metadata();
-  const w = meta.width ?? 1536;
-  const h = meta.height ?? 1024;
-  const halfW = Math.floor(w / 2);
-  // Left panel = back cover, right panel = front cover.
-  const cut = async (left: number, width: number): Promise<Buffer> => {
-    let cropLeft = left;
-    let cropWidth = width;
-    let cropHeight = h;
-    let cropTop = 0;
-    if (opts.panelAspect && opts.panelAspect > 0) {
-      // Centre-crop the half to the target trim aspect (minimal loss because
-      // the half is already close to the trim shape).
-      const halfAspect = width / h;
-      if (halfAspect > opts.panelAspect) {
-        // Half is too wide → trim its width.
-        cropWidth = Math.round(h * opts.panelAspect);
-        cropLeft = left + Math.round((width - cropWidth) / 2);
-      } else if (halfAspect < opts.panelAspect) {
-        // Half is too tall → trim its height.
-        cropHeight = Math.round(width / opts.panelAspect);
-        cropTop = Math.round((h - cropHeight) / 2);
-      }
-    }
-    const targetHeight = Math.round((cropHeight / cropWidth) * targetWidth);
-    return sharp(buf)
-      .extract({ left: cropLeft, top: cropTop, width: cropWidth, height: cropHeight })
-      .resize(targetWidth, targetHeight, { fit: "fill", kernel: "lanczos3" })
-      .png()
-      .toBuffer();
-  };
-  const [back, front] = await Promise.all([
-    cut(0, halfW),
-    cut(w - halfW, halfW),
-  ]);
-  return { back, front };
-}
-
-/**
  * Force a reference sheet's background to pure white.
  *
  * The prompt asks for "plain pure-white seamless background", but a prompt is a
@@ -419,4 +361,70 @@ export async function buildHoleMask(args: {
   }
 
   return sharp(data, { raw: { width: w, height: h, channels: 4 } }).png().toBuffer();
+}
+
+/**
+ * Build a "continue this cover" outpaint seed: crops a strip from the FRONT
+ * cover's LEFT edge (the edge that touches the spine — see the standard
+ * back-spine-front unfolded wrap layout) and pastes it flush against the
+ * RIGHT edge (the back cover's own spine-adjacent edge) of a blank
+ * `width`x`height` canvas. Everything else is filler — its exact pixels don't
+ * matter, since the mask marks that area for full regeneration.
+ *
+ * Returns the seed canvas and a matching mask: opaque (protected) over the
+ * pasted strip, transparent (the "hole" to fill) everywhere else. Fed to an
+ * edit/outpaint call, this makes the seam genuinely pixel-continuous — the
+ * model is extending real front-cover pixels, not imagining a similar-looking
+ * new picture from a loose reference.
+ */
+export async function buildCoverContinuationSeed(args: {
+  front: Buffer;
+  width: number;
+  height: number;
+  /** Fraction of the canvas width the seeded strip occupies. */
+  seamFrac?: number;
+}): Promise<{ seed: Buffer; mask: Buffer }> {
+  const seamFrac = args.seamFrac ?? 0.22;
+  const seamWidthPx = Math.max(1, Math.min(args.width - 1, Math.round(args.width * seamFrac)));
+
+  // Match the front to the back's own canvas size first (front/back are
+  // always rendered at the same trim size, but this guards against any
+  // drift), then take its LEFT edge — the side that touches the spine.
+  const resizedFront = await sharp(args.front)
+    .resize(args.width, args.height, { fit: "cover" })
+    .toBuffer();
+  const strip = await sharp(resizedFront)
+    .extract({ left: 0, top: 0, width: seamWidthPx, height: args.height })
+    .toBuffer();
+
+  const seed = await sharp({
+    create: {
+      width: args.width,
+      height: args.height,
+      channels: 4,
+      // Neutral filler — never seen in the final image, since the mask marks
+      // this whole area as a hole for the model to repaint.
+      background: { r: 128, g: 128, b: 128, alpha: 1 },
+    },
+  })
+    .composite([{ input: strip, left: args.width - seamWidthPx, top: 0 }])
+    .png()
+    .toBuffer();
+
+  const maskData = Buffer.alloc(args.width * args.height * 4);
+  for (let y = 0; y < args.height; y++) {
+    for (let x = 0; x < args.width; x++) {
+      const i = (y * args.width + x) * 4;
+      const protectedStrip = x >= args.width - seamWidthPx;
+      maskData[i] = 0;
+      maskData[i + 1] = 0;
+      maskData[i + 2] = 0;
+      maskData[i + 3] = protectedStrip ? 255 : 0; // opaque = keep, transparent = hole
+    }
+  }
+  const mask = await sharp(maskData, { raw: { width: args.width, height: args.height, channels: 4 } })
+    .png()
+    .toBuffer();
+
+  return { seed, mask };
 }

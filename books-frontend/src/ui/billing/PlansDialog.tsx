@@ -58,9 +58,11 @@ export function PlansDialog() {
   const open = useBillingUiStore((s) => s.plansOpen);
   const close = useBillingUiStore((s) => s.closePlans);
   const plans = useAppConfigStore((s) => s.plans.plans);
+  const configLoaded = useAppConfigStore((s) => s.loaded);
   const baseCurrency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
   const ebookSettings = useAppConfigStore((s) => s.pricingSettings.ebook);
   const subscriptions = useSubscriptionStore((s) => s.subscriptions);
+  const subscriptionsLoading = useSubscriptionStore((s) => s.loading);
 
   const [interval, setInterval] = useState<BillingInterval>("month");
   const [busy, setBusy] = useState<string | null>(null);
@@ -128,7 +130,11 @@ export function PlansDialog() {
           )}
         </div>
 
-        {visible.length === 0 ? (
+        {!configLoaded ? (
+          <div className="flex items-center justify-center gap-2 py-12 text-ink-500">
+            <Loader2 className="size-5 animate-spin" /> Loading plans…
+          </div>
+        ) : visible.length === 0 ? (
           <div className="flex flex-col items-center gap-2 py-12 text-center">
             <span className="flex size-12 items-center justify-center rounded-2xl bg-brand-50 text-brand-500">
               <Sparkles className="size-6" />
@@ -140,7 +146,11 @@ export function PlansDialog() {
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {visible.map((plan) => {
               const price = plan.prices[baseCurrency]?.[interval];
-              const isCurrent = currentPlan?.id === plan.id || (plan.isFree && !currentPlan);
+              // Don't mark the free plan as "current" until we know whether the
+              // user already has a paid subscription.
+              const isCurrent =
+                currentPlan?.id === plan.id ||
+                (plan.isFree && !currentPlan && !subscriptionsLoading);
               const perks = planPerks(plan, interval, ebookSettings, baseCurrency);
               // The plan the admin badged is the one we visually lead with.
               const featured = Boolean(plan.badges[0]) && !plan.isFree;
@@ -254,6 +264,7 @@ export function PlansButton() {
   const open = useBillingUiStore((s) => s.openPlans);
   const plans = useAppConfigStore((s) => s.plans.plans);
   const subscriptions = useSubscriptionStore((s) => s.subscriptions);
+  const subscriptionsLoading = useSubscriptionStore((s) => s.loading);
 
   const hasPaidPlans = plans.some(
     (p) => p.status === "active" && !p.isFree && Object.keys(p.prices).length > 0,
@@ -262,10 +273,16 @@ export function PlansButton() {
 
   const active = subscriptions.find((s) => ["active", "trialing", "past_due"].includes(s.status)) ?? null;
   const currentPlan = findPublicPlanByPriceId(plans, active?.priceId ?? null);
+  const label =
+    currentPlan && !currentPlan.isFree
+      ? currentPlan.name
+      : subscriptionsLoading
+        ? "Plans"
+        : "Upgrade";
 
   return (
     <Button variant="ghost" size="sm" leftIcon={<Sparkles className="size-4" />} onClick={open}>
-      {currentPlan && !currentPlan.isFree ? currentPlan.name : "Upgrade"}
+      {label}
     </Button>
   );
 }

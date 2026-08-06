@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { BookOpen } from "lucide-react";
 import type { PageDesign } from "../../core/types";
 import { CompositedPage, pageDesignHasContent } from "../design/CompositedPage";
-import { useBlobUrl } from "../hooks/useBlobUrl";
+import { useBlobUrlState } from "../hooks/useBlobUrl";
 import { cn } from "../lib/cn";
 
 export interface BookMockupProps {
@@ -44,14 +44,17 @@ export function BookMockup({
   width = 160,
   className,
 }: BookMockupProps) {
-  const blobUrl = useBlobUrl(blobId);
+  const { url: blobUrl, status: blobStatus } = useBlobUrlState(blobId);
   // The real cover (blob) wins; otherwise fall back to the branded default.
-  const url = blobUrl ?? fallbackUrl ?? null;
+  // While a blob id is still resolving, stay in a loading state rather than
+  // flashing "No cover yet" / the branded fallback.
+  const blobLoading = Boolean(blobId) && blobStatus === "loading";
+  const url = blobLoading ? null : blobUrl ?? fallbackUrl ?? null;
   const height = width / aspect;
   const composite = pageDesignHasContent(pageDesign);
   // Only stamp the title when there's no real cover art and no designed
   // overlays — a generated/composited cover already carries the book's identity.
-  const showTitle = !!title && !blobUrl && !composite;
+  const showTitle = !!title && !blobUrl && !blobLoading && !composite;
 
   return (
     <div className={cn("mx-auto", className)} style={{ perspective: "1100px" }}>
@@ -97,6 +100,8 @@ export function BookMockup({
               // Covers bias crop to the top — same as print/export.
               illustrationFocus={{ x: 0.5, y: 0 }}
             />
+          ) : blobLoading ? (
+            <div className="shimmer size-full" aria-hidden />
           ) : url ? (
             <img
               src={url}

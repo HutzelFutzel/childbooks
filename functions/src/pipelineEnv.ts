@@ -6,6 +6,7 @@
  */
 import { serverConfig } from "./config";
 import {
+  buildCoverContinuationSeed,
   buildHoleMask,
   buildScaleChart,
   compositeMaskedRegion,
@@ -132,6 +133,20 @@ export function backendPipelineEnv(
           })),
         );
         return out ? { base64: bufToB64(out), mimeType: "image/png" } : null;
+      },
+      async buildCoverContinuationSeed(input) {
+        const out = await buildCoverContinuationSeed({
+          front: b64ToBuf(input.frontBase64),
+          width: input.width,
+          height: input.height,
+          seamFrac: input.seamFrac,
+        });
+        return {
+          seedBase64: bufToB64(out.seed),
+          seedMime: "image/png",
+          maskBase64: bufToB64(out.mask),
+          maskMime: "image/png",
+        };
       },
     },
     prompts,

@@ -38,10 +38,16 @@ import { logger } from "firebase-functions/v2";
 import { onTaskDispatched } from "firebase-functions/v2/tasks";
 import sharp from "sharp";
 import type { Browser, Page } from "puppeteer-core";
+import { getBrandingConfig } from "./appConfig";
 import type { AuthedRequest } from "./auth";
 import { isEmulator, launchBrowser } from "./browser";
 import { downloadBlob, ensureAdmin } from "./storage";
 import { appBaseUrl } from "./stripeClient";
+import {
+  BACK_COVER_LOGO_FIXED_IN,
+  SAFETY_MARGIN_IN as COVER_SAFETY_MARGIN_IN,
+} from "../../books-frontend/src/core/book/format";
+import { COVER_BACK_ID } from "../../books-frontend/src/core/types";
 import {
   assembleDocument,
   saveRasters,
@@ -243,10 +249,17 @@ export function registerRenderJobRoutes(app: Express): void {
         clientError(res, "We couldn't find that book.", 404);
         return;
       }
+      // Resolved server-side, from the admin config the render page has no
+      // other way to reach — this is what makes the backcover logo something
+      // the book being rendered can't opt out of.
+      const branding = await getBrandingConfig();
+      const logo = branding.backCoverLogo;
       res.json({
         fingerprint: job.fingerprint,
         documents: job.documents,
         project: JSON.parse(raw),
+        backCoverLogoUrl: logo?.imageUrl ?? null,
+        backCoverLogoAspect: typeof logo?.aspect === "number" ? logo.aspect : null,
       });
     } catch (err) {
       logger.error("[render] payload failed", err);
@@ -465,12 +478,50 @@ async function capturePage(page: Page, spec: CaptureSpec): Promise<Buffer> {
       quality: 92,
       captureBeyondViewport: true,
     })) as Buffer;
-    if (spec.mustHaveInk && (await looksBlank(shot))) {
+    // The back cover carries the permanent backcover logo in its bottom-left
+    // corner (see `PrintBook`), which is real ink there whether or not the
+    // book's own art rendered. Checked on the rest of the page instead, so a
+    // genuinely blank back cover still fails loudly.
+    const forBlankCheck = spec.id === COVER_BACK_ID ? await cropOutBackCoverLogo(shot, spec) : shot;
+    if (spec.mustHaveInk && (await looksBlank(forBlankCheck))) {
       throw new Error(`${spec.label} rendered without its illustration.`);
     }
     return shot;
   } finally {
     await handle.dispose();
+  }
+}
+
+// Tallest portrait logo we bother reserving for (aspect height÷width). Beyond
+// this the logo is already capped to the trim by backCoverLogoSizeIn.
+const BACK_COVER_LOGO_ZONE_MAX_ASPECT = 4;
+/** Never reserve more than this fraction of the capture, however small the trim. */
+const BACK_COVER_LOGO_ZONE_MAX_FRACTION = 0.4;
+
+/**
+ * Crop off the bottom strip the backcover logo is drawn in, so the "does this
+ * page have ink on it" check runs on the rest of the page — otherwise a
+ * genuinely missing illustration would be masked by the logo's own ink and
+ * ship a printed back cover with nothing else on it.
+ */
+async function cropOutBackCoverLogo(bytes: Buffer, spec: CaptureSpec): Promise<Buffer> {
+  try {
+    const { width, height } = await sharp(bytes).metadata();
+    if (!width || !height) return bytes;
+    // Landscape logos are 2 cm tall; portrait logos are 2 cm wide and can grow
+    // taller — reserve enough for the tallest shape we allow.
+    const reservedIn =
+      COVER_SAFETY_MARGIN_IN + BACK_COVER_LOGO_FIXED_IN * BACK_COVER_LOGO_ZONE_MAX_ASPECT;
+    const reservedFraction = Math.min(
+      BACK_COVER_LOGO_ZONE_MAX_FRACTION,
+      reservedIn / Math.max(spec.heightIn, 0.01),
+    );
+    const keepHeight = Math.max(1, Math.round(height * (1 - reservedFraction)));
+    return await sharp(bytes).extract({ left: 0, top: 0, width, height: keepHeight }).toBuffer();
+  } catch {
+    // If it can't be cropped, check the whole thing — worst case is a rare
+    // false "blank" on a page that also happens to fail to inspect.
+    return bytes;
   }
 }
 

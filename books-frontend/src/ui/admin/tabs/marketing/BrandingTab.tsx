@@ -207,6 +207,23 @@ export function BrandingTab() {
         </div>
       </Section>
 
+      {/* ---- Backcover logo ---- */}
+      <Section
+        title="Backcover logo"
+        hint="Stamped in the bottom-left corner of every book's back cover — the printed wraparound cover and the digital ebook alike. Baked in on our server when the book is rendered, so it always appears and can't be edited, moved, or removed from the studio. Landscape logos are 2 cm tall; portrait logos are 2 cm wide — the other edge follows the file's own aspect, scaled down if needed to fit the book's trim."
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
+          <AssetCard
+            slot="backCoverLogo"
+            label="Backcover logo"
+            hint="Transparent PNG or SVG recommended. Landscape → 2 cm tall; portrait → 2 cm wide."
+            ratio="1/1"
+            asset={branding.backCoverLogo}
+            history={branding.assetHistory.backCoverLogo ?? []}
+          />
+        </div>
+      </Section>
+
       {/* ---- Watermark ---- */}
       <WatermarkCard />
     </div>

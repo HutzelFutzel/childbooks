@@ -1,4 +1,5 @@
 import { Lock } from "lucide-react";
+import type { ArtStyleSelection } from "../../../core/types";
 import { ART_STYLE_PRESETS } from "../../../core/config/options";
 import { resolveArtStyleLabel } from "../../../core/prompts/style";
 import { useAppConfigStore } from "../../../state/appConfigStore";
@@ -7,15 +8,32 @@ import { useBillingUiStore } from "../../../state/billingUiStore";
 import { Field, Textarea } from "../../components/Input";
 import { OptionCard } from "../../components/OptionCard";
 import { StyleSwatch } from "../visuals";
-import type { StepProps } from "./types";
 
-export function StyleStep({ config, update }: StepProps) {
-  const { artStyle } = config;
+/** Compare preset + custom direction (trim-normalized). */
+export function artStylesEqual(a: ArtStyleSelection, b: ArtStyleSelection): boolean {
+  return (
+    a.presetId === b.presetId &&
+    (a.customDescription ?? "").trim() === (b.customDescription ?? "").trim()
+  );
+}
+
+export function StyleStep({
+  artStyle,
+  committedArtStyle,
+  onChange,
+}: {
+  /** Draft / selected style in the picker. */
+  artStyle: ArtStyleSelection;
+  /** Style currently applied on the book (shown as "Current" when different). */
+  committedArtStyle?: ArtStyleSelection;
+  onChange: (next: ArtStyleSelection) => void;
+}) {
   const artStyles = useAppConfigStore((s) => s.artStyles);
   const examples = artStyles.examples;
   // Data-driven gate: free for everyone until an admin lists "customArtStyle"
   // on a plan, then only those plans may add free-text style directions.
   const customAllowed = useFeatureAllowed("customArtStyle");
+  const committed = committedArtStyle ?? artStyle;
 
   return (
     <div className="space-y-6">
@@ -24,7 +42,8 @@ export function StyleStep({ config, update }: StepProps) {
           <OptionCard
             key={style.id}
             selected={artStyle.presetId === style.id}
-            onSelect={() => update({ artStyle: { ...artStyle, presetId: style.id } })}
+            current={committed.presetId === style.id}
+            onSelect={() => onChange({ ...artStyle, presetId: style.id })}
             title={resolveArtStyleLabel(style.id, artStyles)}
             description={style.description}
             visual={<StyleSwatch swatch={style.swatch} imageUrl={examples[style.id]?.imageUrl} />}
@@ -39,9 +58,7 @@ export function StyleStep({ config, update }: StepProps) {
         >
           <Textarea
             value={artStyle.customDescription ?? ""}
-            onChange={(e) =>
-              update({ artStyle: { ...artStyle, customDescription: e.target.value } })
-            }
+            onChange={(e) => onChange({ ...artStyle, customDescription: e.target.value })}
             placeholder="Add your own twist to the selected style…"
             rows={3}
           />

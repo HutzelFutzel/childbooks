@@ -26,7 +26,8 @@ export type FloatingBarPlacement = {
 };
 
 const DEFAULT_BAR_HEIGHT = 44;
-const DEFAULT_BAR_HALF_WIDTH = 200;
+/** Conservative estimate for initial placement; FloatingBarPortal remeasures. */
+const DEFAULT_BAR_HALF_WIDTH = 280;
 const DEFAULT_GAP = 10;
 const DEFAULT_MARGIN = 8;
 

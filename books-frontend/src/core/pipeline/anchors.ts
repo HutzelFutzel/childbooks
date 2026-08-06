@@ -13,7 +13,7 @@ import type {
 import { resolveArtStyleText } from "../prompts/style";
 import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderSinglePrompt } from "../prompts/render";
-import type { Anchor, ArtStyleSelection } from "../types";
+import type { Anchor, AnchorSheetLayout, ArtStyleSelection } from "../types";
 import { gridShapeText, sheetSpecFor, viewListText } from "./anchorLayout";
 import { withRetry } from "./retry";
 
@@ -58,6 +58,19 @@ export interface BuildAnchorPromptInput {
    */
   hasStyleRef?: boolean;
   /**
+   * Art-style transfer: re-render the existing sheet in the book's new style,
+   * keeping identity, grid and poses byte-for-byte identical in intent. Uses a
+   * dedicated template — the edit template preserves the old style, and the
+   * default one rebuilds the sheet from the description (losing the design).
+   */
+  restyle?: boolean;
+  /**
+   * Grid recorded on the sheet being restyled. Preferred over this anchor
+   * type's current spec, which may describe a different grid than the base
+   * image actually has.
+   */
+  baseLayout?: AnchorSheetLayout;
+  /**
    * Ordered legend of the attached reference images, e.g.
    * `(1) an art-style reference…, (2) Hospital bed (must match…)`. Lets models
    * without per-image labels (OpenAI) bind each image to its purpose.
@@ -86,12 +99,29 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
     edit,
     editFromImage = false,
     hasStyleRef = false,
+    restyle = false,
+    baseLayout,
     legend,
     actualPanelCount,
     prompts,
   } = input;
   const config = resolvePromptsConfig(prompts);
   const isEdit = Boolean(edit?.trim());
+
+  if (restyle) {
+    const spec = sheetSpecFor(anchor);
+    const columns = baseLayout?.columns ?? spec.columns;
+    const rows = baseLayout?.rows ?? spec.rows;
+    return renderSinglePrompt(config, "anchorImage/restyle", {
+      vars: {
+        anchorName: anchor.name,
+        cellCount: String(columns * rows),
+        gridShape: gridShapeText({ ...spec, columns, rows }),
+        artStyle: resolveArtStyleText(artStyle, prompts),
+      },
+      flags: { hasStyleRef },
+    });
+  }
   const listOf = (arr: Anchor[]) => arr.map((r) => `${r.name} (${r.description})`).join("; ");
   // Related anchors additionally carry the resolved statement on HOW they
   // relate (a full sentence naming both, e.g. "Dad has lighter hair than Mom")

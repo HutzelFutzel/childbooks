@@ -1,8 +1,9 @@
 /**
- * Design · Cast workspace — same chrome as Pages (top bar, left strip, stage,
- * side dock) so toggling Cast ↔ Pages feels like one Design product.
+ * Design · Cast workspace — top bar, stage, side dock.
+ * Cast filmstrip portals into the Design chapter accordion when hosted there.
  */
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowRight,
@@ -34,6 +35,7 @@ import { useResolvedModels } from "../hooks/useResolvedModels";
 import { notify } from "../lib/notify";
 import { springSoft } from "../lib/motion";
 import { CastFilmstrip } from "./CastFilmstrip";
+import { useDesignChapterHosts } from "./DesignChapterHosts";
 import { ImportAnchorsDialog } from "./ImportAnchorsDialog";
 import { useStudio } from "./StudioContext";
 import { generateAllAnchors } from "./studioGen";
@@ -62,6 +64,7 @@ export function CastWorkspace() {
     setBusy,
     startGeneration,
   } = useStudio();
+  const chapterHosts = useDesignChapterHosts();
   const setAnchors = useProjectsStore((s) => s.setAnchors);
   const patchAnalysis = useProjectsStore((s) => s.patchAnalysis);
   const activeJobUnitIds = useJobsStore((s) => s.activeUnitIds);
@@ -249,16 +252,26 @@ export function CastWorkspace() {
       </div>
 
       <div className="flex min-h-0 flex-1">
-        <CastFilmstrip
-          anchors={allAnchors}
-          activeId={selectedAnchorId}
-          generatingIds={generatingIds}
-          onSelect={commitSelect}
-          onAdd={addAnchor}
-          canImport={hasImportSources}
-          importLocked={!transferAllowed}
-          onImport={() => (transferAllowed ? setImporting(true) : openPlans())}
-        />
+        {(() => {
+          const inChapters = chapterHosts !== null;
+          const filmstrip = (
+            <CastFilmstrip
+              embedded={inChapters}
+              anchors={allAnchors}
+              activeId={selectedAnchorId}
+              generatingIds={generatingIds}
+              onSelect={commitSelect}
+              onAdd={addAnchor}
+              canImport={hasImportSources}
+              importLocked={!transferAllowed}
+              onImport={() => (transferAllowed ? setImporting(true) : openPlans())}
+            />
+          );
+          if (!inChapters) return filmstrip;
+          return chapterHosts.castHost
+            ? createPortal(filmstrip, chapterHosts.castHost)
+            : null;
+        })()}
 
         <div className="flex min-h-0 min-w-0 flex-1 flex-row">
           <div className="relative min-h-0 min-w-0 flex-1">

@@ -8,7 +8,9 @@ import {
 } from "../../core/config/modelConfig";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { setPreferredImageTier, usePreferredImageTier } from "../../state/imageTier";
+import { useProfileStore } from "../../state/profileStore";
 import { InfoHint } from "../components/InfoHint";
+import { Skeleton } from "../components/Skeleton";
 import { ImageTierPicker } from "./ImageTierPicker";
 
 /**
@@ -21,6 +23,7 @@ import { ImageTierPicker } from "./ImageTierPicker";
 export function ImageTierControl() {
   const labels = useAppConfigStore((s) => s.modelConfig.imageTierLabels);
   const tier = usePreferredImageTier();
+  const profileLoaded = useProfileStore((s) => s.profileLoaded);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -39,7 +42,9 @@ export function ImageTierControl() {
   }, [open]);
 
   const label = (t: ImageTier) => labels?.[t]?.trim() || DEFAULT_IMAGE_TIER_LABELS[t];
-  const unset = tier === null;
+  // Only treat as unset once the profile has loaded — otherwise a saved tier
+  // flashes as "Choose quality" while preferences are still in flight.
+  const unset = profileLoaded && tier === null;
 
   return (
     <div className="relative" ref={ref}>
@@ -56,12 +61,22 @@ export function ImageTierControl() {
             : "bg-ink-50 text-ink-700 ring-ink-100 hover:bg-ink-100")
         }
       >
-        {tier === "premium" ? (
+        {!profileLoaded ? (
+          <Skeleton className="size-4" rounded="full" />
+        ) : tier === "premium" ? (
           <Sparkles className="size-4 text-brand-500" />
         ) : (
           <Zap className="size-4 text-amber-500" />
         )}
-        <span className="hidden sm:inline">{unset ? "Choose quality" : label(tier)}</span>
+        <span className="hidden sm:inline">
+          {!profileLoaded ? (
+            <Skeleton className="inline-block h-4 w-16 align-middle" rounded="full" />
+          ) : tier ? (
+            label(tier)
+          ) : (
+            "Choose quality"
+          )}
+        </span>
         <ChevronDown className={"size-3.5 transition-transform " + (open ? "rotate-180" : "")} />
       </button>
 

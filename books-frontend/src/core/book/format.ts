@@ -34,6 +34,20 @@ export const SPINE_TEXT_CLEARANCE_IN = 0.125;
  */
 export const BARCODE_ZONE_IN = { widthIn: 2, heightIn: 1.2 };
 
+/** Inches per centimetre — the backcover logo's fixed edge is specified in cm. */
+const IN_PER_CM = 1 / 2.54;
+
+/**
+ * Fixed edge of the permanent backcover logo, in centimetres. Landscape logos
+ * (wider than tall) get this as their *height*; portrait / square logos get
+ * this as their *width*. The other edge follows the file's own aspect ratio.
+ * Shared by the editor guide and the print/ebook render — see
+ * {@link backCoverLogoSizeIn}.
+ */
+export const BACK_COVER_LOGO_FIXED_CM = 2;
+/** {@link BACK_COVER_LOGO_FIXED_CM} expressed in inches. */
+export const BACK_COVER_LOGO_FIXED_IN = BACK_COVER_LOGO_FIXED_CM * IN_PER_CM;
+
 /** Paperback spine width formula: `(pages / 444) + 0.06 in`. */
 const PAPERBACK_SPINE_PER_PAGE_IN = 1 / 444;
 const PAPERBACK_SPINE_BASE_IN = 0.06;
@@ -306,6 +320,93 @@ export function computeBarcodeZone(caps: FormatCapabilities): NormRect | null {
   const my = caps.safetyMarginIn / trimH;
   return {
     x: Math.max(0, 1 - mx - w),
+    y: Math.max(0, 1 - my - h),
+    w,
+    h,
+  };
+}
+
+/**
+ * Fallback height÷width used when no logo is configured (or its aspect isn't
+ * known yet). A wide mark — typical for wordmarks — so the reserved box is
+ * usefully sized rather than a tall square.
+ */
+export const BACK_COVER_LOGO_DEFAULT_ASPECT = 0.25;
+
+/**
+ * Physical size of the backcover logo in inches, from its height÷width ratio.
+ *
+ * - Landscape (width > height, aspect &lt; 1): height = 2 cm, width follows.
+ * - Portrait / square (aspect ≥ 1): width = 2 cm, height follows.
+ *
+ * When `trim` is provided, the logo is scaled down to fit inside the trim
+ * minus the safety margins (so a very tall portrait mark can't spill off a
+ * small book). The editor guide and the print/ebook render both call this —
+ * they cannot disagree about size.
+ */
+export function backCoverLogoSizeIn(
+  aspect: number | null | undefined,
+  trim?: { widthIn: number; heightIn: number; safetyMarginIn?: number },
+): { widthIn: number; heightIn: number } {
+  const ratio =
+    typeof aspect === "number" && Number.isFinite(aspect) && aspect > 0
+      ? Math.min(8, Math.max(0.05, aspect))
+      : BACK_COVER_LOGO_DEFAULT_ASPECT;
+
+  let widthIn: number;
+  let heightIn: number;
+  if (ratio < 1) {
+    // Landscape: pin the short edge (height) to 2 cm.
+    heightIn = BACK_COVER_LOGO_FIXED_IN;
+    widthIn = heightIn / ratio;
+  } else {
+    // Portrait or square: pin the short-or-equal edge (width) to 2 cm.
+    widthIn = BACK_COVER_LOGO_FIXED_IN;
+    heightIn = widthIn * ratio;
+  }
+
+  if (trim && trim.widthIn > 0 && trim.heightIn > 0) {
+    const margin = trim.safetyMarginIn ?? SAFETY_MARGIN_IN;
+    const maxW = Math.max(0.1, trim.widthIn - margin * 2);
+    const maxH = Math.max(0.1, trim.heightIn - margin * 2);
+    const scale = Math.min(1, maxW / widthIn, maxH / heightIn);
+    widthIn *= scale;
+    heightIn *= scale;
+  }
+
+  return { widthIn, heightIn };
+}
+
+/**
+ * Reserved rectangle for the permanent backcover logo on a single back-cover
+ * trim page (normalized 0..1). Bottom-LEFT corner (mirrors
+ * {@link computeBarcodeZone}'s bottom-right), inset from the trim by the
+ * safety margin, sized via {@link backCoverLogoSizeIn} — exactly the geometry
+ * `PrintBook` draws at render time, so this guide is never a lie.
+ *
+ * Always returns a zone when the trim is valid (like the barcode guide): pass
+ * the uploaded logo's height÷width when known; otherwise a sensible default
+ * keeps the reserved area visible under Print guides.
+ */
+export function computeBackCoverLogoZone(
+  caps: FormatCapabilities,
+  aspect?: number | null,
+): NormRect | null {
+  const trimW = caps.trimWidthIn;
+  const trimH = caps.trimHeightIn;
+  if (trimW <= 0 || trimH <= 0) return null;
+
+  const { widthIn, heightIn } = backCoverLogoSizeIn(aspect, {
+    widthIn: trimW,
+    heightIn: trimH,
+    safetyMarginIn: caps.safetyMarginIn,
+  });
+  const w = widthIn / trimW;
+  const h = heightIn / trimH;
+  const mx = caps.safetyMarginIn / trimW;
+  const my = caps.safetyMarginIn / trimH;
+  return {
+    x: mx,
     y: Math.max(0, 1 - my - h),
     w,
     h,

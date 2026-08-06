@@ -14,11 +14,12 @@ import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { wordParagraphs } from "../../core/design";
 import { bookProductForConfig, formatCapabilitiesForProject } from "../../core/book";
 import {
-  computeBarcodeZone,
+  computeBackCoverLogoZone,
   computePageGuides,
   type BindingSide,
 } from "../../core/book/format";
 import { getCursor } from "../../core/versioning";
+import { useAppConfigStore } from "../../state/appConfigStore";
 import { useJobsStore } from "../../state/jobsStore";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
@@ -32,6 +33,7 @@ import {
 } from "../design/designInit";
 import type { SpanRef } from "../design/TextBoxView";
 import { useStudio } from "./StudioContext";
+import { useStudioPanelStore } from "./studioPanelStore";
 import { coverSpread } from "./studioGen";
 import { duplicateSpread, moveSpread, removeSpread } from "./pageOps";
 
@@ -112,6 +114,10 @@ export function PageStagePanel({
   const caps = useMemo(() => formatCapabilitiesForProject(project), [project]);
   const isBackCover =
     coverMode && subject.kind === "cover" && subject.coverId === COVER_BACK_ID;
+  // Stored on the brand asset at upload (height÷width). Falls back to a default
+  // wide shape inside computeBackCoverLogoZone when none is configured yet —
+  // the reserved box always shows under Print guides, like the barcode zone.
+  const backCoverLogoAspect = useAppConfigStore((s) => s.branding.backCoverLogo?.aspect ?? null);
   // Covers have no gutter; interior single pages bind on `bindingSide` (falling
   // back to "center", which suppresses the gutter when the side is unknown).
   const printGuides =
@@ -122,8 +128,10 @@ export function PageStagePanel({
             spread: isSpread,
             bindingSide: coverMode ? "center" : bindingSide ?? "center",
           }),
-          // Reserve the barcode area on the back cover only.
-          barcode: isBackCover ? computeBarcodeZone(caps) : null,
+          // Backcover logo reserved zone only. Barcode area is temporarily
+          // disabled — re-enable with `computeBarcodeZone(caps)` when ready.
+          barcode: null,
+          logo: isBackCover ? computeBackCoverLogoZone(caps, backCoverLogoAspect) : null,
         }
       : null;
 
@@ -255,23 +263,21 @@ export function PageControls({
   stale: boolean;
   label?: string;
 }) {
-  const {
-    selection,
-    selectIllustration,
-    openImageEdit,
-    closeImageEdit,
-    imageEditSection,
-  } = useStudio();
+  const { selection, selectIllustration } = useStudio();
+  const imageEditSection = useStudioPanelStore((s) => s.imageEditSection);
+  const openImageEdit = useStudioPanelStore((s) => s.openImageEdit);
+  const closeImageEdit = useStudioPanelStore((s) => s.closeImageEdit);
 
   function toggleIllustrationTools(section: "refine" | "characters" | "scene") {
     const alreadyOpen =
-      selection.kind === "image" &&
+      (selection.kind === "image" || selection.kind === "page") &&
       selection.pageId === page.id &&
       imageEditSection === section;
     if (alreadyOpen) {
       closeImageEdit();
       return;
     }
+    // No art → page selection only (no empty illustration frame).
     selectIllustration(page.id);
     openImageEdit(section);
   }

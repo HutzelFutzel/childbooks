@@ -10,7 +10,7 @@
 import { backendFetch } from "./backend";
 import { useAuthStore } from "../state/authStore";
 import { useSparksUiStore } from "../state/sparksUiStore";
-import type { Anchor, Project, ScreenplayDoc } from "../core/types";
+import type { Anchor, Project, ScreenplayDoc, StoryBrief } from "../core/types";
 import { slimProjectForRender } from "../core/book/slimProject";
 import type { AnchorRender, AnchorRunOptions } from "../core/pipeline/anchorRun";
 import type { IllustrationRender, IllustrationRunOptions } from "../core/pipeline/illustrationRun";
@@ -96,16 +96,33 @@ export interface StoryDraftResult {
   story: string;
 }
 
-/** Quick-start: ask the backend to write a first story for the hero. */
+export interface StoryFitResult {
+  verdict: "good" | "minor" | "mismatch";
+  headline: string;
+  notes: string[];
+}
+
+/** Ask the backend to write the story described by the brief. */
 export function storyDraftRemote(
   project: Project,
-  heroName: string,
-  theme?: string,
+  brief: StoryBrief,
   signal?: AbortSignal,
 ): Promise<StoryDraftResult> {
   return postAi<StoryDraftResult>(
     "/ai/story-draft",
-    { project: slimProjectForRender(project, {}), heroName, theme },
+    { project: slimProjectForRender(project, {}), brief },
+    signal,
+  );
+}
+
+/** Advisory: does the author's own story suit the age band they picked? */
+export function storyFitRemote(
+  project: Project,
+  signal?: AbortSignal,
+): Promise<StoryFitResult> {
+  return postAi<StoryFitResult>(
+    "/ai/story-fit",
+    { project: slimProjectForRender(project, {}) },
     signal,
   );
 }
@@ -160,44 +177,20 @@ export function anchorImageRemote(
   );
 }
 
-/** One panel of a split wrap-cover generation, ready to fold into a tree. */
-export interface CoverWrapPanel {
-  blobId: string;
-  mimeType: string;
-  references: IllustrationRender["references"];
-  prompt: string;
-  label: string;
-  textMode: IllustrationRender["textMode"];
-  /** Cover-only: the exact text baked into this panel's artwork. */
-  bakedText?: IllustrationRender["bakedText"];
-}
-
-export interface CoverWrapResult {
-  front: CoverWrapPanel;
-  back: CoverWrapPanel;
-}
-
-/**
- * Generate both covers as one continuous wrap image and split it into a front +
- * back panel (server-side). One generation → guaranteed-matching covers.
- */
-export function coverWrapRemote(
-  project: Project,
-  tier: ImageTier,
-  signal?: AbortSignal,
-): Promise<CoverWrapResult> {
-  const slim = slimProjectForRender(project, {
-    keepScreenplay: true,
-    keepAnchorVersions: true,
-  });
-  return postAi<CoverWrapResult>("/ai/cover-wrap", { project: slim, tier }, signal);
-}
-
 export function illustrationRemote(
   project: Project,
   spreadId: string,
   options: IllustrationRunOptions,
   tier: ImageTier,
+  /**
+   * Cover-pair generation only: the blob id of an already-rendered sibling
+   * cover (the front), so the backend attaches it as a reference image for
+   * visual continuity. Resolved server-side via `env.loadBlob` — a blob id,
+   * not raw bytes, since the client never receives the rendered pixels
+   * itself, only a blob id/URL. Kept as a sibling of `options` (not inside
+   * it) since it's a wire-level lookup instruction, not a pipeline option.
+   */
+  coverContinuationBlobId?: string,
 ): Promise<IllustrationRender | null> {
   // Illustration render: needs the screenplay (to resolve the spread/cover), the
   // anchors' active images, and this spread's illustration tree (+ branch point).
@@ -208,7 +201,13 @@ export function illustrationRemote(
   });
   return postAi<IllustrationRender | null>(
     "/ai/illustration",
-    { project: slim, spreadId, options: serializableOptions(options), tier },
+    {
+      project: slim,
+      spreadId,
+      options: serializableOptions(options),
+      tier,
+      ...(coverContinuationBlobId ? { coverContinuationBlobId } : {}),
+    },
     options.signal,
   );
 }

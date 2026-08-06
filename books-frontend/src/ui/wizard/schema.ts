@@ -1,26 +1,48 @@
 import { z } from "zod";
 import type { BookConfig } from "../../core/types";
 import { ageBandHasReadingModes } from "../../core/config/ageWritingCatalog";
+import { storyBriefSchema } from "../../core/story/brief";
 
 const modelSelection = z.object({
   provider: z.enum(["openai", "google"]),
   id: z.string().min(1),
 });
 
+const artStyleSchema = z
+  .object({
+    presetId: z.string().nullable(),
+    customDescription: z.string().optional(),
+  })
+  .refine(
+    (v) => v.presetId !== null || Boolean(v.customDescription?.trim()),
+    "Pick a style or describe your own.",
+  );
+
+/** Story step only — audience + text. Art style is confirmed in Design · Cast. */
+export const storyConfigSchema = z
+  .object({
+    storyText: z.string().trim().min(20, "Please enter at least a sentence or two of story."),
+    storyBrief: storyBriefSchema.optional(),
+    ageRangeId: z.string().min(1),
+    readingModeId: z.enum(["read-aloud", "with-help", "independent"]).nullable().optional(),
+  })
+  .superRefine((config, ctx) => {
+    if (ageBandHasReadingModes(config.ageRangeId) && !config.readingModeId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Pick how the book will be read.",
+        path: ["readingModeId"],
+      });
+    }
+  });
+
 export const bookConfigSchema = z.object({
   storyText: z.string().trim().min(20, "Please enter at least a sentence or two of story."),
+  storyBrief: storyBriefSchema.optional(),
   // Models are chosen automatically by the system (no user selection).
   textModel: modelSelection.nullable(),
   imageModel: modelSelection.nullable(),
-  artStyle: z
-    .object({
-      presetId: z.string().nullable(),
-      customDescription: z.string().optional(),
-    })
-    .refine(
-      (v) => v.presetId !== null || Boolean(v.customDescription?.trim()),
-      "Pick a style or describe your own.",
-    ),
+  artStyle: artStyleSchema,
   ageRangeId: z.string().min(1),
   readingModeId: z.enum(["read-aloud", "with-help", "independent"]).nullable().optional(),
   productSku: z.string().min(1),
@@ -40,6 +62,11 @@ export const bookConfigSchema = z.object({
   }
 });
 
+/** Whether a look has been chosen (preset and/or custom direction). */
+export function isArtStyleChosen(config: BookConfig): boolean {
+  return artStyleSchema.safeParse(config.artStyle).success;
+}
+
 export type WizardStepId =
   | "story"
   | "style"
@@ -55,10 +82,8 @@ export function validateStep(step: WizardStepId, config: BookConfig): string | n
       const r = bookConfigSchema.shape.storyText.safeParse(config.storyText);
       return r.success ? null : r.error.issues[0]?.message ?? "Invalid";
     }
-    case "style": {
-      const r = bookConfigSchema.shape.artStyle.safeParse(config.artStyle);
-      return r.success ? null : r.error.issues[0]?.message ?? "Invalid";
-    }
+    case "style":
+      return isArtStyleChosen(config) ? null : "Pick a style or describe your own.";
     case "audience":
       if (!config.ageRangeId || !config.productSku) return "Pick an age range and size.";
       if (ageBandHasReadingModes(config.ageRangeId) && !config.readingModeId) {

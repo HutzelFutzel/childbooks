@@ -198,6 +198,7 @@ export function OrderDialog({
   }, [catalogProduct, publicPlans, subscriptions]);
 
   const savedAddresses = useProfileStore((s) => s.addresses);
+  const addressesLoading = useProfileStore((s) => s.loading);
   const preferredAddress = useProfileStore((s) => s.preferredAddress);
   const upsertAddress = useProfileStore((s) => s.upsertAddress);
 
@@ -767,7 +768,11 @@ export function OrderDialog({
           />
 
           {/* Saved address picker — lets returning customers reuse an address. */}
-          {savedAddresses.length > 0 && (
+          {addressesLoading && savedAddresses.length === 0 ? (
+            <div className="flex items-center gap-2 text-xs text-ink-400">
+              <Loader2 className="size-3.5 animate-spin" /> Loading saved addresses…
+            </div>
+          ) : savedAddresses.length > 0 ? (
             <Field label="Use a saved address">
               <Select
                 options={[
@@ -782,7 +787,7 @@ export function OrderDialog({
                 }}
               />
             </Field>
-          )}
+          ) : null}
 
           {/* Recipient — wrapped in a form with autocomplete tokens so the
               browser can offer to autofill the whole shipping block at once. */}

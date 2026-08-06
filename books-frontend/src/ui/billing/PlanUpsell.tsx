@@ -59,8 +59,12 @@ function useOffer(context: UpsellContext, currency: CurrencyCode): Offer | null 
   const publicProducts = useAppConfigStore((s) => s.products.products);
   const ebookSettings = useAppConfigStore((s) => s.pricingSettings.ebook);
   const subscriptions = useSubscriptionStore((s) => s.subscriptions);
+  const subscriptionsLoading = useSubscriptionStore((s) => s.loading);
 
   return useMemo(() => {
+    // Wait until we know whether they're already a member — otherwise a paid
+    // subscriber briefly sees an upgrade nudge for a plan they already have.
+    if (subscriptionsLoading) return null;
     // Already a member: there is no upgrade to sell them here.
     const sub = activeSubscription(subscriptions);
     const current = sub ? findPublicPlanByPriceId(publicPlans, sub.priceId) : null;
@@ -116,7 +120,7 @@ function useOffer(context: UpsellContext, currency: CurrencyCode): Offer | null 
     offers.sort((a, b) => b.weight - a.weight || a.monthly - b.monthly);
     const { plan, monthly, benefit } = offers[0];
     return { plan, monthly, benefit };
-  }, [context, currency, publicPlans, publicProducts, ebookSettings, subscriptions]);
+  }, [context, currency, publicPlans, publicProducts, ebookSettings, subscriptions, subscriptionsLoading]);
 }
 
 export function PlanUpsell({

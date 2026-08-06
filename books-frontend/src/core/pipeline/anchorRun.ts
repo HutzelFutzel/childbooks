@@ -24,6 +24,7 @@ import {
   relatedAnchorsFor,
   relationSentence,
 } from "../book/anchorGraph";
+import { artStyleKey } from "../prompts/style";
 import { anchorSignature, currentAnchorImage } from "./provenance";
 import {
   asRefPayload,
@@ -41,6 +42,12 @@ export interface AnchorRunOptions {
   fromNodeId?: string;
   /** Use the source version's image as a reference for consistency. */
   useReference?: boolean;
+  /**
+   * Art-style transfer: re-render the current sheet in the book's new style,
+   * keeping the design identical. Implies `useReference` (the existing sheet is
+   * the base) and uses the dedicated restyle prompt.
+   */
+  restyle?: boolean;
   signal?: AbortSignal;
 }
 
@@ -56,6 +63,8 @@ export interface AnchorRender {
   thumbBlobId?: string;
   /** Grid this sheet was rendered against, so later crops can find a cell. */
   layout?: AnchorSheetLayout;
+  /** Art style these pixels were drawn in (see `artStyleKey`). */
+  artStyleKey?: string;
 }
 
 /** Wrap an anchor render into a (new or extended) version tree. Pure. */
@@ -69,6 +78,7 @@ export function applyAnchorRender(
     references: render.references,
     ...(render.thumbBlobId ? { thumbBlobId: render.thumbBlobId } : {}),
     ...(render.layout ? { layout: render.layout } : {}),
+    ...(render.artStyleKey ? { artStyleKey: render.artStyleKey } : {}),
   };
   const next = tree
     ? addVersion(tree, content, {
@@ -91,7 +101,9 @@ export async function renderAnchor(
   env: PipelineEnv,
 ): Promise<AnchorRender> {
   const isIteration = Boolean(anchor.versions);
-  const isEdit = Boolean(options.edit?.trim());
+  const restyle = Boolean(options.restyle);
+  // A restyle is never an edit: it changes the rendering, not the design.
+  const isEdit = !restyle && Boolean(options.edit?.trim());
   const sourceNodeId = options.fromNodeId ?? anchor.versions?.cursorId;
 
   // Explicitly linked anchors (a relative to resemble, or an object/place this
@@ -174,9 +186,17 @@ export async function renderAnchor(
     )
   ).filter((r): r is ReferenceImage => Boolean(r));
 
-  // The anchor's own previous image (edit base, or likeness on iterations).
+  // The anchor's own previous image (restyle base, edit base, or likeness on
+  // iterations). A restyle labels it `restyleBase`, so the provider tells the
+  // model to reproduce its content while replacing the rendering — "match this
+  // exactly" would preserve the very style being replaced.
   let subjectRef: ReferenceImage | null = null;
-  if (options.useReference && anchor.versions && sourceNodeId) {
+  // The grid the base sheet was actually drawn on. A restyle reproduces that
+  // sheet cell for cell, so the prompt (and the recorded layout) must describe
+  // the base — not the grid this anchor's type would get today, which may have
+  // changed since.
+  let baseLayout: AnchorSheetLayout | undefined;
+  if ((options.useReference || restyle) && anchor.versions && sourceNodeId) {
     const src = anchor.versions.nodes[sourceNodeId];
     if (src) {
       const raw = await env.loadBlob(src.content.blobId);
@@ -185,11 +205,17 @@ export async function renderAnchor(
         subjectRef = {
           base64: data.base64,
           mimeType: data.mimeType,
-          role: "subject",
+          role: restyle ? "restyleBase" : "subject",
           label: anchor.name,
         };
+        baseLayout = src.content.layout;
       }
     }
+  }
+  // A restyle needs its base image; without it we'd redraw from the description
+  // and lose the design the reader approved.
+  if (restyle && !subjectRef) {
+    throw new Error("The current reference sheet could not be loaded for the style update.");
   }
 
   // gpt-image-2's images/edits endpoint composes a NEW image from every
@@ -202,15 +228,20 @@ export async function renderAnchor(
   const isOpenAI = imageModel.provider === "openai";
   const editFromImage = isEdit && Boolean(subjectRef);
   let references: ReferenceImage[];
-  if (editFromImage || isOpenAI) {
+  if (restyle) {
+    // Only the sheet being re-rendered: its contained subjects are already
+    // drawn into it, and re-sending their sheets invites the model to add a
+    // second copy — a restyle must not change what is in the picture.
+    references = [subjectRef!];
+  } else if (editFromImage || isOpenAI) {
     references = [...(subjectRef ? [subjectRef] : []), ...containedRefs];
   } else {
     references = [...containedRefs, ...(subjectRef ? [subjectRef] : [])];
   }
 
-  // Lead with the art-style exemplar so a from-scratch/variation sheet matches
-  // the selected style. Skipped for edit-from-image, which must preserve the
-  // existing sheet's style (adding a style ref could restyle it).
+  // Lead with the art-style exemplar so a from-scratch/variation/restyled sheet
+  // matches the selected style. Skipped for edit-from-image, which must
+  // preserve the existing sheet's style (adding a style ref could restyle it).
   const styleRef = editFromImage ? null : await loadStyleReference(env, project.config);
   if (styleRef) references = [styleRef, ...references];
 
@@ -219,6 +250,7 @@ export async function renderAnchor(
   // the final `references` order above.
   const legendNames = references.map((r) => {
     if (r.role === "style") return "an art-style reference (match its style only, not its content)";
+    if (r.role === "restyleBase") return `the sheet of ${anchor.name} being re-rendered`;
     if (r.label === anchor.name) return `the current reference sheet of ${anchor.name}`;
     return `${r.label ?? "a contained subject"} (must match this reference exactly)`;
   });
@@ -235,6 +267,8 @@ export async function renderAnchor(
     edit: options.edit,
     editFromImage,
     hasStyleRef: Boolean(styleRef),
+    restyle,
+    baseLayout,
     legend: references.length > 0 ? legend : undefined,
     prompts: env.prompts,
   });
@@ -248,7 +282,9 @@ export async function renderAnchor(
       providerId: imageModel.provider,
       references: references.length ? references : undefined,
       signal: options.signal,
-      size: spec.size,
+      // A restyle must come back on the base sheet's canvas, or the cells shift
+      // and every recorded crop box points at the wrong place.
+      size: restyle && baseLayout ? `${baseLayout.width}x${baseLayout.height}` : spec.size,
     }),
   );
 
@@ -265,7 +301,9 @@ export async function renderAnchor(
   // corrective slot to retry into — the check would just spend Sparks with no
   // fix path). Best-effort throughout: a failed check just leaves the first
   // sheet as-is rather than blocking the render on a check that can't answer.
-  if (spec.views.length > 1 && !editFromImage) {
+  // A restyle is also skipped: the base sheet already fixes the grid, and the
+  // restyle prompt has no corrective slot to retry into.
+  if (spec.views.length > 1 && !editFromImage && !restyle) {
     try {
       const checkModel = env.models.bindingModel ?? env.models.textModel;
       const checkKey = env.apiKeyFor(checkModel.provider);
@@ -293,6 +331,7 @@ export async function renderAnchor(
           edit: options.edit,
           editFromImage,
           hasStyleRef: Boolean(styleRef),
+          restyle,
           legend: references.length > 0 ? legend : undefined,
           actualPanelCount: actualCount,
           prompts: env.prompts,
@@ -394,10 +433,11 @@ export async function renderAnchor(
   // Prefer the head close-up cell; fall back to the canonical whole-subject
   // cell for grids without one (objects, places).
   let thumbBlobId: string | undefined;
-  const layout = layoutOf(spec);
+  // A restyled sheet keeps the base's grid, so it keeps the base's layout too.
+  const layout = restyle && baseLayout ? baseLayout : layoutOf(spec);
   if (env.composite.cropThumbnail) {
     try {
-      const cell = spec.headCell ?? spec.bodyCell;
+      const cell = layout.headCell ?? layout.bodyCell;
       const thumb = await env.composite.cropThumbnail({
         base64: result.base64,
         mimeType: result.mimeType,
@@ -436,7 +476,8 @@ export async function renderAnchor(
       })),
     ],
     prompt,
-    label: options.edit?.trim() || (isIteration ? "Variation" : "Initial"),
+    label: restyle ? "New style" : options.edit?.trim() || (isIteration ? "Variation" : "Initial"),
     parentId: sourceNodeId,
+    artStyleKey: artStyleKey(project.config.artStyle),
   };
 }

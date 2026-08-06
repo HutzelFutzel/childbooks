@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Sparkles, Plus, ArrowDownRight, ArrowUpRight, Gift, Copy, Users } from "lucide-react";
+import { Sparkles, Plus, ArrowDownRight, ArrowUpRight, Gift, Copy, Loader2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Modal } from "../components/Modal";
 import { Button } from "../components/Button";
 import { Input } from "../components/Input";
+import { Skeleton } from "../components/Skeleton";
 import { useSparksStore } from "../../state/sparksStore";
 import { useSparksUiStore } from "../../state/sparksUiStore";
 import { useBillingUiStore } from "../../state/billingUiStore";
@@ -32,6 +33,7 @@ import { useImageActionRange } from "./SparkCost";
  */
 export function SparksBadge() {
   const balance = useSparksStore((s) => s.balance);
+  const balanceLoading = useSparksStore((s) => s.loading);
   const ledger = useSparksStore((s) => s.ledger);
   const sparks = useAppConfigStore((s) => s.sparks);
   const baseCurrency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
@@ -77,10 +79,12 @@ export function SparksBadge() {
 
   // "Running low" = can't afford one more page render at the chosen tier; "out"
   // = at/below zero. Uses the upper bound of the tier estimate to be safe.
+  // Skip the amber "low" treatment while the first balance snapshot is in
+  // flight so a real balance doesn't flash as zero.
   const pageRange = useImageActionRange("pageIllustration");
   const pageEstimate = pageRange?.maxSparks ?? 0;
-  const outOf = balance <= 0;
-  const runningLow = !outOf && pageEstimate > 0 && balance < pageEstimate;
+  const outOf = !balanceLoading && balance <= 0;
+  const runningLow = !balanceLoading && !outOf && pageEstimate > 0 && balance < pageEstimate;
   const low = outOf || runningLow;
 
   // When opened due to a shortfall, suggest the smallest pack that covers it.
@@ -124,7 +128,11 @@ export function SparksBadge() {
         title="Your Sparks"
       >
         <Sparkles key={glintKey} className={glintKey > 0 ? "size-4 animate-glint" : "size-4"} />
-        {balance.toLocaleString()}
+        {balanceLoading ? (
+          <Skeleton className="h-4 w-8" rounded="full" />
+        ) : (
+          balance.toLocaleString()
+        )}
       </button>
 
       <Modal open={walletOpen} onClose={closeWallet} title="Your Sparks" size="max-w-md">
@@ -303,12 +311,28 @@ function GiftsAndInvites({ open }: { open: boolean }) {
   const [claiming, setClaiming] = useState(false);
   const [referral, setReferral] = useState<ReferralOverview | null>(null);
   const [gifts, setGifts] = useState<SparkGiftSummary[]>([]);
+  const [loadingExtras, setLoadingExtras] = useState(false);
   const openInvite = useAccountUiStore((s) => s.openInvite);
 
   useEffect(() => {
     if (!open) return;
-    fetchReferralOverview().then(setReferral).catch(() => setReferral(null));
-    listMyGifts().then(setGifts).catch(() => setGifts([]));
+    let cancelled = false;
+    setLoadingExtras(true);
+    Promise.all([
+      fetchReferralOverview().catch(() => null),
+      listMyGifts().catch(() => [] as SparkGiftSummary[]),
+    ])
+      .then(([overview, giftList]) => {
+        if (cancelled) return;
+        setReferral(overview);
+        setGifts(giftList);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingExtras(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [open]);
 
   // Discounts earned by inviting apply themselves at checkout, so the only thing
@@ -357,52 +381,61 @@ function GiftsAndInvites({ open }: { open: boolean }) {
         </form>
       </div>
 
-      {/* Referral program */}
-      {referral?.enabled && (
-        <div className="space-y-1.5">
-          <button
-            type="button"
-            onClick={openInvite}
-            className="flex w-full items-center justify-between gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-left text-xs text-emerald-800 transition hover:bg-emerald-100"
-          >
-            <span className="flex items-center gap-1.5">
-              <Users className="size-3.5 shrink-0" />
-              {referral.teaser || referral.headline || "Invite a friend"}
-            </span>
-            <span className="shrink-0 font-semibold">Invite →</span>
-          </button>
-          {usableRewards.length > 0 && (
-            <div className="space-y-1">
-              {usableRewards.map((r) => (
-                <div
-                  key={r.id}
-                  className="rounded-lg bg-emerald-50/60 px-3 py-1.5 text-[11px] text-emerald-800"
-                >
-                  <span className="font-semibold">{r.summary}</span>
-                  {r.expiresAt ? (
-                    <span className="text-emerald-700/80">
-                      {" "}
-                      · use by {new Date(r.expiresAt).toLocaleDateString()}
-                    </span>
-                  ) : null}
-                  <span className="block text-emerald-700/70">Applies automatically at checkout.</span>
+      {loadingExtras ? (
+        <div className="flex items-center justify-center gap-2 py-3 text-xs text-ink-400">
+          <Loader2 className="size-3.5 animate-spin" /> Loading gifts & invites…
+        </div>
+      ) : (
+        <>
+          {/* Referral program */}
+          {referral?.enabled && (
+            <div className="space-y-1.5">
+              <button
+                type="button"
+                onClick={openInvite}
+                className="flex w-full items-center justify-between gap-2 rounded-lg bg-emerald-50 px-3 py-2 text-left text-xs text-emerald-800 transition hover:bg-emerald-100"
+              >
+                <span className="flex items-center gap-1.5">
+                  <Users className="size-3.5 shrink-0" />
+                  {referral.teaser || referral.headline || "Invite a friend"}
+                </span>
+                <span className="shrink-0 font-semibold">Invite →</span>
+              </button>
+              {usableRewards.length > 0 && (
+                <div className="space-y-1">
+                  {usableRewards.map((r) => (
+                    <div
+                      key={r.id}
+                      className="rounded-lg bg-emerald-50/60 px-3 py-1.5 text-[11px] text-emerald-800"
+                    >
+                      <span className="font-semibold">{r.summary}</span>
+                      {r.expiresAt ? (
+                        <span className="text-emerald-700/80">
+                          {" "}
+                          · use by {new Date(r.expiresAt).toLocaleDateString()}
+                        </span>
+                      ) : null}
+                      <span className="block text-emerald-700/70">Applies automatically at checkout.</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
+              {(referral.rewards ?? [])
+                .filter((r) => r.status === "pending")
+                .slice(0, 3)
+                .map((r) => (
+                  <div key={r.id} className="rounded-lg bg-ink-50/70 px-3 py-1.5 text-[11px] text-ink-500">
+                    <span className="font-medium text-ink-700">+{r.summary}</span> pending — unlocks{" "}
+                    {r.unlocks}
+                  </div>
+                ))}
             </div>
           )}
-          {(referral.rewards ?? [])
-            .filter((r) => r.status === "pending")
-            .slice(0, 3)
-            .map((r) => (
-              <div key={r.id} className="rounded-lg bg-ink-50/70 px-3 py-1.5 text-[11px] text-ink-500">
-                <span className="font-medium text-ink-700">+{r.summary}</span> pending — unlocks {r.unlocks}
-              </div>
-            ))}
-        </div>
+        </>
       )}
 
       {/* Gifts this user bought */}
-      {gifts.length > 0 && (
+      {!loadingExtras && gifts.length > 0 && (
         <div className="space-y-1.5">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">
             Gifts you bought

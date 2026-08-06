@@ -30,6 +30,7 @@ function imageAspect(file: Blob): Promise<number> {
  */
 export function AssetsLibrary({ onPlace }: { onPlace?: (asset: AssetItem) => void }) {
   const assets = useSettingsStore((s) => s.settings.assets);
+  const settingsLoaded = useSettingsStore((s) => s.loaded);
   const addAsset = useSettingsStore((s) => s.addAsset);
   const removeAsset = useSettingsStore((s) => s.removeAsset);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -79,7 +80,11 @@ export function AssetsLibrary({ onPlace }: { onPlace?: (asset: AssetItem) => voi
           onChange={(e) => void handleFiles(e.target.files)}
         />
       </div>
-      {assets.length === 0 ? (
+      {!settingsLoaded ? (
+        <div className="mt-2 flex items-center justify-center gap-1.5 rounded-xl border border-dashed border-ink-100 px-3 py-5 text-[11px] text-ink-400">
+          <Loader2 className="size-3.5 animate-spin" /> Loading assets…
+        </div>
+      ) : assets.length === 0 ? (
         <button
           onClick={() => fileRef.current?.click()}
           className="mt-2 flex w-full flex-col items-center gap-1.5 rounded-xl border border-dashed border-ink-200 px-3 py-5 text-center transition hover:border-brand-300 hover:bg-brand-50/40"

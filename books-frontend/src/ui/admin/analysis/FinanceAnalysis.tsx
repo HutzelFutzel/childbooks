@@ -73,6 +73,8 @@ const KIND_LABELS: Record<string, string> = {
   settleFailed: "Uncharged actions (settle failed)",
   cloudCost: "Google Cloud / Firebase spend",
   infraBudget: "Infra budget (prorated)",
+  affiliateCommission: "Affiliate commissions",
+  affiliateCommissionVoided: "Affiliate commissions reversed",
 };
 
 /** Custom operating costs use kind `custom:{slug}` — prettify the slug. */

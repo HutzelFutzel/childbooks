@@ -45,6 +45,16 @@ service firebase.storage {
       allow write: if false;
     }
 
+    // The QR code library's rendered images and centre-logo copies. World-
+    // readable — a code baked into a printed book has to keep resolving for
+    // anyone who scans it, indefinitely; written only by the backend (Admin
+    // SDK) after `requireAdmin`, and by `renderQrCode`'s own preview path,
+    // which never writes to Storage at all.
+    match /public/qrcodes/{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     // Backend-managed print assets are written via the Admin SDK (which bypasses
     // rules) and handed to Lulu through signed URLs — no client access needed.
     match /{allPaths=**} {

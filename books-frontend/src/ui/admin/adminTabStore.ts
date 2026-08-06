@@ -19,6 +19,7 @@ export type ConfigTabId =
   | "memberships" // subscription plans (incl. member ebook pricing)
   | "sparks" // the Sparks economy internals (peg, grants, action pricing)
   | "referrals" // invite-a-friend program (rules, impact, funnel)
+  | "affiliates" // Rewardful affiliate program (master switch + what earns)
   | "financial" // currencies, FX, fees, rounding, tax — the money plumbing
   | "discounts" // sale planner: per-item break-even & safe max discount + slider
   // AI pipeline group.
@@ -30,6 +31,7 @@ export type ConfigTabId =
   | "artStyles"
   | "layouts"
   | "ageWriting"
+  | "storyCraft"
   | "typography"
   // Operations group.
   | "system";
@@ -38,10 +40,10 @@ export type ConfigTabId =
 export type CatalogSegment = "print" | "ebook" | "packs";
 
 /** Sub-tabs within the Analysis section. */
-export type AnalysisTabId = "users" | "products" | "payments" | "finance" | "referrals";
+export type AnalysisTabId = "users" | "products" | "payments" | "finance" | "referrals" | "affiliates";
 
 /** Sub-tabs within the Marketing section. */
-export type MarketingTabId = "seo" | "blog" | "branding";
+export type MarketingTabId = "seo" | "blog" | "branding" | "qrCodes";
 
 /** Sub-tabs within the Communication section. */
 export type CommunicationTabId = "contact" | "transactional-emails" | "admin-slack";
@@ -57,7 +59,16 @@ export const CONFIG_GROUPS: {
   {
     id: "business",
     label: "Business",
-    tabs: ["overview", "catalog", "memberships", "sparks", "referrals", "financial", "discounts"],
+    tabs: [
+      "overview",
+      "catalog",
+      "memberships",
+      "sparks",
+      "referrals",
+      "affiliates",
+      "financial",
+      "discounts",
+    ],
   },
   {
     id: "ai",
@@ -67,7 +78,7 @@ export const CONFIG_GROUPS: {
   {
     id: "creative",
     label: "Creative defaults",
-    tabs: ["artStyles", "layouts", "ageWriting", "typography"],
+    tabs: ["artStyles", "layouts", "ageWriting", "storyCraft", "typography"],
   },
   {
     id: "operations",
@@ -96,6 +107,8 @@ interface AdminNavState {
   /** Jump straight to a Catalog segment (used by the overview cross-links). */
   openCatalog: (segment: CatalogSegment) => void;
   setCatalogSegment: (segment: CatalogSegment) => void;
+  /** Jump straight to a Configuration tab (the mirror of `openAnalysis`). */
+  openConfigTab: (tab: ConfigTabId) => void;
   /** Jump straight to an Analysis sub-tab (used by cross-links from Configuration). */
   openAnalysis: (tab: AnalysisTabId) => void;
   setAnalysisTab: (tab: AnalysisTabId) => void;
@@ -129,6 +142,8 @@ export const useAdminTab = create<AdminNavState>((set) => ({
   openCatalog: (catalogSegment) =>
     set({ configTab: "catalog", configGroup: "business", catalogSegment }),
   setCatalogSegment: (catalogSegment) => set({ catalogSegment }),
+  openConfigTab: (configTab) =>
+    set({ section: "configuration", configTab, configGroup: configGroupForTab(configTab) }),
   openAnalysis: (analysisTab) => set({ section: "analysis", analysisTab }),
   setAnalysisTab: (analysisTab) => set({ analysisTab }),
   setMarketingTab: (marketingTab) => set({ marketingTab }),

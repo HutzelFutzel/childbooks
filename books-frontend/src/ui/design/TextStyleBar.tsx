@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { FloatingBarPortal } from "./FloatingBarPortal";
 import {
   AlignCenter,
   AlignJustify,
@@ -30,26 +31,21 @@ import { recommendFontSize, type FontSizeRec } from "../../core/config/typograph
 import { useAppConfigStore } from "../../state/appConfigStore";
 import {
   CATEGORY_LABEL,
+  FONT_CATEGORY_ORDER,
   FONTS,
   fontStack,
   getFont,
   loadFont,
-  type FontCategory,
   type FontDef,
 } from "../typography/fonts";
 import { cn } from "../lib/cn";
 import { parseColor, toHex } from "./color";
 import { effectiveBackdropBlur } from "./effects";
 import { effectiveFontSizePct } from "./textFit";
-import { useStudio } from "../studio/StudioContext";
+import { useStudioPanelStore } from "../studio/studioPanelStore";
 import type { TextEditSection } from "./TextEditPanel";
-import {
-  floatingBarPortalProps,
-  type FloatingBarPlacement,
-} from "./floatingBarPlacement";
+import type { FloatingBarPlacement } from "./floatingBarPlacement";
 import { PortalToolbarFlyout } from "./toolbarFlyout";
-
-const FONT_CATEGORY_ORDER: FontCategory[] = ["rounded", "sans", "serif", "hand"];
 
 export type TextStyleKey = "bold" | "italic" | "underline";
 
@@ -100,12 +96,10 @@ export function TextStyleBar({
   onColor: (c: string) => void;
   chrome?: TextBoxToolbarChrome;
 }) {
-  const portal = floatingBarPortalProps(placement);
-  return createPortal(
-    <div
+  return (
+    <FloatingBarPortal
+      placement={placement}
       data-text-style-bar
-      className={portal.className}
-      style={portal.style}
       // Keep the caret / box selection alive when a control is clicked.
       onMouseDown={(e) => e.preventDefault()}
     >
@@ -155,14 +149,14 @@ export function TextStyleBar({
           </>
         )}
       </div>
-    </div>,
-    document.body,
+    </FloatingBarPortal>
   );
 }
 
 /** Overflow menu: Effects / Background (docked panel) + style / duplicate. */
 function MoreMenu({ chrome }: { chrome: TextBoxToolbarChrome }) {
-  const { textEditSection, toggleTextEdit } = useStudio();
+  const textEditSection = useStudioPanelStore((s) => s.textEditSection);
+  const toggleTextEdit = useStudioPanelStore((s) => s.toggleTextEdit);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 

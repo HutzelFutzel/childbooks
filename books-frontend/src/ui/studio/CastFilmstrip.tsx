@@ -33,6 +33,8 @@ export function CastFilmstrip({
   onImport,
   canImport,
   importLocked,
+  /** Fill a parent host (Design chapter accordion) — no own width / chrome. */
+  embedded = false,
 }: {
   anchors: Anchor[];
   activeId: string | null;
@@ -42,15 +44,18 @@ export function CastFilmstrip({
   onImport?: () => void;
   canImport?: boolean;
   importLocked?: boolean;
+  embedded?: boolean;
 }) {
   const [width, setWidth] = useState(WIDTH_DEFAULT);
   const resizing = useRef<{ startX: number; startW: number } | null>(null);
 
   useEffect(() => {
+    if (embedded) return;
     setWidth(readStoredWidth());
-  }, []);
+  }, [embedded]);
 
   useEffect(() => {
+    if (embedded) return;
     function onMove(e: PointerEvent) {
       if (!resizing.current) return;
       const next = Math.min(
@@ -73,7 +78,45 @@ export function CastFilmstrip({
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
-  }, []);
+  }, [embedded]);
+
+  const list = (
+    <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
+      {anchors.map((anchor) => (
+        <CastCell
+          key={anchor.id}
+          anchor={anchor}
+          active={activeId === anchor.id}
+          generating={generatingIds.has(anchor.id)}
+          onSelect={() => onSelect(anchor.id)}
+        />
+      ))}
+      <button
+        type="button"
+        onClick={onAdd}
+        className="flex w-full flex-col items-center gap-1 rounded-lg border border-dashed border-ink-200 px-2 py-3 text-ink-400 transition hover:border-brand-300 hover:bg-brand-50/40 hover:text-brand-600"
+      >
+        <Plus className="size-4" />
+        <span className="text-[11px] font-medium">Add</span>
+      </button>
+      {canImport && (
+        <button
+          type="button"
+          onClick={onImport}
+          className="flex w-full flex-col items-center gap-1 rounded-lg border border-dashed border-ink-200 px-2 py-3 text-ink-400 transition hover:border-brand-300 hover:bg-brand-50/40 hover:text-brand-600"
+        >
+          {importLocked ? <Lock className="size-4" /> : <UserPlus className="size-4" />}
+          <span className="text-[11px] font-medium">
+            {importLocked ? "Import · Pro" : "Import"}
+          </span>
+        </button>
+      )}
+    </div>
+  );
+
+  if (embedded) {
+    return <div className="flex h-full min-h-0 w-full flex-col bg-white/80">{list}</div>;
+  }
 
   return (
     <aside
@@ -83,37 +126,7 @@ export function CastFilmstrip({
       <div className="border-b border-ink-100 px-3 py-2">
         <p className="text-xs font-semibold text-ink-500">Cast</p>
       </div>
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
-        {anchors.map((anchor) => (
-          <CastCell
-            key={anchor.id}
-            anchor={anchor}
-            active={activeId === anchor.id}
-            generating={generatingIds.has(anchor.id)}
-            onSelect={() => onSelect(anchor.id)}
-          />
-        ))}
-        <button
-          type="button"
-          onClick={onAdd}
-          className="flex w-full flex-col items-center gap-1 rounded-lg border border-dashed border-ink-200 px-2 py-3 text-ink-400 transition hover:border-brand-300 hover:bg-brand-50/40 hover:text-brand-600"
-        >
-          <Plus className="size-4" />
-          <span className="text-[11px] font-medium">Add</span>
-        </button>
-        {canImport && (
-          <button
-            type="button"
-            onClick={onImport}
-            className="flex w-full flex-col items-center gap-1 rounded-lg border border-dashed border-ink-200 px-2 py-3 text-ink-400 transition hover:border-brand-300 hover:bg-brand-50/40 hover:text-brand-600"
-          >
-            {importLocked ? <Lock className="size-4" /> : <UserPlus className="size-4" />}
-            <span className="text-[11px] font-medium">
-              {importLocked ? "Import · Pro" : "Import"}
-            </span>
-          </button>
-        )}
-      </div>
+      {list}
       <div
         role="separator"
         aria-orientation="vertical"

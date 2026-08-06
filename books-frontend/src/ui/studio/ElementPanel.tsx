@@ -41,7 +41,9 @@ import { ImageEditPanel, type ImageEditSection } from "../design/ImageEditPanel"
 import { ShapeInspector } from "../design/ShapeInspector";
 import { TextEditPanel, type TextEditSection } from "../design/TextEditPanel";
 import { DockSetupPanel } from "./DockSetupPanel";
-import { useStudio, type Selection, type StudioToolPanel } from "./StudioContext";
+import { useStudio, type Selection } from "./StudioContext";
+import { useStudioPanelStore, type StudioToolPanel } from "./studioPanelStore";
+import { subjectForPage } from "./usePageIllustration";
 
 const TEXT_SECTION_META: Record<
   TextEditSection,
@@ -61,6 +63,16 @@ const IMAGE_SECTION_META: Record<
   versions: { title: "Versions", icon: <History className="size-4" /> },
   effects: { title: "Effects", icon: <Blend className="size-4" /> },
   frame: { title: "Frame & position", icon: <Crop className="size-4" /> },
+};
+
+/** Cover pages get cover-specific sheet titles (not page-illustration wording). */
+const COVER_SECTION_META: Partial<
+  Record<ImageEditSection, { title: string; icon: React.ReactNode }>
+> = {
+  refine: { title: "Edit cover", icon: <Sparkles className="size-4" /> },
+  characters: { title: "On this cover", icon: <Users className="size-4" /> },
+  scene: { title: "Cover scene", icon: <Wand2 className="size-4" /> },
+  versions: { title: "Cover versions", icon: <History className="size-4" /> },
 };
 
 /** Card shell shared by every mode: header with an icon/title + close, then content. */
@@ -122,7 +134,11 @@ export function ElementPanel({
   onClose: () => void;
 }) {
   const studio = useStudio();
-  const { selection, textEditSection, imageEditSection } = studio;
+  const { selection } = studio;
+  const textEditSection = useStudioPanelStore((s) => s.textEditSection);
+  const imageEditSection = useStudioPanelStore((s) => s.imageEditSection);
+  const closeTextEdit = useStudioPanelStore((s) => s.closeTextEdit);
+  const closeImageEdit = useStudioPanelStore((s) => s.closeImageEdit);
 
   // Closing an element's inspector always dismisses the whole floating panel
   // (not just the element) — deselect AND clear any pending layers request, so
@@ -189,7 +205,7 @@ export function ElementPanel({
         icon={meta.icon}
         title={meta.title}
         subtitle={studio.pages.find((p) => p.id === pageId)?.label}
-        onClose={() => studio.closeTextEdit()}
+        onClose={closeTextEdit}
       >
         <TextEditPanel
           box={box}
@@ -201,27 +217,48 @@ export function ElementPanel({
     );
   }
 
-  if (selection.kind === "image" && studio.selectedImage && imageEditSection) {
-    const image = studio.selectedImage;
+  // Illustration tools can open on a page before any art/frame exists (Generate).
+  if (
+    imageEditSection &&
+    (selection.kind === "image" || selection.kind === "page") &&
+    "pageId" in selection
+  ) {
     const pageId = selection.pageId;
-    const meta = IMAGE_SECTION_META[imageEditSection];
-    return (
-      <PanelShell
-        icon={meta.icon}
-        title={meta.title}
-        subtitle={studio.pages.find((p) => p.id === pageId)?.label}
-        onClose={() => studio.closeImageEdit()}
-      >
-        <ImageEditPanel
-          pageId={pageId}
-          image={image}
-          section={imageEditSection}
-          onPatch={(patch, opts) => studio.patchImage(pageId, image.id, patch, opts)}
-          onGestureEnd={studio.endHistoryGesture}
-          onAlign={(edge) => studio.alignImage(pageId, image.id, edge)}
-        />
-      </PanelShell>
-    );
+    const image =
+      selection.kind === "image"
+        ? studio.selectedImage
+        : (studio.pageDesign(pageId).images ?? []).find((im) => im.kind === "illustration") ??
+          null;
+    const needsFrame = imageEditSection === "effects" || imageEditSection === "frame";
+    if (!needsFrame || image) {
+      const coverMode = subjectForPage(pageId, studio.project)?.kind === "cover";
+      const meta =
+        (coverMode ? COVER_SECTION_META[imageEditSection] : null) ??
+        IMAGE_SECTION_META[imageEditSection];
+      return (
+        <PanelShell
+          icon={meta.icon}
+          title={meta.title}
+          subtitle={studio.pages.find((p) => p.id === pageId)?.label}
+          onClose={closeImageEdit}
+        >
+          <ImageEditPanel
+            pageId={pageId}
+            image={image}
+            section={imageEditSection}
+            onPatch={(patch, opts) => {
+              if (!image) return;
+              studio.patchImage(pageId, image.id, patch, opts);
+            }}
+            onGestureEnd={studio.endHistoryGesture}
+            onAlign={(edge) => {
+              if (!image) return;
+              studio.alignImage(pageId, image.id, edge);
+            }}
+          />
+        </PanelShell>
+      );
+    }
   }
 
   if (selection.kind === "shape" && studio.selectedShape) {
@@ -540,6 +577,8 @@ export function elementPanelHasContent(
   if (toolPanel) return true;
   if (selection.kind === "box" && textEditOpen) return true;
   if (selection.kind === "image" && imageEditOpen) return true;
+  // Generate / cast tools before any illustration frame exists.
+  if (selection.kind === "page" && imageEditOpen) return true;
   return selection.kind === "shape";
 }
 

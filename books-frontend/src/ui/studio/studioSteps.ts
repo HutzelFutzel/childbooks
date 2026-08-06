@@ -2,11 +2,10 @@
  * The guided studio flow:
  *
  *   Primary:  Story → Design → Order
- *   Design:   Cast (characters & places) → Pages (layout & art)
+ *   Design:   Style → Cast → Pages (left chapter accordion)
  *
- * Cast and Pages are substeps under Design (not peer top-level steps). Pages
- * stays locked until cast references are complete. Internal `StudioStep` ids
- * stay `anchors` / `edit` so stage components and stores don't rename.
+ * Style gates Cast; Cast gates Pages. Internal `StudioStep` ids stay
+ * `anchors` / `edit` so stage components and stores don't rename.
  */
 import type { Project } from "../../core/types";
 import { currentAnchorImage, currentIllustration } from "../../state/ai";
@@ -18,10 +17,15 @@ export type StudioStep = "story" | "anchors" | "edit" | "order";
 /** Top-level rail destinations. */
 export type PrimaryStep = "story" | "design" | "order";
 
-/** Substeps under Design. */
+/** Chapters under Design (left accordion). */
+export type DesignChapter = "style" | "cast" | "pages";
+
+/** Cast / Pages map onto studio steps (Style is overlay state on anchors). */
 export type DesignSubstep = "cast" | "pages";
 
 export const PRIMARY_STEPS: PrimaryStep[] = ["story", "design", "order"];
+
+export const DESIGN_CHAPTERS: DesignChapter[] = ["style", "cast", "pages"];
 
 export const DESIGN_SUBSTEPS: DesignSubstep[] = ["cast", "pages"];
 
@@ -70,8 +74,30 @@ export function stepForDesignSubstep(sub: DesignSubstep): StudioStep {
   return sub === "cast" ? "anchors" : "edit";
 }
 
+export function stepForDesignChapter(ch: DesignChapter): StudioStep {
+  if (ch === "pages") return "edit";
+  return "anchors";
+}
+
+/**
+ * Active Design chapter from step + style gate.
+ * `styleReady === false` forces Style; reopen uses `styleSetupOpen`.
+ * Legacy projects with `styleReady === undefined` skip the style gate.
+ */
+export function designChapterOf(
+  step: StudioStep,
+  styleReady: boolean | undefined,
+  styleSetupOpen: boolean,
+): DesignChapter {
+  if (styleReady === false || styleSetupOpen) return "style";
+  if (step === "edit") return "pages";
+  return "cast";
+}
+
 /** Where Design should open: Cast until references are done, then Pages. */
 export function preferredDesignStep(project: Project): StudioStep {
+  // New books land on anchors so the Style chapter can gate Cast.
+  if (project.config.styleReady === false) return "anchors";
   return computeProgress(project).anchors.done ? "edit" : "anchors";
 }
 

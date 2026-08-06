@@ -4,7 +4,6 @@
  * Effects open the docked ImageEditPanel.
  */
 import { useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import {
   Crop,
   History,
@@ -22,12 +21,11 @@ import { cn } from "../lib/cn";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { anchorThumbBlobId } from "../../state/ai";
 import { useStudio } from "../studio/StudioContext";
-import { usePageIllustration } from "../studio/usePageIllustration";
+import { useStudioPanelStore } from "../studio/studioPanelStore";
+import { subjectForPage, usePageIllustration } from "../studio/usePageIllustration";
 import type { ImageEditSection } from "./ImageEditPanel";
-import {
-  floatingBarPortalProps,
-  type FloatingBarPlacement,
-} from "./floatingBarPlacement";
+import { FloatingBarPortal } from "./FloatingBarPortal";
+import type { FloatingBarPlacement } from "./floatingBarPlacement";
 import { PortalToolbarFlyout } from "./toolbarFlyout";
 
 export type ImageToolbarChrome = {
@@ -35,6 +33,8 @@ export type ImageToolbarChrome = {
   pageId: string;
   onPatch: (patch: Partial<ImageElement>, opts?: { coalesce?: string }) => void;
   onCrop: () => void;
+  /** False when the illustration frame has no pixels yet (empty page). */
+  canCrop?: boolean;
   onDuplicate: () => void;
   onDelete: () => void;
   onToggleLock: () => void;
@@ -55,30 +55,32 @@ export function ImageStyleBar({
   const isIllustration = chrome.image.kind === "illustration";
   const isFill = chrome.image.fit !== "contain";
   const softFill = effectiveFitBackdrop(chrome.image) === "blur";
-  const portal = floatingBarPortalProps(placement);
+  const canCrop = chrome.canCrop !== false;
 
-  return createPortal(
-    <div
+  return (
+    <FloatingBarPortal
+      placement={placement}
       data-image-style-bar
-      className={portal.className}
-      style={portal.style}
       onMouseDown={(e) => {
         if ((e.target as HTMLElement).closest("input, button, select, textarea, a")) return;
         e.preventDefault();
       }}
     >
       <div className="flex items-center gap-0.5 rounded-xl border border-ink-200 bg-white/95 p-1 shadow-lifted backdrop-blur">
-        <Toggle
-          label={isFill ? "Position picture in frame" : "Crop / resize frame"}
-          active={false}
-          onClick={chrome.onCrop}
-        >
-          <Crop className="size-4" />
-          <span className="hidden px-0.5 text-xs font-medium sm:inline">
-            {isFill ? "Position" : "Crop"}
-          </span>
-        </Toggle>
+        {canCrop && (
+          <Toggle
+            label={isFill ? "Position picture in frame" : "Crop / resize frame"}
+            active={false}
+            onClick={chrome.onCrop}
+          >
+            <Crop className="size-4" />
+            <span className="hidden px-0.5 text-xs font-medium sm:inline">
+              {isFill ? "Position" : "Crop"}
+            </span>
+          </Toggle>
+        )}
 
+        {canCrop && (
         <div className="mx-0.5 inline-flex rounded-lg border border-ink-200">
           <FitBtn
             label="Fill"
@@ -98,6 +100,7 @@ export function ImageStyleBar({
             onClick={() => chrome.onPatch({ fit: "contain" })}
           />
         </div>
+        )}
 
         {!isFill && (
           <Toggle
@@ -135,47 +138,52 @@ export function ImageStyleBar({
           <Trash2 className="size-4" />
         </Toggle>
       </div>
-    </div>,
-    document.body,
+    </FloatingBarPortal>
   );
 }
 
 function IllustrationActions({ chrome }: { chrome: ImageToolbarChrome }) {
-  const { toggleImageEdit, imageEditSection } = useStudio();
+  const openImageEdit = useStudioPanelStore((s) => s.openImageEdit);
+  const toggleImageEdit = useStudioPanelStore((s) => s.toggleImageEdit);
+  const imageEditSection = useStudioPanelStore((s) => s.imageEditSection);
   const illo = usePageIllustration(chrome.pageId);
+  const empty = !illo.cursor;
 
   return (
     <>
-      {!illo.cursor ? (
+      {empty ? (
+        // Open the docked toolbox first — never auto-start a generation from here.
         <Toggle
           label={illo.coverMode ? "Generate cover" : "Generate illustration"}
-          active={false}
-          disabled={illo.generating}
-          onClick={() => void illo.generate()}
+          active={imageEditSection === "refine"}
+          onClick={() => openImageEdit("refine")}
           tone="accent"
         >
-          <Sparkles className={cn("size-4", illo.generating && "animate-spin")} />
+          <Sparkles className="size-4" />
           <span className="hidden px-0.5 text-xs font-medium sm:inline">
-            {illo.coverMode ? "Generate cover" : "Generate"}
+            {illo.coverMode ? "Generate cover" : "Generate illustration"}
           </span>
         </Toggle>
-      ) : null}
-      <Toggle
-        label="Edit illustration"
-        active={imageEditSection === "refine"}
-        onClick={() => toggleImageEdit("refine")}
-      >
-        <Sparkles className="size-4" />
-        <span className="hidden px-0.5 text-xs font-medium sm:inline">Edit</span>
-      </Toggle>
+      ) : (
+        <Toggle
+          label={illo.coverMode ? "Edit cover" : "Edit illustration"}
+          active={imageEditSection === "refine"}
+          onClick={() => toggleImageEdit("refine")}
+        >
+          <Sparkles className="size-4" />
+          <span className="hidden px-0.5 text-xs font-medium sm:inline">Edit</span>
+        </Toggle>
+      )}
+      {/* Cast stays available so you can pick who’s featured before generating. */}
       <CastToggle
         active={imageEditSection === "characters"}
         dirty={illo.isStale}
         anchors={illo.anchors}
         activeIds={illo.activeIds}
+        coverMode={illo.coverMode}
         onClick={() => toggleImageEdit("characters")}
       />
-      {illo.isStale && (
+      {!empty && illo.isStale && (
         <Toggle
           label={
             illo.staleRefAnchors.length > 0
@@ -190,7 +198,7 @@ function IllustrationActions({ chrome }: { chrome: ImageToolbarChrome }) {
           <RefreshCw className={cn("size-4", illo.generating && "animate-spin")} />
         </Toggle>
       )}
-      {!illo.isStale && illo.layoutStale && (
+      {!empty && !illo.isStale && illo.layoutStale && (
         <Toggle
           label="Redraw for layout"
           active={false}
@@ -206,10 +214,14 @@ function IllustrationActions({ chrome }: { chrome: ImageToolbarChrome }) {
 }
 
 function MoreMenu({ chrome }: { chrome: ImageToolbarChrome }) {
-  const { imageEditSection, toggleImageEdit } = useStudio();
+  const { project } = useStudio();
+  const imageEditSection = useStudioPanelStore((s) => s.imageEditSection);
+  const toggleImageEdit = useStudioPanelStore((s) => s.toggleImageEdit);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const isIllustration = chrome.image.kind === "illustration";
+  const coverMode =
+    isIllustration && subjectForPage(chrome.pageId, project)?.kind === "cover";
 
   const openPanel = (section: ImageEditSection) => {
     toggleImageEdit(section);
@@ -236,7 +248,7 @@ function MoreMenu({ chrome }: { chrome: ImageToolbarChrome }) {
           <>
             <MenuRow
               icon={<Wand2 className="size-4" />}
-              label="Scene"
+              label={coverMode ? "Cover scene" : "Scene"}
               active={imageEditSection === "scene"}
               onClick={() => openPanel("scene")}
             />
@@ -254,12 +266,14 @@ function MoreMenu({ chrome }: { chrome: ImageToolbarChrome }) {
           active={imageEditSection === "effects"}
           onClick={() => openPanel("effects")}
         />
-        <MenuRow
-          icon={<Crop className="size-4" />}
-          label="Frame & position"
-          active={imageEditSection === "frame"}
-          onClick={() => openPanel("frame")}
-        />
+        {chrome.canCrop !== false && (
+          <MenuRow
+            icon={<Crop className="size-4" />}
+            label="Frame & position"
+            active={imageEditSection === "frame"}
+            onClick={() => openPanel("frame")}
+          />
+        )}
         <div className="my-1 border-t border-ink-100" />
         <MenuRow
           icon={<Lock className="size-4" />}
@@ -314,12 +328,14 @@ function CastToggle({
   dirty,
   anchors,
   activeIds,
+  coverMode,
   onClick,
 }: {
   active: boolean;
   dirty: boolean;
   anchors: Anchor[];
   activeIds: string[];
+  coverMode?: boolean;
   onClick: () => void;
 }) {
   const activeAnchors = activeIds
@@ -329,8 +345,12 @@ function CastToggle({
   const count = activeAnchors.length;
   const label =
     count === 0
-      ? "In this picture — add characters & places"
-      : `In this picture · ${count}`;
+      ? coverMode
+        ? "On this cover — add characters & places"
+        : "In this picture — add characters & places"
+      : coverMode
+        ? `On this cover · ${count}`
+        : `In this picture · ${count}`;
 
   return (
     <button

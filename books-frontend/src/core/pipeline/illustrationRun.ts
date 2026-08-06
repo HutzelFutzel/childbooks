@@ -41,6 +41,7 @@ import {
 import { mapSettled } from "./concurrency";
 import {
   buildAnchorSwapPrompt,
+  buildCoverContinuationPrompt,
   buildIllustrationPrompt,
   buildModifySubjectPrompt,
   buildRemoveRegionPrompt,
@@ -48,6 +49,7 @@ import {
   generateIllustrationImage,
 } from "./illustration";
 import { embeddedPairsAmong } from "../book/anchorGraph";
+import { artStyleKey } from "../prompts/style";
 import { paginate } from "./pagination";
 import type { CompositionMode, LayoutPlan, PageSide } from "../book/layouts";
 import { planPageLayout } from "../book/pageLayout";
@@ -120,6 +122,21 @@ export interface CompositeOps {
       heightFraction: number;
     }[];
   }): Promise<{ base64: string; mimeType: string } | null>;
+  /**
+   * Cover-pair continuation only: crop a strip from the front cover's LEFT
+   * (spine-adjacent) edge and paste it flush against the RIGHT edge of a
+   * `width`x`height` canvas, returning that seed plus a mask that protects
+   * the strip (opaque) and marks the rest as a hole to outpaint (transparent).
+   * Optional; hosts without `sharp`-style pixel access simply can't offer the
+   * genuine-continuation outpaint path (see `renderCoverContinuation`).
+   */
+  buildCoverContinuationSeed?(input: {
+    frontBase64: string;
+    frontMime: string;
+    width: number;
+    height: number;
+    seamFrac?: number;
+  }): Promise<{ seedBase64: string; seedMime: string; maskBase64: string; maskMime: string } | null>;
 }
 
 /** Injected capabilities the orchestration needs from its host platform. */
@@ -177,6 +194,13 @@ export interface IllustrationRunOptions {
   useReference?: boolean;
   /** Inpainting mask (transparent hole = region to change). Forces composition ref. */
   mask?: ReferenceImage;
+  /**
+   * Art-style transfer: re-render this page's current artwork in the book's new
+   * style, changing nothing else. Implies a composition reference, sends every
+   * subject's (already restyled) sheet, and skips every surgical in-place path —
+   * those keep the untouched pixels, which would leave the page half-restyled.
+   */
+  restyle?: boolean;
   signal?: AbortSignal;
 }
 
@@ -202,6 +226,8 @@ export interface IllustrationRender {
   /** The layout / composition mode this artwork was composed for. */
   layoutId?: string;
   compositionMode?: CompositionMode;
+  /** Art style these pixels were drawn in (see `artStyleKey`). */
+  artStyleKey?: string;
 }
 
 /** Wrap a render into a (new or extended) version tree. Pure. */
@@ -219,6 +245,7 @@ export function applyIllustrationRender(
     ...(render.depicted ? { depicted: render.depicted } : {}),
     ...(render.layoutId ? { layoutId: render.layoutId } : {}),
     ...(render.compositionMode ? { compositionMode: render.compositionMode } : {}),
+    ...(render.artStyleKey ? { artStyleKey: render.artStyleKey } : {}),
   };
   const next = tree
     ? addVersion(tree, content, {
@@ -1053,7 +1080,11 @@ export async function renderIllustration(
   // one is model knowledge, not a provider assumption, so it comes from the
   // capability table; models without it fall through to a whole-page,
   // composition-preserving regeneration.
-  const surgicalCapable = capabilitiesFor(imageModel, env.modelCapabilities).maskEditing;
+  // A restyle must repaint every pixel, so the in-place paths are off: they
+  // keep everything outside the edited region untouched, which is precisely the
+  // artwork that has to change.
+  const surgicalCapable =
+    capabilitiesFor(imageModel, env.modelCapabilities).maskEditing && !options.restyle;
 
   // Resolve the spread's anchors in their declared order, so reference images
   // line up with how they're enumerated in the prompt.
@@ -1068,10 +1099,12 @@ export async function renderIllustration(
   // For inpainting, the mask must align to the FIRST reference image, so we
   // send only the page image (no anchor references) and rely on prompt-locking.
   const inpaint = Boolean(options.mask);
+  // A restyle re-renders the existing artwork, so it always needs it as a base.
+  const restyle = Boolean(options.restyle) && !inpaint;
 
   // A mask implies inpainting the current page, so we always need its image as
   // the final (here, only) composition reference.
-  const wantCompositionRef = options.useReference || inpaint;
+  const wantCompositionRef = options.useReference || inpaint || restyle;
 
   // Load the previous illustration FIRST: its recorded provenance decides which
   // subjects actually changed, which in turn decides which reference sheets are
@@ -1225,6 +1258,10 @@ export async function renderIllustration(
   if (!inpaint) {
     const needsSheet = (a: Anchor): boolean => {
       if (!hasCompositionRef) return true; // fresh render: send everything
+      // A restyle redraws the whole picture, so every subject needs its (newly
+      // restyled) sheet. Leaving any in `keptAnchors` would emit the "keep
+      // exactly as drawn, do not restyle" clause and cancel the transfer.
+      if (restyle) return true;
       if (changedDesignIds.has(a.id)) return true;
       if (!prevById.has(a.id)) return true; // newly added subject
       // The edit targets this subject — its sheet keeps it on-model, and it
@@ -1324,7 +1361,9 @@ export async function renderIllustration(
     references.push({
       base64: compositionRefPayload.base64,
       mimeType: compositionRefPayload.mimeType,
-      role: "composition",
+      // `composition` tells the model to keep the previous colors — right for an
+      // edit, wrong for a restyle, where the rendering is what must change.
+      role: restyle ? "restyleBase" : "composition",
     });
   }
 
@@ -1517,6 +1556,7 @@ export async function renderIllustration(
     hasScaleChart,
     hasCompositionRef,
     maskMode,
+    restyle,
     // Cover-only: bake the title/subtitle/author typography into the artwork.
     bakeText: spread.bakeText,
     coverTitle: spread.coverTitle,
@@ -1542,6 +1582,7 @@ export async function renderIllustration(
       providerId: imageModel.provider,
       references: references.length ? references : undefined,
       mask: maskMode ? options.mask : undefined,
+      allowText: Boolean(spread.bakeText),
       signal: options.signal,
     }),
   );
@@ -1570,7 +1611,7 @@ export async function renderIllustration(
 
   // Version label shows the canonical form so the user can see how their edit
   // was understood (e.g. "make Arthur's hair blue" for "make athrurs hair blue").
-  const label = promptEdit?.trim() || (tree ? "Variation" : "Initial");
+  const label = restyle ? "New style" : promptEdit?.trim() || (tree ? "Variation" : "Initial");
   const { image: bound, depicted } = await bindAndRepairPage({
     anchors,
     embeddedPairs,
@@ -1595,159 +1636,9 @@ export async function renderIllustration(
     ...(layoutPlan
       ? { layoutId: layoutPlan.layoutId, compositionMode: layoutPlan.mode }
       : {}),
-  };
-}
-
-/** Inputs for a single wrap-cover generation (front + back as one artwork). */
-export interface CoverWrapInput {
-  /** Front-cover art brief (renders into the RIGHT half). */
-  frontIllustration: string;
-  /** Back-cover art brief (renders into the LEFT half). */
-  backIllustration: string;
-  /** Union of the anchors both covers should feature (for consistency). */
-  anchorIds?: string[];
-  anchorNames?: string[];
-  /** Bake the title/subtitle/author typography into the front (right) half. */
-  bakeText?: boolean;
-  coverTitle?: string;
-  coverSubtitle?: string;
-  coverAuthor?: string;
-}
-
-/** The raw (unsaved) product of one wrap-cover render, for the host to split. */
-export interface CoverWrapImage {
-  base64: string;
-  mimeType: string;
-  prompt: string;
-  references: ReferenceUse[];
-}
-
-/**
- * Render a single continuous "wrap" cover — the back cover on the LEFT, the
- * front cover on the RIGHT, painted as one seamless wide scene — so the two
- * covers are guaranteed to match. The host then slices it in half to get the
- * two panels (see `splitWrapCover`), which both keeps costs to ONE generation
- * and gives real visual continuity instead of two separately-prompted images.
- *
- * Returns the raw image bytes (NOT saved) plus provenance, because the split +
- * per-panel upscale + blob persistence happen on the host where an image
- * library is available.
- */
-export async function renderCoverWrapImage(
-  project: Project,
-  input: CoverWrapInput,
-  env: PipelineEnv,
-  signal?: AbortSignal,
-): Promise<CoverWrapImage> {
-  const bake = Boolean(input.bakeText && (input.coverTitle ?? "").trim());
-  const wrapBrief = [
-    "This is ONE continuous WRAP-AROUND cover for a printed book: the LEFT half is the BACK cover and the RIGHT half is the FRONT cover, painted as a single seamless scene that flows across the full width. Do NOT draw a seam, divider, fold or border down the centre.",
-    input.frontIllustration.trim() ? `FRONT cover (RIGHT half): ${input.frontIllustration.trim()}` : "",
-    input.backIllustration.trim() ? `BACK cover (LEFT half): ${input.backIllustration.trim()}` : "",
-    "Place the main character(s) and the focal point in the RIGHT half (front cover). Let the LEFT half (back cover) continue the SAME setting, sky, colour palette, lighting and art style more calmly, leaving room for a short blurb. Keep the lower-LEFT corner calm and simple — plain, uncluttered background with no objects, symbols or graphics there.",
-    bake ? "Render the title text ONLY in the RIGHT half (front cover); do not place any title on the left (back) half." : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  const spread: ScreenplaySpread = {
-    id: "cover-wrap",
-    kind: "spread",
-    text: "",
-    illustration: wrapBrief,
-    layoutNote: "",
-    anchorIds: input.anchorIds ?? [],
-    anchorNames: input.anchorNames,
-    textMode: bake ? "in-image" : "overlay",
-    ...(bake
-      ? {
-          bakeText: true,
-          coverTitle: input.coverTitle,
-          coverSubtitle: input.coverSubtitle,
-          coverAuthor: input.coverAuthor,
-        }
-      : {}),
-  };
-
-  const byId = new Map((project.anchors ?? []).map((a) => [a.id, a]));
-  const effectiveIds = effectiveAnchorIds(project.anchors, spread);
-  const anchors = effectiveIds
-    .map((id) => byId.get(id))
-    .filter((a): a is Anchor => Boolean(a));
-
-  const references: ReferenceImage[] = [];
-  const referencedAnchors: Anchor[] = [];
-  const describedAnchors: Anchor[] = [];
-  const [styleRef, anchorData] = await Promise.all([
-    loadStyleReference(env, project.config),
-    Promise.all(
-      anchors.map(async (a) => {
-        const img = currentAnchorImage(a);
-        const raw = img ? await env.loadBlob(img.blobId) : null;
-        return raw ? await asRefPayload(env, raw) : null;
-      }),
-    ),
-  ]);
-  let hasStyleRef = false;
-  if (styleRef) {
-    references.push(styleRef);
-    hasStyleRef = true;
-  }
-  anchors.forEach((a, i) => {
-    if (!currentAnchorImage(a)) {
-      describedAnchors.push(a);
-      return;
-    }
-    const data = anchorData[i];
-    if (data) {
-      references.push({
-        base64: data.base64,
-        mimeType: data.mimeType,
-        label: `${a.name} (${a.description})`,
-        role: "subject",
-      });
-      referencedAnchors.push(a);
-    } else {
-      describedAnchors.push(a);
-    }
-  });
-
-  const prompt = buildIllustrationPrompt({
-    spread,
-    config: project.config,
-    referencedAnchors,
-    describedAnchors,
-    hasStyleRef,
-    hasCompositionRef: false,
-    maskMode: false,
-    bakeText: spread.bakeText,
-    coverTitle: spread.coverTitle,
-    coverSubtitle: spread.coverSubtitle,
-    coverAuthor: spread.coverAuthor,
-    isCover: true,
-    prompts: env.prompts,
-  });
-
-  const imageModel = env.models.imageModel;
-  const key = env.apiKeyFor(imageModel.provider);
-  const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
-  const result = await runStep("image", () =>
-    generateIllustrationImage({
-      prompt,
-      size: chooseImageSize("spread", project.config),
-      creds: { apiKey: key },
-      model: imageModel.id,
-      providerId: imageModel.provider,
-      references: references.length ? references : undefined,
-      signal,
-    }),
-  );
-
-  return {
-    base64: result.base64,
-    mimeType: result.mimeType,
-    prompt,
-    references: currentReferenceUses(project.anchors, effectiveIds),
+    // Only whole-page renders carry the stamp: the surgical paths above leave
+    // most pixels in whatever style they were already drawn in.
+    artStyleKey: artStyleKey(project.config.artStyle),
   };
 }
 
@@ -1764,4 +1655,101 @@ export async function runIllustration(
   const render = await renderIllustration(project, spread, options, env);
   if (!render) return null;
   return applyIllustrationRender(project.illustrations?.[spread.id], render);
+}
+
+/**
+ * Render a back cover as a genuine outpaint continuation of an already-
+ * rendered front cover, so the two form one physically continuous scene
+ * across the spine instead of two independently-generated pictures that
+ * merely resemble each other.
+ *
+ * Unlike a normal render, this does NOT hand the model a loose reference
+ * image + "please continue this" instruction — it crops a strip of the
+ * front's REAL pixels from its spine-adjacent (left) edge, seeds it onto the
+ * back cover's own spine-adjacent (right) edge, and asks the model to extend
+ * that exact strip into the rest of the frame via a masked edit. The seam
+ * strip is then pasted back byte-identical from the seed (not just trusted to
+ * survive the edit unchanged), so the boundary is pixel-continuous by
+ * construction, not merely stylistically similar.
+ *
+ * This intentionally skips the whole anchor/reference machinery `
+ * renderIllustration` has: an outpaint from real edge pixels doesn't need (or
+ * benefit from) character sheets, size charts, or the previous-version
+ * composition ref — those all assume a *new* generation being steered toward
+ * a described scene, not a literal pixel extension of another image.
+ *
+ * Only works on a mask-capable, sharp-backed host (`env.composite
+ * .buildCoverContinuationSeed`) — callers should resolve a mask-capable image
+ * model (see `capabilitiesFor(...).maskEditing`) before calling; this throws
+ * a friendly error otherwise rather than silently degrading to a worse result.
+ */
+export async function renderCoverContinuation(
+  project: Project,
+  backSpread: ScreenplaySpread,
+  front: { base64: string; mimeType: string },
+  env: PipelineEnv,
+  options: { signal?: AbortSignal } = {},
+): Promise<IllustrationRender | null> {
+  if (backSpread.placeholder) return null;
+
+  const imageModel = env.models.imageModel;
+  if (
+    !capabilitiesFor(imageModel, env.modelCapabilities).maskEditing ||
+    !env.composite.buildCoverContinuationSeed
+  ) {
+    throw new Error(
+      "A perfectly continuous back cover needs a mask-capable (High-Quality) image model.",
+    );
+  }
+  const key = env.apiKeyFor(imageModel.provider);
+  const size = chooseImageSize(backSpread.kind, project.config);
+  const [width, height] = size.split("x").map((n) => parseInt(n, 10));
+
+  const seedResult = await env.composite.buildCoverContinuationSeed({
+    frontBase64: front.base64,
+    frontMime: front.mimeType,
+    width,
+    height,
+  });
+  if (!seedResult) throw new Error("Could not prepare the front cover's edge for continuation.");
+
+  const prompt = buildCoverContinuationPrompt({ config: project.config, prompts: env.prompts });
+  const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
+  const result = await runStep("image", () =>
+    generateIllustrationImage({
+      prompt,
+      size,
+      creds: { apiKey: key },
+      model: imageModel.id,
+      providerId: imageModel.provider,
+      references: [
+        { base64: seedResult.seedBase64, mimeType: seedResult.seedMime, role: "composition" },
+      ],
+      mask: { base64: seedResult.maskBase64, mimeType: seedResult.maskMime },
+      signal: options.signal,
+    }),
+  );
+
+  // Guarantee the seam strip is byte-identical to the front's real pixels —
+  // the whole point of this path — rather than trusting the model to have
+  // left the "protected" region alone.
+  const composited = await env.composite.compositeMaskedRegion({
+    originalBase64: seedResult.seedBase64,
+    originalMime: seedResult.seedMime,
+    editedBase64: result.base64,
+    editedMime: result.mimeType,
+    maskBase64: seedResult.maskBase64,
+  });
+
+  const blobId = await env.saveImage(composited.base64, composited.mimeType);
+  return {
+    blobId,
+    mimeType: composited.mimeType,
+    // No anchor references: the continuation is driven entirely by the
+    // front's real pixels, not by any subject sheet.
+    references: [],
+    prompt,
+    label: "Initial",
+    textMode: backSpread.textMode,
+  };
 }

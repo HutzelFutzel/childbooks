@@ -7,6 +7,7 @@
  */
 import {
   createContext,
+  startTransition,
   useCallback,
   useContext,
   useEffect,
@@ -46,13 +47,12 @@ import {
 import { getPreset } from "../design/presets";
 import { newShapeId, shapeStyleDefaults } from "../design/shapes";
 import { fitBoxHeightPct, fitFontSizePct } from "../design/textFit";
-import type { TextEditSection } from "../design/TextEditPanel";
-import type { ImageEditSection } from "../design/ImageEditPanel";
 import type { SpanRef } from "../design/TextBoxView";
 import { notify, toast } from "../lib/notify";
 import { buildDisplaySpreads, type DisplaySpread, type Entry, type SpreadSide } from "./spreadModel";
 import type { PageSubject } from "./PageEditorCard";
 import { computeProgress, type StudioStep } from "./studioSteps";
+import { useStudioPanelStore } from "./studioPanelStore";
 import {
   applyStudioSnapshot,
   bindStudioProjectCommit,
@@ -62,9 +62,7 @@ import {
 
 export type { TextEditSection } from "../design/TextEditPanel";
 export type { ImageEditSection } from "../design/ImageEditPanel";
-
-/** Docked tools opened from the Add dock (mutually exclusive). */
-export type StudioToolPanel = "layers" | "view" | "setup";
+export type { StudioToolPanel } from "./studioPanelStore";
 
 export type Selection =
   | { kind: "none" }
@@ -75,6 +73,25 @@ export type Selection =
   | { kind: "anchor"; anchorId: string };
 
 export type AlignEdge = "left" | "hcenter" | "right" | "top" | "vcenter" | "bottom";
+
+/** Push a linked cover overlay edit into the project / screenplay fields. */
+/** True when the page has saved AI art (a blob in the illustrations tree). */
+function pageHasIllustrationArt(project: Project | null | undefined, pageId: string): boolean {
+  if (!project) return false;
+  const tree = project.illustrations?.[pageId];
+  return Boolean(tree && getCursor(tree).content.blobId);
+}
+
+function syncCoverLinkedField(
+  projectId: string,
+  role: TextBox["role"] | undefined,
+  text: string,
+) {
+  if (!role) return;
+  const store = useProjectsStore.getState();
+  if (role === "book-title") void store.setBookTitle(projectId, text);
+  else if (role === "book-subtitle") void store.setCoverSubtitle(projectId, text);
+}
 
 /** Options for design mutations that participate in undo/redo. */
 export type HistoryOpts = {
@@ -126,49 +143,15 @@ interface StudioContextValue {
   selectedImage: ImageElement | null;
 
   /**
-   * Canva-style docked edit panel for text boxes (Effects / Background / More).
-   * Opened from the floating toolbar so controls never cover the selection.
-   */
-  textEditSection: TextEditSection | null;
-  openTextEdit: (section: TextEditSection) => void;
-  /** Open section, or close the dock if that section is already open. */
-  toggleTextEdit: (section: TextEditSection) => void;
-  closeTextEdit: () => void;
-
-  /**
-   * Canva-style docked edit panel for images / page illustrations (Refine,
-   * Characters, Scene, Versions, Effects, Frame). Opened from ImageStyleBar.
-   */
-  imageEditSection: ImageEditSection | null;
-  openImageEdit: (section: ImageEditSection) => void;
-  /** Open section, or close the dock if that section is already open. */
-  toggleImageEdit: (section: ImageEditSection) => void;
-  closeImageEdit: () => void;
-  /**
-   * Optional blocker for leaving the image edit sheet (e.g. dirty cast draft).
-   * Return true to allow immediately; return false and call `proceed` later
-   * after confirm. Pass null to clear.
-   */
-  setImageEditCloseGuard: (
-    guard: ((proceed: () => void) => boolean) | null,
-  ) => void;
-
-  /**
-   * Docked tool panel from the Add dock (Arrange / View / Setup). Opening one
-   * dismisses edit sheets so the tool stays reachable; selection is kept.
-   */
-  toolPanel: StudioToolPanel | null;
-  openToolPanel: (panel: StudioToolPanel) => void;
-  closeToolPanel: () => void;
-  toggleToolPanel: (panel: StudioToolPanel) => void;
-  /** Convenience: open the Arrange (layers) panel. */
-  openLayersPanel: () => void;
-
-  /**
    * Ensure the page's full-bleed AI art is a selectable ImageElement and select
    * it. Optionally enter crop/reframe (used by double-click / Crop).
+   * Without art (and without `createIfMissing`), selects the page and removes
+   * any empty ghost illustration frames — pages are not croppable.
    */
-  selectIllustration: (pageId: string, opts?: { enterReframe?: boolean }) => void;
+  selectIllustration: (
+    pageId: string,
+    opts?: { enterReframe?: boolean; createIfMissing?: boolean },
+  ) => void;
   /** Image id the stage should auto-enter reframe for (one-shot). */
   pendingReframeImageId: string | null;
   clearPendingReframe: () => void;
@@ -232,7 +215,10 @@ interface StudioContextValue {
   duplicateImage: (pageId: string, imageId: string) => void;
   alignImage: (pageId: string, imageId: string, edge: AlignEdge) => void;
   /** Turn the page's generated illustration into a movable/scalable element. */
-  makeIllustrationEditable: (pageId: string, opts?: { enterReframe?: boolean }) => void;
+  makeIllustrationEditable: (
+    pageId: string,
+    opts?: { enterReframe?: boolean; createIfMissing?: boolean },
+  ) => void;
 
   // layers (page-scoped, across all element kinds)
   moveLayer: (pageId: string, id: string, dir: -1 | 1) => void;
@@ -325,6 +311,14 @@ interface StudioContextValue {
   designSetupOpen: boolean;
   openDesignSetup: () => void;
   closeDesignSetup: () => void;
+
+  /**
+   * Art-style gate / editor for Design · Cast. Forced open when
+   * `config.styleReady === false`; otherwise opened from the Cast toolbar.
+   */
+  styleSetupOpen: boolean;
+  openStyleSetup: () => void;
+  closeStyleSetup: () => void;
 }
 
 /** Highest z across all elements on a page (text boxes + shapes + images). */
@@ -475,9 +469,8 @@ export function StudioProvider({
   const setDesign = useProjectsStore((s) => s.setDesign);
 
   const [selection, setSelection] = useState<Selection>({ kind: "none" });
-  const [textEditSection, setTextEditSection] = useState<TextEditSection | null>(null);
-  const [imageEditSection, setImageEditSection] = useState<ImageEditSection | null>(null);
-  const [toolPanel, setToolPanel] = useState<StudioToolPanel | null>(null);
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
   /** When set, PageStage should auto-enter reframe for this illustration image id. */
   const [pendingReframeImageId, setPendingReframeImageId] = useState<string | null>(null);
   /**
@@ -493,6 +486,7 @@ export function StudioProvider({
   const [busy, setBusy] = useState(false);
   const [step, setStepRaw] = useState<StudioStep>(initialStep);
   const [designSetupOpen, setDesignSetupOpen] = useState(false);
+  const [styleSetupOpen, setStyleSetupOpen] = useState(false);
   const [snap, setSnap] = useState(true);
   const [grid, setGrid] = useState(false);
   const [guides, setGuides] = useState(true);
@@ -518,7 +512,12 @@ export function StudioProvider({
   // project that's no longer active and spam errors.
   useEffect(() => () => genAbort.current?.abort(), []);
 
-  const pages = useMemo(() => buildDesignPages(project), [project]);
+  // Rebuild pages only when layout inputs change — not on every design text patch.
+  const pages = useMemo(
+    () => buildDesignPages(project),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [project.screenplay, project.title, project.config, project.illustrations],
+  );
   const design = project.design ?? null;
 
   // --- "what's on screen" resolution (drives paste-in-place) --------------
@@ -602,28 +601,6 @@ export function StudioProvider({
     void setDesign({ ...design, version: DESIGN_VERSION, pages: nextPages });
   }, [design, pages, project, setDesign]);
 
-  // The project title is the single source of truth for the front cover: keep
-  // the linked "book-title" overlay box mirroring it, so the title on the cover
-  // can never drift from the book's real title.
-  useEffect(() => {
-    if (!design) return;
-    const page = design.pages[COVER_FRONT_ID];
-    if (!page) return;
-    let changed = false;
-    const textBoxes = page.textBoxes.map((b) => {
-      if (b.role !== "book-title") return b;
-      if (textFromParagraphs(b.paragraphs) === project.title) return b;
-      changed = true;
-      return { ...b, paragraphs: wordParagraphs(project.title) };
-    });
-    if (changed) {
-      void setDesign({
-        ...design,
-        pages: { ...design.pages, [COVER_FRONT_ID]: { ...page, textBoxes } },
-      });
-    }
-  }, [design, project.title, setDesign]);
-
   // Guarded step navigation: EVERY "go to step X" affordance (the rail, the
   // canvas "Order & print" button, the anchors "Design the pages" button, …)
   // goes through this one gate, so nothing can jump past the rail's own locks.
@@ -666,92 +643,14 @@ export function StudioProvider({
 
   const openSetup = useCallback(() => setStep("story"), [setStep]);
   const closeDesignSetup = useCallback(() => setDesignSetupOpen(false), []);
+  const openStyleSetup = useCallback(() => setStyleSetupOpen(true), []);
+  const closeStyleSetup = useCallback(() => setStyleSetupOpen(false), []);
 
   const select = useCallback((sel: Selection) => {
     setSelection(sel);
-    if (sel.kind !== "box") setTextEditSection(null);
-    if (sel.kind !== "image") setImageEditSection(null);
+    const kind = sel.kind === "box" ? "box" : sel.kind === "image" ? "image" : "other";
+    useStudioPanelStore.getState().onSelectionKind(kind);
   }, []);
-
-  const openTextEdit = useCallback((section: TextEditSection) => {
-    setTextEditSection(section);
-    setImageEditSection(null);
-    setToolPanel(null);
-  }, []);
-  const closeTextEdit = useCallback(() => setTextEditSection(null), []);
-  const toggleTextEdit = useCallback(
-    (section: TextEditSection) => {
-      if (textEditSection === section) {
-        setTextEditSection(null);
-        return;
-      }
-      openTextEdit(section);
-    },
-    [textEditSection, openTextEdit],
-  );
-
-  const imageEditCloseGuard = useRef<((proceed: () => void) => boolean) | null>(null);
-  const setImageEditCloseGuard = useCallback(
-    (guard: ((proceed: () => void) => boolean) | null) => {
-      imageEditCloseGuard.current = guard;
-    },
-    [],
-  );
-
-  const runWithImageEditGuard = useCallback((proceed: () => void) => {
-    const guard = imageEditCloseGuard.current;
-    if (guard && !guard(proceed)) return;
-    proceed();
-  }, []);
-
-  const openImageEdit = useCallback(
-    (section: ImageEditSection) => {
-      // Re-selecting the open section is a no-op (don't trip the dirty guard).
-      if (imageEditSection === section) return;
-      runWithImageEditGuard(() => {
-        setImageEditSection(section);
-        setTextEditSection(null);
-        setToolPanel(null);
-      });
-    },
-    [runWithImageEditGuard, imageEditSection],
-  );
-  const closeImageEdit = useCallback(() => {
-    runWithImageEditGuard(() => setImageEditSection(null));
-  }, [runWithImageEditGuard]);
-  const toggleImageEdit = useCallback(
-    (section: ImageEditSection) => {
-      if (imageEditSection === section) {
-        closeImageEdit();
-        return;
-      }
-      openImageEdit(section);
-    },
-    [imageEditSection, closeImageEdit, openImageEdit],
-  );
-
-  const openToolPanel = useCallback(
-    (panel: StudioToolPanel) => {
-      runWithImageEditGuard(() => {
-        setToolPanel(panel);
-        setTextEditSection(null);
-        setImageEditSection(null);
-      });
-    },
-    [runWithImageEditGuard],
-  );
-  const closeToolPanel = useCallback(() => setToolPanel(null), []);
-  const toggleToolPanel = useCallback(
-    (panel: StudioToolPanel) => {
-      if (toolPanel === panel) {
-        setToolPanel(null);
-        return;
-      }
-      openToolPanel(panel);
-    },
-    [toolPanel, openToolPanel],
-  );
-  const openLayersPanel = useCallback(() => openToolPanel("layers"), [openToolPanel]);
 
   /**
    * First-time gate uses the full-page flow; later visits toggle the docked
@@ -765,17 +664,15 @@ export function StudioProvider({
       setDesignSetupOpen(true);
       return;
     }
-    toggleToolPanel("setup");
-  }, [project.id, project.config.designReady, toggleToolPanel]);
+    useStudioPanelStore.getState().toggleToolPanel("setup");
+  }, [project.id, project.config.designReady]);
 
   // Entering/leaving focused edit clears element selection so the inspector
   // never shows controls for an element whose editor is no longer on screen.
   const setEditingDisp = useCallback((id: string | null) => {
     setEditingDispId(id);
     setSelection({ kind: "none" });
-    setTextEditSection(null);
-    setImageEditSection(null);
-    setToolPanel(null);
+    useStudioPanelStore.getState().reset();
   }, []);
 
   const setAnchorGenerating = useCallback((id: string, on: boolean) => {
@@ -797,10 +694,35 @@ export function StudioProvider({
 
   const endHistoryGesture = useCallback(() => {
     coalesceKey.current = null;
-  }, []);
+    // Finish a canvas text-edit session: push linked cover fields into the
+    // project so the cover toolbox mirrors what was typed on the page.
+    const sel = selectionRef.current;
+    if (sel.kind !== "box" || sel.pageId !== COVER_FRONT_ID) return;
+    const box = useProjectsStore
+      .getState()
+      .current()
+      ?.design?.pages[sel.pageId]?.textBoxes.find((b) => b.id === sel.boxId);
+    if (!box?.role) return;
+    syncCoverLinkedField(project.id, box.role, textFromParagraphs(box.paragraphs));
+  }, [project.id]);
 
   const pushHistory = useCallback((p: Project) => {
     history.current.past.push(takeStudioSnapshot(p));
+    if (history.current.past.length > 80) history.current.past.shift();
+    history.current.future = [];
+  }, []);
+
+  /**
+   * Design-only undo snapshot. Shares screenplay/illustrations refs (those trees
+   * are replaced immutably elsewhere) so text gestures don't deep-clone the
+   * whole book on the first keystroke.
+   */
+  const pushDesignHistory = useCallback((p: Project) => {
+    history.current.past.push({
+      design: p.design ? structuredClone(p.design) : undefined,
+      screenplay: p.screenplay,
+      illustrations: p.illustrations,
+    });
     if (history.current.past.length > 80) history.current.past.shift();
     history.current.future = [];
   }, []);
@@ -827,11 +749,26 @@ export function StudioProvider({
       if (!p?.design) return;
       const key = opts?.coalesce;
       const merging = key != null && key === coalesceKey.current;
-      if (!merging) pushHistory(p);
+      if (!merging) pushDesignHistory(p);
       coalesceKey.current = key ?? null;
-      void setDesign(mutate(structuredClone(p.design)));
+      // Structural share: mutators replace only the pages they touch. Avoids
+      // deep-cloning the whole design on every coalesced keystroke / drag sample.
+      const draft: BookDesign = {
+        ...p.design,
+        pages: { ...p.design.pages },
+      };
+      const next = mutate(draft);
+      // Coalesced gestures (sliders / formatting) can be deferred; discrete
+      // edits stay synchronous so selection/undo feel immediate.
+      if (merging) {
+        startTransition(() => {
+          void setDesign(next);
+        });
+      } else {
+        void setDesign(next);
+      }
     },
-    [pushHistory, setDesign],
+    [pushDesignHistory, setDesign],
   );
 
   /**
@@ -887,7 +824,16 @@ export function StudioProvider({
   const mutatePage = useCallback(
     (d: BookDesign, pageId: string, fn: (pd: PageDesign) => PageDesign): BookDesign => {
       const pd = d.pages[pageId] ?? { textBoxes: [] };
-      d.pages[pageId] = fn(pd);
+      // Shallow-copy the touched page (and its element arrays). Mutators replace
+      // changed elements; deep-cloning images/shapes on every keystroke was
+      // noticeably expensive on illustration-heavy pages.
+      d.pages[pageId] = fn({
+        ...pd,
+        textBoxes: pd.textBoxes.slice(),
+        shapes: pd.shapes?.slice(),
+        images: pd.images?.slice(),
+        background: pd.background ? { ...pd.background } : pd.background,
+      });
       return d;
     },
     [],
@@ -934,8 +880,14 @@ export function StudioProvider({
           })),
         opts,
       );
+      // Linked cover title/subtitle: push canvas → project when the edit isn't
+      // mid-coalesce (live typing). Coalesced sessions flush via endHistoryGesture.
+      if (!opts?.coalesce && pageId === COVER_FRONT_ID && patch.paragraphs) {
+        const role = design?.pages[pageId]?.textBoxes.find((b) => b.id === boxId)?.role;
+        syncCoverLinkedField(project.id, role, textFromParagraphs(patch.paragraphs));
+      }
     },
-    [commit, mutatePage, pages],
+    [commit, mutatePage, pages, design, project.id],
   );
 
   const patchSpan = useCallback(
@@ -1302,32 +1254,73 @@ export function StudioProvider({
    * click/dblclick races can't create stacked ghost copies.
    * Never changes `z` on an existing frame (generation must not reshuffle layers).
    * New frames are created at the back (`bottomZ - 1`) under text/shapes.
+   *
+   * Without saved art, does not create a frame (unless `createIfMissing` for an
+   * in-flight generate) — empty pages must not become croppable ghosts.
    */
   const makeIllustrationEditable = useCallback(
-    (pageId: string, opts?: { enterReframe?: boolean }) => {
+    (pageId: string, opts?: { enterReframe?: boolean; createIfMissing?: boolean }) => {
+      const projectNow = useProjectsStore.getState().current();
+      const hasArt = pageHasIllustrationArt(projectNow, pageId);
+      const allowCreate = hasArt || !!opts?.createIfMissing;
+      const wantReframe = !!opts?.enterReframe && hasArt;
+
+      const selectPageOnly = () => {
+        illustrationEnsureLock.current.delete(pageId);
+        setSelection({ kind: "page", pageId });
+        useStudioPanelStore.getState().onSelectionKind("other");
+      };
+
       const finish = (imageId: string) => {
         illustrationEnsureLock.current.set(pageId, imageId);
         setSelection({ kind: "image", pageId, imageId });
-        setTextEditSection(null);
-        if (opts?.enterReframe) setPendingReframeImageId(imageId);
+        useStudioPanelStore.getState().onSelectionKind("image");
+        if (wantReframe) setPendingReframeImageId(imageId);
       };
+
+      // Drop empty ghost frames left from earlier tool opens / abandoned gens.
+      const purgeEmptyFrames = (): boolean => {
+        const latest = projectNow?.design?.pages[pageId];
+        const ghosts = (latest?.images ?? []).filter((im) => im.kind === "illustration");
+        if (ghosts.length === 0) return false;
+        commit((d) =>
+          mutatePage(d, pageId, (p) => ({
+            ...p,
+            images: (p.images ?? []).filter((im) => im.kind !== "illustration"),
+          })),
+        );
+        return true;
+      };
+
+      if (!allowCreate) {
+        purgeEmptyFrames();
+        selectPageOnly();
+        return;
+      }
 
       const lockedId = illustrationEnsureLock.current.get(pageId);
       if (lockedId) {
-        finish(lockedId);
-        // Still dedupe if older ghosts linger in the store.
-        commit((d) => {
-          const illus = (d.pages[pageId]?.images ?? []).filter((im) => im.kind === "illustration");
-          if (illus.length <= 1) return d;
-          const keep = illus.find((im) => im.id === lockedId) ?? pickCanonicalIllustration(illus);
-          return mutatePage(d, pageId, (p) => ({
-            ...p,
-            images: (p.images ?? []).filter(
-              (im) => im.kind !== "illustration" || im.id === keep.id,
-            ),
-          }));
-        });
-        return;
+        // Locked id may point at a purged ghost — fall through to recreate.
+        const stillThere = (projectNow?.design?.pages[pageId]?.images ?? []).some(
+          (im) => im.id === lockedId,
+        );
+        if (stillThere) {
+          finish(lockedId);
+          // Still dedupe if older ghosts linger in the store.
+          commit((d) => {
+            const illus = (d.pages[pageId]?.images ?? []).filter((im) => im.kind === "illustration");
+            if (illus.length <= 1) return d;
+            const keep = illus.find((im) => im.id === lockedId) ?? pickCanonicalIllustration(illus);
+            return mutatePage(d, pageId, (p) => ({
+              ...p,
+              images: (p.images ?? []).filter(
+                (im) => im.kind !== "illustration" || im.id === keep.id,
+              ),
+            }));
+          });
+          return;
+        }
+        illustrationEnsureLock.current.delete(pageId);
       }
 
       // Reserve the lock before commit so a nested/rapid second call can't
@@ -1397,7 +1390,7 @@ export function StudioProvider({
   );
 
   const selectIllustration = useCallback(
-    (pageId: string, opts?: { enterReframe?: boolean }) => {
+    (pageId: string, opts?: { enterReframe?: boolean; createIfMissing?: boolean }) => {
       makeIllustrationEditable(pageId, opts);
     },
     [makeIllustrationEditable],
@@ -1733,103 +1726,183 @@ export function StudioProvider({
     return design.pages[selection.pageId]?.images?.find((im) => im.id === selection.imageId) ?? null;
   }, [selection, design]);
 
-  const value: StudioContextValue | null = design
-    ? {
-        project,
-        pages,
-        design,
-        pageDesign,
-        selection,
-        select,
-        selectedBox,
-        selectedShape,
-        selectedImage,
-        textEditSection,
-        openTextEdit,
-        toggleTextEdit,
-        closeTextEdit,
-        imageEditSection,
-        openImageEdit,
-        toggleImageEdit,
-        closeImageEdit,
-        setImageEditCloseGuard,
-        toolPanel,
-        openToolPanel,
-        closeToolPanel,
-        toggleToolPanel,
-        openLayersPanel,
-        selectIllustration,
-        pendingReframeImageId,
-        clearPendingReframe,
-        editingDispId,
-        setEditingDisp,
-        undo,
-        redo,
-        endHistoryGesture,
-        addBox,
-        addText,
-        patchBox,
-        patchSpan,
-        deleteBox,
-        duplicateBox,
-        reorderBox,
-        alignBox,
-        addShape,
-        patchShape,
-        deleteShape,
-        duplicateShape,
-        reorderShape,
-        alignShape,
-        addAssetImage,
-        patchImage,
-        deleteImage,
-        duplicateImage,
-        alignImage,
-        makeIllustrationEditable,
-        moveLayer,
-        setLayerOrder,
-        sendLayerToEdge,
-        setLayerHidden,
-        setLayerLocked,
-        fitTextToBox,
-        fitBoxToText,
-        toggleAutoFit,
-        toggleAutoFitGrow,
-        snap,
-        grid,
-        guides,
-        toggleSnap: () => setSnap((v) => !v),
-        toggleGrid: () => setGrid((v) => !v),
-        toggleGuides: () => setGuides((v) => !v),
-        copySelection,
-        cutSelection,
-        pasteSelection,
-        hasClipboard,
-        deleteSelected,
-        duplicateSelected,
-        reorderSelected,
-        nudgeSelected,
-        moveElementToPage,
-        copyBoxStyle,
-        pasteBoxStyle,
-        hasCopiedBoxStyle,
-        setPageBackground,
-        generatingAnchors,
-        generatingPages,
-        setAnchorGenerating,
-        setPageGenerating,
-        busy,
-        setBusy,
-        startGeneration,
-        cancelGeneration,
-        step,
-        setStep,
-        openSetup,
-        designSetupOpen,
-        openDesignSetup,
-        closeDesignSetup,
-      }
-    : null;
+  const toggleSnap = useCallback(() => setSnap((v) => !v), []);
+  const toggleGrid = useCallback(() => setGrid((v) => !v), []);
+  const toggleGuides = useCallback(() => setGuides((v) => !v), []);
+
+  const value: StudioContextValue | null = useMemo(
+    () =>
+      design
+        ? {
+            project,
+            pages,
+            design,
+            pageDesign,
+            selection,
+            select,
+            selectedBox,
+            selectedShape,
+            selectedImage,
+            selectIllustration,
+            pendingReframeImageId,
+            clearPendingReframe,
+            editingDispId,
+            setEditingDisp,
+            undo,
+            redo,
+            endHistoryGesture,
+            addBox,
+            addText,
+            patchBox,
+            patchSpan,
+            deleteBox,
+            duplicateBox,
+            reorderBox,
+            alignBox,
+            addShape,
+            patchShape,
+            deleteShape,
+            duplicateShape,
+            reorderShape,
+            alignShape,
+            addAssetImage,
+            patchImage,
+            deleteImage,
+            duplicateImage,
+            alignImage,
+            makeIllustrationEditable,
+            moveLayer,
+            setLayerOrder,
+            sendLayerToEdge,
+            setLayerHidden,
+            setLayerLocked,
+            fitTextToBox,
+            fitBoxToText,
+            toggleAutoFit,
+            toggleAutoFitGrow,
+            snap,
+            grid,
+            guides,
+            toggleSnap,
+            toggleGrid,
+            toggleGuides,
+            copySelection,
+            cutSelection,
+            pasteSelection,
+            hasClipboard,
+            deleteSelected,
+            duplicateSelected,
+            reorderSelected,
+            nudgeSelected,
+            moveElementToPage,
+            copyBoxStyle,
+            pasteBoxStyle,
+            hasCopiedBoxStyle,
+            setPageBackground,
+            generatingAnchors,
+            generatingPages,
+            setAnchorGenerating,
+            setPageGenerating,
+            busy,
+            setBusy,
+            startGeneration,
+            cancelGeneration,
+            step,
+            setStep,
+            openSetup,
+            designSetupOpen,
+            openDesignSetup,
+            closeDesignSetup,
+            styleSetupOpen,
+            openStyleSetup,
+            closeStyleSetup,
+          }
+        : null,
+    [
+      project,
+      pages,
+      design,
+      pageDesign,
+      selection,
+      select,
+      selectedBox,
+      selectedShape,
+      selectedImage,
+      selectIllustration,
+      pendingReframeImageId,
+      clearPendingReframe,
+      editingDispId,
+      setEditingDisp,
+      undo,
+      redo,
+      endHistoryGesture,
+      addBox,
+      addText,
+      patchBox,
+      patchSpan,
+      deleteBox,
+      duplicateBox,
+      reorderBox,
+      alignBox,
+      addShape,
+      patchShape,
+      deleteShape,
+      duplicateShape,
+      reorderShape,
+      alignShape,
+      addAssetImage,
+      patchImage,
+      deleteImage,
+      duplicateImage,
+      alignImage,
+      makeIllustrationEditable,
+      moveLayer,
+      setLayerOrder,
+      sendLayerToEdge,
+      setLayerHidden,
+      setLayerLocked,
+      fitTextToBox,
+      fitBoxToText,
+      toggleAutoFit,
+      toggleAutoFitGrow,
+      snap,
+      grid,
+      guides,
+      toggleSnap,
+      toggleGrid,
+      toggleGuides,
+      copySelection,
+      cutSelection,
+      pasteSelection,
+      hasClipboard,
+      deleteSelected,
+      duplicateSelected,
+      reorderSelected,
+      nudgeSelected,
+      moveElementToPage,
+      copyBoxStyle,
+      pasteBoxStyle,
+      hasCopiedBoxStyle,
+      setPageBackground,
+      generatingAnchors,
+      generatingPages,
+      setAnchorGenerating,
+      setPageGenerating,
+      busy,
+      setBusy,
+      startGeneration,
+      cancelGeneration,
+      step,
+      setStep,
+      openSetup,
+      designSetupOpen,
+      openDesignSetup,
+      closeDesignSetup,
+      styleSetupOpen,
+      openStyleSetup,
+      closeStyleSetup,
+    ],
+  );
 
   if (!value) {
     return (

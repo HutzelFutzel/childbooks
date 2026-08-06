@@ -10,6 +10,14 @@ export interface OptionCardProps {
   description?: string;
   /** Optional visual rendered above the text (e.g. a swatch or diagram). */
   visual?: React.ReactNode;
+  /**
+   * Currently applied / in-use option (can differ from `selected` while the
+   * user previews a change). Shown with a quieter ring + badge when not also
+   * selected.
+   */
+  current?: boolean;
+  /** Badge when `current` (default "Current"). */
+  currentLabel?: string;
   disabled?: boolean;
   className?: string;
 }
@@ -20,6 +28,8 @@ export function OptionCard({
   title,
   description,
   visual,
+  current = false,
+  currentLabel = "Current",
   disabled,
   className,
 }: OptionCardProps) {
@@ -35,11 +45,25 @@ export function OptionCard({
         "relative flex w-full flex-col gap-2 rounded-2xl border p-3 text-left transition-colors",
         selected
           ? "border-brand-500 bg-brand-50/60 ring-2 ring-brand-200"
-          : "border-ink-200 bg-white hover:border-brand-300",
+          : current
+            ? "border-ink-300 bg-ink-50/80 ring-1 ring-ink-200"
+            : "border-ink-200 bg-white hover:border-brand-300",
         disabled && "cursor-not-allowed opacity-50",
         className,
       )}
     >
+      {current && (
+        <span
+          className={cn(
+            "absolute right-2 top-2 rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+            selected
+              ? "bg-brand-100 text-brand-700"
+              : "bg-ink-100 text-ink-600",
+          )}
+        >
+          {currentLabel}
+        </span>
+      )}
       {visual}
       <div className="flex items-start justify-between gap-2">
         <div>

@@ -1,12 +1,15 @@
 /** Shared prompt overlays loaded from admin `appConfig/*` documents. */
 import type { ArtStylesConfig } from "../config/artStyles";
 import type { AgeWritingConfig } from "../config/ageWriting";
+import type { StoryCraftConfig } from "../config/storyCraft";
 import type { PromptsConfig } from "../config/prompts";
 import { createDefaultPromptsConfig } from "./registry";
 
 export interface PromptContext {
   artStyles?: ArtStylesConfig | null;
   ageWriting?: AgeWritingConfig | null;
+  /** Per-age-band themes, devices and story rules (`appConfig/storyCraft`). */
+  storyCraft?: StoryCraftConfig | null;
   /** Admin-editable prompt templates (`appConfig/prompts`). */
   templates?: PromptsConfig | null;
 }

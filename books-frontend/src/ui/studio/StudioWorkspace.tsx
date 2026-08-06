@@ -1,18 +1,17 @@
 import { useEffect, useRef } from "react";
 import type { Project } from "../../core/types";
 import { analyzeCurrentStory, generateScreenplayVersion } from "../../state/ai";
-import { useProjectsStore } from "../../state/projectsStore";
 import { useResolvedModels } from "../hooks/useResolvedModels";
 import { notify } from "../lib/notify";
-import { BookCanvas } from "./BookCanvas";
-import { DesignSetup } from "./DesignSetup";
+import { DesignWorkspace } from "./DesignWorkspace";
 import { StudioDndProvider } from "./StudioDnd";
 import { StudioProvider, useStudio } from "./StudioContext";
+import { useStudioPanelStore } from "./studioPanelStore";
 import { StudioStepRail } from "./StudioStepRail";
+import { StyleRenewBanner } from "./StyleRenewBanner";
 import { StoryStage } from "./StoryStage";
-import { AnchorsStage } from "./AnchorsStage";
 import { OrderStage } from "./OrderStage";
-import { initialStep } from "./studioSteps";
+import { initialStep, primaryOf } from "./studioSteps";
 import { useStudioHotkeys } from "./useStudioHotkeys";
 
 /** The single unified workspace. Keyed by project id in the parent so all local
@@ -26,18 +25,16 @@ export function StudioWorkspace({ project }: { project: Project }) {
 }
 
 function StudioInner({ project }: { project: Project }) {
-  const { step, designSetupOpen, closeDesignSetup, closeToolPanel } = useStudio();
+  const { step, closeDesignSetup, closeStyleSetup } = useStudio();
+  const closeToolPanel = useStudioPanelStore((s) => s.closeToolPanel);
   const models = useResolvedModels();
   useStudioHotkeys();
-
-  // First-time Design gate only — later Setup visits use the docked side panel.
-  const designReady = useProjectsStore((s) => s.current()?.config.designReady ?? false);
-  const showDesignSetup = step === "edit" && (!designReady || designSetupOpen);
 
   const startedAnalyze = useRef(false);
   const startedScreenplay = useRef(false);
 
   const inStudio = project.stage === "studio";
+  const inDesign = primaryOf(step) === "design";
 
   // Auto-analyze the story once the studio opens (no manual trigger).
   useEffect(() => {
@@ -65,29 +62,32 @@ function StudioInner({ project }: { project: Project }) {
     }
   }, [inStudio, models, project.analysis, project.screenplay]);
 
-  // Reset design-setup / docked tool overlays when the step changes.
+  // Reset design-setup / docked tools when the step changes. Style stays open
+  // across anchors↔edit so Design chapters can reopen Style from Pages.
   useEffect(() => {
     closeDesignSetup();
     closeToolPanel();
   }, [step, closeDesignSetup, closeToolPanel]);
 
+  useEffect(() => {
+    if (!inDesign) closeStyleSetup();
+  }, [inDesign, closeStyleSetup]);
+
   return (
     <StudioDndProvider>
       <div className="flex min-h-0 flex-1 flex-col">
         <StudioStepRail />
+        {/* Mounted once here (not inside Design) so a running style transfer
+            keeps advancing cast → pages wherever the reader navigates. */}
+        <StyleRenewBanner />
 
         <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-grid">
-          {step === "edit" ? (
-            showDesignSetup ? (
-              <DesignSetup />
-            ) : (
-              <BookCanvas />
-            )
-          ) : step === "anchors" ? (
-            <AnchorsStage />
+          {inDesign ? (
+            <DesignWorkspace />
+          ) : step === "story" ? (
+            <StoryStage />
           ) : (
             <div className="min-h-0 flex-1 overflow-y-auto">
-              {step === "story" && <StoryStage />}
               {step === "order" && <OrderStage />}
             </div>
           )}

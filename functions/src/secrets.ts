@@ -39,6 +39,21 @@ export const SLACK_WEBHOOK_URL = defineSecret("SLACK_WEBHOOK_URL");
 export const SLACK_OPS_WEBHOOK_URL = defineSecret("SLACK_OPS_WEBHOOK_URL");
 export const SLACK_CONTACT_WEBHOOK_URL = defineSecret("SLACK_CONTACT_WEBHOOK_URL");
 
+// Rewardful (affiliate program). ONE account, no sandbox counterpart — a
+// Rewardful account is tied to one Stripe account and ignores test-mode events,
+// so both of these live in the base set and the code refuses to act while Stripe
+// is in sandbox instead.
+//   REWARDFUL_API_SECRET    Full access to the account (Company Settings page).
+//   REWARDFUL_WEBHOOK_TOKEN OURS, not theirs: Rewardful webhooks are unsigned,
+//                           so the endpoint is authenticated by this token in
+//                           the URL registered with them. Generate any long
+//                           random string (e.g. `openssl rand -hex 32`).
+// Optional at runtime — everything affiliate-related no-ops when unset — but
+// like the Slack URLs they must EXIST in Secret Manager before the next deploy
+// (`yarn setSecrets`), because `api` binds the whole set.
+export const REWARDFUL_API_SECRET = defineSecret("REWARDFUL_API_SECRET");
+export const REWARDFUL_WEBHOOK_TOKEN = defineSecret("REWARDFUL_WEBHOOK_TOKEN");
+
 // Lulu uses separate OAuth credentials per environment. `serverEnv` selects the
 // pair matching LULU_ENV; the legacy LULU_CLIENT_KEY/SECRET act as a fallback.
 export const LULU_SANDBOX_CLIENT_KEY = defineSecret("LULU_SANDBOX_CLIENT_KEY");
@@ -62,6 +77,8 @@ const BASE_SECRETS = [
   SLACK_WEBHOOK_URL,
   SLACK_OPS_WEBHOOK_URL,
   SLACK_CONTACT_WEBHOOK_URL,
+  REWARDFUL_API_SECRET,
+  REWARDFUL_WEBHOOK_TOKEN,
 ];
 const SANDBOX_SECRETS = [
   LULU_SANDBOX_CLIENT_KEY,

@@ -56,6 +56,19 @@ export const SERVER_ENV_VARS = {
    * keeping a value in that file is harmless locally. Never set in production.
    */
   stripeEmulatorWebhookSecret: "STRIPE_EMULATOR_WEBHOOK_SECRET",
+  /**
+   * Rewardful (affiliate program). Unlike Stripe and Lulu there is NO
+   * environment split: a Rewardful account is bound to one Stripe account and
+   * ignores test-mode events entirely, so there is nothing to point a sandbox
+   * key at. The code instead refuses to act on anything while Stripe is in
+   * sandbox (see `functions/src/affiliates`).
+   *
+   * `REWARDFUL_WEBHOOK_TOKEN` is ours, not Rewardful's: their webhooks are
+   * unsigned, so the endpoint is authenticated by an unguessable token in the
+   * URL we register with them.
+   */
+  rewardfulApiSecret: "REWARDFUL_API_SECRET",
+  rewardfulWebhookToken: "REWARDFUL_WEBHOOK_TOKEN",
   /** Public base URL of the storefront, for Checkout success/cancel redirects. */
   publicAppUrl: "PUBLIC_APP_URL",
   assetHostKind: "ASSET_HOST_KIND",
@@ -81,6 +94,14 @@ export interface StripeConfig {
   appUrl: string;
 }
 
+/** Affiliate program (Rewardful) — one account, no sandbox counterpart. */
+export interface RewardfulConfig {
+  /** Grants full access to the Rewardful account; server-side only, ever. */
+  apiSecret: string;
+  /** Shared token that authenticates our unsigned webhook endpoint. */
+  webhookToken: string;
+}
+
 /** Everything the backend needs at runtime, in domain terms. */
 export interface ServerConfig {
   /** AI provider keys (text + image generation). */
@@ -90,6 +111,8 @@ export interface ServerConfig {
   fulfillment: FulfillmentConfig;
   /** Payments (Stripe). */
   stripe: StripeConfig;
+  /** Affiliate program (Rewardful). */
+  rewardful: RewardfulConfig;
 }
 
 /** A bag of environment variables (e.g. `process.env`). */
@@ -216,6 +239,10 @@ export function loadServerConfig(env: EnvBag, opts: LoadServerConfigOptions = {}
       secretKey: stripeCreds.secretKey,
       webhookSecret: stripeCreds.webhookSecret,
       appUrl: (env[SERVER_ENV_VARS.publicAppUrl] ?? "").replace(/\/+$/, ""),
+    },
+    rewardful: {
+      apiSecret: env[SERVER_ENV_VARS.rewardfulApiSecret] ?? "",
+      webhookToken: env[SERVER_ENV_VARS.rewardfulWebhookToken] ?? "",
     },
   };
 }

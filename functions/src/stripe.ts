@@ -106,6 +106,7 @@ import {
   normalizeCountry,
   UNKNOWN_COUNTRY,
 } from "../../books-frontend/src/core/analytics/markets";
+import { affiliateChargeMetadata, stampCustomerAttribution } from "./affiliates";
 import { raiseAlert } from "./alerts";
 import { notifySlack, money } from "./notify";
 import {
@@ -256,16 +257,27 @@ async function createCheckoutSession(
   }
 }
 
-/** Get (or lazily create) the Stripe customer for a user. */
+/**
+ * Get (or lazily create) the Stripe customer for a user.
+ *
+ * Also the single choke point where affiliate attribution reaches Stripe: every
+ * checkout path resolves its customer here, so stamping the referral once at
+ * this point covers all of them — including a customer that already existed
+ * before the person followed an affiliate link.
+ */
 async function ensureCustomer(uid: string, email?: string | null): Promise<string> {
   const existing = await getStripeCustomerId(uid);
-  if (existing) return existing;
+  if (existing) {
+    await stampCustomerAttribution(uid, existing);
+    return existing;
+  }
   const stripe = getStripe();
   const customer = await stripe.customers.create({
     email: email ?? undefined,
     metadata: { uid },
   });
   await saveStripeCustomerId(uid, customer.id);
+  await stampCustomerAttribution(uid, customer.id);
   return customer.id;
 }
 
@@ -680,6 +692,9 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
   };
 
   const estimatedTotal = unitPrice * copies + shippingCharged;
+  // `rewardful: "false"` when a print order is outside the referring campaign's
+  // scope — Rewardful reads it off the charge and creates no commission.
+  const affiliateMeta = await affiliateChargeMetadata(uid, "order");
   const session = await createCheckoutSession({
     mode: "payment",
     customer: customerId,
@@ -689,7 +704,7 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     line_items: lineItems,
     client_reference_id: paymentId,
     metadata: { paymentId, uid, kind: "order" },
-    payment_intent_data: { metadata: { paymentId, uid, kind: "order" } },
+    payment_intent_data: { metadata: { paymentId, uid, kind: "order", ...affiliateMeta } },
     // `payment` is what the confirmation screen keys on: it opens on our own
     // payment id (not the Stripe session) so it can follow the record live —
     // including the fulfillment leg, which happens after this redirect.
@@ -1153,7 +1168,9 @@ export function registerStripeUserRoutes(app: Express): void {
         ],
         client_reference_id: paymentId,
         metadata: { paymentId, uid, kind: "ebook" },
-        payment_intent_data: { metadata: { paymentId, uid, kind: "ebook" } },
+        payment_intent_data: {
+          metadata: { paymentId, uid, kind: "ebook", ...(await affiliateChargeMetadata(uid, "ebook")) },
+        },
         success_url: `${appBaseUrl()}/studio?ebook=success&payment=${paymentId}&project=${encodeURIComponent(body.projectId)}`,
         cancel_url: `${appBaseUrl()}/studio?ebook=cancel`,
       });
@@ -1354,7 +1371,15 @@ export function registerStripeUserRoutes(app: Express): void {
           ...(referral ? { referralRef: subscriptionRef } : {}),
         },
         // Stamp uid on the subscription so invoice grants can attribute Sparks.
-        subscription_data: { metadata: { uid, ...(referral ? { referralRef: subscriptionRef } : {}) } },
+        // The affiliate flag rides on the SUBSCRIPTION rather than a charge so it
+        // applies to every renewal invoice, not just the first one.
+        subscription_data: {
+          metadata: {
+            uid,
+            ...(referral ? { referralRef: subscriptionRef } : {}),
+            ...(await affiliateChargeMetadata(uid, "subscription")),
+          },
+        },
         success_url: `${appBaseUrl()}/studio?subscription=success`,
         cancel_url: `${appBaseUrl()}/studio?subscription=cancel`,
       });
@@ -1421,7 +1446,14 @@ export function registerStripeUserRoutes(app: Express): void {
         client_reference_id: paymentId,
         metadata: { paymentId, uid, kind: "sparkPack", packId: pack.id, sparks: String(totalSparks) },
         payment_intent_data: {
-          metadata: { paymentId, uid, kind: "sparkPack", packId: pack.id, sparks: String(totalSparks) },
+          metadata: {
+            paymentId,
+            uid,
+            kind: "sparkPack",
+            packId: pack.id,
+            sparks: String(totalSparks),
+            ...(await affiliateChargeMetadata(uid, "sparkPack")),
+          },
         },
         success_url: `${appBaseUrl()}/studio?sparks=success&payment=${paymentId}`,
         cancel_url: `${appBaseUrl()}/studio?sparks=cancel`,
@@ -1504,7 +1536,9 @@ export function registerStripeUserRoutes(app: Express): void {
         ],
         client_reference_id: paymentId,
         metadata: meta,
-        payment_intent_data: { metadata: meta },
+        payment_intent_data: {
+          metadata: { ...meta, ...(await affiliateChargeMetadata(uid, "sparkGift")) },
+        },
         success_url: `${appBaseUrl()}/studio?gift=success&payment=${paymentId}`,
         cancel_url: `${appBaseUrl()}/studio?gift=cancel`,
       });

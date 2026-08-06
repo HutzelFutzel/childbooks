@@ -22,8 +22,13 @@ import {
 } from "../core/versioning";
 import { normalizeAnchorName, reconcileAnchorIds } from "../core/book/anchorRefs";
 import { collectProjectImageBlobIds } from "../core/book/blobRefs";
-import { textFromParagraphs, wordParagraphs } from "../core/design";
-import { COVER_FRONT_ID, createDefaultConfig, STAGE_ORDER } from "../core/types";
+import { textFromParagraphs, withIllustrationFrame, wordParagraphs } from "../core/design";
+import {
+  COVER_BACK_ID,
+  COVER_FRONT_ID,
+  createDefaultConfig,
+  STAGE_ORDER,
+} from "../core/types";
 import { ProjectConflictError } from "../core/storage/repositories";
 import { getRepos } from "./repos";
 import { removeBlob } from "./blobs";
@@ -90,6 +95,11 @@ interface ProjectsState {
    * the front-cover title text box in sync.
    */
   setBookTitle: (id: string, title: string) => Promise<void>;
+  /**
+   * Set the front-cover subtitle from the cover toolbox or the linked canvas
+   * text box. Keeps `frontCover.subtitle` and the `book-subtitle` overlay in sync.
+   */
+  setCoverSubtitle: (id: string, subtitle: string) => Promise<void>;
   goToStage: (stage: ProjectStage) => Promise<void>;
   advanceStage: (stage: ProjectStage) => Promise<void>;
 
@@ -245,6 +255,10 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     await mutateProject(get, set, id, (p) => applyBookTitle(p, title));
   },
 
+  async setCoverSubtitle(id, subtitle) {
+    await mutateProject(get, set, id, (p) => applyCoverSubtitle(p, subtitle));
+  },
+
   async goToStage(stage) {
     // Only allow navigating to stages already unlocked.
     await mutateCurrent(get, set, (p) =>
@@ -395,10 +409,26 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   async setIllustration(spreadId, tree) {
-    await mutateCurrent(get, set, (p) => ({
-      ...p,
-      illustrations: { ...(p.illustrations ?? {}), [spreadId]: tree },
-    }));
+    await mutateCurrent(get, set, (p) => {
+      const illustrations = { ...(p.illustrations ?? {}), [spreadId]: tree };
+      let next: Project = { ...p, illustrations };
+      // New/updated art should appear on the canvas immediately. Editable stages
+      // only paint AI art through an illustration ImageElement — without this,
+      // filmstrip thumbs (non-editable full-bleed) update while the stage stays
+      // blank until the user clicks the page to materialize a frame.
+      const blobId = getCursor(tree).content.blobId;
+      if (blobId && next.design) {
+        const focus =
+          spreadId === COVER_FRONT_ID || spreadId === COVER_BACK_ID
+            ? { x: 0.5, y: 0 }
+            : undefined;
+        next = {
+          ...next,
+          design: withIllustrationFrame(next.design, spreadId, { focus }),
+        };
+      }
+      return next;
+    });
   },
 
   async deleteIllustrationVersion(spreadId, versionId) {
@@ -508,28 +538,55 @@ function applyBookTitle(p: Project, rawTitle: string): Project {
       doc.frontCover ?? { title: "", subtitle: "", illustration: "", anchorIds: [] };
     const nextDoc: ScreenplayDoc = { ...doc, frontCover: { ...base, title: rawTitle } };
     next = { ...next, screenplay: updateNodeContent(tree, tree.cursorId, nextDoc) };
-    next = syncCoverTitleBox(next, prevTitle, rawTitle);
+    next = syncCoverRoleBox(next, "book-title", prevTitle, rawTitle);
   }
   return next;
 }
 
+/** Apply a new front-cover subtitle and mirror it into the linked canvas box. */
+function applyCoverSubtitle(p: Project, rawSubtitle: string): Project {
+  if (!p.screenplay) return p;
+  const tree = p.screenplay;
+  const doc = getCursor(tree).content;
+  const prevSubtitle = doc.frontCover?.subtitle ?? "";
+  const base: CoverSpec =
+    doc.frontCover ?? { title: "", subtitle: "", illustration: "", anchorIds: [] };
+  const nextDoc: ScreenplayDoc = {
+    ...doc,
+    frontCover: { ...base, subtitle: rawSubtitle },
+  };
+  let next: Project = {
+    ...p,
+    screenplay: updateNodeContent(tree, tree.cursorId, nextDoc),
+  };
+  return syncCoverRoleBox(next, "book-subtitle", prevSubtitle, rawSubtitle);
+}
+
 /**
- * Mirror the title into the front-cover "book-title" text box, but only when that
- * box still shows the previous title — so a manually restyled/retyped cover
- * title on the canvas is never clobbered by an edit made elsewhere.
+ * Mirror a cover field into its linked overlay text box, but only when that box
+ * still shows the previous value — so a canvas edit in flight is never
+ * clobbered by an edit made in the toolbox (and vice versa once the canvas
+ * already holds the new text).
  */
-function syncCoverTitleBox(p: Project, prevTitle: string, nextTitle: string): Project {
+function syncCoverRoleBox(
+  p: Project,
+  role: "book-title" | "book-subtitle",
+  prevValue: string,
+  nextValue: string,
+): Project {
   const design = p.design;
   const page = design?.pages[COVER_FRONT_ID];
   if (!design || !page) return p;
 
   let changed = false;
   const textBoxes = page.textBoxes.map((b) => {
-    if (b.role !== "book-title") return b;
+    if (b.role !== role) return b;
     const current = textFromParagraphs(b.paragraphs);
-    if (current !== prevTitle && current.trim() !== "") return b;
+    // Already shows the new value, or was customized away from the old one.
+    if (current === nextValue) return b;
+    if (current !== prevValue && current.trim() !== "") return b;
     changed = true;
-    return { ...b, paragraphs: wordParagraphs(nextTitle) };
+    return { ...b, paragraphs: wordParagraphs(nextValue) };
   });
   if (!changed) return p;
 

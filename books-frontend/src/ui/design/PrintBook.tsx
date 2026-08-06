@@ -1,4 +1,6 @@
-import type { BookDesign } from "../../core/types";
+import { backCoverLogoSizeIn, SAFETY_MARGIN_IN } from "../../core/book/format";
+import { EXPORT_DPI } from "../../core/config/options";
+import { COVER_BACK_ID, type BookDesign } from "../../core/types";
 import { CompositedPage, type ResolvedArtwork } from "./CompositedPage";
 import { defaultIllustrationFocus, type DesignPage } from "./designInit";
 
@@ -40,6 +42,8 @@ export function PrintBook({
   artwork,
   trimIn,
   forExport = false,
+  backCoverLogoUrl,
+  backCoverLogoAspect,
 }: {
   targets: PrintTarget[];
   design: BookDesign;
@@ -49,6 +53,17 @@ export function PrintBook({
   trimIn?: { widthIn: number; heightIn: number };
   /** Export mode renders pages stacked with no page-break CSS for snapshotting. */
   forExport?: boolean;
+  /**
+   * The admin-configured backcover logo (Marketing → Branding), or null/
+   * undefined when none is set. Drawn bottom-left over the back cover target
+   * only — see {@link PrintTargetView}. This is the one thing on the page the
+   * book's own design can't touch: it's applied here, after every design
+   * page has already been composited, so nothing the studio does can cover,
+   * move, or remove it.
+   */
+  backCoverLogoUrl?: string | null;
+  /** Intrinsic height÷width of {@link backCoverLogoUrl}; drives the 2 cm edge rule. */
+  backCoverLogoAspect?: number | null;
 }) {
   return (
     // Export mode is a plain wrapper: the offscreen stage that hosts it owns
@@ -63,6 +78,8 @@ export function PrintBook({
           design={design}
           artwork={artwork}
           forExport={forExport}
+          backCoverLogoUrl={backCoverLogoUrl}
+          backCoverLogoAspect={backCoverLogoAspect}
         />
       ))}
     </div>
@@ -81,20 +98,25 @@ function PrintTargetView({
   design,
   artwork,
   forExport,
+  backCoverLogoUrl,
+  backCoverLogoAspect,
 }: {
   target: PrintTarget;
   design: BookDesign;
   artwork?: ResolvedArtwork;
   forExport: boolean;
+  backCoverLogoUrl?: string | null;
+  backCoverLogoAspect?: number | null;
 }) {
   const clip = target.clip;
   const pd = design.pages[target.page.id] ?? { textBoxes: [] };
+  const containerWidthPx = clip ? clip.widthPx : target.surfaceWidthPx;
   return (
     <div
       className={forExport ? "export-page" : "print-page"}
       data-export-page={forExport ? target.id : undefined}
       style={{
-        width: clip ? clip.widthPx : target.surfaceWidthPx,
+        width: containerWidthPx,
         height: target.surfaceHeightPx,
         position: "relative",
         overflow: "hidden",
@@ -123,7 +145,65 @@ function PrintTargetView({
           illustrationFocus={defaultIllustrationFocus(target.page)}
         />
       </div>
+      {target.page.id === COVER_BACK_ID && backCoverLogoUrl && (
+        <BackCoverLogo
+          url={backCoverLogoUrl}
+          aspect={backCoverLogoAspect}
+          bleedPx={target.bleedPx}
+          containerWidthPx={containerWidthPx}
+          containerHeightPx={target.surfaceHeightPx}
+        />
+      )}
     </div>
+  );
+}
+
+/**
+ * The permanent backcover logo, pinned to the trim's bottom-left corner
+ * (inset by the print safety margin) regardless of what's drawn beneath it.
+ *
+ * Rendered as a plain sibling `<img>` on top of the composited page — not a
+ * design element — so there's no element for the editor, or the design JSON
+ * it saves, to ever reference, hide, move, or delete. Sized by
+ * {@link backCoverLogoSizeIn} (landscape → 2 cm tall, portrait → 2 cm wide),
+ * the same helper the print-guide reserved box uses.
+ */
+function BackCoverLogo({
+  url,
+  aspect,
+  bleedPx,
+  containerWidthPx,
+  containerHeightPx,
+}: {
+  url: string;
+  aspect?: number | null;
+  bleedPx: number;
+  containerWidthPx: number;
+  containerHeightPx: number;
+}) {
+  const marginPx = bleedPx + SAFETY_MARGIN_IN * EXPORT_DPI;
+  const trimWidthIn = Math.max(0.1, (containerWidthPx - bleedPx * 2) / EXPORT_DPI);
+  const trimHeightIn = Math.max(0.1, (containerHeightPx - bleedPx * 2) / EXPORT_DPI);
+  const { widthIn, heightIn } = backCoverLogoSizeIn(aspect, {
+    widthIn: trimWidthIn,
+    heightIn: trimHeightIn,
+    safetyMarginIn: SAFETY_MARGIN_IN,
+  });
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={url}
+      alt=""
+      style={{
+        position: "absolute",
+        left: marginPx,
+        bottom: marginPx,
+        width: widthIn * EXPORT_DPI,
+        height: heightIn * EXPORT_DPI,
+        objectFit: "contain",
+        pointerEvents: "none",
+      }}
+    />
   );
 }
 

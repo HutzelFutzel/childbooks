@@ -6,8 +6,17 @@
  * and change rarely). Writes are validated and performed here, used only by the
  * admin routes (which are already gated by `requireAdmin`).
  */
+import { randomUUID } from "node:crypto";
 import { getFirestore } from "firebase-admin/firestore";
-import { ensureAdmin } from "./storage";
+import {
+  ensureAdmin,
+  deletePublicObject,
+  downloadPublicBase64,
+  fetchPublicBytes,
+  uploadQrCode,
+  uploadQrLogo,
+} from "./storage";
+import { renderQrCode } from "./qrcode";
 import {
   createDefaultModelConfig,
   modelConfigSchema,
@@ -26,6 +35,12 @@ import {
   normalizeAgeWritingConfig,
   type AgeWritingConfig,
 } from "../../books-frontend/src/core/config/ageWriting";
+import {
+  createDefaultStoryCraftConfig,
+  normalizeStoryCraftConfig,
+  storyCraftConfigSchema,
+  type StoryCraftConfig,
+} from "../../books-frontend/src/core/config/storyCraft";
 import {
   normalizeTypographyConfig,
   typographyConfigSchema,
@@ -63,6 +78,7 @@ import {
   type SparksConfig,
 } from "../../books-frontend/src/core/config/sparks";
 import {
+  BRAND_ASSET_SLOTS,
   createDefaultBrandingConfig,
   normalizeBrandingConfig,
   type BrandAsset,
@@ -70,6 +86,22 @@ import {
   type BrandingConfig,
   type BrandingWatermark,
 } from "../../books-frontend/src/core/config/branding";
+import {
+  findQrCode,
+  normalizeQrCodesConfig,
+  QR_LOGO_QUIET_COLOR_DEFAULT,
+  QR_LOGO_QUIET_DEFAULT,
+  QR_LOGO_QUIET_MAX,
+  QR_LOGO_QUIET_MIN,
+  type QrCode,
+  type QrCodesConfig,
+  type QrCornerStyle,
+  type QrDotStyle,
+  type QrErrorCorrectionLevel,
+  type QrFormat,
+  type QrLogo,
+  type QrRender,
+} from "../../books-frontend/src/core/config/qrCodes";
 import { z } from "zod";
 import {
   createDefaultSeoConfig,
@@ -141,6 +173,12 @@ import {
   type ReferralConfig,
 } from "../../books-frontend/src/core/config/referral";
 import {
+  affiliateConfigSchema,
+  createDefaultAffiliateConfig,
+  normalizeAffiliateConfig,
+  type AffiliateConfig,
+} from "../../books-frontend/src/core/config/affiliates";
+import {
   layoutsConfigSchema,
   normalizeLayoutsConfig,
   type LayoutExample,
@@ -152,6 +190,7 @@ const MODELS_DOC = "appConfig/models";
 const ART_STYLES_DOC = "appConfig/artStyles";
 const LAYOUTS_DOC = "appConfig/layouts";
 const AGE_WRITING_DOC = "appConfig/ageWriting";
+const STORY_CRAFT_DOC = "appConfig/storyCraft";
 const TYPOGRAPHY_DOC = "appConfig/typography";
 const MODEL_COSTS_DOC = "appConfig/modelCosts";
 const MODEL_COSTS_PUBLIC_DOC = "appConfig/modelCostsPublic";
@@ -159,6 +198,7 @@ const PRICING_SETTINGS_DOC = "appConfig/pricingSettings";
 const SPARKS_DOC = "appConfig/sparks";
 const REFERRAL_DOC = "appConfig/referral";
 const BRANDING_DOC = "appConfig/branding";
+const QR_CODES_DOC = "appConfig/qrCodes";
 const SEO_DOC = "appConfig/seo";
 const SITE_IMAGES_DOC = "appConfig/siteImages";
 const CATALOG_MEDIA_DOC = "appConfig/catalogMedia";
@@ -172,6 +212,11 @@ const LATENCY_STATS_DOC = "appConfig/latencyStats";
 const EMAIL_CONFIG_DOC = "adminSettings/emailConfig";
 const LEGACY_EMAIL_CONFIG_DOC = "appConfig/emailConfig";
 const EMAIL_STATS_DOC = "appConfig/emailStats";
+// Also NOT under `appConfig/*`: the affiliate scope map names our Rewardful
+// campaigns and singles out individual affiliates by id. None of it is a secret,
+// but the client has no use for it either, and a world-readable copy would
+// publish the commercial shape of the partner program to anyone who asks.
+const AFFILIATE_CONFIG_DOC = "adminSettings/affiliates";
 const SLACK_CONFIG_DOC = "appConfig/slackConfig";
 const LEGAL_DOC = "appConfig/legal";
 const COOKIE_CONFIG_DOC = "appConfig/cookieConfig";
@@ -218,6 +263,9 @@ export function getLayoutsConfig(): Promise<LayoutsConfig> {
 export function getAgeWritingConfig(): Promise<AgeWritingConfig> {
   return readDoc(AGE_WRITING_DOC, normalizeAgeWritingConfig);
 }
+export function getStoryCraftConfig(): Promise<StoryCraftConfig> {
+  return readDoc(STORY_CRAFT_DOC, normalizeStoryCraftConfig);
+}
 /** Once-per-instance guard for the projection backfill below. */
 let modelCostsProjectionEnsured = false;
 
@@ -259,6 +307,9 @@ export async function getReferralConfig(): Promise<ReferralConfig> {
 }
 export function getBrandingConfig(): Promise<BrandingConfig> {
   return readDoc(BRANDING_DOC, normalizeBrandingConfig);
+}
+export function getQrCodesConfig(): Promise<QrCodesConfig> {
+  return readDoc(QR_CODES_DOC, normalizeQrCodesConfig);
 }
 export function getSeoConfig(): Promise<SeoConfig> {
   return readDoc(SEO_DOC, normalizeSeoConfig);
@@ -453,6 +504,24 @@ export async function saveCookieConfig(input: unknown): Promise<CookieConfig> {
   return normalized;
 }
 
+// ---- Affiliate program -----------------------------------------------------
+
+export function getAffiliateConfig(): Promise<AffiliateConfig> {
+  return readDoc(AFFILIATE_CONFIG_DOC, normalizeAffiliateConfig);
+}
+
+export function defaultAffiliateConfig(): AffiliateConfig {
+  return createDefaultAffiliateConfig();
+}
+
+/** Validate + persist the affiliate scope map (admin-only doc). */
+export async function saveAffiliateConfig(input: unknown): Promise<AffiliateConfig> {
+  const parsed = affiliateConfigSchema.parse(input);
+  const normalized = normalizeAffiliateConfig({ ...parsed, updatedAt: Date.now() });
+  await writeDoc(AFFILIATE_CONFIG_DOC, normalized);
+  return normalized;
+}
+
 /**
  * Admin corrections to the shipped image-model capability table. Lives on the
  * layouts doc because that's where the model-behaviour knowledge is curated.
@@ -463,12 +532,13 @@ export async function loadModelCapabilities(): Promise<CapabilityOverrides> {
 
 /** Admin-managed prompt overlays used by text and image pipelines. */
 export async function loadPromptContext(): Promise<PromptContext> {
-  const [artStyles, ageWriting, templates] = await Promise.all([
+  const [artStyles, ageWriting, storyCraft, templates] = await Promise.all([
     getArtStylesConfig(),
     getAgeWritingConfig(),
+    getStoryCraftConfig(),
     getPromptsConfig(),
   ]);
-  return { artStyles, ageWriting, templates };
+  return { artStyles, ageWriting, storyCraft, templates };
 }
 
 /** Validate + persist the prompt templates (world-readable appConfig doc). */
@@ -564,6 +634,17 @@ export async function saveAgeWritingConfig(input: unknown): Promise<AgeWritingCo
   const parsed = ageWritingConfigSchema.parse(input);
   const normalized = normalizeAgeWritingConfig(parsed);
   await writeDoc(AGE_WRITING_DOC, normalized);
+  return normalized;
+}
+
+export function defaultStoryCraftConfig(): StoryCraftConfig {
+  return createDefaultStoryCraftConfig();
+}
+
+export async function saveStoryCraftConfig(input: unknown): Promise<StoryCraftConfig> {
+  const parsed = storyCraftConfigSchema.parse(input);
+  const normalized = normalizeStoryCraftConfig({ ...parsed, updatedAt: Date.now() });
+  await writeDoc(STORY_CRAFT_DOC, normalized);
   return normalized;
 }
 
@@ -711,6 +792,333 @@ export async function deleteBrandingAssetVersion(
     assetHistory: { ...current.assetHistory, [slot]: list },
   });
   await writeDoc(BRANDING_DOC, next);
+  return next;
+}
+
+// ---- QR code library ------------------------------------------------------
+
+/**
+ * What the admin route hands in for a logo — bytes it just uploaded, a pointer
+ * to an existing branding asset to copy from, or "keep" (an update that leaves
+ * an already-saved logo untouched, so editing an unrelated field never forces
+ * re-picking the file).
+ */
+export type QrLogoInput =
+  | { source: "keep"; sizePct: number; quietPct: number; quietColor: string }
+  | {
+      source: "upload";
+      base64: string;
+      mimeType: string;
+      sizePct: number;
+      quietPct: number;
+      quietColor: string;
+    }
+  | {
+      source: "brandingAsset";
+      brandingSlot: BrandAssetSlot;
+      sizePct: number;
+      quietPct: number;
+      quietColor: string;
+    };
+
+export interface QrCodeSaveInput {
+  /** Present ⇒ update that code; absent ⇒ create a new one. */
+  id?: string;
+  name: string;
+  data: string;
+  errorCorrectionLevel: QrErrorCorrectionLevel;
+  margin: number;
+  scalePx: number;
+  colorDark: string;
+  colorLight: string;
+  format: QrFormat;
+  version: number | null;
+  maskPattern: number | null;
+  dotsStyle: QrDotStyle;
+  cornerSquareStyle: QrCornerStyle | null;
+  cornerDotStyle: QrCornerStyle | null;
+  logo: QrLogoInput | null;
+}
+
+/**
+ * Validate/clamp the scalar fields of a QR code by round-tripping a draft
+ * through the same normalizer the stored doc is kept in — one source of truth
+ * for "what's a legal value here", shared by reads and writes.
+ */
+function draftQrCode(input: QrCodeSaveInput, id: string, createdAt?: number): QrCode {
+  const draft = normalizeQrCodesConfig({
+    codes: [
+      {
+        ...input,
+        id,
+        logo: null,
+        rendered: null,
+        history: [],
+        createdAt,
+        updatedAt: Date.now(),
+      },
+    ],
+  }).codes[0];
+  if (!draft) throw new Error("A QR code needs something to encode.");
+  return draft;
+}
+
+/**
+ * Load bytes for a stored public asset. Prefer the Admin SDK path (talks to
+ * whichever bucket the functions runtime is wired to — real or emulator)
+ * over an HTTP fetch of `imageUrl`, which can 404 when Firestore still has
+ * a stale emulator URL after Storage data was lost.
+ */
+async function loadPublicAssetBytes(asset: {
+  storagePath?: string;
+  imageUrl: string;
+}): Promise<{ buffer: Buffer; contentType: string }> {
+  if (asset.storagePath) {
+    try {
+      const { base64, mimeType } = await downloadPublicBase64(asset.storagePath);
+      return { buffer: Buffer.from(base64, "base64"), contentType: mimeType };
+    } catch {
+      // Fall through to the public URL — covers the rare case where the
+      // Admin SDK can't see the object but the HTTP endpoint still can.
+    }
+  }
+  return fetchPublicBytes(asset.imageUrl);
+}
+
+/**
+ * Resolve a logo's source bytes: either the upload the admin just sent, or a
+ * fresh copy of an existing branding asset.
+ */
+export async function resolveQrLogoSource(
+  logo: Exclude<QrLogoInput, { source: "keep" }>,
+): Promise<{ buffer: Buffer; contentType: string }> {
+  if (logo.source === "brandingAsset") {
+    if (!BRAND_ASSET_SLOTS.includes(logo.brandingSlot)) {
+      throw new Error("A valid branding asset slot is required.");
+    }
+    const branding = await getBrandingConfig();
+    const asset = branding[logo.brandingSlot];
+    if (!asset?.imageUrl) throw new Error("That branding asset isn't set yet.");
+    try {
+      return await loadPublicAssetBytes(asset);
+    } catch (err) {
+      // The config still points at it, but the file itself is gone from
+      // Storage (e.g. local emulator data drifted from Firestore's after an
+      // unclean restart) — say so plainly rather than surfacing a bare URL.
+      throw new Error(
+        `That branding asset's file is missing from Storage (it's still set in Marketing → Branding, but the ` +
+          `underlying image is gone). Re-upload it there, then try again. (${err instanceof Error ? err.message : String(err)})`,
+      );
+    }
+  }
+  return { buffer: Buffer.from(logo.base64, "base64"), contentType: logo.mimeType };
+}
+
+function clampLogoSizePct(n: unknown): number {
+  return typeof n === "number" && Number.isFinite(n) ? Math.min(0.3, Math.max(0.1, n)) : 0.2;
+}
+
+function clampLogoQuietPct(n: unknown): number {
+  return typeof n === "number" && Number.isFinite(n)
+    ? Math.min(QR_LOGO_QUIET_MAX, Math.max(QR_LOGO_QUIET_MIN, n))
+    : QR_LOGO_QUIET_DEFAULT;
+}
+
+function normalizeLogoQuietColor(n: unknown): string {
+  return typeof n === "string" && /^#[0-9a-fA-F]{3,8}$/.test(n) ? n : QR_LOGO_QUIET_COLOR_DEFAULT;
+}
+
+/**
+ * The logo bytes to actually render with: "keep" reuses an existing code's
+ * already-stored logo (no re-fetch of the branding asset, no new copy), an
+ * upload/brandingAsset request resolves fresh bytes, and no logo means none.
+ */
+async function resolveLogoBufferForRender(
+  logo: QrLogoInput | null,
+  existing: QrCode | undefined,
+): Promise<Buffer | undefined> {
+  if (!logo) return undefined;
+  if (logo.source === "keep") {
+    if (!existing?.logo) return undefined;
+    try {
+      return (await loadPublicAssetBytes(existing.logo.asset)).buffer;
+    } catch {
+      return undefined;
+    }
+  }
+  return (await resolveQrLogoSource(logo)).buffer;
+}
+
+/**
+ * Render a QR code for preview only — resolves the logo (if any) in memory but
+ * never touches Storage or Firestore, so the admin UI can re-render on every
+ * slider tweak without piling up files or history entries.
+ */
+export async function previewQrCode(
+  input: QrCodeSaveInput,
+): Promise<{ contentType: string; base64: string }> {
+  const draft = draftQrCode(input, "preview");
+  const existing = input.id ? findQrCode(await getQrCodesConfig(), input.id) : undefined;
+  const logoBuffer = await resolveLogoBufferForRender(input.logo, existing);
+  const rendered = await renderQrCode({
+    data: draft.data,
+    format: draft.format,
+    errorCorrectionLevel: draft.errorCorrectionLevel,
+    margin: draft.margin,
+    scalePx: draft.scalePx,
+    colorDark: draft.colorDark,
+    colorLight: draft.colorLight,
+    version: draft.version,
+    maskPattern: draft.maskPattern,
+    dotsStyle: draft.dotsStyle,
+    cornerSquareStyle: draft.cornerSquareStyle,
+    cornerDotStyle: draft.cornerDotStyle,
+    logoBuffer,
+    logoSizePct: input.logo ? clampLogoSizePct(input.logo.sizePct) : undefined,
+    logoQuietPct: input.logo ? clampLogoQuietPct(input.logo.quietPct) : undefined,
+    logoQuietColor: input.logo ? normalizeLogoQuietColor(input.logo.quietColor) : undefined,
+  });
+  return { contentType: rendered.contentType, base64: rendered.buffer.toString("base64") };
+}
+
+/**
+ * Create or update a QR code, rendering it fresh every time. There is no
+ * "draft" state to persist without a render — a saved code with nothing
+ * generated for it yet isn't useful to anything that would reference it.
+ */
+export async function saveQrCode(input: QrCodeSaveInput): Promise<QrCodesConfig> {
+  const current = await getQrCodesConfig();
+  const existing = input.id ? findQrCode(current, input.id) : undefined;
+  const id = existing?.id ?? input.id ?? randomUUID();
+  const draft = draftQrCode(input, id, existing?.createdAt);
+
+  // The logo is stored as its own independent copy — a branding asset picked
+  // today can change or disappear later without retroactively changing a code
+  // that already referenced it. "keep" reuses the existing copy untouched
+  // (no re-fetch, no new file) so editing an unrelated field never disturbs it.
+  let logo: QrLogo | null = null;
+  // Bytes to composite with, kept in memory rather than re-fetched over HTTP
+  // wherever we already have them — a fresh upload/branding-asset copy is
+  // right here; only "keep" (reusing a copy from a previous save) has to go
+  // back to Storage for it.
+  let logoBuffer: Buffer | undefined;
+  if (input.logo?.source === "keep") {
+    logo = existing?.logo
+      ? {
+          ...existing.logo,
+          sizePct: clampLogoSizePct(input.logo.sizePct),
+          quietPct: clampLogoQuietPct(input.logo.quietPct),
+          quietColor: normalizeLogoQuietColor(input.logo.quietColor),
+        }
+      : null;
+    logoBuffer = logo ? (await loadPublicAssetBytes(logo.asset)).buffer : undefined;
+  } else if (input.logo) {
+    const { buffer, contentType } = await resolveQrLogoSource(input.logo);
+    const { storagePath, publicUrl } = await uploadQrLogo(id, buffer, contentType);
+    logo = {
+      source: input.logo.source,
+      ...(input.logo.source === "brandingAsset" ? { brandingSlot: input.logo.brandingSlot } : {}),
+      asset: { imageUrl: publicUrl, storagePath, updatedAt: Date.now() },
+      sizePct: clampLogoSizePct(input.logo.sizePct),
+      quietPct: clampLogoQuietPct(input.logo.quietPct),
+      quietColor: normalizeLogoQuietColor(input.logo.quietColor),
+    };
+    logoBuffer = buffer;
+  }
+
+  const rendered = await renderQrCode({
+    data: draft.data,
+    format: draft.format,
+    errorCorrectionLevel: draft.errorCorrectionLevel,
+    margin: draft.margin,
+    scalePx: draft.scalePx,
+    colorDark: draft.colorDark,
+    colorLight: draft.colorLight,
+    version: draft.version,
+    maskPattern: draft.maskPattern,
+    dotsStyle: draft.dotsStyle,
+    cornerSquareStyle: draft.cornerSquareStyle,
+    cornerDotStyle: draft.cornerDotStyle,
+    logoBuffer,
+    logoSizePct: logo?.sizePct,
+    logoQuietPct: logo?.quietPct,
+    logoQuietColor: logo?.quietColor,
+  });
+  const { storagePath, publicUrl } = await uploadQrCode(id, rendered.buffer, rendered.contentType);
+  const renderRecord: QrRender = { imageUrl: publicUrl, storagePath, updatedAt: Date.now() };
+  const history = existing?.rendered
+    ? computeHistory(existing.rendered, renderRecord, existing.history)
+    : (existing?.history ?? []);
+
+  const nextCode: QrCode = {
+    ...draft,
+    format: rendered.format,
+    errorCorrectionLevel: rendered.errorCorrectionLevel,
+    logo,
+    rendered: renderRecord,
+    history,
+  };
+
+  const codes = existing
+    ? current.codes.map((c) => (c.id === id ? nextCode : c))
+    : [...current.codes, nextCode];
+  const next = normalizeQrCodesConfig({ ...current, codes });
+  await writeDoc(QR_CODES_DOC, next);
+  return next;
+}
+
+/** Delete a QR code entirely. Unlike a branding slot (whose history exists so
+ *  a replaced image can be restored), a deleted CODE has nothing left to
+ *  restore it onto, so its rendered files (current + history + logo) are
+ *  cleaned up too, best-effort. */
+export async function deleteQrCode(id: string): Promise<QrCodesConfig> {
+  const current = await getQrCodesConfig();
+  const target = findQrCode(current, id);
+  const codes = current.codes.filter((c) => c.id !== id);
+  const next = normalizeQrCodesConfig({ ...current, codes });
+  await writeDoc(QR_CODES_DOC, next);
+  if (target) {
+    const paths = [
+      target.rendered?.storagePath,
+      target.logo?.asset.storagePath,
+      ...target.history.map((h) => h.storagePath),
+    ].filter((p): p is string => Boolean(p));
+    await Promise.all(paths.map((p) => deletePublicObject(p)));
+  }
+  return next;
+}
+
+/** Restore a previous render by its storage path (makes it current again — no
+ *  re-render, the file already exists). */
+export async function restoreQrCodeVersion(id: string, storagePath: string): Promise<QrCodesConfig> {
+  const current = await getQrCodesConfig();
+  const target = findQrCode(current, id);
+  if (!target) throw new Error("QR code not found.");
+  const version = target.history.find((h) => h.storagePath === storagePath);
+  if (!version) throw new Error("That version was not found.");
+  const history = computeHistory(target.rendered, version, target.history);
+  const nextCode: QrCode = {
+    ...target,
+    rendered: { ...version, updatedAt: Date.now() },
+    history,
+    updatedAt: Date.now(),
+  };
+  const codes = current.codes.map((c) => (c.id === id ? nextCode : c));
+  const next = normalizeQrCodesConfig({ ...current, codes });
+  await writeDoc(QR_CODES_DOC, next);
+  return next;
+}
+
+/** Remove one historical render from a code's history (the route deletes the
+ *  stored file itself, mirroring the branding asset/watermark routes). */
+export async function deleteQrCodeVersion(id: string, storagePath: string): Promise<QrCodesConfig> {
+  const current = await getQrCodesConfig();
+  const target = findQrCode(current, id);
+  if (!target) throw new Error("QR code not found.");
+  const nextCode: QrCode = { ...target, history: target.history.filter((h) => h.storagePath !== storagePath) };
+  const codes = current.codes.map((c) => (c.id === id ? nextCode : c));
+  const next = normalizeQrCodesConfig({ ...current, codes });
+  await writeDoc(QR_CODES_DOC, next);
   return next;
 }
 

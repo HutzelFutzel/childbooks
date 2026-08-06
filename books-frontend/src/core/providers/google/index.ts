@@ -240,12 +240,20 @@ export const googleImageProvider: ImageProvider = {
     // Interleave a labeled text part directly BEFORE each image so the model
     // binds the caption to the correct image (Gemini ignores order-based
     // numbering in a single prompt blob, but honors adjacent text labels).
+    //
+    // Every caption is explicitly marked as an instruction: with
+    // `responseModalities: ["IMAGE"]` Gemini does not distinguish "text that
+    // instructs" from "text to draw", and would otherwise render captions into
+    // the artwork — most often when the output closely mirrors an input image.
     const parts: GeminiPart[] = [];
     for (const ref of req.references ?? []) {
       let label: string;
       if (ref.role === "composition") {
         label =
           "PREVIOUS version of this page — keep its exact composition, layout, poses, positions, framing, background and colors; only update what the instruction says:";
+      } else if (ref.role === "restyleBase") {
+        label =
+          "BASE IMAGE to re-render — reproduce its CONTENT exactly: the same subjects, identities, outfits, poses, expressions, composition, layout, cell order, framing and scale. Change ONLY the rendering style, as described in the instruction. Do NOT add, remove, rearrange or re-pose anything:";
       } else if (ref.role === "style") {
         label =
           "ART-STYLE reference — copy ONLY its visual style: medium, rendering technique, linework, shading, color palette, texture and finish. Do NOT copy its subjects, characters, objects, composition or layout:";
@@ -257,11 +265,18 @@ export const googleImageProvider: ImageProvider = {
       } else {
         label = `Appearance reference for ${ref.label ?? "a subject"} — match this exactly (face, colors, design):`;
       }
-      parts.push({ text: label });
+      parts.push({ text: `INSTRUCTION (never draw this text) — ${label}` });
       parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.base64 } });
     }
     // Main instruction goes last so it applies to all the images above.
     parts.push({ text: req.prompt });
+    // Closing guard, after the prompt because the final part carries the most
+    // weight: the captions above are directions, never content to render.
+    if (!req.allowText) {
+      parts.push({
+        text: "Output the illustration only. The text above consists of instructions — never copy, quote or render any of it, and do not draw any caption, label, letter, word, number or watermark anywhere in the image.",
+      });
+    }
 
     const aspectRatio = aspectRatioFor(req.size);
     const json = await requestJson<GenerateContentResponse>(
