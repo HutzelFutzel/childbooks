@@ -432,6 +432,31 @@ export const RENDERERS: { [Id in keyof EmailTemplateVarsMap]: TemplateRenderer<I
     return assemble(ctx, subject, `We got your message · ${vars.ref}`, body, text);
   },
 
+  affiliate_application_ack: (vars, ctx) => {
+    const subject = `We received your affiliate application · ${vars.ref}`;
+    const reviewLine =
+      "We review every application by hand to keep the program a good fit for families and creators. We'll email you with next steps — usually within a few business days.";
+    const body = [
+      heading("Application received", ctx.brand),
+      paragraph(`${greeting(vars.name)} thanks for applying to the ${escapeHtml(ctx.brand.brandName)} affiliate program. ${reviewLine}`),
+      calloutBox(
+        [
+          `<strong>Channel:</strong> ${escapeHtml(vars.channel)}`,
+          `<strong>Audience:</strong> ${escapeHtml(vars.audience)}`,
+          `<strong>URL:</strong> ${escapeHtml(vars.channelUrl)}`,
+          "",
+          escapeHtml(vars.pitch).replace(/\n/g, "<br/>"),
+        ].join("<br/>"),
+        ctx.brand,
+      ),
+      paragraph(
+        `Your reference: <strong style="font-family:monospace;">${escapeHtml(vars.ref)}</strong> — mention it if you follow up.`,
+      ),
+    ].join("\n");
+    const text = `${greeting(vars.name)}\n\nThanks for applying to the ${ctx.brand.brandName} affiliate program. ${reviewLine}\n\nChannel: ${vars.channel}\nAudience: ${vars.audience}\nURL: ${vars.channelUrl}\n\n${vars.pitch}\n\nYour reference: ${vars.ref}`;
+    return assemble(ctx, subject, `Affiliate application received · ${vars.ref}`, body, text);
+  },
+
   policy_update: (vars, ctx) => {
     const subject = `We've updated our ${vars.policyName}`;
     const body = [

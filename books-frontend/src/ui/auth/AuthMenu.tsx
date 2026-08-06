@@ -7,6 +7,7 @@ import {
   CreditCard,
   Download,
   ExternalLink,
+  Handshake,
   LogOut,
   Package,
   Settings,
@@ -133,6 +134,14 @@ export function AuthMenu() {
               icon={<BookOpen className="size-4" />}
               label="Blog"
               href="/blog"
+              openInNewTab
+              trailingIcon={<ExternalLink className="size-3.5" />}
+              onClick={close}
+            />
+            <MenuItem
+              icon={<Handshake className="size-4" />}
+              label="Affiliate program"
+              href="/affiliates"
               openInNewTab
               trailingIcon={<ExternalLink className="size-3.5" />}
               onClick={close}

@@ -3,6 +3,8 @@ import { getSeoConfig } from "../../server/seo";
 import { getBrandingConfig } from "../../server/branding";
 import { getLegalConfig } from "../../server/legal";
 import { getPublishedPosts } from "../../server/blog";
+import { marketingPageMetadata } from "../../server/pageSeo";
+import { resolveSeoPage } from "../../core/config/seo";
 import { Nav } from "../../ui/marketing/Nav";
 import { Footer } from "../../ui/marketing/Footer";
 import { BreadcrumbJsonLd } from "../../ui/marketing/BreadcrumbJsonLd";
@@ -15,26 +17,11 @@ import { BlogCard } from "../../ui/blog/BlogCard";
  */
 export const revalidate = 60;
 
+const PATH = "/blog" as const;
+
 export async function generateMetadata(): Promise<Metadata> {
   const [seo, branding] = await Promise.all([getSeoConfig(), getBrandingConfig()]);
-  const canonical = `${seo.siteUrl}/blog`;
-  const title = "Blog";
-  const description = `Guides, ideas and inspiration for making personalized children's books with ${branding.brandName}.`;
-  const ogImage = branding.ogImage?.imageUrl;
-  return {
-    title,
-    description,
-    alternates: { canonical },
-    openGraph: {
-      type: "website",
-      siteName: seo.siteName,
-      title,
-      description,
-      url: canonical,
-      images: ogImage ? [{ url: ogImage, alt: branding.ogImage?.alt || title }] : undefined,
-    },
-    twitter: { card: seo.twitterCard, title, description, images: ogImage ? [ogImage] : undefined },
-  };
+  return marketingPageMetadata(seo, PATH, branding);
 }
 
 export default async function BlogIndexPage() {
@@ -45,13 +32,14 @@ export default async function BlogIndexPage() {
     getPublishedPosts(),
   ]);
   const logoUrl = branding.logo?.imageUrl ?? null;
+  const { title } = resolveSeoPage(seo, PATH);
 
   return (
     <>
       <BreadcrumbJsonLd
         items={[
           { name: "Home", url: `${seo.siteUrl}/` },
-          { name: "Blog", url: `${seo.siteUrl}/blog` },
+          { name: title, url: `${seo.siteUrl}${PATH}` },
         ]}
       />
       <Nav siteName={branding.brandName} logoUrl={logoUrl} />

@@ -36,6 +36,7 @@ export const EMAIL_TEMPLATE_IDS = [
   "referral_reward",
   "contact_form",
   "contact_form_ack",
+  "affiliate_application_ack",
   "policy_update",
 ] as const;
 
@@ -187,6 +188,19 @@ export interface EmailTemplateVarsMap {
    * what they sent.
    */
   contact_form_ack: { name?: string; ref: string; topic?: string; message: string };
+  /**
+   * Sent to the applicant after `/affiliate-applications` accepts their form.
+   * Confirms we received the application and sets the "we'll review" expectation;
+   * `ref` is the quotable reference.
+   */
+  affiliate_application_ack: {
+    name?: string;
+    ref: string;
+    channel: string;
+    channelUrl: string;
+    audience: string;
+    pitch: string;
+  };
   /**
    * Sent to users when a legal document changes materially. A service message
    * about the account's governing policy — transactional, NOT gated on marketing

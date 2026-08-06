@@ -3,6 +3,8 @@ import Link from "next/link";
 import { getBrandingConfig } from "../../server/branding";
 import { getLegalConfig } from "../../server/legal";
 import { getSeoConfig } from "../../server/seo";
+import { marketingPageMetadata } from "../../server/pageSeo";
+import { resolveSeoPage } from "../../core/config/seo";
 import { getPublicPlans } from "../../server/plans";
 import { getCatalogMedia, getPricingSettings, getPublicProducts } from "../../server/products";
 import { offerablePublicProducts } from "../../core/config/products";
@@ -32,25 +34,11 @@ import { requestedCurrency, requestedPlanId } from "../../ui/pricing/format";
  */
 export const dynamic = "force-dynamic";
 
-const TITLE = "Print pricing calculator";
-const DESCRIPTION =
-  "See exactly what printing a custom children's book costs — by format, page count, paper, copies and destination. No account needed.";
+const PATH = "/print-pricing" as const;
 
 export async function generateMetadata(): Promise<Metadata> {
-  const seo = await getSeoConfig();
-  const canonical = `${seo.siteUrl}/print-pricing`;
-  return {
-    title: TITLE,
-    description: DESCRIPTION,
-    alternates: { canonical },
-    openGraph: {
-      type: "website",
-      siteName: seo.siteName,
-      title: TITLE,
-      description: DESCRIPTION,
-      url: canonical,
-    },
-  };
+  const [seo, branding] = await Promise.all([getSeoConfig(), getBrandingConfig()]);
+  return marketingPageMetadata(seo, PATH, branding);
 }
 
 export default async function PrintPricingPage({
@@ -80,19 +68,20 @@ export default async function PrintPricingPage({
   // canonical URL — see `requestedPlanId`.
   const planId = requestedPlanId(plans.plans, askedPlan);
   const faq = pricingFaq(products, settings, currency);
+  const { title, description } = resolveSeoPage(seo, PATH);
 
   return (
     <>
       <BreadcrumbJsonLd
         items={[
           { name: "Home", url: `${seo.siteUrl}/` },
-          { name: TITLE, url: `${seo.siteUrl}/print-pricing` },
+          { name: title, url: `${seo.siteUrl}${PATH}` },
         ]}
       />
       <PricingJsonLd
         name={`${branding.brandName} print pricing calculator`}
-        description={DESCRIPTION}
-        url={`${seo.siteUrl}/print-pricing`}
+        description={description}
+        url={`${seo.siteUrl}${PATH}`}
         faq={faq}
       />
       <Nav siteName={branding.brandName} logoUrl={logoUrl} />

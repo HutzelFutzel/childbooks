@@ -47,6 +47,7 @@ import { registerReferralPublicRoutes, registerReferralUserRoutes } from "./refe
 import { registerAffiliateRoutes } from "./affiliates";
 import { registerAffiliateWebhookRoute } from "./affiliates/webhook";
 import { registerAffiliateAdminRoutes } from "./affiliates/admin";
+import { registerAffiliateApplicationRoutes } from "./affiliates/applications";
 
 export function createApp(): Express {
   const app = express();
@@ -93,6 +94,11 @@ export function createApp(): Express {
   // before the auth guards so visitors can reach it; `attachUser` still ran, so
   // a signed-in sender is identified without requiring a session.
   registerContactRoutes(app);
+
+  // Public affiliate applications — same tokenless + abuse pattern as contact.
+  // Path is `/affiliate-applications` (not `/affiliates/*`) so it stays clear of
+  // the authenticated Rewardful attribution routes under `/affiliates`.
+  registerAffiliateApplicationRoutes(app);
 
   // Public blog analytics beacon — tokenless + cookieless (no consent needed).
   // Registered before the auth guards so visitors on the marketing site can

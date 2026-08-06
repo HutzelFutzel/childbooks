@@ -204,6 +204,23 @@ export const EMAIL_TEMPLATE_REGISTRY: Registry = {
       message: "Hi! I'd love to know how long shipping takes to Germany. Thanks!",
     },
   },
+  affiliate_application_ack: {
+    id: "affiliate_application_ack",
+    label: "Affiliate application received (to applicant)",
+    description:
+      "Sent to the applicant after they submit the public affiliate form — confirms we received it and " +
+      "sets the expectation that applications are reviewed before joining.",
+    category: "transactional",
+    defaultSenderKey: "support",
+    sample: {
+      name: "Jordan",
+      ref: "AFF-3K8P2M",
+      channel: "Instagram",
+      channelUrl: "https://instagram.com/example",
+      audience: "10,000 – 50,000",
+      pitch: "I share personalized gift ideas with parents of young kids.",
+    },
+  },
   policy_update: {
     id: "policy_update",
     label: "Policy update notice",

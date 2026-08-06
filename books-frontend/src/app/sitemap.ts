@@ -29,6 +29,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { url: `${seo.siteUrl}/`, lastModified, changeFrequency: "weekly", priority: 1 },
     { url: `${seo.siteUrl}/print-pricing`, lastModified, changeFrequency: "weekly", priority: 0.8 },
     { url: `${seo.siteUrl}/blog`, lastModified, changeFrequency: "weekly", priority: 0.7 },
+    { url: `${seo.siteUrl}/affiliates`, lastModified, changeFrequency: "monthly", priority: 0.5 },
     { url: `${seo.siteUrl}/contact`, lastModified, changeFrequency: "yearly", priority: 0.3 },
     ...formats.map((product) => ({
       url: `${seo.siteUrl}/print-pricing/${formatSlug(product.spec)}`,

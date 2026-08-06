@@ -20,6 +20,7 @@ const COLUMNS = [
     links: [
       { href: "/blog", label: "Blog" },
       { href: "/#faq", label: "FAQ" },
+      { href: "/affiliates", label: "Affiliate program" },
       { href: "/contact", label: "Contact" },
       { href: "/studio", label: "Sign in" },
     ],

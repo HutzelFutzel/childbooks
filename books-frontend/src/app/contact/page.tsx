@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import { getBrandingConfig } from "../../server/branding";
 import { getLegalConfig } from "../../server/legal";
 import { getSeoConfig } from "../../server/seo";
+import { marketingPageMetadata } from "../../server/pageSeo";
+import { resolveSeoPage } from "../../core/config/seo";
 import { legalUrlByRole } from "../../core/config/legal";
 import { Nav } from "../../ui/marketing/Nav";
 import { Footer } from "../../ui/marketing/Footer";
@@ -11,13 +13,11 @@ import { ContactForm } from "../../ui/contact/ContactForm";
 /** Rendered per request so brand + legal links reflect admin edits without a redeploy. */
 export const dynamic = "force-dynamic";
 
+const PATH = "/contact" as const;
+
 export async function generateMetadata(): Promise<Metadata> {
-  const [branding, seo] = await Promise.all([getBrandingConfig(), getSeoConfig()]);
-  return {
-    title: "Contact",
-    description: `Get in touch with the ${branding.brandName} team.`,
-    alternates: { canonical: `${seo.siteUrl}/contact` },
-  };
+  const [seo, branding] = await Promise.all([getSeoConfig(), getBrandingConfig()]);
+  return marketingPageMetadata(seo, PATH, branding);
 }
 
 export default async function ContactPage() {
@@ -28,13 +28,14 @@ export default async function ContactPage() {
   ]);
   const logoUrl = branding.logo?.imageUrl ?? null;
   const privacyUrl = legalUrlByRole(legal, "privacy") || undefined;
+  const { title } = resolveSeoPage(seo, PATH);
 
   return (
     <>
       <BreadcrumbJsonLd
         items={[
           { name: "Home", url: `${seo.siteUrl}/` },
-          { name: "Contact", url: `${seo.siteUrl}/contact` },
+          { name: title, url: `${seo.siteUrl}${PATH}` },
         ]}
       />
       <Nav siteName={branding.brandName} logoUrl={logoUrl} />

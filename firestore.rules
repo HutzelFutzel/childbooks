@@ -186,10 +186,17 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Affiliate-program applications — system of record for the public apply
+    // form. Contains applicant PII (name, email, channel URLs), so never
+    // client-readable; reviewed via Slack + backend.
+    match /affiliateApplications/{ref} {
+      allow read, write: if false;
+    }
+
     // Fixed-window rate-limit counters for the tokenless contact endpoint. Keys
     // are hashed before use as document ids, so these hold no addresses — just
     // opaque counters. Written only by the backend; a Firestore TTL policy on
-    // `expiresAt` reaps them.
+    // `expiresAt` reaps them. Shared with affiliate applications.
     match /contactRateLimits/{key} {
       allow read, write: if false;
     }

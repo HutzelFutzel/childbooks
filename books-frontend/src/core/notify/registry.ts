@@ -24,6 +24,7 @@ export const SLACK_MESSAGE_IDS = [
   "referral_accepted",
   "referral_paid",
   "contact_form",
+  "affiliate_application",
   "admin_alert",
   "daily_summary",
 ] as const;
@@ -83,6 +84,13 @@ export const SLACK_MESSAGE_REGISTRY: Record<SlackMessageKey, SlackMessageMeta> =
     label: "Contact form submission",
     description: "Posted to #contact when a visitor submits the public contact form.",
     channel: "contact",
+  },
+  affiliate_application: {
+    id: "affiliate_application",
+    label: "Affiliate application",
+    description:
+      "Posted to #growth when someone applies to the affiliate program. Review, then create them in Rewardful if approved.",
+    channel: "growth",
   },
   admin_alert: {
     id: "admin_alert",

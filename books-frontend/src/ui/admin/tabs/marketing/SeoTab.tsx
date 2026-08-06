@@ -9,7 +9,15 @@ import { Select } from "../../../components/Select";
 import { Toggle } from "../../../components/Toggle";
 import { cn } from "../../../lib/cn";
 import { useAppConfigStore } from "../../../../state/appConfigStore";
-import type { SeoConfig, SeoFaqItem } from "../../../../core/config/seo";
+import {
+  SEO_PAGE_IDS,
+  SEO_PAGE_LABELS,
+  defaultSeoPageMeta,
+  type SeoConfig,
+  type SeoFaqItem,
+  type SeoPageId,
+  type SeoPageMeta,
+} from "../../../../core/config/seo";
 import { Grid, Section, TextField } from "../products/parts";
 
 /** Recommended meta-description length window (Google typically truncates ~160). */
@@ -20,11 +28,10 @@ const DESC_MAX = 160;
 const TITLE_MAX = 60;
 
 /**
- * Editor for the **marketing SEO** config (`appConfig/seo`). Owns the landing
- * page's title/description, canonical + social metadata, robots indexing,
- * search-console verification, Organization structured data, and the FAQ that
- * feeds both the on-page accordion and the FAQPage rich result. Reads live from
- * the public config doc; saves through the admin backend route.
+ * Editor for the **marketing SEO** config (`appConfig/seo`). Owns site-wide
+ * identity (landing title/description, robots, verification, org, FAQ) plus
+ * optional per-page title/description overrides for fixed marketing routes.
+ * Reads live from the public config doc; saves through the admin backend route.
  */
 export function SeoTab() {
   const stored = useAppConfigStore((s) => s.seo);
@@ -94,9 +101,9 @@ export function SeoTab() {
     <div className="space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <p className="max-w-2xl text-xs leading-relaxed text-ink-500">
-          Everything that controls how the public landing page appears in search
-          results and social shares. Changes are stored in Firebase and picked up
-          on the next page render — no deploy needed.
+          Site-wide search and social settings, plus per-page title/description
+          overrides for marketing routes. Changes are stored in Firebase and
+          picked up on the next page render — no deploy needed.
         </p>
         <div className="flex gap-2">
           {dirty && (
@@ -120,7 +127,7 @@ export function SeoTab() {
       {/* ---- General ---- */}
       <Section
         title="General"
-        hint="Core identity and the default page title/description used across the site."
+        hint="Site identity and the landing page title/description. Other marketing routes are under Pages below."
       >
         <Grid cols={2}>
           <TextField label="Site name" value={draft.siteName} onChange={(v) => set({ siteName: v })} />
@@ -181,6 +188,50 @@ export function SeoTab() {
             }
           />
         </Field>
+      </Section>
+
+      {/* ---- Per-page overrides ---- */}
+      <Section
+        title="Pages"
+        hint="Optional title and description for each marketing route. Leave blank to use the built-in default. The landing page is edited above under General."
+      >
+        <div className="space-y-4">
+          {SEO_PAGE_IDS.map((path) => {
+            const page = draft.pages[path] ?? { title: "", description: "" };
+            const fallback = defaultSeoPageMeta(path, draft.siteName);
+            const setPage = (patch: Partial<SeoPageMeta>) => {
+              const next: SeoConfig["pages"] = { ...draft.pages };
+              next[path as SeoPageId] = { ...page, ...patch };
+              set({ pages: next });
+            };
+            return (
+              <div
+                key={path}
+                className="space-y-2 rounded-lg bg-white p-3 ring-1 ring-inset ring-ink-100"
+              >
+                <div className="flex flex-wrap items-baseline justify-between gap-2">
+                  <div className="text-sm font-medium text-ink-800">{SEO_PAGE_LABELS[path]}</div>
+                  <code className="text-[11px] text-ink-400">{path}</code>
+                </div>
+                <Field label="Title" hint={`Default: ${fallback.title}`}>
+                  <Input
+                    value={page.title}
+                    placeholder={fallback.title}
+                    onChange={(e) => setPage({ title: e.target.value })}
+                  />
+                </Field>
+                <Field label="Description" hint={`Default: ${fallback.description}`}>
+                  <Textarea
+                    rows={2}
+                    value={page.description}
+                    placeholder={fallback.description}
+                    onChange={(e) => setPage({ description: e.target.value })}
+                  />
+                </Field>
+              </div>
+            );
+          })}
+        </div>
       </Section>
 
       {/* ---- Social / Twitter ---- */}

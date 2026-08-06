@@ -32,6 +32,24 @@ export interface SeoFaqItem {
   answer: string;
 }
 
+/**
+ * Fixed marketing routes whose title/description can be overridden in Admin →
+ * Marketing → SEO → Pages. The landing page (`/`) stays in the General fields
+ * (`titleDefault` / `description`) so site identity isn't duplicated.
+ */
+export const SEO_PAGE_IDS = ["/contact", "/affiliates", "/blog", "/print-pricing"] as const;
+export type SeoPageId = (typeof SEO_PAGE_IDS)[number];
+
+export function isSeoPageId(v: unknown): v is SeoPageId {
+  return typeof v === "string" && (SEO_PAGE_IDS as readonly string[]).includes(v);
+}
+
+/** Per-route meta overrides. Empty strings mean "use the code default". */
+export interface SeoPageMeta {
+  title: string;
+  description: string;
+}
+
 export interface SeoConfig {
   version: 1;
   /** Brand/site name (used in titles + structured data). */
@@ -60,7 +78,59 @@ export interface SeoConfig {
   verification: SeoVerification;
   /** FAQ content — powers the on-page accordion AND the FAQPage JSON-LD. */
   faq: SeoFaqItem[];
+  /**
+   * Optional title/description overrides for fixed marketing routes. Missing or
+   * blank fields fall back to {@link defaultSeoPageMeta}.
+   */
+  pages: Partial<Record<SeoPageId, SeoPageMeta>>;
   updatedAt: number;
+}
+
+/** Human labels for the admin Pages editor. */
+export const SEO_PAGE_LABELS: Record<SeoPageId, string> = {
+  "/contact": "Contact",
+  "/affiliates": "Affiliate program",
+  "/blog": "Blog",
+  "/print-pricing": "Print pricing",
+};
+
+/** Code defaults when an admin override is empty. */
+export function defaultSeoPageMeta(path: SeoPageId, siteName = "Childbook Studio"): SeoPageMeta {
+  switch (path) {
+    case "/contact":
+      return {
+        title: "Contact",
+        description: `Get in touch with the ${siteName} team.`,
+      };
+    case "/affiliates":
+      return {
+        title: "Affiliate program",
+        description: `Earn commission by sharing ${siteName} with your audience. Apply to join our curated affiliate program.`,
+      };
+    case "/blog":
+      return {
+        title: "Blog",
+        description: `Guides, ideas and inspiration for making personalized children's books with ${siteName}.`,
+      };
+    case "/print-pricing":
+      return {
+        title: "Print pricing calculator",
+        description:
+          "See exactly what printing a custom children's book costs — by format, page count, paper, copies and destination. No account needed.",
+      };
+  }
+}
+
+/** Resolve title/description for a marketing route (admin override or default). */
+export function resolveSeoPage(config: SeoConfig, path: SeoPageId): SeoPageMeta {
+  const fallback = defaultSeoPageMeta(path, config.siteName);
+  const override = config.pages[path];
+  const title = override?.title?.trim();
+  const description = override?.description?.trim();
+  return {
+    title: title || fallback.title,
+    description: description || fallback.description,
+  };
 }
 
 const DEFAULT_SITE_URL = "https://childbook.studio";
@@ -112,6 +182,7 @@ export function createDefaultSeoConfig(): SeoConfig {
           "Sparks are the credits used for AI generation. Paid plans include a monthly bundle of Sparks that roll over, plus cheaper prints and premium extras.",
       },
     ],
+    pages: {},
     updatedAt: Date.now(),
   };
 }
@@ -143,6 +214,22 @@ function normalizeFaq(v: unknown): SeoFaqItem[] {
     })
     .filter((it) => it.question.length > 0 && it.answer.length > 0)
     .slice(0, 30);
+}
+
+function normalizePages(v: unknown): SeoConfig["pages"] {
+  if (!v || typeof v !== "object") return {};
+  const raw = v as Record<string, unknown>;
+  const pages: SeoConfig["pages"] = {};
+  for (const id of SEO_PAGE_IDS) {
+    const entry = raw[id];
+    if (!entry || typeof entry !== "object") continue;
+    const e = entry as Partial<SeoPageMeta>;
+    pages[id] = {
+      title: str(e.title, "", 200).trim(),
+      description: str(e.description, "", 500).trim(),
+    };
+  }
+  return pages;
 }
 
 export function normalizeSeoConfig(input: unknown): SeoConfig {
@@ -181,6 +268,7 @@ export function normalizeSeoConfig(input: unknown): SeoConfig {
       bing: str(ver.bing, "", 200),
     },
     faq: normalizeFaq(s.faq),
+    pages: normalizePages(s.pages),
     updatedAt: typeof s.updatedAt === "number" ? s.updatedAt : Date.now(),
   };
 }
@@ -212,6 +300,15 @@ export const seoConfigSchema = z.object({
     .optional(),
   faq: z
     .array(z.object({ question: z.string().max(300), answer: z.string().max(2000) }))
+    .optional(),
+  pages: z
+    .record(
+      z.string(),
+      z.object({
+        title: z.string().max(200),
+        description: z.string().max(500),
+      }),
+    )
     .optional(),
   updatedAt: z.number().optional(),
 });
