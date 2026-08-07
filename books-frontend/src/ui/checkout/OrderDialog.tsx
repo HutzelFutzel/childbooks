@@ -56,6 +56,7 @@ import { Select } from "../components/Select";
 import { notify } from "../lib/notify";
 import type { DesignPage } from "../design/designInit";
 import { buildCoverPlan } from "../design/printTargets";
+import { OfferPreviewNote } from "./OfferPreviewNote";
 import { FormatPicker } from "./FormatPicker";
 import { VariantPicker } from "./VariantPicker";
 import {
@@ -924,6 +925,14 @@ export function OrderDialog({
             ) : quote ? (
               <>
                 <QuoteLines quote={quote} />
+                {/* What this order earns them, before they commit to it. */}
+                <OfferPreviewNote
+                  itemType="print"
+                  amount={quote.total}
+                  productId={catalogProduct?.id}
+                  projectId={project.id}
+                  className="mt-2"
+                />
                 {/* Only when the customer isn't already getting a member price —
                     otherwise this would advertise a discount they have. */}
                 {quote.discountPct === 0 && (

@@ -22,6 +22,8 @@ export type ConfigTabId =
   | "affiliates" // Rewardful affiliate program (master switch + what earns)
   | "financial" // currencies, FX, fees, rounding, tax — the money plumbing
   | "discounts" // sale planner: per-item break-even & safe max discount + slider
+  | "campaigns" // promotions: refunds, gifts, price breaks, purchase discounts
+  | "surveys" // the questions asked after checkout, and who gets asked them
   // AI pipeline group. (Cost *reporting* lives in Analysis → Costs; this group
   // only holds the knobs that set what things cost.)
   | "models"
@@ -54,7 +56,9 @@ export type AnalysisTabId =
   | "products"
   // Where new users come from.
   | "referrals"
-  | "affiliates";
+  | "affiliates"
+  | "campaigns"
+  | "surveys";
 
 /**
  * Analysis is grouped rather than shown as one long tab strip: an admin
@@ -84,8 +88,9 @@ export const ANALYSIS_GROUPS: {
   {
     id: "growth",
     label: "Growth",
-    description: "Where new users come from, and whether the referral/affiliate programs pay off.",
-    tabs: ["referrals", "affiliates"],
+    description:
+      "Where new users come from, whether the referral, affiliate and campaign programs pay for themselves, and who your customers actually are.",
+    tabs: ["referrals", "affiliates", "campaigns", "surveys"],
   },
 ];
 
@@ -124,6 +129,8 @@ export const CONFIG_GROUPS: {
       "affiliates",
       "financial",
       "discounts",
+      "campaigns",
+      "surveys",
     ],
   },
   {

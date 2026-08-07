@@ -110,6 +110,14 @@ service cloud.firestore {
         && fieldUnchanged('lifetime');
     }
 
+    // What the backend worked out about the buyer from their survey answers
+    // (parent, grandparent, has children of their own). Campaign conditions
+    // target on it, so a client that could set it could hand itself any offer
+    // aimed at any segment. Written only through the survey routes.
+    function surveyProfileUnchanged() {
+      return fieldUnchanged('surveyProfile');
+    }
+
     // Profile root doc + saved address book. Owner-only, with field validation
     // on writes. The broad `users/{uid}/**` read rule above does NOT cover the
     // `users/{uid}` doc itself (the recursive wildcard needs >=1 extra segment),
@@ -118,7 +126,8 @@ service cloud.firestore {
     match /users/{uid} {
       allow read: if signedInAs(uid);
       allow write: if signedInAs(uid) && isValidProfile(request.resource.data)
-        && sparkBalanceUnchanged() && referralFieldsUnchanged() && meteringFieldsUnchanged();
+        && sparkBalanceUnchanged() && referralFieldsUnchanged() && meteringFieldsUnchanged()
+        && surveyProfileUnchanged();
     }
     match /users/{uid}/addresses/{addressId} {
       allow create, update: if signedInAs(uid) && isValidAddress(request.resource.data);
@@ -249,6 +258,41 @@ service cloud.firestore {
       allow read, write: if false;
     }
     match /affiliateWebhookEvents/{doc} {
+      allow read, write: if false;
+    }
+
+    // The marketing campaign engine. All of it is backend-only, and all of it is
+    // spelled out for the same reason the affiliate mirror is: this is money.
+    //
+    // `campaignEnrollments` in particular must never be client-WRITABLE — it
+    // holds the FROZEN terms a payout is calculated from, so a client that could
+    // edit it could write itself any offer it liked. `campaignRedemptions` is the
+    // idempotency ledger, and `campaignCounters` is what enforces "first 100".
+    // Customers see all of this through the admin-gated and `/account/offers`
+    // routes instead. (The catch-all below would already deny them.)
+    match /campaignEvents/{doc} {
+      allow read, write: if false;
+    }
+    match /campaignEnrollments/{doc} {
+      allow read, write: if false;
+    }
+    match /campaignRedemptions/{doc} {
+      allow read, write: if false;
+    }
+    match /campaignCounters/{doc} {
+      allow read, write: if false;
+    }
+    match /campaignStats/{doc} {
+      allow read, write: if false;
+    }
+    // Profiling survey answers. Backend-only in BOTH directions, including for the
+    // person who wrote them: a client that could write here could answer on behalf
+    // of an account it doesn't own (poisoning every cross-tab the answers feed) or
+    // re-answer to farm a "get Sparks for answering" campaign. Submissions go
+    // through `/account/survey`, which validates against the live question set and
+    // refuses a second answer. A customer's own answers are readable via the GDPR
+    // export route.
+    match /surveyResponses/{doc} {
       allow read, write: if false;
     }
 

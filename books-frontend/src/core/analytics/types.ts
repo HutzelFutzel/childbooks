@@ -7,6 +7,7 @@
  * browser. The client calls `/admin/analytics/*` (Admin SDK, admin-gated) and
  * just renders the result.
  */
+import type { BuyerFacts } from "../config/surveys";
 
 /** Preset windows for the time-frame toggle (plus a custom range). */
 export type Timeframe = "today" | "7d" | "30d" | "custom";
@@ -275,6 +276,14 @@ export interface AnalyticsUserRow extends UserEconomics {
   events: number;
   /** Lifetime AI spend in USD, or null when unavailable. */
   spendUsd: number | null;
+  /**
+   * Who the surveys say this person buys for, or null when they've never answered.
+   *
+   * The one place the profiling answers become actionable per account rather than
+   * in aggregate: a segment chart tells you grandparents are worth targeting, and
+   * this tells you which accounts they are.
+   */
+  buyer: BuyerFacts | null;
 }
 
 export interface AnalyticsUsersResult {

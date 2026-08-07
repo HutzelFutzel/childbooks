@@ -27,6 +27,8 @@
     "check:print": "node scripts/check-print-catalog.mjs",
     "check:print-geometry": "node scripts/check-print-geometry.mjs",
     "check:pricing": "node scripts/check-pricing.mjs",
+    "check:campaigns": "node scripts/check-campaigns.mjs",
+    "check:surveys": "node scripts/check-surveys.mjs",
     "deploy": "node scripts/deploy.mjs",
     "setSecrets": "node scripts/set-secrets.mjs",
     "setSecrets:status": "node scripts/set-secrets.mjs status",

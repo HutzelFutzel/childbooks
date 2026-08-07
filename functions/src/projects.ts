@@ -79,6 +79,19 @@ export interface ProjectDerived {
   readingModeId?: string;
   artStyleKey?: string;
   productSku?: string;
+  /**
+   * What the book is ABOUT, as catalog ids from the story brief.
+   *
+   * Kept because the print SKU says how a book is bound and nothing about its
+   * subject, and "what do grandparents buy for a first birthday" is a question
+   * about the subject. Ids only: `customTheme` and the free-text occasion can't be
+   * aggregated, and putting a customer's own words in a cross-user analysis
+   * collection is a cost with no matching benefit.
+   */
+  storyMode?: string;
+  themeId?: string;
+  settingId?: string;
+  deviceId?: string;
   /** Illustration units (spreads/pages) in the current screenplay. */
   pageCount: number;
   /** Units that already have at least one illustration. */
@@ -157,12 +170,17 @@ export function deriveProjectStructure(project: Project): ProjectDerived {
   } catch {
     pageCount = 0; // a half-built screenplay must not break metering
   }
+  const brief = project.config?.storyBrief;
   return {
     ...(project.title ? { title: project.title.slice(0, 200) } : {}),
     ...(project.config?.ageRangeId ? { ageRangeId: project.config.ageRangeId } : {}),
     ...(project.config?.readingModeId ? { readingModeId: project.config.readingModeId } : {}),
     ...(project.config?.productSku ? { productSku: project.config.productSku } : {}),
     ...(project.config?.artStyle ? { artStyleKey: artStyleKey(project.config.artStyle) } : {}),
+    ...(brief?.mode ? { storyMode: brief.mode } : {}),
+    ...(brief?.themeId ? { themeId: brief.themeId } : {}),
+    ...(brief?.settingId ? { settingId: brief.settingId } : {}),
+    ...(brief?.deviceId ? { deviceId: brief.deviceId } : {}),
     pageCount,
     illustratedCount: Object.keys(illustrations).length,
     illustrationVersions: Object.values(illustrations).reduce(

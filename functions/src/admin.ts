@@ -30,6 +30,10 @@ import {
   saveCookieConfig,
   getAnnouncementsConfig,
   saveAnnouncementsConfig,
+  getCampaignsConfig,
+  saveCampaignsConfig,
+  getSurveysConfig,
+  saveSurveysConfig,
   deleteBrandingAssetVersion,
   deleteWatermarkVersion,
   restoreBrandingAsset,
@@ -79,6 +83,20 @@ import {
   voidHeldReward,
   voidUnacceptedInvitations,
 } from "./referrals";
+import {
+  campaignReport,
+  listRedemptionsByStatus,
+  releaseRedemption,
+  simulateCampaign,
+  voidRedemption,
+} from "./campaigns";
+import { surveyReport, surveyReports } from "./surveys/report";
+import {
+  normalizeCampaignsConfig,
+  type CampaignTrigger,
+  type HeldRedemptionView,
+} from "../../books-frontend/src/core/config/campaigns";
+import type { DiscountItemType } from "../../books-frontend/src/core/config/discountImpact";
 import type { BillingEnv } from "../../books-frontend/src/core/config/plans";
 import {
   deletePublicObject,
@@ -137,7 +155,7 @@ import {
   type RawBatchCostItem,
 } from "../../books-frontend/src/core/config/costSuggestion";
 import { getAuth } from "firebase-admin/auth";
-import { sendTemplatedEmail } from "./email/service";
+import { recipientForUid, sendTemplatedEmail } from "./email/service";
 import { emailConfigured } from "./email/sender";
 import { legalLinkByRole, type LegalRole } from "../../books-frontend/src/core/config/legal";
 import { isKnownLayoutId } from "../../books-frontend/src/core/book/layouts";
@@ -1621,6 +1639,157 @@ export function registerAdminRoutes(app: Express): void {
   app.put("/admin/config/announcements", json, async (req: Request, res: Response) => {
     try {
       res.json(await saveAnnouncementsConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- Marketing campaigns ---------------------------------------------------
+
+  app.get("/admin/config/campaigns", async (_req, res) => {
+    try {
+      res.json(await getCampaignsConfig());
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.put("/admin/config/campaigns", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveCampaignsConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  /**
+   * Project a campaign over real accounts before it ships. Takes the campaign in
+   * the request body rather than an id, so a DRAFT the admin is still editing can
+   * be costed — which is the only moment the number is any use.
+   */
+  app.post("/admin/campaigns/simulate", json, async (req: Request, res: Response) => {
+    try {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const config = normalizeCampaignsConfig({ version: 1, enabled: true, campaigns: [body.campaign] });
+      const campaign = config.campaigns[0];
+      if (!campaign) {
+        res.status(400).json({ error: { message: "A campaign is required." } });
+        return;
+      }
+      const event = (body.event ?? {}) as Record<string, unknown>;
+      res.json(
+        await simulateCampaign(campaign, {
+          trigger: (event.trigger as CampaignTrigger) ?? "purchase",
+          itemType: event.itemType as DiscountItemType | undefined,
+          amount: typeof event.amount === "number" ? event.amount : undefined,
+          projectId: typeof event.projectId === "string" ? event.projectId : undefined,
+        }),
+      );
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  /** The daily series + derived lift for one campaign. */
+  app.get("/admin/campaigns/:id/report", async (req: Request, res: Response) => {
+    try {
+      const to = Number(req.query.to) || Date.now();
+      const from = Number(req.query.from) || to - 30 * 86_400_000;
+      res.json(await campaignReport(req.params.id, from, to));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  /** Payouts waiting on a human decision, oldest first. */
+  app.get("/admin/campaigns/held", async (_req, res) => {
+    try {
+      const [review, stuck] = await Promise.all([
+        listRedemptionsByStatus("review", 100),
+        listRedemptionsByStatus("pending", 100),
+      ]);
+      // A `pending` redemption is normal for the second between claim and
+      // delivery; only one that STAYED that way is actually stuck.
+      const cutoff = Date.now() - 5 * 60_000;
+      const queue = [...review, ...stuck.filter((r) => r.createdAt < cutoff)].sort(
+        (a, b) => a.createdAt - b.createdAt,
+      );
+      // Emails are resolved for the queue only. Whoever is deciding needs to see
+      // who they're paying, and the queue is bounded at 200 by the query above.
+      const held: HeldRedemptionView[] = await Promise.all(
+        queue.map(async (r) => ({
+          id: r.id,
+          campaignId: r.campaignId,
+          campaignName: r.campaignName,
+          ruleId: r.ruleId,
+          uid: r.uid,
+          email: (await recipientForUid(r.uid)).email,
+          status: r.status,
+          summary: r.summary,
+          unlocks: r.unlocks,
+          cost: r.cost,
+          sparks: r.sparks,
+          createdAt: r.createdAt,
+          note: r.note,
+        })),
+      );
+      res.json({ held });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.post("/admin/campaigns/redemptions/:id/release", json, async (req: Request, res: Response) => {
+    try {
+      res.json({ outcome: await releaseRedemption(req.params.id) });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.post("/admin/campaigns/redemptions/:id/void", json, async (req: Request, res: Response) => {
+    try {
+      const reason = String((req.body as { reason?: unknown })?.reason ?? "").slice(0, 500);
+      res.json({ outcome: await voidRedemption(req.params.id, reason || "no reason given") });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- Profiling surveys -----------------------------------------------------
+
+  app.get("/admin/config/surveys", async (_req, res) => {
+    try {
+      res.json(await getSurveysConfig());
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.put("/admin/config/surveys", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveSurveysConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  /**
+   * Answers cross-tabulated against lifetime revenue — one survey, or all of them.
+   *
+   * Every report in one response because there are at most a handful of surveys
+   * and the analysis tab shows them together; a per-survey round trip would just
+   * re-scan the same cached payment table each time.
+   */
+  app.get("/admin/surveys/report", async (req: Request, res: Response) => {
+    try {
+      const id = typeof req.query.surveyId === "string" ? req.query.surveyId : "";
+      if (id) {
+        const report = await surveyReport(id);
+        res.json({ reports: report ? [report] : [] });
+        return;
+      }
+      res.json({ reports: await surveyReports() });
     } catch (err) {
       handleError(res, err);
     }

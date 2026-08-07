@@ -24,6 +24,7 @@ import { useAccountUiStore } from "../../state/accountUiStore";
 import { packTotalSparks } from "../../core/config/sparks";
 import { fmtMoney } from "../admin/tabs/products/parts";
 import { useImageActionRange } from "./SparkCost";
+import { OffersBlock } from "./OffersBlock";
 
 /**
  * The Spark balance pill in the top bar. Shows the live balance and opens a
@@ -203,6 +204,11 @@ export function SparksBadge() {
               </p>
             </div>
           )}
+
+          {/* Above the packs, not below them: a discount already earned, or an
+              offer that pays out on a top-up, is part of the decision to buy one.
+              Renders nothing when there's nothing running. */}
+          {accessLevel === "full" && <OffersBlock open={walletOpen} />}
 
           {accessLevel === "full" && packs.length > 0 && (
             <div className="space-y-2">

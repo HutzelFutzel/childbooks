@@ -175,6 +175,9 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
     const settled = await settleActionCost(args.uid, args.action, args.events, {
       projectId: args.projectId,
       runId,
+      // Denormalized onto the ledger entry so a campaign can refund "everything
+      // you spent on fast renders" with a query rather than a join through here.
+      tier: args.tier,
     });
 
     const { billable, unbilled } = splitBillable(args.events);

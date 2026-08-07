@@ -4,6 +4,11 @@ import { useState } from "react";
 import { ArrowDown, ArrowUp, Check, Copy, EyeOff, Search, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
+import {
+  BUYER_ROLE_LABELS,
+  describeBuyerProfile,
+  type BuyerFacts,
+} from "../../../core/config/surveys";
 import type { AnalyticsUserRow, UserSort } from "../../../core/analytics/types";
 import { useAdminAnalytics } from "../../../state/adminAnalyticsStore";
 import { Button } from "../../components/Button";
@@ -14,9 +19,15 @@ import { Select } from "../../components/Select";
 import { CardHeader, CardTitle } from "../../components/Card";
 import { fmtDateTime, fmtMoney, fmtNumber, fmtRelative, fmtSparks, fmtUsd, sourceLabel } from "./format";
 
-const COLUMNS: { key: UserSort | "country"; label: string; sortable: boolean; align?: "right" }[] = [
+const COLUMNS: {
+  key: UserSort | "country" | "buyer";
+  label: string;
+  sortable: boolean;
+  align?: "right";
+}[] = [
   { key: "email", label: "User", sortable: true },
   { key: "country", label: "Market", sortable: false },
+  { key: "buyer", label: "Buys for", sortable: false },
   { key: "plan", label: "Plan", sortable: true },
   { key: "sparks", label: "Sparks", sortable: true, align: "right" },
   { key: "revenue", label: "Revenue", sortable: true, align: "right" },
@@ -159,6 +170,9 @@ export function UsersTable() {
                   )}
                 </td>
                 <td className="px-4 py-2.5">
+                  <BuyerCell buyer={u.buyer} />
+                </td>
+                <td className="px-4 py-2.5">
                   <PlanCell row={u} />
                 </td>
                 <td className="px-4 py-2.5 text-right tabular-nums text-ink-700">{fmtSparks(u.sparkBalance)}</td>
@@ -235,6 +249,39 @@ function UidChip({ uid }: { uid: string }) {
       {copied ? <Check className="size-2.5" /> : <Copy className="size-2.5" />}
       {uid}
     </button>
+  );
+}
+
+/**
+ * Who the profiling answers say this account buys for.
+ *
+ * The newest role is the word on screen and the durable facts are in the tooltip,
+ * because that's the order an admin needs them in: the column is scanned to find
+ * the grandparents, and the sentence underneath is read once you've found one and
+ * want to know whether they also have children of their own.
+ *
+ * A dash means never answered. Someone who answered without identifying anyone
+ * shows as "Didn't say", which is a different and more useful fact — asking them
+ * again won't help.
+ */
+function BuyerCell({ buyer }: { buyer: BuyerFacts | null }) {
+  if (!buyer) {
+    return (
+      <span className="text-xs text-ink-300" title="Hasn't answered a survey.">
+        —
+      </span>
+    );
+  }
+  return (
+    <span
+      className="whitespace-nowrap text-xs text-ink-600"
+      title={describeBuyerProfile(buyer)}
+    >
+      {buyer.latestRole ? BUYER_ROLE_LABELS[buyer.latestRole] : "Didn't say"}
+      {buyer.roles.length > 1 && (
+        <span className="text-ink-300"> +{buyer.roles.length - 1}</span>
+      )}
+    </span>
   );
 }
 

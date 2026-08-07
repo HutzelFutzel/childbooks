@@ -29,7 +29,29 @@ export interface UserPreferences {
    * always deliberate.
    */
   imageTier: ImageTier | null;
+  /**
+   * They pressed "don't ask again" on a profiling question card.
+   *
+   * A stated preference, so it lives here rather than being inferred from a run of
+   * dismissals — and it lives on the profile rather than beside the answers,
+   * because a GDPR erasure hard-deletes those and would otherwise resurrect the
+   * asking. Covers every survey, present and future: a per-survey opt-out just
+   * recreates the annoyance under a new name.
+   */
+  surveyOptOut: boolean;
 }
+
+/**
+ * A partial profile update.
+ *
+ * `preferences` is partial in its own right because Firestore merges nested maps
+ * field by field: sending one preference leaves the others alone, and demanding the
+ * whole object would make every caller read-modify-write a map it doesn't care
+ * about — the pattern that eventually clobbers somebody's setting.
+ */
+export type ProfilePatch = Partial<Omit<UserProfile, "preferences">> & {
+  preferences?: Partial<UserPreferences>;
+};
 
 /**
  * One entry in the user's address book. Field names mirror the checkout form
@@ -115,7 +137,7 @@ export function emptyProfile(): UserProfile {
     locale: null,
     currency: null,
     marketingOptIn: false,
-    preferences: { imageTier: null },
+    preferences: { imageTier: null, surveyOptOut: false },
     meta: {
       firstSeenAt: null,
       lastActiveAt: null,
@@ -155,7 +177,7 @@ export function migrateProfile(raw: unknown): UserProfile {
     locale: str(d.locale),
     currency: str(d.currency),
     marketingOptIn: d.marketingOptIn === true,
-    preferences: { imageTier },
+    preferences: { imageTier, surveyOptOut: prefs.surveyOptOut === true },
     meta: {
       firstSeenAt: numOrNull(meta.firstSeenAt),
       lastActiveAt: numOrNull(meta.lastActiveAt),

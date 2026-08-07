@@ -14,6 +14,7 @@ import {
   addressSummary,
   sameAddress,
   type SavedAddress,
+  type ProfilePatch,
   type UserProfile,
 } from "../core/profile/types";
 import {
@@ -59,7 +60,7 @@ interface ProfileState {
   stop: () => void;
 
   /** Merge a partial profile update (best-effort). */
-  updateProfile: (patch: Partial<UserProfile>) => Promise<void>;
+  updateProfile: (patch: ProfilePatch) => Promise<void>;
   /** Record a login/session (write-once create fields + refreshed activity). */
   recordSession: (stamp: SessionStamp) => Promise<void>;
 

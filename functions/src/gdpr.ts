@@ -13,6 +13,9 @@
  *     amounts/refs (required for tax/accounting law) but strip personal data
  *     (recipient name/address, email, raw provider payloads).
  *   - `analyticsEvents` for the uid are de-identified (uid tombstoned).
+ *   - HARD DELETE: `surveyResponses/*` for the uid. They sit outside the user tree
+ *     (so neither the walk nor the recursive delete would catch them) and there's
+ *     no accounting reason to keep a customer's opinions.
  * Every deletion writes an append-only audit record to `adminAudit/*`
  * (backend-only; denied to clients by the default rule).
  *
@@ -24,6 +27,7 @@ import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import { ensureAdmin, storageBucketName } from "./storage";
 import type { AuthedRequest } from "./auth";
+import { deleteResponsesForUser, listResponsesForUser } from "./surveys/store";
 
 /** A trimmed, JSON-safe view of a Firebase Auth user for lookup/export. */
 interface AuthSummary {
@@ -125,6 +129,18 @@ export async function exportUserData(uid: string): Promise<Record<string, unknow
     // best-effort
   }
 
+  // Survey answers live in a top-level collection rather than under the user, so
+  // they'd be missed by both the subcollection walk above and the recursive delete
+  // in `eraseUser`. They're also the most personal thing we hold that the customer
+  // volunteered — who the book was for, what nearly stopped them buying — so
+  // leaving them out of an access request would be the wrong omission to make.
+  let surveyResponses: unknown[] = [];
+  try {
+    surveyResponses = await listResponsesForUser(uid);
+  } catch {
+    // best-effort
+  }
+
   return {
     exportedAt: new Date().toISOString(),
     uid,
@@ -132,6 +148,7 @@ export async function exportUserData(uid: string): Promise<Record<string, unknow
     profile,
     collections,
     financialRecords: financial,
+    surveyResponses,
     storageObjects,
   };
 }
@@ -155,6 +172,7 @@ export interface EraseResult {
   paymentsAnonymized: number;
   subscriptionsAnonymized: number;
   analyticsEventsScrubbed: number;
+  surveyResponsesDeleted: number;
   errors: string[];
 }
 
@@ -175,6 +193,7 @@ export async function eraseUser(uid: string, byUid: string | undefined): Promise
     paymentsAnonymized: 0,
     subscriptionsAnonymized: 0,
     analyticsEventsScrubbed: 0,
+    surveyResponsesDeleted: 0,
     errors: [],
   };
 
@@ -225,6 +244,18 @@ export async function eraseUser(uid: string, byUid: string | undefined): Promise
     result.analyticsEventsScrubbed = n;
   } catch (err) {
     result.errors.push(`analyticsEvents: ${errMsg(err)}`);
+  }
+
+  // 2b) Delete survey answers outright.
+  //
+  // Anonymized rather than deleted would keep them in every cross-tab, and unlike
+  // a payment there's no legal reason to retain a customer's opinion about who
+  // their book was for. A handful of rows leaving a report is not a business
+  // problem; retaining erased answers is.
+  try {
+    result.surveyResponsesDeleted = await deleteResponsesForUser(uid);
+  } catch (err) {
+    result.errors.push(`surveyResponses: ${errMsg(err)}`);
   }
 
   // 3) Delete the whole user tree (profile doc + all subcollections).

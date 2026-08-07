@@ -67,6 +67,11 @@ export { sweepReferralInvitations } from "./referrals/job";
  */
 export { syncAffiliates } from "./affiliates/job";
 
+// Daily campaign sweep: the time-based triggers ("7 days after signup"), which
+// have no event to hang off, and the expiry of promotional Sparks — without
+// which a campaign's `expiresInDays` is a liability that never actually lapses.
+export { sweepCampaigns } from "./campaigns/job";
+
 export const api = onRequest(
   {
     // Image generation can take a while; allow generous time + memory.

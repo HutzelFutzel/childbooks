@@ -82,6 +82,22 @@ import {
   type ReferralStatsSummary,
 } from "../core/config/referral";
 import {
+  createDefaultCampaignsConfig,
+  normalizeCampaignsConfig,
+  type Campaign,
+  type CampaignReport,
+  type CampaignTrigger,
+  type CampaignsConfig,
+  type HeldRedemptionView,
+  type SimulationResult,
+} from "../core/config/campaigns";
+import {
+  normalizeSurveysConfig,
+  type SurveyReport,
+  type SurveysConfig,
+} from "../core/config/surveys";
+import type { DiscountItemType } from "../core/config/discountImpact";
+import {
   createDefaultAffiliateConfig,
   normalizeAffiliateConfig,
   type AffiliateConfig,
@@ -377,6 +393,13 @@ interface AppConfigState {
    */
   referralDocExists: boolean;
   /**
+   * Live marketing campaigns, as the PUBLIC projection: drafts, budgets, admin
+   * notes and allowlists are stripped server-side. It's world-readable because the
+   * studio has to answer "what would this action earn me?" without a round trip,
+   * and it can only do that from the real rules.
+   */
+  campaigns: CampaignsConfig;
+  /**
    * The affiliate scope map. NOT a live snapshot like the rest: it lives in the
    * admin-only `adminSettings/affiliates` doc, so it's fetched through the
    * backend when the admin tab opens.
@@ -453,6 +476,35 @@ interface AppConfigState {
   resolveHeldReward: (rewardId: string, verdict: "release" | "decline") => Promise<void>;
   /** Void every still-unaccepted invitation (misconfiguration emergency). */
   voidUnacceptedInvitations: (reason?: string) => Promise<number>;
+  /** The full campaign config, including drafts (admin-only, so an explicit fetch). */
+  loadCampaignsConfig: () => Promise<CampaignsConfig>;
+  saveCampaignsConfig: (config: CampaignsConfig) => Promise<CampaignsConfig>;
+  /**
+   * Dry-run a campaign against real accounts. Takes the campaign by value rather
+   * than by id so a draft that hasn't been saved yet can be costed — which is the
+   * only moment the number is any use.
+   */
+  simulateCampaign: (
+    campaign: Campaign,
+    event?: { trigger?: CampaignTrigger; itemType?: DiscountItemType; amount?: number },
+  ) => Promise<SimulationResult>;
+  /** Daily series + measured lift for one campaign. */
+  loadCampaignReport: (campaignId: string, from?: number, to?: number) => Promise<CampaignReport>;
+  /** Payouts waiting on a human decision, oldest first. */
+  loadHeldRedemptions: () => Promise<HeldRedemptionView[]>;
+  /** Pay out a redemption an approval or a limit held, or void it for good. */
+  resolveHeldRedemption: (redemptionId: string, verdict: "release" | "void") => Promise<void>;
+  /**
+   * The profiling question sets (admin-only doc, so an explicit fetch).
+   *
+   * There's no store slot for these and no snapshot listener: no customer-facing
+   * screen renders a survey it picked for itself. The capture card asks the server
+   * what to show and gets back at most one, already targeted and sampled.
+   */
+  loadSurveysConfig: () => Promise<SurveysConfig>;
+  saveSurveysConfig: (config: SurveysConfig) => Promise<SurveysConfig>;
+  /** Answers cross-tabulated against lifetime revenue, per survey. */
+  loadSurveyReports: (surveyId?: string) => Promise<SurveyReport[]>;
   /** The affiliate scope map (admin-only doc, so an explicit fetch). */
   loadAffiliateConfig: () => Promise<AffiliateConfig>;
   saveAffiliateConfig: (config: AffiliateConfig) => Promise<void>;
@@ -647,6 +699,7 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   sparks: createDefaultSparksConfig(),
   referral: createDefaultReferralConfig(),
   referralDocExists: false,
+  campaigns: createDefaultCampaignsConfig(),
   affiliates: createDefaultAffiliateConfig(),
   plans: { version: 1, plans: [] },
   branding: createDefaultBrandingConfig(),
@@ -722,6 +775,9 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
             ? normalizeReferralConfig(snap.data())
             : referralConfigFromLegacy(get().sparks.referral),
         });
+      }),
+      onSnapshot(doc(db, "appConfig", "campaigns"), (snap) => {
+        set({ campaigns: normalizeCampaignsConfig(snap.exists() ? snap.data() : undefined) });
       }),
       onSnapshot(doc(db, "appConfig", "plans"), (snap) => {
         set({ plans: normalizePublicPlansConfig(snap.exists() ? snap.data() : undefined) });
@@ -845,6 +901,92 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       // The doc now exists, so the legacy projection must stop overwriting it.
       referralDocExists: true,
     });
+  },
+
+  async loadCampaignsConfig() {
+    const res = await backendFetch("/admin/config/campaigns");
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load campaigns.");
+    // Deliberately NOT written into `campaigns`: that slot holds the public
+    // projection every screen reads, and this response includes drafts and
+    // budgets. The editor owns the full config as local draft state.
+    return normalizeCampaignsConfig(await res.json());
+  },
+
+  async saveCampaignsConfig(config) {
+    return normalizeCampaignsConfig(await putJson("/admin/config/campaigns", config));
+  },
+
+  async loadSurveysConfig() {
+    const res = await backendFetch("/admin/config/surveys");
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load surveys.");
+    return normalizeSurveysConfig(await res.json());
+  },
+
+  async saveSurveysConfig(config) {
+    return normalizeSurveysConfig(await putJson("/admin/config/surveys", config));
+  },
+
+  async loadSurveyReports(surveyId) {
+    const qs = surveyId ? `?surveyId=${encodeURIComponent(surveyId)}` : "";
+    const res = await backendFetch(`/admin/surveys/report${qs}`);
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load survey answers.");
+    const json = (await res.json()) as { reports?: SurveyReport[] };
+    return json.reports ?? [];
+  },
+
+  async simulateCampaign(campaign, event) {
+    const res = await backendFetch("/admin/campaigns/simulate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ campaign, event: event ?? {} }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not simulate this campaign.");
+    return (await res.json()) as SimulationResult;
+  },
+
+  async loadCampaignReport(campaignId, from, to) {
+    const params = new URLSearchParams();
+    if (from != null) params.set("from", String(from));
+    if (to != null) params.set("to", String(to));
+    const qs = params.toString();
+    const res = await backendFetch(
+      `/admin/campaigns/${encodeURIComponent(campaignId)}/report${qs ? `?${qs}` : ""}`,
+    );
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load the campaign report.");
+    return (await res.json()) as CampaignReport;
+  },
+
+  async loadHeldRedemptions() {
+    const res = await backendFetch("/admin/campaigns/held");
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load held payouts.");
+    const json = (await res.json()) as { held?: HeldRedemptionView[] };
+    return json.held ?? [];
+  },
+
+  async resolveHeldRedemption(redemptionId, verdict) {
+    const res = await backendFetch(
+      `/admin/campaigns/redemptions/${encodeURIComponent(redemptionId)}/${verdict}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(verdict === "void" ? { reason: "voided from the Campaigns tab" } : {}),
+      },
+    );
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not update this payout.");
+    const json = (await res.json()) as { outcome?: string };
+    const expected = verdict === "release" ? "granted" : "voided";
+    if (json.outcome !== expected) {
+      // A release can come straight back held: the reason it couldn't be
+      // delivered (the Sparks economy switched off, a cancelled membership) is
+      // recorded on the payout for the next look.
+      throw new Error(
+        json.outcome === "held"
+          ? "Still can't be delivered — check the note on the payout."
+          : json.outcome === "not_held"
+            ? "This payout has already been settled."
+            : `Could not ${verdict === "release" ? "release" : "void"} this payout.`,
+      );
+    }
   },
 
   async loadAffiliateConfig() {

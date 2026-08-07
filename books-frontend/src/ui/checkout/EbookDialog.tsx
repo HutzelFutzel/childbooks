@@ -26,6 +26,7 @@ import { fetchDownloadLink } from "../../platform/downloads";
 import { useCheckoutUiStore } from "../../state/checkoutUiStore";
 import { flushProjectSaves } from "../../state/projectsStore";
 import { PlanUpsell } from "../billing/PlanUpsell";
+import { OfferPreviewNote } from "./OfferPreviewNote";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
 import { notify } from "../lib/notify";
@@ -293,6 +294,11 @@ export function EbookDialog({
             <p className="text-xs text-emerald-700">
               Includes your {quote.discountPct}% discount for owning the printed book.
             </p>
+          )}
+          {/* Nothing to earn on a purchase that isn't happening — an "included"
+              ebook costs nothing and triggers nothing. */}
+          {!quote.included && (
+            <OfferPreviewNote itemType="ebook" amount={quote.price} projectId={project.id} />
           )}
           {/* One quiet line, never a step: a non-member can see what a plan would
               cost them here without being pulled out of the purchase they came

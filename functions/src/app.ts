@@ -44,6 +44,8 @@ import { registerContactAdminRoutes, registerContactRoutes } from "./contact/rou
 import { registerBlogRoutes } from "./blog";
 import { registerBlogStatsAdminRoutes, registerBlogTrackingRoute } from "./blogStats";
 import { registerReferralPublicRoutes, registerReferralUserRoutes } from "./referrals/routes";
+import { registerCampaignUserRoutes } from "./campaigns/routes";
+import { registerSurveyRoutes } from "./surveys/routes";
 import { registerAffiliateRoutes } from "./affiliates";
 import { registerAffiliateWebhookRoute } from "./affiliates/webhook";
 import { registerAffiliateAdminRoutes } from "./affiliates/admin";
@@ -158,6 +160,8 @@ export function createApp(): Express {
   registerStripeUserRoutes(app);
   registerStripeAdminRoutes(app);
   registerReferralUserRoutes(app);
+  registerCampaignUserRoutes(app);
+  registerSurveyRoutes(app);
   registerAffiliateRoutes(app);
   registerAffiliateAdminRoutes(app);
 

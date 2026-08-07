@@ -16,6 +16,7 @@ import type { ReactNode } from "react";
 import {
   BarChart3,
   BookOpen,
+  ClipboardList,
   Coins,
   Cookie,
   Cpu,
@@ -80,6 +81,8 @@ export const CONFIG_TAB_META: Record<ConfigTabId, { label: string; icon: ReactNo
   affiliates: { label: "Affiliates", icon: <Handshake className="size-4" /> },
   financial: { label: "Financial settings", icon: <Coins className="size-4" /> },
   discounts: { label: "Discount planner", icon: <Percent className="size-4" /> },
+  campaigns: { label: "Campaigns", icon: <Megaphone className="size-4" /> },
+  surveys: { label: "Surveys", icon: <ClipboardList className="size-4" /> },
   // AI pipeline
   models: { label: "Models", icon: <Cpu className="size-4" /> },
   modelCosts: { label: "Model costs", icon: <DollarSign className="size-4" /> },
@@ -103,6 +106,8 @@ export const ANALYSIS_TAB_META: Record<AnalysisTabId, { label: string; icon: Rea
   products: { label: "Products", icon: <Package className="size-4" /> },
   referrals: { label: "Referrals", icon: <Share2 className="size-4" /> },
   affiliates: { label: "Affiliates", icon: <Handshake className="size-4" /> },
+  campaigns: { label: "Campaigns", icon: <Megaphone className="size-4" /> },
+  surveys: { label: "Customer profile", icon: <ClipboardList className="size-4" /> },
 };
 
 export const MARKETING_TABS: { id: MarketingTabId; label: string; icon: ReactNode }[] = [

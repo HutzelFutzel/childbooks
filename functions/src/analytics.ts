@@ -66,6 +66,11 @@ import {
   type PlansConfig,
 } from "../../books-frontend/src/core/config/plans";
 import { previousRange } from "../../books-frontend/src/core/analytics/types";
+import {
+  buyerFacts,
+  normalizeBuyerProfile,
+  type BuyerFacts,
+} from "../../books-frontend/src/core/config/surveys";
 import type {
   ActionCostReport,
   ActionCostSeriesPoint,
@@ -300,6 +305,12 @@ interface UserMeta {
   sparkBalance: number | null;
   /** Market, denormalized by the auth blocking functions (see analyticsEvents.ts). */
   country: string | null;
+  /**
+   * What the surveys worked out about who they buy for, or null if they've never
+   * answered. Summarized here — the raw answer keys stay on the document, since a
+   * thousand rows each carrying eighty of them is a payload nobody reads.
+   */
+  buyer: BuyerFacts | null;
 }
 
 /**
@@ -317,12 +328,23 @@ function fetchUserMeta(): Promise<Map<string, UserMeta>> {
     try {
       const snap = await getFirestore().collection("users").get();
       for (const doc of snap.docs) {
-        const d = doc.data() as { sparkBalance?: unknown; country?: unknown };
+        const d = doc.data() as {
+          sparkBalance?: unknown;
+          country?: unknown;
+          surveyProfile?: unknown;
+        };
         const balance =
           typeof d.sparkBalance === "number" && Number.isFinite(d.sparkBalance)
             ? d.sparkBalance
             : null;
-        out.set(doc.id, { sparkBalance: balance, country: normalizeCountry(d.country) });
+        const profile = normalizeBuyerProfile(d.surveyProfile);
+        out.set(doc.id, {
+          sparkBalance: balance,
+          country: normalizeCountry(d.country),
+          // Null rather than an empty profile, so the table can show "never asked"
+          // and "answered but told us nothing" as the different things they are.
+          buyer: profile.answers > 0 ? buyerFacts(profile) : null,
+        });
       }
     } catch {
       // ignore — degrade to no per-user metadata
@@ -379,7 +401,13 @@ interface RevenueInfo {
  */
 const revenueCache = cachedScan<Map<string, RevenueInfo>>(SCAN_CACHE_TTL_MS);
 
-function fetchRevenueByUid(): Promise<Map<string, RevenueInfo>> {
+/**
+ * Exported for the survey report, which cross-tabs answers against lifetime
+ * value. Sharing the scan (and its cache) rather than re-deriving revenue there
+ * is the difference between "grandparents are worth more" meaning the same thing
+ * on two screens and meaning two things.
+ */
+export function fetchRevenueByUid(): Promise<Map<string, RevenueInfo>> {
   return revenueCache(async () => {
     const out = new Map<string, RevenueInfo>();
     ensureAdmin();
@@ -403,6 +431,51 @@ function fetchRevenueByUid(): Promise<Map<string, RevenueInfo>> {
       }
     } catch {
       // ignore — degrade to no revenue
+    }
+    return out;
+  });
+}
+
+/**
+ * Which purchase in the customer's history each payment was — 1 for their first.
+ *
+ * Exported for the survey report, where "what do people buy FIRST" is the whole
+ * question. Derived here rather than stored on the response row because the count
+ * at answer time is a race: a confirmation screen can render before the webhook
+ * that increments the lifetime counter has landed, and an ordinal that was one
+ * short when it was written stays one short forever. Recomputing it means the
+ * report self-corrects as payments settle.
+ *
+ * Only paid-like payments count, so an abandoned checkout doesn't push everything
+ * after it up by one.
+ */
+const ordinalCache = cachedScan<Map<string, number>>(SCAN_CACHE_TTL_MS);
+
+export function fetchPurchaseOrdinals(): Promise<Map<string, number>> {
+  return ordinalCache(async () => {
+    const out = new Map<string, number>();
+    ensureAdmin();
+    try {
+      const snap = await getFirestore().collection("payments").get();
+      const byUid = new Map<string, { id: string; at: number }[]>();
+      for (const doc of snap.docs) {
+        const d = doc.data() as Record<string, unknown>;
+        const uid = typeof d.ownerUid === "string" ? d.ownerUid : null;
+        const status = typeof d.status === "string" ? d.status : "";
+        if (!uid || !PAID_LIKE_STATUSES.has(status)) continue;
+        const list = byUid.get(uid) ?? [];
+        list.push({ id: doc.id, at: tsToMillis(d.createdAt) ?? 0 });
+        byUid.set(uid, list);
+      }
+      for (const list of byUid.values()) {
+        // Ties broken by id so the ordering is total and stable: two payments with
+        // the same timestamp must not swap places between two reads of the report.
+        list.sort((a, b) => a.at - b.at || a.id.localeCompare(b.id));
+        list.forEach((payment, i) => out.set(payment.id, i + 1));
+      }
+    } catch {
+      // Degrade to unknown ordinals. The report labels them as such rather than
+      // guessing, because a wrong ordinal is indistinguishable from a real one.
     }
     return out;
   });
@@ -940,6 +1013,7 @@ async function computeUsers(
         isAnonymous: u.isAnonymous,
         events: eventsByUid.get(u.uid) ?? 0,
         spendUsd: spendByUid.has(u.uid) ? spendByUid.get(u.uid)! : null,
+        buyer: metaByUid.get(u.uid)?.buyer ?? null,
         ...economics,
       } satisfies AnalyticsUserRow;
     })

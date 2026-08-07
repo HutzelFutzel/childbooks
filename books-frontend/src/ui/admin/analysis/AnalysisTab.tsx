@@ -24,6 +24,8 @@ import { ProjectsAnalysis } from "./ProjectsAnalysis";
 import { ProductsAnalysis } from "./ProductsAnalysis";
 import { ReferralsAnalysis } from "./ReferralsAnalysis";
 import { AffiliatesAnalysis } from "./AffiliatesAnalysis";
+import { CampaignsAnalysis } from "./CampaignsAnalysis";
+import { SurveysAnalysis } from "./SurveysAnalysis";
 import { MarketPicker } from "./MarketPicker";
 import { MarketsCard } from "./MarketsCard";
 import { FunnelCard } from "./FunnelCard";
@@ -203,6 +205,8 @@ export function AnalysisTab() {
       {section === "finance" && <FinanceAnalysis />}
       {section === "referrals" && <ReferralsAnalysis />}
       {section === "affiliates" && <AffiliatesAnalysis />}
+      {section === "campaigns" && <CampaignsAnalysis />}
+      {section === "surveys" && <SurveysAnalysis />}
 
       {section === "users" && (
         <div className="space-y-5">

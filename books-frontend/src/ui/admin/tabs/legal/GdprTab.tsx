@@ -94,12 +94,18 @@ export function GdprTab() {
         errors: string[];
         ordersAnonymized: number;
         paymentsAnonymized: number;
+        surveyResponsesDeleted?: number;
       };
       if (result.errors.length > 0) {
         toast.error(`Erased with issues: ${result.errors.join("; ")}`);
       } else {
+        // Survey answers are DELETED rather than anonymized, and the wording says so:
+        // whoever runs an erasure may have to state what happened to what.
+        const surveys = result.surveyResponsesDeleted
+          ? `, deleted ${result.surveyResponsesDeleted} survey answer(s)`
+          : "";
         toast.success(
-          `Account erased. Anonymized ${result.ordersAnonymized} order(s), ${result.paymentsAnonymized} payment(s).`,
+          `Account erased. Anonymized ${result.ordersAnonymized} order(s), ${result.paymentsAnonymized} payment(s)${surveys}.`,
         );
       }
       setUser(null);
@@ -117,7 +123,7 @@ export function GdprTab() {
       <p className="max-w-2xl text-xs leading-relaxed text-ink-500">
         Handle GDPR data-subject requests. A user contacts support; find them here
         by email, then export their data or erase their account. Erasure deletes
-        the account, all app data and stored files, and{" "}
+        the account, all app data, stored files and any survey answers, and{" "}
         <strong>anonymizes</strong> orders/payments (kept for accounting law).
         Every deletion is recorded in an audit log.
       </p>

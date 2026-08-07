@@ -30,6 +30,7 @@ import { type AuthedRequest } from "./auth";
 import { getSeoConfig } from "./appConfig";
 import { sendWelcomeEmail } from "./email/triggers";
 import { notifySlack } from "./notify";
+import { onCampaignEvent } from "./campaigns";
 
 /** Consent captured at signup (client-supplied). All fields optional. */
 interface ConsentPayload {
@@ -129,6 +130,13 @@ export function registerAuthRoutes(app: Express): void {
         ref: `signup_${uid}`,
         text: `🎉 New signup — ${email} (${providerId})`,
       });
+
+      // The campaign engine's `signup` trigger. Fired here rather than from the
+      // Auth blocking function because THIS is where a real (non-guest) account
+      // with an email exists — and because a blocking function that waits on the
+      // campaign engine would be adding latency to every sign-in for the sake of
+      // a promotion. Idempotent on the uid downstream.
+      await onCampaignEvent(uid, "signup");
 
       res.json({ ok: true, sent: result.ok, verified: user.emailVerified });
     } catch (err) {

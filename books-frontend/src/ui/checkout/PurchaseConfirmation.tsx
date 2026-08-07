@@ -55,6 +55,7 @@ import { Celebrate } from "../components/Celebrate";
 import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
 import { FULFILLMENT_STATUS, STAGE_STATUS, orderHealth } from "./orderStatus";
+import { SurveyCard } from "./SurveyCard";
 
 function money(amount: number | string, currency: string): string {
   const n = Number(amount);
@@ -143,6 +144,12 @@ export function PurchaseConfirmation() {
             <Body kind={confirmation.kind} paymentId={confirmation.paymentId} projectId={confirmation.projectId} />
 
             <ConfirmationUpsell kind={confirmation.kind} paymentId={confirmation.paymentId} />
+
+            <ConfirmationSurvey
+              kind={confirmation.kind}
+              paymentId={confirmation.paymentId}
+              projectId={confirmation.projectId}
+            />
 
             <InviteAfterPurchase onInvite={dismiss} />
 
@@ -306,6 +313,44 @@ function Settling({ what }: { what: string }) {
 }
 
 /** Find a payment by id, tolerating the moment before the store has caught up. */
+/**
+ * The profiling questions, withheld until the purchase is a fact.
+ *
+ * Same gate as the upsell, for a sharper version of the same reason: asking a
+ * customer to help with market research while their money is still in the air —
+ * or worse, while we're explaining that their book didn't reach the press — reads
+ * as not having noticed. The questions cost nothing to defer; showing them at the
+ * wrong moment costs the answer and some of the goodwill.
+ */
+function ConfirmationSurvey({
+  kind,
+  paymentId,
+  projectId,
+}: {
+  kind: PurchaseKind;
+  paymentId: string | null;
+  projectId: string | null;
+}) {
+  const { payment } = usePayment(paymentId);
+  const orders = useOrdersStore((s) => s.orders);
+  const order = payment?.orderId ? orders.find((o) => o.id === payment.orderId) ?? null : null;
+
+  // A subscription confirmation has no payment record to wait on; everything else
+  // has to have cleared. `partially_refunded` still counts as a purchase that
+  // happened — the customer bought something and their reasons are still worth
+  // knowing.
+  const settled =
+    kind === "subscription" ||
+    !paymentId ||
+    payment?.status === "paid" ||
+    payment?.status === "partially_refunded";
+  const healthy = kind !== "order" || orderHealth(payment, order) === "ok";
+
+  return (
+    <SurveyCard kind={kind} paymentId={paymentId} projectId={projectId} ready={settled && healthy} />
+  );
+}
+
 function usePayment(paymentId: string | null): { payment: UserPaymentRecord | null; loading: boolean } {
   const payments = usePaymentsStore((s) => s.payments);
   const loading = usePaymentsStore((s) => s.loading);

@@ -179,11 +179,24 @@ import {
   type ReferralConfig,
 } from "../../books-frontend/src/core/config/referral";
 import {
+  campaignsConfigSchema,
+  createDefaultCampaignsConfig,
+  normalizeCampaignsConfig,
+  publicCampaignsProjection,
+  type CampaignsConfig,
+} from "../../books-frontend/src/core/config/campaigns";
+import {
   affiliateConfigSchema,
   createDefaultAffiliateConfig,
   normalizeAffiliateConfig,
   type AffiliateConfig,
 } from "../../books-frontend/src/core/config/affiliates";
+import {
+  createDefaultSurveysConfig,
+  normalizeSurveysConfig,
+  surveysConfigSchema,
+  type SurveysConfig,
+} from "../../books-frontend/src/core/config/surveys";
 import {
   layoutsConfigSchema,
   normalizeLayoutsConfig,
@@ -223,6 +236,19 @@ const EMAIL_STATS_DOC = "appConfig/emailStats";
 // but the client has no use for it either, and a world-readable copy would
 // publish the commercial shape of the partner program to anyone who asks.
 const AFFILIATE_CONFIG_DOC = "adminSettings/affiliates";
+// Private, with a world-readable projection: the full campaign config names
+// individual accounts (`allowlistUids`) and states the programme's budgets and
+// holdout size. The client needs the RULES to preview an offer honestly, so the
+// projection keeps those and strips the rest. See `publicCampaignsProjection`.
+const CAMPAIGNS_DOC = "adminSettings/campaigns";
+const CAMPAIGNS_PUBLIC_DOC = "appConfig/campaigns";
+// Private, and with no projection at all: the client never renders a survey it
+// chose for itself. It asks `/account/survey` what to show, and the server answers
+// with at most one — having already applied targeting, sampling and everything
+// that account has been asked before. Publishing the whole set would leak the
+// segmentation strategy and let a browser decide it qualifies for a question set
+// it doesn't.
+const SURVEYS_DOC = "adminSettings/surveys";
 const SLACK_CONFIG_DOC = "appConfig/slackConfig";
 const LEGAL_DOC = "appConfig/legal";
 const COOKIE_CONFIG_DOC = "appConfig/cookieConfig";
@@ -526,6 +552,58 @@ export async function saveAnnouncementsConfig(input: unknown): Promise<Announcem
   const parsed = announcementsConfigSchema.parse(input);
   const normalized = normalizeAnnouncementsConfig({ ...parsed, updatedAt: Date.now() });
   await writeDoc(ANNOUNCEMENTS_DOC, normalized);
+  return normalized;
+}
+
+// ---- Marketing campaigns ---------------------------------------------------
+
+export function getCampaignsConfig(): Promise<CampaignsConfig> {
+  return readDoc(CAMPAIGNS_DOC, normalizeCampaignsConfig);
+}
+
+export function defaultCampaignsConfig(): CampaignsConfig {
+  return createDefaultCampaignsConfig();
+}
+
+/**
+ * Validate + persist the campaign engine.
+ *
+ * The Zod schema here is where a misconfigured campaign is caught, and its
+ * refusals are written for the admin about to ship it — an uncapped Spark
+ * refund, a Spark grant on a trigger that proves no payment, a condition the
+ * trigger can never evaluate. The normalizer then re-applies the same guards, so
+ * a hand-edited Firestore doc can't smuggle past them either.
+ */
+export async function saveCampaignsConfig(input: unknown): Promise<CampaignsConfig> {
+  const parsed = campaignsConfigSchema.parse(input);
+  const normalized = normalizeCampaignsConfig({ ...parsed, updatedAt: Date.now() });
+  await writeDoc(CAMPAIGNS_DOC, normalized);
+  await writeDoc(CAMPAIGNS_PUBLIC_DOC, publicCampaignsProjection(normalized));
+  return normalized;
+}
+
+// ---- Profiling surveys -----------------------------------------------------
+
+export function getSurveysConfig(): Promise<SurveysConfig> {
+  return readDoc(SURVEYS_DOC, normalizeSurveysConfig);
+}
+
+export function defaultSurveysConfig(): SurveysConfig {
+  return createDefaultSurveysConfig();
+}
+
+/**
+ * Validate + persist the question sets (admin-only doc).
+ *
+ * The schema's refusals are the interesting part: an option with no label, a
+ * live survey with no questions, three required questions on a card the customer
+ * can close. All of them are things that would otherwise be discovered by a
+ * paying customer on the screen they see once.
+ */
+export async function saveSurveysConfig(input: unknown): Promise<SurveysConfig> {
+  const parsed = surveysConfigSchema.parse(input);
+  const normalized = normalizeSurveysConfig({ ...parsed, updatedAt: Date.now() });
+  await writeDoc(SURVEYS_DOC, normalized);
   return normalized;
 }
 

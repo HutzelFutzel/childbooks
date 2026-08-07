@@ -24,6 +24,7 @@ import {
   migrateProfile,
   PROFILE_SCHEMA_VERSION,
   type SavedAddress,
+  type ProfilePatch,
   type UserProfile,
 } from "../core/profile/types";
 
@@ -86,7 +87,7 @@ export function subscribeAddresses(cb: (addresses: SavedAddress[]) => void): Uns
  * `createdAt` on first write). Best-effort by design — callers don't block UX
  * on persistence.
  */
-export async function saveProfile(patch: Partial<UserProfile>): Promise<void> {
+export async function saveProfile(patch: ProfilePatch): Promise<void> {
   const uid = requireUid();
   const now = Date.now();
   const payload: Record<string, unknown> = {

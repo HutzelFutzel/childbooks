@@ -55,6 +55,8 @@ import { PlansTab } from "./tabs/PlansTab";
 import { SparksTab } from "./tabs/SparksTab";
 import { ReferralsTab } from "./tabs/ReferralsTab";
 import { AffiliatesTab } from "./tabs/AffiliatesTab";
+import { CampaignsTab } from "./tabs/CampaignsTab";
+import { SurveysTab } from "./tabs/SurveysTab";
 import { SystemHealthTab } from "./tabs/SystemHealthTab";
 import { SeoTab } from "./tabs/marketing/SeoTab";
 import { BlogTab } from "./tabs/marketing/BlogTab";
@@ -87,6 +89,10 @@ function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
       return <FinancialTab />;
     case "discounts":
       return <DiscountPlannerTab />;
+    case "campaigns":
+      return <CampaignsTab />;
+    case "surveys":
+      return <SurveysTab />;
     case "models":
       return <ModelConfigTab />;
     case "artStyles":

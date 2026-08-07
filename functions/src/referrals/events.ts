@@ -163,7 +163,14 @@ export async function markFirstBookCompleted(uid: string): Promise<void> {
       tx.set(ref, { firstBookCompletedAt: FieldValue.serverTimestamp() }, { merge: true });
       return true;
     });
-    if (first) await onReferralEvent(uid, "first_book_completed");
+    if (first) {
+      await onReferralEvent(uid, "first_book_completed");
+      // The campaign engine keys on the same once-per-account flag, so the two
+      // programs agree on what "activated" means. Imported lazily so the render
+      // path doesn't pull the campaign executors in on every finished book.
+      const { onCampaignEvent } = await import("../campaigns");
+      await onCampaignEvent(uid, "first_book_completed");
+    }
   } catch (err) {
     console.warn("[referrals] first-book milestone failed", err);
   }

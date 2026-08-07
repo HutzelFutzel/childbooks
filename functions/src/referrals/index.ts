@@ -130,28 +130,35 @@ export async function referralOverview(uid: string): Promise<ReferralOverview> {
  *
  * The count comes from per-invoice marker documents rather than a counter, so a
  * webhook retry can't inflate it: the marker id IS the invoice id.
+ *
+ * Returns that count so the CAMPAIGN engine can key its own `nthInvoice` rules
+ * on the same number. Deriving it twice would be two chances to disagree, and
+ * "reward the third renewal" paying on the second is not a bug anyone finds
+ * quickly.
  */
 export async function onSubscriptionInvoicePaid(args: {
   uid: string;
   subscriptionId: string;
   invoiceId: string;
   amount: number;
-}): Promise<void> {
+}): Promise<number> {
   try {
     const markers = db().collection(`users/${args.uid}/subscriptions/${args.subscriptionId}/paidInvoices`);
     await markers.doc(args.invoiceId).set({ at: Date.now(), amount: args.amount }, { merge: true });
     const count = (await markers.limit(50).get()).size;
     if (count <= 1) {
       await onReferralEvent(args.uid, "subscription_started", { ref: args.invoiceId, amount: args.amount });
-      return;
+      return count;
     }
     await onReferralEvent(args.uid, "subscription_renewed", {
       ref: args.invoiceId,
       amount: args.amount,
       invoiceNumber: count,
     });
+    return count;
   } catch (err) {
     console.warn("[referrals] subscription invoice hook failed", err);
+    return 0;
   }
 }
 

@@ -28,6 +28,10 @@ import { ensureAdmin } from "./storage";
 import { getImageCostStats, getModelCostTable, getSparksConfig } from "./appConfig";
 import { resolveImageModels } from "./modelResolve";
 import { actionMultiplier } from "./plans";
+// Only the pricing half of the campaign engine — it imports config and nothing
+// else, so the wallet can read a live price override without pulling in the
+// payout executors (which import the wallet right back).
+import { campaignActionMultiplier } from "./campaigns/pricing";
 import { recordFinanceEvent } from "./finance";
 import {
   estimateForAction,
@@ -94,7 +98,9 @@ export type SparkLotSource =
   | "referral"
   | "gift"
   | "adjust"
-  | "refund";
+  | "refund"
+  /** A marketing campaign grant or spend-refund (see `campaigns/`). */
+  | "campaign";
 
 interface SparkLot {
   id: string;
@@ -104,6 +110,12 @@ interface SparkLot {
   /** Real USD revenue per Spark (pack/gift purchases); null for free grants. */
   usdPerSpark: number | null;
   at: number;
+  /**
+   * When this lot's unspent Sparks lapse (0 = never). Promotional grants carry a
+   * finite life because an unbounded promotional balance is an unbounded
+   * liability tail; purchased Sparks never expire.
+   */
+  expiresAt: number;
 }
 
 /** How a spend decomposed across lots — the paid/free revenue attribution. */
@@ -134,6 +146,7 @@ async function readLots(tx: Transaction, uid: string): Promise<SparkLot[]> {
       remaining: typeof raw.remaining === "number" ? raw.remaining : 0,
       usdPerSpark: typeof raw.usdPerSpark === "number" ? raw.usdPerSpark : null,
       at: typeof raw.at === "number" ? raw.at : 0,
+      expiresAt: typeof raw.expiresAt === "number" ? raw.expiresAt : 0,
     };
   });
 }
@@ -184,7 +197,13 @@ function consumeLots(
 function createLot(
   tx: Transaction,
   uid: string,
-  args: { source: SparkLotSource; amount: number; usdPerSpark?: number | null; ref?: string },
+  args: {
+    source: SparkLotSource;
+    amount: number;
+    usdPerSpark?: number | null;
+    ref?: string;
+    expiresAt?: number;
+  },
 ): void {
   const id = args.ref ? `lot_${args.ref}` : randomUUID();
   tx.set(db().doc(`users/${uid}/sparkLots/${id}`), {
@@ -193,6 +212,7 @@ function createLot(
     remaining: args.amount,
     usdPerSpark: args.usdPerSpark ?? null,
     at: Date.now(),
+    expiresAt: args.expiresAt ?? 0,
     ...(args.ref ? { ref: args.ref } : {}),
   });
 }
@@ -218,6 +238,12 @@ interface GrantArgs {
    * any balance above `rolloverCap` is forfeited, then the fresh grant is added.
    */
   rolloverCap?: number;
+  /**
+   * How long these Sparks live, in days (0/absent = forever). Promotional grants
+   * set this so a campaign's liability has a known end date; purchased Sparks
+   * never pass it.
+   */
+  expiresInDays?: number;
 }
 
 /**
@@ -250,6 +276,8 @@ export async function grantSparks(args: GrantArgs): Promise<boolean> {
       consumeLots(tx, args.uid, lots, current - base);
     }
     const balanceAfter = base + args.amount;
+    const expiresAt =
+      args.expiresInDays && args.expiresInDays > 0 ? Date.now() + args.expiresInDays * 86_400_000 : 0;
     tx.set(userRef, { sparkBalance: balanceAfter }, { merge: true });
     tx.set(ledgerRef, {
       type: args.type,
@@ -257,6 +285,7 @@ export async function grantSparks(args: GrantArgs): Promise<boolean> {
       balanceAfter,
       reason: args.reason,
       source: args.source,
+      ...(expiresAt > 0 ? { expiresAt } : {}),
       ...(args.ref ? { ref: args.ref } : {}),
       at: Date.now(),
     });
@@ -265,6 +294,7 @@ export async function grantSparks(args: GrantArgs): Promise<boolean> {
       amount: args.amount,
       usdPerSpark: args.usdPerSpark ?? null,
       ref: args.ref ? `${args.type}_${args.ref}` : undefined,
+      expiresAt,
     });
     granted = true;
   });
@@ -473,6 +503,16 @@ export interface SettleOptions {
   projectId?: string;
   /** The action run this settlement belongs to (see `actionRun.ts`). */
   runId?: string;
+  /**
+   * The image tier this action rendered at.
+   *
+   * Denormalized onto the ledger entry rather than left on the run record it
+   * points at, because a campaign can refund "everything you spent on FAST
+   * renders" — and that has to be a query over the ledger, not an N+1 join
+   * through `actionRuns`. A dimension the ledger never recorded can never be
+   * refunded retroactively.
+   */
+  tier?: ImageTier;
 }
 
 /** What one settlement actually charged, for the run record. */
@@ -502,13 +542,24 @@ export async function settleActionCost(
     // Only what the user asked for reaches the wallet — repair passes are ours.
     // Split here rather than at the call sites so a direct caller can't skip it.
     const { billable } = splitBillable(events);
-    const [costUsd, multiplier] = await Promise.all([
+    const [costUsd, planMultiplier, campaignMultiplier] = await Promise.all([
       usdForEvents(billable),
       actionMultiplier(uid, action),
+      campaignActionMultiplier(uid, action, opts.tier ?? null),
     ]);
+    // The campaign override multiplies the plan's own discount. It is applied
+    // here AND in `estimateForUser` from the same helper — a promo that only
+    // reaches settlement would quote 5 ✦ and charge 0, and one that only reached
+    // the quote would promise "free" and then bill for it.
+    const multiplier = planMultiplier * campaignMultiplier;
     const price = priceForAction(config, action, costUsd, multiplier);
     if (price <= 0) return { sparks: 0, costUsd, breakdown: null };
-    const breakdown = await deductSparks(uid, price, action, opts.projectId, opts.runId);
+    const breakdown = await deductSparks(uid, price, action, {
+      projectId: opts.projectId,
+      runId: opts.runId,
+      tier: opts.tier,
+      model: primaryModel(billable),
+    });
     await recordFinanceEvent({
       category: "sparks",
       kind: "sparkSpend",
@@ -663,6 +714,109 @@ export async function reverseGrantedSparks(args: {
 }
 
 /**
+ * Retire promotional Spark lots whose life has run out.
+ *
+ * The `expiry` ledger type existed long before anything wrote it, which meant
+ * `expiresInDays` on a campaign grant was a promise we made to ourselves and
+ * never kept — every promotion quietly added to a permanent liability. This is
+ * the enforcement.
+ *
+ * Only the UNSPENT remainder of an expired lot is retired, and only down to zero:
+ * Sparks already spent bought real provider work, and a lapse must never leave
+ * someone with a negative balance they didn't create. Idempotent — a lot is
+ * zeroed and stamped in the same transaction, so a second sweep finds nothing.
+ */
+export async function expireSparkLots(
+  opts: { maxLots?: number; at?: number } = {},
+): Promise<{ lots: number; sparks: number }> {
+  ensureAdmin();
+  const at = opts.at ?? Date.now();
+  let lots = 0;
+  let sparks = 0;
+
+  // A collection-group query over every user's lots: the alternative is scanning
+  // the user table, which is far larger than the set of lots that ever expire.
+  const due = await db()
+    .collectionGroup("sparkLots")
+    .where("expiresAt", ">", 0)
+    .where("expiresAt", "<=", at)
+    .limit(opts.maxLots ?? 500)
+    .get();
+
+  for (const doc of due.docs) {
+    // `users/{uid}/sparkLots/{lotId}` — the grandparent is the account.
+    const uid = doc.ref.parent.parent?.id;
+    if (!uid) continue;
+    const remaining = (doc.get("remaining") as number) ?? 0;
+    if (remaining <= 0) {
+      // Fully spent before it lapsed: nothing to reclaim, but stamp it so the
+      // sweep doesn't keep finding it.
+      await doc.ref.set({ expiresAt: 0, expiredAt: at }, { merge: true }).catch(() => {});
+      continue;
+    }
+
+    const userRef = db().doc(`users/${uid}`);
+    const ledgerRef = userRef.collection("sparksLedger").doc(`expiry_${doc.id}`);
+    try {
+      const removed = await db().runTransaction(async (tx) => {
+        const lotSnap = await tx.get(doc.ref);
+        if (!lotSnap.exists) return 0;
+        const left = (lotSnap.get("remaining") as number) ?? 0;
+        if (left <= 0) return 0;
+        const userSnap = await tx.get(userRef);
+        const current = (userSnap.get("sparkBalance") as number) ?? 0;
+        const take = Math.min(left, Math.max(0, current));
+        const balanceAfter = current - take;
+        tx.set(doc.ref, { remaining: left - take, expiresAt: 0, expiredAt: at }, { merge: true });
+        if (take > 0) {
+          tx.set(userRef, { sparkBalance: balanceAfter }, { merge: true });
+          tx.set(ledgerRef, {
+            type: "expiry",
+            amount: -take,
+            balanceAfter,
+            reason: "promotional Sparks expired",
+            source: (lotSnap.get("source") as string) ?? "adjust",
+            ref: doc.id,
+            at,
+          });
+        }
+        return take;
+      });
+      if (removed > 0) {
+        lots += 1;
+        sparks += removed;
+        await recordFinanceEvent({
+          category: "sparks",
+          kind: "sparkSpend",
+          amountUsd: 0,
+          uid,
+          sparks: -removed,
+          ref: `expiry_${doc.id}`,
+          meta: { source: "expiry", reason: "promotional Sparks expired" },
+        });
+      }
+    } catch (err) {
+      console.warn("[sparks] lot expiry failed", doc.ref.path, err);
+    }
+  }
+  return { lots, sparks };
+}
+
+/** The image model most of a call's billable work went to (for the ledger). */
+function primaryModel(events: UsageEvent[]): string | undefined {
+  const image = events.find((e) => e.modality === "image");
+  return (image ?? events[0])?.model;
+}
+
+/** Extra provenance stamped on a spend entry so refunds can be scoped by it. */
+interface SpendContext {
+  projectId?: string;
+  runId?: string;
+  tier?: ImageTier;
+  model?: string;
+}
+
+/**
  * Deduct Sparks (allowed to dip into the negative buffer) + append a ledger
  * entry, consuming lots FIFO. Returns the paid/free breakdown of the spend.
  */
@@ -670,8 +824,7 @@ async function deductSparks(
   uid: string,
   amount: number,
   reason: string,
-  projectId?: string,
-  runId?: string,
+  ctx: SpendContext = {},
 ): Promise<SpendBreakdown> {
   ensureAdmin();
   const userRef = db().doc(`users/${uid}`);
@@ -688,10 +841,18 @@ async function deductSparks(
       amount: -amount,
       balanceAfter,
       reason,
-      ...(projectId ? { projectId } : {}),
-      ...(runId ? { runId } : {}),
+      ...(ctx.projectId ? { projectId: ctx.projectId } : {}),
+      ...(ctx.runId ? { runId: ctx.runId } : {}),
+      // See `SettleOptions.tier` — a campaign can refund by tier or model, and
+      // only what the ledger stored is refundable.
+      ...(ctx.tier ? { tier: ctx.tier } : {}),
+      ...(ctx.model ? { model: ctx.model } : {}),
       paidSparks: breakdown.paidSparks,
       freeSparks: breakdown.freeSparks + breakdown.unfundedSparks,
+      // Broken out as well as folded into `freeSparks` above: the subsidy report
+      // wants them together (both are unpaid), but a campaign refund must never
+      // return Sparks the customer never had, so it needs them apart.
+      unfundedSparks: breakdown.unfundedSparks,
       paidUsd: breakdown.paidUsd,
       // Which grants funded the free half (starter / referral / subscription …).
       // The per-project subsidy report reads this, so it has to survive on the
@@ -717,7 +878,14 @@ export async function estimateForUser(
 ): Promise<number> {
   const config = await getSparksConfig();
   if (!config.enabled) return 0;
-  const multiplier = await actionMultiplier(uid, action);
+  // The campaign override is folded in here as well as at settlement, from the
+  // same helper. If it only reached one of the two, the studio would quote a
+  // price the wallet doesn't charge — in whichever direction is worse.
+  const [planMultiplier, campaignMultiplier] = await Promise.all([
+    actionMultiplier(uid, action),
+    campaignActionMultiplier(uid, action, tier),
+  ]);
+  const multiplier = planMultiplier * campaignMultiplier;
   const rule = config.actions[action];
   if (rule?.mode === "derived" && isImageAction(action)) {
     const [stats, rateCostUsd] = await Promise.all([
