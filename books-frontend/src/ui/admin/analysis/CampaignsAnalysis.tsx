@@ -12,7 +12,7 @@
  * a flattering conversion number it hasn't earned.
  *
  * The rules, budgets and held payouts are configured under
- * Configuration → Campaigns, cross-linked below.
+ * Marketing → Campaigns, cross-linked below.
  */
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, ArrowRight, Loader2, RefreshCw } from "lucide-react";
@@ -87,8 +87,7 @@ export function CampaignsAnalysis() {
   const campaigns = useAppConfigStore((s) => s.campaigns);
   const loadReport = useAppConfigStore((s) => s.loadCampaignReport);
   const baseCurrency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
-  const setSection = useAdminTab((s) => s.setSection);
-  const setConfigTab = useAdminTab((s) => s.setConfigTab);
+  const openMarketingTab = useAdminTab((s) => s.openMarketingTab);
 
   const [days, setDays] = useState(30);
   // Bumped by Refresh. The window alone can't drive a re-fetch, because refreshing
@@ -131,8 +130,7 @@ export function CampaignsAnalysis() {
   }, [ids, days, nonce, loadReport]);
 
   const openConfig = () => {
-    setConfigTab("campaigns");
-    setSection("configuration");
+    openMarketingTab("campaigns");
   };
 
   return (
@@ -168,7 +166,7 @@ export function CampaignsAnalysis() {
             onClick={openConfig}
             className="mt-1 flex items-center gap-1 text-sm font-semibold text-brand-700 hover:underline"
           >
-            Set one up in Configuration → Campaigns <ArrowRight className="size-3.5" />
+            Set one up in Marketing → Campaigns <ArrowRight className="size-3.5" />
           </button>
         </div>
       )}
@@ -272,7 +270,7 @@ export function CampaignsAnalysis() {
                   onClick={openConfig}
                   className="flex items-center gap-1 text-xs font-semibold text-amber-800 hover:underline"
                 >
-                  {totals.held} payout{totals.held === 1 ? "" : "s"} waiting in Configuration → Campaigns{" "}
+                  {totals.held} payout{totals.held === 1 ? "" : "s"} waiting in Marketing → Campaigns{" "}
                   <ArrowRight className="size-3.5" />
                 </button>
               )}

@@ -41,7 +41,7 @@ export function SparksTab() {
   const baseCurrency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
   const save = useAppConfigStore((s) => s.saveSparksConfig);
   const openCatalog = useAdminTab((s) => s.openCatalog);
-  const setConfigTab = useAdminTab((s) => s.setConfigTab);
+  const openMarketingTab = useAdminTab((s) => s.openMarketingTab);
 
   const [draft, setDraft] = useState<SparksConfig>(stored);
   const [dirty, setDirty] = useState(false);
@@ -169,11 +169,11 @@ export function SparksTab() {
       >
         <p className="text-[11px] text-ink-500">
           The legacy Sparks-only knobs here are kept for backwards compatibility with older config docs; the live
-          program is configured under{" "}
+          program is configured under Marketing →{" "}
           <button
             type="button"
             className="font-semibold text-brand-700 underline"
-            onClick={() => setConfigTab("referrals")}
+            onClick={() => openMarketingTab("referrals")}
           >
             Referrals
           </button>

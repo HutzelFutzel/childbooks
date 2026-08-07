@@ -465,7 +465,7 @@ function ConditionFields({
               and if this matched on labels a live campaign's audience would silently
               empty out the moment somebody fixed a typo. */}
           <p className="text-[11px] leading-relaxed text-ink-400">
-            Ids as configured under Configuration → Surveys, not the wording the
+            Ids as configured under Marketing → Surveys, not the wording the
             customer reads. Matches anyone who has ever given one of these answers.
           </p>
         </div>

@@ -31,6 +31,7 @@ export function BusinessOverviewTab() {
   const loadAdminProducts = useAppConfigStore((s) => s.loadAdminProducts);
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
   const openCatalog = useAdminTab((s) => s.openCatalog);
+  const openMarketingTab = useAdminTab((s) => s.openMarketingTab);
 
   // Full product definitions (incl. cost) for the sale-headroom card — the
   // public projection deliberately has no cost internals.
@@ -220,7 +221,7 @@ export function BusinessOverviewTab() {
         icon={<Users className="size-4" />}
         title="Referrals"
         subtitle="Invite-a-friend rewards — terms freeze onto each invitation when sent"
-        onEdit={() => setConfigTab("referrals")}
+        onEdit={() => openMarketingTab("referrals")}
         editLabel="Edit referrals"
       >
         {!referral.enabled ? (

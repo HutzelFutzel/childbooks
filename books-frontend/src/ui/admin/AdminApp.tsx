@@ -81,18 +81,10 @@ function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
       return <PlansTab />;
     case "sparks":
       return <SparksTab />;
-    case "referrals":
-      return <ReferralsTab />;
-    case "affiliates":
-      return <AffiliatesTab />;
     case "financial":
       return <FinancialTab />;
     case "discounts":
       return <DiscountPlannerTab />;
-    case "campaigns":
-      return <CampaignsTab />;
-    case "surveys":
-      return <SurveysTab />;
     case "models":
       return <ModelConfigTab />;
     case "artStyles":
@@ -400,6 +392,10 @@ export default function AdminApp() {
                       value={marketingTab}
                       onChange={(id) => setMarketingTab(id as typeof marketingTab)}
                     />
+                    {marketingTab === "referrals" && <ReferralsTab />}
+                    {marketingTab === "affiliates" && <AffiliatesTab />}
+                    {marketingTab === "campaigns" && <CampaignsTab />}
+                    {marketingTab === "surveys" && <SurveysTab />}
                     {marketingTab === "announcements" && <AnnouncementsTab />}
                     {marketingTab === "seo" && <SeoTab />}
                     {marketingTab === "blog" && <BlogTab />}

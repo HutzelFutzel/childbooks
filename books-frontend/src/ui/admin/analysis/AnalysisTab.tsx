@@ -89,7 +89,7 @@ export function AnalysisTab() {
 
   const [, forceTick] = useState(0);
   // Lifted to the nav store (not local state) so other tabs can deep-link
-  // straight to a specific Analysis section, e.g. Configuration → Referrals'
+  // straight to a specific Analysis section, e.g. Marketing → Referrals'
   // "see the funnel" cross-link.
   const section = useAdminTab((s) => s.analysisTab);
   const setSection = useAdminTab((s) => s.setAnalysisTab);

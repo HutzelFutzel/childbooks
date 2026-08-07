@@ -115,7 +115,7 @@ export function ReferralsTab() {
   const settings = useAppConfigStore((s) => s.pricingSettings);
   const plans = useAppConfigStore((s) => s.plans.plans);
   const loadAdminProducts = useAppConfigStore((s) => s.loadAdminProducts);
-  const setConfigTab = useAdminTab((s) => s.setConfigTab);
+  const openConfigTab = useAdminTab((s) => s.openConfigTab);
   const openAnalysis = useAdminTab((s) => s.openAnalysis);
 
   const [draft, setDraft] = useState<ReferralConfig>(stored);
@@ -234,8 +234,8 @@ export function ReferralsTab() {
           </>
         }
         links={[
-          { label: "Sparks economy", onClick: () => setConfigTab("sparks") },
-          { label: "Discount planner", onClick: () => setConfigTab("discounts") },
+          { label: "Sparks economy", onClick: () => openConfigTab("sparks") },
+          { label: "Discount planner", onClick: () => openConfigTab("discounts") },
         ]}
       >
         Configure who gets what, and when, for inviting a friend. Terms freeze onto each invitation when it&apos;s sent,
@@ -271,7 +271,7 @@ export function ReferralsTab() {
         <ImpactNote>
           The Sparks economy is disabled, so Spark rewards can&apos;t be granted — they&apos;ll pile up under Held
           payouts until it&apos;s back on. Turn it on under{" "}
-          <button type="button" className="font-semibold underline" onClick={() => setConfigTab("sparks")}>
+          <button type="button" className="font-semibold underline" onClick={() => openConfigTab("sparks")}>
             Sparks economy
           </button>{" "}
           before enabling referrals that grant Sparks.

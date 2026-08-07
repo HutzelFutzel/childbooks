@@ -77,12 +77,8 @@ export const CONFIG_TAB_META: Record<ConfigTabId, { label: string; icon: ReactNo
   catalog: { label: "Catalog", icon: <Package className="size-4" /> },
   memberships: { label: "Memberships", icon: <CreditCard className="size-4" /> },
   sparks: { label: "Sparks economy", icon: <Sparkles className="size-4" /> },
-  referrals: { label: "Referrals", icon: <Users className="size-4" /> },
-  affiliates: { label: "Affiliates", icon: <Handshake className="size-4" /> },
   financial: { label: "Financial settings", icon: <Coins className="size-4" /> },
   discounts: { label: "Discount planner", icon: <Percent className="size-4" /> },
-  campaigns: { label: "Campaigns", icon: <Megaphone className="size-4" /> },
-  surveys: { label: "Surveys", icon: <ClipboardList className="size-4" /> },
   // AI pipeline
   models: { label: "Models", icon: <Cpu className="size-4" /> },
   modelCosts: { label: "Model costs", icon: <DollarSign className="size-4" /> },
@@ -111,6 +107,12 @@ export const ANALYSIS_TAB_META: Record<AnalysisTabId, { label: string; icon: Rea
 };
 
 export const MARKETING_TABS: { id: MarketingTabId; label: string; icon: ReactNode }[] = [
+  // Growth mechanisms — the ones with real money moving through them.
+  { id: "referrals", label: "Referrals", icon: <Users className="size-4" /> },
+  { id: "affiliates", label: "Affiliates", icon: <Handshake className="size-4" /> },
+  { id: "campaigns", label: "Campaigns", icon: <Megaphone className="size-4" /> },
+  { id: "surveys", label: "Surveys", icon: <ClipboardList className="size-4" /> },
+  // Content & site tooling.
   { id: "announcements", label: "Announcements", icon: <PartyPopper className="size-4" /> },
   { id: "seo", label: "SEO", icon: <Search className="size-4" /> },
   { id: "blog", label: "Blog", icon: <Newspaper className="size-4" /> },

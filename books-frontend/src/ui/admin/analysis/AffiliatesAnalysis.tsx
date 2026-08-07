@@ -138,7 +138,7 @@ function CommissionRows({ rows }: { rows: AffiliateCommissionMirror[] }) {
 export function AffiliatesAnalysis() {
   const loadOverview = useAppConfigStore((s) => s.loadAffiliateOverview);
   const sync = useAppConfigStore((s) => s.syncAffiliates);
-  const setConfigTab = useAdminTab((s) => s.openConfigTab);
+  const openMarketingTab = useAdminTab((s) => s.openMarketingTab);
 
   const [overview, setOverview] = useState<AffiliateOverview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -195,7 +195,7 @@ export function AffiliatesAnalysis() {
           <div>
             The affiliate program is switched off, so no new attribution is being recorded. Anything
             below is history.{" "}
-            <button className="underline" onClick={() => setConfigTab("affiliates")}>
+            <button className="underline" onClick={() => openMarketingTab("affiliates")}>
               Open the program settings
             </button>
             .

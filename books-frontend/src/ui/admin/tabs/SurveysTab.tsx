@@ -104,7 +104,7 @@ export function SurveysTab() {
   const load = useAppConfigStore((s) => s.loadSurveysConfig);
   const save = useAppConfigStore((s) => s.saveSurveysConfig);
   const campaigns = useAppConfigStore((s) => s.campaigns);
-  const setConfigTab = useAdminTab((s) => s.setConfigTab);
+  const setMarketingTab = useAdminTab((s) => s.setMarketingTab);
   const openAnalysis = useAdminTab((s) => s.openAnalysis);
 
   const [draft, setDraft] = useState<SurveysConfig | null>(null);
@@ -237,7 +237,7 @@ export function SurveysTab() {
             label: "Analysis → Customer profile",
             onClick: () => openAnalysis("surveys"),
           },
-          { label: "Campaigns", onClick: () => setConfigTab("campaigns") },
+          { label: "Campaigns", onClick: () => setMarketingTab("campaigns") },
         ]}
       >
         A few questions asked once, just after checkout — the one moment a

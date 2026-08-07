@@ -20,7 +20,7 @@
  *      trivia. "38% of buyers, 51% of revenue" is a decision. The bar shows the
  *      share; the number beside it shows what that group is worth.
  *
- * The questions themselves are configured under Configuration → Surveys.
+ * The questions themselves are configured under Marketing → Surveys.
  */
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -42,8 +42,7 @@ import { fmtNumber, fmtRelative } from "./format";
 
 export function SurveysAnalysis() {
   const loadReports = useAppConfigStore((s) => s.loadSurveyReports);
-  const setSection = useAdminTab((s) => s.setSection);
-  const setConfigTab = useAdminTab((s) => s.setConfigTab);
+  const openMarketingTab = useAdminTab((s) => s.openMarketingTab);
 
   const [reports, setReports] = useState<SurveyReport[]>([]);
   const [loading, setLoading] = useState(true);
@@ -76,8 +75,7 @@ export function SurveysAnalysis() {
   }, [loadReports, nonce]);
 
   const openConfig = () => {
-    setSection("configuration");
-    setConfigTab("surveys");
+    openMarketingTab("surveys");
   };
 
   const anyAnswers = useMemo(
@@ -138,7 +136,7 @@ export function SurveysAnalysis() {
         <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
           Nothing answered yet. The card only appears after a purchase settles,
           so answers arrive at roughly the rate you make sales — and only if the
-          master switch under Configuration → Surveys is on.
+          master switch under Marketing → Surveys is on.
         </p>
       )}
 
@@ -249,7 +247,7 @@ function SegmentsBlock({ report }: { report: SurveyReport }) {
     return (
       <div className="rounded-lg bg-ink-50/50 p-3 text-xs leading-relaxed text-ink-400 ring-1 ring-inset ring-ink-100">
         No answer here identifies who&apos;s buying. Tag the options under
-        Configuration → Surveys (&ldquo;my grandchild&rdquo; means the buyer is a
+        Marketing → Surveys (&ldquo;my grandchild&rdquo; means the buyer is a
         grandparent) and this becomes a comparison of what each kind of customer
         is worth.
       </div>

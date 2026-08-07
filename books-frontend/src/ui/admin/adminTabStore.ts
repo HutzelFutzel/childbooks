@@ -18,12 +18,8 @@ export type ConfigTabId =
   | "catalog" // things you sell once: print books, the ebook, Spark packs
   | "memberships" // subscription plans (incl. member ebook pricing)
   | "sparks" // the Sparks economy internals (peg, grants, action pricing)
-  | "referrals" // invite-a-friend program (rules, impact, funnel)
-  | "affiliates" // Rewardful affiliate program (master switch + what earns)
   | "financial" // currencies, FX, fees, rounding, tax — the money plumbing
   | "discounts" // sale planner: per-item break-even & safe max discount + slider
-  | "campaigns" // promotions: refunds, gifts, price breaks, purchase discounts
-  | "surveys" // the questions asked after checkout, and who gets asked them
   // AI pipeline group. (Cost *reporting* lives in Analysis → Costs; this group
   // only holds the knobs that set what things cost.)
   | "models"
@@ -99,7 +95,18 @@ export function analysisGroupForTab(tab: AnalysisTabId): AnalysisGroupId {
 }
 
 /** Sub-tabs within the Marketing section. */
-export type MarketingTabId = "seo" | "blog" | "branding" | "qrCodes" | "announcements";
+export type MarketingTabId =
+  // Growth mechanisms — the ones with real money moving through them.
+  | "referrals" // invite-a-friend program (rules, impact, funnel)
+  | "affiliates" // Rewardful affiliate program (master switch + what earns)
+  | "campaigns" // promotions: refunds, gifts, price breaks, purchase discounts
+  | "surveys" // the questions asked after checkout, and who gets asked them
+  // Content & site tooling.
+  | "seo"
+  | "blog"
+  | "branding"
+  | "qrCodes"
+  | "announcements";
 
 /** Sub-tabs within the Communication section. */
 export type CommunicationTabId = "contact" | "transactional-emails" | "admin-slack";
@@ -120,18 +127,7 @@ export const CONFIG_GROUPS: {
     label: "Business",
     description:
       "Everything that makes money: what you sell, how memberships work, and the plumbing (currencies, discounts) behind every price.",
-    tabs: [
-      "overview",
-      "catalog",
-      "memberships",
-      "sparks",
-      "referrals",
-      "affiliates",
-      "financial",
-      "discounts",
-      "campaigns",
-      "surveys",
-    ],
+    tabs: ["overview", "catalog", "memberships", "sparks", "financial", "discounts"],
   },
   {
     id: "ai",

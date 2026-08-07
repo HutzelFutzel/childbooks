@@ -4,10 +4,10 @@
  * Referral funnel analytics: invites sent → accepted → verified → activated →
  * first purchase, plus who's driving it and what it's costing.
  *
- * This used to live inside Configuration → Referrals, but it's a live metrics
+ * This used to live inside Marketing → Referrals, but it's a live metrics
  * view, not a setting — it belongs next to the rest of the funnels in Analysis.
  * The program's rules, copy and business-impact model are still configured
- * under Configuration → Referrals; held payouts needing a human decision live
+ * under Marketing → Referrals; held payouts needing a human decision live
  * there too (cross-linked below).
  */
 import { useEffect, useState } from "react";
@@ -105,8 +105,7 @@ function StatCard({ label, value, note }: { label: string; value: string; note?:
 export function ReferralsAnalysis() {
   const loadStats = useAppConfigStore((s) => s.loadReferralStats);
   const baseCurrency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
-  const setSection = useAdminTab((s) => s.setSection);
-  const setConfigTab = useAdminTab((s) => s.setConfigTab);
+  const openMarketingTab = useAdminTab((s) => s.openMarketingTab);
 
   const [days, setDays] = useState(30);
   const [stats, setStats] = useState<ReferralStatsSummary | null>(null);
@@ -134,8 +133,7 @@ export function ReferralsAnalysis() {
   }, [days]);
 
   const openHeldPayouts = () => {
-    setConfigTab("referrals");
-    setSection("configuration");
+    openMarketingTab("referrals");
   };
 
   return (
@@ -197,7 +195,7 @@ export function ReferralsAnalysis() {
                       className="mt-0.5 flex items-center gap-1 text-sm font-semibold text-amber-800 hover:underline"
                     >
                       {stats.pendingReview} held reward{stats.pendingReview === 1 ? "" : "s"} waiting in
-                      Configuration → Referrals <ArrowRight className="size-3.5" />
+                      Marketing → Referrals <ArrowRight className="size-3.5" />
                     </button>
                   </div>
                 )}
