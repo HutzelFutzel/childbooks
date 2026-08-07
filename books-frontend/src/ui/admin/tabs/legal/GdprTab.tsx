@@ -7,6 +7,7 @@ import { Button } from "../../../components/Button";
 import { Field, Input } from "../../../components/Input";
 import { backendFetch } from "../../../../platform/backend";
 import { Section } from "../products/parts";
+import { useAdminAccess } from "../../../../state/adminAccessStore";
 
 interface AuthSummary {
   uid: string;
@@ -36,6 +37,11 @@ async function readError(res: Response): Promise<string> {
  * tax/accounting law). Every deletion is written to an append-only audit log.
  */
 export function GdprTab() {
+  // Export/erase are the "dangerous" capability (T1/T2 only) — never grantable
+  // to a plain admin, no matter what level of `legal.gdpr` they hold (that
+  // grant only covers looking someone up to navigate this tab in the first
+  // place). Hiding them here matches what the backend would 403 anyway.
+  const canDangerous = useAdminAccess((s) => s.can("dangerous"));
   const [email, setEmail] = useState("");
   const [looking, setLooking] = useState(false);
   const [user, setUser] = useState<AuthSummary | null>(null);
@@ -159,46 +165,54 @@ export function GdprTab() {
             />
           </dl>
 
-          <div className="flex flex-wrap gap-2 pt-1">
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={<Download className="size-3.5" />}
-              loading={exporting}
-              onClick={exportData}
-            >
-              Export data (JSON)
-            </Button>
-          </div>
+          {canDangerous ? (
+            <>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  leftIcon={<Download className="size-3.5" />}
+                  loading={exporting}
+                  onClick={exportData}
+                >
+                  Export data (JSON)
+                </Button>
+              </div>
 
-          {/* Danger zone — typed confirmation before an irreversible erase. */}
-          <div className="mt-2 space-y-2 rounded-lg border border-red-200 bg-red-50 p-3">
-            <div className="flex items-center gap-2 text-sm font-semibold text-red-700">
-              <ShieldAlert className="size-4" />
-              Erase account &amp; data (irreversible)
-            </div>
-            <p className="text-[11px] leading-relaxed text-red-700/80">
-              Type the account email <strong>{user.email}</strong> to confirm.
+              {/* Danger zone — typed confirmation before an irreversible erase. */}
+              <div className="mt-2 space-y-2 rounded-lg border border-red-200 bg-red-50 p-3">
+                <div className="flex items-center gap-2 text-sm font-semibold text-red-700">
+                  <ShieldAlert className="size-4" />
+                  Erase account &amp; data (irreversible)
+                </div>
+                <p className="text-[11px] leading-relaxed text-red-700/80">
+                  Type the account email <strong>{user.email}</strong> to confirm.
+                </p>
+                <div className="flex flex-wrap items-end gap-2">
+                  <Input
+                    value={confirmText}
+                    placeholder={user.email ?? ""}
+                    onChange={(e) => setConfirmText(e.target.value)}
+                    className="max-w-xs"
+                  />
+                  <Button
+                    variant="danger"
+                    size="sm"
+                    leftIcon={<Trash2 className="size-3.5" />}
+                    loading={deleting}
+                    disabled={!user.email || confirmText.trim().toLowerCase() !== user.email.toLowerCase()}
+                    onClick={erase}
+                  >
+                    Erase permanently
+                  </Button>
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="pt-1 text-xs text-ink-400">
+              Exporting or erasing this account is an owner-only action. Ask a T1/T2 owner.
             </p>
-            <div className="flex flex-wrap items-end gap-2">
-              <Input
-                value={confirmText}
-                placeholder={user.email ?? ""}
-                onChange={(e) => setConfirmText(e.target.value)}
-                className="max-w-xs"
-              />
-              <Button
-                variant="danger"
-                size="sm"
-                leftIcon={<Trash2 className="size-3.5" />}
-                loading={deleting}
-                disabled={!user.email || confirmText.trim().toLowerCase() !== user.email.toLowerCase()}
-                onClick={erase}
-              >
-                Erase permanently
-              </Button>
-            </div>
-          </div>
+          )}
         </Section>
       )}
     </div>

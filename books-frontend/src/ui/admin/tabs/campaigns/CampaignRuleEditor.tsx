@@ -25,6 +25,7 @@ import { Button } from "../../../components/Button";
 import { Field, Input } from "../../../components/Input";
 import { Select } from "../../../components/Select";
 import { Toggle } from "../../../components/Toggle";
+import { useReadOnly } from "../../../components/ReadOnlyContext";
 import {
   CONDITION_KINDS,
   CONDITION_LABELS,
@@ -81,6 +82,7 @@ export function CampaignRuleEditor({
   onRemove: () => void;
   currency: string;
 }) {
+  const readOnly = useReadOnly();
   const meta = TRIGGER_META[rule.trigger];
   const approvalForced = ruleNeedsApproval(rule.trigger, rule.effect.kind);
   const effectOptions = EFFECT_KINDS.filter((kind) => effectAllowedForTrigger(rule.trigger, kind)).map(
@@ -134,14 +136,16 @@ export function CampaignRuleEditor({
             className="min-w-56"
           />
         </div>
-        <button
-          type="button"
-          onClick={onRemove}
-          className="rounded p-1 text-ink-400 transition hover:bg-ink-50 hover:text-ink-700"
-          title="Remove rule"
-        >
-          <Trash2 className="size-3.5" />
-        </button>
+        {!readOnly && (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="rounded p-1 text-ink-400 transition hover:bg-ink-50 hover:text-ink-700"
+            title="Remove rule"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        )}
       </div>
       <p className="text-[11px] text-ink-400">{meta.description}</p>
 
@@ -262,14 +266,16 @@ function ConditionRow({
         <div className="text-[11px] font-semibold text-ink-600">{CONDITION_LABELS[condition.kind]}</div>
         <ConditionFields condition={condition} onChange={onChange} currency={currency} />
       </div>
-      <button
-        type="button"
-        onClick={onRemove}
-        className="rounded p-1 text-ink-400 transition hover:bg-white hover:text-ink-700"
-        title="Remove condition"
-      >
-        <Trash2 className="size-3.5" />
-      </button>
+      {!useReadOnly() && (
+        <button
+          type="button"
+          onClick={onRemove}
+          className="rounded p-1 text-ink-400 transition hover:bg-white hover:text-ink-700"
+          title="Remove condition"
+        >
+          <Trash2 className="size-3.5" />
+        </button>
+      )}
     </div>
   );
 }
@@ -784,6 +790,7 @@ function DiscountEffectEditor({
 
 /** Add-a-rule button, kept here so the shell doesn't import the effect defaults. */
 export function AddRuleButton({ disabled, onAdd }: { disabled: boolean; onAdd: () => void }) {
+  if (useReadOnly()) return null;
   return (
     <Button type="button" size="sm" variant="secondary" disabled={disabled} onClick={onAdd}>
       <Plus className="size-3.5" /> Add rule

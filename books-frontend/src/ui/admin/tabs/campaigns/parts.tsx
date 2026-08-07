@@ -8,6 +8,7 @@
  */
 import type { ReactNode } from "react";
 import { Toggle } from "../../../components/Toggle";
+import { useReadOnly } from "../../../components/ReadOnlyContext";
 
 /**
  * A switch with the visible label + one-line explanation the bare `Toggle`
@@ -60,7 +61,9 @@ export function Chips({
   allowEmpty?: boolean;
   emptyHint?: string;
 }) {
+  const readOnly = useReadOnly();
   const toggle = (value: string) => {
+    if (readOnly) return;
     const next = selected.includes(value) ? selected.filter((v) => v !== value) : [...selected, value];
     if (next.length === 0 && !allowEmpty) return;
     onChange(next);
@@ -71,15 +74,17 @@ export function Chips({
       <div className="flex flex-wrap gap-1.5">
         {options.map((option) => {
           const on = selected.includes(option.value);
+          if (readOnly && !on) return null; // read-only: show only what's selected
           return (
             <button
               key={option.value}
               type="button"
+              disabled={readOnly}
               onClick={() => toggle(option.value)}
               className={
                 on
                   ? "rounded-full bg-brand-100 px-2.5 py-0.5 text-[11px] font-semibold text-brand-800"
-                  : "rounded-full bg-white px-2.5 py-0.5 text-[11px] text-ink-500 ring-1 ring-inset ring-ink-200 transition hover:text-ink-700"
+                  : "rounded-full bg-white px-2.5 py-0.5 text-[11px] text-ink-500 ring-1 ring-inset ring-ink-200 transition hover:text-ink-700 disabled:cursor-default"
               }
             >
               {option.label}
@@ -125,18 +130,25 @@ export function DateField({
     const pad = (n: number) => String(n).padStart(2, "0");
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
+  const readOnly = useReadOnly();
   return (
     <div className="space-y-1.5">
       <label className="flex items-center gap-1 text-sm font-medium text-ink-700">{label}</label>
-      <input
-        type="datetime-local"
-        value={toInput(value)}
-        onChange={(e) => {
-          const parsed = e.target.value ? new Date(e.target.value).getTime() : 0;
-          onChange(Number.isFinite(parsed) ? parsed : 0);
-        }}
-        className="h-11 w-full rounded-xl2 bg-white pl-3.5 pr-3 text-sm text-ink-800 ring-1 ring-inset ring-ink-200 transition focus:outline-none focus:ring-2 focus:ring-brand-400"
-      />
+      {readOnly ? (
+        <div className="flex h-11 items-center rounded-xl2 bg-ink-50 px-3.5 text-sm text-ink-700">
+          {value ? new Date(value).toLocaleString() : "Open (no date set)"}
+        </div>
+      ) : (
+        <input
+          type="datetime-local"
+          value={toInput(value)}
+          onChange={(e) => {
+            const parsed = e.target.value ? new Date(e.target.value).getTime() : 0;
+            onChange(Number.isFinite(parsed) ? parsed : 0);
+          }}
+          className="h-11 w-full rounded-xl2 bg-white pl-3.5 pr-3 text-sm text-ink-800 ring-1 ring-inset ring-ink-200 transition focus:outline-none focus:ring-2 focus:ring-brand-400"
+        />
+      )}
       {hint && <p className="text-xs text-ink-500">{hint}</p>}
     </div>
   );

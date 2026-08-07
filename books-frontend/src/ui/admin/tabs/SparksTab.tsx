@@ -21,6 +21,7 @@ import { resolveImageModel } from "../../../core/config/modelConfig";
 import { grantLiabilityUsd, sparkUnitEconomics } from "../../../core/config/economics";
 import { TEXT_ACTIONS, IMAGE_ACTIONS, type ImageActionId } from "../../../core/ai/actions";
 import { Grid, NumberField, Section, TabIntro, fmtMoney } from "./products/parts";
+import { useReadOnly } from "../../components/ReadOnlyContext";
 
 const MODES: { value: ActionPricingMode; label: string }[] = [
   { value: "free", label: "Free" },
@@ -35,6 +36,7 @@ const MODES: { value: ActionPricingMode; label: string }[] = [
  * backend admin route. The economy stays free until `enabled` is turned on.
  */
 export function SparksTab() {
+  const readOnly = useReadOnly();
   const stored = useAppConfigStore((s) => s.sparks);
   const modelCosts = useAppConfigStore((s) => s.adminModelCosts);
   const modelConfig = useAppConfigStore((s) => s.modelConfig);
@@ -107,16 +109,18 @@ export function SparksTab() {
         everything is free and the app behaves exactly as before.
       </TabIntro>
 
-      <div className="flex items-center justify-end gap-2">
-        {dirty && (
-          <Button variant="ghost" size="sm" onClick={() => { setDraft(stored); setDirty(false); }}>
-            Discard
+      {!readOnly && (
+        <div className="flex items-center justify-end gap-2">
+          {dirty && (
+            <Button variant="ghost" size="sm" onClick={() => { setDraft(stored); setDirty(false); }}>
+              Discard
+            </Button>
+          )}
+          <Button size="sm" onClick={onSave} loading={saving} disabled={!dirty}>
+            Save Sparks config
           </Button>
-        )}
-        <Button size="sm" onClick={onSave} loading={saving} disabled={!dirty}>
-          Save Sparks config
-        </Button>
-      </div>
+        </div>
+      )}
 
       <Section
         title="Economy"

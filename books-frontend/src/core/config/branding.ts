@@ -125,6 +125,15 @@ export interface BrandingConfig {
    * on the server, so nothing the customer does in the studio can take it off.
    */
   backCoverLogo: BrandAsset | null;
+  /**
+   * Fixed edge of {@link backCoverLogo}, in centimetres. Landscape logos
+   * (wider than tall) get this as their *height*; portrait / square logos get
+   * this as their *width* — the other edge follows the file's own aspect
+   * ratio. Admin-configurable (Marketing → Branding); see
+   * {@link DEFAULT_BACK_COVER_LOGO_SIZE_CM} for the shipped default and
+   * `backCoverLogoSizeIn` (core/book/format.ts) for how it's applied.
+   */
+  backCoverLogoSizeCm: number;
   /** Brand colors. */
   colors: BrandColors;
   /** The share watermark, or null when none is configured. */
@@ -138,6 +147,12 @@ export interface BrandingConfig {
 
 /** Max retained previous versions per slot. */
 export const MAX_ASSET_HISTORY = 20;
+
+/** Shipped default for {@link BrandingConfig.backCoverLogoSizeCm}. */
+export const DEFAULT_BACK_COVER_LOGO_SIZE_CM = 2;
+/** Admin-configurable range for {@link BrandingConfig.backCoverLogoSizeCm}. */
+export const MIN_BACK_COVER_LOGO_SIZE_CM = 0.5;
+export const MAX_BACK_COVER_LOGO_SIZE_CM = 8;
 
 export function createDefaultBrandingConfig(): BrandingConfig {
   return {
@@ -156,6 +171,7 @@ export function createDefaultBrandingConfig(): BrandingConfig {
     defaultCoverFrontPortrait: null,
     defaultCoverBackPortrait: null,
     backCoverLogo: null,
+    backCoverLogoSizeCm: DEFAULT_BACK_COVER_LOGO_SIZE_CM,
     colors: { primary: "#f96a4d", accent: "#f79b04" },
     watermark: null,
     assetHistory: {},
@@ -266,6 +282,12 @@ export function normalizeBrandingConfig(input: unknown): BrandingConfig {
     defaultCoverFrontPortrait: normalizeAsset(b.defaultCoverFrontPortrait),
     defaultCoverBackPortrait: normalizeAsset(b.defaultCoverBackPortrait),
     backCoverLogo: normalizeAsset(b.backCoverLogo),
+    backCoverLogoSizeCm: clamp(
+      b.backCoverLogoSizeCm,
+      MIN_BACK_COVER_LOGO_SIZE_CM,
+      MAX_BACK_COVER_LOGO_SIZE_CM,
+      d.backCoverLogoSizeCm,
+    ),
     colors: {
       primary: hex(colors.primary, d.colors.primary),
       accent: hex(colors.accent, d.colors.accent),

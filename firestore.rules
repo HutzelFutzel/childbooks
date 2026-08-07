@@ -142,6 +142,15 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Append-only permissions audit trail (who granted/revoked what, who
+    // promoted/demoted an owner, who revealed a customer's PII). Written only
+    // by the backend (Admin SDK) from `functions/src/permissions.ts`; never
+    // client-readable or -writable — the Permissions page reads it through the
+    // owner-gated `/admin/permissions/audit-log` route instead.
+    match /adminAuditLog/{id} {
+      allow read, write: if false;
+    }
+
     function isAdmin() {
       return request.auth != null
         && exists(/databases/$(database)/documents/admins/$(request.auth.uid));

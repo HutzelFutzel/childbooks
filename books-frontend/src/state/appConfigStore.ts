@@ -560,7 +560,12 @@ interface AppConfigState {
   deleteCatalogPhoto: (key: string, storagePath: string) => Promise<void>;
 
   // Branding — brand identity, image assets, and the share watermark.
-  saveBrandingInfo: (patch: { brandName?: string; tagline?: string; colors?: Partial<BrandColors> }) => Promise<void>;
+  saveBrandingInfo: (patch: {
+    brandName?: string;
+    tagline?: string;
+    colors?: Partial<BrandColors>;
+    backCoverLogoSizeCm?: number;
+  }) => Promise<void>;
   uploadBrandingAsset: (slot: BrandAssetSlot, base64: string, mimeType: string, alt?: string) => Promise<void>;
   removeBrandingAsset: (slot: BrandAssetSlot) => Promise<void>;
   restoreBrandingAsset: (slot: BrandAssetSlot, storagePath: string) => Promise<void>;

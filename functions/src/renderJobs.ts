@@ -44,7 +44,8 @@ import { isEmulator, launchBrowser } from "./browser";
 import { downloadBlob, ensureAdmin } from "./storage";
 import { appBaseUrl } from "./stripeClient";
 import {
-  BACK_COVER_LOGO_FIXED_IN,
+  BACK_COVER_LOGO_FIXED_CM,
+  cmToIn,
   SAFETY_MARGIN_IN as COVER_SAFETY_MARGIN_IN,
 } from "../../books-frontend/src/core/book/format";
 import { COVER_BACK_ID } from "../../books-frontend/src/core/types";
@@ -260,6 +261,7 @@ export function registerRenderJobRoutes(app: Express): void {
         project: JSON.parse(raw),
         backCoverLogoUrl: logo?.imageUrl ?? null,
         backCoverLogoAspect: typeof logo?.aspect === "number" ? logo.aspect : null,
+        backCoverLogoSizeCm: branding.backCoverLogoSizeCm,
       });
     } catch (err) {
       logger.error("[render] payload failed", err);
@@ -378,6 +380,12 @@ async function renderJob(uid: string, jobId: string): Promise<void> {
     );
   };
 
+  // Fetched once per job: the admin-configured fixed edge for the backcover
+  // logo, used below when cropping it out of the blank-page check. Must agree
+  // with what the render page itself was told (see `/internal/render`), so
+  // both sides size the reserved corner the same way.
+  const backCoverLogoSizeCm = (await getBrandingConfig()).backCoverLogoSizeCm;
+
   let browser: Browser | undefined;
   try {
     await ref.set({ status: "running", step: "Starting the renderer…", updatedAt: Date.now() }, { merge: true });
@@ -409,7 +417,7 @@ async function renderJob(uid: string, jobId: string): Promise<void> {
         throw new Error("Rendering this book took too long.");
       }
       const spec = captures[i];
-      const bytes = await capturePage(page, spec);
+      const bytes = await capturePage(page, spec, backCoverLogoSizeCm);
       await saveRasters(uid, job.fingerprint, job.projectId, [
         {
           id: spec.id,
@@ -469,7 +477,7 @@ async function waitForRenderPage(page: Page): Promise<RenderPageState> {
  * with text on it never is. Here the page says up front whether it expects
  * ink, and a page that expected ink and produced none stops the job.
  */
-async function capturePage(page: Page, spec: CaptureSpec): Promise<Buffer> {
+async function capturePage(page: Page, spec: CaptureSpec, backCoverLogoSizeCm: number): Promise<Buffer> {
   const handle = await page.$(`[data-export-page="${cssEscape(spec.id)}"]`);
   if (!handle) throw new Error(`The book's ${spec.label} could not be prepared for printing.`);
   try {
@@ -482,7 +490,8 @@ async function capturePage(page: Page, spec: CaptureSpec): Promise<Buffer> {
     // corner (see `PrintBook`), which is real ink there whether or not the
     // book's own art rendered. Checked on the rest of the page instead, so a
     // genuinely blank back cover still fails loudly.
-    const forBlankCheck = spec.id === COVER_BACK_ID ? await cropOutBackCoverLogo(shot, spec) : shot;
+    const forBlankCheck =
+      spec.id === COVER_BACK_ID ? await cropOutBackCoverLogo(shot, spec, backCoverLogoSizeCm) : shot;
     if (spec.mustHaveInk && (await looksBlank(forBlankCheck))) {
       throw new Error(`${spec.label} rendered without its illustration.`);
     }
@@ -504,14 +513,18 @@ const BACK_COVER_LOGO_ZONE_MAX_FRACTION = 0.4;
  * genuinely missing illustration would be masked by the logo's own ink and
  * ship a printed back cover with nothing else on it.
  */
-async function cropOutBackCoverLogo(bytes: Buffer, spec: CaptureSpec): Promise<Buffer> {
+async function cropOutBackCoverLogo(
+  bytes: Buffer,
+  spec: CaptureSpec,
+  sizeCm: number,
+): Promise<Buffer> {
   try {
     const { width, height } = await sharp(bytes).metadata();
     if (!width || !height) return bytes;
-    // Landscape logos are 2 cm tall; portrait logos are 2 cm wide and can grow
-    // taller — reserve enough for the tallest shape we allow.
-    const reservedIn =
-      COVER_SAFETY_MARGIN_IN + BACK_COVER_LOGO_FIXED_IN * BACK_COVER_LOGO_ZONE_MAX_ASPECT;
+    // Landscape logos are `sizeCm` tall; portrait logos are `sizeCm` wide and
+    // can grow taller — reserve enough for the tallest shape we allow.
+    const fixedIn = cmToIn(Number.isFinite(sizeCm) && sizeCm > 0 ? sizeCm : BACK_COVER_LOGO_FIXED_CM);
+    const reservedIn = COVER_SAFETY_MARGIN_IN + fixedIn * BACK_COVER_LOGO_ZONE_MAX_ASPECT;
     const reservedFraction = Math.min(
       BACK_COVER_LOGO_ZONE_MAX_FRACTION,
       reservedIn / Math.max(spec.heightIn, 0.01),

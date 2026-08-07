@@ -71,6 +71,8 @@ import {
   normalizeBuyerProfile,
   type BuyerFacts,
 } from "../../books-frontend/src/core/config/surveys";
+import { hasPermission, maskDisplayName, maskEmail } from "../../books-frontend/src/core/config/permissions";
+import { logAudit, type PermissionedRequest } from "./permissions";
 import type {
   ActionCostReport,
   ActionCostSeriesPoint,
@@ -948,6 +950,14 @@ async function computeUsers(
     planFilter: PlanFilter;
     cadenceFilter: CadenceFilter;
     country: string | null;
+    /**
+     * False (the default) masks `email`/`displayName` on every row — a plain
+     * admin sees `j***@example.com`, never the real address, unless they also
+     * hold `analysis.users.pii` (see `functions/src/permissions.ts`). Search
+     * still matches against the REAL underlying value below, before masking —
+     * masking is an output concern, not a filter.
+     */
+    revealPii: boolean;
   },
 ): Promise<AnalyticsUsersResult> {
   const [{ users }, { events }, spendByUid, metaByUid, subByUid, revenueByUid, plans] =
@@ -1003,8 +1013,9 @@ async function computeUsers(
       };
       return {
         uid: u.uid,
-        email: u.email,
-        displayName: u.displayName,
+        email: opts.revealPii ? u.email : maskEmail(u.email),
+        displayName: opts.revealPii ? u.displayName : maskDisplayName(u.displayName),
+        piiMasked: !opts.revealPii,
         country: country === UNKNOWN_COUNTRY ? null : country,
         source: u.source,
         createdAt: u.createdAt,
@@ -1589,9 +1600,20 @@ function parseTzMode(req: Request): TimezoneMode {
 export function registerAnalyticsRoutes(app: Express): void {
   const json = express.json({ limit: "1mb" });
 
-  app.get("/admin/settings", async (_req: Request, res: Response) => {
+  app.get("/admin/settings", async (req: Request, res: Response) => {
     try {
-      res.json(await getAdminSettings());
+      const settings = await getAdminSettings();
+      const admin = (req as PermissionedRequest).admin;
+      if (admin && hasPermission(admin, "analysis.users.pii", "read")) {
+        res.json(settings);
+        return;
+      }
+      // excludedEmails is a list of real addresses — mask it for anyone without
+      // the PII grant, same as every other identity field on this dashboard.
+      res.json({
+        ...settings,
+        excludedEmails: settings.excludedEmails.map((e) => maskEmail(e) ?? e),
+      });
     } catch (err) {
       handleError(res, err);
     }
@@ -1599,7 +1621,16 @@ export function registerAnalyticsRoutes(app: Express): void {
 
   app.put("/admin/settings", json, async (req: Request, res: Response) => {
     try {
-      res.json(await saveAdminSettings(req.body));
+      const admin = (req as PermissionedRequest).admin;
+      const body = { ...req.body };
+      if (!admin || !hasPermission(admin, "analysis.users.pii", "read")) {
+        // The GET side of this route masks excludedEmails for anyone without
+        // the PII grant, so a save-back from a client that only ever saw the
+        // masked list must never overwrite the real one with those masks — pin
+        // it to whatever's actually stored instead of trusting the body.
+        body.excludedEmails = (await getAdminSettings()).excludedEmails;
+      }
+      res.json(await saveAdminSettings(body));
     } catch (err) {
       handleError(res, err);
     }
@@ -1691,6 +1722,8 @@ export function registerAnalyticsRoutes(app: Express): void {
       const planFilter = PLAN_FILTERS.includes(planParam) ? planParam : "all";
       const cadenceParam = String(req.query.cadence ?? "all") as CadenceFilter;
       const cadenceFilter = CADENCE_FILTERS.includes(cadenceParam) ? cadenceParam : "all";
+      const admin = (req as PermissionedRequest).admin;
+      const revealPii = Boolean(admin && hasPermission(admin, "analysis.users.pii", "read"));
       res.json(
         await computeUsers(from, to, settings, {
           sort,
@@ -1701,8 +1734,24 @@ export function registerAnalyticsRoutes(app: Express): void {
           planFilter,
           cadenceFilter,
           country: parseCountry(req),
+          revealPii,
         }),
       );
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // One row's real email/name, for an owner (or an admin granted
+  // `analysis.users.pii`) who needs the actual identity behind a masked row —
+  // audit-logged so "who looked up whom" is always answerable.
+  app.get("/admin/analytics/users/:uid/reveal", async (req: Request, res: Response) => {
+    try {
+      const { uid } = req.params;
+      const user = await getAuth().getUser(uid);
+      const actorUid = (req as PermissionedRequest).uid;
+      if (actorUid) await logAudit(actorUid, "pii_reveal", uid, {});
+      res.json({ uid, email: user.email ?? null, displayName: user.displayName ?? null });
     } catch (err) {
       handleError(res, err);
     }

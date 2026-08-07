@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, ChevronRight, FlaskConical, Loader2, Rocket, Search, ShieldAlert } from "lucide-react";
+import { ArrowLeft, ChevronRight, Eye, FlaskConical, Loader2, Rocket, Search, ShieldAlert } from "lucide-react";
 import { Button } from "@/ui/components/Button";
 import { Tabs } from "@/ui/components/Tabs";
 import { Toaster } from "@/ui/components/Toaster";
@@ -20,21 +20,27 @@ import { useAuthStore } from "@/state/authStore";
 import { useAdminHealth } from "@/state/adminHealthStore";
 import { useAccountUiStore } from "@/state/accountUiStore";
 import { useAppConfigStore } from "@/state/appConfigStore";
+import { useAdminAccess } from "@/state/adminAccessStore";
+import { filterReadableTabs, SectionGate } from "./AccessGate";
+import type { PermissionKey } from "@/core/config/permissions";
 import {
   useAdminTab,
   ANALYSIS_GROUPS,
   CONFIG_GROUPS,
+  MARKETING_GROUPS,
   type AdminSection,
   type ConfigGroupId,
   type ConfigTabId,
   type CommunicationTabId,
   type LegalTabId,
+  type MarketingGroupId,
+  type MarketingTabId,
 } from "./adminTabStore";
 import {
   SECTIONS,
   CONFIG_TAB_META,
   ANALYSIS_TAB_META,
-  MARKETING_TABS,
+  MARKETING_TAB_META,
   COMMUNICATION_TABS,
   LEGAL_TABS,
 } from "./adminNav";
@@ -70,6 +76,7 @@ import { LegalDocsTab } from "./tabs/legal/LegalDocsTab";
 import { CookieConsentTab } from "./tabs/legal/CookieConsentTab";
 import { GdprTab } from "./tabs/legal/GdprTab";
 import { AnalysisTab } from "./analysis/AnalysisTab";
+import { PermissionsTab } from "./tabs/PermissionsTab";
 
 function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
   switch (tab) {
@@ -165,6 +172,8 @@ export default function AdminApp() {
   const setConfigGroup = useAdminTab((s) => s.setConfigGroup);
   const configTab = useAdminTab((s) => s.configTab);
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
+  const marketingGroup = useAdminTab((s) => s.marketingGroup);
+  const setMarketingGroup = useAdminTab((s) => s.setMarketingGroup);
   const marketingTab = useAdminTab((s) => s.marketingTab);
   const setMarketingTab = useAdminTab((s) => s.setMarketingTab);
   const communicationTab = useAdminTab((s) => s.communicationTab);
@@ -180,6 +189,13 @@ export default function AdminApp() {
   const closeOrders = useAccountUiStore((s) => s.closeOrders);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
+  const initAccess = useAdminAccess((s) => s.init);
+  const canRead = useAdminAccess((s) => s.canRead);
+  const isOwnerAccess = useAdminAccess((s) => s.isOwner());
+  const viewAsUid = useAdminAccess((s) => s.viewAsUid);
+  const setViewAsUid = useAdminAccess((s) => s.setViewAsUid);
+  const previewAdmins = useAdminAccess((s) => s.admins);
+
   useEffect(() => {
     initAuth();
   }, [initAuth]);
@@ -189,15 +205,55 @@ export default function AdminApp() {
     subscribeConfig();
     // The full rate table is an admin-only doc, so it has its own subscription.
     subscribeAdminModelCosts();
-  }, [isAdmin, subscribeConfig, subscribeAdminModelCosts]);
+    void initAccess();
+  }, [isAdmin, subscribeConfig, subscribeAdminModelCosts, initAccess]);
 
   const active = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
-  const activeGroup = CONFIG_GROUPS.find((g) => g.id === configGroup) ?? CONFIG_GROUPS[0];
+  // "Permissions" is never shown to a plain admin — the API refuses them too,
+  // but there's no reason to even show a link that 403s.
+  const visibleSections = SECTIONS.filter((s) => s.id !== "permissions" || isOwnerAccess);
+
+  const visibleConfigGroups = useMemo(
+    () =>
+      CONFIG_GROUPS.map((g) => ({ ...g, tabs: filterReadableTabs("configuration", g.tabs, canRead) })).filter(
+        (g) => g.tabs.length > 0,
+      ),
+    [canRead],
+  );
+  const activeGroup =
+    visibleConfigGroups.find((g) => g.id === configGroup) ?? visibleConfigGroups[0] ?? CONFIG_GROUPS[0];
   const groupTabs = activeGroup.tabs.map((id) => ({
     id,
     label: CONFIG_TAB_META[id].label,
     icon: CONFIG_TAB_META[id].icon,
   }));
+
+  const visibleMarketingGroups = useMemo(
+    () =>
+      MARKETING_GROUPS.map((g) => ({ ...g, tabs: filterReadableTabs("marketing", g.tabs, canRead) })).filter(
+        (g) => g.tabs.length > 0,
+      ),
+    [canRead],
+  );
+  const activeMarketingGroup =
+    visibleMarketingGroups.find((g) => g.id === marketingGroup) ??
+    visibleMarketingGroups[0] ??
+    MARKETING_GROUPS[0];
+  const marketingGroupTabs = activeMarketingGroup.tabs.map((id) => ({
+    id,
+    label: MARKETING_TAB_META[id].label,
+    icon: MARKETING_TAB_META[id].icon,
+  }));
+
+  const visibleCommunicationTabs = useMemo(
+    () =>
+      COMMUNICATION_TABS.filter((t) => canRead(`communication.${t.id}` as PermissionKey)),
+    [canRead],
+  );
+  const visibleLegalTabs = useMemo(
+    () => LEGAL_TABS.filter((t) => canRead(`legal.${t.id}` as PermissionKey)),
+    [canRead],
+  );
 
   // A persistent "you are here" trail — the deep nav (section → group → tab)
   // is otherwise only visible in the pill row you clicked to get there, which
@@ -223,7 +279,8 @@ export default function AdminApp() {
       case "marketing":
         return [
           { label: "Marketing" },
-          { label: MARKETING_TABS.find((t) => t.id === marketingTab)?.label ?? "" },
+          { label: activeMarketingGroup.label, onClick: () => setMarketingGroup(activeMarketingGroup.id) },
+          { label: MARKETING_TAB_META[marketingTab].label },
         ];
       case "communication":
         return [
@@ -301,7 +358,7 @@ export default function AdminApp() {
                 </kbd>
               </button>
               <nav className="space-y-1">
-                {SECTIONS.map((s) => (
+                {visibleSections.map((s) => (
                   <button
                     key={s.id}
                     onClick={() => setSection(s.id)}
@@ -323,7 +380,7 @@ export default function AdminApp() {
               {/* Mobile section switcher */}
               <div className="sticky top-0 z-10 border-b border-ink-100 bg-canvas/80 px-5 py-2 backdrop-blur sm:hidden">
                 <Tabs
-                  items={SECTIONS.map((s) => ({ id: s.id, label: s.label, icon: s.icon }))}
+                  items={visibleSections.map((s) => ({ id: s.id, label: s.label, icon: s.icon }))}
                   value={section}
                   onChange={(id) => setSection(id as AdminSection)}
                 />
@@ -355,10 +412,26 @@ export default function AdminApp() {
                   <p className="text-sm text-ink-500">{active.description}</p>
                 </header>
 
+                {viewAsUid && (
+                  <div className="mb-5 flex items-center justify-between gap-3 rounded-xl bg-amber-50 px-4 py-2.5 text-sm text-amber-800 ring-1 ring-amber-100">
+                    <span className="flex items-center gap-2">
+                      <Eye className="size-4" />
+                      Previewing as{" "}
+                      <strong>
+                        {previewAdmins.find((a) => a.uid === viewAsUid)?.email ?? viewAsUid}
+                      </strong>{" "}
+                      — every page renders read-only while this is on.
+                    </span>
+                    <Button variant="secondary" size="sm" onClick={() => setViewAsUid(null)}>
+                      Exit preview
+                    </Button>
+                  </div>
+                )}
+
                 {section === "configuration" && (
                   <div className="space-y-5">
                     <div className="flex flex-wrap gap-2">
-                      {CONFIG_GROUPS.map((group) => (
+                      {visibleConfigGroups.map((group) => (
                         <button
                           key={group.id}
                           type="button"
@@ -380,51 +453,78 @@ export default function AdminApp() {
                       value={configTab}
                       onChange={(id) => setConfigTab(id as ConfigTabId)}
                     />
-                    <ConfigTabPanel tab={configTab} />
+                    <SectionGate permissionKey={`configuration.${configTab}`}>
+                      <ConfigTabPanel tab={configTab} />
+                    </SectionGate>
                   </div>
                 )}
 
                 {section === "analysis" && <AnalysisTab />}
+                {section === "permissions" && isOwnerAccess && <PermissionsTab />}
                 {section === "marketing" && (
-                  <div className="space-y-6">
+                  <div className="space-y-5">
+                    <div className="flex flex-wrap gap-2">
+                      {visibleMarketingGroups.map((group) => (
+                        <button
+                          key={group.id}
+                          type="button"
+                          onClick={() => setMarketingGroup(group.id as MarketingGroupId)}
+                          className={cn(
+                            "rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
+                            marketingGroup === group.id
+                              ? "bg-brand-600 text-white shadow-sm"
+                              : "bg-white text-ink-600 ring-1 ring-inset ring-ink-100 hover:bg-ink-50",
+                          )}
+                        >
+                          {group.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-xs text-ink-400">{activeMarketingGroup.description}</p>
                     <Tabs
-                      items={MARKETING_TABS}
+                      items={marketingGroupTabs}
                       value={marketingTab}
-                      onChange={(id) => setMarketingTab(id as typeof marketingTab)}
+                      onChange={(id) => setMarketingTab(id as MarketingTabId)}
                     />
-                    {marketingTab === "referrals" && <ReferralsTab />}
-                    {marketingTab === "affiliates" && <AffiliatesTab />}
-                    {marketingTab === "campaigns" && <CampaignsTab />}
-                    {marketingTab === "surveys" && <SurveysTab />}
-                    {marketingTab === "announcements" && <AnnouncementsTab />}
-                    {marketingTab === "seo" && <SeoTab />}
-                    {marketingTab === "blog" && <BlogTab />}
-                    {marketingTab === "branding" && <BrandingTab />}
-                    {marketingTab === "qrCodes" && <QrCodesTab />}
+                    <SectionGate permissionKey={`marketing.${marketingTab}`}>
+                      {marketingTab === "referrals" && <ReferralsTab />}
+                      {marketingTab === "affiliates" && <AffiliatesTab />}
+                      {marketingTab === "campaigns" && <CampaignsTab />}
+                      {marketingTab === "surveys" && <SurveysTab />}
+                      {marketingTab === "announcements" && <AnnouncementsTab />}
+                      {marketingTab === "seo" && <SeoTab />}
+                      {marketingTab === "blog" && <BlogTab />}
+                      {marketingTab === "branding" && <BrandingTab />}
+                      {marketingTab === "qrCodes" && <QrCodesTab />}
+                    </SectionGate>
                   </div>
                 )}
                 {section === "communication" && (
                   <div className="space-y-6">
                     <Tabs
-                      items={COMMUNICATION_TABS}
+                      items={visibleCommunicationTabs}
                       value={communicationTab}
                       onChange={(id) => setCommunicationTab(id as CommunicationTabId)}
                     />
-                    {communicationTab === "contact" && <ContactInboxTab />}
-                    {communicationTab === "transactional-emails" && <EmailTab />}
-                    {communicationTab === "admin-slack" && <SlackTab />}
+                    <SectionGate permissionKey={`communication.${communicationTab}`}>
+                      {communicationTab === "contact" && <ContactInboxTab />}
+                      {communicationTab === "transactional-emails" && <EmailTab />}
+                      {communicationTab === "admin-slack" && <SlackTab />}
+                    </SectionGate>
                   </div>
                 )}
                 {section === "legal" && (
                   <div className="space-y-6">
                     <Tabs
-                      items={LEGAL_TABS}
+                      items={visibleLegalTabs}
                       value={legalTab}
                       onChange={(id) => setLegalTab(id as LegalTabId)}
                     />
-                    {legalTab === "documents" && <LegalDocsTab />}
-                    {legalTab === "cookies" && <CookieConsentTab />}
-                    {legalTab === "gdpr" && <GdprTab />}
+                    <SectionGate permissionKey={`legal.${legalTab}`}>
+                      {legalTab === "documents" && <LegalDocsTab />}
+                      {legalTab === "cookies" && <CookieConsentTab />}
+                      {legalTab === "gdpr" && <GdprTab />}
+                    </SectionGate>
                   </div>
                 )}
               </div>

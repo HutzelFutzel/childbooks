@@ -38,6 +38,7 @@ export const EMAIL_TEMPLATE_IDS = [
   "contact_form_ack",
   "affiliate_application_ack",
   "policy_update",
+  "admin_invite",
 ] as const;
 
 export type EmailTemplateId = (typeof EMAIL_TEMPLATE_IDS)[number];
@@ -207,6 +208,14 @@ export interface EmailTemplateVarsMap {
    * opt-in.
    */
   policy_update: { name?: string; policyName: string; effectiveDate?: string; documentUrl: string };
+  /**
+   * Sent when a T1/T2 owner invites someone who has no account yet. Carries a
+   * Firebase password-set action link (generated server-side, same mechanism
+   * as a password reset) so the very first thing they do is set a password —
+   * they land already granted plain-admin access (an owner sets what they can
+   * actually see afterward).
+   */
+  admin_invite: { inviterName?: string; setPasswordUrl: string };
 }
 
 export type EmailTemplateVars<Id extends EmailTemplateId> = EmailTemplateVarsMap[Id];

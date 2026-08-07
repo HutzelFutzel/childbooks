@@ -235,6 +235,18 @@ export const EMAIL_TEMPLATE_REGISTRY: Registry = {
       documentUrl: "https://childbook.studio/legal/privacy",
     },
   },
+  admin_invite: {
+    id: "admin_invite",
+    label: "Admin invitation",
+    description:
+      "Sent when an owner invites a new admin who has no account yet. Carries a one-time password-set link.",
+    category: "transactional",
+    defaultSenderKey: "default",
+    sample: {
+      inviterName: "Alex",
+      setPasswordUrl: "https://childbook.studio/studio?mode=resetPassword&oobCode=example",
+    },
+  },
 };
 
 /** Ordered list of template metadata (drives the admin list). */

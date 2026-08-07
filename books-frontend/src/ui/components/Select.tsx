@@ -2,6 +2,7 @@ import { forwardRef } from "react";
 import type { SelectHTMLAttributes } from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "../lib/cn";
+import { useReadOnly } from "./ReadOnlyContext";
 
 export interface SelectOption {
   value: string;
@@ -16,6 +17,15 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
   { options, className, ...rest },
   ref,
 ) {
+  const readOnly = useReadOnly();
+  if (readOnly) {
+    const selected = options.find((o) => o.value === rest.value);
+    return (
+      <div className={cn("flex h-11 w-full items-center rounded-xl2 bg-ink-50 px-3.5 text-sm text-ink-700", className)}>
+        {selected?.label ?? "—"}
+      </div>
+    );
+  }
   return (
     <div className="relative">
       <select

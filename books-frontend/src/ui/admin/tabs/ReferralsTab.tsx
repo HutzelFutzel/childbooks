@@ -24,6 +24,8 @@ import { Select } from "../../components/Select";
 import { Toggle } from "../../components/Toggle";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useAdminTab } from "../adminTabStore";
+import { useReadOnly } from "../../components/ReadOnlyContext";
+import { useAdminAccess } from "../../../state/adminAccessStore";
 import {
   MAX_REWARD_RULES,
   TRIGGERS,
@@ -106,6 +108,8 @@ function defaultReward(kind: RewardKind): Reward {
 }
 
 export function ReferralsTab() {
+  const readOnly = useReadOnly();
+  const canDangerous = useAdminAccess((s) => s.can("dangerous"));
   const stored = useAppConfigStore((s) => s.referral);
   const loadReferralConfig = useAppConfigStore((s) => s.loadReferralConfig);
   const save = useAppConfigStore((s) => s.saveReferralConfig);
@@ -250,14 +254,18 @@ export function ReferralsTab() {
           label="Referral program enabled"
           hint="Whether people can send new invitations at all."
         />
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" size="sm" variant="secondary" loading={voiding} onClick={() => void onVoidUnaccepted()}>
-            Void unaccepted invites
-          </Button>
-          <Button type="button" size="sm" loading={saving} disabled={!dirty || blockers.length > 0} onClick={() => void onSave()}>
-            Save
-          </Button>
-        </div>
+        {!readOnly && (
+          <div className="flex flex-wrap gap-2">
+            {canDangerous && (
+              <Button type="button" size="sm" variant="secondary" loading={voiding} onClick={() => void onVoidUnaccepted()}>
+                Void unaccepted invites
+              </Button>
+            )}
+            <Button type="button" size="sm" loading={saving} disabled={!dirty || blockers.length > 0} onClick={() => void onSave()}>
+              Save
+            </Button>
+          </div>
+        )}
       </div>
 
       {!draft.enabled && (
@@ -320,15 +328,17 @@ export function ReferralsTab() {
         title="Reward schedule"
         hint="Each rule fires once per invitation when its trigger happens. Pre-payment triggers can only award discounts. Free months are referrer-only and require an active subscription."
         action={
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            disabled={draft.rules.length >= MAX_REWARD_RULES}
-            onClick={() => set({ rules: [...draft.rules, createRewardRule()] })}
-          >
-            <Plus className="size-3.5" /> Add rule
-          </Button>
+          readOnly ? undefined : (
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={draft.rules.length >= MAX_REWARD_RULES}
+              onClick={() => set({ rules: [...draft.rules, createRewardRule()] })}
+            >
+              <Plus className="size-3.5" /> Add rule
+            </Button>
+          )
         }
       >
         <div className="space-y-3">
@@ -441,6 +451,7 @@ function RuleEditor({
   onChange: (patch: Partial<RewardRule>) => void;
   onRemove: () => void;
 }) {
+  const readOnly = useReadOnly();
   const meta = TRIGGER_META[rule.trigger];
   return (
     <div className="space-y-2.5 rounded-lg bg-white p-3 ring-1 ring-inset ring-ink-100">
@@ -469,14 +480,16 @@ function RuleEditor({
             className="min-w-48"
           />
         </div>
-        <button
-          type="button"
-          onClick={onRemove}
-          className="rounded p-1 text-ink-400 transition hover:bg-ink-50 hover:text-ink-700"
-          title="Remove rule"
-        >
-          <Trash2 className="size-3.5" />
-        </button>
+        {!readOnly && (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="rounded p-1 text-ink-400 transition hover:bg-ink-50 hover:text-ink-700"
+            title="Remove rule"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        )}
       </div>
       <p className="text-[11px] text-ink-400">{meta.description}</p>
       {meta.prePayment && (
@@ -784,6 +797,7 @@ function HeldRewardsPanel({
   onResolved: () => void;
 }) {
   const resolveHeld = useAppConfigStore((s) => s.resolveHeldReward);
+  const canDangerous = useAdminAccess((s) => s.can("dangerous"));
   const [busy, setBusy] = useState<string | null>(null);
 
   if (held.length === 0) return null;
@@ -830,23 +844,29 @@ function HeldRewardsPanel({
               {row.note && <p className="mt-0.5 text-[11px] text-amber-800">{row.note}</p>}
             </div>
             <div className="flex shrink-0 gap-2">
-              <Button
-                type="button"
-                size="sm"
-                loading={busy === row.id}
-                onClick={() => void act(row.id, "release")}
-              >
-                Pay out
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                disabled={busy === row.id}
-                onClick={() => void act(row.id, "decline")}
-              >
-                Decline
-              </Button>
+              {canDangerous ? (
+                <>
+                  <Button
+                    type="button"
+                    size="sm"
+                    loading={busy === row.id}
+                    onClick={() => void act(row.id, "release")}
+                  >
+                    Pay out
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy === row.id}
+                    onClick={() => void act(row.id, "decline")}
+                  >
+                    Decline
+                  </Button>
+                </>
+              ) : (
+                <span className="text-[11px] text-ink-400">Owner action</span>
+              )}
             </div>
           </div>
         ))}

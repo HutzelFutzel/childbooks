@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Download, Loader2, RefreshCw } from "lucide-react";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
 import type { ActivityMetric, Timeframe, TimezoneMode } from "../../../core/analytics/types";
@@ -10,6 +10,8 @@ import { useAdminMarket } from "../../../state/adminMarketStore";
 import { useAdminPayments } from "../../../state/adminPaymentsStore";
 import { ANALYSIS_GROUPS, useAdminTab, type AnalysisGroupId, type AnalysisTabId } from "../adminTabStore";
 import { ANALYSIS_TAB_META } from "../adminNav";
+import { filterReadableTabs, SectionGate } from "../AccessGate";
+import { useAdminAccess } from "../../../state/adminAccessStore";
 import { Button } from "../../components/Button";
 import { Tabs } from "../../components/Tabs";
 import { Kpis } from "./Kpis";
@@ -95,6 +97,15 @@ export function AnalysisTab() {
   const setSection = useAdminTab((s) => s.setAnalysisTab);
   const group = useAdminTab((s) => s.analysisGroup);
   const setGroup = useAdminTab((s) => s.setAnalysisGroup);
+  const canRead = useAdminAccess((s) => s.canRead);
+  const visibleGroups = useMemo(
+    () =>
+      ANALYSIS_GROUPS.map((g) => ({ ...g, tabs: filterReadableTabs("analysis", g.tabs, canRead) })).filter(
+        (g) => g.tabs.length > 0,
+      ),
+    [canRead],
+  );
+  const activeGroup = visibleGroups.find((g) => g.id === group) ?? visibleGroups[0] ?? ANALYSIS_GROUPS[0];
 
   useEffect(() => {
     void init();
@@ -144,7 +155,7 @@ export function AnalysisTab() {
           market filter that every section honours. */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-2">
-          {ANALYSIS_GROUPS.map((g) => (
+          {visibleGroups.map((g) => (
             <button
               key={g.id}
               type="button"
@@ -168,12 +179,10 @@ export function AnalysisTab() {
         />
       </div>
 
-      <p className="text-xs text-ink-400">
-        {(ANALYSIS_GROUPS.find((g) => g.id === group) ?? ANALYSIS_GROUPS[0]).description}
-      </p>
+      <p className="text-xs text-ink-400">{activeGroup.description}</p>
 
       <Tabs
-        items={(ANALYSIS_GROUPS.find((g) => g.id === group) ?? ANALYSIS_GROUPS[0]).tabs.map((id) => ({
+        items={activeGroup.tabs.map((id) => ({
           id,
           label: ANALYSIS_TAB_META[id].label,
           icon: ANALYSIS_TAB_META[id].icon,
@@ -198,6 +207,7 @@ export function AnalysisTab() {
         </div>
       )}
 
+      <SectionGate permissionKey={`analysis.${section}`}>
       {section === "projects" && <ProjectsAnalysis />}
       {section === "costs" && <CostsAnalysis />}
       {section === "products" && <ProductsAnalysis />}
@@ -360,6 +370,7 @@ export function AnalysisTab() {
           )}
         </div>
       )}
+      </SectionGate>
     </div>
   );
 }

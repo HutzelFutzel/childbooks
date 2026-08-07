@@ -39,6 +39,7 @@ import {
 import { fmtMoney, fmtRelative } from "../analysis/format";
 import { Section, TabIntro } from "./products/parts";
 import { cn } from "../../lib/cn";
+import { useReadOnly } from "../../components/ReadOnlyContext";
 
 function KindChecks({
   selected,
@@ -110,6 +111,7 @@ function campaignTerms(c: AffiliateOverview["campaigns"][number]): string {
 }
 
 export function AffiliatesTab() {
+  const readOnly = useReadOnly();
   const loadOverview = useAppConfigStore((s) => s.loadAffiliateOverview);
   const saveConfig = useAppConfigStore((s) => s.saveAffiliateConfig);
   const sync = useAppConfigStore((s) => s.syncAffiliates);
@@ -218,15 +220,17 @@ export function AffiliatesTab() {
         title="Setup"
         hint="Every line has to pass before a single commission can be created."
         action={
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => void onSync()}
-            disabled={syncing || !readiness.apiConfigured}
-          >
-            {syncing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
-            Sync now
-          </Button>
+          readOnly ? undefined : (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => void onSync()}
+              disabled={syncing || !readiness.apiConfigured}
+            >
+              {syncing ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCw className="size-3.5" />}
+              Sync now
+            </Button>
+          )
         }
       >
         <div className="grid gap-2.5 sm:grid-cols-2">
@@ -313,6 +317,7 @@ export function AffiliatesTab() {
                   <KindChecks
                     selected={kinds}
                     onChange={(next) => setCampaignKinds(c.id, c.name, next)}
+                    disabled={readOnly}
                   />
                   {kinds.length === 0 && (
                     <p className="text-[11px] text-amber-700">
@@ -363,14 +368,18 @@ export function AffiliatesTab() {
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
-                    {override && <KindChecks selected={override} onChange={(k) => setOverrideKinds(p.id, k)} />}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setOverrideKinds(p.id, override ? null : effective)}
-                    >
-                      {override ? "Use campaign" : "Override"}
-                    </Button>
+                    {override && (
+                      <KindChecks selected={override} onChange={(k) => setOverrideKinds(p.id, k)} disabled={readOnly} />
+                    )}
+                    {!readOnly && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setOverrideKinds(p.id, override ? null : effective)}
+                      >
+                        {override ? "Use campaign" : "Override"}
+                      </Button>
+                    )}
                   </div>
                 </div>
               );
@@ -379,13 +388,15 @@ export function AffiliatesTab() {
         )}
       </Section>
 
-      <div className="flex items-center gap-2">
-        <Button onClick={() => void onSave()} disabled={busy || !dirty}>
-          {busy && <Loader2 className="size-3.5 animate-spin" />}
-          Save affiliate program
-        </Button>
-        {dirty && <span className="text-[11px] text-amber-700">Unsaved changes</span>}
-      </div>
+      {!readOnly && (
+        <div className="flex items-center gap-2">
+          <Button onClick={() => void onSave()} disabled={busy || !dirty}>
+            {busy && <Loader2 className="size-3.5 animate-spin" />}
+            Save affiliate program
+          </Button>
+          {dirty && <span className="text-[11px] text-amber-700">Unsaved changes</span>}
+        </div>
+      )}
     </div>
   );
 }

@@ -18,10 +18,12 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "../../../components/Button";
 import { useAppConfigStore } from "../../../../state/appConfigStore";
+import { useAdminAccess } from "../../../../state/adminAccessStore";
 import type { HeldRedemptionView } from "../../../../core/config/campaigns";
 import { Section, fmtMoney } from "../products/parts";
 
 export function HeldPayoutsPanel({ currency }: { currency: string }) {
+  const canDangerous = useAdminAccess((s) => s.can("dangerous"));
   const loadHeld = useAppConfigStore((s) => s.loadHeldRedemptions);
   const resolve = useAppConfigStore((s) => s.resolveHeldRedemption);
   const [held, setHeld] = useState<HeldRedemptionView[]>([]);
@@ -83,18 +85,24 @@ export function HeldPayoutsPanel({ currency }: { currency: string }) {
               {row.note && <p className="mt-0.5 text-[11px] text-amber-800">{row.note}</p>}
             </div>
             <div className="flex shrink-0 gap-2">
-              <Button type="button" size="sm" loading={busy === row.id} onClick={() => void act(row, "release")}>
-                Pay out
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                disabled={busy === row.id}
-                onClick={() => void act(row, "void")}
-              >
-                Void
-              </Button>
+              {canDangerous ? (
+                <>
+                  <Button type="button" size="sm" loading={busy === row.id} onClick={() => void act(row, "release")}>
+                    Pay out
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy === row.id}
+                    onClick={() => void act(row, "void")}
+                  >
+                    Void
+                  </Button>
+                </>
+              ) : (
+                <span className="text-[11px] text-ink-400">Owner action</span>
+              )}
             </div>
           </div>
         ))}

@@ -7,6 +7,8 @@
  * address is given. None of them throw — a failed email must never break the
  * money/reward flow that produced it.
  */
+import { getAuth } from "firebase-admin/auth";
+import { getSeoConfig } from "../appConfig";
 import { sendTemplatedEmail, type SendTemplateResult } from "./service";
 
 /**
@@ -289,5 +291,42 @@ export async function sendSubscriptionCancelledEmail(args: {
     uid: args.uid,
     vars: { planName: args.planName, endDate: args.endDate },
     dedupeKey: `${args.subscriptionId}_cancel`,
+  });
+}
+
+/** Where the password-set link returns to once it's used (the studio, signed in). */
+async function studioUrl(): Promise<string> {
+  try {
+    const seo = await getSeoConfig();
+    const base = (seo.siteUrl || "https://childbook.studio").replace(/\/+$/, "");
+    return `${base}/studio`;
+  } catch {
+    return "https://childbook.studio/studio";
+  }
+}
+
+/**
+ * A brand-new admin invite: generates a Firebase password-RESET action link
+ * (the account was created with no password, so "reset" is really "set for
+ * the first time") and sends it. Not deduped — an owner may re-send the
+ * invite if it goes astray; each send is a fresh, single-use link.
+ */
+export async function sendAdminInviteEmail(args: {
+  uid: string;
+  email: string;
+  inviterName?: string | null;
+}): Promise<SendTemplateResult> {
+  const setPasswordUrl = await getAuth()
+    .generatePasswordResetLink(args.email, { url: await studioUrl() })
+    .catch((err) => {
+      console.warn("[email] could not generate admin-invite password link", err);
+      return null;
+    });
+  if (!setPasswordUrl) return { ok: false, error: "Could not generate a password-set link." };
+  return sendTemplatedEmail({
+    templateId: "admin_invite",
+    uid: args.uid,
+    to: args.email,
+    vars: { inviterName: args.inviterName ?? undefined, setPasswordUrl },
   });
 }

@@ -118,6 +118,7 @@ export function PageStagePanel({
   // wide shape inside computeBackCoverLogoZone when none is configured yet —
   // the reserved box always shows under Print guides, like the barcode zone.
   const backCoverLogoAspect = useAppConfigStore((s) => s.branding.backCoverLogo?.aspect ?? null);
+  const backCoverLogoSizeCm = useAppConfigStore((s) => s.branding.backCoverLogoSizeCm);
   // Covers have no gutter; interior single pages bind on `bindingSide` (falling
   // back to "center", which suppresses the gutter when the side is unknown).
   const printGuides =
@@ -131,7 +132,9 @@ export function PageStagePanel({
           // Backcover logo reserved zone only. Barcode area is temporarily
           // disabled — re-enable with `computeBarcodeZone(caps)` when ready.
           barcode: null,
-          logo: isBackCover ? computeBackCoverLogoZone(caps, backCoverLogoAspect) : null,
+          logo: isBackCover
+            ? computeBackCoverLogoZone(caps, backCoverLogoAspect, backCoverLogoSizeCm)
+            : null,
         }
       : null;
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ArrowDown, ArrowUp, Check, Copy, EyeOff, Search, Sparkles } from "lucide-react";
+import { ArrowDown, ArrowUp, Check, Copy, Eye, EyeOff, Search, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
 import {
@@ -11,6 +11,7 @@ import {
 } from "../../../core/config/surveys";
 import type { AnalyticsUserRow, UserSort } from "../../../core/analytics/types";
 import { useAdminAnalytics } from "../../../state/adminAnalyticsStore";
+import { useAdminAccess } from "../../../state/adminAccessStore";
 import { Button } from "../../components/Button";
 import { Toggle } from "../../components/Toggle";
 import { Modal } from "../../components/Modal";
@@ -49,6 +50,8 @@ export function UsersTable() {
   const cadenceFilter = useAdminAnalytics((s) => s.cadenceFilter);
   const setUserQuery = useAdminAnalytics((s) => s.setUserQuery);
   const excludeEmail = useAdminAnalytics((s) => s.excludeEmail);
+  const revealUserPii = useAdminAnalytics((s) => s.revealUserPii);
+  const canRevealPii = useAdminAccess((s) => s.canRead("analysis.users.pii"));
 
   const [draft, setDraft] = useState(search);
   const [adjustTarget, setAdjustTarget] = useState<AnalyticsUserRow | null>(null);
@@ -59,12 +62,24 @@ export function UsersTable() {
   };
 
   const onExclude = async (row: AnalyticsUserRow) => {
-    if (!row.email) {
-      toast.error("This account has no email to exclude.");
+    if (!row.email || row.piiMasked) {
+      toast.error("Reveal this account's real email first — a masked address can't be excluded.");
       return;
     }
     await excludeEmail(row.email);
     toast.success(`Excluded ${row.email} from analytics.`);
+  };
+
+  const [revealing, setRevealing] = useState<string | null>(null);
+  const onReveal = async (row: AnalyticsUserRow) => {
+    setRevealing(row.uid);
+    try {
+      await revealUserPii(row.uid);
+    } catch (err) {
+      toast.error((err as Error)?.message ?? "Could not reveal this account's identity.");
+    } finally {
+      setRevealing(null);
+    }
   };
 
   return (
@@ -145,7 +160,20 @@ export function UsersTable() {
             {users.map((u) => (
               <tr key={u.uid} className="border-b border-ink-50 last:border-0 hover:bg-ink-50/40">
                 <td className="px-4 py-2.5">
-                  <div className="font-medium text-ink-800">{u.email ?? "—"}</div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-medium text-ink-800">{u.email ?? "—"}</span>
+                    {u.piiMasked && canRevealPii && (
+                      <button
+                        type="button"
+                        onClick={() => void onReveal(u)}
+                        disabled={revealing === u.uid}
+                        title="Reveal this account's real email/name (logged)"
+                        className="rounded p-0.5 text-ink-300 transition hover:bg-ink-50 hover:text-ink-600 disabled:opacity-50"
+                      >
+                        <Eye className="size-3" />
+                      </button>
+                    )}
+                  </div>
                   <div className="flex items-center gap-1.5 text-xs text-ink-400">
                     {u.displayName && <span>{u.displayName}</span>}
                     <SourceBadge source={u.source} isAnonymous={u.isAnonymous} />
@@ -201,8 +229,12 @@ export function UsersTable() {
                       size="sm"
                       leftIcon={<EyeOff className="size-3.5" />}
                       onClick={() => onExclude(u)}
-                      disabled={!u.email}
-                      title="Exclude this user from analytics"
+                      disabled={!u.email || u.piiMasked}
+                      title={
+                        u.piiMasked
+                          ? "Reveal this account's real email to exclude it"
+                          : "Exclude this user from analytics"
+                      }
                     >
                       Exclude
                     </Button>

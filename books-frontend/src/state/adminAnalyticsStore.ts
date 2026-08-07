@@ -98,6 +98,11 @@ interface AdminAnalyticsState {
   saveSettings: (patch: Partial<AdminSettings>) => Promise<void>;
   excludeEmail: (email: string) => Promise<void>;
   adjustSparks: (uid: string, delta: number, reason: string) => Promise<SparksAdjustResult>;
+  /**
+   * Fetch a row's real email/name (server logs the reveal). Requires
+   * `analysis.users.pii` — the backend 403s otherwise, and this rejects.
+   */
+  revealUserPii: (uid: string) => Promise<void>;
 }
 
 function rangeParams(get: () => AdminAnalyticsState): string {
@@ -293,5 +298,18 @@ export const useAdminAnalytics = create<AdminAnalyticsState>((set, get) => ({
       users: s.users.map((u) => (u.uid === uid ? { ...u, sparkBalance: result.balance } : u)),
     }));
     return result;
+  },
+
+  async revealUserPii(uid) {
+    const revealed = await getJson<{ uid: string; email: string | null; displayName: string | null }>(
+      `/admin/analytics/users/${encodeURIComponent(uid)}/reveal`,
+    );
+    set((s) => ({
+      users: s.users.map((u) =>
+        u.uid === uid
+          ? { ...u, email: revealed.email, displayName: revealed.displayName, piiMasked: false }
+          : u,
+      ),
+    }));
   },
 }));

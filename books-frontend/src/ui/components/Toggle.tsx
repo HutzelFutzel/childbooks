@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import { cn } from "../lib/cn";
+import { useReadOnly } from "./ReadOnlyContext";
 
 export interface ToggleProps {
   checked: boolean;
@@ -10,6 +11,21 @@ export interface ToggleProps {
 }
 
 export function Toggle({ checked, onChange, disabled, label, className }: ToggleProps) {
+  const readOnly = useReadOnly();
+  if (readOnly) {
+    return (
+      <span
+        aria-label={label}
+        className={cn(
+          "inline-flex h-6 items-center rounded-full px-2.5 text-[11px] font-semibold",
+          checked ? "bg-brand-100 text-brand-700" : "bg-ink-100 text-ink-500",
+          className,
+        )}
+      >
+        {checked ? "On" : "Off"}
+      </span>
+    );
+  }
   return (
     <button
       type="button"

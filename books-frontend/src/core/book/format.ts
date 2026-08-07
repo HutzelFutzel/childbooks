@@ -35,10 +35,17 @@ export const SPINE_TEXT_CLEARANCE_IN = 0.125;
 export const BARCODE_ZONE_IN = { widthIn: 2, heightIn: 1.2 };
 
 /** Inches per centimetre — the backcover logo's fixed edge is specified in cm. */
-const IN_PER_CM = 1 / 2.54;
+export const IN_PER_CM = 1 / 2.54;
+
+/** Convert a size in centimetres to inches (see {@link IN_PER_CM}). */
+export function cmToIn(cm: number): number {
+  return cm * IN_PER_CM;
+}
 
 /**
- * Fixed edge of the permanent backcover logo, in centimetres. Landscape logos
+ * Admin-configurable fallback for the permanent backcover logo's fixed edge,
+ * in centimetres, used only where the real admin-configured value (see
+ * `BrandingConfig.backCoverLogoSizeCm`) isn't available. Landscape logos
  * (wider than tall) get this as their *height*; portrait / square logos get
  * this as their *width*. The other edge follows the file's own aspect ratio.
  * Shared by the editor guide and the print/ebook render — see
@@ -46,7 +53,7 @@ const IN_PER_CM = 1 / 2.54;
  */
 export const BACK_COVER_LOGO_FIXED_CM = 2;
 /** {@link BACK_COVER_LOGO_FIXED_CM} expressed in inches. */
-export const BACK_COVER_LOGO_FIXED_IN = BACK_COVER_LOGO_FIXED_CM * IN_PER_CM;
+export const BACK_COVER_LOGO_FIXED_IN = cmToIn(BACK_COVER_LOGO_FIXED_CM);
 
 /** Paperback spine width formula: `(pages / 444) + 0.06 in`. */
 const PAPERBACK_SPINE_PER_PAGE_IN = 1 / 444;
@@ -336,8 +343,12 @@ export const BACK_COVER_LOGO_DEFAULT_ASPECT = 0.25;
 /**
  * Physical size of the backcover logo in inches, from its height÷width ratio.
  *
- * - Landscape (width > height, aspect &lt; 1): height = 2 cm, width follows.
- * - Portrait / square (aspect ≥ 1): width = 2 cm, height follows.
+ * - Landscape (width > height, aspect &lt; 1): height = `sizeCm`, width follows.
+ * - Portrait / square (aspect ≥ 1): width = `sizeCm`, height follows.
+ *
+ * `sizeCm` is the admin-configured fixed edge (`BrandingConfig.backCoverLogoSizeCm`,
+ * default 2 cm — see {@link BACK_COVER_LOGO_FIXED_CM}); pass it explicitly
+ * wherever the branding config is in hand so every caller agrees on size.
  *
  * When `trim` is provided, the logo is scaled down to fit inside the trim
  * minus the safety margins (so a very tall portrait mark can't spill off a
@@ -346,22 +357,26 @@ export const BACK_COVER_LOGO_DEFAULT_ASPECT = 0.25;
  */
 export function backCoverLogoSizeIn(
   aspect: number | null | undefined,
+  sizeCm: number = BACK_COVER_LOGO_FIXED_CM,
   trim?: { widthIn: number; heightIn: number; safetyMarginIn?: number },
 ): { widthIn: number; heightIn: number } {
   const ratio =
     typeof aspect === "number" && Number.isFinite(aspect) && aspect > 0
       ? Math.min(8, Math.max(0.05, aspect))
       : BACK_COVER_LOGO_DEFAULT_ASPECT;
+  const fixedIn = cmToIn(
+    typeof sizeCm === "number" && Number.isFinite(sizeCm) && sizeCm > 0 ? sizeCm : BACK_COVER_LOGO_FIXED_CM,
+  );
 
   let widthIn: number;
   let heightIn: number;
   if (ratio < 1) {
-    // Landscape: pin the short edge (height) to 2 cm.
-    heightIn = BACK_COVER_LOGO_FIXED_IN;
+    // Landscape: pin the short edge (height) to `sizeCm`.
+    heightIn = fixedIn;
     widthIn = heightIn / ratio;
   } else {
-    // Portrait or square: pin the short-or-equal edge (width) to 2 cm.
-    widthIn = BACK_COVER_LOGO_FIXED_IN;
+    // Portrait or square: pin the short-or-equal edge (width) to `sizeCm`.
+    widthIn = fixedIn;
     heightIn = widthIn * ratio;
   }
 
@@ -391,12 +406,13 @@ export function backCoverLogoSizeIn(
 export function computeBackCoverLogoZone(
   caps: FormatCapabilities,
   aspect?: number | null,
+  sizeCm?: number,
 ): NormRect | null {
   const trimW = caps.trimWidthIn;
   const trimH = caps.trimHeightIn;
   if (trimW <= 0 || trimH <= 0) return null;
 
-  const { widthIn, heightIn } = backCoverLogoSizeIn(aspect, {
+  const { widthIn, heightIn } = backCoverLogoSizeIn(aspect, sizeCm, {
     widthIn: trimW,
     heightIn: trimH,
     safetyMarginIn: caps.safetyMarginIn,

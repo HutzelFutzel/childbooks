@@ -55,6 +55,7 @@ import { CampaignRuleEditor, AddRuleButton } from "./campaigns/CampaignRuleEdito
 import { CampaignImpactPanel, CampaignSimulatorPanel } from "./campaigns/CampaignImpactPanel";
 import { HeldPayoutsPanel } from "./campaigns/HeldPayoutsPanel";
 import { DateField, SwitchField } from "./campaigns/parts";
+import { useReadOnly } from "../../components/ReadOnlyContext";
 
 const STATUS_OPTIONS = (["draft", "active", "paused", "ended"] as CampaignStatus[]).map((value) => ({
   value,
@@ -62,6 +63,7 @@ const STATUS_OPTIONS = (["draft", "active", "paused", "ended"] as CampaignStatus
 }));
 
 export function CampaignsTab() {
+  const readOnly = useReadOnly();
   const load = useAppConfigStore((s) => s.loadCampaignsConfig);
   const save = useAppConfigStore((s) => s.saveCampaignsConfig);
   const loadAdminProducts = useAppConfigStore((s) => s.loadAdminProducts);
@@ -206,26 +208,28 @@ export function CampaignsTab() {
           label="Campaign engine enabled"
           hint="The master switch. Off means nothing enrolls and nothing pays, whatever each campaign says."
         />
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            disabled={draft.campaigns.length >= MAX_CAMPAIGNS}
-            onClick={addCampaign}
-          >
-            <Plus className="size-3.5" /> New campaign
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            loading={saving}
-            disabled={!dirty || blockers.length > 0}
-            onClick={() => void onSave()}
-          >
-            Save
-          </Button>
-        </div>
+        {!readOnly && (
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={draft.campaigns.length >= MAX_CAMPAIGNS}
+              onClick={addCampaign}
+            >
+              <Plus className="size-3.5" /> New campaign
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              loading={saving}
+              disabled={!dirty || blockers.length > 0}
+              onClick={() => void onSave()}
+            >
+              Save
+            </Button>
+          </div>
+        )}
       </div>
 
       {!draft.enabled && draft.campaigns.some((c) => c.status === "active") && (
@@ -345,6 +349,7 @@ function CampaignEditor({
   onDuplicate: () => void;
   onRemove: () => void;
 }) {
+  const readOnly = useReadOnly();
   const terms = freezeTerms(campaign);
   const generated = summarizeRules(campaign.rules);
 
@@ -353,14 +358,16 @@ function CampaignEditor({
       <Section
         title="This campaign"
         action={
-          <div className="flex gap-1.5">
-            <Button type="button" size="sm" variant="secondary" onClick={onDuplicate}>
-              <Copy className="size-3.5" /> Duplicate
-            </Button>
-            <Button type="button" size="sm" variant="secondary" onClick={onRemove}>
-              <Trash2 className="size-3.5" /> Delete
-            </Button>
-          </div>
+          readOnly ? undefined : (
+            <div className="flex gap-1.5">
+              <Button type="button" size="sm" variant="secondary" onClick={onDuplicate}>
+                <Copy className="size-3.5" /> Duplicate
+              </Button>
+              <Button type="button" size="sm" variant="secondary" onClick={onRemove}>
+                <Trash2 className="size-3.5" /> Delete
+              </Button>
+            </div>
+          )
         }
       >
         <Grid cols={2}>

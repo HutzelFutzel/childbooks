@@ -21,6 +21,8 @@
  */
 import express, { type Express } from "express";
 import { attachUser, requireAdmin, requireAuth, requireVerified } from "./auth";
+import { permissionGate } from "./permissions";
+import { registerPermissionsRoutes } from "./permissionsRoutes";
 import { registerProviderRoutes } from "./providers";
 import { registerLuluRoutes, registerPrintWebhookRoute } from "./lulu";
 import { registerPrintSyncAdminRoutes, registerPrintSyncDevRoute } from "./printSync";
@@ -116,7 +118,9 @@ export function createApp(): Express {
   // account; `/ai` only requires *some* authenticated identity (guests and
   // unverified users generate with their granted Sparks — the Sparks balance,
   // a zero negative buffer, and the per-IP grant throttle bound their spend).
-  // `/admin` additionally requires admin status (Firestore `admins/{uid}`).
+  // `/admin` additionally requires admin status (Firestore `admins/{uid}`) and,
+  // per route, the specific permission that route's tab maps to — see
+  // `permissions.ts` for the role/grant model and the full route table.
   app.use("/print", requireVerified);
   app.use("/ai", requireAuth);
   app.use("/checkout", requireVerified);
@@ -137,7 +141,7 @@ export function createApp(): Express {
   // followed long before there's a real account, so a guest identity must be
   // able to record the referral it arrived with.
   app.use("/affiliates", requireAuth);
-  app.use("/admin", requireVerified, requireAdmin);
+  app.use("/admin", requireVerified, requireAdmin, permissionGate());
 
   registerLuluRoutes(app);
   registerPrintSyncAdminRoutes(app);
@@ -145,6 +149,7 @@ export function createApp(): Express {
   registerMigrationRoutes(app);
   registerAuthRoutes(app);
   registerAdminRoutes(app);
+  registerPermissionsRoutes(app);
   registerContactAdminRoutes(app);
   registerBlogRoutes(app);
   registerBlogStatsAdminRoutes(app);

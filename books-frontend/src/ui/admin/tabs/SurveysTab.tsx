@@ -38,6 +38,7 @@ import { Field, Input } from "../../components/Input";
 import { Select } from "../../components/Select";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useAdminTab } from "../adminTabStore";
+import { useReadOnly } from "../../components/ReadOnlyContext";
 import {
   BUYER_ROLES,
   BUYER_ROLE_LABELS,
@@ -101,6 +102,7 @@ const ROLE_OPTIONS = [
 ];
 
 export function SurveysTab() {
+  const readOnly = useReadOnly();
   const load = useAppConfigStore((s) => s.loadSurveysConfig);
   const save = useAppConfigStore((s) => s.saveSurveysConfig);
   const campaigns = useAppConfigStore((s) => s.campaigns);
@@ -255,26 +257,28 @@ export function SurveysTab() {
           label="Ask customers questions"
           hint="The master switch. Off means nobody is asked anything, whatever's switched on below."
         />
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            disabled={draft.surveys.length >= 20}
-            onClick={addSurvey}
-          >
-            <Plus className="size-3.5" /> New survey
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            loading={saving}
-            disabled={!dirty}
-            onClick={() => void onSave()}
-          >
-            Save
-          </Button>
-        </div>
+        {!readOnly && (
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              disabled={draft.surveys.length >= 20}
+              onClick={addSurvey}
+            >
+              <Plus className="size-3.5" /> New survey
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              loading={saving}
+              disabled={!dirty}
+              onClick={() => void onSave()}
+            >
+              Save
+            </Button>
+          </div>
+        )}
       </div>
 
       <Section
@@ -407,6 +411,7 @@ function SurveyEditor({
   onDuplicate: () => void;
   onRemove: () => void;
 }) {
+  const readOnly = useReadOnly();
   const seconds = estimateSeconds(survey);
   const repeating = survey.questions.filter((q) => !q.askOnce).length;
 
@@ -437,19 +442,21 @@ function SurveyEditor({
         title="Survey"
         hint={describeSurveyAudience(survey)}
         action={
-          <div className="flex gap-1.5">
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              onClick={onDuplicate}
-            >
-              <Copy className="size-3.5" /> Duplicate
-            </Button>
-            <Button type="button" size="sm" variant="ghost" onClick={onRemove}>
-              <Trash2 className="size-3.5" />
-            </Button>
-          </div>
+          readOnly ? undefined : (
+            <div className="flex gap-1.5">
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={onDuplicate}
+              >
+                <Copy className="size-3.5" /> Duplicate
+              </Button>
+              <Button type="button" size="sm" variant="ghost" onClick={onRemove}>
+                <Trash2 className="size-3.5" />
+              </Button>
+            </div>
+          )
         }
       >
         <Grid cols={2}>
@@ -600,7 +607,7 @@ function SurveyEditor({
           ))}
         </div>
 
-        {survey.questions.length < MAX_QUESTIONS_PER_SURVEY && (
+        {!readOnly && survey.questions.length < MAX_QUESTIONS_PER_SURVEY && (
           <div className="flex flex-wrap gap-1.5">
             {QUESTION_KINDS.map((kind) => (
               <Button
@@ -638,6 +645,7 @@ function QuestionEditor({
   onRemove: () => void;
   onMove: (delta: number) => void;
 }) {
+  const readOnly = useReadOnly();
   const setOption = (id: string, patch: Partial<SurveyOption>) =>
     onChange({
       options: question.options.map((o) => (o.id === id ? { ...o, ...patch } : o)),
@@ -675,29 +683,31 @@ function QuestionEditor({
             />
           </Field>
         </div>
-        <div className="flex shrink-0 gap-1 pt-6">
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            disabled={index === 0}
-            onClick={() => onMove(-1)}
-          >
-            ↑
-          </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            disabled={index === total - 1}
-            onClick={() => onMove(1)}
-          >
-            ↓
-          </Button>
-          <Button type="button" size="sm" variant="ghost" onClick={onRemove}>
-            <Trash2 className="size-3.5" />
-          </Button>
-        </div>
+        {!readOnly && (
+          <div className="flex shrink-0 gap-1 pt-6">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={index === 0}
+              onClick={() => onMove(-1)}
+            >
+              ↑
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={index === total - 1}
+              onClick={() => onMove(1)}
+            >
+              ↓
+            </Button>
+            <Button type="button" size="sm" variant="ghost" onClick={onRemove}>
+              <Trash2 className="size-3.5" />
+            </Button>
+          </div>
+        )}
       </div>
 
       <p className="text-[11px] leading-relaxed text-ink-400">
@@ -740,21 +750,23 @@ function QuestionEditor({
                   }
                 />
               </div>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                onClick={() =>
-                  onChange({
-                    options: question.options.filter((o) => o.id !== option.id),
-                  })
-                }
-              >
-                <Trash2 className="size-3.5" />
-              </Button>
+              {!readOnly && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() =>
+                    onChange({
+                      options: question.options.filter((o) => o.id !== option.id),
+                    })
+                  }
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
+              )}
             </div>
           ))}
-          {question.options.length < MAX_OPTIONS_PER_QUESTION && (
+          {!readOnly && question.options.length < MAX_OPTIONS_PER_QUESTION && (
             <Button
               type="button"
               size="sm"

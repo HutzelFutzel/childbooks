@@ -44,6 +44,7 @@ export function PrintBook({
   forExport = false,
   backCoverLogoUrl,
   backCoverLogoAspect,
+  backCoverLogoSizeCm,
 }: {
   targets: PrintTarget[];
   design: BookDesign;
@@ -62,8 +63,10 @@ export function PrintBook({
    * move, or remove it.
    */
   backCoverLogoUrl?: string | null;
-  /** Intrinsic height÷width of {@link backCoverLogoUrl}; drives the 2 cm edge rule. */
+  /** Intrinsic height÷width of {@link backCoverLogoUrl}; drives the fixed-edge rule. */
   backCoverLogoAspect?: number | null;
+  /** Admin-configured fixed edge (cm) for {@link backCoverLogoUrl}; see `backCoverLogoSizeIn`. */
+  backCoverLogoSizeCm?: number | null;
 }) {
   return (
     // Export mode is a plain wrapper: the offscreen stage that hosts it owns
@@ -80,6 +83,7 @@ export function PrintBook({
           forExport={forExport}
           backCoverLogoUrl={backCoverLogoUrl}
           backCoverLogoAspect={backCoverLogoAspect}
+          backCoverLogoSizeCm={backCoverLogoSizeCm}
         />
       ))}
     </div>
@@ -100,6 +104,7 @@ function PrintTargetView({
   forExport,
   backCoverLogoUrl,
   backCoverLogoAspect,
+  backCoverLogoSizeCm,
 }: {
   target: PrintTarget;
   design: BookDesign;
@@ -107,6 +112,7 @@ function PrintTargetView({
   forExport: boolean;
   backCoverLogoUrl?: string | null;
   backCoverLogoAspect?: number | null;
+  backCoverLogoSizeCm?: number | null;
 }) {
   const clip = target.clip;
   const pd = design.pages[target.page.id] ?? { textBoxes: [] };
@@ -149,6 +155,7 @@ function PrintTargetView({
         <BackCoverLogo
           url={backCoverLogoUrl}
           aspect={backCoverLogoAspect}
+          sizeCm={backCoverLogoSizeCm}
           bleedPx={target.bleedPx}
           containerWidthPx={containerWidthPx}
           containerHeightPx={target.surfaceHeightPx}
@@ -165,18 +172,21 @@ function PrintTargetView({
  * Rendered as a plain sibling `<img>` on top of the composited page — not a
  * design element — so there's no element for the editor, or the design JSON
  * it saves, to ever reference, hide, move, or delete. Sized by
- * {@link backCoverLogoSizeIn} (landscape → 2 cm tall, portrait → 2 cm wide),
- * the same helper the print-guide reserved box uses.
+ * {@link backCoverLogoSizeIn} (landscape → tall edge fixed, portrait → wide
+ * edge fixed, per the admin-configured `sizeCm`), the same helper the
+ * print-guide reserved box uses.
  */
 function BackCoverLogo({
   url,
   aspect,
+  sizeCm,
   bleedPx,
   containerWidthPx,
   containerHeightPx,
 }: {
   url: string;
   aspect?: number | null;
+  sizeCm?: number | null;
   bleedPx: number;
   containerWidthPx: number;
   containerHeightPx: number;
@@ -184,7 +194,7 @@ function BackCoverLogo({
   const marginPx = bleedPx + SAFETY_MARGIN_IN * EXPORT_DPI;
   const trimWidthIn = Math.max(0.1, (containerWidthPx - bleedPx * 2) / EXPORT_DPI);
   const trimHeightIn = Math.max(0.1, (containerHeightPx - bleedPx * 2) / EXPORT_DPI);
-  const { widthIn, heightIn } = backCoverLogoSizeIn(aspect, {
+  const { widthIn, heightIn } = backCoverLogoSizeIn(aspect, sizeCm ?? undefined, {
     widthIn: trimWidthIn,
     heightIn: trimHeightIn,
     safetyMarginIn: SAFETY_MARGIN_IN,

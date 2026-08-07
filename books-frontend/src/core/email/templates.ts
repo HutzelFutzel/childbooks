@@ -478,6 +478,24 @@ export const RENDERERS: { [Id in keyof EmailTemplateVarsMap]: TemplateRenderer<I
     }.\n\nRead it here: ${vars.documentUrl}`;
     return assemble(ctx, subject, `Our ${vars.policyName} has changed`, body, text);
   },
+
+  admin_invite: (vars, ctx) => {
+    const subject = `You've been invited to the ${ctx.brand.brandName} dashboard`;
+    const body = [
+      heading("You've been invited", ctx.brand),
+      paragraph(
+        `${
+          vars.inviterName ? `${escapeHtml(vars.inviterName)} has` : "You've been"
+        } invited you to help run the ${escapeHtml(ctx.brand.brandName)} admin dashboard. Set a password to get started — you'll land with the access they've granted you.`,
+      ),
+      button("Set your password", vars.setPasswordUrl, ctx.brand),
+      paragraph("Didn't expect this? You can safely ignore this email."),
+    ].join("\n");
+    const text = `${
+      vars.inviterName ? `${vars.inviterName} has` : "You've been"
+    } invited you to help run the ${ctx.brand.brandName} admin dashboard.\n\nSet your password: ${vars.setPasswordUrl}\n\nDidn't expect this? You can safely ignore this email.`;
+    return assemble(ctx, subject, "You've been invited to the admin dashboard", body, text);
+  },
 };
 
 /** Re-export for callers that only need the token helper (subject overrides). */

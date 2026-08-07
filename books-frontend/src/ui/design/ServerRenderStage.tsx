@@ -71,8 +71,10 @@ interface RenderState {
   artwork: LoadedArtwork;
   /** The admin-configured backcover logo's public URL, or null if unset. */
   backCoverLogoUrl: string | null;
-  /** Intrinsic height÷width of the backcover logo (drives the 2 cm edge rule). */
+  /** Intrinsic height÷width of the backcover logo (drives the fixed-edge rule). */
   backCoverLogoAspect: number | null;
+  /** Admin-configured fixed edge (cm) for the backcover logo. */
+  backCoverLogoSizeCm: number | null;
   spine?: {
     widthPx: number;
     heightPx: number;
@@ -149,6 +151,7 @@ export function ServerRenderStage() {
         forExport
         backCoverLogoUrl={state.backCoverLogoUrl}
         backCoverLogoAspect={state.backCoverLogoAspect}
+        backCoverLogoSizeCm={state.backCoverLogoSizeCm}
       />
       {state.spine && (
         <PrintSpine
@@ -201,6 +204,7 @@ async function prepare(): Promise<RenderState> {
     project: Project;
     backCoverLogoUrl: string | null;
     backCoverLogoAspect: number | null;
+    backCoverLogoSizeCm: number | null;
   };
 
   const project = payload.project;
@@ -292,6 +296,7 @@ async function prepare(): Promise<RenderState> {
     artwork,
     backCoverLogoUrl: payload.backCoverLogoUrl,
     backCoverLogoAspect: payload.backCoverLogoAspect,
+    backCoverLogoSizeCm: payload.backCoverLogoSizeCm,
     spine: spineRequest,
   };
 }

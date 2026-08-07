@@ -80,6 +80,8 @@ import {
 import {
   BRAND_ASSET_SLOTS,
   createDefaultBrandingConfig,
+  MAX_BACK_COVER_LOGO_SIZE_CM,
+  MIN_BACK_COVER_LOGO_SIZE_CM,
   normalizeBrandingConfig,
   type BrandAsset,
   type BrandAssetSlot,
@@ -830,8 +832,8 @@ export async function deleteWatermarkVersion(storagePath: string): Promise<Brand
   return next;
 }
 
-/** Savable brand identity fields (name, tagline, colors) — assets have their
- *  own upload/remove routes and are preserved by this save. */
+/** Savable brand identity fields (name, tagline, colors, backcover logo size)
+ *  — assets have their own upload/remove routes and are preserved by this save. */
 export const brandingInfoSchema = z.object({
   brandName: z.string().max(200).optional(),
   tagline: z.string().max(200).optional(),
@@ -839,9 +841,15 @@ export const brandingInfoSchema = z.object({
     .object({ primary: z.string().max(30), accent: z.string().max(30) })
     .partial()
     .optional(),
+  backCoverLogoSizeCm: z
+    .number()
+    .min(MIN_BACK_COVER_LOGO_SIZE_CM)
+    .max(MAX_BACK_COVER_LOGO_SIZE_CM)
+    .optional(),
 });
 
-/** Merge-save the brand identity (name/tagline/colors), preserving all assets. */
+/** Merge-save the brand identity (name/tagline/colors/backcover logo size),
+ *  preserving all assets. */
 export async function saveBrandingInfo(input: unknown): Promise<BrandingConfig> {
   const parsed = brandingInfoSchema.parse(input);
   const current = await getBrandingConfig();
@@ -849,6 +857,9 @@ export async function saveBrandingInfo(input: unknown): Promise<BrandingConfig> 
     ...current,
     ...(parsed.brandName !== undefined ? { brandName: parsed.brandName } : {}),
     ...(parsed.tagline !== undefined ? { tagline: parsed.tagline } : {}),
+    ...(parsed.backCoverLogoSizeCm !== undefined
+      ? { backCoverLogoSizeCm: parsed.backCoverLogoSizeCm }
+      : {}),
     colors: { ...current.colors, ...(parsed.colors ?? {}) },
   });
   await writeDoc(BRANDING_DOC, next);

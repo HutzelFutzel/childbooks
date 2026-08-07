@@ -260,8 +260,17 @@ export interface UserEconomics {
 /** One row in the users table. */
 export interface AnalyticsUserRow extends UserEconomics {
   uid: string;
+  /** Masked (`j***@example.com`) unless the caller holds `analysis.users.pii`. */
   email: string | null;
+  /** Masked (`J. ***`) unless the caller holds `analysis.users.pii`. */
   displayName: string | null;
+  /**
+   * True when {@link email}/{@link displayName} above are masked. A owner (or an
+   * admin granted `analysis.users.pii`) can call `POST
+   * /admin/analytics/users/:uid/reveal` to fetch the real values for one row —
+   * that call is itself audit-logged (see `functions/src/permissions.ts`).
+   */
+  piiMasked: boolean;
   /** Resolved market (ISO-2), or null when no signal was ever captured. */
   country: string | null;
   /** Provider the account was created with (`password`, `google.com`, `anonymous`). */

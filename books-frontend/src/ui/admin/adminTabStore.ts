@@ -6,7 +6,10 @@ export type AdminSection =
   | "analysis"
   | "marketing"
   | "communication"
-  | "legal";
+  | "legal"
+  // Owner-only: who has access to this dashboard, and to what. Never shown to
+  // a plain admin — see `AdminAccessContext`/`useAdminAccess`.
+  | "permissions";
 
 /** Configuration section groups (second-level nav). */
 export type ConfigGroupId = "business" | "ai" | "creative" | "operations";
@@ -94,19 +97,52 @@ export function analysisGroupForTab(tab: AnalysisTabId): AnalysisGroupId {
   return ANALYSIS_GROUPS.find((g) => g.tabs.includes(tab))?.id ?? "people";
 }
 
+/** Marketing section groups (second-level nav, mirroring Configuration). */
+export type MarketingGroupId = "growth" | "site";
+
 /** Sub-tabs within the Marketing section. */
 export type MarketingTabId =
-  // Growth mechanisms — the ones with real money moving through them.
+  // Growth — mechanisms with real money / targeting impact.
   | "referrals" // invite-a-friend program (rules, impact, funnel)
   | "affiliates" // Rewardful affiliate program (master switch + what earns)
   | "campaigns" // promotions: refunds, gifts, price breaks, purchase discounts
   | "surveys" // the questions asked after checkout, and who gets asked them
-  // Content & site tooling.
+  // Site & content — how the brand shows up publicly.
+  | "announcements"
   | "seo"
   | "blog"
   | "branding"
-  | "qrCodes"
-  | "announcements";
+  | "qrCodes";
+
+/**
+ * Marketing is grouped the same way Analysis → Growth is the metrics side of
+ * the same four programs: an admin arrives asking either "how do we acquire /
+ * reward / learn about customers?" or "how does the public site look?".
+ */
+export const MARKETING_GROUPS: {
+  id: MarketingGroupId;
+  label: string;
+  description: string;
+  tabs: MarketingTabId[];
+}[] = [
+  {
+    id: "growth",
+    label: "Growth",
+    description:
+      "Programs that acquire, reward, or learn from customers — referrals, affiliates, campaigns, and the surveys that feed targeting.",
+    tabs: ["referrals", "affiliates", "campaigns", "surveys"],
+  },
+  {
+    id: "site",
+    label: "Site & content",
+    description: "How the brand shows up on the public site: announcements, SEO, blog, branding and QR codes.",
+    tabs: ["announcements", "seo", "blog", "branding", "qrCodes"],
+  },
+];
+
+export function marketingGroupForTab(tab: MarketingTabId): MarketingGroupId {
+  return MARKETING_GROUPS.find((g) => g.tabs.includes(tab))?.id ?? "growth";
+}
 
 /** Sub-tabs within the Communication section. */
 export type CommunicationTabId = "contact" | "transactional-emails" | "admin-slack";
@@ -162,6 +198,7 @@ interface AdminNavState {
   catalogSegment: CatalogSegment;
   analysisGroup: AnalysisGroupId;
   analysisTab: AnalysisTabId;
+  marketingGroup: MarketingGroupId;
   marketingTab: MarketingTabId;
   communicationTab: CommunicationTabId;
   legalTab: LegalTabId;
@@ -177,6 +214,7 @@ interface AdminNavState {
   openAnalysis: (tab: AnalysisTabId) => void;
   setAnalysisGroup: (group: AnalysisGroupId) => void;
   setAnalysisTab: (tab: AnalysisTabId) => void;
+  setMarketingGroup: (group: MarketingGroupId) => void;
   setMarketingTab: (tab: MarketingTabId) => void;
   setCommunicationTab: (tab: CommunicationTabId) => void;
   setLegalTab: (tab: LegalTabId) => void;
@@ -197,7 +235,9 @@ export const useAdminTab = create<AdminNavState>((set) => ({
   catalogSegment: "print",
   analysisGroup: "people",
   analysisTab: "users",
-  marketingTab: "seo",
+  // Growth first: the higher-stakes half of Marketing (real money moving).
+  marketingGroup: "growth",
+  marketingTab: "referrals",
   // Contact first: it's the only inbox for the public form (the site publishes
   // no email address), so unread submissions are the thing most worth surfacing
   // by default when an admin opens Communication.
@@ -223,10 +263,20 @@ export const useAdminTab = create<AdminNavState>((set) => ({
   },
   setAnalysisTab: (analysisTab) =>
     set({ analysisTab, analysisGroup: analysisGroupForTab(analysisTab) }),
-  setMarketingTab: (marketingTab) => set({ marketingTab }),
+  setMarketingGroup: (marketingGroup) => {
+    const first = MARKETING_GROUPS.find((g) => g.id === marketingGroup)?.tabs[0];
+    set({ marketingGroup, ...(first ? { marketingTab: first } : {}) });
+  },
+  setMarketingTab: (marketingTab) =>
+    set({ marketingTab, marketingGroup: marketingGroupForTab(marketingTab) }),
   setCommunicationTab: (communicationTab) => set({ communicationTab }),
   setLegalTab: (legalTab) => set({ legalTab }),
-  openMarketingTab: (marketingTab) => set({ section: "marketing", marketingTab }),
+  openMarketingTab: (marketingTab) =>
+    set({
+      section: "marketing",
+      marketingTab,
+      marketingGroup: marketingGroupForTab(marketingTab),
+    }),
   openCommunicationTab: (communicationTab) => set({ section: "communication", communicationTab }),
   openLegalTab: (legalTab) => set({ section: "legal", legalTab }),
 }));

@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { Modal } from "../components/Modal";
 import { NAV_INDEX, type NavEntry } from "./adminNav";
+import { useAdminAccess } from "../../state/adminAccessStore";
 
 export function CommandPalette({
   open,
@@ -20,6 +21,12 @@ export function CommandPalette({
 }) {
   const [query, setQuery] = useState("");
   const [highlighted, setHighlighted] = useState(0);
+  const canRead = useAdminAccess((s) => s.canRead);
+  const isOwner = useAdminAccess((s) => s.isOwner());
+  const reachable = useMemo(
+    () => NAV_INDEX.filter((e) => (e.ownerOnly ? isOwner : !e.key || canRead(e.key))),
+    [canRead, isOwner],
+  );
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -43,11 +50,11 @@ export function CommandPalette({
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return NAV_INDEX;
-    return NAV_INDEX.filter((entry) =>
+    if (!q) return reachable;
+    return reachable.filter((entry) =>
       `${entry.label} ${entry.sectionLabel} ${entry.groupLabel ?? ""}`.toLowerCase().includes(q),
     );
-  }, [query]);
+  }, [query, reachable]);
 
   useEffect(() => {
     setHighlighted(0);

@@ -4,11 +4,13 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { RotateCcw, Trash2, Upload } from "lucide-react";
 import { useAppConfigStore } from "../../../../state/appConfigStore";
-import type {
-  BrandAsset,
-  BrandAssetSlot,
-  BrandColors,
-  BrandingWatermark,
+import {
+  MAX_BACK_COVER_LOGO_SIZE_CM,
+  MIN_BACK_COVER_LOGO_SIZE_CM,
+  type BrandAsset,
+  type BrandAssetSlot,
+  type BrandColors,
+  type BrandingWatermark,
 } from "../../../../core/config/branding";
 import { Button } from "../../../components/Button";
 import { Field, Input } from "../../../components/Input";
@@ -210,17 +212,18 @@ export function BrandingTab() {
       {/* ---- Backcover logo ---- */}
       <Section
         title="Backcover logo"
-        hint="Stamped in the bottom-left corner of every book's back cover — the printed wraparound cover and the digital ebook alike. Baked in on our server when the book is rendered, so it always appears and can't be edited, moved, or removed from the studio. Landscape logos are 2 cm tall; portrait logos are 2 cm wide — the other edge follows the file's own aspect, scaled down if needed to fit the book's trim."
+        hint={`Stamped in the bottom-left corner of every book's back cover — the printed wraparound cover and the digital ebook alike. Baked in on our server when the book is rendered, so it always appears and can't be edited, moved, or removed from the studio. Landscape logos get this size as their height; portrait logos get it as their width — the other edge follows the file's own aspect, scaled down if needed to fit the book's trim.`}
       >
         <div className="grid gap-3 sm:grid-cols-2">
           <AssetCard
             slot="backCoverLogo"
             label="Backcover logo"
-            hint="Transparent PNG or SVG recommended. Landscape → 2 cm tall; portrait → 2 cm wide."
+            hint={`Transparent PNG or SVG recommended. Landscape → fixed height; portrait → fixed width (currently ${branding.backCoverLogoSizeCm} cm).`}
             ratio="1/1"
             asset={branding.backCoverLogo}
             history={branding.assetHistory.backCoverLogo ?? []}
           />
+          <BackCoverLogoSizeControl sizeCm={branding.backCoverLogoSizeCm} />
         </div>
       </Section>
 
@@ -356,6 +359,94 @@ function AssetCard({
         onRestore={(sp) => restore(slot, sp)}
         onDelete={(sp) => deleteVersion(slot, sp)}
       />
+    </div>
+  );
+}
+
+/**
+ * Fixed-edge size control for the backcover logo (Marketing → Branding). Local
+ * draft with a manual save, mirroring the identity fields above — the size
+ * only takes effect on the next render, so there's no live preview to drive a
+ * slider off.
+ */
+function BackCoverLogoSizeControl({ sizeCm }: { sizeCm: number }) {
+  const saveInfo = useAppConfigStore((s) => s.saveBrandingInfo);
+  const [value, setValue] = useState(String(sizeCm));
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (dirty) return;
+    setValue(String(sizeCm));
+  }, [sizeCm, dirty]);
+
+  const parsed = Number(value);
+  const valid =
+    Number.isFinite(parsed) &&
+    parsed >= MIN_BACK_COVER_LOGO_SIZE_CM &&
+    parsed <= MAX_BACK_COVER_LOGO_SIZE_CM;
+
+  const onSave = async () => {
+    if (!valid) return;
+    setSaving(true);
+    try {
+      await saveInfo({ backCoverLogoSizeCm: parsed });
+      setDirty(false);
+      toast.success("Backcover logo size saved.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not save.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2 rounded-xl ring-1 ring-inset ring-ink-100 p-3">
+      <div>
+        <div className="text-sm font-semibold text-ink-800">Fixed edge size</div>
+        <p className="text-[11px] leading-relaxed text-ink-400">
+          Height (landscape logos) or width (portrait/square logos), in centimetres.
+          The other edge follows the file&apos;s own aspect ratio.
+        </p>
+      </div>
+      <Field label="Size (cm)">
+        <div className="flex items-center gap-2">
+          <Input
+            type="number"
+            min={MIN_BACK_COVER_LOGO_SIZE_CM}
+            max={MAX_BACK_COVER_LOGO_SIZE_CM}
+            step={0.1}
+            value={value}
+            onChange={(e) => {
+              setValue(e.target.value);
+              setDirty(true);
+            }}
+          />
+          <span className="shrink-0 text-xs text-ink-400">cm</span>
+        </div>
+      </Field>
+      {!valid && (
+        <p className="text-[11px] text-red-500">
+          Enter a size between {MIN_BACK_COVER_LOGO_SIZE_CM} and {MAX_BACK_COVER_LOGO_SIZE_CM} cm.
+        </p>
+      )}
+      <div className="flex gap-2">
+        {dirty && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setValue(String(sizeCm));
+              setDirty(false);
+            }}
+          >
+            Discard
+          </Button>
+        )}
+        <Button size="sm" onClick={onSave} loading={saving} disabled={!dirty || !valid}>
+          Save size
+        </Button>
+      </div>
     </div>
   );
 }

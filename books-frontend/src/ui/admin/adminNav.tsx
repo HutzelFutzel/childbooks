@@ -28,6 +28,7 @@ import {
   HeartPulse,
   Image as ImageIcon,
   Inbox,
+  KeyRound,
   LayoutDashboard,
   LayoutTemplate,
   Mail,
@@ -53,6 +54,7 @@ import {
 import {
   ANALYSIS_GROUPS,
   CONFIG_GROUPS,
+  MARKETING_GROUPS,
   useAdminTab,
   type AdminSection,
   type AnalysisTabId,
@@ -61,6 +63,7 @@ import {
   type LegalTabId,
   type MarketingTabId,
 } from "./adminTabStore";
+import type { PermissionKey } from "../../core/config/permissions";
 
 /** Top-level admin sections (rendered as the left sidebar). */
 export const SECTIONS: { id: AdminSection; label: string; icon: ReactNode; description: string }[] = [
@@ -69,6 +72,7 @@ export const SECTIONS: { id: AdminSection; label: string; icon: ReactNode; descr
   { id: "marketing", label: "Marketing", icon: <Megaphone className="size-4" />, description: "Campaigns and growth tools." },
   { id: "communication", label: "Communication", icon: <MessagesSquare className="size-4" />, description: "Transactional email and Slack notifications." },
   { id: "legal", label: "Legal & Privacy", icon: <Scale className="size-4" />, description: "Legal documents, cookie consent, and GDPR data requests." },
+  { id: "permissions", label: "Permissions", icon: <KeyRound className="size-4" />, description: "Who has access to this dashboard, and to what. Visible to owners only." },
 ];
 
 export const CONFIG_TAB_META: Record<ConfigTabId, { label: string; icon: ReactNode }> = {
@@ -106,19 +110,19 @@ export const ANALYSIS_TAB_META: Record<AnalysisTabId, { label: string; icon: Rea
   surveys: { label: "Customer profile", icon: <ClipboardList className="size-4" /> },
 };
 
-export const MARKETING_TABS: { id: MarketingTabId; label: string; icon: ReactNode }[] = [
-  // Growth mechanisms — the ones with real money moving through them.
-  { id: "referrals", label: "Referrals", icon: <Users className="size-4" /> },
-  { id: "affiliates", label: "Affiliates", icon: <Handshake className="size-4" /> },
-  { id: "campaigns", label: "Campaigns", icon: <Megaphone className="size-4" /> },
-  { id: "surveys", label: "Surveys", icon: <ClipboardList className="size-4" /> },
-  // Content & site tooling.
-  { id: "announcements", label: "Announcements", icon: <PartyPopper className="size-4" /> },
-  { id: "seo", label: "SEO", icon: <Search className="size-4" /> },
-  { id: "blog", label: "Blog", icon: <Newspaper className="size-4" /> },
-  { id: "branding", label: "Branding", icon: <Stamp className="size-4" /> },
-  { id: "qrCodes", label: "QR codes", icon: <QrCode className="size-4" /> },
-];
+export const MARKETING_TAB_META: Record<MarketingTabId, { label: string; icon: ReactNode }> = {
+  // Growth
+  referrals: { label: "Referrals", icon: <Users className="size-4" /> },
+  affiliates: { label: "Affiliates", icon: <Handshake className="size-4" /> },
+  campaigns: { label: "Campaigns", icon: <Megaphone className="size-4" /> },
+  surveys: { label: "Surveys", icon: <ClipboardList className="size-4" /> },
+  // Site & content
+  announcements: { label: "Announcements", icon: <PartyPopper className="size-4" /> },
+  seo: { label: "SEO", icon: <Search className="size-4" /> },
+  blog: { label: "Blog", icon: <Newspaper className="size-4" /> },
+  branding: { label: "Branding", icon: <Stamp className="size-4" /> },
+  qrCodes: { label: "QR codes", icon: <QrCode className="size-4" /> },
+};
 
 export const COMMUNICATION_TABS: { id: CommunicationTabId; label: string; icon: ReactNode }[] = [
   { id: "contact", label: "Contact inbox", icon: <Inbox className="size-4" /> },
@@ -140,6 +144,10 @@ export interface NavEntry {
   sectionLabel: string;
   groupLabel?: string;
   go: () => void;
+  /** The grant this entry needs to be reachable — omitted for owner-only entries. */
+  key?: PermissionKey;
+  /** True for entries only owners should ever see (the Permissions page itself). */
+  ownerOnly?: boolean;
 }
 
 function buildNavIndex(): NavEntry[] {
@@ -154,6 +162,7 @@ function buildNavIndex(): NavEntry[] {
         icon: meta.icon,
         sectionLabel: "Configuration",
         groupLabel: group.label,
+        key: `configuration.${tab}`,
         go: () => useAdminTab.getState().openConfigTab(tab),
       });
     }
@@ -168,19 +177,25 @@ function buildNavIndex(): NavEntry[] {
         icon: meta.icon,
         sectionLabel: "Analysis",
         groupLabel: group.label,
+        key: `analysis.${tab}`,
         go: () => useAdminTab.getState().openAnalysis(tab),
       });
     }
   }
 
-  for (const tab of MARKETING_TABS) {
-    entries.push({
-      id: `marketing:${tab.id}`,
-      label: tab.label,
-      icon: tab.icon,
-      sectionLabel: "Marketing",
-      go: () => useAdminTab.getState().openMarketingTab(tab.id),
-    });
+  for (const group of MARKETING_GROUPS) {
+    for (const tab of group.tabs) {
+      const meta = MARKETING_TAB_META[tab];
+      entries.push({
+        id: `marketing:${tab}`,
+        label: meta.label,
+        icon: meta.icon,
+        sectionLabel: "Marketing",
+        groupLabel: group.label,
+        key: `marketing.${tab}`,
+        go: () => useAdminTab.getState().openMarketingTab(tab),
+      });
+    }
   }
 
   for (const tab of COMMUNICATION_TABS) {
@@ -189,6 +204,7 @@ function buildNavIndex(): NavEntry[] {
       label: tab.label,
       icon: tab.icon,
       sectionLabel: "Communication",
+      key: `communication.${tab.id}`,
       go: () => useAdminTab.getState().openCommunicationTab(tab.id),
     });
   }
@@ -199,9 +215,19 @@ function buildNavIndex(): NavEntry[] {
       label: tab.label,
       icon: tab.icon,
       sectionLabel: "Legal & Privacy",
+      key: `legal.${tab.id}`,
       go: () => useAdminTab.getState().openLegalTab(tab.id),
     });
   }
+
+  entries.push({
+    id: "permissions:home",
+    label: "Permissions",
+    icon: <KeyRound className="size-4" />,
+    sectionLabel: "Permissions",
+    ownerOnly: true,
+    go: () => useAdminTab.getState().setSection("permissions"),
+  });
 
   return entries;
 }
