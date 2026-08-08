@@ -191,6 +191,13 @@ export default function AdminApp() {
 
   const initAccess = useAdminAccess((s) => s.init);
   const canRead = useAdminAccess((s) => s.canRead);
+  // `canRead` is a stable function reference for the whole session (it's a
+  // zustand action, never reassigned), so memoizing on it alone would freeze
+  // the nav-filtering results at whatever `canRead` returned during the very
+  // first render — before `initAccess()` (kicked off in a `useEffect` below)
+  // has had a chance to populate `me`. Depending on the actual state that
+  // `canRead` reads keeps these memos correctly reactive once access loads.
+  const me = useAdminAccess((s) => s.me);
   const isOwnerAccess = useAdminAccess((s) => s.isOwner());
   const viewAsUid = useAdminAccess((s) => s.viewAsUid);
   const setViewAsUid = useAdminAccess((s) => s.setViewAsUid);
@@ -218,7 +225,7 @@ export default function AdminApp() {
       CONFIG_GROUPS.map((g) => ({ ...g, tabs: filterReadableTabs("configuration", g.tabs, canRead) })).filter(
         (g) => g.tabs.length > 0,
       ),
-    [canRead],
+    [canRead, me, previewAdmins, viewAsUid],
   );
   const activeGroup =
     visibleConfigGroups.find((g) => g.id === configGroup) ?? visibleConfigGroups[0] ?? CONFIG_GROUPS[0];
@@ -233,7 +240,7 @@ export default function AdminApp() {
       MARKETING_GROUPS.map((g) => ({ ...g, tabs: filterReadableTabs("marketing", g.tabs, canRead) })).filter(
         (g) => g.tabs.length > 0,
       ),
-    [canRead],
+    [canRead, me, previewAdmins, viewAsUid],
   );
   const activeMarketingGroup =
     visibleMarketingGroups.find((g) => g.id === marketingGroup) ??
@@ -248,11 +255,11 @@ export default function AdminApp() {
   const visibleCommunicationTabs = useMemo(
     () =>
       COMMUNICATION_TABS.filter((t) => canRead(`communication.${t.id}` as PermissionKey)),
-    [canRead],
+    [canRead, me, previewAdmins, viewAsUid],
   );
   const visibleLegalTabs = useMemo(
     () => LEGAL_TABS.filter((t) => canRead(`legal.${t.id}` as PermissionKey)),
-    [canRead],
+    [canRead, me, previewAdmins, viewAsUid],
   );
 
   // A persistent "you are here" trail — the deep nav (section → group → tab)

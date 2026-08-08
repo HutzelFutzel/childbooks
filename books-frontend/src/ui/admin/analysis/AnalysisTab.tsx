@@ -98,12 +98,22 @@ export function AnalysisTab() {
   const group = useAdminTab((s) => s.analysisGroup);
   const setGroup = useAdminTab((s) => s.setAnalysisGroup);
   const canRead = useAdminAccess((s) => s.canRead);
+  // `canRead` is a stable zustand action reference for the whole session, so
+  // memoizing on it alone would freeze this list at whatever it returned on
+  // the very first render — before access has loaded. Depend on the actual
+  // state `canRead` reads so this recomputes once `me`/`admins` arrive. (This
+  // tab still "worked" despite the same bug elsewhere in the dashboard only
+  // because it unmounts/remounts on every section switch, giving it a second,
+  // later chance to compute correctly — see `AdminApp.tsx`'s equivalents.)
+  const me = useAdminAccess((s) => s.me);
+  const admins = useAdminAccess((s) => s.admins);
+  const viewAsUid = useAdminAccess((s) => s.viewAsUid);
   const visibleGroups = useMemo(
     () =>
       ANALYSIS_GROUPS.map((g) => ({ ...g, tabs: filterReadableTabs("analysis", g.tabs, canRead) })).filter(
         (g) => g.tabs.length > 0,
       ),
-    [canRead],
+    [canRead, me, admins, viewAsUid],
   );
   const activeGroup = visibleGroups.find((g) => g.id === group) ?? visibleGroups[0] ?? ANALYSIS_GROUPS[0];
 

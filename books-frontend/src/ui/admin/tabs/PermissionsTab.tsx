@@ -6,7 +6,7 @@
  * write. Never reachable by a plain admin (gated in `AdminApp.tsx` by
  * `useAdminAccess().isOwner()`, and the API refuses non-owners regardless).
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   Crown,
@@ -14,6 +14,7 @@ import {
   KeyRound,
   Loader2,
   Mail,
+  Search,
   Shield,
   ShieldCheck,
   Trash2,
@@ -25,6 +26,7 @@ import { Field, Input } from "../../components/Input";
 import { Select } from "../../components/Select";
 import { Modal } from "../../components/Modal";
 import { TabIntro, Section } from "./products/parts";
+import { backendFetch } from "../../../platform/backend";
 import { useAdminAccess, type AuditEntry } from "../../../state/adminAccessStore";
 import {
   ADMIN_ROLE_LABELS,
@@ -255,6 +257,170 @@ function AuditLogCard() {
   );
 }
 
+interface UserSearchHit {
+  uid: string;
+  email: string;
+  displayName: string | null;
+}
+
+/**
+ * The "Invite an admin" email field, with suggestions from everyone who
+ * already has an account — so an owner can find someone by a fragment of
+ * their email/name instead of retyping it exactly. Fires once 3+ characters
+ * are typed (any shorter and the match list isn't a useful suggestion), and
+ * is debounced so it doesn't fire a request per keystroke.
+ */
+function InviteEmailField({
+  value,
+  onChange,
+  onSubmit,
+  excludeUids,
+  disabled,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  /** Enter, with the suggestion list closed, submits the invite as before. */
+  onSubmit: () => void;
+  /** Admins already on the roster — no point suggesting someone already invited. */
+  excludeUids: Set<string>;
+  disabled?: boolean;
+}) {
+  const [suggestions, setSuggestions] = useState<UserSearchHit[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+  const [highlighted, setHighlighted] = useState(0);
+  const requestId = useRef(0);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const visible = useMemo(
+    () => suggestions.filter((s) => !excludeUids.has(s.uid)),
+    [suggestions, excludeUids],
+  );
+
+  // Debounced search — waits for a pause in typing rather than firing on
+  // every keystroke, matching the pattern used for QR-code preview requests.
+  useEffect(() => {
+    const q = value.trim();
+    if (q.length < 3) {
+      setSuggestions([]);
+      setLoading(false);
+      return;
+    }
+    const id = ++requestId.current;
+    setLoading(true);
+    const timer = setTimeout(() => {
+      void backendFetch(`/admin/permissions/search-users?q=${encodeURIComponent(q)}`)
+        .then((res) => {
+          if (!res.ok) throw new Error("Search failed.");
+          return res.json() as Promise<{ users: UserSearchHit[] }>;
+        })
+        .then((data) => {
+          if (id !== requestId.current) return;
+          setSuggestions(data.users ?? []);
+          setOpen(true);
+          setHighlighted(0);
+        })
+        .catch(() => {
+          if (id !== requestId.current) return;
+          setSuggestions([]);
+        })
+        .finally(() => {
+          if (id === requestId.current) setLoading(false);
+        });
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [value]);
+
+  // Close on an outside click or Escape — the same pattern used by every
+  // other dropdown in this dashboard (see `ui/components/Popover.tsx`).
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  const select = (hit: UserSearchHit) => {
+    onChange(hit.email);
+    setOpen(false);
+    setSuggestions([]);
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (open && visible.length > 0) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setHighlighted((i) => Math.min(i + 1, visible.length - 1));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setHighlighted((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        select(visible[highlighted]);
+        return;
+      }
+    }
+    if (e.key === "Enter") onSubmit();
+  };
+
+  return (
+    <div ref={containerRef} className="relative flex-1">
+      <Field label="Email">
+        <Input
+          type="email"
+          value={value}
+          placeholder="teammate@example.com"
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+          onFocus={() => suggestions.length > 0 && setOpen(true)}
+          onKeyDown={onKeyDown}
+        />
+      </Field>
+      {open && (loading || visible.length > 0) && (
+        <div className="absolute inset-x-0 top-full z-20 mt-1 max-h-56 overflow-y-auto rounded-xl border border-ink-100 bg-white py-1 shadow-lifted">
+          {loading && visible.length === 0 ? (
+            <div className="flex items-center gap-2 px-3 py-2.5 text-xs text-ink-400">
+              <Loader2 className="size-3.5 animate-spin" />
+              Searching…
+            </div>
+          ) : (
+            visible.map((hit, i) => (
+              <button
+                key={hit.uid}
+                type="button"
+                onClick={() => select(hit)}
+                onMouseEnter={() => setHighlighted(i)}
+                className={`flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
+                  i === highlighted ? "bg-brand-50 text-brand-700" : "text-ink-700 hover:bg-ink-50"
+                }`}
+              >
+                <Search className="size-3.5 shrink-0 text-ink-300" />
+                <span className="min-w-0 flex-1 truncate">
+                  <span className="font-medium">{hit.email}</span>
+                  {hit.displayName && (
+                    <span className="ml-1.5 text-ink-400">{hit.displayName}</span>
+                  )}
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PermissionsTab() {
   const me = useAdminAccess((s) => s.me);
   const isT1 = useAdminAccess((s) => s.isT1());
@@ -284,6 +450,7 @@ export function PermissionsTab() {
     () => [...admins].sort((a, b) => (a.uid === me?.uid ? -1 : b.uid === me?.uid ? 1 : 0)),
     [admins, me?.uid],
   );
+  const existingAdminUids = useMemo(() => new Set(admins.map((a) => a.uid)), [admins]);
 
   const onInvite = async () => {
     if (!email.trim()) return;
@@ -353,15 +520,13 @@ export function PermissionsTab() {
           </CardHeader>
           <CardBody>
             <div className="flex items-end gap-3">
-              <Field label="Email" className="flex-1">
-                <Input
-                  type="email"
-                  value={email}
-                  placeholder="teammate@example.com"
-                  onChange={(e) => setEmail(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && void onInvite()}
-                />
-              </Field>
+              <InviteEmailField
+                value={email}
+                onChange={setEmail}
+                onSubmit={() => void onInvite()}
+                excludeUids={existingAdminUids}
+                disabled={inviting}
+              />
               <Button loading={inviting} leftIcon={<UserPlus className="size-4" />} onClick={() => void onInvite()}>
                 Invite
               </Button>

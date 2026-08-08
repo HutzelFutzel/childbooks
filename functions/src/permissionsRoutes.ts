@@ -22,6 +22,7 @@ import {
   removeAdmin,
   requireCapability,
   requireOwner,
+  searchUsersForInvite,
   setGrants,
   setRole,
   type AdminRole,
@@ -85,6 +86,22 @@ export function registerPermissionsRoutes(app: Express): void {
       sendError(res, err);
     }
   });
+
+  // Email/name suggestions for the "Invite an admin" field, gated the same as
+  // the invite itself — it's the one place this dashboard could otherwise be
+  // used to enumerate every registered email address.
+  app.get(
+    "/admin/permissions/search-users",
+    requireCapability("manage_admins"),
+    async (req: PermissionedRequest, res: Response) => {
+      try {
+        const q = typeof req.query.q === "string" ? req.query.q : "";
+        res.json({ users: await searchUsersForInvite(q) });
+      } catch (err) {
+        sendError(res, err);
+      }
+    },
+  );
 
   // Invite (or attach) a plain admin by email. Owner-tier accounts are never
   // created this way — see the role routes below.

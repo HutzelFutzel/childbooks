@@ -180,6 +180,70 @@ export async function listAuditLog(limit = 200): Promise<AuditEntry[]> {
   return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<AuditEntry, "id">) }));
 }
 
+export interface UserSearchHit {
+  uid: string;
+  email: string;
+  displayName: string | null;
+}
+
+/**
+ * A short-lived, in-memory cache of every Auth account's uid/email/name, used
+ * only by {@link searchUsersForInvite}. Deliberately separate from
+ * `analytics.ts`'s own user scan/cache: that one excludes emails/domains an
+ * owner has configured out of analytics (test accounts, internal addresses),
+ * which are exactly the accounts an owner most often needs to find here.
+ */
+const USER_SEARCH_CACHE_TTL_MS = 60_000;
+const USER_SEARCH_SCAN_CAP = 20_000; // matches analytics.ts's MAX_USERS_SCAN
+let userSearchCache: { at: number; users: UserSearchHit[] } | null = null;
+
+async function scanAllUserEmails(): Promise<UserSearchHit[]> {
+  if (userSearchCache && Date.now() - userSearchCache.at < USER_SEARCH_CACHE_TTL_MS) {
+    return userSearchCache.users;
+  }
+  ensureAdmin();
+  const users: UserSearchHit[] = [];
+  let pageToken: string | undefined;
+  let scanned = 0;
+  do {
+    const page = await getAuth().listUsers(1000, pageToken);
+    for (const u of page.users) {
+      scanned += 1;
+      if (u.email) users.push({ uid: u.uid, email: u.email, displayName: u.displayName ?? null });
+    }
+    pageToken = page.pageToken;
+    if (scanned >= USER_SEARCH_SCAN_CAP) break;
+  } while (pageToken);
+  userSearchCache = { at: Date.now(), users };
+  return users;
+}
+
+/**
+ * Email/name suggestions for the "Invite an admin" field, so an owner can
+ * find someone who already has an account instead of retyping their address
+ * exactly. Requires 3+ characters — anything shorter would match too much of
+ * the user base to be a useful suggestion list, and is cheap to enforce here
+ * too since the frontend's debounce is just UX, not a security boundary.
+ * Prefix matches (email starts with the query) sort before mid-string ones.
+ */
+export async function searchUsersForInvite(query: string): Promise<UserSearchHit[]> {
+  const q = query.trim().toLowerCase();
+  if (q.length < 3) return [];
+  const all = await scanAllUserEmails();
+  const startsWith: UserSearchHit[] = [];
+  const contains: UserSearchHit[] = [];
+  for (const u of all) {
+    const email = u.email.toLowerCase();
+    if (email.startsWith(q)) {
+      startsWith.push(u);
+      continue;
+    }
+    const name = (u.displayName ?? "").toLowerCase();
+    if (email.includes(q) || name.includes(q)) contains.push(u);
+  }
+  return [...startsWith, ...contains].slice(0, 8);
+}
+
 /**
  * Invite someone by email. If they already have a Firebase Auth account
  * (any provider), they're simply attached as a plain admin with no grants —
