@@ -64,10 +64,21 @@ jobs:
         if: env.SLACK_CI_WEBHOOK_URL != ''
         env:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
+          # `commits` lists every commit in this push (oldest first, capped at
+          # 20 by GitHub). It's null/absent on a manual `workflow_dispatch`
+          # run, which is why COMMIT_MSG above stays as a fallback.
+          COMMITS_JSON: ${{ toJson(github.event.commits) }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          commits=$(printf '%s' "$COMMITS_JSON" | jq -r '
+            if type == "array" and length > 0
+            then .[] | "• `" + .id[0:7] + "` " + (.message | split("\n")[0])
+            else "" end')
+          if [ -z "$commits" ]; then
+            commits="• ${COMMIT_MSG%%$'\n'*}"
+          fi
           text="⏳ Deploy started — ${GITHUB_REPOSITORY}@${GITHUB_SHA:0:7}
-          ${COMMIT_MSG%%$'\n'*}
+          ${commits}
           by ${GITHUB_ACTOR} · ${RUN_URL}"
           payload=$(printf '{"text": %s}' "$(printf '%s' "$text" | jq -Rs .)")
           curl -fsS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_CI_WEBHOOK_URL"
@@ -130,6 +141,7 @@ jobs:
         env:
           STATUS: ${{ job.status }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
+          COMMITS_JSON: ${{ toJson(github.event.commits) }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           # Name the first step that failed (for a helpful message).
@@ -150,9 +162,17 @@ jobs:
             *)         emoji="❌"; detail="Failed at *${failed:-unknown step}* — open the logs";;
           esac
 
+          commits=$(printf '%s' "$COMMITS_JSON" | jq -r '
+            if type == "array" and length > 0
+            then .[] | "• `" + .id[0:7] + "` " + (.message | split("\n")[0])
+            else "" end')
+          if [ -z "$commits" ]; then
+            commits="• ${COMMIT_MSG%%$'\n'*}"
+          fi
+
           text="$emoji Deploy *$STATUS* — ${GITHUB_REPOSITORY}@${GITHUB_SHA:0:7}
           ${detail}
-          ${COMMIT_MSG%%$'\n'*}
+          ${commits}
           by ${GITHUB_ACTOR} · ${RUN_URL}"
           payload=$(printf '{"text": %s}' "$(printf '%s' "$text" | jq -Rs .)")
           curl -fsS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_CI_WEBHOOK_URL"
