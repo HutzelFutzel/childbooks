@@ -426,6 +426,7 @@ function CalibrateCard({
               <summary className="cursor-pointer select-none">
                 {result.samples.length} price checks taken
               </summary>
+              <div className="overflow-x-auto">
               <table className="mt-1 min-w-[280px] text-xs">
                 <thead className="text-[10px] uppercase tracking-wide text-ink-400">
                   <tr>
@@ -446,6 +447,7 @@ function CalibrateCard({
                   ))}
                 </tbody>
               </table>
+              </div>
             </details>
           )}
           {result.fitResidual != null && (

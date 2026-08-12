@@ -652,7 +652,7 @@ function PlanImpact({
           : ""
       }`}
     >
-      <div className="overflow-hidden rounded-lg ring-1 ring-inset ring-ink-100">
+      <div className="overflow-x-auto rounded-lg ring-1 ring-inset ring-ink-100">
         <table className="w-full text-xs">
           <tbody>
             {!plan.isFree && (

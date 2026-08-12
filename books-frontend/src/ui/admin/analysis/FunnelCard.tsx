@@ -91,6 +91,7 @@ export function FunnelCard({ funnel }: { funnel: FunnelReport }) {
         )}
 
         {funnel.byKind.length > 0 && (
+          <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-ink-400">
@@ -117,6 +118,7 @@ export function FunnelCard({ funnel }: { funnel: FunnelReport }) {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </CardBody>
     </div>

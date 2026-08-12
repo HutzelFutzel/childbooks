@@ -255,7 +255,7 @@ export function BlogTab() {
           )}
         </div>
       ) : (
-        <div className="overflow-hidden rounded-xl ring-1 ring-inset ring-ink-100">
+        <div className="overflow-x-auto rounded-xl ring-1 ring-inset ring-ink-100">
           <table className="w-full text-left text-sm">
             <thead className="bg-ink-50/60 text-[11px] uppercase tracking-wide text-ink-500">
               <tr>

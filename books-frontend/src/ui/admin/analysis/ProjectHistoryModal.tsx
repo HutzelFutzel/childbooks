@@ -139,7 +139,7 @@ function RunTimeline({ runs }: { runs: ActionRunRow[] }) {
       <div className="border-b border-ink-100 bg-ink-50/60 px-3 py-2 text-xs font-semibold text-ink-700">
         Every action, in order ({fmtNumber(ordered.length)})
       </div>
-      <div className="max-h-80 overflow-y-auto">
+      <div className="max-h-80 overflow-auto">
         <table className="w-full text-xs">
           <tbody>
             {ordered.map((r) => (

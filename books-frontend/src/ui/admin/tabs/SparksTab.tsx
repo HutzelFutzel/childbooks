@@ -266,7 +266,7 @@ function EconomyImpact({ draft, baseCurrency }: { draft: SparksConfig; baseCurre
     },
   ];
   return (
-    <div className="mt-2 overflow-hidden rounded-lg ring-1 ring-inset ring-ink-100">
+    <div className="mt-2 overflow-x-auto rounded-lg ring-1 ring-inset ring-ink-100">
       <table className="w-full text-xs">
         <tbody>
           {rows.map((r) => (

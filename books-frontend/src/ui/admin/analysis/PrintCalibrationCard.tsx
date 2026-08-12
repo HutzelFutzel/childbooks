@@ -213,6 +213,7 @@ function MarketDriftTable({ rows }: { rows: CalibrationMarketRow[] }) {
           Markets with at least two comparable orders, worst drift first.
         </p>
       </div>
+      <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
           <tr className="text-left text-xs text-ink-400">
@@ -252,6 +253,7 @@ function MarketDriftTable({ rows }: { rows: CalibrationMarketRow[] }) {
           })}
         </tbody>
       </table>
+      </div>
     </div>
   );
 }

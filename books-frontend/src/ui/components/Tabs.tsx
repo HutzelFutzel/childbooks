@@ -21,7 +21,17 @@ export interface TabsProps {
 export function Tabs({ items, value, onChange, className, fullWidth }: TabsProps) {
   const layoutId = useId();
   return (
-    <div className={cn("inline-flex rounded-full bg-ink-100/70 p-1", fullWidth && "flex w-full", className)}>
+    // Some tab groups (e.g. Configuration's 15 tabs) are far wider than a
+    // phone screen. Rather than silently overflowing the page, this scrolls
+    // horizontally on its own — `fullWidth` groups stay non-scrolling since
+    // they're sized to always fit (evenly distributed, shrinkable labels).
+    <div
+      className={cn(
+        "rounded-full bg-ink-100/70 p-1",
+        fullWidth ? "flex w-full" : "flex max-w-full overflow-x-auto",
+        className,
+      )}
+    >
       {items.map((item) => {
         const active = item.id === value;
         return (
@@ -29,8 +39,8 @@ export function Tabs({ items, value, onChange, className, fullWidth }: TabsProps
             key={item.id}
             onClick={() => onChange(item.id)}
             className={cn(
-              "relative inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors",
-              fullWidth && "min-w-0 flex-1 justify-center px-2 text-xs sm:px-3.5 sm:text-sm",
+              "relative inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium whitespace-nowrap transition-colors",
+              fullWidth ? "min-w-0 flex-1 justify-center px-2 text-xs sm:px-3.5 sm:text-sm" : "shrink-0",
               active ? "text-ink-900" : "text-ink-500 hover:text-ink-700",
             )}
           >
@@ -41,9 +51,9 @@ export function Tabs({ items, value, onChange, className, fullWidth }: TabsProps
                 transition={spring}
               />
             )}
-            <span className="relative z-10 inline-flex items-center gap-1.5">
+            <span className="relative z-10 inline-flex min-w-0 items-center gap-1.5">
               {item.icon}
-              {item.label}
+              <span className={fullWidth ? "truncate" : undefined}>{item.label}</span>
             </span>
           </button>
         );

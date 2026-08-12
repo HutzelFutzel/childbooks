@@ -157,6 +157,7 @@ export function ProductsAnalysis() {
               <RevenueByProductChart products={products.slice(0, 8)} />
 
               <div className="overflow-hidden rounded-2xl border border-ink-100 bg-white">
+                <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-ink-100 text-left text-xs uppercase tracking-wide text-ink-400">
@@ -184,6 +185,7 @@ export function ProductsAnalysis() {
                     ))}
                   </tbody>
                 </table>
+                </div>
               </div>
             </>
           )}

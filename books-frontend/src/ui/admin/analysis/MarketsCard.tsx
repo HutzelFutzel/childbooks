@@ -38,7 +38,7 @@ export function MarketsCard({
         {rows.length === 0 ? (
           <p className="py-6 text-center text-sm text-ink-400">No market data yet.</p>
         ) : (
-          <div className="max-h-80 overflow-y-auto">
+          <div className="max-h-80 overflow-auto">
             <table className="w-full text-sm">
               <thead className="sticky top-0 bg-white">
                 <tr className="text-left text-xs text-ink-400">

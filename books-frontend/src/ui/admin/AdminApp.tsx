@@ -148,7 +148,7 @@ function BillingEnvBadge({ onOpenSystemHealth }: { onOpenSystemHealth: () => voi
       )}
     >
       {isLive ? <Rocket className="size-3.5" /> : <FlaskConical className="size-3.5" />}
-      {isLive ? "Live billing" : "Sandbox billing"}
+      <span className="hidden sm:inline">{isLive ? "Live billing" : "Sandbox billing"}</span>
     </button>
   );
 }
@@ -334,8 +334,10 @@ export default function AdminApp() {
             size="sm"
             leftIcon={<ArrowLeft className="size-4" />}
             onClick={() => router.push("/studio")}
+            aria-label="Back to Studio"
+            className="px-2 sm:px-3"
           >
-            Studio
+            <span className="hidden sm:inline">Studio</span>
           </Button>
         }
       />

@@ -468,7 +468,7 @@ function MarketTable({ rows }: { rows: FinanceCountryRow[] }) {
           under &ldquo;Unknown&rdquo; so the totals still reconcile.
         </p>
       </header>
-      <div className="max-h-72 overflow-y-auto">
+      <div className="max-h-72 overflow-auto">
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-white">
             <tr className="text-left text-xs text-ink-400">
@@ -529,7 +529,7 @@ function ProductTable({ rows }: { rows: FinanceProductRow[] }) {
           splits.
         </p>
       </header>
-      <div className="max-h-72 overflow-y-auto">
+      <div className="max-h-72 overflow-auto">
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-white">
             <tr className="text-left text-xs text-ink-400">
@@ -620,7 +620,7 @@ function GroupTable({
           </Button>
         </form>
       </div>
-      <div className="max-h-72 overflow-y-auto">
+      <div className="max-h-72 overflow-auto">
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-white">
             <tr className="text-left text-xs text-ink-400">
