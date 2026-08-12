@@ -3,7 +3,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Download, Loader2, RefreshCw } from "lucide-react";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
-import type { ActivityMetric, Timeframe, TimezoneMode } from "../../../core/analytics/types";
+import type {
+  ActivityMetric,
+  DeviceFilter,
+  Timeframe,
+  TimezoneMode,
+} from "../../../core/analytics/types";
 import { useAdminAnalytics } from "../../../state/adminAnalyticsStore";
 import { useAdminFinance } from "../../../state/adminFinanceStore";
 import { useAdminMarket } from "../../../state/adminMarketStore";
@@ -24,6 +29,8 @@ import { FinanceAnalysis } from "./FinanceAnalysis";
 import { CostsAnalysis } from "./CostsAnalysis";
 import { ProjectsAnalysis } from "./ProjectsAnalysis";
 import { ProductsAnalysis } from "./ProductsAnalysis";
+import { DevicesAnalysis } from "./DevicesAnalysis";
+import { DevicePicker } from "./DevicePicker";
 import { ReferralsAnalysis } from "./ReferralsAnalysis";
 import { AffiliatesAnalysis } from "./AffiliatesAnalysis";
 import { CampaignsAnalysis } from "./CampaignsAnalysis";
@@ -81,8 +88,11 @@ export function AnalysisTab() {
   const setMetric = useAdminAnalytics((s) => s.setMetric);
   const countUniqueUsers = useAdminAnalytics((s) => s.countUniqueUsers);
   const setCountUniqueUsers = useAdminAnalytics((s) => s.setCountUniqueUsers);
+  const device = useAdminAnalytics((s) => s.device);
+  const setDevice = useAdminAnalytics((s) => s.setDevice);
 
   const refreshProducts = useAdminAnalytics((s) => s.refreshProducts);
+  const refreshDevices = useAdminAnalytics((s) => s.refreshDevices);
   const refreshPayments = useAdminPayments((s) => s.refresh);
   const refreshFinance = useAdminFinance((s) => s.refresh);
 
@@ -155,7 +165,8 @@ export function AnalysisTab() {
     if (section === "products") void refreshProducts();
     if (section === "payments") void refreshPayments();
     if (section === "finance") void refreshFinance();
-  }, [section, country, refresh, refreshProducts, refreshPayments, refreshFinance]);
+    if (section === "devices") void refreshDevices();
+  }, [section, country, refresh, refreshProducts, refreshPayments, refreshFinance, refreshDevices]);
 
   const grid = overview?.activity[metric] ?? null;
 
@@ -227,12 +238,18 @@ export function AnalysisTab() {
       {section === "affiliates" && <AffiliatesAnalysis />}
       {section === "campaigns" && <CampaignsAnalysis />}
       {section === "surveys" && <SurveysAnalysis />}
+      {section === "devices" && <DevicesAnalysis />}
 
       {section === "users" && (
         <div className="space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <Tabs items={TIMEFRAMES} value={timeframe} onChange={(id) => setTimeframe(id as Timeframe)} />
             <div className="flex items-center gap-3">
+              <DevicePicker
+                value={device}
+                onChange={(d) => setDevice(d as DeviceFilter)}
+                disabled={loading}
+              />
               {lastUpdated && (
                 <span className="text-xs text-ink-400">Updated {fmtRelative(lastUpdated)}</span>
               )}
@@ -266,6 +283,23 @@ export function AnalysisTab() {
                 }
                 className="h-9 rounded-lg bg-white px-3 text-sm ring-1 ring-inset ring-ink-200 focus:outline-none focus:ring-2 focus:ring-brand-400"
               />
+            </div>
+          )}
+
+          {device !== "all" && (
+            <div className="flex flex-wrap items-center gap-2 rounded-xl bg-brand-50 px-3.5 py-2 text-sm text-brand-800 ring-1 ring-brand-100">
+              <span>
+                Showing people who <strong>arrived on {device === "mobile" ? "a phone" : device === "tablet" ? "a tablet" : "desktop"}</strong>
+                {" "}— including what they did later on other devices. Accounts with no recorded
+                device are excluded.
+              </span>
+              <button
+                type="button"
+                onClick={() => setDevice("all")}
+                className="ml-auto text-xs font-medium text-brand-600 hover:underline"
+              >
+                Clear
+              </button>
             </div>
           )}
 

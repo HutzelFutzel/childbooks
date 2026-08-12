@@ -42,6 +42,7 @@ import { useAccountUiStore } from "@/state/accountUiStore";
 import { useCheckoutUiStore, type PurchaseKind } from "@/state/checkoutUiStore";
 import { PurchaseConfirmation } from "@/ui/checkout/PurchaseConfirmation";
 import { claimPendingReferral, rememberReferralCode } from "@/platform/referrals";
+import { SessionTracker } from "@/ui/analytics/SessionTracker";
 import { InviteFriendsDialog } from "@/ui/referrals/InviteFriendsDialog";
 import { notify } from "@/ui/lib/notify";
 
@@ -304,6 +305,11 @@ export default function StudioApp() {
         isDev() ? "h-[calc(100vh-1.5rem)]" : "h-screen",
       )}
     >
+      {/* Cookieless device/session beacon — see SessionTracker for the privacy
+          reasoning. Mounted here rather than in the root layout because this is
+          the shell every authenticated identity (guests included) passes
+          through, and the beacon needs an identity to attribute to. */}
+      <SessionTracker />
       <TopBar
         center={<JobProgress />}
         right={

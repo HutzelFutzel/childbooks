@@ -11,6 +11,7 @@
  *   GET  /invite/preview          what an invitation promises      (open)
  *   POST /invite/decline          opt an address out for good      (open)
  *   *    /referrals/*             invite, accept, overview         (any identity)
+ *   POST /session/ping            device + session beacon          (any identity)
  *   *    /admin/print/webhooks    status-webhook management        (admin)
  *   POST /admin/print/sync        pull order status now            (admin)
  *
@@ -45,6 +46,7 @@ import { registerEmailWebhookRoute } from "./email/webhook";
 import { registerContactAdminRoutes, registerContactRoutes } from "./contact/routes";
 import { registerBlogRoutes } from "./blog";
 import { registerBlogStatsAdminRoutes, registerBlogTrackingRoute } from "./blogStats";
+import { registerSessionRoutes } from "./deviceStats";
 import { registerReferralPublicRoutes, registerReferralUserRoutes } from "./referrals/routes";
 import { registerCampaignUserRoutes } from "./campaigns/routes";
 import { registerSurveyRoutes } from "./surveys/routes";
@@ -141,6 +143,10 @@ export function createApp(): Express {
   // followed long before there's a real account, so a guest identity must be
   // able to record the referral it arrived with.
   app.use("/affiliates", requireAuth);
+  // Session/device beacon: any signed-in identity, guests very much included —
+  // guests are the top of the funnel, so excluding them would leave the device
+  // mix describing only the people who already converted.
+  app.use("/session", requireAuth);
   app.use("/admin", requireVerified, requireAdmin, permissionGate());
 
   registerLuluRoutes(app);
@@ -153,6 +159,7 @@ export function createApp(): Express {
   registerContactAdminRoutes(app);
   registerBlogRoutes(app);
   registerBlogStatsAdminRoutes(app);
+  registerSessionRoutes(app);
   registerGdprRoutes(app);
   registerHealthRoutes(app);
   registerRenderRoutes(app);

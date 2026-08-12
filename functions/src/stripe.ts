@@ -92,6 +92,8 @@ import {
   priceEbook,
   revokeRefundedEbook,
 } from "./ebooks";
+import { deviceFactsFromHeaders } from "./geo";
+import { recordDevicePurchase } from "./deviceStats";
 import { getPlansConfig, hasActiveSubscription, resolveActivePlan } from "./plans";
 import { getSparksConfig } from "./appConfig";
 import { grantSparks } from "./sparks";
@@ -361,9 +363,31 @@ async function ensureCustomer(uid: string, email?: string | null): Promise<strin
 
 // ---- Print-order checkout core ----------------------------------------------
 
+/** Coarse device dimensions stamped on a payment at checkout time. */
+interface CheckoutDevice {
+  device: string | null;
+  deviceOs: string | null;
+}
+
+/**
+ * The form factor the buyer is checking out ON, read from the request headers.
+ *
+ * This has to be captured at session-creation time: the Stripe webhook that
+ * settles the payment arrives from Stripe's servers, so by then the only
+ * user-agent available is Stripe's own. Null when unreadable, so the analytics
+ * can tell "not recorded" from a real form factor.
+ */
+function checkoutDevice(req: Request): CheckoutDevice {
+  const facts = deviceFactsFromHeaders(req.headers);
+  if (facts.device === "unknown") return { device: null, deviceOs: null };
+  return { device: facts.device, deviceOs: facts.os };
+}
+
 interface PrintCheckoutArgs {
   uid: string;
   email: string | null;
+  /** Where the checkout was started, for the device analytics. */
+  device: CheckoutDevice;
   product: ProductDefinition;
   /** Variant being sold; drives retail deltas and the composed print SKU. */
   variant: VariantSelection;
@@ -800,6 +824,7 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     stripeSessionId: session.id,
     stripeCustomerId: customerId,
     fulfillment,
+    ...args.device,
     items: [
       { label: product.presentation.name, amount: unitPrice, quantity: copies },
       ...(shippingCharged > 0
@@ -933,6 +958,7 @@ export function registerStripeUserRoutes(app: Express): void {
       const result = await createPrintCheckout({
         uid,
         email: body.recipient.email ?? req.authToken?.email ?? null,
+        device: checkoutDevice(req),
         product,
         variant,
         printSku,
@@ -1186,6 +1212,7 @@ export function registerStripeUserRoutes(app: Express): void {
             : `${title} — digital edition (included with ${quote.planName ?? "plan"})`,
           stripeSessionId: null,
           ebook,
+          ...checkoutDevice(req),
           items: [{ label: `${title} — digital edition (PDF)`, amount: 0, quantity: 1 }],
         });
         await updatePayment({
@@ -1269,6 +1296,7 @@ export function registerStripeUserRoutes(app: Express): void {
         stripeSessionId: session.id,
         stripeCustomerId: customerId,
         ebook,
+        ...checkoutDevice(req),
         items: [{ label: `${title} — digital edition (PDF)`, amount: price, quantity: 1 }],
       });
 
@@ -1335,6 +1363,7 @@ export function registerStripeUserRoutes(app: Express): void {
       const result = await createPrintCheckout({
         uid,
         email: plan.recipient.email ?? req.authToken?.email ?? null,
+        device: checkoutDevice(req),
         product,
         variant,
         printSku,
@@ -1545,6 +1574,7 @@ export function registerStripeUserRoutes(app: Express): void {
         description: `${totalSparks} Sparks`,
         stripeSessionId: session.id,
         stripeCustomerId: customerId,
+        ...checkoutDevice(req),
         items: [{ label: `${totalSparks} Sparks`, amount: chargedPrice, quantity: 1 }],
       });
       res.json({ url: session.url, paymentId });
@@ -1629,6 +1659,7 @@ export function registerStripeUserRoutes(app: Express): void {
         description: `Gift: ${totalSparks} Sparks`,
         stripeSessionId: session.id,
         stripeCustomerId: customerId,
+        ...checkoutDevice(req),
         items: [{ label: `Gift: ${totalSparks} Sparks`, amount: price, quantity: 1 }],
       });
       res.json({ url: session.url, paymentId, giftCode });
@@ -2365,6 +2396,18 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
       // measured against.
       if (uid && projectId && (kind === "order" || kind === "ebook")) {
         await stampMilestone(uid, projectId, "ordered").catch(() => {});
+      }
+
+      // Attribute the sale to the device checkout was started on. Read back off
+      // the payment record rather than this request, because this request is
+      // Stripe's — see `checkoutDevice`.
+      if (payment?.device) {
+        await recordDevicePurchase({
+          uid: uid ?? null,
+          ref: paymentId,
+          device: payment.device,
+          revenueUsd: await toUsd(gross, pi.currency),
+        });
       }
 
       // Safety net in case checkout.session.completed was missed: grants and

@@ -13,6 +13,10 @@
  * Result is an ISO-3166 alpha-2 code, or "ZZ" when nothing is known.
  */
 import type { IncomingHttpHeaders } from "node:http";
+import {
+  parseDeviceFacts,
+  type DeviceFacts,
+} from "../../books-frontend/src/core/analytics/device";
 
 const GEO_HEADERS = [
   "cf-ipcountry", // Cloudflare
@@ -122,11 +126,44 @@ export function countryFromSignals(opts: {
   );
 }
 
-/** Coarse device class from the User-Agent string. */
+/**
+ * Coarse device class from the User-Agent string, for the blog aggregates.
+ *
+ * Kept separate from {@link deviceFactsFromHeaders} because it answers a
+ * narrower question with a narrower contract: the blog beacon already rejects
+ * bots and empty user-agents, so it has no "unknown" bucket and never needed
+ * one. Widening this to three-plus-unknown would silently reclassify historical
+ * `blogStats.byDevice` counts.
+ */
 export function deviceFromUA(ua: string): "mobile" | "tablet" | "desktop" {
   const s = (ua || "").toLowerCase();
   if (/ipad|tablet|kindle|playbook|silk|nexus 7|nexus 10/.test(s)) return "tablet";
   if (/mobi|iphone|ipod|windows phone|blackberry|bb10|opera mini/.test(s)) return "mobile";
   if (/android/.test(s)) return /mobile/.test(s) ? "mobile" : "tablet";
   return "desktop";
+}
+
+/**
+ * Full device facts for a request, read from the headers the browser sent.
+ *
+ * Server-side by design: the same parse run against a client-supplied string
+ * would be a field the measured party controls. Client hints are preferred over
+ * the User-Agent where available (Chromium has frozen the UA string) — see
+ * `core/analytics/device.ts` for the parse order and the privacy constraints
+ * that bound what's collected here.
+ */
+export function deviceFactsFromHeaders(headers: IncomingHttpHeaders): DeviceFacts {
+  const one = (key: string): string | null => {
+    const raw = headers[key];
+    const val = Array.isArray(raw) ? raw[0] : raw;
+    return typeof val === "string" ? val : null;
+  };
+  return parseDeviceFacts({
+    ua: one("user-agent"),
+    hints: {
+      platform: one("sec-ch-ua-platform"),
+      mobile: one("sec-ch-ua-mobile"),
+      brands: one("sec-ch-ua"),
+    },
+  });
 }

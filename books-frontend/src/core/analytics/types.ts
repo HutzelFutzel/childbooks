@@ -112,6 +112,8 @@ export interface AnalyticsOverview {
   timezone: string;
   /** Active market filter (ISO-2), or null for "all markets". */
   country: string | null;
+  /** Active entry-device filter (see {@link DeviceFilter}). */
+  device: DeviceFilter;
   /** Which bucketing the returned {@link activity} grids used. */
   tzMode: TimezoneMode;
   /** When the server computed this (epoch ms). */
@@ -132,6 +134,12 @@ export interface AnalyticsOverview {
   series: TimeSeriesPoint[];
   /** Signup source split for accounts created in the window. */
   signupSources: BreakdownSlice[];
+  /**
+   * Form-factor split of the signups in the window, from the auth event log.
+   * Empty for windows that predate device capture — the event log is
+   * forward-only, so an absent split means "not recorded", not "no phones".
+   */
+  signupDevices: BreakdownSlice[];
   /** Weekday × hour activity, per metric. */
   activity: Record<ActivityMetric, ActivityGrid>;
   /** Per-market breakdown, ranked by activity. */
@@ -230,6 +238,161 @@ export interface FunnelReport {
   capped: boolean;
 }
 
+// ---- Devices ----------------------------------------------------------------
+
+/** One day on the device-mix axis. Keys are {@link DeviceClass} values. */
+export interface DeviceSeriesPoint {
+  day: string;
+  /** Sessions per form factor, zero-filled. */
+  sessions: Record<string, number>;
+}
+
+/**
+ * One row of a device-dimension breakdown (form factor, OS, browser, …).
+ *
+ * `sessions` counts visits and `users` counts people, and the difference
+ * matters: a phone that gets picked up eight times a day and a desktop that
+ * gets one long sitting are the same person's two devices, not eight-to-one
+ * evidence for phones. Conversion is therefore measured per USER, never per
+ * session, or a chatty device looks like a failing one.
+ */
+export interface DeviceSegmentRow {
+  /** Stable map key, e.g. `mobile`, `ios`, `safari:17`. */
+  key: string;
+  label: string;
+  /**
+   * Sessions attributed to this row.
+   *
+   * Exact for form factors — the per-user rollup counts sessions per form
+   * factor, so a person who uses both contributes to both. For OS and browser
+   * rows it's the sessions of accounts CURRENTLY on that OS/browser, since the
+   * rollup keeps only the latest of each (a per-session breakdown would need the
+   * event log this design deliberately doesn't keep). Close enough to rank a
+   * support tail; not a number to reconcile against `sessions` totals.
+   */
+  sessions: number;
+  /** Distinct accounts attributed to this row (by entry device / latest OS). */
+  users: number;
+  /** Accounts created on this dimension value, per the signup event. */
+  signups: number;
+  /** Completed purchases attributed to this dimension value. */
+  purchases: number;
+  revenueUsd: number;
+  /** `purchases / users`, in %. Null when there's no denominator. */
+  conversionPct: number | null;
+  /** Refunds as a share of this row's gross revenue — the "broken on X" signal. */
+  refundRatePct: number | null;
+}
+
+/** Sessions-only breakdown, for dimensions with no revenue attribution. */
+export interface DeviceCountRow {
+  key: string;
+  label: string;
+  sessions: number;
+  /** Share of all sessions in the window, in %. */
+  sharePct: number;
+}
+
+/**
+ * One signup cohort's cross-device behaviour — the "started on mobile, bought on
+ * desktop" question.
+ *
+ * Cohorts are keyed by the device the ACCOUNT WAS CREATED on and then followed
+ * forwards, which is the only framing that survives the fact that people move
+ * between devices: filtering events to one form factor would keep a mobile
+ * signup and drop that person's desktop purchase, making mobile look like it
+ * never converts.
+ */
+export interface CrossDeviceCohort {
+  /** Form factor the account was created on. */
+  signupDevice: string;
+  users: number;
+  /** How many were later seen on a different form factor. */
+  switched: number;
+  switchedPct: number | null;
+  /** Median lag from signup to that first session elsewhere, in ms. */
+  medianSwitchLagMs: number | null;
+  /** Purchasers who switched device first, and those who never did. */
+  paidAfterSwitch: number;
+  paidSameDevice: number;
+  /**
+   * Conversion within each half of the cohort. The pair is the whole point: if
+   * switchers convert far better, a low mobile conversion rate is a HANDOFF
+   * problem (build "email me my draft"), not a mobile-checkout problem.
+   */
+  conversionSwitchedPct: number | null;
+  conversionSameDevicePct: number | null;
+  /** Where the money actually landed, best first. */
+  purchaseDevices: { device: string; purchases: number }[];
+}
+
+export interface CrossDeviceReport {
+  cohorts: CrossDeviceCohort[];
+  /**
+   * How long each cohort was observed after signing up, in days. Cross-device
+   * behaviour plays out over weeks, so this deliberately reaches PAST the
+   * dashboard's window — the only card here that does.
+   */
+  observationDays: number;
+  /**
+   * False when a scan was capped. A truncated scan biases a RATE in an unknown
+   * direction (unlike a count, which is merely a lower bound), so the UI must
+   * withhold these percentages rather than caveat them.
+   */
+  reliable: boolean;
+}
+
+/** The full payload behind the Analysis → Devices tab. */
+export interface DeviceReport {
+  range: AnalyticsRange;
+  timezone: string;
+  country: string | null;
+  generatedAt: number;
+  totals: {
+    sessions: number;
+    /** Accounts with any device observation at all (lifetime, in-market). */
+    users: number;
+    /** Share of those users seen on more than one form factor, in %. */
+    multiDevicePct: number | null;
+  };
+  series: DeviceSeriesPoint[];
+  byDevice: DeviceSegmentRow[];
+  byOs: DeviceSegmentRow[];
+  byBrowser: DeviceSegmentRow[];
+  byViewport: DeviceCountRow[];
+  crossDevice: CrossDeviceReport;
+  /**
+   * True when {@link series} and {@link byViewport} cover ALL markets while a
+   * market filter is active.
+   *
+   * The daily session counters are global aggregates with no market dimension
+   * (adding one would multiply the document count by the number of countries for
+   * a breakdown that's already available per user). Everything else in this
+   * report honours the filter, so the UI has to say which is which rather than
+   * letting an admin read a global curve as a local one.
+   */
+  seriesAllMarkets: boolean;
+  /**
+   * False until the session beacon has recorded anything. The tab renders an
+   * explanation instead of a page of zeroes, the same way the funnel explains
+   * itself before the blocking functions have run.
+   */
+  hasSessionData: boolean;
+  capped: boolean;
+}
+
+/**
+ * The dashboard-wide entry-device filter.
+ *
+ * Deliberately ENTRY-scoped rather than event-scoped: it selects people by the
+ * device they arrived on and then reports everything they did, wherever they did
+ * it. An event-scoped filter would silently drop the cross-device half of every
+ * funnel — see {@link CrossDeviceCohort}.
+ */
+export type DeviceFilter = "all" | "mobile" | "tablet" | "desktop";
+
+export const DEVICE_FILTERS: DeviceFilter[] = ["all", "mobile", "tablet", "desktop"];
+
 /** Billing cadence of a user's active subscription. */
 export type BillingCadence = "month" | "year";
 
@@ -293,6 +456,15 @@ export interface AnalyticsUserRow extends UserEconomics {
    * this tells you which accounts they are.
    */
   buyer: BuyerFacts | null;
+  /**
+   * Form factor this account first arrived on, or null when no session has been
+   * recorded for them. What the dashboard's device filter selects on.
+   */
+  entryDevice: string | null;
+  /** Form factor of their most recent session. */
+  currentDevice: string | null;
+  /** True when they've been seen on more than one form factor. */
+  multiDevice: boolean;
 }
 
 export interface AnalyticsUsersResult {

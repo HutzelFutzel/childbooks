@@ -559,6 +559,7 @@ const ROUTE_RULES: RouteRule[] = [
   { test: /^\/admin\/analytics\/users$/, gate: key("analysis.users", "read") },
   { test: /^\/admin\/analytics\/overview$/, gate: key("analysis.users", "read") },
   { test: /^\/admin\/analytics\/funnel$/, gate: key("analysis.users", "read") },
+  { test: /^\/admin\/analytics\/devices$/, gate: key("analysis.devices", "read") },
   { test: /^\/admin\/analytics\/products$/, gate: key("analysis.products", "read") },
   { test: /^\/admin\/analytics\/action-costs$/, gate: key("analysis.costs", "read") },
   { test: /^\/admin\/projects(\/|$)/, gate: key("analysis.projects", "read") },

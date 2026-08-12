@@ -2,7 +2,7 @@
  * Daily KPI digest — one Slack message per day (evening) with the headline
  * numbers: signups, guests, logins, active users, revenue (+ refund rate),
  * orders, top product, checkout conversion, unfulfilled paid orders, funnel
- * leakage and open alerts since the last digest.
+ * leakage, the device mix and open alerts since the last digest.
  *
  * Reuses the exact same computations the admin Analysis dashboard uses
  * (`computeOverview`, `computeFunnel` in analytics.ts; `financeSummary` in
@@ -32,6 +32,8 @@ import { SLACK_WEBHOOK_URL } from "./secrets";
 import { getAdminSettings } from "./adminSettings";
 import { computeOverview, computeFunnel } from "./analytics";
 import { financeSummary } from "./finance";
+import { readDeviceDays } from "./deviceStats";
+import { deviceLabel, KNOWN_DEVICE_CLASSES } from "../../books-frontend/src/core/analytics/device";
 import { listAlerts, raiseAlert, type AdminAlert } from "./alerts";
 import { notifySlack } from "./notify";
 
@@ -155,6 +157,128 @@ function pctOf(num: number, den: number): string | null {
   return `${Math.round((num / den) * 100)}%`;
 }
 
+/**
+ * Volume floors before the device line is allowed to editorialize (below), and
+ * the gap that counts as worth saying.
+ *
+ * A digest that claims "phones convert badly" off six sessions and one order is
+ * a digest people learn to skim, which costs more than the line is worth. The
+ * index threshold is deliberately blunt — 40% below par on revenue share is not
+ * a subtle statistical claim, it's a thing to go look at.
+ */
+const DEVICE_MIN_SESSIONS = 100;
+const DEVICE_MIN_PURCHASES = 8;
+const DEVICE_UNDERPERFORM_INDEX = 0.6;
+
+interface DeviceMixRow {
+  key: string;
+  sessions: number;
+  purchases: number;
+  revenueUsd: number;
+}
+
+interface DeviceMix {
+  sessions: number;
+  purchases: number;
+  revenueUsd: number;
+  /** Known form factors with any sessions, ranked by sessions. */
+  rows: DeviceMixRow[];
+}
+
+/**
+ * Fold the daily aggregate docs for the window into one mix.
+ *
+ * Reads `deviceStats/{date}` directly rather than calling `computeDevices`:
+ * the digest only needs sessions and purchases per form factor, and the full
+ * report additionally scans every user, every payment and the event log — three
+ * expensive scans for numbers no line below prints.
+ */
+function summarizeDevices(
+  days: { sessions: number; byDevice: Record<string, number>; purchasesByDevice: Record<string, number>; revenueUsdByDevice: Record<string, number> }[],
+): DeviceMix {
+  const acc = new Map<string, DeviceMixRow>();
+  const row = (key: string): DeviceMixRow => {
+    const existing = acc.get(key);
+    if (existing) return existing;
+    const fresh: DeviceMixRow = { key, sessions: 0, purchases: 0, revenueUsd: 0 };
+    acc.set(key, fresh);
+    return fresh;
+  };
+
+  let sessions = 0;
+  for (const d of days) {
+    sessions += d.sessions;
+    for (const cls of KNOWN_DEVICE_CLASSES) {
+      row(cls).sessions += d.byDevice[cls] ?? 0;
+      row(cls).purchases += d.purchasesByDevice[cls] ?? 0;
+      row(cls).revenueUsd += d.revenueUsdByDevice[cls] ?? 0;
+    }
+  }
+
+  const rows = [...acc.values()]
+    .filter((r) => r.sessions > 0 || r.purchases > 0)
+    .sort((a, b) => b.sessions - a.sessions);
+  return {
+    sessions,
+    purchases: rows.reduce((s, r) => s + r.purchases, 0),
+    revenueUsd: rows.reduce((s, r) => s + r.revenueUsd, 0),
+    rows,
+  };
+}
+
+/** `Phone 62% · Desktop 33% · Tablet 5%` over the form factors with sessions. */
+function deviceShareBits(mix: DeviceMix): string[] {
+  const total = mix.rows.reduce((s, r) => s + r.sessions, 0);
+  if (total <= 0) return [];
+  return mix.rows
+    .filter((r) => r.sessions > 0)
+    .map((r) => `${deviceLabel(r.key)} ${Math.round((r.sessions / total) * 100)}%`);
+}
+
+/**
+ * The one device sentence worth waking up to: the form factor most people use
+ * is pulling well under its weight on revenue.
+ *
+ * Compares each form factor's share of revenue against its share of sessions
+ * (an index of 1.0 means "earns exactly as much as its traffic would suggest").
+ * Only the LEADING device by sessions is tested, because that's the one where a
+ * gap is worth engineering time — a shortfall on the 4% tablet slice is a
+ * curiosity, the same shortfall on the 60% phone slice is the roadmap.
+ *
+ * Returns null when the window is too small to mean anything, when nothing
+ * underperforms, or when there's no second device to compare against — a line
+ * that fires every night is a line nobody reads.
+ */
+function deviceAnomalyLine(mix: DeviceMix): string | null {
+  const sessionTotal = mix.rows.reduce((s, r) => s + r.sessions, 0);
+  if (sessionTotal < DEVICE_MIN_SESSIONS || mix.purchases < DEVICE_MIN_PURCHASES) return null;
+  if (mix.revenueUsd <= 0 || mix.rows.length < 2) return null;
+
+  const lead = mix.rows[0];
+  if (lead.sessions <= 0) return null;
+  const sessionShare = lead.sessions / sessionTotal;
+  const revenueShare = lead.revenueUsd / mix.revenueUsd;
+  const index = sessionShare > 0 ? revenueShare / sessionShare : 1;
+  if (index >= DEVICE_UNDERPERFORM_INDEX) return null;
+
+  // Revenue per session is the comparison that makes the gap concrete, and the
+  // best other device is the fair benchmark — "worse than average" includes the
+  // laggard itself and so understates the gap.
+  const perSession = (r: DeviceMixRow) => (r.sessions > 0 ? r.revenueUsd / r.sessions : 0);
+  const best = mix.rows
+    .slice(1)
+    .filter((r) => r.sessions > 0)
+    .sort((a, b) => perSession(b) - perSession(a))[0];
+  const leadRps = perSession(lead);
+  const multiple = best && leadRps > 0 ? perSession(best) / leadRps : null;
+
+  const gap =
+    `📉 ${deviceLabel(lead.key)} is ${Math.round(sessionShare * 100)}% of sessions but ` +
+    `${Math.round(revenueShare * 100)}% of revenue`;
+  if (!best || multiple == null || multiple < 1.2) return `${gap}.`;
+  return `${gap} — ${deviceLabel(best.key)} earns ${multiple.toFixed(1)}× more per session.`;
+}
+
 /** A finance `productId` (e.g. `print:square-hardcover`) as a display label. */
 function productLabel(key: string): string {
   const slug = key.includes(":") ? key.slice(key.indexOf(":") + 1) : key;
@@ -178,11 +302,12 @@ export async function buildDailySummaryText(
   const { from, to } = range;
   const settings = await getAdminSettings();
 
-  const [overview, funnel, finance, alerts] = await Promise.all([
+  const [overview, funnel, finance, alerts, deviceDays] = await Promise.all([
     computeOverview(from, to, settings, { country: null, tzMode: "fixed" }),
     computeFunnel({ from, to, settings, country: null }),
     financeSummary({ fromMs: from, toMs: to, timezone: tz, groupLimit: 5 }),
     listAlerts(200),
+    readDeviceDays(from, to).catch(() => []),
   ]);
 
   const dayLabel = formatRangeLabel(from, to, tz);
@@ -253,6 +378,24 @@ export async function buildDailySummaryText(
     lines.push(
       `🌍 Top market: ${topCountry.country} — ${plural(topCountry.signups, "signup")}, ${topCountry.activeUsers} active`,
     );
+  }
+
+  // Device mix, then the gap between traffic and money if there is one. The
+  // shares are omitted entirely when no sessions were recorded (a window before
+  // the beacon shipped) rather than printed as zeroes, which would read as a
+  // day with no visitors.
+  const deviceMix = summarizeDevices(deviceDays);
+  const shareBits = deviceShareBits(deviceMix);
+  if (shareBits.length > 0) {
+    const signupBits = overview.signupDevices
+      .filter((d) => d.value > 0)
+      .map((d) => `${d.label} ${d.value}`);
+    lines.push(
+      `📱 Sessions: ${deviceMix.sessions} — ${shareBits.join(" · ")}` +
+        (signupBits.length > 0 ? `   ✍️ Signed up on: ${signupBits.join(" · ")}` : ""),
+    );
+    const anomaly = deviceAnomalyLine(deviceMix);
+    if (anomaly) lines.push(anomaly);
   }
 
   if (alertsToday.length > 0) {

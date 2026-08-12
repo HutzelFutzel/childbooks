@@ -171,6 +171,17 @@ export interface CreatePendingPaymentArgs {
   ebook?: EbookFulfillment | null;
   /** Free-form item summary for admin/user display. */
   items?: { label: string; amount: number; quantity: number }[];
+  /**
+   * Coarse form factor / OS the checkout was STARTED on, read from the request
+   * headers (see `geo.ts:deviceFactsFromHeaders`).
+   *
+   * Stamped here rather than derived later because this is the only moment the
+   * information exists: the webhook that settles the payment arrives from Stripe,
+   * carrying Stripe's user-agent, not the buyer's. Admin record only — the buyer's
+   * own copy has no use for it.
+   */
+  device?: string | null;
+  deviceOs?: string | null;
 }
 
 /** Write the pending admin + user records for a freshly-created Checkout Session. */
@@ -209,6 +220,11 @@ export async function createPendingPayment(args: CreatePendingPaymentArgs): Prom
     netAmount: null,
     fulfillment: args.fulfillment ?? null,
     ebook: args.ebook ?? null,
+    // Omitted rather than nulled when unreadable, so "no device recorded" and
+    // "recorded as unknown" stay distinguishable in the device analytics.
+    ...(args.device && args.device !== "unknown"
+      ? { device: args.device, deviceOs: args.deviceOs ?? null }
+      : {}),
     events: [{ at: Date.now(), type: "checkout.created" }],
   });
 
@@ -233,6 +249,8 @@ export interface AdminPaymentRecord {
   orderId: string | null;
   fulfillment: FulfillmentPlan | null;
   ebook: EbookFulfillment | null;
+  /** Form factor checkout was started on, or null for pre-capture payments. */
+  device: string | null;
   /** Retry bookkeeping for paid orders whose print placement failed. */
   fulfillmentAttempts: number;
   fulfillmentFailedAt: number | null;
@@ -258,6 +276,7 @@ export async function getAdminPayment(paymentId: string): Promise<AdminPaymentRe
     orderId: (d.orderId as string) ?? null,
     fulfillment: (d.fulfillment as FulfillmentPlan) ?? null,
     ebook: (d.ebook as EbookFulfillment) ?? null,
+    device: typeof d.device === "string" ? d.device : null,
     fulfillmentAttempts: (d.fulfillmentAttempts as number) ?? 0,
     fulfillmentFailedAt: (d.fulfillmentFailedAt as number) ?? null,
   };

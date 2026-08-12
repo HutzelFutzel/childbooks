@@ -49,7 +49,7 @@ import {
   type RunKind,
   type RunOutcome,
 } from "./actionRun";
-import { percentile } from "./stats";
+import { mergeTally, percentile } from "./stats";
 import { toUsd } from "./finance";
 import type { ImageTier } from "../../books-frontend/src/core/config/modelConfig";
 import { priceForAction } from "../../books-frontend/src/core/config/sparks";
@@ -65,7 +65,16 @@ import {
   type PlanDefinition,
   type PlansConfig,
 } from "../../books-frontend/src/core/config/plans";
-import { previousRange } from "../../books-frontend/src/core/analytics/types";
+import { DEVICE_FILTERS, previousRange } from "../../books-frontend/src/core/analytics/types";
+import {
+  browserVersionKey,
+  browserVersionLabel,
+  deviceLabel,
+  KNOWN_DEVICE_CLASSES,
+  osLabel,
+  viewportLabel,
+} from "../../books-frontend/src/core/analytics/device";
+import { readDeviceDays } from "./deviceStats";
 import {
   buyerFacts,
   normalizeBuyerProfile,
@@ -90,6 +99,13 @@ import type {
   BreakdownSlice,
   CadenceFilter,
   CountryActivity,
+  CrossDeviceCohort,
+  CrossDeviceReport,
+  DeviceCountRow,
+  DeviceFilter,
+  DeviceReport,
+  DeviceSegmentRow,
+  DeviceSeriesPoint,
   FunnelReport,
   FunnelStage,
   PlanFilter,
@@ -243,6 +259,16 @@ interface EventRow {
   email: string | null;
   country: string | null;
   at: number;
+  /**
+   * Form factor the event happened on, or null for events written before device
+   * capture existed. Null is load-bearing: it means "not recorded", and any
+   * breakdown built from these must exclude rather than bucket it, or the whole
+   * pre-capture backlog silently lands in one form factor.
+   */
+  device: string | null;
+  os: string | null;
+  browser: string | null;
+  browserMajor: number | null;
 }
 
 interface EventScan {
@@ -264,12 +290,17 @@ async function fetchEvents(from: number, to: number): Promise<EventScan> {
       .get();
     const events = snap.docs.map((d) => {
       const data = d.data() as Record<string, unknown>;
+      const str = (v: unknown) => (typeof v === "string" && v ? v : null);
       return {
         type: typeof data.type === "string" ? data.type : "",
         uid: typeof data.uid === "string" ? data.uid : null,
         email: typeof data.email === "string" ? data.email : null,
         country: normalizeCountry(data.country),
         at: typeof data.at === "number" ? data.at : 0,
+        device: str(data.device),
+        os: str(data.os),
+        browser: str(data.browser),
+        browserMajor: typeof data.browserMajor === "number" ? data.browserMajor : null,
       };
     });
     return { events, capped: snap.size >= MAX_EVENTS_SCAN };
@@ -313,6 +344,88 @@ interface UserMeta {
    * thousand rows each carrying eighty of them is a payload nobody reads.
    */
   buyer: BuyerFacts | null;
+  /**
+   * The device rollup written by the session beacon + blocking functions (see
+   * `deviceStats.ts`), or null for accounts that predate it. Riding along on this
+   * scan is what makes cross-device cohorts free: the alternative is a second
+   * pass over `users`, which would double the cost of every refresh.
+   */
+  device: UserDeviceMeta | null;
+}
+
+/** The device facts the dashboard needs per account. Mirrors `meta.device`. */
+interface UserDeviceMeta {
+  /** Most recent session's form factor / OS / browser. */
+  device: string | null;
+  os: string | null;
+  browser: string | null;
+  browserMajor: number | null;
+  /** Form factor of the first recorded session — the entry-device attribution. */
+  firstDevice: string | null;
+  /** Form factor at account creation. */
+  signupDevice: string | null;
+  /** Form factor of the first completed purchase. */
+  purchaseDevice: string | null;
+  viewport: string | null;
+  /** Sessions per form factor (at most four keys). */
+  counts: Record<string, number>;
+  sessions: number;
+  /** Epoch ms of the first session on a form factor other than `firstDevice`. */
+  switchedAt: number | null;
+  lastSeenAt: number | null;
+}
+
+function readUserDeviceMeta(raw: unknown): UserDeviceMeta | null {
+  if (!raw || typeof raw !== "object") return null;
+  const d = raw as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" && v ? v : null);
+  const numOrNull = (v: unknown) =>
+    typeof v === "number" && Number.isFinite(v) ? v : null;
+  const counts: Record<string, number> = {};
+  if (d.counts && typeof d.counts === "object") {
+    for (const [k, v] of Object.entries(d.counts as Record<string, unknown>)) {
+      if (typeof v === "number" && Number.isFinite(v) && v > 0) counts[k] = v;
+    }
+  }
+  const meta: UserDeviceMeta = {
+    device: str(d.device),
+    os: str(d.os),
+    browser: str(d.browser),
+    browserMajor: numOrNull(d.browserMajor),
+    firstDevice: str(d.firstDevice),
+    signupDevice: str(d.signupDevice),
+    purchaseDevice: str(d.purchaseDevice),
+    viewport: str(d.viewport),
+    counts,
+    sessions: numOrNull(d.sessions) ?? 0,
+    switchedAt: numOrNull(d.switchedAt),
+    lastSeenAt: numOrNull(d.lastSeenAt),
+  };
+  // A doc where the map exists but holds nothing useful is the same as absent —
+  // returning a hollow object would make every "has device data" test true.
+  const empty =
+    !meta.device && !meta.firstDevice && !meta.signupDevice && meta.sessions === 0;
+  return empty ? null : meta;
+}
+
+/**
+ * The form factor an account is ATTRIBUTED to, best signal first.
+ *
+ * Entry device, not latest device: the dashboard's device filter selects people
+ * by where they came in and then reports everything they did afterwards. Using
+ * the latest device instead would move a person between segments every time they
+ * picked up a different screen, which makes any trend meaningless.
+ */
+function entryDeviceOf(meta: UserMeta | undefined): string | null {
+  const d = meta?.device;
+  if (!d) return null;
+  return d.firstDevice ?? d.signupDevice ?? d.device ?? null;
+}
+
+/** True when the account has been seen on more than one form factor. */
+function isMultiDevice(d: UserDeviceMeta): boolean {
+  const seen = Object.keys(d.counts).filter((k) => k !== "unknown");
+  return seen.length > 1 || d.switchedAt != null;
 }
 
 /**
@@ -334,18 +447,21 @@ function fetchUserMeta(): Promise<Map<string, UserMeta>> {
           sparkBalance?: unknown;
           country?: unknown;
           surveyProfile?: unknown;
+          meta?: unknown;
         };
         const balance =
           typeof d.sparkBalance === "number" && Number.isFinite(d.sparkBalance)
             ? d.sparkBalance
             : null;
         const profile = normalizeBuyerProfile(d.surveyProfile);
+        const meta = (d.meta ?? {}) as Record<string, unknown>;
         out.set(doc.id, {
           sparkBalance: balance,
           country: normalizeCountry(d.country),
           // Null rather than an empty profile, so the table can show "never asked"
           // and "answered but told us nothing" as the different things they are.
           buyer: profile.answers > 0 ? buyerFacts(profile) : null,
+          device: readUserDeviceMeta(meta.device),
         });
       }
     } catch {
@@ -714,8 +830,9 @@ function countTotals(
   country: string | null,
   from: number,
   to: number,
+  inSegment: (uid: string) => boolean = () => true,
 ): { totals: AnalyticsTotals; activeSource: ActiveUsersSource } {
-  const inMarket = (uid: string) => !country || countryOf(uid) === country;
+  const inMarket = (uid: string) => (!country || countryOf(uid) === country) && inSegment(uid);
   let totalUsers = 0;
   let totalGuests = 0;
   let newSignups = 0;
@@ -768,9 +885,10 @@ export async function computeOverview(
   from: number,
   to: number,
   settings: AdminSettings,
-  opts: { country: string | null; tzMode: TimezoneMode },
+  opts: { country: string | null; tzMode: TimezoneMode; device?: DeviceFilter },
 ): Promise<AnalyticsOverview> {
   const { country, tzMode } = opts;
+  const device: DeviceFilter = opts.device ?? "all";
   // A market-filtered view reads most naturally in that market's own clock.
   const tz = country ? timezoneForCountry(country, settings.timezone) : settings.timezone;
   const prev = previousRange({ from, to });
@@ -795,18 +913,28 @@ export async function computeOverview(
   const eventCountry = (e: EventRow) =>
     e.country ?? (e.uid ? countryOf(e.uid) : UNKNOWN_COUNTRY);
   const inMarket = (c: string) => !country || c === country;
+  /**
+   * Entry-device filter. Applied per PERSON, not per event, so a mobile signup
+   * who later converts on a laptop still counts as mobile traffic that converted
+   * — the whole reason this filter is entry-scoped (see `DeviceFilter`).
+   * Accounts with no device data are excluded from a filtered view rather than
+   * defaulted in: "unknown" is not evidence of any form factor.
+   */
+  const inDevice = (uid: string) =>
+    device === "all" || entryDeviceOf(meta.get(uid)) === device;
 
   const dayKeys = dayKeysBetween(from, to, tz);
   const seriesMap = new Map<string, TimeSeriesPoint>();
   for (const day of dayKeys) seriesMap.set(day, { day, signups: 0, logins: 0 });
 
   const sources = new Map<string, number>();
+  const signupDeviceCounts = new Map<string, number>();
   const signupPoints: ActivityPoint[] = [];
   const loginPoints: ActivityPoint[] = [];
 
   for (const u of users) {
     const c = countryOf(u.uid);
-    if (!inMarket(c)) continue;
+    if (!inMarket(c) || !inDevice(u.uid)) continue;
     if (u.createdAt == null || u.createdAt < from || u.createdAt > to) continue;
     sources.set(u.source, (sources.get(u.source) ?? 0) + 1);
     if (u.isAnonymous) continue;
@@ -816,6 +944,14 @@ export async function computeOverview(
   }
 
   for (const e of current.events) {
+    if (e.uid && !inDevice(e.uid)) continue;
+    // The form-factor split of signups comes from the event log rather than the
+    // Auth scan, because Auth records no device — and only from events that
+    // actually carry one, so a pre-capture backlog reads as "no data" instead of
+    // quietly inflating whichever bucket it got defaulted into.
+    if (e.type === "signup" && e.device) {
+      signupDeviceCounts.set(e.device, (signupDeviceCounts.get(e.device) ?? 0) + 1);
+    }
     if (e.type !== "login") continue;
     const c = eventCountry(e);
     if (!inMarket(c)) continue;
@@ -827,8 +963,19 @@ export async function computeOverview(
   const signupSources: BreakdownSlice[] = Array.from(sources.entries())
     .map(([key, value]) => ({ key, label: sourceLabel(key), value }))
     .sort((a, b) => b.value - a.value);
+  const signupDevices: BreakdownSlice[] = Array.from(signupDeviceCounts.entries())
+    .map(([key, value]) => ({ key, label: deviceLabel(key), value }))
+    .sort((a, b) => b.value - a.value);
 
-  const { totals, activeSource } = countTotals(users, current.events, countryOf, country, from, to);
+  const { totals, activeSource } = countTotals(
+    users,
+    current.events,
+    countryOf,
+    country,
+    from,
+    to,
+    inDevice,
+  );
   const { totals: previousTotals, activeSource: previousActiveSource } = countTotals(
     users,
     previous.events,
@@ -836,12 +983,14 @@ export async function computeOverview(
     country,
     prev.from,
     prev.to,
+    inDevice,
   );
 
   return {
     range: { from, to },
     timezone: tz,
     country,
+    device,
     tzMode,
     generatedAt: Date.now(),
     totals,
@@ -854,6 +1003,7 @@ export async function computeOverview(
     activeUsersComparable: activeSource === previousActiveSource,
     series: dayKeys.map((d) => seriesMap.get(d)!),
     signupSources,
+    signupDevices,
     activity: buildActivity(signupPoints, loginPoints, tzMode, tz),
     countries: buildCountryBreakdown(users, current.events, countryOf, eventCountry, from, to),
     excludedCount,
@@ -950,6 +1100,8 @@ async function computeUsers(
     planFilter: PlanFilter;
     cadenceFilter: CadenceFilter;
     country: string | null;
+    /** Entry-device filter — the same person-scoped selection as the overview. */
+    device: DeviceFilter;
     /**
      * False (the default) masks `email`/`displayName` on every row — a plain
      * admin sees `j***@example.com`, never the real address, unless they also
@@ -1025,6 +1177,12 @@ async function computeUsers(
         events: eventsByUid.get(u.uid) ?? 0,
         spendUsd: spendByUid.has(u.uid) ? spendByUid.get(u.uid)! : null,
         buyer: metaByUid.get(u.uid)?.buyer ?? null,
+        entryDevice: entryDeviceOf(metaByUid.get(u.uid)),
+        currentDevice: metaByUid.get(u.uid)?.device?.device ?? null,
+        multiDevice: (() => {
+          const d = metaByUid.get(u.uid)?.device;
+          return d ? isMultiDevice(d) : false;
+        })(),
         ...economics,
       } satisfies AnalyticsUserRow;
     })
@@ -1036,6 +1194,7 @@ async function computeUsers(
         const c = row.country ?? UNKNOWN_COUNTRY;
         if (c !== opts.country) return false;
       }
+      if (opts.device !== "all" && row.entryDevice !== opts.device) return false;
       return true;
     });
 
@@ -1401,6 +1560,349 @@ async function productDisplayNames(): Promise<Map<string, string>> {
   return out;
 }
 
+// ---- Devices -----------------------------------------------------------------
+
+/**
+ * How long a signup cohort is followed for the cross-device analysis.
+ *
+ * Deliberately independent of the dashboard's window, and deliberately longer
+ * than most of its presets. Somebody who starts a book on the train and finishes
+ * it on a laptop at the weekend switches days later — measured over "today" the
+ * switch rate would read as near zero, and the conclusion drawn from it ("nobody
+ * moves between devices") would be an artefact of the window rather than a fact
+ * about users.
+ */
+const COHORT_OBSERVATION_DAYS = 30;
+
+/** Accumulator for one row of a device breakdown. */
+interface DeviceAcc {
+  sessions: number;
+  users: number;
+  signups: number;
+  purchases: number;
+  revenueUsd: number;
+  refundUsd: number;
+}
+
+function emptyDeviceAcc(): DeviceAcc {
+  return { sessions: 0, users: 0, signups: 0, purchases: 0, revenueUsd: 0, refundUsd: 0 };
+}
+
+function bumpAcc(map: Map<string, DeviceAcc>, key: string): DeviceAcc {
+  const acc = map.get(key) ?? emptyDeviceAcc();
+  map.set(key, acc);
+  return acc;
+}
+
+function toSegmentRows(
+  map: Map<string, DeviceAcc>,
+  label: (key: string) => string,
+): DeviceSegmentRow[] {
+  const r2 = (n: number) => Math.round(n * 100) / 100;
+  const pct = (num: number, den: number) =>
+    den > 0 ? Math.round((num / den) * 1000) / 10 : null;
+  return [...map.entries()]
+    .map(([key, a]) => ({
+      key,
+      label: label(key),
+      sessions: a.sessions,
+      users: a.users,
+      signups: a.signups,
+      purchases: a.purchases,
+      revenueUsd: r2(a.revenueUsd),
+      // Per USER, never per session: a phone gets picked up far more often than
+      // a laptop, so a per-session rate would rank the device people use most
+      // as the device that converts worst purely for being used most.
+      conversionPct: pct(a.purchases, a.users),
+      refundRatePct: pct(a.refundUsd, a.revenueUsd),
+    }))
+    .sort((a, b) => b.sessions - a.sessions || b.users - a.users);
+}
+
+/**
+ * Everything behind the Analysis → Devices tab.
+ *
+ * Reads from three places, each answering what only it can:
+ *   - `deviceStats/{date}` — the daily session series and the viewport split.
+ *     Global (no market dimension), hence `seriesAllMarkets`.
+ *   - `users/{uid}.meta.device` — per-account rollups. Market-scopable, and the
+ *     only source that can express "the same person on two devices", which is
+ *     what every cross-device number needs.
+ *   - `payments` — purchases, revenue and refunds by the device CHECKOUT
+ *     happened on (`payments.device`, stamped at session creation).
+ */
+export async function computeDevices(opts: {
+  from: number;
+  to: number;
+  settings: AdminSettings;
+  country: string | null;
+}): Promise<DeviceReport> {
+  ensureAdmin();
+  const { from, to, settings, country } = opts;
+  const tz = country ? timezoneForCountry(country, settings.timezone) : settings.timezone;
+
+  const [{ users, capped }, meta, revenue, eventScan, days] = await Promise.all([
+    scanUsers(settings),
+    fetchUserMeta(),
+    fetchRevenueByUid(),
+    fetchEvents(from, to),
+    readDeviceDays(from, to),
+  ]);
+
+  const eventCountryByUid = new Map<string, string>();
+  for (const e of eventScan.events) {
+    if (e.uid && e.country && !eventCountryByUid.has(e.uid)) eventCountryByUid.set(e.uid, e.country);
+  }
+  const userCountry = resolveUserCountries(users, meta, eventCountryByUid, revenue);
+  const inMarket = (uid: string) => !country || (userCountry.get(uid) ?? UNKNOWN_COUNTRY) === country;
+
+  // ---- Session series + viewport split (global) ----
+  const sessionTotals: Record<string, number> = {};
+  const osSessions: Record<string, number> = {};
+  const browserSessions: Record<string, number> = {};
+  const viewportSessions: Record<string, number> = {};
+  let totalSessions = 0;
+  const series: DeviceSeriesPoint[] = days.map((d) => {
+    totalSessions += d.sessions;
+    mergeTally(sessionTotals, d.byDevice);
+    mergeTally(osSessions, d.byOs);
+    mergeTally(browserSessions, d.byBrowser);
+    mergeTally(viewportSessions, d.byViewport);
+    const sessions: Record<string, number> = {};
+    for (const cls of KNOWN_DEVICE_CLASSES) sessions[cls] = d.byDevice[cls] ?? 0;
+    return { day: d.date, sessions };
+  });
+
+  // ---- Per-account rollups (market-scoped) ----
+  const byDevice = new Map<string, DeviceAcc>();
+  const byOs = new Map<string, DeviceAcc>();
+  const byBrowser = new Map<string, DeviceAcc>();
+  let observedUsers = 0;
+  let multiDeviceUsers = 0;
+
+  for (const u of users) {
+    if (!inMarket(u.uid)) continue;
+    const d = meta.get(u.uid)?.device;
+    if (!d) continue;
+    observedUsers += 1;
+    if (isMultiDevice(d)) multiDeviceUsers += 1;
+
+    // Form factor: exact per-device session counts, so somebody who uses a phone
+    // and a laptop contributes real sessions to both rows.
+    for (const [cls, n] of Object.entries(d.counts)) {
+      if (cls === "unknown") continue;
+      bumpAcc(byDevice, cls).sessions += n;
+    }
+    const entry = entryDeviceOf(meta.get(u.uid));
+    if (entry && entry !== "unknown") bumpAcc(byDevice, entry).users += 1;
+    // OS/browser keep only the latest reading per account (see the field docs on
+    // `DeviceSegmentRow.sessions`), so their session counts are attributed to
+    // wherever the account is now.
+    if (d.os && d.os !== "other") {
+      const acc = bumpAcc(byOs, d.os);
+      acc.users += 1;
+      acc.sessions += d.sessions;
+    }
+    if (d.browser && d.browser !== "other") {
+      const acc = bumpAcc(byBrowser, browserVersionKey({ browser: d.browser, browserMajor: d.browserMajor }));
+      acc.users += 1;
+      acc.sessions += d.sessions;
+    }
+  }
+
+  // ---- Signups by device, from the event log ----
+  for (const e of eventScan.events) {
+    if (e.type !== "signup" || !e.device) continue;
+    if (e.uid && !inMarket(e.uid)) continue;
+    bumpAcc(byDevice, e.device).signups += 1;
+    if (e.os) bumpAcc(byOs, e.os).signups += 1;
+    if (e.browser) {
+      bumpAcc(byBrowser, browserVersionKey({ browser: e.browser, browserMajor: e.browserMajor })).signups += 1;
+    }
+  }
+
+  // ---- Purchases + revenue by checkout device ----
+  const purchaseDeviceCounts: Record<string, number> = {};
+  try {
+    const snap = await getFirestore()
+      .collection("payments")
+      .where("createdAt", ">=", new Date(from))
+      .where("createdAt", "<=", new Date(to))
+      .orderBy("createdAt", "desc")
+      .limit(MAX_PRODUCT_SCAN)
+      .get();
+    for (const doc of snap.docs) {
+      const d = doc.data() as Record<string, unknown>;
+      const status = typeof d.status === "string" ? d.status : "";
+      if (!PAID_LIKE_STATUSES.has(status)) continue;
+      const uid = typeof d.ownerUid === "string" ? d.ownerUid : "";
+      if (uid && !inMarket(uid)) continue;
+      const dev = typeof d.device === "string" ? d.device : null;
+      if (!dev || dev === "unknown") continue;
+      const currency = typeof d.currency === "string" ? d.currency : "USD";
+      const gross = await toUsd(typeof d.amount === "number" ? d.amount : 0, currency);
+      const refunded =
+        typeof d.refundedAmount === "number" && d.refundedAmount > 0
+          ? await toUsd(d.refundedAmount, currency)
+          : 0;
+      purchaseDeviceCounts[dev] = (purchaseDeviceCounts[dev] ?? 0) + 1;
+      const acc = bumpAcc(byDevice, dev);
+      acc.purchases += 1;
+      acc.revenueUsd += gross;
+      acc.refundUsd += refunded;
+      const os = typeof d.deviceOs === "string" ? d.deviceOs : null;
+      if (os) {
+        const a = bumpAcc(byOs, os);
+        a.purchases += 1;
+        a.revenueUsd += gross;
+        a.refundUsd += refunded;
+      }
+    }
+  } catch {
+    // Degrade to the session/user half of the report.
+  }
+
+  return {
+    range: { from, to },
+    timezone: tz,
+    country,
+    generatedAt: Date.now(),
+    totals: {
+      sessions: totalSessions,
+      users: observedUsers,
+      multiDevicePct:
+        observedUsers > 0
+          ? Math.round((multiDeviceUsers / observedUsers) * 1000) / 10
+          : null,
+    },
+    series,
+    byDevice: toSegmentRows(byDevice, deviceLabel),
+    byOs: toSegmentRows(byOs, osLabel),
+    byBrowser: toSegmentRows(byBrowser, browserVersionLabel),
+    byViewport: toCountRows(viewportSessions, viewportLabel),
+    crossDevice: buildCrossDevice({ users, meta, revenue, inMarket, capped }),
+    hasSessionData: totalSessions > 0 || observedUsers > 0,
+    seriesAllMarkets: country != null,
+    capped,
+  };
+}
+
+function toCountRows(
+  tally: Record<string, number>,
+  label: (key: string) => string,
+): DeviceCountRow[] {
+  const total = Object.values(tally).reduce((a, b) => a + b, 0);
+  return Object.entries(tally)
+    .map(([key, sessions]) => ({
+      key,
+      label: label(key),
+      sessions,
+      sharePct: total > 0 ? Math.round((sessions / total) * 1000) / 10 : 0,
+    }))
+    .sort((a, b) => b.sessions - a.sessions);
+}
+
+/**
+ * The cross-device cohorts: group accounts by the device they signed up on and
+ * report what happened next.
+ *
+ * The cohort window is {@link COHORT_OBSERVATION_DAYS} back from now and ignores
+ * the dashboard's own range — see that constant for why. It also means this card
+ * doesn't move when an admin changes the timeframe, which is worth stating in the
+ * UI rather than letting them discover it.
+ */
+function buildCrossDevice(input: {
+  users: ScannedUser[];
+  meta: Map<string, UserMeta>;
+  revenue: Map<string, RevenueInfo>;
+  inMarket: (uid: string) => boolean;
+  capped: boolean;
+}): CrossDeviceReport {
+  const { users, meta, revenue, inMarket, capped } = input;
+  const cutoff = Date.now() - COHORT_OBSERVATION_DAYS * DAY_MS;
+
+  interface CohortAcc {
+    users: number;
+    switched: number;
+    lags: number[];
+    paidAfterSwitch: number;
+    paidSameDevice: number;
+    purchaseDevices: Record<string, number>;
+  }
+  const acc = new Map<string, CohortAcc>();
+
+  for (const u of users) {
+    if (u.isAnonymous) continue;
+    if (u.createdAt == null || u.createdAt < cutoff) continue;
+    if (!inMarket(u.uid)) continue;
+    const d = meta.get(u.uid)?.device;
+    if (!d) continue;
+    const signupDevice = d.signupDevice ?? d.firstDevice;
+    if (!signupDevice || signupDevice === "unknown") continue;
+
+    const c =
+      acc.get(signupDevice) ??
+      ({
+        users: 0,
+        switched: 0,
+        lags: [],
+        paidAfterSwitch: 0,
+        paidSameDevice: 0,
+        purchaseDevices: {},
+      } satisfies CohortAcc);
+    acc.set(signupDevice, c);
+
+    c.users += 1;
+    const switched = isMultiDevice(d);
+    if (switched) {
+      c.switched += 1;
+      // Only count a lag we can actually measure. A switch we inferred from the
+      // per-device counts without a timestamp (an account that predates the
+      // `switchedAt` field) would otherwise contribute a zero and drag the
+      // median towards "instantly", which is the opposite of the truth.
+      if (d.switchedAt != null && d.switchedAt > u.createdAt) {
+        c.lags.push(d.switchedAt - u.createdAt);
+      }
+    }
+    // Lifetime revenue as the conversion test, not a purchase inside the window:
+    // the question is whether this cohort EVER buys, and a purchase two months
+    // after signup still answers it. Cheap, too — the scan is already loaded.
+    const paid = (revenue.get(u.uid)?.total ?? 0) > 0;
+    if (paid) {
+      if (switched) c.paidAfterSwitch += 1;
+      else c.paidSameDevice += 1;
+      const on = d.purchaseDevice;
+      if (on && on !== "unknown") c.purchaseDevices[on] = (c.purchaseDevices[on] ?? 0) + 1;
+    }
+  }
+
+  const pct = (num: number, den: number) =>
+    den > 0 ? Math.round((num / den) * 1000) / 10 : null;
+
+  const cohorts: CrossDeviceCohort[] = [...acc.entries()]
+    .map(([signupDevice, c]) => {
+      const stayed = c.users - c.switched;
+      return {
+        signupDevice,
+        users: c.users,
+        switched: c.switched,
+        switchedPct: pct(c.switched, c.users),
+        medianSwitchLagMs:
+          c.lags.length > 0 ? percentile([...c.lags].sort((a, b) => a - b), 50) : null,
+        paidAfterSwitch: c.paidAfterSwitch,
+        paidSameDevice: c.paidSameDevice,
+        conversionSwitchedPct: pct(c.paidAfterSwitch, c.switched),
+        conversionSameDevicePct: pct(c.paidSameDevice, stayed),
+        purchaseDevices: Object.entries(c.purchaseDevices)
+          .map(([device, purchases]) => ({ device, purchases }))
+          .sort((a, b) => b.purchases - a.purchases),
+      };
+    })
+    .sort((a, b) => b.users - a.users);
+
+  return { cohorts, observationDays: COHORT_OBSERVATION_DAYS, reliable: !capped };
+}
+
 // ---- Conversion funnel -------------------------------------------------------
 
 /**
@@ -1417,9 +1919,11 @@ export async function computeFunnel(opts: {
   to: number;
   settings: AdminSettings;
   country: string | null;
+  device?: DeviceFilter;
 }): Promise<FunnelReport> {
   ensureAdmin();
   const { from, to, settings, country } = opts;
+  const device: DeviceFilter = opts.device ?? "all";
 
   const [{ users }, { events }, meta, revenue] = await Promise.all([
     scanUsers(settings),
@@ -1433,12 +1937,22 @@ export async function computeFunnel(opts: {
   }
   const userCountry = resolveUserCountries(users, meta, eventCountryByUid, revenue);
   const inMarket = (uid: string) => !country || (userCountry.get(uid) ?? UNKNOWN_COUNTRY) === country;
+  /**
+   * Entry-device filter, per person. This is the filter whose scoping matters
+   * most: an EVENT-scoped device filter here would keep a mobile signup and drop
+   * that same person's desktop purchase, so mobile would appear to convert at
+   * near zero and the obvious conclusion ("mobile checkout is broken") would be
+   * the opposite of what the data says.
+   */
+  const inDevice = (uid: string) =>
+    device === "all" || entryDeviceOf(meta.get(uid)) === device;
+  const included = (uid: string) => inMarket(uid) && inDevice(uid);
 
   let signups = 0;
   let guests = 0;
   for (const u of users) {
     if (u.createdAt == null || u.createdAt < from || u.createdAt > to) continue;
-    if (!inMarket(u.uid)) continue;
+    if (!included(u.uid)) continue;
     if (u.isAnonymous) guests += 1;
     else signups += 1;
   }
@@ -1481,6 +1995,11 @@ export async function computeFunnel(opts: {
           (uid ? userCountry.get(uid) ?? UNKNOWN_COUNTRY : UNKNOWN_COUNTRY);
         if (payCountry !== country) continue;
       }
+      // Attribute the checkout to the buyer's ENTRY device, not the device the
+      // checkout itself happened on — the point of the filter is to follow the
+      // person, and `payments.device` (the actual checkout device) is what the
+      // Devices tab reports separately.
+      if (device !== "all" && (!uid || !inDevice(uid))) continue;
       const status = typeof d.status === "string" ? d.status : "pending";
       const kind = typeof d.kind === "string" ? d.kind : "order";
       const amount = typeof d.amount === "number" ? d.amount : 0;
@@ -1597,6 +2116,16 @@ function parseTzMode(req: Request): TimezoneMode {
   return req.query.tzMode === "fixed" ? "fixed" : "market";
 }
 
+/**
+ * The dashboard-wide entry-device filter: `?device=mobile` scopes a report to
+ * people who ARRIVED on a phone — wherever they went afterwards. See
+ * `DeviceFilter` for why it must not be event-scoped.
+ */
+function parseDevice(req: Request): DeviceFilter {
+  const raw = String(req.query.device ?? "").trim().toLowerCase();
+  return (DEVICE_FILTERS as string[]).includes(raw) ? (raw as DeviceFilter) : "all";
+}
+
 export function registerAnalyticsRoutes(app: Express): void {
   const json = express.json({ limit: "1mb" });
 
@@ -1644,6 +2173,7 @@ export function registerAnalyticsRoutes(app: Express): void {
         await computeOverview(from, to, settings, {
           country: parseCountry(req),
           tzMode: parseTzMode(req),
+          device: parseDevice(req),
         }),
       );
     } catch (err) {
@@ -1678,7 +2208,28 @@ export function registerAnalyticsRoutes(app: Express): void {
     try {
       const { from, to } = parseRange(req);
       const settings = await getAdminSettings();
-      res.json(await computeFunnel({ from, to, settings, country: parseCountry(req) }));
+      res.json(
+        await computeFunnel({
+          from,
+          to,
+          settings,
+          country: parseCountry(req),
+          device: parseDevice(req),
+        }),
+      );
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Device mix, per-form-factor economics, and the cross-device cohorts that
+  // answer "they start on a phone — do they ever come back on a laptop, and does
+  // that decide whether they buy?".
+  app.get("/admin/analytics/devices", async (req: Request, res: Response) => {
+    try {
+      const { from, to } = parseRange(req);
+      const settings = await getAdminSettings();
+      res.json(await computeDevices({ from, to, settings, country: parseCountry(req) }));
     } catch (err) {
       handleError(res, err);
     }
@@ -1717,6 +2268,7 @@ export function registerAnalyticsRoutes(app: Express): void {
       const limitRaw = Number(req.query.limit);
       const limit = Number.isFinite(limitRaw) ? Math.min(500, Math.max(1, limitRaw)) : 50;
       const search = String(req.query.search ?? "");
+      const device = parseDevice(req);
       const includeGuests = req.query.includeGuests === "true";
       const planParam = String(req.query.plan ?? "all") as PlanFilter;
       const planFilter = PLAN_FILTERS.includes(planParam) ? planParam : "all";
@@ -1734,6 +2286,7 @@ export function registerAnalyticsRoutes(app: Express): void {
           planFilter,
           cadenceFilter,
           country: parseCountry(req),
+          device,
           revealPii,
         }),
       );

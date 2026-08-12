@@ -16,6 +16,15 @@
  *   - HARD DELETE: `surveyResponses/*` for the uid. They sit outside the user tree
  *     (so neither the walk nor the recursive delete would catch them) and there's
  *     no accounting reason to keep a customer's opinions.
+ *
+ * Device/session data needs no step of its own, by design. The per-user rollup is
+ * a field ON the profile doc (`meta.device`), so the export includes it and the
+ * user-tree delete removes it; the coarse form factor stamped on a payment
+ * (`payments.device`) survives anonymization along with the rest of the retained
+ * record, which is intended — once the uid is gone it identifies nobody, and
+ * dropping it would silently rewrite historical revenue-by-device. The daily
+ * counters in `deviceStats/*` never held a uid in the first place (see
+ * `core/analytics/deviceStats.ts` for why that shape was chosen).
  * Every deletion writes an append-only audit record to `adminAudit/*`
  * (backend-only; denied to clients by the default rule).
  *

@@ -44,6 +44,7 @@ import {
   Search,
   Settings2,
   Share2,
+  Smartphone,
   Sparkles,
   Stamp,
   Type,
@@ -100,6 +101,7 @@ export const CONFIG_TAB_META: Record<ConfigTabId, { label: string; icon: ReactNo
 export const ANALYSIS_TAB_META: Record<AnalysisTabId, { label: string; icon: ReactNode }> = {
   users: { label: "Users", icon: <Users className="size-4" /> },
   projects: { label: "Books", icon: <BookOpen className="size-4" /> },
+  devices: { label: "Devices", icon: <Smartphone className="size-4" /> },
   costs: { label: "Costs", icon: <DollarSign className="size-4" /> },
   finance: { label: "Finance", icon: <Coins className="size-4" /> },
   payments: { label: "Payments", icon: <CreditCard className="size-4" /> },

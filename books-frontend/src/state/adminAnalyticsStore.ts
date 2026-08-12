@@ -17,6 +17,8 @@ import {
   type AnalyticsOverview,
   type AnalyticsUserRow,
   type CadenceFilter,
+  type DeviceFilter,
+  type DeviceReport,
   type FunnelReport,
   type PlanFilter,
   type ProductsReport,
@@ -52,6 +54,7 @@ interface AdminAnalyticsState {
   usersTotal: number;
   products: ProductsReport | null;
   funnel: FunnelReport | null;
+  devices: DeviceReport | null;
   settings: AdminSettings;
 
   sort: UserSort;
@@ -62,6 +65,15 @@ interface AdminAnalyticsState {
   planFilter: PlanFilter;
   cadenceFilter: CadenceFilter;
 
+  /**
+   * The entry-device filter, shared by the overview, funnel and users table.
+   *
+   * Entry-scoped by design: it selects PEOPLE who arrived on a form factor and
+   * then shows everything they did, on any device. See `DeviceFilter` — an
+   * event-scoped filter would drop the cross-device half of the funnel and make
+   * mobile look like it never converts.
+   */
+  device: DeviceFilter;
   /** Which clock the activity grids are bucketed in (server-side). */
   tzMode: TimezoneMode;
   /** Which activity the heatmap / hour chart shows (client-side selection). */
@@ -72,6 +84,7 @@ interface AdminAnalyticsState {
   loading: boolean;
   usersLoading: boolean;
   productsLoading: boolean;
+  devicesLoading: boolean;
   savingSettings: boolean;
   error: string | null;
   lastUpdated: number | null;
@@ -81,12 +94,14 @@ interface AdminAnalyticsState {
   setTimeframe: (tf: Timeframe) => void;
   setCustomRange: (from: number, to: number) => void;
   setCountry: (country: string | null) => void;
+  setDevice: (device: DeviceFilter) => void;
   setTzMode: (mode: TimezoneMode) => void;
   setMetric: (metric: ActivityMetric) => void;
   setCountUniqueUsers: (unique: boolean) => void;
   refresh: () => Promise<void>;
   refreshAll: () => Promise<void>;
   refreshProducts: () => Promise<void>;
+  refreshDevices: () => Promise<void>;
   setUserQuery: (
     patch: Partial<
       Pick<
@@ -111,6 +126,16 @@ function rangeParams(get: () => AdminAnalyticsState): string {
   return `from=${range.from}&to=${range.to}${marketParam()}`;
 }
 
+/**
+ * `&device=mobile` for the active entry-device filter, or "" when unfiltered.
+ * Appended only to the routes that honour it (overview, funnel, users) — the
+ * Devices report is the filter's own subject and must never be scoped by it.
+ */
+function deviceParam(get: () => AdminAnalyticsState): string {
+  const { device } = get();
+  return device === "all" ? "" : `&device=${device}`;
+}
+
 export const useAdminAnalytics = create<AdminAnalyticsState>((set, get) => ({
   timeframe: "7d",
   customFrom: Date.now() - 30 * 24 * 60 * 60 * 1000,
@@ -121,6 +146,7 @@ export const useAdminAnalytics = create<AdminAnalyticsState>((set, get) => ({
   usersTotal: 0,
   products: null,
   funnel: null,
+  devices: null,
   settings: { ...DEFAULT_ADMIN_SETTINGS },
 
   sort: "lastActive",
@@ -136,10 +162,12 @@ export const useAdminAnalytics = create<AdminAnalyticsState>((set, get) => ({
   tzMode: "market",
   metric: "all",
   countUniqueUsers: false,
+  device: "all",
 
   loading: false,
   usersLoading: false,
   productsLoading: false,
+  devicesLoading: false,
   savingSettings: false,
   error: null,
   lastUpdated: null,
@@ -177,6 +205,14 @@ export const useAdminAnalytics = create<AdminAnalyticsState>((set, get) => ({
     useAdminMarket.getState().setCountry(country);
   },
 
+  setDevice(device) {
+    set({ device });
+    // Filtered server-side (it selects on data the browser can't read), so
+    // changing it is a re-fetch of the overview + funnel + users table. The
+    // Devices report is deliberately left alone: it's what the filter is FOR.
+    void get().refresh();
+  },
+
   setTzMode(tzMode) {
     set({ tzMode });
     // The grids are bucketed server-side, so switching clocks is a re-fetch.
@@ -193,19 +229,20 @@ export const useAdminAnalytics = create<AdminAnalyticsState>((set, get) => ({
 
   async refresh() {
     const params = rangeParams(get);
+    const seg = params + deviceParam(get);
     const { sort, dir, search, limit, includeGuests, planFilter, cadenceFilter, tzMode } = get();
     set({ loading: true, usersLoading: true, error: null });
     try {
       const usersQs =
-        `${params}&sort=${sort}&dir=${dir}&limit=${limit}` +
+        `${seg}&sort=${sort}&dir=${dir}&limit=${limit}` +
         `&includeGuests=${includeGuests}` +
         `&plan=${planFilter}&cadence=${cadenceFilter}` +
         (search ? `&search=${encodeURIComponent(search)}` : "");
       const [overview, usersRes, funnel] = await Promise.all([
-        getJson<AnalyticsOverview>(`/admin/analytics/overview?${params}&tzMode=${tzMode}`),
+        getJson<AnalyticsOverview>(`/admin/analytics/overview?${seg}&tzMode=${tzMode}`),
         getJson<{ rows: AnalyticsUserRow[]; total: number }>(`/admin/analytics/users?${usersQs}`),
         // Supplementary: a funnel failure shouldn't blank the whole dashboard.
-        getJson<FunnelReport>(`/admin/analytics/funnel?${params}`).catch(() => null),
+        getJson<FunnelReport>(`/admin/analytics/funnel?${seg}`).catch(() => null),
       ]);
       set({
         overview,
@@ -235,7 +272,22 @@ export const useAdminAnalytics = create<AdminAnalyticsState>((set, get) => ({
   async refreshAll() {
     const tasks = [get().refresh()];
     if (get().products) tasks.push(get().refreshProducts());
+    if (get().devices) tasks.push(get().refreshDevices());
     await Promise.all(tasks);
+  },
+
+  async refreshDevices() {
+    set({ devicesLoading: true, error: null });
+    try {
+      const devices = await getJson<DeviceReport>(
+        `/admin/analytics/devices?${rangeParams(get)}`,
+      );
+      set({ devices, lastUpdated: Date.now() });
+    } catch (err) {
+      set({ error: (err as Error)?.message ?? "Failed to load device analytics." });
+    } finally {
+      set({ devicesLoading: false });
+    }
   },
 
   async refreshProducts() {

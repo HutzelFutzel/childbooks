@@ -7,7 +7,16 @@
  * blocking triggers capture every signup + sign-in server-side (can't be
  * spoofed by the client) into `analyticsEvents/{autoId}`:
  *
- *   { type: "signup" | "login", uid, email, source, country, at }
+ *   { type: "signup" | "login", uid, email, source, country, at,
+ *     device, os, browser, browserMajor }
+ *
+ * The device fields come from the `userAgent` the blocking event carries, parsed
+ * server-side (see `core/analytics/device.ts` for what's collected and why it
+ * needs no consent). Capturing them HERE is what makes every existing chart
+ * device-aware for free: signups and logins by form factor, per market, over
+ * time, with no new endpoint and no client change. Forward-only like the rest of
+ * this collection — an event without them predates capture, which is a different
+ * fact from "desktop" and is reported as such.
  *
  * `country` is the MARKET the event came from, derived from the already-exposed
  * locale/IP signals the blocking event carries (see geo.ts — never a stored IP,
@@ -32,6 +41,11 @@ import { notifySlack } from "./notify";
 import { SLACK_WEBHOOK_URL } from "./secrets";
 import { regionFromLocale } from "./geo";
 import { UNKNOWN_COUNTRY } from "../../books-frontend/src/core/analytics/markets";
+import {
+  isUnknownDevice,
+  parseDeviceFacts,
+  type DeviceFacts,
+} from "../../books-frontend/src/core/analytics/device";
 
 /** The provider an account was created/signed in with. */
 function sourceOf(user: AuthUserRecord): string {
@@ -49,12 +63,26 @@ function countryOf(event: AuthBlockingEvent): string {
   return regionFromLocale(event.locale ?? "") ?? UNKNOWN_COUNTRY;
 }
 
+/**
+ * Form factor / OS / browser for a blocking event.
+ *
+ * The event carries a raw `userAgent`; client hints aren't available here (this
+ * isn't an HTTP request we can read headers off), so the UA string is the only
+ * signal — which is fine, because everything derived from it is a family or a
+ * major version.
+ */
+function deviceOf(event: AuthBlockingEvent): DeviceFacts {
+  return parseDeviceFacts({ ua: event.userAgent ?? null });
+}
+
 async function record(
   type: "signup" | "login",
   user: AuthUserRecord,
   country: string,
+  device: DeviceFacts,
 ): Promise<void> {
   const source = sourceOf(user);
+  const known = !isUnknownDevice(device);
   try {
     ensureAdmin();
     const db = getFirestore();
@@ -65,14 +93,50 @@ async function record(
       source,
       country,
       at: Date.now(),
+      // Omitted entirely when nothing could be read, so a missing field means
+      // "not captured" rather than a bucket the dashboard would have to trust.
+      ...(known
+        ? {
+            device: device.device,
+            os: device.os,
+            browser: device.browser,
+            browserMajor: device.browserMajor,
+          }
+        : {}),
     });
     // Denormalize the market onto the user doc so the dashboard's per-market
     // grouping is a single `users` read rather than a join against the event
     // log (which only covers the selected window). Only overwrite with a known
     // country — a signal-less sign-in must not erase a good earlier reading.
+    const patch: Record<string, unknown> = {};
     if (country !== UNKNOWN_COUNTRY) {
-      const patch: Record<string, unknown> = { country };
+      patch.country = country;
       if (type === "signup") patch.signupCountry = country;
+    }
+    // Same reasoning for the device rollup. `signupDevice` anchors every
+    // cross-device cohort ("created the account on a phone — then what?"), so
+    // it's written ONCE, on creation, and never touched by a later sign-in.
+    //
+    // Note what it means in a guest-first product: `beforeUserCreated` fires
+    // when the ANONYMOUS session is minted, and upgrading links that account in
+    // place (same uid, and linking re-triggers beforeSignIn, not beforeCreate).
+    // So this is the device the person first arrived on, which is the useful
+    // reading anyway — but it is not necessarily the device they filled the
+    // signup form on. `firstDevice` is deliberately left to the session beacon,
+    // which is the only writer that sees guests reliably and can keep it
+    // write-once without racing this one.
+    if (known) {
+      patch.meta = {
+        device: {
+          ...(type === "signup" ? { signupDevice: device.device } : {}),
+          device: device.device,
+          os: device.os,
+          browser: device.browser,
+          browserMajor: device.browserMajor,
+        },
+      };
+    }
+    if (Object.keys(patch).length > 0) {
       await db.doc(`users/${user.uid}`).set(patch, { merge: true });
     }
   } catch {
@@ -98,10 +162,10 @@ const BLOCKING_OPTS = { secrets: [SLACK_WEBHOOK_URL] };
 
 /** Fired once when an account (incl. anonymous guests) is first created. */
 export const onBeforeCreate = beforeUserCreated(BLOCKING_OPTS, async (event) => {
-  if (event.data) await record("signup", event.data, countryOf(event));
+  if (event.data) await record("signup", event.data, countryOf(event), deviceOf(event));
 });
 
 /** Fired on every sign-in (not token refresh). */
 export const onBeforeSignIn = beforeUserSignedIn(BLOCKING_OPTS, async (event) => {
-  if (event.data) await record("login", event.data, countryOf(event));
+  if (event.data) await record("login", event.data, countryOf(event), deviceOf(event));
 });

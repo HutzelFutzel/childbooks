@@ -48,6 +48,7 @@ export type AnalysisTabId =
   // Who is using it and what they're making.
   | "users"
   | "projects"
+  | "devices"
   // What it costs and what it earns.
   | "costs"
   | "finance"
@@ -75,8 +76,8 @@ export const ANALYSIS_GROUPS: {
   {
     id: "people",
     label: "People & books",
-    description: "Who's using the product and what they're making.",
-    tabs: ["users", "projects"],
+    description: "Who's using the product, what they're making, and what they're using to do it.",
+    tabs: ["users", "projects", "devices"],
   },
   {
     id: "money",

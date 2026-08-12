@@ -118,6 +118,26 @@ service cloud.firestore {
       return fieldUnchanged('surveyProfile');
     }
 
+    // The device rollup the session beacon keeps at `meta.device` (form factor,
+    // OS, browser, per-device session counts, the cross-device switch stamp).
+    // It is EVIDENCE ABOUT the client, so it must not be writable BY the client:
+    // an account that could set its own form factor could place itself in any
+    // cohort, and the Devices analysis is meant to inform build decisions. The
+    // backend derives every field there from the request's own headers — see
+    // `functions/src/deviceStats.ts`.
+    //
+    // Profile writes deep-merge `meta` and rules evaluate the POST-merge
+    // document, so a rollup the client never touched compares equal and passes;
+    // adding, altering or dropping one fails. `null` on both sides covers the
+    // create case (no rollup yet, none allowed in).
+    function deviceMetaUnchanged() {
+      let incoming = 'meta' in request.resource.data && request.resource.data.meta is map
+        && 'device' in request.resource.data.meta ? request.resource.data.meta.device : null;
+      let existing = resource != null && 'meta' in resource.data && resource.data.meta is map
+        && 'device' in resource.data.meta ? resource.data.meta.device : null;
+      return incoming == existing;
+    }
+
     // Profile root doc + saved address book. Owner-only, with field validation
     // on writes. The broad `users/{uid}/**` read rule above does NOT cover the
     // `users/{uid}` doc itself (the recursive wildcard needs >=1 extra segment),
@@ -127,7 +147,7 @@ service cloud.firestore {
       allow read: if signedInAs(uid);
       allow write: if signedInAs(uid) && isValidProfile(request.resource.data)
         && sparkBalanceUnchanged() && referralFieldsUnchanged() && meteringFieldsUnchanged()
-        && surveyProfileUnchanged();
+        && surveyProfileUnchanged() && deviceMetaUnchanged();
     }
     match /users/{uid}/addresses/{addressId} {
       allow create, update: if signedInAs(uid) && isValidAddress(request.resource.data);
@@ -205,6 +225,15 @@ service cloud.firestore {
       match /days/{date} {
         allow read, write: if false;
       }
+    }
+
+    // Daily device/session counters (`deviceStats/{YYYY-MM-DD}`), written only by
+    // the backend from the `/session/ping` beacon and read only through the
+    // admin-gated Devices report. Client writes would be worse than useless:
+    // every key is a counter, so anyone able to increment them could invent a
+    // traffic mix. The top-level deny-all covers this; spelled out for clarity.
+    match /deviceStats/{date} {
+      allow read, write: if false;
     }
 
     // Admin dashboard settings (exclusion lists, timezone, refresh interval) and

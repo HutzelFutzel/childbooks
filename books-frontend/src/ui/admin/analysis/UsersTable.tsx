@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ArrowDown, ArrowUp, Check, Copy, Eye, EyeOff, Search, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
+import { deviceLabel } from "../../../core/analytics/device";
 import {
   BUYER_ROLE_LABELS,
   describeBuyerProfile,
@@ -21,13 +22,14 @@ import { CardHeader, CardTitle } from "../../components/Card";
 import { fmtDateTime, fmtMoney, fmtNumber, fmtRelative, fmtSparks, fmtUsd, sourceLabel } from "./format";
 
 const COLUMNS: {
-  key: UserSort | "country" | "buyer";
+  key: UserSort | "country" | "buyer" | "device";
   label: string;
   sortable: boolean;
   align?: "right";
 }[] = [
   { key: "email", label: "User", sortable: true },
   { key: "country", label: "Market", sortable: false },
+  { key: "device", label: "Device", sortable: false },
   { key: "buyer", label: "Buys for", sortable: false },
   { key: "plan", label: "Plan", sortable: true },
   { key: "sparks", label: "Sparks", sortable: true, align: "right" },
@@ -198,6 +200,9 @@ export function UsersTable() {
                   )}
                 </td>
                 <td className="px-4 py-2.5">
+                  <DeviceCell row={u} />
+                </td>
+                <td className="px-4 py-2.5">
                   <BuyerCell buyer={u.buyer} />
                 </td>
                 <td className="px-4 py-2.5">
@@ -296,6 +301,43 @@ function UidChip({ uid }: { uid: string }) {
  * shows as "Didn't say", which is a different and more useful fact — asking them
  * again won't help.
  */
+/**
+ * Where this account came in, and where it is now.
+ *
+ * Shows the entry device with an arrow to the current one only when they differ,
+ * because that difference is the interesting case: it's the individual instance
+ * of the pattern the Devices tab measures in aggregate.
+ */
+function DeviceCell({ row }: { row: AnalyticsUserRow }) {
+  if (!row.entryDevice) {
+    return (
+      <span className="text-xs text-ink-300" title="No session recorded for this account yet.">
+        —
+      </span>
+    );
+  }
+  const moved = row.currentDevice != null && row.currentDevice !== row.entryDevice;
+  return (
+    <span
+      className="whitespace-nowrap text-xs text-ink-600"
+      title={
+        moved
+          ? `Arrived on ${deviceLabel(row.entryDevice)}, most recently on ${deviceLabel(row.currentDevice!)}.`
+          : `Arrived and stayed on ${deviceLabel(row.entryDevice)}.`
+      }
+    >
+      {deviceLabel(row.entryDevice)}
+      {moved && (
+        <>
+          <span className="mx-0.5 text-ink-300">→</span>
+          {deviceLabel(row.currentDevice!)}
+        </>
+      )}
+      {!moved && row.multiDevice && <span className="ml-1 text-ink-300">+</span>}
+    </span>
+  );
+}
+
 function BuyerCell({ buyer }: { buyer: BuyerFacts | null }) {
   if (!buyer) {
     return (

@@ -79,10 +79,20 @@ export function ActivityChart({ overview }: { overview: AnalyticsOverview }) {
   );
 }
 
-/** Signup source split (Email / Google / Guest …) for the window. */
+/**
+ * Signup source split (Email / Google / Guest …) for the window, with the
+ * form-factor split of the same signups underneath.
+ *
+ * The two belong together: "where did they come from" and "what were they
+ * holding" are one question when you're deciding which sign-up flow to polish.
+ * The device row is absent for windows that predate device capture rather than
+ * showing zeroes — the auth event log is forward-only.
+ */
 export function SourcesChart({ overview }: { overview: AnalyticsOverview }) {
   const data = overview.signupSources;
   const hasData = data.some((d) => d.value > 0);
+  const devices = overview.signupDevices.filter((d) => d.value > 0);
+  const deviceTotal = devices.reduce((sum, d) => sum + d.value, 0);
   return (
     <ChartCard title="Signup sources">
       <div className="h-64 w-full">
@@ -102,6 +112,19 @@ export function SourcesChart({ overview }: { overview: AnalyticsOverview }) {
           <EmptyChart label="No signups in this window" />
         )}
       </div>
+      {devices.length > 0 && (
+        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-ink-50 pt-2.5 text-xs text-ink-500">
+          <span className="text-ink-400">On:</span>
+          {devices.map((d) => (
+            <span key={d.key}>
+              <span className="font-medium text-ink-700">{d.label}</span>{" "}
+              <span className="tabular-nums">
+                {deviceTotal > 0 ? `${Math.round((d.value / deviceTotal) * 100)}%` : ""}
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
     </ChartCard>
   );
 }

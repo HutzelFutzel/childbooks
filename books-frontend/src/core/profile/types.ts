@@ -124,6 +124,56 @@ export interface ProfileMeta {
   signupSource: string | null;
   /** Most recent user-agent string (coarse device/browser analysis). */
   lastUserAgent: string | null;
+  /** Server-written device rollup. Null until a session has been recorded. */
+  device: ProfileDeviceMeta | null;
+}
+
+/**
+ * What we know about the devices one account uses — a fixed-size rollup, never
+ * a log.
+ *
+ * BACKEND-AUTHORITATIVE. Written only by `functions/src/deviceStats.ts` (from
+ * the User-Agent on the request) and the auth blocking functions, never by the
+ * client: a form factor the browser could assert is a form factor that can be
+ * asserted wrongly, and "which device do our buyers use" is not a question
+ * worth answering from a field the answer's subject can set. The Firestore rules
+ * pin it against client writes (`deviceMetaUnchanged`).
+ *
+ * Everything here is a scalar or a 4-key map, so the profile doc stays a single
+ * cheap read no matter how long somebody uses the product.
+ */
+export interface ProfileDeviceMeta {
+  /** Form factor of the most recent session. */
+  device: string | null;
+  os: string | null;
+  browser: string | null;
+  /** Major version only, e.g. 17. */
+  browserMajor: number | null;
+  /**
+   * Form factor of the FIRST session ever recorded — the entry-device
+   * attribution the dashboard's device filter selects on. Write-once.
+   */
+  firstDevice: string | null;
+  /** Form factor the account was created on, per the signup blocking event. */
+  signupDevice: string | null;
+  /** Form factor of the first COMPLETED purchase, stamped at checkout. */
+  purchaseDevice: string | null;
+  /** Sessions per form factor. At most four keys, so it can't grow. */
+  counts: Record<string, number>;
+  /** Total sessions recorded. */
+  sessions: number;
+  /** Viewport bucket last reported — only present with analytics consent. */
+  viewport: string | null;
+  /**
+   * Epoch ms of the first session on a form factor other than
+   * {@link firstDevice}, or null if they've never switched. Write-once, and the
+   * basis of the cross-device switch-lag metric.
+   */
+  switchedAt: number | null;
+  /** Epoch ms the current session began (server-derived, 30-minute idle gap). */
+  sessionStartedAt: number | null;
+  /** Epoch ms of the last session ping. */
+  lastSeenAt: number | null;
 }
 
 /** A blank profile for a brand-new user. */
@@ -143,9 +193,39 @@ export function emptyProfile(): UserProfile {
       lastActiveAt: null,
       signupSource: null,
       lastUserAgent: null,
+      device: null,
     },
     createdAt: 0,
     updatedAt: 0,
+  };
+}
+
+/** Coerce a stored device rollup, tolerating docs written before it existed. */
+function migrateDeviceMeta(raw: unknown): ProfileDeviceMeta | null {
+  if (!raw || typeof raw !== "object") return null;
+  const d = raw as Record<string, unknown>;
+  const str = (v: unknown): string | null => (typeof v === "string" ? v : null);
+  const numOrNull = (v: unknown): number | null => (typeof v === "number" ? v : null);
+  const counts: Record<string, number> = {};
+  if (d.counts && typeof d.counts === "object") {
+    for (const [k, v] of Object.entries(d.counts as Record<string, unknown>)) {
+      if (typeof v === "number" && Number.isFinite(v)) counts[k] = v;
+    }
+  }
+  return {
+    device: str(d.device),
+    os: str(d.os),
+    browser: str(d.browser),
+    browserMajor: numOrNull(d.browserMajor),
+    firstDevice: str(d.firstDevice),
+    signupDevice: str(d.signupDevice),
+    purchaseDevice: str(d.purchaseDevice),
+    counts,
+    sessions: typeof d.sessions === "number" ? d.sessions : 0,
+    viewport: str(d.viewport),
+    switchedAt: numOrNull(d.switchedAt),
+    sessionStartedAt: numOrNull(d.sessionStartedAt),
+    lastSeenAt: numOrNull(d.lastSeenAt),
   };
 }
 
@@ -183,6 +263,7 @@ export function migrateProfile(raw: unknown): UserProfile {
       lastActiveAt: numOrNull(meta.lastActiveAt),
       signupSource: str(meta.signupSource),
       lastUserAgent: str(meta.lastUserAgent),
+      device: migrateDeviceMeta(meta.device),
     },
     createdAt: num(d.createdAt),
     updatedAt: num(d.updatedAt),
