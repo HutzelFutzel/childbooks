@@ -7,6 +7,7 @@ import { ArrowRight, Check, Lock, type LucideIcon } from "lucide-react";
 import type { BookConfig } from "../../core/types";
 import { useProjectsStore } from "../../state/projectsStore";
 import { Button } from "../components/Button";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import { notify } from "../lib/notify";
 import { cn } from "../lib/cn";
 import { storyConfigSchema } from "../wizard/schema";
@@ -177,11 +178,23 @@ function StoryTopicStrip({
   onSelect: (id: string) => void;
   reachable: (i: number) => boolean;
 }) {
+  // Below `md` the fixed 176–208px strip eats too much of a phone's width —
+  // collapse to an icon-only rail (no stored width; unlike the Design chapter
+  // rail this one was never user-resizable).
+  const isMobile = useMediaQuery("(max-width: 767px)");
+
   return (
-    <aside className="flex h-full w-44 shrink-0 flex-col border-r border-ink-100 bg-white/80 sm:w-52">
-      <div className="border-b border-ink-100 px-3 py-2">
-        <p className="text-xs font-semibold text-ink-500">Story</p>
-      </div>
+    <aside
+      className={cn(
+        "flex h-full shrink-0 flex-col border-r border-ink-100 bg-white/80",
+        isMobile ? "w-16" : "w-44 sm:w-52",
+      )}
+    >
+      {!isMobile && (
+        <div className="border-b border-ink-100 px-3 py-2">
+          <p className="text-xs font-semibold text-ink-500">Story</p>
+        </div>
+      )}
       <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
         {topics.map((q, i) => {
           const Icon = q.icon as LucideIcon;
@@ -200,6 +213,7 @@ function StoryTopicStrip({
               title={locked ? "Finish the earlier sections first" : q.summary(config)}
               className={cn(
                 "flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2.5 text-left transition",
+                isMobile && "flex-col items-center gap-1 px-1 py-2 text-center",
                 active
                   ? "bg-brand-50 ring-1 ring-brand-200"
                   : canOpen
@@ -210,6 +224,7 @@ function StoryTopicStrip({
               <span
                 className={cn(
                   "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold",
+                  isMobile && "mt-0",
                   done && !active
                     ? "bg-emerald-500 text-white"
                     : active
@@ -225,19 +240,30 @@ function StoryTopicStrip({
                   <Icon className="size-4" />
                 )}
               </span>
-              <span className="min-w-0 flex-1">
+              {isMobile ? (
                 <span
                   className={cn(
-                    "block text-sm font-semibold",
-                    active ? "text-brand-700" : "text-ink-800",
+                    "max-w-full truncate text-[10px] font-semibold leading-tight",
+                    active ? "text-brand-700" : "text-ink-700",
                   )}
                 >
                   {stripTitle(q)}
                 </span>
-                <span className="mt-0.5 block truncate text-[11px] text-ink-400">
-                  {done ? q.summary(config) : "Not set"}
+              ) : (
+                <span className="min-w-0 flex-1">
+                  <span
+                    className={cn(
+                      "block text-sm font-semibold",
+                      active ? "text-brand-700" : "text-ink-800",
+                    )}
+                  >
+                    {stripTitle(q)}
+                  </span>
+                  <span className="mt-0.5 block truncate text-[11px] text-ink-400">
+                    {done ? q.summary(config) : "Not set"}
+                  </span>
                 </span>
-              </span>
+              )}
             </button>
           );
         })}

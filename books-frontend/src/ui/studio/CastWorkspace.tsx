@@ -31,6 +31,7 @@ import { Button } from "../components/Button";
 import { Celebrate } from "../components/Celebrate";
 import { PipelineStepper, type PipelinePhase } from "../generation/PipelineStepper";
 import { SparkEstimateCost, useImageBatchRange } from "../layout/SparkCost";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useResolvedModels } from "../hooks/useResolvedModels";
 import { notify } from "../lib/notify";
 import { springSoft } from "../lib/motion";
@@ -74,6 +75,9 @@ export function CastWorkspace() {
   const [celebrate, setCelebrate] = useState(false);
   const [lineupOpen, setLineupOpen] = useState(false);
   const [dockOpen, setDockOpen] = useState(true);
+  // Below `md` a 320px docked column leaves little to no room for the stage
+  // next to the cast filmstrip rail, so it becomes a full-width bottom sheet.
+  const isMobile = useMediaQuery("(max-width: 767px)");
 
   const transferAllowed = useFeatureAllowed("characterTransfer");
   const openPlans = useBillingUiStore((s) => s.openPlans);
@@ -293,15 +297,28 @@ export function CastWorkspace() {
             {activeAnchor && dockOpen && (
               <motion.aside
                 key="cast-dock"
-                initial={{ width: 0 }}
-                animate={{ width: INSPECTOR_DOCK_W }}
-                exit={{ width: 0 }}
-                transition={springSoft}
-                className="h-full min-h-0 shrink-0 self-stretch overflow-hidden border-l border-ink-100 bg-white"
+                {...(isMobile
+                  ? {
+                      initial: { y: "100%", opacity: 0 },
+                      animate: { y: 0, opacity: 1 },
+                      exit: { y: "100%", opacity: 0 },
+                      transition: { type: "spring", stiffness: 380, damping: 34 },
+                    }
+                  : {
+                      initial: { width: 0 },
+                      animate: { width: INSPECTOR_DOCK_W },
+                      exit: { width: 0 },
+                      transition: springSoft,
+                    })}
+                className={
+                  isMobile
+                    ? "fixed inset-x-0 bottom-0 z-40 h-[75vh] overflow-hidden rounded-t-3xl border-t border-ink-100 bg-white shadow-lifted"
+                    : "h-full min-h-0 shrink-0 self-stretch overflow-hidden border-l border-ink-100 bg-white"
+                }
               >
                 <div
                   className="flex h-full min-h-0 flex-col"
-                  style={{ width: INSPECTOR_DOCK_W }}
+                  style={isMobile ? undefined : { width: INSPECTOR_DOCK_W }}
                   data-floating-bar-obstacle
                 >
                   <div className="flex items-center gap-2.5 border-b border-ink-100 px-4 py-2.5">
@@ -325,7 +342,7 @@ export function CastWorkspace() {
                       <X className="size-4" />
                     </button>
                   </div>
-                  <div className="min-h-0 flex-1 overflow-y-auto">
+                  <div className="min-h-0 flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
                     <AnchorEditor
                       layout="dock"
                       anchor={activeAnchor}

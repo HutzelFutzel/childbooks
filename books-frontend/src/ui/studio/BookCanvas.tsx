@@ -38,6 +38,7 @@ import { EmptyState } from "../components/EmptyState";
 import { Popover } from "../components/Popover";
 import { SparkEstimateCost } from "../layout/SparkCost";
 import { PipelineStepper, type PipelinePhase } from "../generation/PipelineStepper";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useResolvedModels } from "../hooks/useResolvedModels";
 import { notify } from "../lib/notify";
 import { cn } from "../lib/cn";
@@ -370,8 +371,30 @@ const INSPECTOR_DOCK_W = 320; // Tailwind w-80
  * Layout-docked inspector. Width snaps in one step (no spring) so the Konva
  * stage ResizeObserver fires once — animating width was re-laying out the
  * canvas every animation frame and felt laggy when opening tools.
+ *
+ * Below `md` a 320px docked column would leave little to no room for the
+ * canvas next to the chapter rail, so it becomes a full-width bottom sheet
+ * instead — overlaid on top of the stage rather than sharing its width.
  */
 function InspectorDock({ children }: { children: React.ReactNode }) {
+  const isMobile = useMediaQuery("(max-width: 767px)");
+
+  if (isMobile) {
+    return (
+      <motion.aside
+        initial={{ y: "100%", opacity: 0 }}
+        animate={{ y: 0, opacity: 1 }}
+        exit={{ y: "100%", opacity: 0 }}
+        transition={{ type: "spring", stiffness: 380, damping: 34 }}
+        // Fixed (not `max-h`) height — `PanelShell` fills its parent with
+        // `h-full`, which needs a definite height to resolve against.
+        className="fixed inset-x-0 bottom-0 z-40 h-[75vh] overflow-hidden rounded-t-3xl border-t border-ink-100 bg-white shadow-lifted"
+      >
+        <div className="flex h-full flex-col pb-[env(safe-area-inset-bottom)]">{children}</div>
+      </motion.aside>
+    );
+  }
+
   return (
     <motion.aside
       initial={{ opacity: 0 }}

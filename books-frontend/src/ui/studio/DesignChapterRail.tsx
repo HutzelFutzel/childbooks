@@ -14,6 +14,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "../lib/cn";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import { springSoft } from "../lib/motion";
 import type { DesignChapter } from "./studioSteps";
 
@@ -21,6 +22,10 @@ const WIDTH_KEY = "childbooks.designChapterRailWidth";
 const WIDTH_MIN = 160;
 const WIDTH_MAX = 280;
 const WIDTH_DEFAULT = 188;
+// Below `md` the resizable desktop width (160–280px) would leave the stage
+// with little to no room next to the inspector dock, so it collapses to a
+// fixed icon-only rail instead — not user-resizable, so no stored width.
+const MOBILE_WIDTH = 96;
 
 function readStoredWidth(): number {
   if (typeof window === "undefined") return WIDTH_DEFAULT;
@@ -72,6 +77,7 @@ export function DesignChapterRail({
 }) {
   const [width, setWidth] = useState(WIDTH_DEFAULT);
   const resizing = useRef<{ startX: number; startW: number } | null>(null);
+  const isMobile = useMediaQuery("(max-width: 767px)");
 
   useEffect(() => {
     setWidth(readStoredWidth());
@@ -105,7 +111,7 @@ export function DesignChapterRail({
   return (
     <aside
       className="relative flex h-full shrink-0 flex-col border-r border-ink-100 bg-white/90"
-      style={{ width }}
+      style={{ width: isMobile ? MOBILE_WIDTH : width }}
     >
       <div className="flex min-h-0 flex-1 flex-col">
         {CHAPTERS.map((meta) => {
@@ -129,18 +135,21 @@ export function DesignChapterRail({
                 type="button"
                 disabled={!unlocked}
                 title={
-                  unlocked
-                    ? meta.hint
-                    : meta.id === "cast"
+                  !unlocked
+                    ? meta.id === "cast"
                       ? "Pick an art style first"
                       : meta.id === "pages"
                         ? "Finish cast references before designing pages"
                         : meta.hint
+                    : isMobile
+                      ? meta.label
+                      : meta.hint
                 }
                 onClick={() => unlocked && onSelect(meta.id)}
                 aria-expanded={open}
                 className={cn(
                   "flex w-full shrink-0 items-center gap-2 px-3 py-2.5 text-left transition",
+                  isMobile && "flex-col gap-1 px-1.5 py-2 text-center",
                   open
                     ? "bg-brand-50 text-brand-800"
                     : unlocked
@@ -168,38 +177,46 @@ export function DesignChapterRail({
                     <Icon className="size-3.5" />
                   )}
                 </span>
-                <span className="min-w-0 flex-1">
-                  <span className="flex items-center gap-1.5 text-sm font-semibold">
+                {isMobile ? (
+                  <span className="max-w-full truncate text-[11px] font-semibold leading-tight">
                     {meta.label}
-                    {detail && (
-                      <span
-                        className={cn(
-                          "rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums",
-                          done ? "bg-emerald-100 text-emerald-700" : "bg-ink-100 text-ink-500",
-                        )}
-                      >
-                        {detail}
-                      </span>
-                    )}
                   </span>
-                  <span className="block truncate text-[11px] text-ink-400">{meta.hint}</span>
-                </span>
+                ) : (
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-1.5 text-sm font-semibold">
+                      {meta.label}
+                      {detail && (
+                        <span
+                          className={cn(
+                            "rounded-full px-1.5 py-0.5 text-[10px] font-semibold tabular-nums",
+                            done ? "bg-emerald-100 text-emerald-700" : "bg-ink-100 text-ink-500",
+                          )}
+                        >
+                          {detail}
+                        </span>
+                      )}
+                    </span>
+                    <span className="block truncate text-[11px] text-ink-400">{meta.hint}</span>
+                  </span>
+                )}
               </button>
 
-              <AnimatePresence initial={false}>
-                {open && meta.id === "style" && (
-                  <motion.p
-                    key="style-hint"
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: "auto", opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={springSoft}
-                    className="overflow-hidden px-3 pb-3 text-[11px] leading-snug text-ink-400"
-                  >
-                    Choose the look on the stage.
-                  </motion.p>
-                )}
-              </AnimatePresence>
+              {!isMobile && (
+                <AnimatePresence initial={false}>
+                  {open && meta.id === "style" && (
+                    <motion.p
+                      key="style-hint"
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={springSoft}
+                      className="overflow-hidden px-3 pb-3 text-[11px] leading-snug text-ink-400"
+                    >
+                      Choose the look on the stage.
+                    </motion.p>
+                  )}
+                </AnimatePresence>
+              )}
 
               {open && meta.id === "cast" && (
                 <motion.div
@@ -228,17 +245,19 @@ export function DesignChapterRail({
         })}
       </div>
 
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        title="Drag to resize"
-        onPointerDown={(e) => {
-          e.preventDefault();
-          resizing.current = { startX: e.clientX, startW: width };
-          (e.target as HTMLElement).setPointerCapture(e.pointerId);
-        }}
-        className="absolute inset-y-0 right-0 z-10 w-1.5 cursor-col-resize hover:bg-brand-200/50"
-      />
+      {!isMobile && (
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          title="Drag to resize"
+          onPointerDown={(e) => {
+            e.preventDefault();
+            resizing.current = { startX: e.clientX, startW: width };
+            (e.target as HTMLElement).setPointerCapture(e.pointerId);
+          }}
+          className="absolute inset-y-0 right-0 z-10 w-1.5 cursor-col-resize hover:bg-brand-200/50"
+        />
+      )}
     </aside>
   );
 }
