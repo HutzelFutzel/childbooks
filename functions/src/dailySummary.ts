@@ -1,20 +1,32 @@
 /**
  * Daily KPI digest — one Slack message per day (evening) with the headline
- * numbers: signups, logins, active users, revenue, orders, funnel leakage and
- * open alerts for the day that just ended.
+ * numbers: signups, guests, logins, active users, revenue (+ refund rate),
+ * orders, top product, checkout conversion, unfulfilled paid orders, funnel
+ * leakage and open alerts since the last digest.
  *
  * Reuses the exact same computations the admin Analysis dashboard uses
  * (`computeOverview`, `computeFunnel` in analytics.ts; `financeSummary` in
  * finance.ts) rather than re-deriving numbers from the raw collections, so the
  * digest can never drift from what the dashboard shows for the same window.
  *
- * Best-effort like every other Slack notification in this codebase: a failure
- * here must never do anything worse than a missing/late Slack message (see
- * `notify.ts`). On failure we also raise an admin alert so a silent outage
- * doesn't go unnoticed forever.
+ * The window is a persisted watermark (`adminState/dailySummary.coveredThroughMs`),
+ * not "yesterday relative to whenever this run happens to fire". That matters
+ * because this job is best-effort like every other Slack notification here
+ * (see `notify.ts`) — a cold start, a transient Slack error or a bad deploy can
+ * skip a run outright. A window computed purely from "now" would silently and
+ * permanently drop that day from the digest (the dashboard itself is
+ * unaffected — only what got reported in Slack). Anchoring to the watermark
+ * instead means the NEXT successful run just reports everything since the
+ * LAST successful one, however long that turns out to be, so nothing sent
+ * through Slack is ever lost — only delayed.
+ *
+ * On failure we also raise an admin alert so a silent outage doesn't go
+ * unnoticed forever, and the watermark is left untouched so the same
+ * uncovered range is retried (and grows) until it's actually reported.
  */
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { logger } from "firebase-functions/v2";
+import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { SLACK_WEBHOOK_URL } from "./secrets";
 import { getAdminSettings } from "./adminSettings";
@@ -24,6 +36,44 @@ import { listAlerts, raiseAlert, type AdminAlert } from "./alerts";
 import { notifySlack } from "./notify";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+/**
+ * Safety valve on how far back a single digest will ever reach, even if the
+ * watermark is very stale (a long outage, the toggle left off for weeks, …).
+ * Past this, older history is dropped from the NEXT message (with a visible
+ * note) rather than trying to summarize an unbounded window in one Slack post.
+ */
+const MAX_CATCHUP_MS = 14 * DAY_MS;
+
+const STATE_DOC = "adminState/dailySummary";
+
+/** Epoch ms through which the digest has already reported, or null if it has
+ * never successfully sent (first run ever). */
+async function getCoveredThroughMs(): Promise<number | null> {
+  try {
+    ensureAdmin();
+    const snap = await getFirestore().doc(STATE_DOC).get();
+    const v = snap.exists ? snap.get("coveredThroughMs") : null;
+    return typeof v === "number" && Number.isFinite(v) ? v : null;
+  } catch {
+    return null; // Degrade to the one-day fallback in the scheduler below.
+  }
+}
+
+/** Advance the watermark. Only called once a window has actually been
+ * accounted for (sent, or already claimed by an earlier attempt). */
+async function setCoveredThroughMs(ms: number): Promise<void> {
+  try {
+    ensureAdmin();
+    await getFirestore()
+      .doc(STATE_DOC)
+      .set({ coveredThroughMs: ms, updatedAt: Date.now() }, { merge: true });
+  } catch (err) {
+    // If this write fails, the next run just re-covers the same ground — a
+    // possible duplicate post (caught by the `ref` idempotency key below)
+    // beats silently forgetting where we left off.
+    logger.error("[daily-summary] failed to persist watermark", err);
+  }
+}
 
 /** Offset (ms) to ADD to a UTC instant to get the wall-clock reading in `tz`. */
 function tzOffsetMs(atUtcMs: number, tz: string): number {
@@ -66,17 +116,23 @@ function dayKeyDaysAgo(daysAgo: number, tz: string): string {
   return new Date(Date.UTC(y, m - 1, d - daysAgo)).toISOString().slice(0, 10);
 }
 
-/** [from, to) epoch bounds of one full local calendar day in `tz`. */
-function localDayRange(dayKey: string, tz: string): { from: number; to: number } {
-  const from = localMidnightMs(dayKey, tz);
-  return { from, to: from + DAY_MS };
+/**
+ * Human label for [from, to). A window that lines up with a single local
+ * calendar day (the normal, nightly case) reads as just that date; a wider
+ * catch-up window (a missed run) reads as the date range it actually spans.
+ */
+function formatRangeLabel(from: number, to: number, tz: string): string {
+  const fmt = new Intl.DateTimeFormat("en-US", { timeZone: tz, month: "short", day: "numeric", year: "numeric" });
+  const start = fmt.format(new Date(from));
+  const end = fmt.format(new Date(Math.max(from, to - 1)));
+  return start === end ? start : `${start} – ${end}`;
 }
 
 function pctChange(curr: number, prev: number): string {
   if (prev <= 0) return curr > 0 ? " (new)" : "";
   const pct = Math.round(((curr - prev) / prev) * 100);
   if (pct === 0) return "";
-  return ` (${pct > 0 ? "+" : ""}${pct}% vs prior day)`;
+  return ` (${pct > 0 ? "+" : ""}${pct}% vs prior period)`;
 }
 
 function plural(n: number, noun: string): string {
@@ -93,10 +149,34 @@ function usd(n: number): string {
   return `${sign}$${Math.abs(n).toFixed(2)}`;
 }
 
-/** Build the Slack message text for one day's KPIs. Exported for testing. */
-export async function buildDailySummaryText(dayKey: string, tz: string): Promise<string> {
+/** `num` as a share of `den`, formatted as a whole-number percentage. */
+function pctOf(num: number, den: number): string | null {
+  if (!(den > 0)) return null;
+  return `${Math.round((num / den) * 100)}%`;
+}
+
+/** A finance `productId` (e.g. `print:square-hardcover`) as a display label. */
+function productLabel(key: string): string {
+  const slug = key.includes(":") ? key.slice(key.indexOf(":") + 1) : key;
+  const words = slug.replace(/[-_]+/g, " ").trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : key;
+}
+
+/**
+ * Build the Slack message text for [from, to). Exported for testing.
+ *
+ * `note`, when set, is rendered as its own line right under the header — used
+ * by the scheduler below to call out a catch-up window so it's obvious in
+ * Slack (not just in the logs) that a run was missed and this message is
+ * covering more than one day.
+ */
+export async function buildDailySummaryText(
+  range: { from: number; to: number },
+  tz: string,
+  opts: { note?: string } = {},
+): Promise<string> {
+  const { from, to } = range;
   const settings = await getAdminSettings();
-  const { from, to } = localDayRange(dayKey, tz);
 
   const [overview, funnel, finance, alerts] = await Promise.all([
     computeOverview(from, to, settings, { country: null, tzMode: "fixed" }),
@@ -105,12 +185,7 @@ export async function buildDailySummaryText(dayKey: string, tz: string): Promise
     listAlerts(200),
   ]);
 
-  const dayLabel = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz,
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  }).format(new Date(from + 12 * 60 * 60 * 1000));
+  const dayLabel = formatRangeLabel(from, to, tz);
 
   const alertsToday = alerts.filter((a: AdminAlert) => a.at >= from && a.at < to);
   const unresolvedToday = alertsToday.filter((a) => !a.resolvedAt);
@@ -124,17 +199,31 @@ export async function buildDailySummaryText(dayKey: string, tz: string): Promise
   const refundUsd = refundRows.reduce((s, k) => s + k.costUsd, 0);
 
   const topCountry = overview.countries.find((c) => c.signups > 0 || c.activeUsers > 0);
+  const guestsStarted = funnel.stages.find((s) => s.key === "guests")?.value ?? 0;
+  const paidStage = funnel.stages.find((s) => s.key === "paid");
+  const fulfilledStage = funnel.stages.find((s) => s.key === "fulfilled");
+  const unfulfilledPaid = Math.max(0, (paidStage?.value ?? 0) - (fulfilledStage?.value ?? 0));
+  const topProduct = finance.byProduct[0];
+  const capped = overview.capped || overview.eventsCapped || finance.capped || funnel.capped;
 
   const lines: string[] = [];
   lines.push(`📊 *Daily summary — ${dayLabel}*`);
+  if (opts.note) lines.push(opts.note);
+  if (capped) {
+    lines.push("⚠️ _One or more scans hit their safety cap — some numbers below are a lower bound._");
+  }
   lines.push(
     `👤 Signups: ${overview.totals.newSignups}${pctChange(overview.totals.newSignups, overview.previousTotals.newSignups)}` +
+      `   🕶️ Guests: ${guestsStarted}` +
       `   🔑 Logins: ${overview.totals.logins}` +
       `   🟢 Active users: ${overview.totals.activeUsers}`,
   );
 
   const revenueBits = [`gross ${usd(finance.totalRevenueUsd)}`];
-  if (refundCount > 0) revenueBits.push(`${plural(refundCount, "refund")} ${usd(refundUsd)}`);
+  if (refundCount > 0) {
+    const rate = pctOf(refundUsd, finance.totalRevenueUsd);
+    revenueBits.push(`${plural(refundCount, "refund")} ${usd(refundUsd)}${rate ? ` (${rate} of gross)` : ""}`);
+  }
   lines.push(`💰 Net revenue: ${usd(finance.netUsd)} (${revenueBits.join(", ")})`);
 
   const orderBits: string[] = [];
@@ -143,6 +232,16 @@ export async function buildDailySummaryText(dayKey: string, tz: string): Promise
   if (packOrders) orderBits.push(`${plural(packOrders, "Spark pack")}`);
   if (subPayments) orderBits.push(`${plural(subPayments, "subscription payment")}`);
   if (orderBits.length > 0) lines.push(`🛒 Orders: ${orderBits.join(" · ")}`);
+
+  if (topProduct && (topProduct.revenueUsd > 0 || topProduct.units > 0)) {
+    lines.push(
+      `🏆 Top product: ${productLabel(topProduct.key)} — ${usd(topProduct.netUsd)} net (${plural(topProduct.units, "unit")})`,
+    );
+  }
+
+  if (paidStage && paidStage.stepPct != null) {
+    lines.push(`🎯 Checkout → paid: ${paidStage.stepPct}%${unfulfilledPaid > 0 ? ` · ⚙️ ${plural(unfulfilledPaid, "paid order")} unfulfilled` : ""}`);
+  }
 
   if (funnel.abandonedCheckouts > 0) {
     lines.push(
@@ -166,8 +265,16 @@ export async function buildDailySummaryText(dayKey: string, tz: string): Promise
 /**
  * Runs once a day in the evening. Defaults to 20:00 UTC — adjust the cron
  * expression / `timeZone` below to your own business evening (the KPI window
- * itself always uses the admin-configured `adminSettings.timezone`, so the
- * numbers are calendar-day-correct regardless of when the job fires).
+ * itself always uses the admin-configured `adminSettings.timezone`, and is
+ * anchored to the watermark rather than to when this fires — see the file
+ * header comment).
+ *
+ * The upper bound is always the most recent local midnight (`adminSettings.
+ * timezone`) at or before "now", not "now" itself — so the digest only ever
+ * reports on complete calendar days, and two back-to-back runs tile exactly
+ * (no gap, no overlap) as long as each one succeeds. The lower bound is the
+ * watermark left by the last successful send, so a missed run just makes the
+ * next message cover more days instead of dropping the missed one.
  */
 export const sendDailySummary = onSchedule(
   {
@@ -178,25 +285,55 @@ export const sendDailySummary = onSchedule(
   },
   async () => {
     ensureAdmin();
+    let to = 0;
     try {
       const settings = await getAdminSettings();
-      const dayKey = dayKeyDaysAgo(1, settings.timezone);
-      const text = await buildDailySummaryText(dayKey, settings.timezone);
+      to = localMidnightMs(dayKeyDaysAgo(0, settings.timezone), settings.timezone);
+
+      const coveredThrough = await getCoveredThroughMs();
+      let from = coveredThrough ?? to - DAY_MS;
+      let note: string | undefined;
+      if (to - from > MAX_CATCHUP_MS) {
+        // Very stale watermark (long outage, toggle left off for weeks, …).
+        // Report what we can and say so, rather than trying to summarize an
+        // unbounded window in one Slack post.
+        from = to - MAX_CATCHUP_MS;
+        note = `⚠️ _Watermark was very stale — showing only the last ${Math.round(MAX_CATCHUP_MS / DAY_MS)} days._`;
+      } else if (to - from > DAY_MS * 1.5) {
+        const days = Math.round((to - from) / DAY_MS);
+        note = `⏳ _Catching up ${days} days since the last summary — nothing lost._`;
+      }
+
+      if (to <= from) {
+        logger.info("[daily-summary] nothing new since the last summary — skipping");
+        return;
+      }
+
+      const text = await buildDailySummaryText({ from, to }, settings.timezone, { note });
       const result = await notifySlack({
         channel: "growth",
         messageKey: "daily_summary",
-        ref: `daily_${dayKey}`,
+        ref: `daily_${from}_${to}`,
         text,
       });
-      if (result.sent) logger.info(`[daily-summary] posted summary for ${dayKey}`);
-      else logger.info(`[daily-summary] skipped for ${dayKey}: ${result.reason}`);
+      // Advance the watermark whenever this exact window is accounted for —
+      // either we just sent it, or an earlier attempt already claimed it
+      // (`duplicate`). Any other reason (disabled/not configured/error)
+      // leaves the watermark where it was, so the same uncovered range is
+      // retried — and grows — until it's actually reported.
+      if (result.sent || result.reason === "duplicate") {
+        await setCoveredThroughMs(to);
+      }
+      const range = `${new Date(from).toISOString()} → ${new Date(to).toISOString()}`;
+      if (result.sent) logger.info(`[daily-summary] posted summary for ${range}`);
+      else logger.info(`[daily-summary] skipped (${result.reason}) for ${range}`);
     } catch (err) {
       logger.error("[daily-summary] failed", err);
       await raiseAlert({
         severity: "warning",
         kind: "dailySummary.failed",
         message: `Daily KPI summary failed to build/send: ${(err as Error)?.message ?? "unknown error"}`,
-        ref: dayKeyDaysAgo(1, "UTC"),
+        ref: to ? String(to) : dayKeyDaysAgo(1, "UTC"),
       }).catch(() => {});
     }
   },
