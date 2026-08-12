@@ -45,10 +45,10 @@ export function LowSparksBanner() {
   };
 
   return (
-    <div className="flex items-center justify-center gap-3 border-b border-magic-300/50 bg-magic-100 px-4 py-2 text-xs text-magic-700">
-      <span className="flex min-w-0 items-center gap-1.5">
+    <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1.5 border-b border-magic-300/50 bg-magic-100 px-4 py-2 text-center text-xs text-magic-700">
+      <span className="inline-flex items-center gap-1.5">
         <Sparkles className="size-4 shrink-0" />
-        <span className="truncate">
+        <span>
           {balance <= 0 ? "You're out of Sparks" : "Your Sparks are running low"} — create a free
           account and get <span className="font-semibold">+{bonus} ✦</span> instantly
           {sparks.grants.verifyBonusSparks > 0 && (

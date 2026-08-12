@@ -98,7 +98,7 @@ export function VersionHistoryList({
                     onClick={() => onDelete(item.id)}
                     title="Delete this version"
                     aria-label={`Delete version ${item.index}`}
-                    className="rounded-md p-1.5 text-ink-300 opacity-0 transition hover:bg-red-50 hover:text-red-600 group-hover:opacity-100 focus:opacity-100"
+                    className="rounded-md p-1.5 text-ink-300 opacity-0 transition hover:bg-red-50 hover:text-red-600 group-hover:opacity-100 focus:opacity-100 pointer-coarse:opacity-70"
                   >
                     <Trash2 className="size-3.5" />
                   </button>

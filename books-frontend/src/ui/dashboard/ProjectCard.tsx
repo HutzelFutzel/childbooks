@@ -72,7 +72,7 @@ export function ProjectCard({ project, onOpen, onDelete }: ProjectCardProps) {
           e.stopPropagation();
           onDelete();
         }}
-        className="absolute right-1 top-1 z-10 rounded-full bg-white/80 p-1.5 text-ink-400 opacity-0 shadow-soft backdrop-blur transition hover:bg-red-50 hover:text-red-500 group-hover:opacity-100"
+        className="absolute right-1 top-1 z-10 rounded-full bg-white/80 p-1.5 text-ink-400 opacity-0 shadow-soft backdrop-blur transition hover:bg-red-50 hover:text-red-500 group-hover:opacity-100 pointer-coarse:opacity-70"
         aria-label="Delete project"
       >
         <Trash2 className="size-4" />

@@ -229,13 +229,13 @@ export function Dashboard() {
       </div>
 
       {isGuest && projects.length > 0 && (
-        <div className="mb-6 flex items-center justify-between gap-3 rounded-2xl border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-800">
-          <span className="flex items-center gap-2">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-brand-200 bg-brand-50 px-4 py-3 text-sm text-brand-800">
+          <span className="flex min-w-0 items-center gap-2">
             <Sparkles className="size-4 shrink-0" />
             You're creating as a guest — save your storybooks to a free account so they're never
             lost, on any device.
           </span>
-          <Button size="sm" variant="secondary" onClick={() => openAuthDialog()}>
+          <Button size="sm" variant="secondary" onClick={() => openAuthDialog()} className="shrink-0">
             Save my storybooks
           </Button>
         </div>
