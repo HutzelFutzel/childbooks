@@ -9,7 +9,7 @@
  * rich-result violation.
  */
 import type { PricingSettings, PublicProduct } from "../../core/config/products";
-import { allowedMarketsFor, publicUnitPrice } from "../../core/config/productMath";
+import { publicMarketsFor, publicUnitPrice } from "../../core/config/productMath";
 import { countryLabel } from "../../core/analytics/markets";
 import { bindingNoun } from "../../core/fulfillment";
 import { formatMoney } from "./format";
@@ -44,9 +44,7 @@ export function pricingFaq(
       publicUnitPrice(p, settings, { currency, pages: p.conditions.pages.min }),
     ),
   );
-  const markets = [
-    ...new Set(products.flatMap((p) => allowedMarketsFor(p.shipping.destinations))),
-  ];
+  const markets = [...new Set(products.flatMap(publicMarketsFor))];
   const bindings = [...new Set(products.map((p) => bindingNoun(p.spec.binding)))];
   const minPages = Math.min(...products.map((p) => p.conditions.pages.min));
   const maxPages = Math.max(...products.map((p) => p.conditions.pages.max));

@@ -74,6 +74,7 @@ const CONFIG_TAB_EXHAUSTIVE: Record<ConfigTabId, true> = {
   sparks: true,
   financial: true,
   discounts: true,
+  markets: true,
   models: true,
   modelCosts: true,
   prompts: true,

@@ -67,6 +67,21 @@ import {
   type ProviderEnv,
   type PublicProductsConfig,
 } from "../core/config/products";
+import {
+  EMPTY_MARKET_REGISTRY,
+  normalizeMarketsConfig,
+  normalizePublicMarkets,
+  registryFrom,
+  registryOf,
+  type MarketRegistry,
+  type MarketsConfig,
+} from "../core/config/markets";
+import {
+  createEmptyMarketCapability,
+  normalizeMarketCapability,
+  type MarketCapabilityConfig,
+  type MarketSweepSummary,
+} from "../core/config/marketCapability";
 import type { MarginBreakdown } from "../core/config/productMath";
 import type { VariantSelection } from "../core/config/variants";
 import {
@@ -380,6 +395,22 @@ interface AppConfigState {
   latencyStats: LatencyStats;
   /** Public product projection (storefront-facing; resolved prices, no internals). */
   products: PublicProductsConfig;
+  /**
+   * The countries we currently sell to — the ceiling every destination check
+   * intersects with.
+   *
+   * Starts EMPTY, which allows nothing. That's deliberate: before the snapshot
+   * arrives the honest answer is "we don't know yet", and a picker that briefly
+   * offers a country we don't ship to sends the customer down a path checkout
+   * will refuse.
+   */
+  markets: MarketRegistry;
+  /**
+   * What the print provider was discovered to run to each country. Read-only
+   * evidence from the backend sweep; the admin Markets tab renders it beside
+   * the enabled flags so opening a country nobody can ship to is visible.
+   */
+  marketCapability: MarketCapabilityConfig;
   /** Catalog-wide pricing economics (currencies, FX, fees, tax). */
   pricingSettings: PricingSettings;
   /** The Sparks economy (world-readable; also used by the admin editor). */
@@ -405,6 +436,13 @@ interface AppConfigState {
    * backend when the admin tab opens.
    */
   affiliates: AffiliateConfig;
+  /**
+   * The FULL market registry with admin notes — the private
+   * `adminSettings/markets` doc, fetched through the backend when the Markets
+   * tab opens. Distinct from `markets`, which is the world-readable projection
+   * every geo check uses.
+   */
+  adminMarkets: MarketsConfig;
   /** Public subscription plans (storefront-facing; no Stripe internals). */
   plans: PublicPlansConfig;
   /** Global branding (the share watermark asset + appearance). */
@@ -505,6 +543,15 @@ interface AppConfigState {
   saveSurveysConfig: (config: SurveysConfig) => Promise<SurveysConfig>;
   /** Answers cross-tabulated against lifetime revenue, per survey. */
   loadSurveyReports: (surveyId?: string) => Promise<SurveyReport[]>;
+  /** The market registry with admin notes (admin-only doc, so an explicit fetch). */
+  loadMarketsConfig: () => Promise<MarketsConfig>;
+  saveMarketsConfig: (config: MarketsConfig) => Promise<MarketsConfig>;
+  /**
+   * Re-ask the print provider what it ships where. Long-running (~one request
+   * per country) and resumable: a throttled run leaves the countries it
+   * couldn't reach as `unknown` and re-running fills only those.
+   */
+  sweepMarketCapability: (opts?: { force?: boolean; sku?: string }) => Promise<MarketSweepSummary>;
   /** The affiliate scope map (admin-only doc, so an explicit fetch). */
   loadAffiliateConfig: () => Promise<AffiliateConfig>;
   saveAffiliateConfig: (config: AffiliateConfig) => Promise<void>;
@@ -700,12 +747,15 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   imageCostStats: createDefaultImageCostStats(),
   latencyStats: createDefaultLatencyStats(),
   products: { version: 1, products: [] },
+  markets: EMPTY_MARKET_REGISTRY,
+  marketCapability: createEmptyMarketCapability(),
   pricingSettings: createDefaultPricingSettings(),
   sparks: createDefaultSparksConfig(),
   referral: createDefaultReferralConfig(),
   referralDocExists: false,
   campaigns: createDefaultCampaignsConfig(),
   affiliates: createDefaultAffiliateConfig(),
+  adminMarkets: { version: 1, markets: [], updatedAt: 0 },
   plans: { version: 1, plans: [] },
   branding: createDefaultBrandingConfig(),
   qrCodes: createDefaultQrCodesConfig(),
@@ -758,6 +808,22 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       }),
       onSnapshot(doc(db, "appConfig", "products"), (snap) => {
         set({ products: normalizePublicProductsConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "markets"), (snap) => {
+        // A missing document leaves the registry empty rather than falling back
+        // to the seed list: the seed is the BACKEND's answer for a first run,
+        // and duplicating it here would let the client offer countries the
+        // server hasn't actually opened.
+        set({
+          markets: registryOf(normalizePublicMarkets(snap.exists() ? snap.data() : undefined).enabled),
+        });
+      }),
+      onSnapshot(doc(db, "appConfig", "marketCapability"), (snap) => {
+        set({
+          marketCapability: snap.exists()
+            ? normalizeMarketCapability(snap.data())
+            : createEmptyMarketCapability(),
+        });
       }),
       onSnapshot(doc(db, "appConfig", "pricingSettings"), (snap) => {
         set({ pricingSettings: normalizePricingSettings(snap.exists() ? snap.data() : undefined) });
@@ -992,6 +1058,34 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
             : `Could not ${verdict === "release" ? "release" : "void"} this payout.`,
       );
     }
+  },
+
+  async loadMarketsConfig() {
+    const res = await backendFetch("/admin/config/markets");
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load the markets config.");
+    const config = normalizeMarketsConfig(await res.json());
+    set({ adminMarkets: config });
+    return config;
+  },
+
+  async saveMarketsConfig(config) {
+    const saved = normalizeMarketsConfig(await putJson("/admin/config/markets", config));
+    // The public projection arrives on its own snapshot, but the admin's own
+    // view must not wait for the round trip — the checkboxes it just toggled
+    // would flicker back to their old state.
+    set({ adminMarkets: saved, markets: registryFrom(saved) });
+    return saved;
+  },
+
+  async sweepMarketCapability(opts = {}) {
+    const params = new URLSearchParams();
+    if (opts.force) params.set("force", "1");
+    if (opts.sku) params.set("sku", opts.sku);
+    const res = await backendFetch(`/admin/markets/sweep?${params}`, { method: "POST" });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "The coverage sweep failed.");
+    const summary = (await res.json()) as MarketSweepSummary;
+    set({ marketCapability: normalizeMarketCapability(summary.capability) });
+    return summary;
   },
 
   async loadAffiliateConfig() {

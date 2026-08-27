@@ -32,7 +32,9 @@ import {
   type PrintDiscountPlan,
 } from "../../books-frontend/src/core/config/productMath";
 import { isOfferable } from "../../books-frontend/src/core/config/productValidation";
+import type { MarketRegistry } from "../../books-frontend/src/core/config/markets";
 import { getPlansConfig } from "./plans";
+import { getMarketRegistry } from "./markets";
 import { serverConfig } from "./config";
 
 const PRIVATE_DOC = "adminSettings/products";
@@ -77,6 +79,7 @@ function projectPublic(
   config: ProductsConfig,
   settings: PricingSettings,
   plans: readonly PrintDiscountPlan[],
+  registry: MarketRegistry,
 ): PublicProductsConfig {
   const env = activeEnv();
   return {
@@ -84,7 +87,11 @@ function projectPublic(
     products: config.products
       .filter((p) => p.status !== "retired")
       .map((p) =>
-        toPublicProduct(p, settings, { offerable: isOfferable(p, settings, { env }), plans }),
+        toPublicProduct(p, settings, {
+          offerable: isOfferable(p, settings, { env, registry }),
+          plans,
+          registry,
+        }),
       )
       .sort((a, b) => a.sortOrder - b.sortOrder),
   };
@@ -117,11 +124,15 @@ function stripUndefined<T>(value: T): T {
 async function writeConfig(config: ProductsConfig): Promise<ProductsConfig> {
   ensureAdmin();
   const db = getFirestore();
-  const [settings, plans] = await Promise.all([getPricingSettings(), printDiscountPlans()]);
+  const [settings, plans, registry] = await Promise.all([
+    getPricingSettings(),
+    printDiscountPlans(),
+    getMarketRegistry(),
+  ]);
   await db.doc(PRIVATE_DOC).set(stripUndefined(config) as unknown as Record<string, unknown>, { merge: false });
   await db
     .doc(PUBLIC_DOC)
-    .set(stripUndefined(projectPublic(config, settings, plans)) as unknown as Record<string, unknown>, {
+    .set(stripUndefined(projectPublic(config, settings, plans, registry)) as unknown as Record<string, unknown>, {
       merge: false,
     });
   cache = { value: config, at: Date.now() };
@@ -133,18 +144,21 @@ async function writeConfig(config: ProductsConfig): Promise<ProductsConfig> {
  * after pricing settings change (currencies/tax/fees affect resolved prices),
  * after a plan's print discount changes (the projection publishes the clamped
  * discount per plan), and after the sandbox↔live toggle flips (SKU verification
- * — and so offerability — is per-environment, and the two catalogs don't agree).
+ * — and so offerability — is per-environment, and the two catalogs don't agree),
+ * and after markets are opened or closed (which countries a product can reach,
+ * and so its published shipping rates, come from the registry).
  */
 export async function reprojectPublicProducts(): Promise<void> {
-  const [config, settings, plans] = await Promise.all([
+  const [config, settings, plans, registry] = await Promise.all([
     readConfig(),
     getPricingSettings(),
     printDiscountPlans(),
+    getMarketRegistry(),
   ]);
   const db = getFirestore();
   await db
     .doc(PUBLIC_DOC)
-    .set(stripUndefined(projectPublic(config, settings, plans)) as unknown as Record<string, unknown>, {
+    .set(stripUndefined(projectPublic(config, settings, plans, registry)) as unknown as Record<string, unknown>, {
       merge: false,
     });
 }

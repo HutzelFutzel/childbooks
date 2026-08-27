@@ -23,7 +23,7 @@ import type {
   ShippingFallbackRow,
   TaxBehavior,
 } from "./products";
-import { SUPPORTED_MARKETS, isSupportedMarket } from "./products";
+import { enabledMarkets, type MarketRegistry } from "./markets";
 import {
   VARIANT_COST_AXES,
   costVariantKey,
@@ -593,9 +593,15 @@ export function shippingTierRefused(
 /**
  * Shipping cost estimate used when no live quote is available.
  *
- * Prefers the measured row for the actual destination and tier — it scales with
- * copies, which the flat `fallbackCost` cannot — and falls back to the scalar
- * when nothing has been measured for this scenario.
+ * Only ever the measured row for the ACTUAL destination and tier. The scalar
+ * `pricing.fallbackCost` is deliberately not a catch-all for unmeasured
+ * countries: it was fitted to the handful of routes a sweep visited, and
+ * billing it to a destination nobody measured is a number invented about a
+ * country we know nothing about. With markets now openable by an admin, the
+ * unmeasured case is the common one rather than the exception, so those orders
+ * are refused instead — see {@link hasUsableShippingCost}.
+ *
+ * The scalar still serves a measured country whose specific tier has no row.
  */
 export function estimateShippingCost(
   shipping: ProductShippingPolicy,
@@ -610,15 +616,35 @@ export function estimateShippingCost(
   if (row?.available) {
     return row.base + row.perCopy * Math.max(1, scenario?.copies ?? 1);
   }
-  return shipping.pricing.fallbackCost ?? 0;
+  // The destination has SOME measurement, just not for this tier — the scalar is
+  // at least fitted to routes this product really ships.
+  if (hasMeasurementFor(shipping, scenario?.destinationCountry)) {
+    return shipping.pricing.fallbackCost ?? 0;
+  }
+  return 0;
+}
+
+/** Whether the sweep ever reached this destination, for any tier. */
+function hasMeasurementFor(
+  shipping: ProductShippingPolicy,
+  country: string | undefined,
+): boolean {
+  const rows = shipping.fallback;
+  if (!rows || rows.length === 0 || !country) return false;
+  const c = country.trim().toUpperCase();
+  return rows.some((r) => r.country.toUpperCase() === c);
 }
 
 /**
  * Whether shipping can be priced without a live quote. `free` and `flat` are
  * self-sufficient (both charge a configured amount), but `passthrough` charges
- * the provider's cost — with no quote, no measured row and no `fallbackCost` it
- * would charge zero while we still pay to ship, so an order in that state must
- * not be priced.
+ * the provider's cost — with no quote and no measured rate for THIS destination
+ * it would either charge zero while we still pay to ship, or bill a figure
+ * fitted to a different continent. Neither is acceptable, so an order in that
+ * state must not be priced at all.
+ *
+ * The customer sees "we can't price shipping right now, try again", which is
+ * recoverable. A silently wrong shipping charge is not.
  */
 export function hasUsableShippingCost(
   shipping: ProductShippingPolicy,
@@ -651,23 +677,32 @@ function regionListed(codes: string[], region?: string): boolean {
 }
 
 /**
- * Whether a destination is allowed — by {@link SUPPORTED_MARKETS} first, and by
- * the product's own geo policy second.
+ * Whether a destination is allowed — by the market registry first, and by the
+ * product's own geo policy second.
  *
  * The ceiling lives HERE, in the one function every caller already goes through,
  * rather than as a second check alongside it. A separate rule is a rule someone
  * adding a checkout path can forget; this one they'd have to actively remove.
  * The product policy can only narrow the set, never widen it, so a product
- * misconfigured to ship worldwide still ships to five countries.
+ * misconfigured to ship worldwide still ships only where we sell.
+ *
+ * `registry` is a required parameter rather than a cached module global for the
+ * same reason: with an argument, forgetting the ceiling is a compile error. An
+ * unloaded registry is empty and therefore refuses everything, which is the
+ * direction a failure should fall.
  */
-export function isDestinationAllowed(policy: GeoPolicy, dest: GeoMatch): boolean {
+export function isDestinationAllowed(
+  registry: MarketRegistry,
+  policy: GeoPolicy,
+  dest: GeoMatch,
+): boolean {
   const country = dest.country?.trim().toUpperCase();
   if (!country) return false;
-  if (!isSupportedMarket(country)) return false;
+  if (!registry.enabled.has(country)) return false;
   const inCountries = policy.countries.some((c) => c.trim().toUpperCase() === country);
 
   let countryOk: boolean;
-  // `all` now means "everywhere we sell", which the ceiling above has already
+  // `all` means "everywhere we sell", which the ceiling above has already
   // decided. A stored blocklist still subtracts from that set — it can carve
   // markets out, which is a narrowing, and never adds one back.
   if (policy.mode === "all") countryOk = true;
@@ -683,17 +718,17 @@ export function isDestinationAllowed(policy: GeoPolicy, dest: GeoMatch): boolean
 }
 
 /**
- * The countries this product can actually be ordered to: the supported markets
+ * The countries this product can actually be ordered to: the enabled markets
  * the policy doesn't exclude. Drives the checkout country picker, so what a
  * customer can choose and what the server will accept come from one place.
  */
-export function allowedMarketsFor(policy: GeoPolicy): string[] {
-  return SUPPORTED_MARKETS.filter((c) => isDestinationAllowed(policy, { country: c }));
+export function allowedMarketsFor(registry: MarketRegistry, policy: GeoPolicy): string[] {
+  return enabledMarkets(registry).filter((c) => isDestinationAllowed(registry, policy, { country: c }));
 }
 
-/** Reachable iff at least one supported market is allowed (sanity for validation). */
-export function hasReachableDestination(policy: GeoPolicy): boolean {
-  return allowedMarketsFor(policy).length > 0;
+/** Reachable iff at least one enabled market is allowed (sanity for validation). */
+export function hasReachableDestination(registry: MarketRegistry, policy: GeoPolicy): boolean {
+  return allowedMarketsFor(registry, policy).length > 0;
 }
 
 // ---- Public projection -----------------------------------------------------
@@ -710,7 +745,7 @@ export function hasReachableDestination(policy: GeoPolicy): boolean {
 export function toPublicProduct(
   product: ProductDefinition,
   settings: PricingSettings,
-  opts: { offerable: boolean; plans?: readonly PrintDiscountPlan[] },
+  opts: { offerable: boolean; registry: MarketRegistry; plans?: readonly PrintDiscountPlan[] },
 ): PublicProduct {
   const displayPages = product.pricing.displayPages ?? product.conditions.pages.min;
   const prices: Record<CurrencyCode, number> = {};
@@ -746,7 +781,7 @@ export function toPublicProduct(
       // Mode only — `markupPct` and `fallbackCost` are ours, and `fallbackCost`
       // is denominated in the cost currency besides.
       pricing: { mode: product.shipping.pricing.mode },
-      rates: projectShippingRates(product, settings),
+      rates: projectShippingRates(product, settings, opts.registry),
     },
   };
 }
@@ -838,19 +873,32 @@ export function worstBreakEvenDiscountPct(
 export function projectShippingRates(
   product: ProductDefinition,
   settings: PricingSettings,
+  registry: MarketRegistry,
 ): PublicShippingRate[] {
   const { shipping } = product;
   const methods = shipping.methods.filter((m) => m.enabled).map((m) => m.method);
-  const countries = allowedMarketsFor(shipping.destinations);
+  const countries = allowedMarketsFor(registry, shipping.destinations);
   const rates: PublicShippingRate[] = [];
 
   for (const country of countries) {
     for (const method of methods) {
       const row = shippingRowFor(shipping, country, method);
-      // A measured refusal is a fact about coverage worth publishing; an
-      // unmeasured route is not, and falls through to the scalar below.
+      // A measured refusal is a fact about coverage worth publishing.
       if (row && !row.available) {
         rates.push({ country, method, available: false, charged: {}, measured: true });
+        continue;
+      }
+      // An unmeasured route in a passthrough product has no honest published
+      // price: the scalar fallback was fitted to countries the sweep visited,
+      // and this isn't one. Checkout will live-quote it and succeed; the
+      // storefront simply declines to promise a number in advance rather than
+      // advertising one it would then contradict.
+      if (
+        !row &&
+        shipping.pricing.mode === "passthrough" &&
+        !hasMeasurementFor(shipping, country)
+      ) {
+        rates.push({ country, method, available: true, charged: {}, measured: false });
         continue;
       }
       const charged: PublicShippingRate["charged"] = {};
@@ -969,6 +1017,19 @@ export function publicShippingRateFor(
   if (!country || !method) return undefined;
   const c = country.trim().toUpperCase();
   return product.shipping.rates.find((r) => r.method === method && r.country.toUpperCase() === c);
+}
+
+/**
+ * The countries this product is PUBLISHED as shipping to.
+ *
+ * Read off the projected rates rather than recomputed from the geo policy: the
+ * server already intersected that policy with the open markets when it built
+ * the projection, so this is what the storefront was actually told. Deriving it
+ * again on the client would need the registry AND could disagree with the
+ * prices sitting right next to it.
+ */
+export function publicMarketsFor(product: PublicProduct): string[] {
+  return [...new Set(product.shipping.rates.map((r) => r.country.toUpperCase()))].sort();
 }
 
 /** The speeds this product is published as actually reaching a destination. */

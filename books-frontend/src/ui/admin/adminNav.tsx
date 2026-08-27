@@ -23,6 +23,7 @@ import {
   CreditCard,
   DollarSign,
   FileText,
+  Globe,
   Handshake,
   Hash,
   HeartPulse,
@@ -80,6 +81,7 @@ export const CONFIG_TAB_META: Record<ConfigTabId, { label: string; icon: ReactNo
   // Business
   overview: { label: "Overview", icon: <LayoutDashboard className="size-4" /> },
   catalog: { label: "Catalog", icon: <Package className="size-4" /> },
+  markets: { label: "Markets", icon: <Globe className="size-4" /> },
   memberships: { label: "Memberships", icon: <CreditCard className="size-4" /> },
   sparks: { label: "Sparks economy", icon: <Sparkles className="size-4" /> },
   financial: { label: "Financial settings", icon: <Coins className="size-4" /> },

@@ -1,0 +1,578 @@
+{
+  "banner": {
+    "dismiss": "Ausblenden"
+  },
+  "billing": {
+    "plans": {
+      "title": "Tarife",
+      "intro": "Wähle den Tarif, der zu deinem Tempo passt. Jeder Tarif enthält jeden Monat ein Paket Sparks (günstiger als einzeln gekauft) und weitere Vorteile. Jederzeit kündbar.",
+      "monthly": "Monatlich",
+      "yearly": "Jährlich",
+      "save": "sparen",
+      "loading": "Tarife werden geladen…",
+      "emptyTitle": "Noch keine Tarife verfügbar",
+      "emptyBody": "Die Abo-Tarife sind noch nicht veröffentlicht.",
+      "free": "Kostenlos",
+      "perMonth": "Mon.",
+      "perYear": "Jahr",
+      "notAvailable": "In {currency} nicht verfügbar",
+      "currentPlan": "Aktueller Tarif",
+      "included": "Enthalten",
+      "switchInPortal": "Im Zahlungsportal wechseln",
+      "choosePlan": "{plan} wählen",
+      "onPlan": "Du nutzt <name>{plan}</name>.",
+      "onPlanCancelling": "Du nutzt <name>{plan}</name><warn> · endet zum Abrechnungsende</warn>.",
+      "manage": "Abo verwalten",
+      "upgrade": "Upgrade",
+      "checkoutFailed": "Der Bezahlvorgang konnte nicht gestartet werden.",
+      "portalFailed": "Die Zahlungsverwaltung konnte nicht geöffnet werden.",
+      "perk": {
+        "sparks": "{count, number} Sparks jeden Monat",
+        "annualBonus": "+{count, number} Bonus-Sparks sofort",
+        "printDiscount": "{pct} % Rabatt auf gedruckte Bücher",
+        "ebookIncluded": "Digitale Ausgaben deiner Bücher – inklusive",
+        "ebookDiscounted": "Digitale Ausgaben für {price} (statt {list})",
+        "formats": "{count, plural, one {# Premium-Format} other {# Premium-Formate}}",
+        "layouts": "{count, plural, one {# Premium-Layout} other {# Premium-Layouts}}",
+        "fonts": "{count, plural, one {# zusätzliche Schrift} other {# zusätzliche Schriften}}"
+      }
+    },
+    "upsell": {
+      "heading": "Noch mehr Bücher?",
+      "seePlans": "Tarife ansehen",
+      "inline": "{plan}-Mitglieder erhalten {benefit} – ab {price}/Mon.",
+      "card": "{plan}-Mitglieder erhalten {benefit}, ab {price} pro Monat. Jederzeit kündbar.",
+      "benefit": {
+        "ebookIncluded": "digitale Ausgaben inklusive",
+        "ebookDiscounted": "digitale Ausgaben für {price} statt {list}",
+        "print": "{pct} % Rabatt auf jedes gedruckte Buch",
+        "sparks": "{count, number} Sparks jeden Monat"
+      }
+    }
+  },
+  "blog": {
+    "allArticles": "Alle Artikel",
+    "readingTime": "{minutes} Min. Lesezeit",
+    "keepReading": "Weiterlesen",
+    "notFound": "Artikel nicht gefunden",
+    "breadcrumbHome": "Startseite",
+    "breadcrumbBlog": "Blog"
+  },
+  "checkout": {
+    "address": {
+      "unverifiedTitle": "Wir konnten diese Adresse nicht prüfen",
+      "unverifiedBody": "Unsere Druckerei nimmt keine Adresse an, die sie nicht bestätigen kann. Bitte prüfe Straße, Ort und Postleitzahl noch einmal, bevor du bezahlst.",
+      "adjustedSlightly": "Der Versanddienst hat deine Adresse leicht angepasst",
+      "confirmedTitle": "Lieferadresse bestätigt",
+      "checkTitle": "Prüfe deine Lieferadresse",
+      "checkBody": "Der Versanddienst schlägt eine leicht abweichende Version vor. Seine Variante ist der sicherste Weg, damit dein Buch ankommt.",
+      "youEntered": "Deine Eingabe",
+      "carrierSuggests": "Vorschlag des Versanddienstes",
+      "recommended": "Empfohlen",
+      "useSuggested": "Vorgeschlagene Adresse übernehmen",
+      "keepMine": "Meine Eingabe behalten"
+    },
+    "binding": {
+      "saddle-stitch": {
+        "noun": "geheftetes Softcover",
+        "blurb": "Gefalzte Bögen im Falz geheftet – das Buch liegt flach auf und wiegt fast nichts. Kein bedruckbarer Buchrücken, und nur für dünne Bücher."
+      },
+      "perfect-bound": {
+        "noun": "Softcover",
+        "blurb": "Seiten in einen flachen, bedruckten Buchrücken geklebt, wie bei jedem Taschenbuch. Braucht genug Dicke zum Kleben."
+      },
+      "coil-bound": {
+        "noun": "Softcover mit Spiralbindung",
+        "blurb": "Eine Spirale durch gestanzte Löcher – das Buch liegt völlig flach auf dem Tisch. Gemacht zum Mitlesen und Ausmalen; es sieht nicht aus wie ein Buchhandelsexemplar."
+      },
+      "casewrap": {
+        "noun": "Hardcover",
+        "blurb": "Das Motiv wird direkt auf den Deckel gedruckt und laminiert. Das Format zum Aufbewahren – und das, was ein Geschenkexemplar sein sollte."
+      }
+    },
+    "confirmation": {
+      "close": "Schließen",
+      "backToBook": "Zurück zu deinem Buch",
+      "inviteHeading": "Kennst du andere Eltern, die das lieben würden?",
+      "printedBook": "Gedrucktes Buch",
+      "justNow": "Gerade eben",
+      "settling": {
+        "title": "Wir bestätigen deine Zahlung…",
+        "body": "{what} Das dauert nur wenige Sekunden. Du kannst diese Seite verlassen – wir schreiben dir in jedem Fall eine E-Mail."
+      },
+      "order": {
+        "eyebrowConfirmed": "Bestellung bestätigt",
+        "eyebrowReceived": "Bestellung eingegangen",
+        "titleSettling": "Danke für deine Bestellung",
+        "titleOk": "Dein Buch ist auf dem Weg",
+        "titleWorking": "Wir klären noch etwas",
+        "titleStuck": "Deine Bestellung braucht unsere Aufmerksamkeit",
+        "subtitleSettling": "Wir bestätigen deine Zahlung mit unserem Anbieter.",
+        "subtitleOk": "Wir haben deine Zahlung erhalten und dein Buch geht in den Druck. Alles unten steht auch in deiner E-Mail.",
+        "subtitleWorking": "Deine Zahlung war erfolgreich, aber die Druckerei hat das Buch nicht auf Anhieb angenommen. Wir kümmern uns darum – die Details stehen unten.",
+        "subtitleStuck": "Deine Zahlung war erfolgreich, aber wir konnten dieses Buch nicht in den Druck geben. Unser Team ist informiert und meldet sich bei dir.",
+        "settlingNote": "Deine Bestellung ist reserviert und nichts geht verloren.",
+        "summary": "Bestellübersicht",
+        "summaryMeta": "{date} · {count, plural, one {# Exemplar} other {# Exemplare}} · {product}",
+        "lineTimes": "{label} × {quantity}",
+        "totalPaid": "Gesamtbetrag",
+        "viewReceipt": "Beleg ansehen",
+        "track": "Bestellung verfolgen",
+        "orderId": "Bestellung",
+        "trackParcel": "Sendung verfolgen",
+        "shippingTo": "Versand an",
+        "methodAndBinding": "{method} · {binding}",
+        "carrierAdjusted": "Der Versanddienst hat dies zu <addr>{address}</addr> geändert. Falls das nicht stimmt, melde dich sofort bei uns – die Bestellung kann noch gestoppt werden."
+      },
+      "ebook": {
+        "eyebrow": "Kauf abgeschlossen",
+        "title": "Dein E-Book ist fertig",
+        "subtitle": "Die digitale Ausgabe gehört dir. Lade sie so oft herunter, wie du magst – auf jedem Gerät.",
+        "download": "E-Book herunterladen",
+        "savedNote": "Es ist in deinem Konto gespeichert – du findest es jederzeit unter „Downloads“.",
+        "settlingNote": "Dein E-Book wird freigeschaltet, sobald die Zahlung durch ist."
+      },
+      "sparks": {
+        "eyebrow": "Aufladung abgeschlossen",
+        "title": "Deine Sparks sind da",
+        "subtitle": "Sparks verfallen nie – gib sie für Geschichten, Illustrationen und Überarbeitungen aus, wann du willst.",
+        "settlingNote": "Deine Sparks kommen an, sobald die Zahlung durch ist.",
+        "balance": "Dein Guthaben"
+      },
+      "gift": {
+        "eyebrow": "Geschenk gekauft",
+        "title": "Dein Geschenk ist bereit",
+        "subtitle": "Teile den Code unten mit der Person, die du beschenken willst. Sie löst ihn in ihrem eigenen Konto ein.",
+        "claimCode": "Einlösecode",
+        "fetching": "Dein Code wird geladen…",
+        "copy": "Kopieren",
+        "copied": "Kopiert",
+        "copyFailed": "Der Code konnte nicht kopiert werden – markiere und kopiere ihn manuell.",
+        "generating": "Dein Code wird erstellt – du findest ihn in deinem Sparks-Guthaben unter „Gekaufte Geschenke“ und in deiner E-Mail-Bestätigung."
+      },
+      "subscription": {
+        "eyebrow": "Willkommen an Bord",
+        "title": "Dein Tarif ist aktiv",
+        "subtitle": "Deine Mitgliedsvorteile gelten ab sofort – monatliche Sparks, Mitgliederpreise und alle Premium-Extras deines Tarifs.",
+        "body": "Du kannst deinen Tarif jederzeit über das Kontomenü ansehen oder ändern. Die erste Spark-Gutschrift ist bereits in deinem Guthaben."
+      }
+    },
+    "downloads": {
+      "title": "Deine Downloads",
+      "loading": "Deine Downloads werden geladen…",
+      "emptyTitle": "Noch keine Downloads",
+      "emptyBody": "Wenn du die digitale Ausgabe eines Buches kaufst, erscheint sie hier – jederzeit und auf jedem Gerät herunterladbar.",
+      "untitled": "Dein Buch",
+      "new": "Neu",
+      "type": {
+        "ebook": "Digitale Ausgabe (PDF)",
+        "other": "Download"
+      },
+      "boughtOn": "{type} · gekauft am {date}",
+      "timesDownloaded": "{count, plural, one {<n>#</n>× heruntergeladen} other {<n>#</n>× heruntergeladen}}",
+      "lastDownloaded": "Zuletzt: {date}",
+      "download": "Herunterladen",
+      "history": "Download-Verlauf",
+      "historyWithCount": "Download-Verlauf ({count})",
+      "loadingHistory": "Verlauf wird geladen…",
+      "noHistory": "Noch keine Downloads erfasst."
+    },
+    "ebook": {
+      "title": "Dein Buch als E-Book",
+      "checkingPrice": "Preis wird geprüft…",
+      "alreadyOwn": "Du besitzt die digitale Ausgabe von <name>{title}</name> bereits.",
+      "download": "E-Book herunterladen",
+      "findUnderDownloads": "Du findest es jederzeit unter „Downloads“ im Kontomenü.",
+      "staleNote": "Design nach dem Kauf geändert? Hol dir ein frisches PDF mit deinen neuesten Änderungen – kostenlos, weil du es schon besitzt.",
+      "updateToLatest": "Auf dein neuestes Design aktualisieren",
+      "oneMoment": "Einen Moment…",
+      "unavailable": "E-Books sind gerade nicht verfügbar. Bitte schau später wieder vorbei.",
+      "digitalEditionOf": "{title} – digitale Ausgabe",
+      "pitch": "Ein schönes, hochwertiges PDF deines fertigen Buches – für immer lesbar auf Tablet, Handy oder Computer. Die Seiten haben das von dir gestaltete Format von {width} × {height} Zoll, es liest sich also genau wie das gedruckte Exemplar.",
+      "price": "Preis",
+      "included": "Enthalten",
+      "includedWithPlan": "Digitale Ausgaben sind in deinem Tarif {plan} enthalten.",
+      "memberPrice": "Dein Mitgliederpreis im Tarif {plan}.",
+      "printOwnerDiscount": "Enthält deinen Rabatt von {pct} %, weil du das gedruckte Buch besitzt.",
+      "getIncluded": "E-Book holen – in deinem Tarif enthalten",
+      "buyFor": "E-Book kaufen · {price}",
+      "noPaymentNeeded": "Keine Zahlung nötig – das ist Teil deines Tarifs.",
+      "securePayment": "Sichere Zahlung über Stripe. Der Download wird direkt nach der Zahlung freigeschaltet.",
+      "statusPreparing": "Dein Buch wird vorbereitet…",
+      "statusUpdating": "Dein E-Book wird aktualisiert…",
+      "statusAdding": "Wird deiner Bibliothek hinzugefügt…",
+      "statusPayment": "Sichere Zahlung wird geöffnet…",
+      "errorQuote": "Wir konnten den Preis für das E-Book nicht ermitteln.",
+      "errorPrepare": "Wir konnten dein Buch nicht vorbereiten.",
+      "errorCheckout": "Wir konnten den Bezahlvorgang nicht starten."
+    },
+    "format": {
+      "legend": "Bindung",
+      "hint": "Wie das Buch zusammengehalten wird. Jede Option druckt dieselben Seiten im selben Format.",
+      "pageRounding": "Wird als {pages} Seiten gedruckt (diese Bindung arbeitet in {step}er-Schritten)",
+      "needsMore": "Braucht mindestens {min} Seiten – dein Buch hat {pages}.",
+      "takesFewer": "Nimmt bis zu {max} Seiten – dein Buch hat {pages}."
+    },
+    "variant": {
+      "unavailable": "Mit der aktuellen Auswahl nicht verfügbar",
+      "axis": {
+        "print": {
+          "label": "Innendruck",
+          "hint": "Wie die Seiten gedruckt werden. Der größte Preisfaktor bei einem langen Buch."
+        },
+        "paper": {
+          "label": "Papier",
+          "hint": "Worauf die Seiten gedruckt werden."
+        },
+        "finish": {
+          "label": "Cover-Veredelung",
+          "hint": "Wie das Cover laminiert wird."
+        }
+      },
+      "option": {
+        "print": {
+          "premium-colour": {
+            "label": "Premium-Farbe",
+            "hint": "Kräftigste Farben und schärfstes Register. Was illustrierte Seiten verdienen – und die Empfehlung der Druckerei für Kinderbücher."
+          },
+          "standard-colour": {
+            "label": "Standard-Farbe",
+            "hint": "Farbe auf jeder Seite für etwa ein Drittel des Premium-Preises pro Seite. Die Farben wirken etwas flacher."
+          },
+          "premium-bw": {
+            "label": "Premium-Schwarzweiß",
+            "hint": "Tiefe Schwarztöne und feine Graustufen für Bleistift- und Tuschearbeiten. Illustrationen werden monochrom gedruckt."
+          },
+          "standard-bw": {
+            "label": "Standard-Schwarzweiß",
+            "hint": "Der günstigste Weg, ein langes Buch zu drucken. Richtig für textlastige Erstlesebücher, falsch für farbige Illustrationen."
+          }
+        },
+        "paper": {
+          "80-coated-white": {
+            "label": "80# gestrichen weiß",
+            "hint": "Schwer und glatt mit leichtem Glanz, damit Farben strahlen. Die Empfehlung der Druckerei für Bilderbücher."
+          },
+          "60-uncoated-white": {
+            "label": "60# ungestrichen weiß",
+            "hint": "Leichter und matt, eher wie ein Roman. Weichere Farben, dünneres und günstigeres Buch."
+          },
+          "60-uncoated-cream": {
+            "label": "60# ungestrichen creme",
+            "hint": "Warmes Naturweiß, das angenehmer zu lesen ist. Nur für Schwarzweiß-Innenteile – die Druckerei druckt keine Farbe auf Creme."
+          }
+        },
+        "finish": {
+          "gloss": {
+            "label": "Glänzend",
+            "hint": "Glänzend und satt, und abwischbar – was bei einem Buch in Kleinkindhänden zählt. Zeigt Fingerabdrücke."
+          },
+          "matte": {
+            "label": "Matt",
+            "hint": "Weich, blendfrei und wirkt hochwertiger. Gebrauchsspuren zeigen sich leichter als bei glänzend."
+          }
+        }
+      }
+    },
+    "order": {
+      "title": "Gedrucktes Buch bestellen",
+      "cancel": "Abbrechen",
+      "continueToPayment": "Weiter zur Zahlung",
+      "preparingFiles": "Dateien werden vorbereitet…",
+      "redirecting": "Weiterleitung…",
+      "checkAddress": "Adresse prüfen",
+      "confirmAddress": "Adresse bestätigen",
+      "untitledBook": "Dein Bilderbuch",
+      "productMeta": "{width}×{height}″ · {pages} Seiten · {binding}",
+      "needsMinPages": "Ein {binding} braucht mindestens {min} Seiten – dein Buch hat {pages}.",
+      "takesMaxPages": "Ein {binding} nimmt bis zu {max} Seiten – dein Buch hat {pages}.",
+      "switchTo": "{binding} nimmt ein Buch dieser Länge – wechsle unten.",
+      "addPages": "Füge {count, plural, one {# weitere Seite} other {# weitere Seiten}} hinzu, bevor du bestellst.",
+      "removePages": "Entferne einige Seiten, bevor du bestellst.",
+      "maxCopies": "Du kannst höchstens {count, plural, one {# Exemplar} other {# Exemplare}} auf einmal bestellen.",
+      "preflightTitle": "Ein Blick lohnt sich, bevor du druckst",
+      "preflightMore": "… und {count} weitere.",
+      "preflightAdvisory": "Du kannst trotzdem bestellen – das sind Ermessensfragen, keine Fehler.",
+      "gateAnyPlan": "Dieses Druckprodukt ist mit jedem bezahlten Abo verfügbar. Führe ein Upgrade durch, um es zu bestellen.",
+      "gateSelectPlans": "Dieses Druckprodukt ist in ausgewählten Abo-Tarifen verfügbar. Führe ein Upgrade durch, um es zu bestellen.",
+      "loadingAddresses": "Gespeicherte Adressen werden geladen…",
+      "savedAddress": "Gespeicherte Adresse verwenden",
+      "newAddress": "Neue Adresse…",
+      "saveAddress": "Diese Adresse für das nächste Mal speichern",
+      "addressLabelFallback": "Adresse",
+      "field": {
+        "name": "Name des Empfängers",
+        "email": "E-Mail",
+        "phone": "Telefon",
+        "address": "Adresse",
+        "line2": "Adresszusatz",
+        "city": "Ort",
+        "region": "Bundesland / Region",
+        "postal": "Postleitzahl",
+        "country": "Land",
+        "copies": "Exemplare",
+        "shipping": "Versand"
+      },
+      "placeholder": {
+        "name": "Erika Mustermann",
+        "email": "für Versand-Updates",
+        "phone": "für den Versanddienst",
+        "line1": "Straße und Hausnummer",
+        "line2": "Wohnung, Etage (optional)"
+      },
+      "estimatedCost": "Geschätzte Kosten",
+      "quoting": "Aktueller Preis wird ermittelt…",
+      "quoteHint": "Gib Ort, Region und Postleitzahl ein, um die Preise zu sehen.",
+      "quoteError": "Wir konnten für dieses Ziel keinen Preis ermitteln. Prüfe Ort, Region und Postleitzahl.",
+      "quoteAuthError": "Bitte melde dich erneut an, um aktuelle Preise zu sehen.",
+      "lineBooks": "Bücher ({copies} × {price})",
+      "planSaves": "Dein Tarif spart dir {pct} % (vorher {was} pro Exemplar).",
+      "lineShipping": "Versand",
+      "lineTotal": "Geschätzte Gesamtsumme",
+      "paymentNote": "Die Zahlung wird sicher über Stripe abgewickelt. Du siehst die endgültige Summe – inklusive Steuern – vor dem Bezahlen. Deine Bestellung geht erst nach erfolgreicher Zahlung in den Druck.",
+      "statusCoverSize": "Cover-Größe wird berechnet…",
+      "statusChecking": "Dein Buch wird geprüft…",
+      "statusRedirecting": "Weiterleitung zur sicheren Kasse…",
+      "errorSubscription": "Dieses Produkt ist nur mit einem Abo verfügbar. Führe ein Upgrade durch, um es zu bestellen.",
+      "errorAddressUnverified": "Diese Lieferadresse konnte nicht geprüft werden. Bitte korrigiere sie.",
+      "errorAddressUnreviewed": "Der Versanddienst hat eine Adresskorrektur vorgeschlagen – wähle eine Variante, bevor du bezahlst.",
+      "errorIncomplete": "Gib Empfängername, Telefonnummer und die vollständige Lieferadresse an."
+    },
+    "orders": {
+      "title": "Bestellungen & Zahlungen",
+      "tabOrders": "Bestellungen",
+      "tabPayments": "Zahlungen & Belege",
+      "loadingOrders": "Deine Bestellungen werden geladen…",
+      "noOrdersTitle": "Noch keine Bestellungen",
+      "noOrdersBody": "Wenn du ein gedrucktes Buch bestellst, erscheint es hier – mit aktuellem Status, Sendungsverfolgung und den Druckdateien, die wir an die Druckerei geschickt haben.",
+      "loadingPayments": "Deine Zahlungen werden geladen…",
+      "noPaymentsTitle": "Noch keine Zahlungen",
+      "noPaymentsBody": "Belege für deine Bestellungen und Abos erscheinen hier, sobald du bezahlt hast.",
+      "printedBook": "Gedrucktes Buch",
+      "justNow": "Gerade eben",
+      "subscription": "Abo",
+      "order": "Bestellung",
+      "refunded": "{amount} erstattet",
+      "reorderFailed": "Wir konnten den Bezahlvorgang nicht starten.",
+      "viewReceipt": "Beleg ansehen",
+      "orderStatus": "Bestellstatus",
+      "orderAgain": "Erneut bestellen",
+      "copiesOn": "{date} · {count, plural, one {# Exemplar} other {# Exemplare}}",
+      "carrierAdjusted": "Der Versanddienst hat diese Adresse zu <addr>{address}</addr> geändert. Falls das nicht stimmt, melde dich sofort bei uns – wir können die Bestellung noch stoppen.",
+      "shipTo": "Versand an",
+      "charged": "Belastet",
+      "shipment": "Sendung",
+      "interiorPdf": "Innenteil-PDF",
+      "coverPdf": "Cover-PDF",
+      "statusHistory": "Statusverlauf ({count})",
+      "paymentStatus": {
+        "pending": "Offen",
+        "paid": "Bezahlt",
+        "failed": "Fehlgeschlagen",
+        "refunded": "Erstattet",
+        "partiallyRefunded": "Teilweise erstattet"
+      }
+    },
+    "shipping": {
+      "option": {
+        "Budget": "Budget (am langsamsten, am günstigsten)",
+        "Standard": "Standard",
+        "StandardPlus": "Standard Plus",
+        "Express": "Express",
+        "Overnight": "Overnight (am schnellsten)"
+      },
+      "method": {
+        "Budget": "Budget-Versand",
+        "Standard": "Standardversand",
+        "StandardPlus": "Standard-Plus-Versand",
+        "Express": "Expressversand",
+        "Overnight": "Overnight-Versand"
+      }
+    },
+    "survey": {
+      "privacyNote": "Freiwillig, und es bleibt unter uns – wir nutzen es, um zu entscheiden, was wir als Nächstes bauen.",
+      "noThanks": "Nein, danke",
+      "skip": "Überspringen",
+      "send": "Senden",
+      "skipped": "Kein Problem – wir fragen zu dieser Bestellung nicht noch einmal.",
+      "neverAgain": "Nicht mehr fragen",
+      "somethingElse": "Etwas anderes…"
+    },
+    "status": {
+      "stage": {
+        "draft": "Eingegangen",
+        "onHold": "Braucht Aufmerksamkeit",
+        "inProgress": "In Produktion",
+        "complete": "Versandt",
+        "cancelled": "Storniert",
+        "error": "Problem"
+      },
+      "fulfillment": {
+        "pending": {
+          "label": "Wird für den Druck vorbereitet",
+          "detail": "Wir schicken dein Buch an die Druckerei. Das dauert meist ein bis zwei Minuten."
+        },
+        "placed": {
+          "label": "In der Druckerei",
+          "detail": "Dein Buch ist bei unserem Druckpartner. Du erhältst die Sendungsverfolgung, sobald es verschickt wird."
+        },
+        "retrying": {
+          "label": "Wir arbeiten noch daran",
+          "detail": "Dein Buch in den Druck zu geben hat beim ersten Versuch nicht geklappt, also versuchen wir es automatisch erneut. Du musst nichts tun – und es wird nichts doppelt berechnet."
+        },
+        "failed": {
+          "label": "Braucht unsere Aufmerksamkeit",
+          "detail": "Wir konnten dieses Buch nicht in den Druck geben. Unser Team ist informiert und meldet sich wegen Nachdruck oder Erstattung. Es wird nichts doppelt berechnet."
+        }
+      }
+    }
+  },
+  "consent": {
+    "settings": "Cookie-Einstellungen",
+    "necessaryAlwaysOn": "Notwendig (immer aktiv)",
+    "categoryEnabled": "{category} aktiviert"
+  },
+  "faq": {
+    "heading": "Häufige Fragen"
+  },
+  "footer": {
+    "tagline": "Schreibe, illustriere und drucke personalisierte Bilderbücher für Kinder – mit KI.",
+    "product": "Produkt",
+    "company": "Unternehmen",
+    "legal": "Rechtliches",
+    "howItWorks": "So funktioniert's",
+    "features": "Funktionen",
+    "plansPricing": "Tarife & Preise",
+    "printCalculator": "Druckkosten-Rechner",
+    "openStudio": "Studio öffnen",
+    "blog": "Blog",
+    "faq": "FAQ",
+    "affiliates": "Partnerprogramm",
+    "contact": "Kontakt",
+    "signIn": "Anmelden",
+    "copyright": "© {year} {siteName}. Alle Rechte vorbehalten."
+  },
+  "marketing": {
+    "hero": {
+      "badge": "Mit KI illustrierte Bilderbücher",
+      "title": "Mach aus einer Geschichte ein gedrucktes Bilderbuch.",
+      "subtitle": "Schreibe deine Geschichte, gestalte wiederkehrende Figuren und Orte und lass die KI jede Seite in einem einheitlichen Look illustrieren – und bestelle dann ein wunderschönes, druckfertiges Buch nach Hause.",
+      "ctaPrimary": "Jetzt Bilderbuch erstellen",
+      "ctaSecondary": "So funktioniert's",
+      "note": "Kostenlos starten – ohne Konto und ohne Kreditkarte.",
+      "namePlaceholder": "Von wem soll die Geschichte handeln?",
+      "nameLabel": "Die Hauptfigur deiner Geschichte"
+    },
+    "trust": {
+      "0": "Professionelle Druckqualität",
+      "1": "Gedruckt & versandt von Lulu",
+      "2": "Dieselben Figuren auf jeder Seite",
+      "3": "Kostenlos starten – ohne Kreditkarte"
+    },
+    "how": {
+      "heading": "Vom leeren Blatt ins Bücherregal – in drei Schritten",
+      "subhead": "Ein geführter Ablauf bringt dich von der Idee zum fertigen, druckbaren Buch – ohne Designkenntnisse.",
+      "stepLabel": "Schritt {number}",
+      "step1": {
+        "title": "Geschichte schreiben",
+        "body": "Füge deine Geschichte ein oder schreibe sie direkt. Wir zerlegen sie in Figuren, Orte und ein Drehbuch Seite für Seite, das du feinjustieren kannst."
+      },
+      "step2": {
+        "title": "Mit KI illustrieren",
+        "body": "Gestalte deine Referenzen einmal. Jede Seite greift darauf zurück, damit dein Ensemble vom Cover bis zur letzten Seite gleich aussieht."
+      },
+      "step3": {
+        "title": "Drucken & behalten",
+        "body": "Setze Text und Bilder ins Layout und bestelle ein randlos gedrucktes, druckfertiges Buch – oder erhalte es sofort als digitale Ausgabe."
+      }
+    },
+    "features": {
+      "heading": "Alles, was ein echtes Buch braucht",
+      "subhead": "Mächtige Werkzeuge unter einer einfachen, spielerischen Oberfläche – damit die Geschichte im Mittelpunkt bleibt.",
+      "0": {
+        "title": "Gleichbleibende Figuren",
+        "body": "Gestalte eine Figur oder einen Ort einmal – sie bleiben auf jeder Seite modellgetreu: dasselbe Gesicht, dieselbe Kleidung, derselbe Stil."
+      },
+      "1": {
+        "title": "KI-Illustrationen für jede Seite",
+        "body": "Jede Seite wird passend zu ihrem Moment in der Geschichte illustriert – in einem Stil, den du wählst und verfeinern kannst."
+      },
+      "2": {
+        "title": "Druckfertiger Export",
+        "body": "Wir setzen randlose Seiten im richtigen Format und übergeben ein druckfertiges Buch an die echte Produktion."
+      },
+      "3": {
+        "title": "Digitale Ausgabe inklusive",
+        "body": "Du bekommst dein fertiges Buch zusätzlich als schönes PDF – lies es auf jedem Gerät und behalte es für immer."
+      },
+      "4": {
+        "title": "Ohne Anmeldung starten",
+        "body": "Leg sofort los – keine Registrierungshürde. Speichern und drucken kannst du, wann du möchtest."
+      },
+      "5": {
+        "title": "Sparks, die nicht verfallen",
+        "body": "Bezahlte Tarife enthalten jeden Monat ein Guthaben an Sparks, das übertragen wird – dazu günstigere Drucke."
+      }
+    },
+    "founder": {
+      "sectionLabel": "Von unserem Gründer",
+      "eyebrow": "Warum wir angefangen haben",
+      "quote": "Als mein Kleinkind operiert werden musste, fand ich kein einziges Bilderbuch, das sanft genug war, um ihm zu erklären, was auf ihn zukommt. Also habe ich selbst eines gemacht – und aus diesem Buch wurde Childbook Studio.",
+      "name": "Gründer",
+      "role": "Childbook Studio"
+    },
+    "cta": {
+      "heading": "Bereit für dein erstes Buch?",
+      "subhead": "Schreibe und illustriere in Sekunden los. Ohne Konto, ohne Kreditkarte.",
+      "button": "Studio öffnen"
+    },
+    "images": {
+      "hero": {
+        "main": "Doppelseite aus einem Bilderbuch",
+        "card1": "Beispielseite",
+        "card2": "Beispielseite"
+      },
+      "how": {
+        "step1": "Illustration – Schreiben",
+        "step2": "Illustration – Illustrieren",
+        "step3": "Illustration – Drucken"
+      },
+      "founder": {
+        "photo": "Foto des Gründers"
+      }
+    }
+  },
+  "nav": {
+    "howItWorks": "So funktioniert's",
+    "features": "Funktionen",
+    "pricing": "Preise",
+    "printCosts": "Druckkosten",
+    "blog": "Blog",
+    "faq": "FAQ",
+    "openStudio": "Studio öffnen",
+    "openMenu": "Menü öffnen",
+    "closeMenu": "Menü schließen",
+    "language": "Sprache",
+    "admin": "Admin",
+    "signIn": "Anmelden",
+    "signOut": "Abmelden"
+  },
+  "pricing": {
+    "heading": "Einfache Tarife, die mit deinen Geschichten wachsen",
+    "subhead": "Kostenlos starten. Upgrade für mehr Sparks, günstigere Drucke und Premium-Extras.",
+    "monthly": "Monatlich",
+    "yearly": "Jährlich",
+    "saveMore": "Mehr sparen",
+    "free": "Kostenlos",
+    "perMonth": "Mon.",
+    "perYear": "Jahr",
+    "startForFree": "Kostenlos starten",
+    "choosePlan": "Tarif wählen",
+    "footnote": "Preise dienen der Orientierung. Du kannst dein Abo jederzeit im Studio verwalten.",
+    "sparksPerMonth": "{count, number} Sparks jeden Monat",
+    "annualBonusSparks": "+{count, number} Bonus-Sparks im Jahrestarif",
+    "printDiscount": "{pct} % Rabatt auf jede Druckbestellung",
+    "completeBookFree": "Ein komplettes Buch kostenlos erstellen",
+    "printStandardPrice": "Jederzeit zum Standardpreis drucken"
+  }
+}

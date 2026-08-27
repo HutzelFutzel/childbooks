@@ -34,6 +34,13 @@ export interface Address {
   postalOrZipCode: string;
   /** Two-letter ISO country code. */
   countryCode: string;
+  /**
+   * The RECIPIENT's tax identification number, where the destination's customs
+   * regime demands one (Brazil CPF/CNPJ, Chile RUT, Mexico RFC). Customer data
+   * for the carrier's paperwork, not a registration of ours — and required at
+   * order time, not at quote time, so checkout must collect it before payment.
+   */
+  taxId?: string;
 }
 
 export interface Recipient {
@@ -212,6 +219,51 @@ export interface TierOutcome {
   throttled?: boolean;
   /** The provider's explanation, when it gave one. */
   message?: string;
+}
+
+/**
+ * A shipping service the provider offers to one destination.
+ *
+ * Distinct from {@link TierOutcome}, which is the result of PRICING a specific
+ * order: this describes what exists to a country at all, with the delivery
+ * window attached, and is cheap enough to ask for every country on earth. It's
+ * what a coverage sweep records.
+ *
+ * `level` is the provider's own string rather than a {@link ShippingMethod}
+ * because a provider can run services we haven't given a domain tier to (Lulu's
+ * GROUND_HD / GROUND_BUS). Discarding those at the adapter boundary would hide
+ * real coverage; `method` is left undefined instead.
+ */
+export interface ShippingOption {
+  level: string;
+  method?: ShippingMethod;
+  /** Business days from start of production to delivery, when reported. */
+  transitDaysMin?: number;
+  transitDaysMax?: number;
+  /** Whether the service produces a tracking link. */
+  traceable: boolean;
+  postboxOk: boolean;
+  /** Delivers on working days only. */
+  businessOnly: boolean;
+  /**
+   * Cost for the exact configuration that was asked about. Indicative only for
+   * a coverage sweep, which probes one reference product — real shipping cost
+   * scales with the book's weight.
+   */
+  cost?: Money;
+}
+
+/** What to ask about when enumerating a destination's shipping services. */
+export interface ShippingOptionsRequest {
+  productSku: string;
+  pageCount: number;
+  copies: number;
+  destinationCountry: string;
+  /** ISO-3166-2 subdivision. Required by some countries for an accurate answer. */
+  destinationState?: string;
+  destinationPostalCode?: string;
+  destinationCity?: string;
+  currency?: string;
 }
 
 /** Normalized lifecycle stage of an order across providers. */
@@ -424,6 +476,19 @@ export interface FulfillmentProvider {
    * has no way to report why a tier is missing. Only backend callers need it.
    */
   quoteTiers?(req: QuoteRequest): Promise<TierOutcome[]>;
+  /**
+   * Every shipping service the provider runs to a destination, in ONE call.
+   *
+   * Separate from {@link quoteTiers} because it answers a different question at
+   * a different cost: "what reaches this country" rather than "what does this
+   * order cost", needing only a country rather than a validated address. That's
+   * what makes sweeping every country in the world affordable — `quoteTiers`
+   * would be one request per speed per country.
+   *
+   * Optional for the same reason as {@link quoteTiers}: the browser adapter
+   * talks to our own API, and coverage discovery is a backend concern.
+   */
+  shippingOptions?(req: ShippingOptionsRequest): Promise<ShippingOption[]>;
   /** Upload assets and submit an order for fulfillment. */
   createOrder(draft: OrderDraft): Promise<FulfillmentOrder>;
   /** Fetch current order status. */

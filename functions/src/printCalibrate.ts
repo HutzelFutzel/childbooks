@@ -28,6 +28,9 @@ import {
   type ShippingFallbackRow,
 } from "../../books-frontend/src/core/config/products";
 import { isDestinationAllowed } from "../../books-frontend/src/core/config/productMath";
+import { enabledMarkets, type MarketRegistry } from "../../books-frontend/src/core/config/markets";
+import { isMeasurable, PROBE_ADDRESS } from "../../books-frontend/src/core/config/countries";
+import { getMarketRegistry } from "./markets";
 import {
   costVariantKey,
   enumerateVariants,
@@ -69,20 +72,27 @@ const QUANTITY_LADDER = [5, 10, 20, 50];
 const SHIPPING_COPY_POINTS = [1, 4];
 
 /**
- * Destinations the shipping matrix is measured against.
+ * Destinations the shipping matrix is measured against: every OPEN market we
+ * hold a probe address for.
  *
- * Not a sample of everywhere we sell — a representative one per shipping
- * region, because carrier pricing and tier availability change by region far
- * more than by country within one. The US row also serves as the catch-all when
- * an order goes somewhere unmeasured.
+ * This used to be a fixed list of six countries, which quietly made the market
+ * registry a lie — an admin could switch Japan on, the picker would offer it,
+ * and a passthrough product would then refuse every Japanese order because no
+ * row had ever been measured for it. Deriving the zones from the registry means
+ * opening a market and measuring it are one workflow.
+ *
+ * A market with no {@link PROBE_ADDRESS} entry still isn't measurable: the
+ * provider's cost endpoint validates a full street address, and inventing a
+ * deliverable one per country is not something to guess at. Those destinations
+ * price from the live quote at checkout and are refused when it fails — see
+ * `hasUsableShippingCost`. Coverage for them still comes from the capability
+ * sweep, which needs only a country code.
  */
-const SHIPPING_ZONES: ProbeDestination[] = [
-  REFERENCE_DESTINATION,
-  { country: "GB", city: "London", postalCode: "SW1A 1AA", line1: "1 High St" },
-  { country: "DE", city: "Berlin", postalCode: "10115", line1: "Hauptstr 1" },
-  { country: "AU", state: "NSW", city: "Sydney", postalCode: "2000", line1: "1 George St" },
-  { country: "CA", state: "ON", city: "Toronto", postalCode: "M5H 2N2", line1: "1 King St" },
-];
+function shippingZones(registry: MarketRegistry): ProbeDestination[] {
+  return enabledMarkets(registry)
+    .filter((country) => isMeasurable(country))
+    .map((country) => ({ country, ...PROBE_ADDRESS[country] }));
+}
 
 export interface CostSample {
   pages: number;
@@ -216,6 +226,8 @@ export function fitCostLine(samples: { pages: number; unitCost: number }[]): {
 export interface CalibrateRequest {
   product: ProductDefinition;
   env: FulfillmentEnv;
+  /** The open markets — the sweep only measures destinations we actually sell to. */
+  registry: MarketRegistry;
 }
 
 /** Cost-distinct variants this product offers, one per `print/paper` pair. */
@@ -367,7 +379,7 @@ export async function calibrateCost(req: CalibrateRequest): Promise<CalibrationR
   }
 
   // ---- Shipping ------------------------------------------------------------
-  const shipping = await measureShipping(env, sku, product);
+  const shipping = await measureShipping(env, sku, product, req.registry);
 
   const pageNote =
     discovered && (discovered.min !== product.conditions.pages.min || discovered.max !== product.conditions.pages.max)
@@ -418,6 +430,7 @@ async function measureShipping(
   env: FulfillmentEnv,
   sku: string,
   product: ProductDefinition,
+  registry: MarketRegistry,
 ): Promise<{
   rows?: ShippingFallbackRow[];
   fallback?: number;
@@ -432,8 +445,13 @@ async function measureShipping(
     product.conditions.pages.max,
   );
 
-  const zones = SHIPPING_ZONES.filter((z) => sellsTo(product, z.country));
-  if (zones.length === 0) return { message: "No measurable destination is allowed by the geo policy." };
+  const zones = shippingZones(registry).filter((z) => sellsTo(registry, product, z.country));
+  if (zones.length === 0) {
+    return {
+      message:
+        "None of the destinations this sweep has probe addresses for are open for this product. Those markets will price from the live quote instead.",
+    };
+  }
 
   const results = await mapLimit(zones, 3, async (zone) => ({
     zone,
@@ -533,8 +551,12 @@ const ALL_METHODS: ShippingMethod[] = ["Budget", "Standard", "StandardPlus", "Ex
  * accepts) would leave the cost table and checkout disagreeing about where we
  * ship.
  */
-function sellsTo(product: ProductDefinition, country: string): boolean {
-  return isDestinationAllowed(product.shipping.destinations, { country });
+function sellsTo(
+  registry: MarketRegistry,
+  product: ProductDefinition,
+  country: string,
+): boolean {
+  return isDestinationAllowed(registry, product.shipping.destinations, { country });
 }
 
 /** Fold a successful calibration into a product, leaving everything else alone. */
@@ -605,7 +627,7 @@ export async function calibrateAndSave(
     };
   }
 
-  const result = await calibrateCost({ product, env });
+  const result = await calibrateCost({ product, env, registry: await getMarketRegistry() });
   const run = summarizeRun(product, result);
   if (!result.ok) return { result, config, run };
 
@@ -692,9 +714,10 @@ export async function calibrateCatalog(
     (p) => p.provider.id === "lulu" && p.provider.sku.trim() && (!productId || p.id === productId),
   );
 
+  const registry = await getMarketRegistry();
   const outcomes = await mapLimit(targets, 2, async (product) => ({
     product,
-    result: await calibrateCost({ product, env }),
+    result: await calibrateCost({ product, env, registry }),
   }));
 
   const runs = outcomes.map(({ product, result }) => summarizeRun(product, result));

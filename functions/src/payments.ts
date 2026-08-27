@@ -20,6 +20,7 @@ import { getFirestore, FieldValue, type Query } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { toUsd } from "./finance";
 import { normalizeCountry, UNKNOWN_COUNTRY } from "../../books-frontend/src/core/analytics/markets";
+import type { OrderDraft } from "../../books-frontend/src/core/fulfillment/types";
 
 function db() {
   ensureAdmin();
@@ -127,6 +128,14 @@ export interface FulfillmentPlan {
       stateOrCounty?: string | null;
       postalOrZipCode: string;
       countryCode: string;
+      /**
+       * The recipient's own tax id, where customs demands one (Brazil CPF/CNPJ,
+       * Chile RUT, Mexico RFC). Persisted because the print job is created from
+       * this plan AFTER payment: checkout refuses the order without it, so
+       * dropping it here charged the customer and then failed the print job on a
+       * field they had already supplied.
+       */
+      taxId?: string | null;
     };
   };
   /** Public URLs of the already-uploaded print-ready files. */
@@ -152,6 +161,48 @@ export interface FulfillmentPlan {
      */
     productionSource?: "live" | "table";
   } | null;
+}
+
+/**
+ * Convert between the order draft's recipient and the plan's stored copy.
+ *
+ * The two shapes differ only in how they spell "absent" — `undefined` in the
+ * domain type, `null` in Firestore — so these used to be written out
+ * field-by-field at each of the three crossings. That is how `taxId` came to be
+ * silently dropped on all three: a new address field is invisible to a
+ * hand-copied literal, and the loss only surfaced after payment, when the print
+ * job was rejected for a field the customer had actually entered. Spreading the
+ * address means the next field added is carried by default.
+ */
+export function planRecipient(recipient: OrderDraft["recipient"]): FulfillmentPlan["recipient"] {
+  const { line2, stateOrCounty, taxId, ...address } = recipient.address;
+  return {
+    name: recipient.name,
+    email: recipient.email ?? null,
+    phoneNumber: recipient.phoneNumber ?? null,
+    address: {
+      ...address,
+      line2: line2 ?? null,
+      stateOrCounty: stateOrCounty ?? null,
+      taxId: taxId ?? null,
+    },
+  };
+}
+
+/** The inverse of {@link planRecipient}, for replaying a stored plan. */
+export function draftRecipient(recipient: FulfillmentPlan["recipient"]): OrderDraft["recipient"] {
+  const { line2, stateOrCounty, taxId, ...address } = recipient.address;
+  return {
+    name: recipient.name,
+    email: recipient.email ?? undefined,
+    phoneNumber: recipient.phoneNumber ?? undefined,
+    address: {
+      ...address,
+      line2: line2 ?? undefined,
+      stateOrCounty: stateOrCounty ?? undefined,
+      taxId: taxId ?? undefined,
+    },
+  };
 }
 
 export interface CreatePendingPaymentArgs {

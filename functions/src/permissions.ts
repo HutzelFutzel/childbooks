@@ -525,6 +525,11 @@ const ROUTE_RULES: RouteRule[] = [
   { test: /^\/admin\/print\/sku\/check$/, gate: key("configuration.catalog", "read") },
   { test: /^\/admin\/print\/sku\/matrix$/, gate: key("configuration.catalog", "read") },
   { test: /^\/admin\/catalog\/media(\/|$)/, gate: key("configuration.catalog") },
+  { test: /^\/admin\/config\/markets$/, gate: key("configuration.markets") },
+  // A sweep only READS from the provider, but it rewrites the capability
+  // document every product's shipping options are read from — so it needs the
+  // write grant, not the read one.
+  { test: /^\/admin\/markets\/sweep$/, gate: key("configuration.markets", "write") },
   { test: /^\/admin\/config\/sparks$/, gate: key("configuration.sparks") },
   { test: /^\/admin\/config\/plans(\/|$)/, gate: key("configuration.memberships") },
 

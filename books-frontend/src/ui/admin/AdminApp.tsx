@@ -55,6 +55,7 @@ import { PromptsTab } from "./tabs/PromptsTab";
 import { ModelCostsTab } from "./tabs/ModelCostsTab";
 import { BusinessOverviewTab } from "./tabs/BusinessOverviewTab";
 import { CatalogTab } from "./tabs/CatalogTab";
+import { MarketsTab } from "./tabs/MarketsTab";
 import { FinancialTab } from "./tabs/FinancialTab";
 import { DiscountPlannerTab } from "./tabs/DiscountPlannerTab";
 import { PlansTab } from "./tabs/PlansTab";
@@ -84,6 +85,8 @@ function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
       return <BusinessOverviewTab />;
     case "catalog":
       return <CatalogTab />;
+    case "markets":
+      return <MarketsTab />;
     case "memberships":
       return <PlansTab />;
     case "sparks":

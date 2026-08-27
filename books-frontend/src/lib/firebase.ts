@@ -40,7 +40,8 @@ const APP_CHECK_SITE_KEY = process.env.NEXT_PUBLIC_FIREBASE_APPCHECK_SITE_KEY;
 
 const AUTH_EMULATOR_URL = "http://127.0.0.1:9099";
 const EMULATOR_HOST = "127.0.0.1";
-const FIRESTORE_EMULATOR_PORT = 8080;
+/** Matches `emulators.firestore.port` in firebase.json. Not 8080: Cursor binds that locally. */
+const FIRESTORE_EMULATOR_PORT = 8081;
 const STORAGE_EMULATOR_PORT = 9199;
 
 export function useEmulators(): boolean {

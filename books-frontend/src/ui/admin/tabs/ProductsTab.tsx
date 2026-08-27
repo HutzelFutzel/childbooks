@@ -25,7 +25,6 @@ import {
   FULFILLMENT_PROVIDERS,
   PROVIDER_ENVS,
   PROVIDER_LABELS,
-  SUPPORTED_MARKETS,
   createDefaultProduct,
   productAccessOf,
   verificationCoversPages,
@@ -38,6 +37,7 @@ import {
   type ShippingFallbackRow,
 } from "../../../core/config/products";
 import { isDestinationAllowed } from "../../../core/config/productMath";
+import { enabledMarkets } from "../../../core/config/markets";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
 import { bookMediaKey, optionMediaKey } from "../../../core/config/catalogMedia";
 import { BINDINGS, FINISHES } from "../../../core/fulfillment/types";
@@ -124,6 +124,9 @@ export function ProductsTab() {
   // Verification is per-environment, so validation needs to know which one is
   // being served before it can say whether a product is safe to offer.
   const runtime = useAdminHealth((s) => s.runtime);
+  // The open markets bound every product's geo policy, so validation can't say
+  // whether a product reaches anywhere without them.
+  const registry = useAppConfigStore((s) => s.markets);
   // Plans advertise a print discount that checkout clamps to break-even. Handing
   // them to validation turns a perk this price can't honour into a warning here,
   // instead of a member quietly being charged more than the plan promised.
@@ -355,16 +358,21 @@ export function ProductsTab() {
     [publicPlans],
   );
 
+  // One options object for every validation call on this screen. The list dots,
+  // the header dot and the issues panel all have to agree — an env or registry
+  // present in one and absent from another shows a product as green in the list
+  // and broken in the editor.
+  const validateOpts = useMemo(
+    () => ({ registry, ...(runtime ? { env: runtime.env } : {}) }),
+    [registry, runtime],
+  );
+
   const issues = useMemo(
     () =>
       draft
-        ? validateProduct(draft, settings, {
-            media,
-            plans: discountPlans,
-            ...(runtime ? { env: runtime.env } : {}),
-          })
+        ? validateProduct(draft, settings, { ...validateOpts, media, plans: discountPlans })
         : [],
-    [draft, settings, runtime, media, discountPlans],
+    [draft, settings, validateOpts, media, discountPlans],
   );
   // Actionable errors (verify / calibrate) don't block saving — you must save a
   // product before you can run those tools against it.
@@ -469,8 +477,8 @@ export function ProductsTab() {
                 // server projects publicly) — otherwise this dot can show green
                 // for a product whose SKU was never verified in the live
                 // catalog, because an env-less check only warns about that.
-                const offerable = isOfferable(p, settings, runtime ? { env: runtime.env } : {});
-                const errCount = productErrors(p, settings, runtime ? { env: runtime.env } : {}).length;
+                const offerable = isOfferable(p, settings, validateOpts);
+                const errCount = productErrors(p, settings, validateOpts).length;
                 return (
                   <li key={p.id}>
                     <button
@@ -506,7 +514,7 @@ export function ProductsTab() {
                 <div className="flex items-center gap-2">
                   <StatusDot
                     status={draft.status}
-                    offerable={isOfferable(draft, settings, runtime ? { env: runtime.env } : {})}
+                    offerable={isOfferable(draft, settings, validateOpts)}
                   />
                   <h2 className="text-base font-semibold text-ink-900">{draft.presentation.name || "Untitled"}</h2>
                 </div>
@@ -999,19 +1007,20 @@ function SkuBuilder({ product, update }: { product: ProductDefinition; update: U
  * measurement would silently discard the edit anyway.
  */
 function ShippingRatesTable({ product }: { product: ProductDefinition }) {
+  const registry = useAppConfigStore((s) => s.markets);
   // Only markets this product still sells to. Rows for a withdrawn market are
   // kept (re-adding it shouldn't lose the measurement) but showing them here
   // would contradict the checkboxes directly above, which is worse than showing
   // nothing.
   const rows = (product.shipping.fallback ?? []).filter((r) =>
-    isDestinationAllowed(product.shipping.destinations, { country: r.country }),
+    isDestinationAllowed(registry, product.shipping.destinations, { country: r.country }),
   );
   if (rows.length === 0) {
     return (
       <Section title="Measured shipping rates" hint="Filled in by “Measure cost from the provider”.">
         <p className="text-[11px] text-ink-500">
-          Nothing measured yet. Until it is, an order whose live quote fails falls back to the single
-          fallback amount below — and we can&apos;t tell which speeds reach which countries.
+          Nothing measured yet. Until it is, orders whose live quote fails are refused rather than
+          charged a guessed amount — and we can&apos;t tell which speeds reach which countries.
         </p>
       </Section>
     );
@@ -1646,7 +1655,7 @@ function ShippingSection({ product, update }: { product: ProductDefinition; upda
               <NumberField label="Markup on shipping" value={sh.pricing.markupPct ?? 0} step="1" className="w-44" suffix="%" onChange={(n) => setSh({ pricing: { ...pass, markupPct: n } })} />
               <NumberField
                 label="Fallback shipping cost"
-                hint="Used only when a live quote can't be fetched AND the destination has no measured rate above."
+                hint="Used when a live quote fails in a MEASURED country whose specific speed has no rate above."
                 value={sh.pricing.fallbackCost ?? 0}
                 step="0.5"
                 className="w-56"
@@ -1656,9 +1665,11 @@ function ShippingSection({ product, update }: { product: ProductDefinition; upda
             </div>
             <ImpactNote>
               This number is <span className="font-medium">charged to the customer</span>, plus your
-              markup, whenever a live quote fails. Leave it empty and those orders are refused rather
-              than shipped at your expense; set it too high and everyone caught by an outage is
-              overcharged. Measuring costs fills it in from the dearest route it saw.
+              markup, whenever a live quote fails in a country shipping was measured for. It is{" "}
+              <span className="font-medium">not</span> applied to unmeasured countries — it was
+              fitted to the routes the sweep visited, and billing it elsewhere would invent a price
+              for a destination nobody priced. Orders there are refused until a live quote succeeds,
+              which is recoverable in a way that a silently wrong shipping charge is not.
             </ImpactNote>
           </>
         )}
@@ -1681,13 +1692,13 @@ function ShippingSection({ product, update }: { product: ProductDefinition; upda
 }
 
 /**
- * Which of our markets this product ships to.
+ * Which of our open markets this product ships to.
  *
- * A checkbox per market rather than a comma-separated list of codes: the set is
- * small and fixed, and typing ISO codes into a text field is how you end up
- * selling to a country you never measured. `SUPPORTED_MARKETS` is a ceiling
- * enforced server-side, so there's deliberately no way to type in a country
- * outside it — that would render a box the order path refuses to honour.
+ * A checkbox per market rather than a text field of ISO codes: the open set is
+ * a ceiling enforced server-side, so there's deliberately no way to type in a
+ * country outside it — that would render a box the order path refuses to
+ * honour. Opening a new country happens in Configuration → Markets, and shows
+ * up here as another checkbox.
  *
  * Each market also reports whether an enabled speed actually reaches it, because
  * "selected" and "orderable" are different things and the gap between them only
@@ -1702,7 +1713,9 @@ function MarketsSection({
   rows: ShippingFallbackRow[];
   onChange: (dest: GeoPolicy) => void;
 }) {
-  const selected = SUPPORTED_MARKETS.filter((c) => isDestinationAllowed(dest, { country: c }));
+  const registry = useAppConfigStore((s) => s.markets);
+  const open = useMemo(() => enabledMarkets(registry), [registry]);
+  const selected = open.filter((c) => isDestinationAllowed(registry, dest, { country: c }));
   const toggle = (country: string, on: boolean) => {
     const next = on
       ? [...selected, country]
@@ -1710,6 +1723,10 @@ function MarketsSection({
     // Always written as an allowlist. A stored blocklist is read correctly above
     // but never produced here: two ways to express one intent is how a policy
     // ends up meaning the opposite of what it reads like.
+    //
+    // Note this converts a product that was "everywhere we sell" into an
+    // explicit list the moment one box is unticked — which is the intent, but
+    // it also means the product stops picking up newly opened markets.
     onChange({ ...dest, mode: "allowlist", countries: [...new Set(next)] });
   };
 
@@ -1718,8 +1735,14 @@ function MarketsSection({
       title="Where it ships"
       hint="The markets this product can be ordered to. Customers outside them can't reach checkout, and the server refuses the order regardless."
     >
+      {open.length === 0 && (
+        <p className="text-[11px] text-red-600">
+          No markets are open yet. Open one in Configuration → Markets before this product can be
+          sold anywhere.
+        </p>
+      )}
       <div className="space-y-1.5">
-        {SUPPORTED_MARKETS.map((country) => {
+        {open.map((country) => {
           const on = selected.includes(country);
           const measured = rows.filter((r) => r.country === country);
           const priced = measured.filter((r) => r.available).length;
@@ -1738,7 +1761,8 @@ function MarketsSection({
               </label>
               {on && measured.length === 0 && (
                 <span className="text-[11px] text-amber-700">
-                  No shipping measured — run “Measure cost from the provider”.
+                  No shipping measured — orders here need a live quote and are refused if one
+                  can&apos;t be fetched.
                 </span>
               )}
               {on && measured.length > 0 && priced === 0 && (
@@ -1761,8 +1785,8 @@ function MarketsSection({
         </p>
       )}
       <p className="text-[10px] text-ink-400">
-        Adding a market means measuring shipping to it and checking its tax setup, so the list is
-        fixed in code rather than typed here.
+        Only countries opened in Configuration → Markets appear here — the server enforces that
+        ceiling regardless of what this product claims.
       </p>
     </Section>
   );

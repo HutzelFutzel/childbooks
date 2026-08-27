@@ -37,6 +37,11 @@ export { retryFulfillments } from "./fulfillmentRetry";
 // safety net for status webhooks that were missed or deactivated.
 export { syncPrintOrders } from "./printSyncJob";
 
+// Weekly re-ask of which countries the print provider actually ships to, so an
+// open market that quietly lost coverage shows up in the admin rather than at a
+// customer's checkout.
+export { sweepMarketCoverage } from "./marketSweepJob";
+
 // Scheduled eviction of cached book renders nobody has come back to.
 export { cleanupStaleRenders } from "./renders";
 

@@ -1,0 +1,578 @@
+{
+  "banner": {
+    "dismiss": "Dismiss"
+  },
+  "billing": {
+    "plans": {
+      "title": "Plans",
+      "intro": "Pick the plan that fits how much you create. Every plan includes a monthly bundle of Sparks (cheaper than buying packs) plus perks. Cancel anytime.",
+      "monthly": "Monthly",
+      "yearly": "Yearly",
+      "save": "save",
+      "loading": "Loading plans…",
+      "emptyTitle": "No plans available yet",
+      "emptyBody": "Subscription plans haven't been published yet.",
+      "free": "Free",
+      "perMonth": "mo",
+      "perYear": "yr",
+      "notAvailable": "Not available in {currency}",
+      "currentPlan": "Current plan",
+      "included": "Included",
+      "switchInPortal": "Switch in billing portal",
+      "choosePlan": "Choose {plan}",
+      "onPlan": "You're on <name>{plan}</name>.",
+      "onPlanCancelling": "You're on <name>{plan}</name><warn> · cancels at period end</warn>.",
+      "manage": "Manage subscription",
+      "upgrade": "Upgrade",
+      "checkoutFailed": "Could not start checkout.",
+      "portalFailed": "Could not open billing.",
+      "perk": {
+        "sparks": "{count, number} Sparks every month",
+        "annualBonus": "+{count, number} bonus Sparks up front",
+        "printDiscount": "{pct}% off printed books",
+        "ebookIncluded": "Digital editions of your books — included",
+        "ebookDiscounted": "Digital editions for {price} (instead of {list})",
+        "formats": "{count, plural, one {# premium format} other {# premium formats}}",
+        "layouts": "{count, plural, one {# premium layout} other {# premium layouts}}",
+        "fonts": "{count, plural, one {# extra font} other {# extra fonts}}"
+      }
+    },
+    "upsell": {
+      "heading": "Making more books?",
+      "seePlans": "See plans",
+      "inline": "{plan} members get {benefit} — from {price}/mo.",
+      "card": "{plan} members get {benefit}, from {price} a month. Cancel whenever you like.",
+      "benefit": {
+        "ebookIncluded": "digital editions included",
+        "ebookDiscounted": "digital editions at {price} instead of {list}",
+        "print": "{pct}% off every printed book",
+        "sparks": "{count, number} Sparks every month"
+      }
+    }
+  },
+  "blog": {
+    "allArticles": "All articles",
+    "readingTime": "{minutes} min read",
+    "keepReading": "Keep reading",
+    "notFound": "Article not found",
+    "breadcrumbHome": "Home",
+    "breadcrumbBlog": "Blog"
+  },
+  "checkout": {
+    "address": {
+      "unverifiedTitle": "We couldn't verify this address",
+      "unverifiedBody": "Our print partner won't accept an address it can't confirm, so please double-check the street, city and postal code before paying.",
+      "adjustedSlightly": "The carrier adjusted your address slightly",
+      "confirmedTitle": "Shipping address confirmed",
+      "checkTitle": "Check your shipping address",
+      "checkBody": "The delivery carrier suggests a slightly different version. Picking theirs is the safest way to make sure your book arrives.",
+      "youEntered": "You entered",
+      "carrierSuggests": "Carrier suggests",
+      "recommended": "Recommended",
+      "useSuggested": "Use suggested address",
+      "keepMine": "Keep mine as entered"
+    },
+    "binding": {
+      "saddle-stitch": {
+        "noun": "stapled paperback",
+        "blurb": "Folded sheets stapled through the fold, so it opens flat and weighs almost nothing. No spine to print on, and thin books only."
+      },
+      "perfect-bound": {
+        "noun": "paperback",
+        "blurb": "Pages glued into a flat printed spine, like any trade paperback. Needs enough thickness to glue."
+      },
+      "coil-bound": {
+        "noun": "coil-bound paperback",
+        "blurb": "A spiral through punched holes, so the book lies perfectly flat on a table. Made for reading along and colouring in; it won't look like a trade book."
+      },
+      "casewrap": {
+        "noun": "hardcover",
+        "blurb": "Artwork printed straight onto the board and laminated. The keepsake format, and what a gift copy should be."
+      }
+    },
+    "confirmation": {
+      "close": "Close",
+      "backToBook": "Back to your book",
+      "inviteHeading": "Know another parent who'd love this?",
+      "printedBook": "Printed book",
+      "justNow": "Just now",
+      "settling": {
+        "title": "Confirming your payment…",
+        "body": "{what} This takes a few seconds. You can leave this page — we'll email you either way."
+      },
+      "order": {
+        "eyebrowConfirmed": "Order confirmed",
+        "eyebrowReceived": "Order received",
+        "titleSettling": "Thank you for your order",
+        "titleOk": "Your book is on its way",
+        "titleWorking": "We're sorting something out",
+        "titleStuck": "Your order needs our attention",
+        "subtitleSettling": "We're confirming your payment with our provider.",
+        "subtitleOk": "We've got your payment and your book is heading to the press. Everything below is also in your email.",
+        "subtitleWorking": "Your payment went through, but the press didn't accept the book first time. We're on it — the details are below.",
+        "subtitleStuck": "Your payment went through, but we couldn't get this book onto the press. Our team has been alerted and will be in touch.",
+        "settlingNote": "Your order is reserved and nothing will be lost.",
+        "summary": "Order summary",
+        "summaryMeta": "{date} · {count, plural, one {# copy} other {# copies}} · {product}",
+        "lineTimes": "{label} × {quantity}",
+        "totalPaid": "Total paid",
+        "viewReceipt": "View your receipt",
+        "track": "Track this order",
+        "orderId": "Order",
+        "trackParcel": "Track your parcel",
+        "shippingTo": "Shipping to",
+        "methodAndBinding": "{method} · {binding}",
+        "carrierAdjusted": "The carrier adjusted this to <addr>{address}</addr>. If that's wrong, contact us now — the order can still be stopped."
+      },
+      "ebook": {
+        "eyebrow": "Purchase complete",
+        "title": "Your ebook is ready",
+        "subtitle": "The digital edition is yours to keep. Download it as many times as you like, on any device.",
+        "download": "Download your ebook",
+        "savedNote": "It's saved to your account — find it any time under Downloads.",
+        "settlingNote": "Your ebook unlocks as soon as the payment clears."
+      },
+      "sparks": {
+        "eyebrow": "Top-up complete",
+        "title": "Your Sparks are in",
+        "subtitle": "Sparks never expire — spend them on stories, illustrations and revisions whenever you like.",
+        "settlingNote": "Your Sparks land the moment it clears.",
+        "balance": "Your balance"
+      },
+      "gift": {
+        "eyebrow": "Gift purchased",
+        "title": "Your gift is ready to give",
+        "subtitle": "Share the code below with whoever you're spoiling. They redeem it in their own account.",
+        "claimCode": "Claim code",
+        "fetching": "Fetching your code…",
+        "copy": "Copy",
+        "copied": "Copied",
+        "copyFailed": "Couldn't copy the code — select and copy it manually.",
+        "generating": "Your code is being generated — you'll find it in your Sparks wallet under “Gifts you bought”, and in your email receipt."
+      },
+      "subscription": {
+        "eyebrow": "Welcome aboard",
+        "title": "Your plan is active",
+        "subtitle": "Your member benefits are live right now — monthly Sparks, member pricing and every premium extra your plan includes.",
+        "body": "You can review or change your plan any time from the account menu. Your first Spark grant has already been added to your balance."
+      }
+    },
+    "downloads": {
+      "title": "Your downloads",
+      "loading": "Loading your downloads…",
+      "emptyTitle": "No downloads yet",
+      "emptyBody": "When you buy the digital edition of a book it'll appear here to download anytime, on any device.",
+      "untitled": "Your book",
+      "new": "New",
+      "type": {
+        "ebook": "Digital edition (PDF)",
+        "other": "Download"
+      },
+      "boughtOn": "{type} · bought {date}",
+      "timesDownloaded": "{count, plural, one {Downloaded <n>#</n> time} other {Downloaded <n>#</n> times}}",
+      "lastDownloaded": "Last: {date}",
+      "download": "Download",
+      "history": "Download history",
+      "historyWithCount": "Download history ({count})",
+      "loadingHistory": "Loading history…",
+      "noHistory": "No downloads recorded yet."
+    },
+    "ebook": {
+      "title": "Your book as an ebook",
+      "checkingPrice": "Checking the price…",
+      "alreadyOwn": "You already own the digital edition of <name>{title}</name>.",
+      "download": "Download your ebook",
+      "findUnderDownloads": "Find it anytime under Downloads in your account menu.",
+      "staleNote": "Changed the design since buying this? Get a fresh PDF with your latest edits — free, since you already own it.",
+      "updateToLatest": "Update to your latest design",
+      "oneMoment": "One moment…",
+      "unavailable": "Ebooks aren't available right now. Please check back later.",
+      "digitalEditionOf": "{title} — digital edition",
+      "pitch": "A beautiful, high-quality PDF of your finished book — read it on any tablet, phone or computer, forever. Pages are the {width} × {height} in shape you designed, so it reads exactly like the printed copy.",
+      "price": "Price",
+      "included": "Included",
+      "includedWithPlan": "Digital editions are included with your {plan} plan.",
+      "memberPrice": "Your {plan} member price.",
+      "printOwnerDiscount": "Includes your {pct}% discount for owning the printed book.",
+      "getIncluded": "Get your ebook — included in your plan",
+      "buyFor": "Buy the ebook · {price}",
+      "noPaymentNeeded": "No payment needed — this is part of your plan.",
+      "securePayment": "Secure payment by Stripe. Your download unlocks right after payment.",
+      "statusPreparing": "Preparing your book…",
+      "statusUpdating": "Updating your ebook…",
+      "statusAdding": "Adding it to your library…",
+      "statusPayment": "Opening secure payment…",
+      "errorQuote": "We couldn't price the ebook.",
+      "errorPrepare": "We couldn't prepare your book.",
+      "errorCheckout": "We couldn't start checkout."
+    },
+    "format": {
+      "legend": "Binding",
+      "hint": "How the book is held together. Every option prints the same pages at the same size.",
+      "pageRounding": "Printed as {pages} pages (this binding works in {step}s)",
+      "needsMore": "Needs at least {min} pages — your book has {pages}.",
+      "takesFewer": "Takes up to {max} pages — your book has {pages}."
+    },
+    "variant": {
+      "unavailable": "Not available with the current selection",
+      "axis": {
+        "print": {
+          "label": "Interior printing",
+          "hint": "How the pages are printed. The biggest lever on price for a long book."
+        },
+        "paper": {
+          "label": "Paper",
+          "hint": "What the pages are printed on."
+        },
+        "finish": {
+          "label": "Cover finish",
+          "hint": "How the cover is laminated."
+        }
+      },
+      "option": {
+        "print": {
+          "premium-colour": {
+            "label": "Premium colour",
+            "hint": "Richest colour and the sharpest registration. What illustrated pages are worth, and the provider's own pick for children's books."
+          },
+          "standard-colour": {
+            "label": "Standard colour",
+            "hint": "Colour on every page at about a third of the premium price per page. Colours read a little flatter."
+          },
+          "premium-bw": {
+            "label": "Premium black & white",
+            "hint": "Deep blacks and fine greys for pencil and ink work. Illustrations print as monochrome."
+          },
+          "standard-bw": {
+            "label": "Standard black & white",
+            "hint": "The cheapest way to print a long book. Right for text-led chapter books, wrong for colour art."
+          }
+        },
+        "paper": {
+          "80-coated-white": {
+            "label": "80# coated white",
+            "hint": "Heavy and smooth with a slight sheen, so colours pop. The provider's recommendation for picture books."
+          },
+          "60-uncoated-white": {
+            "label": "60# uncoated white",
+            "hint": "Lighter and matte, more like a novel. Softer colour, thinner and cheaper book."
+          },
+          "60-uncoated-cream": {
+            "label": "60# uncoated cream",
+            "hint": "Warm off-white that is gentler to read against. Black & white interiors only — the provider prints no colour on cream."
+          }
+        },
+        "finish": {
+          "gloss": {
+            "label": "Gloss",
+            "hint": "Shiny and saturated, and wipes clean — which matters for a book toddlers hold. Shows fingerprints."
+          },
+          "matte": {
+            "label": "Matte",
+            "hint": "Soft, low-glare and reads as more premium. Marks show more easily than gloss."
+          }
+        }
+      }
+    },
+    "order": {
+      "title": "Order a printed book",
+      "cancel": "Cancel",
+      "continueToPayment": "Continue to payment",
+      "preparingFiles": "Preparing files…",
+      "redirecting": "Redirecting…",
+      "checkAddress": "Check your address",
+      "confirmAddress": "Confirm your address",
+      "untitledBook": "Your storybook",
+      "productMeta": "{width}×{height}″ · {pages} pages · {binding}",
+      "needsMinPages": "A {binding} needs at least {min} pages — your book has {pages}.",
+      "takesMaxPages": "A {binding} takes up to {max} pages — your book has {pages}.",
+      "switchTo": "{binding} takes a book this length — switch below.",
+      "addPages": "Add {count, plural, one {# more page} other {# more pages}} before ordering.",
+      "removePages": "Remove some pages before ordering.",
+      "maxCopies": "You can order up to {count, plural, one {# copy} other {# copies}} at a time.",
+      "preflightTitle": "Worth a look before you print",
+      "preflightMore": "…and {count} more.",
+      "preflightAdvisory": "You can order anyway — these are judgement calls, not errors.",
+      "gateAnyPlan": "This printed product is available with any paid subscription. Upgrade your plan to order it.",
+      "gateSelectPlans": "This printed product is available on select subscription plans. Upgrade your plan to order it.",
+      "loadingAddresses": "Loading saved addresses…",
+      "savedAddress": "Use a saved address",
+      "newAddress": "New address…",
+      "saveAddress": "Save this address for next time",
+      "addressLabelFallback": "Address",
+      "field": {
+        "name": "Recipient name",
+        "email": "Email",
+        "phone": "Phone",
+        "address": "Address",
+        "line2": "Address line 2",
+        "city": "City",
+        "region": "State / County",
+        "postal": "Postal / ZIP",
+        "country": "Country",
+        "copies": "Copies",
+        "shipping": "Shipping"
+      },
+      "placeholder": {
+        "name": "Jane Doe",
+        "email": "for shipping updates",
+        "phone": "for the carrier",
+        "line1": "Street address",
+        "line2": "Apt, suite (optional)"
+      },
+      "estimatedCost": "Estimated cost",
+      "quoting": "Getting a live quote…",
+      "quoteHint": "Enter a city, state and postal code to see pricing.",
+      "quoteError": "We couldn't price this destination. Check the city, state and postal code.",
+      "quoteAuthError": "Please sign in again to see live pricing.",
+      "lineBooks": "Books ({copies} × {price})",
+      "planSaves": "Your plan saves you {pct}% (was {was} per copy).",
+      "lineShipping": "Shipping",
+      "lineTotal": "Estimated total",
+      "paymentNote": "Payment is processed securely by Stripe. You'll review the final total — including any tax — before paying. Your order is sent to print only after payment succeeds.",
+      "statusCoverSize": "Calculating cover size…",
+      "statusChecking": "Checking your book…",
+      "statusRedirecting": "Redirecting to secure checkout…",
+      "errorSubscription": "This product is only available with a subscription. Upgrade your plan to order it.",
+      "errorAddressUnverified": "This shipping address couldn't be verified. Please check and correct it.",
+      "errorAddressUnreviewed": "The delivery carrier suggested an address correction — pick one before paying.",
+      "errorIncomplete": "Add a recipient name, phone number and full shipping address."
+    },
+    "orders": {
+      "title": "Orders & payments",
+      "tabOrders": "Orders",
+      "tabPayments": "Payments & receipts",
+      "loadingOrders": "Loading your orders…",
+      "noOrdersTitle": "No orders yet",
+      "noOrdersBody": "When you order a printed book it'll show up here with live status, tracking and the print files we sent to the press.",
+      "loadingPayments": "Loading your payments…",
+      "noPaymentsTitle": "No payments yet",
+      "noPaymentsBody": "Receipts for your orders and subscriptions will appear here once you've paid.",
+      "printedBook": "Printed book",
+      "justNow": "Just now",
+      "subscription": "Subscription",
+      "order": "Order",
+      "refunded": "Refunded {amount}",
+      "reorderFailed": "We couldn't start checkout.",
+      "viewReceipt": "View receipt",
+      "orderStatus": "Order status",
+      "orderAgain": "Order again",
+      "copiesOn": "{date} · {count, plural, one {# copy} other {# copies}}",
+      "carrierAdjusted": "The delivery carrier adjusted this address to <addr>{address}</addr>. If that isn't right, contact us straight away — we can still stop the order.",
+      "shipTo": "Ship to",
+      "charged": "Charged",
+      "shipment": "Shipment",
+      "interiorPdf": "Interior PDF",
+      "coverPdf": "Cover PDF",
+      "statusHistory": "Status history ({count})",
+      "paymentStatus": {
+        "pending": "Pending",
+        "paid": "Paid",
+        "failed": "Failed",
+        "refunded": "Refunded",
+        "partiallyRefunded": "Partly refunded"
+      }
+    },
+    "shipping": {
+      "option": {
+        "Budget": "Budget (slowest, cheapest)",
+        "Standard": "Standard",
+        "StandardPlus": "Standard Plus",
+        "Express": "Express",
+        "Overnight": "Overnight (fastest)"
+      },
+      "method": {
+        "Budget": "Budget delivery",
+        "Standard": "Standard delivery",
+        "StandardPlus": "Standard Plus delivery",
+        "Express": "Express delivery",
+        "Overnight": "Overnight delivery"
+      }
+    },
+    "survey": {
+      "privacyNote": "Optional, and it stays between us — we use it to decide what to build next.",
+      "noThanks": "No thanks",
+      "skip": "Skip",
+      "send": "Send",
+      "skipped": "No problem — we won't ask about this order again.",
+      "neverAgain": "Don't ask again",
+      "somethingElse": "Something else…"
+    },
+    "status": {
+      "stage": {
+        "draft": "Received",
+        "onHold": "Needs attention",
+        "inProgress": "In production",
+        "complete": "Shipped",
+        "cancelled": "Cancelled",
+        "error": "Issue"
+      },
+      "fulfillment": {
+        "pending": {
+          "label": "Preparing for print",
+          "detail": "We're sending your book to the press. This usually takes a minute or two."
+        },
+        "placed": {
+          "label": "At the press",
+          "detail": "Your book is with our print partner. You'll get tracking as soon as it ships."
+        },
+        "retrying": {
+          "label": "Still working on it",
+          "detail": "Getting your book onto the press didn't work first time, so we're trying again automatically. Nothing for you to do — and you won't be charged again."
+        },
+        "failed": {
+          "label": "Needs our attention",
+          "detail": "We couldn't get this book onto the press. Our team has been alerted and will be in touch about a reprint or a refund. You won't be charged twice."
+        }
+      }
+    }
+  },
+  "consent": {
+    "settings": "Cookie settings",
+    "necessaryAlwaysOn": "Necessary (always on)",
+    "categoryEnabled": "{category} enabled"
+  },
+  "faq": {
+    "heading": "Frequently asked questions"
+  },
+  "footer": {
+    "tagline": "Write, illustrate, and print personalized children's picture books with AI.",
+    "product": "Product",
+    "company": "Company",
+    "legal": "Legal",
+    "howItWorks": "How it works",
+    "features": "Features",
+    "plansPricing": "Plans & pricing",
+    "printCalculator": "Print cost calculator",
+    "openStudio": "Open the Studio",
+    "blog": "Blog",
+    "faq": "FAQ",
+    "affiliates": "Affiliate program",
+    "contact": "Contact",
+    "signIn": "Sign in",
+    "copyright": "© {year} {siteName}. All rights reserved."
+  },
+  "marketing": {
+    "hero": {
+      "badge": "AI-illustrated picture books",
+      "title": "Turn a story into a printed picture book.",
+      "subtitle": "Write your tale, design recurring characters and places, and let AI illustrate every page with a consistent look — then order a beautiful, print-ready book delivered to your door.",
+      "ctaPrimary": "Create their storybook",
+      "ctaSecondary": "See how it works",
+      "note": "Free to start — no account or credit card needed.",
+      "namePlaceholder": "Who is the story about?",
+      "nameLabel": "The hero of your story"
+    },
+    "trust": {
+      "0": "Professional print quality",
+      "1": "Printed & shipped by Lulu",
+      "2": "Same characters on every page",
+      "3": "Free to start — no credit card"
+    },
+    "how": {
+      "heading": "From blank page to bookshelf in three steps",
+      "subhead": "A guided flow takes you from an idea to a finished, printable book — no design skills required.",
+      "stepLabel": "Step {number}",
+      "step1": {
+        "title": "Write your story",
+        "body": "Paste or write your tale. We analyze it into characters, places, and a page-by-page screenplay you can fine-tune."
+      },
+      "step2": {
+        "title": "Illustrate with AI",
+        "body": "Design your references once. Every page reuses them, so your cast stays visually consistent from cover to cover."
+      },
+      "step3": {
+        "title": "Print & keep",
+        "body": "Lay out text and art, then order a full-bleed, print-ready book — or get it instantly as a digital edition."
+      }
+    },
+    "features": {
+      "heading": "Everything you need to make a real book",
+      "subhead": "Powerful tools under a simple, playful surface — so the story stays the star.",
+      "0": {
+        "title": "Consistent characters",
+        "body": "Design a character or place once and it stays on-model across every page — same face, outfit, and style."
+      },
+      "1": {
+        "title": "Per-page AI art",
+        "body": "Each page is illustrated to match your story beat, in an art style you choose and can refine."
+      },
+      "2": {
+        "title": "Print-ready export",
+        "body": "We compose full-bleed, correctly-sized pages and hand off a print-ready book for real fulfillment."
+      },
+      "3": {
+        "title": "Digital edition included",
+        "body": "Get your finished book as a beautiful PDF too — read it on any device, keep it forever."
+      },
+      "4": {
+        "title": "Guest-first, zero setup",
+        "body": "Start creating immediately — no sign-up wall. Save and print whenever you're ready."
+      },
+      "5": {
+        "title": "Sparks that roll over",
+        "body": "Paid plans include a monthly bundle of generation credits that carry over, plus cheaper prints."
+      }
+    },
+    "founder": {
+      "sectionLabel": "From our founder",
+      "eyebrow": "Why we started",
+      "quote": "When my toddler needed surgery, I couldn't find a single picture book gentle enough to help him understand what was about to happen. So I made one myself — and that book became Childbook Studio.",
+      "name": "Founder",
+      "role": "Childbook Studio"
+    },
+    "cta": {
+      "heading": "Ready to make your first book?",
+      "subhead": "Start writing and illustrating in seconds. No account, no credit card.",
+      "button": "Open the Studio"
+    },
+    "images": {
+      "hero": {
+        "main": "Hero storybook spread",
+        "card1": "Sample page",
+        "card2": "Sample page"
+      },
+      "how": {
+        "step1": "Spot illustration — writing",
+        "step2": "Spot illustration — illustrating",
+        "step3": "Spot illustration — printing"
+      },
+      "founder": {
+        "photo": "Founder photo"
+      }
+    }
+  },
+  "nav": {
+    "howItWorks": "How it works",
+    "features": "Features",
+    "pricing": "Pricing",
+    "printCosts": "Print costs",
+    "blog": "Blog",
+    "faq": "FAQ",
+    "openStudio": "Open the Studio",
+    "openMenu": "Open menu",
+    "closeMenu": "Close menu",
+    "language": "Language",
+    "admin": "Admin",
+    "signIn": "Sign in",
+    "signOut": "Sign out"
+  },
+  "pricing": {
+    "heading": "Simple plans that grow with your stories",
+    "subhead": "Start free. Upgrade for more Sparks, cheaper prints, and premium extras.",
+    "monthly": "Monthly",
+    "yearly": "Yearly",
+    "saveMore": "Save more",
+    "free": "Free",
+    "perMonth": "mo",
+    "perYear": "yr",
+    "startForFree": "Start for free",
+    "choosePlan": "Choose plan",
+    "footnote": "Prices shown for reference. Manage your subscription anytime in the studio.",
+    "sparksPerMonth": "{count, number} Sparks every month",
+    "annualBonusSparks": "+{count, number} bonus Sparks on annual",
+    "printDiscount": "{pct}% off every print order",
+    "completeBookFree": "Make a complete book for free",
+    "printStandardPrice": "Print anytime at standard price"
+  }
+}

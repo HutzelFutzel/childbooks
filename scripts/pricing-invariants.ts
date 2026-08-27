@@ -14,7 +14,6 @@
  * .mjs check would mean the check could pass while the shipped code was wrong.
  */
 import {
-  SUPPORTED_MARKETS,
   createDefaultPricingSettings,
   findPublicProductBySlug,
   formatSlug,
@@ -46,8 +45,36 @@ import {
   variantPriceDelta,
 } from "../books-frontend/src/core/config/variants";
 import { saveBlockingIssues, validateProduct } from "../books-frontend/src/core/config/productValidation";
+import {
+  createDefaultMarketsConfig,
+  EMPTY_MARKET_REGISTRY,
+  enabledMarkets,
+  registryFrom,
+  registryOf,
+  SEED_MARKETS,
+} from "../books-frontend/src/core/config/markets";
+import {
+  currencyForMarket,
+  isMeasurable,
+  PROBE_ADDRESS,
+  PROBE_STATE,
+  STATE_CODE_REQUIRED,
+  TAX_ID_LABEL,
+  TAX_ID_REQUIRED,
+} from "../books-frontend/src/core/config/countries";
+import { subdivisionsFor, SUBDIVISIONS } from "../books-frontend/src/core/config/subdivisions";
 import { variantFromSku } from "../books-frontend/src/core/fulfillment/lulu/skuAxes";
 import { mapAddressValidation } from "../books-frontend/src/core/fulfillment/lulu/wire";
+
+/**
+ * The seeded markets, standing in for whatever an admin has actually opened.
+ *
+ * These checks are about the SHAPE of the geo rule — that a product can only
+ * narrow the open set, never widen it — so any non-empty registry proves it.
+ * Using the seed rather than a hand-written list keeps the countries named in
+ * the assertions below honest as the seed changes.
+ */
+const REGISTRY = registryFrom(createDefaultMarketsConfig());
 
 const failures: string[] = [];
 const checks: string[] = [];
@@ -241,26 +268,39 @@ for (const target of [25, 45]) {
   });
   check("measured shipping differs by destination", gb !== one, `US ${one}, GB ${gb}`);
 
-  // An unmeasured route must still price, or the order is refused outright.
+  // A country the sweep never visited gets no estimate at all. The scalar
+  // fallback was fitted to the routes it DID visit, so charging it here would
+  // invent a shipping price for a continent nobody measured — and with markets
+  // now openable by an admin, that's the common case rather than the exception.
   const unmeasured = estimateShippingCost(product.shipping, {
     destinationCountry: "JP",
     shippingMethod: "StandardPlus",
     copies: 1,
   });
-  check("an unmeasured destination falls back to the scalar", unmeasured > 0, `got ${unmeasured}`);
   check(
-    "shipping is priceable everywhere with a fallback set",
-    hasUsableShippingCost(product.shipping, undefined, { destinationCountry: "JP", copies: 1 }),
+    "an unmeasured destination gets no invented estimate",
+    unmeasured === 0,
+    `got ${unmeasured}`,
+  );
+  check(
+    "an order to an unmeasured destination is refused rather than mispriced",
+    !hasUsableShippingCost(product.shipping, undefined, { destinationCountry: "JP", copies: 1 }),
+  );
+  // …but a live quote settles it, which is the recoverable path a customer
+  // actually takes.
+  check(
+    "a live quote makes an unmeasured destination priceable",
+    hasUsableShippingCost(product.shipping, 14.5, { destinationCountry: "JP", copies: 1 }),
   );
 
-  // The scalar, not some other country's measured rate. Substituting one
-  // destination's rate for another's is how a UK buyer gets billed a Canadian
-  // shipping cost — and it stays plausible-looking, so nothing catches it.
+  // Never another country's measured rate. Substituting one destination's rate
+  // for another's is how a UK buyer gets billed a Canadian shipping cost — and
+  // it stays plausible-looking, so nothing catches it.
   const scalar = product.shipping.pricing.fallbackCost ?? 0;
   check(
     "an unmeasured destination is not billed another country's measured rate",
-    unmeasured === scalar,
-    `JP quoted ${unmeasured}, scalar is ${scalar}`,
+    unmeasured !== 4.99 + 1.5 && unmeasured !== 9.99 + 2.25 && unmeasured !== scalar,
+    `JP quoted ${unmeasured}`,
   );
 
   // Likewise across tiers: a route measured for one speed says nothing about
@@ -320,7 +360,7 @@ for (const target of [25, 45]) {
   );
   check(
     "an unmeasured speed does not strand a country",
-    !saveBlockingIssues(validateProduct(unknownInAu, settings)).some((i) =>
+    !saveBlockingIssues(validateProduct(unknownInAu, settings, { registry: REGISTRY })).some((i) =>
       i.message.includes("No enabled shipping speed reaches"),
     ),
   );
@@ -340,7 +380,7 @@ for (const target of [25, 45]) {
     }),
     enabledOnly,
   );
-  const stranding = validateProduct(refusedInAu, settings).find((i) =>
+  const stranding = validateProduct(refusedInAu, settings, { registry: REGISTRY }).find((i) =>
     i.message.includes("No enabled shipping speed reaches"),
   );
   check("a refused speed does strand a country", stranding != null);
@@ -364,8 +404,8 @@ for (const target of [25, 45]) {
   });
   check(
     "deselecting a market clears its stranding error without re-measuring",
-    !validateProduct(withoutAu, settings).some((i) => i.message.includes("AU")),
-    validateProduct(withoutAu, settings)
+    !validateProduct(withoutAu, settings, { registry: REGISTRY }).some((i) => i.message.includes("AU")),
+    validateProduct(withoutAu, settings, { registry: REGISTRY })
       .filter((i) => i.message.includes("AU"))
       .map((i) => i.message)
       .join(" | "),
@@ -410,8 +450,8 @@ for (const target of [25, 45]) {
       destinations: { mode: "all", countries: [], regions: {} },
     },
   });
-  const escapes = ["FR", "ES", "IT", "NL", "JP", "BR"].filter((c) =>
-    isDestinationAllowed(worldwide.shipping.destinations, { country: c }),
+  const escapes = ["ES", "IT", "NL", "JP", "BR"].filter((c) =>
+    isDestinationAllowed(REGISTRY, worldwide.shipping.destinations, { country: c }),
   );
   check(
     "a product claiming worldwide shipping still can't leave our markets",
@@ -419,13 +459,21 @@ for (const target of [25, 45]) {
     escapes.join(", "),
   );
 
-  // A stored "ship anywhere" is rewritten on read, so existing products are
-  // restricted without anyone re-saving them.
+  // "Ship anywhere" is now stored as-is and resolved against the registry at
+  // check time, so a product created before a market opened reaches it too.
   check(
-    "a stored ship-anywhere policy is normalized to our markets",
-    worldwide.shipping.destinations.mode === "allowlist" &&
-      worldwide.shipping.destinations.countries.length === SUPPORTED_MARKETS.length,
-    `${worldwide.shipping.destinations.mode} / ${worldwide.shipping.destinations.countries.join(",")}`,
+    "a ship-anywhere policy resolves to exactly the open markets",
+    worldwide.shipping.destinations.mode === "all" &&
+      allowedMarketsFor(REGISTRY, worldwide.shipping.destinations).join(",") ===
+        enabledMarkets(REGISTRY).join(","),
+    allowedMarketsFor(REGISTRY, worldwide.shipping.destinations).join(","),
+  );
+
+  // The ceiling holds against an empty registry too — that's the state before
+  // config loads, and it must refuse rather than fall open.
+  check(
+    "an unloaded registry refuses every destination",
+    allowedMarketsFor(EMPTY_MARKET_REGISTRY, worldwide.shipping.destinations).length === 0,
   );
 
   // A blocklist may subtract from the markets but never add to them.
@@ -436,10 +484,12 @@ for (const target of [25, 45]) {
       destinations: { mode: "blocklist", countries: ["AU", "FR"], regions: {} },
     },
   });
-  const viaBlocklist = allowedMarketsFor(blocking.shipping.destinations);
+  const viaBlocklist = allowedMarketsFor(REGISTRY, blocking.shipping.destinations);
   check(
     "a blocklist subtracts markets and adds none",
-    !viaBlocklist.includes("AU") && viaBlocklist.every((c) => SUPPORTED_MARKETS.includes(c)),
+    !viaBlocklist.includes("AU") &&
+      !viaBlocklist.includes("FR") &&
+      viaBlocklist.every((c) => REGISTRY.enabled.has(c)),
     viaBlocklist.join(", "),
   );
 
@@ -447,23 +497,149 @@ for (const target of [25, 45]) {
   // mean a product nobody can order — worth failing loudly rather than shipping
   // a country dropdown with nothing in it.
   const seeds = seedProductsFromCatalog().filter(
-    (p) => allowedMarketsFor(p.shipping.destinations).length === 0,
+    (p) => allowedMarketsFor(REGISTRY, p.shipping.destinations).length === 0,
   );
   check("every seeded product can be ordered to at least one market", seeds.length === 0);
 
-  // An unsupported country is refused even when the product explicitly names it:
+  // A closed country is refused even when the product explicitly names it:
   // otherwise "allowlist" would be a way to opt back out of the ceiling.
   const optimistic = normalizeProduct({
     ...product,
     shipping: {
       ...product.shipping,
-      destinations: { mode: "allowlist", countries: ["US", "FR"], regions: {} },
+      destinations: { mode: "allowlist", countries: ["US", "JP"], regions: {} },
     },
   });
   check(
-    "naming an unsupported country in an allowlist doesn't enable it",
-    !isDestinationAllowed(optimistic.shipping.destinations, { country: "FR" }) &&
-      isDestinationAllowed(optimistic.shipping.destinations, { country: "US" }),
+    "naming a closed country in an allowlist doesn't open it",
+    !isDestinationAllowed(REGISTRY, optimistic.shipping.destinations, { country: "JP" }) &&
+      isDestinationAllowed(REGISTRY, optimistic.shipping.destinations, { country: "US" }),
+  );
+
+  // The sanctions list is applied when the registry is BUILT, not only in the
+  // admin UI — a document hand-edited in the Firestore console must not be able
+  // to open one.
+  check(
+    "a sanctioned country can't be enabled through the registry",
+    !registryOf(["US", "RU", "IR"]).enabled.has("RU") &&
+      !registryOf(["US", "RU", "IR"]).enabled.has("IR"),
+  );
+}
+
+// ---- Country reference data agrees with itself ------------------------------
+
+// Every table here is transcribed by hand from an external register, and a
+// mistake in one is invisible until the provider rejects a real address — for
+// the tax-id countries, after the customer has paid. These checks are the only
+// thing that disagrees with a typo.
+{
+  // A seeded market with no probe address can be sold to but never MEASURED, so
+  // a passthrough product refuses every order to it the moment a live quote
+  // fails. Shipping that state by default would make the fallback machinery
+  // decorative for exactly the countries we sell to most.
+  const unmeasurableSeeds = SEED_MARKETS.filter((c) => !isMeasurable(c));
+  check(
+    "every seeded market can have its shipping measured",
+    unmeasurableSeeds.length === 0,
+    unmeasurableSeeds.join(", "),
+  );
+
+  // The provider rejects an address in these countries without a subdivision,
+  // so a probe address that omits one measures nothing and reports it as a
+  // provider refusal.
+  const probeMissingState = Object.keys(PROBE_ADDRESS).filter(
+    (c) => STATE_CODE_REQUIRED.has(c) && !PROBE_ADDRESS[c].state?.trim(),
+  );
+  check(
+    "every probe address carries a state where one is mandatory",
+    probeMissingState.length === 0,
+    probeMissingState.join(", "),
+  );
+
+  // The two tables are written independently — one for sweeping coverage, one
+  // for the checkout picker — and the sweep's code silently becoming invalid is
+  // how a whole country's coverage reads as "refused".
+  const probeStateNotOffered = Object.keys(PROBE_STATE).filter((country) => {
+    const subs = subdivisionsFor(country);
+    return subs.length > 0 && !subs.some((s) => s.code === PROBE_STATE[country]);
+  });
+  check(
+    "the probe state is one the subdivision list actually offers",
+    probeStateNotOffered.length === 0,
+    probeStateNotOffered.join(", "),
+  );
+
+  // Same check in the other direction for the probe ADDRESS, which is what
+  // calibration bills a customer's shipping from.
+  const probeAddressStateNotOffered = Object.keys(PROBE_ADDRESS).filter((country) => {
+    const state = PROBE_ADDRESS[country].state;
+    const subs = subdivisionsFor(country);
+    return Boolean(state) && subs.length > 0 && !subs.some((s) => s.code === state);
+  });
+  check(
+    "the probe address's state is one the subdivision list offers",
+    probeAddressStateNotOffered.length === 0,
+    probeAddressStateNotOffered.join(", "),
+  );
+
+  // A duplicate code makes one of the two entries unselectable, and React keys
+  // the options by it.
+  const dupes = Object.keys(SUBDIVISIONS).filter((country) => {
+    const codes = SUBDIVISIONS[country].map((s) => s.code);
+    return new Set(codes).size !== codes.length;
+  });
+  check("no subdivision list repeats a code", dupes.length === 0, dupes.join(", "));
+
+  // Checkout demands a tax id for these and names it in the message; an
+  // unlabelled one asks the customer for "tax id" in a country where nobody
+  // calls it that.
+  const unlabelled = [...TAX_ID_REQUIRED].filter((c) => !TAX_ID_LABEL[c]);
+  check("every mandatory tax id has a local name", unlabelled.length === 0, unlabelled.join(", "));
+
+  // The countries where a subdivision mistake is most expensive: the order is
+  // refused at print-job creation, which is after payment, so the picker (not a
+  // free-text field) is what has to cover them.
+  const riskyWithoutPicker = [...TAX_ID_REQUIRED].filter(
+    (c) => STATE_CODE_REQUIRED.has(c) && subdivisionsFor(c).length === 0,
+  );
+  check(
+    "a country needing both a tax id and a state code offers a state picker",
+    riskyWithoutPicker.length === 0,
+    riskyWithoutPicker.join(", "),
+  );
+}
+
+// ---- Customers are billed in the destination's currency ---------------------
+
+{
+  const supported = settings.currencies;
+  // The bug this replaced: checkout hardcoded USD, so every market opened after
+  // the first billed dollars for a book priced in the local currency.
+  check(
+    "a eurozone destination is billed in euros when the catalog supports them",
+    !supported.includes("EUR") ||
+      currencyForMarket("DE", supported, settings.baseCurrency) === "EUR",
+  );
+  check(
+    "a destination whose currency we don't support falls back to the base",
+    currencyForMarket("JP", ["USD", "EUR"], "USD") === "USD",
+  );
+  // An unknown or missing country must not produce an empty currency string —
+  // that reaches Stripe as an invalid charge rather than a validation error.
+  check(
+    "an unrecognised destination still resolves to a real currency",
+    currencyForMarket("ZZ", supported, settings.baseCurrency) === settings.baseCurrency &&
+      currencyForMarket(null, supported, settings.baseCurrency) === settings.baseCurrency,
+  );
+  // Every currency this table can select has to be one the catalog prices in,
+  // or opening the market yields a checkout that can't quote.
+  const unpriceable = SEED_MARKETS.filter(
+    (c) => !supported.includes(currencyForMarket(c, supported, settings.baseCurrency)),
+  );
+  check(
+    "every seeded market resolves to a currency the catalog prices in",
+    unpriceable.length === 0,
+    unpriceable.join(", "),
   );
 }
 
@@ -478,7 +654,7 @@ for (const target of [25, 45]) {
   const blocked: string[] = [];
   const unclear: string[] = [];
   for (const seed of seedProductsFromCatalog()) {
-    const issues = validateProduct(seed, settings, { env: "sandbox" });
+    const issues = validateProduct(seed, settings, { registry: REGISTRY, env: "sandbox" });
     if (saveBlockingIssues(issues).length > 0) blocked.push(seed.presentation.name);
     const missingFix = issues.filter((i) => i.level === "error" && i.actionable && !i.fix);
     if (missingFix.length > 0) unclear.push(`${seed.presentation.name} (${missingFix[0].field})`);
@@ -523,6 +699,7 @@ for (const target of [25, 45]) {
 
   const publicProduct = toPublicProduct(priced, settings, {
     offerable: true,
+    registry: REGISTRY,
     plans: [
       { id: "storyteller", printDiscountPct: 10 },
       { id: "dream-weaver", printDiscountPct: 20 },
@@ -552,9 +729,15 @@ for (const target of [25, 45]) {
   // rate that ignored `perCopy` would quote one copy correctly and undercharge
   // every larger order, which is exactly the failure the two-term shape exists
   // to prevent.
+  //
+  // Unmeasured destinations are checked for the opposite property: the
+  // storefront must publish NO price and checkout must refuse, together. Either
+  // one alone is the bad case — a published figure checkout won't honour, or a
+  // silent charge the storefront never showed.
   const shippingMismatches: string[] = [];
+  const unmeasuredLeaks: string[] = [];
   for (const cur of settings.currencies) {
-    for (const country of allowedMarketsFor(product.shipping.destinations)) {
+    for (const country of allowedMarketsFor(REGISTRY, product.shipping.destinations)) {
       for (const copies of [1, 3, 10]) {
         const method = defaultShippingMethod(product);
         const quote = simulatePublicOrder(publicProduct, settings, {
@@ -564,11 +747,21 @@ for (const target of [25, 45]) {
           destinationCountry: country,
           shippingMethod: method,
         });
-        const server = computeMargin(
-          product,
-          { currency: cur, pages: min, copies, destinationCountry: country, shippingMethod: method },
-          settings,
-        ).shippingCharged;
+        const scenario = {
+          currency: cur,
+          pages: min,
+          copies,
+          destinationCountry: country,
+          shippingMethod: method,
+        };
+        const priceable = hasUsableShippingCost(product.shipping, undefined, scenario);
+        if (!priceable) {
+          if (quote.shipping != null) {
+            unmeasuredLeaks.push(`${cur} ${country} ×${copies}: published ${quote.shipping}`);
+          }
+          continue;
+        }
+        const server = computeMargin(product, scenario, settings).shippingCharged;
         if (quote.shipping == null || Math.abs(quote.shipping - server) > 0.02) {
           shippingMismatches.push(
             `${cur} ${country} ×${copies}: ${quote.shipping ?? "none"} vs ${server}`,
@@ -581,6 +774,11 @@ for (const target of [25, 45]) {
     "published shipping matches what checkout charges, at every quantity",
     shippingMismatches.length === 0,
     shippingMismatches[0],
+  );
+  check(
+    "an unmeasured destination publishes no shipping price at all",
+    unmeasuredLeaks.length === 0,
+    unmeasuredLeaks[0],
   );
 
   // A refusal the provider gave us must reach the customer as a refusal. Read as
@@ -630,6 +828,7 @@ for (const target of [25, 45]) {
   // And the clamp must not be silent: an admin who sets a perk the price can't
   // pay for gets told, rather than discovering it from a support ticket.
   const greedy = validateProduct(product, settings, {
+    registry: REGISTRY,
     plans: [{ id: "greedy", name: "Greedy", printDiscountPct: 99 }],
   });
   check(
@@ -653,7 +852,7 @@ for (const target of [25, 45]) {
   );
 
   const publicProducts = seedProductsFromCatalog().map((p) =>
-    toPublicProduct(p, settings, { offerable: true }),
+    toPublicProduct(p, settings, { offerable: true, registry: REGISTRY }),
   );
   const roundTripped = publicProducts.every(
     (p) => findPublicProductBySlug(publicProducts, formatSlug(p.spec))?.sku === p.sku,

@@ -13,6 +13,8 @@ import type {
   OrderStage,
   Quote,
   ShipmentInfo,
+  ShippingMethod,
+  ShippingOption,
   StatusWebhook,
   SuggestedAddress,
 } from "../types";
@@ -34,6 +36,16 @@ export interface LuluShippingAddress {
   postcode?: string;
   phone_number?: string;
   email?: string;
+  /**
+   * The recipient's own tax id. Lulu REQUIRES it for Brazil (CPF/CNPJ), Chile
+   * (RUT) and Mexico (RFC) and accepts it unvalidated for a long tail of
+   * others; it standardizes the format itself, so separators are fine.
+   *
+   * Only enforced on print-job creation — a cost calculation for Brazil
+   * succeeds without it, which is why checkout has to collect it up front
+   * rather than discovering the requirement after payment.
+   */
+  recipient_tax_id?: string;
 }
 
 // ---- Outbound (request) shapes -------------------------------------------
@@ -70,6 +82,26 @@ export interface LuluCostRequest {
   line_items: LuluCostLineItem[];
   shipping_address: LuluShippingAddress;
   shipping_level: string;
+}
+
+/**
+ * `POST /shipping-options/` — every service Lulu runs to a destination.
+ *
+ * Note how little it needs: a country is enough. No street, no postcode, no
+ * phone. That's the difference between asking "what reaches here" and asking
+ * "price this order", and it's why coverage can be swept worldwide.
+ */
+export interface LuluShippingOptionsRequest {
+  /** Lulu quotes in AUD, CAD, EUR, GBP or USD. Defaults to USD. */
+  currency?: string;
+  line_items: LuluCostLineItem[];
+  shipping_address: {
+    country: string;
+    /** ISO-3166-2 subdivision; required by some countries for accurate results. */
+    state?: string;
+    city?: string;
+    postcode?: string;
+  };
 }
 
 // ---- Inbound (response) shapes -------------------------------------------
@@ -124,6 +156,24 @@ interface LuluCostResponse {
   currency?: string;
   /** The address we asked it to price, with the carrier's verdict on it. */
   shipping_address?: LuluValidatedAddress;
+}
+
+/** One entry from `POST /shipping-options/`. */
+export interface LuluShippingOption {
+  id?: number;
+  /** MAIL | PRIORITY_MAIL | GROUND_HD | GROUND_BUS | GROUND | EXPEDITED | EXPRESS */
+  level?: string;
+  /** Decimal string, and null unless quantity + currency were both supplied. */
+  cost_excl_tax?: string | null;
+  currency?: string;
+  /** Business days from start of production to delivery. */
+  total_days_min?: number;
+  total_days_max?: number;
+  transit_time?: number;
+  traceable?: boolean;
+  postbox_ok?: boolean;
+  home_only?: boolean;
+  business_only?: boolean;
 }
 
 interface LuluPrintJobStatus {
@@ -298,6 +348,39 @@ export function mapCostToQuote(json: LuluCostResponse, shippingLevel: string): Q
     shipments: [{ cost: money(json.shipping_cost?.total_cost_excl_tax, currency) }],
     ...(addressValidation ? { addressValidation } : {}),
   };
+}
+
+/**
+ * Map `POST /shipping-options/` entries into domain {@link ShippingOption}s.
+ *
+ * `methodForLevel` is injected rather than imported because the level↔tier map
+ * lives in the provider, which already imports this module. Levels it doesn't
+ * recognise (GROUND_HD, GROUND_BUS) are KEPT with an undefined `method`:
+ * dropping them would under-report what a country can actually receive, and
+ * coverage is the whole point of this call.
+ */
+export function mapShippingOptions(
+  json: LuluShippingOption[] | undefined,
+  methodForLevel: (level: string) => ShippingMethod | undefined,
+): ShippingOption[] {
+  if (!Array.isArray(json)) return [];
+  return json.flatMap((o) => {
+    const level = text(o.level);
+    if (!level) return [];
+    const amount = text(o.cost_excl_tax);
+    return [
+      {
+        level,
+        method: methodForLevel(level),
+        ...(typeof o.total_days_min === "number" ? { transitDaysMin: o.total_days_min } : {}),
+        ...(typeof o.total_days_max === "number" ? { transitDaysMax: o.total_days_max } : {}),
+        traceable: o.traceable ?? false,
+        postboxOk: o.postbox_ok ?? false,
+        businessOnly: o.business_only ?? false,
+        ...(amount ? { cost: money(amount, o.currency) } : {}),
+      },
+    ];
+  });
 }
 
 function mapStage(name?: string): OrderStage {

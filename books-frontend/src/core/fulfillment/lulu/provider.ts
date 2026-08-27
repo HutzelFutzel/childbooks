@@ -14,6 +14,7 @@
  *
  * Reference: https://api.lulu.com/docs/
  */
+import { TAX_ID_LABEL, TAX_ID_REQUIRED } from "../../config/countries";
 import { FulfillmentError, fulfillmentKindFromStatus, isRetryable, retryAfterMs } from "../errors";
 import type {
   AssetHost,
@@ -24,6 +25,8 @@ import type {
   Quote,
   QuoteRequest,
   ShippingMethod,
+  ShippingOption,
+  ShippingOptionsRequest,
   TierOutcome,
 } from "../types";
 import { LULU_BOOK_PRODUCTS } from "./products";
@@ -32,10 +35,13 @@ import {
   mapCostToQuote,
   mapCoverDimensionsMm,
   mapOrder,
+  mapShippingOptions,
   mapWebhook,
   type LuluCostRequest,
   type LuluPrintJobRequest,
   type LuluShippingAddress,
+  type LuluShippingOption,
+  type LuluShippingOptionsRequest,
   type LuluSourceFile,
   type LuluWebhook,
 } from "./wire";
@@ -429,6 +435,30 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
 
     quoteTiers,
 
+    async shippingOptions(req: ShippingOptionsRequest): Promise<ShippingOption[]> {
+      const body: LuluShippingOptionsRequest = {
+        currency: req.currency,
+        line_items: [
+          {
+            page_count: Math.max(1, Math.round(req.pageCount)),
+            pod_package_id: req.productSku,
+            quantity: Math.max(1, Math.round(req.copies)),
+          },
+        ],
+        shipping_address: {
+          country: req.destinationCountry.trim().toUpperCase(),
+          state: req.destinationState?.trim() || undefined,
+          city: req.destinationCity?.trim() || undefined,
+          postcode: req.destinationPostalCode?.trim() || undefined,
+        },
+      };
+      const json = await request<LuluShippingOption[]>("/shipping-options/", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+      return mapShippingOptions(json, shippingMethodForLevel);
+    },
+
     async createOrder(draft: OrderDraft): Promise<FulfillmentOrder> {
       // Prefer already-hosted files (payment-gated checkout uploaded them up
       // front); otherwise upload the in-memory assets now.
@@ -444,6 +474,19 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
       if (!files.interior || !files.cover) {
         throw new FulfillmentError(
           "Lulu orders require both an interior and a cover print file.",
+          { kind: "validation", provider: "lulu" },
+        );
+      }
+
+      // Checked here as well as at checkout because this runs AFTER payment:
+      // Lulu only enforces the recipient tax id on job creation (a cost
+      // calculation for Brazil succeeds without one), so a gap in the checkout
+      // form would surface as a failed job on an order already charged.
+      const destination = draft.recipient.address.countryCode.trim().toUpperCase();
+      const recipientTaxId = draft.recipient.address.taxId?.trim();
+      if (TAX_ID_REQUIRED.has(destination) && !recipientTaxId) {
+        throw new FulfillmentError(
+          `Shipping to ${destination} requires the recipient's ${TAX_ID_LABEL[destination] ?? "tax id"}.`,
           { kind: "validation", provider: "lulu" },
         );
       }
@@ -473,6 +516,7 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
           postcode: draft.recipient.address.postalOrZipCode,
           phone_number: draft.recipient.phoneNumber,
           email: draft.recipient.email,
+          recipient_tax_id: recipientTaxId || undefined,
         },
         shipping_level: SHIPPING_LEVEL[draft.shippingMethod],
       };

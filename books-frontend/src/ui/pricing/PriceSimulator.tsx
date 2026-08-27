@@ -12,8 +12,8 @@ import {
   type PublicProduct,
 } from "../../core/config/products";
 import {
-  allowedMarketsFor,
   pickTier,
+  publicMarketsFor,
   publicShippingMethodsFor,
   simulatePublicOrder,
 } from "../../core/config/productMath";
@@ -110,10 +110,7 @@ export function PriceSimulator({
 
   // Countries and speeds come from the product, so the tool can never quote a
   // route checkout would refuse.
-  const countries = useMemo(
-    () => (product ? allowedMarketsFor(product.shipping.destinations) : []),
-    [product],
-  );
+  const countries = useMemo(() => (product ? publicMarketsFor(product) : []), [product]);
   const methods = useMemo(
     () => (product ? publicShippingMethodsFor(product, country) : []),
     [product, country],

@@ -24,7 +24,13 @@ import { cachedDocumentPath, cachedDocumentUrl, documentKey } from "./renders";
 import { fulfillmentProvider } from "./lulu";
 import { persistCreatedOrder } from "./orders";
 import { getProductsConfig } from "./products";
+import { getMarketRegistry } from "./markets";
 import { getPricingSettings } from "./appConfig";
+import {
+  currencyForMarket,
+  TAX_ID_LABEL,
+  TAX_ID_REQUIRED,
+} from "../../books-frontend/src/core/config/countries";
 import {
   computeMargin,
   defaultShippingMethod,
@@ -69,6 +75,7 @@ import {
 import {
   claimFulfillment,
   createPendingPayment,
+  draftRecipient,
   findPaymentIdByStripeId,
   findUidByCustomerId,
   getAdminPayment,
@@ -77,6 +84,7 @@ import {
   listPayments,
   markFulfillmentFailed,
   paymentsAnalytics,
+  planRecipient,
   saveStripeCustomerId,
   updatePayment,
   upsertSubscription,
@@ -106,6 +114,7 @@ import {
 } from "./finance";
 import { stampMilestone } from "./projects";
 import {
+  countryLabel,
   normalizeCountry,
   UNKNOWN_COUNTRY,
 } from "../../books-frontend/src/core/analytics/markets";
@@ -618,16 +627,50 @@ async function priceRetailOrder(args: RetailPriceArgs): Promise<RetailPriceResul
  * a doomed order doesn't cost a Storage round trip first. Sharing the function
  * means the fast path can't drift from the binding one.
  */
-function shippingRefusal(
+async function shippingRefusal(
   product: ProductDefinition,
-  dest: { country?: string | null; region?: string; method: ShippingMethod },
-): string | null {
-  const country = (dest.country ?? "").trim();
-  if (!isDestinationAllowed(product.shipping.destinations, { country, region: dest.region })) {
-    return "We can't ship this product to that destination yet.";
+  dest: {
+    country?: string | null;
+    region?: string;
+    method: ShippingMethod;
+    /**
+     * `"quote"` checks only destination eligibility; `"order"` also demands the
+     * order-time fields the provider will insist on. A price preview must not
+     * fail on a missing tax id — the customer hasn't reached that input yet, and
+     * an error there reads as "we won't sell to you" rather than "keep typing".
+     */
+    stage: "quote" | "order";
+    taxId?: string | null;
+  },
+): Promise<string | null> {
+  const country = (dest.country ?? "").trim().toUpperCase();
+  const registry = await getMarketRegistry();
+  const policy = product.shipping.destinations;
+
+  // Three separate refusals, because they have three different remedies and a
+  // single message sent everyone down the wrong one. "We don't serve your
+  // country" is final; "this book doesn't go there" means try another book;
+  // "not to your state" means the rest of the country is fine. The old shared
+  // wording ("this product … that destination") told a customer in an unserved
+  // country to go shopping for a different book that also wouldn't ship.
+  if (!country || !registry.enabled.has(country)) {
+    const where = country ? countryLabel(country) : "that country";
+    return `We're sorry — we don't currently ship to ${where}.`;
+  }
+  if (!isDestinationAllowed(registry, policy, { country })) {
+    return `This book can't be shipped to ${countryLabel(country)} yet.`;
+  }
+  if (!isDestinationAllowed(registry, policy, { country, region: dest.region })) {
+    return `We can't ship this book to that part of ${countryLabel(country)} yet.`;
   }
   if (!product.shipping.methods.some((m) => m.enabled && m.method === dest.method)) {
     return "That shipping method isn't available for this product.";
+  }
+  // Enforced here as well as in the checkout form because this is the binding
+  // check: the provider only rejects a missing recipient tax id when the print
+  // job is created, which is after the customer has paid.
+  if (dest.stage === "order" && TAX_ID_REQUIRED.has(country) && !dest.taxId?.trim()) {
+    return `Orders to ${countryLabel(country)} need the recipient's ${TAX_ID_LABEL[country] ?? "tax id"} for customs.`;
   }
   return null;
 }
@@ -638,10 +681,12 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
   // Checked HERE, at the chokepoint both physical-order paths funnel through.
   // Only one of them used to validate: a reorder replayed a stored address, so
   // an order placed before a market was withdrawn stayed repeatable forever.
-  const refusal = shippingRefusal(product, {
+  const refusal = await shippingRefusal(product, {
     country: args.destinationCountry || recipient.address.countryCode,
     region: recipient.address.stateOrCounty ?? undefined,
     method: args.shippingMethod,
+    stage: "order",
+    taxId: recipient.address.taxId,
   });
   if (refusal) return { ok: false, error: refusal };
 
@@ -776,19 +821,7 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     currency,
     pageCount: pages,
     merchantReference: args.merchantReference,
-    recipient: {
-      name: recipient.name,
-      email: recipient.email ?? null,
-      phoneNumber: recipient.phoneNumber ?? null,
-      address: {
-        line1: recipient.address.line1,
-        line2: recipient.address.line2 ?? null,
-        townOrCity: recipient.address.townOrCity,
-        stateOrCounty: recipient.address.stateOrCounty ?? null,
-        postalOrZipCode: recipient.address.postalOrZipCode,
-        countryCode: recipient.address.countryCode,
-      },
-    },
+    recipient: planRecipient(recipient),
     sourceFileUrls: args.sourceFileUrls,
     estimatedCost,
   };
@@ -887,11 +920,14 @@ export function registerStripeUserRoutes(app: Express): void {
         }
       }
 
-      const currency = (body.currency || settings.baseCurrency).toUpperCase() as CurrencyCode;
-      if (!settings.currencies.includes(currency)) {
-        clientError(res, `Currency ${currency} isn't supported.`);
-        return;
-      }
+      // Destination-derived, exactly as in the price preview — see the note
+      // there. Taking it from the body would let the two disagree, which means
+      // charging an amount the customer was never shown.
+      const currency = currencyForMarket(
+        body.destinationCountry || body.recipient.address.countryCode,
+        settings.currencies,
+        settings.baseCurrency,
+      ) as CurrencyCode;
       const copies = Math.max(1, Math.floor(body.copies || 1));
       const pages = Math.max(1, Math.floor(body.pageCount || product.conditions.pages.min));
 
@@ -908,10 +944,12 @@ export function registerStripeUserRoutes(app: Express): void {
       }
       // Checked before the uploads below purely to save the round trip;
       // `createPrintCheckout` re-checks and is the binding one.
-      const refusal = shippingRefusal(product, {
+      const refusal = await shippingRefusal(product, {
         country: body.destinationCountry || body.recipient.address.countryCode,
         region: body.recipient.address.stateOrCounty ?? undefined,
         method: body.shippingMethod,
+        stage: "order",
+        taxId: body.recipient.address.taxId,
       });
       if (refusal) {
         clientError(res, refusal);
@@ -1026,9 +1064,34 @@ export function registerStripeUserRoutes(app: Express): void {
         return;
       }
       const { product, variant, printSku } = resolved;
-      const currency = (body.currency || settings.baseCurrency).toUpperCase() as CurrencyCode;
-      if (!settings.currencies.includes(currency)) {
-        clientError(res, `Currency ${currency} isn't supported.`);
+      // Derived from the DESTINATION, not taken from the client. Both sides run
+      // the same function on the same settings doc, so the previewed price and
+      // the charged one can't be denominated differently — and a client can't
+      // pick the currency its book happens to be cheapest in.
+      const currency = currencyForMarket(
+        body.destinationCountry,
+        settings.currencies,
+        settings.baseCurrency,
+      ) as CurrencyCode;
+      // The client always sends a method; when it doesn't, preview a tier this
+      // product actually offers. Defaulting to a fixed one previewed a price for
+      // a speed the customer would then be unable to select — and if that tier
+      // isn't sold to their country, the preview fails on a product that would
+      // have quoted perfectly well.
+      const shippingMethod = body.shippingMethod ?? defaultShippingMethod(product);
+      // The preview goes through the same refusal as checkout. Without this it
+      // would price whatever the print provider happens to quote — the provider
+      // ships to far more countries than we sell to — so a customer in a closed
+      // market saw a real total and was only turned away at "Continue to
+      // payment", after entering a full address.
+      const refusal = await shippingRefusal(product, {
+        country: body.destinationCountry,
+        region: body.state,
+        method: shippingMethod,
+        stage: "quote",
+      });
+      if (refusal) {
+        clientError(res, refusal);
         return;
       }
       const activePlan = await resolveActivePlan(uid);
@@ -1043,12 +1106,7 @@ export function registerStripeUserRoutes(app: Express): void {
         copies,
         pages,
         currency,
-        // The client always sends a method; when it doesn't, preview a tier this
-        // product actually offers. Defaulting to a fixed one previewed a price
-        // for a speed the customer would then be unable to select — and if that
-        // tier isn't sold to their country, the preview fails on a product that
-        // would have quoted perfectly well.
-        shippingMethod: body.shippingMethod ?? defaultShippingMethod(product),
+        shippingMethod,
         destinationCountry: body.destinationCountry,
         address: {
           line1: body.line1,
@@ -1371,22 +1429,17 @@ export function registerStripeUserRoutes(app: Express): void {
         activePlan,
         copies,
         pages: plan.pageCount,
-        currency: plan.currency.toUpperCase() as CurrencyCode,
+        // Re-derived rather than replayed: the stored currency can be one the
+        // catalog has since stopped supporting, which would fail the reorder on
+        // a price the customer never chose in the first place.
+        currency: currencyForMarket(
+          plan.destinationCountry,
+          settings.currencies,
+          settings.baseCurrency,
+        ) as CurrencyCode,
         shippingMethod: plan.shippingMethod as ShippingMethod,
         destinationCountry: plan.destinationCountry,
-        recipient: {
-          name: plan.recipient.name,
-          email: plan.recipient.email ?? undefined,
-          phoneNumber: plan.recipient.phoneNumber ?? undefined,
-          address: {
-            line1: plan.recipient.address.line1,
-            line2: plan.recipient.address.line2 ?? undefined,
-            townOrCity: plan.recipient.address.townOrCity,
-            stateOrCounty: plan.recipient.address.stateOrCounty ?? undefined,
-            postalOrZipCode: plan.recipient.address.postalOrZipCode,
-            countryCode: plan.recipient.address.countryCode,
-          },
-        },
+        recipient: draftRecipient(plan.recipient),
         sourceFileUrls: plan.sourceFileUrls,
         merchantReference: plan.merchantReference ?? null,
       });
@@ -1799,19 +1852,7 @@ async function fulfillPaidOrder(paymentId: string): Promise<void> {
   const draft: OrderDraft = {
     productSku: plan.productSku,
     copies: plan.copies,
-    recipient: {
-      name: plan.recipient.name,
-      email: plan.recipient.email ?? undefined,
-      phoneNumber: plan.recipient.phoneNumber ?? undefined,
-      address: {
-        line1: plan.recipient.address.line1,
-        line2: plan.recipient.address.line2 ?? undefined,
-        townOrCity: plan.recipient.address.townOrCity,
-        stateOrCounty: plan.recipient.address.stateOrCounty ?? undefined,
-        postalOrZipCode: plan.recipient.address.postalOrZipCode,
-        countryCode: plan.recipient.address.countryCode,
-      },
-    },
+    recipient: draftRecipient(plan.recipient),
     shippingMethod: plan.shippingMethod as ShippingMethod,
     assets: [],
     sourceFileUrls: plan.sourceFileUrls,

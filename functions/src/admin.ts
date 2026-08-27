@@ -126,6 +126,8 @@ import {
   type QrCornerStyle,
   type QrDotStyle,
 } from "../../books-frontend/src/core/config/qrCodes";
+import { ensureMarketsSeeded, saveMarketsConfig } from "./markets";
+import { runMarketSweep } from "./marketDiscovery";
 import {
   deleteProduct,
   getProductsConfig,
@@ -143,7 +145,8 @@ import type { FulfillmentEnv } from "../../books-frontend/src/core/settings";
 import { computeMargin } from "../../books-frontend/src/core/config/productMath";
 import { isVariantSelection } from "../../books-frontend/src/core/config/variants";
 import { skuForVariant } from "../../books-frontend/src/core/fulfillment/lulu/skuAxes";
-import type { ProductDefinition } from "../../books-frontend/src/core/config/products";
+import type { ProductDefinition, ProviderEnv } from "../../books-frontend/src/core/config/products";
+import { verificationFor } from "../../books-frontend/src/core/config/products";
 import { apiKeyFor, resolveSuggestionModel } from "./modelResolve";
 import { recordUsage, withUsage } from "./usage";
 import { getTextProvider } from "../../books-frontend/src/core/providers";
@@ -1314,6 +1317,59 @@ export function registerAdminRoutes(app: Express): void {
   app.put("/admin/config/referral", json, async (req: Request, res: Response) => {
     try {
       res.json(await saveReferralConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- Selling markets ------------------------------------------------------
+
+  // Which countries we ship to. Seeded on first read so the table opens showing
+  // the markets the storefront is already serving rather than an empty list
+  // that reads as "we sell nowhere".
+  app.get("/admin/config/markets", async (_req, res) => {
+    try {
+      res.json(await ensureMarketsSeeded());
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.put("/admin/config/markets", json, async (req: Request, res: Response) => {
+    try {
+      const config = await saveMarketsConfig(req.body);
+      // Opening or closing a market changes which destinations every product
+      // can reach, and so the shipping rates the storefront publishes. Without
+      // this the public projection keeps advertising the old country list.
+      await reprojectPublicProducts();
+      res.json(config);
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Ask the print provider what it ships where. One request per country, so
+  // this runs for minutes; it resumes rather than restarting, since only the
+  // countries left `unknown` by a throttled run are re-probed.
+  app.post("/admin/markets/sweep", async (req: Request, res: Response) => {
+    try {
+      // Coverage is a fact about the provider, so any verified SKU will do —
+      // the shared runner defaults to the first the catalog has rather than
+      // making the admin choose one to answer a question that doesn't depend
+      // on it.
+      const result = await runMarketSweep({
+        force: req.query.force === "1",
+        sku: typeof req.query.sku === "string" ? req.query.sku : undefined,
+      });
+      res.json({
+        capability: result.config,
+        probed: result.probed,
+        available: result.available,
+        refused: result.refused,
+        unknown: result.unknown,
+        throttled: result.throttled,
+        ...(result.message ? { message: result.message } : {}),
+      });
     } catch (err) {
       handleError(res, err);
     }

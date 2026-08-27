@@ -16,6 +16,7 @@ import {
   worstBreakEvenDiscountPct,
 } from "./productMath";
 import { bookMediaKey, resolvedPhotosFor, type CatalogMediaConfig } from "./catalogMedia";
+import { EMPTY_MARKET_REGISTRY, type MarketRegistry } from "./markets";
 import { variantFromSku } from "../fulfillment/lulu/skuAxes";
 import type { ShippingMethod } from "../fulfillment/types";
 import {
@@ -81,6 +82,15 @@ export interface ValidateOptions {
    * turns that silence into a warning naming the product and the plan.
    */
   plans?: readonly { id: string; name: string; printDiscountPct: number }[];
+  /**
+   * The markets currently open for business.
+   *
+   * Defaults to {@link EMPTY_MARKET_REGISTRY}, which reports every product as
+   * having no reachable destination. That's the loud failure mode on purpose:
+   * a caller that forgot to load the registry sees "this product ships
+   * nowhere" rather than a validation pass that silently ignored the ceiling.
+   */
+  registry?: MarketRegistry;
 }
 
 /** Collect all configuration issues for a product. */
@@ -296,10 +306,16 @@ export function validateProduct(
   }
 
   // Shipping
+  const registry = opts.registry ?? EMPTY_MARKET_REGISTRY;
   const enabledMethods = p.shipping.methods.filter((s) => s.enabled).map((s) => s.method);
   if (enabledMethods.length === 0) err("shipping.methods", "Enable at least one shipping method.");
-  if (!hasReachableDestination(p.shipping.destinations)) {
-    err("shipping.destinations", "No destinations are reachable with this geo policy.");
+  if (!hasReachableDestination(registry, p.shipping.destinations)) {
+    err(
+      "shipping.destinations",
+      registry.enabled.size === 0
+        ? "No markets are enabled — open one in Configuration → Markets before this product can be sold."
+        : "No destinations are reachable with this geo policy.",
+    );
   }
   // Passthrough shipping charges whatever the provider quotes, so it needs a
   // stand-in for the times a quote can't be fetched — otherwise checkout has to
@@ -328,7 +344,7 @@ export function validateProduct(
   const measuredRows = p.shipping.fallback ?? [];
   if (measuredRows.length > 0 && enabledMethods.length > 0) {
     const countries = [...new Set(measuredRows.map((r) => r.country))].filter((c) =>
-      isDestinationAllowed(p.shipping.destinations, { country: c }),
+      isDestinationAllowed(registry, p.shipping.destinations, { country: c }),
     );
     const refusedFor = (country: string, method: ShippingMethod) =>
       measuredRows.some((r) => r.country === country && r.method === method && !r.available);

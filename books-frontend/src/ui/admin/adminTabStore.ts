@@ -23,6 +23,7 @@ export type ConfigTabId =
   | "sparks" // the Sparks economy internals (peg, grants, action pricing)
   | "financial" // currencies, FX, fees, rounding, tax — the money plumbing
   | "discounts" // sale planner: per-item break-even & safe max discount + slider
+  | "markets" // which countries we ship to, and what the printer reaches
   // AI pipeline group. (Cost *reporting* lives in Analysis → Costs; this group
   // only holds the knobs that set what things cost.)
   | "models"
@@ -164,7 +165,7 @@ export const CONFIG_GROUPS: {
     label: "Business",
     description:
       "Everything that makes money: what you sell, how memberships work, and the plumbing (currencies, discounts) behind every price.",
-    tabs: ["overview", "catalog", "memberships", "sparks", "financial", "discounts"],
+    tabs: ["overview", "catalog", "markets", "memberships", "sparks", "financial", "discounts"],
   },
   {
     id: "ai",

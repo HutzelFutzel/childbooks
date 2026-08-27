@@ -7,6 +7,13 @@ import { useReadOnly } from "./ReadOnlyContext";
 export interface SelectOption {
   value: string;
   label: string;
+  /**
+   * Shown but not choosable. Lets a select DISPLAY a value it no longer offers —
+   * a native select whose value isn't among its options renders the first one
+   * instead, so without this the only ways to keep display and state honest are
+   * to silently rewrite the value or to hide it.
+   */
+  disabled?: boolean;
 }
 
 export interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
@@ -39,7 +46,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select
         {...rest}
       >
         {options.map((o) => (
-          <option key={o.value} value={o.value}>
+          <option key={o.value} value={o.value} disabled={o.disabled}>
             {o.label}
           </option>
         ))}

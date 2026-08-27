@@ -341,31 +341,19 @@ export interface PricingSettings {
 // ---- Shipping policy + geo restrictions ------------------------------------
 
 /**
- * The countries we sell to. Not a default — a CEILING.
+ * The countries we sell to are NOT declared here.
  *
- * Shipping somewhere is not a switch we can flip: the tier matrix has to be
- * measured there, the tax treatment has to be configured, and the print
- * provider has to actually run a service to it. So the honest model is a short
- * explicit list, and everything else refuses.
+ * They live in the admin-managed market registry (`config/markets.ts`), because
+ * opening a country is an operational decision — the provider has to run a
+ * service there and the coverage has to be discovered — not a deploy. What used
+ * to be a `SUPPORTED_MARKETS` constant in this file is now a
+ * {@link MarketRegistry} passed into {@link isDestinationAllowed}.
  *
- * {@link isDestinationAllowed} intersects every product's own geo policy with
- * this list, which is why it can be trusted as a ceiling rather than a
- * suggestion: a product misconfigured to ship worldwide still can't, and a
- * checkout path that forgets to look at the product policy still can't.
- *
- * Adding a market means adding it here AND re-running the shipping measurement
- * so orders to it can be priced. See `SHIPPING_ZONES` in `printCalibrate.ts`,
- * which probes exactly these countries.
+ * The safety property is unchanged and still lives in that one function: every
+ * geo check intersects the product's own policy with the registry first, so a
+ * product's policy can only ever NARROW the set. A product misconfigured to
+ * ship worldwide still ships only where we sell.
  */
-export const SUPPORTED_MARKETS = ["US", "GB", "DE", "CA", "AU"] as const;
-
-export type SupportedMarket = (typeof SUPPORTED_MARKETS)[number];
-
-/** Whether a country code is one we sell to at all. */
-export function isSupportedMarket(country: string | null | undefined): boolean {
-  const c = (country ?? "").trim().toUpperCase();
-  return (SUPPORTED_MARKETS as readonly string[]).includes(c);
-}
 
 export interface GeoMatch {
   country?: string; // ISO-2
@@ -374,10 +362,14 @@ export interface GeoMatch {
 
 export interface GeoPolicy {
   /**
-   * How `countries` is read. Note that `"all"` means "everywhere we sell", not
-   * everywhere — {@link SUPPORTED_MARKETS} bounds every mode, so a policy can
-   * only ever narrow the set. Stored `"all"` policies are rewritten to an
-   * explicit allowlist on read so the admin UI shows what's enforced.
+   * How `countries` is read.
+   *
+   * `"all"` means "everywhere we sell", not everywhere — the market registry
+   * bounds every mode, so a policy can only ever narrow the set. It is stored
+   * as `"all"` rather than expanded into a snapshot list precisely BECAUSE the
+   * registry is now dynamic: a frozen copy of today's markets would silently
+   * exclude a country opened tomorrow, and the product would look enabled for
+   * it in the admin while checkout refused.
    */
   mode: "all" | "allowlist" | "blocklist";
   countries: string[]; // ISO-2
@@ -804,10 +796,10 @@ export function createDefaultCostModel(): ProductCostModel {
  */
 export function createDefaultShippingPolicy(): ProductShippingPolicy {
   return {
-    // An explicit allowlist, not "anywhere". A new product that claims worldwide
-    // shipping is claiming something nobody has measured or priced, and the
-    // claim surfaces as a checkout failure in front of a paying customer.
-    destinations: { mode: "allowlist", countries: [...SUPPORTED_MARKETS], regions: {} },
+    // "Everywhere we sell", which the market registry bounds — not "anywhere".
+    // Stored as a mode rather than a snapshot of today's markets so a product
+    // doesn't quietly exclude a country opened after it was created.
+    destinations: { mode: "all", countries: [], regions: {} },
     methods: [
       { method: "Budget", enabled: false },
       { method: "StandardPlus", enabled: true },
@@ -1049,17 +1041,10 @@ function normalizeShipping(input: unknown, def: ProductShippingPolicy): ProductS
   const s = (input ?? {}) as Partial<ProductShippingPolicy>;
   const shipping: ProductShippingPolicy = { ...def, ...s };
 
-  // Products stored before markets were declared say "ship anywhere". Rewriting
-  // that on read restricts them without anyone having to re-save every product,
-  // and makes the admin UI show what is actually enforced rather than a promise
-  // the order path will refuse to keep.
-  if (shipping.destinations.mode === "all") {
-    shipping.destinations = {
-      ...shipping.destinations,
-      mode: "allowlist",
-      countries: [...SUPPORTED_MARKETS],
-    };
-  }
+  // `"all"` is left as-is rather than expanded into an explicit country list.
+  // It is bounded by the market registry at check time, so it cannot promise
+  // more than we sell — and freezing it into a snapshot here would mean a
+  // product created today never reaches a market opened tomorrow.
   const rows = Array.isArray(s.fallback) ? s.fallback : [];
   const clean = rows.filter(
     (r): r is ShippingFallbackRow =>

@@ -4,13 +4,20 @@ import { Loader2, Package, ShieldCheck, TriangleAlert, Truck } from "lucide-reac
 import { bookProductForConfig } from "../../core/book";
 import { findPublicPlanByPriceId } from "../../core/config/plans";
 import {
-  SUPPORTED_MARKETS,
   findPublicProductForSku,
   planMeetsAccess,
   productAccessOf,
 } from "../../core/config/products";
 import { allowedMarketsFor } from "../../core/config/productMath";
-import { countryLabel } from "../../core/analytics/markets";
+import {
+  currencyForMarket,
+  PROBE_STATE,
+  STATE_CODE_REQUIRED,
+  TAX_ID_LABEL,
+  TAX_ID_REQUIRED,
+} from "../../core/config/countries";
+import { subdivisionsFor } from "../../core/config/subdivisions";
+import { countryFlag, countryLabel } from "../../core/analytics/markets";
 import {
   createDefaultVariantPolicy,
   firstAllowedVariant,
@@ -70,19 +77,6 @@ type Phase = "form" | "rendering" | "submitting";
 
 const MM_PER_IN = 25.4;
 
-/**
- * Fallback country list, used only before the catalog has loaded.
- *
- * There is deliberately no hand-maintained list here any more. This one offered
- * France, Spain, Italy and the Netherlands — markets nobody had measured or
- * priced — so a customer could pick a destination the server would then refuse.
- * The real options come from the product's own geo policy.
- */
-const FALLBACK_COUNTRIES: { value: string; label: string }[] = SUPPORTED_MARKETS.map((value) => ({
-  value,
-  label: countryLabel(value),
-}));
-
 const SHIPPING: { value: ShippingMethod; label: string }[] = [
   { value: "Budget", label: "Budget (slowest, cheapest)" },
   { value: "Standard", label: "Standard" },
@@ -94,8 +88,6 @@ const SHIPPING: { value: ShippingMethod; label: string }[] = [
 const SHIPPING_LABEL: Record<ShippingMethod, string> = Object.fromEntries(
   SHIPPING.map((s) => [s.value, s.label]),
 ) as Record<ShippingMethod, string>;
-
-const CURRENCY = "USD";
 
 // In dev, seed the form with a real Lulu-priceable address so the live quote
 // fires and the order can be placed without typing. Empty in production.
@@ -144,6 +136,11 @@ export function OrderDialog({
   // checkout; this mirrors it so we can disable ordering + explain why up front.
   const publicProducts = useAppConfigStore((s) => s.products.products);
   const publicPlans = useAppConfigStore((s) => s.plans.plans);
+  // The open markets bound the country picker. Empty until the snapshot lands,
+  // which is the right way round — offering a country we don't ship to sends
+  // the customer down a path checkout refuses.
+  const registry = useAppConfigStore((s) => s.markets);
+  const pricingSettings = useAppConfigStore((s) => s.pricingSettings);
   const subscriptions = useSubscriptionStore((s) => s.subscriptions);
   const watchSubscriptions = useSubscriptionStore((s) => s.watch);
   useEffect(() => {
@@ -240,11 +237,18 @@ export function OrderDialog({
   // Countries this product can actually be shipped to, from the same function
   // the server enforces with — so the picker can't offer a destination checkout
   // will refuse.
+  //
+  // There is deliberately no hardcoded fallback list. The old one offered
+  // France, Spain, Italy and the Netherlands — markets nobody had opened — so a
+  // customer could pick a destination the server would then refuse. Until the
+  // registry and the catalog have both loaded the picker is simply empty.
   const countryOptions = useMemo(() => {
-    if (!catalogProduct) return FALLBACK_COUNTRIES;
-    const allowed = allowedMarketsFor(catalogProduct.shipping.destinations);
-    return allowed.map((value) => ({ value, label: countryLabel(value) }));
-  }, [catalogProduct]);
+    if (!catalogProduct) return [];
+    return allowedMarketsFor(registry, catalogProduct.shipping.destinations).map((value) => ({
+      value,
+      label: `${countryFlag(value)} ${countryLabel(value)}`,
+    }));
+  }, [catalogProduct, registry]);
 
   // Shipping methods the product actually supports (backend rejects the rest).
   const shippingOptions = useMemo(() => {
@@ -270,6 +274,11 @@ export function OrderDialog({
   const [region, setRegion] = useState(DEV_PREFILL?.region ?? "");
   const [postal, setPostal] = useState(DEV_PREFILL?.postal ?? "");
   const [country, setCountry] = useState(DEV_PREFILL?.country ?? "US");
+  // The recipient's own tax id, for the handful of customs regimes that demand
+  // one. Collected HERE because it is the last cheap moment: the provider only
+  // rejects a missing one when the print job is created, which is after the
+  // customer has been charged.
+  const [taxId, setTaxId] = useState("");
   const [copies, setCopies] = useState(1);
   // Budget (Lulu MAIL) is the only level quotable in every destination we sell
   // to — GROUND ("Standard") is unavailable to the US and UK, and EXPEDITED
@@ -298,6 +307,66 @@ export function OrderDialog({
   const [reviewedSuggestion, setReviewedSuggestion] = useState("");
 
   const enteredAddress: EnteredAddress = { line1, line2, city, region, postal, country };
+
+  // What this customer is billed in: the destination's own currency where the
+  // catalog supports it, the base currency otherwise. Derived from the country
+  // rather than fixed at USD, which is what it used to be — a German customer
+  // was charged a dollar amount for a book priced in euros, and every market
+  // opened after the first inherited the same mismatch. The server recomputes
+  // this from the same function, so the preview and the charge can't disagree.
+  const currency = useMemo(
+    () => currencyForMarket(country, pricingSettings.currencies, pricingSettings.baseCurrency),
+    [country, pricingSettings],
+  );
+
+  // A destination we don't sell to — a saved address from before a market was
+  // opened elsewhere or withdrawn here. Told plainly rather than corrected: this
+  // used to silently rewrite the country to the first one on offer, so a
+  // customer with a Tokyo address on file would have their order quietly turned
+  // into an Australian one. Only meaningful once the picker has something in it;
+  // an empty one means the registry and catalog are still loading, which is not
+  // the same as a refusal.
+  //
+  // The country stays in the picker as a disabled entry, so what the customer
+  // reads is what checkout will actually be asked for.
+  const unserviced =
+    countryOptions.length > 0 && Boolean(country) && !countryOptions.some((o) => o.value === country);
+  const countrySelectOptions = useMemo(
+    () =>
+      unserviced
+        ? [
+            ...countryOptions,
+            { value: country, label: `${countryFlag(country)} ${countryLabel(country)}`, disabled: true },
+          ]
+        : countryOptions,
+    [countryOptions, country, unserviced],
+  );
+
+  // Extra fields this destination's carrier demands. Both are hard refusals at
+  // the provider rather than style notes, so they're required, not advisory.
+  const destination = country.trim().toUpperCase();
+  const regionRequired = STATE_CODE_REQUIRED.has(destination);
+  const taxIdRequired = TAX_ID_REQUIRED.has(destination);
+  const taxIdLabel = TAX_ID_LABEL[destination] ?? "Tax ID";
+  // A blank first entry when the field is required: preselecting a state the
+  // customer never chose is how a parcel goes to the wrong one.
+  //
+  // A stored value the list doesn't contain is shown as a disabled entry rather
+  // than dropped, for the same reason the country picker does it — an address
+  // saved as "California" before this was a picker would otherwise display
+  // "Select a state" while still holding a value the carrier rejects.
+  const regionOptions = useMemo(() => {
+    const subs = subdivisionsFor(destination);
+    if (subs.length === 0) return [];
+    const known = subs.some((s) => s.code === region);
+    return [
+      { value: "", label: "Select a state / province" },
+      ...subs.map((s) => ({ value: s.code, label: `${s.name} (${s.code})` })),
+      ...(region && !known ? [{ value: region, label: `${region} — not recognised`, disabled: true }] : []),
+    ];
+  }, [destination, region]);
+  const regionUnrecognised =
+    regionOptions.length > 0 && Boolean(region) && !subdivisionsFor(destination).some((s) => s.code === region);
   const validation = quote?.addressValidation ?? null;
   const pendingSuggestion = suggestionKey(validation);
   const addressChoiceForSuggestion: AddressChoice =
@@ -330,9 +399,19 @@ export function OrderDialog({
     setAddressChoice("entered");
   };
 
-  // Enough of a destination to ask the provider for a price. Lulu requires a
-  // city + postcode (and a state for many countries) to compute shipping.
-  const canQuote = Boolean(city.trim() && postal.trim() && country);
+  // Enough of a destination to ask the provider for a price. The provider needs
+  // a city + postcode, and a state in the countries that mandate one — quoting
+  // without it validates a different address than the order would ship to. An
+  // unserviced country is not asked about at all: the server would refuse it,
+  // and a refusal in the price box says less than the notice under the picker.
+  const canQuote = Boolean(
+    city.trim() &&
+      postal.trim() &&
+      country &&
+      !unserviced &&
+      !regionUnrecognised &&
+      (!regionRequired || region.trim()),
+  );
 
   useEffect(() => {
     if (open) setContactEmail((e) => e || email);
@@ -345,17 +424,6 @@ export function OrderDialog({
       setShipping(shippingOptions[0]?.value ?? "Standard");
     }
   }, [shippingOptions, shipping]);
-
-  // Same for the country. A saved address from before a market was withdrawn
-  // can hold a country no longer offered, and a `<select>` whose value isn't
-  // among its options SHOWS the first one while holding the old value — so the
-  // customer would read "United States" and have the order refused for France.
-  useEffect(() => {
-    if (countryOptions.length === 0) return;
-    if (!countryOptions.some((o) => o.value === country)) {
-      setCountry(countryOptions[0].value);
-    }
-  }, [countryOptions, country]);
 
   // Editing any address field detaches from the picked saved address, so saving
   // creates a new entry instead of silently overwriting the selected one.
@@ -420,7 +488,7 @@ export function OrderDialog({
           variant,
           copies,
           pageCount,
-          currency: CURRENCY,
+          currency,
           shippingMethod: shipping,
           destinationCountry: country,
           line1,
@@ -480,6 +548,7 @@ export function OrderDialog({
         stateOrCounty: region.trim() || undefined,
         postalOrZipCode: postal.trim(),
         countryCode: country,
+        taxId: taxId.trim() || undefined,
       },
     };
   }
@@ -530,9 +599,12 @@ export function OrderDialog({
       city.trim() &&
       postal.trim() &&
       country &&
+      (!regionRequired || region.trim()) &&
+      (!taxIdRequired || taxId.trim()) &&
       copies >= 1,
   );
-  const canOrder = addressComplete && !requirementError && !addressNeedsReview;
+  const canOrder =
+    addressComplete && !unserviced && !regionUnrecognised && !requirementError && !addressNeedsReview;
 
   async function beginRender() {
     if (requirementError) {
@@ -616,7 +688,7 @@ export function OrderDialog({
         // by fingerprint.
         pageCount,
         destinationCountry: country,
-        currency: CURRENCY,
+        currency,
         merchantReference: project.id,
       });
       // Remember this address for faster reordering (deduped; first one becomes
@@ -757,14 +829,14 @@ export function OrderDialog({
             value={product.sku}
             onChange={(sku) => void updateConfig({ productSku: sku })}
             contentPages={contentPages}
-            currency={CURRENCY}
+            currency={currency}
           />
 
           <VariantPicker
             policy={variantPolicy}
             value={variant}
             onChange={setVariant}
-            currency={CURRENCY}
+            currency={currency}
             pages={pageCount}
           />
 
@@ -842,12 +914,37 @@ export function OrderDialog({
                 autoComplete="shipping address-level2"
               />
             </Field>
-            <Field label="State / County">
-              <Input
-                value={region}
-                onChange={(e) => editAddr(setRegion, e.target.value)}
-                autoComplete="shipping address-level1"
-              />
+            <Field
+              label="State / Province"
+              required={regionRequired}
+              error={regionUnrecognised ? "Please pick this from the list." : undefined}
+              hint={
+                regionOptions.length > 0
+                  ? undefined
+                  : regionRequired
+                    ? `The carrier won't deliver here without the official code (e.g. ${PROBE_STATE[destination] ?? "AB"}), not the full name.`
+                    : undefined
+              }
+            >
+              {/* A picker wherever the codes have been verified, because the
+                  carrier wants "CA", not "California", and rejects the address
+                  outright otherwise — after payment, in the countries that also
+                  need a tax id. Elsewhere it stays a text field with an example
+                  rather than a guessed-at list the customer couldn't override. */}
+              {regionOptions.length > 0 ? (
+                <Select
+                  options={regionOptions}
+                  value={region}
+                  onChange={(e) => editAddr(setRegion, e.target.value)}
+                  autoComplete="shipping address-level1"
+                />
+              ) : (
+                <Input
+                  value={region}
+                  onChange={(e) => editAddr(setRegion, e.target.value)}
+                  autoComplete="shipping address-level1"
+                />
+              )}
             </Field>
             <Field label="Postal / ZIP" required>
               <Input
@@ -856,14 +953,36 @@ export function OrderDialog({
                 autoComplete="shipping postal-code"
               />
             </Field>
-            <Field label="Country" required>
+            <Field
+              label="Country"
+              required
+              className={unserviced ? "col-span-2" : undefined}
+              error={
+                unserviced
+                  ? `We're sorry — we don't currently ship to ${countryLabel(country)}. Choose another destination to continue.`
+                  : undefined
+              }
+            >
               <Select
-                options={countryOptions}
+                options={countrySelectOptions}
                 value={country}
                 onChange={(e) => editAddr(setCountry, e.target.value)}
                 autoComplete="shipping country"
               />
             </Field>
+            {/* Only rendered where customs actually demands it — three countries
+                today. Showing it everywhere would ask every customer for a
+                government id to buy a picture book. */}
+            {taxIdRequired && (
+              <Field
+                label={`Recipient ${taxIdLabel}`}
+                required
+                className="col-span-2"
+                hint="Customs in this country requires the recipient's tax number before a parcel can clear."
+              >
+                <Input value={taxId} onChange={(e) => editAddr(setTaxId, e.target.value)} />
+              </Field>
+            )}
           </form>
 
           {/* The carrier's verdict on the address, from the live quote. Asked
