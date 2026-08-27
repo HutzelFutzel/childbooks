@@ -26,6 +26,7 @@ import {
   allowedMarketsFor,
   computeMargin,
   computeRetailPrice,
+  convertCostAmount,
   defaultShippingMethod,
   destinationPolicyFor,
   estimateShippingCost,
@@ -403,6 +404,24 @@ for (const target of [25, 45]) {
     offeredMethodsFor(SHIPPING, undefined, product.shipping, "JP").length ===
       SHIPPING_METHODS.length,
   );
+  check(
+    "a settled country refusal offers no delivery speeds",
+    offeredMethodsFor(
+      SHIPPING,
+      { country: "JP", status: "refused", levels: [], probedAt: Date.now() },
+      product.shipping,
+      "JP",
+    ).length === 0,
+  );
+  check(
+    "an available response containing only unmapped services offers no guessed tier",
+    offeredMethodsFor(
+      SHIPPING,
+      { country: "JP", status: "available", levels: ["GROUND_HD"], probedAt: Date.now() },
+      product.shipping,
+      "JP",
+    ).length === 0,
+  );
 
   // A global veto beats coverage: the printer running it doesn't mean we sell it.
   const noBudget: ShippingSettings = {
@@ -437,6 +456,20 @@ for (const target of [25, 45]) {
   check(
     "switching to flat leaves only the cheapest speed on",
     SHIPPING_METHODS.filter((m) => flat.methods[m].offered).length === 1,
+  );
+}
+
+// Unknown/stale FX data must err toward overstating cost, never toward an
+// artificially healthy margin.
+{
+  const current = createDefaultPricingSettings();
+  current.fx.updatedAt = Date.now();
+  const stale = createDefaultPricingSettings();
+  stale.fx.updatedAt = 0;
+  check(
+    "unknown FX age adds a fail-safe cost buffer",
+    convertCostAmount(stale, 10, "USD", "EUR") >
+      convertCostAmount(current, 10, "USD", "EUR"),
   );
 }
 

@@ -190,6 +190,15 @@ export function validateProduct(
   // one this build knows. The cost table is calibrated to the base, which should
   // be the most expensive combination so a table fallback never understates cost.
   const currencies = settings.currencies;
+  if (currencies.some((currency) => currency !== settings.baseCurrency)) {
+    const fxAge = settings.fx.updatedAt ? Date.now() - settings.fx.updatedAt : Number.POSITIVE_INFINITY;
+    if (fxAge > 30 * 24 * 60 * 60 * 1000) {
+      warn(
+        "pricing.fx",
+        "FX rates have not been reviewed in the last 30 days. Cost math is applying an extra safety buffer until they are saved again.",
+      );
+    }
+  }
   const baseVariant = variantFromSku(p.provider.sku);
   if (p.provider.sku.trim() && !baseVariant) {
     warn(

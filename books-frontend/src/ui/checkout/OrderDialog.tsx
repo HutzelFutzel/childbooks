@@ -141,6 +141,7 @@ export function OrderDialog({
   // which is the right way round — offering a country we don't ship to sends
   // the customer down a path checkout refuses.
   const registry = useAppConfigStore((s) => s.markets);
+  const marketsLoaded = useAppConfigStore((s) => s.marketsLoaded);
   const pricingSettings = useAppConfigStore((s) => s.pricingSettings);
   const subscriptions = useSubscriptionStore((s) => s.subscriptions);
   const watchSubscriptions = useSubscriptionStore((s) => s.watch);
@@ -628,7 +629,17 @@ export function OrderDialog({
       copies >= 1,
   );
   const canOrder =
-    addressComplete && !unserviced && !regionUnrecognised && !requirementError && !addressNeedsReview;
+    marketsLoaded &&
+    countryOptions.some((option) => option.value === country) &&
+    shippingChoices.some((option) => option.value === shipping) &&
+    quote != null &&
+    !quoting &&
+    !quoteError &&
+    addressComplete &&
+    !unserviced &&
+    !regionUnrecognised &&
+    !requirementError &&
+    !addressNeedsReview;
 
   async function beginRender() {
     if (requirementError) {
@@ -737,7 +748,14 @@ export function OrderDialog({
       // AFTER Stripe confirms payment (via webhook). Redirect to Stripe.
       // Send the SAME (normalized) page count the price preview used so the
       // charge matches what the customer was quoted.
-      const { url } = await startOrderCheckout({ draft, pageCount, variant, fingerprint });
+      const { url } = await startOrderCheckout({
+        draft,
+        pageCount,
+        variant,
+        fingerprint,
+        addressConfirmed:
+          !validation?.suggested || addressChoiceForSuggestion !== "unreviewed",
+      });
       window.location.href = url;
     } catch (err) {
       setPhase("form");
@@ -1033,7 +1051,7 @@ export function OrderDialog({
             Save this address for next time
           </label>
 
-          <Field label="Copies" required className="max-w-[10rem]">
+          <Field label="Copies" required className="max-w-40">
             <Input
               type="number"
               min={1}
@@ -1053,9 +1071,13 @@ export function OrderDialog({
           <Field label="Delivery" required>
             {shippingChoices.length === 0 ? (
               <p className="text-xs text-ink-400">
-                {unserviced || !country
+                {!marketsLoaded
+                  ? "Loading available destinations…"
+                  : countryOptions.length === 0
+                    ? "Print ordering is not available in any destination right now."
+                    : unserviced || !country
                   ? "Choose a destination to see delivery options."
-                  : "No delivery options are published for this destination yet — the exact cost will be quoted when you continue."}
+                  : "No delivery options are currently available for this destination."}
               </p>
             ) : (
               <div className="space-y-1.5">

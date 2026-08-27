@@ -491,6 +491,12 @@ export interface FulfillmentProvider {
   shippingOptions?(req: ShippingOptionsRequest): Promise<ShippingOption[]>;
   /** Upload assets and submit an order for fulfillment. */
   createOrder(draft: OrderDraft): Promise<FulfillmentOrder>;
+  /**
+   * Recover an order after an ambiguous create response using the stable key
+   * supplied on the original draft. Backend providers should implement this
+   * when their create endpoint lacks native idempotency.
+   */
+  findOrderByIdempotencyKey?(key: string): Promise<FulfillmentOrder | null>;
   /** Fetch current order status. */
   getOrder(id: string): Promise<FulfillmentOrder>;
   /** Attempt to cancel an order before it enters production. */

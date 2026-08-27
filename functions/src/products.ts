@@ -123,12 +123,16 @@ async function projectionInputs(): Promise<ProjectionInputs> {
     getShippingSettings(),
     getMarketCapability(),
   ]);
+  const capabilityCountries =
+    capability.probe.env === activeEnv() ? capability.countries : [];
   return {
     settings,
     plans,
     registry,
     shipping,
-    capability: new Map(capability.countries.map((c) => [c.country, c])),
+    // Sandbox and live are different Lulu catalogs. Evidence collected in one
+    // environment must never govern the other after a runtime switch.
+    capability: new Map(capabilityCountries.map((c) => [c.country, c])),
   };
 }
 

@@ -192,7 +192,6 @@ export const marketsConfigSchema = z.object({
         updatedBy: z.string().max(120).optional(),
       }),
     )
-    .max(400)
-    .optional(),
+    .max(400),
   updatedAt: z.number().optional(),
 });

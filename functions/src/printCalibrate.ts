@@ -400,6 +400,7 @@ export async function calibrateCost(req: CalibrateRequest): Promise<CalibrationR
     product,
     req.registry,
     await getShippingSettings(),
+    baseProbes[0].currency ?? product.cost.currency,
   );
 
   const pageNote =
@@ -453,6 +454,7 @@ async function measureShipping(
   product: ProductDefinition,
   registry: MarketRegistry,
   shippingSettings: ShippingSettings,
+  currency: string,
 ): Promise<{
   rows?: ShippingFallbackRow[];
   fallback?: number;
@@ -479,7 +481,7 @@ async function measureShipping(
     zone,
     probes: await Promise.all(
       SHIPPING_COPY_POINTS.map((copies) =>
-        probeShippingOptions({ env, sku, pages, copies, destination: zone }),
+        probeShippingOptions({ env, sku, pages, copies, destination: zone, currency }),
       ),
     ),
   }));
@@ -496,6 +498,12 @@ async function measureShipping(
     if (one.throttled || many.throttled) throttled = true;
     if (one.outcome !== "ok" || many.outcome !== "ok") {
       failures.push(`${zone.country} (${one.message ?? many.message ?? "no quote"})`);
+      continue;
+    }
+    if (one.currency !== currency || many.currency !== currency) {
+      failures.push(
+        `${zone.country} (provider returned ${one.currency ?? "no currency"}/${many.currency ?? "no currency"} instead of ${currency})`,
+      );
       continue;
     }
     for (const method of ALL_METHODS) {

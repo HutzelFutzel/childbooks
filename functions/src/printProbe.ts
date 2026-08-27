@@ -297,8 +297,11 @@ export async function probeShippingOptions(req: ProbeRequest): Promise<ShippingO
       });
       currency ??= o.cost.currency;
     }
-    const priced = new Set(options.map((o) => o.method));
-    const refused = ALL_METHODS.filter((m) => !priced.has(m));
+    // A returned service with no cost is not a refusal; it is an incomplete
+    // pricing answer. Keep it out of both lists so calibration records the tier
+    // as undetermined instead of permanently unavailable.
+    const present = new Set(found.flatMap((o) => (o.method ? [o.method] : [])));
+    const refused = ALL_METHODS.filter((m) => !present.has(m));
     return { outcome: "ok", currency, options, refused };
   } catch (err) {
     const probe = classify(err);

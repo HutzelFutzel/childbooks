@@ -317,7 +317,7 @@ export interface PricingSettings {
   /** Currencies a customer can be charged in (drives the price-table columns). */
   currencies: CurrencyCode[];
   /** Exchange rates (base → currency) + a drift buffer, for cost conversion. */
-  fx: { rates: Record<CurrencyCode, number>; bufferPct: number };
+  fx: { rates: Record<CurrencyCode, number>; bufferPct: number; updatedAt?: number };
   /** Payment-processor fee per currency (e.g. Stripe 2.9% + fixed). */
   fees: Record<CurrencyCode, PaymentFeeModel>;
   /** Optional price rounding per currency (cosmetic; applied to entered prices). */
@@ -732,7 +732,7 @@ export function createDefaultPricingSettings(): PricingSettings {
     version: 1,
     baseCurrency: "USD",
     currencies: ["USD", "EUR", "GBP"],
-    fx: { rates: { USD: 1, EUR: 0.92, GBP: 0.79 }, bufferPct: 2 },
+    fx: { rates: { USD: 1, EUR: 0.92, GBP: 0.79 }, bufferPct: 2, updatedAt: 0 },
     fees: {
       USD: { percentPct: 2.9, fixed: 0.3 },
       EUR: { percentPct: 2.9, fixed: 0.25 },
@@ -908,7 +908,11 @@ export function normalizePricingSettings(input: unknown): PricingSettings {
     version: 1,
     baseCurrency: p.baseCurrency && currencies.includes(p.baseCurrency) ? p.baseCurrency : currencies[0],
     currencies,
-    fx: { rates: { ...def.fx.rates, ...p.fx?.rates }, bufferPct: p.fx?.bufferPct ?? def.fx.bufferPct },
+    fx: {
+      rates: { ...def.fx.rates, ...p.fx?.rates },
+      bufferPct: p.fx?.bufferPct ?? def.fx.bufferPct,
+      updatedAt: p.fx?.updatedAt ?? def.fx.updatedAt,
+    },
     fees: { ...def.fees, ...p.fees },
     rounding: { ...def.rounding, ...p.rounding },
     floorPrice: { ...def.floorPrice, ...p.floorPrice },
@@ -1286,7 +1290,11 @@ export const pricingSettingsSchema = z.object({
   version: z.literal(1),
   baseCurrency: z.string(),
   currencies: z.array(z.string()).min(1),
-  fx: z.object({ rates: z.record(z.string(), z.number().positive()), bufferPct: z.number().min(0) }),
+  fx: z.object({
+    rates: z.record(z.string(), z.number().positive()),
+    bufferPct: z.number().min(0),
+    updatedAt: z.number().nonnegative().optional(),
+  }),
   fees: z.record(z.string(), feeSchema),
   rounding: roundingSchema,
   floorPrice: z.record(z.string(), z.number().nonnegative()),

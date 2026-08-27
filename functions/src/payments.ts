@@ -27,6 +27,9 @@ function db() {
   return getFirestore();
 }
 
+/** Longer than the HTTPS function timeout; safe point to reclaim a dead worker. */
+const FULFILLMENT_CLAIM_LEASE_MS = 10 * 60_000;
+
 /** Recursively drop `undefined` (Firestore rejects it). */
 function stripUndefined<T>(value: T): T {
   if (Array.isArray(value)) return value.map((v) => stripUndefined(v)) as unknown as T;
@@ -59,7 +62,7 @@ export type PaymentKind = "order" | "subscription" | "sparkPack" | "sparkGift" |
  * `retrying` is deliberately distinct from `failed`: the sweep is still working
  * on it and there is nothing for the customer to do yet.
  */
-export type FulfillmentState = "pending" | "placed" | "retrying" | "failed";
+export type FulfillmentState = "pending" | "placing" | "placed" | "retrying" | "failed";
 
 /**
  * What the webhook needs to deliver a purchased ebook AFTER payment: where the
@@ -460,17 +463,30 @@ export async function markFulfillmentRejected(args: {
  * scheduled retry sweep works through these (bounded attempts).
  */
 export async function listFailedFulfillments(maxAttempts: number): Promise<AdminPaymentRecord[]> {
-  // Single-field range query (no composite index); status filtered in memory.
-  const q = await db()
-    .collection("payments")
-    .where("fulfillmentFailedAt", ">", 0)
-    .limit(100)
-    .get();
+  // Include both explicit failures and abandoned claims. `placing` is queried
+  // separately so old completed records cannot consume the query limit before
+  // the stale active claim we need to recover.
+  const [failed, abandoned] = await Promise.all([
+    db().collection("payments").where("fulfillmentFailedAt", ">", 0).limit(100).get(),
+    db()
+      .collection("payments")
+      .where("fulfillmentState", "==", "placing")
+      .limit(500)
+      .get(),
+  ]);
+  const docs = new Map([...failed.docs, ...abandoned.docs].map((doc) => [doc.id, doc]));
   const out: AdminPaymentRecord[] = [];
-  for (const doc of q.docs) {
+  for (const doc of docs.values()) {
     const d = doc.data() as Record<string, unknown>;
     if (d.orderId) continue;
     if ((d.status as string) !== "paid") continue;
+    const claimedAt = (d.fulfillmentClaimedAt as number) ?? 0;
+    if (
+      d.fulfillmentState === "placing" &&
+      claimedAt >= Date.now() - FULFILLMENT_CLAIM_LEASE_MS
+    ) {
+      continue;
+    }
     const attempts = (d.fulfillmentAttempts as number) ?? 0;
     if (attempts >= maxAttempts) continue;
     const rec = await getAdminPayment(doc.id);
@@ -552,6 +568,11 @@ export async function updatePayment(args: UpdatePaymentArgs): Promise<void> {
   }
 
   const adminPatch: Record<string, unknown> = { ...userPatch };
+  if (args.fulfillmentState === "placed" || args.status === "refunded") {
+    adminPatch.fulfillmentClaimedAt = FieldValue.delete();
+    adminPatch.fulfillmentFailedAt = FieldValue.delete();
+    adminPatch.lastFulfillmentError = FieldValue.delete();
+  }
   if (args.stripePaymentIntentId !== undefined) adminPatch.stripePaymentIntentId = args.stripePaymentIntentId;
   if (args.stripeChargeId !== undefined) adminPatch.stripeChargeId = args.stripeChargeId;
   if (args.stripeCustomerId !== undefined) adminPatch.stripeCustomerId = args.stripeCustomerId;
@@ -915,8 +936,11 @@ export async function claimFulfillment(paymentId: string): Promise<boolean> {
     const snap = await tx.get(ref);
     if (!snap.exists) return false;
     const d = snap.data() as Record<string, unknown>;
-    if (d.orderId || d.fulfillmentClaimedAt) return false;
-    tx.set(ref, { fulfillmentClaimedAt: Date.now() }, { merge: true });
+    const claimedAt = typeof d.fulfillmentClaimedAt === "number" ? d.fulfillmentClaimedAt : 0;
+    if (d.orderId || (claimedAt > 0 && Date.now() - claimedAt < FULFILLMENT_CLAIM_LEASE_MS)) {
+      return false;
+    }
+    tx.set(ref, { fulfillmentClaimedAt: Date.now(), fulfillmentState: "placing" }, { merge: true });
     return true;
   });
 }

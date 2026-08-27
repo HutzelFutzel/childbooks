@@ -98,6 +98,8 @@ export interface CheckoutInput {
    * re-uploading tens of megabytes of PDF at checkout time.
    */
   fingerprint?: string;
+  /** Customer reviewed the carrier's suggested correction, when one exists. */
+  addressConfirmed?: boolean;
 }
 
 /**
@@ -107,7 +109,7 @@ export interface CheckoutInput {
 export async function startOrderCheckout(
   input: CheckoutInput & { variant?: VariantSelection },
 ): Promise<{ url: string; paymentId: string }> {
-  const { draft, pageCount, variant, fingerprint } = input;
+  const { draft, pageCount, variant, fingerprint, addressConfirmed } = input;
   const assets = await Promise.all(draft.assets.map(assetToWire));
   const body = {
     // Format identity (base SKU). The server composes the print SKU from
@@ -123,6 +125,7 @@ export async function startOrderCheckout(
     recipient: draft.recipient,
     assets,
     fingerprint,
+    addressConfirmed,
   };
   const res = await backendFetch("/checkout", {
     method: "POST",

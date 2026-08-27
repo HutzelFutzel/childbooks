@@ -12,16 +12,16 @@
  * order of months, and the same rate limiter serves checkout quoting. Sunday
  * 04:10 UTC keeps it clear of the daily finance and digest jobs.
  *
- * `force` is deliberately NOT set. An unforced run re-probes only the countries
- * left `unknown` by a previous throttled attempt, so the weekly job also acts as
- * the retry that finishes an incomplete manual sweep. Re-confirming settled
- * verdicts is what the admin's "Re-check coverage" button is for.
+ * The scheduled run is forced because its purpose is freshness, not merely
+ * finishing unknown rows from a previous attempt. The resulting capability is
+ * immediately reprojected into the public product catalog.
  */
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { logger } from "firebase-functions/v2";
 import { ensureAdmin } from "./storage";
 import { ALL_SECRETS } from "./secrets";
 import { runMarketSweep } from "./marketDiscovery";
+import { reprojectPublicProducts } from "./products";
 
 export const sweepMarketCoverage = onSchedule(
   {
@@ -33,7 +33,10 @@ export const sweepMarketCoverage = onSchedule(
   async () => {
     ensureAdmin();
     try {
-      const result = await runMarketSweep();
+      // Coverage has a shelf life. A weekly refresh must re-check settled
+      // countries too, then publish the new answer to the storefront.
+      const result = await runMarketSweep({ force: true });
+      await reprojectPublicProducts();
       if (result.probed === 0) {
         // Not an error: every country already has a settled verdict, which is
         // the steady state once a full sweep has completed.

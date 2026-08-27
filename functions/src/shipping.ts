@@ -24,9 +24,6 @@ import { ensureAdmin } from "./storage";
 
 const PRIVATE_DOC = "adminSettings/shipping";
 
-const CACHE_TTL_MS = 30_000;
-let cache: { value: ShippingSettings; at: number } | null = null;
-
 /** Deep-strip `undefined` (Firestore rejects it). */
 function stripUndefined<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
@@ -35,24 +32,14 @@ function stripUndefined<T>(value: T): T {
 /**
  * The current policy, seeded when the document doesn't exist.
  *
- * A read failure falls through to the seeded default rather than throwing.
- * That default offers every speed at cost, which is the same thing the catalog
- * did before this document existed — so a transient Firestore error degrades to
- * "sell as before" instead of taking checkout down.
+ * A missing document uses the first-run default. A read failure is allowed to
+ * throw: silently offering every speed during a Firestore outage would be a
+ * fail-open policy change on a payment path.
  */
 export async function getShippingSettings(): Promise<ShippingSettings> {
-  if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.value;
   ensureAdmin();
-  let raw: unknown = undefined;
-  try {
-    const snap = await getFirestore().doc(PRIVATE_DOC).get();
-    raw = snap.exists ? snap.data() : undefined;
-  } catch {
-    // fall through to the seeded default
-  }
-  const value = normalizeShippingSettings(raw);
-  cache = { value, at: Date.now() };
-  return value;
+  const snap = await getFirestore().doc(PRIVATE_DOC).get();
+  return snap.exists ? normalizeShippingSettings(snap.data()) : createDefaultShippingSettings();
 }
 
 export async function saveShippingSettings(
@@ -72,7 +59,6 @@ export async function saveShippingSettings(
   await getFirestore()
     .doc(PRIVATE_DOC)
     .set(stripUndefined(config) as unknown as Record<string, unknown>, { merge: false });
-  cache = { value: config, at: Date.now() };
   return config;
 }
 

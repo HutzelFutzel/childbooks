@@ -33,14 +33,11 @@ import {
   type MarketCapabilityConfig,
 } from "../../books-frontend/src/core/config/marketCapability";
 import { ensureAdmin } from "./storage";
+import { serverConfig } from "./config";
 
 const PRIVATE_DOC = "adminSettings/markets";
 const PUBLIC_DOC = "appConfig/markets";
 const CAPABILITY_DOC = "appConfig/marketCapability";
-
-const CACHE_TTL_MS = 30_000;
-let cache: { value: MarketsConfig; at: number } | null = null;
-let capabilityCache: { value: MarketCapabilityConfig; at: number } | null = null;
 
 /** Deep-strip `undefined` (Firestore rejects it). */
 function stripUndefined<T>(value: T): T {
@@ -48,50 +45,56 @@ function stripUndefined<T>(value: T): T {
 }
 
 export async function getMarketsConfig(): Promise<MarketsConfig> {
-  if (cache && Date.now() - cache.at < CACHE_TTL_MS) return cache.value;
   ensureAdmin();
-  let raw: unknown = undefined;
-  try {
-    const snap = await getFirestore().doc(PRIVATE_DOC).get();
-    raw = snap.exists ? snap.data() : undefined;
-  } catch {
-    // fall through to the seeded default
-  }
-  const value = normalizeMarketsConfig(raw);
-  cache = { value, at: Date.now() };
-  return value;
+  const snap = await getFirestore().doc(PRIVATE_DOC).get();
+  // Missing configuration must fail closed on customer paths. Seeding is an
+  // explicit admin write performed by ensureMarketsSeeded, not a side effect of
+  // a read and not a fallback for a Firestore outage.
+  return snap.exists
+    ? normalizeMarketsConfig(snap.data())
+    : normalizeMarketsConfig({ version: 1, markets: [], updatedAt: 0 });
 }
 
 /**
  * The registry every destination check takes.
  *
- * Note what this does NOT do: swallow a read failure into an empty registry.
- * `normalizeMarketsConfig` seeds the established markets when the document is
- * missing, so a first run sells to the countries the business already serves —
- * and a genuinely empty `markets` array (every country switched off) is an
- * explicit admin decision that is honoured as written.
+ * Reads are deliberately uncached and fail closed: a disable must take effect
+ * on every function instance immediately, and a Firestore outage must stop
+ * checkout rather than resurrect the seed markets.
  */
 export async function getMarketRegistry(): Promise<MarketRegistry> {
   return registryFrom(await getMarketsConfig());
 }
 
-export async function saveMarketsConfig(input: unknown): Promise<MarketsConfig> {
+export async function saveMarketsConfig(input: unknown, uid?: string): Promise<MarketsConfig> {
   ensureAdmin();
   const parsed = marketsConfigSchema.safeParse(input);
   if (!parsed.success) {
     throw new Error(`Invalid markets config: ${parsed.error.issues[0]?.message ?? "unknown"}`);
   }
-  const config = normalizeMarketsConfig({ ...parsed.data, updatedAt: Date.now() });
+  const now = Date.now();
+  const config = normalizeMarketsConfig({
+    ...parsed.data,
+    markets: parsed.data.markets.map((market) => ({
+      ...market,
+      updatedAt: now,
+      updatedBy: uid ?? market.updatedBy ?? "",
+    })),
+    updatedAt: now,
+  });
   const db = getFirestore();
-  await db
-    .doc(PRIVATE_DOC)
-    .set(stripUndefined(config) as unknown as Record<string, unknown>, { merge: false });
-  await db
-    .doc(PUBLIC_DOC)
-    .set(stripUndefined(projectPublicMarkets(config)) as unknown as Record<string, unknown>, {
-      merge: false,
-    });
-  cache = { value: config, at: Date.now() };
+  const batch = db.batch();
+  batch.set(
+    db.doc(PRIVATE_DOC),
+    stripUndefined(config) as unknown as Record<string, unknown>,
+    { merge: false },
+  );
+  batch.set(
+    db.doc(PUBLIC_DOC),
+    stripUndefined(projectPublicMarkets(config)) as unknown as Record<string, unknown>,
+    { merge: false },
+  );
+  await batch.commit();
   return config;
 }
 
@@ -108,20 +111,9 @@ export async function ensureMarketsSeeded(): Promise<MarketsConfig> {
 }
 
 export async function getMarketCapability(): Promise<MarketCapabilityConfig> {
-  if (capabilityCache && Date.now() - capabilityCache.at < CACHE_TTL_MS) {
-    return capabilityCache.value;
-  }
   ensureAdmin();
-  let raw: unknown = undefined;
-  try {
-    const snap = await getFirestore().doc(CAPABILITY_DOC).get();
-    raw = snap.exists ? snap.data() : undefined;
-  } catch {
-    // fall through
-  }
-  const value = raw ? normalizeMarketCapability(raw) : createEmptyMarketCapability();
-  capabilityCache = { value, at: Date.now() };
-  return value;
+  const snap = await getFirestore().doc(CAPABILITY_DOC).get();
+  return snap.exists ? normalizeMarketCapability(snap.data()) : createEmptyMarketCapability();
 }
 
 /**
@@ -136,6 +128,7 @@ export async function capabilityFor(country: string): Promise<MarketCapability |
   const code = country.trim().toUpperCase();
   if (!code) return undefined;
   const config = await getMarketCapability();
+  if (config.probe.env !== serverConfig().fulfillment.lulu.env) return undefined;
   return config.countries.find((c) => c.country === code);
 }
 
@@ -147,6 +140,5 @@ export async function saveMarketCapability(
   await getFirestore()
     .doc(CAPABILITY_DOC)
     .set(stripUndefined(value) as unknown as Record<string, unknown>, { merge: false });
-  capabilityCache = { value, at: Date.now() };
   return value;
 }

@@ -417,6 +417,8 @@ interface AppConfigState {
    * will refuse.
    */
   markets: MarketRegistry;
+  /** Whether the public markets snapshot has resolved (success or failure). */
+  marketsLoaded: boolean;
   /**
    * What the print provider was discovered to run to each country. Read-only
    * evidence from the backend sweep; the admin Markets tab renders it beside
@@ -814,6 +816,7 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   latencyStats: createDefaultLatencyStats(),
   products: { version: 1, products: [], projectedAt: 0 },
   markets: EMPTY_MARKET_REGISTRY,
+  marketsLoaded: false,
   marketCapability: createEmptyMarketCapability(),
   pricingSettings: createDefaultPricingSettings(),
   sparks: createDefaultSparksConfig(),
@@ -883,8 +886,9 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
         // server hasn't actually opened.
         set({
           markets: registryOf(normalizePublicMarkets(snap.exists() ? snap.data() : undefined).enabled),
+          marketsLoaded: true,
         });
-      }),
+      }, () => set({ markets: EMPTY_MARKET_REGISTRY, marketsLoaded: true })),
       onSnapshot(doc(db, "appConfig", "marketCapability"), (snap) => {
         set({
           marketCapability: snap.exists()

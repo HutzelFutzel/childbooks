@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import { Globe, Loader2, RefreshCw, Search, Upload } from "lucide-react";
 import { Button } from "../../components/Button";
 import { Input } from "../../components/Input";
+import { useReadOnly } from "../../components/ReadOnlyContext";
 import { cn } from "../../lib/cn";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
 import {
@@ -63,6 +64,7 @@ function daysSince(at: number): number {
 }
 
 export function MarketsTab() {
+  const readOnly = useReadOnly();
   const loadMarketsConfig = useAppConfigStore((s) => s.loadMarketsConfig);
   const saveMarketsConfig = useAppConfigStore((s) => s.saveMarketsConfig);
   const sweep = useAppConfigStore((s) => s.sweepMarketCapability);
@@ -83,6 +85,8 @@ export function MarketsTab() {
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   // Both documents, together. They're edited on the same screen — the country
   // rows toggle speeds, which lives in the shipping policy — so having one
@@ -90,12 +94,16 @@ export function MarketsTab() {
   // that isn't what's stored.
   useEffect(() => {
     let alive = true;
+    setLoading(true);
+    setLoadError(null);
     Promise.all([loadMarketsConfig(), loadShippingSettings()])
       .then(([config]) => {
         if (alive) setDraft(config);
       })
       .catch((err: unknown) => {
-        toast.error(err instanceof Error ? err.message : "Could not load markets.");
+        if (alive) {
+          setLoadError(err instanceof Error ? err.message : "Could not load markets.");
+        }
       })
       .finally(() => {
         if (alive) setLoading(false);
@@ -103,7 +111,7 @@ export function MarketsTab() {
     return () => {
       alive = false;
     };
-  }, [loadMarketsConfig, loadShippingSettings]);
+  }, [loadAttempt, loadMarketsConfig, loadShippingSettings]);
 
   const config = draft ?? stored;
   const enabled = useMemo(
@@ -250,6 +258,19 @@ export function MarketsTab() {
     return newest > 0 && projectedAt < newest;
   }, [capability.sweptAt, projectedAt, shipping.updatedAt, stored.updatedAt]);
 
+  if (loadError) {
+    return (
+      <Section title="Markets unavailable">
+        <div className="space-y-3 py-3 text-sm text-red-700">
+          <p>{loadError} No market or shipping controls were enabled, so stored configuration cannot be overwritten by defaults.</p>
+          <Button variant="secondary" size="sm" onClick={() => setLoadAttempt((value) => value + 1)}>
+            Retry loading
+          </Button>
+        </div>
+      </Section>
+    );
+  }
+
   return (
     <div className="space-y-4">
       <TabIntro
@@ -273,7 +294,7 @@ export function MarketsTab() {
             variant="ghost"
             size="sm"
             leftIcon={sweeping ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-            disabled={sweeping || busy != null}
+            disabled={readOnly || loading || sweeping || busy != null}
             onClick={() => runSweep(false)}
           >
             {capability.sweptAt ? "Re-check coverage" : "Discover coverage"}
@@ -282,13 +303,13 @@ export function MarketsTab() {
             variant="ghost"
             size="sm"
             leftIcon={busy ? <Loader2 className="size-4 animate-spin" /> : undefined}
-            disabled={sweeping || busy != null}
+            disabled={readOnly || loading || sweeping || busy != null}
             onClick={runRemeasure}
             title="Coverage, then every product's rates, then republish — in that order, which is the order they depend on each other."
           >
             Re-measure everything
           </Button>
-          <Button size="sm" disabled={!dirty || saving} onClick={save}>
+          <Button size="sm" disabled={readOnly || loading || !dirty || saving} onClick={save}>
             {saving ? "Saving…" : "Save markets"}
           </Button>
         </div>
@@ -387,6 +408,7 @@ export function MarketsTab() {
                 notes={notes.get(country) ?? ""}
                 capability={coverage.get(country)}
                 shipping={shipping}
+                readOnly={readOnly}
                 onToggle={(on) => setMarket(country, { enabled: on })}
                 onNotes={(value) => setMarket(country, { notes: value })}
                 onToggleMethod={(method, sell) => void toggleCountryMethod(country, method, sell)}
@@ -425,6 +447,7 @@ function CountryRow({
   notes,
   capability,
   shipping,
+  readOnly,
   onToggle,
   onNotes,
   onToggleMethod,
@@ -434,6 +457,7 @@ function CountryRow({
   notes: string;
   capability: MarketCapability | undefined;
   shipping: ShippingSettings;
+  readOnly: boolean;
   onToggle: (on: boolean) => void;
   onNotes: (value: string) => void;
   onToggleMethod: (method: ShippingMethod, sell: boolean) => void;
@@ -450,6 +474,7 @@ function CountryRow({
           <input
             type="checkbox"
             checked={enabled}
+            disabled={readOnly}
             onChange={(e) => onToggle(e.target.checked)}
             className="size-4 shrink-0 rounded border-ink-300 text-brand-600 focus:ring-brand-400"
           />
@@ -474,7 +499,7 @@ function CountryRow({
                 <button
                   key={method}
                   type="button"
-                  disabled={globallyOff}
+                  disabled={readOnly || globallyOff}
                   onClick={() => onToggleMethod(method, !selling)}
                   title={
                     globallyOff

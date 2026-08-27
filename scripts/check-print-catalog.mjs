@@ -23,8 +23,9 @@
  * SKU or an out-of-range page count fails at print-job creation, which happens
  * AFTER the customer has been charged.
  */
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { mkdirSync, rmSync } from "node:fs";
+import { build } from "esbuild";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { readEnvLocal } from "./set-secrets.mjs";
 
@@ -49,45 +50,37 @@ const PROBE_LEVEL = "MAIL";
 // ---- Parse the catalog we actually ship ------------------------------------
 
 /**
- * Read SKUs and page limits out of the TypeScript source. Parsing beats
- * importing here: the catalog is a .ts module inside the Next workspace, and a
- * check script should not need a build step to run.
+ * Import the actual generated catalog through a tiny temporary bundle. The
+ * catalog is composed from trim/binding rows now, so regex-parsing object
+ * literals silently dropped every product and made this release gate useless.
  */
-function readCatalog() {
-  const src = readFileSync(CATALOG, "utf8");
-
-  // Anchor on `binding:` so only the shared binding presets match — without it,
-  // any earlier `const NAME = {` lazily swallows the first minPages it finds and
-  // the real preset is skipped, silently dropping its products from the check.
-  const limits = {};
-  for (const m of src.matchAll(
-    /const ([A-Z_]+) = \{\s*binding: "[a-z-]+",[\s\S]*?minPages: (\d+),\s*pageStep: (\d+),\s*maxPages: (\d+),/g,
-  )) {
-    limits[m[1]] = { minPages: +m[2], pageStep: +m[3], maxPages: +m[4] };
+async function readCatalog() {
+  const outDir = join(ROOT, "node_modules", ".cache", "childbooks-print-catalog");
+  const outFile = join(outDir, "catalog.mjs");
+  mkdirSync(outDir, { recursive: true });
+  try {
+    await build({
+      entryPoints: [CATALOG],
+      outfile: outFile,
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      target: "node20",
+      external: ["zod"],
+      logLevel: "warning",
+    });
+    const module = await import(`${pathToFileURL(outFile).href}?at=${Date.now()}`);
+    return module.LULU_BOOK_PRODUCTS.map((product) => ({
+      sku: product.sku,
+      label: product.label,
+      binding: product.binding,
+      minPages: product.minPages,
+      pageStep: product.pageStep,
+      maxPages: product.maxPages,
+    }));
+  } finally {
+    rmSync(outDir, { recursive: true, force: true });
   }
-
-  const products = [];
-  for (const m of src.matchAll(
-    /sku: "([A-Z0-9]+)",\s*\n\s*label: '([^']+)'[\s\S]*?\.\.\.([A-Z_]+),/g,
-  )) {
-    const limit = limits[m[3]];
-    if (!limit) {
-      console.error(`\n❌ Product ${m[1]} spreads unknown preset ${m[3]} — parser is out of date.`);
-      process.exit(1);
-    }
-    products.push({ sku: m[1], label: m[2], binding: m[3], ...limit });
-  }
-
-  // A miscount means the parser silently dropped a product, which would report a
-  // clean catalog while leaving a broken SKU live.
-  const declared = (src.match(/^\s{4}sku: "/gm) ?? []).length;
-  if (products.length !== declared) {
-    console.error(
-      `\n❌ Parsed ${products.length} of ${declared} products in the catalog — parser is out of date.`,
-    );
-    process.exit(1);
-  }
-  return products;
 }
 
 // ---- Lulu ------------------------------------------------------------------
@@ -141,7 +134,7 @@ async function quote(sku, pages) {
 
 // ---- Verify ----------------------------------------------------------------
 
-const products = readCatalog();
+const products = await readCatalog();
 if (products.length === 0) {
   console.error(`\n❌ Parsed no products from ${CATALOG} — has its shape changed?`);
   process.exit(1);

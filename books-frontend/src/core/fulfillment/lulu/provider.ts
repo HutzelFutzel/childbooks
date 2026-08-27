@@ -164,6 +164,7 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
           "Content-Type": "application/x-www-form-urlencoded",
         },
         body: "grant_type=client_credentials",
+        signal: AbortSignal.timeout(30_000),
       });
     } catch (err) {
       throw new FulfillmentError("Network request to Lulu (auth) failed.", {
@@ -252,6 +253,7 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
     try {
       res = await deps.httpFetch(`${base}${path}`, {
         ...init,
+        signal: init.signal ?? AbortSignal.timeout(30_000),
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
@@ -294,6 +296,24 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
 
   async function request<T>(path: string, init: RequestInit): Promise<T> {
     const res = await fetchOk(path, init);
+    try {
+      return (await res.json()) as T;
+    } catch (err) {
+      throw new FulfillmentError("Could not parse Lulu response.", {
+        kind: "parse",
+        provider: "lulu",
+        cause: err,
+      });
+    }
+  }
+
+  /**
+   * One non-retried request for non-idempotent operations. A network failure
+   * after Lulu accepted a POST is ambiguous; replaying it immediately can print
+   * the same order twice.
+   */
+  async function requestOnce<T>(path: string, init: RequestInit): Promise<T> {
+    const res = await fetchOnce(path, init);
     try {
       return (await res.json()) as T;
     } catch (err) {
@@ -373,6 +393,17 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
           { method: "POST", body: JSON.stringify(body) },
         );
         const quote = mapCostToQuote(json, level);
+        if (
+          !Number.isFinite(Number(quote.items.amount)) ||
+          Number(quote.items.amount) <= 0 ||
+          !Number.isFinite(Number(quote.shipping.amount)) ||
+          Number(quote.shipping.amount) <= 0
+        ) {
+          throw new FulfillmentError("Lulu returned an incomplete or zero cost calculation.", {
+            kind: "parse",
+            provider: "lulu",
+          });
+        }
         if (!addressIsReal) delete quote.addressValidation;
         outcomes.push({ method, quote });
       } catch (err) {
@@ -405,6 +436,18 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
       else out.interior = { source_url: url };
     }
     return out;
+  }
+
+  async function findOrderByIdempotencyKey(key: string): Promise<FulfillmentOrder | null> {
+    const stableKey = key.trim();
+    if (!stableKey) return null;
+    type RawOrder = Parameters<typeof mapOrder>[0] & { external_id?: string };
+    const page = await request<{ results?: RawOrder[] }>(
+      `/print-jobs/?search=${encodeURIComponent(stableKey)}&page_size=100`,
+      { method: "GET" },
+    );
+    const match = (page.results ?? []).find((order) => order.external_id === stableKey);
+    return match ? mapOrder(match) : null;
   }
 
   return {
@@ -459,7 +502,14 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
       return mapShippingOptions(json, shippingMethodForLevel);
     },
 
+    findOrderByIdempotencyKey,
+
     async createOrder(draft: OrderDraft): Promise<FulfillmentOrder> {
+      const idempotencyKey = draft.idempotencyKey?.trim();
+      if (idempotencyKey) {
+        const existing = await findOrderByIdempotencyKey(idempotencyKey);
+        if (existing) return existing;
+      }
       // Prefer already-hosted files (payment-gated checkout uploaded them up
       // front); otherwise upload the in-memory assets now.
       const files =
@@ -493,10 +543,10 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
 
       const body: LuluPrintJobRequest = {
         contact_email: draft.recipient.email,
-        external_id: draft.merchantReference,
+        external_id: idempotencyKey || draft.merchantReference,
         line_items: [
           {
-            external_id: draft.merchantReference,
+            external_id: idempotencyKey ? `${idempotencyKey}:item` : draft.merchantReference,
             title: draft.merchantReference ?? "Childbook",
             quantity: draft.copies,
             printable_normalization: {
@@ -521,17 +571,37 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
         shipping_level: SHIPPING_LEVEL[draft.shippingMethod],
       };
 
-      const json = await request<Parameters<typeof mapOrder>[0]>("/print-jobs/", {
-        method: "POST",
-        body: JSON.stringify(body),
-      });
-      return {
-        ...mapOrder(json),
-        printFiles: {
-          interior: files.interior.source_url,
-          cover: files.cover.source_url,
-        },
-      };
+      // Lulu has no native idempotency header. Never auto-retry this POST; an
+      // ambiguous failure is recovered by external_id on the scheduled retry.
+      try {
+        const json = await requestOnce<Parameters<typeof mapOrder>[0]>("/print-jobs/", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+        return {
+          ...mapOrder(json),
+          printFiles: {
+            interior: files.interior.source_url,
+            cover: files.cover.source_url,
+          },
+        };
+      } catch (err) {
+        // The connection can die after Lulu accepts the body. Give the search
+        // index time to expose that job before the scheduled retry sees a
+        // failure; otherwise a replay could print the same book twice.
+        if (idempotencyKey) {
+          for (const delay of [1_000, 3_000, 7_000]) {
+            await sleep(delay);
+            try {
+              const recovered = await findOrderByIdempotencyKey(idempotencyKey);
+              if (recovered) return recovered;
+            } catch {
+              // Preserve the original create failure after recovery attempts.
+            }
+          }
+        }
+        throw err;
+      }
     },
 
     async getOrder(id: string): Promise<FulfillmentOrder> {

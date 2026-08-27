@@ -416,8 +416,10 @@ export function registerRuntimeRoutes(app: Express): void {
       await setRuntimeEnv(target, req.uid);
       // Re-derive the public plans doc so the storefront uses the new env's price ids,
       // and the products doc so it offers only what's verified in the new print catalog.
-      await reprojectPublicPlans().catch(() => {});
-      await reprojectPublicProducts().catch(() => {});
+      // A projection failure is part of the environment switch failure. Do not
+      // report success while the storefront is still serving the previous
+      // environment's catalog.
+      await Promise.all([reprojectPublicPlans(), reprojectPublicProducts()]);
       res.json({ env: target, readiness });
     } catch (err) {
       res.status(500).json({ error: { message: (err as Error)?.message ?? "Failed to set runtime env." } });

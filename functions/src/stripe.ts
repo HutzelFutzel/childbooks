@@ -29,6 +29,8 @@ import { getShippingSettings } from "./shipping";
 import { getPricingSettings } from "./appConfig";
 import {
   currencyForMarket,
+  isIsoCountry,
+  STATE_CODE_REQUIRED,
   TAX_ID_LABEL,
   TAX_ID_REQUIRED,
 } from "../../books-frontend/src/core/config/countries";
@@ -164,11 +166,32 @@ import {
 
 // ---- Money helpers ---------------------------------------------------------
 
-const ZERO_DECIMAL = new Set(["JPY", "KRW", "VND", "CLP", "ISK"]);
+const ZERO_DECIMAL = new Set([
+  "BIF",
+  "CLP",
+  "DJF",
+  "GNF",
+  "JPY",
+  "KMF",
+  "KRW",
+  "MGA",
+  "PYG",
+  "RWF",
+  "VND",
+  "VUV",
+  "XAF",
+  "XOF",
+  "XPF",
+]);
+// Stripe retains two-decimal API amounts for these currencies even though
+// their economies no longer use fractional units. The amount must end in 00.
+const COMPAT_TWO_DECIMAL = new Set(["ISK", "UGX"]);
 
 /** Convert a major-unit amount to Stripe's minor units for the currency. */
 function toMinor(amount: number, currency: string): number {
-  const factor = ZERO_DECIMAL.has(currency.toUpperCase()) ? 1 : 100;
+  const code = currency.toUpperCase();
+  if (COMPAT_TWO_DECIMAL.has(code)) return Math.round(amount) * 100;
+  const factor = ZERO_DECIMAL.has(code) ? 1 : 100;
   return Math.round(amount * factor);
 }
 
@@ -198,6 +221,8 @@ interface CheckoutBody {
   destinationCountry: string;
   merchantReference?: string;
   recipient: OrderDraft["recipient"];
+  /** Customer reviewed the carrier's suggested correction, if one was returned. */
+  addressConfirmed?: boolean;
   assets?: WireAsset[];
   /**
    * Content fingerprint of the render (see `core/print/fingerprint`). When the
@@ -317,36 +342,11 @@ async function notifyCampaignsOfPurchase(args: {
   }
 }
 
-/**
- * Create the Checkout Session, retrying without automatic tax if the account
- * hasn't activated Stripe Tax (so checkout still works before tax is set up).
- */
+/** Create a Checkout Session without weakening configured tax collection. */
 async function createCheckoutSession(
   params: Stripe.Checkout.SessionCreateParams,
 ): Promise<Stripe.Checkout.Session> {
-  const stripe = getStripe();
-  try {
-    return await stripe.checkout.sessions.create(params);
-  } catch (err) {
-    const msg = (err as Error)?.message ?? "";
-    if (params.automatic_tax?.enabled && /tax/i.test(msg)) {
-      console.warn("[stripe] automatic_tax failed, retrying without tax:", msg);
-      const retry: Stripe.Checkout.SessionCreateParams = {
-        ...params,
-        automatic_tax: { enabled: false },
-      };
-      // Drop per-line tax_behavior so Stripe doesn't reject it without tax.
-      retry.line_items = (params.line_items ?? []).map((li) => {
-        if (li.price_data?.tax_behavior) {
-          const { tax_behavior: _drop, ...priceData } = li.price_data;
-          return { ...li, price_data: priceData };
-        }
-        return li;
-      });
-      return stripe.checkout.sessions.create(retry);
-    }
-    throw err;
-  }
+  return getStripe().checkout.sessions.create(params);
 }
 
 /**
@@ -413,6 +413,8 @@ interface PrintCheckoutArgs {
   shippingMethod: ShippingMethod;
   destinationCountry: string;
   recipient: OrderDraft["recipient"];
+  /** Customer reviewed the live carrier correction, if one was returned. */
+  addressConfirmed?: boolean;
   sourceFileUrls: { interior?: string; cover?: string };
   merchantReference: string | null;
 }
@@ -717,12 +719,41 @@ async function previewShippingMethod(
 
 async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintCheckoutResult> {
   const { uid, product, variant, printSku, settings, copies, pages, currency, recipient } = args;
+  const destinationCountry = args.destinationCountry.trim().toUpperCase();
+  const recipientCountry = recipient.address.countryCode.trim().toUpperCase();
+  if (
+    !isIsoCountry(destinationCountry) ||
+    destinationCountry !== recipientCountry
+  ) {
+    return {
+      ok: false,
+      error: "The checkout destination must match the recipient's shipping country.",
+    };
+  }
+  if (
+    !recipient.name.trim() ||
+    !recipient.phoneNumber?.trim() ||
+    !recipient.address.line1.trim() ||
+    !recipient.address.townOrCity.trim() ||
+    !recipient.address.postalOrZipCode.trim()
+  ) {
+    return {
+      ok: false,
+      error: "A recipient name, phone number, and complete shipping address are required.",
+    };
+  }
+  if (STATE_CODE_REQUIRED.has(destinationCountry) && !recipient.address.stateOrCounty?.trim()) {
+    return {
+      ok: false,
+      error: `Orders to ${countryLabel(destinationCountry)} require a state or province code.`,
+    };
+  }
 
   // Checked HERE, at the chokepoint both physical-order paths funnel through.
   // Only one of them used to validate: a reorder replayed a stored address, so
   // an order placed before a market was withdrawn stayed repeatable forever.
   const refusal = await shippingRefusal(product, {
-    country: args.destinationCountry || recipient.address.countryCode,
+    country: destinationCountry,
     region: recipient.address.stateOrCounty ?? undefined,
     method: args.shippingMethod,
     stage: "order",
@@ -747,9 +778,21 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     pages,
     currency,
     shippingMethod: args.shippingMethod,
-    destinationCountry: args.destinationCountry,
+    destinationCountry,
     address: recipient.address,
   });
+  if (addressValidation?.severity === "error") {
+    return {
+      ok: false,
+      error: "The shipping address could not be verified. Please correct it before paying.",
+    };
+  }
+  if (addressValidation?.suggested && !args.addressConfirmed) {
+    return {
+      ok: false,
+      error: "Review the carrier's suggested address correction before paying.",
+    };
+  }
 
   if (planPrice <= 0) {
     return { ok: false, error: "This product isn't priced for ordering yet." };
@@ -797,22 +840,6 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     };
   }
 
-  // The print provider refuses jobs whose address its validation service can't
-  // confirm, so charging for one would strand a paid order. The dialog blocks
-  // this too, but the money is decided here — a client is not a gate.
-  if (addressValidation?.severity === "error") {
-    console.warn(
-      "[stripe] checkout blocked — unverifiable shipping address:",
-      addressValidation.warnings.map((w) => w.message).join("; "),
-    );
-    return {
-      ok: false,
-      error:
-        "We couldn't verify this shipping address with our delivery partner. " +
-        "Please check the street, city and postal code and try again.",
-    };
-  }
-
   const customerId = await ensureCustomer(uid, args.email);
 
   const taxBehavior = settings.tax.perCurrency[currency]?.behavior ?? "exclusive";
@@ -857,7 +884,7 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     variant,
     copies,
     shippingMethod: args.shippingMethod,
-    destinationCountry: args.destinationCountry,
+    destinationCountry,
     currency,
     pageCount: pages,
     merchantReference: args.merchantReference,
@@ -927,6 +954,46 @@ export function registerStripeUserRoutes(app: Express): void {
         clientError(res, "Missing order details.");
         return;
       }
+      const destinationCountry = body.destinationCountry?.trim().toUpperCase();
+      const recipientCountry = body.recipient.address?.countryCode?.trim().toUpperCase();
+      if (
+        !isIsoCountry(destinationCountry) ||
+        !isIsoCountry(recipientCountry) ||
+        destinationCountry !== recipientCountry
+      ) {
+        clientError(res, "The checkout destination must match the recipient's shipping country.");
+        return;
+      }
+      const recipient: OrderDraft["recipient"] = {
+        ...body.recipient,
+        name: body.recipient.name.trim(),
+        phoneNumber: body.recipient.phoneNumber?.trim(),
+        email: body.recipient.email?.trim(),
+        address: {
+          ...body.recipient.address,
+          line1: body.recipient.address.line1?.trim(),
+          line2: body.recipient.address.line2?.trim() || undefined,
+          townOrCity: body.recipient.address.townOrCity?.trim(),
+          stateOrCounty: body.recipient.address.stateOrCounty?.trim() || undefined,
+          postalOrZipCode: body.recipient.address.postalOrZipCode?.trim(),
+          countryCode: destinationCountry,
+          taxId: body.recipient.address.taxId?.trim() || undefined,
+        },
+      };
+      if (
+        !recipient.name ||
+        !recipient.phoneNumber ||
+        !recipient.address.line1 ||
+        !recipient.address.townOrCity ||
+        !recipient.address.postalOrZipCode
+      ) {
+        clientError(res, "A recipient name, phone number, and complete shipping address are required.");
+        return;
+      }
+      if (STATE_CODE_REQUIRED.has(destinationCountry) && !recipient.address.stateOrCounty) {
+        clientError(res, `Orders to ${countryLabel(destinationCountry)} require a state or province code.`);
+        return;
+      }
 
       const [config, settings] = await Promise.all([getProductsConfig(), getPricingSettings()]);
       const resolved = resolvePrintOrder({
@@ -964,7 +1031,7 @@ export function registerStripeUserRoutes(app: Express): void {
       // there. Taking it from the body would let the two disagree, which means
       // charging an amount the customer was never shown.
       const currency = currencyForMarket(
-        body.destinationCountry || body.recipient.address.countryCode,
+        destinationCountry,
         settings.currencies,
         settings.baseCurrency,
       ) as CurrencyCode;
@@ -985,11 +1052,11 @@ export function registerStripeUserRoutes(app: Express): void {
       // Checked before the uploads below purely to save the round trip;
       // `createPrintCheckout` re-checks and is the binding one.
       const refusal = await shippingRefusal(product, {
-        country: body.destinationCountry || body.recipient.address.countryCode,
-        region: body.recipient.address.stateOrCounty ?? undefined,
+        country: destinationCountry,
+        region: recipient.address.stateOrCounty ?? undefined,
         method: body.shippingMethod,
         stage: "order",
-        taxId: body.recipient.address.taxId,
+        taxId: recipient.address.taxId,
       });
       if (refusal) {
         clientError(res, refusal);
@@ -1035,7 +1102,7 @@ export function registerStripeUserRoutes(app: Express): void {
 
       const result = await createPrintCheckout({
         uid,
-        email: body.recipient.email ?? req.authToken?.email ?? null,
+        email: recipient.email ?? req.authToken?.email ?? null,
         device: checkoutDevice(req),
         product,
         variant,
@@ -1046,8 +1113,9 @@ export function registerStripeUserRoutes(app: Express): void {
         pages,
         currency,
         shippingMethod: body.shippingMethod,
-        destinationCountry: body.destinationCountry,
-        recipient: body.recipient,
+        destinationCountry,
+        recipient,
+        addressConfirmed: body.addressConfirmed === true,
         sourceFileUrls,
         merchantReference: body.merchantReference ?? null,
       });
@@ -1485,7 +1553,12 @@ export function registerStripeUserRoutes(app: Express): void {
         merchantReference: plan.merchantReference ?? null,
       });
       if (!result.ok) {
-        clientError(res, result.error);
+        clientError(
+          res,
+          result.error.startsWith("Review the carrier")
+            ? "The carrier wants this saved address reviewed again. Open the book and use its order checkout to review the correction before paying."
+            : result.error,
+        );
         return;
       }
       res.json({ url: result.url, paymentId: result.paymentId });
@@ -1555,9 +1628,8 @@ export function registerStripeUserRoutes(app: Express): void {
       // coupon: Stripe generates the invoice, so we can't just quote less.
       const subscriptionRef = randomUUID();
       const referral = await planDiscountCoupon(uid, subscriptionRef);
-      // `createCheckoutSession` retries without automatic tax if Stripe Tax
-      // isn't activated, so subscriptions collect tax when possible but never
-      // hard-fail because of tax configuration.
+      // Tax configuration is binding. If Stripe Tax is not ready, checkout
+      // fails rather than silently creating an untaxed subscription.
       const session = await createCheckoutSession({
         mode: "subscription",
         customer: customerId,
@@ -1904,6 +1976,64 @@ async function fulfillPaidOrder(paymentId: string): Promise<void> {
   };
 
   try {
+    // A Checkout Session may remain open while an admin closes its market.
+    // Re-check at the last pre-press boundary. Because payment has already been
+    // captured here, a refusal must be paired with an idempotent full refund.
+    const destination = plan.destinationCountry.trim().toUpperCase();
+    const registry = await getMarketRegistry();
+    if (!registry.enabled.has(destination)) {
+      // A previous worker may have lost Lulu's create response before it could
+      // persist the order. Recover that job first; refunding now would leave a
+      // real print job running with no captured payment.
+      const provider = fulfillmentProvider();
+      const recovered = provider.findOrderByIdempotencyKey
+        ? await provider.findOrderByIdempotencyKey(paymentId)
+        : null;
+      if (recovered) {
+        const cfg = serverConfig();
+        await persistCreatedOrder({
+          uid: payment.ownerUid,
+          provider: "lulu",
+          env: cfg.fulfillment.lulu.env,
+          paymentId,
+          estimatedCost: plan.estimatedCost ?? null,
+          draft,
+          order: recovered,
+        });
+        await updatePayment({
+          paymentId,
+          uid: payment.ownerUid,
+          orderId: recovered.id,
+          event: "order.recovered",
+          fulfillmentState: "placed",
+        });
+        return;
+      }
+      if (!payment.stripePaymentIntentId) {
+        throw new Error(`Paid payment ${paymentId} has no PaymentIntent to refund.`);
+      }
+      await getStripe().refunds.create(
+        { payment_intent: payment.stripePaymentIntentId },
+        { idempotencyKey: `closed-market-${paymentId}` },
+      );
+      await updatePayment({
+        paymentId,
+        uid: payment.ownerUid,
+        status: "refunded",
+        refundedAmount: payment.amount,
+        event: "fulfillment.market_closed_refund",
+        fulfillmentState: "failed",
+      });
+      await raiseAlert({
+        severity: "warning",
+        kind: "fulfillment.marketClosed",
+        message: `Payment ${paymentId} was refunded because ${destination} closed before print placement.`,
+        meta: { paymentId, uid: payment.ownerUid, destination },
+        ref: paymentId,
+      });
+      return;
+    }
+
     const order = await fulfillmentProvider().createOrder(draft);
     const cfg = serverConfig();
     // Persisting also books the provider's charge as `printCost` COGS via the

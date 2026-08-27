@@ -126,7 +126,7 @@ import {
   type QrCornerStyle,
   type QrDotStyle,
 } from "../../books-frontend/src/core/config/qrCodes";
-import { ensureMarketsSeeded, getMarketCapability, getMarketRegistry, saveMarketsConfig } from "./markets";
+import { getMarketsConfig, getMarketCapability, getMarketRegistry, saveMarketsConfig } from "./markets";
 import { ensureShippingSeeded, getShippingSettings, saveShippingSettings } from "./shipping";
 import { normalizeShippingSettings } from "../../books-frontend/src/core/config/shipping";
 import { previewShippingChange } from "../../books-frontend/src/core/config/shippingPreview";
@@ -1332,7 +1332,10 @@ export function registerAdminRoutes(app: Express): void {
   // that reads as "we sell nowhere".
   app.get("/admin/config/markets", async (_req, res) => {
     try {
-      res.json(await ensureMarketsSeeded());
+      // Reads must not publish seed markets. Missing configuration is returned
+      // as an empty, fail-closed registry; seeding belongs in an explicit
+      // migration/write path.
+      res.json(await getMarketsConfig());
     } catch (err) {
       handleError(res, err);
     }
@@ -1340,7 +1343,7 @@ export function registerAdminRoutes(app: Express): void {
 
   app.put("/admin/config/markets", json, async (req: Request, res: Response) => {
     try {
-      const config = await saveMarketsConfig(req.body);
+      const config = await saveMarketsConfig(req.body, (req as AuthedRequest).uid);
       // Opening or closing a market changes which destinations every product
       // can reach, and so the shipping rates the storefront publishes. Without
       // this the public projection keeps advertising the old country list.
@@ -1364,6 +1367,7 @@ export function registerAdminRoutes(app: Express): void {
         force: req.query.force === "1",
         sku: typeof req.query.sku === "string" ? req.query.sku : undefined,
       });
+      await reprojectPublicProducts();
       res.json({
         capability: result.config,
         probed: result.probed,

@@ -69,6 +69,8 @@ export interface SweepRequest {
   previous?: MarketCapabilityConfig;
   /** Re-probe everything, including countries already settled. */
   force?: boolean;
+  /** Bound one invocation; oldest evidence is refreshed first. */
+  maxCountries?: number;
   pageCount?: number;
 }
 
@@ -206,8 +208,15 @@ export async function sweepMarketCapability(req: SweepRequest): Promise<SweepRes
   // A different reference SKU (or a fresh sweep) invalidates the old answers,
   // since coverage was measured for a different book.
   const sameProbe = previous?.probe.sku === sku && previous?.probe.env === req.env;
-  const targets =
+  const candidates =
     req.force || !sameProbe ? requested : requested.filter((c) => !settled(prior.get(c)));
+  const targets = [...candidates]
+    .sort(
+      (a, b) =>
+        (prior.get(a)?.probedAt ?? 0) - (prior.get(b)?.probedAt ?? 0) ||
+        a.localeCompare(b),
+    )
+    .slice(0, req.maxCountries ?? candidates.length);
 
   const results = await mapLimit(targets, CONCURRENCY, (country) =>
     probeCountry(req.env, sku, pageCount, country),
@@ -215,7 +224,11 @@ export async function sweepMarketCapability(req: SweepRequest): Promise<SweepRes
 
   // Merge onto the prior sweep so a partial run adds knowledge rather than
   // replacing the map with only what this run managed to reach.
-  const merged = new Map(sameProbe && !req.force ? prior : []);
+  // `force` means re-ask, not forget. Keep settled evidence for the same
+  // environment/SKU until a new settled verdict replaces it; a transient
+  // failure during the weekly refresh must not turn known coverage into the
+  // fail-open `unknown` state.
+  const merged = new Map(sameProbe ? prior : []);
   for (const r of results) {
     // An `unknown` result must never overwrite a settled verdict — that is the
     // whole reason failures are distinguished from refusals.
@@ -274,11 +287,18 @@ export async function referenceSkuForSweep(env: FulfillmentEnv): Promise<string>
 export async function runMarketSweep(opts: {
   force?: boolean;
   sku?: string;
+  maxCountries?: number;
 } = {}): Promise<SweepResult> {
   const env = serverConfig().fulfillment.lulu.env;
   const sku = opts.sku?.trim() || (await referenceSkuForSweep(env));
   const previous = await getMarketCapability();
-  const result = await sweepMarketCapability({ env, sku, previous, force: opts.force });
+  const result = await sweepMarketCapability({
+    env,
+    sku,
+    previous,
+    force: opts.force,
+    maxCountries: opts.maxCountries ?? 180,
+  });
   if (result.probed > 0) {
     return { ...result, config: await saveMarketCapability(result.config) };
   }

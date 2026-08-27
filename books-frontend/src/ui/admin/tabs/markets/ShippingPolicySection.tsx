@@ -23,6 +23,7 @@ import { Loader2 } from "lucide-react";
 import { Button } from "../../../components/Button";
 import { Field, Input } from "../../../components/Input";
 import { Select } from "../../../components/Select";
+import { useReadOnly } from "../../../components/ReadOnlyContext";
 import { cn } from "../../../lib/cn";
 import { countryLabel } from "../../../../core/analytics/markets";
 import {
@@ -63,6 +64,7 @@ const MODES: { value: ShippingPricingMode; label: string; hint: string }[] = [
  * before the real one arrives would overwrite it.
  */
 export function ShippingPolicySection({ loading }: { loading: boolean }) {
+  const readOnly = useReadOnly();
   const save = useAppConfigStore((s) => s.saveShippingSettings);
   const preview = useAppConfigStore((s) => s.previewShippingSettings);
   const stored = useAppConfigStore((s) => s.shippingSettings);
@@ -133,10 +135,10 @@ export function ShippingPolicySection({ loading }: { loading: boolean }) {
       hint="One policy for every book. Which speeds you're willing to sell, and what you charge for them — availability per country is discovered, not declared here."
       action={
         <div className="flex gap-2">
-          <Button variant="ghost" size="sm" disabled={!dirty || checking} onClick={runPreview}>
+          <Button variant="ghost" size="sm" disabled={readOnly || !dirty || checking} onClick={runPreview}>
             {checking ? "Checking…" : "Preview changes"}
           </Button>
-          <Button size="sm" disabled={!dirty || saving} onClick={commit}>
+          <Button size="sm" disabled={readOnly || !dirty || saving} onClick={commit}>
             {saving ? "Saving…" : "Save policy"}
           </Button>
         </div>
@@ -219,6 +221,7 @@ export function ShippingPolicySection({ loading }: { loading: boolean }) {
           <label className="flex items-start gap-2 text-xs text-ink-600">
             <input
               type="checkbox"
+              disabled={readOnly}
               checked={pricing.absorbInPrice}
               onChange={(e) =>
                 patch({ ...config, pricing: { ...pricing, absorbInPrice: e.target.checked } })
@@ -249,6 +252,7 @@ export function ShippingPolicySection({ loading }: { loading: boolean }) {
                   <label className="flex w-48 min-w-0 items-center gap-2 text-sm text-ink-700">
                     <input
                       type="checkbox"
+                      disabled={readOnly}
                       checked={setting.offered}
                       onChange={(e) =>
                         patch({

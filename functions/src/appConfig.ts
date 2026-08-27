@@ -708,7 +708,13 @@ export async function saveReferralConfig(input: unknown): Promise<ReferralConfig
 /** Validate + persist the catalog-wide pricing settings. */
 export async function savePricingSettings(input: unknown): Promise<PricingSettings> {
   const parsed = pricingSettingsSchema.parse(input);
-  const normalized = normalizePricingSettings(parsed);
+  // Saving pricing settings is an explicit attestation of the entered FX
+  // table. Persist when it was reviewed so cost conversion can fail safe as the
+  // rates age instead of treating a years-old number as current forever.
+  const normalized = normalizePricingSettings({
+    ...parsed,
+    fx: { ...parsed.fx, updatedAt: Date.now() },
+  });
   await writeDoc(PRICING_SETTINGS_DOC, normalized);
   return normalized;
 }

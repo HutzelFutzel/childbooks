@@ -47,7 +47,10 @@ import {
 export function fxRate(settings: PricingSettings, currency: CurrencyCode): number {
   if (currency === settings.baseCurrency) return 1;
   const rate = settings.fx.rates[currency];
-  return rate && rate > 0 ? rate : 1;
+  if (!(rate > 0)) {
+    throw new Error(`No FX rate configured for ${settings.baseCurrency} → ${currency}.`);
+  }
+  return rate;
 }
 
 /**
@@ -62,7 +65,19 @@ export function convertCostAmount(
   to: CurrencyCode,
 ): number {
   if (from === to) return amount;
-  const buffer = 1 + Math.max(0, settings.fx.bufferPct) / 100;
+  const age = settings.fx.updatedAt
+    ? Math.max(0, Date.now() - settings.fx.updatedAt)
+    : Number.POSITIVE_INFINITY;
+  const staleBufferPct =
+    age <= 30 * 24 * 60 * 60 * 1000
+      ? 0
+      : Number.isFinite(age)
+        ? Math.min(25, Math.ceil(age / (30 * 24 * 60 * 60 * 1000)) * 5)
+        : 25;
+  // Unknown or stale rates overstate cost rather than understate it. This is a
+  // safety net, not a substitute for refreshing rates: the admin health checks
+  // still flag stale metadata.
+  const buffer = 1 + (Math.max(0, settings.fx.bufferPct) + staleBufferPct) / 100;
   return amount * (fxRate(settings, to) / fxRate(settings, from)) * buffer;
 }
 
@@ -678,9 +693,14 @@ export function offeredMethodsFor(
 ): ShippingMethod[] {
   const code = (country ?? "").trim().toUpperCase();
   const reachable = new Set(availableMethodsFor(capability));
+  const coverageIsBinding =
+    capability?.status === "refused" || capability?.status === "available";
   return METHODS_BY_SPEED.filter((method) => {
     if (!methodOfferedIn(settings, code, method)) return false;
-    if (code && reachable.size > 0 && !reachable.has(method)) return false;
+    // Missing/unknown coverage is inconclusive and deliberately does not close
+    // a newly opened market. A settled answer is binding, including a refusal
+    // or an "available" response containing only provider levels we cannot map.
+    if (code && coverageIsBinding && !reachable.has(method)) return false;
     return !shippingTierRefused(shipping, code, method);
   });
 }
@@ -1058,13 +1078,16 @@ export function projectShippingRates(
     const methods = SHIPPING_METHODS.filter((method) =>
       methodOfferedIn(shippingSettings, country, method),
     );
-    const reachable = new Set(availableMethodsFor(capability?.get(country)));
+    const countryCapability = capability?.get(country);
+    const reachable = new Set(availableMethodsFor(countryCapability));
+    const coverageIsBinding =
+      countryCapability?.status === "refused" || countryCapability?.status === "available";
     for (const method of methods) {
       const row = shippingRowFor(shipping, country, method);
       // Two different refusals, published the same way: the provider told us it
       // doesn't run this speed here (a measured row) or the sweep never saw it
       // among the services it offers here.
-      const refused = (row && !row.available) || (reachable.size > 0 && !reachable.has(method));
+      const refused = (row && !row.available) || (coverageIsBinding && !reachable.has(method));
       if (refused) {
         rates.push({ country, method, available: false, charged: {}, measured: row != null });
         continue;
