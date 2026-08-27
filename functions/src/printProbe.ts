@@ -78,6 +78,8 @@ export interface ProbeRequest {
   /** Defaults to 1 — the quantity the returned per-unit cost is derived from. */
   copies?: number;
   destination?: ProbeDestination;
+  /** Currency to quote in, where the endpoint accepts one. */
+  currency?: string;
 }
 
 /**
@@ -212,6 +214,110 @@ export async function probeShippingTiers(req: ProbeRequest): Promise<ShippingPro
     };
   }
 }
+
+/** One shipping service to a destination: what it costs and how long it takes. */
+export interface OptionQuote {
+  method: ShippingMethod;
+  /** Shipping cost for the probed quantity, ex tax. */
+  shippingCost: number;
+  /** Business days from start of production to delivery, when reported. */
+  transitDaysMin?: number;
+  transitDaysMax?: number;
+}
+
+export interface ShippingOptionsProbe {
+  outcome: ProbeOutcome;
+  throttled?: boolean;
+  /** One entry per domain speed the provider priced. */
+  options: OptionQuote[];
+  /**
+   * Speeds the provider does NOT run to this destination.
+   *
+   * Sound here in a way it isn't for {@link probeShippingTiers}: this endpoint
+   * enumerates every service to a country in ONE call, so a speed absent from a
+   * successful response is genuinely absent — not a request that happened to
+   * fail. A failed call returns no verdict at all rather than an empty list.
+   */
+  refused: ShippingMethod[];
+  currency?: string;
+  message?: string;
+}
+
+/**
+ * Every shipping service to one destination, in a single request.
+ *
+ * The efficient counterpart to {@link probeShippingTiers}, and the reason a
+ * per-product shipping measurement can cover the whole world. That one prices
+ * each speed separately — five round trips per country per copy count — and
+ * needs a validated street address, which is why measurement used to be
+ * restricted to the handful of countries we hold a probe address for. This
+ * needs only a country code, so any open market can be measured.
+ *
+ * It also returns delivery estimates, which the per-speed quote doesn't. Those
+ * are what let checkout say "arrives in 5–8 business days" instead of leaving
+ * the customer to guess what "Standard Plus" means.
+ */
+export async function probeShippingOptions(req: ProbeRequest): Promise<ShippingOptionsProbe> {
+  const empty = { options: [], refused: [] };
+  const sku = req.sku?.trim();
+  if (!sku) return { ...empty, outcome: "rejected", message: "No SKU given." };
+  if (!luluCredentialsPresent(req.env)) {
+    return { ...empty, outcome: "inconclusive", message: `No print-provider credentials for ${req.env}.` };
+  }
+
+  const dest = req.destination ?? REFERENCE_DESTINATION;
+  const provider = fulfillmentProviderFor(req.env);
+  if (!provider.shippingOptions) {
+    return { ...empty, outcome: "inconclusive", message: "Provider can't enumerate shipping options." };
+  }
+  try {
+    const found = await provider.shippingOptions({
+      productSku: sku,
+      copies: Math.max(1, Math.round(req.copies ?? 1)),
+      pageCount: Math.max(1, Math.round(req.pages)),
+      destinationCountry: dest.country,
+      destinationState: dest.state,
+      destinationCity: dest.city,
+      destinationPostalCode: dest.postalCode,
+      currency: req.currency,
+    });
+
+    const options: OptionQuote[] = [];
+    let currency: string | undefined;
+    for (const o of found) {
+      // Services with no domain tier (Lulu's GROUND_HD / GROUND_BUS) are real
+      // coverage but nothing we sell, so they're skipped here rather than
+      // guessed into a tier. The coverage sweep keeps them.
+      if (!o.method || !o.cost) continue;
+      options.push({
+        method: o.method,
+        shippingCost: Number(o.cost.amount) || 0,
+        ...(o.transitDaysMin != null ? { transitDaysMin: o.transitDaysMin } : {}),
+        ...(o.transitDaysMax != null ? { transitDaysMax: o.transitDaysMax } : {}),
+      });
+      currency ??= o.cost.currency;
+    }
+    const priced = new Set(options.map((o) => o.method));
+    const refused = ALL_METHODS.filter((m) => !priced.has(m));
+    return { outcome: "ok", currency, options, refused };
+  } catch (err) {
+    const probe = classify(err);
+    return {
+      ...empty,
+      outcome: probe.outcome,
+      message: probe.message,
+      ...(probe.throttled ? { throttled: true } : {}),
+    };
+  }
+}
+
+const ALL_METHODS: ShippingMethod[] = [
+  "Budget",
+  "Standard",
+  "StandardPlus",
+  "Express",
+  "Overnight",
+];
 
 /**
  * Whether the provider's complaint is about the package or page count rather

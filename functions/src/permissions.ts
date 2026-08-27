@@ -530,6 +530,16 @@ const ROUTE_RULES: RouteRule[] = [
   // document every product's shipping options are read from — so it needs the
   // write grant, not the read one.
   { test: /^\/admin\/markets\/sweep$/, gate: key("configuration.markets", "write") },
+  // A POST that writes nothing: it projects the catalog against a candidate
+  // policy and throws the result away. Gated on read so someone who may look at
+  // the shipping policy can also find out what changing it would do — refusing
+  // that would only push them to save it and see.
+  { test: /^\/admin\/config\/shipping\/preview$/, gate: key("configuration.markets", "read") },
+  // Shipping policy rides on the markets grant rather than its own. It answers
+  // the same question the markets table does — where and how we sell — and a
+  // separate permission would let someone open a country while being unable to
+  // choose a speed for it.
+  { test: /^\/admin\/config\/shipping$/, gate: key("configuration.markets") },
   { test: /^\/admin\/config\/sparks$/, gate: key("configuration.sparks") },
   { test: /^\/admin\/config\/plans(\/|$)/, gate: key("configuration.memberships") },
 

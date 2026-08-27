@@ -13,6 +13,7 @@ import type {
   ProductDefinition,
   ProductsConfig,
 } from "../../../../core/config/products";
+import type { ShippingSettings } from "../../../../core/config/shipping";
 import {
   computeMargin,
   feeFor,
@@ -726,6 +727,7 @@ function maxTargetMargin(settings: PricingSettings): number {
 function tiersForMargin(
   product: ProductDefinition,
   settings: PricingSettings,
+  shippingSettings: ShippingSettings,
   tiers: PageTier[],
   target: number,
 ): { tiers: PageTier[]; unreachable: string[] } {
@@ -736,7 +738,13 @@ function tiersForMargin(
     const pages = Math.max(1, Math.round((lo + Math.max(lo, hi)) / 2));
     const prices = { ...t.prices };
     for (const currency of settings.currencies) {
-      const price = suggestTierPrice(product, { currency, pages, copies: 1 }, settings, target);
+      const price = suggestTierPrice(
+        product,
+        { currency, pages, copies: 1 },
+        settings,
+        target,
+        shippingSettings,
+      );
       if (price == null) unreachable.add(currency);
       else prices[currency] = price;
     }
@@ -771,12 +779,13 @@ function MarginPlanner({
   setTiers: (next: PageTier[]) => void;
 }) {
   const plans = useAppConfigStore((s) => s.plans.plans);
+  const shippingSettings = useAppConfigStore((s) => s.shippingSettings);
   const cap = useMemo(() => maxTargetMargin(settings), [settings]);
   const [target, setTarget] = useState(() => Math.min(45, cap));
 
   const suggestion = useMemo(
-    () => tiersForMargin(product, settings, tiers, Math.min(target, cap)),
-    [product, settings, tiers, target, cap],
+    () => tiersForMargin(product, settings, shippingSettings, tiers, Math.min(target, cap)),
+    [product, settings, shippingSettings, tiers, target, cap],
   );
 
   const headroom = useMemo(() => {
@@ -786,6 +795,7 @@ function MarginPlanner({
       { ...product, pricing: { ...product.pricing, tiers: suggestion.tiers } },
       { currency: settings.baseCurrency, pages, copies: 1 },
       settings,
+      shippingSettings,
       buyerContextsFromPublicPlans(plans, settings),
     );
   }, [product, suggestion.tiers, settings, plans]);
@@ -955,6 +965,7 @@ export function PricingSection({
 function MarginInfo({ product, settings }: { product: ProductDefinition; settings: PricingSettings }) {
   const previewMargin = useAppConfigStore((s) => s.previewMargin);
   const plans = useAppConfigStore((s) => s.plans.plans);
+  const shippingSettings = useAppConfigStore((s) => s.shippingSettings);
   const [currency, setCurrency] = useState(settings.baseCurrency);
   const [pages, setPages] = useState(product.conditions.pages.min);
   const [copies, setCopies] = useState(Math.max(1, product.conditions.copies.min));
@@ -976,8 +987,9 @@ function MarginInfo({ product, settings }: { product: ProductDefinition; setting
   }, [variantKeyChoice, product.variants, cur, pages]);
 
   const offline = useMemo<MarginBreakdown>(
-    () => computeMargin(product, { currency: cur, pages, copies, variant }, settings),
-    [product, cur, pages, copies, variant, settings],
+    () =>
+      computeMargin(product, { currency: cur, pages, copies, variant }, settings, shippingSettings),
+    [product, cur, pages, copies, variant, settings, shippingSettings],
   );
   const shown = live?.breakdown ?? offline;
   const costIsEstimate = product.cost.source === "providerLive" && !live?.live;

@@ -31,6 +31,7 @@ import {
 } from "./discountImpact";
 import type { PublicPlan } from "./plans";
 import type { CurrencyCode, PricingSettings, ProductDefinition } from "./products";
+import type { ShippingSettings } from "./shipping";
 import { packTotalSparks, type SparksConfig } from "./sparks";
 import {
   TRIGGER_META,
@@ -94,6 +95,8 @@ export interface ReferralImpactArgs {
   plans: PublicPlan[];
   /** Defaults to the pricing base currency. */
   currency?: CurrencyCode;
+  /** Catalog-wide shipping policy — part of every print row's margin. */
+  shipping: ShippingSettings;
 }
 
 function round2(n: number): number {
@@ -212,14 +215,14 @@ function smallestPackSparks(sparks: SparksConfig): number | null {
  * warnings that a single-reward view can't see.
  */
 export function referralImpact(args: ReferralImpactArgs): ReferralImpact {
-  const { referral, sparks, settings, products, plans } = args;
+  const { referral, sparks, settings, products, plans, shipping } = args;
   const currency = args.currency ?? settings.baseCurrency;
   const rows: RewardCostRow[] = [];
   const warnings: ImpactWarning[] = [];
 
   let impacts: DiscountImpact[] = [];
   try {
-    impacts = catalogDiscountImpacts({ settings, sparks, products, plans, currency });
+    impacts = catalogDiscountImpacts({ settings, sparks, products, plans, currency, shipping });
   } catch {
     // A half-configured catalog must not break the panel — discount rewards
     // simply report as unmodelable below.

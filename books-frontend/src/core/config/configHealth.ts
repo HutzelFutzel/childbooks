@@ -19,6 +19,7 @@
  */
 import type { PublicPlan } from "./plans";
 import type { PricingSettings, ProductDefinition } from "./products";
+import type { ShippingSettings } from "./shipping";
 import type { SparksConfig } from "./sparks";
 import { computeMargin } from "./productMath";
 import {
@@ -46,6 +47,8 @@ export interface ConfigHealthArgs {
   /** Full admin product definitions; empty ⇒ print checks are skipped. */
   products: ProductDefinition[];
   plans: PublicPlan[];
+  /** Catalog-wide shipping policy — part of what every print margin is made of. */
+  shipping: ShippingSettings;
 }
 
 const AREA_BY_ITEM: Record<DiscountImpact["itemType"], EconomicFinding["area"]> = {
@@ -57,7 +60,7 @@ const AREA_BY_ITEM: Record<DiscountImpact["itemType"], EconomicFinding["area"]> 
 
 /** All findings, sorted errors → warnings → info. */
 export function economicFindings(args: ConfigHealthArgs): EconomicFinding[] {
-  const { settings, sparks, products, plans } = args;
+  const { settings, sparks, products, plans, shipping } = args;
   const findings: EconomicFinding[] = [];
   const buyers = buyerContextsFromPublicPlans(plans, settings);
   const base = settings.baseCurrency;
@@ -66,7 +69,14 @@ export function economicFindings(args: ConfigHealthArgs): EconomicFinding[] {
   // key = itemType:itemId → the currencies (and a sample buyer) where it loses money.
   const losses = new Map<string, { impact: DiscountImpact; currencies: string[] }>();
   for (const currency of settings.currencies) {
-    const impacts = catalogDiscountImpacts({ settings, sparks, products, plans, currency });
+    const impacts = catalogDiscountImpacts({
+      settings,
+      sparks,
+      products,
+      plans,
+      currency,
+      shipping,
+    });
     for (const impact of impacts) {
       if (!impact.underwaterAtList) continue;
       const key = `${impact.itemType}:${impact.itemId}`;
@@ -91,7 +101,14 @@ export function economicFindings(args: ConfigHealthArgs): EconomicFinding[] {
   }
 
   // ---- Base-currency checks (kept to one currency to avoid noise) ----------
-  const baseImpacts = catalogDiscountImpacts({ settings, sparks, products, plans, currency: base });
+  const baseImpacts = catalogDiscountImpacts({
+    settings,
+    sparks,
+    products,
+    plans,
+    currency: base,
+    shipping,
+  });
 
   for (const impact of baseImpacts) {
     if (impact.underwaterAtList) continue; // already an error above
@@ -128,7 +145,7 @@ export function economicFindings(args: ConfigHealthArgs): EconomicFinding[] {
         const be = Math.min(
           ...[product.conditions.pages.min, product.conditions.pages.max].map(
             (pages) =>
-              computeMargin(product, { currency: base, pages, copies: 1 }, settings)
+              computeMargin(product, { currency: base, pages, copies: 1 }, settings, shipping)
                 .breakEvenDiscountPct,
           ),
         );

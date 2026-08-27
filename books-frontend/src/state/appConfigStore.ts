@@ -82,6 +82,12 @@ import {
   type MarketCapabilityConfig,
   type MarketSweepSummary,
 } from "../core/config/marketCapability";
+import {
+  createDefaultShippingSettings,
+  normalizeShippingSettings,
+  type ShippingSettings,
+} from "../core/config/shipping";
+import type { ShippingPreview } from "../core/config/shippingPreview";
 import type { MarginBreakdown } from "../core/config/productMath";
 import type { VariantSelection } from "../core/config/variants";
 import {
@@ -334,6 +340,12 @@ export interface CalibrationResult {
   fitResidual?: number;
 }
 
+/** Per-step outcome of {@link AppConfigState.remeasureShipping}. */
+export interface RemeasureSummary {
+  ok: boolean;
+  steps: { step: "coverage" | "rates" | "publish"; ok: boolean; detail: string }[];
+}
+
 export interface CalibrationOutcome {
   result: CalibrationResult;
   config: ProductsConfig;
@@ -443,6 +455,19 @@ interface AppConfigState {
    * every geo check uses.
    */
   adminMarkets: MarketsConfig;
+  /**
+   * The catalog-wide shipping policy — private `adminSettings/shipping`,
+   * fetched through the backend when an admin tab needs it.
+   *
+   * Deliberately has NO public counterpart. Everything the storefront needs is
+   * already baked into `products` by the catalog projection, so the picker and
+   * the price table can't disagree with each other about what's on sale.
+   *
+   * Until it loads this is the seeded default (every speed, cost at no markup),
+   * which understates shipping revenue and therefore understates margin — the
+   * conservative direction for the admin panels that read it.
+   */
+  shippingSettings: ShippingSettings;
   /** Public subscription plans (storefront-facing; no Stripe internals). */
   plans: PublicPlansConfig;
   /** Global branding (the share watermark asset + appearance). */
@@ -552,6 +577,43 @@ interface AppConfigState {
    * couldn't reach as `unknown` and re-running fills only those.
    */
   sweepMarketCapability: (opts?: { force?: boolean; sku?: string }) => Promise<MarketSweepSummary>;
+  /** The catalog-wide shipping policy (admin-only doc, so an explicit fetch). */
+  loadShippingSettings: () => Promise<ShippingSettings>;
+  /**
+   * Save it, and re-project the catalog — which the backend does, because the
+   * published rates are derived from this document and would otherwise keep
+   * advertising the old policy until something else happened to trigger a
+   * projection.
+   */
+  saveShippingSettings: (config: ShippingSettings) => Promise<ShippingSettings>;
+  /**
+   * What saving a policy would change, without saving it.
+   *
+   * The consequences of a shipping edit are two joins from the form — one
+   * unticked speed can withdraw it from ninety countries — so the diff is the
+   * only honest way to review one.
+   */
+  previewShippingSettings: (candidate: ShippingSettings) => Promise<ShippingPreview>;
+  /**
+   * Rebuild the public product projection from the private documents.
+   *
+   * Every write that affects it already does this, so needing it by hand means
+   * something got out of step. Cheap and idempotent.
+   */
+  reprojectProducts: () => Promise<void>;
+  /**
+   * Coverage, then rates, then publish — the whole derivation, in order.
+   *
+   * Orchestrated here rather than in one backend route because the middle step
+   * is a per-product loop: a full catalog is far more provider round trips than
+   * fit in a single request, and each product persists as it goes so a late
+   * failure keeps the earlier work.
+   */
+  remeasureShipping: (opts?: {
+    env?: ProviderEnv;
+    force?: boolean;
+    onProgress?: (step: string) => void;
+  }) => Promise<RemeasureSummary>;
   /** The affiliate scope map (admin-only doc, so an explicit fetch). */
   loadAffiliateConfig: () => Promise<AffiliateConfig>;
   saveAffiliateConfig: (config: AffiliateConfig) => Promise<void>;
@@ -726,6 +788,10 @@ async function putJson(path: string, body: unknown): Promise<unknown> {
   return res.json();
 }
 
+function message(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 async function safeError(res: Response): Promise<string | null> {
   try {
     const json = (await res.json()) as { error?: { message?: string } };
@@ -746,7 +812,7 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   adminModelCosts: createDefaultModelCostTable(),
   imageCostStats: createDefaultImageCostStats(),
   latencyStats: createDefaultLatencyStats(),
-  products: { version: 1, products: [] },
+  products: { version: 1, products: [], projectedAt: 0 },
   markets: EMPTY_MARKET_REGISTRY,
   marketCapability: createEmptyMarketCapability(),
   pricingSettings: createDefaultPricingSettings(),
@@ -756,6 +822,7 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   campaigns: createDefaultCampaignsConfig(),
   affiliates: createDefaultAffiliateConfig(),
   adminMarkets: { version: 1, markets: [], updatedAt: 0 },
+  shippingSettings: createDefaultShippingSettings(),
   plans: { version: 1, plans: [] },
   branding: createDefaultBrandingConfig(),
   qrCodes: createDefaultQrCodesConfig(),
@@ -1075,6 +1142,100 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     // would flicker back to their old state.
     set({ adminMarkets: saved, markets: registryFrom(saved) });
     return saved;
+  },
+
+  async loadShippingSettings() {
+    const res = await backendFetch("/admin/config/shipping");
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load the shipping settings.");
+    const config = normalizeShippingSettings(await res.json());
+    set({ shippingSettings: config });
+    return config;
+  },
+
+  async saveShippingSettings(config) {
+    const saved = normalizeShippingSettings(await putJson("/admin/config/shipping", config));
+    set({ shippingSettings: saved });
+    return saved;
+  },
+
+  async previewShippingSettings(candidate) {
+    const res = await backendFetch("/admin/config/shipping/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(candidate),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not preview the change.");
+    return (await res.json()) as ShippingPreview;
+  },
+
+  async reprojectProducts() {
+    const res = await backendFetch("/admin/config/products/reproject", { method: "POST" });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not republish the catalog.");
+  },
+
+  async remeasureShipping(opts = {}) {
+    const steps: RemeasureSummary["steps"] = [];
+    const note = (step: string) => opts.onProgress?.(step);
+
+    note("Asking the printer what it ships where…");
+    try {
+      const summary = await get().sweepMarketCapability({ force: opts.force });
+      steps.push({
+        step: "coverage",
+        ok: true,
+        detail:
+          `${summary.available} reachable, ${summary.refused} refused, ${summary.unknown} unknown` +
+          (summary.throttled ? " (throttled — run again to finish)" : ""),
+      });
+    } catch (err) {
+      steps.push({ step: "coverage", ok: false, detail: message(err) });
+    }
+
+    // Fetched rather than read from state: the private catalog isn't held in
+    // the store, and it's the one that carries the SKUs and statuses this loop
+    // filters on.
+    const catalog = await get().loadAdminProducts();
+    // Only products the provider prints have rates to measure. Retired ones are
+    // excluded because measuring a book nobody can buy spends the same provider
+    // budget as measuring one they can.
+    const targets = catalog.products.filter(
+      (p) => p.provider.id === "lulu" && p.provider.sku.trim() && p.status !== "retired",
+    );
+    let measured = 0;
+    const failures: string[] = [];
+    for (const [index, product] of targets.entries()) {
+      const name = product.presentation.name;
+      note(`Measuring rates (${index + 1}/${targets.length}): ${name}`);
+      try {
+        const { result } = await get().calibrateProductCost(product.id, opts.env);
+        // A cost fit that worked but a shipping sweep that didn't is not a
+        // success here: this button exists to fill the rate table, and calling
+        // it green with no rows is how that used to go unnoticed until checkout.
+        if (result.ok && !result.shippingMessage) measured += 1;
+        else failures.push(`${name}: ${result.shippingMessage ?? result.message ?? "failed"}`);
+      } catch (err) {
+        failures.push(`${name}: ${message(err)}`);
+      }
+    }
+    steps.push({
+      step: "rates",
+      ok: failures.length === 0,
+      detail:
+        `${measured}/${targets.length} products measured` +
+        (failures.length > 0 ? ` — ${failures[0]}` : ""),
+    });
+
+    // Runs even when the steps above failed: both persist as they go, so there
+    // is usually something new to publish, and the projection is stale anyway.
+    note("Republishing the catalog…");
+    try {
+      await get().reprojectProducts();
+      steps.push({ step: "publish", ok: true, detail: "Catalog republished." });
+    } catch (err) {
+      steps.push({ step: "publish", ok: false, detail: message(err) });
+    }
+
+    return { ok: steps.every((s) => s.ok), steps };
   },
 
   async sweepMarketCapability(opts = {}) {

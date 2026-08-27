@@ -69,6 +69,7 @@ export function CampaignsTab() {
   const loadAdminProducts = useAppConfigStore((s) => s.loadAdminProducts);
   const sparks = useAppConfigStore((s) => s.sparks);
   const settings = useAppConfigStore((s) => s.pricingSettings);
+  const shipping = useAppConfigStore((s) => s.shippingSettings);
   const plans = useAppConfigStore((s) => s.plans.plans);
   const openConfigTab = useAdminTab((s) => s.openConfigTab);
   const openAnalysis = useAdminTab((s) => s.openAnalysis);
@@ -103,9 +104,9 @@ export function CampaignsTab() {
   const impact = useMemo(
     () =>
       selected
-        ? campaignImpact({ campaign: selected, sparks, settings, products, plans })
+        ? campaignImpact({ campaign: selected, sparks, settings, products, plans, shipping })
         : null,
-    [selected, sparks, settings, products, plans],
+    [selected, sparks, settings, products, plans, shipping],
   );
   const blockers = impact ? campaignBlocks(impact) : [];
 

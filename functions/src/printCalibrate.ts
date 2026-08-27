@@ -27,10 +27,15 @@ import {
   type ProviderEnv,
   type ShippingFallbackRow,
 } from "../../books-frontend/src/core/config/products";
-import { isDestinationAllowed } from "../../books-frontend/src/core/config/productMath";
+import {
+  destinationPolicyFor,
+  isDestinationAllowed,
+} from "../../books-frontend/src/core/config/productMath";
 import { enabledMarkets, type MarketRegistry } from "../../books-frontend/src/core/config/markets";
-import { isMeasurable, PROBE_ADDRESS } from "../../books-frontend/src/core/config/countries";
+import type { ShippingSettings } from "../../books-frontend/src/core/config/shipping";
+import { PROBE_STATE } from "../../books-frontend/src/core/config/countries";
 import { getMarketRegistry } from "./markets";
+import { getShippingSettings } from "./shipping";
 import {
   costVariantKey,
   enumerateVariants,
@@ -42,7 +47,7 @@ import type { ShippingMethod } from "../../books-frontend/src/core/fulfillment/t
 import type { FulfillmentEnv } from "../../books-frontend/src/core/settings";
 import { mapLimit } from "./concurrency";
 import {
-  probeShippingTiers,
+  probeShippingOptions,
   probeSku,
   REFERENCE_DESTINATION,
   type ProbeDestination,
@@ -72,26 +77,36 @@ const QUANTITY_LADDER = [5, 10, 20, 50];
 const SHIPPING_COPY_POINTS = [1, 4];
 
 /**
- * Destinations the shipping matrix is measured against: every OPEN market we
- * hold a probe address for.
- *
- * This used to be a fixed list of six countries, which quietly made the market
- * registry a lie — an admin could switch Japan on, the picker would offer it,
- * and a passthrough product would then refuse every Japanese order because no
- * row had ever been measured for it. Deriving the zones from the registry means
- * opening a market and measuring it are one workflow.
- *
- * A market with no {@link PROBE_ADDRESS} entry still isn't measurable: the
- * provider's cost endpoint validates a full street address, and inventing a
- * deliverable one per country is not something to guess at. Those destinations
- * price from the live quote at checkout and are refused when it fails — see
- * `hasUsableShippingCost`. Coverage for them still comes from the capability
- * sweep, which needs only a country code.
+ * Concurrent probes. Matches the coverage sweep: the endpoint is cheap, but its
+ * rate limiter is shared with checkout quoting, and a run that throttles itself
+ * produces exactly the unknown rows it exists to avoid.
  */
-function shippingZones(registry: MarketRegistry): ProbeDestination[] {
+const CONCURRENCY = 4;
+
+/**
+ * Destinations the shipping matrix is measured against: every open market this
+ * product actually sells to.
+ *
+ * No probe-address filter any more. The options endpoint needs a country code,
+ * not a validated street address, so every open market is measurable — which
+ * closes the gap where opening a market took one click but making it priceable
+ * took a code change to hand-write an address for it.
+ *
+ * A state is still passed where the provider needs one to answer accurately;
+ * that's a lookup, not an invented address.
+ */
+function shippingZones(
+  registry: MarketRegistry,
+  product: ProductDefinition,
+  shippingSettings: ShippingSettings,
+): ProbeDestination[] {
+  const policy = destinationPolicyFor(shippingSettings, product.shipping);
   return enabledMarkets(registry)
-    .filter((country) => isMeasurable(country))
-    .map((country) => ({ country, ...PROBE_ADDRESS[country] }));
+    .filter((country) => isDestinationAllowed(registry, policy, { country }))
+    .map((country) => ({
+      country,
+      ...(PROBE_STATE[country] ? { state: PROBE_STATE[country] } : {}),
+    }));
 }
 
 export interface CostSample {
@@ -379,7 +394,13 @@ export async function calibrateCost(req: CalibrateRequest): Promise<CalibrationR
   }
 
   // ---- Shipping ------------------------------------------------------------
-  const shipping = await measureShipping(env, sku, product, req.registry);
+  const shipping = await measureShipping(
+    env,
+    sku,
+    product,
+    req.registry,
+    await getShippingSettings(),
+  );
 
   const pageNote =
     discovered && (discovered.min !== product.conditions.pages.min || discovered.max !== product.conditions.pages.max)
@@ -410,27 +431,28 @@ export async function calibrateCost(req: CalibrateRequest): Promise<CalibrationR
 }
 
 /**
- * Sweep shipping across destinations and tiers.
+ * Sweep shipping across every open market this product sells to.
  *
- * The expensive half of a calibration by some margin — the provider prices one
- * speed per request, so this is (zones × copy points × speeds) round trips —
- * which is why the zones are a handful of representatives rather than every
- * country we sell to, and why the whole thing runs at bounded concurrency.
+ * Uses the shipping-OPTIONS endpoint, which returns all five speeds for a
+ * destination in one call and needs only a country code. The previous version
+ * priced each speed separately — (countries × copy points × speeds) round trips
+ * — and needed a validated street address, which is why measurement was capped
+ * at the handful of countries we hand-wrote a probe address for. Everything
+ * else was left to live-quote at checkout and refuse when the quote failed.
+ *
+ * That cap was the real problem. Opening a market took one click; making it
+ * priceable took a code change nobody remembered was needed.
  *
  * Two copy points, not one, because a passthrough product BILLS this number to
  * the customer when a live quote fails. Fitting `base + perCopy × copies` means
  * the person buying one copy isn't charged what three would cost.
- *
- * A tier missing from a zone's response is recorded as unavailable, which is
- * the part that can't be guessed — the provider doesn't run GROUND to the US or
- * EXPEDITED outside it, and offering one anyway fails the order after the
- * customer has typed their address.
  */
 async function measureShipping(
   env: FulfillmentEnv,
   sku: string,
   product: ProductDefinition,
   registry: MarketRegistry,
+  shippingSettings: ShippingSettings,
 ): Promise<{
   rows?: ShippingFallbackRow[];
   fallback?: number;
@@ -445,19 +467,19 @@ async function measureShipping(
     product.conditions.pages.max,
   );
 
-  const zones = shippingZones(registry).filter((z) => sellsTo(registry, product, z.country));
+  const zones = shippingZones(registry, product, shippingSettings);
   if (zones.length === 0) {
     return {
       message:
-        "None of the destinations this sweep has probe addresses for are open for this product. Those markets will price from the live quote instead.",
+        "This product isn't sold to any open market, so there was nothing to measure. Open a market under Configuration → Markets.",
     };
   }
 
-  const results = await mapLimit(zones, 3, async (zone) => ({
+  const results = await mapLimit(zones, CONCURRENCY, async (zone) => ({
     zone,
     probes: await Promise.all(
       SHIPPING_COPY_POINTS.map((copies) =>
-        probeShippingTiers({ env, sku, pages, copies, destination: zone }),
+        probeShippingOptions({ env, sku, pages, copies, destination: zone }),
       ),
     ),
   }));
@@ -468,8 +490,8 @@ async function measureShipping(
   let throttled = false;
   for (const { zone, probes } of results) {
     const [one, many] = probes;
-    // Read before the early return: a zone can answer while individual speeds
-    // within it were throttled, and those gaps are ours rather than the
+    // Read before the early return: a country can answer at one order size and
+    // be throttled at the other, and that gap is ours rather than the
     // provider's just the same.
     if (one.throttled || many.throttled) throttled = true;
     if (one.outcome !== "ok" || many.outcome !== "ok") {
@@ -477,13 +499,24 @@ async function measureShipping(
       continue;
     }
     for (const method of ALL_METHODS) {
-      const a = one.tiers.find((t) => t.method === method);
-      const b = many.tiers.find((t) => t.method === method);
+      const a = one.options.find((o) => o.method === method);
+      const b = many.options.find((o) => o.method === method);
       if (a && b) {
         const span = SHIPPING_COPY_POINTS[1] - SHIPPING_COPY_POINTS[0];
         const perCopy = Math.max(0, round((b.shippingCost - a.shippingCost) / span, 2));
         const base = Math.max(0, round(a.shippingCost - perCopy * SHIPPING_COPY_POINTS[0], 2));
-        rows.push({ country: zone.country, method, available: true, base, perCopy });
+        rows.push({
+          country: zone.country,
+          method,
+          available: true,
+          base,
+          perCopy,
+          // Taken from the single-copy probe: quantity doesn't change how long
+          // a service takes, and picking one avoids publishing two estimates
+          // for the same route that differ only by which call answered first.
+          ...(a.transitDaysMin != null ? { transitDaysMin: a.transitDaysMin } : {}),
+          ...(a.transitDaysMax != null ? { transitDaysMax: a.transitDaysMax } : {}),
+        });
         continue;
       }
       // Refused at EITHER order size is a real gap: a speed the provider won't
@@ -543,22 +576,6 @@ async function measureShipping(
 
 const ALL_METHODS: ShippingMethod[] = ["Budget", "Standard", "StandardPlus", "Express", "Overnight"];
 
-/**
- * Whether we sell this product to a country at all.
- *
- * Delegates rather than reimplementing: this was a third copy of the geo rule,
- * and a sweep that measured a market the order path refuses (or skipped one it
- * accepts) would leave the cost table and checkout disagreeing about where we
- * ship.
- */
-function sellsTo(
-  registry: MarketRegistry,
-  product: ProductDefinition,
-  country: string,
-): boolean {
-  return isDestinationAllowed(registry, product.shipping.destinations, { country });
-}
-
 /** Fold a successful calibration into a product, leaving everything else alone. */
 export function withCalibration(
   product: ProductDefinition,
@@ -571,8 +588,12 @@ export function withCalibration(
     shipping.fallback = result.shippingRows;
     shipping.fallbackMeasuredAt = Date.now();
   }
-  if (shipping.pricing.mode === "passthrough" && result.shippingFallback) {
-    shipping.pricing = { ...shipping.pricing, fallbackCost: result.shippingFallback };
+  // Written regardless of how shipping is priced today. It's a measurement, not
+  // a setting — gating it on the mode meant a catalog switched to flat and back
+  // came out the other side with no catch-all rate and orders it could no
+  // longer price.
+  if (result.shippingFallback) {
+    shipping.fallbackCost = result.shippingFallback;
   }
 
   const offered = new Set(

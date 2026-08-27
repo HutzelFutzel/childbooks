@@ -14,13 +14,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Globe, Loader2, RefreshCw, Search } from "lucide-react";
+import { Globe, Loader2, RefreshCw, Search, Upload } from "lucide-react";
 import { Button } from "../../components/Button";
 import { Input } from "../../components/Input";
 import { cn } from "../../lib/cn";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
 import {
-  isMeasurable,
   ISO_COUNTRIES,
   SANCTIONS_DENYLIST,
   STATE_CODE_REQUIRED,
@@ -33,8 +32,11 @@ import {
   type MarketCapability,
 } from "../../../core/config/marketCapability";
 import type { Market, MarketsConfig } from "../../../core/config/markets";
+import { methodLabel, type ShippingSettings } from "../../../core/config/shipping";
+import type { ShippingMethod } from "../../../core/fulfillment/types";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useAdminTab } from "../adminTabStore";
+import { ShippingPolicySection } from "./markets/ShippingPolicySection";
 import { Section, TabIntro } from "./products/parts";
 
 type Filter = "all" | "enabled" | "available" | "mismatch";
@@ -66,6 +68,12 @@ export function MarketsTab() {
   const sweep = useAppConfigStore((s) => s.sweepMarketCapability);
   const stored = useAppConfigStore((s) => s.adminMarkets);
   const capability = useAppConfigStore((s) => s.marketCapability);
+  const shipping = useAppConfigStore((s) => s.shippingSettings);
+  const loadShippingSettings = useAppConfigStore((s) => s.loadShippingSettings);
+  const saveShipping = useAppConfigStore((s) => s.saveShippingSettings);
+  const remeasure = useAppConfigStore((s) => s.remeasureShipping);
+  const reproject = useAppConfigStore((s) => s.reprojectProducts);
+  const projectedAt = useAppConfigStore((s) => s.products.projectedAt);
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
 
   const [draft, setDraft] = useState<MarketsConfig | null>(null);
@@ -74,11 +82,16 @@ export function MarketsTab() {
   const [sweeping, setSweeping] = useState(false);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
 
+  // Both documents, together. They're edited on the same screen — the country
+  // rows toggle speeds, which lives in the shipping policy — so having one
+  // arrive without the other would let an edit be written against a default
+  // that isn't what's stored.
   useEffect(() => {
     let alive = true;
-    loadMarketsConfig()
-      .then((config) => {
+    Promise.all([loadMarketsConfig(), loadShippingSettings()])
+      .then(([config]) => {
         if (alive) setDraft(config);
       })
       .catch((err: unknown) => {
@@ -90,7 +103,7 @@ export function MarketsTab() {
     return () => {
       alive = false;
     };
-  }, [loadMarketsConfig]);
+  }, [loadMarketsConfig, loadShippingSettings]);
 
   const config = draft ?? stored;
   const enabled = useMemo(
@@ -176,30 +189,77 @@ export function MarketsTab() {
     }
   };
 
+  // Disable one speed for one country: "the printer runs it, we don't want to
+  // sell it here". Saved immediately rather than batched with the market edits
+  // above, because it belongs to a different document and pretending otherwise
+  // is how a half-saved screen happens.
+  const toggleCountryMethod = async (country: string, method: ShippingMethod, sell: boolean) => {
+    const disabled = new Set(shipping.countryOverrides[country]?.disabled ?? []);
+    if (sell) disabled.delete(method);
+    else disabled.add(method);
+    const overrides = { ...shipping.countryOverrides };
+    if (disabled.size > 0) overrides[country] = { disabled: [...disabled] };
+    else delete overrides[country];
+    try {
+      await saveShipping({ ...shipping, countryOverrides: overrides });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not save the speed override.");
+    }
+  };
+
+  const runRemeasure = async () => {
+    setBusy("Starting…");
+    try {
+      const summary = await remeasure({ onProgress: setBusy });
+      for (const step of summary.steps) {
+        if (step.ok) toast.success(step.detail);
+        else toast.error(step.detail);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "The re-measure failed.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const republish = async () => {
+    setBusy("Republishing…");
+    try {
+      await reproject();
+      toast.success("Catalog republished.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Could not republish the catalog.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const enabledCount = enabled.size;
   const reachable = capability.countries.filter((c) => c.status === "available").length;
   const attention = ISO_COUNTRIES.filter(
     (c) => !SANCTIONS_DENYLIST.has(c) && needsAttention(enabled.has(c), coverage.get(c)),
   ).length;
   const stale = capability.sweptAt > 0 && Date.now() - capability.sweptAt > SWEEP_STALE_AFTER_MS;
-  // Open markets calibration can't measure a fallback rate for. They still sell,
-  // but only while the live quote answers — worth naming here because the
-  // symptom otherwise appears as an unpriceable order on a product page.
-  const liveQuoteOnly = useMemo(
-    () => [...enabled].filter((c) => !isMeasurable(c)).sort(),
-    [enabled],
-  );
+  // The storefront reads ONLY the projection, so anything published before its
+  // inputs last changed is what customers are currently being shown. Compared
+  // against the inputs rather than against a clock: "three days old" is fine if
+  // nothing has changed in three days, and "an hour old" is wrong if the policy
+  // was saved half an hour ago.
+  const staleProjection = useMemo(() => {
+    const newest = Math.max(shipping.updatedAt, stored.updatedAt, capability.sweptAt);
+    return newest > 0 && projectedAt < newest;
+  }, [capability.sweptAt, projectedAt, shipping.updatedAt, stored.updatedAt]);
 
   return (
     <div className="space-y-4">
       <TabIntro
-        elsewhere="Which countries a specific book ships to — and the shipping speeds and rates it offers — stay on that product, under Catalog → Print books → Shipping. This tab only decides which countries are available to choose from at all."
+        elsewhere="What shipping COSTS is measured per book, because it's priced by weight — see the rate table under Catalog → Print books → Shipping. That table is evidence, not a setting: everything configurable about shipping is on this tab."
         links={[{ label: "Catalog", onClick: () => setConfigTab("catalog") }]}
       >
-        The countries we sell to. A country switched off here can&apos;t be ordered to by anyone,
-        whatever a product claims — the server enforces this list as a ceiling on every product&apos;s
-        own geo policy. Switching one on is safe to do gradually: it only makes the country
-        selectable, and orders to it still have to price successfully before they can be placed.
+        The countries we sell to, and how shipping is sold to them. A country switched off here
+        can&apos;t be ordered to by anyone, whatever a product claims — the server enforces this list
+        as a ceiling. Switching one on is safe to do gradually: it only makes the country selectable,
+        and orders to it still have to price successfully before they can be placed.
       </TabIntro>
 
       <div className="flex flex-wrap items-center gap-2">
@@ -213,16 +273,33 @@ export function MarketsTab() {
             variant="ghost"
             size="sm"
             leftIcon={sweeping ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-            disabled={sweeping}
+            disabled={sweeping || busy != null}
             onClick={() => runSweep(false)}
           >
             {capability.sweptAt ? "Re-check coverage" : "Discover coverage"}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            leftIcon={busy ? <Loader2 className="size-4 animate-spin" /> : undefined}
+            disabled={sweeping || busy != null}
+            onClick={runRemeasure}
+            title="Coverage, then every product's rates, then republish — in that order, which is the order they depend on each other."
+          >
+            Re-measure everything
           </Button>
           <Button size="sm" disabled={!dirty || saving} onClick={save}>
             {saving ? "Saving…" : "Save markets"}
           </Button>
         </div>
       </div>
+
+      {busy && (
+        <p className="flex items-center gap-2 rounded-lg bg-ink-50 px-3 py-2 text-[11px] text-ink-600 ring-1 ring-inset ring-ink-100">
+          <Loader2 className="size-3.5 animate-spin" /> {busy} Leave this tab open — it runs one
+          request per product and stops if you navigate away.
+        </p>
+      )}
 
       {capability.sweptAt === 0 && (
         <p className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800 ring-1 ring-inset ring-amber-100">
@@ -240,17 +317,26 @@ export function MarketsTab() {
         </p>
       )}
 
-      {liveQuoteOnly.length > 0 && (
-        <p className="rounded-lg bg-ink-50 px-3 py-2 text-[11px] leading-relaxed text-ink-600 ring-1 ring-inset ring-ink-100">
-          <span className="font-medium">Live quote only:</span>{" "}
-          {liveQuoteOnly.map((c) => countryLabel(c)).join(", ")}. Cost calibration has no probe
-          address for these, so no fallback shipping rate can be measured. Orders still work while
-          the printer answers a live quote, but a product that charges the shipping it pays will
-          refuse the order if that call fails. Adding a probe address is a code change
-          (<code>PROBE_ADDRESS</code> in <code>core/config/countries.ts</code>), after which
-          &ldquo;Measure cost from the provider&rdquo; will cover them.
-        </p>
+      {staleProjection && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800 ring-1 ring-inset ring-amber-100">
+          <span className="flex-1">
+            The storefront is serving a catalog published before the latest market, coverage or
+            shipping change. It reads only the published copy, so customers are still being offered
+            the previous countries, speeds and prices.
+          </span>
+          <Button
+            variant="ghost"
+            size="sm"
+            leftIcon={<Upload className="size-4" />}
+            disabled={busy != null}
+            onClick={republish}
+          >
+            Republish now
+          </Button>
+        </div>
       )}
+
+      <ShippingPolicySection loading={loading} />
 
       <Section
         title="Countries"
@@ -300,8 +386,10 @@ export function MarketsTab() {
                 enabled={enabled.has(country)}
                 notes={notes.get(country) ?? ""}
                 capability={coverage.get(country)}
+                shipping={shipping}
                 onToggle={(on) => setMarket(country, { enabled: on })}
                 onNotes={(value) => setMarket(country, { notes: value })}
+                onToggleMethod={(method, sell) => void toggleCountryMethod(country, method, sell)}
               />
             ))}
           </ul>
@@ -336,19 +424,24 @@ function CountryRow({
   enabled,
   notes,
   capability,
+  shipping,
   onToggle,
   onNotes,
+  onToggleMethod,
 }: {
   country: string;
   enabled: boolean;
   notes: string;
   capability: MarketCapability | undefined;
+  shipping: ShippingSettings;
   onToggle: (on: boolean) => void;
   onNotes: (value: string) => void;
+  onToggleMethod: (method: ShippingMethod, sell: boolean) => void;
 }) {
   const [editingNotes, setEditingNotes] = useState(false);
   const methods = availableMethodsFor(capability);
   const attention = needsAttention(enabled, capability);
+  const vetoed = new Set(shipping.countryOverrides[country]?.disabled ?? []);
 
   return (
     <li className={cn("px-3 py-2", attention && "bg-amber-50/60")}>
@@ -368,8 +461,42 @@ function CountryRow({
 
         <CoverageBadge capability={capability} />
 
+        {/* The speeds the printer was observed to run here, each a toggle for
+            whether we sell it. Rendered from coverage rather than from the
+            policy so the list can only ever contain speeds that actually
+            exist — there is nothing to switch off that was never offered. */}
         {methods.length > 0 && (
-          <span className="text-[11px] text-ink-400">{methods.join(", ")}</span>
+          <span className="flex flex-wrap items-center gap-1">
+            {methods.map((method) => {
+              const selling = shipping.methods[method]?.offered && !vetoed.has(method);
+              const globallyOff = !shipping.methods[method]?.offered;
+              return (
+                <button
+                  key={method}
+                  type="button"
+                  disabled={globallyOff}
+                  onClick={() => onToggleMethod(method, !selling)}
+                  title={
+                    globallyOff
+                      ? `${methodLabel(shipping, method)} is switched off for the whole catalog in the shipping policy above.`
+                      : selling
+                        ? `Selling ${methodLabel(shipping, method)} here. Click to stop offering it in this country only.`
+                        : `Not selling ${methodLabel(shipping, method)} here, though the printer runs it. Click to offer it again.`
+                  }
+                  className={cn(
+                    "rounded px-1.5 py-0.5 text-[10px] font-medium transition",
+                    globallyOff
+                      ? "cursor-not-allowed bg-ink-50 text-ink-300 line-through"
+                      : selling
+                        ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
+                        : "bg-ink-100 text-ink-400 line-through hover:bg-ink-200",
+                  )}
+                >
+                  {methodLabel(shipping, method)}
+                </button>
+              );
+            })}
+          </span>
         )}
 
         {STATE_CODE_REQUIRED.has(country) && (
@@ -382,12 +509,6 @@ function CountryRow({
             {TAX_ID_LABEL[country]} required
           </Tag>
         )}
-        {enabled && !isMeasurable(country) && (
-          <Tag title="No probe address, so cost calibration can't measure a fallback shipping rate here. Orders depend on the live quote succeeding.">
-            live quote only
-          </Tag>
-        )}
-
         <button
           type="button"
           onClick={() => setEditingNotes((v) => !v)}

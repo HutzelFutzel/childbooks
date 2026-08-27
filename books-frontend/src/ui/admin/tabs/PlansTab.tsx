@@ -559,6 +559,7 @@ function PlanImpact({
   pricingSettings: PricingSettings;
   products: ProductDefinition[];
 }) {
+  const shippingSettings = useAppConfigStore((s) => s.shippingSettings);
   const currency = pricingSettings.baseCurrency;
   const monthlyPrice = plan.billing.prices[currency]?.month?.amount ?? 0;
   const yearlyPrice = plan.billing.prices[currency]?.year?.amount ?? 0;
@@ -618,8 +619,12 @@ function PlanImpact({
             const be = Math.min(
               ...[p.conditions.pages.min, p.conditions.pages.max].map(
                 (pages) =>
-                  computeMargin(p, { currency: currency as CurrencyCode, pages, copies: 1 }, pricingSettings)
-                    .breakEvenDiscountPct,
+                  computeMargin(
+                    p,
+                    { currency: currency as CurrencyCode, pages, copies: 1 },
+                    pricingSettings,
+                    shippingSettings,
+                  ).breakEvenDiscountPct,
               ),
             );
             return { name: p.presentation.name, breakEven: Math.round(be * 10) / 10 };

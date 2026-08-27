@@ -9,16 +9,19 @@
 import type { PricingSettings, ProductDefinition, ProviderEnv } from "./products";
 import { verificationCoversPages, verificationFor } from "./products";
 import {
+  allowedMarketsFor,
   computeMargin,
   costTableIsEmpty,
+  destinationPolicyFor,
   hasReachableDestination,
   isDestinationAllowed,
+  offeredMethodsFor,
   worstBreakEvenDiscountPct,
 } from "./productMath";
 import { bookMediaKey, resolvedPhotosFor, type CatalogMediaConfig } from "./catalogMedia";
 import { EMPTY_MARKET_REGISTRY, type MarketRegistry } from "./markets";
+import { createDefaultShippingSettings, type ShippingSettings } from "./shipping";
 import { variantFromSku } from "../fulfillment/lulu/skuAxes";
-import type { ShippingMethod } from "../fulfillment/types";
 import {
   VARIANT_AXES,
   cheapestVariant,
@@ -91,6 +94,15 @@ export interface ValidateOptions {
    * nowhere" rather than a validation pass that silently ignored the ceiling.
    */
   registry?: MarketRegistry;
+  /**
+   * The catalog-wide shipping policy.
+   *
+   * Defaults to the seeded one (every speed, cost passed through at no markup),
+   * which understates shipping revenue and so understates margin. That's the
+   * conservative direction: a caller that forgot to pass the real policy gets
+   * MORE "this price doesn't cover its costs" complaints, not fewer.
+   */
+  shipping?: ShippingSettings;
 }
 
 /** Collect all configuration issues for a product. */
@@ -100,6 +112,7 @@ export function validateProduct(
   opts: ValidateOptions = {},
 ): ProductIssue[] {
   const issues: ProductIssue[] = [];
+  const shippingSettings = opts.shipping ?? createDefaultShippingSettings();
   const err = (field: string, message: string) => issues.push({ level: "error", field, message });
   /** An error whose fix is running a tool (Verify / Calibrate), not typing. */
   const action = (field: string, message: string, fix?: IssueFix) =>
@@ -265,7 +278,12 @@ export function validateProduct(
           : "";
       let m;
       try {
-        m = computeMargin(p, { currency, pages: pg, copies: Math.max(1, copies.min), variant }, settings);
+        m = computeMargin(
+          p,
+          { currency, pages: pg, copies: Math.max(1, copies.min), variant },
+          settings,
+          shippingSettings,
+        );
       } catch {
         continue;
       }
@@ -294,7 +312,12 @@ export function validateProduct(
   // the mismatch.
   const advertising = (opts.plans ?? []).filter((pl) => pl.printDiscountPct > 0);
   if (advertising.length > 0 && !costTableIsEmpty(p.cost)) {
-    const headroom = worstBreakEvenDiscountPct(p, settings, Math.max(1, copies.min));
+    const headroom = worstBreakEvenDiscountPct(
+      p,
+      settings,
+      shippingSettings,
+      Math.max(1, copies.min),
+    );
     for (const plan of advertising) {
       if (plan.printDiscountPct > headroom) {
         warn(
@@ -305,33 +328,33 @@ export function validateProduct(
     }
   }
 
-  // Shipping
+  // Shipping.
+  //
+  // Most of what used to be checked here can no longer be misconfigured. Which
+  // speeds we sell and how we price them are catalog-wide now, so "enable at
+  // least one speed" and "set a markup" are questions about the shipping
+  // settings, not about this product — reporting them on every product turned
+  // one global mistake into a catalog full of red.
+  //
+  // What remains is genuinely per product: can this book reach the markets it
+  // claims, and has it been measured well enough to price them.
   const registry = opts.registry ?? EMPTY_MARKET_REGISTRY;
-  const enabledMethods = p.shipping.methods.filter((s) => s.enabled).map((s) => s.method);
-  if (enabledMethods.length === 0) err("shipping.methods", "Enable at least one shipping method.");
-  if (!hasReachableDestination(registry, p.shipping.destinations)) {
+  const policy = destinationPolicyFor(shippingSettings, p.shipping);
+  if (!hasReachableDestination(registry, policy)) {
     err(
       "shipping.destinations",
       registry.enabled.size === 0
         ? "No markets are enabled — open one in Configuration → Markets before this product can be sold."
-        : "No destinations are reachable with this geo policy.",
-    );
-  }
-  // Passthrough shipping charges whatever the provider quotes, so it needs a
-  // stand-in for the times a quote can't be fetched — otherwise checkout has to
-  // refuse the order rather than ship at our expense.
-  if (p.shipping.pricing.mode === "passthrough" && !((p.shipping.pricing.fallbackCost ?? 0) > 0)) {
-    action(
-      "shipping.pricing",
-      "Set a fallback shipping cost. It's charged (plus your markup) when a live shipping quote can't be fetched; without it those orders can't be placed at all.",
-      "measure",
+        : p.shipping.destinationsOverride
+          ? "This product's destination override excludes every open market."
+          : "No destinations are reachable with the catalog's shipping destinations.",
     );
   }
 
-  // Tier availability. The provider hard-refuses a speed it doesn't run to a
-  // country, which fails the order AFTER the customer has entered their
-  // address — so a product whose only enabled tier doesn't reach a market it
-  // sells to is broken there, however well everything else is configured.
+  // A market this product sells to that no speed can reach is broken there,
+  // however well everything else is configured — the provider hard-refuses a
+  // speed it doesn't run, which fails the order AFTER the customer has entered
+  // their address.
   //
   // Only rows the provider actually REFUSED count. A speed we couldn't get an
   // answer for has no row at all, and must not read as unavailable: that turned
@@ -342,42 +365,36 @@ export function validateProduct(
   // the country list off the rows alone kept reporting a market as broken after
   // it had been withdrawn, with no way to clear it but a full re-measure.
   const measuredRows = p.shipping.fallback ?? [];
-  if (measuredRows.length > 0 && enabledMethods.length > 0) {
-    const countries = [...new Set(measuredRows.map((r) => r.country))].filter((c) =>
-      isDestinationAllowed(registry, p.shipping.destinations, { country: c }),
+  const sellsToMeasured = [...new Set(measuredRows.map((r) => r.country))].filter((c) =>
+    isDestinationAllowed(registry, policy, { country: c }),
+  );
+  if (measuredRows.length > 0) {
+    const stranded = sellsToMeasured.filter(
+      (country) => offeredMethodsFor(shippingSettings, undefined, p.shipping, country).length === 0,
     );
-    const refusedFor = (country: string, method: ShippingMethod) =>
-      measuredRows.some((r) => r.country === country && r.method === method && !r.available);
-    const stranded = countries.filter((country) => enabledMethods.every((m) => refusedFor(country, m)));
     if (stranded.length > 0) {
-      // Name the speeds that DO reach the stranded markets. "Enable a speed the
-      // provider offers" is only useful if you already know which, and the
-      // measured rows know — so the fix is one click rather than a guess.
-      const alternatives = [
-        ...new Set(
-          stranded.flatMap((country) =>
-            measuredRows
-              .filter((r) => r.country === country && r.available && !enabledMethods.includes(r.method))
-              .map((r) => r.method),
-          ),
-        ),
-      ];
       err(
-        "shipping.methods",
-        `No enabled shipping speed reaches ${stranded.join(", ")} — orders there will be refused at checkout. ` +
-          (alternatives.length > 0
-            ? `Enable ${alternatives.join(" or ")}, which the provider does quote there.`
-            : `Enable another speed, or stop selling to ${stranded.join(", ")} under Destinations.`),
+        "shipping.destinations",
+        `The printer refuses every speed we sell to ${stranded.join(", ")} — orders there will fail at checkout. ` +
+          `Either stop selling this book there, or offer a speed the printer does run under Configuration → Markets.`,
       );
     }
-    for (const method of enabledMethods) {
-      const refusedIn = countries.filter((country) => refusedFor(country, method));
-      if (refusedIn.length > 0 && refusedIn.length < countries.length) {
-        warn(
-          "shipping.methods",
-          `${method} isn't offered to ${refusedIn.join(", ")}; customers there can't pick it.`,
-        );
-      }
+  }
+
+  // Unmeasured markets. Passthrough bills the provider's cost, so a route with
+  // no measurement and no live quote can't be priced at all — the order is
+  // refused rather than shipped at our expense. That's the safe direction, but
+  // it's invisible until a customer hits it, so it's reported here as work to
+  // do rather than left to be discovered.
+  if (shippingSettings.pricing.mode === "passthrough" && !costTableIsEmpty(p.cost)) {
+    const measured = new Set(measuredRows.map((r) => r.country));
+    const unmeasured = allowedMarketsFor(registry, policy).filter((c) => !measured.has(c));
+    if (unmeasured.length > 0) {
+      action(
+        "shipping.fallback",
+        `No measured shipping rate for ${unmeasured.join(", ")}. Orders there are priced from a live quote and refused when one can't be fetched — measure the cost to fill them in.`,
+        "measure",
+      );
     }
   }
 

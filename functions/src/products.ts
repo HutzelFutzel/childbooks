@@ -33,8 +33,11 @@ import {
 } from "../../books-frontend/src/core/config/productMath";
 import { isOfferable } from "../../books-frontend/src/core/config/productValidation";
 import type { MarketRegistry } from "../../books-frontend/src/core/config/markets";
+import type { MarketCapability } from "../../books-frontend/src/core/config/marketCapability";
+import type { ShippingSettings } from "../../books-frontend/src/core/config/shipping";
 import { getPlansConfig } from "./plans";
-import { getMarketRegistry } from "./markets";
+import { getMarketCapability, getMarketRegistry } from "./markets";
+import { getShippingSettings } from "./shipping";
 import { serverConfig } from "./config";
 
 const PRIVATE_DOC = "adminSettings/products";
@@ -75,25 +78,57 @@ function activeEnv(): ProviderEnv {
  * during projection because the clamp needs the cost table and the storefront
  * must never see it (see `toPublicProduct`).
  */
-function projectPublic(
-  config: ProductsConfig,
-  settings: PricingSettings,
-  plans: readonly PrintDiscountPlan[],
-  registry: MarketRegistry,
-): PublicProductsConfig {
+function projectPublic(config: ProductsConfig, inputs: ProjectionInputs): PublicProductsConfig {
   const env = activeEnv();
+  const { settings, plans, registry, shipping, capability } = inputs;
   return {
     version: 1,
     products: config.products
       .filter((p) => p.status !== "retired")
       .map((p) =>
         toPublicProduct(p, settings, {
-          offerable: isOfferable(p, settings, { env, registry }),
+          offerable: isOfferable(p, settings, { env, registry, shipping }),
           plans,
           registry,
+          shipping,
+          capability,
         }),
       )
       .sort((a, b) => a.sortOrder - b.sortOrder),
+    projectedAt: Date.now(),
+  };
+}
+
+/**
+ * Everything the projection is derived from.
+ *
+ * Gathered in one place because the two callers used to fetch them separately
+ * and had already drifted by one argument — a projection built by the save path
+ * and one built by the reproject path could disagree about the same catalog,
+ * which is the one thing a derived document must never do.
+ */
+interface ProjectionInputs {
+  settings: PricingSettings;
+  plans: readonly PrintDiscountPlan[];
+  registry: MarketRegistry;
+  shipping: ShippingSettings;
+  capability: ReadonlyMap<string, MarketCapability>;
+}
+
+async function projectionInputs(): Promise<ProjectionInputs> {
+  const [settings, plans, registry, shipping, capability] = await Promise.all([
+    getPricingSettings(),
+    printDiscountPlans(),
+    getMarketRegistry(),
+    getShippingSettings(),
+    getMarketCapability(),
+  ]);
+  return {
+    settings,
+    plans,
+    registry,
+    shipping,
+    capability: new Map(capability.countries.map((c) => [c.country, c])),
   };
 }
 
@@ -124,15 +159,11 @@ function stripUndefined<T>(value: T): T {
 async function writeConfig(config: ProductsConfig): Promise<ProductsConfig> {
   ensureAdmin();
   const db = getFirestore();
-  const [settings, plans, registry] = await Promise.all([
-    getPricingSettings(),
-    printDiscountPlans(),
-    getMarketRegistry(),
-  ]);
+  const inputs = await projectionInputs();
   await db.doc(PRIVATE_DOC).set(stripUndefined(config) as unknown as Record<string, unknown>, { merge: false });
   await db
     .doc(PUBLIC_DOC)
-    .set(stripUndefined(projectPublic(config, settings, plans, registry)) as unknown as Record<string, unknown>, {
+    .set(stripUndefined(projectPublic(config, inputs)) as unknown as Record<string, unknown>, {
       merge: false,
     });
   cache = { value: config, at: Date.now() };
@@ -140,25 +171,25 @@ async function writeConfig(config: ProductsConfig): Promise<ProductsConfig> {
 }
 
 /**
- * Regenerate the public projection from the current catalog + settings. Called
- * after pricing settings change (currencies/tax/fees affect resolved prices),
- * after a plan's print discount changes (the projection publishes the clamped
- * discount per plan), and after the sandbox↔live toggle flips (SKU verification
- * — and so offerability — is per-environment, and the two catalogs don't agree),
- * and after markets are opened or closed (which countries a product can reach,
- * and so its published shipping rates, come from the registry).
+ * Regenerate the public projection from the current catalog + settings.
+ *
+ * Must be called after ANY of the projection's inputs change, because the
+ * storefront reads only the projection and will otherwise keep advertising the
+ * previous answer indefinitely:
+ *   - pricing settings (currencies, tax, fees resolve into prices),
+ *   - a plan's print discount (published pre-clamped per plan),
+ *   - the sandbox↔live toggle (SKU verification, and so offerability, is
+ *     per-environment and the two catalogs don't agree),
+ *   - markets opened or closed (which countries a product reaches),
+ *   - the shipping policy (which speeds are sold, and at what markup),
+ *   - a coverage sweep (which speeds the provider actually runs where).
  */
 export async function reprojectPublicProducts(): Promise<void> {
-  const [config, settings, plans, registry] = await Promise.all([
-    readConfig(),
-    getPricingSettings(),
-    printDiscountPlans(),
-    getMarketRegistry(),
-  ]);
+  const [config, inputs] = await Promise.all([readConfig(), projectionInputs()]);
   const db = getFirestore();
   await db
     .doc(PUBLIC_DOC)
-    .set(stripUndefined(projectPublic(config, settings, plans, registry)) as unknown as Record<string, unknown>, {
+    .set(stripUndefined(projectPublic(config, inputs)) as unknown as Record<string, unknown>, {
       merge: false,
     });
 }

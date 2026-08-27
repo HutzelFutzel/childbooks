@@ -44,7 +44,7 @@ export async function getPublicProducts(): Promise<PublicProductsConfig> {
     return config;
   } catch (err) {
     console.error("getPublicProducts: failed to read appConfig/products, falling back to an empty catalog.", err);
-    return { version: 1, products: [] };
+    return { version: 1, products: [], projectedAt: 0 };
   }
 }
 

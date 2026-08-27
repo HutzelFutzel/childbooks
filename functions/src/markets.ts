@@ -29,6 +29,7 @@ import {
 import {
   createEmptyMarketCapability,
   normalizeMarketCapability,
+  type MarketCapability,
   type MarketCapabilityConfig,
 } from "../../books-frontend/src/core/config/marketCapability";
 import { ensureAdmin } from "./storage";
@@ -121,6 +122,21 @@ export async function getMarketCapability(): Promise<MarketCapabilityConfig> {
   const value = raw ? normalizeMarketCapability(raw) : createEmptyMarketCapability();
   capabilityCache = { value, at: Date.now() };
   return value;
+}
+
+/**
+ * Discovered coverage for ONE country, or undefined if no sweep has reached it.
+ *
+ * Undefined is not "nothing ships there" — the resolvers read a missing entry
+ * as "unknown, don't filter on it". Distinguishing the two matters most right
+ * after a market is opened, when the admin's intent is recorded but no sweep
+ * has run yet.
+ */
+export async function capabilityFor(country: string): Promise<MarketCapability | undefined> {
+  const code = country.trim().toUpperCase();
+  if (!code) return undefined;
+  const config = await getMarketCapability();
+  return config.countries.find((c) => c.country === code);
 }
 
 export async function saveMarketCapability(

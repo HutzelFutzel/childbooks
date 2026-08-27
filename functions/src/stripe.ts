@@ -24,7 +24,8 @@ import { cachedDocumentPath, cachedDocumentUrl, documentKey } from "./renders";
 import { fulfillmentProvider } from "./lulu";
 import { persistCreatedOrder } from "./orders";
 import { getProductsConfig } from "./products";
-import { getMarketRegistry } from "./markets";
+import { capabilityFor, getMarketRegistry } from "./markets";
+import { getShippingSettings } from "./shipping";
 import { getPricingSettings } from "./appConfig";
 import {
   currencyForMarket,
@@ -34,9 +35,11 @@ import {
 import {
   computeMargin,
   defaultShippingMethod,
+  destinationPolicyFor,
   hasUsableShippingCost,
   hasUsableUnitCost,
   isDestinationAllowed,
+  offeredMethodsFor,
   resolveShippingCharged,
 } from "../../books-frontend/src/core/config/productMath";
 import { fetchLiveCost, productionCostSource } from "./printCost";
@@ -496,6 +499,11 @@ class PricingUnavailableError extends Error {
  */
 async function priceRetailOrder(args: RetailPriceArgs): Promise<RetailPriceResult> {
   const { product, variant, printSku, settings, copies, pages, currency } = args;
+  // Read here rather than threaded through every caller: it's a 30-second
+  // cached read on a path that already makes a provider round trip, and it
+  // must be the SAME policy the projection published or the price the customer
+  // was shown and the price they're charged would differ.
+  const shippingSettings = await getShippingSettings();
 
   // The FORMAT must be proven printable in the environment we're serving.
   // Page bounds are a property of trim+binding (verified on the base SKU); the
@@ -571,18 +579,18 @@ async function priceRetailOrder(args: RetailPriceArgs): Promise<RetailPriceResul
         `live quote ${live.error ?? "returned no unit cost"} and the cost table is empty.`,
     );
   }
-  // Same rule for shipping: passthrough with no quote and no configured fallback
+  // Same rule for shipping: passthrough with no quote and no measured rate
   // would charge the customer nothing while we still pay the provider.
-  if (!hasUsableShippingCost(product.shipping, live.shippingCost, scenario)) {
+  if (!hasUsableShippingCost(shippingSettings, product.shipping, live.shippingCost, scenario)) {
     throw new PricingUnavailableError(
       `No shipping cost for SKU ${printSku}: ` +
-        `live quote ${live.error ?? "returned no shipping cost"} and shipping is passthrough ` +
-        `with no measured rate for ${args.shippingMethod} to ${args.destinationCountry} ` +
-        `and no fallback cost configured.`,
+        `live quote ${live.error ?? "returned no shipping cost"} and shipping is ` +
+        `${shippingSettings.pricing.mode} with no rate for ${args.shippingMethod} ` +
+        `to ${args.destinationCountry}.`,
     );
   }
 
-  const margin = computeMargin(product, scenario, settings);
+  const margin = computeMargin(product, scenario, settings, shippingSettings);
   // Active subscribers get their plan's print discount, clamped to break-even
   // so the order can never be sold at a loss.
   const discountPct = effectivePrintDiscountPct(
@@ -594,7 +602,12 @@ async function priceRetailOrder(args: RetailPriceArgs): Promise<RetailPriceResul
       ? Math.round(margin.pricePerUnit * (1 - discountPct / 100) * 100) / 100
       : margin.pricePerUnit;
   const shippingCharged =
-    margin.shippingCharged || resolveShippingCharged(product.shipping, live.shippingCost ?? 0);
+    margin.shippingCharged ||
+    resolveShippingCharged(shippingSettings, settings, live.shippingCost ?? 0, {
+      currency,
+      copies,
+      method: args.shippingMethod,
+    });
   // The cost view of this exact scenario — stamped onto the fulfillment plan so
   // the finance stream can later compare it against what the provider actually
   // charges. The per-part sources make that drift readable: a "live" estimate
@@ -644,8 +657,12 @@ async function shippingRefusal(
   },
 ): Promise<string | null> {
   const country = (dest.country ?? "").trim().toUpperCase();
-  const registry = await getMarketRegistry();
-  const policy = product.shipping.destinations;
+  const [registry, shippingSettings, capability] = await Promise.all([
+    getMarketRegistry(),
+    getShippingSettings(),
+    capabilityFor(country),
+  ]);
+  const policy = destinationPolicyFor(shippingSettings, product.shipping);
 
   // Three separate refusals, because they have three different remedies and a
   // single message sent everyone down the wrong one. "We don't serve your
@@ -663,8 +680,11 @@ async function shippingRefusal(
   if (!isDestinationAllowed(registry, policy, { country, region: dest.region })) {
     return `We can't ship this book to that part of ${countryLabel(country)} yet.`;
   }
-  if (!product.shipping.methods.some((m) => m.enabled && m.method === dest.method)) {
-    return "That shipping method isn't available for this product.";
+  // The same resolver the storefront's picker is built from, so a speed can't
+  // be selectable in the form and rejected here. It also catches the case the
+  // picker can't: coverage discovered AFTER the page was rendered.
+  if (!offeredMethodsFor(shippingSettings, capability, product.shipping, country).includes(dest.method)) {
+    return `That delivery speed isn't available to ${countryLabel(country)}.`;
   }
   // Enforced here as well as in the checkout form because this is the binding
   // check: the provider only rejects a missing recipient tax id when the print
@@ -673,6 +693,26 @@ async function shippingRefusal(
     return `Orders to ${countryLabel(country)} need the recipient's ${TAX_ID_LABEL[country] ?? "tax id"} for customs.`;
   }
   return null;
+}
+
+/**
+ * The tier to quote when the client didn't name one.
+ *
+ * The cheapest speed that actually reaches this destination, since that's what
+ * a "from" price should say. Falls back to the cheapest tier sold anywhere only
+ * when the destination offers none — the refusal check that follows will turn
+ * that order away with a better message than a pricing error would.
+ */
+async function previewShippingMethod(
+  product: ProductDefinition,
+  country: string,
+): Promise<ShippingMethod> {
+  const [settings, capability] = await Promise.all([
+    getShippingSettings(),
+    capabilityFor(country),
+  ]);
+  const offered = offeredMethodsFor(settings, capability, product.shipping, country);
+  return offered[0] ?? defaultShippingMethod(settings);
 }
 
 async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintCheckoutResult> {
@@ -1073,12 +1113,13 @@ export function registerStripeUserRoutes(app: Express): void {
         settings.currencies,
         settings.baseCurrency,
       ) as CurrencyCode;
-      // The client always sends a method; when it doesn't, preview a tier this
-      // product actually offers. Defaulting to a fixed one previewed a price for
-      // a speed the customer would then be unable to select — and if that tier
-      // isn't sold to their country, the preview fails on a product that would
-      // have quoted perfectly well.
-      const shippingMethod = body.shippingMethod ?? defaultShippingMethod(product);
+      // The client always sends a method; when it doesn't, preview the cheapest
+      // tier that actually reaches THIS destination. Defaulting to a fixed one
+      // previewed a price for a speed the customer would then be unable to
+      // select — and if that tier isn't sold to their country, the preview fails
+      // on a product that would have quoted perfectly well.
+      const shippingMethod =
+        body.shippingMethod ?? (await previewShippingMethod(product, body.destinationCountry));
       // The preview goes through the same refusal as checkout. Without this it
       // would price whatever the print provider happens to quote — the provider
       // ships to far more countries than we sell to — so a customer in a closed

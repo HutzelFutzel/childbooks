@@ -27,6 +27,7 @@ export function BusinessOverviewTab() {
   const products = useAppConfigStore((s) => s.products.products);
   const pricing = useAppConfigStore((s) => s.pricingSettings);
   const sparks = useAppConfigStore((s) => s.sparks);
+  const shipping = useAppConfigStore((s) => s.shippingSettings);
   const referral = useAppConfigStore((s) => s.referral);
   const loadAdminProducts = useAppConfigStore((s) => s.loadAdminProducts);
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
@@ -66,8 +67,9 @@ export function BusinessOverviewTab() {
         products: adminProducts,
         plans,
         currency: base,
+        shipping,
       }),
-    [pricing, sparks, adminProducts, plans, base],
+    [pricing, sparks, adminProducts, plans, base, shipping],
   );
   const storewide = storewideSafeDiscount(saleImpacts);
 

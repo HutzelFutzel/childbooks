@@ -36,8 +36,14 @@ import {
   type ProviderEnv,
   type ShippingFallbackRow,
 } from "../../../core/config/products";
-import { isDestinationAllowed } from "../../../core/config/productMath";
+import {
+  chargedShippingTerms,
+  destinationPolicyFor,
+  isDestinationAllowed,
+} from "../../../core/config/productMath";
+import { methodLabel, offeredMethods } from "../../../core/config/shipping";
 import { enabledMarkets } from "../../../core/config/markets";
+import type { ShippingMethod } from "../../../core/fulfillment/types";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
 import { bookMediaKey, optionMediaKey } from "../../../core/config/catalogMedia";
 import { BINDINGS, FINISHES } from "../../../core/fulfillment/types";
@@ -85,21 +91,6 @@ import { VariantsSection } from "./products/VariantsSection";
 type Update = (fn: (p: ProductDefinition) => ProductDefinition) => void;
 
 const ORIENTATIONS = ["square", "landscape", "portrait"] as const;
-const SHIPPING_METHODS = ["Budget", "Standard", "StandardPlus", "Express", "Overnight"] as const;
-
-/**
- * What each speed means to a customer, and where it's known not to run. The
- * availability notes are the load-bearing part: enabling a speed the printer
- * doesn't offer to a market makes every order from that market fail at
- * checkout, and the tier names give no hint of it.
- */
-const SHIPPING_METHOD_HINTS: Record<(typeof SHIPPING_METHODS)[number], string> = {
-  Budget: "Cheapest and slowest, untracked. Quotes to every country we sell to, but drops out on large orders.",
-  Standard: "Ground courier. Not offered to the US or the UK — don't rely on it as your only speed.",
-  StandardPlus: "Tracked priority post. The one speed available everywhere we sell; a safe default.",
-  Express: "Fast courier, US only.",
-  Overnight: "Fastest and dearest. Quotes to every country we sell to.",
-};
 
 const EDITOR_TABS = [
   { id: "details", label: "Details", icon: <Tag className="size-4" /> },
@@ -1008,12 +999,19 @@ function SkuBuilder({ product, update }: { product: ProductDefinition; update: U
  */
 function ShippingRatesTable({ product }: { product: ProductDefinition }) {
   const registry = useAppConfigStore((s) => s.markets);
+  const pricingSettings = useAppConfigStore((s) => s.pricingSettings);
+  const shippingSettings = useAppConfigStore((s) => s.shippingSettings);
+  // Cost is what we pay, charged is what the customer sees. The second used to
+  // be unanswerable without doing the markup and FX arithmetic by hand, which
+  // is exactly the arithmetic worth checking before changing a markup.
+  const [view, setView] = useState<"cost" | "charged">("cost");
+  const policy = destinationPolicyFor(shippingSettings, product.shipping);
   // Only markets this product still sells to. Rows for a withdrawn market are
   // kept (re-adding it shouldn't lose the measurement) but showing them here
-  // would contradict the checkboxes directly above, which is worse than showing
+  // would contradict the destinations below, which is worse than showing
   // nothing.
   const rows = (product.shipping.fallback ?? []).filter((r) =>
-    isDestinationAllowed(registry, product.shipping.destinations, { country: r.country }),
+    isDestinationAllowed(registry, policy, { country: r.country }),
   );
   if (rows.length === 0) {
     return (
@@ -1026,16 +1024,22 @@ function ShippingRatesTable({ product }: { product: ProductDefinition }) {
     );
   }
   const countries = [...new Set(rows.map((r) => r.country))];
-  // Enabled speeds are listed even with no rows at all. A speed that failed to
+  // Speeds on sale are listed even with no rows at all. A speed that failed to
   // measure everywhere would otherwise vanish from the table, hiding the one
   // thing worth knowing about it — that we don't know whether it works.
-  const methods = [
-    ...new Set([
-      ...rows.map((r) => r.method),
-      ...product.shipping.methods.filter((m) => m.enabled).map((m) => m.method),
-    ]),
-  ];
+  const methods = [...new Set([...rows.map((r) => r.method), ...offeredMethods(shippingSettings)])];
   const measuredAt = product.shipping.fallbackMeasuredAt;
+  const displayCurrency = view === "cost" ? product.cost.currency : pricingSettings.baseCurrency;
+
+  /** One cell's amounts, in whichever view is showing. */
+  const amountsFor = (row: ShippingFallbackRow, method: ShippingMethod) => {
+    if (view === "cost") return { base: row.base, perCopy: row.perCopy };
+    return chargedShippingTerms(product, pricingSettings, shippingSettings, row, {
+      currency: pricingSettings.baseCurrency,
+      method,
+    });
+  };
+
   return (
     <Section
       title="Measured shipping rates"
@@ -1043,8 +1047,27 @@ function ShippingRatesTable({ product }: { product: ProductDefinition }) {
         measuredAt ? ` Measured ${new Date(measuredAt).toLocaleDateString()}.` : ""
       }`}
     >
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          className="h-8 w-56 text-xs"
+          value={view}
+          options={[
+            { value: "cost", label: `Cost to us (${product.cost.currency})` },
+            {
+              value: "charged",
+              label: `Charged to customer (${pricingSettings.baseCurrency})`,
+            },
+          ]}
+          onChange={(e) => setView(e.target.value as "cost" | "charged")}
+        />
+        {view === "charged" && (
+          <span className="text-[10px] text-ink-400">
+            Includes the catalog markup and handling fee, converted at the current rate.
+          </span>
+        )}
+      </div>
       <div className="overflow-x-auto">
-        <table className="min-w-[420px] text-[11px]">
+        <table className="min-w-105 text-[11px]">
           <thead className="text-[10px] uppercase tracking-wide text-ink-400">
             <tr>
               <th className="pb-1 pr-3 text-left font-medium">Speed</th>
@@ -1058,7 +1081,7 @@ function ShippingRatesTable({ product }: { product: ProductDefinition }) {
           <tbody>
             {methods.map((method) => (
               <tr key={method} className="border-t border-ink-100">
-                <td className="py-1 pr-3 text-ink-700">{method}</td>
+                <td className="py-1 pr-3 text-ink-700">{methodLabel(shippingSettings, method)}</td>
                 {countries.map((country) => {
                   const row = rows.find((r) => r.method === method && r.country === country);
                   // No row and a refused row mean different things, and only one
@@ -1082,16 +1105,32 @@ function ShippingRatesTable({ product }: { product: ProductDefinition }) {
                       </td>
                     );
                   }
+                  const amounts = amountsFor(row, method);
+                  if (!amounts) {
+                    return (
+                      <td
+                        key={country}
+                        className="py-1 pr-3 text-right text-ink-300"
+                        title="No flat rate set for this speed — it can't be sold"
+                      >
+                        —
+                      </td>
+                    );
+                  }
+                  const days = transitLabel(row);
                   return (
                     <td
                       key={country}
                       className="py-1 pr-3 text-right tabular-nums text-ink-600"
-                      title={`${row.base.toFixed(2)} + ${row.perCopy.toFixed(2)} per copy`}
+                      title={`${amounts.base.toFixed(2)} + ${amounts.perCopy.toFixed(2)} per copy${
+                        days ? ` · ${days}` : ""
+                      }`}
                     >
-                      {(row.base + row.perCopy).toFixed(2)}
-                      {row.perCopy > 0 && (
-                        <span className="text-ink-400"> +{row.perCopy.toFixed(2)}/ea</span>
+                      {(amounts.base + amounts.perCopy).toFixed(2)}
+                      {amounts.perCopy > 0 && (
+                        <span className="text-ink-400"> +{amounts.perCopy.toFixed(2)}/ea</span>
                       )}
+                      {days && <span className="block text-[10px] text-ink-400">{days}</span>}
                     </td>
                   );
                 })}
@@ -1101,12 +1140,24 @@ function ShippingRatesTable({ product }: { product: ProductDefinition }) {
         </table>
       </div>
       <p className="text-[10px] text-ink-400">
-        Shown for one copy, in {product.cost.currency}. A dash means the printer doesn&apos;t run that
-        speed to that country — enabling it there fails the order at checkout. A question mark means
-        we haven&apos;t found out yet; those fall back to the single amount below.
+        Shown for one copy, in {displayCurrency}. A dash means the printer doesn&apos;t run that
+        speed to that country, so it isn&apos;t offered there. A question mark means we haven&apos;t
+        found out yet. Day counts are the printer&apos;s own estimate and include production, not
+        just time in transit.
       </p>
     </Section>
   );
+}
+
+/** "5–8 days", or nothing when the printer didn't say. */
+function transitLabel(row: {
+  transitDaysMin?: number;
+  transitDaysMax?: number;
+}): string | null {
+  const { transitDaysMin: min, transitDaysMax: max } = row;
+  if (min == null && max == null) return null;
+  if (min != null && max != null) return min === max ? `${min} days` : `${min}–${max} days`;
+  return `${min ?? max} days`;
 }
 
 /**
@@ -1549,245 +1600,204 @@ function ConditionsFields({ product, update }: { product: ProductDefinition; upd
   );
 }
 
+/**
+ * Shipping, per product — evidence and one escape hatch.
+ *
+ * Speeds, markup and handling used to be edited here, once per product. They
+ * are catalog-wide now (Configuration → Markets), because none of them ever
+ * varied by book: five copies of one decision could only drift, and a speed
+ * enabled on three products and forgotten on the fourth was invisible until a
+ * customer couldn't pick it.
+ *
+ * What's left is what genuinely belongs to this book — the rates the printer
+ * quoted for its weight, and the rare "this format can't go there".
+ */
 function ShippingSection({ product, update }: { product: ProductDefinition; update: Update }) {
   const sh = product.shipping;
-  const setSh = (patch: Partial<ProductDefinition["shipping"]>) => update((d) => ({ ...d, shipping: { ...d.shipping, ...patch } }));
-  const dest = sh.destinations;
-  const flat =
-    sh.pricing.mode === "flat"
-      ? sh.pricing
-      : { mode: "flat" as const, default: 0, currency: "USD", overrides: [] };
-  // Patch passthrough fields without dropping the sibling one.
-  const pass = sh.pricing.mode === "passthrough" ? sh.pricing : { mode: "passthrough" as const };
+  const shippingSettings = useAppConfigStore((s) => s.shippingSettings);
+  const setConfigTab = useAdminTab((s) => s.setConfigTab);
+  const setSh = (patch: Partial<ProductDefinition["shipping"]>) =>
+    update((d) => ({ ...d, shipping: { ...d.shipping, ...patch } }));
   const rows = sh.fallback ?? [];
+  const offered = offeredMethods(shippingSettings);
+  const mode = shippingSettings.pricing.mode;
+  const modeLabel =
+    mode === "passthrough"
+      ? "the printer's cost"
+      : mode === "free"
+        ? "nothing (free shipping)"
+        : "a flat rate per speed";
+
   return (
     <div className="space-y-3">
-      <TabIntro>
-        Two separate things live on this tab. <span className="font-medium">Speeds</span> are what the
-        customer picks at checkout — we re-quote the printer for whichever one they choose.{" "}
-        <span className="font-medium">What you charge</span> decides whether they pay that quote, a flat
-        rate, or nothing. Not every speed reaches every country: the printer simply refuses one it
-        doesn&apos;t run there, which fails the order after the customer has typed their address, so
-        only enable speeds the grid below shows as available.
+      <TabIntro
+        elsewhere={
+          <>
+            Which speeds you sell, your markup and any handling fee are set once for the whole
+            catalog under <span className="font-medium">Configuration → Markets</span>.
+          </>
+        }
+      >
+        This tab shows what the printer quoted <span className="font-medium">for this book</span> —
+        shipping is priced by weight, so a thin paperback and a thick casewrap to the same address
+        are different numbers. Which countries a speed reaches is discovered, not chosen: the
+        printer decides, and we sell whatever it will carry.
       </TabIntro>
 
       <Section
-        title="Shipping speeds"
-        hint="Delivery options offered to the customer (mapped to provider services). Measure costs to fill in which ones actually reach where you sell."
+        title="Speeds on sale"
+        hint="Set for the whole catalog. A speed only appears at checkout where the printer was found to run it."
       >
-        <div className="space-y-1.5">
-          {SHIPPING_METHODS.map((method) => {
-            const cfg = sh.methods.find((m) => m.method === method);
-            const enabled = cfg?.enabled ?? false;
-            const refusedIn = rows.filter((r) => r.method === method && !r.available).map((r) => r.country);
-            const availableIn = rows.filter((r) => r.method === method && r.available).map((r) => r.country);
-            return (
-              <div key={method} className="space-y-0.5">
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="flex w-40 items-center gap-2 text-sm text-ink-700">
-                    <input
-                      type="checkbox"
-                      checked={enabled}
-                      onChange={(e) => {
-                        const exists = sh.methods.some((m) => m.method === method);
-                        const methods = exists
-                          ? sh.methods.map((m) => (m.method === method ? { ...m, enabled: e.target.checked } : m))
-                          : [...sh.methods, { method, enabled: e.target.checked }];
-                        setSh({ methods });
-                      }}
-                    />
-                    {method}
-                  </label>
-                  <Input
-                    className="h-8 flex-1 min-w-40 text-sm"
-                    placeholder="Customer-facing label (optional)"
-                    value={cfg?.label ?? ""}
-                    onChange={(e) => {
-                      const exists = sh.methods.some((m) => m.method === method);
-                      const methods = exists
-                        ? sh.methods.map((m) => (m.method === method ? { ...m, label: e.target.value } : m))
-                        : [...sh.methods, { method, enabled: false, label: e.target.value }];
-                      setSh({ methods });
-                    }}
-                  />
-                </div>
-                <p className="pl-6 text-[10px] leading-snug text-ink-400">
-                  {SHIPPING_METHOD_HINTS[method]}
-                  {rows.length > 0 && refusedIn.length > 0 && (
-                    <span className="text-amber-600">
-                      {" "}
-                      Measured: not offered to {refusedIn.join(", ")}
-                      {availableIn.length > 0 ? `; available to ${availableIn.join(", ")}` : ""}.
-                    </span>
-                  )}
-                </p>
-              </div>
-            );
-          })}
-        </div>
+        {offered.length === 0 ? (
+          <p className="text-[11px] text-red-600">
+            No shipping speeds are on sale — nothing in the catalog can be ordered anywhere.
+          </p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {offered.map((method) => (
+              <span
+                key={method}
+                className="rounded-full bg-ink-100 px-2 py-0.5 text-[11px] text-ink-700"
+              >
+                {methodLabel(shippingSettings, method)}
+              </span>
+            ))}
+          </div>
+        )}
+        <p className="text-[10px] text-ink-400">
+          Customers pay {modeLabel}.{" "}
+          <button
+            type="button"
+            className="underline underline-offset-2 hover:text-ink-600"
+            onClick={() => setConfigTab("markets")}
+          >
+            Change under Configuration → Markets
+          </button>
+          .
+        </p>
       </Section>
 
       <ShippingRatesTable product={product} />
 
-      <Section
-        title="What you charge for shipping"
-        hint="Charge the printer's cost and you never lose money on postage, but the customer sees a different number for every destination. A flat rate is predictable for them — you win on nearby orders and lose on distant ones. Free is simplest to sell, and you absorb it unless you fold it into the book price."
-      >
-        <Field label="Shipping charge" className="w-full sm:w-72">
-          <Select
-            value={sh.pricing.mode}
-            options={[
-              { value: "passthrough", label: "Charge the provider's cost" },
-              { value: "free", label: "Free shipping" },
-              { value: "flat", label: "Flat rate" },
-            ]}
-            onChange={(e) => {
-              const mode = e.target.value as ProductDefinition["shipping"]["pricing"]["mode"];
-              if (mode === "passthrough") setSh({ pricing: { mode, markupPct: 0 } });
-              else if (mode === "free") setSh({ pricing: { mode, absorbInPrice: false } });
-              else setSh({ pricing: { mode, default: 0, currency: "USD", overrides: [] } });
-            }}
-          />
-        </Field>
-        {sh.pricing.mode === "passthrough" && (
-          <>
-            <div className="flex flex-wrap items-start gap-4">
-              <NumberField label="Markup on shipping" value={sh.pricing.markupPct ?? 0} step="1" className="w-44" suffix="%" onChange={(n) => setSh({ pricing: { ...pass, markupPct: n } })} />
-              <NumberField
-                label="Fallback shipping cost"
-                hint="Used when a live quote fails in a MEASURED country whose specific speed has no rate above."
-                value={sh.pricing.fallbackCost ?? 0}
-                step="0.5"
-                className="w-56"
-                suffix={product.cost.currency}
-                onChange={(n) => setSh({ pricing: { ...pass, fallbackCost: n } })}
-              />
-            </div>
-            <ImpactNote>
-              This number is <span className="font-medium">charged to the customer</span>, plus your
-              markup, whenever a live quote fails in a country shipping was measured for. It is{" "}
-              <span className="font-medium">not</span> applied to unmeasured countries — it was
-              fitted to the routes the sweep visited, and billing it elsewhere would invent a price
-              for a destination nobody priced. Orders there are refused until a live quote succeeds,
-              which is recoverable in a way that a silently wrong shipping charge is not.
-            </ImpactNote>
-          </>
-        )}
-        {sh.pricing.mode === "free" && (
-          <Field label="Cover the cost in the book price" className="w-full sm:w-64">
-            <Select value={sh.pricing.absorbInPrice ? "yes" : "no"} options={[{ value: "no", label: "No (you absorb it)" }, { value: "yes", label: "Yes (build into price)" }]} onChange={(e) => setSh({ pricing: { mode: "free", absorbInPrice: e.target.value === "yes" } })} />
-          </Field>
-        )}
-        {sh.pricing.mode === "flat" && (
-          <Grid cols={2}>
-            <NumberField label="Flat rate" value={flat.default} step="0.01" suffix={flat.currency} onChange={(n) => setSh({ pricing: { ...flat, default: n } })} />
-            <TextField label="Currency" value={flat.currency} onChange={(v) => setSh({ pricing: { ...flat, currency: v.toUpperCase() } })} />
-          </Grid>
-        )}
-      </Section>
-
-      <MarketsSection dest={dest} rows={rows} onChange={(destinations) => setSh({ destinations })} />
+      <DestinationOverrideSection
+        product={product}
+        rows={rows}
+        onChange={(destinationsOverride) => setSh({ destinationsOverride })}
+      />
     </div>
   );
 }
 
 /**
- * Which of our open markets this product ships to.
+ * The per-product destination escape hatch, off by default.
  *
- * A checkbox per market rather than a text field of ISO codes: the open set is
- * a ceiling enforced server-side, so there's deliberately no way to type in a
- * country outside it — that would render a box the order path refuses to
- * honour. Opening a new country happens in Configuration → Markets, and shows
- * up here as another checkbox.
+ * Off is the important part. Where the catalog ships is one decision, made
+ * under Configuration → Markets; having every product restate it meant opening
+ * a country updated the market list and changed nothing, because each product
+ * carried a frozen allowlist written before that country existed.
  *
- * Each market also reports whether an enabled speed actually reaches it, because
- * "selected" and "orderable" are different things and the gap between them only
- * shows up at checkout otherwise.
+ * So this stays collapsed until someone deliberately opens it, and turning it
+ * on is a claim about THIS format — too heavy, too large, a carrier that won't
+ * take it — rather than a copy of the catalog's answer.
  */
-function MarketsSection({
-  dest,
+function DestinationOverrideSection({
+  product,
   rows,
   onChange,
 }: {
-  dest: GeoPolicy;
+  product: ProductDefinition;
   rows: ShippingFallbackRow[];
-  onChange: (dest: GeoPolicy) => void;
+  onChange: (dest: GeoPolicy | undefined) => void;
 }) {
   const registry = useAppConfigStore((s) => s.markets);
+  const shippingSettings = useAppConfigStore((s) => s.shippingSettings);
+  const override = product.shipping.destinationsOverride;
   const open = useMemo(() => enabledMarkets(registry), [registry]);
-  const selected = open.filter((c) => isDestinationAllowed(registry, dest, { country: c }));
+  const policy = destinationPolicyFor(shippingSettings, product.shipping);
+  const selected = open.filter((c) => isDestinationAllowed(registry, policy, { country: c }));
+
   const toggle = (country: string, on: boolean) => {
-    const next = on
-      ? [...selected, country]
-      : selected.filter((c) => c !== country);
-    // Always written as an allowlist. A stored blocklist is read correctly above
-    // but never produced here: two ways to express one intent is how a policy
-    // ends up meaning the opposite of what it reads like.
-    //
-    // Note this converts a product that was "everywhere we sell" into an
-    // explicit list the moment one box is unticked — which is the intent, but
-    // it also means the product stops picking up newly opened markets.
-    onChange({ ...dest, mode: "allowlist", countries: [...new Set(next)] });
+    const next = on ? [...selected, country] : selected.filter((c) => c !== country);
+    // Always written as an allowlist. A stored blocklist is read correctly but
+    // never produced here: two ways to express one intent is how a policy ends
+    // up meaning the opposite of what it reads like.
+    onChange({ mode: "allowlist", countries: [...new Set(next)], regions: {} });
   };
 
   return (
     <Section
       title="Where it ships"
-      hint="The markets this product can be ordered to. Customers outside them can't reach checkout, and the server refuses the order regardless."
+      hint="Inherited from the catalog unless this format specifically can't go somewhere."
     >
-      {open.length === 0 && (
-        <p className="text-[11px] text-red-600">
-          No markets are open yet. Open one in Configuration → Markets before this product can be
-          sold anywhere.
-        </p>
+      {!override ? (
+        <div className="space-y-1.5">
+          <p className="text-[11px] text-ink-500">
+            Ships everywhere the catalog does — {selected.length} market
+            {selected.length === 1 ? "" : "s"}, and it picks up new ones automatically.
+          </p>
+          <Button
+            variant="secondary"
+            size="sm"
+            onClick={() => onChange({ mode: "allowlist", countries: selected, regions: {} })}
+          >
+            Restrict this product
+          </Button>
+        </div>
+      ) : (
+        <>
+          <div className="space-y-1.5">
+            {open.map((country) => {
+              const on = selected.includes(country);
+              const measured = rows.filter((r) => r.country === country);
+              const priced = measured.filter((r) => r.available).length;
+              return (
+                <div key={country} className="flex flex-wrap items-center gap-2">
+                  <label className="flex w-56 items-center gap-2 text-sm text-ink-700">
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={(e) => toggle(country, e.target.checked)}
+                      className="size-4 rounded border-ink-300 text-brand-600 focus:ring-brand-400"
+                    />
+                    <span>
+                      {countryFlag(country)} {countryLabel(country)}
+                    </span>
+                  </label>
+                  {on && measured.length === 0 && (
+                    <span className="text-[11px] text-amber-700">
+                      No shipping measured — orders here need a live quote and are refused if one
+                      can&apos;t be fetched.
+                    </span>
+                  )}
+                  {on && measured.length > 0 && priced === 0 && (
+                    <span className="text-[11px] text-red-600">
+                      The printer quotes no speed here — orders will fail.
+                    </span>
+                  )}
+                  {on && priced > 0 && (
+                    <span className="text-[11px] text-ink-400">
+                      {priced} speed{priced === 1 ? "" : "s"} available
+                    </span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {selected.length === 0 && (
+            <p className="text-[11px] text-red-600">
+              No markets selected — this product can&apos;t be ordered anywhere.
+            </p>
+          )}
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={() => onChange(undefined)}>
+              Follow the catalog again
+            </Button>
+            <span className="text-[10px] text-ink-400">
+              While restricted, this product does NOT pick up newly opened markets.
+            </span>
+          </div>
+        </>
       )}
-      <div className="space-y-1.5">
-        {open.map((country) => {
-          const on = selected.includes(country);
-          const measured = rows.filter((r) => r.country === country);
-          const priced = measured.filter((r) => r.available).length;
-          return (
-            <div key={country} className="flex flex-wrap items-center gap-2">
-              <label className="flex w-56 items-center gap-2 text-sm text-ink-700">
-                <input
-                  type="checkbox"
-                  checked={on}
-                  onChange={(e) => toggle(country, e.target.checked)}
-                  className="size-4 rounded border-ink-300 text-brand-600 focus:ring-brand-400"
-                />
-                <span>
-                  {countryFlag(country)} {countryLabel(country)}
-                </span>
-              </label>
-              {on && measured.length === 0 && (
-                <span className="text-[11px] text-amber-700">
-                  No shipping measured — orders here need a live quote and are refused if one
-                  can&apos;t be fetched.
-                </span>
-              )}
-              {on && measured.length > 0 && priced === 0 && (
-                <span className="text-[11px] text-red-600">
-                  The printer quotes no speed here — orders will fail.
-                </span>
-              )}
-              {on && priced > 0 && (
-                <span className="text-[11px] text-ink-400">
-                  {priced} speed{priced === 1 ? "" : "s"} available
-                </span>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {selected.length === 0 && (
-        <p className="text-[11px] text-red-600">
-          No markets selected — this product can&apos;t be ordered anywhere.
-        </p>
-      )}
-      <p className="text-[10px] text-ink-400">
-        Only countries opened in Configuration → Markets appear here — the server enforces that
-        ceiling regardless of what this product claims.
-      </p>
     </Section>
   );
 }

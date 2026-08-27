@@ -36,6 +36,7 @@ import { NumberField, Section, TabIntro, fmtMoney } from "./products/parts";
 export function DiscountPlannerTab() {
   const settings = useAppConfigStore((s) => s.pricingSettings);
   const sparks = useAppConfigStore((s) => s.sparks);
+  const shipping = useAppConfigStore((s) => s.shippingSettings);
   const plans = useAppConfigStore((s) => s.plans.plans);
   const loadAdminProducts = useAppConfigStore((s) => s.loadAdminProducts);
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
@@ -64,8 +65,9 @@ export function DiscountPlannerTab() {
   }, [buyerId, buyers]);
 
   const impacts = useMemo(
-    () => catalogDiscountImpacts({ settings, sparks, products, plans, currency: cur, buyer }),
-    [settings, sparks, products, plans, cur, buyer],
+    () =>
+      catalogDiscountImpacts({ settings, sparks, products, plans, currency: cur, buyer, shipping }),
+    [settings, sparks, products, plans, cur, buyer, shipping],
   );
   const storewide = storewideSafeDiscount(impacts);
   const losing = impacts.filter((i) => i.atDiscount(discount).netProfit < 0);

@@ -6,6 +6,7 @@ import type { PublicPlan } from "../../../core/config/plans";
 import type { PricingSettings, ProductDefinition } from "../../../core/config/products";
 import type { SparksConfig } from "../../../core/config/sparks";
 import { economicFindings, type EconomicFinding } from "../../../core/config/configHealth";
+import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useAdminTab } from "../adminTabStore";
 
 /**
@@ -30,10 +31,14 @@ export function ConfigHealthPanel({
 }) {
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
   const openCatalog = useAdminTab((s) => s.openCatalog);
+  // Read from the store rather than taken as a prop: every caller would have to
+  // forward it, and the panel is embedded in five tabs that otherwise have no
+  // reason to know shipping exists.
+  const shipping = useAppConfigStore((s) => s.shippingSettings);
 
   const findings = useMemo(
-    () => economicFindings({ settings, sparks, products, plans }),
-    [settings, sparks, products, plans],
+    () => economicFindings({ settings, sparks, products, plans, shipping }),
+    [settings, sparks, products, plans, shipping],
   );
 
   if (findings.length === 0) {

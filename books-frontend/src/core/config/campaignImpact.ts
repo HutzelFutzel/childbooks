@@ -38,6 +38,7 @@ import {
 } from "./discountImpact";
 import type { PublicPlan } from "./plans";
 import type { CurrencyCode, PricingSettings, ProductDefinition } from "./products";
+import type { ShippingSettings } from "./shipping";
 import { packTotalSparks, type SparksConfig } from "./sparks";
 import { IMAGE_TIERS, type ImageTier } from "./modelConfig";
 import { ALL_IMAGE_ACTION_IDS } from "../ai/actions";
@@ -108,6 +109,8 @@ export interface CampaignImpactArgs {
   plans: PublicPlan[];
   /** Defaults to the pricing base currency. */
   currency?: CurrencyCode;
+  /** Catalog-wide shipping policy — part of every print row's margin. */
+  shipping: ShippingSettings;
 }
 
 function round2(n: number): number {
@@ -189,14 +192,14 @@ function refundCeilingSparks(
  * warnings a single-rule view can't see.
  */
 export function campaignImpact(args: CampaignImpactArgs): CampaignImpact {
-  const { campaign, sparks, settings, products, plans } = args;
+  const { campaign, sparks, settings, products, plans, shipping } = args;
   const currency = args.currency ?? settings.baseCurrency;
   const rows: EffectCostRow[] = [];
   const warnings: CampaignWarning[] = [];
 
   let impacts: DiscountImpact[] = [];
   try {
-    impacts = catalogDiscountImpacts({ settings, sparks, products, plans, currency });
+    impacts = catalogDiscountImpacts({ settings, sparks, products, plans, currency, shipping });
   } catch {
     // A half-configured catalog must not break the panel — discount rules simply
     // report as unmodelable below.

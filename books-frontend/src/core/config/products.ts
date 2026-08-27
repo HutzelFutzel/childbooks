@@ -21,6 +21,10 @@ import { z } from "zod";
 import type { Binding, Finish, ShippingMethod } from "../fulfillment/types";
 import { LULU_BOOK_FORMATS } from "../fulfillment/lulu/products";
 import { sameFormat, skuForVariant, variantFromSku } from "../fulfillment/lulu/skuAxes";
+import { geoPolicySchema, type GeoMatch, type GeoPolicy } from "./geo";
+// Type-only, so it is erased at compile time and creates no import cycle with
+// `shipping.ts` (which imports `CurrencyCode` from here the same way).
+import type { ShippingPricingMode } from "./shipping";
 import {
   createDefaultVariantPolicy,
   firstAllowedVariant,
@@ -35,6 +39,12 @@ import {
 
 /** ISO-4217 currency code, e.g. "USD", "EUR", "GBP". */
 export type CurrencyCode = string;
+
+// Re-exported so the many modules that already import geo types from the
+// catalog keep working; `geo.ts` owns them because the shipping policy needs
+// the same schema at runtime and a direct import either way would cycle.
+export { geoPolicySchema, geoMatchSchema } from "./geo";
+export type { GeoMatch, GeoPolicy } from "./geo";
 
 /** Fulfillment providers we can route an order to. Lulu today; extensible. */
 export type FulfillmentProviderId = "lulu" | "manual";
@@ -338,98 +348,67 @@ export interface PricingSettings {
   ebook: EbookSettings;
 }
 
-// ---- Shipping policy + geo restrictions ------------------------------------
+// ---- Shipping: what this product MEASURED ----------------------------------
 
 /**
- * The countries we sell to are NOT declared here.
+ * Shipping POLICY is not declared here.
  *
- * They live in the admin-managed market registry (`config/markets.ts`), because
- * opening a country is an operational decision — the provider has to run a
- * service there and the coverage has to be discovered — not a deploy. What used
- * to be a `SUPPORTED_MARKETS` constant in this file is now a
- * {@link MarketRegistry} passed into {@link isDestinationAllowed}.
+ * Which speeds we sell, what markup we take, and where the catalog ships live
+ * in {@link ShippingSettings} (`config/shipping.ts`), once for the whole
+ * catalog. They used to be per product, which made them five copies of one
+ * decision that could only drift apart.
  *
- * The safety property is unchanged and still lives in that one function: every
- * geo check intersects the product's own policy with the registry first, so a
- * product's policy can only ever NARROW the set. A product misconfigured to
- * ship worldwide still ships only where we sell.
+ * What remains on a product is what was MEASURED for it, because that genuinely
+ * differs: shipping is priced by weight, so a 24-page paperback and a 100-page
+ * casewrap to the same address are different numbers.
+ *
+ * The countries we sell to are likewise not declared here — they live in the
+ * admin-managed market registry (`config/markets.ts`), and every geo check
+ * intersects with it first, so neither the global policy nor a product's
+ * override can ever widen the set. See `isDestinationAllowed`.
  */
 
-export interface GeoMatch {
-  country?: string; // ISO-2
-  region?: string; // state / province code
-}
-
-export interface GeoPolicy {
-  /**
-   * How `countries` is read.
-   *
-   * `"all"` means "everywhere we sell", not everywhere — the market registry
-   * bounds every mode, so a policy can only ever narrow the set. It is stored
-   * as `"all"` rather than expanded into a snapshot list precisely BECAUSE the
-   * registry is now dynamic: a frozen copy of today's markets would silently
-   * exclude a country opened tomorrow, and the product would look enabled for
-   * it in the admin while checkout refused.
-   */
-  mode: "all" | "allowlist" | "blocklist";
-  countries: string[]; // ISO-2
-  /** Per-country state/province restrictions (e.g. ship to US but not AK/HI). */
-  regions: Record<string, { mode: "allowlist" | "blocklist"; codes: string[] }>;
-}
-
+/**
+ * One speed as the storefront sees it.
+ *
+ * Resolved from {@link ShippingSettings} when the catalog is projected, not
+ * stored on the product. It survives as a type because the public projection
+ * still has to name the speeds it published rates for.
+ */
 export interface ShippingMethodConfig {
   method: ShippingMethod;
   enabled: boolean;
-  label?: string; // customer-facing, e.g. "Standard (5–8 business days)"
+  /** Customer-facing name. Delivery estimates come from the measured rate. */
+  label?: string;
 }
 
-export type ShippingPricing =
-  /**
-   * Charge the provider's shipping cost (+ optional markup). `fallbackCost`
-   * stands in for that cost — in the product's COST currency — when a live quote
-   * can't be obtained; without it a failed quote would charge the customer
-   * nothing while we still pay the provider, so it's required.
-   */
-  | { mode: "passthrough"; markupPct?: number; fallbackCost?: number }
-  | { mode: "free"; absorbInPrice: boolean } // free shipping (optionally folded into price)
-  | { mode: "flat"; default: number; currency: CurrencyCode; overrides: { match: GeoMatch; amount: number }[] };
-
 /**
- * One measured cell of the provider's shipping: what a tier costs to one
- * country, and whether it reaches it at all.
- *
- * Both halves matter, and they're recorded together because one probe answers
- * both. Cost is fitted as `base + perCopy × copies` rather than stored flat,
- * because a passthrough product BILLS this number to the customer — a single
- * scalar measured at three copies overcharges the person buying one and
- * undercharges the person buying ten.
- *
- * Availability is per (tier, destination), not per product: the provider hard-
- * refuses a tier it doesn't run to a country, which fails the order after the
- * customer has filled in their address.
- */
-/**
- * One measured shipping rate: what a speed costs to a country.
+ * One measured shipping rate: what a speed costs to a country, and how long it
+ * takes to get there.
  *
  * A row is only written when we LEARNED something. `available: true` means the
  * provider priced it; `available: false` means the provider refused it, which
  * is a real fact about coverage. A speed we couldn't get an answer for gets no
  * row at all — absence means "unknown", and falls through to the scalar
- * `pricing.fallbackCost`.
+ * {@link ProductShippingPolicy.fallbackCost}.
  *
  * That three-way distinction is the whole point. When a failed request was
  * recorded as `available: false`, one throttled probe became a permanent claim
  * that a country had no shipping, which blocked saving until someone re-ran a
  * measurement they had no reason to suspect.
+ *
+ * Cost is fitted as `base + perCopy × copies` rather than stored flat, because
+ * a passthrough product BILLS this number to the customer — a single scalar
+ * measured at three copies overcharges the person buying one and undercharges
+ * the person buying ten.
  */
 export interface ShippingFallbackRow {
   /**
    * ISO-2 country this row was measured against.
    *
-   * Always a real country: the sweep measures representative destinations and
-   * never invents a wildcard row, because a rate measured in one country is not
-   * evidence about another. Destinations with no row fall through to the scalar
-   * `pricing.fallbackCost` instead.
+   * Always a real country: the sweep measures real destinations and never
+   * invents a wildcard row, because a rate measured in one country is not
+   * evidence about another.
    */
   country: string;
   method: ShippingMethod;
@@ -438,13 +417,29 @@ export interface ShippingFallbackRow {
   /** Shipping cost = `base + perCopy × copies`. Zero when unavailable. */
   base: number;
   perCopy: number;
+  /**
+   * Business days from start of production to delivery, as the provider
+   * reported them. Total elapsed time including printing, NOT time in transit —
+   * so "arrives in 5–8 business days" is honest and "shipping takes 5–8 days"
+   * is not.
+   *
+   * Optional because rows measured before the sweep collected them carry none,
+   * and an absent estimate must render as no estimate rather than as zero days.
+   */
+  transitDaysMin?: number;
+  transitDaysMax?: number;
 }
 
 export interface ProductShippingPolicy {
-  destinations: GeoPolicy;
-  methods: ShippingMethodConfig[];
-  pricing: ShippingPricing;
-  surcharges: { match: GeoMatch; amount: number; currency: CurrencyCode }[];
+  /**
+   * Narrows the catalog-wide destination policy for this product alone.
+   *
+   * Undefined for almost everything. It exists for the case the global list
+   * can't express — a format too heavy or too large for a carrier that serves
+   * the rest of the catalog fine. Like every geo policy it can only narrow:
+   * `isDestinationAllowed` intersects with the market registry first.
+   */
+  destinationsOverride?: GeoPolicy;
   /**
    * What the provider was measured to charge and to offer, per country and
    * tier, in the product's COST currency. Fills in for a live quote when one
@@ -454,6 +449,17 @@ export interface ProductShippingPolicy {
   fallback?: ShippingFallbackRow[];
   /** When {@link fallback} was measured (epoch ms). */
   fallbackMeasuredAt?: number;
+  /**
+   * The dearest single-copy route the sweep saw, in the COST currency.
+   *
+   * Measured, not configured — which is why it sits here with the rows rather
+   * than in the global policy. It stands in for a country that WAS measured but
+   * whose specific speed has no row. It is deliberately not used for a country
+   * nobody measured: a rate fitted to the routes a sweep visited, billed to a
+   * destination it never saw, is a number invented about a country we know
+   * nothing about.
+   */
+  fallbackCost?: number;
 }
 
 // ---- Provider SKU verification ---------------------------------------------
@@ -573,13 +579,13 @@ export interface ProductsConfig {
 /**
  * How shipping is charged, with the cost internals removed.
  *
- * {@link ShippingPricing} carries `markupPct` and `fallbackCost` — our markup
- * and a wholesale rate in the COST currency — which have no business in a
- * world-readable document. The mode still ships because the storefront needs to
- * say "free shipping"; every actual amount comes from {@link PublicShippingRate}
- * instead, already converted and marked up.
+ * The global policy carries `markupPct`, `fixedAdd` and a measured wholesale
+ * rate, none of which belong in a world-readable document. The mode still ships
+ * because the storefront needs to say "free shipping"; every actual amount
+ * comes from {@link PublicShippingRate} instead, already converted and marked
+ * up.
  */
-export type PublicShippingPricing = { mode: ShippingPricing["mode"] };
+export type PublicShippingPricing = { mode: ShippingPricingMode };
 
 /**
  * What shipping COSTS THE CUSTOMER for one destination and speed, per currency.
@@ -612,6 +618,13 @@ export interface PublicShippingRate {
    * can be honest about which of its two numbers is the softer one.
    */
   measured: boolean;
+  /**
+   * Business days from order to delivery, including production. Published so
+   * the speed picker can say how long each option takes instead of leaving the
+   * customer to infer it from the tier's name.
+   */
+  transitDaysMin?: number;
+  transitDaysMax?: number;
 }
 
 /** One product as the storefront sees it: prices resolved, internals stripped. */
@@ -678,6 +691,19 @@ export interface PublicProduct {
 export interface PublicProductsConfig {
   version: 1;
   products: PublicProduct[];
+  /**
+   * When this projection was last built (epoch ms).
+   *
+   * Everything here is DERIVED — from the catalog, pricing settings, the market
+   * registry, coverage and the shipping policy — so it can silently fall behind
+   * any of its five inputs. Stamping the build makes "the storefront is still
+   * advertising the old markup" a comparison the admin can see rather than a
+   * report from a customer.
+   *
+   * Zero on projections written before this existed, which reads as "unknown"
+   * rather than "1970" wherever it's rendered.
+   */
+  projectedAt: number;
 }
 
 // ---- Defaults --------------------------------------------------------------
@@ -794,21 +820,15 @@ export function createDefaultCostModel(): ProductCostModel {
  * safe default; the rest are opened per product once measured against the
  * destinations it ships to. See `SHIPPING_LEVEL` in `lulu/provider.ts`.
  */
+/**
+ * A new product carries no shipping policy at all.
+ *
+ * Everything a product used to declare here — speeds, pricing, destinations —
+ * now comes from the catalog-wide {@link ShippingSettings}, so the empty object
+ * is the correct and complete default. It fills in as the product is measured.
+ */
 export function createDefaultShippingPolicy(): ProductShippingPolicy {
-  return {
-    // "Everywhere we sell", which the market registry bounds — not "anywhere".
-    // Stored as a mode rather than a snapshot of today's markets so a product
-    // doesn't quietly exclude a country opened after it was created.
-    destinations: { mode: "all", countries: [], regions: {} },
-    methods: [
-      { method: "Budget", enabled: false },
-      { method: "StandardPlus", enabled: true },
-      { method: "Standard", enabled: false },
-      { method: "Express", enabled: false },
-    ],
-    pricing: { mode: "passthrough" },
-    surcharges: [],
-  };
+  return {};
 }
 
 export function createDefaultProduct(overrides: Partial<ProductDefinition> = {}): ProductDefinition {
@@ -1036,15 +1056,35 @@ function normalizeCost(input: unknown, def: ProductCostModel): ProductCostModel 
   return cost;
 }
 
-/** Merge a stored shipping policy onto the defaults, dropping malformed rows. */
+/**
+ * Keep the measurement, drop everything the catalog-wide policy now owns.
+ *
+ * This is the whole migration. A stored product still carrying `methods`,
+ * `pricing`, `surcharges` or `destinations` parses, loses them here, and writes
+ * back slim on its next save — so no backfill script runs and no document has
+ * to be touched before the new code can read it.
+ *
+ * The one salvage is `pricing.fallbackCost`, which was nested inside the old
+ * passthrough policy but is a MEASURED number rather than a configured one.
+ * Dropping it with the rest would silently discard a calibration and make
+ * previously-sellable routes refuse until someone re-measured.
+ */
 function normalizeShipping(input: unknown, def: ProductShippingPolicy): ProductShippingPolicy {
-  const s = (input ?? {}) as Partial<ProductShippingPolicy>;
-  const shipping: ProductShippingPolicy = { ...def, ...s };
+  const s = (input ?? {}) as Partial<ProductShippingPolicy> & {
+    destinations?: GeoPolicy;
+    pricing?: { mode?: string; fallbackCost?: number };
+  };
+  const shipping: ProductShippingPolicy = { ...def };
 
-  // `"all"` is left as-is rather than expanded into an explicit country list.
-  // It is bounded by the market registry at check time, so it cannot promise
-  // more than we sell — and freezing it into a snapshot here would mean a
-  // product created today never reaches a market opened tomorrow.
+  // An explicit override wins; otherwise adopt a legacy per-product policy that
+  // actually restricted something. A legacy `"all"` said "everywhere we sell",
+  // which is exactly what inheriting the global policy now means — carrying it
+  // over as an override would freeze today's answer onto the product forever.
+  const legacy = s.destinations;
+  const override =
+    s.destinationsOverride ?? (legacy && legacy.mode !== "all" ? legacy : undefined);
+  if (override) shipping.destinationsOverride = override;
+
   const rows = Array.isArray(s.fallback) ? s.fallback : [];
   const clean = rows.filter(
     (r): r is ShippingFallbackRow =>
@@ -1056,7 +1096,16 @@ function normalizeShipping(input: unknown, def: ProductShippingPolicy): ProductS
       Number.isFinite(r.perCopy),
   );
   if (clean.length > 0) shipping.fallback = clean;
-  else delete shipping.fallback;
+  if (Number.isFinite(s.fallbackMeasuredAt)) shipping.fallbackMeasuredAt = s.fallbackMeasuredAt;
+
+  const measuredScalar = Number.isFinite(s.fallbackCost)
+    ? s.fallbackCost
+    : Number.isFinite(s.pricing?.fallbackCost)
+      ? s.pricing?.fallbackCost
+      : undefined;
+  if (typeof measuredScalar === "number" && measuredScalar > 0) {
+    shipping.fallbackCost = measuredScalar;
+  }
   return shipping;
 }
 
@@ -1090,6 +1139,7 @@ export function normalizePublicProductsConfig(input: unknown): PublicProductsCon
         rates: Array.isArray(p.shipping?.rates) ? p.shipping.rates : [],
       },
     })),
+    projectedAt: Number.isFinite(stored.projectedAt) ? (stored.projectedAt as number) : 0,
   };
 }
 
@@ -1266,32 +1316,16 @@ export const pricingSettingsSchema = z.object({
     .optional(),
 });
 
-const geoMatchSchema = z.object({ country: z.string().optional(), region: z.string().optional() });
-
-const geoPolicySchema = z.object({
-  mode: z.enum(["all", "allowlist", "blocklist"]),
-  countries: z.array(z.string()),
-  regions: z.record(z.string(), z.object({ mode: z.enum(["allowlist", "blocklist"]), codes: z.array(z.string()) })),
-});
-
+/**
+ * Only the measurement, plus the rare per-product narrowing.
+ *
+ * `.passthrough()`-free and deliberately strict about what it KEEPS rather than
+ * what it rejects: a document still carrying the old `methods` / `pricing` /
+ * `surcharges` keys parses fine and `normalizeShipping` drops them, so the
+ * hoist to `adminSettings/shipping` needs no backfill and no downtime.
+ */
 const shippingSchema = z.object({
-  destinations: geoPolicySchema,
-  methods: z.array(z.object({ method: shippingMethodEnum, enabled: z.boolean(), label: z.string().optional() })),
-  pricing: z.union([
-    z.object({
-      mode: z.literal("passthrough"),
-      markupPct: z.number().optional(),
-      fallbackCost: z.number().nonnegative().optional(),
-    }),
-    z.object({ mode: z.literal("free"), absorbInPrice: z.boolean() }),
-    z.object({
-      mode: z.literal("flat"),
-      default: z.number().nonnegative(),
-      currency: z.string(),
-      overrides: z.array(z.object({ match: geoMatchSchema, amount: z.number().nonnegative() })),
-    }),
-  ]),
-  surcharges: z.array(z.object({ match: geoMatchSchema, amount: z.number().nonnegative(), currency: z.string() })),
+  destinationsOverride: geoPolicySchema.optional(),
   fallback: z
     .array(
       z.object({
@@ -1300,10 +1334,13 @@ const shippingSchema = z.object({
         available: z.boolean(),
         base: z.number().nonnegative(),
         perCopy: z.number().nonnegative(),
+        transitDaysMin: z.number().nonnegative().optional(),
+        transitDaysMax: z.number().nonnegative().optional(),
       }),
     )
     .optional(),
   fallbackMeasuredAt: z.number().optional(),
+  fallbackCost: z.number().nonnegative().optional(),
 });
 
 export const productSchema = z.object({

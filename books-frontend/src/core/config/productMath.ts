@@ -24,6 +24,13 @@ import type {
   TaxBehavior,
 } from "./products";
 import { enabledMarkets, type MarketRegistry } from "./markets";
+import { availableMethodsFor, type MarketCapability } from "./marketCapability";
+import {
+  methodLabel,
+  methodOfferedIn,
+  SHIPPING_METHODS,
+  type ShippingSettings,
+} from "./shipping";
 import {
   VARIANT_COST_AXES,
   costVariantKey,
@@ -57,6 +64,24 @@ export function convertCostAmount(
   if (from === to) return amount;
   const buffer = 1 + Math.max(0, settings.fx.bufferPct) / 100;
   return amount * (fxRate(settings, to) / fxRate(settings, from)) * buffer;
+}
+
+/**
+ * Convert a PRICE between currencies, at the plain rate.
+ *
+ * The counterpart of {@link convertCostAmount}, and the buffer is the whole
+ * difference. That padding exists to overstate what we PAY; applied to an
+ * amount we CHARGE it just quietly overcharges the customer by the buffer
+ * percentage in every non-base currency.
+ */
+export function convertPriceAmount(
+  settings: PricingSettings,
+  amount: number,
+  from: CurrencyCode,
+  to: CurrencyCode,
+): number {
+  if (from === to) return amount;
+  return amount * (fxRate(settings, to) / fxRate(settings, from));
 }
 
 /**
@@ -310,6 +335,7 @@ export function computeMargin(
   product: ProductDefinition,
   scenario: PriceScenario,
   settings: PricingSettings,
+  shippingSettings: ShippingSettings,
 ): MarginBreakdown {
   const { cost, shipping } = product;
   const currency = scenario.currency;
@@ -332,7 +358,13 @@ export function computeMargin(
       ? scenario.liveShippingCost
       : estimateShippingCost(shipping, scenario);
   const shippingCost = round2(shippingCostCostCcy * costToCurrency);
-  const shippingCharged = round2(resolveShippingCharged(shipping, shippingCost));
+  const shippingCharged = round2(
+    resolveShippingCharged(shippingSettings, settings, shippingCost, {
+      currency,
+      copies,
+      method: scenario.shippingMethod,
+    }),
+  );
 
   // Tax applies to the goods + shipping; Stripe processes the gross.
   const taxableBase = netRevenue + shippingCharged;
@@ -415,6 +447,7 @@ export function suggestPrice(
   scenario: PriceScenario,
   settings: PricingSettings,
   targetMarginPct: number,
+  shippingSettings: ShippingSettings,
 ): number | null {
   const currency = scenario.currency;
   const copies = Math.max(1, scenario.copies);
@@ -436,7 +469,11 @@ export function suggestPrice(
       ? scenario.liveShippingCost
       : estimateShippingCost(product.shipping, scenario);
   const shippingCost = shippingCostCcy * costToCurrency;
-  const shippingCharged = resolveShippingCharged(product.shipping, shippingCost);
+  const shippingCharged = resolveShippingCharged(shippingSettings, settings, shippingCost, {
+    currency,
+    copies,
+    method: scenario.shippingMethod,
+  });
 
   const revenueYouKeep = (production + shippingCost + fee.fixed) / denominator;
   // Shipping revenue is fixed by policy, so only the goods portion is ours to set.
@@ -468,10 +505,17 @@ export function suggestTierPrice(
   scenario: PriceScenario,
   settings: PricingSettings,
   targetMarginPct: number,
+  shippingSettings: ShippingSettings,
 ): number | null {
   const variant =
     scenario.variant ?? cheapestVariant(product.variants, scenario.currency, scenario.pages);
-  const sticker = suggestPrice(product, { ...scenario, variant }, settings, targetMarginPct);
+  const sticker = suggestPrice(
+    product,
+    { ...scenario, variant },
+    settings,
+    targetMarginPct,
+    shippingSettings,
+  );
   if (sticker == null) return null;
   const delta = variantPriceDelta(product.variants, variant, scenario.currency, scenario.pages);
   return round2(Math.max(0, sticker - delta));
@@ -544,13 +588,28 @@ function round(value: number, dp: number): number {
 const METHODS_BY_SPEED: ShippingMethod[] = ["Budget", "StandardPlus", "Standard", "Express", "Overnight"];
 
 /**
- * A tier this product actually offers, for callers that must pick one on the
- * customer's behalf (a price preview, say). The cheapest enabled tier, since
- * that's the one a "from" price should quote.
+ * Which destination policy governs a product: its own override, or the
+ * catalog's.
+ *
+ * The single place the two are reconciled. Both are only ever a NARROWING —
+ * {@link isDestinationAllowed} intersects with the market registry before
+ * either is consulted — so this choosing one over the other can't widen
+ * anything, whichever it picks.
  */
-export function defaultShippingMethod(product: ProductDefinition): ShippingMethod {
-  const enabled = new Set(product.shipping.methods.filter((m) => m.enabled).map((m) => m.method));
-  return METHODS_BY_SPEED.find((m) => enabled.has(m)) ?? "StandardPlus";
+export function destinationPolicyFor(
+  settings: ShippingSettings,
+  shipping: ProductShippingPolicy,
+): GeoPolicy {
+  return shipping.destinationsOverride ?? settings.destinations;
+}
+
+/**
+ * A tier to quote when the caller has to pick one on the customer's behalf (a
+ * price preview, say). The cheapest offered tier, since that's the one a "from"
+ * price should quote.
+ */
+export function defaultShippingMethod(settings: ShippingSettings): ShippingMethod {
+  return METHODS_BY_SPEED.find((m) => settings.methods[m]?.offered) ?? "StandardPlus";
 }
 
 /**
@@ -560,7 +619,7 @@ export function defaultShippingMethod(product: ProductDefinition): ShippingMetho
  * measured country" fallback: shipping to Australia costs nothing like shipping
  * to Canada, and a passthrough product BILLS this number, so substituting one
  * for the other would overcharge or undercharge a real customer. A destination
- * we never measured falls through to the scalar `pricing.fallbackCost`, which
+ * we never measured falls through to the scalar `shipping.fallbackCost`, which
  * is only ever set from a sweep that reached every zone.
  */
 export function shippingRowFor(
@@ -591,13 +650,55 @@ export function shippingTierRefused(
 }
 
 /**
- * Shipping cost estimate used when no live quote is available.
+ * The speeds a customer in one country may actually choose — the ONE answer
+ * every surface asks for.
+ *
+ * Four filters, in order of how firmly they're known:
+ *   1. we sell the speed at all (global veto),
+ *   2. we sell it to this country (per-country veto),
+ *   3. the provider was DISCOVERED to run it there (coverage sweep),
+ *   4. it wasn't MEASURED to be refused for this specific book.
+ *
+ * Note what isn't a filter: "we have no measurement". Unknown is not
+ * unavailable. The sweep's `status` already collapses to no methods when a
+ * probe failed, and treating a missing per-product row as a refusal would hide
+ * every speed in a market the moment it was opened, before anything had been
+ * measured for it.
+ *
+ * The inversion this encodes is the point of the whole design. Availability
+ * used to be declared per product and coverage was advisory, so a speed the
+ * provider didn't run to a country was still offered there — and the order
+ * failed after the customer had typed their address.
+ */
+export function offeredMethodsFor(
+  settings: ShippingSettings,
+  capability: MarketCapability | undefined,
+  shipping: ProductShippingPolicy,
+  country: string | null | undefined,
+): ShippingMethod[] {
+  const code = (country ?? "").trim().toUpperCase();
+  const reachable = new Set(availableMethodsFor(capability));
+  return METHODS_BY_SPEED.filter((method) => {
+    if (!methodOfferedIn(settings, code, method)) return false;
+    if (code && reachable.size > 0 && !reachable.has(method)) return false;
+    return !shippingTierRefused(shipping, code, method);
+  });
+}
+
+/**
+ * What shipping COSTS US for a route, when no live quote is available.
+ *
+ * Deliberately independent of how we charge for it. What we pay the provider
+ * doesn't change because we decided to advertise free shipping — the previous
+ * version returned 0 under `free` and the flat rate under `flat`, so margin was
+ * computed against a cost we don't pay and a number denominated in the wrong
+ * currency. Both showed profit that wasn't there.
  *
  * Only ever the measured row for the ACTUAL destination and tier. The scalar
- * `pricing.fallbackCost` is deliberately not a catch-all for unmeasured
+ * `shipping.fallbackCost` is deliberately not a catch-all for unmeasured
  * countries: it was fitted to the handful of routes a sweep visited, and
  * billing it to a destination nobody measured is a number invented about a
- * country we know nothing about. With markets now openable by an admin, the
+ * country we know nothing about. With markets openable by an admin, the
  * unmeasured case is the common one rather than the exception, so those orders
  * are refused instead — see {@link hasUsableShippingCost}.
  *
@@ -607,11 +708,6 @@ export function estimateShippingCost(
   shipping: ProductShippingPolicy,
   scenario?: { destinationCountry?: string; shippingMethod?: ShippingMethod; copies?: number },
 ): number {
-  if (shipping.pricing.mode === "flat") return shipping.pricing.default;
-  // Passthrough charges what shipping costs us, so with no quote it needs a
-  // measured stand-in; free shipping has nothing to estimate.
-  if (shipping.pricing.mode !== "passthrough") return 0;
-
   const row = shippingRowFor(shipping, scenario?.destinationCountry, scenario?.shippingMethod);
   if (row?.available) {
     return row.base + row.perCopy * Math.max(1, scenario?.copies ?? 1);
@@ -619,7 +715,7 @@ export function estimateShippingCost(
   // The destination has SOME measurement, just not for this tier — the scalar is
   // at least fitted to routes this product really ships.
   if (hasMeasurementFor(shipping, scenario?.destinationCountry)) {
-    return shipping.pricing.fallbackCost ?? 0;
+    return shipping.fallbackCost ?? 0;
   }
   return 0;
 }
@@ -636,35 +732,74 @@ function hasMeasurementFor(
 }
 
 /**
- * Whether shipping can be priced without a live quote. `free` and `flat` are
- * self-sufficient (both charge a configured amount), but `passthrough` charges
- * the provider's cost — with no quote and no measured rate for THIS destination
- * it would either charge zero while we still pay to ship, or bill a figure
- * fitted to a different continent. Neither is acceptable, so an order in that
- * state must not be priced at all.
+ * Whether shipping can be CHARGED for this route.
+ *
+ * `free` always can (there's nothing to work out). `flat` needs a rate for the
+ * chosen speed — and a live provider quote does not rescue it, because a flat
+ * rate is what the customer pays regardless of what we're quoted. `passthrough`
+ * needs either a live quote or a measured rate for THIS destination; with
+ * neither it would charge zero while we still pay to ship, or bill a figure
+ * fitted to a different continent.
  *
  * The customer sees "we can't price shipping right now, try again", which is
  * recoverable. A silently wrong shipping charge is not.
  */
 export function hasUsableShippingCost(
+  settings: ShippingSettings,
   shipping: ProductShippingPolicy,
   liveShippingCost: number | undefined,
   scenario?: { destinationCountry?: string; shippingMethod?: ShippingMethod; copies?: number },
 ): boolean {
+  const { pricing } = settings;
+  if (pricing.mode === "free") return true;
+  if (pricing.mode === "flat") {
+    const method = scenario?.shippingMethod;
+    return method ? (pricing.flatPerMethod[method] ?? 0) > 0 : false;
+  }
   if (typeof liveShippingCost === "number") return true;
-  if (shipping.pricing.mode !== "passthrough") return true;
   return estimateShippingCost(shipping, scenario) > 0;
 }
 
-/** What the customer is charged for shipping, given the cost we pay. */
-export function resolveShippingCharged(shipping: ProductShippingPolicy, shippingCost: number): number {
-  switch (shipping.pricing.mode) {
-    case "passthrough":
-      return shippingCost * (1 + (shipping.pricing.markupPct ?? 0) / 100);
+/**
+ * What the customer is charged for shipping.
+ *
+ * `shippingCost` is what we PAY, already converted into `ctx.currency`. Only
+ * passthrough derives the charge from it; the other two modes name their own
+ * amount and ignore it entirely.
+ *
+ * The handling fee and the flat rate are converted here rather than by the
+ * caller because both are PRICES entered in their own currency, so both convert
+ * at the plain rate. Running them through the cost conversion would apply the
+ * FX buffer — which exists to overstate what we pay — and quietly overcharge by
+ * that percentage in every non-base currency.
+ */
+export function resolveShippingCharged(
+  shippingSettings: ShippingSettings,
+  pricingSettings: PricingSettings,
+  shippingCost: number,
+  ctx: { currency: CurrencyCode; copies?: number; method?: ShippingMethod },
+): number {
+  const { pricing } = shippingSettings;
+  switch (pricing.mode) {
+    case "passthrough": {
+      const units = pricing.fixedAddKind === "perCopy" ? Math.max(1, ctx.copies ?? 1) : 1;
+      const add = convertPriceAmount(
+        pricingSettings,
+        pricing.fixedAdd * units,
+        pricing.fixedAddCurrency,
+        ctx.currency,
+      );
+      return shippingCost * (1 + pricing.markupPct / 100) + add;
+    }
     case "free":
       return 0;
-    case "flat":
-      return shipping.pricing.default;
+    case "flat": {
+      // Per speed, not one amount for all of them. A single flat rate next to
+      // derived availability sells Overnight at the Budget price and the
+      // difference comes straight out of margin.
+      const rate = ctx.method ? (pricing.flatPerMethod[ctx.method] ?? 0) : 0;
+      return convertPriceAmount(pricingSettings, rate, pricing.flatCurrency, ctx.currency);
+    }
   }
 }
 
@@ -745,7 +880,19 @@ export function hasReachableDestination(registry: MarketRegistry, policy: GeoPol
 export function toPublicProduct(
   product: ProductDefinition,
   settings: PricingSettings,
-  opts: { offerable: boolean; registry: MarketRegistry; plans?: readonly PrintDiscountPlan[] },
+  opts: {
+    offerable: boolean;
+    registry: MarketRegistry;
+    shipping: ShippingSettings;
+    /**
+     * Discovered provider coverage, so the projection only publishes speeds the
+     * provider was seen to run. Optional: with no sweep on record every offered
+     * speed is published, which is the same "unknown is not unavailable" rule
+     * {@link offeredMethodsFor} applies.
+     */
+    capability?: ReadonlyMap<string, MarketCapability>;
+    plans?: readonly PrintDiscountPlan[];
+  },
 ): PublicProduct {
   const displayPages = product.pricing.displayPages ?? product.conditions.pages.min;
   const prices: Record<CurrencyCode, number> = {};
@@ -774,14 +921,26 @@ export function toPublicProduct(
     priceTiers: product.pricing.tiers,
     supportedCurrencies: settings.currencies,
     taxBehavior,
-    planPrintDiscountPct: projectPlanPrintDiscounts(product, settings, opts.plans ?? []),
+    planPrintDiscountPct: projectPlanPrintDiscounts(
+      product,
+      settings,
+      opts.shipping,
+      opts.plans ?? [],
+    ),
     shipping: {
-      methods: product.shipping.methods,
-      destinations: product.shipping.destinations,
-      // Mode only — `markupPct` and `fallbackCost` are ours, and `fallbackCost`
-      // is denominated in the cost currency besides.
-      pricing: { mode: product.shipping.pricing.mode },
-      rates: projectShippingRates(product, settings, opts.registry),
+      // Resolved from the catalog-wide policy, not stored on the product. The
+      // storefront still needs to NAME the speeds it was given rates for, so
+      // the shape survives even though the source moved.
+      methods: SHIPPING_METHODS.map((method) => ({
+        method,
+        enabled: opts.shipping.methods[method]?.offered ?? false,
+        label: methodLabel(opts.shipping, method),
+      })),
+      destinations: destinationPolicyFor(opts.shipping, product.shipping),
+      // Mode only — markup, handling fee and the measured wholesale rate are
+      // ours, and the last is denominated in the cost currency besides.
+      pricing: { mode: opts.shipping.pricing.mode },
+      rates: projectShippingRates(product, settings, opts.registry, opts.shipping, opts.capability),
     },
   };
 }
@@ -809,6 +968,7 @@ export interface PrintDiscountPlan {
 function projectPlanPrintDiscounts(
   product: ProductDefinition,
   settings: PricingSettings,
+  shippingSettings: ShippingSettings,
   plans: readonly PrintDiscountPlan[],
 ): Record<string, number> {
   const out: Record<string, number> = {};
@@ -818,7 +978,7 @@ function projectPlanPrintDiscounts(
   // One copy is the worst case: the processor's FIXED fee is amortized over the
   // order, so a single-copy order has the least room and the tightest break-even.
   const copies = Math.max(1, product.conditions.copies.min);
-  const headroom = worstBreakEvenDiscountPct(product, settings, copies);
+  const headroom = worstBreakEvenDiscountPct(product, settings, shippingSettings, copies);
   for (const plan of wanted) {
     out[plan.id] = Math.round(Math.min(plan.printDiscountPct, headroom) * 10) / 10;
   }
@@ -837,6 +997,7 @@ function projectPlanPrintDiscounts(
 export function worstBreakEvenDiscountPct(
   product: ProductDefinition,
   settings: PricingSettings,
+  shippingSettings: ShippingSettings,
   copies = 1,
 ): number {
   const { pages } = product.conditions;
@@ -848,7 +1009,12 @@ export function worstBreakEvenDiscountPct(
     for (const pg of checkPoints) {
       const variant = cheapestVariant(product.variants, currency, pg);
       try {
-        const m = computeMargin(product, { currency, pages: pg, copies, variant }, settings);
+        const m = computeMargin(
+          product,
+          { currency, pages: pg, copies, variant },
+          settings,
+          shippingSettings,
+        );
         worst = Math.min(worst, m.breakEvenDiscountPct);
       } catch {
         // An unpriceable scenario tells us nothing about safe headroom; the
@@ -864,30 +1030,49 @@ export function worstBreakEvenDiscountPct(
  * Charged shipping for every destination × speed this product offers, per
  * currency — the customer-facing projection of the measured rate matrix.
  *
- * Only the enabled speeds and the markets the geo policy actually allows, so the
- * storefront can't quote a combination checkout would refuse. Rows come from the
- * measurement when there is one (it scales with copies) and from the scalar
- * fallback otherwise, which is exactly the precedence
- * {@link estimateShippingCost} applies at checkout.
+ * This is where the catalog-wide policy meets one product's measurements, and
+ * the result is the ONLY thing the storefront reads. That's deliberate: there
+ * is no public copy of the shipping settings, so the picker, the price table
+ * and the simulator can't disagree with each other about what's on sale.
+ *
+ * Only offered speeds, only markets the geo policy allows, and only speeds the
+ * provider was discovered to run there — so the storefront can't quote a
+ * combination checkout would refuse.
  */
 export function projectShippingRates(
   product: ProductDefinition,
   settings: PricingSettings,
   registry: MarketRegistry,
+  shippingSettings: ShippingSettings,
+  capability?: ReadonlyMap<string, MarketCapability>,
 ): PublicShippingRate[] {
   const { shipping } = product;
-  const methods = shipping.methods.filter((m) => m.enabled).map((m) => m.method);
-  const countries = allowedMarketsFor(registry, shipping.destinations);
+  const countries = allowedMarketsFor(registry, destinationPolicyFor(shippingSettings, shipping));
   const rates: PublicShippingRate[] = [];
 
   for (const country of countries) {
+    // Publishes a row per speed we'd offer here, including the refusals — a
+    // greyed-out option with a reason beats one that works until the order is
+    // placed. Speeds vetoed globally or for this country produce no row at all,
+    // because they aren't on sale and there is nothing to explain.
+    const methods = SHIPPING_METHODS.filter((method) =>
+      methodOfferedIn(shippingSettings, country, method),
+    );
+    const reachable = new Set(availableMethodsFor(capability?.get(country)));
     for (const method of methods) {
       const row = shippingRowFor(shipping, country, method);
-      // A measured refusal is a fact about coverage worth publishing.
-      if (row && !row.available) {
-        rates.push({ country, method, available: false, charged: {}, measured: true });
+      // Two different refusals, published the same way: the provider told us it
+      // doesn't run this speed here (a measured row) or the sweep never saw it
+      // among the services it offers here.
+      const refused = (row && !row.available) || (reachable.size > 0 && !reachable.has(method));
+      if (refused) {
+        rates.push({ country, method, available: false, charged: {}, measured: row != null });
         continue;
       }
+      const days = {
+        ...(row?.transitDaysMin != null ? { transitDaysMin: row.transitDaysMin } : {}),
+        ...(row?.transitDaysMax != null ? { transitDaysMax: row.transitDaysMax } : {}),
+      };
       // An unmeasured route in a passthrough product has no honest published
       // price: the scalar fallback was fitted to countries the sweep visited,
       // and this isn't one. Checkout will live-quote it and succeed; the
@@ -895,15 +1080,18 @@ export function projectShippingRates(
       // advertising one it would then contradict.
       if (
         !row &&
-        shipping.pricing.mode === "passthrough" &&
+        shippingSettings.pricing.mode === "passthrough" &&
         !hasMeasurementFor(shipping, country)
       ) {
-        rates.push({ country, method, available: true, charged: {}, measured: false });
+        rates.push({ country, method, available: true, charged: {}, measured: false, ...days });
         continue;
       }
       const charged: PublicShippingRate["charged"] = {};
       for (const currency of settings.currencies) {
-        const terms = chargedShippingTerms(product, settings, row, currency);
+        const terms = chargedShippingTerms(product, settings, shippingSettings, row, {
+          currency,
+          method,
+        });
         if (terms) charged[currency] = terms;
       }
       rates.push({
@@ -912,6 +1100,7 @@ export function projectShippingRates(
         available: true,
         charged,
         measured: row?.available === true,
+        ...days,
       });
     }
   }
@@ -928,36 +1117,54 @@ export function projectShippingRates(
  * Passthrough is linear in cost, which is what makes distributing markup and FX
  * across the terms exact rather than an approximation of a rounded total.
  */
-function chargedShippingTerms(
+export function chargedShippingTerms(
   product: ProductDefinition,
   settings: PricingSettings,
+  shippingSettings: ShippingSettings,
   row: ShippingFallbackRow | undefined,
-  currency: CurrencyCode,
+  ctx: { currency: CurrencyCode; method: ShippingMethod },
 ): { base: number; perCopy: number } | null {
-  const { pricing } = product.shipping;
+  const { pricing } = shippingSettings;
+  const { currency } = ctx;
   switch (pricing.mode) {
     case "free":
       return { base: 0, perCopy: 0 };
-    case "flat":
-      // A price, not a cost: converted at the plain rate, since the FX buffer
-      // exists to overstate what we PAY and would overcharge here.
+    case "flat": {
+      // Per speed. A single amount for every tier sells Overnight at the Budget
+      // price, which is the reason flat mode doesn't get automatic availability.
+      const rate = pricing.flatPerMethod[ctx.method];
+      if (rate == null) return null;
       return {
-        base: round4(
-          (pricing.default * fxRate(settings, currency)) / fxRate(settings, pricing.currency),
-        ),
+        base: round4(convertPriceAmount(settings, rate, pricing.flatCurrency, currency)),
         perCopy: 0,
       };
+    }
     case "passthrough": {
       const fx = convertCostAmount(settings, 1, product.cost.currency, currency);
-      const markup = 1 + (pricing.markupPct ?? 0) / 100;
-      const base = row?.available ? row.base : (pricing.fallbackCost ?? 0);
+      const markup = 1 + pricing.markupPct / 100;
+      const base = row?.available ? row.base : (product.shipping.fallbackCost ?? 0);
       const perCopy = row?.available ? row.perCopy : 0;
       // Nothing measured and no fallback configured. Publishing zero here would
       // read as free shipping on a product that in fact can't be shipped at any
       // price; publishing nothing makes the storefront say so instead. Validation
       // blocks offering a product in this state, so only drafts reach it.
       if (base === 0 && perCopy === 0) return null;
-      return { base: round4(base * fx * markup), perCopy: round4(perCopy * fx * markup) };
+      // The handling fee rides on whichever term matches how it's charged, so
+      // the published two-term shape stays exact rather than approximating a
+      // per-order fee as a per-copy one. It is a PRICE, so it converts at the
+      // plain rate while the provider's cost converts with the FX buffer.
+      const add = convertPriceAmount(
+        settings,
+        pricing.fixedAdd,
+        pricing.fixedAddCurrency,
+        currency,
+      );
+      const perOrderAdd = pricing.fixedAddKind === "perOrder" ? add : 0;
+      const perCopyAdd = pricing.fixedAddKind === "perCopy" ? add : 0;
+      return {
+        base: round4(base * fx * markup + perOrderAdd),
+        perCopy: round4(perCopy * fx * markup + perCopyAdd),
+      };
     }
   }
 }

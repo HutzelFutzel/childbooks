@@ -117,6 +117,7 @@ export function ReferralsTab() {
   const voidUnaccepted = useAppConfigStore((s) => s.voidUnacceptedInvitations);
   const sparks = useAppConfigStore((s) => s.sparks);
   const settings = useAppConfigStore((s) => s.pricingSettings);
+  const shipping = useAppConfigStore((s) => s.shippingSettings);
   const plans = useAppConfigStore((s) => s.plans.plans);
   const loadAdminProducts = useAppConfigStore((s) => s.loadAdminProducts);
   const openConfigTab = useAdminTab((s) => s.openConfigTab);
@@ -182,8 +183,9 @@ export function ReferralsTab() {
         settings,
         products,
         plans,
+        shipping,
       }),
-    [draft, sparks, settings, products, plans],
+    [draft, sparks, settings, products, plans, shipping],
   );
   const blockers = impactBlocks(impact);
   const terms = freezeTerms(draft);

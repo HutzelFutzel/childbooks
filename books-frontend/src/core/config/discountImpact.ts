@@ -50,6 +50,7 @@ import {
   type ProductDefinition,
   type TaxBehavior,
 } from "./products";
+import type { ShippingSettings } from "./shipping";
 import type { SparkPack, SparksConfig } from "./sparks";
 import { packTotalSparks } from "./sparks";
 import { sparkUnitEconomics, worstActionMultiplier } from "./economics";
@@ -504,9 +505,10 @@ export function printDiscountImpact(
   product: ProductDefinition,
   scenario: PriceScenario,
   settings: PricingSettings,
+  shipping: ShippingSettings,
   buyer: BuyerContext = NEUTRAL_BUYER,
 ): DiscountImpact {
-  const m = computeMargin(product, scenario, settings);
+  const m = computeMargin(product, scenario, settings, shipping);
   const costIsEstimate =
     product.cost.source === "providerLive" && typeof scenario.liveUnitCost !== "number";
   return printImpactFromBreakdown(
@@ -532,6 +534,7 @@ export function printWorstCaseImpact(
   product: ProductDefinition,
   scenario: PriceScenario,
   settings: PricingSettings,
+  shipping: ShippingSettings,
   buyers: BuyerContext[],
 ): DiscountImpact | null {
   const eligible = eligibleBuyers(product.conditions.access, buyers);
@@ -539,7 +542,9 @@ export function printWorstCaseImpact(
   const variant =
     scenario.variant ?? cheapestVariant(product.variants, scenario.currency, scenario.pages);
   const worstCase = variant ? { ...scenario, variant } : scenario;
-  return pickWorst(eligible.map((b) => printDiscountImpact(product, worstCase, settings, b)));
+  return pickWorst(
+    eligible.map((b) => printDiscountImpact(product, worstCase, settings, shipping, b)),
+  );
 }
 
 /**
@@ -776,6 +781,8 @@ export interface CatalogDiscountArgs {
   /** Public plans are enough — they carry prices, grants and multipliers. */
   plans: PublicPlan[];
   currency: CurrencyCode;
+  /** Catalog-wide shipping policy — part of every print row's margin. */
+  shipping: ShippingSettings;
   /**
    * Whose perspective to price print/ebook/pack rows from:
    *   - "worst" (default): each item's most expensive eligible buyer, with a
@@ -794,7 +801,7 @@ export interface CatalogDiscountArgs {
  * static cost table (fetch live quotes in the product editor for exact costs).
  */
 export function catalogDiscountImpacts(args: CatalogDiscountArgs): DiscountImpact[] {
-  const { settings, sparks, products, plans, currency } = args;
+  const { settings, sparks, products, plans, currency, shipping } = args;
   const mode = args.buyer ?? "worst";
   const allBuyers = buyerContextsFromPublicPlans(plans, settings);
   const out: DiscountImpact[] = [];
@@ -805,10 +812,10 @@ export function catalogDiscountImpacts(args: CatalogDiscountArgs): DiscountImpac
     const scenario = { currency, pages, copies: 1 };
     try {
       if (mode === "worst") {
-        const impact = printWorstCaseImpact(product, scenario, settings, allBuyers);
+        const impact = printWorstCaseImpact(product, scenario, settings, shipping, allBuyers);
         if (impact) out.push(impact);
       } else if (eligibleBuyers(product.conditions.access, [mode]).length > 0) {
-        out.push(printDiscountImpact(product, scenario, settings, mode));
+        out.push(printDiscountImpact(product, scenario, settings, shipping, mode));
       }
     } catch {
       // A malformed product must not break the whole planner.

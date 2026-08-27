@@ -126,7 +126,10 @@ import {
   type QrCornerStyle,
   type QrDotStyle,
 } from "../../books-frontend/src/core/config/qrCodes";
-import { ensureMarketsSeeded, saveMarketsConfig } from "./markets";
+import { ensureMarketsSeeded, getMarketCapability, getMarketRegistry, saveMarketsConfig } from "./markets";
+import { ensureShippingSeeded, getShippingSettings, saveShippingSettings } from "./shipping";
+import { normalizeShippingSettings } from "../../books-frontend/src/core/config/shipping";
+import { previewShippingChange } from "../../books-frontend/src/core/config/shippingPreview";
 import { runMarketSweep } from "./marketDiscovery";
 import {
   deleteProduct,
@@ -1375,6 +1378,75 @@ export function registerAdminRoutes(app: Express): void {
     }
   });
 
+  // ---- Shipping policy ------------------------------------------------------
+
+  // How shipping is sold catalog-wide. Seeded on first read for the same reason
+  // markets are: an empty form would read as "we ship nothing", which is the
+  // opposite of what the storefront is currently doing.
+  app.get("/admin/config/shipping", async (_req, res) => {
+    try {
+      res.json(await ensureShippingSeeded());
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.put("/admin/config/shipping", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const config = await saveShippingSettings(req.body, req.uid);
+      // This policy has no public mirror by design — the storefront reads the
+      // rates baked into the product projection. So the save is only half done
+      // until the catalog is re-projected; skip it and the customer keeps being
+      // offered the speeds and prices of the previous policy.
+      await reprojectPublicProducts();
+      res.json(config);
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // What the save above would do, without doing it. Runs the real projection
+  // against the candidate policy and diffs it, so the answer is the outcome
+  // rather than a model of it.
+  app.post("/admin/config/shipping/preview", json, async (req: Request, res: Response) => {
+    try {
+      const [products, settings, registry, current, capability] = await Promise.all([
+        getProductsConfig(),
+        getPricingSettings(),
+        getMarketRegistry(),
+        getShippingSettings(),
+        getMarketCapability(),
+      ]);
+      res.json(
+        previewShippingChange({
+          products: products.products,
+          settings,
+          registry,
+          current,
+          candidate: normalizeShippingSettings(req.body),
+          capability: new Map(capability.countries.map((c) => [c.country, c])),
+        }),
+      );
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Rebuild the public projection from whatever the private documents currently
+  // say. Every write that affects it already does this, so needing it means
+  // something got out of step — a partial failure, a document edited in the
+  // Firebase console, or a deploy that changed how the projection is built.
+  // It's cheap and idempotent, which is what makes it a safe button rather than
+  // an operation to think about.
+  app.post("/admin/config/products/reproject", async (_req, res) => {
+    try {
+      await reprojectPublicProducts();
+      res.json({ ok: true, projectedAt: Date.now() });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
   // ---- Affiliate program ----------------------------------------------------
 
   // Which purchase kinds each Rewardful campaign may pay a commission on. Rates,
@@ -1961,7 +2033,10 @@ export function registerAdminRoutes(app: Express): void {
         return;
       }
 
-      const settings = await getPricingSettings();
+      const [settings, shippingSettings] = await Promise.all([
+        getPricingSettings(),
+        getShippingSettings(),
+      ]);
       // Variants change both sides of the preview: a different SKU to quote, and
       // a different sticker. Quoting the base while pricing a variant would show
       // a margin no order can produce.
@@ -1988,8 +2063,13 @@ export function registerAdminRoutes(app: Express): void {
           variant,
           liveUnitCost: live.unitCost,
           liveShippingCost: live.shippingCost,
+          // Named so that, if the live quote came back empty, the preview falls
+          // back to the row measured for the country the admin actually asked
+          // about rather than to no row at all.
+          destinationCountry: sc.country || "US",
         },
         settings,
+        shippingSettings,
       );
       res.json({
         breakdown,

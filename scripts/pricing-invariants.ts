@@ -27,9 +27,11 @@ import {
   computeMargin,
   computeRetailPrice,
   defaultShippingMethod,
+  destinationPolicyFor,
   estimateShippingCost,
   hasUsableShippingCost,
   isDestinationAllowed,
+  offeredMethodsFor,
   perPageCostFor,
   publicUnitPrice,
   simulatePublicOrder,
@@ -38,6 +40,14 @@ import {
   toPublicProduct,
   worstBreakEvenDiscountPct,
 } from "../books-frontend/src/core/config/productMath";
+import {
+  createDefaultShippingSettings,
+  SHIPPING_METHODS,
+  withPricingMode,
+  type ShippingSettings,
+} from "../books-frontend/src/core/config/shipping";
+import { previewShippingChange } from "../books-frontend/src/core/config/shippingPreview";
+import type { MarketCapability } from "../books-frontend/src/core/config/marketCapability";
 import {
   costVariantKey,
   enumerateVariants,
@@ -128,18 +138,36 @@ function fixture(): { product: ProductDefinition; settings: PricingSettings } {
     shipping: {
       ...seed.shipping,
       fallback: [
-        { country: "US", method: "StandardPlus", available: true, base: 4.99, perCopy: 1.5 },
+        {
+          country: "US",
+          method: "StandardPlus",
+          available: true,
+          base: 4.99,
+          perCopy: 1.5,
+          transitDaysMin: 3,
+          transitDaysMax: 6,
+        },
         { country: "US", method: "Standard", available: false, base: 0, perCopy: 0 },
         { country: "GB", method: "StandardPlus", available: true, base: 9.99, perCopy: 2.25 },
         { country: "GB", method: "Standard", available: false, base: 0, perCopy: 0 },
       ],
-      pricing: { mode: "passthrough", fallbackCost: 12.24 },
+      fallbackCost: 12.24,
     },
   });
   return { product, settings: createDefaultPricingSettings() };
 }
 
 const { product, settings } = fixture();
+
+/**
+ * The catalog-wide shipping policy these checks run against: the seeded one,
+ * which offers every speed and passes the provider's cost straight through.
+ *
+ * Deliberately the DEFAULT rather than a hand-tuned fixture. It's what a fresh
+ * install sells under, so a property that only holds for some carefully chosen
+ * markup is a property that doesn't hold in production.
+ */
+const SHIPPING = createDefaultShippingSettings();
 const currency = settings.baseCurrency;
 const { min, max } = product.conditions.pages;
 const lengths = [min, Math.round((min + max) / 2), max];
@@ -168,7 +196,7 @@ const lengths = [min, Math.round((min + max) / 2), max];
 
 for (const target of [25, 45]) {
   for (const pages of lengths) {
-    const suggested = suggestTierPrice(product, { currency, pages, copies: 1 }, settings, target);
+    const suggested = suggestTierPrice(product, { currency, pages, copies: 1 }, settings, target, SHIPPING);
     if (suggested == null) {
       check(`suggested price exists at ${pages}pp / ${target}%`, false, "no price could be derived");
       continue;
@@ -177,7 +205,7 @@ for (const target of [25, 45]) {
       ...product,
       pricing: { ...product.pricing, tiers: [{ minPages: 0, maxPages: 100000, prices: { [currency]: suggested } }] },
     });
-    const margin = computeMargin(priced, { currency, pages, copies: 1 }, settings);
+    const margin = computeMargin(priced, { currency, pages, copies: 1 }, settings, SHIPPING);
     // Within a cent per rounding step: the suggestion is rounded to a charm
     // price, so it can't land exactly on target and shouldn't pretend to.
     const off = Math.abs(margin.marginPct - target);
@@ -200,7 +228,7 @@ for (const target of [25, 45]) {
   check("variant deltas can be derived from measured cost", withDeltas.variants !== product.variants);
 
   for (const pages of lengths) {
-    const tierPrice = suggestTierPrice(withDeltas, { currency, pages, copies: 1 }, settings, target);
+    const tierPrice = suggestTierPrice(withDeltas, { currency, pages, copies: 1 }, settings, target, SHIPPING);
     if (tierPrice == null) continue;
     const priced = normalizeProduct({
       ...withDeltas,
@@ -209,7 +237,7 @@ for (const target of [25, 45]) {
     let worst = Number.POSITIVE_INFINITY;
     let worstVariant = "";
     for (const variant of enumerateVariants(priced.variants)) {
-      const margin = computeMargin(priced, { currency, pages, copies: 1, variant }, settings);
+      const margin = computeMargin(priced, { currency, pages, copies: 1, variant }, settings, SHIPPING);
       if (margin.marginPct < worst) {
         worst = margin.marginPct;
         worstVariant = costVariantKey(variant);
@@ -284,19 +312,25 @@ for (const target of [25, 45]) {
   );
   check(
     "an order to an unmeasured destination is refused rather than mispriced",
-    !hasUsableShippingCost(product.shipping, undefined, { destinationCountry: "JP", copies: 1 }),
+    !hasUsableShippingCost(SHIPPING, product.shipping, undefined, {
+      destinationCountry: "JP",
+      copies: 1,
+    }),
   );
   // …but a live quote settles it, which is the recoverable path a customer
   // actually takes.
   check(
     "a live quote makes an unmeasured destination priceable",
-    hasUsableShippingCost(product.shipping, 14.5, { destinationCountry: "JP", copies: 1 }),
+    hasUsableShippingCost(SHIPPING, product.shipping, 14.5, {
+      destinationCountry: "JP",
+      copies: 1,
+    }),
   );
 
   // Never another country's measured rate. Substituting one destination's rate
   // for another's is how a UK buyer gets billed a Canadian shipping cost — and
   // it stays plausible-looking, so nothing catches it.
-  const scalar = product.shipping.pricing.fallbackCost ?? 0;
+  const scalar = product.shipping.fallbackCost ?? 0;
   check(
     "an unmeasured destination is not billed another country's measured rate",
     unmeasured !== 4.99 + 1.5 && unmeasured !== 9.99 + 2.25 && unmeasured !== scalar,
@@ -320,11 +354,165 @@ for (const target of [25, 45]) {
   // charging zero while we still pay the printer is the failure this guards.
   const bare = normalizeProduct({
     ...product,
-    shipping: { ...product.shipping, fallback: undefined, pricing: { mode: "passthrough" } },
+    shipping: { ...product.shipping, fallback: undefined, fallbackCost: undefined },
   });
   check(
     "passthrough with no fallback refuses to price",
-    !hasUsableShippingCost(bare.shipping, undefined, { destinationCountry: "US", copies: 1 }),
+    !hasUsableShippingCost(SHIPPING, bare.shipping, undefined, {
+      destinationCountry: "US",
+      copies: 1,
+    }),
+  );
+}
+
+// ---- Availability is derived, not declared ---------------------------------
+
+// The inversion the whole redesign turns on. Availability used to be declared
+// per product and coverage was advisory, so a speed the printer didn't run to a
+// country was still offered there — and the order failed after the customer had
+// typed their address. These check the three vetoes compose the right way, and
+// crucially that "we have no measurement" is NOT one of them.
+{
+  const reachable: MarketCapability = {
+    country: "US",
+    status: "available",
+    levels: [
+      { level: "MAIL", method: "Budget", traceable: false, postboxOk: true, businessOnly: false },
+      {
+        level: "PRIORITY_MAIL",
+        method: "StandardPlus",
+        traceable: true,
+        postboxOk: true,
+        businessOnly: false,
+      },
+    ],
+    probedAt: Date.now(),
+  };
+
+  check(
+    "coverage narrows the offered speeds to what the printer runs",
+    offeredMethodsFor(SHIPPING, reachable, product.shipping, "US").join(",") ===
+      "Budget,StandardPlus",
+    offeredMethodsFor(SHIPPING, reachable, product.shipping, "US").join(","),
+  );
+
+  // No sweep yet is not a refusal. Reading it as one would hide every speed in
+  // a market the moment it was opened, before anything had been measured.
+  check(
+    "an unswept country still offers every speed we sell",
+    offeredMethodsFor(SHIPPING, undefined, product.shipping, "JP").length ===
+      SHIPPING_METHODS.length,
+  );
+
+  // A global veto beats coverage: the printer running it doesn't mean we sell it.
+  const noBudget: ShippingSettings = {
+    ...SHIPPING,
+    methods: { ...SHIPPING.methods, Budget: { offered: false } },
+  };
+  check(
+    "a speed switched off catalog-wide is not offered anywhere",
+    !offeredMethodsFor(noBudget, reachable, product.shipping, "US").includes("Budget"),
+  );
+
+  // And a per-country veto beats both, without touching the other countries.
+  const notInUs: ShippingSettings = {
+    ...SHIPPING,
+    countryOverrides: { US: { disabled: ["StandardPlus"] } },
+  };
+  check(
+    "a country veto removes one speed there and nowhere else",
+    !offeredMethodsFor(notInUs, reachable, product.shipping, "US").includes("StandardPlus") &&
+      offeredMethodsFor(notInUs, undefined, product.shipping, "GB").includes("StandardPlus"),
+  );
+
+  // A measured refusal for THIS book, on a route the printer serves for others.
+  check(
+    "a speed the printer refused for this book is not offered",
+    !offeredMethodsFor(SHIPPING, undefined, product.shipping, "US").includes("Standard"),
+  );
+
+  // Flat mode is the one place automatic availability is unsafe: a speed with
+  // no rate entered would be sold at whatever the cheapest one charges.
+  const flat = withPricingMode(SHIPPING, "flat");
+  check(
+    "switching to flat leaves only the cheapest speed on",
+    SHIPPING_METHODS.filter((m) => flat.methods[m].offered).length === 1,
+  );
+}
+
+// ---- The dry run predicts what the save actually does ----------------------
+
+// The preview exists so a policy change can be reviewed before it reaches
+// customers, which is worth nothing if it disagrees with the save. It's built
+// by running the real projection twice, so this check is really guarding
+// against someone "optimising" it into a model of the rules.
+{
+  const dearer: ShippingSettings = {
+    ...SHIPPING,
+    pricing: { ...SHIPPING.pricing, markupPct: 50 },
+  };
+  const preview = previewShippingChange({
+    products: [product],
+    settings,
+    registry: REGISTRY,
+    current: SHIPPING,
+    candidate: dearer,
+  });
+  check(
+    "a markup change is predicted as repricing and not as withdrawal",
+    preview.totals.repriced > 0 && preview.totals.lost === 0 && preview.totals.gained === 0,
+    JSON.stringify(preview.totals),
+  );
+
+  const after = toPublicProduct(product, settings, {
+    offerable: true,
+    registry: REGISTRY,
+    shipping: dearer,
+  });
+  const predicted = preview.prices.find((p) => p.country === "US" && p.method === "StandardPlus");
+  const actual = after.shipping.rates.find(
+    (r) => r.country === "US" && r.method === "StandardPlus",
+  )?.charged[predicted?.currency ?? settings.baseCurrency];
+  check(
+    "the predicted price is the price the save produces",
+    predicted != null &&
+      actual != null &&
+      Math.abs(predicted.after - (actual.base + actual.perCopy)) < 0.01,
+    predicted ? `predicted ${predicted.after}` : "no prediction",
+  );
+
+  // Withdrawing a speed has to read as a withdrawal, not as a reprice — they
+  // have opposite remedies and the panel tints only one of them.
+  const withoutStandardPlus: ShippingSettings = {
+    ...SHIPPING,
+    methods: { ...SHIPPING.methods, StandardPlus: { offered: false } },
+  };
+  const withdrawal = previewShippingChange({
+    products: [product],
+    settings,
+    registry: REGISTRY,
+    current: SHIPPING,
+    candidate: withoutStandardPlus,
+  });
+  check(
+    "unticking a speed is predicted as routes withdrawn",
+    withdrawal.totals.lost > 0 && withdrawal.totals.gained === 0,
+    JSON.stringify(withdrawal.totals),
+  );
+
+  // An unchanged policy must produce an empty diff. A preview that always finds
+  // something would be ignored within a week.
+  const same = previewShippingChange({
+    products: [product],
+    settings,
+    registry: REGISTRY,
+    current: SHIPPING,
+    candidate: SHIPPING,
+  });
+  check(
+    "an unchanged policy predicts no change at all",
+    same.totals.gained + same.totals.lost + same.totals.repriced + same.totals.unpriceable === 0,
+    JSON.stringify(same.totals),
   );
 }
 
@@ -333,61 +521,55 @@ for (const target of [25, 45]) {
 // The failure this guards is a save-blocking error invented out of a network
 // blip: a speed we never got an answer for, treated as one the printer refuses.
 {
-  const enabledOnly: ShippingMethod[] = ["StandardPlus"];
-  const withMethods = (p: ProductDefinition, enabled: ShippingMethod[]) =>
-    normalizeProduct({
-      ...p,
-      shipping: {
-        ...p.shipping,
-        methods: p.shipping.methods.map((m) => ({ ...m, enabled: enabled.includes(m.method) })),
-      },
-    });
+  // Only StandardPlus is on sale, so a refusal of it is a refusal of everything
+  // this catalog offers.
+  const onlyStandardPlus: ShippingSettings = {
+    ...SHIPPING,
+    methods: Object.fromEntries(
+      SHIPPING_METHODS.map((m) => [m, { offered: m === "StandardPlus" }]),
+    ) as ShippingSettings["methods"],
+  };
+  const opts = { registry: REGISTRY, shipping: onlyStandardPlus };
 
-  // AU has rows for other speeds but none for the enabled one: unknown, not
+  // AU has a row for another speed but none for the one we sell: unknown, not
   // refused. Nothing here justifies blocking a save.
-  const unknownInAu = withMethods(
-    normalizeProduct({
-      ...product,
-      shipping: {
-        ...product.shipping,
-        fallback: [
-          ...(product.shipping.fallback ?? []),
-          { country: "AU", method: "Budget", available: true, base: 14.99, perCopy: 3 },
-        ],
-      },
-    }),
-    enabledOnly,
-  );
+  const unknownInAu = normalizeProduct({
+    ...product,
+    shipping: {
+      ...product.shipping,
+      fallback: [
+        ...(product.shipping.fallback ?? []),
+        { country: "AU", method: "Budget", available: true, base: 14.99, perCopy: 3 },
+      ],
+    },
+  });
   check(
     "an unmeasured speed does not strand a country",
-    !saveBlockingIssues(validateProduct(unknownInAu, settings, { registry: REGISTRY })).some((i) =>
-      i.message.includes("No enabled shipping speed reaches"),
+    !saveBlockingIssues(validateProduct(unknownInAu, settings, opts)).some((i) =>
+      i.message.includes("refuses every speed"),
     ),
   );
 
   // Same shape, but now the printer actually refused it. That IS a finding.
-  const refusedInAu = withMethods(
-    normalizeProduct({
-      ...product,
-      shipping: {
-        ...product.shipping,
-        fallback: [
-          ...(product.shipping.fallback ?? []),
-          { country: "AU", method: "Budget", available: true, base: 14.99, perCopy: 3 },
-          { country: "AU", method: "StandardPlus", available: false, base: 0, perCopy: 0 },
-        ],
-      },
-    }),
-    enabledOnly,
+  const refusedInAu = normalizeProduct({
+    ...product,
+    shipping: {
+      ...product.shipping,
+      fallback: [
+        ...(product.shipping.fallback ?? []),
+        { country: "AU", method: "Budget", available: true, base: 14.99, perCopy: 3 },
+        { country: "AU", method: "StandardPlus", available: false, base: 0, perCopy: 0 },
+      ],
+    },
+  });
+  const stranding = validateProduct(refusedInAu, settings, opts).find((i) =>
+    i.message.includes("refuses every speed"),
   );
-  const stranding = validateProduct(refusedInAu, settings, { registry: REGISTRY }).find((i) =>
-    i.message.includes("No enabled shipping speed reaches"),
-  );
-  check("a refused speed does strand a country", stranding != null);
-  // Naming the working speed is the difference between a dead end and a fix.
+  check("a refused speed does strand a country", stranding != null, stranding?.message);
+  // Naming the country is the difference between a dead end and a fix.
   check(
-    "the stranding error names a speed that works there",
-    stranding?.message.includes("Budget") === true,
+    "the stranding error names the country it's about",
+    stranding?.message.includes("AU") === true,
     stranding?.message,
   );
 
@@ -399,13 +581,19 @@ for (const target of [25, 45]) {
     ...refusedInAu,
     shipping: {
       ...refusedInAu.shipping,
-      destinations: { mode: "allowlist", countries: ["US", "GB", "DE", "CA"], regions: {} },
+      destinationsOverride: {
+        mode: "allowlist",
+        countries: ["US", "GB", "DE", "CA"],
+        regions: {},
+      },
     },
   });
   check(
     "deselecting a market clears its stranding error without re-measuring",
-    !validateProduct(withoutAu, settings, { registry: REGISTRY }).some((i) => i.message.includes("AU")),
-    validateProduct(withoutAu, settings, { registry: REGISTRY })
+    !validateProduct(withoutAu, settings, opts).some(
+      (i) => i.message.includes("AU") && i.message.includes("refuses every speed"),
+    ),
+    validateProduct(withoutAu, settings, opts)
       .filter((i) => i.message.includes("AU"))
       .map((i) => i.message)
       .join(" | "),
@@ -418,22 +606,24 @@ for (const target of [25, 45]) {
   );
 }
 
-// ---- Every seeded product offers a tier that reaches our markets -----------
+// ---- The seeded policy can actually sell -----------------------------------
 
+// One check where there used to be one per product, because the answer stopped
+// varying by product: which speeds are on sale is a single document now.
 {
-  // `Standard` is the provider's GROUND service, which it does not run to the
-  // US or the UK. A seed offering only that cannot be ordered in either.
-  const stranded = seedProductsFromCatalog().filter(
-    (p) => defaultShippingMethod(p) === "Standard",
-  );
   check(
-    "no seeded product defaults to a tier that misses the US and UK",
-    stranded.length === 0,
-    stranded.length > 0 ? `${stranded.length} seeds default to Standard (GROUND)` : undefined,
+    "the seeded policy sells at least one speed",
+    SHIPPING_METHODS.some((m) => SHIPPING.methods[m].offered),
   );
 
-  const noTier = seedProductsFromCatalog().filter((p) => !p.shipping.methods.some((m) => m.enabled));
-  check("every seeded product enables a shipping tier", noTier.length === 0);
+  // `Standard` is the provider's GROUND service, which it does not run to the
+  // US or the UK. Falling back to it when nothing else is known would fail the
+  // first quote in our two largest markets.
+  check(
+    "the fallback tier isn't one that misses the US and UK",
+    defaultShippingMethod(SHIPPING) !== "Standard",
+    defaultShippingMethod(SHIPPING),
+  );
 }
 
 // ---- Markets are a ceiling, not a suggestion -------------------------------
@@ -451,7 +641,7 @@ for (const target of [25, 45]) {
     },
   });
   const escapes = ["ES", "IT", "NL", "JP", "BR"].filter((c) =>
-    isDestinationAllowed(REGISTRY, worldwide.shipping.destinations, { country: c }),
+    isDestinationAllowed(REGISTRY, destinationPolicyFor(SHIPPING, worldwide.shipping), { country: c }),
   );
   check(
     "a product claiming worldwide shipping still can't leave our markets",
@@ -463,17 +653,17 @@ for (const target of [25, 45]) {
   // check time, so a product created before a market opened reaches it too.
   check(
     "a ship-anywhere policy resolves to exactly the open markets",
-    worldwide.shipping.destinations.mode === "all" &&
-      allowedMarketsFor(REGISTRY, worldwide.shipping.destinations).join(",") ===
+    destinationPolicyFor(SHIPPING, worldwide.shipping).mode === "all" &&
+      allowedMarketsFor(REGISTRY, destinationPolicyFor(SHIPPING, worldwide.shipping)).join(",") ===
         enabledMarkets(REGISTRY).join(","),
-    allowedMarketsFor(REGISTRY, worldwide.shipping.destinations).join(","),
+    allowedMarketsFor(REGISTRY, destinationPolicyFor(SHIPPING, worldwide.shipping)).join(","),
   );
 
   // The ceiling holds against an empty registry too — that's the state before
   // config loads, and it must refuse rather than fall open.
   check(
     "an unloaded registry refuses every destination",
-    allowedMarketsFor(EMPTY_MARKET_REGISTRY, worldwide.shipping.destinations).length === 0,
+    allowedMarketsFor(EMPTY_MARKET_REGISTRY, destinationPolicyFor(SHIPPING, worldwide.shipping)).length === 0,
   );
 
   // A blocklist may subtract from the markets but never add to them.
@@ -484,7 +674,7 @@ for (const target of [25, 45]) {
       destinations: { mode: "blocklist", countries: ["AU", "FR"], regions: {} },
     },
   });
-  const viaBlocklist = allowedMarketsFor(REGISTRY, blocking.shipping.destinations);
+  const viaBlocklist = allowedMarketsFor(REGISTRY, destinationPolicyFor(SHIPPING, blocking.shipping));
   check(
     "a blocklist subtracts markets and adds none",
     !viaBlocklist.includes("AU") &&
@@ -497,7 +687,7 @@ for (const target of [25, 45]) {
   // mean a product nobody can order — worth failing loudly rather than shipping
   // a country dropdown with nothing in it.
   const seeds = seedProductsFromCatalog().filter(
-    (p) => allowedMarketsFor(REGISTRY, p.shipping.destinations).length === 0,
+    (p) => allowedMarketsFor(REGISTRY, destinationPolicyFor(SHIPPING, p.shipping)).length === 0,
   );
   check("every seeded product can be ordered to at least one market", seeds.length === 0);
 
@@ -512,8 +702,8 @@ for (const target of [25, 45]) {
   });
   check(
     "naming a closed country in an allowlist doesn't open it",
-    !isDestinationAllowed(REGISTRY, optimistic.shipping.destinations, { country: "JP" }) &&
-      isDestinationAllowed(REGISTRY, optimistic.shipping.destinations, { country: "US" }),
+    !isDestinationAllowed(REGISTRY, destinationPolicyFor(SHIPPING, optimistic.shipping), { country: "JP" }) &&
+      isDestinationAllowed(REGISTRY, destinationPolicyFor(SHIPPING, optimistic.shipping), { country: "US" }),
   );
 
   // The sanctions list is applied when the registry is BUILT, not only in the
@@ -700,6 +890,7 @@ for (const target of [25, 45]) {
   const publicProduct = toPublicProduct(priced, settings, {
     offerable: true,
     registry: REGISTRY,
+    shipping: SHIPPING,
     plans: [
       { id: "storyteller", printDiscountPct: 10 },
       { id: "dream-weaver", printDiscountPct: 20 },
@@ -737,9 +928,9 @@ for (const target of [25, 45]) {
   const shippingMismatches: string[] = [];
   const unmeasuredLeaks: string[] = [];
   for (const cur of settings.currencies) {
-    for (const country of allowedMarketsFor(REGISTRY, product.shipping.destinations)) {
+    for (const country of allowedMarketsFor(REGISTRY, destinationPolicyFor(SHIPPING, product.shipping))) {
       for (const copies of [1, 3, 10]) {
-        const method = defaultShippingMethod(product);
+        const method = defaultShippingMethod(SHIPPING);
         const quote = simulatePublicOrder(publicProduct, settings, {
           currency: cur,
           pages: min,
@@ -754,14 +945,14 @@ for (const target of [25, 45]) {
           destinationCountry: country,
           shippingMethod: method,
         };
-        const priceable = hasUsableShippingCost(product.shipping, undefined, scenario);
+        const priceable = hasUsableShippingCost(SHIPPING, product.shipping, undefined, scenario);
         if (!priceable) {
           if (quote.shipping != null) {
             unmeasuredLeaks.push(`${cur} ${country} ×${copies}: published ${quote.shipping}`);
           }
           continue;
         }
-        const server = computeMargin(product, scenario, settings).shippingCharged;
+        const server = computeMargin(product, scenario, settings, SHIPPING).shippingCharged;
         if (quote.shipping == null || Math.abs(quote.shipping - server) > 0.02) {
           shippingMismatches.push(
             `${cur} ${country} ×${copies}: ${quote.shipping ?? "none"} vs ${server}`,
@@ -815,7 +1006,7 @@ for (const target of [25, 45]) {
 
   // Plan discounts are published already clamped, so the storefront can multiply
   // naively and still never advertise more than the price can carry.
-  const headroom = worstBreakEvenDiscountPct(product, settings, 1);
+  const headroom = worstBreakEvenDiscountPct(product, settings, SHIPPING, 1);
   const overpromised = Object.entries(publicProduct.planPrintDiscountPct).filter(
     ([, pct]) => pct > headroom + 1e-9,
   );
@@ -852,7 +1043,7 @@ for (const target of [25, 45]) {
   );
 
   const publicProducts = seedProductsFromCatalog().map((p) =>
-    toPublicProduct(p, settings, { offerable: true, registry: REGISTRY }),
+    toPublicProduct(p, settings, { offerable: true, registry: REGISTRY, shipping: SHIPPING }),
   );
   const roundTripped = publicProducts.every(
     (p) => findPublicProductBySlug(publicProducts, formatSlug(p.spec))?.sku === p.sku,

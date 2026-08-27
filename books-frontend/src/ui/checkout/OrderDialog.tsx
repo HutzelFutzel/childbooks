@@ -60,6 +60,7 @@ import { Button } from "../components/Button";
 import { Field, Input } from "../components/Input";
 import { Modal } from "../components/Modal";
 import { Select } from "../components/Select";
+import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
 import type { DesignPage } from "../design/designInit";
 import { buildCoverPlan } from "../design/printTargets";
@@ -250,16 +251,6 @@ export function OrderDialog({
     }));
   }, [catalogProduct, registry]);
 
-  // Shipping methods the product actually supports (backend rejects the rest).
-  const shippingOptions = useMemo(() => {
-    const enabled = catalogProduct?.shipping.methods.filter((m) => m.enabled) ?? [];
-    if (enabled.length === 0) return SHIPPING;
-    return enabled.map((m) => ({
-      value: m.method,
-      label: m.label || SHIPPING_LABEL[m.method] || m.method,
-    }));
-  }, [catalogProduct]);
-
   const [phase, setPhase] = useState<Phase>("form");
   const [status, setStatus] = useState("");
   const [coverDims, setCoverDims] = useState<{ widthMm: number; heightMm: number } | null>(null);
@@ -280,10 +271,10 @@ export function OrderDialog({
   // customer has been charged.
   const [taxId, setTaxId] = useState("");
   const [copies, setCopies] = useState(1);
-  // Budget (Lulu MAIL) is the only level quotable in every destination we sell
-  // to — GROUND ("Standard") is unavailable to the US and UK, and EXPEDITED
-  // ("Express") is US-only, so defaulting to either fails the first price quote.
-  // Per-product availability is configured in the admin catalog's shipping tab.
+  // Corrected to something this destination actually offers as soon as the
+  // catalog and the country are both known. A fixed default was wrong for most
+  // countries — the printer runs a different set of services in each — and the
+  // customer only found out when the first quote failed.
   const [shipping, setShipping] = useState<ShippingMethod>("Budget");
 
   // Saved-address book: "" means a new/unsaved address is being entered.
@@ -341,6 +332,37 @@ export function OrderDialog({
         : countryOptions,
     [countryOptions, country, unserviced],
   );
+
+  // The speeds this destination actually offers, with how long each takes and
+  // what it costs.
+  //
+  // Driven by the published rate rows, which are the same rows the server
+  // resolves the order against — so the picker can't offer a speed checkout
+  // would refuse. It used to list whatever the product had enabled regardless
+  // of country, and since the printer runs a different set of services in each,
+  // most of those entries were fiction until the quote came back.
+  const shippingChoices = useMemo(() => {
+    const labels = new Map(
+      (catalogProduct?.shipping.methods ?? []).map((m) => [m.method, m.label || SHIPPING_LABEL[m.method]]),
+    );
+    const rows = (catalogProduct?.shipping.rates ?? []).filter(
+      (r) => r.country === country && r.available,
+    );
+    return rows
+      .map((row) => {
+        const terms = row.charged[currency];
+        return {
+          value: row.method,
+          label: labels.get(row.method) ?? SHIPPING_LABEL[row.method] ?? row.method,
+          // Absent when the route was never measured. The order still prices —
+          // checkout live-quotes it — so the option is offered without a
+          // number rather than withheld.
+          price: terms ? terms.base + terms.perCopy * copies : null,
+          transit: transitLabel(row.transitDaysMin, row.transitDaysMax),
+        };
+      })
+      .sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+  }, [catalogProduct, country, currency, copies]);
 
   // Extra fields this destination's carrier demands. Both are hard refusals at
   // the provider rather than style notes, so they're required, not advisory.
@@ -417,13 +439,15 @@ export function OrderDialog({
     if (open) setContactEmail((e) => e || email);
   }, [open, email]);
 
-  // Keep the selected shipping method within what the product supports (the
-  // options can arrive/refresh after the dialog opens).
+  // Keep the selection inside what this destination offers. Runs on every
+  // country change, not just on open: the previous speed may not exist there,
+  // and leaving it selected quotes a combination the server refuses.
   useEffect(() => {
-    if (!shippingOptions.some((o) => o.value === shipping)) {
-      setShipping(shippingOptions[0]?.value ?? "Standard");
+    if (shippingChoices.length === 0) return;
+    if (!shippingChoices.some((o) => o.value === shipping)) {
+      setShipping(shippingChoices[0].value);
     }
-  }, [shippingOptions, shipping]);
+  }, [shippingChoices, shipping]);
 
   // Editing any address field detaches from the picked saved address, so saving
   // creates a new entry instead of silently overwriting the selected one.
@@ -1009,28 +1033,67 @@ export function OrderDialog({
             Save this address for next time
           </label>
 
-          {/* Copies + shipping */}
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Copies" required>
-              <Input
-                type="number"
-                min={1}
-                max={Number.isFinite(maxCopies) ? maxCopies : undefined}
-                value={copies}
-                onChange={(e) => {
-                  const next = Math.max(1, Number(e.target.value) || 1);
-                  setCopies(Number.isFinite(maxCopies) ? Math.min(next, maxCopies) : next);
-                }}
-              />
-            </Field>
-            <Field label="Shipping" required>
-              <Select
-                options={shippingOptions}
-                value={shipping}
-                onChange={(e) => setShipping(e.target.value as ShippingMethod)}
-              />
-            </Field>
-          </div>
+          <Field label="Copies" required className="max-w-[10rem]">
+            <Input
+              type="number"
+              min={1}
+              max={Number.isFinite(maxCopies) ? maxCopies : undefined}
+              value={copies}
+              onChange={(e) => {
+                const next = Math.max(1, Number(e.target.value) || 1);
+                setCopies(Number.isFinite(maxCopies) ? Math.min(next, maxCopies) : next);
+              }}
+            />
+          </Field>
+
+          {/* Delivery speed. Cards rather than a dropdown because the choice is
+              between a time and a price, and neither fits in an option label —
+              a customer picking blind between five names is how "why is this
+              taking three weeks" happens. */}
+          <Field label="Delivery" required>
+            {shippingChoices.length === 0 ? (
+              <p className="text-xs text-ink-400">
+                {unserviced || !country
+                  ? "Choose a destination to see delivery options."
+                  : "No delivery options are published for this destination yet — the exact cost will be quoted when you continue."}
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                {shippingChoices.map((option) => (
+                  <label
+                    key={option.value}
+                    className={cn(
+                      "flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 text-sm transition",
+                      shipping === option.value
+                        ? "border-brand-400 bg-brand-50/60"
+                        : "border-ink-100 hover:border-ink-200",
+                    )}
+                  >
+                    <input
+                      type="radio"
+                      name="shipping-method"
+                      checked={shipping === option.value}
+                      onChange={() => setShipping(option.value)}
+                      className="size-4 shrink-0 border-ink-300 text-brand-600 focus:ring-brand-400"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-ink-800">{option.label}</span>
+                      <span className="block text-xs text-ink-400">
+                        {option.transit ?? "Delivery time confirmed at checkout"}
+                      </span>
+                    </span>
+                    <span className="shrink-0 text-sm font-medium text-ink-700">
+                      {option.price == null
+                        ? "—"
+                        : option.price === 0
+                          ? "Free"
+                          : money(String(option.price), currency)}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </Field>
 
           {/* Quote */}
           <div className="rounded-xl border border-ink-100 px-3.5 py-3 text-sm">
@@ -1090,6 +1153,22 @@ export function OrderDialog({
 
 function capitalize(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/**
+ * "5–8 business days", or null when the provider didn't say.
+ *
+ * Null rather than a guess. The figure includes production, varies by country,
+ * and is the one part of this screen a customer will hold us to — inventing it
+ * from the tier's name is how "Express" comes to mean whatever they hoped.
+ */
+function transitLabel(min: number | undefined, max: number | undefined): string | null {
+  if (min == null && max == null) return null;
+  const low = min ?? max;
+  const high = max ?? min;
+  if (low == null || high == null) return null;
+  const range = low === high ? `${low}` : `${low}–${high}`;
+  return `${range} business day${high === 1 ? "" : "s"}`;
 }
 
 function money(amount: string, currency: string): string {
