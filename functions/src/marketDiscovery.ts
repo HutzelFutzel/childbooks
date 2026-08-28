@@ -97,8 +97,15 @@ function settled(prev: MarketCapability | undefined): boolean {
   return prev != null && prev.status !== "unknown";
 }
 
-/** One country: ask the provider what it runs there. */
-async function probeCountry(
+/**
+ * One country: ask the provider what it runs there for one book.
+ *
+ * Exported because the per-format sweep (`productDiscovery.ts`) asks the exact
+ * same question with a different SKU. Sharing it is what keeps the two sweeps
+ * agreeing on the part that is easy to get wrong — that an empty option list is
+ * a refusal, and that everything else that goes wrong is `unknown`.
+ */
+export async function probeCountry(
   env: FulfillmentEnv,
   sku: string,
   pageCount: number,

@@ -21,6 +21,7 @@ import { logger } from "firebase-functions/v2";
 import { ensureAdmin } from "./storage";
 import { ALL_SECRETS } from "./secrets";
 import { runMarketSweep } from "./marketDiscovery";
+import { runProductSweep } from "./productDiscovery";
 import { reprojectPublicProducts } from "./products";
 
 export const sweepMarketCoverage = onSchedule(
@@ -36,23 +37,43 @@ export const sweepMarketCoverage = onSchedule(
       // Coverage has a shelf life. A weekly refresh must re-check settled
       // countries too, then publish the new answer to the storefront.
       const result = await runMarketSweep({ force: true });
-      await reprojectPublicProducts();
       if (result.probed === 0) {
         // Not an error: every country already has a settled verdict, which is
         // the steady state once a full sweep has completed.
         logger.info(`[market-sweep] nothing to probe${result.message ? ` — ${result.message}` : ""}`);
-        return;
+      } else {
+        logger.info(
+          `[market-sweep] probed ${result.probed}: ${result.available} reachable, ` +
+            `${result.refused} refused, ${result.unknown} unknown`,
+        );
       }
-      logger.info(
-        `[market-sweep] probed ${result.probed}: ${result.available} reachable, ` +
-          `${result.refused} refused, ${result.unknown} unknown`,
-      );
       // Worth a warning rather than a silent retry next week: a throttled run
       // leaves `unknown` rows, and an enabled country with no verdict is
       // exactly the case the Markets tab flags for attention.
       if (result.throttled) {
         logger.warn(`[market-sweep] incomplete — ${result.message ?? "rate-limited"}`);
       }
+
+      // Then the per-format pass. Runs even when the country sweep found
+      // nothing new: it answers a different question (which formats the
+      // printer will MAKE for each market), and its answer moves when a
+      // facility changes what it binds, not when a country opens.
+      //
+      // Its own failure is caught separately so a bad format sweep can't
+      // discard a good country sweep — both persist as they go, and the
+      // projection below publishes whatever was learned.
+      try {
+        const formats = await runProductSweep({ force: true });
+        logger.info(
+          `[product-sweep] ${formats.formats} formats, probed ${formats.probed}: ` +
+            `${formats.available} available, ${formats.refused} refused, ${formats.unknown} unknown`,
+        );
+        if (formats.message) logger.warn(`[product-sweep] ${formats.message}`);
+      } catch (err) {
+        logger.error("[product-sweep] format sweep failed", err);
+      }
+
+      await reprojectPublicProducts();
     } catch (err) {
       logger.error("[market-sweep] sweep failed", err);
     }

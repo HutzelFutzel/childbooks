@@ -530,6 +530,10 @@ const ROUTE_RULES: RouteRule[] = [
   // document every product's shipping options are read from — so it needs the
   // write grant, not the read one.
   { test: /^\/admin\/markets\/sweep$/, gate: key("configuration.markets", "write") },
+  // Same reasoning for the per-format sweep, and gated on markets rather than
+  // catalog for the same reason the shipping policy is: it decides where a book
+  // can be sold, which is the markets question asked one format at a time.
+  { test: /^\/admin\/markets\/formats\/sweep$/, gate: key("configuration.markets", "write") },
   // A POST that writes nothing: it projects the catalog against a candidate
   // policy and throws the result away. Gated on read so someone who may look at
   // the shipping policy can also find out what changing it would do — refusing

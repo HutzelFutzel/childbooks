@@ -19,6 +19,7 @@ import {
   worstBreakEvenDiscountPct,
 } from "./productMath";
 import { bookMediaKey, resolvedPhotosFor, type CatalogMediaConfig } from "./catalogMedia";
+import { availableMethodsFor, type MarketCapability } from "./marketCapability";
 import { EMPTY_MARKET_REGISTRY, type MarketRegistry } from "./markets";
 import { createDefaultShippingSettings, type ShippingSettings } from "./shipping";
 import { variantFromSku } from "../fulfillment/lulu/skuAxes";
@@ -103,6 +104,16 @@ export interface ValidateOptions {
    * MORE "this price doesn't cover its costs" complaints, not fewer.
    */
   shipping?: ShippingSettings;
+  /**
+   * What the printer was measured to do FOR THIS FORMAT in each country.
+   *
+   * Omitted means "nobody has asked", and every check below treats that as
+   * permission rather than refusal. That is the same fail-open rule the country
+   * sweep uses, and it matters more here: a format is measured only after it
+   * exists, so failing closed would make every newly-created product invalid
+   * until a sweep had run — which an admin would reasonably read as a bug.
+   */
+  capability?: ReadonlyMap<string, MarketCapability>;
 }
 
 /** Collect all configuration issues for a product. */
@@ -386,6 +397,51 @@ export function validateProduct(
         "shipping.destinations",
         `The printer refuses every speed we sell to ${stranded.join(", ")} — orders there will fail at checkout. ` +
           `Either stop selling this book there, or offer a speed the printer does run under Configuration → Markets.`,
+      );
+    }
+  }
+
+  // Per-format coverage. The printer doesn't bind every format in every
+  // facility, so where one isn't made locally it's imported — which changes
+  // WHICH SPEEDS EXIST, not just the price. A landscape hardcover to Germany
+  // loses Standard (GROUND) and gains Express; a hardcover to Australia loses
+  // Standard Plus. Selling a speed the printer doesn't run for this book is a
+  // hard refusal at order time, after payment.
+  //
+  // Counted only where the sweep reached a verdict, so an unswept format — or a
+  // throttled cell — says nothing rather than blocking a save.
+  //
+  // A LOSS IN SOME MARKETS IS A WARNING, NOT AN ERROR, and the distinction is
+  // load-bearing: an error makes the product non-offerable, which would pull a
+  // hardcover from the whole storefront because Australia can't have it. The
+  // projection already withholds the individual country (its rate rows come out
+  // unavailable), so nobody can order the broken combination either way. The
+  // warning exists so the gap is visible rather than silent. Only a format that
+  // reaches NO market it sells to is genuinely unsellable, and that is the one
+  // case worth blocking on. See `productCapability.ts`.
+  if (opts.capability) {
+    const sellsTo = allowedMarketsFor(registry, policy);
+    const unreachable: string[] = [];
+    let reachable = 0;
+    for (const country of sellsTo) {
+      const cell = opts.capability.get(country);
+      if (!cell || cell.status === "unknown") continue;
+      const sellable = offeredMethodsFor(shippingSettings, undefined, p.shipping, country);
+      const runs = new Set(availableMethodsFor(cell));
+      if (sellable.some((m) => runs.has(m))) reachable += 1;
+      else unreachable.push(country);
+    }
+    if (unreachable.length > 0 && reachable === 0) {
+      err(
+        "shipping.destinations",
+        `The printer runs no speed we sell for this format to any market it's sold in (${unreachable.join(", ")}) — every order would be refused after payment. ` +
+          `Offer a speed it does run under Configuration → Markets, or retire this format.`,
+      );
+    } else if (unreachable.length > 0) {
+      warn(
+        "shipping.destinations",
+        `The printer runs no speed we sell for this format to ${unreachable.join(", ")}, so it's withheld there — customers in those countries won't see it. ` +
+          `Offer a speed it does run under Configuration → Markets, or exclude those countries under Destinations to make the gap deliberate.`,
       );
     }
   }

@@ -9,6 +9,7 @@ import { useAppConfigStore } from "../../state/appConfigStore";
 import { useProjectsStore } from "../../state/projectsStore";
 import { OptionCard } from "../components/OptionCard";
 import { Button } from "../components/Button";
+import { ShipToNote } from "../components/ShipToNote";
 import { LayoutSchematic } from "../design/LayoutSchematic";
 import { cn } from "../lib/cn";
 import type { BookConfig } from "../../core/types";
@@ -43,7 +44,8 @@ type PickerProps = StepProps & {
 
 /** Question 1 · physical size (trim), the one choice the design is built around. */
 export function SizeQuestion({ config, compact }: PickerProps) {
-  const { sizes, purchasable, offerable, currency, catalogLoaded } = useOfferableFormats();
+  const { sizes, purchasable, offerable, currency, catalogLoaded, unavailableHere } =
+    useOfferableFormats();
   const current = bookProductForConfig(config);
   // Art is generated at the page's aspect ratio, so a different shape means every
   // illustration is cropped to fit. That makes size the one decision this flow
@@ -111,6 +113,11 @@ export function SizeQuestion({ config, compact }: PickerProps) {
           </span>
         </div>
       )}
+
+      {/* Only speaks up when the destination is actually costing this reader an
+          option — see ShipToNote. Placed above the cards so the shorter list is
+          explained before it's noticed rather than after. */}
+      <ShipToNote hiddenCount={unavailableHere.length} />
 
       {compact ? (
         <div className="flex flex-col gap-1.5">

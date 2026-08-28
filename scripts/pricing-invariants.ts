@@ -14,11 +14,14 @@
  * .mjs check would mean the check could pass while the shipped code was wrong.
  */
 import {
+  availableCountries,
   createDefaultPricingSettings,
   findPublicProductBySlug,
   formatSlug,
+  isAvailableIn,
   normalizeProduct,
   seedProductsFromCatalog,
+  type GeoPolicy,
   type PricingSettings,
   type ProductDefinition,
 } from "../books-frontend/src/core/config/products";
@@ -50,6 +53,10 @@ import {
 } from "../books-frontend/src/core/config/shipping";
 import { previewShippingChange } from "../books-frontend/src/core/config/shippingPreview";
 import type { MarketCapability } from "../books-frontend/src/core/config/marketCapability";
+import {
+  coverageFor,
+  normalizeProductCapability,
+} from "../books-frontend/src/core/config/productCapability";
 import {
   costVariantKey,
   enumerateVariants,
@@ -455,6 +462,122 @@ for (const target of [25, 45]) {
     "a speed the printer refused for this book is not offered",
     !offeredMethodsFor(SHIPPING, undefined, product.shipping, "US").includes("Standard"),
   );
+
+  // ---- Coverage is per FORMAT, not just per country ------------------------
+  //
+  // Measured against the real printer: a hardcover to Australia is imported and
+  // runs MAIL/EXPEDITED/EXPRESS, while the paperback to the same address goes
+  // by Australia Post and runs MAIL/EXPRESS. Country-level coverage cannot
+  // express that, so these check the per-format document does — and, just as
+  // importantly, that its absence changes nothing.
+  {
+    const hardcoverInAu: MarketCapability = {
+      country: "AU",
+      status: "available",
+      levels: [
+        { level: "MAIL", method: "Budget", traceable: false, postboxOk: true, businessOnly: false },
+        { level: "EXPRESS", method: "Overnight", traceable: true, postboxOk: false, businessOnly: false },
+      ],
+      probedAt: Date.now(),
+    };
+    const config = normalizeProductCapability({
+      version: 1,
+      probe: { copies: 1, currency: "USD", env: "sandbox" },
+      products: [{ sku: product.provider.sku, pageCount: 40, countries: [hardcoverInAu] }],
+      sweptAt: Date.now(),
+    });
+
+    check(
+      "per-format coverage narrows speeds to what the printer runs for THAT book",
+      offeredMethodsFor(SHIPPING, hardcoverInAu, product.shipping, "AU").join(",") ===
+        "Budget,Overnight",
+      offeredMethodsFor(SHIPPING, hardcoverInAu, product.shipping, "AU").join(","),
+    );
+
+    // The fallback contract the projection depends on. A format nobody has
+    // swept must be indistinguishable from one with no document at all, or
+    // activating a new product would withdraw it from every market until the
+    // next sweep.
+    check(
+      "an unswept format has no coverage map, so the caller falls back",
+      coverageFor(config, "NOSUCHSKU0000000000000000000") === undefined,
+    );
+    check(
+      "a swept format's coverage is keyed by country",
+      coverageFor(config, product.provider.sku)?.get("AU")?.status === "available",
+    );
+
+    // Normalization has to survive the round trip through Firestore, or the
+    // sweep's verdicts quietly become "unswept" on the way back out.
+    const reread = normalizeProductCapability(JSON.parse(JSON.stringify(config)));
+    check(
+      "per-format coverage survives a serialization round trip",
+      coverageFor(reread, product.provider.sku)?.get("AU")?.levels.length === 2,
+    );
+
+    // The admin-facing half. A format that reaches NOTHING it sells to is an
+    // error; one that loses a single market is only a warning — because an
+    // error makes it non-offerable, which would pull the format from the entire
+    // storefront over one country the projection already withholds on its own.
+    const only = (...countries: string[]): GeoPolicy => ({
+      mode: "allowlist",
+      countries,
+      regions: {},
+    });
+    const withMarkets = (policy: GeoPolicy) =>
+      normalizeProduct({ ...product, shipping: { ...product.shipping, destinationsOverride: policy } });
+    const strandedInAu = new Map<string, MarketCapability>([
+      ["AU", { country: "AU", status: "refused", levels: [], probedAt: Date.now() }],
+      ["US", reachable],
+    ]);
+    const issuesFor = (policy: GeoPolicy, capability?: ReadonlyMap<string, MarketCapability>) =>
+      validateProduct(withMarkets(policy), settings, {
+        registry: REGISTRY,
+        shipping: SHIPPING,
+        ...(capability ? { capability } : {}),
+      }).filter((i) => i.field === "shipping.destinations");
+
+    check(
+      "a format the printer can't deliver anywhere it's sold is an error",
+      issuesFor(only("AU"), strandedInAu).some((i) => i.level === "error"),
+    );
+    check(
+      "losing one market only warns, so the format stays sellable in the rest",
+      issuesFor(only("AU", "US"), strandedInAu).every((i) => i.level === "warning") &&
+        issuesFor(only("AU", "US"), strandedInAu).some((i) => i.level === "warning"),
+    );
+    // The same product with no coverage passed, and with an inconclusive one,
+    // must both stay clean. A throttled probe is not evidence, and turning one
+    // into a save-blocking error is the failure mode this whole design avoids.
+    const unknownInAu = new Map<string, MarketCapability>([
+      ["AU", { country: "AU", status: "unknown", levels: [], probedAt: Date.now() }],
+    ]);
+    check(
+      "an unswept or inconclusive format raises nothing at all",
+      issuesFor(only("AU")).length === 0 && issuesFor(only("AU"), unknownInAu).length === 0,
+    );
+
+    // The storefront half, read off the published rate rows rather than from a
+    // second document — so the picker and the price table can't disagree.
+    const auPublic = toPublicProduct(withMarkets(only("AU", "US")), settings, {
+      offerable: true,
+      registry: REGISTRY,
+      shipping: SHIPPING,
+      capability: strandedInAu,
+    });
+    check(
+      "a format with no working route is unavailable in that country and no other",
+      !isAvailableIn(auPublic, "AU") &&
+        !availableCountries(auPublic).includes("AU") &&
+        isAvailableIn(auPublic, "US"),
+    );
+    // Fail-open, in the two shapes it has to hold: no country to filter by, and
+    // a country the projection has no rows for at all.
+    check(
+      "an unknown destination hides nothing",
+      isAvailableIn(auPublic, "") && isAvailableIn(auPublic, "JP"),
+    );
+  }
 
   // Flat mode is the one place automatic availability is unsafe: a speed with
   // no rate entered would be sold at whatever the cheapest one charges.

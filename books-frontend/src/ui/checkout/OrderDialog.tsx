@@ -55,6 +55,7 @@ import { flushProjectSaves, useProjectsStore } from "../../state/projectsStore";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useSubscriptionStore } from "../../state/subscriptionStore";
 import { useFormatsForConfigSize } from "../hooks/useOfferableFormats";
+import { useShipCountry } from "../hooks/useShipCountry";
 import { PlanUpsell } from "../billing/PlanUpsell";
 import { Button } from "../components/Button";
 import { Field, Input } from "../components/Input";
@@ -125,7 +126,20 @@ export function OrderDialog({
   // its aspect). The BINDING isn't: the formats below all print the same pages at
   // the same trim, so it's chosen here, where the final page count — the thing
   // that decides which bindings can even take this book — is known.
-  const { formats, offerable: offerableCatalog } = useFormatsForConfigSize(project.config);
+  // The destination, hoisted above the format hooks because it now FEEDS them:
+  // which bindings exist is a question about where the book is going, so the
+  // country has to be known before the format list can be built. It stays part
+  // of the address block in the form below.
+  //
+  // Seeded from the visitor's location only as a guess. Where the buyer sits
+  // and where a gift is sent are different countries often enough that the
+  // guess must never survive contact with a real address.
+  const { country: geoCountry, setCountry: rememberCountry } = useShipCountry();
+  const [country, setCountry] = useState(DEV_PREFILL?.country ?? "");
+  const { formats, offerable: offerableCatalog } = useFormatsForConfigSize(
+    project.config,
+    country,
+  );
   const designFormat = bookProductForConfig(project.config);
   const updateConfig = useProjectsStore((s) => s.updateConfig);
   const product = useMemo(
@@ -265,7 +279,6 @@ export function OrderDialog({
   const [city, setCity] = useState(DEV_PREFILL?.city ?? "");
   const [region, setRegion] = useState(DEV_PREFILL?.region ?? "");
   const [postal, setPostal] = useState(DEV_PREFILL?.postal ?? "");
-  const [country, setCountry] = useState(DEV_PREFILL?.country ?? "US");
   // The recipient's own tax id, for the handful of customs regimes that demand
   // one. Collected HERE because it is the last cheap moment: the provider only
   // rejects a missing one when the print job is created, which is after the
@@ -440,6 +453,20 @@ export function OrderDialog({
     if (open) setContactEmail((e) => e || email);
   }, [open, email]);
 
+  // Fill an empty country once, from the geo hint if we have one and otherwise
+  // from the only market on offer.
+  //
+  // It starts empty rather than at "US", which is what it used to be: a German
+  // customer opened checkout already set to the United States, saw US shipping
+  // speeds and US prices, and had to notice and correct it. Filling it from a
+  // guess is only safe because it is the EMPTY case — a saved address or
+  // anything the customer typed is left alone.
+  useEffect(() => {
+    if (!open || country) return;
+    const seed = geoCountry || (countryOptions.length === 1 ? countryOptions[0].value : "");
+    if (seed) setCountry(seed);
+  }, [open, country, geoCountry, countryOptions]);
+
   // Keep the selection inside what this destination offers. Runs on every
   // country change, not just on open: the previous speed may not exist there,
   // and leaving it selected quotes a combination the server refuses.
@@ -449,6 +476,21 @@ export function OrderDialog({
       setShipping(shippingChoices[0].value);
     }
   }, [shippingChoices, shipping]);
+
+  // Same rule one level up, for the BINDING. A destination can remove a whole
+  // format — the printer doesn't bind every one in every facility — and the
+  // picker below simply stops listing it. Without this the config would keep
+  // pointing at a format nobody can see, quoting a book this country can't
+  // receive, so the selection is moved to a sibling at the same trim instead.
+  //
+  // Deliberately not run while the list is empty: that's the catalog still
+  // loading, not a destination that refuses everything.
+  useEffect(() => {
+    if (!open || formats.length === 0) return;
+    if (!formats.some((f) => f.sku === project.config.productSku)) {
+      void updateConfig({ productSku: formats[0].sku });
+    }
+  }, [open, formats, project.config.productSku, updateConfig]);
 
   // Editing any address field detaches from the picked saved address, so saving
   // creates a new entry instead of silently overwriting the selected one.
@@ -467,7 +509,10 @@ export function OrderDialog({
     setCity(a.city);
     setRegion(a.region);
     setPostal(a.postal);
-    setCountry(a.country || "US");
+    // Empty rather than "US" when the saved entry has no country: the seeding
+    // effect then fills it from the geo hint, which is a better guess than a
+    // fixed default and is the same one the customer saw before opening this.
+    setCountry(a.country || "");
   };
 
   // Prefill from the preferred saved address when the dialog opens (once).
@@ -1008,7 +1053,15 @@ export function OrderDialog({
               <Select
                 options={countrySelectOptions}
                 value={country}
-                onChange={(e) => editAddr(setCountry, e.target.value)}
+                onChange={(e) => {
+                  editAddr(setCountry, e.target.value);
+                  // Correcting the destination here is the strongest signal we
+                  // get about where this person ships, so it replaces the guess
+                  // for the rest of the session and the next visit — including
+                  // the format picker back in the design flow, which would
+                  // otherwise go on offering a binding checkout just refused.
+                  rememberCountry(e.target.value);
+                }}
                 autoComplete="shipping country"
               />
             </Field>

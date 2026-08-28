@@ -1502,6 +1502,43 @@ export function offerablePublicProducts(
 }
 
 /**
+ * Whether this format can actually be ordered to a country.
+ *
+ * Read off the published rate table rather than from a second document,
+ * because the projection has already done the work: `rates` holds one row per
+ * destination and speed we'd sell, with `available` set from the printer's own
+ * per-format coverage. One available row is one way to get the book there.
+ *
+ * NO COUNTRY MEANS YES. The storefront calls this before it knows where the
+ * customer is, and hiding every format until a country is chosen would empty
+ * the shop for anyone whose location we can't guess.
+ *
+ * A country with NO ROWS AT ALL also means yes. Rows exist only for markets the
+ * product's geo policy allows, and the caller has already narrowed to those; an
+ * absent row is an unswept format, not a refusal. Failing open here is
+ * deliberate and safe — the live quote at checkout is the real gate, and it
+ * refuses what this can only guess at.
+ */
+export function isAvailableIn(
+  product: PublicProduct,
+  country: string | null | undefined,
+): boolean {
+  const code = (country ?? "").trim().toUpperCase();
+  if (!code) return true;
+  const rows = product.shipping.rates.filter((r) => r.country === code);
+  return rows.length === 0 || rows.some((r) => r.available);
+}
+
+/** The countries this format has at least one working delivery route to. */
+export function availableCountries(product: PublicProduct): string[] {
+  const out = new Set<string>();
+  for (const rate of product.shipping.rates) {
+    if (rate.available) out.add(rate.country);
+  }
+  return [...out].sort();
+}
+
+/**
  * A product's URL segment for public pages: `8-5x8-5-hardcover`.
  *
  * Derived from the physical spec rather than from `id` or `presentation.name`,

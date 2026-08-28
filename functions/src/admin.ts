@@ -131,6 +131,7 @@ import { getShippingSettings, saveShippingSettings } from "./shipping";
 import { normalizeShippingSettings } from "../../books-frontend/src/core/config/shipping";
 import { previewShippingChange } from "../../books-frontend/src/core/config/shippingPreview";
 import { runMarketSweep } from "./marketDiscovery";
+import { runProductSweep } from "./productDiscovery";
 import {
   deleteProduct,
   getProductsConfig,
@@ -1370,6 +1371,32 @@ export function registerAdminRoutes(app: Express): void {
       await reprojectPublicProducts();
       res.json({
         capability: result.config,
+        probed: result.probed,
+        available: result.available,
+        refused: result.refused,
+        unknown: result.unknown,
+        throttled: result.throttled,
+        ...(result.message ? { message: result.message } : {}),
+      });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Ask the printer what it will make for each FORMAT in each open market.
+  // Bounded to active formats × enabled markets, so it's tens of requests
+  // rather than the country sweep's hundreds; like that one it resumes instead
+  // of restarting, re-probing only the cells left `unknown`.
+  app.post("/admin/markets/formats/sweep", async (req: Request, res: Response) => {
+    try {
+      const result = await runProductSweep({ force: req.query.force === "1" });
+      // Coverage feeds the published rate table, and the storefront reads only
+      // the projection — skip this and it keeps offering speeds the printer
+      // was just observed not to run for that book.
+      await reprojectPublicProducts();
+      res.json({
+        capability: result.config,
+        formats: result.formats,
         probed: result.probed,
         available: result.available,
         refused: result.refused,

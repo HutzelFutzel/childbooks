@@ -13,6 +13,7 @@
  * Result is an ISO-3166 alpha-2 code, or "ZZ" when nothing is known.
  */
 import type { IncomingHttpHeaders } from "node:http";
+import type { Express, Request, Response } from "express";
 import {
   parseDeviceFacts,
   type DeviceFacts,
@@ -124,6 +125,44 @@ export function countryFromSignals(opts: {
     countryFromTz(opts.tz ?? "") ??
     "ZZ"
   );
+}
+
+/**
+ * Guess where the visitor is, so checkout and the format picker can open on a
+ * country instead of on a hardcoded "US".
+ *
+ * Deliberately the same coarse derivation the analytics use, and for the same
+ * privacy reason: edge header, then locale region, then timezone. No IP is
+ * geolocated and none is stored. That makes it a HINT and nothing more, which
+ * is exactly the right strength for this job — the answer only preselects a
+ * dropdown the customer can change, and it is never the thing that decides
+ * what they're allowed to buy. That decision belongs to the destination they
+ * actually enter, checked server-side at quote time.
+ *
+ * Tokenless: this runs on the marketing pages and in the wizard, long before
+ * anyone signs in.
+ *
+ * NOTE ON DEPLOYMENT: none of the edge headers above are set by Firebase App
+ * Hosting on its own, so in practice the locale and timezone fallbacks do the
+ * work until a CDN that sets one is put in front. Both come from the browser,
+ * so treat the result as the visitor's own claim about where they are.
+ */
+export function registerGeoRoutes(app: Express): void {
+  app.get("/geo/country", (req: Request, res: Response) => {
+    const one = (key: string): string | undefined => {
+      const raw = req.query[key];
+      return typeof raw === "string" ? raw.slice(0, 100) : undefined;
+    };
+    const country = countryFromSignals({
+      headers: req.headers,
+      locale: one("locale") ?? req.headers["accept-language"]?.toString(),
+      tz: one("tz"),
+    });
+    // Varies per visitor, so it must never land in a shared cache. Short-lived
+    // because a wrong guess should stop being repeated quickly.
+    res.set("Cache-Control", "private, max-age=300");
+    res.json({ country: country === "ZZ" ? null : country });
+  });
 }
 
 /**

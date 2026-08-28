@@ -116,7 +116,14 @@ function normalizeLevel(input: unknown): DiscoveredLevel | null {
   };
 }
 
-function normalizeCapability(input: unknown): MarketCapability | null {
+/**
+ * Normalize one country's verdict.
+ *
+ * Exported because {@link ../config/productCapability} stores the same shape
+ * per product and must decode it identically — two normalizers for one document
+ * shape is how a field ends up trusted in one place and dropped in the other.
+ */
+export function normalizeCountryCapability(input: unknown): MarketCapability | null {
   const c = (input ?? {}) as Partial<MarketCapability>;
   const country = str(c.country, "", 2).trim().toUpperCase();
   if (country.length !== 2) return null;
@@ -144,7 +151,7 @@ export function normalizeMarketCapability(input: unknown): MarketCapabilityConfi
   const seen = new Set<string>();
   const countries: MarketCapability[] = [];
   for (const raw of Array.isArray(c.countries) ? c.countries.slice(0, 400) : []) {
-    const cap = normalizeCapability(raw);
+    const cap = normalizeCountryCapability(raw);
     if (!cap || seen.has(cap.country)) continue;
     seen.add(cap.country);
     countries.push(cap);

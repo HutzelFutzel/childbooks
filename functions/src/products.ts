@@ -34,9 +34,11 @@ import {
 import { isOfferable } from "../../books-frontend/src/core/config/productValidation";
 import type { MarketRegistry } from "../../books-frontend/src/core/config/markets";
 import type { MarketCapability } from "../../books-frontend/src/core/config/marketCapability";
+import { productCapabilityIndex } from "../../books-frontend/src/core/config/productCapability";
 import type { ShippingSettings } from "../../books-frontend/src/core/config/shipping";
 import { getPlansConfig } from "./plans";
 import { getMarketCapability, getMarketRegistry } from "./markets";
+import { getProductCapability } from "./productCapability";
 import { getShippingSettings } from "./shipping";
 import { serverConfig } from "./config";
 
@@ -80,20 +82,21 @@ function activeEnv(): ProviderEnv {
  */
 function projectPublic(config: ProductsConfig, inputs: ProjectionInputs): PublicProductsConfig {
   const env = activeEnv();
-  const { settings, plans, registry, shipping, capability } = inputs;
+  const { settings, plans, registry, shipping, capabilityFor } = inputs;
   return {
     version: 1,
     products: config.products
       .filter((p) => p.status !== "retired")
-      .map((p) =>
-        toPublicProduct(p, settings, {
-          offerable: isOfferable(p, settings, { env, registry, shipping }),
+      .map((p) => {
+        const capability = capabilityFor(p.provider.sku);
+        return toPublicProduct(p, settings, {
+          offerable: isOfferable(p, settings, { env, registry, shipping, capability }),
           plans,
           registry,
           shipping,
           capability,
-        }),
-      )
+        });
+      })
       .sort((a, b) => a.sortOrder - b.sortOrder),
     projectedAt: Date.now(),
   };
@@ -112,27 +115,45 @@ interface ProjectionInputs {
   plans: readonly PrintDiscountPlan[];
   registry: MarketRegistry;
   shipping: ShippingSettings;
-  capability: ReadonlyMap<string, MarketCapability>;
+  /**
+   * Coverage for one format, preferring what was measured for that format and
+   * falling back to the country-level sweep.
+   *
+   * A function rather than a map because the answer is now per product: a
+   * hardcover and a paperback reach the same country by different carriers, on
+   * different service levels. See {@link coverageForSku}.
+   */
+  capabilityFor: (sku: string) => ReadonlyMap<string, MarketCapability>;
 }
 
 async function projectionInputs(): Promise<ProjectionInputs> {
-  const [settings, plans, registry, shipping, capability] = await Promise.all([
+  const [settings, plans, registry, shipping, capability, productCapability] = await Promise.all([
     getPricingSettings(),
     printDiscountPlans(),
     getMarketRegistry(),
     getShippingSettings(),
     getMarketCapability(),
+    getProductCapability(),
   ]);
-  const capabilityCountries =
-    capability.probe.env === activeEnv() ? capability.countries : [];
+  const env = activeEnv();
+  // Sandbox and live are different Lulu catalogs. Evidence collected in one
+  // environment must never govern the other after a runtime switch.
+  const countryLevel = new Map(
+    (capability.probe.env === env ? capability.countries : []).map((c) => [c.country, c]),
+  );
+  const perFormat =
+    productCapability.probe.env === env
+      ? productCapabilityIndex(productCapability)
+      : new Map<string, ReadonlyMap<string, MarketCapability>>();
   return {
     settings,
     plans,
     registry,
     shipping,
-    // Sandbox and live are different Lulu catalogs. Evidence collected in one
-    // environment must never govern the other after a runtime switch.
-    capability: new Map(capabilityCountries.map((c) => [c.country, c])),
+    // Falls back rather than failing closed: a format added between two sweeps
+    // has no rows of its own, and treating that as "reaches nowhere" would
+    // withdraw it from the storefront the moment an admin activated it.
+    capabilityFor: (sku) => perFormat.get(sku.trim().toUpperCase()) ?? countryLevel,
   };
 }
 

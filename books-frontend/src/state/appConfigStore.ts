@@ -83,6 +83,12 @@ import {
   type MarketSweepSummary,
 } from "../core/config/marketCapability";
 import {
+  createEmptyProductCapability,
+  normalizeProductCapability,
+  type ProductCapabilityConfig,
+  type ProductSweepSummary,
+} from "../core/config/productCapability";
+import {
   createDefaultShippingSettings,
   normalizeShippingSettings,
   type ShippingSettings,
@@ -343,7 +349,7 @@ export interface CalibrationResult {
 /** Per-step outcome of {@link AppConfigState.remeasureShipping}. */
 export interface RemeasureSummary {
   ok: boolean;
-  steps: { step: "coverage" | "rates" | "publish"; ok: boolean; detail: string }[];
+  steps: { step: "coverage" | "formats" | "rates" | "publish"; ok: boolean; detail: string }[];
 }
 
 export interface CalibrationOutcome {
@@ -425,6 +431,18 @@ interface AppConfigState {
    * the enabled flags so opening a country nobody can ship to is visible.
    */
   marketCapability: MarketCapabilityConfig;
+  /**
+   * The same evidence, per FORMAT — what the printer will make and how it gets
+   * it there, for each book in each open market.
+   *
+   * Separate from `marketCapability` because it answers a different question:
+   * that one is "do we reach this country at all", this one is "does this
+   * binding exist there, and on which speeds". A hardcover to Australia is
+   * imported and loses Standard Plus; the country-level answer can't see that.
+   * The storefront doesn't read this directly — the rates baked into `products`
+   * already carry the verdict — but the admin needs the matrix to explain one.
+   */
+  productCapability: ProductCapabilityConfig;
   /** Catalog-wide pricing economics (currencies, FX, fees, tax). */
   pricingSettings: PricingSettings;
   /** The Sparks economy (world-readable; also used by the admin editor). */
@@ -579,6 +597,14 @@ interface AppConfigState {
    * couldn't reach as `unknown` and re-running fills only those.
    */
   sweepMarketCapability: (opts?: { force?: boolean; sku?: string }) => Promise<MarketSweepSummary>;
+  /**
+   * Re-ask the printer what it will make for each format in each open market.
+   *
+   * Far cheaper than the country sweep — active formats × open markets rather
+   * than the whole world — but the same resumable contract: a throttled run
+   * leaves cells `unknown` and re-running fills only those.
+   */
+  sweepProductCapability: (opts?: { force?: boolean }) => Promise<ProductSweepSummary>;
   /** The catalog-wide shipping policy (admin-only doc, so an explicit fetch). */
   loadShippingSettings: () => Promise<ShippingSettings>;
   /**
@@ -818,6 +844,7 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   markets: EMPTY_MARKET_REGISTRY,
   marketsLoaded: false,
   marketCapability: createEmptyMarketCapability(),
+  productCapability: createEmptyProductCapability(),
   pricingSettings: createDefaultPricingSettings(),
   sparks: createDefaultSparksConfig(),
   referral: createDefaultReferralConfig(),
@@ -894,6 +921,13 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
           marketCapability: snap.exists()
             ? normalizeMarketCapability(snap.data())
             : createEmptyMarketCapability(),
+        });
+      }),
+      onSnapshot(doc(db, "appConfig", "productCapability"), (snap) => {
+        set({
+          productCapability: snap.exists()
+            ? normalizeProductCapability(snap.data())
+            : createEmptyProductCapability(),
         });
       }),
       onSnapshot(doc(db, "appConfig", "pricingSettings"), (snap) => {
@@ -1195,6 +1229,24 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       steps.push({ step: "coverage", ok: false, detail: message(err) });
     }
 
+    // Then per format. Runs before the rate measurement because it decides
+    // which speeds are on offer at all, and measuring the price of a speed the
+    // printer doesn't run for this book is work thrown away.
+    note("Checking which formats the printer makes for each market…");
+    try {
+      const summary = await get().sweepProductCapability({ force: opts.force });
+      steps.push({
+        step: "formats",
+        ok: true,
+        detail:
+          `${summary.formats} formats: ${summary.available} routes available, ` +
+          `${summary.refused} refused, ${summary.unknown} unknown` +
+          (summary.throttled ? " (throttled — run again to finish)" : ""),
+      });
+    } catch (err) {
+      steps.push({ step: "formats", ok: false, detail: message(err) });
+    }
+
     // Fetched rather than read from state: the private catalog isn't held in
     // the store, and it's the one that carries the SKUs and statuses this loop
     // filters on.
@@ -1250,6 +1302,16 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     if (!res.ok) throw new Error((await safeError(res)) ?? "The coverage sweep failed.");
     const summary = (await res.json()) as MarketSweepSummary;
     set({ marketCapability: normalizeMarketCapability(summary.capability) });
+    return summary;
+  },
+
+  async sweepProductCapability(opts = {}) {
+    const params = new URLSearchParams();
+    if (opts.force) params.set("force", "1");
+    const res = await backendFetch(`/admin/markets/formats/sweep?${params}`, { method: "POST" });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "The format sweep failed.");
+    const summary = (await res.json()) as ProductSweepSummary;
+    set({ productCapability: normalizeProductCapability(summary.capability) });
     return summary;
   },
 

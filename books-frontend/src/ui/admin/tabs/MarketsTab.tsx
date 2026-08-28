@@ -37,6 +37,7 @@ import { methodLabel, type ShippingSettings } from "../../../core/config/shippin
 import type { ShippingMethod } from "../../../core/fulfillment/types";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useAdminTab } from "../adminTabStore";
+import { FormatCoverageSection } from "./markets/FormatCoverageSection";
 import { ShippingPolicySection } from "./markets/ShippingPolicySection";
 import { Section, TabIntro } from "./products/parts";
 
@@ -358,6 +359,11 @@ export function MarketsTab() {
       )}
 
       <ShippingPolicySection loading={loading} />
+
+      {/* Placed between the policy and the country table because it depends on
+          both: which speeds we sell comes from above, and which countries are
+          columns comes from below. */}
+      <FormatCoverageSection markets={[...enabled].sort()} />
 
       <Section
         title="Countries"

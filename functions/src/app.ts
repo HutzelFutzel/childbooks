@@ -10,6 +10,7 @@
  *   POST /internal/print/sync     pull order status                (emulator only)
  *   GET  /invite/preview          what an invitation promises      (open)
  *   POST /invite/decline          opt an address out for good      (open)
+ *   GET  /geo/country             coarse visitor country hint      (open)
  *   *    /referrals/*             invite, accept, overview         (any identity)
  *   POST /session/ping            device + session beacon          (any identity)
  *   *    /admin/print/webhooks    status-webhook management        (admin)
@@ -32,6 +33,7 @@ import { registerMigrationRoutes } from "./migration";
 import { registerAuthRoutes } from "./authRoutes";
 import { registerAdminRoutes } from "./admin";
 import { registerGdprRoutes } from "./gdpr";
+import { registerGeoRoutes } from "./geo";
 import { registerHealthRoutes } from "./health";
 import { registerRenderRoutes } from "./renders";
 import { registerRenderJobRoutes } from "./renderJobs";
@@ -114,6 +116,12 @@ export function createApp(): Express {
   // Invitation preview + decline — tokenless by necessity: the invited person has
   // no account, and the decline link is the program's whole opt-out story.
   registerReferralPublicRoutes(app);
+
+  // Coarse "which country is this visitor in", to preselect the destination in
+  // the wizard and at checkout. Tokenless because it runs on marketing pages
+  // and in the guest wizard; it reads only already-exposed signals and stores
+  // nothing (see geo.ts).
+  registerGeoRoutes(app);
 
   // Protected surfaces — registered before their route handlers so the guard
   // runs first. Fulfillment + payments require a verified, non-anonymous

@@ -8,10 +8,15 @@
  */
 import { useMemo } from "react";
 import { bookProductForConfig } from "../../core/book";
-import { offerablePublicProducts, type PublicProduct } from "../../core/config/products";
+import {
+  isAvailableIn,
+  offerablePublicProducts,
+  type PublicProduct,
+} from "../../core/config/products";
 import { BOOK_PRODUCTS, type BookProduct } from "../../core/fulfillment";
 import type { BookConfig } from "../../core/types";
 import { useAppConfigStore } from "../../state/appConfigStore";
+import { useShipCountry } from "./useShipCountry";
 
 /** Stable key grouping products that share a physical trim (a "size"). */
 export function trimKey(p: BookProduct): string {
@@ -50,18 +55,40 @@ export interface OfferableFormats {
   currency: string;
   /** Whether the catalog has arrived, so "nothing on sale" can be told from "not yet known". */
   catalogLoaded: boolean;
+  /**
+   * The destination these formats were filtered for, or "" when unfiltered.
+   * Surfaced so a picker can explain why a format it used to show is missing.
+   */
+  country: string;
+  /** Formats on sale that this destination can't receive. Empty when unfiltered. */
+  unavailableHere: BookProduct[];
 }
 
-export function useOfferableFormats(): OfferableFormats {
+/**
+ * @param countryOverride Filter for this destination instead of the visitor's.
+ *   Checkout passes the address being typed, which is the country that will
+ *   actually be shipped to and can differ from where the buyer is sitting — a
+ *   gift is the normal case, not the exception.
+ */
+export function useOfferableFormats(countryOverride?: string): OfferableFormats {
   const publicProducts = useAppConfigStore((s) => s.products.products);
   const loaded = useAppConfigStore((s) => s.loaded);
   const currency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
+  const { country: detectedCountry } = useShipCountry();
+  const country = (countryOverride ?? detectedCountry).trim().toUpperCase();
 
   return useMemo(() => {
     const offerable = new Map(
       offerablePublicProducts(publicProducts).map((p) => [p.sku, p] as const),
     );
-    const formats = BOOK_PRODUCTS.filter((p) => offerable.has(p.sku));
+    // Two lists, because a format the printer won't deliver here is a different
+    // thing from one nobody put on sale, and the picker should be able to say
+    // so. Filtering is skipped entirely when the country is unknown — see
+    // `isAvailableIn`, which fails open by design.
+    const onSale = BOOK_PRODUCTS.filter((p) => offerable.has(p.sku));
+    const reaches = (p: BookProduct) => isAvailableIn(offerable.get(p.sku)!, country);
+    const formats = onSale.filter(reaches);
+    const unavailableHere = onSale.filter((p) => !reaches(p));
     const priceOf = (p: BookProduct) => offerable.get(p.sku)?.prices[currency];
     const group = (list: readonly BookProduct[]): SizeOption[] => {
       const byTrim = new Map<string, BookProduct[]>();
@@ -90,17 +117,22 @@ export function useOfferableFormats(): OfferableFormats {
       offerable,
       currency,
       catalogLoaded: loaded && publicProducts.length > 0,
+      country,
+      unavailableHere,
     };
-  }, [publicProducts, loaded, currency]);
+  }, [publicProducts, loaded, currency, country]);
 }
 
 /** The sellable formats printed at a config's chosen size. */
-export function useFormatsForConfigSize(config: BookConfig): {
+export function useFormatsForConfigSize(
+  config: BookConfig,
+  countryOverride?: string,
+): {
   formats: BookProduct[];
   offerable: Map<string, PublicProduct>;
   currency: string;
 } {
-  const { sizes, offerable, currency } = useOfferableFormats();
+  const { sizes, offerable, currency } = useOfferableFormats(countryOverride);
   const current = bookProductForConfig(config);
   const formats = useMemo(
     () => sizes.find((s) => s.key === trimKey(current))?.formats ?? [],
