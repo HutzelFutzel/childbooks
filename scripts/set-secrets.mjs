@@ -47,8 +47,12 @@ export function projectId() {
  * too. (Note: SLACK_CI_WEBHOOK_URL is intentionally NOT a `defineSecret` in
  * secrets.ts — CI/CD doesn't run inside a Cloud Function, so it has no reason
  * to live in Secret Manager or be bound to `api`.)
+ *
+ * RELEASE_NOTES_TOKEN is the one secret that belongs in BOTH stores: the
+ * `rollout-watch` workflow sends it and the `api` function checks it, so it is
+ * also a `defineSecret` in secrets.ts and gets pushed to Secret Manager too.
  */
-export const GITHUB_ACTION_SECRETS = ["SLACK_CI_WEBHOOK_URL"];
+export const GITHUB_ACTION_SECRETS = ["SLACK_CI_WEBHOOK_URL", "RELEASE_NOTES_TOKEN"];
 
 /**
  * Every secret name declared in functions/src/secrets.ts. Parsed from the
@@ -78,6 +82,7 @@ export function groupOf(name) {
   if (name.startsWith("STRIPE_")) return name.includes("LIVE") ? "Stripe (live)" : "Stripe (sandbox)";
   if (name.startsWith("REWARDFUL_")) return "Rewardful (affiliates)";
   if (name.startsWith("SLACK_")) return "Slack";
+  if (name.startsWith("RELEASE_NOTES_")) return "CI/CD";
   if (name.startsWith("ZEPTOMAIL_")) return "Email (ZeptoMail)";
   return "AI providers";
 }

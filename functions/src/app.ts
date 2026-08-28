@@ -8,6 +8,8 @@
  *   *    /print/*                  print fulfillment endpoints      (verified)
  *   POST /print-webhook           provider status callback         (HMAC-signed)
  *   POST /internal/print/sync     pull order status                (emulator only)
+ *   POST /internal/release-notes  CI: summarize a deploy to Slack  (bearer token)
+ *   GET  /internal/release-notes/state  where the next summary starts (bearer token)
  *   GET  /invite/preview          what an invitation promises      (open)
  *   POST /invite/decline          opt an address out for good      (open)
  *   GET  /geo/country             coarse visitor country hint      (open)
@@ -37,6 +39,7 @@ import { registerGeoRoutes } from "./geo";
 import { registerHealthRoutes } from "./health";
 import { registerRenderRoutes } from "./renders";
 import { registerRenderJobRoutes } from "./renderJobs";
+import { registerReleaseNotesRoute } from "./releaseNotes";
 import { registerRuntimeRoutes } from "./readiness";
 import { registerAnalyticsRoutes } from "./analytics";
 import {
@@ -90,6 +93,12 @@ export function createApp(): Express {
   // ZeptoMail's delivery-event webhook — tokenless (verified by signature when
   // configured). Registered here so it's reachable without a Firebase token.
   registerEmailWebhookRoute(app);
+
+  // CI/CD → "what's new" release notes. Called by the `rollout-watch` workflow
+  // once a commit's frontend is live. Tokenless in the Firebase sense (CI has no
+  // user), authenticated by the RELEASE_NOTES_TOKEN bearer secret, so it MUST be
+  // registered before the auth guards below.
+  registerReleaseNotesRoute(app);
 
   // Rewardful's event webhook. Rewardful does NOT sign its webhooks, so this one
   // is authenticated by a secret token in the URL and treats the payload as an

@@ -170,8 +170,9 @@ import {
   EMAIL_TEMPLATE_REGISTRY,
 } from "../../books-frontend/src/core/email/registry";
 import { isEmailTemplateId } from "../../books-frontend/src/core/email/types";
-import { notifySlack } from "./notify";
+import { CHANNEL_WEBHOOK_SECRET, notifySlack } from "./notify";
 import {
+  isSlackChannel,
   SLACK_MESSAGE_REGISTRY,
   type SlackChannel,
 } from "../../books-frontend/src/core/notify/registry";
@@ -1660,8 +1661,7 @@ export function registerAdminRoutes(app: Express): void {
   app.post("/admin/slack/test", json, async (req: AuthedRequest, res: Response) => {
     try {
       const channel = ((req.body ?? {}) as { channel?: string }).channel;
-      const target: SlackChannel =
-        channel === "ops" ? "ops" : channel === "contact" ? "contact" : "growth";
+      const target: SlackChannel = isSlackChannel(channel) ? channel : "growth";
       const who = req.authToken?.email ?? req.uid ?? "an admin";
       const result = await notifySlack({
         channel: target,
@@ -1669,16 +1669,11 @@ export function registerAdminRoutes(app: Express): void {
         text: `🔔 Test notification — Slack is wired up correctly (sent from the admin dashboard by ${who}).`,
       });
       if (!result.sent) {
-        const secretName: Record<SlackChannel, string> = {
-          growth: "SLACK_WEBHOOK_URL",
-          ops: "SLACK_OPS_WEBHOOK_URL",
-          contact: "SLACK_CONTACT_WEBHOOK_URL",
-        };
         res.status(502).json({
           error: {
             message:
               result.reason === "not_configured"
-                ? `No webhook is configured for #${target}. Set the ${secretName[target]} secret and deploy.`
+                ? `No webhook is configured for #${target}. Set the ${CHANNEL_WEBHOOK_SECRET[target]} secret and deploy.`
                 : `Slack test failed (${result.reason}).`,
           },
         });

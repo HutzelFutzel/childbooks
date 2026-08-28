@@ -12,6 +12,7 @@
  *   - SLACK_WEBHOOK_URL          required for any ping — #growth.
  *   - SLACK_OPS_WEBHOOK_URL      optional — #ops.
  *   - SLACK_CONTACT_WEBHOOK_URL  optional — #contact.
+ *   - SLACK_RELEASE_WEBHOOK_URL  optional — #releases.
  * Any channel whose own URL is unset falls back to SLACK_WEBHOOK_URL, so a
  * single webhook / single channel works out of the box, and you can split
  * channels out later just by setting the matching secret.
@@ -20,25 +21,31 @@ import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { getSlackConfig } from "./appConfig";
 import { slackMessageEnabled } from "../../books-frontend/src/core/config/slackConfig";
-import type { SlackMessageKey } from "../../books-frontend/src/core/notify/registry";
+import type { SlackChannel, SlackMessageKey } from "../../books-frontend/src/core/notify/registry";
 
 /** Which Slack channel a message is for (drives which webhook is used). */
-export type NotifyChannel = "growth" | "ops" | "contact";
+export type NotifyChannel = SlackChannel;
+
+/** The Secret Manager name holding each channel's webhook URL. */
+export const CHANNEL_WEBHOOK_SECRET: Record<NotifyChannel, string> = {
+  growth: "SLACK_WEBHOOK_URL",
+  ops: "SLACK_OPS_WEBHOOK_URL",
+  contact: "SLACK_CONTACT_WEBHOOK_URL",
+  release: "SLACK_RELEASE_WEBHOOK_URL",
+};
 
 /** Why a Slack ping was (or wasn't) delivered — surfaced by the test action. */
 export type NotifyResult =
   | { sent: true }
   | { sent: false; reason: "emulator" | "not_configured" | "disabled" | "duplicate" | "error" };
 
-/** The webhook URL for a channel, or undefined when none is configured. */
+/**
+ * The webhook URL for a channel, or undefined when none is configured. Any
+ * channel without its own URL falls back to #growth's, so a single webhook
+ * covers everything until you're ready to split channels out.
+ */
 function webhookFor(channel: NotifyChannel): string | undefined {
-  if (channel === "ops") {
-    return process.env.SLACK_OPS_WEBHOOK_URL || process.env.SLACK_WEBHOOK_URL || undefined;
-  }
-  if (channel === "contact") {
-    return process.env.SLACK_CONTACT_WEBHOOK_URL || process.env.SLACK_WEBHOOK_URL || undefined;
-  }
-  return process.env.SLACK_WEBHOOK_URL || undefined;
+  return process.env[CHANNEL_WEBHOOK_SECRET[channel]] || process.env.SLACK_WEBHOOK_URL || undefined;
 }
 
 /**
@@ -65,6 +72,12 @@ export async function notifySlack(opts: {
   messageKey?: SlackMessageKey;
   /** Bypass emulator/toggle/dedupe guards (admin test send). */
   force?: boolean;
+  /**
+   * Optional Block Kit layout. When present Slack renders these instead of
+   * `text`, which stays as the notification/preview fallback (and is what
+   * shows in the mobile push), so callers must always supply a useful `text`.
+   */
+  blocks?: unknown[];
 }): Promise<NotifyResult> {
   try {
     // Prod only — the emulator sets FUNCTIONS_EMULATOR (see auth.ts, stripeClient.ts).
@@ -105,7 +118,9 @@ export async function notifySlack(opts: {
       const res = await fetch(url, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ text: opts.text }),
+        body: JSON.stringify(
+          opts.blocks?.length ? { text: opts.text, blocks: opts.blocks } : { text: opts.text },
+        ),
         signal: ctrl.signal,
       });
       if (!res.ok) {

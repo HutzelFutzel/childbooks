@@ -33,11 +33,23 @@ export const ZEPTOMAIL_WEBHOOK_SECRET = defineSecret("ZEPTOMAIL_WEBHOOK_SECRET")
 //                              a single webhook works out of the box.
 //   SLACK_OPS_WEBHOOK_URL      #ops — optional.
 //   SLACK_CONTACT_WEBHOOK_URL  #contact — optional.
+//   SLACK_RELEASE_WEBHOOK_URL  #releases — optional. The AI release notes
+//                              posted after each deploy (see releaseNotes.ts).
 // (CI/CD pings use a SEPARATE SLACK_CI_WEBHOOK_URL that lives only in GitHub
 // Actions secrets, not here — see scripts/set-secrets.mjs.)
 export const SLACK_WEBHOOK_URL = defineSecret("SLACK_WEBHOOK_URL");
 export const SLACK_OPS_WEBHOOK_URL = defineSecret("SLACK_OPS_WEBHOOK_URL");
 export const SLACK_CONTACT_WEBHOOK_URL = defineSecret("SLACK_CONTACT_WEBHOOK_URL");
+export const SLACK_RELEASE_WEBHOOK_URL = defineSecret("SLACK_RELEASE_WEBHOOK_URL");
+
+// Shared bearer token authenticating `POST /internal/release-notes`, which the
+// `rollout-watch` workflow calls once the frontend of a commit is live. CI has
+// no Firebase user, so it can't go through `requireAdmin` like the rest of the
+// admin surface — this token is the whole gate. It lives in BOTH Secret Manager
+// (for the function) and GitHub Actions secrets (for the workflow); `yarn
+// setSecrets` fans it out to both. Generate with `openssl rand -hex 32`.
+// Unset ⇒ the endpoint refuses every request, so release notes simply never post.
+export const RELEASE_NOTES_TOKEN = defineSecret("RELEASE_NOTES_TOKEN");
 
 // Rewardful (affiliate program). ONE account, no sandbox counterpart — a
 // Rewardful account is tied to one Stripe account and ignores test-mode events,
@@ -77,6 +89,8 @@ const BASE_SECRETS = [
   SLACK_WEBHOOK_URL,
   SLACK_OPS_WEBHOOK_URL,
   SLACK_CONTACT_WEBHOOK_URL,
+  SLACK_RELEASE_WEBHOOK_URL,
+  RELEASE_NOTES_TOKEN,
   REWARDFUL_API_SECRET,
   REWARDFUL_WEBHOOK_TOKEN,
 ];

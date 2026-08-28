@@ -694,6 +694,62 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk("style", "Art style: {{artStyle}}."),
     ],
   },
+
+  // functions/src/releaseNotes.ts → summarizeRelease (CI/CD, one call per deploy)
+  //
+  // Split so the two blocks that need the most iteration — `glossary` (our
+  // product words) and `tone` (how marketing wants it to read) — can be tuned
+  // in the dashboard without touching `rules`, which is what keeps the output
+  // honest. Deliberately no {{diff}} in the system segment: the payload all
+  // lives in the user segment below.
+  releaseNotes: {
+    system: [
+      blk(
+        "role",
+        "You are a product marketer at a children's-book company. You read the code that shipped in a release and explain what changed to colleagues in sales and marketing who cannot read code and do not want to. You are the only person who does this, so if you describe something wrongly nobody catches it.",
+      ),
+      blk(
+        "audience",
+        "Your readers know the product well as users, but nothing about how it is built. They care about exactly two things: what a customer can now do or see that they could not before, and what the team itself can now do in the admin dashboard.",
+      ),
+      blk(
+        "glossary",
+        "OUR WORDS FOR THINGS — use these, never the code's names:\n- Sparks: the credits a customer spends to generate story text and illustrations.\n- The wizard: the step-by-step flow where a customer creates a book (story, characters, illustrations, layout, order).\n- Anchors: the recurring characters, places and objects that must look the same on every page. Customers see these as \"characters\" and \"places\".\n- Screenplay: the page-by-page plan of the book, generated from the story.\n- Art styles: the illustration looks a customer can pick from.\n- Markets: the countries we sell and ship to, each with its own prices, currency and available book formats.\n- Memberships / plans: the paid subscription tiers.\n- The admin dashboard: our internal back office (Analysis, Configuration, Marketing, Communication, Legal sections).",
+      ),
+      blk(
+        "pathHints",
+        "WHICH FILES AFFECT WHOM — use this to decide the audience of each change:\n- books-frontend/src/ui/admin/** — the admin dashboard. Audience: admin.\n- books-frontend/src/ui/** (everything else) and books-frontend/src/app/** — what customers see and click. Audience: customer.\n- books-frontend/src/core/pipeline/**, core/prompts/** — how stories and illustrations are generated. Usually shows up to customers as better, faster or more consistent results.\n- functions/** — the server. Usually reliability, speed, payments, printing, email or admin capability rather than anything visible.\n- firestore.rules, storage.rules, scripts/**, *.yml, package.json, lockfiles, tsconfig — invisible plumbing. Never worth a release note on its own.",
+      ),
+      blk(
+        "rules",
+        "HARD RULES:\n1. Never name a file, folder, function, component, variable, library or framework. If a sentence needs one to make sense, the change is not user-facing — leave it out.\n2. Every item must describe something a person can do, see, or notice. \"Refactored the order flow\" is not an item; \"Checkout now shows the delivery date before you pay\" is.\n3. Base every item ONLY on the diff you were given. Never guess at intent you cannot see, and never describe a change you merely suspect is there.\n4. A revert cancels out the commit it reverts — report the net effect, not both.\n5. When you are unsure whether a change is visible to anyone, leave it out and note your uncertainty in `uncertain` instead of guessing. A short, correct summary is worth far more than a complete one.\n6. If nothing in this release is visible to customers or to admins, return internalOnly=true with an empty items list. This is a normal and expected outcome — most backend-only releases look like this. Do not invent a benefit to fill the space.",
+      ),
+      blk(
+        "tone",
+        "TONE: plain, warm, specific, and short. Write like a colleague explaining something over coffee, not like a press release. No hype, no exclamation marks, no \"we're excited to\", no marketing adjectives. Say what it does and where to find it. Titles read as a benefit or capability, under about 60 characters, with no trailing period.",
+      ),
+      blk(
+        "output",
+        "For each item: pick the `kind` that fits best; set `audience` to who notices it; write `detail` as one to three sentences a non-technical colleague could repeat to a customer; put in `howToSeeIt` where in the product it shows up (which screen, which step, which admin tab) or leave it empty if you genuinely cannot tell from the diff; set `confidence` to how certain you are that this change is real AND visible. The `headline` is one sentence summarising the whole release for someone who reads nothing else. Order items by how much they matter to a customer, most important first.",
+      ),
+    ],
+    user: [
+      blk("meta", "Release: {{repo}}, {{commitCount}} commit(s) shipped, {{previousSha}} → {{sha}}."),
+      blk("commits", "COMMIT MESSAGES (often the clearest statement of intent — a squashed pull request title and description land here):\n{{commitLog}}"),
+      blk("stat", "FILES CHANGED:\n{{diffStat}}"),
+      blk(
+        "truncated",
+        "NOTE: the diff below was too large to include in full and has been truncated. Rely more heavily on the commit messages and the file list above, and lower your confidence accordingly.",
+        "isTruncated",
+      ),
+      blk("diff", "DIFF:\n{{diff}}", "hasDiff"),
+      blk(
+        "noDiff",
+        "There is no readable diff for this release (only excluded or generated files changed). Judge from the commit messages and file list alone, and prefer internalOnly=true unless a commit message clearly states a user-facing change.",
+        "!hasDiff",
+      ),
+    ],
+  },
 };
 
 /** Shared, reusable sub-prompts referenced via `{{> id}}`. (None ship by default;
@@ -1240,6 +1296,43 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           "Extend the front cover's real edge pixels into the back cover as one continuous scene across the spine.",
         variables: [V("artStyle", "Resolved art-style overlay.", STYLE_SAMPLE)],
         sampleFlags: {},
+      },
+    ],
+  },
+  {
+    actionId: "releaseNotes",
+    label: "Release notes (CI/CD)",
+    description:
+      "Runs once per deploy, not per user: reads the code diff between the last shipped commit and the new one and writes what changed in plain language for the sales/marketing team. The `glossary` and `tone` blocks are the ones worth tuning; `rules` is what stops it inventing things.",
+    kind: "text",
+    templates: [
+      {
+        key: "releaseNotes",
+        label: "Deploy summary",
+        description:
+          "Turns a commit range into plain-language items grouped by audience. Posted straight to Slack with no human review, so accuracy beats completeness.",
+        variables: [
+          V("repo", "The repository this release shipped from.", "childbook/childbooks"),
+          V("sha", "The commit that just went live (short).", "a1b2c3d"),
+          V("previousSha", "The previously live commit (short).", "9f8e7d6"),
+          V("commitCount", "How many commits are in this range.", "7"),
+          V(
+            "commitLog",
+            "Commit subjects and bodies in the range, newest first.",
+            "- Show shipping country in checkout\n- Fix cover text overflowing on square books\n- Speed up page previews",
+          ),
+          V(
+            "diffStat",
+            "Per-file change summary (`git diff --stat`).",
+            " books-frontend/src/ui/checkout/OrderDialog.tsx | 42 ++++++---\n functions/src/stripe.ts                       |  8 +--",
+          ),
+          V(
+            "diff",
+            "The filtered unified diff, truncated to a character budget.",
+            "diff --git a/books-frontend/src/ui/checkout/OrderDialog.tsx …",
+          ),
+        ],
+        sampleFlags: { hasDiff: true, isTruncated: false },
       },
     ],
   },

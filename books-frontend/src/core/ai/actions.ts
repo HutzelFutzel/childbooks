@@ -14,7 +14,8 @@ export type TextActionId =
   | "screenplay" // generateScreenplay — page-by-page plan + covers
   | "localize" // locateSubject(s) — vision call placing subjects on a page
   | "bindingPass" // bindDepictedSubjects — vision call binding anchors to regions in a freshly rendered page
-  | "editIntent"; // resolveEditIntent — classify user edits into structured operations
+  | "editIntent" // resolveEditIntent — classify user edits into structured operations
+  | "releaseNotes"; // summarizeRelease — turn a deploy's code diff into plain-language release notes
 
 export type ImageActionId =
   | "anchorImage" // renderAnchor — anchor reference sheet
@@ -37,6 +38,7 @@ export const TEXT_ACTIONS: ActionInfo<TextActionId>[] = [
   { id: "localize", label: "Subject localization (vision)", modality: "text", help: "Finds where a subject sits inside a rendered page (used for in-place edits)." },
   { id: "bindingPass", label: "Anchor binding (vision)", modality: "text", help: "After a page is rendered, binds each anchor to its region in the image (records what's depicted where)." },
   { id: "editIntent", label: "Edit intent resolution", modality: "text", help: "Classifies a user's free-text illustration edit into structured remove/replace/refresh operations over known anchors." },
+  { id: "releaseNotes", label: "Release notes (CI/CD)", modality: "text", help: "Reads the code diff between the last shipped commit and the new one, and writes what changed in plain language for the sales/marketing team. Runs once per deploy, not per user — pick a model with a large context window." },
 ];
 
 export const IMAGE_ACTIONS: ActionInfo<ImageActionId>[] = [

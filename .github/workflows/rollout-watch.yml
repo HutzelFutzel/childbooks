@@ -17,10 +17,32 @@ name: Rollout watch
 # Reads only. No extra IAM: GCP_DEPLOY_SA already holds `roles/firebase.admin`,
 # which includes `firebaseapphosting.builds.list`/`.get`. If that ever stops being
 # true the job says "couldn't verify" instead of claiming the site is broken.
+#
+# ── Second half: "what's new" release notes ──────────────────────────────────
+# Once the build IS live, the steps at the bottom summarise what shipped for the
+# sales/marketing team (#releases). This workflow is the right home for it
+# because it knows the one thing nobody else does: that users can now actually
+# see this commit.
+#
+# The range runs from the last commit the backend SUMMARIZED (not the last one
+# that went live) up to this one, so nothing is ever dropped: whenever a release
+# posts nothing — failed frontend build, failed backend deploy, provider or Slack
+# outage — its commits are simply carried into the next release's summary. See
+# "Decide where the release notes start" below.
 on:
   push:
     branches: [main]
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      notes_from:
+        description: "Release notes: summarize from this commit instead of the previously-live one (for prompt iteration)."
+        required: false
+        type: string
+      notes_force:
+        description: "Release notes: repost even if this commit was already summarized."
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: rollout-watch-${{ github.sha }}
@@ -32,9 +54,12 @@ jobs:
     permissions:
       id-token: write # required for Workload Identity Federation
       contents: read
+      actions: read # read the Deploy run's conclusion for this commit
     env:
       API: https://firebaseapphosting.googleapis.com/v1beta/projects/childbook-60f89/locations/us-east4/backends/childbooks
       SLACK_CI_WEBHOOK_URL: ${{ secrets.SLACK_CI_WEBHOOK_URL }}
+      BACKEND_URL: https://us-central1-childbook-60f89.cloudfunctions.net/api
+      RELEASE_NOTES_TOKEN: ${{ secrets.RELEASE_NOTES_TOKEN }}
     steps:
       - name: Authenticate to Google Cloud
         id: auth
@@ -94,10 +119,189 @@ jobs:
           echo "::error::Timed out waiting for the App Hosting build."
           exit 1
 
+      # ── "What's new" release notes (#releases) ──────────────────────────────
+      # Best-effort throughout: every step below is `continue-on-error`, and the
+      # alarm at the bottom is scoped to the build step, so nothing here can make
+      # a healthy deploy look broken. Skipped entirely when the token is unset.
+
+      # fetch-depth: 0 — the default shallow clone has no history to diff, and
+      # the range resolution below needs to check whether a commit still exists.
+      - name: Check out full history
+        id: checkout
+        if: steps.build.outputs.verdict == 'live' && env.RELEASE_NOTES_TOKEN != ''
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # WHERE THE RANGE STARTS. Two sources, in order of trust:
+      #
+      #   1. The marker — the last commit the backend actually SUMMARIZED. This is
+      #      what makes nothing get lost: a release skipped for any reason (failed
+      #      backend deploy, provider outage, Slack outage, nothing confident to
+      #      say) leaves the marker where it was, so this range simply widens to
+      #      cover it. See `advanceState` in functions/src/releaseNotes.ts.
+      #   2. The last commit whose FRONTEND went live, from the build list already
+      #      on disk. Used on the very first run, and if the marker ever points at
+      #      a commit that no longer exists (a force-push).
+      #
+      # Note the two differ precisely when a release went live but wasn't
+      # summarized — which is the case the marker exists to fix.
+      - name: Decide where the release notes start
+        id: range
+        if: steps.checkout.outcome == 'success'
+        continue-on-error: true
+        env:
+          OVERRIDE: ${{ inputs.notes_from }}
+        run: |
+          set -uo pipefail
+          in_history() { git cat-file -e "${1}^{commit}" 2>/dev/null; }
+          emit() { echo "sha=$1" >> "$GITHUB_OUTPUT"; echo "Range starts at $1 (source: $2)"; }
+
+          if [ -n "${OVERRIDE:-}" ]; then
+            emit "$OVERRIDE" "manual run input"
+            exit 0
+          fi
+
+          marker=$(curl -fsS --max-time 30 \
+            -H "Authorization: Bearer $RELEASE_NOTES_TOKEN" \
+            "$BACKEND_URL/internal/release-notes/state" 2>/dev/null \
+            | jq -r '.lastSummarizedSha // ""' 2>/dev/null || echo "")
+
+          if [ -n "$marker" ] && [ "$marker" != "null" ] && in_history "$marker"; then
+            if [ "$marker" = "$GITHUB_SHA" ]; then
+              echo "::notice::This commit was already summarized — nothing to do."
+              exit 0
+            fi
+            emit "$marker" "last summarized commit"
+            exit 0
+          fi
+          [ -n "$marker" ] && [ "$marker" != "null" ] \
+            && echo "Marker $marker is not in this repo's history — falling back to the build list."
+
+          mine=$(jq -r --arg sha "$GITHUB_SHA" \
+            '[.builds[]? | select(.source.codebase.hash==$sha)] | sort_by(.createTime) | last | .createTime // ""' \
+            /tmp/builds.json)
+          prev=$(jq -r --arg t "$mine" \
+            '[.builds[]? | select(.state=="READY") | select(.createTime < $t)]
+             | sort_by(.createTime) | last | .source.codebase.hash // ""' /tmp/builds.json)
+          if [ -n "$prev" ] && [ "$prev" != "null" ] && in_history "$prev"; then
+            emit "$prev" "last live build"
+            exit 0
+          fi
+          # First ever run, or the retained build list has nothing usable. Say
+          # nothing rather than summarise the wrong commits — the marker will be
+          # seeded by the first release that does resolve a range.
+          echo "::notice::No usable starting commit — skipping release notes."
+
+      # A green frontend says nothing about the backend, which deploys in
+      # parallel (deploy.yml). If that run FAILED, half of what we'd announce
+      # isn't actually live — so stay quiet. Nothing is lost by doing so: the
+      # marker doesn't move, so the next release covers these commits too.
+      # Still in progress is fine — it lands within a minute or two.
+      - name: Check the backend deploy of this commit
+        id: backend
+        if: steps.range.outputs.sha != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          conclusion=$(gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$GITHUB_SHA&per_page=50" \
+            --jq '[.workflow_runs[]? | select(.name=="Deploy")] | sort_by(.created_at) | last | .conclusion // ""' \
+            2>/dev/null || echo "")
+          if [ "$conclusion" = "failure" ] || [ "$conclusion" = "cancelled" ]; then
+            echo "::notice::Backend deploy did not succeed ($conclusion) — skipping release notes."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Collect the range and POST it. The backend picks the model and prompt
+      # (admin dashboard → Configuration → AI pipeline), decides whether anything
+      # here is worth telling anyone about, posts to Slack, and moves the marker —
+      # see functions/src/releaseNotes.ts.
+      - name: Summarize the release to Slack
+        id: notes
+        if: steps.range.outputs.sha != '' && steps.backend.outputs.ok == 'true'
+        continue-on-error: true
+        env:
+          PREV: ${{ steps.range.outputs.sha }}
+          FORCE: ${{ inputs.notes_force }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          # Both resolved sources are checked already; this catches a typo in the
+          # commit given on a manual run, which is passed through unvalidated.
+          if ! git cat-file -e "${PREV}^{commit}" 2>/dev/null; then
+            echo "::notice::$PREV is not in this repo's history — skipping release notes."
+            exit 0
+          fi
+
+          # Excluded on purpose: lockfiles and tsconfig.tsbuildinfo churn on
+          # every build and would drown the real changes, and nothing about them
+          # is ever user-visible.
+          EXCLUDES=(
+            ':(exclude)yarn.lock'
+            ':(exclude)package-lock.json'
+            ':(exclude)**/tsconfig.tsbuildinfo'
+            ':(exclude)**/*.snap'
+            ':(exclude)**/*.svg'
+            ':(exclude)**/*.png'
+            ':(exclude)**/*.jpg'
+            ':(exclude)**/*.webp'
+            ':(exclude)**/*.ico'
+            ':(exclude)**/*.woff'
+            ':(exclude)**/*.woff2'
+          )
+
+          range="${PREV}..${GITHUB_SHA}"
+          count=$(git rev-list --count "$range")
+          # Truncate on LINE boundaries, not bytes: `head -c` can cut mid-character
+          # and jq rejects invalid UTF-8, which would turn a large release into an
+          # empty payload. Diffs are line-oriented anyway.
+          clip() { awk -v max="$1" '{ n += length($0) + 1; if (n > max) exit; print }'; }
+          # Squash-merged pull requests put the PR title in the subject and the
+          # description in the body, which is usually the clearest statement of
+          # user intent anywhere in the release.
+          log=$(git log --no-merges --format='- %s%n%b' "$range" | clip 40000)
+          stat=$(git diff --stat "$range" -- . "${EXCLUDES[@]}" | clip 40000)
+          diff=$(git diff --unified=3 "$range" -- . "${EXCLUDES[@]}" | clip 400000)
+
+          if [ -z "$log" ] && [ -z "$diff" ]; then
+            echo "Nothing to summarize."
+            exit 0
+          fi
+
+          payload=$(jq -n \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg sha "$GITHUB_SHA" \
+            --arg previousSha "$PREV" \
+            --arg runUrl "$RUN_URL" \
+            --argjson commitCount "${count:-0}" \
+            --arg commitLog "$log" \
+            --arg diffStat "$stat" \
+            --arg diff "$diff" \
+            --argjson force "$([ "${FORCE:-false}" = "true" ] && echo true || echo false)" \
+            '$ARGS.named')
+
+          # A timeout here loses the RESPONSE, not the work: the function posts to
+          # Slack and moves the marker before it answers, so a slow model shows up
+          # as a red step next to a delivered message rather than a repeat next run.
+          echo "Summarizing $count commit(s): $PREV..$GITHUB_SHA"
+          printf '%s' "$payload" | curl -fsS --max-time 300 \
+            -X POST "$BACKEND_URL/internal/release-notes" \
+            -H "Authorization: Bearer $RELEASE_NOTES_TOKEN" \
+            -H 'Content-Type: application/json' \
+            --data-binary @-
+
       # Only fires when the frontend did NOT go live. Success is silent: the whole
       # point is that a stale site stops being invisible, not more green noise.
+      # Scoped to the BUILD step on purpose — a failure in the release-notes
+      # steps above must never claim the site is broken.
       - name: Notify Slack (frontend did not deploy)
-        if: failure() && env.SLACK_CI_WEBHOOK_URL != ''
+        if: failure() && steps.build.outcome == 'failure' && env.SLACK_CI_WEBHOOK_URL != ''
         env:
           COMMIT_MSG: ${{ github.event.head_commit.message }}
           REASON: ${{ steps.build.outputs.reason }}

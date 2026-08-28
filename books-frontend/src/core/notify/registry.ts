@@ -13,7 +13,14 @@
  */
 
 /** Which Slack channel a message posts to (drives which webhook URL is used). */
-export type SlackChannel = "growth" | "ops" | "contact";
+export type SlackChannel = "growth" | "ops" | "contact" | "release";
+
+/** Every channel, in admin-display order (drives the test-send buttons). */
+export const SLACK_CHANNELS = ["growth", "ops", "contact", "release"] as const;
+
+export function isSlackChannel(v: unknown): v is SlackChannel {
+  return typeof v === "string" && (SLACK_CHANNELS as readonly string[]).includes(v);
+}
 
 /** Every distinct Slack message the product can send. Order drives the admin list. */
 export const SLACK_MESSAGE_IDS = [
@@ -27,6 +34,7 @@ export const SLACK_MESSAGE_IDS = [
   "affiliate_application",
   "admin_alert",
   "daily_summary",
+  "release_notes",
 ] as const;
 
 export type SlackMessageKey = (typeof SLACK_MESSAGE_IDS)[number];
@@ -105,6 +113,13 @@ export const SLACK_MESSAGE_REGISTRY: Record<SlackMessageKey, SlackMessageMeta> =
     description:
       "Posted to #growth once a day (evening) with signups, logins, revenue, orders and other headline KPIs for the day.",
     channel: "growth",
+  },
+  release_notes: {
+    id: "release_notes",
+    label: "What's new (release notes)",
+    description:
+      "Posted to #releases after every deploy that reaches the live site: an AI summary of what changed since the last release, written for non-technical readers. Releases with nothing user-visible post nothing at all. Nothing gets skipped either — when a release can't be summarized, its changes are carried into the next one, which is why a note sometimes covers several days. Generated with no human review; the model and its prompt are under Configuration → AI pipeline.",
+    channel: "release",
   },
 };
 
