@@ -5,6 +5,7 @@ import { z } from "zod";
 import { ProviderError } from "../../errors";
 import { providerHttp } from "../httpContext";
 import { requestJson } from "../http-helpers";
+import { openaiSchemaName, toOpenAISchema } from "./schema";
 import type {
   ImageProvider,
   ImageRequest,
@@ -54,6 +55,54 @@ function extractJson(text: string): string {
   return trimmed;
 }
 
+type VisionPart =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
+/** Chat messages for a structured call, with optional vision parts on the last user turn. */
+function structuredMessages(
+  req: StructuredRequest<unknown>,
+  extraSystem?: string,
+): { role: string; content: string | VisionPart[] }[] {
+  const messages: { role: string; content: string | VisionPart[] }[] = [];
+  if (extraSystem) messages.push({ role: "system", content: extraSystem });
+  for (const m of req.messages) messages.push({ role: m.role, content: m.content });
+  if (!req.images?.length) return messages;
+
+  const imageParts: VisionPart[] = req.images.map((im) => ({
+    type: "image_url",
+    image_url: { url: `data:${im.mimeType};base64,${im.base64}` },
+  }));
+  let idx = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") {
+      idx = i;
+      break;
+    }
+  }
+  if (idx >= 0) {
+    const existing = messages[idx].content;
+    const text = typeof existing === "string" ? existing : "";
+    messages[idx] = { role: "user", content: [{ type: "text", text }, ...imageParts] };
+  } else {
+    messages.push({ role: "user", content: imageParts });
+  }
+  return messages;
+}
+
+function jsonObjectHint(schema: z.ZodType): string {
+  let schemaHint = "";
+  try {
+    schemaHint = JSON.stringify(z.toJSONSchema(schema));
+  } catch {
+    schemaHint = "";
+  }
+  return (
+    "You are a precise assistant that replies with a single valid JSON object and nothing else." +
+    (schemaHint ? ` It must conform to this JSON schema: ${schemaHint}` : "")
+  );
+}
+
 export const openaiTextProvider: TextProvider = {
   provider: "openai",
 
@@ -90,62 +139,50 @@ export const openaiTextProvider: TextProvider = {
     creds: ProviderCredentials,
     req: StructuredRequest<T>,
   ): Promise<T> {
-    let schemaHint = "";
-    try {
-      schemaHint = JSON.stringify(z.toJSONSchema(req.schema));
-    } catch {
-      schemaHint = "";
-    }
-    const sys = {
-      role: "system" as const,
-      content:
-        "You are a precise assistant that replies with a single valid JSON object and nothing else." +
-        (schemaHint ? ` It must conform to this JSON schema: ${schemaHint}` : ""),
-    };
+    const openaiSchema = toOpenAISchema(req.schema);
 
-    // Attach any images to the LAST user message as vision content parts so the
-    // model can reason over the image (e.g. locate a subject in a page).
-    type VisionPart =
-      | { type: "text"; text: string }
-      | { type: "image_url"; image_url: { url: string } };
-    const messages: { role: string; content: string | VisionPart[] }[] = req.messages.map(
-      (m) => ({ role: m.role, content: m.content }),
-    );
-    if (req.images?.length) {
-      const imageParts: VisionPart[] = req.images.map((im) => ({
-        type: "image_url",
-        image_url: { url: `data:${im.mimeType};base64,${im.base64}` },
-      }));
-      let idx = -1;
-      for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].role === "user") {
-          idx = i;
-          break;
-        }
-      }
-      if (idx >= 0) {
-        const text = typeof messages[idx].content === "string" ? (messages[idx].content as string) : "";
-        messages[idx] = { role: "user", content: [{ type: "text", text }, ...imageParts] };
-      } else {
-        messages.push({ role: "user", content: imageParts });
-      }
-    }
-
-    const json = await requestJson<ChatCompletion>(
-      "openai",
-      `${base()}/v1/chat/completions`,
-      {
+    const complete = (
+      messages: { role: string; content: string | VisionPart[] }[],
+      responseFormat: unknown,
+    ) =>
+      requestJson<ChatCompletion>("openai", `${base()}/v1/chat/completions`, {
         method: "POST",
         headers: headers(creds),
         signal: req.signal,
         body: JSON.stringify({
           model: req.model,
-          messages: [sys, ...messages],
+          messages,
           temperature: req.temperature ?? 0.4,
-          response_format: { type: "json_object" },
+          response_format: responseFormat,
         }),
-      },
-    );
+      });
+
+    // Prefer native structured outputs. Some models (or a schema we couldn't
+    // make strict) 400 — fall back to json_object + a schema hint, which is
+    // what this adapter used before json_schema existed.
+    let json: ChatCompletion;
+    if (openaiSchema) {
+      try {
+        json = await complete(structuredMessages(req), {
+          type: "json_schema",
+          json_schema: {
+            name: openaiSchemaName(req.schemaName),
+            strict: openaiSchema.strict,
+            schema: openaiSchema.schema,
+          },
+        });
+      } catch (err) {
+        if (!(err instanceof ProviderError) || err.kind !== "invalid_request") throw err;
+        json = await complete(structuredMessages(req, jsonObjectHint(req.schema)), {
+          type: "json_object",
+        });
+      }
+    } else {
+      json = await complete(structuredMessages(req, jsonObjectHint(req.schema)), {
+        type: "json_object",
+      });
+    }
+
     const raw = json.choices[0]?.message?.content ?? "";
     let parsed: unknown;
     try {

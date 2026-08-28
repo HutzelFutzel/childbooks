@@ -289,12 +289,22 @@ jobs:
           # A timeout here loses the RESPONSE, not the work: the function posts to
           # Slack and moves the marker before it answers, so a slow model shows up
           # as a red step next to a delivered message rather than a repeat next run.
+          #
+          # Don't use curl -f: a 500 then hides the JSON body, which is the only
+          # clue (`maxLength` rejected, token mismatch, model missing, …).
           echo "Summarizing $count commit(s): $PREV..$GITHUB_SHA"
-          printf '%s' "$payload" | curl -fsS --max-time 300 \
+          code=$(printf '%s' "$payload" | curl -sS --max-time 300 \
+            -o /tmp/notes.json -w '%{http_code}' \
             -X POST "$BACKEND_URL/internal/release-notes" \
             -H "Authorization: Bearer $RELEASE_NOTES_TOKEN" \
             -H 'Content-Type: application/json' \
-            --data-binary @-
+            --data-binary @-)
+          cat /tmp/notes.json
+          echo
+          if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
+            echo "::error::Release notes endpoint returned HTTP $code"
+            exit 1
+          fi
 
       # Only fires when the frontend did NOT go live. Success is silent: the whole
       # point is that a stale site stops being invisible, not more green noise.

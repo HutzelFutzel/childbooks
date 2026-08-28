@@ -1,13 +1,32 @@
 /**
  * Converts a Zod schema into a Gemini-compatible response schema.
  *
- * Gemini's `responseSchema` only accepts a restricted OpenAPI 3.0 subset and
- * rejects JSON-Schema metadata that Zod emits (e.g. `$schema`,
- * `additionalProperties`, `$ref`/`$defs`). This walks the generated JSON
- * Schema, inlines refs, drops unsupported keys, and normalizes nullable types.
+ * Gemini's `responseSchema` is a small OpenAPI 3.0 subset. Anything outside it
+ * is a 400 (`Unknown name "maxLength"` and friends), not a silent ignore —
+ * which is how a `z.string().max(n)` on an otherwise-valid schema took down
+ * the release-notes call. Zod still enforces those constraints on the parsed
+ * output; they just must not appear in what we send.
+ *
+ * This walks the generated JSON Schema, inlines `$ref`s, drops unsupported
+ * keys, and normalizes nullable types.
+ *
+ * OpenAI's structured-output subset is different (it wants `additionalProperties:
+ * false` and `$defs`, and rejects a different set of keywords). That conversion
+ * lives in `providers/openai/schema.ts`. Callers pass one Zod schema; each
+ * provider converts it for its own API.
  */
 import { z } from "zod";
 
+/**
+ * Keywords Gemini's `responseSchema` rejects. Kept as a denylist (not an
+ * allowlist) so newly-documented fields like `propertyOrdering` still pass
+ * through if Zod ever emits them.
+ *
+ * Length/pattern/numeric-exclusion keywords are the ones Zod emits for
+ * `.max()` / `.min()` / `.regex()` on strings — supported as JSON Schema,
+ * not as Gemini Schema. `maxItems` / `minItems` / `minimum` / `maximum` ARE
+ * in Gemini's subset and are intentionally left alone.
+ */
 const UNSUPPORTED_KEYS = new Set([
   "$schema",
   "$id",
@@ -33,6 +52,16 @@ const UNSUPPORTED_KEYS = new Set([
   "prefixItems",
   "$defs",
   "definitions",
+  // JSON Schema string/number constraints Zod emits; Gemini 400s on these.
+  "maxLength",
+  "minLength",
+  "pattern",
+  "exclusiveMinimum",
+  "exclusiveMaximum",
+  "multipleOf",
+  "uniqueItems",
+  "contentEncoding",
+  "contentMediaType",
 ]);
 
 type JsonObject = Record<string, unknown>;

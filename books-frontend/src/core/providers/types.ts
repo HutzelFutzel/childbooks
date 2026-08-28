@@ -45,7 +45,12 @@ export interface StructuredRequest<T> {
   model: string;
   messages: TextMessage[];
   schema: z.ZodType<T>;
-  /** Name for the schema, required by some providers' structured output. */
+  /**
+   * Name for the schema. OpenAI's structured-output endpoint requires one
+   * (`^[A-Za-z0-9_-]{1,64}$`); Gemini ignores it. Each provider converts this
+   * Zod schema into its own JSON-Schema subset — see `providers/google/schema.ts`
+   * and `providers/openai/schema.ts`.
+   */
   schemaName?: string;
   /**
    * Images appended to the final user message for vision-capable models. Used by
