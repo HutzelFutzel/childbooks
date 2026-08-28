@@ -40,6 +40,7 @@ import { notifySlack } from "./notify";
 import { ensureAdmin } from "./storage";
 import { getTextProvider } from "../../books-frontend/src/core/providers";
 import { renderTextPrompt } from "../../books-frontend/src/core/prompts/render";
+import { ProviderError } from "../../books-frontend/src/core/errors";
 import {
   releaseNotesSchema,
   renderReleaseBlocks,
@@ -255,6 +256,18 @@ function str(v: unknown, max: number): string {
   return typeof v === "string" ? v.slice(0, max) : "";
 }
 
+/** What CI logs when generation throws — include the provider body, not just the short message. */
+function errorPayload(err: unknown): { message: string; details?: string } {
+  if (err instanceof ProviderError) {
+    const details = err.details?.trim();
+    return {
+      message: err.message,
+      ...(details && details !== err.message ? { details: details.slice(0, 2000) } : {}),
+    };
+  }
+  return { message: err instanceof Error ? err.message : "Release notes failed." };
+}
+
 /**
  * Why the happy path returns `posted: false` with a `reason` rather than an
  * error status: the caller is a CI step. A non-2xx there either fails the
@@ -336,9 +349,7 @@ export function registerReleaseNotesRoute(app: Express): void {
       // retries this range plus whatever else lands. A provider outage costs a
       // delay, never a missing release.
       console.error("[releaseNotes] generation failed", err);
-      res.status(500).json({
-        error: { message: err instanceof Error ? err.message : "Release notes failed." },
-      });
+      res.status(500).json({ error: errorPayload(err) });
     }
   });
 }

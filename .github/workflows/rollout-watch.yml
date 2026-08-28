@@ -195,11 +195,11 @@ jobs:
           echo "::notice::No usable starting commit — skipping release notes."
 
       # A green frontend says nothing about the backend, which deploys in
-      # parallel (deploy.yml). If that run FAILED, half of what we'd announce
-      # isn't actually live — so stay quiet. Nothing is lost by doing so: the
-      # marker doesn't move, so the next release covers these commits too.
-      # Still in progress is fine — it lands within a minute or two.
-      - name: Check the backend deploy of this commit
+      # parallel (deploy.yml). The release-notes endpoint lives on THAT
+      # deploy, so posting while it is still in progress hits the previous
+      # revision and 500s. Wait until it succeeds; if it failed, stay quiet
+      # (the marker doesn't move, so the next release covers these commits).
+      - name: Wait for the backend deploy of this commit
         id: backend
         if: steps.range.outputs.sha != ''
         continue-on-error: true
@@ -207,16 +207,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
-          conclusion=$(gh api \
-            "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$GITHUB_SHA&per_page=50" \
-            --jq '[.workflow_runs[]? | select(.name=="Deploy")] | sort_by(.created_at) | last | .conclusion // ""' \
-            2>/dev/null || echo "")
-          if [ "$conclusion" = "failure" ] || [ "$conclusion" = "cancelled" ]; then
-            echo "::notice::Backend deploy did not succeed ($conclusion) — skipping release notes."
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          fi
+          for _ in $(seq 1 40); do
+            run=$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$GITHUB_SHA&per_page=50" \
+              --jq '[.workflow_runs[]? | select(.name=="Deploy")] | sort_by(.created_at) | last // {}' \
+              2>/dev/null || echo '{}')
+            status=$(jq -r '.status // ""' <<<"$run")
+            conclusion=$(jq -r '.conclusion // ""' <<<"$run")
+            echo "backend deploy: status=${status:-?} conclusion=${conclusion:-?}"
+            if [ "$conclusion" = "success" ]; then
+              echo "ok=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$conclusion" = "failure" ] || [ "$conclusion" = "cancelled" ]; then
+              echo "::notice::Backend deploy did not succeed ($conclusion) — skipping release notes."
+              echo "ok=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::notice::Timed out waiting for the backend deploy — skipping release notes."
+          echo "ok=false" >> "$GITHUB_OUTPUT"
 
       # Collect the range and POST it. The backend picks the model and prompt
       # (admin dashboard → Configuration → AI pipeline), decides whether anything
