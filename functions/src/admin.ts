@@ -127,7 +127,7 @@ import {
   type QrDotStyle,
 } from "../../books-frontend/src/core/config/qrCodes";
 import { getMarketsConfig, getMarketCapability, getMarketRegistry, saveMarketsConfig } from "./markets";
-import { ensureShippingSeeded, getShippingSettings, saveShippingSettings } from "./shipping";
+import { getShippingSettings, saveShippingSettings } from "./shipping";
 import { normalizeShippingSettings } from "../../books-frontend/src/core/config/shipping";
 import { previewShippingChange } from "../../books-frontend/src/core/config/shippingPreview";
 import { runMarketSweep } from "./marketDiscovery";
@@ -1384,12 +1384,12 @@ export function registerAdminRoutes(app: Express): void {
 
   // ---- Shipping policy ------------------------------------------------------
 
-  // How shipping is sold catalog-wide. Seeded on first read for the same reason
-  // markets are: an empty form would read as "we ship nothing", which is the
-  // opposite of what the storefront is currently doing.
+  // How shipping is sold catalog-wide. Missing data normalizes to the default,
+  // but a read never writes: read-only admins must not mutate configuration and
+  // a GET must not fail because a seed write is unavailable.
   app.get("/admin/config/shipping", async (_req, res) => {
     try {
-      res.json(await ensureShippingSeeded());
+      res.json(await getShippingSettings());
     } catch (err) {
       handleError(res, err);
     }

@@ -44,6 +44,7 @@ import {
 import {
   createDefaultShippingSettings,
   SHIPPING_METHODS,
+  shippingSettingsSchema,
   withPricingMode,
   type ShippingSettings,
 } from "../books-frontend/src/core/config/shipping";
@@ -94,6 +95,11 @@ function check(name: string, ok: boolean, detail?: string): void {
   if (ok) checks.push(name);
   else failures.push(`${name}${detail ? `: ${detail}` : ""}`);
 }
+
+check(
+  "the first-run shipping policy validates before it is persisted",
+  shippingSettingsSchema.safeParse(createDefaultShippingSettings()).success,
+);
 
 /**
  * A product with a plausible measured cost model. The NUMBERS are arbitrary —

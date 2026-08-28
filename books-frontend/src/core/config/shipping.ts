@@ -340,7 +340,10 @@ export const shippingSettingsSchema = z.object({
       fixedAddKind: z.enum(["perOrder", "perCopy"]).optional(),
       fixedAddCurrency: z.string().max(3).optional(),
       absorbInPrice: z.boolean().optional(),
-      flatPerMethod: z.record(methodEnum, z.number().nonnegative()).optional(),
+      // Sparse by design: under flat pricing, a missing speed is not sold.
+      // Zod 4 makes z.record(enum, ...) exhaustive, so use partialRecord or the
+      // valid default `{}` fails with "expected number, received undefined".
+      flatPerMethod: z.partialRecord(methodEnum, z.number().nonnegative()).optional(),
       flatCurrency: z.string().max(3).optional(),
     })
     .optional(),
