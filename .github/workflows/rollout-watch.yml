@@ -141,12 +141,10 @@ jobs:
       #      backend deploy, provider outage, Slack outage, nothing confident to
       #      say) leaves the marker where it was, so this range simply widens to
       #      cover it. See `advanceState` in functions/src/releaseNotes.ts.
-      #   2. The last commit whose FRONTEND went live, from the build list already
-      #      on disk. Used on the very first run, and if the marker ever points at
-      #      a commit that no longer exists (a force-push).
-      #
-      # Note the two differ precisely when a release went live but wasn't
-      # summarized — which is the case the marker exists to fix.
+      #   2. If there is no marker yet (first run, or every attempt so far 500'd),
+      #      the last 25 commits. We do NOT use "the previous live build" here:
+      #      `A..B` excludes A, so a commit that went live and then failed to
+      #      summarize would vanish the moment it became "last live".
       - name: Decide where the release notes start
         id: range
         if: steps.checkout.outcome == 'success'
@@ -177,21 +175,18 @@ jobs:
             exit 0
           fi
           [ -n "$marker" ] && [ "$marker" != "null" ] \
-            && echo "Marker $marker is not in this repo's history — falling back to the build list."
+            && echo "Marker $marker is not in this repo's history — falling back."
 
-          mine=$(jq -r --arg sha "$GITHUB_SHA" \
-            '[.builds[]? | select(.source.codebase.hash==$sha)] | sort_by(.createTime) | last | .createTime // ""' \
-            /tmp/builds.json)
-          prev=$(jq -r --arg t "$mine" \
-            '[.builds[]? | select(.state=="READY") | select(.createTime < $t)]
-             | sort_by(.createTime) | last | .source.codebase.hash // ""' /tmp/builds.json)
-          if [ -n "$prev" ] && [ "$prev" != "null" ] && in_history "$prev"; then
-            emit "$prev" "last live build"
+          # No marker yet (first run, or every attempt so far failed). `A..B`
+          # excludes A, so "last live build" as A would drop a commit that went
+          # live but was never summarized — which is exactly the hole the marker
+          # exists to close. Walk back up to 25 commits so a failed first post
+          # is still in the next range.
+          start=$(git rev-list --max-count=26 "$GITHUB_SHA" | tail -n 1)
+          if [ -n "$start" ] && [ "$start" != "$GITHUB_SHA" ] && in_history "$start"; then
+            emit "$start" "no marker yet — last 25 commits"
             exit 0
           fi
-          # First ever run, or the retained build list has nothing usable. Say
-          # nothing rather than summarise the wrong commits — the marker will be
-          # seeded by the first release that does resolve a range.
           echo "::notice::No usable starting commit — skipping release notes."
 
       # A green frontend says nothing about the backend, which deploys in
