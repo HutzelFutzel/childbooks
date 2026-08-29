@@ -29,8 +29,14 @@ import { ensureAdmin } from "./storage";
 import { type AuthedRequest } from "./auth";
 import { getSeoConfig } from "./appConfig";
 import { sendWelcomeEmail } from "./email/triggers";
-import { notifySlack } from "./notify";
+import { notifySlack, formatSignupSlackMessage, getSparksSpent } from "./notify";
 import { onCampaignEvent } from "./campaigns";
+import { countryFromSignals, deviceFactsFromHeaders } from "./geo";
+import { UNKNOWN_COUNTRY } from "../../books-frontend/src/core/analytics/markets";
+import {
+  isUnknownDevice,
+  normalizeDeviceFacts,
+} from "../../books-frontend/src/core/analytics/device";
 
 /** Consent captured at signup (client-supplied). All fields optional. */
 interface ConsentPayload {
@@ -123,12 +129,55 @@ export function registerAuthRoutes(app: Express): void {
         dedupe: user.emailVerified,
       });
 
+      // Enrich the signup alert with location, device facts, and guest sparks history.
+      let country = countryFromSignals({
+        headers: req.headers,
+        locale: req.headers["accept-language"]?.toString(),
+      });
+      const deviceFacts = deviceFactsFromHeaders(req.headers);
+
+      try {
+        if (country === UNKNOWN_COUNTRY || isUnknownDevice(deviceFacts)) {
+          const userDoc = await getFirestore().doc(`users/${uid}`).get();
+          const data = userDoc.data() ?? {};
+          if (country === UNKNOWN_COUNTRY) {
+            const savedCountry =
+              typeof data.country === "string"
+                ? data.country
+                : typeof data.signupCountry === "string"
+                  ? data.signupCountry
+                  : "";
+            if (savedCountry) country = savedCountry;
+          }
+          if (isUnknownDevice(deviceFacts) && data.meta?.device) {
+            const normalized = normalizeDeviceFacts(data.meta.device);
+            if (!isUnknownDevice(normalized)) {
+              if (deviceFacts.device === "unknown") deviceFacts.device = normalized.device;
+              if (deviceFacts.os === "other") deviceFacts.os = normalized.os;
+              if (deviceFacts.browser === "other") deviceFacts.browser = normalized.browser;
+            }
+          }
+        }
+      } catch {
+        // Best-effort: enrichment must never fail the welcome flow.
+      }
+
+      const guestSparksSpent = await getSparksSpent(uid);
+
       // #growth ping for the real account (deduped on uid via notifySlack's ref).
       await notifySlack({
         channel: "growth",
         messageKey: "signup",
         ref: `signup_${uid}`,
-        text: `🎉 New signup — ${email} (${providerId})`,
+        text: formatSignupSlackMessage({
+          email,
+          providerId,
+          country,
+          device: deviceFacts.device,
+          os: deviceFacts.os,
+          browser: deviceFacts.browser,
+          guestSparksSpent,
+        }),
       });
 
       // The campaign engine's `signup` trigger. Fired here rather than from the

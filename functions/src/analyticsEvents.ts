@@ -37,7 +37,7 @@ import { beforeUserCreated, beforeUserSignedIn } from "firebase-functions/v2/ide
 import type { AuthBlockingEvent, AuthUserRecord } from "firebase-functions/v2/identity";
 import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
-import { notifySlack } from "./notify";
+import { notifySlack, formatSignupSlackMessage, getSparksSpent } from "./notify";
 import { SLACK_WEBHOOK_URL } from "./secrets";
 import { regionFromLocale } from "./geo";
 import { UNKNOWN_COUNTRY } from "../../books-frontend/src/core/analytics/markets";
@@ -147,11 +147,26 @@ async function record(
   // anonymous guest, so those would be pure noise. Deduped on uid; prod-only and
   // best-effort (notifySlack swallows failures, so it can't block sign-in).
   if (type === "signup" && source !== "anonymous") {
+    let guestSparksSpent = 0;
+    try {
+      guestSparksSpent = await getSparksSpent(user.uid);
+    } catch {
+      // Best-effort
+    }
+
     await notifySlack({
       channel: "growth",
       messageKey: "signup",
       ref: `signup_${user.uid}`,
-      text: `🎉 New signup — ${user.email ?? user.uid} (${source})`,
+      text: formatSignupSlackMessage({
+        email: user.email ?? user.uid,
+        providerId: source,
+        country,
+        device: device.device,
+        os: device.os,
+        browser: device.browser,
+        guestSparksSpent,
+      }),
     });
   }
 }

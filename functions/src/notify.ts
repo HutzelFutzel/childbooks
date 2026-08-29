@@ -22,6 +22,15 @@ import { ensureAdmin } from "./storage";
 import { getSlackConfig } from "./appConfig";
 import { slackMessageEnabled } from "../../books-frontend/src/core/config/slackConfig";
 import type { SlackChannel, SlackMessageKey } from "../../books-frontend/src/core/notify/registry";
+import { UNKNOWN_COUNTRY, countryFlag } from "../../books-frontend/src/core/analytics/markets";
+import {
+  deviceLabel,
+  osLabel,
+  browserLabel,
+  type DeviceClass,
+  type OsFamily,
+  type BrowserFamily,
+} from "../../books-frontend/src/core/analytics/device";
 
 /** Which Slack channel a message is for (drives which webhook is used). */
 export type NotifyChannel = SlackChannel;
@@ -141,3 +150,92 @@ export async function notifySlack(opts: {
 export function money(amount: number, currency: string): string {
   return `${amount.toFixed(2)} ${currency.toUpperCase()}`;
 }
+
+/** Format providerId into clean human label: "google.com" -> "Google", "password" -> "Email", etc. */
+export function formatProviderLabel(providerId?: string | null): string {
+  if (!providerId) return "Email";
+  const p = providerId.trim().toLowerCase();
+  if (p === "google.com" || p === "google") return "Google";
+  if (p === "password" || p === "email") return "Email";
+  if (p === "apple.com" || p === "apple") return "Apple";
+  if (p === "github.com" || p === "github") return "GitHub";
+  if (p === "facebook.com" || p === "facebook") return "Facebook";
+  if (p === "anonymous" || p === "guest") return "Guest";
+  return providerId.replace(/\.com$/i, "");
+}
+
+export interface SignupNotificationOptions {
+  email: string;
+  providerId?: string | null;
+  country?: string | null;
+  device?: DeviceClass | string | null;
+  os?: OsFamily | string | null;
+  browser?: BrowserFamily | string | null;
+  guestSparksSpent?: number | null;
+}
+
+/**
+ * Format the single-line compact signup alert for Slack (#growth).
+ * e.g. "🎉 New signup — xyz@gmail.com (Google) · 🇺🇸 US · Desktop · macOS · Chrome · ⚡ 3 guest sparks spent"
+ */
+export function formatSignupSlackMessage(opts: SignupNotificationOptions): string {
+  const provider = formatProviderLabel(opts.providerId);
+  const base = `🎉 New signup — ${opts.email} (${provider})`;
+
+  const segments: string[] = [base];
+
+  // Country
+  const c = (opts.country || "").trim().toUpperCase();
+  if (c && c !== UNKNOWN_COUNTRY && c !== "XX" && c !== "ZZ") {
+    segments.push(`${countryFlag(c)} ${c}`);
+  } else {
+    segments.push("🌍 Unknown");
+  }
+
+  // Device / OS / Browser
+  if (opts.device && opts.device !== "unknown") {
+    segments.push(deviceLabel(opts.device));
+  }
+  if (opts.os && opts.os !== "other" && opts.os !== "unknown") {
+    segments.push(osLabel(opts.os));
+  }
+  if (opts.browser && opts.browser !== "other" && opts.browser !== "unknown") {
+    segments.push(browserLabel(opts.browser));
+  }
+
+  // Guest sparks spent
+  const spent =
+    typeof opts.guestSparksSpent === "number" && Number.isFinite(opts.guestSparksSpent)
+      ? Math.max(0, Math.round(opts.guestSparksSpent))
+      : 0;
+  if (spent > 0) {
+    segments.push(`⚡ ${spent} guest spark${spent === 1 ? "" : "s"} spent`);
+  } else {
+    segments.push("⚡ 0 guest sparks spent");
+  }
+
+  return segments.join(" · ");
+}
+
+/** Total sparks spent from the user's ledger (e.g. prior guest usage before signup). */
+export async function getSparksSpent(uid: string): Promise<number> {
+  try {
+    ensureAdmin();
+    const snap = await getFirestore()
+      .collection(`users/${uid}/sparksLedger`)
+      .where("type", "==", "spend")
+      .get();
+    let total = 0;
+    for (const doc of snap.docs) {
+      const amt = doc.data()?.amount;
+      if (typeof amt === "number") {
+        total += Math.abs(amt);
+      }
+    }
+    return total;
+  } catch (err) {
+    console.warn("[notify] could not load sparks spent", err);
+    return 0;
+  }
+}
+
