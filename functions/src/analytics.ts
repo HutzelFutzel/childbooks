@@ -338,6 +338,8 @@ interface UserMeta {
   sparkBalance: number | null;
   /** Market, denormalized by the auth blocking functions (see analyticsEvents.ts). */
   country: string | null;
+  /** Timestamp when user registered / linked a permanent account. */
+  signedUpAt: number | null;
   /**
    * What the surveys worked out about who they buy for, or null if they've never
    * answered. Summarized here — the raw answer keys stay on the document, since a
@@ -446,6 +448,7 @@ function fetchUserMeta(): Promise<Map<string, UserMeta>> {
         const d = doc.data() as {
           sparkBalance?: unknown;
           country?: unknown;
+          signedUpAt?: unknown;
           surveyProfile?: unknown;
           meta?: unknown;
         };
@@ -453,11 +456,16 @@ function fetchUserMeta(): Promise<Map<string, UserMeta>> {
           typeof d.sparkBalance === "number" && Number.isFinite(d.sparkBalance)
             ? d.sparkBalance
             : null;
+        const signedUpAt =
+          typeof d.signedUpAt === "number" && Number.isFinite(d.signedUpAt)
+            ? d.signedUpAt
+            : null;
         const profile = normalizeBuyerProfile(d.surveyProfile);
         const meta = (d.meta ?? {}) as Record<string, unknown>;
         out.set(doc.id, {
           sparkBalance: balance,
           country: normalizeCountry(d.country),
+          signedUpAt,
           // Null rather than an empty profile, so the table can show "never asked"
           // and "answered but told us nothing" as the different things they are.
           buyer: profile.answers > 0 ? buyerFacts(profile) : null,
@@ -831,6 +839,7 @@ function countTotals(
   from: number,
   to: number,
   inSegment: (uid: string) => boolean = () => true,
+  meta?: Map<string, UserMeta>,
 ): { totals: AnalyticsTotals; activeSource: ActiveUsersSource } {
   const inMarket = (uid: string) => (!country || countryOf(uid) === country) && inSegment(uid);
   let totalUsers = 0;
@@ -838,10 +847,14 @@ function countTotals(
   let newSignups = 0;
   for (const u of users) {
     if (!inMarket(u.uid)) continue;
-    if (u.isAnonymous) totalGuests += 1;
-    else totalUsers += 1;
-    if (!u.isAnonymous && u.createdAt != null && u.createdAt >= from && u.createdAt <= to) {
-      newSignups += 1;
+    if (u.isAnonymous) {
+      totalGuests += 1;
+    } else {
+      totalUsers += 1;
+      const signupTime = meta?.get(u.uid)?.signedUpAt ?? u.createdAt;
+      if (signupTime != null && signupTime >= from && signupTime <= to) {
+        newSignups += 1;
+      }
     }
   }
 
@@ -935,12 +948,13 @@ export async function computeOverview(
   for (const u of users) {
     const c = countryOf(u.uid);
     if (!inMarket(c) || !inDevice(u.uid)) continue;
-    if (u.createdAt == null || u.createdAt < from || u.createdAt > to) continue;
     sources.set(u.source, (sources.get(u.source) ?? 0) + 1);
     if (u.isAnonymous) continue;
-    const point = seriesMap.get(tzParts(u.createdAt, tz).dayKey);
+    const signupTime = meta.get(u.uid)?.signedUpAt ?? u.createdAt;
+    if (signupTime == null || signupTime < from || signupTime > to) continue;
+    const point = seriesMap.get(tzParts(signupTime, tz).dayKey);
     if (point) point.signups += 1;
-    signupPoints.push({ at: u.createdAt, country: c, actor: u.uid });
+    signupPoints.push({ at: signupTime, country: c, actor: u.uid });
   }
 
   for (const e of current.events) {
@@ -975,6 +989,7 @@ export async function computeOverview(
     from,
     to,
     inDevice,
+    meta,
   );
   const { totals: previousTotals, activeSource: previousActiveSource } = countTotals(
     users,
@@ -984,6 +999,7 @@ export async function computeOverview(
     prev.from,
     prev.to,
     inDevice,
+    meta,
   );
 
   return {
@@ -1005,7 +1021,7 @@ export async function computeOverview(
     signupSources,
     signupDevices,
     activity: buildActivity(signupPoints, loginPoints, tzMode, tz),
-    countries: buildCountryBreakdown(users, current.events, countryOf, eventCountry, from, to),
+    countries: buildCountryBreakdown(users, current.events, countryOf, eventCountry, from, to, meta),
     excludedCount,
     capped,
     eventsCapped: current.capped,
@@ -1020,6 +1036,7 @@ function buildCountryBreakdown(
   eventCountry: (e: EventRow) => string,
   from: number,
   to: number,
+  meta?: Map<string, UserMeta>,
 ): CountryActivity[] {
   interface Acc {
     totalUsers: number;
@@ -1040,7 +1057,8 @@ function buildCountryBreakdown(
     if (u.isAnonymous) continue;
     const a = get(countryOf(u.uid));
     a.totalUsers += 1;
-    if (u.createdAt != null && u.createdAt >= from && u.createdAt <= to) a.signups += 1;
+    const signupTime = meta?.get(u.uid)?.signedUpAt ?? u.createdAt;
+    if (signupTime != null && signupTime >= from && signupTime <= to) a.signups += 1;
   }
   for (const e of events) {
     if (e.at < from || e.at > to) continue;
@@ -1951,10 +1969,13 @@ export async function computeFunnel(opts: {
   let signups = 0;
   let guests = 0;
   for (const u of users) {
-    if (u.createdAt == null || u.createdAt < from || u.createdAt > to) continue;
     if (!included(u.uid)) continue;
-    if (u.isAnonymous) guests += 1;
-    else signups += 1;
+    if (u.isAnonymous) {
+      if (u.createdAt != null && u.createdAt >= from && u.createdAt <= to) guests += 1;
+    } else {
+      const signupTime = meta.get(u.uid)?.signedUpAt ?? u.createdAt;
+      if (signupTime != null && signupTime >= from && signupTime <= to) signups += 1;
+    }
   }
 
   interface KindAcc {

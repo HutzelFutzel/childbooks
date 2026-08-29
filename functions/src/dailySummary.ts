@@ -226,13 +226,13 @@ function summarizeDevices(
   };
 }
 
-/** `Phone 62% · Desktop 33% · Tablet 5%` over the form factors with sessions. */
+/** `Desktop: 6 (50%) · Phone: 6 (50%)` over the form factors with sessions. */
 function deviceShareBits(mix: DeviceMix): string[] {
   const total = mix.rows.reduce((s, r) => s + r.sessions, 0);
   if (total <= 0) return [];
   return mix.rows
     .filter((r) => r.sessions > 0)
-    .map((r) => `${deviceLabel(r.key)} ${Math.round((r.sessions / total) * 100)}%`);
+    .map((r) => `${deviceLabel(r.key)}: ${r.sessions} (${Math.round((r.sessions / total) * 100)}%)`);
 }
 
 /**
@@ -273,7 +273,7 @@ function deviceAnomalyLine(mix: DeviceMix): string | null {
   const multiple = best && leadRps > 0 ? perSession(best) / leadRps : null;
 
   const gap =
-    `📉 ${deviceLabel(lead.key)} is ${Math.round(sessionShare * 100)}% of sessions but ` +
+    `${deviceLabel(lead.key)} is ${Math.round(sessionShare * 100)}% of sessions but ` +
     `${Math.round(revenueShare * 100)}% of revenue`;
   if (!best || multiple == null || multiple < 1.2) return `${gap}.`;
   return `${gap} — ${deviceLabel(best.key)} earns ${multiple.toFixed(1)}× more per session.`;
@@ -332,16 +332,16 @@ export async function buildDailySummaryText(
   const capped = overview.capped || overview.eventsCapped || finance.capped || funnel.capped;
 
   const lines: string[] = [];
-  lines.push(`📊 *Daily summary — ${dayLabel}*`);
+  lines.push(`*Daily summary — ${dayLabel}*`);
   if (opts.note) lines.push(opts.note);
   if (capped) {
-    lines.push("⚠️ _One or more scans hit their safety cap — some numbers below are a lower bound._");
+    lines.push("_One or more scans hit their safety cap — some numbers below are a lower bound._");
   }
   lines.push(
-    `👤 Signups: ${overview.totals.newSignups}${pctChange(overview.totals.newSignups, overview.previousTotals.newSignups)}` +
-      `   🕶️ Guests: ${guestsStarted}` +
-      `   🔑 Logins: ${overview.totals.logins}` +
-      `   🟢 Active users: ${overview.totals.activeUsers}`,
+    `Signups: ${overview.totals.newSignups}${pctChange(overview.totals.newSignups, overview.previousTotals.newSignups)}` +
+      `   Guests: ${guestsStarted}` +
+      `   Logins: ${overview.totals.logins}` +
+      `   Active users: ${overview.totals.activeUsers}`,
   );
 
   const revenueBits = [`gross ${usd(finance.totalRevenueUsd)}`];
@@ -349,34 +349,34 @@ export async function buildDailySummaryText(
     const rate = pctOf(refundUsd, finance.totalRevenueUsd);
     revenueBits.push(`${plural(refundCount, "refund")} ${usd(refundUsd)}${rate ? ` (${rate} of gross)` : ""}`);
   }
-  lines.push(`💰 Net revenue: ${usd(finance.netUsd)} (${revenueBits.join(", ")})`);
+  lines.push(`Net revenue: ${usd(finance.netUsd)} (${revenueBits.join(", ")})`);
 
   const orderBits: string[] = [];
   if (printOrders) orderBits.push(`${plural(printOrders, "print order")}`);
   if (ebookOrders) orderBits.push(`${plural(ebookOrders, "ebook")}`);
   if (packOrders) orderBits.push(`${plural(packOrders, "Spark pack")}`);
   if (subPayments) orderBits.push(`${plural(subPayments, "subscription payment")}`);
-  if (orderBits.length > 0) lines.push(`🛒 Orders: ${orderBits.join(" · ")}`);
+  if (orderBits.length > 0) lines.push(`Orders: ${orderBits.join(" · ")}`);
 
   if (topProduct && (topProduct.revenueUsd > 0 || topProduct.units > 0)) {
     lines.push(
-      `🏆 Top product: ${productLabel(topProduct.key)} — ${usd(topProduct.netUsd)} net (${plural(topProduct.units, "unit")})`,
+      `Top product: ${productLabel(topProduct.key)} — ${usd(topProduct.netUsd)} net (${plural(topProduct.units, "unit")})`,
     );
   }
 
   if (paidStage && paidStage.stepPct != null) {
-    lines.push(`🎯 Checkout → paid: ${paidStage.stepPct}%${unfulfilledPaid > 0 ? ` · ⚙️ ${plural(unfulfilledPaid, "paid order")} unfulfilled` : ""}`);
+    lines.push(`Checkout → paid: ${paidStage.stepPct}%${unfulfilledPaid > 0 ? ` · ${plural(unfulfilledPaid, "paid order")} unfulfilled` : ""}`);
   }
 
   if (funnel.abandonedCheckouts > 0) {
     lines.push(
-      `🚧 Abandoned checkouts: ${funnel.abandonedCheckouts} (${usd(funnel.abandonedUsd)} left on the table)`,
+      `Abandoned checkouts: ${funnel.abandonedCheckouts} (${usd(funnel.abandonedUsd)} left on the table)`,
     );
   }
 
   if (topCountry) {
     lines.push(
-      `🌍 Top market: ${topCountry.country} — ${plural(topCountry.signups, "signup")}, ${topCountry.activeUsers} active`,
+      `Top market: ${topCountry.country} — ${plural(topCountry.signups, "signup")}, ${topCountry.activeUsers} active`,
     );
   }
 
@@ -389,17 +389,17 @@ export async function buildDailySummaryText(
   if (shareBits.length > 0) {
     const signupBits = overview.signupDevices
       .filter((d) => d.value > 0)
-      .map((d) => `${d.label} ${d.value}`);
+      .map((d) => `${d.label}: ${d.value}`);
     lines.push(
-      `📱 Sessions: ${deviceMix.sessions} — ${shareBits.join(" · ")}` +
-        (signupBits.length > 0 ? `   ✍️ Signed up on: ${signupBits.join(" · ")}` : ""),
+      `Sessions: ${deviceMix.sessions} — ${shareBits.join(" · ")}` +
+        (signupBits.length > 0 ? `   Signed up on: ${signupBits.join(" · ")}` : ""),
     );
     const anomaly = deviceAnomalyLine(deviceMix);
     if (anomaly) lines.push(anomaly);
   }
 
   if (alertsToday.length > 0) {
-    lines.push(`⚠️ Alerts: ${alertsToday.length} (${unresolvedToday.length} unresolved)`);
+    lines.push(`Alerts: ${alertsToday.length} (${unresolvedToday.length} unresolved)`);
   }
 
   return lines.join("\n");
@@ -407,17 +407,12 @@ export async function buildDailySummaryText(
 
 /**
  * Runs once a day in the evening. Defaults to 20:00 UTC — adjust the cron
- * expression / `timeZone` below to your own business evening (the KPI window
- * itself always uses the admin-configured `adminSettings.timezone`, and is
- * anchored to the watermark rather than to when this fires — see the file
- * header comment).
+ * expression / `timeZone` below to your own business evening.
  *
- * The upper bound is always the most recent local midnight (`adminSettings.
- * timezone`) at or before "now", not "now" itself — so the digest only ever
- * reports on complete calendar days, and two back-to-back runs tile exactly
- * (no gap, no overlap) as long as each one succeeds. The lower bound is the
- * watermark left by the last successful send, so a missed run just makes the
- * next message cover more days instead of dropping the missed one.
+ * The upper bound is the run timestamp `now`, and the lower bound is the
+ * watermark left by the last successful send (or `now - 24h` on first run).
+ * This guarantees the window precisely covers the period between consecutive
+ * summary messages, resetting to 0 once sent.
  */
 export const sendDailySummary = onSchedule(
   {
@@ -431,20 +426,20 @@ export const sendDailySummary = onSchedule(
     let to = 0;
     try {
       const settings = await getAdminSettings();
-      to = localMidnightMs(dayKeyDaysAgo(0, settings.timezone), settings.timezone);
+      to = Date.now();
 
       const coveredThrough = await getCoveredThroughMs();
-      let from = coveredThrough ?? to - DAY_MS;
+      let from = coveredThrough ?? (to - DAY_MS);
       let note: string | undefined;
       if (to - from > MAX_CATCHUP_MS) {
         // Very stale watermark (long outage, toggle left off for weeks, …).
         // Report what we can and say so, rather than trying to summarize an
         // unbounded window in one Slack post.
         from = to - MAX_CATCHUP_MS;
-        note = `⚠️ _Watermark was very stale — showing only the last ${Math.round(MAX_CATCHUP_MS / DAY_MS)} days._`;
+        note = `_Watermark was very stale — showing only the last ${Math.round(MAX_CATCHUP_MS / DAY_MS)} days._`;
       } else if (to - from > DAY_MS * 1.5) {
         const days = Math.round((to - from) / DAY_MS);
-        note = `⏳ _Catching up ${days} days since the last summary — nothing lost._`;
+        note = `_Catching up ${days} days since the last summary — nothing lost._`;
       }
 
       if (to <= from) {

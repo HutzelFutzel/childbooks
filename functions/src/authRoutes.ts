@@ -30,6 +30,7 @@ import { type AuthedRequest } from "./auth";
 import { getSeoConfig } from "./appConfig";
 import { sendWelcomeEmail } from "./email/triggers";
 import { notifySlack, formatSignupSlackMessage, getSparksSpent } from "./notify";
+import { recordSignupEvent } from "./analyticsEvents";
 import { onCampaignEvent } from "./campaigns";
 import { countryFromSignals, deviceFactsFromHeaders } from "./geo";
 import { UNKNOWN_COUNTRY } from "../../books-frontend/src/core/analytics/markets";
@@ -163,6 +164,15 @@ export function registerAuthRoutes(app: Express): void {
       }
 
       const guestSparksSpent = await getSparksSpent(uid);
+
+      // Record non-anonymous signup analytics event + stamp signedUpAt on user doc.
+      await recordSignupEvent({
+        uid,
+        email,
+        providerId,
+        country,
+        device: deviceFacts,
+      });
 
       // #growth ping for the real account (deduped on uid via notifySlack's ref).
       await notifySlack({

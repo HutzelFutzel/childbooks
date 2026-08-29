@@ -83,6 +83,7 @@ async function record(
 ): Promise<void> {
   const source = sourceOf(user);
   const known = !isUnknownDevice(device);
+  const now = Date.now();
   try {
     ensureAdmin();
     const db = getFirestore();
@@ -92,7 +93,7 @@ async function record(
       email: user.email ? user.email.toLowerCase() : null,
       source,
       country,
-      at: Date.now(),
+      at: now,
       // Omitted entirely when nothing could be read, so a missing field means
       // "not captured" rather than a bucket the dashboard would have to trust.
       ...(known
@@ -109,6 +110,10 @@ async function record(
     // log (which only covers the selected window). Only overwrite with a known
     // country — a signal-less sign-in must not erase a good earlier reading.
     const patch: Record<string, unknown> = {};
+    if (source !== "anonymous" && type === "signup") {
+      patch.signedUpAt = now;
+      patch.signupSource = source;
+    }
     if (country !== UNKNOWN_COUNTRY) {
       patch.country = country;
       if (type === "signup") patch.signupCountry = country;
@@ -168,6 +173,73 @@ async function record(
         guestSparksSpent,
       }),
     });
+  }
+}
+
+/**
+ * Record a non-anonymous signup event and stamp `signedUpAt` on the user doc.
+ * Called from `/auth/welcome` when a user creates/links a real account.
+ * Idempotent: if `users/{uid}.signedUpAt` is already set, it will not duplicate.
+ */
+export async function recordSignupEvent(opts: {
+  uid: string;
+  email: string | null;
+  providerId: string;
+  country: string;
+  device?: DeviceFacts;
+  at?: number;
+}): Promise<void> {
+  const at = opts.at ?? Date.now();
+  try {
+    ensureAdmin();
+    const db = getFirestore();
+    const userRef = db.doc(`users/${opts.uid}`);
+    const userSnap = await userRef.get();
+    const existing = userSnap.data() ?? {};
+    if (typeof existing.signedUpAt === "number") {
+      return; // Already stamped as signed up.
+    }
+
+    const patch: Record<string, unknown> = {
+      signedUpAt: at,
+      signupSource: opts.providerId,
+    };
+    if (opts.country !== UNKNOWN_COUNTRY) {
+      patch.country = opts.country;
+      patch.signupCountry = opts.country;
+    }
+    const known = opts.device && !isUnknownDevice(opts.device);
+    if (known && opts.device) {
+      patch.meta = {
+        device: {
+          signupDevice: opts.device.device,
+          device: opts.device.device,
+          os: opts.device.os,
+          browser: opts.device.browser,
+          browserMajor: opts.device.browserMajor,
+        },
+      };
+    }
+    await userRef.set(patch, { merge: true });
+
+    await db.collection("analyticsEvents").add({
+      type: "signup",
+      uid: opts.uid,
+      email: opts.email ? opts.email.toLowerCase() : null,
+      source: opts.providerId,
+      country: opts.country,
+      at,
+      ...(known && opts.device
+        ? {
+            device: opts.device.device,
+            os: opts.device.os,
+            browser: opts.device.browser,
+            browserMajor: opts.device.browserMajor,
+          }
+        : {}),
+    });
+  } catch {
+    // Best-effort: never throw
   }
 }
 
