@@ -77,6 +77,7 @@ export interface ProjectDerived {
   title?: string;
   ageRangeId?: string;
   readingModeId?: string;
+  contentLocale?: string;
   artStyleKey?: string;
   productSku?: string;
   /**
@@ -175,6 +176,7 @@ export function deriveProjectStructure(project: Project): ProjectDerived {
     ...(project.title ? { title: project.title.slice(0, 200) } : {}),
     ...(project.config?.ageRangeId ? { ageRangeId: project.config.ageRangeId } : {}),
     ...(project.config?.readingModeId ? { readingModeId: project.config.readingModeId } : {}),
+    ...(project.config?.contentLocale ? { contentLocale: project.config.contentLocale } : {}),
     ...(project.config?.productSku ? { productSku: project.config.productSku } : {}),
     ...(project.config?.artStyle ? { artStyleKey: artStyleKey(project.config.artStyle) } : {}),
     ...(brief?.mode ? { storyMode: brief.mode } : {}),

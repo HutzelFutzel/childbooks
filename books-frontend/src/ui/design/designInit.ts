@@ -26,7 +26,9 @@ import {
   type TextBox,
 } from "../../core/types";
 import { wordParagraphs } from "../../core/design";
-import { defaultFontForAge } from "../typography/fonts";
+import type { BookLanguagesConfig } from "../../core/config/bookLanguages";
+import { getBookLanguage } from "../../core/config/bookLanguages";
+import { defaultFontForAge, getFont } from "../typography/fonts";
 import { getPreset } from "./presets";
 
 export interface DesignPage {
@@ -154,11 +156,22 @@ export function defaultIllustrationFocus(
   return page.isCover ? { x: 0.5, y: 0 } : undefined;
 }
 
-export function defaultDesign(project: Project): BookDesign {
-  const { family, sizePct } = defaultFontForAge(project.config.ageRangeId);
+export function defaultDesign(
+  project: Project,
+  languages?: BookLanguagesConfig | null,
+): BookDesign {
+  const { family, sizePct } = defaultFontForAge(
+    project.config.ageRangeId,
+    project.config.contentLocale,
+    languages,
+  );
+  const language = getBookLanguage(project.config.contentLocale);
+  const titleFontId = languages?.overrides[language.id]?.defaultTitleFontId;
+  const titleFamily = titleFontId ? getFont(titleFontId)?.family : undefined;
   return {
     version: DESIGN_VERSION,
     defaultFontFamily: family,
+    ...(titleFamily ? { defaultTitleFontFamily: titleFamily } : {}),
     defaultFontSizePct: sizePct,
     pages: {},
   };
@@ -258,7 +271,7 @@ export function applyCoverBakeText(
     const titleBox = makeTextBox({
       rect: { x: 0.1, y: 0.08, w: 0.8, h: 0.2 },
       text: page.seedTitle,
-      family: design.defaultFontFamily,
+      family: design.defaultTitleFontFamily ?? design.defaultFontFamily,
       sizePct: Math.min(0.13, design.defaultFontSizePct * 1.7),
       presetId: "shadowed",
       z: nextZ++,
@@ -299,7 +312,7 @@ export function seedPageDesign(design: BookDesign, page: DesignPage): PageDesign
       const titleBox = makeTextBox({
         rect: { x: 0.1, y: 0.08, w: 0.8, h: 0.2 },
         text: page.seedTitle,
-        family: design.defaultFontFamily,
+        family: design.defaultTitleFontFamily ?? design.defaultFontFamily,
         sizePct: Math.min(0.13, design.defaultFontSizePct * 1.7),
         presetId: "shadowed",
         z: 1,

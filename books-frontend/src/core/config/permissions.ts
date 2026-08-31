@@ -82,6 +82,7 @@ const CONFIG_TAB_EXHAUSTIVE: Record<ConfigTabId, true> = {
   layouts: true,
   ageWriting: true,
   storyCraft: true,
+  bookLanguages: true,
   typography: true,
   system: true,
 };

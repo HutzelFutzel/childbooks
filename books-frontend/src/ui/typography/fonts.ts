@@ -4,6 +4,11 @@
  * We load weight 400 and rely on the browser's faux-bold/italic for variants,
  * which keeps the bundle small and works offline (incl. the Tauri build).
  */
+import {
+  getBookLanguage,
+  type BookLanguagesConfig,
+  type FontCoverageProfile,
+} from "../../core/config/bookLanguages";
 
 export type FontCategory = "display" | "rounded" | "sans" | "serif" | "hand";
 
@@ -14,6 +19,8 @@ export interface FontDef {
   family: string;
   label: string;
   category: FontCategory;
+  /** Coverage shipped by the exact CSS import used below, not the upstream family in general. */
+  coverage: readonly FontCoverageProfile[];
   /** Lazily injects the font's @font-face CSS. */
   load: () => Promise<unknown>;
 }
@@ -35,7 +42,7 @@ export const FONT_CATEGORY_ORDER: FontCategory[] = [
   "hand",
 ];
 
-export const FONTS: FontDef[] = [
+const BASE_FONTS: Omit<FontDef, "coverage">[] = [
   // Titles & covers (display — best for covers/chapter titles, not long body)
   { id: "luckiest-guy", family: "Luckiest Guy", label: "Luckiest Guy", category: "display", load: () => import("@fontsource/luckiest-guy/400.css") },
   { id: "lilita-one", family: "Lilita One", label: "Lilita One", category: "display", load: () => import("@fontsource/lilita-one/400.css") },
@@ -111,6 +118,30 @@ export const FONTS: FontDef[] = [
   { id: "covered-by-your-grace", family: "Covered By Your Grace", label: "Covered By Your Grace", category: "hand", load: () => import("@fontsource/covered-by-your-grace/400.css") },
 ];
 
+/**
+ * Packages without a latin-ext face, plus the two families intentionally
+ * imported as latin-only to avoid their much larger CJK payloads.
+ */
+const WESTERN_ONLY_FONT_IDS = new Set([
+  "boogaloo",
+  "chewy",
+  "comic-neue",
+  "gaegu",
+  "gochi-hand",
+  "homemade-apple",
+  "schoolbell",
+  "short-stack",
+  "cherry-bomb-one",
+  "m-plus-rounded-1c",
+]);
+
+export const FONTS: FontDef[] = BASE_FONTS.map((font) => ({
+  ...font,
+  coverage: WESTERN_ONLY_FONT_IDS.has(font.id)
+    ? ["western-latin"]
+    : ["western-latin", "extended-latin"],
+}));
+
 const byId = new Map(FONTS.map((f) => [f.id, f]));
 const byFamily = new Map(FONTS.map((f) => [f.family, f]));
 const loaded = new Set<string>();
@@ -142,21 +173,47 @@ export function fontStack(family: string): string {
 
 export const DEFAULT_FONT_ID = "nunito";
 
+export function fontSupportsBookLanguage(font: FontDef, languageId?: string | null): boolean {
+  return font.coverage.includes(getBookLanguage(languageId).fontProfile);
+}
+
+/** Certified fonts, narrowed further by the admin's offer set when present. */
+export function fontsForBookLanguage(
+  languageId?: string | null,
+  config?: BookLanguagesConfig | null,
+): FontDef[] {
+  const language = getBookLanguage(languageId);
+  const certified = FONTS.filter((font) => font.coverage.includes(language.fontProfile));
+  const offered = config?.overrides[language.id]?.fontIds;
+  if (!offered) return certified;
+  const ids = new Set(offered);
+  return certified.filter((font) => ids.has(font.id));
+}
+
 /**
  * Age-appropriate defaults: younger readers get larger text. Returned size is a
  * fraction of the page height (used by the normalized overlay renderer).
  */
-export function defaultFontForAge(ageRangeId: string): { family: string; sizePct: number } {
+export function defaultFontForAge(
+  ageRangeId: string,
+  languageId?: string | null,
+  config?: BookLanguagesConfig | null,
+): { family: string; sizePct: number } {
+  const language = getBookLanguage(languageId);
+  const configuredId = config?.overrides[language.id]?.defaultBodyFontId;
+  const configured = configuredId ? getFont(configuredId) : undefined;
+  const configuredFamily =
+    configured && fontSupportsBookLanguage(configured, language.id) ? configured.family : undefined;
   switch (ageRangeId) {
     case "0-2":
-      return { family: "Baloo 2", sizePct: 0.085 };
+      return { family: configuredFamily ?? "Baloo 2", sizePct: 0.085 };
     case "3-5":
-      return { family: "Nunito", sizePct: 0.065 };
+      return { family: configuredFamily ?? "Nunito", sizePct: 0.065 };
     case "6-8":
-      return { family: "Lora", sizePct: 0.05 };
+      return { family: configuredFamily ?? "Lora", sizePct: 0.05 };
     case "9-12":
-      return { family: "Literata", sizePct: 0.04 };
+      return { family: configuredFamily ?? "Literata", sizePct: 0.04 };
     default:
-      return { family: "Nunito", sizePct: 0.06 };
+      return { family: configuredFamily ?? "Nunito", sizePct: 0.06 };
   }
 }

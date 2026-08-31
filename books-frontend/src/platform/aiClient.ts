@@ -132,6 +132,20 @@ export function storyDraftRemote(
   );
 }
 
+/** Ask the backend to translate and adapt an existing story into a target language. */
+export function storyTranslateRemote(
+  project: Project,
+  sourceLocale?: string,
+  targetLocale?: string,
+  signal?: AbortSignal,
+): Promise<StoryDraftResult> {
+  return postAi<StoryDraftResult>(
+    "/ai/story-translate",
+    { project: slimProjectForRender(project, {}), sourceLocale, targetLocale },
+    signal,
+  );
+}
+
 /** Advisory: does the author's own story suit the age band they picked? */
 export function storyFitRemote(
   project: Project,

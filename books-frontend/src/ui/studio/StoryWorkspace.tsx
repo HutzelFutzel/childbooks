@@ -1,10 +1,12 @@
 /**
  * Story step as a Design-like workspace: top bar + left topic strip + center
- * stage. First-run walks Audience → Story; art style is confirmed in Design · Cast.
+ * stage. First-run walks Language → Audience → Story; art style is confirmed
+ * in Design · Cast.
  */
 import { useMemo, useState } from "react";
 import { ArrowLeft, ArrowRight, Check, Lock, type LucideIcon } from "lucide-react";
 import type { BookConfig } from "../../core/types";
+import type { BookLanguageId } from "../../core/config/bookLanguages";
 import { useProjectsStore } from "../../state/projectsStore";
 import { Button } from "../components/Button";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -33,7 +35,7 @@ export function StoryWorkspace() {
     [config],
   );
 
-  const [topicId, setTopicId] = useState<TopicId>(topics[0]?.id ?? "age");
+  const [topicId, setTopicId] = useState<TopicId>(topics[0]?.id ?? "language");
   // Furthest guided index reached — review mode unlocks everything.
   const [furthest, setFurthest] = useState(0);
 
@@ -49,6 +51,11 @@ export function StoryWorkspace() {
 
   const answered = topic.isAnswered(cfg);
   const isLast = index === topics.length - 1;
+
+  const hasStory = Boolean(cfg.storyText?.trim());
+  const originLocale: BookLanguageId = (cfg.storyBrief?.generatedForLocale as BookLanguageId) ?? "en-US";
+  const currentLocale: BookLanguageId = (cfg.contentLocale as BookLanguageId) ?? "en-US";
+  const languageChanged = hasStory && originLocale !== currentLocale;
 
   function topicReachable(i: number): boolean {
     if (!firstRun) return true;
@@ -83,6 +90,14 @@ export function StoryWorkspace() {
       notify.info("Almost there", "Finish this section before continuing.");
       return;
     }
+    if (languageChanged && topic.id !== "story") {
+      const storyIdx = topics.findIndex((t) => t.id === "story");
+      if (storyIdx >= 0) {
+        setFurthest((f) => Math.max(f, storyIdx));
+        setTopicId("story");
+        return;
+      }
+    }
     if (!isLast) {
       const next = index + 1;
       setFurthest((f) => Math.max(f, next));
@@ -97,11 +112,13 @@ export function StoryWorkspace() {
   }
 
   const primaryLabel =
-    isLast || !firstRun
-      ? "Continue to design"
-      : topics[index + 1]
-        ? `Continue to ${stripTitle(topics[index + 1]!).toLowerCase()}`
-        : "Continue";
+    languageChanged && topic.id !== "story"
+      ? "Continue to story"
+      : isLast || !firstRun
+        ? "Continue to design"
+        : topics[index + 1]
+          ? `Continue to ${stripTitle(topics[index + 1]!).toLowerCase()}`
+          : "Continue";
   const primaryDisabled = firstRun
     ? !answered || (isLast && !ready)
     : !ready;
@@ -320,6 +337,8 @@ function StoryTopicStrip({
 /** Short strip labels — full titles stay in the stage header. */
 function stripTitle(q: GuidedQuestion): string {
   switch (q.id) {
+    case "language":
+      return "Language";
     case "age":
       return "Audience";
     case "story":

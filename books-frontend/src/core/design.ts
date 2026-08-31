@@ -297,6 +297,8 @@ export interface BookDesign {
   version?: number;
   /** Default font for new boxes. */
   defaultFontFamily: string;
+  /** Optional language-specific default for cover/title boxes. */
+  defaultTitleFontFamily?: string;
   /** Age-based default size as a fraction of page height. */
   defaultFontSizePct: number;
   /** Per-page design keyed by spread id (and cover ids). */

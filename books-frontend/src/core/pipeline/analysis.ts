@@ -5,6 +5,7 @@
  */
 import { z } from "zod";
 import { AGE_RANGES } from "../config/options";
+import { getBookLanguage } from "../config/bookLanguages";
 import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import type { Anchor, AnchorImportance, AnchorType, BookConfig } from "../types";
@@ -120,6 +121,7 @@ export async function analyzeStory(
   const { story, config, creds, model, signal, prompts } = input;
   const provider = getTextProvider(config.textModel!.provider);
   const age = AGE_RANGES.find((a) => a.id === config.ageRangeId)?.label ?? config.ageRangeId;
+  const language = getBookLanguage(config.contentLocale);
   const ageTextPrompt = resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, prompts);
   // A co-written story was built from real people the author already described.
   // Handing those facts back saves the model from re-inferring ages and family
@@ -127,7 +129,13 @@ export async function analyzeStory(
   const castHints = castPromptLines(briefOf(config));
 
   const { system, user } = renderTextPrompt(resolvePromptsConfig(prompts), "storyAnalysis", {
-    vars: { age, ageGuidance: ageTextPrompt, story: story.trim(), castHints },
+    vars: {
+      age,
+      ageGuidance: ageTextPrompt,
+      languageName: language.englishName,
+      story: story.trim(),
+      castHints,
+    },
     flags: { hasCastHints: config.storyBrief?.mode === "co-write" && castHints.length > 0 },
   });
 
@@ -196,6 +204,7 @@ export async function generateAnchorDescription(
   const { story, config, creds, model, name, type, existingAnchors, signal, prompts } = input;
   const provider = getTextProvider(config.textModel!.provider);
   const age = AGE_RANGES.find((a) => a.id === config.ageRangeId)?.label ?? config.ageRangeId;
+  const language = getBookLanguage(config.contentLocale);
   const ageTextPrompt = resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, prompts);
 
   const others =
@@ -205,7 +214,15 @@ export async function generateAnchorDescription(
       .join("\n") || "(none)";
 
   const { system, user } = renderTextPrompt(resolvePromptsConfig(prompts), "anchorDescription", {
-    vars: { type, name, age, ageGuidance: ageTextPrompt, others, story: story.trim() },
+    vars: {
+      type,
+      name,
+      age,
+      ageGuidance: ageTextPrompt,
+      languageName: language.englishName,
+      others,
+      story: story.trim(),
+    },
   });
 
   const res = await withRetry(

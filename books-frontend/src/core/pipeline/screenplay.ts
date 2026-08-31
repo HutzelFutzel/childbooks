@@ -15,6 +15,7 @@ import type { ProviderCredentials } from "../providers/types";
 import type { Anchor, BookConfig, ScreenplayDoc, ScreenplaySpread } from "../types";
 import { effectiveAnchorIds, normalizeAnchorName } from "../book/anchorRefs";
 import { getBookLayout } from "../book/layouts";
+import { getBookLanguage } from "../config/bookLanguages";
 import { fixPagination } from "./pagination";
 import { withRetry } from "./retry";
 import { resolveAgeLlmGuidance } from "../prompts/age";
@@ -102,6 +103,7 @@ export async function generateScreenplay(
   const { config, anchors, creds, model, edit, previous, signal, prompts } = input;
   const provider = getTextProvider(config.textModel!.provider);
   const included = anchors.filter((a) => a.include);
+  const language = getBookLanguage(config.contentLocale);
 
   const spreadGuidance =
     config.spreadUsage === "single"
@@ -148,6 +150,7 @@ export async function generateScreenplay(
       spreadGuidance,
       textGuidance,
       ageGuidance: ageTextPrompt,
+      languageInstruction: language.promptInstruction,
       placementGuidance,
       configDescription: describeConfig(config),
       anchorsList: describeAnchors(included),

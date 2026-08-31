@@ -41,6 +41,11 @@ import {
   type TypographyConfig,
 } from "../core/config/typography";
 import {
+  createDefaultBookLanguagesConfig,
+  normalizeBookLanguagesConfig,
+  type BookLanguagesConfig,
+} from "../core/config/bookLanguages";
+import {
   createDefaultModelCostTable,
   normalizeModelCostTable,
   type ModelCostTable,
@@ -396,6 +401,8 @@ interface AppConfigState {
   storyCraft: StoryCraftConfig;
   /** Age/format-aware font-size recommendation coefficients. */
   typography: TypographyConfig;
+  /** Book-content languages and the certified fonts offered for each one. */
+  bookLanguages: BookLanguagesConfig;
   /**
    * PUBLIC cost projection (`appConfig/modelCostsPublic`): flat per-image
    * estimates only, derived server-side. Powers storefront Spark estimates.
@@ -547,6 +554,7 @@ interface AppConfigState {
   saveAgeWriting: (config: AgeWritingConfig) => Promise<void>;
   saveStoryCraft: (config: StoryCraftConfig) => Promise<void>;
   saveTypography: (config: TypographyConfig) => Promise<void>;
+  saveBookLanguages: (config: BookLanguagesConfig) => Promise<void>;
   saveModelCosts: (table: ModelCostTable) => Promise<void>;
   savePricingSettings: (settings: PricingSettings) => Promise<void>;
   saveSparksConfig: (config: SparksConfig) => Promise<void>;
@@ -836,6 +844,7 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   ageWriting: createDefaultAgeWritingConfig(),
   storyCraft: createDefaultStoryCraftConfig(),
   typography: createDefaultTypographyConfig(),
+  bookLanguages: createDefaultBookLanguagesConfig(),
   modelCosts: createDefaultModelCostTable(),
   adminModelCosts: createDefaultModelCostTable(),
   imageCostStats: createDefaultImageCostStats(),
@@ -891,6 +900,11 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       }),
       onSnapshot(doc(db, "appConfig", "typography"), (snap) => {
         set({ typography: normalizeTypographyConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "bookLanguages"), (snap) => {
+        set({
+          bookLanguages: normalizeBookLanguagesConfig(snap.exists() ? snap.data() : undefined),
+        });
       }),
       // The public projection (per-image estimates only); the raw rate table
       // is admin-only and subscribed separately via subscribeAdminModelCosts.
@@ -1049,6 +1063,14 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
 
   async saveTypography(config) {
     set({ typography: normalizeTypographyConfig(await putJson("/admin/config/typography", config)) });
+  },
+
+  async saveBookLanguages(config) {
+    set({
+      bookLanguages: normalizeBookLanguagesConfig(
+        await putJson("/admin/config/book-languages", config),
+      ),
+    });
   },
 
   async saveModelCosts(table) {

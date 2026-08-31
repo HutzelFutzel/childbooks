@@ -17,6 +17,10 @@ import type {
 import type { ImageTier } from "./config/modelConfig";
 import type { ReadingModeId } from "./config/ageWritingCatalog";
 import type { StoryMode } from "./config/storyCraftCatalog";
+import {
+  DEFAULT_BOOK_LANGUAGE_ID,
+  type BookLanguageId,
+} from "./config/bookLanguages";
 import type { VersionTree } from "./versioning";
 import type { BookDesign } from "./design";
 import { DEFAULT_BOOK_LAYOUT_ID, type CompositionMode } from "./book/layouts";
@@ -102,6 +106,8 @@ export interface StoryBrief {
   generatedSignature?: string;
   /** Age band the current draft was written for, to detect an audience change. */
   generatedForAge?: string;
+  /** Content locale the current draft was written for. */
+  generatedForLocale?: BookLanguageId;
 }
 
 /** Everything captured by the setup wizard. */
@@ -109,6 +115,11 @@ export interface BookConfig {
   storyText: string;
   /** How the story was written, and the inputs that produced it. */
   storyBrief?: StoryBrief;
+  /**
+   * Language and regional writing convention for the book's reader-facing
+   * content. Optional only for backwards compatibility with older projects.
+   */
+  contentLocale?: BookLanguageId;
   textModel: ModelSelection | null;
   /**
    * Primary image model, used for page/cover illustrations (where editing
@@ -183,9 +194,10 @@ export interface StyleRenewPlan {
   startedAt: number;
 }
 
-export function createDefaultConfig(): BookConfig {
+export function createDefaultConfig(initialLocale?: BookLanguageId): BookConfig {
   return {
     storyText: "",
+    contentLocale: initialLocale ?? DEFAULT_BOOK_LANGUAGE_ID,
     textModel: null,
     imageModel: null,
     artStyle: { presetId: "watercolor" },

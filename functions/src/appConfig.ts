@@ -47,6 +47,11 @@ import {
   type TypographyConfig,
 } from "../../books-frontend/src/core/config/typography";
 import {
+  bookLanguagesConfigSchema,
+  normalizeBookLanguagesConfig,
+  type BookLanguagesConfig,
+} from "../../books-frontend/src/core/config/bookLanguages";
+import {
   createDefaultModelCostTable,
   modelCostTableSchema,
   normalizeModelCostTable,
@@ -213,6 +218,7 @@ const LAYOUTS_DOC = "appConfig/layouts";
 const AGE_WRITING_DOC = "appConfig/ageWriting";
 const STORY_CRAFT_DOC = "appConfig/storyCraft";
 const TYPOGRAPHY_DOC = "appConfig/typography";
+const BOOK_LANGUAGES_DOC = "appConfig/bookLanguages";
 const MODEL_COSTS_DOC = "appConfig/modelCosts";
 const MODEL_COSTS_PUBLIC_DOC = "appConfig/modelCostsPublic";
 const PRICING_SETTINGS_DOC = "appConfig/pricingSettings";
@@ -300,6 +306,9 @@ export function getAgeWritingConfig(): Promise<AgeWritingConfig> {
 }
 export function getStoryCraftConfig(): Promise<StoryCraftConfig> {
   return readDoc(STORY_CRAFT_DOC, normalizeStoryCraftConfig);
+}
+export function getBookLanguagesConfig(): Promise<BookLanguagesConfig> {
+  return readDoc(BOOK_LANGUAGES_DOC, normalizeBookLanguagesConfig);
 }
 /** Once-per-instance guard for the projection backfill below. */
 let modelCostsProjectionEnsured = false;
@@ -763,6 +772,13 @@ export async function saveTypographyConfig(input: unknown): Promise<TypographyCo
   const parsed = typographyConfigSchema.parse(input);
   const normalized = normalizeTypographyConfig(parsed);
   await writeDoc(TYPOGRAPHY_DOC, normalized);
+  return normalized;
+}
+
+export async function saveBookLanguagesConfig(input: unknown): Promise<BookLanguagesConfig> {
+  const parsed = bookLanguagesConfigSchema.parse(input);
+  const normalized = normalizeBookLanguagesConfig(parsed);
+  await writeDoc(BOOK_LANGUAGES_DOC, normalized);
   return normalized;
 }
 

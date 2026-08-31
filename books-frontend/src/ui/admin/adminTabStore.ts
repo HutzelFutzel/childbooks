@@ -34,6 +34,7 @@ export type ConfigTabId =
   | "layouts"
   | "ageWriting"
   | "storyCraft"
+  | "bookLanguages"
   | "typography"
   // Operations group.
   | "system";
@@ -178,7 +179,7 @@ export const CONFIG_GROUPS: {
     label: "Creative defaults",
     description:
       "Defaults for the creative pipeline — art direction, page layout, age-appropriate writing and story structure.",
-    tabs: ["artStyles", "layouts", "ageWriting", "storyCraft", "typography"],
+    tabs: ["artStyles", "layouts", "ageWriting", "storyCraft", "bookLanguages", "typography"],
   },
   {
     id: "operations",

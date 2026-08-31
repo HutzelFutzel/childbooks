@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Loader2, RotateCcw, Sparkles, Undo2, Wand2 } from "lucide-react";
+import { Loader2, Redo2, RotateCcw, Sparkles, Undo2, Wand2 } from "lucide-react";
 import type { AgeBandStoryCraft } from "../../../core/config/storyCraftCatalog";
 import type { StoryBrief } from "../../../core/types";
 import { namedHeroes } from "../../../core/story/brief";
@@ -28,7 +28,7 @@ export function GuidedComposer({
   onChange: (patch: Partial<StoryBrief>) => void;
 }) {
   const models = useResolvedModels();
-  const { writing, undoable, write, undo } = useStoryDraft();
+  const { writing, undoable, redoable, write, undo, redo } = useStoryDraft();
   const prefilled = useRef(false);
   const heroes = namedHeroes(brief);
 
@@ -133,6 +133,11 @@ export function GuidedComposer({
           {undoable && !writing && (
             <Button variant="ghost" size="sm" leftIcon={<Undo2 className="size-4" />} onClick={undo}>
               Bring back the last one
+            </Button>
+          )}
+          {redoable && !writing && (
+            <Button variant="ghost" size="sm" leftIcon={<Redo2 className="size-4" />} onClick={redo}>
+              Redo
             </Button>
           )}
           <span className="flex items-center gap-1.5 text-xs text-ink-400">

@@ -30,6 +30,7 @@ import {
 } from "./modelResolve";
 import { analyzeStory, generateAnchorDescription } from "../../books-frontend/src/core/pipeline/analysis";
 import { generateStoryDraft } from "../../books-frontend/src/core/pipeline/storyDraft";
+import { translateStory } from "../../books-frontend/src/core/pipeline/storyTranslate";
 import { checkStoryFit } from "../../books-frontend/src/core/pipeline/storyFit";
 import {
   briefBlockers,
@@ -141,6 +142,57 @@ export function registerAiRoutes(app: Express): void {
         generateStoryDraft({
           brief,
           config: withTextModel(project.config, model),
+          creds: { apiKey: apiKeyFor(model.provider) },
+          model: model.id,
+          prompts,
+        }),
+      );
+      await meterAndSettle({
+        uid: req.uid!,
+        action: "storyDraft",
+        events,
+        stats,
+        projectId: project.id,
+        project,
+        kind: "fresh",
+        source: "sync",
+        startedAt,
+        models: { text: model },
+      });
+      res.json(value);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  app.post("/ai/story-translate", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const { project, sourceLocale, targetLocale } = req.body as {
+        project: Project;
+        sourceLocale?: string;
+        targetLocale?: string;
+      };
+      const story = project.config.storyText?.trim() ?? "";
+      if (story.length < 5) {
+        res.status(400).json({ error: { message: "There's no story to translate yet." } });
+        return;
+      }
+      const [model, prompts] = await Promise.all([resolveText("storyDraft"), loadPromptContext()]);
+      const startedAt = Date.now();
+      const target = targetLocale ?? project.config.contentLocale;
+      const { value, events, stats } = await withUsage(() =>
+        translateStory({
+          config: withTextModel(
+            {
+              ...project.config,
+              contentLocale: target,
+            },
+            model,
+          ),
+          story,
+          title: project.title,
+          sourceLocale,
+          targetLocale: target,
           creds: { apiKey: apiKeyFor(model.provider) },
           model: model.id,
           prompts,

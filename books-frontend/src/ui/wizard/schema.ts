@@ -1,12 +1,20 @@
 import { z } from "zod";
 import type { BookConfig } from "../../core/types";
 import { ageBandHasReadingModes } from "../../core/config/ageWritingCatalog";
+import { BOOK_LANGUAGES } from "../../core/config/bookLanguages";
 import { storyBriefSchema } from "../../core/story/brief";
 
 const modelSelection = z.object({
   provider: z.enum(["openai", "google"]),
   id: z.string().min(1),
 });
+
+const contentLocaleSchema = z.enum(
+  BOOK_LANGUAGES.map((language) => language.id) as [
+    (typeof BOOK_LANGUAGES)[number]["id"],
+    ...(typeof BOOK_LANGUAGES)[number]["id"][],
+  ],
+);
 
 const artStyleSchema = z
   .object({
@@ -23,6 +31,7 @@ export const storyConfigSchema = z
   .object({
     storyText: z.string().trim().min(20, "Please enter at least a sentence or two of story."),
     storyBrief: storyBriefSchema.optional(),
+    contentLocale: contentLocaleSchema.optional(),
     ageRangeId: z.string().min(1),
     readingModeId: z.enum(["read-aloud", "with-help", "independent"]).nullable().optional(),
   })
@@ -39,6 +48,7 @@ export const storyConfigSchema = z
 export const bookConfigSchema = z.object({
   storyText: z.string().trim().min(20, "Please enter at least a sentence or two of story."),
   storyBrief: storyBriefSchema.optional(),
+  contentLocale: contentLocaleSchema.optional(),
   // Models are chosen automatically by the system (no user selection).
   textModel: modelSelection.nullable(),
   imageModel: modelSelection.nullable(),

@@ -1,9 +1,12 @@
-import { BookText, Users } from "lucide-react";
+import { BookText, Languages, Users } from "lucide-react";
 import { AGE_RANGES } from "../../core/config/options";
+import { getBookLanguage, isBookLanguageId } from "../../core/config/bookLanguages";
+import { wordCount } from "../../core/story/brief";
 import { ageBandHasReadingModes, readingModeLabel } from "../../core/config/ageWritingCatalog";
 import { storyModeInfo } from "../../core/config/storyCraftCatalog";
 import type { GuidedQuestion } from "./GuidedQuestions";
 import { AudienceStep } from "./steps/AudienceStep";
+import { LanguageStep } from "./steps/LanguageStep";
 import { StoryStep } from "./steps/StoryStep";
 
 function ageLabel(id: string): string {
@@ -15,6 +18,19 @@ function ageLabel(id: string): string {
  * Design · Cast (confirmed before the first reference images are made).
  */
 export const STORY_QUESTIONS: GuidedQuestion[] = [
+  {
+    id: "language",
+    title: "What language does your little reader speak?",
+    subtitle:
+      "Pick the language your child loves listening to for their adventure.",
+    icon: Languages,
+    isAnswered: (config) => isBookLanguageId(config.contentLocale ?? "en-US"),
+    summary: (config) => {
+      const lang = getBookLanguage(config.contentLocale);
+      return `${lang.flag} ${lang.endonym} · ${lang.regionShort}`;
+    },
+    render: (props) => <LanguageStep {...props} />,
+  },
   {
     id: "age",
     title: "Who will treasure this book?",
@@ -36,7 +52,7 @@ export const STORY_QUESTIONS: GuidedQuestion[] = [
     icon: BookText,
     isAnswered: (c) => c.storyText.trim().length >= 20,
     summary: (c) => {
-      const words = c.storyText.trim() ? c.storyText.trim().split(/\s+/).length : 0;
+      const words = wordCount(c.storyText);
       if (words > 0) return `${words} word${words === 1 ? "" : "s"} written`;
       return c.storyBrief ? storyModeInfo(c.storyBrief.mode).label : "No story yet";
     },

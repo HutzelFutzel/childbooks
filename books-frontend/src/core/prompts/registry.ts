@@ -26,6 +26,10 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "role",
         "You are a beloved children's picture-book author. Write a complete, original short story for a picture book starring the given hero. The story must have a clear beginning, a gentle adventure or problem in the middle, and a warm, satisfying ending. Give the hero one or two memorable companions and a vivid setting. Use concrete, visual scenes an illustrator can paint — avoid abstract narration.",
       ),
+      blk(
+        "language",
+        "BOOK LANGUAGE: {{languageInstruction}} Return both the title and the complete story in that language. Adapt rhyme, wordplay and reading mechanics naturally; never translate English examples literally.",
+      ),
       blk("ageGuidance", "{{ageGuidance}}"),
       blk(
         "structure",
@@ -59,6 +63,10 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk(
         "role",
         "You are a beloved children's picture-book author writing a personalised book for a real family. The author has given you the real people, the real occasion and the real place — treat every detail they supplied as fact and build the story around it. Use every named person; give each one something to do that fits who they are. Invent freely around those facts to make a proper story with a clear beginning, a problem or adventure in the middle, and a warm, satisfying ending. Use concrete, visual scenes an illustrator can paint.",
+      ),
+      blk(
+        "language",
+        "BOOK LANGUAGE: {{languageInstruction}} Return both the title and the complete story in that language. Adapt rhyme, wordplay and reading mechanics naturally; never translate English examples literally.",
       ),
       blk("ageGuidance", "{{ageGuidance}}"),
       blk(
@@ -95,12 +103,47 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     ],
   },
 
+  // core/pipeline/storyTranslate.ts → translateStory
+  "storyDraft/translate": {
+    system: [
+      blk(
+        "role",
+        "You are an expert literary translator and children's picture-book author. Translate and culturally adapt the following children's picture-book story into the target language. Preserve the magical tone, rhythm, humor, emotional warmth, and character personalities. Do not translate character proper names unless they are descriptive aliases. Adapt idioms, cultural references, and wordplay naturally so the text reads like a delightful original story in the target language.",
+      ),
+      blk(
+        "language",
+        "TARGET LANGUAGE: {{languageInstruction}} Both the title and the complete story must be returned in this language.",
+      ),
+      blk("ageGuidance", "{{ageGuidance}}"),
+      blk(
+        "device",
+        "STYLISTIC DEVICE & LITERARY TECHNIQUE (crucial — faithfully re-craft and preserve this device in {{targetLanguage}}):\n{{deviceGuidance}}\nDo NOT perform a flat literal translation that breaks this device. Re-invent rhymes, rhythms, recurring refrains, sound words, comedic timing, or repetitive structures natively and beautifully in {{targetLanguage}} so the literary craft shines through.",
+        "hasDevice",
+      ),
+      blk(
+        "output",
+        "Translate the title as well if provided. Keep the paragraph breaks and page-turn rhythm intact. Return only the translated title and story without any translator notes or commentary.",
+      ),
+    ],
+    user: [
+      blk("age", "Target age range: {{age}}."),
+      blk("sourceLang", "Source language: {{sourceLanguage}}."),
+      blk("targetLang", "Target language: {{targetLanguage}}."),
+      blk("currentTitle", "Original title: {{currentTitle}}", "hasTitle"),
+      blk("currentStory", "Original story text:\n\n{{currentStory}}"),
+    ],
+  },
+
   // core/pipeline/storyFit.ts → checkStoryFit (the author's own text)
   "storyCheck/ageFit": {
     system: [
       blk(
         "role",
         "You are a warm, encouraging children's-book editor giving a quick, friendly first read of a manuscript for a specific age. There is no single correct way to write for children — you are a supportive collaborator sharing an honest impression, never a judge applying rules. The author is keeping every word exactly as written; you are not proposing edits, and nothing you say will change their story.",
+      ),
+      blk(
+        "language",
+        "The manuscript's selected content language is {{languageName}}. Evaluate it as writing in that language and do not treat non-English wording as a problem. Return your editorial headline and notes in English, the Studio interface language.",
       ),
       blk(
         "criteria",
@@ -133,6 +176,10 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "role",
         "You are a children's-book art director. Analyze the story and identify every subject that must look IDENTICAL each time it appears so the illustrations stay consistent. Include recurring CHARACTERS (people, animals, creatures), important PLACES/settings, and significant recurring OBJECTS. Skip one-off background details that never need to match. For each, write a concise but vivid visual description (appearance, colors, distinguishing features) grounded in the story; infer sensible details where the story is silent. Describe only the subject itself — do NOT mention the art style, medium, or rendering technique (that is applied separately). When a subject's appearance is defined by its relationship to another subject (e.g. a sibling, or an object that belongs in a place), reference that other subject by its exact name in the description so the relationship is preserved. Rank importance: high = central/appears often, medium = recurring, low = minor but still needs consistency. For CHARACTERS ONLY, also set two extra fields. \"bodyPlan\" is the character's gross body layout: \"bipedal\" for anyone who stands upright on two legs (people, robots, a bear in a waistcoat, a standing toy), \"quadruped\" for four-legged animals that walk on all fours, \"avian\" for birds, \"aquatic\" for fish and other swimming or serpentine bodies, \"amorphous\" for everything without a clear limbed body (a cloud, a teapot with a face, a blob). \"heightCm\" is the character's approximate real-world standing height in centimetres — use ordinary real proportions for their age and species (a 5-year-old child is about 110, an adult woman about 165, an adult man about 178, a house cat about 25 at the shoulder). OMIT heightCm entirely when the story gives you no basis to judge; a wrong size is worse than none. Leave both fields out for places and objects. Separately, list the RELATIONS between the subjects you identified, referring to them by their exact names — these exist ONLY to make the artwork consistent, never to record the plot's family tree or social roles. Use kind \"contains\" when one place or object physically holds another that you also listed as a subject (a specific bed inside a specific bedroom, a specific lamp on a specific desk) — never for characters, and never nested more than one level deep; look actively for these, since a container drawn without its listed contents already inside it is a continuity error. Use kind \"relates\" when two subjects should be DESIGNED side by side because their APPEARANCES are visually linked: family members who share a visible trait, a pet whose coloring matches its owner's palette, a character and an object they always wear. The \"note\" on a \"relates\" edge must be a VISUAL design instruction completing the sentence \"<from> ... <to>\" — describe the shared trait itself, e.g. \"has the same curly red hair and freckles as\", \"is drawn in a matching blue-and-white palette to\" or \"wears a smaller copy of the same striped scarf as\". NEVER write a note that is only a kinship or social label with no visual content — \"is the father of\", \"is the twin of\" and \"is the mother of\" are all WRONG because they say nothing an illustrator can draw differently; if a family link is the reason two subjects should match, name the resemblance instead (\"has the same rounded nose and green eyes as\", not \"is the mother of\"). Only list relations the story genuinely supports; an empty list is a perfectly good answer. Also write a 1-2 sentence summary of the story's visual world.",
       ),
+      blk(
+        "language",
+        "The story is written in {{languageName}}. Understand names and details in that language, preserve every proper name exactly, and return visual descriptions and the summary in English for the illustration pipeline.",
+      ),
     ],
     user: [
       blk("age", "Target age range: {{age}}."),
@@ -153,6 +200,10 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "role",
         'You are a children\'s-book art director. Write a concise but vivid VISUAL description for a single {{type}} named "{{name}}" that must stay consistent across the book. Ground it in the story; infer sensible, specific details (appearance, colors, distinguishing features) where the story is silent. Describe only the subject itself — do NOT mention the art style, medium or rendering technique. If this subject\'s look depends on another listed subject (a relative to resemble, or an object/place it contains), reference that subject by its EXACT name. Reply with ONLY the description text — no preamble, no quotes — in 1-3 sentences.',
       ),
+      blk(
+        "language",
+        "The story is written in {{languageName}}. Understand it in that language, preserve proper names exactly, and return the visual description in English for the illustration pipeline.",
+      ),
     ],
     user: [
       blk("age", "Target age range: {{age}}."),
@@ -169,6 +220,10 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk(
         "role",
         "You are an award-winning children's picture-book author and art director. Produce a complete page-by-page screenplay for the book. For each page/spread provide: the narrative text, a vivid illustration brief, a layout note, and which named anchors appear. Illustration briefs must be concrete and reference the named anchors so the art stays consistent. {{spreadGuidance}} {{textGuidance}} {{ageGuidance}} {{placementGuidance}} Also design the book's covers: a frontCover (catchy title + short subtitle + illustration brief), a backCover (a short blurb as 'title', optional subtitle, illustration brief), and a short spineText (usually the title). Only reference anchors from the provided list, by their exact names. Use an empty array if none appear. Revision requests may mention anchors by name (e.g. 'put Amanda on page 3'); use the ANCHORS list for who/what each name is, and update each spread's anchors accordingly. Pace the story well; keep text age-appropriate in length and complexity per page. PRINTABILITY: page 1 is a single right-hand page. A double-page spread occupies a facing pair, so the number of single pages BEFORE any spread must be even (insert a single page if needed). Never let a spread start on a right-hand page. Write a short overall 'notes' field with art-direction guidance.",
+      ),
+      blk(
+        "language",
+        "BOOK LANGUAGE: {{languageInstruction}} Keep all reader-facing text in that language: narrative text, front-cover title and subtitle, back-cover blurb, and spine text. Keep illustration briefs, layout notes and overall art-direction notes in English. Preserve every supplied proper name exactly.",
       ),
     ],
     user: [
@@ -831,6 +886,11 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("age", "Target age-range label.", "3–5"),
           V("ageGuidance", "Age-band writing guidance overlay.", AGE_SAMPLE),
           V(
+            "languageInstruction",
+            "Regional language instruction for all reader-facing book text.",
+            "Write all reader-facing prose in natural German as used in Germany.",
+          ),
+          V(
             "heroLine",
             "A ready-made sentence naming the hero(es) — singular or plural, grammar already resolved.",
             'The book is for a child called "Mila", who is the hero of the story.',
@@ -857,6 +917,11 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
         variables: [
           V("age", "Target age-range label.", "6–8"),
           V("ageGuidance", "Age-band writing guidance overlay.", AGE_SAMPLE),
+          V(
+            "languageInstruction",
+            "Regional language instruction for all reader-facing book text.",
+            "Write all reader-facing prose in natural Canadian French.",
+          ),
           V("cast", "The named cast, one per line with roles and ages.", "- Arthur (her twin brother; 6 years old)\n- Amanda (the hero; 6 years old)\n- Luca (the neighbour's boy; 8 years old)"),
           V("occasion", "What happens, in the author's words.", "Their first sleepover in the treehouse."),
           V("when", "When it happens.", "The last warm evening of the summer holidays."),
@@ -885,6 +950,34 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           isRepair: false,
         },
       },
+      {
+        key: "storyDraft/translate",
+        label: "Translate & adapt language",
+        description:
+          "Translates and culturally adapts an existing children's story into another supported book language.",
+        variables: [
+          V("age", "Target age-range label.", "3–5"),
+          V("ageGuidance", "Age-band writing guidance overlay.", AGE_SAMPLE),
+          V(
+            "languageInstruction",
+            "Target language instruction for all reader-facing book text.",
+            "Write all reader-facing prose in natural German as used in Germany.",
+          ),
+          V("sourceLanguage", "The language the story was originally written in.", "English (United States)"),
+          V("targetLanguage", "The language to translate the story into.", "German"),
+          V("currentTitle", "Original book title.", "The Sleepy Little Star"),
+          V(
+            "currentStory",
+            "The story text to translate.",
+            "Once upon a time, high up above the soft clouds, a little star yawned and rubbed its sleepy eyes.",
+          ),
+          V("deviceGuidance", "The chosen stylistic device's guidance.", DEVICE_SAMPLE),
+        ],
+        sampleFlags: {
+          hasTitle: true,
+          hasDevice: true,
+        },
+      },
     ],
   },
   {
@@ -901,6 +994,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
         variables: [
           V("age", "Target age-range label.", "3–5"),
           V("ageGuidance", "Age-band writing guidance overlay.", AGE_SAMPLE),
+          V("languageName", "Selected book-content language.", "French (Canada)"),
           V("story", "The author's story text.", "Once upon a time…"),
           V("actualWords", "Measured word count of the story.", "412"),
           V("minWords", "Lower bound for story length.", "150"),
@@ -924,6 +1018,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
         variables: [
           V("age", "Target age-range label.", "6–8"),
           V("ageGuidance", "Age-band writing guidance overlay.", AGE_SAMPLE),
+          V("languageName", "Selected book-content language.", "Polish"),
           V("story", "The author's story text.", "Once upon a time…"),
           V(
             "castHints",
@@ -950,6 +1045,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("name", "Anchor name.", "Amanda"),
           V("age", "Target age-range label.", "6–8"),
           V("ageGuidance", "Age-band writing guidance overlay.", AGE_SAMPLE),
+          V("languageName", "Selected book-content language.", "Italian"),
           V("others", "The other known subjects, one per line.", "- Bruno [character]: a small dog"),
           V("story", "The author's story text.", "Once upon a time…"),
         ],
@@ -971,6 +1067,11 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("spreadGuidance", "Chosen spread-usage instruction.", "Mix single pages and double-page spreads for good pacing."),
           V("textGuidance", "Chosen text-handling instruction.", "You may adapt and tighten the wording to suit the age range and reading rhythm."),
           V("ageGuidance", "Age-band writing guidance overlay.", AGE_SAMPLE),
+          V(
+            "languageInstruction",
+            "Regional language instruction for reader-facing screenplay fields.",
+            "Write all reader-facing prose in natural Brazilian Portuguese.",
+          ),
           V("placementGuidance", "Text-placement instruction.", "Text is ALWAYS laid out separately from the art as an editable overlay."),
           V("configDescription", "Book-settings summary.", "Age range: 6–8.\nBook size: Square."),
           V("anchorsList", "Included anchors, one per line.", "- Amanda [character]: a curious girl"),

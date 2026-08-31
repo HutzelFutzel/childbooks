@@ -1,6 +1,6 @@
 "use client";
 
-import { Loader2, RotateCcw, Sparkles, Undo2, Users } from "lucide-react";
+import { Loader2, Redo2, RotateCcw, Sparkles, Undo2, Users } from "lucide-react";
 import type { AgeBandStoryCraft } from "../../../core/config/storyCraftCatalog";
 import type { StoryBrief } from "../../../core/types";
 import { briefBlockers, isBriefReady } from "../../../core/story/brief";
@@ -28,7 +28,7 @@ export function CoWriteComposer({
   onChange: (patch: Partial<StoryBrief>) => void;
 }) {
   const models = useResolvedModels();
-  const { writing, undoable, write, undo } = useStoryDraft();
+  const { writing, undoable, redoable, write, undo, redo } = useStoryDraft();
 
   const ready = isBriefReady(brief);
   const blockers = briefBlockers(brief);
@@ -155,6 +155,11 @@ export function CoWriteComposer({
         {undoable && !writing && (
           <Button variant="ghost" size="sm" leftIcon={<Undo2 className="size-4" />} onClick={undo}>
             Bring back the last one
+          </Button>
+        )}
+        {redoable && !writing && (
+          <Button variant="ghost" size="sm" leftIcon={<Redo2 className="size-4" />} onClick={redo}>
+            Redo
           </Button>
         )}
         <span className="flex items-center gap-1.5 text-xs text-ink-400">

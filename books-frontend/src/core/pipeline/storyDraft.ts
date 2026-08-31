@@ -61,13 +61,13 @@ export async function generateStoryDraft(input: GenerateStoryDraftInput): Promis
 
   const { craft } = buildStoryDraftPrompt(config, brief, prompts);
   const first = await write();
-  const firstIssues = inspectDraft(first.story, brief, craft.structure);
+  const firstIssues = inspectDraft(first.story, brief, craft.structure, config.contentLocale);
   if (!firstIssues.repairInstruction) return first;
 
   // One repair pass, then keep whichever attempt is closer to the rules — a
   // second miss is still a perfectly readable story, and a third call would
   // cost more than the difference is worth.
   const second = await write(firstIssues.repairInstruction);
-  const secondIssues = inspectDraft(second.story, brief, craft.structure);
+  const secondIssues = inspectDraft(second.story, brief, craft.structure, config.contentLocale);
   return issueScore(secondIssues) <= issueScore(firstIssues) ? second : first;
 }

@@ -50,6 +50,7 @@ import { ArtStylesTab } from "./tabs/ArtStylesTab";
 import { LayoutsTab } from "./tabs/LayoutsTab";
 import { AgeWritingTab } from "./tabs/AgeWritingTab";
 import { StoryCraftTab } from "./tabs/StoryCraftTab";
+import { BookLanguagesTab } from "./tabs/BookLanguagesTab";
 import { TypographyTab } from "./tabs/TypographyTab";
 import { PromptsTab } from "./tabs/PromptsTab";
 import { ModelCostsTab } from "./tabs/ModelCostsTab";
@@ -105,6 +106,8 @@ function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
       return <AgeWritingTab />;
     case "storyCraft":
       return <StoryCraftTab />;
+    case "bookLanguages":
+      return <BookLanguagesTab />;
     case "typography":
       return <TypographyTab />;
     case "prompts":

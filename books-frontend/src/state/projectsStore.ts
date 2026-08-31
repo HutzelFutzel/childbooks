@@ -29,11 +29,14 @@ import {
   createDefaultConfig,
   STAGE_ORDER,
 } from "../core/types";
+import { detectDefaultBookLanguage } from "../core/config/bookLanguages";
 import { ProjectConflictError } from "../core/storage/repositories";
 import { getRepos } from "./repos";
 import { touchProjectRemote } from "../platform/aiClient";
 import { removeBlob } from "./blobs";
 import { useSettingsStore } from "./settingsStore";
+import { useAppConfigStore } from "./appConfigStore";
+import { resolveShipCountry, useShipCountryStore } from "./shipCountryStore";
 
 /** Consume one relation suggestion, whether it was accepted or dismissed. */
 function withoutRelation(
@@ -196,6 +199,10 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
 
   async createProject(title, open = true) {
     const now = Date.now();
+    const languageConfig = useAppConfigStore.getState().bookLanguages;
+    const countryHint = resolveShipCountry(useShipCountryStore.getState());
+    const defaultLocale = detectDefaultBookLanguage(languageConfig, countryHint);
+
     const project: Project = {
       id: genId(),
       title: title?.trim() || "Untitled Story",
@@ -203,7 +210,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       updatedAt: now,
       stage: "setup",
       furthestStage: "setup",
-      config: createDefaultConfig(),
+      config: createDefaultConfig(defaultLocale),
     };
     const { projects } = await getRepos();
     const saved = await projects.save(project);

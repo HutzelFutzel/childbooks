@@ -9,6 +9,11 @@ import type { StoryBrief, StoryCastMember } from "../types";
 import type { AgeBandStoryCraft } from "../config/storyCraftCatalog";
 import { optionLabel } from "../config/storyCraft";
 import type { StoryMode } from "../config/storyCraftCatalog";
+import { BOOK_LANGUAGES, type BookLanguageId } from "../config/bookLanguages";
+
+const bookLanguageIdSchema = z.enum(
+  BOOK_LANGUAGES.map((language) => language.id) as [BookLanguageId, ...BookLanguageId[]],
+);
 
 const storyCastMemberSchema = z.object({
   id: z.string().min(1),
@@ -41,6 +46,7 @@ export const storyBriefSchema = z.object({
   generatedAt: z.number().optional(),
   generatedSignature: z.string().max(4000).optional(),
   generatedForAge: z.string().max(40).optional(),
+  generatedForLocale: bookLanguageIdSchema.optional(),
 });
 
 export function createDefaultStoryBrief(mode: StoryMode): StoryBrief {
@@ -125,11 +131,13 @@ export function storyBriefSignature(
   brief: StoryBrief,
   ageRangeId: string,
   readingModeId?: string | null,
+  contentLocale?: string | null,
 ): string {
   const parts: string[] = [
     brief.mode,
     ageRangeId,
     readingModeId ?? "",
+    ...(contentLocale ? [contentLocale] : []),
     brief.themeId ?? "",
     brief.customTheme?.trim() ?? "",
     brief.deviceId ?? "",
@@ -154,9 +162,18 @@ export function isDraftStale(
   storyText: string,
   ageRangeId: string,
   readingModeId?: string | null,
+  contentLocale?: string | null,
 ): boolean {
   if (!storyText.trim() || !brief.generatedSignature) return false;
-  return brief.generatedSignature !== storyBriefSignature(brief, ageRangeId, readingModeId);
+  return (
+    brief.generatedSignature !==
+    storyBriefSignature(
+      brief,
+      ageRangeId,
+      readingModeId,
+      brief.generatedForLocale ? contentLocale : undefined,
+    )
+  );
 }
 
 /** One-line description of the brief for the topic strip and review screens. */
@@ -193,6 +210,5 @@ export function castPromptLines(brief: StoryBrief): string {
 }
 
 export function wordCount(text: string): number {
-  const trimmed = text.trim();
-  return trimmed ? trimmed.split(/\s+/).length : 0;
+  return text.normalize("NFC").match(/\p{L}[\p{L}\p{M}\p{N}'’\-]*/gu)?.length ?? 0;
 }

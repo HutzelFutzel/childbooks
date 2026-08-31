@@ -3,6 +3,9 @@
 import { useEffect, useState } from "react";
 import { Check, Feather } from "lucide-react";
 import { useProjectsStore } from "../../../state/projectsStore";
+import { getBookLanguage } from "../../../core/config/bookLanguages";
+import { wordCount } from "../../../core/story/brief";
+import { fontStack, loadFont } from "../../typography/fonts";
 import { cn } from "../../lib/cn";
 
 /** Schema requires ~a sentence; surface readiness in words, not cryptic chars. */
@@ -22,6 +25,7 @@ export function StoryManuscript({
   placeholder?: string;
 }) {
   const current = useProjectsStore((s) => s.current());
+  const language = getBookLanguage(current?.config.contentLocale);
   const rename = useProjectsStore((s) => s.renameProject);
   const [title, setTitle] = useState(current?.title ?? "");
 
@@ -31,25 +35,40 @@ export function StoryManuscript({
     setTitle(current?.title ?? "");
   }, [current?.id, current?.title]);
 
+  useEffect(() => {
+    loadFont("Nunito");
+    loadFont("Lora");
+  }, []);
+
   const trimmed = storyText.trim();
-  const words = trimmed ? trimmed.split(/\s+/).length : 0;
+  const words = wordCount(trimmed);
   const empty = !trimmed;
 
   return (
     <div className="overflow-hidden rounded-3xl bg-white shadow-soft ring-1 ring-ink-100">
       <div className="border-b border-ink-100/80 bg-linear-to-b from-brand-50/40 to-white px-5 pt-5 sm:px-7 sm:pt-6">
-        <label className="block">
-          <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-400">
-            Book title
+        <div className="flex items-center justify-between gap-3">
+          <label className="block flex-1">
+            <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-ink-400">
+              Book title
+            </span>
+            <input
+              lang={language.id}
+              dir={language.direction}
+              style={{ fontFamily: fontStack("Nunito") }}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onBlur={() => current && title.trim() && rename(current.id, title)}
+              placeholder={language.storyGreeting ? `${language.endonym} Story Title…` : "Luna and the Sleepy Moon"}
+              className="mt-1.5 w-full border-0 bg-transparent font-display text-2xl font-bold tracking-tight text-ink-900 placeholder:text-ink-300 focus:outline-none focus:ring-0 sm:text-[1.75rem]"
+            />
+          </label>
+          <span className="inline-flex items-center gap-1.5 self-start rounded-full bg-white px-3 py-1 text-[11px] font-semibold text-ink-600 shadow-xs ring-1 ring-ink-200/80">
+            <span className="text-xs select-none">{language.flag}</span>
+            <span>{language.endonym}</span>
+            <span className="text-ink-400 font-mono text-[10px]">({language.regionShort})</span>
           </span>
-          <input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            onBlur={() => current && title.trim() && rename(current.id, title)}
-            placeholder="Luna and the Sleepy Moon"
-            className="mt-1.5 w-full border-0 bg-transparent font-display text-2xl font-bold tracking-tight text-ink-900 placeholder:text-ink-300 focus:outline-none focus:ring-0 sm:text-[1.75rem]"
-          />
-        </label>
+        </div>
       </div>
 
       <div className="relative bg-linear-to-b from-white to-ink-50/40">
@@ -58,12 +77,15 @@ export function StoryManuscript({
           className="pointer-events-none absolute inset-y-4 left-0 w-1 bg-linear-to-b from-brand-200/0 via-brand-200/70 to-brand-200/0 sm:left-2"
         />
         <textarea
+          lang={language.id}
+          dir={language.direction}
+          style={{ fontFamily: fontStack("Lora"), hyphens: "auto" }}
           value={storyText}
           onChange={(e) => onChange(e.target.value)}
           placeholder={
             empty
               ? (placeholder ??
-                "Once upon a time, in a little house at the edge of the forest…")
+                `${language.storyGreeting} ${language.samplePhrase}`)
               : undefined
           }
           rows={14}
@@ -77,13 +99,17 @@ export function StoryManuscript({
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2 border-t border-ink-100/80 bg-ink-50/50 px-5 py-3 sm:px-7">
-        <div className="flex items-center gap-2 text-xs text-ink-500">
-          <Feather className="size-3.5 text-ink-400" />
-          <span className="tabular-nums">
-            {words === 0
-              ? "No words yet"
-              : `${words.toLocaleString()} word${words === 1 ? "" : "s"}`}
-          </span>
+        <div className="flex items-center gap-3 text-xs text-ink-500">
+          <div className="flex items-center gap-1.5">
+            <Feather className="size-3.5 text-ink-400" />
+            <span className="tabular-nums font-medium">
+              {words === 0
+                ? "No words yet"
+                : `${words.toLocaleString()} word${words === 1 ? "" : "s"}`}
+            </span>
+          </div>
+          <span className="text-ink-300">•</span>
+          <span className="text-ink-400 font-mono text-[11px]">{language.id}</span>
         </div>
         <StatusChip empty={empty} ready={trimmed.length >= READY_CHARS} />
       </div>

@@ -10,6 +10,7 @@ import type { StoryBrief, BookConfig } from "../types";
 import type { AgeBandStoryCraft } from "../config/storyCraftCatalog";
 import { ageBandLabel } from "../config/storyCraftCatalog";
 import { optionGuidance, resolveStoryCraft, type StoryCraftConfig } from "../config/storyCraft";
+import { getBookLanguage } from "../config/bookLanguages";
 import { castPromptLines, heroesLine } from "../story/brief";
 import { resolveAgeLlmGuidance } from "./age";
 import type { PromptContext } from "./context";
@@ -48,12 +49,21 @@ export interface StoryPromptParts {
  * block, which explains what the rejected attempt got wrong.
  */
 export function buildStoryDraftPrompt(
-  config: Pick<BookConfig, "ageRangeId" | "readingModeId">,
+  config: Pick<BookConfig, "ageRangeId" | "readingModeId" | "contentLocale">,
   brief: StoryBrief,
   ctx?: PromptContext | null,
   repairInstruction?: string,
 ): StoryPromptParts {
-  const craft = resolveStoryCraftFor(config.ageRangeId, ctx);
+  const baseCraft = resolveStoryCraftFor(config.ageRangeId, ctx);
+  const language = getBookLanguage(config.contentLocale);
+  const craft: AgeBandStoryCraft = {
+    ...baseCraft,
+    structure: {
+      ...baseCraft.structure,
+      minWords: Math.max(1, Math.round(baseCraft.structure.minWords * language.wordCountFactor)),
+      maxWords: Math.max(1, Math.round(baseCraft.structure.maxWords * language.wordCountFactor)),
+    },
+  };
   const themeGuidance = optionGuidance(craft.themes, brief.themeId ?? undefined, brief.customTheme);
   const deviceGuidance = optionGuidance(craft.devices, brief.deviceId ?? undefined, brief.customDevice);
   const settingGuidance = optionGuidance(
@@ -67,6 +77,7 @@ export function buildStoryDraftPrompt(
     vars: {
       age: ageBandLabel(config.ageRangeId),
       ageGuidance: resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, ctx),
+      languageInstruction: language.promptInstruction,
       heroLine: heroesLine(brief),
       cast: castPromptLines(brief),
       occasion: brief.occasion?.trim() ?? "",
@@ -104,16 +115,26 @@ export function buildStoryDraftPrompt(
 
 /** Build the advisory age-fit prompt for a story the author wrote themselves. */
 export function buildStoryFitPrompt(
-  config: Pick<BookConfig, "ageRangeId" | "readingModeId">,
+  config: Pick<BookConfig, "ageRangeId" | "readingModeId" | "contentLocale">,
   story: string,
   actualWords: number,
   ctx?: PromptContext | null,
 ): StoryPromptParts {
-  const craft = resolveStoryCraftFor(config.ageRangeId, ctx);
+  const baseCraft = resolveStoryCraftFor(config.ageRangeId, ctx);
+  const language = getBookLanguage(config.contentLocale);
+  const craft: AgeBandStoryCraft = {
+    ...baseCraft,
+    structure: {
+      ...baseCraft.structure,
+      minWords: Math.max(1, Math.round(baseCraft.structure.minWords * language.wordCountFactor)),
+      maxWords: Math.max(1, Math.round(baseCraft.structure.maxWords * language.wordCountFactor)),
+    },
+  };
   const { system, user } = renderTextPrompt(resolvePromptsConfig(ctx), "storyCheck/ageFit", {
     vars: {
       age: ageBandLabel(config.ageRangeId),
       ageGuidance: resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, ctx),
+      languageName: language.englishName,
       story,
       actualWords: String(actualWords),
       minWords: String(craft.structure.minWords),
@@ -122,4 +143,40 @@ export function buildStoryFitPrompt(
     },
   });
   return { system, user, craft };
+}
+
+/** Build the translation and cultural adaptation prompt for an existing story. */
+export function buildStoryTranslatePrompt(
+  config: Pick<BookConfig, "ageRangeId" | "readingModeId" | "contentLocale" | "storyBrief">,
+  story: string,
+  title: string | undefined,
+  sourceLocale?: string | null,
+  ctx?: PromptContext | null,
+): StoryPromptParts {
+  const baseCraft = resolveStoryCraftFor(config.ageRangeId, ctx);
+  const targetLanguage = getBookLanguage(config.contentLocale);
+  const sourceLanguage = getBookLanguage(sourceLocale);
+  const brief = config.storyBrief;
+  const deviceGuidance = brief
+    ? optionGuidance(baseCraft.devices, brief.deviceId ?? undefined, brief.customDevice)
+    : "";
+
+  const { system, user } = renderTextPrompt(resolvePromptsConfig(ctx), "storyDraft/translate", {
+    vars: {
+      age: ageBandLabel(config.ageRangeId),
+      ageGuidance: resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, ctx),
+      languageInstruction: targetLanguage.promptInstruction,
+      sourceLanguage: sourceLanguage.englishName,
+      targetLanguage: targetLanguage.englishName,
+      currentTitle: title?.trim() ?? "",
+      currentStory: story.trim(),
+      deviceGuidance,
+    },
+    flags: {
+      hasTitle: Boolean(title?.trim()),
+      hasDevice: Boolean(deviceGuidance),
+    },
+  });
+
+  return { system, user, craft: baseCraft };
 }

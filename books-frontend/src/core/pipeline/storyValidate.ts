@@ -25,15 +25,21 @@ export interface DraftIssues {
  */
 const WORD_TOLERANCE = 0.15;
 
-function namePresent(story: string, name: string): boolean {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`\\b${escaped}\\b`, "i").test(story);
+function namePresent(story: string, name: string, locale?: string): boolean {
+  const normalizedName = name.normalize("NFC").toLocaleLowerCase(locale);
+  const normalizedStory = story.normalize("NFC").toLocaleLowerCase(locale);
+  const escaped = normalizedName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    `(?:^|[^\\p{L}\\p{M}\\p{N}])${escaped}(?=$|[^\\p{L}\\p{M}\\p{N}])`,
+    "u",
+  ).test(normalizedStory);
 }
 
 export function inspectDraft(
   story: string,
   brief: StoryBrief,
   structure: StoryStructureRules,
+  locale?: string,
 ): DraftIssues {
   const words = wordCount(story);
   const floor = Math.round(structure.minWords * (1 - WORD_TOLERANCE));
@@ -44,7 +50,7 @@ export function inspectDraft(
   // co-write names its whole cast) — only the author's own text goes unchecked.
   const required =
     brief.mode === "co-write" ? namedCast(brief).map((c) => c.name.trim()) : namedHeroes(brief);
-  const missingNames = required.filter((n) => !namePresent(story, n));
+  const missingNames = required.filter((n) => !namePresent(story, n, locale));
 
   const problems: string[] = [];
   if (wordMiss > 0) {

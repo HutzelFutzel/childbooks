@@ -32,6 +32,7 @@ import {
 } from "../../core/types";
 import type { AssetItem } from "../../core/settings";
 import { useProjectsStore } from "../../state/projectsStore";
+import { useAppConfigStore } from "../../state/appConfigStore";
 import { getCursor } from "../../core/versioning";
 import {
   buildDesignPages,
@@ -467,6 +468,7 @@ export function StudioProvider({
   children: React.ReactNode;
 }) {
   const setDesign = useProjectsStore((s) => s.setDesign);
+  const bookLanguages = useAppConfigStore((s) => s.bookLanguages);
 
   const [selection, setSelection] = useState<Selection>({ kind: "none" });
   const selectionRef = useRef(selection);
@@ -584,7 +586,7 @@ export function StudioProvider({
   // anything the reader added themselves is left exactly where they put it.
   useEffect(() => {
     if (!design) {
-      void setDesign(defaultDesign(project));
+      void setDesign(defaultDesign(project, bookLanguages));
       return;
     }
     const missing = pages.filter((p) => !design.pages[p.id]);
@@ -599,7 +601,7 @@ export function StudioProvider({
       if (current) nextPages[p.id] = relayoutPageDesign(design, p, current);
     }
     void setDesign({ ...design, version: DESIGN_VERSION, pages: nextPages });
-  }, [design, pages, project, setDesign]);
+  }, [bookLanguages, design, pages, project, setDesign]);
 
   // Guarded step navigation: EVERY "go to step X" affordance (the rail, the
   // canvas "Order & print" button, the anchors "Design the pages" button, …)

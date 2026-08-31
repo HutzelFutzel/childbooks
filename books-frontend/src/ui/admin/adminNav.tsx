@@ -32,6 +32,7 @@ import {
   KeyRound,
   LayoutDashboard,
   LayoutTemplate,
+  Languages,
   Mail,
   Megaphone,
   MessageSquareText,
@@ -95,6 +96,7 @@ export const CONFIG_TAB_META: Record<ConfigTabId, { label: string; icon: ReactNo
   layouts: { label: "Page layouts", icon: <LayoutTemplate className="size-4" /> },
   ageWriting: { label: "Age writing", icon: <BookOpen className="size-4" /> },
   storyCraft: { label: "Story craft", icon: <Wand2 className="size-4" /> },
+  bookLanguages: { label: "Book languages", icon: <Languages className="size-4" /> },
   typography: { label: "Typography", icon: <Type className="size-4" /> },
   // Operations
   system: { label: "System health", icon: <HeartPulse className="size-4" /> },

@@ -516,6 +516,7 @@ const ROUTE_RULES: RouteRule[] = [
   { test: /^\/admin\/config\/age-writing$/, gate: key("configuration.ageWriting") },
   { test: /^\/admin\/config\/story-craft$/, gate: key("configuration.storyCraft") },
   { test: /^\/admin\/config\/typography$/, gate: key("configuration.typography") },
+  { test: /^\/admin\/config\/book-languages$/, gate: key("configuration.bookLanguages") },
 
   // Configuration → Business.
   { test: /^\/admin\/config\/pricing-settings$/, gate: key("configuration.financial") },

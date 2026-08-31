@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { FloatingBarPortal } from "./FloatingBarPortal";
 import {
@@ -29,15 +29,18 @@ import type { HAlign, TextBox, VAlign } from "../../core/types";
 import type { ReadingModeId } from "../../core/config/ageWritingCatalog";
 import { recommendFontSize, type FontSizeRec } from "../../core/config/typography";
 import { useAppConfigStore } from "../../state/appConfigStore";
+import { useProjectsStore } from "../../state/projectsStore";
 import {
   CATEGORY_LABEL,
   FONT_CATEGORY_ORDER,
-  FONTS,
   fontStack,
+  fontsForBookLanguage,
   getFont,
   loadFont,
+  type FontCategory,
   type FontDef,
 } from "../typography/fonts";
+import { getBookLanguage } from "../../core/config/bookLanguages";
 import { cn } from "../lib/cn";
 import { parseColor, toHex } from "./color";
 import { effectiveBackdropBlur } from "./effects";
@@ -469,13 +472,20 @@ function VAlignMenu({
 }
 
 /**
- * Grouped font picker with live face previews. The menu is portaled so
- * mousedown-preventDefault on the bar doesn't break search focus.
+ * Grouped font picker with live face previews and language-aware sample phrases.
  */
 function FontField({ value, onChange }: { value: string; onChange: (family: string) => void }) {
   const current = getFont(value);
+  const languageId = useProjectsStore((state) => state.current()?.config.contentLocale);
+  const language = getBookLanguage(languageId);
+  const languagePolicy = useAppConfigStore((state) => state.bookLanguages);
+  const availableFonts = useMemo(
+    () => fontsForBookLanguage(languageId, languagePolicy),
+    [languageId, languagePolicy],
+  );
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [categoryFilter, setCategoryFilter] = useState<"all" | FontCategory>("all");
   const [menuPos, setMenuPos] = useState<{ left: number; top: number; width: number } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -487,12 +497,12 @@ function FontField({ value, onChange }: { value: string; onChange: (family: stri
 
   useEffect(() => {
     if (!open) return;
-    for (const f of FONTS) loadFont(f.id);
+    for (const f of availableFonts) loadFont(f.id);
     const place = () => {
       const el = triggerRef.current;
       if (!el) return;
       const r = el.getBoundingClientRect();
-      setMenuPos({ left: r.left, top: r.bottom + 4, width: Math.max(r.width, 288) });
+      setMenuPos({ left: Math.max(12, r.left), top: r.bottom + 6, width: 340 });
     };
     place();
     requestAnimationFrame(() => searchRef.current?.focus());
@@ -502,7 +512,7 @@ function FontField({ value, onChange }: { value: string; onChange: (family: stri
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
-  }, [open]);
+  }, [availableFonts, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -530,7 +540,16 @@ function FontField({ value, onChange }: { value: string; onChange: (family: stri
   }
 
   const q = query.trim().toLowerCase();
-  const filtered = q ? FONTS.filter((f) => f.label.toLowerCase().includes(q)) : null;
+  const filtered = useMemo(() => {
+    return availableFonts.filter((font) => {
+      if (categoryFilter !== "all" && font.category !== categoryFilter) return false;
+      if (!q) return true;
+      return (
+        font.label.toLowerCase().includes(q) ||
+        CATEGORY_LABEL[font.category].toLowerCase().includes(q)
+      );
+    });
+  }, [availableFonts, categoryFilter, q]);
 
   return (
     <>
@@ -539,7 +558,7 @@ function FontField({ value, onChange }: { value: string; onChange: (family: stri
         type="button"
         onClick={() => setOpen((o) => !o)}
         style={{ fontFamily: fontStack(current?.family ?? value) }}
-        className="flex h-7 max-w-28 shrink-0 items-center justify-between gap-1 rounded-lg border border-ink-200 bg-white px-2 text-left text-xs text-ink-800 transition hover:border-brand-300"
+        className="flex h-7 max-w-32 shrink-0 items-center justify-between gap-1.5 rounded-lg border border-ink-200 bg-white px-2 text-left text-xs text-ink-800 transition hover:border-brand-300"
       >
         <span className="truncate">{current?.label ?? value}</span>
         <ChevronDown className="size-3.5 shrink-0 text-ink-400" />
@@ -550,42 +569,92 @@ function FontField({ value, onChange }: { value: string; onChange: (family: stri
         createPortal(
           <div
             ref={menuRef}
-            className="fixed z-100 overflow-hidden rounded-xl border border-ink-200 bg-white shadow-lifted"
+            className="fixed z-100 overflow-hidden rounded-2xl border border-ink-200 bg-white shadow-2xl ring-1 ring-black/5"
             style={{ left: menuPos.left, top: menuPos.top, width: menuPos.width }}
             onMouseDown={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center gap-1.5 border-b border-ink-100 px-2 py-1.5">
-              <Search className="size-3.5 shrink-0 text-ink-300" />
+            {/* Header: Language certified notice */}
+            <div className="flex items-center justify-between border-b border-ink-100/80 bg-linear-to-r from-ink-50/70 to-brand-50/30 px-3 py-2 text-[11px]">
+              <div className="flex items-center gap-1.5 font-medium text-ink-700">
+                <span className="text-sm select-none">{language.flag}</span>
+                <span>Certified for {language.endonym}</span>
+                <span className="font-mono text-[10px] text-ink-400">({language.regionShort})</span>
+              </div>
+              <span className="font-mono text-[10px] text-ink-400">
+                {availableFonts.length} fonts
+              </span>
+            </div>
+
+            {/* Search */}
+            <div className="flex items-center gap-2 border-b border-ink-100 px-3 py-2">
+              <Search className="size-3.5 shrink-0 text-ink-400" />
               <input
                 ref={searchRef}
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search fonts…"
-                className="w-full text-xs text-ink-700 outline-none placeholder:text-ink-300"
+                placeholder="Search certified fonts…"
+                className="w-full text-xs text-ink-800 outline-none placeholder:text-ink-400"
               />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  className="rounded p-0.5 text-ink-400 hover:text-ink-700"
+                >
+                  <Search className="size-3" />
+                </button>
+              )}
             </div>
-            <div className="max-h-72 overflow-y-auto p-1">
-              {filtered ? (
-                filtered.length > 0 ? (
-                  <FontOptionList fonts={filtered} currentId={current?.id} onPick={pick} />
-                ) : (
-                  <p className="px-2 py-4 text-center text-xs text-ink-400">
-                    No fonts match &ldquo;{query}&rdquo;
-                  </p>
-                )
+
+            {/* Category Filter Pills */}
+            <div className="flex items-center gap-1 overflow-x-auto border-b border-ink-100/70 px-2 py-1.5 scrollbar-none">
+              <button
+                type="button"
+                onClick={() => setCategoryFilter("all")}
+                className={cn(
+                  "shrink-0 rounded-md px-2 py-0.5 text-[11px] font-medium transition",
+                  categoryFilter === "all"
+                    ? "bg-brand-500 text-white"
+                    : "bg-ink-100/60 text-ink-600 hover:bg-ink-100",
+                )}
+              >
+                All ({availableFonts.length})
+              </button>
+              {FONT_CATEGORY_ORDER.map((cat) => {
+                const count = availableFonts.filter((f) => f.category === cat).length;
+                if (count === 0) return null;
+                const active = categoryFilter === cat;
+                return (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => setCategoryFilter(cat)}
+                    className={cn(
+                      "shrink-0 rounded-md px-2 py-0.5 text-[11px] font-medium transition",
+                      active
+                        ? "bg-brand-500 text-white"
+                        : "bg-ink-100/60 text-ink-600 hover:bg-ink-100",
+                    )}
+                  >
+                    {CATEGORY_LABEL[cat]}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Font list */}
+            <div className="max-h-72 overflow-y-auto p-1.5">
+              {filtered.length > 0 ? (
+                <FontOptionList
+                  fonts={filtered}
+                  currentId={current?.id}
+                  samplePhrase={language.samplePhrase}
+                  onPick={pick}
+                />
               ) : (
-                FONT_CATEGORY_ORDER.map((cat) => (
-                  <div key={cat} className="mb-1 last:mb-0">
-                    <div className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
-                      {CATEGORY_LABEL[cat]}
-                    </div>
-                    <FontOptionList
-                      fonts={FONTS.filter((f) => f.category === cat)}
-                      currentId={current?.id}
-                      onPick={pick}
-                    />
-                  </div>
-                ))
+                <div className="py-6 text-center text-xs text-ink-400">
+                  No fonts match &ldquo;{query}&rdquo;
+                </div>
               )}
             </div>
           </div>,
@@ -598,30 +667,59 @@ function FontField({ value, onChange }: { value: string; onChange: (family: stri
 function FontOptionList({
   fonts,
   currentId,
+  samplePhrase,
   onPick,
 }: {
   fonts: FontDef[];
   currentId?: string;
+  samplePhrase: string;
   onPick: (font: FontDef) => void;
 }) {
   return (
-    <>
-      {fonts.map((f) => (
-        <button
-          key={f.id}
-          type="button"
-          onClick={() => onPick(f)}
-          style={{ fontFamily: fontStack(f.family) }}
-          className={cn(
-            "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-base transition",
-            f.id === currentId ? "bg-brand-50 text-brand-700" : "text-ink-700 hover:bg-ink-50",
-          )}
-        >
-          <span className="truncate">{f.label}</span>
-          {f.id === currentId && <Check className="size-3.5 shrink-0" />}
-        </button>
-      ))}
-    </>
+    <div className="space-y-0.5">
+      {fonts.map((f) => {
+        const isCurrent = f.id === currentId;
+        return (
+          <button
+            key={f.id}
+            type="button"
+            onClick={() => onPick(f)}
+            className={cn(
+              "group flex w-full flex-col justify-center rounded-xl px-2.5 py-2 text-left transition",
+              isCurrent
+                ? "bg-brand-50/80 ring-1 ring-brand-300"
+                : "hover:bg-ink-50/90",
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span
+                style={{ fontFamily: fontStack(f.family) }}
+                className={cn(
+                  "truncate text-base leading-snug tracking-tight",
+                  isCurrent ? "font-semibold text-brand-900" : "text-ink-900",
+                )}
+              >
+                {f.label}
+              </span>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span className="rounded bg-ink-100/70 px-1.5 py-0.5 text-[9px] font-medium text-ink-500 uppercase">
+                  {CATEGORY_LABEL[f.category]}
+                </span>
+                {isCurrent && <Check className="size-3.5 text-brand-600" strokeWidth={3} />}
+              </div>
+            </div>
+
+            {/* Live localized sample phrase */}
+            <span
+              style={{ fontFamily: fontStack(f.family) }}
+              className="mt-0.5 truncate text-xs text-ink-400 group-hover:text-ink-600 transition-colors"
+            >
+              {samplePhrase}
+            </span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

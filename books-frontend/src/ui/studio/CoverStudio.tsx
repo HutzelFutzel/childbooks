@@ -91,6 +91,7 @@ export function CoverToolsPanel({
   const front = doc?.frontCover;
   const back = doc?.backCover;
   const frontBake = Boolean(front?.bakeText);
+  const canBakeText = (project.config.contentLocale ?? "en-US").startsWith("en-");
   const frontDrift = coverTextDrift(project, COVER_FRONT_ID);
 
   const frontTier: ImageTier | null = frontBake ? "premium" : userTier;
@@ -116,6 +117,13 @@ export function CoverToolsPanel({
   }
 
   async function setFrontBake(on: boolean) {
+    if (on && !canBakeText) {
+      notify.info(
+        "Use editable cover text for this language",
+        "Image models can misspell accented characters. The title will stay as a sharp, editable text layer.",
+      );
+      return;
+    }
     await patchCover(COVER_FRONT_ID, { bakeText: on });
     // Never delete the page design — that orphaned selection and closed Edit.
     // Only strip/restore the title overlays while keeping images intact.
@@ -435,8 +443,18 @@ export function CoverToolsPanel({
             <p className="text-xs font-medium text-ink-700">Bake title into art</p>
             <p className="text-[11px] text-ink-400">Painted in the illustration</p>
           </div>
-          <Toggle checked={frontBake} onChange={(v) => void setFrontBake(v)} label="Bake title into art" />
+          <Toggle
+            checked={frontBake}
+            disabled={!canBakeText && !frontBake}
+            onChange={(v) => void setFrontBake(v)}
+            label="Bake title into art"
+          />
         </div>
+        {!canBakeText && !frontBake && (
+          <Callout tone="info" icon={Info}>
+            Kept as editable text so accents and regional spelling print exactly.
+          </Callout>
+        )}
         {frontBake && (
           <Callout tone="brand" icon={Info}>
             Uses {premiumLabel} (not {quickLabel}).

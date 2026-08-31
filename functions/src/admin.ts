@@ -45,6 +45,7 @@ import {
   saveAgeWritingConfig,
   saveStoryCraftConfig,
   saveTypographyConfig,
+  saveBookLanguagesConfig,
   saveBrandingInfo,
   saveModelConfig,
   saveModelCostTable,
@@ -429,6 +430,14 @@ export function registerAdminRoutes(app: Express): void {
   app.put("/admin/config/typography", json, async (req: Request, res: Response) => {
     try {
       res.json(await saveTypographyConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.put("/admin/config/book-languages", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveBookLanguagesConfig(req.body));
     } catch (err) {
       handleError(res, err);
     }
