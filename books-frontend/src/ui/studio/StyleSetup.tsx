@@ -133,7 +133,15 @@ export function StyleSetup() {
   return (
     <div className="relative flex h-full min-h-0 flex-col">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-ink-100 bg-white/70 px-3 py-2.5 backdrop-blur sm:px-5">
-        <div className="flex min-w-0 items-center gap-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="text-xs font-semibold text-ink-700">Art Style</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {!firstTime && (
+            <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>
+              Cancel
+            </Button>
+          )}
           <Button
             size="sm"
             disabled={!chosen || busy}
@@ -143,11 +151,6 @@ export function StyleSetup() {
             {firstTime ? "Continue to cast" : dirty ? "Apply style" : "Done"}
           </Button>
         </div>
-        {!firstTime && (
-          <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>
-            Cancel
-          </Button>
-        )}
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto bg-grid">
@@ -198,6 +201,37 @@ export function StyleSetup() {
             committedArtStyle={firstTime ? undefined : committed}
             onChange={setDraft}
           />
+
+          {/* In-flow action card at the bottom of the style gallery */}
+          <div className="mt-8 flex flex-col items-stretch justify-between gap-4 rounded-2xl border border-ink-100 bg-white p-4 shadow-soft sm:flex-row sm:items-center">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-ink-900">
+                Selected: <span className="text-brand-600">{draftLabel}</span>
+              </p>
+              <p className="mt-0.5 text-xs text-ink-500">
+                {firstTime
+                  ? "Every character and page illustration will be drawn in this art style."
+                  : dirty
+                    ? "Confirming will create new versions of your cast and pages in this style."
+                    : "This art style is currently applied to your book."}
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center justify-end gap-2">
+              {!firstTime && (
+                <Button size="md" variant="ghost" disabled={busy} onClick={onCancel}>
+                  Cancel
+                </Button>
+              )}
+              <Button
+                size="md"
+                disabled={!chosen || busy}
+                rightIcon={<ArrowRight className="size-4" />}
+                onClick={onPrimary}
+              >
+                {firstTime ? "Continue to cast" : dirty ? "Apply style" : "Done"}
+              </Button>
+            </div>
+          </div>
         </div>
       </div>
 

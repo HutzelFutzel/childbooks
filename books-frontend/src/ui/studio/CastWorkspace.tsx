@@ -203,19 +203,8 @@ export function CastWorkspace() {
     <div className="relative flex h-full min-h-0 flex-col">
       <Celebrate play={celebrate} />
 
-      {/* Top bar — mirrors Pages: next action left, utilities right */}
+      {/* Top bar */}
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-ink-100 bg-white/70 px-3 py-2.5 backdrop-blur sm:px-5">
-        <div className="flex min-w-0 items-center gap-3">
-          <CastNextAction
-            canProceed={canProceed}
-            busy={busy}
-            ready={ready}
-            total={anchors.length}
-            batchRange={batchRange}
-            onGenerate={() => void generateAll()}
-            onContinue={() => setStep("edit")}
-          />
-        </div>
         <div className="flex items-center gap-1.5">
           {canCompareSizes && (
             <Button
@@ -253,6 +242,17 @@ export function CastWorkspace() {
             </Button>
           )}
         </div>
+        <div className="flex min-w-0 items-center gap-3">
+          <CastNextAction
+            canProceed={canProceed}
+            busy={busy}
+            ready={ready}
+            total={anchors.length}
+            batchRange={batchRange}
+            onGenerate={() => void generateAll()}
+            onContinue={() => setStep("edit")}
+          />
+        </div>
       </div>
 
       <div className="flex min-h-0 flex-1">
@@ -288,7 +288,7 @@ export function CastWorkspace() {
                   setGenerating={(v) => setAnchorGenerating(activeAnchor.id, v)}
                 />
               ) : (
-                <EmptyCastStage onAdd={addAnchor} />
+                <EmptyCastStage onAdd={addAnchor} onContinue={() => setStep("edit")} />
               )}
             </div>
           </div>
@@ -427,7 +427,7 @@ function CastNextAction({
   );
 }
 
-function EmptyCastStage({ onAdd }: { onAdd: () => void }) {
+function EmptyCastStage({ onAdd, onContinue }: { onAdd: () => void; onContinue: () => void }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 text-center">
       <span className="flex size-14 items-center justify-center rounded-2xl bg-white text-brand-500 shadow-soft ring-1 ring-ink-100">
@@ -436,12 +436,17 @@ function EmptyCastStage({ onAdd }: { onAdd: () => void }) {
       <div>
         <p className="text-sm font-semibold text-ink-700">No cast members yet</p>
         <p className="mt-1 max-w-xs text-xs text-ink-400">
-          Add someone from the strip on the left.
+          Add someone from the strip on the left, or continue straight to designing your pages.
         </p>
       </div>
-      <Button size="sm" variant="secondary" onClick={onAdd}>
-        Add a character
-      </Button>
+      <div className="mt-1 flex items-center justify-center gap-2">
+        <Button size="sm" variant="secondary" onClick={onAdd}>
+          Add a character
+        </Button>
+        <Button size="sm" rightIcon={<ArrowRight className="size-4" />} onClick={onContinue}>
+          Continue to pages
+        </Button>
+      </div>
     </div>
   );
 }

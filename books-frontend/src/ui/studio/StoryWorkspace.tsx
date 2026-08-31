@@ -3,7 +3,7 @@
  * stage. First-run walks Audience → Story; art style is confirmed in Design · Cast.
  */
 import { useMemo, useState } from "react";
-import { ArrowRight, Check, Lock, type LucideIcon } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, Lock, type LucideIcon } from "lucide-react";
 import type { BookConfig } from "../../core/types";
 import { useProjectsStore } from "../../state/projectsStore";
 import { Button } from "../components/Button";
@@ -96,7 +96,12 @@ export function StoryWorkspace() {
     finish();
   }
 
-  const primaryLabel = isLast || !firstRun ? "Continue to design" : "Continue";
+  const primaryLabel =
+    isLast || !firstRun
+      ? "Continue to design"
+      : topics[index + 1]
+        ? `Continue to ${stripTitle(topics[index + 1]!).toLowerCase()}`
+        : "Continue";
   const primaryDisabled = firstRun
     ? !answered || (isLast && !ready)
     : !ready;
@@ -104,7 +109,24 @@ export function StoryWorkspace() {
   return (
     <div className="relative flex h-full min-h-0 flex-col">
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-ink-100 bg-white/70 px-3 py-2.5 backdrop-blur sm:px-5">
-        <div className="flex min-w-0 items-center gap-3">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="text-xs font-semibold text-ink-700">Story</span>
+          {firstRun && (
+            <span className="rounded-full bg-ink-100 px-2 py-0.5 text-[11px] font-medium tabular-nums text-ink-600">
+              {index + 1} of {topics.length}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-2">
+          {!firstRun && (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setStep(preferredDesignStep(project))}
+            >
+              Back to design
+            </Button>
+          )}
           <Button
             size="sm"
             disabled={primaryDisabled}
@@ -113,21 +135,7 @@ export function StoryWorkspace() {
           >
             {primaryLabel}
           </Button>
-          {firstRun && (
-            <span className="hidden text-xs tabular-nums text-ink-400 sm:inline">
-              {index + 1} of {topics.length}
-            </span>
-          )}
         </div>
-        {!firstRun && (
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setStep(preferredDesignStep(project))}
-          >
-            Back to design
-          </Button>
-        )}
       </div>
 
       <div className="flex min-h-0 flex-1">
@@ -150,8 +158,45 @@ export function StoryWorkspace() {
               )}
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
-              <div className="mx-auto w-full max-w-3xl">
+              <div className="mx-auto w-full max-w-3xl space-y-8">
                 {topic.render({ config: cfg, update })}
+
+                {/* In-flow action footer right where the user finishes */}
+                <div className="flex flex-col-reverse items-stretch justify-between gap-3 border-t border-ink-100/80 pt-6 sm:flex-row sm:items-center">
+                  <div className="flex items-center gap-2">
+                    {index > 0 ? (
+                      <Button
+                        size="md"
+                        variant="ghost"
+                        leftIcon={<ArrowLeft className="size-4" />}
+                        onClick={() => selectTopic(topics[index - 1]!.id)}
+                      >
+                        Back to {stripTitle(topics[index - 1]!)}
+                      </Button>
+                    ) : !firstRun ? (
+                      <Button
+                        size="md"
+                        variant="ghost"
+                        leftIcon={<ArrowLeft className="size-4" />}
+                        onClick={() => setStep(preferredDesignStep(project))}
+                      >
+                        Back to design
+                      </Button>
+                    ) : null}
+                  </div>
+
+                  <div className="flex items-center justify-end gap-3">
+                    <Button
+                      size="md"
+                      disabled={primaryDisabled}
+                      rightIcon={<ArrowRight className="size-4" />}
+                      onClick={onPrimary}
+                      className="min-w-44 shadow-soft"
+                    >
+                      {primaryLabel}
+                    </Button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
