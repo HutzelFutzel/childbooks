@@ -268,29 +268,31 @@ jobs:
           # and jq rejects invalid UTF-8, which would turn a large release into an
           # empty payload. Diffs are line-oriented anyway.
           clip() { awk -v max="$1" '{ n += length($0) + 1; if (n > max) exit; print }'; }
-          # Squash-merged pull requests put the PR title in the subject and the
-          # description in the body, which is usually the clearest statement of
-          # user intent anywhere in the release.
-          log=$(git log --no-merges --format='- %s%n%b' "$range" | clip 40000)
-          stat=$(git diff --stat "$range" -- . "${EXCLUDES[@]}" | clip 40000)
-          diff=$(git diff --unified=3 "$range" -- . "${EXCLUDES[@]}" | clip 400000)
+          # Write blobs to files and let jq --rawfile read them. `--arg` puts the
+          # value on argv, and Linux rejects a single argument over 128KB
+          # (MAX_ARG_STRLEN) — a 400KB clipped diff then dies as
+          # "jq: Argument list too long" before Slack ever hears about the release.
+          # Squash-merged PRs: title in the subject, description in the body.
+          git log --no-merges --format='- %s%n%b' "$range" | clip 40000 > /tmp/commit-log.txt
+          git diff --stat "$range" -- . "${EXCLUDES[@]}" | clip 40000 > /tmp/diff-stat.txt
+          git diff --unified=3 "$range" -- . "${EXCLUDES[@]}" | clip 400000 > /tmp/diff.txt
 
-          if [ -z "$log" ] && [ -z "$diff" ]; then
+          if [ ! -s /tmp/commit-log.txt ] && [ ! -s /tmp/diff.txt ]; then
             echo "Nothing to summarize."
             exit 0
           fi
 
-          payload=$(jq -n \
+          jq -n \
             --arg repo "$GITHUB_REPOSITORY" \
             --arg sha "$GITHUB_SHA" \
             --arg previousSha "$PREV" \
             --arg runUrl "$RUN_URL" \
             --argjson commitCount "${count:-0}" \
-            --arg commitLog "$log" \
-            --arg diffStat "$stat" \
-            --arg diff "$diff" \
+            --rawfile commitLog /tmp/commit-log.txt \
+            --rawfile diffStat /tmp/diff-stat.txt \
+            --rawfile diff /tmp/diff.txt \
             --argjson force "$([ "${FORCE:-false}" = "true" ] && echo true || echo false)" \
-            '$ARGS.named')
+            '$ARGS.named' > /tmp/payload.json
 
           # A timeout here loses the RESPONSE, not the work: the function posts to
           # Slack and moves the marker before it answers, so a slow model shows up
@@ -298,13 +300,13 @@ jobs:
           #
           # Don't use curl -f: a 500 then hides the JSON body, which is the only
           # clue (`maxLength` rejected, token mismatch, model missing, …).
-          echo "Summarizing $count commit(s): $PREV..$GITHUB_SHA"
-          code=$(printf '%s' "$payload" | curl -sS --max-time 300 \
+          echo "Summarizing $count commit(s): $PREV..$GITHUB_SHA ($(wc -c < /tmp/payload.json) bytes)"
+          code=$(curl -sS --max-time 300 \
             -o /tmp/notes.json -w '%{http_code}' \
             -X POST "$BACKEND_URL/internal/release-notes" \
             -H "Authorization: Bearer $RELEASE_NOTES_TOKEN" \
             -H 'Content-Type: application/json' \
-            --data-binary @-)
+            --data-binary @/tmp/payload.json)
           cat /tmp/notes.json
           echo
           if [ "$code" -lt 200 ] || [ "$code" -ge 300 ]; then
