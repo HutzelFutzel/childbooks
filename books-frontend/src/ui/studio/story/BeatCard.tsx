@@ -86,7 +86,7 @@ export function BeatCard({
               type="button"
               onMouseDown={(e) => e.preventDefault()}
               onClick={handleSplit}
-              title="Split story into beats at the current cursor position"
+              title="Split story into sections at the current cursor position"
               className="inline-flex items-center gap-1.5 rounded-lg border border-ink-200/80 bg-white/90 px-2.5 py-1 text-xs font-medium text-ink-600 shadow-2xs transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 active:scale-95"
             >
               <Scissors className="size-3.5 text-brand-600" />
@@ -157,7 +157,7 @@ export function BeatCard({
               }
             }}
             placeholder={defaultBeatLabel(index)}
-            aria-label={`Title for Beat ${index + 1}`}
+            aria-label={`Title for Section ${index + 1}`}
             className="min-w-0 flex-1 border-0 bg-transparent py-0.5 text-xs font-semibold text-ink-800 placeholder:text-ink-400 focus:outline-none focus:ring-0 focus:text-ink-900"
           />
         </div>
@@ -176,8 +176,8 @@ export function BeatCard({
               type="button"
               onMouseDown={(e) => e.preventDefault()}
               onClick={handleSplit}
-              title="Split this beat at cursor"
-              aria-label={`Split Beat ${index + 1} at cursor`}
+              title="Split this section at cursor"
+              aria-label={`Split Section ${index + 1} at cursor`}
               className="inline-flex size-6.5 items-center justify-center rounded-lg text-ink-400 transition hover:bg-brand-50 hover:text-brand-700 active:scale-95"
             >
               <Scissors className="size-3.5" />
@@ -189,15 +189,15 @@ export function BeatCard({
             <button
               type="button"
               onClick={onRemove}
-              title="Remove empty beat"
-              aria-label={`Remove empty Beat ${index + 1}`}
+              title="Remove empty section"
+              aria-label={`Remove empty Section ${index + 1}`}
               className="inline-flex size-6.5 items-center justify-center rounded-lg text-rose-500 transition hover:bg-rose-50 hover:text-rose-700 active:scale-95"
             >
               <Trash2 className="size-3.5" />
             </button>
           ) : totalBeats > 1 ? (
             <span
-              title="Clear beat text first to remove"
+              title="Clear section text first to remove"
               className="inline-flex size-6.5 items-center justify-center rounded-lg text-ink-200 cursor-not-allowed select-none"
             >
               <Trash2 className="size-3.5" />
@@ -231,18 +231,18 @@ export function BeatCard({
         />
       </div>
 
-      {/* Between-beat inline floating actions (Add between / Merge with next) - Only for non-last beats */}
+      {/* Between-section inline floating actions (Add between / Merge with next) - Only for non-last sections */}
       {isNotLast && (
         <div className="absolute left-1/2 -translate-x-1/2 -bottom-3.5 flex items-center justify-center gap-1.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-all duration-150 transform-gpu group-hover:translate-y-0 translate-y-1 z-20 pointer-events-none group-hover:pointer-events-auto group-focus-within:pointer-events-auto">
           <button
             type="button"
             onMouseDown={(e) => e.preventDefault()}
             onClick={onInsertAfter}
-            title={`Insert a new beat between Beat ${index + 1} and Beat ${index + 2}`}
+            title={`Insert a new section between Section ${index + 1} and Section ${index + 2}`}
             className="inline-flex items-center gap-1 rounded-full border border-ink-200/90 bg-white/95 px-2.5 py-0.5 text-[10.5px] font-medium text-ink-600 shadow-soft backdrop-blur-xs transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 active:scale-95"
           >
             <Plus className="size-3 text-brand-600" />
-            <span>Add beat</span>
+            <span>Add section</span>
           </button>
 
           {onMergeWithNext && (
@@ -250,11 +250,11 @@ export function BeatCard({
               type="button"
               onMouseDown={(e) => e.preventDefault()}
               onClick={onMergeWithNext}
-              title={`Merge Beat ${index + 1} with Beat ${index + 2}`}
+              title={`Merge Section ${index + 1} with Section ${index + 2}`}
               className="inline-flex items-center gap-1 rounded-full border border-ink-200/90 bg-white/95 px-2.5 py-0.5 text-[10.5px] font-medium text-ink-600 shadow-soft backdrop-blur-xs transition hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700 active:scale-95"
             >
               <Merge className="size-3 text-violet-600" />
-              <span>Merge with Beat {index + 2}</span>
+              <span>Merge with Section {index + 2}</span>
             </button>
           )}
         </div>

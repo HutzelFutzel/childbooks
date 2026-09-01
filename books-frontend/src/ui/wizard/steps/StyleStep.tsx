@@ -1,13 +1,13 @@
-import { Lock } from "lucide-react";
+"use client";
+
+import { motion } from "framer-motion";
+import { Check } from "lucide-react";
 import type { ArtStyleSelection } from "../../../core/types";
 import { ART_STYLE_PRESETS } from "../../../core/config/options";
 import { resolveArtStyleLabel } from "../../../core/prompts/style";
 import { useAppConfigStore } from "../../../state/appConfigStore";
-import { useFeatureAllowed } from "../../../state/subscriptionStore";
-import { useBillingUiStore } from "../../../state/billingUiStore";
-import { Field, Textarea } from "../../components/Input";
-import { OptionCard } from "../../components/OptionCard";
-import { StyleSwatch } from "../visuals";
+import { cn } from "../../lib/cn";
+import { fadeRise, spring } from "../../lib/motion";
 
 /** Compare preset + custom direction (trim-normalized). */
 export function artStylesEqual(a: ArtStyleSelection, b: ArtStyleSelection): boolean {
@@ -30,67 +30,110 @@ export function StyleStep({
 }) {
   const artStyles = useAppConfigStore((s) => s.artStyles);
   const examples = artStyles.examples;
-  // Data-driven gate: free for everyone until an admin lists "customArtStyle"
-  // on a plan, then only those plans may add free-text style directions.
-  const customAllowed = useFeatureAllowed("customArtStyle");
   const committed = committedArtStyle ?? artStyle;
 
   return (
-    <div className="space-y-6">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        {ART_STYLE_PRESETS.map((style) => (
-          <OptionCard
-            key={style.id}
-            selected={artStyle.presetId === style.id}
-            current={committed.presetId === style.id}
-            onSelect={() => onChange({ ...artStyle, presetId: style.id })}
-            title={resolveArtStyleLabel(style.id, artStyles)}
-            description={style.description}
-            visual={<StyleSwatch swatch={style.swatch} imageUrl={examples[style.id]?.imageUrl} />}
-          />
-        ))}
-      </div>
-
-      {customAllowed ? (
-        <Field
-          label="Creative additions (optional)"
-          hint="Describe extra direction, e.g. 'muted autumn palette, cozy lighting, friendly round characters'."
-        >
-          <Textarea
-            value={artStyle.customDescription ?? ""}
-            onChange={(e) => onChange({ ...artStyle, customDescription: e.target.value })}
-            placeholder="Add your own twist to the selected style…"
-            rows={3}
-          />
-        </Field>
-      ) : (
-        <UpgradeNudge />
-      )}
-    </div>
-  );
-}
-
-/** Locked custom-style teaser shown when the feature is gated to other plans. */
-function UpgradeNudge() {
-  const openPlans = useBillingUiStore((s) => s.openPlans);
-  return (
-    <button
-      type="button"
-      onClick={openPlans}
-      className="flex w-full items-start gap-3 rounded-2xl border border-dashed border-ink-200 bg-ink-50/60 p-4 text-left transition hover:border-brand-300 hover:bg-brand-50/40"
+    <motion.div
+      variants={fadeRise}
+      initial="hidden"
+      animate="show"
+      className="space-y-6"
     >
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-ink-100 text-ink-500">
-        <Lock className="size-4" />
-      </span>
-      <span>
-        <span className="block text-sm font-semibold text-ink-800">
-          Custom style directions are a subscriber perk
-        </span>
-        <span className="mt-0.5 block text-xs text-ink-500">
-          Upgrade to add your own creative twist on top of the preset styles — palettes, lighting,
-          character shapes and more.
-        </span>
-      </span>
-    </button>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {ART_STYLE_PRESETS.map((style, i) => {
+          const selected = artStyle.presetId === style.id;
+          const isCurrent = committed.presetId === style.id;
+          const title = resolveArtStyleLabel(style.id, artStyles);
+          const imageUrl = examples[style.id]?.imageUrl;
+
+          return (
+            <motion.button
+              key={style.id}
+              type="button"
+              onClick={() => onChange({ ...artStyle, presetId: style.id })}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ ...spring, delay: i * 0.03 }}
+              whileHover={{ y: -3 }}
+              whileTap={{ scale: 0.99 }}
+              className={cn(
+                "group relative flex flex-col overflow-hidden rounded-3xl text-left shadow-soft ring-1 transition",
+                selected
+                  ? "bg-white ring-2 ring-brand-500 shadow-lifted"
+                  : isCurrent
+                    ? "bg-white/90 ring-1 ring-ink-300 hover:ring-brand-300 hover:shadow-lifted"
+                    : "bg-white/80 ring-ink-100 hover:bg-white hover:ring-brand-300 hover:shadow-lifted",
+              )}
+            >
+              {/* Visual artwork preview banner */}
+              <div className="relative h-36 w-full overflow-hidden bg-ink-100 sm:h-40">
+                {imageUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={imageUrl}
+                    alt={title}
+                    className="size-full object-cover transition-transform duration-500 group-hover:scale-105"
+                  />
+                ) : (
+                  <div
+                    className={cn(
+                      "size-full bg-linear-to-br transition-transform duration-500 group-hover:scale-105",
+                      style.swatch,
+                    )}
+                  >
+                    <div className="flex h-full items-end p-3">
+                      <span className="rounded-md bg-white/75 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-ink-700 backdrop-blur shadow-2xs">
+                        Sample preview
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Subtle vignette gradient for depth */}
+                <div className="pointer-events-none absolute inset-0 bg-linear-to-t from-black/20 via-transparent to-black/10" />
+
+                {/* Status Badges */}
+                {isCurrent && (
+                  <span
+                    className={cn(
+                      "absolute left-3 top-3 rounded-full px-2.5 py-0.5 text-[10px] font-semibold tracking-wide backdrop-blur shadow-2xs transition",
+                      selected
+                        ? "bg-brand-600/90 text-white"
+                        : "bg-ink-900/75 text-white",
+                    )}
+                  >
+                    Current style
+                  </span>
+                )}
+
+                {/* Selection Check Circle */}
+                <span
+                  className={cn(
+                    "absolute right-3 top-3 flex size-6 items-center justify-center rounded-full border shadow-2xs transition",
+                    selected
+                      ? "border-brand-500 bg-brand-500 text-(--color-brand-foreground)"
+                      : "border-ink-200/80 bg-white/80 text-transparent group-hover:border-brand-300",
+                  )}
+                >
+                  <Check className="size-3.5" strokeWidth={3} />
+                </span>
+              </div>
+
+              {/* Information body */}
+              <div className="flex flex-1 flex-col justify-between gap-1.5 p-4 sm:p-5">
+                <div>
+                  <h3 className="font-display text-base font-bold tracking-tight text-ink-900 transition-colors group-hover:text-brand-700 sm:text-lg">
+                    {title}
+                  </h3>
+                  <p className="mt-1 text-xs leading-relaxed text-ink-500 sm:text-sm">
+                    {style.description}
+                  </p>
+                </div>
+              </div>
+            </motion.button>
+          );
+        })}
+      </div>
+    </motion.div>
   );
 }

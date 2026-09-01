@@ -7,6 +7,7 @@ import type { StoryBeatItem } from "../../../core/story/beats";
 import { beatWordCount, defaultBeatLabel } from "../../../core/story/beats";
 import { spring } from "../../lib/motion";
 import { cn } from "../../lib/cn";
+import { InfoHint } from "../../components/InfoHint";
 
 export interface BeatNavigatorProps {
   beats: StoryBeatItem[];
@@ -55,7 +56,7 @@ export function BeatNavigator({
 
   return (
     <nav
-      aria-label="Story beats navigation"
+      aria-label="Story sections navigation"
       className={cn(
         "shrink-0 border-b border-ink-100/80 bg-linear-to-b from-white/95 to-ink-50/50 px-3 py-2 backdrop-blur-xs sm:px-6",
         className,
@@ -65,18 +66,19 @@ export function BeatNavigator({
         {/* Left fixed indicator badge */}
         <div className="flex shrink-0 items-center gap-1.5 pr-2 mr-0.5 border-r border-ink-200/70 select-none">
           <span className="text-[10px] font-bold uppercase tracking-wider text-ink-400">
-            Beats
+            Sections
           </span>
           <span className="flex size-4 items-center justify-center rounded-full bg-ink-100 text-[10px] font-bold text-ink-600 tabular-nums">
             {beats.length}
           </span>
+          <InfoHint topic="storySections" side="bottom" align="start" />
         </div>
 
         {/* Scrollable tabs track */}
         <div
           ref={containerRef}
           role="tablist"
-          aria-label="Story beats tabs"
+          aria-label="Story sections tabs"
           className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto no-scrollbar scroll-smooth py-0.5 px-0.5"
         >
           {beats.map((beat, index) => {
@@ -141,12 +143,12 @@ export function BeatNavigator({
           <button
             type="button"
             onClick={onAddBeat}
-            title="Add a new beat"
-            aria-label="Add a new beat"
+            title="Add a new section"
+            aria-label="Add a new section"
             className="inline-flex shrink-0 items-center gap-1 rounded-full border border-dashed border-ink-200 bg-white/70 px-2.5 py-1 text-xs font-medium text-ink-500 transition hover:border-brand-400 hover:bg-brand-50/60 hover:text-brand-700 active:scale-95"
           >
             <Plus className="size-3 text-ink-400 group-hover:text-brand-600" />
-            <span className="hidden xs:inline text-[11px]">Add beat</span>
+            <span className="hidden xs:inline text-[11px]">Add section</span>
           </button>
         </div>
       </div>

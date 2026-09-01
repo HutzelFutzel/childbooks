@@ -11,10 +11,31 @@ function uid(): string {
 }
 
 /**
- * Returns a user-friendly default title for a beat index (1-based).
+ * Returns a user-friendly default title for a section index (1-based).
  */
 export function defaultBeatLabel(index: number): string {
-  return `Beat ${index + 1}`;
+  return `Section ${index + 1}`;
+}
+
+export const defaultSectionLabel = defaultBeatLabel;
+
+/**
+ * Normalizes section titles, converting legacy "Beat 1", "Beat 2", etc. to "Section 1", "Section 2".
+ */
+export function normalizeSectionTitle(title: string, index?: number): string {
+  const trimmed = title.trim();
+  if (!trimmed) return "";
+  // If title is "Beat 1", "Beat 2", "beat 1", "Beat", etc.
+  if (/^beat(\s+\d+)?$/i.test(trimmed)) {
+    const numMatch = trimmed.match(/\d+/);
+    const num = numMatch ? numMatch[0] : index != null ? `${index + 1}` : "";
+    return num ? `Section ${num}` : "Section";
+  }
+  // If title starts with "Beat 1: ..." or "Beat: ..."
+  if (/^beat(\s+\d+)?\s*[:\-\u2013\u2014]\s*/i.test(trimmed)) {
+    return trimmed.replace(/^beat/i, "Section");
+  }
+  return trimmed;
 }
 
 /**
@@ -47,7 +68,7 @@ export function parseStoryBeats(
 
       const headingMatch = section.match(/^#{1,3}\s+([^\n]+)(?:\n+([\s\S]*))?$/);
       if (headingMatch) {
-        const title = (headingMatch[1] ?? "").trim();
+        const title = normalizeSectionTitle((headingMatch[1] ?? "").trim(), i);
         const text = (headingMatch[2] ?? "").trim();
         parsed.push({
           id: existingBeats?.[i]?.id ?? uid(),
@@ -55,9 +76,10 @@ export function parseStoryBeats(
           text,
         });
       } else {
+        const existingTitle = existingBeats?.[i]?.title ?? "";
         parsed.push({
           id: existingBeats?.[i]?.id ?? uid(),
-          title: existingBeats?.[i]?.title ?? "",
+          title: normalizeSectionTitle(existingTitle, i),
           text: section,
         });
       }
@@ -69,10 +91,11 @@ export function parseStoryBeats(
   }
 
   // Without explicit markdown headings, the entire story text is 1 beat
+  const existingTitle = existingBeats?.[0]?.title ?? "";
   return [
     {
       id: existingBeats?.[0]?.id ?? uid(),
-      title: existingBeats?.[0]?.title ?? "",
+      title: normalizeSectionTitle(existingTitle, 0),
       text: raw,
     },
   ];
@@ -88,7 +111,7 @@ export function serializeStoryBeats(beats: StoryBeatItem[]): string {
 
   if (beats.length === 1) {
     const single = beats[0];
-    const title = single.title.trim();
+    const title = normalizeSectionTitle(single.title.trim(), 0);
     const text = single.text.trim();
     if (title && text) {
       return `### ${title}\n\n${text}`;
@@ -100,7 +123,7 @@ export function serializeStoryBeats(beats: StoryBeatItem[]): string {
 
   for (let i = 0; i < beats.length; i++) {
     const beat = beats[i];
-    const title = beat.title.trim() || defaultBeatLabel(i);
+    const title = normalizeSectionTitle(beat.title.trim(), i) || defaultBeatLabel(i);
     const text = beat.text.trim();
 
     if (text) {

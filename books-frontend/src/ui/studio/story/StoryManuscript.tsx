@@ -67,13 +67,23 @@ export function StoryManuscript({
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const lastSerializedRef = useRef(storyText);
 
-  // Sync external storyText changes (AI generation, translation, undo/redo)
+  // Sync external storyText changes (AI generation, translation, undo/redo) & migrate legacy "Beat" headings
   useEffect(() => {
+    const parsed = parseStoryBeats(storyText);
+    const normalizedSerialized = serializeStoryBeats(parsed);
+
     if (storyText !== lastSerializedRef.current) {
-      lastSerializedRef.current = storyText;
-      setBeats((prev) => parseStoryBeats(storyText, prev));
+      lastSerializedRef.current = normalizedSerialized;
+      setBeats(parsed);
+      if (normalizedSerialized !== storyText && storyText.length > 0) {
+        onChange(normalizedSerialized);
+      }
+    } else if (normalizedSerialized !== storyText && storyText.length > 0) {
+      lastSerializedRef.current = normalizedSerialized;
+      setBeats(parsed);
+      onChange(normalizedSerialized);
     }
-  }, [storyText]);
+  }, [storyText, onChange]);
 
   // Track title changes from external project updates
   useEffect(() => {
@@ -420,7 +430,7 @@ export function StoryManuscript({
                 />
               ))}
 
-              {/* Bottom Add Beat button when multiple beats exist */}
+              {/* Bottom Add Section button when multiple sections exist */}
               {beats.length > 1 && (
                 <div className="pt-2 pb-6 flex justify-center">
                   <button
@@ -429,7 +439,7 @@ export function StoryManuscript({
                     className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-ink-200 bg-white/80 px-4 py-1.5 text-xs font-semibold text-ink-600 shadow-2xs transition hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700"
                   >
                     <Plus className="size-3.5 text-brand-600" />
-                    <span>Add next beat</span>
+                    <span>Add next section</span>
                   </button>
                 </div>
               )}
@@ -458,7 +468,7 @@ export function StoryManuscript({
                 <>
                   <span className="text-ink-300">•</span>
                   <span className="text-ink-600 font-medium">
-                    {beats.length} beats
+                    {beats.length} sections
                   </span>
                 </>
               )}
@@ -489,10 +499,10 @@ export function StoryManuscript({
                     type="button"
                     onClick={() => handleAddBeat()}
                     className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-ink-600 transition hover:bg-white hover:text-brand-700"
-                    title="Add a new beat to divide your story"
+                    title="Add a new section to organize your story"
                   >
                     <Plus className="size-3 text-brand-600" />
-                    <span>Add beat</span>
+                    <span>Add section</span>
                   </button>
                 </>
               )}

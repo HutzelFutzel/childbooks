@@ -5,7 +5,7 @@
  * with existing art opens a confirm that renews cast → pages when Sparks allow.
  */
 import { useEffect, useState } from "react";
-import { AlertTriangle, ArrowRight, Clock, Palette, Sparkles } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, Clock, Sparkles } from "lucide-react";
 import type { ArtStyleSelection, BookConfig } from "../../core/types";
 import { resolveArtStyleLabel } from "../../core/prompts/style";
 import { useAppConfigStore } from "../../state/appConfigStore";
@@ -132,14 +132,15 @@ export function StyleSetup() {
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
+      {/* Top Workspace Header */}
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-ink-100 bg-white/70 px-3 py-2.5 backdrop-blur sm:px-5">
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="flex min-w-0 items-center gap-2.5">
           <span className="text-xs font-semibold text-ink-700">Art Style</span>
         </div>
         <div className="flex items-center gap-2">
           {!firstTime && (
             <Button size="sm" variant="ghost" disabled={busy} onClick={onCancel}>
-              Cancel
+              Back to cast
             </Button>
           )}
           <Button
@@ -153,83 +154,85 @@ export function StyleSetup() {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto bg-grid">
-        <div className="mx-auto w-full max-w-2xl px-4 py-6 sm:px-6">
-          <div className="mb-6 flex items-start gap-3">
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
-              <Palette className="size-5" />
-            </span>
-            <div>
-              <h2 className="text-lg font-semibold text-ink-900">
-                {firstTime ? "Pick a look for your book" : "Art style"}
-              </h2>
-              <p className="mt-1 text-sm text-ink-500">
-                {firstTime
-                  ? "This sets how every character and page illustration is drawn. You can change it later."
-                  : "Pick a new look, then confirm — we’ll create new versions of your cast and pages in that style."}
-              </p>
-            </div>
+      {/* Stage Layout matching Story step */}
+      <div className="relative min-h-0 min-w-0 flex-1">
+        <div className="absolute inset-0 flex flex-col bg-grid">
+          {/* Stage Sub-header banner */}
+          <div className="shrink-0 border-b border-ink-100/80 bg-white/50 px-4 py-3 sm:px-6">
+            <h2 className="text-base font-semibold text-ink-900">
+              {firstTime ? "Pick a look for your book" : "Art style"}
+            </h2>
+            <p className="mt-0.5 text-sm text-ink-500">
+              {firstTime
+                ? "Choose the visual style for every character and illustration in your book."
+                : "Pick a new look, then confirm — we’ll create new versions of your cast and pages in that style."}
+            </p>
           </div>
 
-          {needsRenewWarn && (
-            <div className="mb-5 flex gap-3 rounded-2xl border border-amber-200 bg-amber-50/90 px-4 py-3 text-sm text-amber-950">
-              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
-              <div className="min-w-0 leading-snug">
-                <p className="font-semibold">Existing art will get new versions</p>
-                <p className="mt-1 text-amber-900/85">
-                  Your cast and pages were drawn in{" "}
-                  <span className="font-medium">{committedLabel}</span>. Once you confirm{" "}
-                  <span className="font-medium">{draftLabel}</span>, we’ll automatically create new
-                  versions in the new style — cast looks first, then pages using those looks.
-                </p>
-                <p className="mt-1.5 text-xs font-medium text-amber-800/80">
-                  {[
-                    renew.cast > 0 &&
-                      `${renew.cast} cast look${renew.cast === 1 ? "" : "s"}`,
-                    renew.pages > 0 &&
-                      `${renew.pages} page${renew.pages === 1 ? "" : "s"}`,
-                  ]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </p>
-              </div>
-            </div>
-          )}
-
-          <StyleStep
-            artStyle={draft}
-            committedArtStyle={firstTime ? undefined : committed}
-            onChange={setDraft}
-          />
-
-          {/* In-flow action card at the bottom of the style gallery */}
-          <div className="mt-8 flex flex-col items-stretch justify-between gap-4 rounded-2xl border border-ink-100 bg-white p-4 shadow-soft sm:flex-row sm:items-center">
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-ink-900">
-                Selected: <span className="text-brand-600">{draftLabel}</span>
-              </p>
-              <p className="mt-0.5 text-xs text-ink-500">
-                {firstTime
-                  ? "Every character and page illustration will be drawn in this art style."
-                  : dirty
-                    ? "Confirming will create new versions of your cast and pages in this style."
-                    : "This art style is currently applied to your book."}
-              </p>
-            </div>
-            <div className="flex shrink-0 items-center justify-end gap-2">
-              {!firstTime && (
-                <Button size="md" variant="ghost" disabled={busy} onClick={onCancel}>
-                  Cancel
-                </Button>
+          {/* Main Scrollable Canvas */}
+          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+            <div className="mx-auto w-full max-w-3xl space-y-6 sm:space-y-8">
+              {/* Alert notice when changing style with existing artwork */}
+              {needsRenewWarn && (
+                <div className="flex items-start gap-3 rounded-2xl border border-amber-200/80 bg-linear-to-r from-amber-50/90 via-amber-50/50 to-white p-3.5 text-xs text-amber-900 shadow-2xs sm:text-sm">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
+                  <div className="min-w-0 flex-1 leading-snug">
+                    <p className="font-semibold text-amber-950">Existing art will get new versions</p>
+                    <p className="mt-1 text-amber-900/85 text-xs sm:text-sm">
+                      Your cast and pages were drawn in{" "}
+                      <span className="font-medium text-amber-950">{committedLabel}</span>. Once you confirm{" "}
+                      <span className="font-medium text-amber-950">{draftLabel}</span>, we’ll automatically create new
+                      versions in the new style — cast looks first, then pages using those looks.
+                    </p>
+                    <p className="mt-1.5 text-xs font-semibold text-amber-800/90">
+                      {[
+                        renew.cast > 0 &&
+                          `${renew.cast} cast look${renew.cast === 1 ? "" : "s"}`,
+                        renew.pages > 0 &&
+                          `${renew.pages} page${renew.pages === 1 ? "" : "s"}`,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </p>
+                  </div>
+                </div>
               )}
-              <Button
-                size="md"
-                disabled={!chosen || busy}
-                rightIcon={<ArrowRight className="size-4" />}
-                onClick={onPrimary}
-              >
-                {firstTime ? "Continue to cast" : dirty ? "Apply style" : "Done"}
-              </Button>
+
+              {/* Style Grid Cards */}
+              <StyleStep
+                artStyle={draft}
+                committedArtStyle={firstTime ? undefined : committed}
+                onChange={setDraft}
+              />
+
+              {/* In-flow Action Footer */}
+              <div className="flex flex-col-reverse items-stretch justify-between gap-3 border-t border-ink-100/80 pt-6 sm:flex-row sm:items-center">
+                <div className="flex items-center gap-2">
+                  {!firstTime ? (
+                    <Button
+                      size="md"
+                      variant="ghost"
+                      leftIcon={<ArrowLeft className="size-4" />}
+                      disabled={busy}
+                      onClick={onCancel}
+                    >
+                      Back to cast
+                    </Button>
+                  ) : null}
+                </div>
+
+                <div className="flex items-center justify-end gap-3">
+                  <Button
+                    size="md"
+                    disabled={!chosen || busy}
+                    rightIcon={<ArrowRight className="size-4" />}
+                    onClick={onPrimary}
+                    className="min-w-44 shadow-soft"
+                  >
+                    {firstTime ? "Continue to cast" : dirty ? "Apply style" : "Done"}
+                  </Button>
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -367,7 +370,7 @@ function StyleRenewConfirm({
             )}
             {canAfford && (
               <p className="mt-1 text-xs opacity-80">
-                You’re charged the actual cost when each image finishes, which can vary a little.
+                You can top up more anytime from your account.
               </p>
             )}
           </div>

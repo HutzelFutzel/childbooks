@@ -5,7 +5,7 @@
   "description": "Childbooks Firebase Functions backend (secret holder + AI proxy + Lulu fulfillment).",
   "main": "lib/index.js",
   "engines": {
-    "node": "20"
+    "node": ">=20"
   },
   "scripts": {
     "build": "node esbuild.mjs",

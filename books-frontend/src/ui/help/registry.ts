@@ -86,6 +86,10 @@ export const HELP: Record<string, HelpTopic> = {
       "Switch to High-Quality for real designing and final art — it matches references far more closely and auto-repairs small flaws.",
     ],
   },
+  storySections: {
+    title: "Story sections",
+    body: "Use sections to organize and navigate longer stories—your book’s pages and artwork will be laid out in the next step.",
+  },
   layoutQuietZone: {
     title: "How text sits on the page",
     body: "Illustrations are generated full-bleed with a calm area on the outer edge of each page, where your words sit. On left pages the text is on the left; on right pages it's on the right.",
