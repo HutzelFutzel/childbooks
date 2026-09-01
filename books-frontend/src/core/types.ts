@@ -80,6 +80,8 @@ export interface StoryBrief {
   customTheme?: string;
   /** Catalog id from the age band's stylistic-device list. */
   deviceId?: string | null;
+  /** Multiple catalog ids from the age band's stylistic-device list. */
+  deviceIds?: string[];
   customDevice?: string;
   /** Catalog id from the age band's setting list (co-write only). */
   settingId?: string | null;

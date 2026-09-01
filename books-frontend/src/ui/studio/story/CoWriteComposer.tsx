@@ -64,7 +64,13 @@ export function CoWriteComposer({
   const isStepDone = (index: number) => {
     if (index === 0) return hasCast;
     if (index === 1) return hasOccasion;
-    return Boolean(brief.themeId || brief.deviceId || brief.customTheme || brief.customDevice);
+    return Boolean(
+      brief.themeId ||
+        brief.deviceId ||
+        (brief.deviceIds && brief.deviceIds.length > 0) ||
+        brief.customTheme ||
+        brief.customDevice,
+    );
   };
 
   const activeStep = CO_WRITE_STEPS[currentStepIndex] ?? CO_WRITE_STEPS[0];
@@ -277,12 +283,21 @@ export function CoWriteComposer({
               <OptionChips
                 label="Storytelling style"
                 optional
+                hint="style"
+                subhint="Pick 1–2 rhythm or storytelling techniques"
+                multiple
+                maxSelectable={2}
                 options={craft.devices}
                 selectedId={brief.deviceId}
+                selectedIds={brief.deviceIds ?? (brief.deviceId ? [brief.deviceId] : [])}
                 custom={brief.customDevice}
-                onChange={({ id, custom }, options) =>
+                onChange={({ id, ids, custom }, options) =>
                   onChange(
-                    { deviceId: id, ...(custom !== undefined ? { customDevice: custom } : {}) },
+                    {
+                      deviceId: id ?? null,
+                      deviceIds: ids ?? [],
+                      ...(custom !== undefined ? { customDevice: custom } : {}),
+                    },
                     options,
                   )
                 }

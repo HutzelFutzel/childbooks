@@ -9,7 +9,7 @@
 import type { StoryBrief, BookConfig } from "../types";
 import type { AgeBandStoryCraft } from "../config/storyCraftCatalog";
 import { ageBandLabel } from "../config/storyCraftCatalog";
-import { optionGuidance, resolveStoryCraft, type StoryCraftConfig } from "../config/storyCraft";
+import { optionGuidance, optionsGuidance, resolveStoryCraft, type StoryCraftConfig } from "../config/storyCraft";
 import { getBookLanguage } from "../config/bookLanguages";
 import { castPromptLines, heroesLine } from "../story/brief";
 import { resolveAgeLlmGuidance } from "./age";
@@ -65,8 +65,10 @@ export function buildStoryDraftPrompt(
       maxWords: Math.max(1, Math.round(baseCraft.structure.maxWords * language.wordCountFactor)),
     },
   };
+  const effectiveDeviceIds =
+    brief.deviceIds && brief.deviceIds.length > 0 ? brief.deviceIds : brief.deviceId ?? undefined;
   const themeGuidance = optionGuidance(craft.themes, brief.themeId ?? undefined, brief.customTheme);
-  const deviceGuidance = optionGuidance(craft.devices, brief.deviceId ?? undefined, brief.customDevice);
+  const deviceGuidance = optionsGuidance(craft.devices, effectiveDeviceIds, brief.customDevice);
   const settingGuidance = optionGuidance(
     craft.settings,
     brief.settingId ?? undefined,
@@ -158,8 +160,11 @@ export function buildStoryTranslatePrompt(
   const targetLanguage = getBookLanguage(config.contentLocale);
   const sourceLanguage = getBookLanguage(sourceLocale);
   const brief = config.storyBrief;
+  const effectiveDeviceIds = brief?.deviceIds && brief.deviceIds.length > 0
+    ? brief.deviceIds
+    : brief?.deviceId ?? undefined;
   const deviceGuidance = brief
-    ? optionGuidance(baseCraft.devices, brief.deviceId ?? undefined, brief.customDevice)
+    ? optionsGuidance(baseCraft.devices, effectiveDeviceIds, brief.customDevice)
     : "";
 
   const { system, user } = renderTextPrompt(resolvePromptsConfig(ctx), "storyDraft/translate", {
@@ -193,8 +198,11 @@ export function buildStoryRevisionPrompt(
   const craft = resolveStoryCraftFor(config.ageRangeId, ctx);
   const language = getBookLanguage(config.contentLocale);
   const brief = config.storyBrief;
+  const effectiveDeviceIds = brief?.deviceIds && brief.deviceIds.length > 0
+    ? brief.deviceIds
+    : brief?.deviceId ?? undefined;
   const deviceGuidance = brief
-    ? optionGuidance(craft.devices, brief.deviceId ?? undefined, brief.customDevice)
+    ? optionsGuidance(craft.devices, effectiveDeviceIds, brief.customDevice)
     : "";
 
   const { system, user } = renderTextPrompt(resolvePromptsConfig(ctx), "storyEdit/revise", {

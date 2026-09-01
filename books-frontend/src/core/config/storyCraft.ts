@@ -143,6 +143,30 @@ export function resolveStoryCraft(
 }
 
 /**
+ * The guidance for chosen option(s): catalog entries' `llmGuidance` joined together,
+ * plus the user's custom free text if provided. Returns "" when neither is set.
+ */
+export function optionsGuidance(
+  options: StoryOption[],
+  ids: string[] | string | undefined | null,
+  custom: string | undefined,
+): string {
+  const idList = Array.isArray(ids) ? ids : ids ? [ids] : [];
+  const parts: string[] = [];
+  for (const id of idList) {
+    const found = options.find((o) => o.id === id);
+    if (found?.llmGuidance.trim()) {
+      parts.push(found.llmGuidance.trim());
+    }
+  }
+  const custom_ = custom?.trim();
+  if (custom_) {
+    parts.push(custom_);
+  }
+  return parts.join("; ");
+}
+
+/**
  * The guidance for a chosen option: the catalog entry's `llmGuidance` when the
  * id is known, otherwise the user's own free text. Returns "" when neither is
  * set, so the prompt block simply doesn't render.
@@ -152,12 +176,23 @@ export function optionGuidance(
   id: string | undefined,
   custom: string | undefined,
 ): string {
-  const custom_ = custom?.trim();
-  if (id) {
+  return optionsGuidance(options, id, custom);
+}
+
+/** The human labels for chosen option(s) (for summaries and chips). */
+export function optionsLabels(
+  options: StoryOption[],
+  ids: string[] | string | undefined | null,
+  custom: string | undefined,
+): string[] {
+  const idList = Array.isArray(ids) ? ids : ids ? [ids] : [];
+  const labels: string[] = [];
+  for (const id of idList) {
     const found = options.find((o) => o.id === id);
-    if (found) return found.llmGuidance.trim();
+    if (found?.label) labels.push(found.label);
   }
-  return custom_ ?? "";
+  if (custom?.trim()) labels.push(custom.trim());
+  return labels;
 }
 
 /** The human label for a chosen option (for summaries and chips). */

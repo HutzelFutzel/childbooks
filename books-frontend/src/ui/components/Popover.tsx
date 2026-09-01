@@ -145,18 +145,17 @@ export function Popover({
       return;
     }
 
-    // Horizontal clamp: keep the panel fully within the viewport regardless
-    // of which side it ended up on.
-    let left = panelRect.left;
-    if (left < margin) left = margin;
-    const maxLeft = window.innerWidth - panelRect.width - margin;
-    if (left > maxLeft) left = Math.max(margin, maxLeft);
-    if (Math.abs(left - panelRect.left) > 0.5) {
-      adjustedRef.current = true;
-      setStyle((prev) => (prev ? { ...prev, left, right: undefined, transform: undefined } : prev));
-    } else {
-      adjustedRef.current = true;
+    // Horizontal position & clamp
+    let idealLeft = anchorRect.left;
+    if (align === "center") {
+      idealLeft = anchorRect.left + anchorRect.width / 2 - panelRect.width / 2;
+    } else if (align === "end") {
+      idealLeft = anchorRect.right - panelRect.width;
     }
+    const left = Math.max(margin, Math.min(idealLeft, window.innerWidth - panelRect.width - margin));
+
+    adjustedRef.current = true;
+    setStyle((prev) => (prev ? { ...prev, left, right: undefined, transform: undefined } : prev));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, style, effectiveSide]);
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, RotateCcw, Sparkles, Wand2 } from "lucide-react";
 import type { AgeBandStoryCraft } from "../../../core/config/storyCraftCatalog";
 import type { StoryBrief } from "../../../core/types";
@@ -32,6 +32,7 @@ export function GuidedComposer({
   const models = useResolvedModels();
   const { writing, write } = draft;
   const prefilled = useRef(false);
+  const [draftHeroName, setDraftHeroName] = useState("");
   const heroes = namedHeroes(brief);
 
   // The landing page asks for the child's name before the project exists and
@@ -47,7 +48,25 @@ export function GuidedComposer({
     }
   }, [heroes.length, onChange]);
 
-  const canWrite = Boolean(heroes.length > 0 && models && !writing);
+  // Effective heroes: either committed chips, or currently typed draft text in the input
+  const effectiveHeroes = useMemo(() => {
+    if (heroes.length > 0) return heroes;
+    const trimmed = draftHeroName.trim();
+    return trimmed ? [trimmed] : [];
+  }, [heroes, draftHeroName]);
+
+  const canWrite = Boolean(effectiveHeroes.length > 0 && models && !writing);
+
+  const handleWrite = () => {
+    if (effectiveHeroes.length === 0) return;
+    if (heroes.length === 0 && draftHeroName.trim()) {
+      onChange({ heroNames: effectiveHeroes });
+    }
+    void write({
+      ...brief,
+      heroNames: effectiveHeroes,
+    });
+  };
 
   return (
     <section className="relative overflow-hidden rounded-2xl bg-aurora p-4 shadow-soft ring-1 ring-magic-300/40 sm:p-5">
@@ -82,13 +101,19 @@ export function GuidedComposer({
           <div className="w-full">
             <HeroNamesInput
               names={heroes}
-              onChange={(heroNames) => onChange({ heroNames })}
-              placeholder="e.g. Mila — press Enter to add"
+              onDraftChange={setDraftHeroName}
+              onChange={(heroNames) => {
+                setDraftHeroName("");
+                onChange({ heroNames });
+              }}
+              placeholder="e.g. Mila (or enter names for siblings)"
             />
           </div>
           <span className="mt-1 block text-[11px] text-ink-400">
-            {heroes.length > 1
-              ? "They'll be the heroes, together."
+            {effectiveHeroes.length > 1
+              ? `${effectiveHeroes.join(" and ")} will be the heroes, together.`
+              : effectiveHeroes.length === 1
+              ? `${effectiveHeroes[0]} will be the hero of the story.`
               : "They'll be the hero of the story."}
           </span>
         </label>
@@ -112,12 +137,20 @@ export function GuidedComposer({
           label="How should it be told?"
           optional
           hint="style"
+          subhint="Pick 1–2 rhythm or storytelling techniques"
+          multiple
+          maxSelectable={2}
           options={craft.devices}
           selectedId={brief.deviceId}
+          selectedIds={brief.deviceIds ?? (brief.deviceId ? [brief.deviceId] : [])}
           custom={brief.customDevice}
-          onChange={({ id, custom }, options) =>
+          onChange={({ id, ids, custom }, options) =>
             onChange(
-              { deviceId: id, ...(custom !== undefined ? { customDevice: custom } : {}) },
+              {
+                deviceId: id ?? null,
+                deviceIds: ids ?? [],
+                ...(custom !== undefined ? { customDevice: custom } : {}),
+              },
               options,
             )
           }
@@ -131,7 +164,7 @@ export function GuidedComposer({
             variant="magic"
             size="sm"
             leftIcon={!writing ? (hasStory ? <RotateCcw className="size-3.5" /> : <Wand2 className="size-3.5" />) : undefined}
-            onClick={() => void write(brief)}
+            onClick={handleWrite}
             className="h-8.5 text-xs shadow-soft"
           >
             {writing ? "Writing your story…" : hasStory ? "Write again" : "Write my story"}

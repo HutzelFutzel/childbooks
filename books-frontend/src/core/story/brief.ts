@@ -7,7 +7,7 @@
 import { z } from "zod";
 import type { StoryBrief, StoryCastMember } from "../types";
 import type { AgeBandStoryCraft } from "../config/storyCraftCatalog";
-import { optionLabel } from "../config/storyCraft";
+import { optionLabel, optionsLabels } from "../config/storyCraft";
 import type { StoryMode } from "../config/storyCraftCatalog";
 import { BOOK_LANGUAGES, type BookLanguageId } from "../config/bookLanguages";
 
@@ -34,6 +34,7 @@ export const storyBriefSchema = z.object({
   themeId: z.string().max(60).nullable().optional(),
   customTheme: z.string().max(500).optional(),
   deviceId: z.string().max(60).nullable().optional(),
+  deviceIds: z.array(z.string().max(60)).max(10).optional(),
   customDevice: z.string().max(500).optional(),
   settingId: z.string().max(60).nullable().optional(),
   customSetting: z.string().max(500).optional(),
@@ -133,6 +134,11 @@ export function storyBriefSignature(
   readingModeId?: string | null,
   contentLocale?: string | null,
 ): string {
+  const effectiveDevices =
+    brief.deviceIds && brief.deviceIds.length > 0
+      ? [...brief.deviceIds].sort().join(",")
+      : brief.deviceId ?? "";
+
   const parts: string[] = [
     brief.mode,
     ageRangeId,
@@ -140,7 +146,7 @@ export function storyBriefSignature(
     ...(contentLocale ? [contentLocale] : []),
     brief.themeId ?? "",
     brief.customTheme?.trim() ?? "",
-    brief.deviceId ?? "",
+    effectiveDevices,
     brief.customDevice?.trim() ?? "",
     brief.settingId ?? "",
     brief.customSetting?.trim() ?? "",
