@@ -5,6 +5,7 @@ import { storyDraftRemote, storyTranslateRemote } from "../../../platform/aiClie
 import { useProjectsStore } from "../../../state/projectsStore";
 import type { StoryBrief } from "../../../core/types";
 import { getBookLanguage, type BookLanguageId } from "../../../core/config/bookLanguages";
+import { ageBandLabel } from "../../../core/config/storyCraftCatalog";
 import {
   briefBlockers,
   createDefaultStoryBrief,
@@ -32,6 +33,7 @@ export interface UseStoryDraft {
   redoable: string | null;
   write: (brief: StoryBrief) => Promise<void>;
   translate: (sourceLocale?: BookLanguageId, targetLocale?: BookLanguageId) => Promise<void>;
+  confirmWithoutRewrite: () => Promise<void>;
   confirmLanguageWithoutTranslate: () => Promise<void>;
   undo: () => void;
   redo: () => void;
@@ -137,6 +139,9 @@ export function useStoryDraft(): UseStoryDraft {
         const { ageRangeId, readingModeId } = project.config;
         const brief: StoryBrief =
           project.config.storyBrief ?? createDefaultStoryBrief("own");
+        const prevAge = brief.generatedForAge ?? (story ? "0-2" : undefined);
+        const ageChanged = Boolean(prevAge) && prevAge !== ageRangeId;
+        const langChanged = source !== target;
 
         await updateConfig({
           storyText: result.story,
@@ -157,10 +162,23 @@ export function useStoryDraft(): UseStoryDraft {
         if (result.title) await rename(project.id, result.title);
         setUndoSnapshot(previousSnapshot);
         setRedoSnapshot(null);
-        notify.success(
-          `Story translated to ${targetLang.endonym}`,
-          `Culturally adapted from ${sourceLang.endonym} into ${targetLang.englishName}.`,
-        );
+
+        if (langChanged && ageChanged) {
+          notify.success(
+            `Story adapted to ${targetLang.endonym} for ${ageBandLabel(ageRangeId)}`,
+            `Translated into ${targetLang.englishName} and calibrated for ${ageBandLabel(ageRangeId)}.`,
+          );
+        } else if (langChanged) {
+          notify.success(
+            `Story translated to ${targetLang.endonym}`,
+            `Culturally adapted from ${sourceLang.endonym} into ${targetLang.englishName}.`,
+          );
+        } else {
+          notify.success(
+            `Story adapted for ${ageBandLabel(ageRangeId)}`,
+            `Calibrated vocabulary and pacing for ${ageBandLabel(ageRangeId)}.`,
+          );
+        }
       } catch (err) {
         notify.error(err);
       } finally {
@@ -170,18 +188,19 @@ export function useStoryDraft(): UseStoryDraft {
     [rename, translating, updateConfig, writing],
   );
 
-  const confirmLanguageWithoutTranslate = useCallback(async () => {
+  const confirmWithoutRewrite = useCallback(async () => {
     const project = useProjectsStore.getState().current();
     if (!project) return;
     const brief: StoryBrief =
       project.config.storyBrief ?? createDefaultStoryBrief("own");
     const { ageRangeId, readingModeId } = project.config;
-    const currentLocale = project.config.contentLocale ?? "en-US";
+    const currentLocale = (project.config.contentLocale as BookLanguageId) ?? "en-US";
     await updateConfig({
       contentLocale: currentLocale,
       storyBrief: {
         ...brief,
         generatedForLocale: currentLocale,
+        generatedForAge: ageRangeId,
         generatedSignature: storyBriefSignature(
           brief,
           ageRangeId,
@@ -191,10 +210,12 @@ export function useStoryDraft(): UseStoryDraft {
       },
     });
     notify.info(
-      "Language choice confirmed",
-      `Kept your current story words with ${getBookLanguage(currentLocale).endonym} selected.`,
+      "Story settings confirmed",
+      "Kept your current story words with updated settings.",
     );
   }, [updateConfig]);
+
+  const confirmLanguageWithoutTranslate = confirmWithoutRewrite;
 
   const undo = useCallback(async () => {
     if (!undoSnapshot) return;
@@ -249,6 +270,7 @@ export function useStoryDraft(): UseStoryDraft {
     redoable: redoSnapshot ? redoSnapshot.storyText : null,
     write,
     translate,
+    confirmWithoutRewrite,
     confirmLanguageWithoutTranslate,
     undo,
     redo,

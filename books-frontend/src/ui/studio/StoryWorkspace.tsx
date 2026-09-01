@@ -56,6 +56,9 @@ export function StoryWorkspace() {
   const originLocale: BookLanguageId = (cfg.storyBrief?.generatedForLocale as BookLanguageId) ?? "en-US";
   const currentLocale: BookLanguageId = (cfg.contentLocale as BookLanguageId) ?? "en-US";
   const languageChanged = hasStory && originLocale !== currentLocale;
+  const originAge = cfg.storyBrief?.generatedForAge ?? (hasStory ? "0-2" : undefined);
+  const ageChanged = hasStory && Boolean(originAge) && originAge !== cfg.ageRangeId;
+  const needsAdaptation = languageChanged || ageChanged;
 
   function topicReachable(i: number): boolean {
     if (!firstRun) return true;
@@ -90,7 +93,7 @@ export function StoryWorkspace() {
       notify.info("Almost there", "Finish this section before continuing.");
       return;
     }
-    if (languageChanged && topic.id !== "story") {
+    if (needsAdaptation && topic.id !== "story") {
       const storyIdx = topics.findIndex((t) => t.id === "story");
       if (storyIdx >= 0) {
         setFurthest((f) => Math.max(f, storyIdx));
@@ -112,7 +115,7 @@ export function StoryWorkspace() {
   }
 
   const primaryLabel =
-    languageChanged && topic.id !== "story"
+    needsAdaptation && topic.id !== "story"
       ? "Continue to story"
       : isLast || !firstRun
         ? "Continue to design"

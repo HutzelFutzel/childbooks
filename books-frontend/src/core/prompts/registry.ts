@@ -108,7 +108,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     system: [
       blk(
         "role",
-        "You are an expert literary translator and children's picture-book author. Translate and culturally adapt the following children's picture-book story into the target language. Preserve the magical tone, rhythm, humor, emotional warmth, and character personalities. Do not translate character proper names unless they are descriptive aliases. Adapt idioms, cultural references, and wordplay naturally so the text reads like a delightful original story in the target language.",
+        "You are an expert children's picture-book author, editor, and literary translator. Translate, culturally adapt, and/or calibrate the following children's picture-book story to fit the target age range and language. Calibrate vocabulary complexity, sentence length, and reading rhythm to the target age guidance while preserving the story's core plot, characters, charm, warmth, and emotional resonance. Do not translate character proper names unless they are descriptive aliases. Adapt idioms, cultural references, and wordplay naturally so the text reads like a delightful original story.",
       ),
       blk(
         "language",
@@ -122,7 +122,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "output",
-        "Translate the title as well if provided. Keep the paragraph breaks and page-turn rhythm intact. Return only the translated title and story without any translator notes or commentary.",
+        "Translate and/or adapt the title as well if provided. Keep the paragraph breaks and page-turn rhythm intact. If the language is unchanged, calibrate and polish the story to suit the target age range. Return only the adapted title and story without any translator notes or commentary.",
       ),
     ],
     user: [
@@ -986,9 +986,9 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
       },
       {
         key: "storyDraft/translate",
-        label: "Translate & adapt language",
+        label: "Translate & adapt story",
         description:
-          "Translates and culturally adapts an existing children's story into another supported book language.",
+          "Translates, culturally adapts, and/or age-calibrates an existing children's story for the selected language and audience.",
         variables: [
           V("age", "Target age-range label.", "3–5"),
           V("ageGuidance", "Age-band writing guidance overlay.", AGE_SAMPLE),

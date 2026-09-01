@@ -13,6 +13,7 @@ import {
   defaultAgeCardDescription,
   type ReadingModeId,
 } from "../../../core/config/ageWritingCatalog";
+import { ageBandLabel } from "../../../core/config/storyCraftCatalog";
 import { resolveAgeHumanGuidance } from "../../../core/prompts/age";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { cn } from "../../lib/cn";
@@ -68,6 +69,10 @@ export function AudienceStep({ config, update }: StepProps) {
   const showReadingModes = ageBandHasReadingModes(config.ageRangeId);
   const readingMode = (config.readingModeId ?? "read-aloud") as ReadingModeId;
 
+  const hasStory = config.storyText.trim().length > 0;
+  const originAge = config.storyBrief?.generatedForAge ?? (hasStory ? "0-2" : undefined);
+  const ageChanged = hasStory && Boolean(originAge) && originAge !== config.ageRangeId;
+
   const selectAge = (ageId: string) => {
     if (ageBandHasReadingModes(ageId)) {
       update({
@@ -80,7 +85,27 @@ export function AudienceStep({ config, update }: StepProps) {
   };
 
   return (
-    <motion.div variants={fadeRise} initial="hidden" animate="show" className="space-y-8">
+    <motion.div variants={fadeRise} initial="hidden" animate="show" className="space-y-6">
+      {/* Informative notice when changing audience for an existing story */}
+      {hasStory && ageChanged && (
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-amber-200/80 bg-linear-to-r from-amber-50/90 via-amber-50/50 to-white p-3 text-xs text-amber-900 shadow-2xs">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span className="text-base select-none shrink-0">✨</span>
+            <div className="min-w-0">
+              <span className="font-semibold">
+                Audience changed to {ageBandLabel(config.ageRangeId)}
+              </span>
+              <p className="text-[11px] text-amber-700/90 truncate">
+                Originally written for {ageBandLabel(originAge!)}. You can adapt it in the Story step.
+              </p>
+            </div>
+          </div>
+          <span className="hidden sm:inline-flex shrink-0 rounded-full bg-amber-100 px-2 py-0.5 font-medium text-[10px] text-amber-800">
+            Adapt next ➔
+          </span>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {AGE_RANGES.map((age, i) => {
           const selected = config.ageRangeId === age.id;

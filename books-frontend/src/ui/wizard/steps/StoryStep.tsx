@@ -37,6 +37,7 @@ import { AgeFitCheck } from "../../studio/story/AgeFitCheck";
 import { StoryManuscript } from "../../studio/story/StoryManuscript";
 import { StoryDiffActions, StoryDiffReview } from "../../studio/story/StoryDiffReview";
 import { StoryRefinePanel } from "../../studio/story/StoryRefinePanel";
+import { StoryAdaptCard } from "../../studio/story/StoryAdaptCard";
 import { StoryModePicker } from "../../studio/story/StoryModePicker";
 import { useStoryDraft } from "../../studio/story/useStoryDraft";
 import { useStoryRevision } from "../../studio/story/useStoryRevision";
@@ -66,6 +67,7 @@ export function StoryStep({ config, update }: StepProps) {
     undoable,
     redoable,
     translate,
+    confirmWithoutRewrite,
     confirmLanguageWithoutTranslate,
     undo,
     redo,
@@ -134,11 +136,13 @@ export function StoryStep({ config, update }: StepProps) {
     config.readingModeId,
     config.contentLocale,
   );
+  const originAge = brief.generatedForAge ?? (hasStory ? "0-2" : undefined);
   const ageChanged =
-    hasStory && Boolean(brief.generatedForAge) && brief.generatedForAge !== config.ageRangeId;
+    hasStory && Boolean(originAge) && originAge !== config.ageRangeId;
   const originLocale: BookLanguageId = (brief.generatedForLocale as BookLanguageId) ?? "en-US";
   const currentLocale: BookLanguageId = (config.contentLocale as BookLanguageId) ?? "en-US";
   const languageChanged = hasStory && originLocale !== currentLocale;
+  const needsAdaptation = languageChanged || ageChanged;
 
   const originLang = getBookLanguage(originLocale);
   const targetLang = getBookLanguage(currentLocale);
@@ -181,6 +185,18 @@ export function StoryStep({ config, update }: StepProps) {
         <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
           {hasStory && (
             <div className="space-y-3 shrink-0 lg:w-90">
+              <StoryAdaptCard
+                languageChanged={languageChanged}
+                ageChanged={ageChanged}
+                originLocale={originLocale}
+                currentLocale={currentLocale}
+                originAge={originAge}
+                targetAge={config.ageRangeId}
+                translating={translating}
+                writing={writing}
+                onConfirm={confirmWithoutRewrite}
+                onAdapt={() => translate(originLocale, currentLocale)}
+              />
               <StoryRefinePanel
                 revision={revisionFlow.revision}
                 starting={revisionFlow.starting}
@@ -289,54 +305,19 @@ export function StoryStep({ config, update }: StepProps) {
               />
             )}
 
-            {/* Interactive Language Transfer Card */}
-            {languageChanged && (
-              <motion.div
-                variants={fadeRise}
-                initial="hidden"
-                animate="show"
-                className="relative overflow-hidden rounded-3xl border border-brand-200 bg-linear-to-br from-brand-50/90 via-white to-sky-50/50 p-4 shadow-soft ring-1 ring-brand-200/60"
-              >
-                <div className="space-y-3">
-                  <div className="flex items-start gap-2.5">
-                    <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white text-lg shadow-2xs ring-1 ring-brand-200">
-                      <Languages className="size-4.5 text-brand-600" />
-                    </div>
-                    <div className="min-w-0">
-                      <h3 className="font-display text-xs font-bold text-ink-900">
-                        Translate to {targetLang.endonym}?
-                      </h3>
-                      <p className="mt-0.5 text-[11px] leading-relaxed text-ink-600">
-                        Story words are in <strong>{originLang.englishName}</strong> while book is set to <strong>{targetLang.englishName}</strong>.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={confirmLanguageWithoutTranslate}
-                      disabled={translating || writing}
-                      className="text-xs"
-                    >
-                      Keep current text
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="magic"
-                      leftIcon={<Sparkles className="size-3" />}
-                      loading={translating}
-                      disabled={translating || writing}
-                      onClick={() => translate(originLocale, currentLocale)}
-                      className="text-xs"
-                    >
-                      Translate with AI
-                    </Button>
-                  </div>
-                </div>
-              </motion.div>
-            )}
+            {/* Interactive Adaptation / Translation Transfer Card */}
+            <StoryAdaptCard
+              languageChanged={languageChanged}
+              ageChanged={ageChanged}
+              originLocale={originLocale}
+              currentLocale={currentLocale}
+              originAge={originAge}
+              targetAge={config.ageRangeId}
+              translating={translating}
+              writing={writing}
+              onConfirm={confirmWithoutRewrite}
+              onAdapt={() => translate(originLocale, currentLocale)}
+            />
 
             {/* Undo / Redo Toast */}
             {(undoable || redoable) && (
@@ -371,14 +352,12 @@ export function StoryStep({ config, update }: StepProps) {
               </div>
             )}
 
-            {/* Age Changed Notice */}
-            {!languageChanged && (stale || ageChanged) && (
+            {/* Composer Details Changed Notice (when parameters changed but not age/language) */}
+            {!needsAdaptation && stale && (
               <div className="flex items-start gap-2 rounded-2xl bg-amber-50 p-3 text-amber-900 ring-1 ring-amber-100 text-xs">
                 <RefreshCw className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
                 <p className="leading-relaxed">
-                  {ageChanged
-                    ? `Originally written for ${ageBandLabel(brief.generatedForAge!)}; you now have ${ageBandLabel(config.ageRangeId)} selected. You can regenerate or edit.`
-                    : "Details changed since draft was written. Write again to update."}
+                  Details changed since draft was written. Write again to update.
                 </p>
               </div>
             )}
