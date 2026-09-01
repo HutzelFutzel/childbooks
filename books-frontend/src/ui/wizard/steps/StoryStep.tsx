@@ -148,13 +148,18 @@ export function StoryStep({ config, update }: StepProps) {
   // Initial first-time view: 3 mode cards
   if (!chosen) {
     return (
-      <motion.div variants={fadeRise} initial="hidden" animate="show" className="flex h-full min-h-0 flex-col items-center justify-center p-4">
-        <div className="w-full max-w-2xl space-y-6">
+      <motion.div
+        variants={fadeRise}
+        initial="hidden"
+        animate="show"
+        className="flex h-full min-h-0 flex-col items-center justify-center overflow-y-auto p-4"
+      >
+        <div className="my-auto w-full max-w-4xl space-y-7 py-4">
           <div className="text-center">
             <h2 className="font-display text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">
               How would you like to create your story?
             </h2>
-            <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-ink-500">
+            <p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-ink-500">
               Whichever path you choose, you&apos;ll be able to read and edit every word — perfectly pitched for {ageBandLabel(config.ageRangeId)}.
             </p>
           </div>
