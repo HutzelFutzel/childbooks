@@ -169,8 +169,8 @@ export function registerAiRoutes(app: Express): void {
     try {
       const { project, sourceLocale, targetLocale } = req.body as {
         project: Project;
-        sourceLocale?: string;
-        targetLocale?: string;
+        sourceLocale?: BookConfig["contentLocale"];
+        targetLocale?: BookConfig["contentLocale"];
       };
       const story = project.config.storyText?.trim() ?? "";
       if (story.length < 5) {

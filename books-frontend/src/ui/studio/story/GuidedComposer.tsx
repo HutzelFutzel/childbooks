@@ -13,8 +13,7 @@ import { HERO_NAME_KEY, useStoryDraft } from "./useStoryDraft";
 
 /**
  * "Write it for me": a name, an optional theme, an optional device — then a
- * complete story. Everything here is one screen on purpose; the whole promise
- * of this mode is that it's over in under a minute.
+ * complete story. Optimized with space-awareness for sidebar workbenches.
  */
 export function GuidedComposer({
   brief,
@@ -48,7 +47,7 @@ export function GuidedComposer({
   const canWrite = Boolean(heroes.length > 0 && models && !writing);
 
   return (
-    <section className="relative overflow-hidden rounded-3xl bg-aurora p-6 shadow-soft ring-1 ring-magic-300/40 sm:p-7">
+    <section className="relative overflow-hidden rounded-2xl bg-aurora p-4 shadow-soft ring-1 ring-magic-300/40 sm:p-5">
       <div
         aria-hidden
         className="pointer-events-none absolute -right-10 -top-12 h-40 w-40 rounded-full bg-magic-300/30 blur-3xl"
@@ -58,40 +57,36 @@ export function GuidedComposer({
         className="pointer-events-none absolute -bottom-16 -left-8 h-36 w-36 rounded-full bg-brand-200/35 blur-3xl"
       />
 
-      <div className="relative space-y-6">
-        <div className="flex items-start gap-3">
-          <span className="flex size-11 shrink-0 items-center justify-center rounded-2xl bg-magic-500 text-white shadow-soft">
-            <Wand2 className="size-5" />
+      <div className="relative space-y-4">
+        <div className="flex items-center gap-2.5">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-magic-500 text-white shadow-soft">
+            <Wand2 className="size-4.5" />
           </span>
-          <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-magic-700">
+          <div className="min-w-0 flex-1">
+            <p className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-magic-700">
               Write it for me
             </p>
-            <h2 className="mt-1 font-display text-2xl font-bold tracking-tight text-ink-900">
+            <h2 className="font-display text-base font-bold tracking-tight text-ink-900">
               Start with a little magic
             </h2>
-            <p className="mt-1.5 max-w-lg text-sm leading-relaxed text-ink-500">
-              Tell us who the book is for and pick a direction — we&apos;ll write the whole story,
-              already pitched at the age you chose.
-            </p>
           </div>
         </div>
 
         <label className="block">
-          <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-ink-500">
+          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
             Who is the book for?
           </span>
-          <div className="sm:max-w-96">
+          <div className="w-full">
             <HeroNamesInput
               names={heroes}
               onChange={(heroNames) => onChange({ heroNames })}
-              placeholder="e.g. Mila — press Enter to add another"
+              placeholder="e.g. Mila — press Enter to add"
             />
           </div>
-          <span className="mt-1.5 block text-xs text-ink-400">
+          <span className="mt-1 block text-[11px] text-ink-400">
             {heroes.length > 1
-              ? "They'll be the heroes, together. We'll invent everyone else around them."
-              : "Add one name, or a few — press Enter after each. They'll be the hero. We'll invent everyone else around them."}
+              ? "They'll be the heroes, together."
+              : "They'll be the hero of the story."}
           </span>
         </label>
 
@@ -110,46 +105,50 @@ export function GuidedComposer({
         <OptionChips
           label="How should it be told?"
           optional
-          hint="the storytelling style"
+          hint="style"
           options={craft.devices}
           selectedId={brief.deviceId}
           custom={brief.customDevice}
           onChange={({ id, custom }) =>
             onChange({ deviceId: id, ...(custom !== undefined ? { customDevice: custom } : {}) })
           }
-          customPlaceholder="e.g. told entirely as a bedtime lullaby"
+          customPlaceholder="e.g. bedtime lullaby rhythm"
         />
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-ink-100/60">
           <Button
             disabled={!canWrite && !writing}
             loading={writing}
             variant="magic"
-            leftIcon={!writing ? (hasStory ? <RotateCcw className="size-4" /> : <Wand2 className="size-4" />) : undefined}
+            size="sm"
+            leftIcon={!writing ? (hasStory ? <RotateCcw className="size-3.5" /> : <Wand2 className="size-3.5" />) : undefined}
             onClick={() => void write(brief)}
+            className="h-8.5 text-xs shadow-soft"
           >
-            {writing ? "Writing your story…" : hasStory ? "Write it again" : "Write my story"}
+            {writing ? "Writing your story…" : hasStory ? "Write again" : "Write my story"}
           </Button>
+
           {undoable && !writing && (
-            <Button variant="ghost" size="sm" leftIcon={<Undo2 className="size-4" />} onClick={undo}>
-              Bring back the last one
+            <Button variant="ghost" size="sm" leftIcon={<Undo2 className="size-3.5" />} onClick={undo} className="h-8.5 text-xs px-2.5">
+              Undo
             </Button>
           )}
           {redoable && !writing && (
-            <Button variant="ghost" size="sm" leftIcon={<Redo2 className="size-4" />} onClick={redo}>
+            <Button variant="ghost" size="sm" leftIcon={<Redo2 className="size-3.5" />} onClick={redo} className="h-8.5 text-xs px-2.5">
               Redo
             </Button>
           )}
-          <span className="flex items-center gap-1.5 text-xs text-ink-400">
+
+          <span className="flex items-center gap-1 text-[11px] text-ink-400">
             {writing ? (
               <>
-                <Loader2 className="size-3.5 animate-spin text-magic-500" />
-                Spinning a tale — usually a few seconds…
+                <Loader2 className="size-3 animate-spin text-magic-500" />
+                A few seconds…
               </>
             ) : (
               <>
-                <Sparkles className="size-3.5" />
-                You can edit every word afterwards.
+                <Sparkles className="size-3 text-magic-500" />
+                Edit words anytime
               </>
             )}
           </span>

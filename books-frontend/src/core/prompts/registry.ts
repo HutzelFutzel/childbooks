@@ -134,6 +134,40 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     ],
   },
 
+  // core/pipeline/storyRevision.ts → reviseStory
+  "storyEdit/revise": {
+    system: [
+      blk(
+        "role",
+        "You are a precise children's-book editor. Make only the change the author requests. Preserve the manuscript's voice, tense, point of view, vocabulary level, paragraph rhythm, character personalities, proper names, recurring phrases, and emotional arc everywhere else.",
+      ),
+      blk(
+        "patchContract",
+        "Return a short summary and a list of independent exact replacements. For each replacement, `before` must be copied character-for-character from the current manuscript and must occur exactly once. `after` is the complete replacement text; use an empty `after` only for a requested deletion. Include enough surrounding text in `before` to make it unique, but keep each replacement as small as practical. Replacements must not overlap. Never return a fully rewritten manuscript.",
+      ),
+      blk(
+        "scope",
+        "If a selected passage is supplied, every replacement must stay completely inside that passage. Otherwise, touch only the minimum passages necessary for the request.",
+      ),
+      blk("language", "{{languageInstruction}} Keep the manuscript in its current language."),
+      blk("ageGuidance", "{{ageGuidance}}"),
+      blk(
+        "device",
+        "The manuscript uses this stylistic device: {{deviceGuidance}} Preserve it unless the author explicitly asks to change it.",
+        "hasDevice",
+      ),
+    ],
+    user: [
+      blk("instruction", "AUTHOR'S REQUEST:\n{{instruction}}"),
+      blk(
+        "selection",
+        "EDIT ONLY INSIDE THIS SELECTED PASSAGE:\n---\n{{selectedPassage}}\n---",
+        "hasSelection",
+      ),
+      blk("story", "CURRENT MANUSCRIPT:\n---\n{{currentStory}}\n---"),
+    ],
+  },
+
   // core/pipeline/storyFit.ts → checkStoryFit (the author's own text)
   "storyCheck/ageFit": {
     system: [
@@ -977,6 +1011,35 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           hasTitle: true,
           hasDevice: true,
         },
+      },
+    ],
+  },
+  {
+    actionId: "storyEdit",
+    label: "Story refinement",
+    description:
+      "Makes a surgical author-requested change while preserving the rest of the manuscript and its established voice.",
+    kind: "text",
+    templates: [
+      {
+        key: "storyEdit/revise",
+        label: "Revise story",
+        description:
+          "Returns independent exact replacements that can be reviewed and accepted change by change.",
+        variables: [
+          V("age", "Target age-range label.", "3–5"),
+          V("ageGuidance", "Age-band writing guidance overlay.", AGE_SAMPLE),
+          V(
+            "languageInstruction",
+            "Selected language instruction for the manuscript.",
+            "Write all reader-facing prose in natural German as used in Germany.",
+          ),
+          V("deviceGuidance", "The established stylistic device to preserve.", DEVICE_SAMPLE),
+          V("instruction", "The author's requested change.", "Add a short stanza where they get ready for bed."),
+          V("selectedPassage", "Optional passage that strictly bounds the edit.", "Mila climbed into bed."),
+          V("currentStory", "The immutable manuscript used as the patch base.", "Once upon a time…"),
+        ],
+        sampleFlags: { hasDevice: true, hasSelection: false },
       },
     ],
   },

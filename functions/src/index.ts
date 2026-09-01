@@ -49,6 +49,7 @@ export { cleanupStaleRenders } from "./renders";
 // Chrome over a book's pages. Its own function because it needs a browser's
 // worth of memory and minutes of runtime, neither of which `api` should carry.
 export { runRenderJob } from "./renderJobs";
+export { runStoryRevisionJob } from "./storyRevisionJobs";
 
 // Daily import of Firebase/GCP spend into the finance stream (BigQuery billing
 // export when configured, else a prorated monthly budget).

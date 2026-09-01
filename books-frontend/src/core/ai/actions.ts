@@ -8,6 +8,7 @@ import type { Modality } from "../config/options";
 
 export type TextActionId =
   | "storyDraft" // generateStoryDraft — write the story (guided / co-write modes)
+  | "storyEdit" // reviseStory — surgical author-requested manuscript changes
   | "storyCheck" // checkStoryFit — advisory age-fit read of the author's own text
   | "storyAnalysis" // analyzeStory — extract anchors from the story
   | "anchorDescription" // generateAnchorDescription — suggest one anchor's look
@@ -31,6 +32,7 @@ export interface ActionInfo<Id extends string> {
 
 export const TEXT_ACTIONS: ActionInfo<TextActionId>[] = [
   { id: "storyDraft", label: "Story draft", modality: "text", help: "Writes the story — either from a name + theme (guided) or from the real cast, occasion and place (co-write)." },
+  { id: "storyEdit", label: "Story refinement", modality: "text", help: "Makes a precise requested change while preserving the rest of the manuscript and its voice." },
   { id: "storyCheck", label: "Story age-fit check", modality: "text", help: "Advisory read of a story the author wrote themselves: does it suit the age band they picked?" },
   { id: "storyAnalysis", label: "Story analysis", modality: "text", help: "Extracts the characters, places and objects that must stay consistent." },
   { id: "anchorDescription", label: "Anchor description", modality: "text", help: "Suggests a single character/place/object's visual description." },

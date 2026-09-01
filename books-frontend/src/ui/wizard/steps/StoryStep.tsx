@@ -1,29 +1,57 @@
 "use client";
 
-import { useMemo } from "react";
-import { motion } from "framer-motion";
-import { Languages, Redo2, RefreshCw, Sparkles, Undo2 } from "lucide-react";
+import { useMemo, useState, useEffect } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  BookOpen,
+  Languages,
+  PenLine,
+  Redo2,
+  RefreshCw,
+  Sparkles,
+  Undo2,
+  Users,
+  Wand2,
+} from "lucide-react";
 import type { StoryBrief } from "../../../core/types";
-import { ageBandLabel, type StoryMode } from "../../../core/config/storyCraftCatalog";
-import { getBookLanguage, type BookLanguageId } from "../../../core/config/bookLanguages";
+import {
+  ageBandLabel,
+  storyModeInfo,
+  type StoryMode,
+} from "../../../core/config/storyCraftCatalog";
+import {
+  getBookLanguage,
+  type BookLanguageId,
+} from "../../../core/config/bookLanguages";
 import { resolveStoryCraft } from "../../../core/config/storyCraft";
-import { createDefaultStoryBrief, isDraftStale } from "../../../core/story/brief";
+import {
+  createDefaultStoryBrief,
+  isDraftStale,
+  namedHeroes,
+  wordCount,
+} from "../../../core/story/brief";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { GuidedComposer } from "../../studio/story/GuidedComposer";
 import { CoWriteComposer } from "../../studio/story/CoWriteComposer";
 import { AgeFitCheck } from "../../studio/story/AgeFitCheck";
 import { StoryManuscript } from "../../studio/story/StoryManuscript";
+import { StoryDiffActions, StoryDiffReview } from "../../studio/story/StoryDiffReview";
+import { StoryRefinePanel } from "../../studio/story/StoryRefinePanel";
 import { StoryModePicker } from "../../studio/story/StoryModePicker";
 import { useStoryDraft } from "../../studio/story/useStoryDraft";
+import { useStoryRevision } from "../../studio/story/useStoryRevision";
 import { Button } from "../../components/Button";
-import { fadeRise } from "../../lib/motion";
+import { cn } from "../../lib/cn";
+import { fadeRise, spring } from "../../lib/motion";
 import type { StepProps } from "./types";
 
 /**
- * The Story step. Three ways in — write it for me, write it together, or write
- * it myself — all landing on the same manuscript. The chosen mode and its
- * inputs live on the config (`storyBrief`), so reopening the project a week
- * later still knows how this story came to be and can rewrite it.
+ * The Story step:
+ * 1. Desktop: State-of-the-art 2-column authoring workbench.
+ *    - Left: Focused prompt & craft generator (Guided / Co-write) with micro-stepper.
+ *    - Right: Full-height Manuscript desk with internal scrollable editor.
+ * 2. Mobile/Tablet: Intuitive tabbed switcher between prompt generator & full manuscript view.
+ * 3. Distraction-free mode for author's own story with real-time age & reading guidance.
  */
 export function StoryStep({ config, update }: StepProps) {
   const storyCraft = useAppConfigStore((s) => s.storyCraft);
@@ -42,13 +70,49 @@ export function StoryStep({ config, update }: StepProps) {
     undo,
     redo,
   } = useStoryDraft();
+  const revisionFlow = useStoryRevision();
+  const reviewReady =
+    revisionFlow.revision?.status === "ready" && Boolean(revisionFlow.revision.proposal);
+  const [reviewOpen, setReviewOpen] = useState(true);
+  const reviewing = reviewReady && reviewOpen;
 
   const hasStory = config.storyText.trim().length > 0;
-  // A project written before modes existed keeps its words and is treated as
-  // the author's own — never offer to overwrite text we didn't write.
+  const words = wordCount(config.storyText.trim());
   const brief: StoryBrief =
     config.storyBrief ?? createDefaultStoryBrief(hasStory ? "own" : "guided");
   const chosen = Boolean(config.storyBrief) || hasStory;
+
+  // On mobile (< lg), track active tab: "composer" or "manuscript"
+  const [mobileTab, setMobileTab] = useState<"composer" | "manuscript">(
+    hasStory || brief.mode === "own" ? "manuscript" : "composer"
+  );
+
+  // Auto-switch to manuscript on mobile when generation finishes
+  useEffect(() => {
+    if (hasStory && !writing) {
+      setMobileTab("manuscript");
+    }
+  }, [hasStory, writing]);
+
+  useEffect(() => {
+    if (reviewing) setMobileTab("manuscript");
+  }, [reviewing]);
+
+  useEffect(() => {
+    if (reviewReady) setReviewOpen(true);
+  }, [reviewReady, revisionFlow.revision?.id]);
+
+  const revisionHeaderAction = reviewReady ? (
+    <Button
+      size="sm"
+      variant="ghost"
+      leftIcon={reviewing ? <PenLine className="size-3.5" /> : <Sparkles className="size-3.5" />}
+      onClick={() => setReviewOpen((open) => !open)}
+      className="h-8 text-xs"
+    >
+      {reviewing ? "Continue editing" : "Review changes"}
+    </Button>
+  ) : null;
 
   const patchBrief = (patch: Partial<StoryBrief>) =>
     update({ storyBrief: { ...brief, ...patch } });
@@ -56,6 +120,11 @@ export function StoryStep({ config, update }: StepProps) {
   const setMode = (mode: StoryMode) => {
     if (mode === brief.mode && config.storyBrief) return;
     patchBrief({ mode });
+    if (mode === "own") {
+      setMobileTab("manuscript");
+    } else if (!hasStory) {
+      setMobileTab("composer");
+    }
   };
 
   const stale = isDraftStale(
@@ -74,163 +143,332 @@ export function StoryStep({ config, update }: StepProps) {
   const originLang = getBookLanguage(originLocale);
   const targetLang = getBookLanguage(currentLocale);
 
+  const modeInfo = storyModeInfo(brief.mode);
+
+  // Initial first-time view: 3 mode cards
   if (!chosen) {
     return (
-      <motion.div variants={fadeRise} initial="hidden" animate="show" className="space-y-5">
-        <div className="px-1">
-          <h2 className="font-display text-xl font-bold tracking-tight text-ink-900">
-            How would you like to write it?
-          </h2>
-          <p className="mt-1 max-w-xl text-sm leading-relaxed text-ink-500">
-            However you start, you&apos;ll be able to edit every word — and whichever you pick, the
-            story is written for {ageBandLabel(config.ageRangeId)}.
-          </p>
+      <motion.div variants={fadeRise} initial="hidden" animate="show" className="flex h-full min-h-0 flex-col items-center justify-center p-4">
+        <div className="w-full max-w-2xl space-y-6">
+          <div className="text-center">
+            <h2 className="font-display text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">
+              How would you like to create your story?
+            </h2>
+            <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-ink-500">
+              Whichever path you choose, you&apos;ll be able to read and edit every word — perfectly pitched for {ageBandLabel(config.ageRangeId)}.
+            </p>
+          </div>
+          <StoryModePicker value={brief.mode} onChange={setMode} />
         </div>
-        <StoryModePicker value={brief.mode} onChange={setMode} />
       </motion.div>
     );
   }
 
+  // ---------------------------------------------------------------------------
+  // 1. Author's Own Words Mode (Distraction-Free Full-Screen Desk)
+  // ---------------------------------------------------------------------------
+  if (brief.mode === "own") {
+    return (
+      <div className="flex h-full min-h-0 flex-1 flex-col space-y-3">
+        {/* Compact mode switcher — keep the manuscript's vertical space. */}
+        <div className="flex shrink-0 items-center rounded-2xl bg-white/80 p-2 shadow-2xs ring-1 ring-ink-100 backdrop-blur sm:px-3.5">
+          <div className="flex items-center gap-2">
+            <StoryModePicker value={brief.mode} onChange={setMode} compact />
+          </div>
+        </div>
+
+        {/* Full-Height Manuscript Desk */}
+        <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
+          {hasStory && (
+            <div className="space-y-3 shrink-0 lg:w-90">
+              <StoryRefinePanel
+                revision={revisionFlow.revision}
+                starting={revisionFlow.starting}
+                onStart={revisionFlow.start}
+              />
+              <AgeFitCheck
+                storyText={config.storyText}
+                ageRangeId={config.ageRangeId}
+                craft={craft}
+              />
+            </div>
+          )}
+          <div className="flex min-h-0 flex-1 flex-col">
+            <StoryManuscript
+              storyText={config.storyText}
+              onChange={(storyText) => update({ storyText })}
+              placeholder="Write or paste your story here… Tell an unforgettable tale for your little reader."
+              headerAction={revisionHeaderAction}
+              reviewing={reviewing}
+              reviewContent={
+                reviewing && revisionFlow.revision ? (
+                  <StoryDiffReview
+                    revision={revisionFlow.revision}
+                    currentStory={config.storyText}
+                    onDecide={revisionFlow.decide}
+                  />
+                ) : null
+              }
+              reviewFooter={
+                reviewing && revisionFlow.revision ? (
+                  <StoryDiffActions
+                    revision={revisionFlow.revision}
+                    currentStory={config.storyText}
+                    saving={revisionFlow.saving}
+                    onKeepAll={revisionFlow.keepAll}
+                    onKeepSelected={revisionFlow.keepSelected}
+                    onDiscardAll={revisionFlow.discardAll}
+                  />
+                ) : null
+              }
+            />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // 2. Guided & Co-Write 2-Column Responsive Workspace
+  // ---------------------------------------------------------------------------
   return (
-    <motion.div variants={fadeRise} initial="hidden" animate="show" className="flex flex-col gap-6">
-      <StoryModePicker value={brief.mode} onChange={setMode} compact />
+    <div className="flex h-full min-h-0 flex-1 flex-col">
+      {/* Mobile Tab Switcher (< lg screens) */}
+      <div className="mb-3 flex shrink-0 items-center justify-between gap-2 rounded-2xl bg-white/90 p-1.5 shadow-2xs ring-1 ring-ink-100 lg:hidden">
+        <div className="flex flex-1 items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setMobileTab("composer")}
+            className={cn(
+              "flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-semibold transition",
+              mobileTab === "composer"
+                ? "bg-brand-600 text-white shadow-soft"
+                : "text-ink-600 hover:bg-ink-50"
+            )}
+          >
+            <Wand2 className="size-3.5" />
+            <span>Prompt & Idea</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setMobileTab("manuscript")}
+            className={cn(
+              "flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-semibold transition",
+              mobileTab === "manuscript"
+                ? "bg-brand-600 text-white shadow-soft"
+                : "text-ink-600 hover:bg-ink-50"
+            )}
+          >
+            <BookOpen className="size-3.5" />
+            <span>Manuscript {words > 0 ? `(${words}w)` : ""}</span>
+          </button>
+        </div>
+      </div>
 
-      {brief.mode === "guided" && (
-        <GuidedComposer brief={brief} craft={craft} hasStory={hasStory} onChange={patchBrief} />
-      )}
-      {brief.mode === "co-write" && (
-        <CoWriteComposer brief={brief} craft={craft} hasStory={hasStory} onChange={patchBrief} />
-      )}
+      {/* 2-Column Split Body on Desktop, Tabbed on Mobile */}
+      <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row lg:gap-5">
+        {/* Left Column: Generator Form & Mode Details */}
+        <div
+          className={cn(
+            "flex min-h-0 flex-col space-y-3.5 lg:w-102.5 xl:w-115 lg:shrink-0",
+            mobileTab === "manuscript" ? "hidden lg:flex" : "flex flex-1"
+          )}
+        >
+          {/* Top Bar inside column */}
+          <div className="flex shrink-0 items-center justify-between gap-2 rounded-2xl bg-white/80 p-2 shadow-2xs ring-1 ring-ink-100 backdrop-blur">
+            <StoryModePicker value={brief.mode} onChange={setMode} compact />
+          </div>
 
-      {/* Interactive Language Transfer Card */}
-      {languageChanged && (
-        <div className="relative overflow-hidden rounded-2xl border border-brand-200 bg-linear-to-br from-brand-50/80 via-white to-sky-50/40 p-4 sm:p-5 shadow-soft ring-1 ring-brand-200/60">
-          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-            <div className="flex items-start gap-3">
-              <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-white text-xl shadow-xs ring-1 ring-brand-200">
-                <Languages className="size-5 text-brand-600" />
-              </div>
-              <div className="min-w-0 space-y-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <h3 className="font-display text-sm font-bold text-ink-900">
-                    Translate your story to {targetLang.endonym}?
-                  </h3>
-                  <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-100/70 px-2.5 py-0.5 text-[11px] font-semibold text-brand-800">
-                    <span>{originLang.flag} {originLang.regionShort}</span>
-                    <span className="text-brand-400">➔</span>
-                    <span>{targetLang.flag} {targetLang.regionShort}</span>
-                  </span>
+          {/* Scrollable inputs column */}
+          <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto pr-1 sm:pr-2">
+            {hasStory && (
+              <StoryRefinePanel
+                revision={revisionFlow.revision}
+                starting={revisionFlow.starting}
+                onStart={revisionFlow.start}
+              />
+            )}
+
+            {/* Interactive Language Transfer Card */}
+            {languageChanged && (
+              <motion.div
+                variants={fadeRise}
+                initial="hidden"
+                animate="show"
+                className="relative overflow-hidden rounded-3xl border border-brand-200 bg-linear-to-br from-brand-50/90 via-white to-sky-50/50 p-4 shadow-soft ring-1 ring-brand-200/60"
+              >
+                <div className="space-y-3">
+                  <div className="flex items-start gap-2.5">
+                    <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-white text-lg shadow-2xs ring-1 ring-brand-200">
+                      <Languages className="size-4.5 text-brand-600" />
+                    </div>
+                    <div className="min-w-0">
+                      <h3 className="font-display text-xs font-bold text-ink-900">
+                        Translate to {targetLang.endonym}?
+                      </h3>
+                      <p className="mt-0.5 text-[11px] leading-relaxed text-ink-600">
+                        Story words are in <strong>{originLang.englishName}</strong> while book is set to <strong>{targetLang.englishName}</strong>.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      onClick={confirmLanguageWithoutTranslate}
+                      disabled={translating || writing}
+                      className="text-xs"
+                    >
+                      Keep current text
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="magic"
+                      leftIcon={<Sparkles className="size-3" />}
+                      loading={translating}
+                      disabled={translating || writing}
+                      onClick={() => translate(originLocale, currentLocale)}
+                      className="text-xs"
+                    >
+                      Translate with AI
+                    </Button>
+                  </div>
                 </div>
-                <p className="text-xs leading-relaxed text-ink-600">
-                  Your book is set to <strong>{targetLang.englishName}</strong>, but your story words
-                  are currently in <strong>{originLang.englishName}</strong>. You can adapt them with
-                  AI or keep your current text.
+              </motion.div>
+            )}
+
+            {/* Undo / Redo Toast */}
+            {(undoable || redoable) && (
+              <div className="flex items-center justify-between gap-2 rounded-2xl border border-ink-200 bg-white px-3 py-2 text-xs text-ink-700 shadow-2xs">
+                <span className="truncate">
+                  {undoable ? "Story was rewritten." : "Change was undone."}
+                </span>
+                <div className="flex shrink-0 items-center gap-1.5">
+                  {undoable && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      leftIcon={<Undo2 className="size-3" />}
+                      onClick={undo}
+                      className="h-7 px-2 text-xs"
+                    >
+                      Undo
+                    </Button>
+                  )}
+                  {redoable && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      leftIcon={<Redo2 className="size-3" />}
+                      onClick={redo}
+                      className="h-7 px-2 text-xs"
+                    >
+                      Redo
+                    </Button>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Age Changed Notice */}
+            {!languageChanged && (stale || ageChanged) && (
+              <div className="flex items-start gap-2 rounded-2xl bg-amber-50 p-3 text-amber-900 ring-1 ring-amber-100 text-xs">
+                <RefreshCw className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
+                <p className="leading-relaxed">
+                  {ageChanged
+                    ? `Originally written for ${ageBandLabel(brief.generatedForAge!)}; you now have ${ageBandLabel(config.ageRangeId)} selected. You can regenerate or edit.`
+                    : "Details changed since draft was written. Write again to update."}
                 </p>
               </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2 sm:self-start shrink-0">
-              <Button
-                size="sm"
-                variant="secondary"
-                onClick={confirmLanguageWithoutTranslate}
-                disabled={translating || writing}
-              >
-                Keep current text
-              </Button>
-              <Button
-                size="sm"
-                variant="magic"
-                leftIcon={<Sparkles className="size-3.5" />}
-                loading={translating}
-                disabled={translating || writing}
-                onClick={() => translate(originLocale, currentLocale)}
-              >
-                Translate with AI
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Undo / Redo banner right after translation or regeneration */}
-      {(undoable || redoable) && (
-        <div className="flex items-center justify-between gap-3 rounded-xl border border-ink-200 bg-white px-3.5 py-2.5 text-xs text-ink-700 shadow-2xs">
-          <span>
-            {undoable
-              ? "Story text was updated. You can revert back anytime."
-              : "Story change was undone. You can restore the translated version."}
-          </span>
-          <div className="flex items-center gap-2">
-            {undoable && (
-              <Button
-                size="sm"
-                variant="ghost"
-                leftIcon={<Undo2 className="size-3.5" />}
-                onClick={undo}
-              >
-                Undo change
-              </Button>
             )}
-            {redoable && (
-              <Button
-                size="sm"
-                variant="secondary"
-                leftIcon={<Redo2 className="size-3.5" />}
-                onClick={redo}
-              >
-                Redo translation
-              </Button>
-            )}
-          </div>
-        </div>
-      )}
 
-      {!languageChanged && (stale || ageChanged) && (
-        <div className="flex items-start gap-2.5 rounded-2xl bg-amber-50 px-4 py-3 text-amber-900 ring-1 ring-amber-100">
-          <RefreshCw className="mt-0.5 size-4 shrink-0 text-amber-600" />
-          <p className="text-xs leading-relaxed">
-            {ageChanged ? (
-              <>
-                This story was written for {ageBandLabel(brief.generatedForAge!)}, and you now have{" "}
-                {ageBandLabel(config.ageRangeId)} selected.{" "}
-                {brief.mode === "own"
-                  ? "Check it still reads right, or edit it below."
-                  : "Write it again to match, or edit it below."}
-              </>
+            {/* Main Form Composer */}
+            {hasStory ? (
+              <details className="group rounded-2xl bg-white ring-1 ring-ink-100">
+                <summary className="cursor-pointer list-none px-4 py-3 text-xs font-bold text-ink-600">
+                  Original story details
+                  <span className="ml-1.5 text-ink-400 group-open:hidden">›</span>
+                </summary>
+                <div className="border-t border-ink-100 p-2">
+                  {brief.mode === "guided" && (
+                    <GuidedComposer
+                      brief={brief}
+                      craft={craft}
+                      hasStory={hasStory}
+                      onChange={patchBrief}
+                    />
+                  )}
+                  {brief.mode === "co-write" && (
+                    <CoWriteComposer
+                      brief={brief}
+                      craft={craft}
+                      hasStory={hasStory}
+                      onChange={patchBrief}
+                    />
+                  )}
+                </div>
+              </details>
             ) : (
               <>
-                You&apos;ve changed the details since this draft was written. Write it again to use
-                them, or keep this version and edit it below.
+                {brief.mode === "guided" && (
+                  <GuidedComposer
+                    brief={brief}
+                    craft={craft}
+                    hasStory={hasStory}
+                    onChange={patchBrief}
+                  />
+                )}
+                {brief.mode === "co-write" && (
+                  <CoWriteComposer
+                    brief={brief}
+                    craft={craft}
+                    hasStory={hasStory}
+                    onChange={patchBrief}
+                  />
+                )}
               </>
             )}
-          </p>
+          </div>
         </div>
-      )}
 
-      {brief.mode === "own" && hasStory && (
-        <AgeFitCheck
-          storyText={config.storyText}
-          ageRangeId={config.ageRangeId}
-          craft={craft}
-        />
-      )}
-
-      <StoryManuscript
-        storyText={config.storyText}
-        onChange={(storyText) => update({ storyText })}
-        placeholder={
-          brief.mode === "own"
-            ? "Write or paste your story here…"
-            : "Your story will appear here — or start typing and write it yourself."
-        }
-      />
-
-      {!hasStory && (
-        <p className="px-1 text-center text-xs leading-relaxed text-ink-400">
-          A sentence or two is enough to continue — you can polish every page later.
-        </p>
-      )}
-    </motion.div>
+        {/* Right Column: Full-Height Story Manuscript Desk */}
+        <div
+          className={cn(
+            "flex min-h-0 flex-1 flex-col",
+            mobileTab === "composer" ? "hidden lg:flex" : "flex flex-1"
+          )}
+        >
+          <StoryManuscript
+            storyText={config.storyText}
+            onChange={(storyText) => update({ storyText })}
+            placeholder="Your story will appear here as it's written — or start typing to shape it yourself."
+            headerAction={revisionHeaderAction}
+            reviewing={reviewing}
+            reviewContent={
+              reviewing && revisionFlow.revision ? (
+                <StoryDiffReview
+                  revision={revisionFlow.revision}
+                  currentStory={config.storyText}
+                  onDecide={revisionFlow.decide}
+                />
+              ) : null
+            }
+            reviewFooter={
+              reviewing && revisionFlow.revision ? (
+                <StoryDiffActions
+                  revision={revisionFlow.revision}
+                  currentStory={config.storyText}
+                  saving={revisionFlow.saving}
+                  onKeepAll={revisionFlow.keepAll}
+                  onKeepSelected={revisionFlow.keepSelected}
+                  onDiscardAll={revisionFlow.discardAll}
+                />
+              ) : null
+            }
+          />
+        </div>
+      </div>
+    </div>
   );
 }

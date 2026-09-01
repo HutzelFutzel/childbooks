@@ -174,48 +174,54 @@ export function StoryWorkspace() {
                 <p className="mt-0.5 text-sm text-ink-500">{topic.subtitle}</p>
               )}
             </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
-              <div className="mx-auto w-full max-w-3xl space-y-8">
+            {topic.id === "story" ? (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3 sm:p-4 lg:p-5">
                 {topic.render({ config: cfg, update })}
+              </div>
+            ) : (
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+                <div className="mx-auto w-full max-w-3xl space-y-8">
+                  {topic.render({ config: cfg, update })}
 
-                {/* In-flow action footer right where the user finishes */}
-                <div className="flex flex-col-reverse items-stretch justify-between gap-3 border-t border-ink-100/80 pt-6 sm:flex-row sm:items-center">
-                  <div className="flex items-center gap-2">
-                    {index > 0 ? (
+                  {/* In-flow action footer right where the user finishes */}
+                  <div className="flex flex-col-reverse items-stretch justify-between gap-3 border-t border-ink-100/80 pt-6 sm:flex-row sm:items-center">
+                    <div className="flex items-center gap-2">
+                      {index > 0 ? (
+                        <Button
+                          size="md"
+                          variant="ghost"
+                          leftIcon={<ArrowLeft className="size-4" />}
+                          onClick={() => selectTopic(topics[index - 1]!.id)}
+                        >
+                          Back to {stripTitle(topics[index - 1]!)}
+                        </Button>
+                      ) : !firstRun ? (
+                        <Button
+                          size="md"
+                          variant="ghost"
+                          leftIcon={<ArrowLeft className="size-4" />}
+                          onClick={() => setStep(preferredDesignStep(project))}
+                        >
+                          Back to design
+                        </Button>
+                      ) : null}
+                    </div>
+
+                    <div className="flex items-center justify-end gap-3">
                       <Button
                         size="md"
-                        variant="ghost"
-                        leftIcon={<ArrowLeft className="size-4" />}
-                        onClick={() => selectTopic(topics[index - 1]!.id)}
+                        disabled={primaryDisabled}
+                        rightIcon={<ArrowRight className="size-4" />}
+                        onClick={onPrimary}
+                        className="min-w-44 shadow-soft"
                       >
-                        Back to {stripTitle(topics[index - 1]!)}
+                        {primaryLabel}
                       </Button>
-                    ) : !firstRun ? (
-                      <Button
-                        size="md"
-                        variant="ghost"
-                        leftIcon={<ArrowLeft className="size-4" />}
-                        onClick={() => setStep(preferredDesignStep(project))}
-                      >
-                        Back to design
-                      </Button>
-                    ) : null}
-                  </div>
-
-                  <div className="flex items-center justify-end gap-3">
-                    <Button
-                      size="md"
-                      disabled={primaryDisabled}
-                      rightIcon={<ArrowRight className="size-4" />}
-                      onClick={onPrimary}
-                      className="min-w-44 shadow-soft"
-                    >
-                      {primaryLabel}
-                    </Button>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       </div>

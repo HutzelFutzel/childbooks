@@ -16,6 +16,7 @@ import { resolveAgeLlmGuidance } from "./age";
 import type { PromptContext } from "./context";
 import { resolvePromptsConfig } from "./context";
 import { renderTextPrompt } from "./render";
+import type { StoryRevisionSelection } from "../story/revision";
 
 function craftFromCtx(
   ctx?: Pick<PromptContext, "storyCraft"> | StoryCraftConfig | null,
@@ -179,4 +180,38 @@ export function buildStoryTranslatePrompt(
   });
 
   return { system, user, craft: baseCraft };
+}
+
+/** Build a surgical edit prompt whose output names every exact text replacement. */
+export function buildStoryRevisionPrompt(
+  config: Pick<BookConfig, "ageRangeId" | "readingModeId" | "contentLocale" | "storyBrief">,
+  story: string,
+  instruction: string,
+  selection?: StoryRevisionSelection,
+  ctx?: PromptContext | null,
+): StoryPromptParts {
+  const craft = resolveStoryCraftFor(config.ageRangeId, ctx);
+  const language = getBookLanguage(config.contentLocale);
+  const brief = config.storyBrief;
+  const deviceGuidance = brief
+    ? optionGuidance(craft.devices, brief.deviceId ?? undefined, brief.customDevice)
+    : "";
+
+  const { system, user } = renderTextPrompt(resolvePromptsConfig(ctx), "storyEdit/revise", {
+    vars: {
+      age: ageBandLabel(config.ageRangeId),
+      ageGuidance: resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, ctx),
+      languageInstruction: language.promptInstruction,
+      deviceGuidance,
+      instruction: instruction.trim(),
+      selectedPassage: selection?.text ?? "",
+      currentStory: story,
+    },
+    flags: {
+      hasDevice: Boolean(deviceGuidance),
+      hasSelection: Boolean(selection),
+    },
+  });
+
+  return { system, user, craft };
 }

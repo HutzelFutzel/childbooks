@@ -59,6 +59,7 @@ import { registerAffiliateRoutes } from "./affiliates";
 import { registerAffiliateWebhookRoute } from "./affiliates/webhook";
 import { registerAffiliateAdminRoutes } from "./affiliates/admin";
 import { registerAffiliateApplicationRoutes } from "./affiliates/applications";
+import { registerStoryRevisionRoutes } from "./storyRevisionJobs";
 
 export function createApp(): Express {
   const app = express();
@@ -169,6 +170,7 @@ export function createApp(): Express {
   registerLuluRoutes(app);
   registerPrintSyncAdminRoutes(app);
   registerAiRoutes(app);
+  registerStoryRevisionRoutes(app);
   registerMigrationRoutes(app);
   registerAuthRoutes(app);
   registerAdminRoutes(app);
