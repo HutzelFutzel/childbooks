@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Feather, Plus, Scissors, Sparkles } from "lucide-react";
+import { Check, Feather, Loader2, Plus, Scissors, Sparkles, Wand2 } from "lucide-react";
 import { useProjectsStore } from "../../../state/projectsStore";
 import { getBookLanguage } from "../../../core/config/bookLanguages";
 import { wordCount } from "../../../core/story/brief";
@@ -34,6 +34,8 @@ export interface StoryManuscriptProps {
   reviewing?: boolean;
   reviewContent?: React.ReactNode;
   reviewFooter?: React.ReactNode;
+  writing?: boolean;
+  translating?: boolean;
 }
 
 /**
@@ -53,6 +55,8 @@ export function StoryManuscript({
   reviewing = false,
   reviewContent,
   reviewFooter,
+  writing = false,
+  translating = false,
 }: StoryManuscriptProps) {
   const current = useProjectsStore((s) => s.current());
   const { updateStory, endStoryHistoryGesture } = useStudio();
@@ -100,6 +104,8 @@ export function StoryManuscript({
   const empty = !trimmed;
   const isReady = trimmed.length >= READY_CHARS;
   const readMinutes = Math.max(1, Math.ceil(words / 90));
+  const busy = writing || translating;
+  const busyLabel = translating ? "Translating story…" : "Writing story…";
 
   // Helper to commit beats state and notify parent
   const commitBeats = useCallback(
@@ -327,9 +333,11 @@ export function StoryManuscript({
                   void updateStory({ title: title.trim() });
                 }
               }}
-              readOnly={reviewing}
+              readOnly={reviewing || busy}
               placeholder={
-                language.storyGreeting
+                busy
+                  ? "Writing story title…"
+                  : language.storyGreeting
                   ? `${language.endonym} Story Title…`
                   : "Luna and the Sleepy Moon"
               }
@@ -338,6 +346,12 @@ export function StoryManuscript({
           </label>
           <div className="flex items-center gap-2">
             {headerAction}
+            {busy && (
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-2.5 py-1 text-[11px] font-bold text-brand-700 ring-1 ring-brand-200">
+                <Sparkles className="size-3 animate-spin text-brand-500" />
+                {translating ? "Translating…" : "Writing story…"}
+              </span>
+            )}
             {reviewing && (
               <span className="inline-flex items-center gap-1.5 rounded-full bg-violet-100 px-2.5 py-1 text-[11px] font-bold text-violet-700 ring-1 ring-violet-200">
                 <Sparkles className="size-3" />
@@ -394,15 +408,45 @@ export function StoryManuscript({
         <div className="flex min-h-0 flex-1 overflow-hidden p-1">
           {reviewing ? (
             <div className="min-h-0 flex-1 overflow-hidden">{reviewContent}</div>
+          ) : busy && empty ? (
+            <div className="flex h-full min-h-64 flex-1 flex-col items-center justify-center p-6 text-center">
+              <div className="relative mb-4 flex items-center justify-center">
+                <div className="absolute size-14 rounded-2xl bg-brand-100/50 animate-ping opacity-60" />
+                <div className="flex size-12 items-center justify-center rounded-2xl bg-brand-50 text-brand-600 shadow-soft ring-1 ring-brand-200">
+                  <Wand2 className="size-5 animate-pulse text-brand-600" />
+                </div>
+              </div>
+              <h3 className="font-display text-base font-bold text-ink-900">
+                {translating ? "Translating your story…" : "Writing your story…"}
+              </h3>
+              <p className="mt-1 max-w-xs text-xs leading-relaxed text-ink-500">
+                {translating
+                  ? "Adapting the words and rhythm for your chosen language."
+                  : "Crafting characters, pacing, and words for your child."}
+              </p>
+              <div className="mt-6 w-full max-w-xs space-y-2.5 opacity-60">
+                <div className="h-2.5 w-3/4 mx-auto rounded-full bg-brand-200/60 animate-pulse" />
+                <div className="h-2.5 w-full rounded-full bg-brand-200/60 animate-pulse [animation-delay:150ms]" />
+                <div className="h-2.5 w-5/6 mx-auto rounded-full bg-brand-200/60 animate-pulse [animation-delay:300ms]" />
+              </div>
+            </div>
           ) : (
             <div
               ref={scrollContainerRef}
               onScroll={handleScroll}
               className={cn(
-                "h-full w-full overflow-y-auto scroll-smooth",
+                "relative h-full w-full overflow-y-auto scroll-smooth",
                 beats.length > 1 ? "space-y-4 px-4 py-4 sm:px-7 sm:py-5" : "flex flex-col p-1 sm:p-2",
               )}
             >
+              {busy && !empty && (
+                <div className="sticky top-2 z-20 mb-3 flex items-center justify-center">
+                  <div className="inline-flex items-center gap-2 rounded-full bg-brand-600/90 px-3.5 py-1.5 text-xs font-semibold text-white shadow-lifted backdrop-blur-xs">
+                    <Loader2 className="size-3.5 animate-spin" />
+                    <span>{translating ? "Translating fresh version…" : "Writing fresh version…"}</span>
+                  </div>
+                </div>
+              )}
               {beats.map((beat, index) => (
                 <BeatCard
                   key={beat.id}
@@ -507,7 +551,12 @@ export function StoryManuscript({
                 </>
               )}
 
-              <StatusChip empty={empty} ready={isReady} />
+              <StatusChip
+                empty={empty}
+                ready={isReady}
+                busy={busy}
+                busyLabel={busyLabel}
+              />
             </div>
           </>
         )}
@@ -516,7 +565,25 @@ export function StoryManuscript({
   );
 }
 
-function StatusChip({ empty, ready }: { empty: boolean; ready: boolean }) {
+function StatusChip({
+  empty,
+  ready,
+  busy,
+  busyLabel,
+}: {
+  empty: boolean;
+  ready: boolean;
+  busy?: boolean;
+  busyLabel?: string;
+}) {
+  if (busy) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-2.5 py-1 text-[11px] font-medium text-brand-700 ring-1 ring-brand-100">
+        <Loader2 className="size-3 animate-spin text-brand-600" />
+        {busyLabel ?? "Writing story…"}
+      </span>
+    );
+  }
   if (empty) {
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-ink-400 ring-1 ring-ink-100">

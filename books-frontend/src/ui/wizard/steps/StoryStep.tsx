@@ -212,6 +212,8 @@ export function StoryStep({ config, update }: StepProps) {
               placeholder="Write or paste your story here… Tell an unforgettable tale for your little reader."
               headerAction={revisionHeaderAction}
               reviewing={reviewing}
+              writing={writing}
+              translating={translating}
               reviewContent={
                 reviewing && revisionFlow.revision ? (
                   <StoryDiffReview
@@ -391,6 +393,8 @@ export function StoryStep({ config, update }: StepProps) {
             placeholder="Your story will appear here as it's written — or start typing to shape it yourself."
             headerAction={revisionHeaderAction}
             reviewing={reviewing}
+            writing={writing}
+            translating={translating}
             reviewContent={
               reviewing && revisionFlow.revision ? (
                 <StoryDiffReview
