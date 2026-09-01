@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { storyDraftRemote, storyTranslateRemote } from "../../../platform/aiClient";
 import { useProjectsStore } from "../../../state/projectsStore";
 import type { StoryBrief } from "../../../core/types";
@@ -13,30 +13,17 @@ import {
   storyBriefSignature,
 } from "../../../core/story/brief";
 import { notify } from "../../lib/notify";
+import { useStudio } from "../StudioContext";
 
 /** Session-scoped hand-off from the landing page's "who is it for?" on-ramp. */
 export const HERO_NAME_KEY = "quickStartHeroName";
 
-export interface StoryDraftSnapshot {
-  storyText: string;
-  title?: string;
-  contentLocale?: BookLanguageId;
-  storyBrief?: StoryBrief;
-}
-
 export interface UseStoryDraft {
   writing: boolean;
   translating: boolean;
-  /** The story that was on screen before the last generation/translation, for one-tap undo. */
-  undoable: string | null;
-  /** The story that was undone, for one-tap redo. */
-  redoable: string | null;
   write: (brief: StoryBrief) => Promise<void>;
   translate: (sourceLocale?: BookLanguageId, targetLocale?: BookLanguageId) => Promise<void>;
   confirmWithoutRewrite: () => Promise<void>;
-  confirmLanguageWithoutTranslate: () => Promise<void>;
-  undo: () => void;
-  redo: () => void;
 }
 
 /**
@@ -44,36 +31,32 @@ export interface UseStoryDraft {
  * the story step language-transfer actions.
  */
 export function useStoryDraft(): UseStoryDraft {
-  const updateConfig = useProjectsStore((s) => s.updateConfig);
-  const rename = useProjectsStore((s) => s.renameProject);
+  const { updateStory, endStoryHistoryGesture } = useStudio();
   const [writing, setWriting] = useState(false);
   const [translating, setTranslating] = useState(false);
-  const [undoSnapshot, setUndoSnapshot] = useState<StoryDraftSnapshot | null>(null);
-  const [redoSnapshot, setRedoSnapshot] = useState<StoryDraftSnapshot | null>(null);
+  const writingRef = useRef(false);
+  const translatingRef = useRef(false);
 
   const write = useCallback(
     async (brief: StoryBrief) => {
       const project = useProjectsStore.getState().current();
-      if (!project || writing || translating) return;
+      if (!project || writingRef.current || translatingRef.current) return;
       if (!isBriefReady(brief)) {
         notify.info("Almost there", briefBlockers(brief)[0] ?? "Add a little more first.");
         return;
       }
 
-      const previous = project.config.storyText ?? "";
-      const isFirstDraft = !previous.trim();
-      const previousSnapshot: StoryDraftSnapshot = {
-        storyText: previous,
-        title: project.title,
-        contentLocale: project.config.contentLocale,
-        storyBrief: project.config.storyBrief,
-      };
+      const isFirstDraft = !project.config.storyText.trim();
 
+      writingRef.current = true;
       setWriting(true);
       try {
         const draft = await storyDraftRemote(project, brief);
-        const { ageRangeId, readingModeId, contentLocale } = project.config;
-        await updateConfig({
+        const live = useProjectsStore.getState().current();
+        if (!live || live.id !== project.id) return;
+        const { ageRangeId, readingModeId, contentLocale } = live.config;
+        endStoryHistoryGesture();
+        await updateStory({
           storyText: draft.story,
           storyBrief: {
             ...brief,
@@ -87,12 +70,8 @@ export function useStoryDraft(): UseStoryDraft {
             generatedForAge: ageRangeId,
             generatedForLocale: contentLocale,
           },
+          ...(isFirstDraft && draft.title ? { title: draft.title } : {}),
         });
-        // Only title the book on the first draft — after that the title is the
-        // reader's, and silently overwriting it on every regenerate is theft.
-        if (isFirstDraft && draft.title) await rename(project.id, draft.title);
-        setUndoSnapshot(isFirstDraft ? null : previousSnapshot);
-        setRedoSnapshot(null);
         try {
           sessionStorage.removeItem(HERO_NAME_KEY);
         } catch {
@@ -105,16 +84,17 @@ export function useStoryDraft(): UseStoryDraft {
       } catch (err) {
         notify.error(err);
       } finally {
+        writingRef.current = false;
         setWriting(false);
       }
     },
-    [rename, translating, updateConfig, writing],
+    [endStoryHistoryGesture, updateStory],
   );
 
   const translate = useCallback(
     async (sourceLocale?: BookLanguageId, targetLocale?: BookLanguageId) => {
       const project = useProjectsStore.getState().current();
-      if (!project || writing || translating) return;
+      if (!project || writingRef.current || translatingRef.current) return;
       const story = project.config.storyText?.trim() ?? "";
       if (!story) return;
 
@@ -126,24 +106,21 @@ export function useStoryDraft(): UseStoryDraft {
       const targetLang = getBookLanguage(target);
       const sourceLang = getBookLanguage(source);
 
-      const previousSnapshot: StoryDraftSnapshot = {
-        storyText: project.config.storyText ?? "",
-        title: project.title,
-        contentLocale: (project.config.contentLocale as BookLanguageId) ?? "en-US",
-        storyBrief: project.config.storyBrief,
-      };
-
+      translatingRef.current = true;
       setTranslating(true);
       try {
         const result = await storyTranslateRemote(project, source, target);
-        const { ageRangeId, readingModeId } = project.config;
+        const live = useProjectsStore.getState().current();
+        if (!live || live.id !== project.id) return;
+        const { ageRangeId, readingModeId } = live.config;
         const brief: StoryBrief =
-          project.config.storyBrief ?? createDefaultStoryBrief("own");
+          live.config.storyBrief ?? createDefaultStoryBrief("own");
         const prevAge = brief.generatedForAge ?? (story ? "0-2" : undefined);
         const ageChanged = Boolean(prevAge) && prevAge !== ageRangeId;
         const langChanged = source !== target;
 
-        await updateConfig({
+        endStoryHistoryGesture();
+        await updateStory({
           storyText: result.story,
           contentLocale: target,
           storyBrief: {
@@ -158,10 +135,8 @@ export function useStoryDraft(): UseStoryDraft {
             generatedForAge: ageRangeId,
             generatedForLocale: target,
           },
+          ...(result.title ? { title: result.title } : {}),
         });
-        if (result.title) await rename(project.id, result.title);
-        setUndoSnapshot(previousSnapshot);
-        setRedoSnapshot(null);
 
         if (langChanged && ageChanged) {
           notify.success(
@@ -182,10 +157,11 @@ export function useStoryDraft(): UseStoryDraft {
       } catch (err) {
         notify.error(err);
       } finally {
+        translatingRef.current = false;
         setTranslating(false);
       }
     },
-    [rename, translating, updateConfig, writing],
+    [endStoryHistoryGesture, updateStory],
   );
 
   const confirmWithoutRewrite = useCallback(async () => {
@@ -195,7 +171,8 @@ export function useStoryDraft(): UseStoryDraft {
       project.config.storyBrief ?? createDefaultStoryBrief("own");
     const { ageRangeId, readingModeId } = project.config;
     const currentLocale = (project.config.contentLocale as BookLanguageId) ?? "en-US";
-    await updateConfig({
+    endStoryHistoryGesture();
+    await updateStory({
       contentLocale: currentLocale,
       storyBrief: {
         ...brief,
@@ -213,66 +190,13 @@ export function useStoryDraft(): UseStoryDraft {
       "Story settings confirmed",
       "Kept your current story words with updated settings.",
     );
-  }, [updateConfig]);
-
-  const confirmLanguageWithoutTranslate = confirmWithoutRewrite;
-
-  const undo = useCallback(async () => {
-    if (!undoSnapshot) return;
-    const project = useProjectsStore.getState().current();
-    if (!project) return;
-    const currentSnapshot: StoryDraftSnapshot = {
-      storyText: project.config.storyText ?? "",
-      title: project.title,
-      contentLocale: project.config.contentLocale,
-      storyBrief: project.config.storyBrief,
-    };
-    setRedoSnapshot(currentSnapshot);
-    await updateConfig({
-      storyText: undoSnapshot.storyText,
-      contentLocale: undoSnapshot.contentLocale,
-      storyBrief: undoSnapshot.storyBrief,
-    });
-    if (undoSnapshot.title && undoSnapshot.title !== project.title) {
-      await rename(project.id, undoSnapshot.title);
-    }
-    setUndoSnapshot(null);
-    notify.info("Change undone", "Reverted story to previous version.");
-  }, [rename, undoSnapshot, updateConfig]);
-
-  const redo = useCallback(async () => {
-    if (!redoSnapshot) return;
-    const project = useProjectsStore.getState().current();
-    if (!project) return;
-    const currentSnapshot: StoryDraftSnapshot = {
-      storyText: project.config.storyText ?? "",
-      title: project.title,
-      contentLocale: project.config.contentLocale,
-      storyBrief: project.config.storyBrief,
-    };
-    setUndoSnapshot(currentSnapshot);
-    await updateConfig({
-      storyText: redoSnapshot.storyText,
-      contentLocale: redoSnapshot.contentLocale,
-      storyBrief: redoSnapshot.storyBrief,
-    });
-    if (redoSnapshot.title && redoSnapshot.title !== project.title) {
-      await rename(project.id, redoSnapshot.title);
-    }
-    setRedoSnapshot(null);
-    notify.success("Change restored", "Restored story.");
-  }, [redoSnapshot, rename, updateConfig]);
+  }, [endStoryHistoryGesture, updateStory]);
 
   return {
     writing,
     translating,
-    undoable: undoSnapshot ? undoSnapshot.storyText : null,
-    redoable: redoSnapshot ? redoSnapshot.storyText : null,
     write,
     translate,
     confirmWithoutRewrite,
-    confirmLanguageWithoutTranslate,
-    undo,
-    redo,
   };
 }

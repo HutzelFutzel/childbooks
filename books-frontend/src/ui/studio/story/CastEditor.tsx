@@ -6,6 +6,7 @@ import { newCastMember } from "../../../core/story/brief";
 import { Button } from "../../components/Button";
 import { Input } from "../../components/Input";
 import { cn } from "../../lib/cn";
+import type { StoryHistoryOptions } from "./storyUndo";
 
 /**
  * The real people in the book.
@@ -16,12 +17,15 @@ export function CastEditor({
   onChange,
 }: {
   cast: StoryCastMember[];
-  onChange: (cast: StoryCastMember[]) => void;
+  onChange: (cast: StoryCastMember[], options?: StoryHistoryOptions) => void;
 }) {
   const rows = cast.length > 0 ? cast : [newCastMember()];
 
   const patch = (id: string, next: Partial<StoryCastMember>) =>
-    onChange(rows.map((c) => (c.id === id ? { ...c, ...next } : c)));
+    onChange(
+      rows.map((c) => (c.id === id ? { ...c, ...next } : c)),
+      { coalesce: `story-cast:${id}:${Object.keys(next)[0] ?? "field"}` },
+    );
 
   return (
     <div className="space-y-2">

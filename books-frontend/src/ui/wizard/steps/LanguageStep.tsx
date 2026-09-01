@@ -43,11 +43,11 @@ export function LanguageStep({ config, update }: StepProps) {
     if (!config.contentLocale) {
       if (hasStory) {
         // Existing stories created before language selection always default to en-US
-        update({ contentLocale: "en-US" });
+        update({ contentLocale: "en-US" }, { skipHistory: true });
       } else {
         const countryHint = resolveShipCountry(useShipCountryStore.getState());
         const detected = detectDefaultBookLanguage(policy, countryHint);
-        update({ contentLocale: detected });
+        update({ contentLocale: detected }, { skipHistory: true });
       }
     }
   }, [config.contentLocale, geoCountry, hasStory, policy, update]);
@@ -93,6 +93,7 @@ export function LanguageStep({ config, update }: StepProps) {
       <div className="relative w-full">
         <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-ink-400" />
         <input
+          data-native-undo
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}

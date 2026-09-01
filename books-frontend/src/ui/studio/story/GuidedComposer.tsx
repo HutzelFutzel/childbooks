@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { Loader2, Redo2, RotateCcw, Sparkles, Undo2, Wand2 } from "lucide-react";
+import { Loader2, RotateCcw, Sparkles, Wand2 } from "lucide-react";
 import type { AgeBandStoryCraft } from "../../../core/config/storyCraftCatalog";
 import type { StoryBrief } from "../../../core/types";
 import { namedHeroes } from "../../../core/story/brief";
@@ -9,7 +9,8 @@ import { Button } from "../../components/Button";
 import { useResolvedModels } from "../../hooks/useResolvedModels";
 import { HeroNamesInput } from "./HeroNamesInput";
 import { OptionChips } from "./OptionChips";
-import { HERO_NAME_KEY, useStoryDraft } from "./useStoryDraft";
+import { HERO_NAME_KEY, type UseStoryDraft } from "./useStoryDraft";
+import type { StoryHistoryOptions } from "./storyUndo";
 
 /**
  * "Write it for me": a name, an optional theme, an optional device — then a
@@ -20,14 +21,16 @@ export function GuidedComposer({
   craft,
   hasStory,
   onChange,
+  draft,
 }: {
   brief: StoryBrief;
   craft: AgeBandStoryCraft;
   hasStory: boolean;
-  onChange: (patch: Partial<StoryBrief>) => void;
+  onChange: (patch: Partial<StoryBrief>, options?: StoryHistoryOptions) => void;
+  draft: Pick<UseStoryDraft, "writing" | "write">;
 }) {
   const models = useResolvedModels();
-  const { writing, undoable, redoable, write, undo, redo } = useStoryDraft();
+  const { writing, write } = draft;
   const prefilled = useRef(false);
   const heroes = namedHeroes(brief);
 
@@ -96,8 +99,11 @@ export function GuidedComposer({
           options={craft.themes}
           selectedId={brief.themeId}
           custom={brief.customTheme}
-          onChange={({ id, custom }) =>
-            onChange({ themeId: id, ...(custom !== undefined ? { customTheme: custom } : {}) })
+          onChange={({ id, custom }, options) =>
+            onChange(
+              { themeId: id, ...(custom !== undefined ? { customTheme: custom } : {}) },
+              options,
+            )
           }
           customPlaceholder="e.g. losing a first tooth on holiday"
         />
@@ -109,8 +115,11 @@ export function GuidedComposer({
           options={craft.devices}
           selectedId={brief.deviceId}
           custom={brief.customDevice}
-          onChange={({ id, custom }) =>
-            onChange({ deviceId: id, ...(custom !== undefined ? { customDevice: custom } : {}) })
+          onChange={({ id, custom }, options) =>
+            onChange(
+              { deviceId: id, ...(custom !== undefined ? { customDevice: custom } : {}) },
+              options,
+            )
           }
           customPlaceholder="e.g. bedtime lullaby rhythm"
         />
@@ -127,17 +136,6 @@ export function GuidedComposer({
           >
             {writing ? "Writing your story…" : hasStory ? "Write again" : "Write my story"}
           </Button>
-
-          {undoable && !writing && (
-            <Button variant="ghost" size="sm" leftIcon={<Undo2 className="size-3.5" />} onClick={undo} className="h-8.5 text-xs px-2.5">
-              Undo
-            </Button>
-          )}
-          {redoable && !writing && (
-            <Button variant="ghost" size="sm" leftIcon={<Redo2 className="size-3.5" />} onClick={redo} className="h-8.5 text-xs px-2.5">
-              Redo
-            </Button>
-          )}
 
           <span className="flex items-center gap-1 text-[11px] text-ink-400">
             {writing ? (

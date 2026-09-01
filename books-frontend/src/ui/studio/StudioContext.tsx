@@ -31,7 +31,7 @@ import {
   type TextSpan,
 } from "../../core/types";
 import type { AssetItem } from "../../core/settings";
-import { useProjectsStore } from "../../state/projectsStore";
+import { applyBookTitle, useProjectsStore } from "../../state/projectsStore";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { getCursor } from "../../core/versioning";
 import {
@@ -60,6 +60,14 @@ import {
   takeStudioSnapshot,
   type StudioSnapshot,
 } from "./studioUndo";
+import {
+  patchStorySnapshot,
+  storySnapshotsEqual,
+  takeStorySnapshot,
+  type StoryHistoryOptions,
+  type StorySnapshot,
+  type StorySnapshotPatch,
+} from "./story/storyUndo";
 
 export type { TextEditSection } from "../design/TextEditPanel";
 export type { ImageEditSection } from "../design/ImageEditPanel";
@@ -173,6 +181,17 @@ interface StudioContextValue {
    * mutation starts a fresh undo step.
    */
   endHistoryGesture: () => void;
+
+  // Story authoring history is intentionally separate from Design history.
+  storyUndo: () => void;
+  storyRedo: () => void;
+  canStoryUndo: boolean;
+  canStoryRedo: boolean;
+  updateStory: (
+    patch: StorySnapshotPatch,
+    opts?: StoryHistoryOptions,
+  ) => Promise<void>;
+  endStoryHistoryGesture: () => void;
   addBox: (pageId: string, center?: Point) => void;
   /**
    * Smart Text dock action: on an empty page prefer screenplay story text, then
@@ -320,6 +339,26 @@ interface StudioContextValue {
   styleSetupOpen: boolean;
   openStyleSetup: () => void;
   closeStyleSetup: () => void;
+}
+
+function applyStorySnapshot(project: Project, snapshot: StorySnapshot): Project {
+  const titled =
+    project.title === snapshot.title
+      ? project
+      : applyBookTitle(project, snapshot.title);
+  return {
+    ...titled,
+    config: {
+      ...titled.config,
+      storyText: snapshot.storyText,
+      storyBrief: snapshot.storyBrief
+        ? structuredClone(snapshot.storyBrief)
+        : undefined,
+      contentLocale: snapshot.contentLocale,
+      ageRangeId: snapshot.ageRangeId,
+      readingModeId: snapshot.readingModeId,
+    },
+  };
 }
 
 /** Highest z across all elements on a page (text boxes + shapes + images). */
@@ -496,6 +535,13 @@ export function StudioProvider({
     past: [],
     future: [],
   });
+  const storyHistory = useRef<{ past: StorySnapshot[]; future: StorySnapshot[] }>({
+    past: [],
+    future: [],
+  });
+  const [storyHistoryVersion, setStoryHistoryVersion] = useState(0);
+  const storyCoalesceKey = useRef<string | null>(null);
+  const storyCoalesceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Active coalesce key — see {@link HistoryOpts.coalesce}. */
   const coalesceKey = useRef<string | null>(null);
   const genAbort = useRef<AbortController | null>(null);
@@ -512,7 +558,13 @@ export function StudioProvider({
   // Abort any in-flight generation when the studio unmounts (e.g. the user goes
   // back to the library or switches books), so it can't keep running against a
   // project that's no longer active and spam errors.
-  useEffect(() => () => genAbort.current?.abort(), []);
+  useEffect(
+    () => () => {
+      genAbort.current?.abort();
+      if (storyCoalesceTimer.current) clearTimeout(storyCoalesceTimer.current);
+    },
+    [],
+  );
 
   // Rebuild pages only when layout inputs change — not on every design text patch.
   const pages = useMemo(
@@ -707,6 +759,100 @@ export function StudioProvider({
     if (!box?.role) return;
     syncCoverLinkedField(project.id, box.role, textFromParagraphs(box.paragraphs));
   }, [project.id]);
+
+  const endStoryHistoryGesture = useCallback(() => {
+    storyCoalesceKey.current = null;
+    if (storyCoalesceTimer.current) {
+      clearTimeout(storyCoalesceTimer.current);
+      storyCoalesceTimer.current = null;
+    }
+  }, []);
+
+  const refreshStoryHistoryState = useCallback(() => {
+    setStoryHistoryVersion((version) => version + 1);
+  }, []);
+
+  const updateStory = useCallback(
+    async (patch: StorySnapshotPatch, opts?: StoryHistoryOptions) => {
+      const current = useProjectsStore.getState().current();
+      if (!current) return;
+
+      const before = takeStorySnapshot(current);
+      const after = patchStorySnapshot(before, patch);
+      if (storySnapshotsEqual(before, after)) return;
+
+      const key = opts?.coalesce;
+      const merging =
+        !opts?.skipHistory &&
+        key != null &&
+        key === storyCoalesceKey.current;
+
+      if (!opts?.skipHistory && !merging) {
+        storyHistory.current.past.push(before);
+        if (storyHistory.current.past.length > 80) {
+          storyHistory.current.past.shift();
+        }
+      }
+
+      if (!opts?.skipHistory) {
+        storyHistory.current.future = [];
+      }
+
+      storyCoalesceKey.current =
+        opts?.skipHistory ? null : key ?? null;
+      if (storyCoalesceTimer.current) clearTimeout(storyCoalesceTimer.current);
+      storyCoalesceTimer.current = key
+        ? setTimeout(() => {
+            storyCoalesceKey.current = null;
+            storyCoalesceTimer.current = null;
+          }, 650)
+        : null;
+
+      refreshStoryHistoryState();
+      await useProjectsStore
+        .getState()
+        .patchCurrent((project) => applyStorySnapshot(project, after));
+    },
+    [refreshStoryHistoryState],
+  );
+
+  const storyUndo = useCallback(() => {
+    const current = useProjectsStore.getState().current();
+    const past = storyHistory.current.past;
+    if (!current || past.length === 0) return;
+
+    endStoryHistoryGesture();
+    storyHistory.current.future.push(takeStorySnapshot(current));
+    const snapshot = past.pop()!;
+    refreshStoryHistoryState();
+    void useProjectsStore
+      .getState()
+      .patchCurrent((project) => applyStorySnapshot(project, snapshot))
+      .catch(() => refreshStoryHistoryState());
+  }, [endStoryHistoryGesture, refreshStoryHistoryState]);
+
+  const storyRedo = useCallback(() => {
+    const current = useProjectsStore.getState().current();
+    const future = storyHistory.current.future;
+    if (!current || future.length === 0) return;
+
+    endStoryHistoryGesture();
+    storyHistory.current.past.push(takeStorySnapshot(current));
+    const snapshot = future.pop()!;
+    refreshStoryHistoryState();
+    void useProjectsStore
+      .getState()
+      .patchCurrent((project) => applyStorySnapshot(project, snapshot))
+      .catch(() => refreshStoryHistoryState());
+  }, [endStoryHistoryGesture, refreshStoryHistoryState]);
+
+  const storyHistoryAvailability = useMemo(
+    () => ({
+      canUndo: storyHistory.current.past.length > 0,
+      canRedo: storyHistory.current.future.length > 0,
+    }),
+    [storyHistoryVersion],
+  );
 
   const pushHistory = useCallback((p: Project) => {
     history.current.past.push(takeStudioSnapshot(p));
@@ -1753,6 +1899,12 @@ export function StudioProvider({
             undo,
             redo,
             endHistoryGesture,
+            storyUndo,
+            storyRedo,
+            canStoryUndo: storyHistoryAvailability.canUndo,
+            canStoryRedo: storyHistoryAvailability.canRedo,
+            updateStory,
+            endStoryHistoryGesture,
             addBox,
             addText,
             patchBox,
@@ -1838,6 +1990,11 @@ export function StudioProvider({
       undo,
       redo,
       endHistoryGesture,
+      storyUndo,
+      storyRedo,
+      storyHistoryAvailability,
+      updateStory,
+      endStoryHistoryGesture,
       addBox,
       addText,
       patchBox,

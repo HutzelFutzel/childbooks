@@ -96,6 +96,7 @@ export function StoryRefinePanel({
 
       <div className="mt-3 rounded-2xl bg-ink-50/80 p-2 ring-1 ring-ink-100">
         <textarea
+          data-native-undo
           value={instruction}
           onChange={(event) => setInstruction(event.target.value)}
           onKeyDown={(event) => {

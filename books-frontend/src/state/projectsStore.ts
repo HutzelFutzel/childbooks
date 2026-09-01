@@ -541,7 +541,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
  * front-cover spec title, and the front-cover title text box. The project always
  * keeps a non-empty name, but the cover title may be blank.
  */
-function applyBookTitle(p: Project, rawTitle: string): Project {
+export function applyBookTitle(p: Project, rawTitle: string): Project {
   const clean = rawTitle.trim();
   // The project must keep a name; only overwrite it with a non-empty value.
   let next: Project = clean ? { ...p, title: clean } : p;

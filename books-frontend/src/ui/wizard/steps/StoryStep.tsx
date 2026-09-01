@@ -6,10 +6,8 @@ import {
   BookOpen,
   Languages,
   PenLine,
-  Redo2,
   RefreshCw,
   Sparkles,
-  Undo2,
   Users,
   Wand2,
 } from "lucide-react";
@@ -61,17 +59,13 @@ export function StoryStep({ config, update }: StepProps) {
     [config.ageRangeId, storyCraft],
   );
 
+  const storyDraft = useStoryDraft();
   const {
     translating,
     writing,
-    undoable,
-    redoable,
     translate,
     confirmWithoutRewrite,
-    confirmLanguageWithoutTranslate,
-    undo,
-    redo,
-  } = useStoryDraft();
+  } = storyDraft;
   const revisionFlow = useStoryRevision();
   const reviewReady =
     revisionFlow.revision?.status === "ready" && Boolean(revisionFlow.revision.proposal);
@@ -116,8 +110,10 @@ export function StoryStep({ config, update }: StepProps) {
     </Button>
   ) : null;
 
-  const patchBrief = (patch: Partial<StoryBrief>) =>
-    update({ storyBrief: { ...brief, ...patch } });
+  const patchBrief = (
+    patch: Partial<StoryBrief>,
+    options?: Parameters<StepProps["update"]>[1],
+  ) => update({ storyBrief: { ...brief, ...patch } }, options);
 
   const setMode = (mode: StoryMode) => {
     if (mode === brief.mode && config.storyBrief) return;
@@ -212,7 +208,7 @@ export function StoryStep({ config, update }: StepProps) {
           <div className="flex min-h-0 flex-1 flex-col">
             <StoryManuscript
               storyText={config.storyText}
-              onChange={(storyText) => update({ storyText })}
+              onChange={(storyText, options) => update({ storyText }, options)}
               placeholder="Write or paste your story here… Tell an unforgettable tale for your little reader."
               headerAction={revisionHeaderAction}
               reviewing={reviewing}
@@ -319,39 +315,6 @@ export function StoryStep({ config, update }: StepProps) {
               onAdapt={() => translate(originLocale, currentLocale)}
             />
 
-            {/* Undo / Redo Toast */}
-            {(undoable || redoable) && (
-              <div className="flex items-center justify-between gap-2 rounded-2xl border border-ink-200 bg-white px-3 py-2 text-xs text-ink-700 shadow-2xs">
-                <span className="truncate">
-                  {undoable ? "Story was rewritten." : "Change was undone."}
-                </span>
-                <div className="flex shrink-0 items-center gap-1.5">
-                  {undoable && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      leftIcon={<Undo2 className="size-3" />}
-                      onClick={undo}
-                      className="h-7 px-2 text-xs"
-                    >
-                      Undo
-                    </Button>
-                  )}
-                  {redoable && (
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      leftIcon={<Redo2 className="size-3" />}
-                      onClick={redo}
-                      className="h-7 px-2 text-xs"
-                    >
-                      Redo
-                    </Button>
-                  )}
-                </div>
-              </div>
-            )}
-
             {/* Composer Details Changed Notice (when parameters changed but not age/language) */}
             {!needsAdaptation && stale && (
               <div className="flex items-start gap-2 rounded-2xl bg-amber-50 p-3 text-amber-900 ring-1 ring-amber-100 text-xs">
@@ -376,6 +339,7 @@ export function StoryStep({ config, update }: StepProps) {
                       craft={craft}
                       hasStory={hasStory}
                       onChange={patchBrief}
+                      draft={storyDraft}
                     />
                   )}
                   {brief.mode === "co-write" && (
@@ -384,6 +348,7 @@ export function StoryStep({ config, update }: StepProps) {
                       craft={craft}
                       hasStory={hasStory}
                       onChange={patchBrief}
+                      draft={storyDraft}
                     />
                   )}
                 </div>
@@ -396,6 +361,7 @@ export function StoryStep({ config, update }: StepProps) {
                     craft={craft}
                     hasStory={hasStory}
                     onChange={patchBrief}
+                    draft={storyDraft}
                   />
                 )}
                 {brief.mode === "co-write" && (
@@ -404,6 +370,7 @@ export function StoryStep({ config, update }: StepProps) {
                     craft={craft}
                     hasStory={hasStory}
                     onChange={patchBrief}
+                    draft={storyDraft}
                   />
                 )}
               </>
@@ -420,7 +387,7 @@ export function StoryStep({ config, update }: StepProps) {
         >
           <StoryManuscript
             storyText={config.storyText}
-            onChange={(storyText) => update({ storyText })}
+            onChange={(storyText, options) => update({ storyText }, options)}
             placeholder="Your story will appear here as it's written — or start typing to shape it yourself."
             headerAction={revisionHeaderAction}
             reviewing={reviewing}

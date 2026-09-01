@@ -4,7 +4,15 @@
  * in Design · Cast.
  */
 import { useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, Check, Lock, type LucideIcon } from "lucide-react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  Lock,
+  Redo2,
+  Undo2,
+  type LucideIcon,
+} from "lucide-react";
 import type { BookConfig } from "../../core/types";
 import type { BookLanguageId } from "../../core/config/bookLanguages";
 import { useProjectsStore } from "../../state/projectsStore";
@@ -15,19 +23,41 @@ import { cn } from "../lib/cn";
 import { storyConfigSchema } from "../wizard/schema";
 import { STORY_QUESTIONS } from "../wizard/storyQuestions";
 import type { GuidedQuestion } from "../wizard/GuidedQuestions";
+import type { StoryHistoryOptions, StorySnapshotPatch } from "./story/storyUndo";
 import { useStudio } from "./StudioContext";
 import { preferredDesignStep } from "./studioSteps";
 
 type TopicId = string;
 
 export function StoryWorkspace() {
-  const { project, setStep } = useStudio();
+  const {
+    project,
+    setStep,
+    updateStory,
+    storyUndo,
+    storyRedo,
+    canStoryUndo,
+    canStoryRedo,
+  } = useStudio();
   const config = useProjectsStore((s) => s.current()?.config);
   const updateConfig = useProjectsStore((s) => s.updateConfig);
   const advanceStage = useProjectsStore((s) => s.advanceStage);
 
   const firstRun = project.stage === "setup";
-  const update = (patch: Partial<BookConfig>) => void updateConfig(patch);
+  const update = (
+    patch: Partial<BookConfig>,
+    options?: StoryHistoryOptions,
+  ) => {
+    const storyPatch: StorySnapshotPatch = {};
+    if ("storyText" in patch) storyPatch.storyText = patch.storyText;
+    if ("storyBrief" in patch) storyPatch.storyBrief = patch.storyBrief;
+    if ("contentLocale" in patch) storyPatch.contentLocale = patch.contentLocale;
+    if ("ageRangeId" in patch && patch.ageRangeId != null) {
+      storyPatch.ageRangeId = patch.ageRangeId;
+    }
+    if ("readingModeId" in patch) storyPatch.readingModeId = patch.readingModeId;
+    void updateStory(storyPatch, options);
+  };
   const ready = config ? storyConfigSchema.safeParse(config).success : false;
 
   const topics = useMemo(
@@ -138,6 +168,28 @@ export function StoryWorkspace() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <div className="flex items-center rounded-xl bg-ink-50 p-0.5 ring-1 ring-ink-100">
+            <button
+              type="button"
+              onClick={storyUndo}
+              disabled={!canStoryUndo}
+              title="Undo story change (⌘Z)"
+              aria-label="Undo story change"
+              className="inline-flex size-7 items-center justify-center rounded-lg text-ink-600 transition hover:bg-white disabled:cursor-not-allowed disabled:text-ink-300"
+            >
+              <Undo2 className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={storyRedo}
+              disabled={!canStoryRedo}
+              title="Redo story change (⌘⇧Z)"
+              aria-label="Redo story change"
+              className="inline-flex size-7 items-center justify-center rounded-lg text-ink-600 transition hover:bg-white disabled:cursor-not-allowed disabled:text-ink-300"
+            >
+              <Redo2 className="size-3.5" />
+            </button>
+          </div>
           {!firstRun && (
             <Button
               size="sm"

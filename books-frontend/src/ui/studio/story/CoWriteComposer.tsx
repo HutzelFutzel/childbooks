@@ -9,7 +9,6 @@ import {
   Check,
   RotateCcw,
   Sparkles,
-  Undo2,
   Users,
   Wand2,
 } from "lucide-react";
@@ -23,7 +22,8 @@ import { cn } from "../../lib/cn";
 import { fadeRise } from "../../lib/motion";
 import { CastEditor } from "./CastEditor";
 import { OptionChips } from "./OptionChips";
-import { useStoryDraft } from "./useStoryDraft";
+import type { UseStoryDraft } from "./useStoryDraft";
+import type { StoryHistoryOptions } from "./storyUndo";
 
 const CO_WRITE_STEPS = [
   { id: "cast", label: "The Cast", subtitle: "Heroes & family", icon: Users },
@@ -41,15 +41,17 @@ export function CoWriteComposer({
   craft,
   hasStory,
   onChange,
+  draft,
 }: {
   brief: StoryBrief;
   craft: AgeBandStoryCraft;
   hasStory: boolean;
-  onChange: (patch: Partial<StoryBrief>) => void;
+  onChange: (patch: Partial<StoryBrief>, options?: StoryHistoryOptions) => void;
+  draft: Pick<UseStoryDraft, "writing" | "write">;
 }) {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const models = useResolvedModels();
-  const { writing, undoable, redoable, write, undo, redo } = useStoryDraft();
+  const { writing, write } = draft;
 
   const ready = isBriefReady(brief);
   const blockers = briefBlockers(brief);
@@ -147,7 +149,10 @@ export function CoWriteComposer({
                   Add their names and relationships. The first person is the hero.
                 </p>
               </div>
-              <CastEditor cast={brief.cast ?? []} onChange={(cast) => onChange({ cast })} />
+              <CastEditor
+                cast={brief.cast ?? []}
+                onChange={(cast, options) => onChange({ cast }, options)}
+              />
             </motion.div>
           )}
 
@@ -177,7 +182,12 @@ export function CoWriteComposer({
                   <Textarea
                     rows={2}
                     value={brief.occasion ?? ""}
-                    onChange={(e) => onChange({ occasion: e.target.value })}
+                    onChange={(e) =>
+                      onChange(
+                        { occasion: e.target.value },
+                        { coalesce: "story-brief:occasion" },
+                      )
+                    }
                     placeholder="Amanda and Arthur's first sleepover in the treehouse…"
                     maxLength={1000}
                     aria-label="What happens"
@@ -192,7 +202,12 @@ export function CoWriteComposer({
                     </span>
                     <Input
                       value={brief.when ?? ""}
-                      onChange={(e) => onChange({ when: e.target.value })}
+                      onChange={(e) =>
+                        onChange(
+                          { when: e.target.value },
+                          { coalesce: "story-brief:when" },
+                        )
+                      }
                       placeholder="The last warm evening of the summer"
                       maxLength={200}
                       aria-label="When it happens"
@@ -205,7 +220,12 @@ export function CoWriteComposer({
                     </span>
                     <Input
                       value={brief.where ?? ""}
-                      onChange={(e) => onChange({ where: e.target.value })}
+                      onChange={(e) =>
+                        onChange(
+                          { where: e.target.value },
+                          { coalesce: "story-brief:where" },
+                        )
+                      }
                       placeholder="Grandad's garden, at the bottom of the hill"
                       maxLength={200}
                       aria-label="Where it happens"
@@ -220,7 +240,12 @@ export function CoWriteComposer({
                   </span>
                   <Input
                     value={brief.mustInclude ?? ""}
-                    onChange={(e) => onChange({ mustInclude: e.target.value })}
+                    onChange={(e) =>
+                      onChange(
+                        { mustInclude: e.target.value },
+                        { coalesce: "story-brief:must-include" },
+                      )
+                    }
                     placeholder="Her yellow torch, and the dog that snores"
                     maxLength={300}
                     aria-label="Anything that must be included"
@@ -255,8 +280,11 @@ export function CoWriteComposer({
                 options={craft.devices}
                 selectedId={brief.deviceId}
                 custom={brief.customDevice}
-                onChange={({ id, custom }) =>
-                  onChange({ deviceId: id, ...(custom !== undefined ? { customDevice: custom } : {}) })
+                onChange={({ id, custom }, options) =>
+                  onChange(
+                    { deviceId: id, ...(custom !== undefined ? { customDevice: custom } : {}) },
+                    options,
+                  )
                 }
                 customPlaceholder="e.g. told as a series of letters"
               />
@@ -267,8 +295,11 @@ export function CoWriteComposer({
                 options={craft.themes}
                 selectedId={brief.themeId}
                 custom={brief.customTheme}
-                onChange={({ id, custom }) =>
-                  onChange({ themeId: id, ...(custom !== undefined ? { customTheme: custom } : {}) })
+                onChange={({ id, custom }, options) =>
+                  onChange(
+                    { themeId: id, ...(custom !== undefined ? { customTheme: custom } : {}) },
+                    options,
+                  )
                 }
                 customPlaceholder="e.g. being brave when others sleep"
               />
@@ -317,16 +348,6 @@ export function CoWriteComposer({
               </Button>
             )}
 
-            {undoable && !writing && (
-              <Button variant="ghost" size="sm" leftIcon={<Undo2 className="size-3" />} onClick={undo} className="h-8 text-xs px-2">
-                Undo
-              </Button>
-            )}
-            {redoable && !writing && (
-              <Button variant="ghost" size="sm" leftIcon={<Undo2 className="size-3" />} onClick={redo} className="h-8 text-xs px-2">
-                Redo
-              </Button>
-            )}
           </div>
         </div>
 

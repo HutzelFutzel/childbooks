@@ -13,6 +13,10 @@ function isTypingTarget(el: EventTarget | null): boolean {
   return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable;
 }
 
+function prefersNativeUndo(el: EventTarget | null): boolean {
+  return el instanceof HTMLElement && Boolean(el.closest("[data-native-undo]"));
+}
+
 export function useStudioHotkeys() {
   const studio = useStudio();
   const studioRef = useRef(studio);
@@ -26,12 +30,24 @@ export function useStudioHotkeys() {
       const mod = e.metaKey || e.ctrlKey;
       const key = e.key.toLowerCase();
 
-      // Design undo/redo always wins — including inside inputs / contentEditable
-      // (inline text editing handles ⌘Z itself and stopPropagation's first).
+      // Route undo/redo to the active authoring domain. If Story has no app
+      // history while an input is focused, preserve the browser's native text
+      // undo instead of swallowing the shortcut.
       if (mod && (key === "z" || key === "y")) {
-        e.preventDefault();
-        if (key === "y" || e.shiftKey) s.redo();
-        else s.undo();
+        const wantsRedo = key === "y" || e.shiftKey;
+        if (s.step === "story") {
+          if (prefersNativeUndo(e.target)) return;
+          const available = wantsRedo ? s.canStoryRedo : s.canStoryUndo;
+          if (!available && isTypingTarget(e.target)) return;
+          if (!available) return;
+          e.preventDefault();
+          if (wantsRedo) s.storyRedo();
+          else s.storyUndo();
+        } else {
+          e.preventDefault();
+          if (wantsRedo) s.redo();
+          else s.undo();
+        }
         return;
       }
 

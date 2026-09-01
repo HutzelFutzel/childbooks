@@ -7,6 +7,7 @@ import type { StoryOption } from "../../../core/config/storyCraftCatalog";
 import { Input } from "../../components/Input";
 import { cn } from "../../lib/cn";
 import { spring } from "../../lib/motion";
+import type { StoryHistoryOptions } from "./storyUndo";
 
 export interface OptionChipsProps {
   label: string;
@@ -16,7 +17,10 @@ export interface OptionChipsProps {
   options: StoryOption[];
   selectedId: string | null | undefined;
   custom: string | undefined;
-  onChange: (patch: { id: string | null; custom?: string }) => void;
+  onChange: (
+    patch: { id: string | null; custom?: string },
+    options?: StoryHistoryOptions,
+  ) => void;
   customPlaceholder: string;
 }
 
@@ -105,7 +109,12 @@ export function OptionChips({
         <Input
           ref={customRef}
           value={custom ?? ""}
-          onChange={(e) => onChange({ id: null, custom: e.target.value })}
+          onChange={(e) =>
+            onChange(
+              { id: null, custom: e.target.value },
+              { coalesce: `story-option:${label}` },
+            )
+          }
           placeholder={customPlaceholder}
           maxLength={300}
           aria-label={`${label} — your own`}

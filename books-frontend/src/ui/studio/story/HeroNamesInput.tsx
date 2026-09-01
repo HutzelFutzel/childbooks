@@ -76,6 +76,7 @@ export function HeroNamesInput({
         </span>
       ))}
       <input
+        data-native-undo
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={(e) => {

@@ -17,12 +17,13 @@ import {
   type StoryRevisionWithId,
 } from "../../../platform/storyRevisions";
 import { notify } from "../../lib/notify";
+import { useStudio } from "../StudioContext";
 
 const OPEN_STATUSES = new Set(["pending", "running", "ready", "error"]);
 
 export function useStoryRevision() {
   const project = useProjectsStore((state) => state.current());
-  const updateConfig = useProjectsStore((state) => state.updateConfig);
+  const { updateStory, endStoryHistoryGesture } = useStudio();
   const [revisions, setRevisions] = useState<StoryRevisionWithId[]>([]);
   const [starting, setStarting] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -150,7 +151,9 @@ export function useStoryRevision() {
       if (!revision?.proposal || revision.status !== "ready" || !project) return;
       setSaving(true);
       try {
-        const currentStory = project.config.storyText;
+        const live = useProjectsStore.getState().current();
+        if (!live || live.id !== project.id) return;
+        const currentStory = live.config.storyText;
         const plan = buildStoryMergePlan(
           revision.baseStory,
           currentStory,
@@ -192,7 +195,8 @@ export function useStoryRevision() {
           decisions,
         );
         if (currentStory !== nextStory) {
-          await updateConfig({ storyText: nextStory });
+          endStoryHistoryGesture();
+          await updateStory({ storyText: nextStory });
         }
         await finishStoryRevision(revision.id, "applied", storyTextHash(nextStory));
         notify.success(
@@ -205,7 +209,7 @@ export function useStoryRevision() {
         setSaving(false);
       }
     },
-    [project, revision, updateConfig],
+    [endStoryHistoryGesture, project, revision, updateStory],
   );
 
   return {

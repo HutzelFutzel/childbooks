@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
-import { Check, Feather, Plus, Sparkles } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import { Check, Feather, Plus, Scissors, Sparkles } from "lucide-react";
 import { useProjectsStore } from "../../../state/projectsStore";
 import { getBookLanguage } from "../../../core/config/bookLanguages";
 import { wordCount } from "../../../core/story/brief";
@@ -14,6 +15,8 @@ import { fontStack, loadFont } from "../../typography/fonts";
 import { cn } from "../../lib/cn";
 import { BeatNavigator } from "./BeatNavigator";
 import { BeatCard } from "./BeatCard";
+import { useStudio } from "../StudioContext";
+import type { StoryHistoryOptions } from "./storyUndo";
 
 /** Schema requires ~a sentence; surface readiness in words, not cryptic chars. */
 const READY_CHARS = 20;
@@ -24,7 +27,7 @@ function uid(): string {
 
 export interface StoryManuscriptProps {
   storyText: string;
-  onChange: (text: string) => void;
+  onChange: (text: string, options?: StoryHistoryOptions) => void;
   placeholder?: string;
   className?: string;
   headerAction?: React.ReactNode;
@@ -52,8 +55,8 @@ export function StoryManuscript({
   reviewFooter,
 }: StoryManuscriptProps) {
   const current = useProjectsStore((s) => s.current());
+  const { updateStory, endStoryHistoryGesture } = useStudio();
   const language = getBookLanguage(current?.config.contentLocale);
-  const rename = useProjectsStore((s) => s.renameProject);
   const [title, setTitle] = useState(current?.title ?? "");
 
   // Internal beats state
@@ -90,23 +93,23 @@ export function StoryManuscript({
 
   // Helper to commit beats state and notify parent
   const commitBeats = useCallback(
-    (nextBeats: StoryBeatItem[]) => {
+    (nextBeats: StoryBeatItem[], options?: StoryHistoryOptions) => {
       setBeats(nextBeats);
       const nextSerialized = serializeStoryBeats(nextBeats);
       lastSerializedRef.current = nextSerialized;
-      onChange(nextSerialized);
+      onChange(nextSerialized, options);
     },
     [onChange],
   );
 
   const handleTitleChange = (index: number, nextTitle: string) => {
     const next = beats.map((b, i) => (i === index ? { ...b, title: nextTitle } : b));
-    commitBeats(next);
+    commitBeats(next, { coalesce: `beat-title:${beats[index]?.id ?? index}` });
   };
 
   const handleTextChange = (index: number, nextText: string) => {
     const next = beats.map((b, i) => (i === index ? { ...b, text: nextText } : b));
-    commitBeats(next);
+    commitBeats(next, { coalesce: `beat-text:${beats[index]?.id ?? index}` });
   };
 
   const handleAddBeat = (insertAtIndex?: number) => {
@@ -141,9 +144,101 @@ export function StoryManuscript({
     }, 900);
   };
 
+  const handleSplitBeat = (index: number, splitPosition?: number) => {
+    const target = beats[index];
+    if (!target) return;
+
+    const fullText = target.text;
+    const pos =
+      splitPosition != null
+        ? Math.max(0, Math.min(splitPosition, fullText.length))
+        : Math.floor(fullText.length / 2);
+
+    const beforeText = fullText.slice(0, pos).trimEnd();
+    const afterText = fullText.slice(pos).trimStart();
+
+    const currentUpdated: StoryBeatItem = {
+      ...target,
+      text: beforeText,
+    };
+
+    const newBeat: StoryBeatItem = {
+      id: uid(),
+      title: "",
+      text: afterText,
+    };
+
+    const next = [...beats];
+    next.splice(index, 1, currentUpdated, newBeat);
+    commitBeats(next);
+
+    const nextActiveIndex = index + 1;
+    setActiveBeatIndex(nextActiveIndex);
+    setHighlightedBeatId(newBeat.id);
+
+    // Smooth scroll and focus the newly created beat
+    setTimeout(() => {
+      const el = document.getElementById(`beat-${nextActiveIndex}`);
+      if (el && scrollContainerRef.current) {
+        el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        const textarea = el.querySelector("textarea") as HTMLTextAreaElement | null;
+        if (textarea) {
+          textarea.focus();
+          textarea.setSelectionRange(0, 0);
+        }
+      }
+    }, 60);
+
+    setTimeout(() => {
+      setHighlightedBeatId(null);
+    }, 900);
+  };
+
+  const handleMergeWithNextBeat = (index: number) => {
+    if (index >= beats.length - 1) return;
+
+    const currentBeat = beats[index];
+    const nextBeat = beats[index + 1];
+    if (!currentBeat || !nextBeat) return;
+
+    const currentText = currentBeat.text.trim();
+    const nextText = nextBeat.text.trim();
+    const mergedText =
+      currentText && nextText
+        ? `${currentText}\n\n${nextText}`
+        : currentText || nextText;
+    const mergedTitle = currentBeat.title.trim() || nextBeat.title.trim();
+
+    const mergedBeat: StoryBeatItem = {
+      ...currentBeat,
+      title: mergedTitle,
+      text: mergedText,
+    };
+
+    const next = [...beats];
+    next.splice(index, 2, mergedBeat);
+    commitBeats(next);
+
+    setActiveBeatIndex(index);
+    setHighlightedBeatId(mergedBeat.id);
+
+    setTimeout(() => {
+      const el = document.getElementById(`beat-${index}`);
+      if (el && scrollContainerRef.current) {
+        el.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        const textarea = el.querySelector("textarea") as HTMLTextAreaElement | null;
+        textarea?.focus();
+      }
+    }, 60);
+
+    setTimeout(() => {
+      setHighlightedBeatId(null);
+    }, 900);
+  };
+
   const handleRemoveBeat = (index: number) => {
     const target = beats[index];
-    if (!target || target.text.trim().length > 0) {
+    if (!target || target.text.trim().length > 0 || target.title.trim().length > 0) {
       return; // Only allow removing empty beats per specification
     }
 
@@ -210,12 +305,18 @@ export function StoryManuscript({
               Book title
             </span>
             <input
+              data-native-undo
               lang={language.id}
               dir={language.direction}
               style={{ fontFamily: fontStack("Nunito") }}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              onBlur={() => current && title.trim() && rename(current.id, title)}
+              onBlur={() => {
+                endStoryHistoryGesture();
+                if (current && title.trim() && title.trim() !== current.title) {
+                  void updateStory({ title: title.trim() });
+                }
+              }}
               readOnly={reviewing}
               placeholder={
                 language.storyGreeting
@@ -253,14 +354,25 @@ export function StoryManuscript({
       </div>
 
       {/* Top Beat Navigator - Zero waste: only appears when >= 2 beats and not in review mode */}
-      {!reviewing && (
-        <BeatNavigator
-          beats={beats}
-          activeIndex={activeBeatIndex}
-          onSelectBeat={handleSelectBeat}
-          onAddBeat={() => handleAddBeat()}
-        />
-      )}
+      <AnimatePresence initial={false}>
+        {!reviewing && beats.length >= 2 && (
+          <motion.div
+            key="beat-navigator"
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden"
+          >
+            <BeatNavigator
+              beats={beats}
+              activeIndex={activeBeatIndex}
+              onSelectBeat={handleSelectBeat}
+              onAddBeat={() => handleAddBeat()}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Internal Scrollable Story Manuscript Body */}
       <div className="relative flex min-h-0 flex-1 flex-col bg-linear-to-b from-white via-white to-ink-50/30">
@@ -299,6 +411,12 @@ export function StoryManuscript({
                   onChangeText={(nextText) => handleTextChange(index, nextText)}
                   onRemove={() => handleRemoveBeat(index)}
                   onInsertAfter={() => handleAddBeat(index + 1)}
+                  onSplitAtCursor={(pos) => handleSplitBeat(index, pos)}
+                  onMergeWithNext={
+                    index < beats.length - 1
+                      ? () => handleMergeWithNextBeat(index)
+                      : undefined
+                  }
                 />
               ))}
 
@@ -357,15 +475,26 @@ export function StoryManuscript({
 
             <div className="flex items-center gap-2">
               {beats.length <= 1 && !empty && (
-                <button
-                  type="button"
-                  onClick={() => handleAddBeat()}
-                  className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-ink-600 transition hover:bg-white hover:text-brand-700"
-                  title="Add a new beat to divide your story"
-                >
-                  <Plus className="size-3 text-brand-600" />
-                  <span>Add beat</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => handleSplitBeat(0)}
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-ink-600 transition hover:bg-white hover:text-brand-700"
+                    title="Split story at current cursor position"
+                  >
+                    <Scissors className="size-3 text-brand-600" />
+                    <span>Split at cursor</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleAddBeat()}
+                    className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-ink-600 transition hover:bg-white hover:text-brand-700"
+                    title="Add a new beat to divide your story"
+                  >
+                    <Plus className="size-3 text-brand-600" />
+                    <span>Add beat</span>
+                  </button>
+                </>
               )}
 
               <StatusChip empty={empty} ready={isReady} />
