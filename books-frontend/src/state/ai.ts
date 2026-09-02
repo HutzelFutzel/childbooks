@@ -22,7 +22,7 @@ import {
   currentReferenceUses,
 } from "../core/pipeline/provenance";
 import { effectiveAnchorIds } from "../core/book/anchorRefs";
-import { containersOf, linkedAnchorsFor, relatedAnchorsFor } from "../core/book/anchorGraph";
+import { containedAnchorsFor } from "../core/book/anchorGraph";
 import { spreadsById } from "../core/book/units";
 import { reconcileScreenplaySpreadIds } from "../core/book/screenplayReconcile";
 import { ProviderError } from "../core/errors";
@@ -63,12 +63,6 @@ import { useAppConfigStore } from "./appConfigStore";
 export { anchorThumbBlobId, currentAnchorImage } from "../core/pipeline/provenance";
 export {
   containedAnchorsFor,
-  containersOf,
-  relatedAnchorsFor,
-  linkedAnchorsFor,
-  relationOwner,
-  relationNote,
-  relationSentence,
   orderAnchorsByDependency,
 } from "../core/book/anchorGraph";
 
@@ -108,7 +102,7 @@ export async function analyzeCurrentStory(signal?: AbortSignal): Promise<void> {
   const project = useProjectsStore.getState().current();
   if (!project) throw new Error("No active project.");
 
-  const { summary, anchors, model, relations } = await analyzeStoryRemote(project, signal);
+  const { summary, anchors, model, embeddings } = await analyzeStoryRemote(project, signal);
 
   await useProjectsStore.getState().setAnalysis(
     {
@@ -119,13 +113,13 @@ export async function analyzeCurrentStory(signal?: AbortSignal): Promise<void> {
       sourceStoryText: project.config.storyText,
     },
     anchors,
-    relations,
+    embeddings,
   );
 }
 
 /**
  * Suggest (and store) a visual description for an anchor based on the story
- * (server-side), referencing other anchors so relationships are captured.
+ * (server-side), with other named subjects available for visual consistency.
  */
 export async function suggestAnchorDescription(
   anchorId: string,
@@ -238,38 +232,9 @@ export function currentIllustration(
   return tree ? getCursor(tree).content : null;
 }
 
-function escapeRegExp(s: string): string {
-  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
 /**
- * Best-effort suggestions: other anchors whose exact name appears in this
- * anchor's description/guidance but are NOT yet explicitly linked. Used only to
- * offer one-click linking in the UI — never as an authoritative relation, so it
- * can't silently create the "random" relation/staleness cascades.
- */
-export function suggestLinkedAnchors(anchor: Anchor, all: Anchor[]): Anchor[] {
-  const haystack = `${anchor.description ?? ""} ${anchor.userGuidance ?? ""}`.toLowerCase();
-  if (!haystack.trim()) return [];
-  // Exclude anything already connected in EITHER direction (contains either
-  // way, or relates either way), so a link created from the other anchor isn't
-  // re-suggested here.
-  const linked = new Set([
-    ...(anchor.containedIds ?? []),
-    ...containersOf(anchor, all).map((o) => o.id),
-    ...relatedAnchorsFor(anchor, all).map((o) => o.id),
-  ]);
-  return all.filter((other) => {
-    if (other.id === anchor.id || linked.has(other.id)) return false;
-    const name = other.name?.trim();
-    if (!name || name.length < 3) return false; // skip very short/common names
-    return new RegExp(`\\b${escapeRegExp(name.toLowerCase())}\\b`).test(haystack);
-  });
-}
-
-/**
- * Anchor ids whose generated image used a related anchor that has since changed
- * (different version or edited description), so the user can regenerate them.
+ * Anchor ids whose generated image used an embedded subject that has since
+ * changed, so the user can regenerate them.
  */
 export function staleAnchorIds(project: Project): string[] {
   const anchors = project.anchors ?? [];
@@ -281,21 +246,14 @@ export function staleAnchorIds(project: Project): string[] {
     let isStale = used.some((u) => {
       const r = byId.get(u.anchorId);
       if (!r) return true;
-      // Text-only uses (related anchors, and the anchor's own self-entry —
-      // see `renderAnchor`) don't care about image versions.
+      // The anchor's own self-entry is text-only and has no image version.
       if (!u.textOnly && (r.versions?.cursorId ?? undefined) !== u.versionId) return true;
       if (u.signature !== undefined && u.signature !== anchorSignature(r)) return true;
       return false;
     });
-    // The link SET itself changed since the render (a relation was added or
-    // removed) — the sheet no longer reflects the declared relationships.
-    // Uses the SAME bidirectional definition the renderer records with
-    // (`linkedAnchorsFor`), so an incoming relates edge created from the other
-    // anchor doesn't read as a perpetual mismatch here. The anchor's own
-    // self-entry is excluded from both sides — it's never a "link" — so it
-    // can't manufacture a permanent one-item mismatch.
+    // The embedded-subject set itself changed since the render.
     if (!isStale) {
-      const currentLinks = new Set(linkedAnchorsFor(a, anchors).map((r) => r.id));
+      const currentLinks = new Set(containedAnchorsFor(a, anchors).map((r) => r.id));
       const recorded = new Set(
         used.map((u) => u.anchorId).filter((id) => id !== a.id && byId.has(id)),
       );

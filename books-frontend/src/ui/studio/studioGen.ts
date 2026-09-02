@@ -32,6 +32,7 @@ import { estimateForAction } from "../../core/config/sparks";
 import type { ImageActionId } from "../../core/ai/actions";
 import { currentActionMultiplier } from "../../state/subscriptionStore";
 import { requireImageTier } from "../../state/imageTierPrompt";
+import type { ImageTier } from "../../core/config/modelConfig";
 
 /**
  * Mirror the server's pre-flight Spark check on the client so a batch we can't
@@ -177,6 +178,8 @@ async function waitForAnchorImages(ids: string[], signal?: AbortSignal): Promise
  * queue: enqueue one anchors job (the worker honors the dependency graph), track
  * progress to drive the per-anchor spinners, then wait until results have been
  * folded back into the project. Runs server-side and survives a refresh.
+ * `skipIds` leaves in-progress looks alone so a one-off create doesn't get
+ * re-queued by "create remaining".
  *
  * Returns false when a gate refused the batch before it started — no tier
  * chosen, or not enough Sparks. Both cases already put an explanation on screen,
@@ -187,8 +190,11 @@ export async function generateAllAnchors(
   setGen: SetGen,
   onError: (err: unknown) => void,
   signal?: AbortSignal,
+  skipIds?: ReadonlySet<string>,
 ): Promise<boolean> {
-  const pending = (project.anchors ?? []).filter((a) => a.include && !currentAnchorImage(a));
+  const pending = (project.anchors ?? []).filter(
+    (a) => a.include && !currentAnchorImage(a) && !skipIds?.has(a.id),
+  );
   if (pending.length === 0) return true;
   const tier = await requireImageTier();
   if (!tier) return false;
@@ -293,17 +299,24 @@ export async function generateAllPages(
 export async function refreshSpread(
   project: Project,
   spreadId: string,
-  options: { useReference?: boolean; edit?: string; fromNodeId?: string; restyle?: boolean },
+  options: {
+    useReference?: boolean;
+    edit?: string;
+    fromNodeId?: string;
+    restyle?: boolean;
+    tier?: ImageTier;
+  },
   onError: (err: unknown) => void,
 ): Promise<void> {
   const isCover = spreadId === COVER_FRONT_ID || spreadId === COVER_BACK_ID;
-  const tier = await requireImageTier();
+  const { tier: requestedTier, ...runOptions } = options;
+  const tier = requestedTier ?? (await requireImageTier());
   if (!tier) return;
   if (!ensureBatchAffordable(isCover ? "coverIllustration" : "pageIllustration", 1)) return;
 
   try {
     const models = getResolvedModels(tier);
-    const tasks: RefreshTask[] = [{ id: spreadId, status: "pending", options }];
+    const tasks: RefreshTask[] = [{ id: spreadId, status: "pending", options: runOptions }];
     const jobId = await createRefreshJob(project, models, tasks, tier);
     // Fire-and-forget: fold the result in from the job's OWN task subcollection
     // rather than relying solely on the project-wide collection-group listener,
@@ -328,7 +341,13 @@ export async function refreshSpread(
 export async function generateAnchorViaJob(
   project: Project,
   anchorId: string,
-  options: { useReference?: boolean; edit?: string; fromNodeId?: string; restyle?: boolean },
+  options: {
+    useReference?: boolean;
+    edit?: string;
+    fromNodeId?: string;
+    restyle?: boolean;
+    tier?: ImageTier;
+  },
   onError: (err: unknown) => void,
 ): Promise<void> {
   const anchor = (project.anchors ?? []).find((a) => a.id === anchorId);
@@ -336,7 +355,8 @@ export async function generateAnchorViaJob(
     onError(new Error("Anchor not found."));
     return;
   }
-  const tier = await requireImageTier();
+  const { tier: requestedTier, ...runOptions } = options;
+  const tier = requestedTier ?? (await requireImageTier());
   if (!tier) return;
 
   const missingChildren = containedAnchorsFor(anchor, project.anchors ?? []).filter(
@@ -348,7 +368,7 @@ export async function generateAnchorViaJob(
     const models = getResolvedModels(tier);
     const tasks: AnchorTask[] = [
       ...missingChildren.map<AnchorTask>((c) => ({ id: c.id, status: "pending" })),
-      { id: anchorId, status: "pending", options },
+      { id: anchorId, status: "pending", options: runOptions },
     ];
     const jobId = await createAnchorsJob(project, models, tasks, tier);
     // Fire-and-forget error surfacing: the enqueue returns immediately, so a
@@ -365,7 +385,7 @@ export async function generateAnchorViaJob(
 }
 
 /**
- * Re-render every anchor whose linked references/relations changed since its
+ * Re-render every anchor whose embedded reference changed since its
  * image was generated (dependency-ordered, keeping composition via
  * `useReference`), and WAIT until the results are reconciled into the project.
  * Used as the first step of the "update everything stale" cascade so the page

@@ -221,6 +221,23 @@ export function usePageIllustration(pageId: string) {
     await generate();
   }
 
+  async function upgradeQuality() {
+    if (!genSpread) return;
+    ensureArtFrame();
+    setPageGenerating(pageId, true);
+    try {
+      const latest = useProjectsStore.getState().current() ?? project;
+      await refreshSpread(
+        latest,
+        genSpread.id,
+        { useReference: true, tier: "premium" },
+        (err) => notify.error(err),
+      );
+    } finally {
+      setPageGenerating(pageId, false);
+    }
+  }
+
   async function applyIntentPick(anchorId: string) {
     if (!intentPick) return;
     await generate({
@@ -316,6 +333,7 @@ export function usePageIllustration(pageId: string) {
     generate,
     applyEdit,
     tryAgain,
+    upgradeQuality,
     applyIntentPick,
     updateScene,
     redrawLayout,

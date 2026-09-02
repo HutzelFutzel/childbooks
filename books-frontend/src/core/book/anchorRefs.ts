@@ -49,7 +49,7 @@ function anchorsByName(anchors: Anchor[]): Map<string, Anchor> {
  * matches the fresh analysis result (which only knows the name as it appears
  * in the story text, i.e. the *old* name) instead of being orphaned behind a
  * newly-minted duplicate. When that happens the user's current name and
- * hand-set fields (relationships, creative direction, etc.) win over the
+ * author-set fields (creative direction, age, existing art, etc.) win over the
  * freshly-analyzed ones, since re-analysis should refresh story-derived facts
  * (description/importance) without discarding the user's customization.
  */
@@ -66,30 +66,39 @@ export function reconcileAnchorIds(next: Anchor[], prev: Anchor[]): Anchor[] {
     for (const alias of a.aliasNames ?? []) index(normalizeAnchorName(alias), a);
   }
   const used = new Set<string>();
-  return next.map((a) => {
+  const reconciled = next.map((a) => {
     const candidates = prevByName.get(normalizeAnchorName(a.name)) ?? [];
     const match = candidates.find((c) => !used.has(c.id));
     if (!match) return a;
     used.add(match.id);
+    const keepAuthorAge =
+      match.ageYears !== undefined &&
+      (match.ageSource === "author" || match.ageSource === undefined);
     return {
       ...a,
       id: match.id,
       name: match.name,
       aliasNames: match.aliasNames,
+      source: match.source ?? a.source,
       mode: match.mode,
       include: match.include,
+      description:
+        match.descriptionUserEdited || match.versions ? match.description : a.description,
+      descriptionUserEdited: match.descriptionUserEdited,
+      ageYears: keepAuthorAge ? match.ageYears : a.ageYears,
+      ageSource: keepAuthorAge ? (match.ageSource ?? "author") : a.ageSource,
       userGuidance: match.userGuidance,
       containedIds: match.containedIds,
-      relatedIds: match.relatedIds,
-      relatedNotes: match.relatedNotes,
       versions: a.versions ?? match.versions,
-      // A height the user set in the lineup is customization, not a
-      // story-derived fact, so a fresh analysis must not overwrite it.
-      ...(match.heightUserSet
-        ? { heightCm: match.heightCm, heightUserSet: true }
-        : {}),
     };
   });
+  // Re-reading the story must never erase references the author added by hand.
+  // Legacy unmatched anchors have no source marker, so preserve them too; new
+  // analysis-created anchors are explicitly marked and may safely disappear.
+  const preserved = prev.filter(
+    (a) => !used.has(a.id) && (a.source !== "analysis" || Boolean(a.versions)),
+  );
+  return [...reconciled, ...preserved];
 }
 
 /**

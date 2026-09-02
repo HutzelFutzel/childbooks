@@ -32,7 +32,7 @@ import { classifyModel, FALLBACK_MODELS } from "../../../core/models/catalog";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useSettingsStore } from "../../../state/settingsStore";
 import { Button } from "../../components/Button";
-import { Field, Input } from "../../components/Input";
+import { Field, Input, Textarea } from "../../components/Input";
 import { Select } from "../../components/Select";
 
 const PROVIDER_LABELS: Record<ProviderId, string> = { openai: "OpenAI", google: "Google" };
@@ -242,6 +242,20 @@ export function ModelConfigTab() {
     setDirty(true);
     setDraft((d) => ({ ...d, imageTierLabels: { ...d.imageTierLabels, [tier]: label } }));
   };
+  const setTierUi = (
+    tier: ImageTier,
+    field: "description" | "generatedImageNotice",
+    value: string,
+  ) => {
+    setDirty(true);
+    setDraft((d) => ({
+      ...d,
+      imageTierUi: {
+        ...d.imageTierUi,
+        [tier]: { ...d.imageTierUi[tier], [field]: value },
+      },
+    }));
+  };
   const tierLabel = (tier: ImageTier) =>
     draft.imageTierLabels?.[tier]?.trim() || DEFAULT_IMAGE_TIER_LABELS[tier];
 
@@ -257,6 +271,16 @@ export function ModelConfigTab() {
   const textValues = new Set(textOptions.map((o) => o.value));
   const imageValues = new Set(imageOptions.map((o) => o.value));
 
+  const presentationInvalidCount = IMAGE_TIERS.reduce(
+    (count, tier) =>
+      count +
+      [
+        draft.imageTierLabels[tier],
+        draft.imageTierUi[tier].description,
+        draft.imageTierUi[tier].generatedImageNotice,
+      ].filter((value) => !value.trim()).length,
+    0,
+  );
   const invalidCount =
     TEXT_ACTIONS.filter((a) => {
       const b = draft.textBindings[a.id];
@@ -271,7 +295,8 @@ export function ModelConfigTab() {
           return !b || !imageValues.has(`${b.provider}:${b.speed}`);
         }).length
       );
-    }, 0);
+    }, 0) +
+    presentationInvalidCount;
   const allValid = invalidCount === 0;
 
   const onSave = async () => {
@@ -480,24 +505,42 @@ export function ModelConfigTab() {
         </div>
       </section>
 
-      {/* Stage 3: tier names */}
+      {/* Stage 3: tier presentation */}
       <section className="space-y-3">
         <header>
-          <h3 className="text-sm font-semibold text-ink-800">Stage 3 · Quality tier names</h3>
+          <h3 className="text-sm font-semibold text-ink-800">
+            Stage 3 · Quality tier presentation
+          </h3>
           <p className="text-xs text-ink-500">
-            The labels users see when choosing image quality. Defaults are
-            &ldquo;{DEFAULT_IMAGE_TIER_LABELS.quick}&rdquo; and &ldquo;{DEFAULT_IMAGE_TIER_LABELS.premium}&rdquo;.
+            Single source of truth for tier names, quality-picker descriptions, and notices shown
+            on generated images.
           </p>
         </header>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {IMAGE_TIERS.map((tier) => (
-            <Field key={tier} label={tier === "quick" ? "Faster / cheaper tier" : "Higher-quality tier"}>
-              <Input
-                value={draft.imageTierLabels?.[tier] ?? ""}
-                placeholder={DEFAULT_IMAGE_TIER_LABELS[tier]}
-                onChange={(e) => setTierLabel(tier, e.target.value)}
-              />
-            </Field>
+            <div key={tier} className="space-y-3 rounded-xl bg-ink-50/50 p-4 ring-1 ring-inset ring-ink-100">
+              <Field label={tier === "quick" ? "Faster / cheaper tier name" : "Higher-quality tier name"}>
+                <Input
+                  value={draft.imageTierLabels?.[tier] ?? ""}
+                  placeholder={DEFAULT_IMAGE_TIER_LABELS[tier]}
+                  onChange={(e) => setTierLabel(tier, e.target.value)}
+                />
+              </Field>
+              <Field label="Quality picker description">
+                <Textarea
+                  rows={3}
+                  value={draft.imageTierUi[tier].description}
+                  onChange={(e) => setTierUi(tier, "description", e.target.value)}
+                />
+              </Field>
+              <Field label="Notice on generated images">
+                <Textarea
+                  rows={4}
+                  value={draft.imageTierUi[tier].generatedImageNotice}
+                  onChange={(e) => setTierUi(tier, "generatedImageNotice", e.target.value)}
+                />
+              </Field>
+            </div>
           ))}
         </div>
       </section>
@@ -506,7 +549,7 @@ export function ModelConfigTab() {
         {!allValid && (
           <span className="flex items-center gap-1.5 text-xs font-medium text-amber-700">
             <AlertTriangle className="size-3.5" />
-            {invalidCount} action{invalidCount === 1 ? "" : "s"} need a valid model before saving.
+            {invalidCount} model or presentation {invalidCount === 1 ? "field needs" : "fields need"} attention before saving.
           </span>
         )}
         {dirty && (

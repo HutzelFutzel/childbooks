@@ -413,17 +413,29 @@ export interface IllustrationImage extends AnchorImage {
 export interface Anchor {
   id: string;
   name: string;
+  /** Where this reference originated; legacy projects may omit it. */
+  source?: "analysis" | "user";
   /**
    * Prior name(s) this anchor has been renamed from. Lets a fresh story
    * re-analysis — which only knows the name as it appears in the story text —
    * still match this anchor by an old name and preserve the rename instead of
-   * minting a duplicate and orphaning this one's art/relationships.
+   * minting a duplicate and orphaning this one's art/custom details.
    */
   aliasNames?: string[];
   type: AnchorType;
   /** Description derived from the story analysis (editable). */
   description: string;
+  /** Protect an author-edited description from silent re-analysis overwrite. */
+  descriptionUserEdited?: boolean;
   importance: AnchorImportance;
+  /**
+   * Character-only age in years. This is shown and confirmed in Cast, then
+   * carried into both reference-sheet and page prompts so proportions come
+   * from a fact the author understands rather than a hidden sizing control.
+   */
+  ageYears?: number;
+  /** Why the current age is present, so suggested values remain transparent. */
+  ageSource?: "author" | "story" | "suggested";
   /**
    * Character-only: gross body layout, inferred by the story analysis. Selects
    * the turnaround angles the reference sheet asks for. Undefined on anchors
@@ -431,19 +443,11 @@ export interface Anchor {
    */
   bodyPlan?: BodyPlan;
   /**
-   * Character-only: approximate real-world height in centimetres, inferred at
-   * analysis time and adjustable by the user through the cast lineup. Drives
-   * relative sizing in page illustrations; never shown as a number in the UI.
-   * Undefined when the story gives nothing to infer from — the analysis leaves
-   * it blank rather than guessing.
+   * Character-only internal scale hint inferred during analysis. Never exposed
+   * as a user control; page generation may fall back to age-derived human
+   * proportions when this is absent.
    */
   heightCm?: number;
-  /**
-   * True once the user has adjusted `heightCm` in the cast lineup. Re-analysis
-   * refreshes story-derived heights but must not silently undo a size the user
-   * chose deliberately.
-   */
-  heightUserSet?: boolean;
   /** Whether the system creatively designs it, or the user describes it. */
   mode: AnchorMode;
   /** Optional user creative direction for this specific anchor. */
@@ -457,38 +461,8 @@ export interface Anchor {
    * Undefined/empty means "no contained anchors" (no implicit name matching).
    */
   containedIds?: string[];
-  /**
-   * Anchors this one relates to / resembles for context only (e.g. a sibling to
-   * match traits with). Stored by anchor id — fed in as context but NOT drawn
-   * as separate figures. Undefined/empty means "no relations".
-   */
-  relatedIds?: string[];
-  /**
-   * Optional free-text note per `relatedIds` entry describing HOW the two
-   * relate (e.g. "has lighter hair than him"), keyed by the other anchor's id.
-   * Fed into the prompt alongside the related anchor's own description. A
-   * separate map (not a richer `related` array) so existing `relatedIds`
-   * data needs no migration.
-   */
-  relatedNotes?: Record<string, string>;
   /** Image version history (undefined until first generation). */
   versions?: VersionTree<AnchorImage>;
-}
-
-/**
- * A relationship the story analysis believes exists between two anchors.
- *
- * Held as a *suggestion* rather than written straight onto the anchors: a
- * relation drives generation ordering and staleness cascades, so a wrong edge
- * applied silently causes confusing regenerations later. The user accepts or
- * dismisses it, and either way the suggestion is consumed.
- */
-export interface AnchorRelationSuggestion {
-  fromId: string;
-  toId: string;
-  kind: "contains" | "relates";
-  /** For "relates": the predicate, e.g. "is the father of". */
-  note?: string;
 }
 
 export interface StoryAnalysis {
@@ -501,8 +475,6 @@ export interface StoryAnalysis {
    * when the user has edited the story since the cast was last derived.
    */
   sourceStoryText?: string;
-  /** Pending relationship suggestions, consumed as the user accepts/dismisses. */
-  relations?: AnchorRelationSuggestion[];
 }
 
 /** One unit of the book: a single page or a double-page spread. */

@@ -14,7 +14,12 @@ import { resolveArtStyleText } from "../prompts/style";
 import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderSinglePrompt } from "../prompts/render";
 import type { Anchor, AnchorSheetLayout, ArtStyleSelection } from "../types";
-import { gridShapeText, sheetSpecFor, viewListText } from "./anchorLayout";
+import {
+  ANCHOR_SHEET_SIZE,
+  gridShapeText,
+  sheetSpecFor,
+  viewListText,
+} from "./anchorLayout";
 import { withRetry } from "./retry";
 
 export interface BuildAnchorPromptInput {
@@ -25,18 +30,6 @@ export interface BuildAnchorPromptInput {
    * sheet and matched exactly to their own reference images.
    */
   containedAnchors?: Anchor[];
-  /**
-   * Anchors this one RELATES to / resembles: context only (e.g. family traits),
-   * never drawn as separate figures here.
-   */
-  relatedAnchors?: Anchor[];
-  /**
-   * Optional resolved statement per related anchor id — a full, side-independent
-   * sentence naming both parties (e.g. "Dad has lighter hair than Mom") so the
-   * model knows exactly how the resemblance/connection works from THIS anchor's
-   * point of view, without having to invert the phrasing.
-   */
-  relatedNotes?: Record<string, string>;
   /**
    * Anchors the EDIT TEXT refers to ("make him the same age as Amanda"),
    * detected by the mention resolver — no user tagging required. Injected as
@@ -93,8 +86,6 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
     anchor,
     artStyle,
     containedAnchors = [],
-    relatedAnchors = [],
-    relatedNotes,
     mentionedAnchors = [],
     edit,
     editFromImage = false,
@@ -123,18 +114,6 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
     });
   }
   const listOf = (arr: Anchor[]) => arr.map((r) => `${r.name} (${r.description})`).join("; ");
-  // Related anchors additionally carry the resolved statement on HOW they
-  // relate (a full sentence naming both, e.g. "Dad has lighter hair than Mom")
-  // right alongside the description, so the model doesn't have to invent what
-  // the resemblance means.
-  const listRelated = (arr: Anchor[]) =>
-    arr
-      .map((r) => {
-        const note = relatedNotes?.[r.id]?.trim();
-        return `${r.name} (${r.description}${note ? `; ${note}` : ""})`;
-      })
-      .join("; ");
-
   // Edit-from-image: keep the current image as the source of truth and apply
   // ONLY the requested change. We deliberately omit the full description and
   // style text (both are already baked into the provided image) so they can't
@@ -160,9 +139,8 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
   // A character can't physically "contain" another anchor. Contained subjects
   // are drawn; related subjects are context only (links are user-declared).
   const contained = anchor.type === "character" ? [] : containedAnchors;
-  // Mentioned anchors already covered by an explicit relation would be
-  // duplicated context — only inject the untagged ones.
-  const covered = new Set([...contained, ...relatedAnchors].map((a) => a.id));
+  // Mentioned anchors already embedded in this sheet would be duplicate context.
+  const covered = new Set(contained.map((a) => a.id));
   const mentioned = mentionedAnchors.filter((a) => !covered.has(a.id));
   const spec = sheetSpecFor(anchor);
 
@@ -174,9 +152,9 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
       gridShape: gridShapeText(spec),
       viewList: viewListText(spec),
       description: anchor.description.trim(),
+      age: anchor.ageYears !== undefined ? `${anchor.ageYears} years old` : "",
       userGuidance: anchor.userGuidance?.trim() ?? "",
       containedList: listOf(contained),
-      relatedList: listRelated(relatedAnchors),
       mentionedList: listOf(mentioned),
       artStyle: styleText,
       edit: edit?.trim() ?? "",
@@ -188,8 +166,8 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
       isPlace: anchor.type === "place",
       isObject: anchor.type === "object",
       hasUserGuidance: Boolean(anchor.userGuidance?.trim()),
+      hasAge: anchor.type === "character" && anchor.ageYears !== undefined,
       hasContained: contained.length > 0,
-      hasRelated: relatedAnchors.length > 0,
       hasMentioned: mentioned.length > 0,
       hasStyleRef,
       hasEdit: isEdit,
@@ -226,7 +204,7 @@ export async function generateAnchorImage(
       provider.generateImage(creds, {
         model,
         prompt,
-        size: size ?? "1024x1024",
+        size: size ?? ANCHOR_SHEET_SIZE,
         references,
         signal,
       }),

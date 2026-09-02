@@ -25,6 +25,7 @@ import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
 import { Popover } from "../components/Popover";
 import { useBlobUrl } from "../hooks/useBlobUrl";
+import { FastDraftBadge } from "../components/FastDraftBadge";
 import { cn } from "../lib/cn";
 import { PageStage } from "../design/PageStage";
 import {
@@ -169,6 +170,7 @@ export function PageStagePanel({
       grid={grid}
       showGutter={isSpread}
       printGuides={printGuides}
+      overlay={cursor?.imageTier === "quick" ? <FastDraftBadge /> : undefined}
       selectedId={selectedElementId}
       onSelectElement={(ref) => {
         if (!ref) {

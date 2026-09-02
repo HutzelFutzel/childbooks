@@ -208,7 +208,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     system: [
       blk(
         "role",
-        "You are a children's-book art director. Analyze the story and identify every subject that must look IDENTICAL each time it appears so the illustrations stay consistent. Include recurring CHARACTERS (people, animals, creatures), important PLACES/settings, and significant recurring OBJECTS. Skip one-off background details that never need to match. For each, write a concise but vivid visual description (appearance, colors, distinguishing features) grounded in the story; infer sensible details where the story is silent. Describe only the subject itself — do NOT mention the art style, medium, or rendering technique (that is applied separately). When a subject's appearance is defined by its relationship to another subject (e.g. a sibling, or an object that belongs in a place), reference that other subject by its exact name in the description so the relationship is preserved. Rank importance: high = central/appears often, medium = recurring, low = minor but still needs consistency. For CHARACTERS ONLY, also set two extra fields. \"bodyPlan\" is the character's gross body layout: \"bipedal\" for anyone who stands upright on two legs (people, robots, a bear in a waistcoat, a standing toy), \"quadruped\" for four-legged animals that walk on all fours, \"avian\" for birds, \"aquatic\" for fish and other swimming or serpentine bodies, \"amorphous\" for everything without a clear limbed body (a cloud, a teapot with a face, a blob). \"heightCm\" is the character's approximate real-world standing height in centimetres — use ordinary real proportions for their age and species (a 5-year-old child is about 110, an adult woman about 165, an adult man about 178, a house cat about 25 at the shoulder). OMIT heightCm entirely when the story gives you no basis to judge; a wrong size is worse than none. Leave both fields out for places and objects. Separately, list the RELATIONS between the subjects you identified, referring to them by their exact names — these exist ONLY to make the artwork consistent, never to record the plot's family tree or social roles. Use kind \"contains\" when one place or object physically holds another that you also listed as a subject (a specific bed inside a specific bedroom, a specific lamp on a specific desk) — never for characters, and never nested more than one level deep; look actively for these, since a container drawn without its listed contents already inside it is a continuity error. Use kind \"relates\" when two subjects should be DESIGNED side by side because their APPEARANCES are visually linked: family members who share a visible trait, a pet whose coloring matches its owner's palette, a character and an object they always wear. The \"note\" on a \"relates\" edge must be a VISUAL design instruction completing the sentence \"<from> ... <to>\" — describe the shared trait itself, e.g. \"has the same curly red hair and freckles as\", \"is drawn in a matching blue-and-white palette to\" or \"wears a smaller copy of the same striped scarf as\". NEVER write a note that is only a kinship or social label with no visual content — \"is the father of\", \"is the twin of\" and \"is the mother of\" are all WRONG because they say nothing an illustrator can draw differently; if a family link is the reason two subjects should match, name the resemblance instead (\"has the same rounded nose and green eyes as\", not \"is the mother of\"). Only list relations the story genuinely supports; an empty list is a perfectly good answer. Also write a 1-2 sentence summary of the story's visual world.",
+        "You are a children's-book art director. Analyze the story and identify every subject that must look IDENTICAL each time it appears so the illustrations stay consistent. Include recurring CHARACTERS (people, animals, creatures), important PLACES/settings, and significant recurring OBJECTS. Skip one-off background details that never need to match. For each, write a concise but vivid, self-contained visual description (appearance, colors, distinguishing features) grounded in the story; infer sensible details where the story is silent. Describe only the subject itself — do NOT mention the art style, medium, rendering technique, family tree, or relationship graph. Rank importance: high = central/appears often, medium = recurring, low = minor but still needs consistency. For CHARACTERS ONLY, also set three fields. \"ageYears\" is the character's age in years when stated or strongly implied; omit it rather than guessing when the story gives no reliable basis. \"bodyPlan\" is the character's gross body layout: \"bipedal\" for anyone who stands upright on two legs (people, robots, a bear in a waistcoat, a standing toy), \"quadruped\" for four-legged animals that walk on all fours, \"avian\" for birds, \"aquatic\" for fish and other swimming or serpentine bodies, \"amorphous\" for everything without a clear limbed body (a cloud, a teapot with a face, a blob). \"heightCm\" is a private approximate real-world scale hint based on age and species (a 5-year-old child is about 110, an adult about 170, a house cat about 25 at the shoulder); omit it rather than guessing. Leave all three fields out for places and objects. Separately list only EMBEDDINGS needed for rendering: a named place or object that physically contains another extracted subject which must appear inside its reference sheet (for example a specific lamp on a specific desk). Return each as {container, subject}, never nest more than one level, and use an empty list when none are essential. Also write a 1-2 sentence summary of the story's visual world.",
       ),
       blk(
         "language",
@@ -220,7 +220,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk("ageGuidance", "{{ageGuidance}}"),
       blk(
         "castHints",
-        "\nThe author wrote this story about REAL people and told us who they are. Treat this as ground truth for their names, ages and relationships — prefer it over anything you infer from the prose, and use the ages to get each character's proportions right:\n{{castHints}}",
+        "\nThe author wrote this story about REAL people and told us who they are. Treat this as ground truth for their names and ages — prefer it over anything you infer from the prose, and use the ages to get each character's proportions right:\n{{castHints}}",
         "hasCastHints",
       ),
       blk("story", "\nSTORY:\n{{story}}"),
@@ -424,16 +424,16 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "hasGridRepair",
       ),
       blk("description", "{{description}}"),
+      blk(
+        "characterAge",
+        "{{anchorName}} is {{age}}. Keep face, body proportions and apparent life stage believable for this age and species.",
+        "hasAge",
+      ),
       blk("userGuidance", "{{userGuidance}}", "hasUserGuidance"),
       blk(
         "contained",
         "This {{anchorType}} contains the following, which must look EXACTLY like their reference images (same shape, materials, colors and details): {{containedList}}.",
         "hasContained",
-      ),
-      blk(
-        "related",
-        "Related subjects for resemblance/context only — match the described relationships (e.g. family traits) but do NOT draw them as separate figures in this sheet: {{relatedList}}.",
-        "hasRelated",
       ),
       blk(
         "mentioned",
@@ -1279,9 +1279,9 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
             "(1) the full body from the front, standing straight, arms relaxed at the sides, (2) the full body from a three-quarter front angle (turned about 45 degrees)",
           ),
           V("description", "The anchor's visual description.", "a curious girl with red boots"),
+          V("age", "Character age.", "6 years old"),
           V("userGuidance", "Optional extra user guidance.", "always wearing a green scarf"),
           V("containedList", "Contained anchors (place/object).", "the bed (a wooden bunk bed)"),
-          V("relatedList", "Related anchors (context only).", "her brother Bruno (a small dog)"),
           V("mentionedList", "Anchors the revision text refers to (context only).", "Amanda (a curious girl)"),
           V("legend", "Ordered reference-image legend.", "(1) an art-style reference, (2) Hospital bed (must match this reference exactly)"),
           V("artStyle", "Resolved art-style overlay.", STYLE_SAMPLE),
@@ -1293,8 +1293,8 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           isPlace: false,
           isObject: false,
           hasUserGuidance: false,
+          hasAge: true,
           hasContained: false,
-          hasRelated: false,
           hasMentioned: false,
           hasStyleRef: false,
           hasEdit: false,

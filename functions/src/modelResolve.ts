@@ -25,7 +25,7 @@ export class ServiceUnavailable extends Error {}
 /** The caller didn't state which image quality to render at. */
 export class ImageTierRequired extends Error {
   constructor() {
-    super("Choose an image quality (Fast or High-Quality) before generating.");
+    super("Choose an image quality before generating.");
   }
 }
 

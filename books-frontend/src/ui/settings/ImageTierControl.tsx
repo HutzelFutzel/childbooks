@@ -9,7 +9,6 @@ import {
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { setPreferredImageTier, usePreferredImageTier } from "../../state/imageTier";
 import { useProfileStore } from "../../state/profileStore";
-import { InfoHint } from "../components/InfoHint";
 import { Skeleton } from "../components/Skeleton";
 import { ImageTierPicker } from "./ImageTierPicker";
 
@@ -22,6 +21,9 @@ import { ImageTierPicker } from "./ImageTierPicker";
  */
 export function ImageTierControl() {
   const labels = useAppConfigStore((s) => s.modelConfig.imageTierLabels);
+  const fastNotice = useAppConfigStore(
+    (s) => s.modelConfig.imageTierUi.quick.generatedImageNotice,
+  );
   const tier = usePreferredImageTier();
   const profileLoaded = useProfileStore((s) => s.profileLoaded);
   const [open, setOpen] = useState(false);
@@ -85,11 +87,14 @@ export function ImageTierControl() {
           Fast is the active choice — this is a heads-up about the tier
           they're about to spend Sparks on, not a reason to avoid picking it. */}
       {tier === "quick" && (
-        <InfoHint
-          topic="fastTierConsistency"
-          icon={AlertTriangle}
+        <span
+          role="img"
+          aria-label={fastNotice}
+          title={fastNotice}
           className="absolute -right-1 -top-1 size-3.5 rounded-full bg-white text-amber-500 shadow-sm ring-1 ring-amber-200 hover:text-amber-600"
-        />
+        >
+          <AlertTriangle className="size-3.5" />
+        </span>
       )}
 
       {open && (

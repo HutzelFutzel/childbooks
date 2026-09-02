@@ -1,7 +1,4 @@
-/**
- * Design left accordion: Style → Cast → Pages.
- * Cast / Pages expand to host their filmstrips; Style has no nested list.
- */
+/** Design left accordion: Style → Cast → Pages. Pages expands to its filmstrip. */
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -58,7 +55,6 @@ export function DesignChapterRail({
   pagesDetail,
   busyCast,
   busyPages,
-  castHostRef,
   pagesHostRef,
 }: {
   chapter: DesignChapter;
@@ -72,7 +68,6 @@ export function DesignChapterRail({
   pagesDetail?: string;
   busyCast: boolean;
   busyPages: boolean;
-  castHostRef: (el: HTMLDivElement | null) => void;
   pagesHostRef: (el: HTMLDivElement | null) => void;
 }) {
   const [width, setWidth] = useState(WIDTH_DEFAULT);
@@ -124,7 +119,7 @@ export function DesignChapterRail({
           const busy = meta.id === "cast" ? busyCast : meta.id === "pages" ? busyPages : false;
           const open = chapter === meta.id;
           const Icon = meta.icon;
-          const fills = open && meta.id !== "style";
+          const fills = open && meta.id === "pages";
 
           return (
             <div
@@ -218,17 +213,6 @@ export function DesignChapterRail({
                 </AnimatePresence>
               )}
 
-              {open && meta.id === "cast" && (
-                <motion.div
-                  key="cast-host"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ duration: 0.18 }}
-                  className="min-h-0 flex-1"
-                >
-                  <div ref={castHostRef} className="h-full min-h-0" />
-                </motion.div>
-              )}
               {open && meta.id === "pages" && (
                 <motion.div
                   key="pages-host"

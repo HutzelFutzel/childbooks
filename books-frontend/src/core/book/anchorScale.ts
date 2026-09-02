@@ -16,10 +16,35 @@
 import type { Anchor } from "../types";
 import { standsOnGround } from "../types";
 
+/** Age-derived fallback for upright human-like characters when analysis did not
+ * produce a private scale hint. Deliberately coarse: it exists to prevent a
+ * five-year-old and an adult from arriving at identical reference height, not
+ * to claim medical precision. */
+function ageHeightCm(anchor: Anchor): number | undefined {
+  if (
+    (anchor.bodyPlan !== undefined && anchor.bodyPlan !== "bipedal") ||
+    anchor.ageYears === undefined
+  ) {
+    return undefined;
+  }
+  const age = Math.max(0, Math.min(20, anchor.ageYears));
+  if (age < 1) return 50 + age * 25;
+  if (age < 3) return 75 + (age - 1) * 11;
+  if (age < 12) return 97 + (age - 3) * 5.8;
+  if (age < 18) return 149 + (age - 12) * 3.8;
+  return 172;
+}
+
+function scaleHeight(anchor: Anchor): number | undefined {
+  return typeof anchor.heightCm === "number" && anchor.heightCm > 0
+    ? anchor.heightCm
+    : ageHeightCm(anchor);
+}
+
 /** Characters that can take part in a size comparison. */
 export function scalableCharacters(anchors: Anchor[]): Anchor[] {
   return anchors.filter(
-    (a) => a.type === "character" && typeof a.heightCm === "number" && a.heightCm > 0,
+    (a) => a.type === "character" && scaleHeight(a) !== undefined,
   );
 }
 
@@ -62,19 +87,21 @@ export function relativeHeightsText(anchors: Anchor[]): string {
   const scalable = scalableCharacters(anchors);
   if (scalable.length < 2) return "";
 
-  const sorted = [...scalable].sort((a, b) => (b.heightCm ?? 0) - (a.heightCm ?? 0));
+  const sorted = [...scalable].sort((a, b) => scaleHeight(b)! - scaleHeight(a)!);
   const tallest = sorted[0];
-  const tallestCm = tallest.heightCm!;
+  const tallestCm = scaleHeight(tallest)!;
 
   const clauses = sorted.slice(1).map((a) => {
-    const ratio = Math.max(0, Math.min(1, (a.heightCm ?? 0) / tallestCm));
+    const ratio = Math.max(0, Math.min(1, scaleHeight(a)! / tallestCm));
     const upright = standsOnGround(a.bodyPlan) && standsOnGround(tallest.bodyPlan);
     return upright
       ? `${a.name} ${landmarkFor(ratio)} ${tallest.name}`
       : `${a.name} is ${fractionFor(ratio)} ${tallest.name}`;
   });
 
-  const approx = sorted.map((a) => `${a.name} ${Math.round(a.heightCm!)}cm`).join(", ");
+  const approx = sorted
+    .map((a) => `${a.name} ${Math.round(scaleHeight(a)!)}cm`)
+    .join(", ");
   return `${tallest.name} is the tallest; ${clauses.join("; ")} (approximate real heights: ${approx}).`;
 }
 
@@ -88,11 +115,11 @@ export function heightFractions(anchors: Anchor[]): Map<string, number> {
   const out = new Map<string, number>();
   const scalable = scalableCharacters(anchors);
   if (scalable.length < 2) return out;
-  const tallestCm = Math.max(...scalable.map((a) => a.heightCm!));
+  const tallestCm = Math.max(...scalable.map((a) => scaleHeight(a)!));
   if (tallestCm <= 0) return out;
   let varied = false;
   for (const a of scalable) {
-    const fraction = a.heightCm! / tallestCm;
+    const fraction = scaleHeight(a)! / tallestCm;
     if (fraction < 0.92) varied = true;
     out.set(a.id, fraction);
   }

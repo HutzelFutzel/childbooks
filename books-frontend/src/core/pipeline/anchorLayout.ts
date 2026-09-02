@@ -22,6 +22,9 @@ export interface AnchorSheetSpec extends Omit<AnchorSheetLayout, "width" | "heig
   size: string;
 }
 
+/** Every Cast reference uses one provider-safe landscape canvas. */
+export const ANCHOR_SHEET_SIZE = "1536x1024";
+
 const HEAD_FRONT = "a head-and-shoulders close-up from the front, neutral expression";
 
 /**
@@ -35,7 +38,7 @@ const BIPEDAL: AnchorSheetSpec = {
   rows: 2,
   bodyCell: 0,
   headCell: 4,
-  size: "1536x1024",
+  size: ANCHOR_SHEET_SIZE,
   views: [
     "the full body from the front, standing straight, arms relaxed at the sides",
     "the full body from a three-quarter front angle (turned about 45 degrees)",
@@ -51,7 +54,7 @@ const QUADRUPED: AnchorSheetSpec = {
   rows: 2,
   bodyCell: 0,
   headCell: 3,
-  size: "1024x1024",
+  size: ANCHOR_SHEET_SIZE,
   views: [
     "the whole animal from the side, in profile, standing on all fours",
     "the whole animal from a three-quarter front angle, standing on all fours",
@@ -65,7 +68,7 @@ const AVIAN: AnchorSheetSpec = {
   rows: 2,
   bodyCell: 0,
   headCell: 3,
-  size: "1024x1024",
+  size: ANCHOR_SHEET_SIZE,
   views: [
     "the whole bird perched, seen from the side, in profile",
     "the whole bird perched, seen from a three-quarter front angle",
@@ -79,7 +82,7 @@ const AQUATIC: AnchorSheetSpec = {
   rows: 2,
   bodyCell: 0,
   headCell: 3,
-  size: "1024x1024",
+  size: ANCHOR_SHEET_SIZE,
   views: [
     "the whole body from the side, in profile",
     "the whole body from a three-quarter front angle",
@@ -93,7 +96,7 @@ const AMORPHOUS: AnchorSheetSpec = {
   rows: 2,
   bodyCell: 0,
   headCell: 3,
-  size: "1024x1024",
+  size: ANCHOR_SHEET_SIZE,
   views: [
     "the whole subject from the front",
     "the whole subject from a three-quarter angle",
@@ -106,7 +109,7 @@ const OBJECT: AnchorSheetSpec = {
   columns: 2,
   rows: 2,
   bodyCell: 0,
-  size: "1024x1024",
+  size: ANCHOR_SHEET_SIZE,
   views: [
     "the item from the front",
     "the item from the side",
@@ -116,20 +119,20 @@ const OBJECT: AnchorSheetSpec = {
 };
 
 /**
- * Places get a single column of wide cells: an establishing shot is a landscape
- * composition, so squeezing three of them into a square grid wastes most of the
- * canvas. Only three views — an environment has no canonical turnaround, and
- * asking for more invites the model to invent rooms that don't match.
+ * Places use the same landscape canvas contract as every other Cast reference.
+ * A 2x2 grid gives each environment view enough width while keeping previews,
+ * version thumbnails and provider requests dimensionally consistent.
  */
 const PLACE: AnchorSheetSpec = {
-  columns: 1,
-  rows: 3,
+  columns: 2,
+  rows: 2,
   bodyCell: 0,
-  size: "1024x1536",
+  size: ANCHOR_SHEET_SIZE,
   views: [
     "a wide establishing view of the whole space",
     "the reverse angle, looking back across the same space from the opposite side",
     "a closer view of the most important corner or detail of the space",
+    "the entrance or exterior approach that most clearly identifies the same place",
   ],
 };
 

@@ -18,13 +18,25 @@ import { whenProfileLoaded } from "./profileStore";
 interface ImageTierPromptState {
   open: boolean;
   requestSelection: () => void;
+  select: (tier: ImageTier) => void;
   close: () => void;
 }
+
+let pendingSelection: ((tier: ImageTier | null) => void) | null = null;
 
 export const useImageTierPromptStore = create<ImageTierPromptState>((set) => ({
   open: false,
   requestSelection: () => set({ open: true }),
-  close: () => set({ open: false }),
+  select: (tier) => {
+    pendingSelection?.(tier);
+    pendingSelection = null;
+    set({ open: false });
+  },
+  close: () => {
+    pendingSelection?.(null);
+    pendingSelection = null;
+    set({ open: false });
+  },
 }));
 
 /**
@@ -49,8 +61,11 @@ export async function requireImageTier(): Promise<ImageTier | null> {
   // premium preference can't be honored here, so ask rather than quietly
   // charging for one tier and delivering another.
   if (!tier || (accessLevel === "guest" && tier === "premium")) {
-    useImageTierPromptStore.getState().requestSelection();
-    return null;
+    return new Promise<ImageTier | null>((resolve) => {
+      pendingSelection?.(null);
+      pendingSelection = resolve;
+      useImageTierPromptStore.getState().requestSelection();
+    });
   }
   return tier;
 }

@@ -10,8 +10,8 @@ import type { Anchor, AnchorImage, ReferenceUse } from "../types";
 import { getCursor } from "../versioning";
 
 /**
- * A stable signature of an anchor's text inputs (description / guidance / mode
- * / body plan). When this changes, a page using the anchor should be considered
+ * A stable signature of an anchor's authored inputs (description / age /
+ * guidance / mode / body plan). When this changes, a page using the anchor should be considered
  * stale even if the image version id did not change.
  *
  * `heightCm` is deliberately excluded: resizing a character changes how big
@@ -19,9 +19,13 @@ import { getCursor } from "../versioning";
  * a reference sheet the user is happy with.
  */
 export function anchorSignature(a: Anchor): string {
-  return [a.description ?? "", a.userGuidance ?? "", a.mode ?? "", a.bodyPlan ?? ""].join(
-    "\u0000",
-  );
+  return [
+    a.description ?? "",
+    a.ageYears ?? "",
+    a.userGuidance ?? "",
+    a.mode ?? "",
+    a.bodyPlan ?? "",
+  ].join("\u0000");
 }
 
 /** Current image content for an anchor, if any. */

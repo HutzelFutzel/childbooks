@@ -1,11 +1,7 @@
-/**
- * Portal hosts for Cast / Pages filmstrips inside the Design chapter accordion.
- * Workspaces render their own filmstrip data but mount it into the open chapter body.
- */
+/** Portal host for the Pages filmstrip inside the Design chapter accordion. */
 import { createContext, useContext, type ReactNode } from "react";
 
 export type DesignChapterHostsValue = {
-  castHost: HTMLElement | null;
   pagesHost: HTMLElement | null;
 };
 

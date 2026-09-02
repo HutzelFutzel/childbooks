@@ -178,7 +178,7 @@ export interface PipelineRefreshJob extends JobLease {
 
 /**
  * An anchor task names an anchor to (re)render through the anchor pipeline on
- * the worker. The worker resolves relations/prompts from the project snapshot.
+ * the worker. The worker resolves private dependencies/prompts from the project snapshot.
  */
 export interface AnchorTask {
   id: string; // == anchorId

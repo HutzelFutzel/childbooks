@@ -1,8 +1,8 @@
 /**
  * Platform-agnostic anchor (character / place / object) image orchestration.
  *
- * Resolves the anchor's explicit relations into reference images, builds the
- * prompt, renders the reference sheet, and stores the blob — returning an
+ * Resolves private embedded-subject references, builds the prompt, renders the
+ * reference sheet, and stores the blob — returning an
  * {@link AnchorRender} for the caller to fold into the anchor's version tree.
  * Side effects are injected via {@link PipelineEnv}, so the same logic runs on
  * the client and in the backend worker.
@@ -20,9 +20,6 @@ import { buildAnchorPrompt, generateAnchorImage } from "./anchors";
 import { cellBox, layoutOf, sheetSpecFor } from "./anchorLayout";
 import {
   containedAnchorsFor,
-  linkedAnchorsFor,
-  relatedAnchorsFor,
-  relationSentence,
 } from "../book/anchorGraph";
 import { artStyleKey } from "../prompts/style";
 import { anchorSignature, currentAnchorImage } from "./provenance";
@@ -112,23 +109,10 @@ export async function renderAnchor(
   const isEdit = !restyle && Boolean(options.edit?.trim());
   const sourceNodeId = options.fromNodeId ?? anchor.versions?.cursorId;
 
-  // Explicitly linked anchors (a relative to resemble, or an object/place this
-  // one contains). Their current images are fed in as context so relationships
-  // and embedded subjects stay consistent.
+  // Private embedded-subject dependencies inferred from the story. Their
+  // current images are fed in so contained objects stay consistent.
   const all = project.anchors ?? [];
   const containedAnchors = containedAnchorsFor(anchor, all);
-  const relatedAnchors = relatedAnchorsFor(anchor, all);
-  const linked = linkedAnchorsFor(anchor, all);
-
-  // Resolve each related pair into a full, side-independent sentence ("Dad has
-  // lighter hair than Mom") so the prompt reads correctly no matter which
-  // anchor stored the edge — the same statement feeds both anchors' prompts,
-  // teaching e.g. Mom she has darker hair without us inverting anything.
-  const relatedNotes: Record<string, string> = {};
-  for (const r of relatedAnchors) {
-    const sentence = relationSentence(anchor, r);
-    if (sentence) relatedNotes[r.id] = sentence;
-  }
 
   // Cross-referencing: when the edit text mentions OTHER anchors ("make him
   // the same age as Amanda", typos included), detect them with one cheap
@@ -267,8 +251,6 @@ export async function renderAnchor(
     anchor,
     artStyle: project.config.artStyle,
     containedAnchors,
-    relatedAnchors,
-    relatedNotes,
     mentionedAnchors,
     edit: options.edit,
     editFromImage,
@@ -288,9 +270,9 @@ export async function renderAnchor(
       providerId: imageModel.provider,
       references: references.length ? references : undefined,
       signal: options.signal,
-      // A restyle must come back on the base sheet's canvas, or the cells shift
-      // and every recorded crop box points at the wrong place.
-      size: restyle && baseLayout ? `${baseLayout.width}x${baseLayout.height}` : spec.size,
+      // Cast references have one landscape output contract, including restyles
+      // of legacy square/portrait sheets.
+      size: spec.size,
     }),
   );
 
@@ -331,8 +313,6 @@ export async function renderAnchor(
           anchor,
           artStyle: project.config.artStyle,
           containedAnchors,
-          relatedAnchors,
-          relatedNotes,
           mentionedAnchors,
           edit: options.edit,
           editFromImage,
@@ -441,8 +421,13 @@ export async function renderAnchor(
   // Prefer the head close-up cell; fall back to the canonical whole-subject
   // cell for grids without one (objects, places).
   let thumbBlobId: string | undefined;
-  // A restyled sheet keeps the base's grid, so it keeps the base's layout too.
-  const layout = restyle && baseLayout ? baseLayout : layoutOf(spec);
+  // A restyle keeps the base grid/cell identities but moves legacy sheets onto
+  // the canonical landscape canvas.
+  const targetLayout = layoutOf(spec);
+  const layout =
+    restyle && baseLayout
+      ? { ...baseLayout, width: targetLayout.width, height: targetLayout.height }
+      : targetLayout;
   if (env.composite.cropThumbnail) {
     try {
       const cell = layout.headCell ?? layout.bodyCell;
@@ -457,15 +442,13 @@ export async function renderAnchor(
     }
   }
 
-  const relatedIdSet = new Set(relatedAnchors.map((r) => r.id));
   return {
     blobId,
     mimeType: result.mimeType,
     thumbBlobId,
     layout,
-    // Provenance: contained anchors were used as IMAGES (track their version),
-    // related anchors as TEXT only (track just the signature, so a sibling's
-    // image regeneration doesn't flag this sheet stale). Plus a self-entry:
+    // Provenance: contained anchors were used as IMAGES (track their version).
+    // Plus a self-entry:
     // without recording the anchor's OWN signature at generation time, editing
     // its own description after the sheet exists had nothing to compare
     // against, so the portrait never flagged itself as out of date — the
@@ -474,13 +457,10 @@ export async function renderAnchor(
     // only the text signature drift matters here.
     references: [
       { anchorId: anchor.id, signature: anchorSignature(anchor), textOnly: true },
-      ...linked.map((r) => ({
+      ...containedAnchors.map((r) => ({
         anchorId: r.id,
         versionId: r.versions?.cursorId,
         signature: anchorSignature(r),
-        ...(relatedIdSet.has(r.id) && !containedAnchors.some((c) => c.id === r.id)
-          ? { textOnly: true }
-          : {}),
       })),
     ],
     prompt,

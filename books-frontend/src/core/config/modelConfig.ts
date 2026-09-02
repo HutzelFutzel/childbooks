@@ -59,6 +59,29 @@ export const DEFAULT_IMAGE_TIER_LABELS: Record<ImageTier, string> = {
   premium: "High-Quality",
 };
 
+export interface ImageTierUiCopy {
+  /** One-line explanation shown in the quality picker. */
+  description: string;
+  /** Explanation attached to images created with this tier. */
+  generatedImageNotice: string;
+}
+
+/** Fallback copy until an admin saves custom tier presentation. */
+export const DEFAULT_IMAGE_TIER_UI: Record<ImageTier, ImageTierUiCopy> = {
+  quick: {
+    description:
+      "Draft quality in under a minute per image — great for layout and ideas. Expect occasional artifacts and characters drifting from their references.",
+    generatedImageNotice:
+      "Useful for layout and ideas, but this Fast image may contain unexpected artifacts or drift from character references. Recreate it in High-Quality before using it as final art.",
+  },
+  premium: {
+    description:
+      "Slower per image, but subjects match their references much more closely and small flaws are auto-repaired — best for final artwork.",
+    generatedImageNotice:
+      "Created in High-Quality for stronger reference matching and automatic repair of small flaws.",
+  },
+};
+
 /** An untrusted value as a tier, or null when it isn't an explicit choice. */
 export function parseImageTier(value: unknown): ImageTier | null {
   return value === "premium" || value === "quick" ? value : null;
@@ -116,6 +139,8 @@ export interface ModelConfig {
   imageBindings: Record<ImageActionId, ImageTierBindings>;
   /** Admin-overridable display labels for the quality tiers. */
   imageTierLabels: Record<ImageTier, string>;
+  /** Admin-owned user-facing descriptions and generated-image notices. */
+  imageTierUi: Record<ImageTier, ImageTierUiCopy>;
 }
 
 /** Look up a model id in a provider's catalog fallback for a given modality+economy. */
@@ -175,6 +200,10 @@ export function createDefaultModelConfig(): ModelConfig {
       coverIllustration: defaultImageTiers(),
     },
     imageTierLabels: { ...DEFAULT_IMAGE_TIER_LABELS },
+    imageTierUi: {
+      quick: { ...DEFAULT_IMAGE_TIER_UI.quick },
+      premium: { ...DEFAULT_IMAGE_TIER_UI.premium },
+    },
   };
 }
 
@@ -315,6 +344,7 @@ export function normalizeModelConfig(input: unknown): ModelConfig {
   const stored = (input ?? {}) as Partial<ModelConfig> & {
     imageBindings?: Record<string, unknown>;
     imageTierLabels?: Partial<Record<ImageTier, string>>;
+    imageTierUi?: Partial<Record<ImageTier, Partial<ImageTierUiCopy>>>;
   };
   const slots = stored.slots ?? def.slots;
   const text = {} as ModelSlots["text"];
@@ -328,6 +358,8 @@ export function normalizeModelConfig(input: unknown): ModelConfig {
     imageBindings[id] = coerceImageTierBindings(stored.imageBindings?.[id], def.imageBindings[id]);
   }
   const labels: Partial<Record<ImageTier, string>> = stored.imageTierLabels ?? {};
+  const ui: Partial<Record<ImageTier, Partial<ImageTierUiCopy>>> =
+    stored.imageTierUi ?? {};
   return {
     version: 1,
     slots: { text, image },
@@ -337,6 +369,30 @@ export function normalizeModelConfig(input: unknown): ModelConfig {
       quick: typeof labels.quick === "string" && labels.quick.trim() ? labels.quick : def.imageTierLabels.quick,
       premium:
         typeof labels.premium === "string" && labels.premium.trim() ? labels.premium : def.imageTierLabels.premium,
+    },
+    imageTierUi: {
+      quick: {
+        description:
+          typeof ui.quick?.description === "string" && ui.quick.description.trim()
+            ? ui.quick.description.trim()
+            : def.imageTierUi.quick.description,
+        generatedImageNotice:
+          typeof ui.quick?.generatedImageNotice === "string" &&
+          ui.quick.generatedImageNotice.trim()
+            ? ui.quick.generatedImageNotice.trim()
+            : def.imageTierUi.quick.generatedImageNotice,
+      },
+      premium: {
+        description:
+          typeof ui.premium?.description === "string" && ui.premium.description.trim()
+            ? ui.premium.description.trim()
+            : def.imageTierUi.premium.description,
+        generatedImageNotice:
+          typeof ui.premium?.generatedImageNotice === "string" &&
+          ui.premium.generatedImageNotice.trim()
+            ? ui.premium.generatedImageNotice.trim()
+            : def.imageTierUi.premium.generatedImageNotice,
+      },
     },
   };
 }
@@ -378,4 +434,13 @@ export const modelConfigSchema = z.object({
   textBindings: z.record(z.string(), textSlotRefSchema),
   imageBindings: z.record(z.string(), imageTierBindingsSchema),
   imageTierLabels: z.record(z.string(), z.string()).optional(),
+  imageTierUi: z
+    .record(
+      z.string(),
+      z.object({
+        description: z.string().min(1),
+        generatedImageNotice: z.string().min(1),
+      }),
+    )
+    .optional(),
 });

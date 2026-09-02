@@ -104,8 +104,8 @@ export interface AnalyzeResult {
   summary: string;
   anchors: Anchor[];
   model: string;
-  /** Proposed relations, keyed by anchor name (ids don't exist server-side). */
-  relations?: { from: string; to: string; kind: "contains" | "relates"; note?: string }[];
+  /** Private contained-subject dependencies, keyed by name until reconciliation. */
+  embeddings?: { container: string; subject: string }[];
 }
 
 export interface StoryDraftResult {

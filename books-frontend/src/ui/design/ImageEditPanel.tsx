@@ -472,7 +472,12 @@ function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustrati
               }
             />
           )}
-          {cursor.imageTier === "quick" && <FastDraftBanner />}
+          {cursor.imageTier === "quick" && (
+            <FastDraftBanner
+              upgrading={generating}
+              onUpgrade={() => void illo.upgradeQuality()}
+            />
+          )}
 
           <div>
             <p className="mb-1.5 text-xs font-medium text-ink-600">

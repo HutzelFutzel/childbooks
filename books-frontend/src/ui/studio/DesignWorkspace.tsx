@@ -1,7 +1,4 @@
-/**
- * Design primary: left chapter accordion (Style / Cast / Pages) + stage.
- * Filmstrips portal into the open Cast / Pages chapter body.
- */
+/** Design primary: left chapter navigation (Style / Cast / Pages) + stage. */
 import { useCallback, useState } from "react";
 import { useProjectsStore } from "../../state/projectsStore";
 import { AnchorsStage } from "./AnchorsStage";
@@ -18,7 +15,13 @@ import {
   type DesignChapter,
 } from "./studioSteps";
 
-export function DesignWorkspace() {
+export function DesignWorkspace({
+  analysisRun,
+  onRetryAnalysis,
+}: {
+  analysisRun: { status: "idle" | "running" | "error"; message?: string };
+  onRetryAnalysis: () => void;
+}) {
   const {
     project,
     step,
@@ -41,12 +44,8 @@ export function DesignWorkspace() {
   const pagesUnlocked = progress.edit.unlocked;
   const styleDone = styleReady === true || styleReady === undefined;
 
-  const [castHost, setCastHost] = useState<HTMLElement | null>(null);
   const [pagesHost, setPagesHost] = useState<HTMLElement | null>(null);
 
-  const castHostRef = useCallback((el: HTMLDivElement | null) => {
-    setCastHost(el);
-  }, []);
   const pagesHostRef = useCallback((el: HTMLDivElement | null) => {
     setPagesHost(el);
   }, []);
@@ -70,7 +69,7 @@ export function DesignWorkspace() {
   const showDesignSetup = chapter === "pages" && (!designReady || designSetupOpen);
 
   return (
-    <DesignChapterHostsProvider value={{ castHost, pagesHost }}>
+    <DesignChapterHostsProvider value={{ pagesHost }}>
       <div className="flex h-full min-h-0">
         <DesignChapterRail
           chapter={chapter}
@@ -84,7 +83,6 @@ export function DesignWorkspace() {
           pagesDetail={progress.edit.detail}
           busyCast={generatingAnchors.size > 0}
           busyPages={generatingPages.size > 0}
-          castHostRef={castHostRef}
           pagesHostRef={pagesHostRef}
         />
 
@@ -92,7 +90,7 @@ export function DesignWorkspace() {
           {chapter === "style" ? (
             <StyleSetup />
           ) : chapter === "cast" ? (
-            <AnchorsStage />
+            <AnchorsStage analysisRun={analysisRun} onRetryAnalysis={onRetryAnalysis} />
           ) : showDesignSetup ? (
             <DesignSetup />
           ) : (

@@ -25,6 +25,7 @@ import { computePageGuides } from "../../core/book/format";
 import { getCursor } from "../../core/versioning";
 import { defaultIllustrationFocus } from "../design/designInit";
 import { useBlobUrl } from "../hooks/useBlobUrl";
+import { FastDraftBadge } from "../components/FastDraftBadge";
 import { useJobsStore } from "../../state/jobsStore";
 import { PageStage, type ElementKind as StageElementKind, type GeomPatch } from "../design/PageStage";
 import type { SpanRef } from "../design/TextBoxView";
@@ -180,6 +181,16 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
         printGuides: rightGuides,
       }}
       dropId={pairDropId(left.page.id, right.page.id)}
+      overlay={
+        leftCursor?.imageTier === "quick" || rightCursor?.imageTier === "quick" ? (
+          <>
+            {leftCursor?.imageTier === "quick" && <FastDraftBadge />}
+            {rightCursor?.imageTier === "quick" && (
+              <FastDraftBadge className="left-[calc(50%+0.5rem)]" />
+            )}
+          </>
+        ) : undefined
+      }
       fillParent
       snap={snap}
       grid={grid}

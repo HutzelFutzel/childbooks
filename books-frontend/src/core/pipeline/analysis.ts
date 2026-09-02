@@ -10,7 +10,7 @@ import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import type { Anchor, AnchorImportance, AnchorType, BookConfig } from "../types";
 import { withRetry } from "./retry";
-import { briefOf, castPromptLines } from "../story/brief";
+import { briefOf, castPromptLines, namedCast } from "../story/brief";
 import { resolveAgeLlmGuidance } from "../prompts/age";
 import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderTextPrompt } from "../prompts/render";
@@ -27,33 +27,46 @@ const anchorItemSchema = z.object({
    * than none, so the model is told to omit it rather than guess.
    */
   heightCm: z.number().nullish(),
+  /** Characters only; copied from the author's cast brief when available. */
+  ageYears: z.number().min(0).max(120).nullish(),
 });
 
-const relationItemSchema = z.object({
-  from: z.string(),
-  to: z.string(),
-  kind: z.enum(["contains", "relates"]),
-  note: z.string().nullish(),
+const embeddingItemSchema = z.object({
+  container: z.string(),
+  subject: z.string(),
 });
 
 const analysisSchema = z.object({
   summary: z.string(),
   anchors: z.array(anchorItemSchema),
-  relations: z.array(relationItemSchema).nullish(),
+  embeddings: z.array(embeddingItemSchema).nullish(),
 });
 
-/** A proposed relation, still keyed by anchor NAME as the model reported it. */
-export interface AnalyzedRelation {
-  from: string;
-  to: string;
-  kind: "contains" | "relates";
-  note?: string;
+/** A private render dependency, still keyed by name until ids are reconciled. */
+export interface AnalyzedEmbedding {
+  container: string;
+  subject: string;
 }
 
 export type AnalysisResult = z.infer<typeof analysisSchema>;
 
 function uid(): string {
   return Math.random().toString(36).slice(2, 10);
+}
+
+function suggestedCharacterAge(
+  character: { name: string; description: string; bodyPlan?: string | null },
+  ageRangeId: string,
+): number {
+  const text = `${character.name} ${character.description}`.toLowerCase();
+  if (/\b(newborn|infant|baby)\b/.test(text)) return 1;
+  if (/\b(toddler|preschooler)\b/.test(text)) return 3;
+  if (/\b(teen|teenager|adolescent)\b/.test(text)) return 15;
+  if (/\b(grandma|grandmother|grandpa|grandfather|elderly|older adult)\b/.test(text)) return 65;
+  if (/\b(mother|mom|mum|father|dad|parent|aunt|uncle|teacher|adult)\b/.test(text)) return 35;
+  if (character.bodyPlan && character.bodyPlan !== "bipedal") return 4;
+  const range = AGE_RANGES.find((item) => item.id === ageRangeId);
+  return range ? Math.round((range.min + range.max) / 2) : 6;
 }
 
 export interface AnalyzeStoryInput {
@@ -66,50 +79,43 @@ export interface AnalyzeStoryInput {
 }
 
 /**
- * Reject relations the model shouldn't have proposed, rather than trusting the
- * output. The rules mirror what the relations editor enforces by hand: a
- * character is never *contained* in anything, containment nests only one level
- * deep, and nothing links to itself or to a subject that doesn't exist.
+ * Reject embedding dependencies the model should not have proposed. Characters
+ * never contain another visual reference, nesting stays one level deep, and
+ * every name must resolve to an extracted anchor.
  */
-function validateRelations(
-  raw: { from: string; to: string; kind: "contains" | "relates"; note?: string | null }[],
+function validateEmbeddings(
+  raw: { container: string; subject: string }[],
   anchors: Anchor[],
-): AnalyzedRelation[] {
+): AnalyzedEmbedding[] {
   const byName = new Map<string, Anchor>();
   for (const a of anchors) byName.set(a.name.trim().toLowerCase(), a);
 
-  const out: AnalyzedRelation[] = [];
+  const out: AnalyzedEmbedding[] = [];
   const seen = new Set<string>();
   // Tracks accepted containment so a second edge can't create a second level.
   const isContained = new Set<string>();
   const isContainer = new Set<string>();
 
   for (const r of raw) {
-    const from = byName.get(r.from?.trim().toLowerCase() ?? "");
-    const to = byName.get(r.to?.trim().toLowerCase() ?? "");
+    const from = byName.get(r.container?.trim().toLowerCase() ?? "");
+    const to = byName.get(r.subject?.trim().toLowerCase() ?? "");
     if (!from || !to || from.id === to.id) continue;
 
     // One edge per unordered pair, whichever direction arrives first.
     const key = [from.id, to.id].sort().join("|");
     if (seen.has(key)) continue;
 
-    if (r.kind === "contains") {
-      // A character can neither be drawn inside something nor act as a
-      // container — its sheet is a turnaround, not a scene.
-      if (from.type === "character" || to.type === "character") continue;
-      // Depth 2 would mean matching a reference inside a reference.
-      if (isContained.has(from.id) || isContainer.has(to.id)) continue;
-      isContainer.add(from.id);
-      isContained.add(to.id);
-    }
+    // A character cannot be a container — its sheet is a turnaround, not a
+    // scene. Characters may be embedded in a place/object when the story
+    // genuinely calls for a fixed depiction (for example a portrait).
+    if (from.type === "character") continue;
+    // Depth 2 would mean matching a reference inside a reference.
+    if (isContained.has(from.id) || isContainer.has(to.id)) continue;
+    isContainer.add(from.id);
+    isContained.add(to.id);
 
     seen.add(key);
-    out.push({
-      from: from.name,
-      to: to.name,
-      kind: r.kind,
-      ...(r.note?.trim() ? { note: r.note.trim() } : {}),
-    });
+    out.push({ container: from.name, subject: to.name });
   }
   return out;
 }
@@ -117,7 +123,7 @@ function validateRelations(
 /** Run the story analysis and return editable anchors + a short summary. */
 export async function analyzeStory(
   input: AnalyzeStoryInput,
-): Promise<{ summary: string; anchors: Anchor[]; relations: AnalyzedRelation[] }> {
+): Promise<{ summary: string; anchors: Anchor[]; embeddings: AnalyzedEmbedding[] }> {
   const { story, config, creds, model, signal, prompts } = input;
   const provider = getTextProvider(config.textModel!.provider);
   const age = AGE_RANGES.find((a) => a.id === config.ageRangeId)?.label ?? config.ageRangeId;
@@ -155,20 +161,43 @@ export async function analyzeStory(
     { signal },
   );
 
+  const knownAges = new Map(
+    namedCast(briefOf(config))
+      .filter((member) => member.age !== undefined)
+      .map((member) => [member.name.trim().toLowerCase(), member.age!]),
+  );
   const anchors: Anchor[] = result.anchors.map((a) => {
     const isCharacter = a.type === "character";
     // Body plan and height only mean anything for characters; a model that
     // fills them in for a place or object is answering a question we didn't
     // ask, so drop them rather than letting them reach the sheet prompt.
     const height = isCharacter && typeof a.heightCm === "number" ? a.heightCm : undefined;
+    const briefAge = knownAges.get(a.name.trim().toLowerCase());
+    const reportedAge =
+      isCharacter && typeof briefAge === "number"
+        ? briefAge
+        : isCharacter && typeof a.ageYears === "number"
+          ? a.ageYears
+          : undefined;
+    const characterAge = isCharacter
+      ? (reportedAge ?? suggestedCharacterAge(a, config.ageRangeId))
+      : undefined;
+    const ageSource =
+      typeof briefAge === "number"
+        ? "author"
+        : typeof a.ageYears === "number"
+          ? "story"
+          : "suggested";
     return {
       id: uid(),
       name: a.name,
+      source: "analysis",
       type: a.type as AnchorType,
       description: a.description,
       importance: a.importance as AnchorImportance,
       mode: "creative",
       include: true,
+      ...(characterAge !== undefined ? { ageYears: characterAge, ageSource } : {}),
       ...(isCharacter && a.bodyPlan ? { bodyPlan: a.bodyPlan } : {}),
       ...(height && height > 0 ? { heightCm: Math.round(height) } : {}),
     } satisfies Anchor;
@@ -177,7 +206,7 @@ export async function analyzeStory(
   return {
     summary: result.summary,
     anchors,
-    relations: validateRelations(result.relations ?? [], anchors),
+    embeddings: validateEmbeddings(result.embeddings ?? [], anchors),
   };
 }
 
@@ -188,7 +217,7 @@ export interface GenerateAnchorDescriptionInput {
   model: string;
   name: string;
   type: AnchorType;
-  /** Other known subjects, so the description can reference relationships. */
+  /** Other known subjects, so names and visual descriptions stay consistent. */
   existingAnchors: { name: string; type: AnchorType; description: string }[];
   signal?: AbortSignal;
   prompts?: PromptContext;

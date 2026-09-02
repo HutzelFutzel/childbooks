@@ -124,7 +124,12 @@ export function computeProgress(project: Project): StudioProgress {
   const cast: StepProgress = {
     unlocked: setupDone,
     done: anchorsDone,
-    detail: anchorsTotal > 0 ? `${anchorsReady} / ${anchorsTotal}` : undefined,
+    detail:
+      anchorsTotal > 0
+        ? anchorsReady > 0
+          ? `${anchorsReady} / ${anchorsTotal}`
+          : `${anchorsTotal} to create`
+        : undefined,
     ratio: anchorsTotal > 0 ? anchorsReady / anchorsTotal : anchorsDone ? 1 : 0,
   };
 

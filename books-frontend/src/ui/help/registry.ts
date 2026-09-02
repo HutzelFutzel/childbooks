@@ -41,15 +41,6 @@ export const HELP: Record<string, HelpTopic> = {
     title: "Why does a page need updating?",
     body: "When you change a character or place after a page was drawn, that page still shows the old look. \u201cUpdate\u201d re-renders it to match the newest design — nothing changes until you choose to.",
   },
-  containsRelates: {
-    title: "Contains vs. Relates to",
-    body: "Linking two characters, places or objects helps the AI keep them consistent whenever they're drawn together — but the two links mean very different things.",
-    points: [
-      "Contains — physically drawn inside this subject, matched exactly to its own reference. E.g. Hospital Room contains Hospital Bed: the bed looks exactly like its own reference photo. Only makes sense between two places/objects (not characters). It shows on both — as \u201cContains\u201d on the room and \u201cContained in\u201d on the bed.",
-      "Relates to — a resemblance or connection the AI should know about, but never draws as a separate figure. E.g. Mila relates to her big brother: the AI keeps a family likeness without drawing him into her picture. It's two-way, so it appears on both. Add a note as a full sentence naming both (\u201cMila has lighter hair than her brother\u201d) — it reads the same on both, so there's no confusion about who's who.",
-      "Cost: if a contained subject has no reference yet, creating this one creates that one too — extra time & Sparks right away. And if any linked subject's design changes later, this one will need a fresh (paid) regenerate to stay in sync.",
-    ],
-  },
   embedLimit: {
     title: "Keep it to a few",
     body: "With more than ~3 embedded subjects, each one is matched less accurately and the image takes longer. Keep the 2–3 most important ones and describe the rest in the text.",
@@ -77,14 +68,6 @@ export const HELP: Record<string, HelpTopic> = {
   versions: {
     title: "Version history",
     body: "Every generation is saved. Click any thumbnail to revert, or refine from it to branch a new version. Switching a character's version marks the pages that used it as needing an update.",
-  },
-  fastTierConsistency: {
-    title: "Fast is for drafting",
-    body: "The Fast tier trades fidelity for speed: characters can drift from their reference art, and generations often show unexpected or unwanted artifacts (odd hands, warped props, messy details).",
-    points: [
-      "Great for laying out the book and trying ideas quickly.",
-      "Switch to High-Quality for real designing and final art — it matches references far more closely and auto-repairs small flaws.",
-    ],
   },
   storySections: {
     title: "Story sections",

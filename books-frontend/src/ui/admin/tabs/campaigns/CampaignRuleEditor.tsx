@@ -57,8 +57,9 @@ import {
   type BuyerRole,
 } from "../../../../core/config/buyerRoles";
 import { DISCOUNT_ITEM_LABELS, type DiscountItemType } from "../../../../core/config/discountImpact";
-import { DEFAULT_IMAGE_TIER_LABELS, IMAGE_TIERS, type ImageTier } from "../../../../core/config/modelConfig";
+import { IMAGE_TIERS, type ImageTier } from "../../../../core/config/modelConfig";
 import { IMAGE_ACTIONS } from "../../../../core/ai/actions";
+import { useAppConfigStore } from "../../../../state/appConfigStore";
 import { Grid, NumberField } from "../products/parts";
 import { Chips, SwitchField } from "./parts";
 
@@ -67,9 +68,12 @@ const ITEM_OPTIONS = (["print", "ebook", "pack", "plan"] as DiscountItemType[]).
   label: DISCOUNT_ITEM_LABELS[value],
 }));
 
-const TIER_OPTIONS = IMAGE_TIERS.map((value) => ({ value, label: DEFAULT_IMAGE_TIER_LABELS[value] }));
-
 const IMAGE_ACTION_OPTIONS = IMAGE_ACTIONS.map((a) => ({ value: a.id as string, label: a.label }));
+
+function useImageTierOptions() {
+  const labels = useAppConfigStore((s) => s.modelConfig.imageTierLabels);
+  return IMAGE_TIERS.map((value) => ({ value, label: labels[value] }));
+}
 
 export function CampaignRuleEditor({
   rule,
@@ -572,6 +576,7 @@ function RefundEffectEditor({
   onChange: (effect: CampaignEffect) => void;
   currency: string;
 }) {
+  const tierOptions = useImageTierOptions();
   const scope = (patch: Partial<SpendRefundEffect["scope"]>) =>
     onChange({ ...effect, scope: { ...effect.scope, ...patch } });
 
@@ -672,7 +677,7 @@ function RefundEffectEditor({
         </Field>
         <Field label="Only these image tiers" hint="Empty means every tier.">
           <Chips
-            options={TIER_OPTIONS}
+            options={tierOptions}
             selected={effect.scope.tiers}
             onChange={(tiers) => scope({ tiers: tiers as ImageTier[] })}
             allowEmpty
@@ -696,6 +701,7 @@ function PricingEffectEditor({
   effect: ActionPricingEffect;
   onChange: (effect: CampaignEffect) => void;
 }) {
+  const tierOptions = useImageTierOptions();
   return (
     <div className="space-y-2.5">
       <Grid cols={2}>
@@ -729,7 +735,7 @@ function PricingEffectEditor({
       </Field>
       <Field label="Which image tiers" hint="Empty means every tier.">
         <Chips
-          options={TIER_OPTIONS}
+          options={tierOptions}
           selected={effect.tiers}
           onChange={(tiers) => onChange({ ...effect, tiers: tiers as ImageTier[] })}
           allowEmpty

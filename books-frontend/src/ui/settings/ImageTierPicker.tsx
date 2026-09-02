@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Check, Clock, Gauge, Lock, Sparkles, Zap } from "lucide-react";
+import { Check, Clock, Gauge, Lock, Sparkles, Zap } from "lucide-react";
 import {
   DEFAULT_IMAGE_TIER_LABELS,
   IMAGE_TIERS,
@@ -12,16 +12,7 @@ import {
 } from "../../core/config/latencyStats";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useAuthStore } from "../../state/authStore";
-import { InfoHint } from "../components/InfoHint";
 import { formatSparkRange, useTierSparkEstimate } from "../hooks/useTierEstimate";
-
-/** One-line pitch for each tier, shown under its name. */
-const TIER_BLURB: Record<ImageTier, string> = {
-  quick:
-    "Draft quality in under a minute per image — great for layout and ideas. Expect occasional artifacts and characters drifting from their references.",
-  premium:
-    "Slower per image (a few minutes), but subjects match their references much more closely and flaws get auto-repaired — best for real designing and the final book.",
-};
 
 function TierCard({
   tier,
@@ -36,6 +27,7 @@ function TierCard({
   onSelect: () => void;
 }) {
   const labels = useAppConfigStore((s) => s.modelConfig.imageTierLabels);
+  const tierUi = useAppConfigStore((s) => s.modelConfig.imageTierUi);
   const latencyStats = useAppConfigStore((s) => s.latencyStats);
   const estimate = useTierSparkEstimate("pageIllustration", tier);
   const priceText = formatSparkRange(estimate);
@@ -48,17 +40,6 @@ function TierCard({
 
   return (
     <div className="relative">
-      {/* A sibling of the `<button>` below, not a child — an interactive
-          popover trigger nested inside the card's own `<button>` would be
-          invalid HTML (buttons can't nest) and would fire tier-selection on
-          every hover-triggered tap. */}
-      {tier === "quick" && (
-        <InfoHint
-          topic="fastTierConsistency"
-          icon={AlertTriangle}
-          className="absolute right-3 top-3 text-amber-500"
-        />
-      )}
       <button
         type="button"
         onClick={onSelect}
@@ -95,7 +76,7 @@ function TierCard({
             </span>
           ) : null}
         </div>
-        <p className="text-xs leading-relaxed text-ink-500">{TIER_BLURB[tier]}</p>
+        <p className="text-xs leading-relaxed text-ink-500">{tierUi[tier].description}</p>
         <span className="inline-flex w-fit items-center gap-1 rounded bg-ink-50 px-1.5 py-0.5 text-[10px] font-medium text-ink-500">
           <Clock className="size-3" /> {timeText} per image
         </span>
@@ -128,6 +109,7 @@ export function ImageTierPicker({
 }) {
   const accessLevel = useAuthStore((s) => s.accessLevel);
   const openAuthDialog = useAuthStore((s) => s.openAuthDialog);
+  const labels = useAppConfigStore((s) => s.modelConfig.imageTierLabels);
   const premiumLocked = accessLevel === "guest";
 
   return (
@@ -143,7 +125,9 @@ export function ImageTierPicker({
               locked={locked}
               onSelect={() =>
                 locked
-                  ? openAuthDialog("Create a free account to generate on the High-Quality tier.")
+                  ? openAuthDialog(
+                      `Create a free account to generate on the ${labels.premium} tier.`,
+                    )
                   : onChange(tier)
               }
             />

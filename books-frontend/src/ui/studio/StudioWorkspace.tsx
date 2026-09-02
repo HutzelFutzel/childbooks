@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Project } from "../../core/types";
 import { analyzeCurrentStory, generateScreenplayVersion } from "../../state/ai";
 import { useResolvedModels } from "../hooks/useResolvedModels";
@@ -30,23 +30,43 @@ function StudioInner({ project }: { project: Project }) {
   const models = useResolvedModels();
   useStudioHotkeys();
 
-  const startedAnalyze = useRef(false);
   const startedScreenplay = useRef(false);
+  const [analysisRun, setAnalysisRun] = useState<{
+    status: "idle" | "running" | "error";
+    message?: string;
+  }>({ status: project.analysis ? "idle" : "running" });
 
   const inStudio = project.stage === "studio";
   const inDesign = primaryOf(step) === "design";
 
-  // Auto-analyze the story once the studio opens (no manual trigger).
-  useEffect(() => {
-    if (!inStudio || !models) return;
-    if (!project.analysis && !startedAnalyze.current && project.config.storyText.trim()) {
-      startedAnalyze.current = true;
-      void analyzeCurrentStory().catch((err) => {
-        startedAnalyze.current = false;
-        notify.error(err);
-      });
+  const runAnalysis = useCallback(async () => {
+    if (!project.config.storyText.trim()) {
+      setAnalysisRun({ status: "error", message: "Add your story before creating its cast." });
+      return;
     }
-  }, [inStudio, models, project.analysis, project.config.storyText]);
+    if (!models) {
+      setAnalysisRun({
+        status: "error",
+        message: "AI generation is still being set up. Try again in a moment.",
+      });
+      return;
+    }
+    setAnalysisRun({ status: "running" });
+    try {
+      await analyzeCurrentStory();
+      setAnalysisRun({ status: "idle" });
+    } catch (err) {
+      const message = (err as Error)?.message ?? "We couldn't read the story.";
+      setAnalysisRun({ status: "error", message });
+      notify.error(err);
+    }
+  }, [models, project.config.storyText]);
+
+  // Auto-analyze once, while keeping a real recoverable status for Cast.
+  useEffect(() => {
+    if (!inStudio || project.analysis || analysisRun.status !== "running") return;
+    void runAnalysis();
+  }, [inStudio, project.analysis, analysisRun.status, runAnalysis]);
 
   // Auto-draft the screenplay once the analysis is done. We intentionally do NOT
   // require any anchors: a story can legitimately have none (or the analyzer may
@@ -83,7 +103,7 @@ function StudioInner({ project }: { project: Project }) {
 
         <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-grid">
           {inDesign ? (
-            <DesignWorkspace />
+            <DesignWorkspace analysisRun={analysisRun} onRetryAnalysis={() => void runAnalysis()} />
           ) : step === "story" ? (
             <StoryStage />
           ) : (

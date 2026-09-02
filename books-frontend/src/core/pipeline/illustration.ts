@@ -207,7 +207,15 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
       .join(", ");
     return renderSinglePrompt(resolvePromptsConfig(prompts), "pageIllustration/restyle", {
       vars: {
-        charactersList: referencedAnchors.map((a) => `${a.name} (${a.description})`).join("; "),
+        charactersList: referencedAnchors
+          .map(
+            (a) =>
+              `${a.name} (${[
+                a.ageYears !== undefined ? `${a.ageYears} years old` : "",
+                a.description,
+              ].filter(Boolean).join("; ")})`,
+          )
+          .join("; "),
         legend: restyleLegend,
         artStyle: styleText,
       },
@@ -235,7 +243,16 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
   // reserve-space instruction entirely, so it suppresses these.
   const facts = layoutPlan ? layoutPromptFacts(layoutPlan, renderAspect(spread.kind, config)) : null;
   const pageNote = spread.layoutNote.trim();
-  const listOf = (arr: Anchor[]) => arr.map((a) => `${a.name} (${a.description})`).join("; ");
+  const listOf = (arr: Anchor[]) =>
+    arr
+      .map(
+        (a) =>
+          `${a.name} (${[
+            a.ageYears !== undefined ? `${a.ageYears} years old` : "",
+            a.description,
+          ].filter(Boolean).join("; ")})`,
+      )
+      .join("; ");
 
   const characters = referencedAnchors.filter((a) => a.type === "character");
   const settings = referencedAnchors.filter((a) => a.type !== "character");
