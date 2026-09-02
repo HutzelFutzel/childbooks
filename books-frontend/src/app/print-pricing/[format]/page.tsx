@@ -58,7 +58,11 @@ export async function generateMetadata({
   params: Promise<{ format: string }>;
 }): Promise<Metadata> {
   const { format } = await params;
-  const [seo, loaded] = await Promise.all([getSeoConfig(), loadFormat(format)]);
+  const [seo, branding, loaded] = await Promise.all([
+    getSeoConfig(),
+    getBrandingConfig(),
+    loadFormat(format),
+  ]);
   if (!loaded) return { title: "Print pricing", robots: { index: false, follow: true } };
 
   const { product } = loaded;
@@ -68,6 +72,7 @@ export async function generateMetadata({
     product.spec.pageTrim,
   )}, from ${product.conditions.pages.min} to ${product.conditions.pages.max} pages, including shipping.`;
   const canonical = `${seo.siteUrl}/print-pricing/${formatSlug(product.spec)}`;
+  const ogImage = branding.ogImage?.imageUrl;
 
   return {
     title,
@@ -79,6 +84,14 @@ export async function generateMetadata({
       title,
       description,
       url: canonical,
+      images: ogImage ? [{ url: ogImage, alt: branding.ogImage?.alt || title }] : undefined,
+    },
+    twitter: {
+      card: seo.twitterCard,
+      site: seo.twitterHandle || undefined,
+      title,
+      description,
+      images: ogImage ? [ogImage] : undefined,
     },
   };
 }
@@ -117,6 +130,7 @@ export default async function FormatPricingPage({
   const name = formatName(product);
   const slug = formatSlug(product.spec);
   const faq = pricingFaq([product], settings, currency);
+  const others = siblings.filter((p) => p.sku !== product.sku);
 
   return (
     <>
@@ -213,6 +227,30 @@ export default async function FormatPricingPage({
                 <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-ink-600">
                   {product.description}
                 </p>
+              </section>
+            )}
+
+            {others.length > 0 && (
+              <section aria-labelledby="other-formats" className="max-w-2xl border-t border-ink-100 pt-6">
+                <h2 id="other-formats" className="font-display text-lg font-bold tracking-tight text-ink-900">
+                  Other book formats
+                </h2>
+                <ul className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {others.map((p) => {
+                    const otherSlug = formatSlug(p.spec);
+                    const otherName = `${bindingNoun(p.spec.binding)}, ${trimLabel(p.spec.pageTrim)}`;
+                    return (
+                      <li key={p.sku}>
+                        <Link
+                          href={`/print-pricing/${otherSlug}`}
+                          className="text-xs font-medium text-brand-700 underline underline-offset-2 hover:text-brand-800"
+                        >
+                          {otherName}
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
               </section>
             )}
           </div>
