@@ -162,24 +162,29 @@ export function createDefaultSeoConfig(): SeoConfig {
     verification: { google: "", bing: "" },
     faq: [
       {
-        question: "Do I need an account to start?",
+        question: "Do I need an account or credit card to start?",
         answer:
-          "No. Childbook Studio is guest-first — you can start writing and illustrating a book right away, then create an account whenever you want to save or print.",
+          "No. You can jump straight in, write your story, choose an art style, and preview your complete illustrated book for free without creating an account or entering a credit card.",
       },
       {
-        question: "How does the AI keep characters consistent?",
+        question: "Can I make a story with multiple siblings or characters?",
         answer:
-          "You design your characters and places once as references. Every page reuses them, so your cast keeps the same look, outfits, and style across the whole book.",
+          "Yes! You can add multiple names (e.g. 'Noah & Mia'). Our guided story writer creates adventures where each child plays an active role, and each character receives their own consistent design across every page.",
       },
       {
-        question: "Can I get a real printed book?",
+        question: "Can I edit the words and change the illustrations?",
         answer:
-          "Yes. When you're happy with your story, we lay it out as a full-bleed, print-ready book and handle fulfillment so a physical copy ships to your door.",
+          "Absolutely. You have full creative control. You can edit every sentence, change page layouts, re-roll illustrations with refined directions, or adjust character details anytime.",
       },
       {
-        question: "What are Sparks?",
+        question: "What is the quality of the printed books?",
         answer:
-          "Sparks are the credits used for AI generation. Paid plans include a monthly bundle of Sparks that roll over, plus cheaper prints and premium extras.",
+          "We produce library-grade heirloom hardcovers with thick, smudge-resistant paper and vivid full-color printing. Books are professionally bound and shipped worldwide in protective packaging.",
+      },
+      {
+        question: "Do I have to subscribe to order a printed book?",
+        answer:
+          "No. Subscriptions are completely optional for regular makers who want monthly creation credits and print discounts. You can always create and order single books on demand whenever you like.",
       },
     ],
     pages: {},

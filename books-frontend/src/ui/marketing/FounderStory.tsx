@@ -1,4 +1,4 @@
-import { Quote } from "lucide-react";
+import { Heart, Quote } from "lucide-react";
 import { EditableImage } from "./EditableImage";
 import { EditableText } from "./EditableText";
 import { Reveal } from "./Reveal";
@@ -15,7 +15,7 @@ export function FounderStory({ images, text }: { images: SiteImagesMap; text: Si
     <section id="founder-story" aria-label="From our founder" className="scroll-mt-20 bg-brand-50/40 py-20 lg:py-28">
       <div className="mx-auto max-w-4xl px-6">
         <Reveal>
-          <figure className="rounded-3xl border border-ink-200 bg-white p-8 shadow-soft sm:p-12">
+          <figure className="rounded-3xl border border-brand-200/60 bg-white p-8 shadow-soft sm:p-12">
             <div className="flex flex-col items-center gap-8 sm:flex-row sm:items-start">
               <div className="w-28 shrink-0 sm:w-32">
                 <EditableImage
@@ -23,7 +23,7 @@ export function FounderStory({ images, text }: { images: SiteImagesMap; text: Si
                   label="Founder photo"
                   ratio="1/1"
                   hint="800×800 · portrait, plain background"
-                  className="rounded-full"
+                  className="rounded-full ring-4 ring-brand-100"
                   serverUrl={images["founder.photo"]?.imageUrl}
                   alt={images["founder.photo"]?.alt}
                   sizes="128px"
@@ -32,6 +32,7 @@ export function FounderStory({ images, text }: { images: SiteImagesMap; text: Si
               </div>
               <div className="text-center sm:text-left">
                 <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-100 px-4 py-1 text-sm font-semibold text-brand-700">
+                  <Heart className="size-3.5 fill-brand-600 text-brand-600" />
                   <EditableText
                     slotId="founder.eyebrow"
                     as="span"
@@ -45,7 +46,7 @@ export function FounderStory({ images, text }: { images: SiteImagesMap; text: Si
                     slotId="founder.quote"
                     as="p"
                     multiline
-                    defaultValue="When my toddler needed surgery, I couldn't find a single picture book gentle enough to help him understand what was about to happen. So I made one myself — and that book became Childbook Studio."
+                    defaultValue="When my toddler needed surgery, I couldn't find a single picture book gentle enough to help him understand what was about to happen. So I made one myself - and that book became Childbook Studio."
                     serverValue={text["founder.quote"]}
                     className="mt-4 font-display text-xl font-semibold leading-snug text-ink-900 sm:text-2xl"
                   />

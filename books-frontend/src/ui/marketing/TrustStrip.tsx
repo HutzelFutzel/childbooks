@@ -4,10 +4,10 @@ import type { SiteTextSlot } from "@/core/config/siteContent";
 import type { SiteTextMap } from "./content";
 
 const ITEMS = [
-  { icon: Printer, slot: "trust.0" as SiteTextSlot, label: "Professional print quality" },
-  { icon: Truck, slot: "trust.1" as SiteTextSlot, label: "Printed & shipped by Lulu" },
-  { icon: Wand2, slot: "trust.2" as SiteTextSlot, label: "Same characters on every page" },
-  { icon: ShieldCheck, slot: "trust.3" as SiteTextSlot, label: "Free to start — no credit card" },
+  { icon: Printer, slot: "trust.0" as SiteTextSlot, label: "Heirloom hardcover quality" },
+  { icon: Truck, slot: "trust.1" as SiteTextSlot, label: "Printed & shipped worldwide" },
+  { icon: Wand2, slot: "trust.2" as SiteTextSlot, label: "Same character on every page" },
+  { icon: ShieldCheck, slot: "trust.3" as SiteTextSlot, label: "Free to preview - no card required" },
 ];
 
 /** A quiet reassurance strip under the hero. */

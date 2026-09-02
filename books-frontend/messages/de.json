@@ -454,70 +454,70 @@
   },
   "marketing": {
     "hero": {
-      "badge": "Mit KI illustrierte Bilderbücher",
-      "title": "Mach aus einer Geschichte ein gedrucktes Bilderbuch.",
-      "subtitle": "Schreibe deine Geschichte, gestalte wiederkehrende Figuren und Orte und lass die KI jede Seite in einem einheitlichen Look illustrieren – und bestelle dann ein wunderschönes, druckfertiges Buch nach Hause.",
+      "badge": "Personalisierte Kinder-Bilderbücher",
+      "title": "Mach dein Kind zum Helden seines eigenen Bilderbuchs.",
+      "subtitle": "Schreibe eine Gute-Nacht-Geschichte, illustriere jede Seite mit gleichbleibenden Figuren und halte ein wunderschönes Hardcover-Buch in den Händen.",
       "ctaPrimary": "Jetzt Bilderbuch erstellen",
       "ctaSecondary": "So funktioniert's",
-      "note": "Kostenlos starten – ohne Konto und ohne Kreditkarte.",
-      "namePlaceholder": "Von wem soll die Geschichte handeln?",
+      "note": "Kostenlos gestalten und vorschauen - ohne Konto und ohne Kreditkarte.",
+      "namePlaceholder": "Von wem soll die Geschichte handeln? (z.B. Maya)",
       "nameLabel": "Die Hauptfigur deiner Geschichte"
     },
     "trust": {
-      "0": "Professionelle Druckqualität",
-      "1": "Gedruckt & versandt von Lulu",
-      "2": "Dieselben Figuren auf jeder Seite",
-      "3": "Kostenlos starten – ohne Kreditkarte"
+      "0": "Erstklassige Hardcover-Qualität",
+      "1": "Weltweiter Druck & Versand",
+      "2": "Dieselbe Figur auf jeder Seite",
+      "3": "Kostenlos vorschauen - keine Karte nötig"
     },
     "how": {
-      "heading": "Vom leeren Blatt ins Bücherregal – in drei Schritten",
-      "subhead": "Ein geführter Ablauf bringt dich von der Idee zum fertigen, druckbaren Buch – ohne Designkenntnisse.",
+      "heading": "Von der Gutenacht-Idee zum echten Buch in drei Schritten",
+      "subhead": "Ein geführter Ablauf von deiner Fantasie zum fertigen Buch - ganz ohne Designkenntnisse.",
       "stepLabel": "Schritt {number}",
       "step1": {
-        "title": "Geschichte schreiben",
-        "body": "Füge deine Geschichte ein oder schreibe sie direkt. Wir zerlegen sie in Figuren, Orte und ein Drehbuch Seite für Seite, das du feinjustieren kannst."
+        "title": "Geschichte gestalten",
+        "body": "Schreibe eigene Worte oder lass dich von unserer geführten Geschichtenerstellung zu einem maßgeschneiderten Abenteuer inspirieren."
       },
       "step2": {
-        "title": "Mit KI illustrieren",
-        "body": "Gestalte deine Referenzen einmal. Jede Seite greift darauf zurück, damit dein Ensemble vom Cover bis zur letzten Seite gleich aussieht."
+        "title": "Szenen zum Leben erwecken",
+        "body": "Wähle einen liebevollen Kunststil. Deine Figuren bleiben über alle Illustrationen hinweg perfekt wiedererkennbar."
       },
       "step3": {
-        "title": "Drucken & behalten",
-        "body": "Setze Text und Bilder ins Layout und bestelle ein randlos gedrucktes, druckfertiges Buch – oder erhalte es sofort als digitale Ausgabe."
+        "title": "Drucken & festhalten",
+        "body": "Prüfe dein fertiges Buch in der Vorschau, passe das Layout an und bestelle ein echtes Hardcover direkt nach Hause."
       }
     },
     "features": {
-      "heading": "Alles, was ein echtes Buch braucht",
-      "subhead": "Mächtige Werkzeuge unter einer einfachen, spielerischen Oberfläche – damit die Geschichte im Mittelpunkt bleibt.",
+      "heading": "Warum Eltern & Kinder unsere Bücher lieben",
+      "subhead": "Mit Liebe gemacht, für die Gute-Nacht-Stunde geschaffen und für Generationen gedruckt.",
       "0": {
-        "title": "Gleichbleibende Figuren",
-        "body": "Gestalte eine Figur oder einen Ort einmal – sie bleiben auf jeder Seite modellgetreu: dasselbe Gesicht, dieselbe Kleidung, derselbe Stil."
+        "title": "100% anpassbare Geschichten",
+        "body": "Jede Seite ist vollständig anpassbar. Personalisiere Figurennamen, wähle deinen Kunststil und passe jeden Satz und jede Illustration nach deinen Wünschen an."
       },
       "1": {
-        "title": "KI-Illustrationen für jede Seite",
-        "body": "Jede Seite wird passend zu ihrem Moment in der Geschichte illustriert – in einem Stil, den du wählst und verfeinern kannst."
+        "title": "Digital, gedruckt oder beides",
+        "body": "Lies dein Buch sofort digital auf dem Tablet oder Smartphone, bestelle ein gedrucktes Exemplar für die Gute-Nacht-Stunde oder kombiniere beides."
       },
       "2": {
-        "title": "Druckfertiger Export",
-        "body": "Wir setzen randlose Seiten im richtigen Format und übergeben ein druckfertiges Buch an die echte Produktion."
+        "title": "Softcover oder edles Hardcover",
+        "body": "Wähle das passende Format: ein handliches Softcover für unterwegs oder ein hochwertiges, langlebiges Hardcover für das heimische Bücherregal."
       },
       "3": {
         "title": "Digitale Ausgabe inklusive",
-        "body": "Du bekommst dein fertiges Buch zusätzlich als schönes PDF – lies es auf jedem Gerät und behalte es für immer."
+        "body": "Jedes Buch enthält eine hochauflösende digitale Version zum Lesen auf dem Tablet oder Smartphone."
       },
       "4": {
-        "title": "Ohne Anmeldung starten",
-        "body": "Leg sofort los – keine Registrierungshürde. Speichern und drucken kannst du, wann du möchtest."
+        "title": "Sofort loslegen ohne Hürden",
+        "body": "Starte sofort ohne Registrierung. Gestalte dein Buch kostenlos in der Vorschau."
       },
       "5": {
-        "title": "Sparks, die nicht verfallen",
-        "body": "Bezahlte Tarife enthalten jeden Monat ein Guthaben an Sparks, das übertragen wird – dazu günstigere Drucke."
+        "title": "Flexible Optionen",
+        "body": "Bestelle einzelne Bücher auf Wunsch oder wähle eine Mitgliedschaft für monatliche Ersparnisse."
       }
     },
     "founder": {
       "sectionLabel": "Von unserem Gründer",
       "eyebrow": "Warum wir angefangen haben",
-      "quote": "Als mein Kleinkind operiert werden musste, fand ich kein einziges Bilderbuch, das sanft genug war, um ihm zu erklären, was auf ihn zukommt. Also habe ich selbst eines gemacht – und aus diesem Buch wurde Childbook Studio.",
+      "quote": "Als mein Kleinkind operiert werden musste, fand ich kein einziges Bilderbuch, das sanft genug war, um ihm zu erklären, was auf ihn zukommt. Also habe ich selbst eines gemacht - und aus diesem Buch wurde Childbook Studio.",
       "name": "Gründer",
       "role": "Childbook Studio"
     },

@@ -62,11 +62,11 @@ export function Pricing({ initial }: { initial: PublicPlansConfig }) {
       <div className="mx-auto max-w-6xl px-6">
         <Reveal className="mx-auto max-w-2xl text-center">
           <h2 id="pricing-title" className="font-display text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl">
-            Create more stories with a membership
+            Flexible plans for bedtime storytellers
           </h2>
           <p className="mt-4 text-lg text-ink-600">
-            Membership gives you monthly Sparks for creating and illustrating, plus creative tools
-            and member pricing. Printed books are always ordered separately.
+            Start completely free. Create and order individual books anytime, or choose a membership
+            for monthly story sparks and exclusive print discounts.
           </p>
 
           {/* Billing interval toggle */}

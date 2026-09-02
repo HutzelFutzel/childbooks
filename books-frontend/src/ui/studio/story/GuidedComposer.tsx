@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Loader2, RotateCcw, Sparkles, Wand2 } from "lucide-react";
 import type { AgeBandStoryCraft } from "../../../core/config/storyCraftCatalog";
 import type { StoryBrief } from "../../../core/types";
-import { namedHeroes } from "../../../core/story/brief";
+import { namedHeroes, splitHeroNames } from "../../../core/story/brief";
 import { Button } from "../../components/Button";
 import { useResolvedModels } from "../../hooks/useResolvedModels";
 import { HeroNamesInput } from "./HeroNamesInput";
@@ -42,7 +42,10 @@ export function GuidedComposer({
     prefilled.current = true;
     try {
       const stored = sessionStorage.getItem(HERO_NAME_KEY);
-      if (stored?.trim()) onChange({ heroNames: [stored.trim()] });
+      if (stored?.trim()) {
+        const parsed = splitHeroNames(stored.trim());
+        if (parsed.length > 0) onChange({ heroNames: parsed });
+      }
     } catch {
       /* private mode — nothing to carry over */
     }
@@ -52,7 +55,7 @@ export function GuidedComposer({
   const effectiveHeroes = useMemo(() => {
     if (heroes.length > 0) return heroes;
     const trimmed = draftHeroName.trim();
-    return trimmed ? [trimmed] : [];
+    return trimmed ? splitHeroNames(trimmed) : [];
   }, [heroes, draftHeroName]);
 
   const canWrite = Boolean(effectiveHeroes.length > 0 && models && !writing);
@@ -111,7 +114,11 @@ export function GuidedComposer({
           </div>
           <span className="mt-1 block text-[11px] text-ink-400">
             {effectiveHeroes.length > 1
-              ? `${effectiveHeroes.join(" and ")} will be the heroes, together.`
+              ? `${
+                  effectiveHeroes.length === 2
+                    ? effectiveHeroes.join(" and ")
+                    : `${effectiveHeroes.slice(0, -1).join(", ")} and ${effectiveHeroes[effectiveHeroes.length - 1]}`
+                } will be the heroes, together.`
               : effectiveHeroes.length === 1
               ? `${effectiveHeroes[0]} will be the hero of the story.`
               : "They'll be the hero of the story."}

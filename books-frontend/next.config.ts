@@ -3,6 +3,9 @@ import path from "node:path";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // Disable Next.js dev overlay indicator and segment explorer to prevent
+  // "Could not find module segment-explorer-node.js in React Client Manifest" RSC bundler cache bugs.
+  devIndicators: false,
   // Monorepo: pin the file-tracing root to the repo root so Next doesn't guess
   // it from a stray lockfile elsewhere.
   outputFileTracingRoot: path.join(import.meta.dirname, ".."),

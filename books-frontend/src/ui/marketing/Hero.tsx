@@ -11,19 +11,19 @@ export function Hero({ images, text }: { images: SiteImagesMap; text: SiteTextMa
       {/* Soft brand glow behind the hero */}
       <div
         aria-hidden
-        className="pointer-events-none absolute left-1/2 top-0 -z-10 h-[480px] w-[900px] -translate-x-1/2 rounded-full bg-brand-200/40 blur-3xl"
+        className="pointer-events-none absolute left-1/2 top-0 -z-10 h-120 w-225 -translate-x-1/2 rounded-full bg-brand-200/40 blur-3xl"
       />
       <div className="mx-auto grid max-w-6xl items-center gap-12 px-6 py-16 lg:grid-cols-2 lg:py-24">
         <div className="text-center lg:text-left">
           <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-100 px-4 py-1 text-sm font-semibold text-brand-700">
             <Sparkles className="size-3.5" />
-            <EditableText slotId="hero.badge" as="span" defaultValue="AI-illustrated picture books" serverValue={text["hero.badge"]} />
+            <EditableText slotId="hero.badge" as="span" defaultValue="Custom Children's Picture Books" serverValue={text["hero.badge"]} />
           </span>
           <EditableText
             slotId="hero.title"
             as="h1"
             multiline
-            defaultValue="Turn a story into a printed picture book."
+            defaultValue="Make your child the hero of their own picture book."
             serverValue={text["hero.title"]}
             className="mt-6 font-display text-4xl font-bold tracking-tight text-ink-900 sm:text-5xl lg:text-6xl"
           />
@@ -31,7 +31,7 @@ export function Hero({ images, text }: { images: SiteImagesMap; text: SiteTextMa
             slotId="hero.subtitle"
             as="p"
             multiline
-            defaultValue="Write your tale, design recurring characters and places, and let AI illustrate every page with a consistent look — then order a beautiful, print-ready book delivered to your door."
+            defaultValue="Write a bedtime tale, illustrate every page with consistent characters, and hold a beautiful heirloom hardcover delivered to your door."
             serverValue={text["hero.subtitle"]}
             className="mx-auto mt-6 max-w-xl text-lg text-ink-600 lg:mx-0"
           />
@@ -44,7 +44,7 @@ export function Hero({ images, text }: { images: SiteImagesMap; text: SiteTextMa
             <EditableText
               slotId="hero.note"
               as="p"
-              defaultValue="Free to start — no account or credit card needed."
+              defaultValue="Free to create and preview - no account or credit card needed."
               serverValue={text["hero.note"]}
               className="text-sm text-ink-500"
             />

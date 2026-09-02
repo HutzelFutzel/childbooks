@@ -71,9 +71,32 @@ export function namedCast(brief: StoryBrief): StoryCastMember[] {
   return (brief.cast ?? []).filter((c) => c.name.trim().length > 0);
 }
 
-/** The guided-mode hero names with an actual value, trimmed, in order. */
+/**
+ * Splits raw input on commas, ampersands, pluses, slashes, semicolons,
+ * or standalone conjunction words (and, und, et, y, etc.) into clean name tokens.
+ */
+export function splitHeroNames(raw: string): string[] {
+  return raw
+    .split(/[,;\n\r&+/]+|\b(?:and|und|et|y)\b/i)
+    .map((s) => s.trim().replace(/^['"‘“]+|['"’”]+$/g, ""))
+    .filter(Boolean);
+}
+
+/** The guided-mode hero names with an actual value, trimmed and properly split, in order. */
 export function namedHeroes(brief: StoryBrief): string[] {
-  return (brief.heroNames ?? []).map((n) => n.trim()).filter(Boolean);
+  const list = brief.heroNames ?? [];
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const item of list) {
+    for (const part of splitHeroNames(item)) {
+      const key = part.toLowerCase();
+      if (!seen.has(key)) {
+        seen.add(key);
+        result.push(part);
+      }
+    }
+  }
+  return result;
 }
 
 /**

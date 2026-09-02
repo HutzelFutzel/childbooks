@@ -454,70 +454,70 @@
   },
   "marketing": {
     "hero": {
-      "badge": "AI-illustrated picture books",
-      "title": "Turn a story into a printed picture book.",
-      "subtitle": "Write your tale, design recurring characters and places, and let AI illustrate every page with a consistent look — then order a beautiful, print-ready book delivered to your door.",
+      "badge": "Custom Children's Picture Books",
+      "title": "Make your child the hero of their own picture book.",
+      "subtitle": "Write a bedtime tale, illustrate every page with consistent characters, and hold a beautiful heirloom hardcover delivered to your door.",
       "ctaPrimary": "Create their storybook",
       "ctaSecondary": "See how it works",
-      "note": "Free to start — no account or credit card needed.",
-      "namePlaceholder": "Who is the story about?",
+      "note": "Free to create and preview - no account or credit card needed.",
+      "namePlaceholder": "Who is the story about? (e.g. Maya)",
       "nameLabel": "The hero of your story"
     },
     "trust": {
-      "0": "Professional print quality",
-      "1": "Printed & shipped by Lulu",
-      "2": "Same characters on every page",
-      "3": "Free to start — no credit card"
+      "0": "Heirloom hardcover quality",
+      "1": "Printed & shipped worldwide",
+      "2": "Same character on every page",
+      "3": "Free to preview - no card required"
     },
     "how": {
-      "heading": "From blank page to bookshelf in three steps",
-      "subhead": "A guided flow takes you from an idea to a finished, printable book — no design skills required.",
+      "heading": "From bedtime idea to real book in three steps",
+      "subhead": "A guided journey from your imagination to a finished, printable book - no design skills required.",
       "stepLabel": "Step {number}",
       "step1": {
-        "title": "Write your story",
-        "body": "Paste or write your tale. We analyze it into characters, places, and a page-by-page screenplay you can fine-tune."
+        "title": "Shape your story",
+        "body": "Write your own words or let our guided storytelling spark an adventure made just for your little reader."
       },
       "step2": {
-        "title": "Illustrate with AI",
-        "body": "Design your references once. Every page reuses them, so your cast stays visually consistent from cover to cover."
+        "title": "Bring scenes to life",
+        "body": "Choose an art style. Your characters stay consistent across every illustration, from cover to final page."
       },
       "step3": {
-        "title": "Print & keep",
-        "body": "Lay out text and art, then order a full-bleed, print-ready book — or get it instantly as a digital edition."
+        "title": "Print & cherish",
+        "body": "Preview your complete book, customize your layout, and order a hardcover delivered to your door."
       }
     },
     "features": {
-      "heading": "Everything you need to make a real book",
-      "subhead": "Powerful tools under a simple, playful surface — so the story stays the star.",
+      "heading": "Why parents & kids love our books",
+      "subhead": "Crafted with love, built for bedtime, and printed to last generations.",
       "0": {
-        "title": "Consistent characters",
-        "body": "Design a character or place once and it stays on-model across every page — same face, outfit, and style."
+        "title": "100% customizable stories",
+        "body": "Every page is fully yours to shape. Personalize names, choose your art style, and fine-tune every sentence and illustration until it feels just right."
       },
       "1": {
-        "title": "Per-page AI art",
-        "body": "Each page is illustrated to match your story beat, in an art style you choose and can refine."
+        "title": "Digital, print, or both",
+        "body": "Read together on your tablet or smartphone right away, order a real physical book delivered to your home, or enjoy both seamlessly."
       },
       "2": {
-        "title": "Print-ready export",
-        "body": "We compose full-bleed, correctly-sized pages and hand off a print-ready book for real fulfillment."
+        "title": "Softcover or heirloom hardcover",
+        "body": "Select the perfect format for your family: a durable, flexible softcover for everyday reading, or a sturdy library-grade hardcover keepsake."
       },
       "3": {
         "title": "Digital edition included",
-        "body": "Get your finished book as a beautiful PDF too — read it on any device, keep it forever."
+        "body": "Every book comes with an instant high-resolution digital edition. Read together on your iPad or share with distant grandparents."
       },
       "4": {
-        "title": "Guest-first, zero setup",
-        "body": "Start creating immediately — no sign-up wall. Save and print whenever you're ready."
+        "title": "Zero setup, start creating",
+        "body": "Start creating immediately with no sign-up wall. Preview your storybook for free."
       },
       "5": {
-        "title": "Sparks that roll over",
-        "body": "Paid plans include a monthly bundle of generation credits that carry over, plus cheaper prints."
+        "title": "Flexible options",
+        "body": "Order single printed books on demand, or join a membership for monthly savings."
       }
     },
     "founder": {
       "sectionLabel": "From our founder",
       "eyebrow": "Why we started",
-      "quote": "When my toddler needed surgery, I couldn't find a single picture book gentle enough to help him understand what was about to happen. So I made one myself — and that book became Childbook Studio.",
+      "quote": "When my toddler needed surgery, I couldn't find a single picture book gentle enough to help him understand what was about to happen. So I made one myself - and that book became Childbook Studio.",
       "name": "Founder",
       "role": "Childbook Studio"
     },

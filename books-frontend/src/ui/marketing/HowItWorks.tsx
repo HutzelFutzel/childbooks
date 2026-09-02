@@ -12,9 +12,9 @@ const STEPS = [
     slot: "how.step1" as SiteImageSlot,
     titleSlot: "how.step1.title" as const,
     bodySlot: "how.step1.body" as const,
-    title: "Write your story",
-    body: "Paste or write your tale. We analyze it into characters, places, and a page-by-page screenplay you can fine-tune.",
-    art: "Spot illustration — writing",
+    title: "Shape your story",
+    body: "Write your own words or let our guided storytelling spark an adventure made just for your little reader.",
+    art: "Spot illustration - writing",
   },
   {
     icon: Sparkles,
@@ -22,9 +22,9 @@ const STEPS = [
     slot: "how.step2" as SiteImageSlot,
     titleSlot: "how.step2.title" as const,
     bodySlot: "how.step2.body" as const,
-    title: "Illustrate with AI",
-    body: "Design your references once. Every page reuses them, so your cast stays visually consistent from cover to cover.",
-    art: "Spot illustration — illustrating",
+    title: "Bring scenes to life",
+    body: "Choose an art style. Your characters stay consistent across every illustration, from cover to final page.",
+    art: "Spot illustration - illustrating",
   },
   {
     icon: BookOpen,
@@ -32,9 +32,9 @@ const STEPS = [
     slot: "how.step3" as SiteImageSlot,
     titleSlot: "how.step3.title" as const,
     bodySlot: "how.step3.body" as const,
-    title: "Print & keep",
-    body: "Lay out text and art, then order a full-bleed, print-ready book — or get it instantly as a digital edition.",
-    art: "Spot illustration — printing",
+    title: "Print & cherish",
+    body: "Preview your complete book, customize your layout, and order a hardcover delivered to your door.",
+    art: "Spot illustration - printing",
   },
 ];
 
@@ -48,7 +48,7 @@ export function HowItWorks({ images, text }: { images: SiteImagesMap; text: Site
             slotId="how.heading"
             as="h2"
             multiline
-            defaultValue="From blank page to bookshelf in three steps"
+            defaultValue="From bedtime idea to real book in three steps"
             serverValue={text["how.heading"]}
             className="font-display text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl"
           />
@@ -56,7 +56,7 @@ export function HowItWorks({ images, text }: { images: SiteImagesMap; text: Site
             slotId="how.subhead"
             as="p"
             multiline
-            defaultValue="A guided flow takes you from an idea to a finished, printable book — no design skills required."
+            defaultValue="A guided journey from your imagination to a finished, printable book - no design skills required."
             serverValue={text["how.subhead"]}
             className="mt-4 text-lg text-ink-600"
           />

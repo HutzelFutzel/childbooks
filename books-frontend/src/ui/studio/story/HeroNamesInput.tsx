@@ -3,17 +3,13 @@
 import { useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { cn } from "../../lib/cn";
+import { splitHeroNames } from "../../../core/story/brief";
 
 const MAX_NAMES = 12;
 const MAX_NAME_LENGTH = 40;
 
-/** Splits on commas or a standalone "and" — however someone naturally lists names. */
-export function splitNames(raw: string): string[] {
-  return raw
-    .split(/,|\band\b/i)
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
+/** Splits on commas, ampersands, pluses, slashes, or standalone "and"/"und" */
+export const splitNames = splitHeroNames;
 
 export interface HeroNamesInputProps {
   names: string[];
@@ -27,7 +23,7 @@ export interface HeroNamesInputProps {
  * A seamless name input for one or more hero names.
  * Features:
  * - Live draft syncing so the form is immediately valid as the user types without requiring an Enter/blur lock-in step.
- * - Natural splitting on commas or "and" (e.g. "Mila, Leo" or "Mila and Leo").
+ * - Natural splitting on commas, ampersands, or "and" (e.g. "Mila, Leo" or "Mila & Leo" or "Mila and Leo").
  * - Clear chip badges with remove buttons and an inline "+ Add" action for siblings.
  */
 export function HeroNamesInput({
@@ -71,8 +67,15 @@ export function HeroNamesInput({
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
-    // Auto-split on comma or " and "
-    if (val.includes(",") || /\band\s+/i.test(val)) {
+    // Auto-split on comma, &, +, /, ;, or typing " and " / " und " / " et "
+    if (
+      val.includes(",") ||
+      val.includes("&") ||
+      val.includes("+") ||
+      val.includes("/") ||
+      val.includes(";") ||
+      /\b(?:and|und|et|y)\s+/i.test(val)
+    ) {
       commit(val);
       return;
     }
