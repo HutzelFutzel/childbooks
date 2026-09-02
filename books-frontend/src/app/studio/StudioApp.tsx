@@ -341,7 +341,7 @@ export default function StudioApp() {
       {accessLevel === "unverified" && <VerifyEmailBanner />}
       <LowSparksBanner />
 
-      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-grid">
+      <main className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-canvas">
         {accessLevel === "loading" ? (
           <div className="flex flex-1 items-center justify-center">
             <Loader2 className="size-7 animate-spin text-brand-400" />

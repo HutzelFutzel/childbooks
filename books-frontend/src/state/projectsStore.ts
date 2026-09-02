@@ -72,6 +72,7 @@ interface ProjectsState {
   reloadProject: (id: string) => Promise<void>;
   /** Create a project; `open` (default true) also makes it the current one. */
   createProject: (title?: string, open?: boolean) => Promise<string>;
+  duplicateProject: (id: string) => Promise<string | null>;
   openProject: (id: string) => void;
   closeProject: () => void;
   deleteProject: (id: string) => Promise<void>;
@@ -203,6 +204,28 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     set((state) => ({
       projects: [saved, ...state.projects],
       ...(open ? { currentId: saved.id } : {}),
+    }));
+    return saved.id;
+  },
+
+  async duplicateProject(id) {
+    const original = get().projects.find((p) => p.id === id);
+    if (!original) return null;
+    const now = Date.now();
+    const newId = genId();
+    const duplicate: Project = {
+      ...JSON.parse(JSON.stringify(original)),
+      id: newId,
+      title: `${original.title} (Copy)`,
+      createdAt: now,
+      updatedAt: now,
+      rev: undefined,
+    };
+    const { projects } = await getRepos();
+    const saved = await projects.save(duplicate);
+    touchProjectRemote({ projectId: saved.id, stage: saved.stage, title: saved.title });
+    set((state) => ({
+      projects: [saved, ...state.projects],
     }));
     return saved.id;
   },
