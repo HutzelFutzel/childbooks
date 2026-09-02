@@ -255,6 +255,12 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Short-window idempotency keys for contact-form retries (same email + body
+    // within minutes → same ticket). Opaque hashes, no PII; backend-only.
+    match /contactSubmitKeys/{key} {
+      allow read, write: if false;
+    }
+
     // Affiliate-program applications — system of record for the public apply
     // form. Contains applicant PII (name, email, channel URLs), so never
     // client-readable; reviewed via Slack + backend.

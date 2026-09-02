@@ -7,8 +7,10 @@
  *
  * WHERE A SUBMISSION GOES:
  *   1. Firestore (`affiliateApplications`) — system of record.
- *   2. Slack — how a human finds out (best-effort).
- *   3. Ack email to the applicant (`affiliate_application_ack`) — trust signal.
+ *   2. Slack — how a human finds out. Awaited before we respond so Cloud Run
+ *      cannot freeze the instance out from under the ping.
+ *   3. Ack email to the applicant (`affiliate_application_ack`) — trust signal,
+ *      also awaited.
  *
  * Approval is manual: create the partner in Rewardful, then Sync. This endpoint
  * never provisions Rewardful accounts.
@@ -119,31 +121,41 @@ export function registerAffiliateApplicationRoutes(app: Express): void {
       const channelLabel = AFFILIATE_CHANNEL_LABELS[channel];
       const audienceLabel = AFFILIATE_AUDIENCE_LABELS[audience];
 
-      void notifySlack({
-        channel: "growth",
-        messageKey: "affiliate_application",
-        ref: saved.ref,
-        text:
-          `🤝 ${saved.ref} · Affiliate application\n` +
-          `${name} <${email}>${req.uid ? ` · uid ${req.uid}` : ""}\n` +
-          `${channelLabel} · ${audienceLabel}\n` +
-          `${channelUrl}\n` +
-          pitch.slice(0, 500),
-      }).catch((err) => console.error("[affiliates] application slack notify failed", err));
-
-      void sendTemplatedEmail({
-        templateId: "affiliate_application_ack",
-        to: email,
-        dedupeKey: saved.ref,
-        vars: {
-          name,
+      // Await Slack + ack before responding: Cloud Run freezes CPU after the
+      // HTTP response, so a `void` ping is how an application lands in Firestore
+      // with no Slack notice. Failures are logged, never thrown.
+      await Promise.all([
+        notifySlack({
+          channel: "growth",
+          messageKey: "affiliate_application",
           ref: saved.ref,
-          channel: channelLabel,
-          channelUrl,
-          audience: audienceLabel,
-          pitch,
-        },
-      });
+          text:
+            `🤝 ${saved.ref} · Affiliate application\n` +
+            `${name} <${email}>${req.uid ? ` · uid ${req.uid}` : ""}\n` +
+            `${channelLabel} · ${audienceLabel}\n` +
+            `${channelUrl}\n` +
+            pitch.slice(0, 500),
+        })
+          .then((result) => {
+            if (!result.sent && (result.reason === "error" || result.reason === "not_configured")) {
+              console.error("[affiliates] slack not delivered", saved.ref, result.reason);
+            }
+          })
+          .catch((err) => console.error("[affiliates] application slack notify failed", err)),
+        sendTemplatedEmail({
+          templateId: "affiliate_application_ack",
+          to: email,
+          dedupeKey: saved.ref,
+          vars: {
+            name,
+            ref: saved.ref,
+            channel: channelLabel,
+            channelUrl,
+            audience: audienceLabel,
+            pitch,
+          },
+        }).catch((err) => console.error("[affiliates] ack email failed", saved.ref, err)),
+      ]);
 
       res.json({ ok: true, ref: saved.ref });
     } catch (err) {

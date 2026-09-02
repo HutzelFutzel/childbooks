@@ -20,7 +20,7 @@ import { CONTACT_TOPICS, type ContactTopicId } from "../../core/contact/topics";
  *
  * Anti-spam pieces that need the form's cooperation: an off-screen honeypot field
  * (`company`) and `elapsedMs`, which lets the backend reject submissions completed
- * impossibly fast. Both are speed bumps — App Check is the real gate.
+ * faster than a human click. Both are speed bumps — App Check is the real gate.
  */
 export function ContactForm({ privacyUrl, bare = false }: { privacyUrl?: string; bare?: boolean }) {
   const user = useAuthStore((s) => s.user);
@@ -54,12 +54,31 @@ export function ContactForm({ privacyUrl, bare = false }: { privacyUrl?: string;
     e.preventDefault();
     setError(null);
     setBusy(true);
+    const payload = JSON.stringify({ name, email, topic, message, company, elapsedMs: elapsedMs() });
     try {
-      const res = await backendFetch("/contact", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, email, topic, message, company, elapsedMs: elapsedMs() }),
-      });
+      // One network retry: a blip after the server persisted is collapsed onto
+      // the original ticket (same email + body, 15-minute window). Don't retry
+      // HTTP error responses — those are deliberate (validation, rate limit).
+      let res: Response | null = null;
+      let lastErr: unknown = null;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          res = await backendFetch("/contact", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: payload,
+          });
+          lastErr = null;
+          break;
+        } catch (err) {
+          lastErr = err;
+          if (attempt === 0) {
+            await new Promise((r) => setTimeout(r, 400));
+            continue;
+          }
+        }
+      }
+      if (!res) throw lastErr instanceof Error ? lastErr : new Error("Could not send your message.");
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as
           | { error?: { message?: string } }

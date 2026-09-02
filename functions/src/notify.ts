@@ -57,13 +57,79 @@ function webhookFor(channel: NotifyChannel): string | undefined {
   return process.env[CHANNEL_WEBHOOK_SECRET[channel]] || process.env.SLACK_WEBHOOK_URL || undefined;
 }
 
+const SLACK_POST_TIMEOUT_MS = 5_000;
+const SLACK_POST_ATTEMPTS = 2;
+const SLACK_RETRY_DELAY_MS = 300;
+
+function slackMarkerId(channel: NotifyChannel, ref: string): string {
+  return `${channel}_${ref}`.replace(/\//g, "_");
+}
+
+function slackMarkerRef(id: string) {
+  return getFirestore().collection("slackNotified").doc(id);
+}
+
+async function claimSlackMarker(id: string): Promise<"claimed" | "duplicate" | "skipped"> {
+  try {
+    ensureAdmin();
+    await slackMarkerRef(id).create({ at: Date.now() });
+    return "claimed";
+  } catch (err) {
+    // ALREADY_EXISTS ⇒ we've pinged for this fact before; stay quiet.
+    if ((err as { code?: number }).code === 6) return "duplicate";
+    // Any other marker failure: fall through and still try to notify — a
+    // possible duplicate beats a missed alert.
+    return "skipped";
+  }
+}
+
+/** Drop a reservation so a later retry can send. Best-effort; never throws. */
+async function releaseSlackMarker(id: string): Promise<void> {
+  try {
+    await slackMarkerRef(id).delete();
+  } catch {
+    // Leaving a stuck marker is worse than a possible duplicate, but a delete
+    // hiccup isn't worth failing the caller — they already got `reason: error`.
+  }
+}
+
+async function postSlackWebhook(
+  url: string,
+  payload: { text: string; blocks?: unknown[] },
+): Promise<boolean> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), SLACK_POST_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload.blocks?.length ? payload : { text: payload.text }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      console.error("[notify] slack responded", res.status);
+      return false;
+    }
+    return true;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
  * Post a plain-text message to Slack.
  *
  * When `ref` is supplied the message is sent AT MOST ONCE: a tiny Firestore
  * marker (`slackNotified/{channel}_{ref}`) makes retries idempotent, so a
  * Stripe webhook that fires twice (or a subscription that stays "active" across
- * renewals) only pings once.
+ * renewals) only pings once. The marker is a reservation, not a delivery
+ * receipt: if the webhook POST fails (or the instance dies mid-send) it is
+ * released so a later retry can actually notify, rather than being treated as
+ * a duplicate of a ping that never arrived.
  *
  * When `messageKey` is supplied the ping is gated on the admin toggle in
  * `appConfig/slackConfig` (Communication → Admin Slack) — a disabled message is
@@ -88,6 +154,7 @@ export async function notifySlack(opts: {
    */
   blocks?: unknown[];
 }): Promise<NotifyResult> {
+  let claimedKey: string | null = null;
   try {
     // Prod only — the emulator sets FUNCTIONS_EMULATOR (see auth.ts, stripeClient.ts).
     if (!opts.force && process.env.FUNCTIONS_EMULATOR === "true") return { sent: false, reason: "emulator" };
@@ -107,41 +174,32 @@ export async function notifySlack(opts: {
       }
     }
 
-    // Idempotency: claim a one-time marker keyed on the underlying fact.
     if (!opts.force && opts.ref) {
-      const key = `${channel}_${opts.ref}`.replace(/\//g, "_");
-      try {
-        ensureAdmin();
-        await getFirestore().collection("slackNotified").doc(key).create({ at: Date.now() });
-      } catch (err) {
-        // ALREADY_EXISTS ⇒ we've pinged for this fact before; stay quiet.
-        if ((err as { code?: number }).code === 6) return { sent: false, reason: "duplicate" };
-        // Any other marker failure: fall through and still try to notify — a
-        // possible duplicate beats a missed alert.
-      }
+      const key = slackMarkerId(channel, opts.ref);
+      const claim = await claimSlackMarker(key);
+      if (claim === "duplicate") return { sent: false, reason: "duplicate" };
+      if (claim === "claimed") claimedKey = key;
     }
 
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 4000);
-    try {
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(
-          opts.blocks?.length ? { text: opts.text, blocks: opts.blocks } : { text: opts.text },
-        ),
-        signal: ctrl.signal,
-      });
-      if (!res.ok) {
-        console.error("[notify] slack responded", res.status);
-        return { sent: false, reason: "error" };
+    const payload = {
+      text: opts.text,
+      ...(opts.blocks?.length ? { blocks: opts.blocks } : {}),
+    };
+
+    for (let attempt = 1; attempt <= SLACK_POST_ATTEMPTS; attempt++) {
+      try {
+        if (await postSlackWebhook(url, payload)) return { sent: true };
+      } catch (err) {
+        console.error("[notify] slack failed", err);
       }
-      return { sent: true };
-    } finally {
-      clearTimeout(timer);
+      if (attempt < SLACK_POST_ATTEMPTS) await sleep(SLACK_RETRY_DELAY_MS);
     }
+
+    if (claimedKey) await releaseSlackMarker(claimedKey);
+    return { sent: false, reason: "error" };
   } catch (err) {
     console.error("[notify] slack failed", err);
+    if (claimedKey) await releaseSlackMarker(claimedKey);
     return { sent: false, reason: "error" };
   }
 }

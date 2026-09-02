@@ -90,6 +90,16 @@ async function claimDedupe(key: string): Promise<boolean> {
   }
 }
 
+/** Drop a failed-send reservation so a later retry can actually deliver. */
+async function releaseDedupe(key: string): Promise<void> {
+  try {
+    ensureAdmin();
+    await getFirestore().collection(DEDUPE_COLLECTION).doc(key).delete();
+  } catch {
+    // Stuck key ⇒ a retry would no-op. Logged by the caller via the send result.
+  }
+}
+
 export interface SendTemplateOptions<Id extends EmailTemplateId> {
   templateId: Id;
   vars: EmailTemplateVarsMap[Id];
@@ -114,10 +124,16 @@ export interface SendTemplateResult {
 /**
  * Render + send one templated email. Returns a structured result; callers in
  * hot paths should not await-and-throw — they typically fire-and-log.
+ *
+ * The dedupe key (when supplied) is a reservation, not a delivery receipt: a
+ * failed or unconfigured send releases it so a later retry can actually
+ * deliver, rather than being treated as a duplicate of an email that never
+ * left.
  */
 export async function sendTemplatedEmail<Id extends EmailTemplateId>(
   opts: SendTemplateOptions<Id>,
 ): Promise<SendTemplateResult> {
+  let claimedKey: string | null = null;
   try {
     const config = await getEmailConfig();
     const settings = config.templates[opts.templateId];
@@ -149,8 +165,10 @@ export async function sendTemplatedEmail<Id extends EmailTemplateId>(
 
     // De-dupe (skip for tests).
     if (!opts.isTest && opts.dedupeKey) {
-      const claimed = await claimDedupe(`${opts.templateId}_${opts.dedupeKey}`);
+      const key = `${opts.templateId}_${opts.dedupeKey}`;
+      const claimed = await claimDedupe(key);
       if (!claimed) return { ok: true, skipped: "duplicate" };
+      claimedKey = key;
     }
 
     const ctx = await buildContext(config, meta.category);
@@ -179,16 +197,21 @@ export async function sendTemplatedEmail<Id extends EmailTemplateId>(
       reference: opts.dedupeKey,
     });
 
-    if (result.notConfigured) return { ok: false, skipped: "not_configured" };
+    if (result.notConfigured) {
+      if (claimedKey) await releaseDedupe(claimedKey);
+      return { ok: false, skipped: "not_configured" };
+    }
 
     if (result.ok) {
       await recordEmailEvent(opts.templateId, "sent");
       if (result.messageId) await mapMessage(result.messageId, opts.templateId, opts.uid);
     } else {
+      if (claimedKey) await releaseDedupe(claimedKey);
       await recordEmailEvent(opts.templateId, "failed");
     }
     return { ok: result.ok, error: result.error };
   } catch (err) {
+    if (claimedKey) await releaseDedupe(claimedKey);
     console.error("[email] sendTemplatedEmail failed", opts.templateId, err);
     return { ok: false, error: err instanceof Error ? err.message : "Send failed." };
   }

@@ -31,10 +31,16 @@ const RATE_LIMIT_COLLECTION = "contactRateLimits";
 export const RATE_WINDOW_MS = 10 * 60 * 1000;
 export const RATE_MAX_PER_WINDOW = 5;
 
-/** Reject anything submitted faster than a human could plausibly type it. */
-const MIN_FILL_MS = 1_500;
-/** …and anything claiming to have sat open for implausibly long. */
-const MAX_FILL_MS = 12 * 60 * 60 * 1000;
+/**
+ * Instant-submit floor. Tight on purpose: a signed-in visitor with autofilled
+ * name/email who pastes a message and clicks Send can easily beat 1.5s, and
+ * silently dropping THAT as spam is the worst failure this form can have.
+ * A script posting on mount lands well under a human click (~400ms).
+ *
+ * A form left open for hours is a human who got distracted — never a bot —
+ * so there is no upper bound.
+ */
+const MIN_FILL_MS = 400;
 
 /**
  * Local mirror of counters this instance has already seen.
@@ -187,8 +193,9 @@ export async function checkSenderDomain(email: string): Promise<SenderDomainVerd
 
 /**
  * Whether a submission carries the fingerprints of a script rather than a
- * person: the honeypot field is filled, or the form was completed impossibly
- * fast.
+ * person: the honeypot field is filled, or the form was completed in less
+ * time than a human click (see {@link MIN_FILL_MS}). A long-open form is
+ * never treated as automated — that's a distracted human, not a bot.
  *
  * `elapsedMs` is how long the form was open, measured ENTIRELY on the client (off
  * a monotonic clock where available) and sent as a duration. Deliberately not a
@@ -206,7 +213,6 @@ export function looksAutomated(input: { honeypot?: string; elapsedMs?: number })
   if (typeof elapsed === "number" && Number.isFinite(elapsed)) {
     // Negative is impossible from a single clock ⇒ the value was fabricated.
     if (elapsed < MIN_FILL_MS) return true;
-    if (elapsed > MAX_FILL_MS) return true;
   }
   return false;
 }

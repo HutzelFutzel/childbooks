@@ -3,10 +3,9 @@
  * human triage a message before ever opening the admin dashboard: is this a
  * real customer, have they paid us anything, and when did they last buy?
  *
- * Best-effort and READ-ONLY: any lookup failure degrades to "unknown" rather
- * than blocking anything — `contact/routes.ts` fires this off after already
- * responding to the visitor, so a slow/failed lookup only delays or blanks the
- * Slack ping, never the submission itself.
+ * Best-effort and READ-ONLY: any lookup failure (or a lookup that overruns the
+ * budget) degrades to a short "details unavailable" line rather than blocking
+ * the Slack ping. The ping is the thing a human actually sees; this is garnish.
  */
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
@@ -15,6 +14,9 @@ import { money } from "../notify";
 
 /** Payment statuses that represent real (even if since-refunded) revenue. */
 const PAID_LIKE_STATUSES = new Set(["paid", "refunded", "partially_refunded"]);
+
+/** Cap the extra lookup so a slow payments query can't stall the Slack ping. */
+const LOOKUP_BUDGET_MS = 2_000;
 
 export interface ContactAccountContext {
   /** A Firebase session (including a guest/anonymous one) was attached to the request. */
@@ -28,6 +30,11 @@ export interface ContactAccountContext {
   currency: string;
   /** Epoch ms of the most recent paid-like payment, or null if the uid never paid. */
   lastPurchaseAt: number | null;
+  /**
+   * Lookup timed out or threw before we knew anything useful. Format as
+   * "details unavailable" rather than inventing a guest/zero-revenue line.
+   */
+  incomplete?: boolean;
 }
 
 const NOT_SIGNED_IN: ContactAccountContext = {
@@ -39,6 +46,16 @@ const NOT_SIGNED_IN: ContactAccountContext = {
   lastPurchaseAt: null,
 };
 
+const SIGNED_IN_UNKNOWN: ContactAccountContext = {
+  signedIn: true,
+  hasAccount: false,
+  verified: false,
+  totalRevenue: 0,
+  currency: "USD",
+  lastPurchaseAt: null,
+  incomplete: true,
+};
+
 /** Firestore Timestamp → epoch ms (payment docs store `createdAt` as a Timestamp). */
 function tsToMs(v: unknown): number | null {
   if (v && typeof v === "object" && typeof (v as { toMillis?: () => number }).toMillis === "function") {
@@ -47,11 +64,23 @@ function tsToMs(v: unknown): number | null {
   return typeof v === "number" ? v : null;
 }
 
-/** Best-effort account + lifetime-revenue lookup for a uid. Never throws. */
-export async function contactAccountContext(
-  uid: string | null | undefined,
-): Promise<ContactAccountContext> {
-  if (!uid) return NOT_SIGNED_IN;
+function withTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(fallback), ms);
+    p.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(fallback);
+      },
+    );
+  });
+}
+
+async function lookupAccount(uid: string): Promise<ContactAccountContext> {
   ensureAdmin();
 
   let hasAccount = false;
@@ -94,8 +123,21 @@ export async function contactAccountContext(
   return { signedIn: true, hasAccount, verified, totalRevenue, currency, lastPurchaseAt };
 }
 
+/** Best-effort account + lifetime-revenue lookup for a uid. Never throws. */
+export async function contactAccountContext(
+  uid: string | null | undefined,
+): Promise<ContactAccountContext> {
+  if (!uid) return NOT_SIGNED_IN;
+  try {
+    return await withTimeout(lookupAccount(uid), LOOKUP_BUDGET_MS, SIGNED_IN_UNKNOWN);
+  } catch {
+    return SIGNED_IN_UNKNOWN;
+  }
+}
+
 /** One Slack line summarizing account status, lifetime spend, and recency. */
 export function formatAccountLine(ctx: ContactAccountContext): string {
+  if (ctx.incomplete) return "👤 signed in · 💰 details unavailable";
   const account = !ctx.signedIn
     ? "not signed in"
     : !ctx.hasAccount

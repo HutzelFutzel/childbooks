@@ -9,12 +9,12 @@
  *   1. Firestore (`contactMessages`) — the system of record. If this fails the
  *      visitor is told so, because the alternative is claiming we received a
  *      message we then have no way to find.
- *   2. Slack — how a human actually finds out. Best-effort.
+ *   2. Slack — how a human actually finds out. Still "best-effort" in the sense
+ *      that a Slack outage must not 500 the visitor (they'd retry into a second
+ *      ticket before we had dedupe), but the ping is AWAITED before we respond
+ *      so Cloud Run cannot freeze the instance out from under it.
  *   3. An acknowledgement email BACK TO THE SUBMITTER (`contact_form_ack`),
- *      carrying their reference. This is the trust signal that makes a form a
- *      credible substitute for a published address — without it the visitor
- *      has only our word that anything happened. Best-effort; the reference
- *      already returned in the response is the real guarantee.
+ *      carrying their reference. Same await-before-respond rule as Slack.
  *   4. An email COPY to an inbox — OPTIONAL and off by default
  *      (`contactRecipient` is empty). The whole point of storing submissions is
  *      that no inbox has to be published to receive them.
@@ -27,8 +27,8 @@
 import express, { type Express, type Response } from "express";
 import { z } from "zod";
 import { getEmailConfig } from "../appConfig";
-import { sendTemplatedEmail } from "../email/service";
-import { notifySlack } from "../notify";
+import { sendTemplatedEmail, type SendTemplateResult } from "../email/service";
+import { notifySlack, type NotifyResult } from "../notify";
 import { appCheckRejects } from "../appCheck";
 import type { AuthedRequest } from "../auth";
 import { contactTopic } from "../../../books-frontend/src/core/contact/topics";
@@ -67,6 +67,49 @@ function pretendAccepted(res: Response): void {
   res.json({ ok: true });
 }
 
+async function notifyContactSlack(opts: {
+  ref: string;
+  uid: string | null | undefined;
+  name: string;
+  email: string;
+  topicLabel: string;
+  timeSensitive: boolean;
+  message: string;
+}): Promise<NotifyResult> {
+  const account = await contactAccountContext(opts.uid);
+  return notifySlack({
+    channel: "contact",
+    messageKey: "contact_form",
+    ref: opts.ref,
+    text:
+      `✉️ ${opts.ref} · ${opts.topicLabel}${opts.timeSensitive ? " ⏱" : ""}\n` +
+      `${opts.name} <${opts.email}>${opts.uid ? ` · uid ${opts.uid}` : ""}\n` +
+      `${formatAccountLine(account)}\n` +
+      opts.message.slice(0, 500),
+  });
+}
+
+function logSideEffect(
+  kind: "slack" | "email",
+  ref: string,
+  result: NotifyResult | SendTemplateResult,
+): void {
+  if (kind === "slack") {
+    const slack = result as NotifyResult;
+    if (slack.sent) return;
+    // emulator / disabled / duplicate are expected quiet skips; error and
+    // not_configured are the ones that mean a human never saw the message.
+    if (slack.reason === "error" || slack.reason === "not_configured") {
+      console.error("[contact] slack not delivered", ref, slack.reason);
+    }
+    return;
+  }
+  const email = result as SendTemplateResult;
+  if (email.ok) return;
+  if (email.skipped === "disabled" || email.skipped === "duplicate" || email.skipped === "capped") return;
+  console.error("[contact] email not delivered", ref, email.skipped ?? email.error);
+}
+
 export function registerContactRoutes(app: Express): void {
   const json = express.json({ limit: "32kb" });
 
@@ -82,6 +125,10 @@ export function registerContactRoutes(app: Express): void {
 
       // 1. Free checks first — no I/O, no quota consumed.
       if (looksAutomated({ honeypot: company, elapsedMs })) {
+        console.warn("[contact] dropped as automated", {
+          elapsedMs,
+          honeypot: Boolean(company.trim()),
+        });
         pretendAccepted(res);
         return;
       }
@@ -138,44 +185,45 @@ export function registerContactRoutes(app: Express): void {
         userAgent: req.get("user-agent")?.slice(0, 300) ?? null,
       });
 
-      // 7. Notify a human. Best-effort — the record above is the guarantee. The
-      //    account line (signed-in/verified/lifetime revenue/last purchase) is
-      //    an extra async lookup, so it's wrapped in its own IIFE rather than
-      //    awaited inline — it must never delay the response to the visitor.
-      void (async () => {
-        const account = await contactAccountContext(req.uid);
-        await notifySlack({
-          channel: "contact",
-          messageKey: "contact_form",
+      // 7–9. Slack + emails MUST complete (or fail) before we respond. Cloud Run
+      // allocates CPU only during the request; a `void` after `res.json()` is
+      // how a ticket lands in the admin inbox with no Slack ping. Failures are
+      // logged, never thrown — the visitor already has a durable reference.
+      const sideEffects: Promise<void>[] = [
+        notifyContactSlack({
           ref: saved.ref,
-          text:
-            `✉️ ${saved.ref} · ${meta.label}${meta.timeSensitive ? " ⏱" : ""}\n` +
-            `${name} <${email}>${req.uid ? ` · uid ${req.uid}` : ""}\n` +
-            `${formatAccountLine(account)}\n` +
-            message.slice(0, 500),
-        });
-      })().catch((err) => console.error("[contact] slack notify failed", err));
-
-      // 8. Acknowledge to the SUBMITTER — the trust signal that makes the form a
-      //    credible substitute for a published address. Best-effort: the ref
-      //    already in the JSON response is the real guarantee, not this email.
-      void sendTemplatedEmail({
-        templateId: "contact_form_ack",
-        to: email,
-        dedupeKey: saved.ref,
-        vars: { name, ref: saved.ref, topic: meta.label, message },
-      });
-
-      // 9. Optional email copy, only if an inbox was explicitly configured.
-      if (config.global.contactRecipient) {
-        void sendTemplatedEmail({
-          templateId: "contact_form",
-          to: config.global.contactRecipient,
-          replyTo: email,
+          uid: req.uid,
+          name,
+          email,
+          topicLabel: meta.label,
+          timeSensitive: Boolean(meta.timeSensitive),
+          message,
+        })
+          .then((result) => logSideEffect("slack", saved.ref, result))
+          .catch((err) => console.error("[contact] slack notify failed", saved.ref, err)),
+        sendTemplatedEmail({
+          templateId: "contact_form_ack",
+          to: email,
           dedupeKey: saved.ref,
-          vars: { fromName: name, fromEmail: email, topic: meta.label, message },
-        });
+          vars: { name, ref: saved.ref, topic: meta.label, message },
+        })
+          .then((result) => logSideEffect("email", saved.ref, result))
+          .catch((err) => console.error("[contact] ack email failed", saved.ref, err)),
+      ];
+      if (config.global.contactRecipient) {
+        sideEffects.push(
+          sendTemplatedEmail({
+            templateId: "contact_form",
+            to: config.global.contactRecipient,
+            replyTo: email,
+            dedupeKey: saved.ref,
+            vars: { fromName: name, fromEmail: email, topic: meta.label, message },
+          })
+            .then((result) => logSideEffect("email", saved.ref, result))
+            .catch((err) => console.error("[contact] copy email failed", saved.ref, err)),
+        );
       }
+      await Promise.all(sideEffects);
 
       res.json({ ok: true, ref: saved.ref });
     } catch (err) {

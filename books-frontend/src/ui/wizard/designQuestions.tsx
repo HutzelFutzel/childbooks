@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Check, LayoutTemplate, Ruler, TriangleAlert } from "lucide-react";
+import { BookOpen, Check, LayoutTemplate, Ruler, Sparkles, TriangleAlert } from "lucide-react";
 import { bookSizeFromAspect } from "../../core/config/options";
 import { bookProductForConfig } from "../../core/book";
 import { getBookLayout, isKnownLayoutId } from "../../core/book/layouts";
@@ -27,6 +27,21 @@ function trimLabel(widthIn: number, heightIn: number): string {
 function shapeLabel(aspect: number): string {
   const shape = bookSizeFromAspect(aspect);
   return shape.charAt(0).toUpperCase() + shape.slice(1);
+}
+
+/** Editorial description for a page aspect ratio. */
+function shapeDescription(aspect: number): string {
+  const shape = bookSizeFromAspect(aspect);
+  switch (shape) {
+    case "square":
+      return "Classic picture book format — balanced for story text and illustrations";
+    case "landscape":
+      return "Wide panoramic format — perfect for scenic spreads and scenery";
+    case "portrait":
+      return "Standard tall format — great for classic story reading and chapter books";
+    default:
+      return "Standard printed dimensions";
+  }
 }
 
 function money(amount: number, currency: string): string {
@@ -89,7 +104,18 @@ export function SizeQuestion({ config, compact }: PickerProps) {
     : "flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-sm text-amber-800";
 
   return (
-    <div className={cn("space-y-3", compact && "space-y-2")}>
+    <div className={cn("space-y-3.5", compact && "space-y-2")}>
+      {/* Reassurance banner: makes clear that digital creation is completely free,
+          and prices are non-intrusive estimates for optional printed copies later. */}
+      {catalogLoaded && purchasable && !compact && (
+        <div className="flex items-center gap-2.5 rounded-xl border border-brand-200/70 bg-brand-50/50 px-3.5 py-2.5 text-xs text-brand-900">
+          <Sparkles className="size-4 shrink-0 text-brand-600" />
+          <span>
+            <strong>Digital creation & preview are free.</strong> Page size sets your illustration aspect ratio. Optional printed copies start at the estimates shown below.
+          </span>
+        </div>
+      )}
+
       {/* Nothing is on sale, so these are page shapes rather than things to buy.
           Said plainly here instead of at the order step, where it would arrive
           as a surprise after all the work. */}
@@ -127,10 +153,11 @@ export function SizeQuestion({ config, compact }: PickerProps) {
               selected={selectedKey === size.key}
               onSelect={() => select(size)}
               title={`${shapeLabel(size.rep.aspect)} · ${trimLabel(size.rep.trim.widthIn, size.rep.trim.heightIn)}`}
-              description={
+              description={shapeDescription(size.rep.aspect)}
+              price={
                 size.cheapest != null
-                  ? `From ${money(size.cheapest, currency)}`
-                  : "Printed dimensions"
+                  ? `Optional print: from ${money(size.cheapest, currency)}`
+                  : undefined
               }
               visual={<BookSizeShape aspect={size.rep.aspect} size="sm" />}
             />
@@ -144,12 +171,27 @@ export function SizeQuestion({ config, compact }: PickerProps) {
               selected={selectedKey === size.key}
               onSelect={() => select(size)}
               title={`${shapeLabel(size.rep.aspect)} · ${trimLabel(size.rep.trim.widthIn, size.rep.trim.heightIn)}`}
-              description={
-                size.cheapest != null
-                  ? `Real printed dimensions · from ${money(size.cheapest, currency)}`
-                  : "Real printed dimensions."
-              }
+              description={shapeDescription(size.rep.aspect)}
               visual={<BookSizeShape aspect={size.rep.aspect} />}
+              footer={
+                size.cheapest != null ? (
+                  <div className="flex items-center gap-1.5 pt-0.5">
+                    <span
+                      className={cn(
+                        "inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition",
+                        selectedKey === size.key
+                          ? "bg-brand-100/90 text-brand-800"
+                          : "bg-ink-100/80 text-ink-600",
+                      )}
+                    >
+                      <BookOpen className="size-3 text-ink-400" />
+                      <span>
+                        Print estimate: <strong className="font-semibold">{money(size.cheapest, currency)}</strong>
+                      </span>
+                    </span>
+                  </div>
+                ) : null
+              }
             />
           ))}
         </div>
@@ -180,9 +222,9 @@ export function SizeQuestion({ config, compact }: PickerProps) {
       )}
 
       {purchasable && (
-        <p className="text-xs text-ink-400">
-          How the book is bound — hardcover, softcover, stapled — is chosen when you order, once
-          your book has a final page count to bind.
+        <p className="text-xs text-ink-400 leading-relaxed">
+          Binding options (hardcover, softcover, stapled) and print upgrades are chosen at checkout
+          when your book has a final page count to bind.
         </p>
       )}
     </div>
@@ -215,9 +257,85 @@ export function LayoutQuestion({ config, compact }: PickerProps) {
   );
   const selectedId = resolveLayoutById(config.layoutId, layoutsConfig).id;
 
-  // Only one layout ships today; a picker of one is noise, so it renders as a
-  // plain description until there's a real choice to make.
+  // When only one layout is available, render an informative standard overview
+  // rather than a fake selectable choice card.
   const single = options.length === 1;
+
+  if (single && options[0]) {
+    const only = options[0];
+    const example = only.examples[0];
+
+    if (compact) {
+      return (
+        <div className="space-y-2.5 rounded-xl border border-ink-200/80 bg-ink-50/50 p-3">
+          <div className="overflow-hidden rounded-lg border border-ink-200/60 bg-white">
+            {example ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={example.imageUrl}
+                alt={example.alt ?? `${only.label} example`}
+                className="h-28 w-full object-cover"
+              />
+            ) : (
+              <LayoutSchematic
+                layout={only.layout}
+                product={product}
+                mode={only.defaultMode}
+                className="h-28 w-full rounded-none bg-ink-50/80 p-2"
+              />
+            )}
+          </div>
+          <div className="space-y-1">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-ink-800">{only.label}</span>
+              <span className="rounded-full bg-brand-100 px-1.5 py-0.5 text-[9px] font-semibold text-brand-700">
+                Standard
+              </span>
+            </div>
+            <p className="text-[11px] leading-relaxed text-ink-500">{only.description}</p>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-3">
+        <div className="rounded-2xl border border-ink-200/80 bg-ink-50/40 p-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+            <div className="w-full shrink-0 overflow-hidden rounded-xl border border-ink-200/60 bg-white sm:w-56">
+              {example ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={example.imageUrl}
+                  alt={example.alt ?? `${only.label} example`}
+                  className="h-32 w-full object-cover"
+                />
+              ) : (
+                <LayoutSchematic
+                  layout={only.layout}
+                  product={product}
+                  mode={only.defaultMode}
+                  className="h-32 w-full"
+                />
+              )}
+            </div>
+            <div className="min-w-0 flex-1 space-y-2">
+              <div className="flex items-center gap-2">
+                <h3 className="text-sm font-semibold text-ink-900">{only.label}</h3>
+                <span className="rounded-full bg-brand-100 px-2 py-0.5 text-[10px] font-semibold text-brand-700">
+                  Standard layout
+                </span>
+              </div>
+              <p className="text-xs leading-relaxed text-ink-600">{only.description}</p>
+              <p className="text-[11px] text-ink-400">
+                Story text automatically hugs the outer page margin, leaving calm space for full-page artwork.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={cn("space-y-3", compact && "space-y-2.5")}>
@@ -251,7 +369,7 @@ export function LayoutQuestion({ config, compact }: PickerProps) {
                       layout={option.layout}
                       product={product}
                       mode={option.defaultMode}
-                      className="h-full min-h-[8.5rem] w-full rounded-none bg-ink-50/80 p-3"
+                      className="h-full min-h-34 w-full rounded-none bg-ink-50/80 p-3"
                     />
                   )
                 }
@@ -260,7 +378,7 @@ export function LayoutQuestion({ config, compact }: PickerProps) {
           })}
         </div>
       ) : (
-        <div className={cn("grid gap-3", single ? "grid-cols-1" : "grid-cols-1 sm:grid-cols-2")}>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {options.map((option) => {
             const availability = layoutAvailability(option, { product, config: layoutsConfig });
             const example = option.examples[0];
@@ -318,6 +436,7 @@ function CompactOptionRow({
   onSelect,
   title,
   description,
+  price,
   visual,
   disabled,
 }: {
@@ -325,6 +444,7 @@ function CompactOptionRow({
   onSelect: () => void;
   title: string;
   description?: string;
+  price?: string;
   visual?: React.ReactNode;
   disabled?: boolean;
 }) {
@@ -334,7 +454,7 @@ function CompactOptionRow({
       disabled={disabled}
       onClick={onSelect}
       className={cn(
-        "flex w-full items-center gap-2.5 rounded-lg border px-2 py-2 text-left transition",
+        "flex w-full items-center gap-2.5 rounded-lg border px-2.5 py-2 text-left transition",
         selected
           ? "border-brand-500 bg-brand-50/70 ring-1 ring-brand-200"
           : "border-ink-200 bg-white hover:border-brand-300",
@@ -345,8 +465,13 @@ function CompactOptionRow({
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-semibold leading-snug text-ink-800">{title}</span>
         {description && (
-          <span className="mt-0.5 line-clamp-2 block text-[11px] leading-snug text-ink-500">
+          <span className="mt-0.5 line-clamp-1 block text-[11px] leading-snug text-ink-500">
             {description}
+          </span>
+        )}
+        {price && (
+          <span className="mt-0.5 block text-[11px] font-medium text-ink-500">
+            {price}
           </span>
         )}
       </span>
@@ -429,7 +554,7 @@ export const DESIGN_QUESTIONS: GuidedQuestion[] = [
   {
     id: "size",
     title: "Choose your book size",
-    subtitle: "Real printed dimensions — this sets the shape of every page.",
+    subtitle: "Sets the physical dimensions and aspect ratio for your story pages.",
     icon: Ruler,
     isAnswered: (c) => Boolean(c.productSku),
     summary: sizeSummary,
@@ -440,6 +565,12 @@ export const DESIGN_QUESTIONS: GuidedQuestion[] = [
     title: "Layout",
     subtitle: "How each page divides between the story text and the illustration.",
     icon: LayoutTemplate,
+    // Only ask layout as a guided question if there are multiple layouts to choose from.
+    visible: (c) => {
+      const shape = bookSizeFromAspect(bookProductForConfig(c).aspect);
+      const layouts = resolvedLayouts(useAppConfigStore.getState().layouts, shape);
+      return layouts.length > 1;
+    },
     isAnswered: (c) => isKnownLayoutId(c.layoutId),
     summary: layoutSummary,
     render: (props) => <LayoutQuestion {...props} />,

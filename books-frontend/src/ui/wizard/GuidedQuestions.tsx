@@ -183,7 +183,7 @@ export function GuidedQuestions({
             )}
           </div>
           <div className="flex items-center gap-3">
-            {!isSpoke && (
+            {!isSpoke && active.length > 1 && (
               <span className="hidden text-xs tabular-nums text-ink-400 sm:inline">
                 {index + 1} of {active.length}
               </span>
@@ -223,6 +223,8 @@ function QuestionRail({
   furthest: number;
   onJump: (index: number) => void;
 }) {
+  if (active.length <= 1) return null;
+
   return (
     <div className="flex items-center gap-1.5 sm:gap-2">
       {active.map((q, i) => {

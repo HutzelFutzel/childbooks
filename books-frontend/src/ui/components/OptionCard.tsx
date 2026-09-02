@@ -18,6 +18,10 @@ export interface OptionCardProps {
   current?: boolean;
   /** Badge when `current` (default "Current"). */
   currentLabel?: string;
+  /** Custom badge element pinned to top-right. */
+  badge?: React.ReactNode;
+  /** Optional footer / metadata element placed below description. */
+  footer?: React.ReactNode;
   disabled?: boolean;
   className?: string;
 }
@@ -30,6 +34,8 @@ export function OptionCard({
   visual,
   current = false,
   currentLabel = "Current",
+  badge,
+  footer,
   disabled,
   className,
 }: OptionCardProps) {
@@ -52,7 +58,9 @@ export function OptionCard({
         className,
       )}
     >
-      {current && (
+      {badge ? (
+        <div className="absolute right-2 top-2 z-10">{badge}</div>
+      ) : current ? (
         <span
           className={cn(
             "absolute right-2 top-2 rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
@@ -63,12 +71,13 @@ export function OptionCard({
         >
           {currentLabel}
         </span>
-      )}
+      ) : null}
       {visual}
       <div className="flex items-start justify-between gap-2">
-        <div>
+        <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-ink-800">{title}</p>
-          {description && <p className="mt-0.5 text-xs text-ink-500">{description}</p>}
+          {description && <p className="mt-0.5 text-xs text-ink-500 leading-relaxed">{description}</p>}
+          {footer && <div className="mt-2">{footer}</div>}
         </div>
         <span
           className={cn(

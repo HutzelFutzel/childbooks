@@ -10,7 +10,7 @@
  * Backend-only: `contactMessages` is denied to all clients in `firestore.rules`
  * and read exclusively through the admin-gated routes.
  */
-import { randomInt } from "node:crypto";
+import { createHash, randomInt } from "node:crypto";
 import { getFirestore, type Query } from "firebase-admin/firestore";
 import { ensureAdmin } from "../storage";
 import type { ContactTopicId } from "../../../books-frontend/src/core/contact/topics";
@@ -20,6 +20,9 @@ export { isContactMessageStatus } from "../../../books-frontend/src/core/contact
 export type { ContactMessage, ContactMessageStatus } from "../../../books-frontend/src/core/contact/message";
 
 export const CONTACT_COLLECTION = "contactMessages";
+/** Short-window idempotency keys so a client retry doesn't open a second ticket. */
+const SUBMIT_KEY_COLLECTION = "contactSubmitKeys";
+const SUBMIT_DEDUP_WINDOW_MS = 15 * 60 * 1000;
 
 export interface ContactMessageInput {
   name: string;
@@ -50,16 +53,33 @@ function generateRef(): string {
 }
 
 /**
+ * Same sender + same body within a few minutes is a retry (timeout, double-click,
+ * "did it send?"), not a new enquiry. Collapsing those onto one reference means
+ * Slack/email retries re-drive the original ticket instead of opening a second.
+ */
+function submitKey(email: string, message: string): string {
+  return createHash("sha256")
+    .update(`${email.trim().toLowerCase()}\n${message.trim()}`)
+    .digest("hex")
+    .slice(0, 40);
+}
+
+/**
  * Persist a submission and return its reference.
  *
  * The reference doubles as the document id and is claimed with `create()`, so a
  * collision can never silently overwrite somebody else's message — it retries
  * with a fresh reference instead. Throws if it genuinely can't write, so the
  * route can tell the visitor the truth rather than a false "message sent".
+ *
+ * A second submit of the same email+body inside {@link SUBMIT_DEDUP_WINDOW_MS}
+ * returns the original record so client retries (and a Slack/email re-drive)
+ * stay on one ticket.
  */
 export async function saveContactMessage(input: ContactMessageInput): Promise<ContactMessage> {
   ensureAdmin();
   const db = getFirestore();
+  const keyRef = db.collection(SUBMIT_KEY_COLLECTION).doc(submitKey(input.email, input.message));
 
   for (let attempt = 0; attempt < 5; attempt++) {
     const ref = generateRef();
@@ -75,8 +95,22 @@ export async function saveContactMessage(input: ContactMessageInput): Promise<Co
       handledBy: null,
     };
     try {
-      await db.collection(CONTACT_COLLECTION).doc(ref).create(record);
-      return record;
+      return await db.runTransaction(async (tx) => {
+        const keySnap = await tx.get(keyRef);
+        const prev = keySnap.data() as { ref?: string; at?: number } | undefined;
+        if (
+          keySnap.exists &&
+          typeof prev?.ref === "string" &&
+          typeof prev.at === "number" &&
+          Date.now() - prev.at < SUBMIT_DEDUP_WINDOW_MS
+        ) {
+          const existing = await tx.get(db.collection(CONTACT_COLLECTION).doc(prev.ref));
+          if (existing.exists) return existing.data() as ContactMessage;
+        }
+        tx.create(db.collection(CONTACT_COLLECTION).doc(ref), record);
+        tx.set(keyRef, { ref, at: Date.now() });
+        return record;
+      });
     } catch (err) {
       // ALREADY_EXISTS ⇒ reference collision; anything else is a real failure.
       if ((err as { code?: number }).code === 6) continue;
