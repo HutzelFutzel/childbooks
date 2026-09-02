@@ -70,7 +70,7 @@ export function DesignWorkspace({
 
   return (
     <DesignChapterHostsProvider value={{ pagesHost }}>
-      <div className="flex h-full min-h-0">
+      <div className="flex h-full min-h-0 flex-col md:flex-row">
         <DesignChapterRail
           chapter={chapter}
           onSelect={selectChapter}

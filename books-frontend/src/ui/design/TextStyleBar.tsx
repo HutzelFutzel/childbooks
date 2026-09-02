@@ -47,7 +47,8 @@ import {
 } from "../typography/fonts";
 import { getBookLanguage } from "../../core/config/bookLanguages";
 import { cn } from "../lib/cn";
-import { parseColor, toHex } from "./color";
+import { parseColor } from "./color";
+import { ColorField } from "./ColorPicker";
 import { effectiveBackdropBlur } from "./effects";
 import { effectiveFontSizePct } from "./textFit";
 import { useStudioPanelStore } from "../studio/studioPanelStore";
@@ -111,7 +112,7 @@ export function TextStyleBar({
       // Keep the caret / box selection alive when a control is clicked.
       onMouseDown={(e) => e.preventDefault()}
     >
-      <div className="flex items-center gap-0.5 rounded-xl border border-ink-200 bg-white/95 p-1 shadow-lifted backdrop-blur">
+      <div className="flex max-w-[calc(100vw-16px)] items-center gap-0.5 overflow-x-auto rounded-xl border border-ink-200 bg-white/95 p-1 shadow-lifted backdrop-blur">
         {chrome && (
           <>
             <FontField
@@ -145,7 +146,13 @@ export function TextStyleBar({
 
         <span className="mx-0.5 h-5 w-px shrink-0 bg-ink-200" />
 
-        <TextColorChip color={color} onColor={onColor} />
+        <ColorField
+          value={color ?? "#1f2937"}
+          onChange={onColor}
+          allowAlpha={false}
+          compact
+          label="Text color"
+        />
 
         {chrome && (
           <>
@@ -272,65 +279,6 @@ function MenuItem({
       <span className="text-ink-500">{icon}</span>
       {label}
     </button>
-  );
-}
-
-/**
- * Native OS colour picker. React's `onChange` fires on every drag sample (it
- * listens to the DOM `input` event), so we keep a local draft for the chip and
- * only commit via the native `change` event when the picker is dismissed.
- */
-function TextColorChip({
-  color,
-  onColor,
-}: {
-  color?: string;
-  onColor: (c: string) => void;
-}) {
-  const committed = toHex(parseColor(color ?? "#1f2937"));
-  const [draft, setDraft] = useState(committed);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const onColorRef = useRef(onColor);
-  onColorRef.current = onColor;
-  const picking = useRef(false);
-
-  useEffect(() => {
-    if (!picking.current) setDraft(committed);
-  }, [committed]);
-
-  useEffect(() => {
-    const el = inputRef.current;
-    if (!el) return;
-    const onNativeChange = () => {
-      picking.current = false;
-      const v = el.value;
-      setDraft(v);
-      onColorRef.current(v);
-    };
-    el.addEventListener("change", onNativeChange);
-    return () => el.removeEventListener("change", onNativeChange);
-  }, []);
-
-  return (
-    <label
-      title="Text colour"
-      className="relative flex size-7 shrink-0 cursor-pointer items-center justify-center overflow-hidden rounded-lg border border-ink-200 transition hover:border-brand-300"
-    >
-      <span
-        className="size-4 rounded-full ring-1 ring-inset ring-black/15"
-        style={{ background: draft }}
-      />
-      <input
-        ref={inputRef}
-        type="color"
-        value={draft}
-        onInput={(e) => {
-          picking.current = true;
-          setDraft(e.currentTarget.value);
-        }}
-        className="absolute inset-0 cursor-pointer opacity-0"
-      />
-    </label>
   );
 }
 

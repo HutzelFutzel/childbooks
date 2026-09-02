@@ -8,21 +8,21 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   BookText,
   Check,
   CheckCircle2,
   Eye,
   History,
-  Image as ImageIcon,
   Layers as LayersIcon,
   LayoutTemplate,
   Loader2,
+  MoreHorizontal,
+  Plus,
   Redo2,
   RefreshCw,
   LayoutGrid,
-  ShoppingCart,
   SlidersHorizontal,
   Sparkles,
   Type,
@@ -42,6 +42,7 @@ import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useResolvedModels } from "../hooks/useResolvedModels";
 import { notify } from "../lib/notify";
 import { cn } from "../lib/cn";
+import { useDialogFocus } from "../lib/dialogFocus";
 import { AssetsLibrary } from "./AssetsLibrary";
 import { useDesignChapterHosts } from "./DesignChapterHosts";
 import { ElementPanel, elementPanelHasContent } from "./ElementPanel";
@@ -87,7 +88,6 @@ export function BookCanvas() {
     setEditingDisp,
     undo,
     redo,
-    setStep,
     openDesignSetup,
   } = useStudio();
   const textEditSection = useStudioPanelStore((s) => s.textEditSection);
@@ -100,6 +100,12 @@ export function BookCanvas() {
   const chapterHosts = useDesignChapterHosts();
   const models = useResolvedModels();
   const [previewing, setPreviewing] = useState(false);
+  const closePreview = useCallback(() => setPreviewing(false), []);
+  const closeInspector = useCallback(() => {
+    closeToolPanel();
+    closeTextEdit();
+    closeImageEdit();
+  }, [closeImageEdit, closeTextEdit, closeToolPanel]);
 
   /** Toggle docked illustration tools for a page (same control opens/closes). */
   const openIllustrationTools = useCallback(
@@ -199,57 +205,33 @@ export function BookCanvas() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Toolbar */}
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-ink-100 bg-white/70 px-3 py-2.5 backdrop-blur sm:px-5">
-        <div className="flex min-w-0 items-center gap-3">
+      <div className="flex min-w-0 items-center justify-between gap-2 border-b border-ink-100 bg-white/70 px-2 py-2 backdrop-blur sm:px-5 sm:py-2.5">
+        <div className="flex min-w-0 items-center">
           <NextActionChip />
         </div>
-        <div className="flex items-center gap-1.5">
-          {/* Undo / redo: available on every screen size. */}
-          <button
-            onClick={undo}
-            title="Undo"
-            className="rounded-lg p-2 text-ink-500 transition hover:bg-ink-100 hover:text-ink-800"
-          >
-            <Undo2 className="size-4" />
-          </button>
-          <button
-            onClick={redo}
-            title="Redo"
-            className="rounded-lg p-2 text-ink-500 transition hover:bg-ink-100 hover:text-ink-800"
-          >
-            <Redo2 className="size-4" />
-          </button>
-          <span className="mx-0.5 h-5 w-px bg-ink-200" />
-          <Button
-            size="sm"
-            variant="secondary"
-            leftIcon={<SlidersHorizontal className="size-4" />}
-            onClick={() => toggleToolPanel("view")}
-            title="Snapping, grid & print guides"
-            aria-pressed={toolPanel === "view"}
-            className={
-              toolPanel === "view"
-                ? "border-brand-200 bg-brand-50 text-brand-700 ring-brand-200"
-                : undefined
-            }
-          >
-            <span className="hidden sm:inline">View</span>
-          </Button>
-          <Button
-            size="sm"
-            variant="secondary"
-            leftIcon={<LayoutTemplate className="size-4" />}
-            onClick={openDesignSetup}
-            title="Book size"
-            aria-pressed={toolPanel === "setup"}
-            className={
-              toolPanel === "setup"
-                ? "border-brand-200 bg-brand-50 text-brand-700 ring-brand-200"
-                : undefined
-            }
-          >
-            <span className="hidden sm:inline">Setup</span>
-          </Button>
+        <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
+          {/* Undo / redo stay visible on desktop and move into More on mobile. */}
+          <div className="hidden items-center sm:flex">
+            <button
+              type="button"
+              onClick={undo}
+              title="Undo"
+              aria-label="Undo"
+              className="flex size-9 items-center justify-center rounded-lg text-ink-500 transition hover:bg-ink-100 hover:text-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+            >
+              <Undo2 className="size-4" />
+            </button>
+            <button
+              type="button"
+              onClick={redo}
+              title="Redo"
+              aria-label="Redo"
+              className="flex size-9 items-center justify-center rounded-lg text-ink-500 transition hover:bg-ink-100 hover:text-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+            >
+              <Redo2 className="size-4" />
+            </button>
+            <span className="mx-0.5 h-5 w-px bg-ink-200" />
+          </div>
           <Button
             size="sm"
             variant="secondary"
@@ -258,10 +240,13 @@ export function BookCanvas() {
           >
             Preview
           </Button>
-          <Button size="sm" leftIcon={<ShoppingCart className="size-4" />} onClick={() => setStep("order")}>
-            <span className="hidden sm:inline">Order &amp; print</span>
-            <span className="sm:hidden">Order</span>
-          </Button>
+          <PagesToolbarMore
+            viewOpen={toolPanel === "view"}
+            onUndo={undo}
+            onRedo={redo}
+            onToggleView={() => toggleToolPanel("view")}
+            onOpenSetup={openDesignSetup}
+          />
         </div>
       </div>
 
@@ -340,15 +325,11 @@ export function BookCanvas() {
               !!textEditSection,
               !!imageEditSection,
             ) && (
-              <InspectorDock key="inspector-dock">
+              <InspectorDock key="inspector-dock" onClose={closeInspector}>
                 <ElementPanel
                   toolPanel={toolPanel}
                   arrangePages={arrangePages}
-                  onClose={() => {
-                    closeToolPanel();
-                    closeTextEdit();
-                    closeImageEdit();
-                  }}
+                  onClose={closeInspector}
                 />
               </InspectorDock>
             )}
@@ -358,10 +339,124 @@ export function BookCanvas() {
 
       <AnimatePresence>
         {previewing && displays.length > 0 && (
-          <BookPreview displays={displays} onClose={() => setPreviewing(false)} />
+          <BookPreview
+            displays={displays}
+            startId={activeDisp?.id}
+            onClose={closePreview}
+          />
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+function PagesToolbarMore({
+  viewOpen,
+  onUndo,
+  onRedo,
+  onToggleView,
+  onOpenSetup,
+}: {
+  viewOpen: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
+  onToggleView: () => void;
+  onOpenSetup: () => void;
+}) {
+  return (
+    <Popover
+      align="end"
+      panelClassName="w-56 p-1.5"
+      trigger={(open) => (
+        <span
+          title="More page tools"
+          className={cn(
+            "inline-flex size-8 items-center justify-center rounded-lg border text-ink-500 transition group-focus-visible:ring-2 group-focus-visible:ring-brand-400",
+            open || viewOpen
+              ? "border-brand-200 bg-brand-50 text-brand-700"
+              : "border-ink-200 bg-white hover:bg-ink-50 hover:text-ink-700",
+          )}
+        >
+          <MoreHorizontal className="size-4" />
+          <span className="sr-only">More page tools</span>
+        </span>
+      )}
+    >
+      {(close) => (
+        <div className="space-y-0.5">
+          <div className="grid grid-cols-2 gap-1 sm:hidden">
+            <PagesToolbarMenuItem
+              icon={<Undo2 className="size-4" />}
+              label="Undo"
+              onClick={() => {
+                onUndo();
+                close();
+              }}
+            />
+            <PagesToolbarMenuItem
+              icon={<Redo2 className="size-4" />}
+              label="Redo"
+              onClick={() => {
+                onRedo();
+                close();
+              }}
+            />
+          </div>
+          <PagesToolbarMenuItem
+            icon={<SlidersHorizontal className="size-4" />}
+            label="Canvas view"
+            description="Snapping, grid and print guides"
+            active={viewOpen}
+            onClick={() => {
+              onToggleView();
+              close();
+            }}
+          />
+          <PagesToolbarMenuItem
+            icon={<LayoutTemplate className="size-4" />}
+            label="Book setup"
+            description="Size, layout and page defaults"
+            onClick={() => {
+              onOpenSetup();
+              close();
+            }}
+          />
+        </div>
+      )}
+    </Popover>
+  );
+}
+
+function PagesToolbarMenuItem({
+  icon,
+  label,
+  description,
+  active,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  description?: string;
+  active?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition",
+        active ? "bg-brand-50 text-brand-700" : "text-ink-700 hover:bg-ink-50",
+      )}
+    >
+      <span className="mt-0.5 shrink-0">{icon}</span>
+      <span className="min-w-0">
+        <span className="block text-xs font-semibold">{label}</span>
+        {description && (
+          <span className="block text-[11px] leading-snug text-ink-400">{description}</span>
+        )}
+      </span>
+    </button>
   );
 }
 
@@ -376,22 +471,71 @@ const INSPECTOR_DOCK_W = 320; // Tailwind w-80
  * canvas next to the chapter rail, so it becomes a full-width bottom sheet
  * instead — overlaid on top of the stage rather than sharing its width.
  */
-function InspectorDock({ children }: { children: React.ReactNode }) {
+function InspectorDock({
+  children,
+  onClose,
+}: {
+  children: React.ReactNode;
+  onClose: () => void;
+}) {
   const isMobile = useMediaQuery("(max-width: 767px)");
+  const reduceMotion = useReducedMotion();
+  const dialogRef = useDialogFocus<HTMLElement>(isMobile);
+
+  useEffect(() => {
+    if (!isMobile) return;
+    const previousOverflow = document.body.style.overflow;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      onClose();
+    };
+    document.body.style.overflow = "hidden";
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [isMobile, onClose]);
 
   if (isMobile) {
-    return (
-      <motion.aside
-        initial={{ y: "100%", opacity: 0 }}
-        animate={{ y: 0, opacity: 1 }}
-        exit={{ y: "100%", opacity: 0 }}
-        transition={{ type: "spring", stiffness: 380, damping: 34 }}
-        // Fixed (not `max-h`) height — `PanelShell` fills its parent with
-        // `h-full`, which needs a definite height to resolve against.
-        className="fixed inset-x-0 bottom-0 z-40 h-[75vh] overflow-hidden rounded-t-3xl border-t border-ink-100 bg-white shadow-lifted"
-      >
-        <div className="flex h-full flex-col pb-[env(safe-area-inset-bottom)]">{children}</div>
-      </motion.aside>
+    return createPortal(
+      <div className="fixed inset-0 z-40">
+        <motion.div
+          aria-hidden
+          className="absolute inset-0 bg-ink-900/35 backdrop-blur-[1px]"
+          initial={reduceMotion ? false : { opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          onClick={onClose}
+        />
+        <motion.aside
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Page editing tools"
+          tabIndex={-1}
+          initial={reduceMotion ? false : { y: "100%", opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: "100%", opacity: 0 }}
+          transition={
+            reduceMotion
+              ? { duration: 0.08 }
+              : { type: "spring", stiffness: 380, damping: 34 }
+          }
+          // Fixed height lets PanelShell fill the sheet predictably.
+          className="absolute inset-x-0 bottom-0 z-10 flex h-[75dvh] flex-col overflow-hidden rounded-t-3xl border-t border-ink-100 bg-white shadow-lifted outline-none"
+        >
+          <div className="flex shrink-0 justify-center pb-1 pt-2.5" aria-hidden>
+            <span className="h-1 w-10 rounded-full bg-ink-200" />
+          </div>
+          <div className="min-h-0 flex-1 pb-[env(safe-area-inset-bottom)]">
+            {children}
+          </div>
+        </motion.aside>
+      </div>,
+      document.body,
     );
   }
 
@@ -428,9 +572,11 @@ function NextActionChip() {
         <span className="hidden sm:inline">Illustrating your book…</span>
         <span className="sm:hidden">Illustrating…</span>
         <button
+          type="button"
           onClick={gen.cancelGeneration}
           title="Cancel generation"
-          className="ml-1 rounded-full p-1 text-brand-400 transition hover:bg-brand-100 hover:text-red-600"
+          aria-label="Cancel generation"
+          className="ml-1 flex size-8 items-center justify-center rounded-full text-brand-400 transition hover:bg-brand-100 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
         >
           <X className="size-3.5" />
         </button>
@@ -836,7 +982,7 @@ function ChipButton({
   );
 }
 
-/** Floating "Add" dock — page-local tools (text, image, arrange). */
+/** Compact page-local dock. Add choices stay hidden until requested. */
 function AddDock({
   activePageId,
   toolPanel,
@@ -850,33 +996,71 @@ function AddDock({
   const pageId = activePageId;
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-4 z-30 flex justify-center">
+    <div className="pointer-events-none absolute inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-30 flex justify-center">
       <div
         className="pointer-events-auto flex items-center gap-1 rounded-full bg-white/95 p-1.5 shadow-lifted ring-1 ring-ink-200 backdrop-blur-sm"
         data-floating-bar-obstacle
       >
-        <DockButton
-          icon={<Type className="size-4" />}
-          label="Text"
-          title="Add story text, or a blank text box"
-          disabled={!pageId}
-          onClick={() => pageId && addText(pageId)}
-        />
-        <Popover
-          side="top"
-          align="center"
-          panelClassName="w-64"
-          trigger={
-            <span
-              title="Upload or place saved pictures"
-              className="flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium text-ink-600 transition hover:bg-ink-100"
-            >
-              <ImageIcon className="size-4" /> <span className="hidden sm:inline">Assets</span>
-            </span>
-          }
-        >
-          <AssetsLibrary onPlace={pageId ? (asset) => addAssetImage(pageId, asset) : undefined} />
-        </Popover>
+        {pageId ? (
+          <Popover
+            side="top"
+            align="center"
+            panelClassName="w-72 p-2"
+            trigger={(open) => (
+              <span
+                title="Add something to this page"
+                className={cn(
+                  "flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-semibold transition group-focus-visible:ring-2 group-focus-visible:ring-brand-400",
+                  open
+                    ? "bg-brand-50 text-brand-700"
+                    : "text-ink-700 hover:bg-ink-100",
+                )}
+              >
+                <Plus className="size-4" />
+                Add
+              </span>
+            )}
+          >
+            {(close) => (
+              <div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    addText(pageId);
+                    close();
+                  }}
+                  className="flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2.5 text-left text-ink-700 transition hover:bg-ink-50"
+                >
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
+                    <Type className="size-4" />
+                  </span>
+                  <span className="min-w-0">
+                    <span className="block text-sm font-semibold">Text box</span>
+                    <span className="block text-[11px] leading-snug text-ink-400">
+                      Add story text or an empty text box
+                    </span>
+                  </span>
+                </button>
+                <div className="my-1 border-t border-ink-100" />
+                <div className="px-1.5 py-1.5">
+                  <AssetsLibrary
+                    onPlace={(asset) => {
+                      addAssetImage(pageId, asset);
+                      close();
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </Popover>
+        ) : (
+          <DockButton
+            icon={<Plus className="size-4" />}
+            label="Add"
+            disabled
+            onClick={() => undefined}
+          />
+        )}
         <span className="mx-0.5 h-5 w-px bg-ink-200" />
         <DockButton
           icon={<LayersIcon className="size-4" />}

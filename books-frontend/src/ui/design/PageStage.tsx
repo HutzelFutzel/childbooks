@@ -24,7 +24,6 @@ import {
 } from "./floatingBarPlacement";
 import type { ReadingModeId } from "../../core/config/ageWritingCatalog";
 import {
-  applyInlineColor,
   applyInlineCommand,
   editorToParagraphs,
   paragraphsToHtml,
@@ -610,13 +609,15 @@ export function PageStage({
   }
 
   const editingBox = editingId
-    ? pageDesign.textBoxes.find((b) => b.id === editingId)
+    ? pageDesign.textBoxes.find((b) => b.id === editingId && !b.hidden)
     : undefined;
 
   // Minimum width (px) the selected text box may be resized to before words start
   // clipping — keeps resize from squeezing a box narrower than its content.
   const selectedTextBox =
-    editable && selectedId ? pageDesign.textBoxes.find((b) => b.id === selectedId) : undefined;
+    editable && selectedId
+      ? pageDesign.textBoxes.find((b) => b.id === selectedId && !b.hidden)
+      : undefined;
   const selMinWidthPx =
     selectedTextBox && W > 0 ? minContentWidthPct(selectedTextBox, aspect) * W : 0;
 
@@ -1835,6 +1836,9 @@ function InlineTextEditor({
                   ref.current?.focus();
                   return;
                 }
+                if ((next as HTMLElement).closest?.("[data-color-picker-popover]")) {
+                  return;
+                }
               }
               finish(true);
             }}
@@ -1886,9 +1890,21 @@ function InlineTextEditor({
             syncLive(true);
           }}
           onColor={(c) => {
-            applyInlineColor(c);
-            ref.current?.focus();
-            syncLive(true);
+            const editor = ref.current;
+            if (!editor || !liveChrome) return;
+            editor.style.color = c;
+            editor
+              .querySelectorAll<HTMLElement>("[style]")
+              .forEach((el) => el.style.removeProperty("color"));
+            dirty.current = true;
+            liveChrome.onPatch(
+              {
+                color: c,
+                paragraphs: editorToParagraphs(editor),
+              },
+              { coalesce: `edit-${box.id}` },
+            );
+            editor.focus({ preventScroll: true });
           }}
           chrome={liveChrome}
         />

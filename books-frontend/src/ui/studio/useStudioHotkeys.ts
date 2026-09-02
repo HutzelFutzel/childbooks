@@ -7,6 +7,7 @@
  */
 import { useEffect, useRef } from "react";
 import { useStudio } from "./StudioContext";
+import { useStudioPanelStore } from "./studioPanelStore";
 
 function isTypingTarget(el: EventTarget | null): boolean {
   if (!(el instanceof HTMLElement)) return false;
@@ -95,6 +96,19 @@ export function useStudioHotkeys() {
       }
 
       if (e.key === "Escape") {
+        const panels = useStudioPanelStore.getState();
+        if (panels.toolPanel) {
+          panels.closeToolPanel();
+          return;
+        }
+        if (panels.imageEditSection) {
+          panels.closeImageEdit();
+          return;
+        }
+        if (panels.textEditSection) {
+          panels.closeTextEdit();
+          return;
+        }
         if (s.selection.kind !== "none") s.select({ kind: "none" });
         return;
       }

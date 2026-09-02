@@ -103,9 +103,12 @@ function PanelShell({
           {subtitle && <p className="truncate text-[11px] text-ink-400">{subtitle}</p>}
         </div>
         <button
+          type="button"
+          data-panel-close
           onClick={onClose}
           title="Close"
-          className="rounded-lg p-1.5 text-ink-400 transition hover:bg-ink-100 hover:text-ink-700"
+          aria-label={`Close ${title}`}
+          className="flex size-11 shrink-0 items-center justify-center rounded-lg text-ink-400 transition hover:bg-ink-100 hover:text-ink-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
         >
           <X className="size-4" />
         </button>

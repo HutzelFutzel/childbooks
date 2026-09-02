@@ -17,6 +17,7 @@
  * (`HalfFrame` for the live editor, `SpreadThumbnail` for the filmstrip) that
  * both the main stage and the filmstrip share.
  */
+import { useMemo } from "react";
 import { Ban } from "lucide-react";
 import { useJobsStore } from "../../state/jobsStore";
 import { getCursor } from "../../core/versioning";
@@ -224,6 +225,55 @@ export function SpreadThumbnail({ disp }: { disp: DisplaySpread }) {
 
 export type UnitStatus = "empty" | "missing" | "generating" | "stale" | "ready";
 
+export function displayStatusFor(
+  disp: DisplaySpread,
+  stale: (pageId: string) => boolean,
+  generatingPages: Set<string>,
+  activeUnitIds: Set<string>,
+): UnitStatus {
+  const entries = displayEntries(disp)
+    .map((e) => e.entry)
+    .filter((e) => !isBlankEntry(e));
+  if (entries.length === 0) return "empty";
+  const ids = entries.map((e) => e.page.id);
+  if (ids.some((id) => generatingPages.has(id) || activeUnitIds.has(id))) {
+    return "generating";
+  }
+  if (entries.some((e) => !e.page.blobId)) return "missing";
+  if (entries.some((e) => stale(e.page.id))) return "stale";
+  return "ready";
+}
+
+/** Filtering ignores generation overlays; only missing or stale art needs action. */
+export function displayNeedsAttention(
+  disp: DisplaySpread,
+  stale: (pageId: string) => boolean,
+): boolean {
+  return displayEntries(disp)
+    .map((side) => side.entry)
+    .filter((entry) => !isBlankEntry(entry))
+    .some((entry) => !entry.page.blobId || stale(entry.page.id));
+}
+
+/** Statuses for a whole display list, shared by filtering and status dots. */
+export function useDisplayStatuses(
+  displays: DisplaySpread[],
+  stale: (pageId: string) => boolean,
+): Map<string, UnitStatus> {
+  const { generatingPages } = useStudio();
+  const activeUnitIds = useJobsStore((s) => s.activeUnitIds);
+  return useMemo(
+    () =>
+      new Map(
+        displays.map((disp) => [
+          disp.id,
+          displayStatusFor(disp, stale, generatingPages, activeUnitIds),
+        ]),
+      ),
+    [activeUnitIds, displays, generatingPages, stale],
+  );
+}
+
 /** Live generation status for one page/cover entry — drives chip badges & dots. */
 export function useEntryStatus(entry: Entry, stale: (pageId: string) => boolean): UnitStatus {
   const { generatingPages } = useStudio();
@@ -240,15 +290,6 @@ export function useEntryStatus(entry: Entry, stale: (pageId: string) => boolean)
 /** Worst-of status across every live page a display spread shows — for the filmstrip dot. */
 export function useDisplayStatus(disp: DisplaySpread, stale: (pageId: string) => boolean): UnitStatus {
   const { generatingPages } = useStudio();
-  const entries = displayEntries(disp)
-    .map((e) => e.entry)
-    .filter((e) => !isBlankEntry(e));
-  const ids = entries.map((e) => e.page.id);
-  const jobActive = useJobsStore((s) => ids.some((id) => s.activeUnitIds.has(id)));
-  if (entries.length === 0) return "empty";
-  const generating = jobActive || ids.some((id) => generatingPages.has(id));
-  if (generating) return "generating";
-  if (entries.some((e) => !e.page.blobId)) return "missing";
-  if (entries.some((e) => e.page.blobId && stale(e.page.id))) return "stale";
-  return "ready";
+  const activeUnitIds = useJobsStore((s) => s.activeUnitIds);
+  return displayStatusFor(disp, stale, generatingPages, activeUnitIds);
 }

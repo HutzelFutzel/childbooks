@@ -69,7 +69,7 @@ export function ImageStyleBar({
         e.preventDefault();
       }}
     >
-      <div className="flex items-center gap-0.5 rounded-xl border border-ink-200 bg-white/95 p-1 shadow-lifted backdrop-blur">
+      <div className="flex max-w-[calc(100vw-16px)] items-center gap-0.5 overflow-x-auto rounded-xl border border-ink-200 bg-white/95 p-1 shadow-lifted backdrop-blur">
         {canCrop && (
           <Toggle
             label={isFill ? "Position picture in frame" : "Crop / resize frame"}

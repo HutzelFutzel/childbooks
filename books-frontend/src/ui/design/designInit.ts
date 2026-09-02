@@ -262,9 +262,9 @@ function textForSlot(slot: ResolvedSlot, page: DesignPage): string {
 }
 
 /**
- * Toggle baked cover text on an existing page design: remove or restore the
- * title/subtitle overlays without deleting the page (images, custom boxes,
- * selection all stay intact).
+ * Toggle baked cover text on an existing page design. Role-owned overlays are
+ * hidden rather than deleted so typography, color, placement, and current text
+ * survive a round trip through "paint title into illustration".
  */
 export function applyCoverBakeText(
   design: BookDesign,
@@ -275,13 +275,19 @@ export function applyCoverBakeText(
   if (bakeText) {
     return {
       ...pageDesign,
-      textBoxes: pageDesign.textBoxes.filter(
-        (b) => b.role !== "book-title" && b.role !== "book-subtitle",
+      textBoxes: pageDesign.textBoxes.map((b) =>
+        b.role === "book-title" || b.role === "book-subtitle"
+          ? { ...b, hidden: true }
+          : b,
       ),
     };
   }
 
-  const boxes = [...pageDesign.textBoxes];
+  const boxes = pageDesign.textBoxes.map((b) =>
+    b.role === "book-title" || b.role === "book-subtitle"
+      ? { ...b, hidden: false }
+      : b,
+  );
   let nextZ = Math.max(0, ...boxes.map((b) => b.z)) + 1;
 
   if (!boxes.some((b) => b.role === "book-title") && page.seedTitle?.trim()) {

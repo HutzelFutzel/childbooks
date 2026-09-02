@@ -19,11 +19,6 @@ const WIDTH_KEY = "childbooks.designChapterRailWidth";
 const WIDTH_MIN = 160;
 const WIDTH_MAX = 280;
 const WIDTH_DEFAULT = 188;
-// Below `md` the resizable desktop width (160–280px) would leave the stage
-// with little to no room next to the inspector dock, so it collapses to a
-// fixed icon-only rail instead — not user-resizable, so no stored width.
-const MOBILE_WIDTH = 96;
-
 function readStoredWidth(): number {
   if (typeof window === "undefined") return WIDTH_DEFAULT;
   const raw = window.localStorage.getItem(WIDTH_KEY);
@@ -105,10 +100,20 @@ export function DesignChapterRail({
 
   return (
     <aside
-      className="relative flex h-full shrink-0 flex-col border-r border-ink-100 bg-white/90"
-      style={{ width: isMobile ? MOBILE_WIDTH : width }}
+      className={cn(
+        "relative flex shrink-0 flex-col bg-white/90",
+        isMobile
+          ? "w-full border-b border-ink-100"
+          : "h-full border-r border-ink-100",
+      )}
+      style={isMobile ? undefined : { width }}
     >
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div
+        className={cn(
+          "flex min-h-0",
+          isMobile ? "w-full flex-row" : "flex-1 flex-col",
+        )}
+      >
         {CHAPTERS.map((meta) => {
           const unlocked =
             meta.id === "style" ? true : meta.id === "cast" ? castUnlocked : pagesUnlocked;
@@ -124,7 +129,13 @@ export function DesignChapterRail({
           return (
             <div
               key={meta.id}
-              className={cn("flex flex-col border-b border-ink-100", fills && "min-h-0 flex-1")}
+              className={cn(
+                "flex flex-col",
+                isMobile
+                  ? "min-w-0 flex-1 border-r border-ink-100 last:border-r-0"
+                  : "border-b border-ink-100",
+                !isMobile && fills && "min-h-0 flex-1",
+              )}
             >
               <button
                 type="button"
@@ -213,7 +224,7 @@ export function DesignChapterRail({
                 </AnimatePresence>
               )}
 
-              {open && meta.id === "pages" && (
+              {!isMobile && open && meta.id === "pages" && (
                 <motion.div
                   key="pages-host"
                   initial={{ opacity: 0 }}
@@ -229,17 +240,46 @@ export function DesignChapterRail({
         })}
       </div>
 
+      {isMobile && chapter === "pages" && (
+        <motion.div
+          key="mobile-pages-host"
+          initial={{ height: 0, opacity: 0 }}
+          animate={{ height: 148, opacity: 1 }}
+          transition={{ duration: 0.18 }}
+          className="w-full shrink-0 overflow-hidden border-t border-ink-100"
+        >
+          <div ref={pagesHostRef} className="h-full min-h-0" />
+        </motion.div>
+      )}
+
       {!isMobile && (
         <div
           role="separator"
+          tabIndex={0}
           aria-orientation="vertical"
-          title="Drag to resize"
+          aria-valuemin={WIDTH_MIN}
+          aria-valuemax={WIDTH_MAX}
+          aria-valuenow={width}
+          aria-label="Resize design navigation"
+          title="Drag or use arrow keys to resize"
+          onKeyDown={(e) => {
+            let next = width;
+            if (e.key === "ArrowLeft") next = width - 8;
+            else if (e.key === "ArrowRight") next = width + 8;
+            else if (e.key === "Home") next = WIDTH_MIN;
+            else if (e.key === "End") next = WIDTH_MAX;
+            else return;
+            e.preventDefault();
+            const clamped = Math.min(WIDTH_MAX, Math.max(WIDTH_MIN, next));
+            setWidth(clamped);
+            window.localStorage.setItem(WIDTH_KEY, String(clamped));
+          }}
           onPointerDown={(e) => {
             e.preventDefault();
             resizing.current = { startX: e.clientX, startW: width };
             (e.target as HTMLElement).setPointerCapture(e.pointerId);
           }}
-          className="absolute inset-y-0 right-0 z-10 w-1.5 cursor-col-resize hover:bg-brand-200/50"
+          className="absolute inset-y-0 right-0 z-10 w-1.5 cursor-col-resize hover:bg-brand-200/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
         />
       )}
     </aside>

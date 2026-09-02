@@ -166,7 +166,15 @@ export function Popover({
       if (anchorRef.current?.contains(t) || panelRef.current?.contains(t)) return;
       setOpen(false);
     };
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      setOpen(false);
+      requestAnimationFrame(() => {
+        anchorRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
+      });
+    };
     document.addEventListener("mousedown", onDown);
     document.addEventListener("keydown", onKey);
     return () => {
@@ -174,6 +182,18 @@ export function Popover({
       document.removeEventListener("keydown", onKey);
     };
   }, [open]);
+
+  useEffect(() => {
+    if (!open || !style) return;
+    const frame = requestAnimationFrame(() => {
+      panelRef.current
+        ?.querySelector<HTMLElement>(
+          "button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])",
+        )
+        ?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [open, style]);
 
   useEffect(() => () => {
     if (closeTimer.current) clearTimeout(closeTimer.current);
@@ -207,7 +227,7 @@ export function Popover({
         aria-expanded={open}
         aria-controls={id}
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex"
+        className="group inline-flex focus-visible:outline-none"
       >
         {typeof trigger === "function" ? trigger(open) : trigger}
       </button>

@@ -145,7 +145,8 @@ function AssetTile({
         }}
         onPointerDown={(e) => e.stopPropagation()}
         title="Remove asset"
-        className="absolute right-0.5 top-0.5 hidden rounded bg-white/90 p-0.5 text-red-500 shadow-sm group-hover:block"
+        aria-label={`Remove ${asset.name}`}
+        className="absolute right-0.5 top-0.5 flex size-7 items-center justify-center rounded-md bg-white/90 text-red-500 opacity-100 shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 md:opacity-0 md:group-hover:opacity-100 md:focus:opacity-100"
       >
         <Trash2 className="size-3" />
       </button>

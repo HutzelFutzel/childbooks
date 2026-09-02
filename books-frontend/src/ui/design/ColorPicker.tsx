@@ -66,11 +66,14 @@ export function ColorField({
   value,
   onChange,
   allowAlpha = true,
+  compact = false,
 }: {
   label?: string;
   value: string;
   onChange: (color: string) => void;
   allowAlpha?: boolean;
+  /** Swatch-only trigger for dense floating toolbars. */
+  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<RGBA>(() => parseColor(value));
@@ -182,16 +185,26 @@ export function ColorField({
   const display = open ? toRgbaString(draft) : value;
 
   return (
-    <div className="relative">
-      {label && <span className="mb-1 block text-xs font-medium text-ink-500">{label}</span>}
+    <div className={cn("relative", compact && "shrink-0")}>
+      {label && !compact && (
+        <span className="mb-1 block text-xs font-medium text-ink-500">{label}</span>
+      )}
       <button
         ref={triggerRef}
         type="button"
         onClick={() => (open ? close(true) : setOpen(true))}
-        className="flex items-center gap-2 rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-xs transition hover:border-brand-300"
+        title={label ?? "Choose color"}
+        aria-label={label ?? "Choose color"}
+        className={cn(
+          "flex items-center rounded-lg border border-ink-200 bg-white text-xs transition hover:border-brand-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
+          compact ? "size-7 justify-center p-0" : "gap-2 px-2 py-1.5",
+        )}
       >
         <span
-          className="size-5 rounded ring-1 ring-inset ring-black/10"
+          className={cn(
+            "rounded ring-1 ring-inset ring-black/10",
+            compact ? "size-4" : "size-5",
+          )}
           style={{
             backgroundImage:
               "linear-gradient(45deg,#ccc 25%,transparent 25%,transparent 75%,#ccc 75%),linear-gradient(45deg,#ccc 25%,#fff 25%,#fff 75%,#ccc 75%)",
@@ -201,7 +214,11 @@ export function ColorField({
         >
           <span className="block size-full rounded" style={{ background: display }} />
         </span>
-        <span className="font-mono text-ink-600">{toHex(open ? draft : parseColor(value))}</span>
+        {!compact && (
+          <span className="font-mono text-ink-600">
+            {toHex(open ? draft : parseColor(value))}
+          </span>
+        )}
       </button>
 
       {open &&
