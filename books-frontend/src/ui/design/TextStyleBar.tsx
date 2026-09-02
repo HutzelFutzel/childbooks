@@ -27,7 +27,12 @@ import {
 } from "lucide-react";
 import type { HAlign, TextBox, VAlign } from "../../core/types";
 import type { ReadingModeId } from "../../core/config/ageWritingCatalog";
-import { recommendFontSize, type FontSizeRec } from "../../core/config/typography";
+import {
+  defaultBodyFontSeedPt,
+  recommendFontSize,
+  type FontSizeRec,
+} from "../../core/config/typography";
+import { ageBandLabel } from "../../core/config/storyCraftCatalog";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useProjectsStore } from "../../state/projectsStore";
 import {
@@ -335,7 +340,7 @@ function SizeStepper({ chrome }: { chrome: TextBoxToolbarChrome }) {
     chrome;
   const trimH = pageHeightIn > 0 ? pageHeightIn : 8.27;
   const ptPerPct = trimH * 72;
-  const sizePt = Math.round(effectiveFontSizePct(box, surfaceAspect) * ptPerPct);
+  const sizePt = Math.round(effectiveFontSizePct(box, surfaceAspect) * ptPerPct * 2) / 2;
   const boxWidthIn = box.rect.w * surfaceAspect * trimH;
 
   const rec: FontSizeRec | null =
@@ -345,6 +350,15 @@ function SizeStepper({ chrome }: { chrome: TextBoxToolbarChrome }) {
           readingModeId,
           trim: { widthIn: pageWidthIn, heightIn: pageHeightIn },
           boxWidthIn,
+          config: typography,
+        })
+      : null;
+  const defaultPt =
+    ageRangeId && pageHeightIn && pageWidthIn
+      ? defaultBodyFontSeedPt({
+          ageRangeId,
+          readingModeId,
+          trim: { widthIn: pageWidthIn, heightIn: pageHeightIn },
           config: typography,
         })
       : null;
@@ -358,8 +372,12 @@ function SizeStepper({ chrome }: { chrome: TextBoxToolbarChrome }) {
       </Toggle>
       <button
         type="button"
-        title={rec ? `Recommended ${rec.minPt}–${rec.maxPt}pt` : "Font size"}
-        onClick={() => rec && setPt(rec.idealPt)}
+        title={
+          defaultPt != null && ageRangeId
+            ? `Default for ${ageBandLabel(ageRangeId)}: ${defaultPt}pt. Larger sizes are always allowed.`
+            : "Font size"
+        }
+        onClick={() => defaultPt != null && setPt(defaultPt)}
         className={cn(
           "min-w-9 rounded-lg px-1 py-1 text-center text-xs font-semibold tabular-nums transition",
           rec && sizePt < rec.floorPt

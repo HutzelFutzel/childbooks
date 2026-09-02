@@ -93,15 +93,20 @@ export function fitFontSizePct(box: TextBox, pageAspect: number): number {
  * value (the floating size stepper) should read this, not `fontSizePct`
  * directly, or the number goes stale the moment auto-fit kicks in.
  *
- * Shrink-to-fit is always on: the requested size is never rendered larger than
- * the box can hold. With `autoFitGrow` the font instead fills the box in both
- * directions (grow *and* shrink), which is handy for titles/captions.
+ * Generated story-body boxes preserve their requested physical reading size
+ * across every page. If one does not fit, the editor surfaces overflow instead
+ * of quietly making that page's words smaller than the rest of the book.
+ *
+ * Other text still shrinks to fit: the requested size is never rendered larger
+ * than the box can hold. With `autoFitGrow` the font instead fills the box in
+ * both directions (grow *and* shrink), which is handy for titles/captions.
  * Shrinking stops at {@link MIN_FONT_PCT}; below that the text is allowed to
  * overflow (and the editor shows an overflow indicator) rather than becoming
  * unreadable. The legacy `autoFit` flag is ignored for rendering.
  */
 export function effectiveFontSizePct(box: TextBox, pageAspect: number): number {
   const pct = box.fontSizePct;
+  if (box.role === "story-body") return pct;
   const fit = Math.max(MIN_FONT_PCT, fitFontSizePct(box, pageAspect));
   return box.autoFitGrow ? fit : Math.min(pct, fit);
 }

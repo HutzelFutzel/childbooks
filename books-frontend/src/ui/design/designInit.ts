@@ -28,6 +28,10 @@ import {
 import { wordParagraphs } from "../../core/design";
 import type { BookLanguagesConfig } from "../../core/config/bookLanguages";
 import { getBookLanguage } from "../../core/config/bookLanguages";
+import {
+  defaultBodyFontSeedPt,
+  type TypographyConfig,
+} from "../../core/config/typography";
 import { defaultFontForAge, getFont } from "../typography/fonts";
 import { getPreset } from "./presets";
 
@@ -159,12 +163,23 @@ export function defaultIllustrationFocus(
 export function defaultDesign(
   project: Project,
   languages?: BookLanguagesConfig | null,
+  typography?: TypographyConfig | null,
 ): BookDesign {
-  const { family, sizePct } = defaultFontForAge(
+  const { family } = defaultFontForAge(
     project.config.ageRangeId,
     project.config.contentLocale,
     languages,
   );
+  const trim = bookProductForConfig(project.config).trim;
+  const seedPt = defaultBodyFontSeedPt({
+    ageRangeId: project.config.ageRangeId,
+    readingModeId: project.config.readingModeId,
+    trim,
+    config: typography,
+  });
+  // Design geometry is normalized to page height, but the initial reading size
+  // is physical: the same point size must survive every offered trim.
+  const sizePct = seedPt / (trim.heightIn * 72);
   const language = getBookLanguage(project.config.contentLocale);
   const titleFontId = languages?.overrides[language.id]?.defaultTitleFontId;
   const titleFamily = titleFontId ? getFont(titleFontId)?.family : undefined;
@@ -185,6 +200,7 @@ function makeTextBox(input: {
   presetId: string;
   z: number;
   slotId?: string;
+  role?: TextBox["role"];
   align?: TextBox["align"];
   vAlign?: TextBox["vAlign"];
   name?: string;
@@ -207,6 +223,7 @@ function makeTextBox(input: {
     padding: preset.padding,
     autoFit: true,
     ...(input.slotId ? { slotId: input.slotId } : {}),
+    ...(input.role ? { role: input.role } : {}),
     ...(input.name ? { name: input.name } : {}),
   };
 }
@@ -351,6 +368,7 @@ export function seedPageDesign(design: BookDesign, page: DesignPage): PageDesign
             presetId: slot.presetId ?? "plain",
             z: i + 1,
             slotId: slot.id,
+            role: "story-body",
             align: slot.align,
             vAlign: slot.vAlign,
             name: slot.label,
@@ -422,6 +440,7 @@ export function relayoutPageDesign(
         presetId: slot.presetId ?? "plain",
         z,
         slotId: slot.id,
+        role: "story-body",
         align: slot.align,
         vAlign: slot.vAlign,
         name: slot.label,

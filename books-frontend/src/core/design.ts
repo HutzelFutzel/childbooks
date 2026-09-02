@@ -125,7 +125,7 @@ export interface TextBox {
    * boxes are the ones auto-seeded from the cover spec, so toggling "bake text
    * into the art" can remove exactly them (and leave any user-added boxes).
    */
-  role?: "book-title" | "book-subtitle";
+  role?: "book-title" | "book-subtitle" | "story-body";
   /**
    * The layout slot this box was seeded from (`LayoutSlot.id`). Boxes carrying
    * one are layout-owned: switching layout moves them to the new slot's
@@ -144,8 +144,10 @@ export interface TextBox {
   /** Shadow / opacity effects (legacy content blur lives on effects.blur). */
   effects?: ElementEffects;
   /**
-   * Legacy flag — shrink-to-fit is always applied at render time. Kept so older
-   * projects round-trip cleanly; new code should not rely on toggling this.
+   * Legacy flag — shrink-to-fit is applied at render time for non-story text.
+   * Generated story-body boxes preserve their shared reading size and surface
+   * overflow instead. Kept so older projects round-trip cleanly; new code
+   * should not rely on toggling this.
    */
   autoFit?: boolean;
   /**

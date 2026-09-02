@@ -73,8 +73,23 @@ export const DEFAULT_TYPOGRAPHY: ResolvedTypography = {
   },
 };
 
+/**
+ * Upper bounds for the automatically seeded story-body size.
+ *
+ * These are not editor limits: after the canvas is created, readers remain
+ * free to choose any font size. They only keep the first generated layout from
+ * starting with oversized type when an age band's configured ideal is larger.
+ */
+export const DEFAULT_BODY_FONT_SEED_CAP_PT: Record<AgeBandId, number> = {
+  "0-2": 25,
+  "3-5": 20,
+  "6-8": 18,
+  "9-12": 18,
+};
+
 /** Fallback band for unknown age ids (mirrors the 3–5 picture-book range). */
 const FALLBACK_BAND: FontBand = DEFAULT_TYPOGRAPHY.bands["3-5"];
+const FALLBACK_SEED_CAP_PT = DEFAULT_BODY_FONT_SEED_CAP_PT["3-5"];
 
 const fontBandSchema = z
   .object({
@@ -177,4 +192,24 @@ export function recommendFontSize(input: {
     maxPt: round(maxPt),
     floorPt: round(t.floorPt),
   };
+}
+
+/**
+ * Physical point size used only when a new book design is first seeded.
+ *
+ * The configured age/reading-mode ideal remains the source of truth, while the
+ * seed cap prevents the initial canvas from exceeding the product defaults.
+ * User customization in the editor is deliberately not clamped by this helper.
+ */
+export function defaultBodyFontSeedPt(input: {
+  ageRangeId: string;
+  readingModeId?: ReadingModeId | null;
+  trim: { widthIn: number; heightIn: number };
+  config?: TypographyConfig | null;
+}): number {
+  const recommendation = recommendFontSize(input);
+  const cap =
+    DEFAULT_BODY_FONT_SEED_CAP_PT[input.ageRangeId as AgeBandId] ??
+    FALLBACK_SEED_CAP_PT;
+  return Math.min(recommendation.idealPt, cap);
 }

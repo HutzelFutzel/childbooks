@@ -508,6 +508,7 @@ export function StudioProvider({
 }) {
   const setDesign = useProjectsStore((s) => s.setDesign);
   const bookLanguages = useAppConfigStore((s) => s.bookLanguages);
+  const typography = useAppConfigStore((s) => s.typography);
 
   const [selection, setSelection] = useState<Selection>({ kind: "none" });
   const selectionRef = useRef(selection);
@@ -638,7 +639,7 @@ export function StudioProvider({
   // anything the reader added themselves is left exactly where they put it.
   useEffect(() => {
     if (!design) {
-      void setDesign(defaultDesign(project, bookLanguages));
+      void setDesign(defaultDesign(project, bookLanguages, typography));
       return;
     }
     const missing = pages.filter((p) => !design.pages[p.id]);
@@ -653,7 +654,7 @@ export function StudioProvider({
       if (current) nextPages[p.id] = relayoutPageDesign(design, p, current);
     }
     void setDesign({ ...design, version: DESIGN_VERSION, pages: nextPages });
-  }, [bookLanguages, design, pages, project, setDesign]);
+  }, [bookLanguages, design, pages, project, setDesign, typography]);
 
   // Guarded step navigation: EVERY "go to step X" affordance (the rail, the
   // canvas "Order & print" button, the anchors "Design the pages" button, …)

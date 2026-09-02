@@ -190,15 +190,12 @@ export function fontsForBookLanguage(
   return certified.filter((font) => ids.has(font.id));
 }
 
-/**
- * Age-appropriate defaults: younger readers get larger text. Returned size is a
- * fraction of the page height (used by the normalized overlay renderer).
- */
+/** Age-appropriate default body family for a book's language. */
 export function defaultFontForAge(
   ageRangeId: string,
   languageId?: string | null,
   config?: BookLanguagesConfig | null,
-): { family: string; sizePct: number } {
+): { family: string } {
   const language = getBookLanguage(languageId);
   const configuredId = config?.overrides[language.id]?.defaultBodyFontId;
   const configured = configuredId ? getFont(configuredId) : undefined;
@@ -206,14 +203,14 @@ export function defaultFontForAge(
     configured && fontSupportsBookLanguage(configured, language.id) ? configured.family : undefined;
   switch (ageRangeId) {
     case "0-2":
-      return { family: configuredFamily ?? "Baloo 2", sizePct: 0.085 };
+      return { family: configuredFamily ?? "Baloo 2" };
     case "3-5":
-      return { family: configuredFamily ?? "Nunito", sizePct: 0.065 };
+      return { family: configuredFamily ?? "Nunito" };
     case "6-8":
-      return { family: configuredFamily ?? "Lora", sizePct: 0.05 };
+      return { family: configuredFamily ?? "Lora" };
     case "9-12":
-      return { family: configuredFamily ?? "Literata", sizePct: 0.04 };
+      return { family: configuredFamily ?? "Literata" };
     default:
-      return { family: configuredFamily ?? "Nunito", sizePct: 0.06 };
+      return { family: configuredFamily ?? "Nunito" };
   }
 }
