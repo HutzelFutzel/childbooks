@@ -1,5 +1,5 @@
 /**
- * Design · Cast is a checkpoint, not a miniature editor.
+ * Characters & places is an optional consistency checkpoint, not a miniature editor.
  *
  * The default path is one glance at the inferred cast and one action to create
  * every missing look. A member opens an optional drawer for corrections and
@@ -11,7 +11,6 @@ import {
   AlertCircle,
   ArrowRight,
   BookOpen,
-  Check,
   CheckCircle2,
   ImagePlus,
   Loader2,
@@ -296,25 +295,21 @@ export function CastWorkspace({
   }
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-aurora">
+    <div className="relative flex h-full min-h-0 flex-col bg-ink-50/30">
       <Celebrate play={celebrate} />
 
-      <main className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-6xl px-4 pb-32 pt-7 sm:px-7 sm:pt-10">
-          <header className="mx-auto max-w-2xl text-center">
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold text-brand-700 ring-1 ring-brand-100">
-              {allReady ? <Check className="size-3.5" /> : <Sparkles className="size-3.5" />}
-              {allReady ? "All looks ready" : "Details inferred from your story"}
-            </span>
-            <h1 className="mt-4 font-display text-2xl font-semibold text-ink-900 sm:text-3xl">
-              {allReady ? "Your cast is ready" : "Meet your cast"}
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-6xl px-4 pb-32 pt-6 sm:px-7">
+          <header className="max-w-2xl">
+            <h1 className="font-display text-2xl font-semibold text-ink-900">
+              {allReady ? "Characters ready" : "Characters & places"}
             </h1>
-            <p className="mx-auto mt-2 max-w-xl text-sm leading-relaxed text-ink-500 sm:text-base">
+            <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-ink-500">
               {anchors.length > 0
                 ? allReady
-                  ? "These references keep every character and place recognizable across the book."
-                  : "We prepared the recurring characters and places. Adjust anything that matters, or create them as-is."
-                : "This story does not need a fixed visual cast. You can continue, or add one recurring character."}
+                  ? "These references keep the artwork consistent. You can change them at any time."
+                  : "We found these in your story. Create the suggested looks, or adjust only what matters."
+                : "No recurring characters or places are needed for this story."}
             </p>
           </header>
 
@@ -342,7 +337,7 @@ export function CastWorkspace({
           )}
 
           {anchors.length > 0 ? (
-            <section className="mt-8" aria-labelledby="cast-grid-title">
+            <section className="mt-6" aria-labelledby="cast-grid-title">
               <div className="mb-3 flex items-end justify-between gap-4">
                 <div>
                   <h2 id="cast-grid-title" className="text-sm font-semibold text-ink-800">
@@ -380,7 +375,7 @@ export function CastWorkspace({
               </div>
             </section>
           ) : (
-            <div className="mx-auto mt-8 flex max-w-md flex-col items-center rounded-3xl border border-dashed border-ink-200 bg-white/70 px-6 py-9 text-center">
+            <div className="mt-6 flex max-w-md flex-col items-center rounded-2xl border border-dashed border-ink-200 bg-white px-6 py-9 text-center">
               <span className="flex size-12 items-center justify-center rounded-2xl bg-brand-50 text-brand-600">
                 <ImagePlus className="size-5" />
               </span>
@@ -395,7 +390,7 @@ export function CastWorkspace({
             </div>
           )}
         </div>
-      </main>
+      </div>
 
       <CastActionBar
         canProceed={canProceed}
@@ -484,7 +479,7 @@ function CastMemberCard({
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: Math.min(index * 0.04, 0.24), duration: 0.24 }}
-      className="group relative flex h-full flex-col overflow-hidden rounded-2xl bg-white shadow-soft ring-1 ring-ink-100 transition hover:-translate-y-0.5 hover:shadow-lifted hover:ring-brand-200"
+      className="group relative flex h-full flex-col overflow-hidden rounded-xl border border-ink-200 bg-white"
     >
       <button
         type="button"
@@ -532,7 +527,7 @@ function CastMemberCard({
                 : "bg-white/95 text-ink-600 ring-ink-200",
           )}
         >
-          {generating ? "Creating…" : image ? "Ready" : "Looks good"}
+          {generating ? "Creating…" : image ? "Ready" : "Needs look"}
         </span>
         {image?.imageTier === "quick" && (
           <FastDraftBadge compact className="left-auto right-12 top-3" />
@@ -680,7 +675,7 @@ function CastActionBar({
         : "Create my cast";
 
   return (
-    <div className="absolute inset-x-0 bottom-0 z-20 border-t border-ink-100 bg-white/95 px-4 py-3 shadow-[0_-12px_32px_rgba(39,28,70,0.08)] backdrop-blur sm:px-7">
+    <div className="absolute inset-x-0 bottom-0 z-20 border-t border-ink-200 bg-white px-4 py-3 sm:px-7">
       <div className="mx-auto flex w-full max-w-6xl flex-col items-center justify-between gap-3 sm:flex-row">
         <div className="flex items-center gap-2 text-center sm:text-left">
           <span

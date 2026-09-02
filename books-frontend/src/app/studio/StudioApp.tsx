@@ -51,6 +51,9 @@ export default function StudioApp() {
   const loadSettings = useSettingsStore((s) => s.load);
   const projectsLoaded = useProjectsStore((s) => s.loaded);
   const currentId = useProjectsStore((s) => s.currentId);
+  const currentTitle = useProjectsStore(
+    (s) => s.projects.find((project) => project.id === s.currentId)?.title,
+  );
   const createProject = useProjectsStore((s) => s.createProject);
   const closeProject = useProjectsStore((s) => s.closeProject);
   const initAuth = useAuthStore((s) => s.init);
@@ -312,6 +315,7 @@ export default function StudioApp() {
       <SessionTracker />
       <TopBar
         center={<JobProgress />}
+        contextLabel={inProject ? currentTitle : undefined}
         right={
           <>
             {/* Guests choose a quality too (High-Quality shows locked), so the

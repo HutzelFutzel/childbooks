@@ -333,8 +333,8 @@ interface StudioContextValue {
   closeDesignSetup: () => void;
 
   /**
-   * Art-style gate / editor for Design · Cast. Forced open when
-   * `config.styleReady === false`; otherwise opened from the Cast toolbar.
+   * Art-style gate / editor. Forced open when `config.styleReady === false`;
+   * otherwise opened from the studio navigator.
    */
   styleSetupOpen: boolean;
   openStyleSetup: () => void;
@@ -656,9 +656,7 @@ export function StudioProvider({
     void setDesign({ ...design, version: DESIGN_VERSION, pages: nextPages });
   }, [bookLanguages, design, pages, project, setDesign, typography]);
 
-  // Guarded step navigation: EVERY "go to step X" affordance (the rail, the
-  // canvas "Order & print" button, the anchors "Design the pages" button, …)
-  // goes through this one gate, so nothing can jump past the rail's own locks.
+  // Guarded step navigation: every workflow affordance goes through one gate.
   // A blocked jump explains what's still missing instead of silently failing.
   const setStep = useCallback(
     (next: StudioStep) => {
@@ -671,21 +669,14 @@ export function StudioProvider({
       if (!progress[next].unlocked) {
         if (next === "order") {
           notify.info(
-            "Almost there!",
-            progress.pagesTotal > 0
-              ? `Every page needs its artwork before you can order — ${progress.pagesReady} of ${progress.pagesTotal} ready.`
-              : "Design your pages before ordering a printed book.",
+            "Your book is still being prepared",
+            "The page-by-page draft needs to finish before you can preview or order it.",
           );
         } else if (next === "edit" && live.stage === "studio") {
-          if (!progress.anchors.done) {
-            notify.info(
-              "Finish the cast first",
-              "Create reference looks for your characters and places, then design the pages.",
-            );
-          } else {
-            // Cast is done but the screenplay hasn't finished auto-drafting.
-            notify.info("Your pages are still being written", "Give it a moment, then try again.");
-          }
+          notify.info(
+            "Choose an art style first",
+            "Pick the look for your book, then its pages will open automatically.",
+          );
         } else {
           notify.info("One step at a time", "Finish the Story step first.");
         }

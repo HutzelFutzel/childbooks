@@ -1,8 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  ArrowLeft,
-  BookOpenCheck,
   Download,
   Eye,
   Loader2,
@@ -38,7 +36,7 @@ import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { BookPreview } from "./BookPreview";
 
 /**
- * Step 3 · Order. The finish line: flip through the book, order a professionally
+ * The finish line: flip through the book, order a professionally
  * printed & bound copy, or buy the digital edition (ebook PDF).
  */
 export function OrderStage() {
@@ -290,14 +288,11 @@ export function OrderStage() {
   return (
     <div className="mx-auto w-full max-w-3xl px-5 py-8">
       <StageHeader
-        eyebrow="Step 3 · Order"
-        eyebrowIcon={BookOpenCheck}
-        tone="mint"
-        title="Your book is ready"
-        subtitle="Take one last look, then order a beautifully bound copy or get the digital edition."
+        title="Preview & order"
+        subtitle="Review your book, then choose a printed copy or digital edition."
       />
 
-      <div className="relative flex flex-col items-center gap-6 rounded-3xl border border-ink-100 bg-aurora p-6 shadow-soft sm:flex-row sm:items-center">
+      <div className="relative flex flex-col items-center gap-6 rounded-2xl border border-ink-200 bg-white p-6 sm:flex-row sm:items-center">
         <Celebrate play={celebrate} />
         <BookMockup
           blobId={cover?.blobId}
@@ -414,15 +409,6 @@ export function OrderStage() {
         )}
       </div>
 
-      <div className="mt-8 flex justify-center">
-        <button
-          onClick={() => setStep("edit")}
-          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-ink-500 transition hover:bg-ink-100 hover:text-brand-600"
-        >
-          <ArrowLeft className="size-3.5" /> Back to design
-        </button>
-      </div>
-
       <OrderDialog
         open={ordering}
         onClose={() => setOrdering(false)}
@@ -486,9 +472,7 @@ function OptionCard({
 }) {
   return (
     <motion.div
-      whileHover={disabled ? undefined : { y: -3 }}
-      transition={{ type: "spring", stiffness: 360, damping: 26 }}
-      className={`flex flex-col gap-3 rounded-3xl border border-ink-100 bg-white p-5 shadow-soft ${
+      className={`flex flex-col gap-3 rounded-2xl border border-ink-200 bg-white p-5 ${
         disabled ? "opacity-60" : ""
       }`}
     >

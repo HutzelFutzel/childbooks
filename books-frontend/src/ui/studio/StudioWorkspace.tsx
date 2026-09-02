@@ -7,7 +7,7 @@ import { DesignWorkspace } from "./DesignWorkspace";
 import { StudioDndProvider } from "./StudioDnd";
 import { StudioProvider, useStudio } from "./StudioContext";
 import { useStudioPanelStore } from "./studioPanelStore";
-import { StudioStepRail } from "./StudioStepRail";
+import { StudioNavigator } from "./StudioNavigator";
 import { StyleRenewBanner } from "./StyleRenewBanner";
 import { StoryStage } from "./StoryStage";
 import { OrderStage } from "./OrderStage";
@@ -41,7 +41,7 @@ function StudioInner({ project }: { project: Project }) {
 
   const runAnalysis = useCallback(async () => {
     if (!project.config.storyText.trim()) {
-      setAnalysisRun({ status: "error", message: "Add your story before creating its cast." });
+      setAnalysisRun({ status: "error", message: "Add your story before preparing the book." });
       return;
     }
     if (!models) {
@@ -96,12 +96,12 @@ function StudioInner({ project }: { project: Project }) {
   return (
     <StudioDndProvider>
       <div className="flex min-h-0 flex-1 flex-col">
-        <StudioStepRail />
+        {inStudio && step !== "story" && <StudioNavigator />}
         {/* Mounted once here (not inside Design) so a running style transfer
             keeps advancing cast → pages wherever the reader navigates. */}
         <StyleRenewBanner />
 
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-grid">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-ink-50/30">
           {inDesign ? (
             <DesignWorkspace analysisRun={analysisRun} onRetryAnalysis={() => void runAnalysis()} />
           ) : step === "story" ? (
@@ -111,7 +111,7 @@ function StudioInner({ project }: { project: Project }) {
               {step === "order" && <OrderStage />}
             </div>
           )}
-        </main>
+        </div>
       </div>
     </StudioDndProvider>
   );

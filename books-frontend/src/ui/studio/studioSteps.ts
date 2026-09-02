@@ -1,11 +1,11 @@
 /**
  * The guided studio flow:
  *
- *   Primary:  Story → Design → Order
- *   Design:   Style → Cast → Pages (left chapter accordion)
+ *   Story → Style → Book (with optional Cast refinement) → Order
  *
- * Style gates Cast; Cast gates Pages. Internal `StudioStep` ids stay
- * `anchors` / `edit` so stage components and stores don't rename.
+ * The book becomes available as soon as Story and Style are ready. Cast images
+ * remain part of the generation pipeline, but they no longer block someone
+ * from seeing the screenplay and page layout.
  */
 import type { Project } from "../../core/types";
 import { currentAnchorImage, currentIllustration } from "../../state/ai";
@@ -17,20 +17,8 @@ export type StudioStep = "story" | "anchors" | "edit" | "order";
 /** Top-level rail destinations. */
 export type PrimaryStep = "story" | "design" | "order";
 
-/** Chapters under Design (left accordion). */
+/** Focused creation sections represented by the underlying studio states. */
 export type DesignChapter = "style" | "cast" | "pages";
-
-/** Cast / Pages map onto studio steps (Style is overlay state on anchors). */
-export type DesignSubstep = "cast" | "pages";
-
-export const PRIMARY_STEPS: PrimaryStep[] = ["story", "design", "order"];
-
-export const DESIGN_CHAPTERS: DesignChapter[] = ["style", "cast", "pages"];
-
-export const DESIGN_SUBSTEPS: DesignSubstep[] = ["cast", "pages"];
-
-/** Status of a single step, used to render the rail. */
-export type StepStatus = "locked" | "todo" | "active" | "in-progress" | "done";
 
 export interface StepProgress {
   /** Whether the step can be opened yet (earlier prerequisites met). */
@@ -64,21 +52,6 @@ export function primaryOf(step: StudioStep): PrimaryStep {
   return step;
 }
 
-export function designSubstepOf(step: StudioStep): DesignSubstep | null {
-  if (step === "anchors") return "cast";
-  if (step === "edit") return "pages";
-  return null;
-}
-
-export function stepForDesignSubstep(sub: DesignSubstep): StudioStep {
-  return sub === "cast" ? "anchors" : "edit";
-}
-
-export function stepForDesignChapter(ch: DesignChapter): StudioStep {
-  if (ch === "pages") return "edit";
-  return "anchors";
-}
-
 /**
  * Active Design chapter from step + style gate.
  * `styleReady === false` forces Style; reopen uses `styleSetupOpen`.
@@ -94,11 +67,10 @@ export function designChapterOf(
   return "cast";
 }
 
-/** Where Design should open: Cast until references are done, then Pages. */
+/** Pages are home once the required art-style choice has been made. */
 export function preferredDesignStep(project: Project): StudioStep {
-  // New books land on anchors so the Style chapter can gate Cast.
   if (project.config.styleReady === false) return "anchors";
-  return computeProgress(project).anchors.done ? "edit" : "anchors";
+  return "edit";
 }
 
 /**
@@ -134,8 +106,9 @@ export function computeProgress(project: Project): StudioProgress {
   };
 
   const pages: StepProgress = {
-    // Pages stay locked until cast references are finished (and the screenplay exists).
-    unlocked: setupDone && anchorsDone && hasScreenplay,
+    // Show the book immediately after Style. The canvas owns its screenplay
+    // loading state, and batch generation creates references before page art.
+    unlocked: setupDone && project.config.styleReady !== false,
     done: editDone,
     detail: pagesTotal > 0 ? `${pagesReady} / ${pagesTotal}` : undefined,
     ratio: pagesTotal > 0 ? pagesReady / pagesTotal : 0,
@@ -158,7 +131,9 @@ export function computeProgress(project: Project): StudioProgress {
     edit: pages,
     design,
     order: {
-      unlocked: editDone,
+      // Preview is useful before every illustration is complete. OrderStage
+      // clearly identifies blank art and blocks only genuinely invalid print.
+      unlocked: setupDone && hasScreenplay,
       done: false,
       ratio: 0,
     },
@@ -172,7 +147,6 @@ export function computeProgress(project: Project): StudioProgress {
 /** The step the studio should open on for a given project state. */
 export function initialStep(project: Project): StudioStep {
   if (project.stage === "setup") return "story";
-  // Don't skip past Cast: reopening a book whose references aren't finished
-  // lands on Cast, not on a Pages canvas full of subjects with no look refs.
+  // Returning readers land on their book, not on a setup checkpoint.
   return preferredDesignStep(project);
 }

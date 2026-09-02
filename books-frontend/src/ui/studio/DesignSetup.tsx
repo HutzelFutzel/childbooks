@@ -1,4 +1,3 @@
-import { LayoutTemplate } from "lucide-react";
 import type { BookConfig } from "../../core/types";
 import { useProjectsStore } from "../../state/projectsStore";
 import { StageHeader } from "../components/StageHeader";
@@ -34,13 +33,10 @@ export function DesignSetup() {
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-5 py-8">
         <StageHeader
-          eyebrow="Design · Pages"
-          eyebrowIcon={LayoutTemplate}
-          tone="brand"
-          title={firstTime ? "Let's set up your book" : "Book setup"}
+          title={firstTime ? "Set the page size" : "Book setup"}
           subtitle={
             firstTime
-              ? "How big your pages are, before we lay them out."
+              ? "Choose the page shape once, then your book opens."
               : "Review your book's page size."
           }
           className="mb-8"

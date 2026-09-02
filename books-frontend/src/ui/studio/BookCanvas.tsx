@@ -44,7 +44,6 @@ import { notify } from "../lib/notify";
 import { cn } from "../lib/cn";
 import { useDialogFocus } from "../lib/dialogFocus";
 import { AssetsLibrary } from "./AssetsLibrary";
-import { useDesignChapterHosts } from "./DesignChapterHosts";
 import { ElementPanel, elementPanelHasContent } from "./ElementPanel";
 import { PageFilmstrip } from "./PageFilmstrip";
 import { PageMenu, PageStagePanel } from "./PageEditorCard";
@@ -97,7 +96,6 @@ export function BookCanvas() {
   const closeTextEdit = useStudioPanelStore((s) => s.closeTextEdit);
   const closeToolPanel = useStudioPanelStore((s) => s.closeToolPanel);
   const toggleToolPanel = useStudioPanelStore((s) => s.toggleToolPanel);
-  const chapterHosts = useDesignChapterHosts();
   const models = useResolvedModels();
   const [previewing, setPreviewing] = useState(false);
   const closePreview = useCallback(() => setPreviewing(false), []);
@@ -250,30 +248,20 @@ export function BookCanvas() {
         </div>
       </div>
 
-      {/* Body: filmstrip (portaled into Design chapter rail when hosted) + stage */}
-      <div className="flex min-h-0 flex-1">
-        {(() => {
-          const inChapters = chapterHosts !== null;
-          const filmstrip = (
-            <PageFilmstrip
-              embedded={inChapters}
-              displays={displays}
-              activeId={activeDisp?.id ?? null}
-              onSelect={(id) => setEditingDisp(id)}
-              stale={isStale}
-            />
-          );
-          if (!inChapters) return filmstrip;
-          return chapterHosts.pagesHost
-            ? createPortal(filmstrip, chapterHosts.pagesHost)
-            : null;
-        })()}
+      {/* Body: book navigation + focused editing stage. */}
+      <div className="flex min-h-0 flex-1 flex-col md:flex-row">
+        <PageFilmstrip
+          displays={displays}
+          activeId={activeDisp?.id ?? null}
+          onSelect={(id) => setEditingDisp(id)}
+          stale={isStale}
+        />
 
         {/* Stage + inspector dock as siblings so the panel never covers chips. */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-row">
           <div className="relative min-h-0 min-w-0 flex-1">
             <div
-              className="absolute inset-0 flex flex-col bg-grid px-3 pb-20 pt-3 sm:px-5 sm:pt-4"
+              className="absolute inset-0 flex flex-col bg-ink-50/40 px-3 pb-20 pt-3 sm:px-5 sm:pt-4"
               onMouseDown={(e) => {
                 // Click anywhere in the empty canvas area (outside the page surface
                 // and the floating element toolbox, which is a separate subtree) to
@@ -585,12 +573,16 @@ function NextActionChip() {
   }
 
   if (gen.pendingCount > 0) {
+    const label =
+      gen.pendingAnchors > 0
+        ? "Create book artwork"
+        : gen.pendingPages === 1
+          ? "Illustrate 1 page"
+          : `Illustrate ${gen.pendingPages} pages`;
     return (
       <Button size="sm" leftIcon={<Sparkles className="size-4" />} onClick={() => void gen.generateEverything()}>
-        <span className="hidden sm:inline">
-          Generate {gen.pendingCount === 1 ? "1 illustration" : `${gen.pendingCount} illustrations`}
-        </span>
-        <span className="sm:hidden">Generate</span>
+        <span className="hidden sm:inline">{label}</span>
+        <span className="sm:hidden">Create artwork</span>
         <SparkEstimateCost range={gen.batchRange} />
       </Button>
     );
@@ -615,7 +607,7 @@ function NextActionChip() {
 
   if (gen.everythingDone) {
     return (
-      <span className="hidden items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-200 sm:flex">
+      <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
         <CheckCircle2 className="size-3.5" /> All pages ready
       </span>
     );

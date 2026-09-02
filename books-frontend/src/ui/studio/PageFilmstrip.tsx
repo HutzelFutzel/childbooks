@@ -53,14 +53,11 @@ export function PageFilmstrip({
   activeId,
   onSelect,
   stale,
-  /** Fill a parent host (Design chapter accordion) — no own width / chrome. */
-  embedded = false,
 }: {
   displays: DisplaySpread[];
   activeId: string | null;
   onSelect: (id: string) => void;
   stale: (pageId: string) => boolean;
-  embedded?: boolean;
 }) {
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
@@ -91,9 +88,8 @@ export function PageFilmstrip({
   }, [activeId, attentionDisplays, filter, onSelect]);
 
   useEffect(() => {
-    if (embedded) return;
     setWidth(readStoredWidth());
-  }, [embedded]);
+  }, []);
 
   function cellIdAt(x: number, y: number): string | null {
     const el = document.elementFromPoint(x, y);
@@ -175,7 +171,7 @@ export function PageFilmstrip({
             count={attentionDisplays.length}
             onClick={() => setFilter("attention")}
           >
-            Needs attention
+            Issues
           </FilterButton>
         </div>
       </div>
@@ -253,45 +249,48 @@ export function PageFilmstrip({
     </>
   );
 
-  if (embedded) {
-    return <div className="flex h-full min-h-0 w-full flex-col bg-white">{list}</div>;
-  }
-
   return (
     <div
-      className="relative flex h-full shrink-0 flex-col border-r border-ink-100 bg-white"
-      style={{ width }}
+      className={cn(
+        "relative flex shrink-0 flex-col bg-white",
+        isMobile
+          ? "h-28 w-full border-b border-ink-100"
+          : "h-full border-r border-ink-100",
+      )}
+      style={isMobile ? undefined : { width }}
     >
       {list}
-      <div
-        role="separator"
-        tabIndex={0}
-        aria-orientation="vertical"
-        aria-valuemin={WIDTH_MIN}
-        aria-valuemax={WIDTH_MAX}
-        aria-valuenow={width}
-        aria-label="Resize page list"
-        title="Drag or use arrow keys to resize"
-        className="group absolute inset-y-0 -right-1 z-20 flex w-2 cursor-col-resize touch-none justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
-        onKeyDown={(e) => {
-          let next = width;
-          if (e.key === "ArrowLeft") next = width - 8;
-          else if (e.key === "ArrowRight") next = width + 8;
-          else if (e.key === "Home") next = WIDTH_MIN;
-          else if (e.key === "End") next = WIDTH_MAX;
-          else return;
-          e.preventDefault();
-          const clamped = Math.min(WIDTH_MAX, Math.max(WIDTH_MIN, next));
-          setWidth(clamped);
-          window.localStorage.setItem(WIDTH_KEY, String(clamped));
-        }}
-        onPointerDown={onResizePointerDown}
-        onPointerMove={onResizePointerMove}
-        onPointerUp={endResize}
-        onPointerCancel={endResize}
-      >
-        <span className="w-px bg-transparent transition group-hover:bg-brand-300 group-active:bg-brand-400" />
-      </div>
+      {!isMobile && (
+        <div
+          role="separator"
+          tabIndex={0}
+          aria-orientation="vertical"
+          aria-valuemin={WIDTH_MIN}
+          aria-valuemax={WIDTH_MAX}
+          aria-valuenow={width}
+          aria-label="Resize page list"
+          title="Drag or use arrow keys to resize"
+          className="group absolute inset-y-0 -right-1 z-20 flex w-2 cursor-col-resize touch-none justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+          onKeyDown={(e) => {
+            let next = width;
+            if (e.key === "ArrowLeft") next = width - 8;
+            else if (e.key === "ArrowRight") next = width + 8;
+            else if (e.key === "Home") next = WIDTH_MIN;
+            else if (e.key === "End") next = WIDTH_MAX;
+            else return;
+            e.preventDefault();
+            const clamped = Math.min(WIDTH_MAX, Math.max(WIDTH_MIN, next));
+            setWidth(clamped);
+            window.localStorage.setItem(WIDTH_KEY, String(clamped));
+          }}
+          onPointerDown={onResizePointerDown}
+          onPointerMove={onResizePointerMove}
+          onPointerUp={endResize}
+          onPointerCancel={endResize}
+        >
+          <span className="w-px bg-transparent transition group-hover:bg-brand-300 group-active:bg-brand-400" />
+        </div>
+      )}
     </div>
   );
 }

@@ -55,7 +55,9 @@ export function useBookGeneration() {
   const staleCount = stalePageCount + staleAnchorCount;
 
   const everythingDone =
-    anchors.length > 0 && anchorsReady === anchors.length && units.length > 0 && pagesReady === units.length;
+    (anchors.length === 0 || anchorsReady === anchors.length) &&
+    units.length > 0 &&
+    pagesReady === units.length;
 
   const batchRange = useImageBatchRange([
     { action: "anchorImage", count: pendingAnchors },
@@ -148,6 +150,8 @@ export function useBookGeneration() {
     anchorsReady,
     pagesTotal: units.length,
     pagesReady,
+    pendingAnchors,
+    pendingPages,
     pendingCount,
     staleAnchorCount,
     stalePageCount,

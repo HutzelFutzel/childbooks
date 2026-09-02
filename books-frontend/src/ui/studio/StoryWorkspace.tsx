@@ -1,14 +1,11 @@
 /**
- * Story step as a Design-like workspace: top bar + left topic strip + center
- * stage. First-run walks Language → Audience → Story; art style is confirmed
- * in Design · Cast.
+ * Focused Story workspace. First-run walks Language → Audience → Story in one
+ * compact wayfinder; art style is the next blocking decision.
  */
 import { useMemo, useState } from "react";
 import {
-  ArrowLeft,
   ArrowRight,
   Check,
-  Lock,
   Redo2,
   Undo2,
   type LucideIcon,
@@ -17,7 +14,6 @@ import type { BookConfig } from "../../core/types";
 import type { BookLanguageId } from "../../core/config/bookLanguages";
 import { useProjectsStore } from "../../state/projectsStore";
 import { Button } from "../components/Button";
-import { useMediaQuery } from "../hooks/useMediaQuery";
 import { notify } from "../lib/notify";
 import { cn } from "../lib/cn";
 import { storyConfigSchema } from "../wizard/schema";
@@ -25,7 +21,6 @@ import { STORY_QUESTIONS } from "../wizard/storyQuestions";
 import type { GuidedQuestion } from "../wizard/GuidedQuestions";
 import type { StoryHistoryOptions, StorySnapshotPatch } from "./story/storyUndo";
 import { useStudio } from "./StudioContext";
-import { preferredDesignStep } from "./studioSteps";
 
 type TopicId = string;
 
@@ -104,23 +99,30 @@ export function StoryWorkspace() {
     setTopicId(id);
   }
 
-  function finish() {
+  async function finish() {
     const result = storyConfigSchema.safeParse(cfg);
     if (!result.success) {
       notify.error(result.error.issues[0]?.message ?? "Please complete the story setup.");
       return;
     }
     if (firstRun) {
-      // Force the Design · Cast style gate before the first reference images.
-      void updateConfig({ styleReady: false });
-      void advanceStage("studio");
+      // Style is the only remaining blocking decision. Analysis and screenplay
+      // drafting continue in the background while the reader chooses it.
+      await updateConfig({ styleReady: false });
+      await advanceStage("studio");
+      setStep("anchors");
+      return;
     }
-    setStep(preferredDesignStep(project));
+    setStep("edit");
   }
 
   function onPrimary() {
     if (!answered) {
       notify.info("Almost there", "Finish this section before continuing.");
+      return;
+    }
+    if (!firstRun && !needsAdaptation) {
+      void finish();
       return;
     }
     if (needsAdaptation && topic.id !== "story") {
@@ -141,33 +143,38 @@ export function StoryWorkspace() {
       notify.info("Almost there", "Complete every section before continuing to design.");
       return;
     }
-    finish();
+    void finish();
   }
 
   const primaryLabel =
     needsAdaptation && topic.id !== "story"
       ? "Continue to story"
-      : isLast || !firstRun
-        ? "Continue to design"
-        : topics[index + 1]
-          ? `Continue to ${stripTitle(topics[index + 1]!).toLowerCase()}`
-          : "Continue";
+      : !firstRun
+        ? "Back to pages"
+        : isLast
+          ? "Continue to art style"
+          : topics[index + 1]
+            ? `Continue to ${stripTitle(topics[index + 1]!).toLowerCase()}`
+            : "Continue";
   const primaryDisabled = firstRun
     ? !answered || (isLast && !ready)
     : !ready;
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-b border-ink-100 bg-white/70 px-3 py-2.5 backdrop-blur sm:px-5">
-        <div className="flex min-w-0 items-center gap-2.5">
-          <span className="text-xs font-semibold text-ink-700">Story</span>
-          {firstRun && (
-            <span className="rounded-full bg-ink-100 px-2 py-0.5 text-[11px] font-medium tabular-nums text-ink-600">
-              {index + 1} of {topics.length}
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-ink-100 bg-white px-2 py-2 sm:px-4">
+        <span className="text-sm font-semibold text-ink-900 sm:hidden">Story</span>
+        <StoryTopicNav
+          topics={topics}
+          config={cfg}
+          activeId={topic.id}
+          firstRun={firstRun}
+          furthest={furthest}
+          onSelect={selectTopic}
+          reachable={topicReachable}
+        />
+
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           <div className="flex items-center rounded-xl bg-ink-50 p-0.5 ring-1 ring-ink-100">
             <button
               type="button"
@@ -190,15 +197,6 @@ export function StoryWorkspace() {
               <Redo2 className="size-3.5" />
             </button>
           </div>
-          {!firstRun && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setStep(preferredDesignStep(project))}
-            >
-              Back to design
-            </Button>
-          )}
           <Button
             size="sm"
             disabled={primaryDisabled}
@@ -210,81 +208,32 @@ export function StoryWorkspace() {
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1">
-        <StoryTopicStrip
-          topics={topics}
-          config={cfg}
-          activeId={topic.id}
-          firstRun={firstRun}
-          furthest={furthest}
-          onSelect={selectTopic}
-          reachable={topicReachable}
-        />
-
-        <div className="relative min-h-0 min-w-0 flex-1">
-          <div className="absolute inset-0 flex flex-col bg-grid">
-            <div className="shrink-0 border-b border-ink-100/80 bg-white/50 px-4 py-3 sm:px-6">
-              <h2 className="text-base font-semibold text-ink-900">{topic.title}</h2>
-              {topic.subtitle && (
-                <p className="mt-0.5 text-sm text-ink-500">{topic.subtitle}</p>
-              )}
-            </div>
-            {topic.id === "story" ? (
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3 sm:p-4 lg:p-5">
-                {topic.render({ config: cfg, update })}
-              </div>
-            ) : (
-              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
-                <div className="mx-auto w-full max-w-3xl space-y-8">
-                  {topic.render({ config: cfg, update })}
-
-                  {/* In-flow action footer right where the user finishes */}
-                  <div className="flex flex-col-reverse items-stretch justify-between gap-3 border-t border-ink-100/80 pt-6 sm:flex-row sm:items-center">
-                    <div className="flex items-center gap-2">
-                      {index > 0 ? (
-                        <Button
-                          size="md"
-                          variant="ghost"
-                          leftIcon={<ArrowLeft className="size-4" />}
-                          onClick={() => selectTopic(topics[index - 1]!.id)}
-                        >
-                          Back to {stripTitle(topics[index - 1]!)}
-                        </Button>
-                      ) : !firstRun ? (
-                        <Button
-                          size="md"
-                          variant="ghost"
-                          leftIcon={<ArrowLeft className="size-4" />}
-                          onClick={() => setStep(preferredDesignStep(project))}
-                        >
-                          Back to design
-                        </Button>
-                      ) : null}
-                    </div>
-
-                    <div className="flex items-center justify-end gap-3">
-                      <Button
-                        size="md"
-                        disabled={primaryDisabled}
-                        rightIcon={<ArrowRight className="size-4" />}
-                        onClick={onPrimary}
-                        className="min-w-44 shadow-soft"
-                      >
-                        {primaryLabel}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              </div>
+      <div className="relative min-h-0 min-w-0 flex-1">
+        <div className="absolute inset-0 flex flex-col bg-ink-50/30">
+          <div className="shrink-0 border-b border-ink-100 bg-white px-4 py-3 sm:px-6">
+            <h2 className="text-base font-semibold text-ink-900">{topic.title}</h2>
+            {topic.subtitle && (
+              <p className="mt-0.5 text-sm text-ink-500">{topic.subtitle}</p>
             )}
           </div>
+          {topic.id === "story" ? (
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3 sm:p-4 lg:p-5">
+              {topic.render({ config: cfg, update })}
+            </div>
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
+              <div className="mx-auto w-full max-w-3xl">
+                {topic.render({ config: cfg, update })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 }
 
-function StoryTopicStrip({
+function StoryTopicNav({
   topics,
   config,
   activeId,
@@ -301,97 +250,46 @@ function StoryTopicStrip({
   onSelect: (id: string) => void;
   reachable: (i: number) => boolean;
 }) {
-  // Below `md` the fixed 176–208px strip eats too much of a phone's width —
-  // collapse to an icon-only rail (no stored width; unlike the Design chapter
-  // rail this one was never user-resizable).
-  const isMobile = useMediaQuery("(max-width: 767px)");
-
   return (
-    <aside
-      className={cn(
-        "flex h-full shrink-0 flex-col border-r border-ink-100 bg-white/80",
-        isMobile ? "w-16" : "w-44 sm:w-52",
-      )}
+    <nav
+      aria-label="Story setup"
+      className="order-2 flex min-w-0 basis-full items-center gap-1 overflow-x-auto sm:order-none sm:flex-1 sm:basis-auto"
     >
-      {!isMobile && (
-        <div className="border-b border-ink-100 px-3 py-2">
-          <p className="text-xs font-semibold text-ink-500">Story</p>
-        </div>
-      )}
-      <nav className="min-h-0 flex-1 space-y-1 overflow-y-auto p-2">
-        {topics.map((q, i) => {
-          const Icon = q.icon as LucideIcon;
-          const done = q.isAnswered(config);
-          const active = q.id === activeId;
-          const locked = firstRun && !reachable(i) && !done;
-          // Guided: next step after furthest is reachable for Continue flow.
-          const canOpen = !locked && (reachable(i) || done || i <= furthest);
+      {topics.map((q, i) => {
+        const Icon = q.icon as LucideIcon;
+        const done = q.isAnswered(config);
+        const active = q.id === activeId;
+        const locked = firstRun && !reachable(i) && !done;
+        // Guided: next step after furthest is reachable for Continue flow.
+        const canOpen = !locked && (reachable(i) || done || i <= furthest);
 
-          return (
-            <button
-              key={q.id}
-              type="button"
-              disabled={!canOpen}
-              onClick={() => canOpen && onSelect(q.id)}
-              title={locked ? "Finish the earlier sections first" : q.summary(config)}
-              className={cn(
-                "flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2.5 text-left transition",
-                isMobile && "flex-col items-center gap-1 px-1 py-2 text-center",
-                active
-                  ? "bg-brand-50 ring-1 ring-brand-200"
-                  : canOpen
-                    ? "hover:bg-ink-50"
-                    : "cursor-not-allowed opacity-45",
-              )}
-            >
-              <span
-                className={cn(
-                  "mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold",
-                  isMobile && "mt-0",
-                  done && !active
-                    ? "bg-emerald-500 text-white"
-                    : active
-                      ? "bg-brand-600 text-(--color-brand-foreground)"
-                      : "bg-ink-100 text-ink-500",
-                )}
-              >
-                {locked ? (
-                  <Lock className="size-3.5" />
-                ) : done && !active ? (
-                  <Check className="size-4" strokeWidth={3} />
-                ) : (
-                  <Icon className="size-4" />
-                )}
-              </span>
-              {isMobile ? (
-                <span
-                  className={cn(
-                    "max-w-full truncate text-[10px] font-semibold leading-tight",
-                    active ? "text-brand-700" : "text-ink-700",
-                  )}
-                >
-                  {stripTitle(q)}
-                </span>
-              ) : (
-                <span className="min-w-0 flex-1">
-                  <span
-                    className={cn(
-                      "block text-sm font-semibold",
-                      active ? "text-brand-700" : "text-ink-800",
-                    )}
-                  >
-                    {stripTitle(q)}
-                  </span>
-                  <span className="mt-0.5 block truncate text-[11px] text-ink-400">
-                    {done ? q.summary(config) : "Not set"}
-                  </span>
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </nav>
-    </aside>
+        return (
+          <button
+            key={q.id}
+            type="button"
+            disabled={!canOpen}
+            onClick={() => canOpen && onSelect(q.id)}
+            title={locked ? "Finish the earlier sections first" : q.summary(config)}
+            aria-current={active ? "step" : undefined}
+            className={cn(
+              "flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-left text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
+              active
+                ? "bg-brand-50 text-brand-800"
+                : canOpen
+                  ? "text-ink-500 hover:bg-ink-50 hover:text-ink-800"
+                  : "cursor-not-allowed opacity-45",
+            )}
+          >
+            {done && !active ? (
+              <Check className="size-3.5 shrink-0 text-emerald-600" />
+            ) : (
+              <Icon className="size-3.5 shrink-0" />
+            )}
+            <span>{stripTitle(q)}</span>
+          </button>
+        );
+      })}
+    </nav>
   );
 }
 
