@@ -52,7 +52,10 @@ export function ImageStyleBar({
   placement: FloatingBarPlacement;
   chrome: ImageToolbarChrome;
 }) {
+  const { project } = useStudio();
   const isIllustration = chrome.image.kind === "illustration";
+  const coverMode =
+    isIllustration && subjectForPage(chrome.pageId, project)?.kind === "cover";
   const isFill = chrome.image.fit !== "contain";
   const softFill = effectiveFitBackdrop(chrome.image) === "blur";
   const canCrop = chrome.canCrop !== false;
@@ -80,29 +83,29 @@ export function ImageStyleBar({
           </Toggle>
         )}
 
-        {canCrop && (
-        <div className="mx-0.5 inline-flex rounded-lg border border-ink-200">
-          <FitBtn
-            label="Fill"
-            title="Fill the frame — drag to choose which part shows"
-            active={isFill}
-            onClick={() => {
-              chrome.onPatch({ fit: "cover" });
-              // Aspect mismatch crops edges — open position mode so the user
-              // can immediately drag the picture into place.
-              chrome.onCrop();
-            }}
-          />
-          <FitBtn
-            label="Fit"
-            title="Show the whole picture — may leave bars"
-            active={!isFill}
-            onClick={() => chrome.onPatch({ fit: "contain" })}
-          />
-        </div>
+        {canCrop && !coverMode && (
+          <div className="mx-0.5 inline-flex rounded-lg border border-ink-200">
+            <FitBtn
+              label="Fill"
+              title="Fill the frame — drag to choose which part shows"
+              active={isFill}
+              onClick={() => {
+                chrome.onPatch({ fit: "cover" });
+                // Aspect mismatch crops edges — open position mode so the user
+                // can immediately drag the picture into place.
+                chrome.onCrop();
+              }}
+            />
+            <FitBtn
+              label="Fit"
+              title="Show the whole picture — may leave bars"
+              active={!isFill}
+              onClick={() => chrome.onPatch({ fit: "contain" })}
+            />
+          </div>
         )}
 
-        {!isFill && (
+        {!coverMode && !isFill && (
           <Toggle
             label={softFill ? "Soft fill on leftover space" : "Transparent leftover space"}
             active={softFill}
@@ -126,17 +129,19 @@ export function ImageStyleBar({
 
         <span className="mx-0.5 h-5 w-px shrink-0 bg-ink-200" />
         <MoreMenu chrome={chrome} />
-        <Toggle
-          label={
-            isIllustration
-              ? "Clear art from page (versions kept)"
-              : "Delete"
-          }
-          active={false}
-          onClick={chrome.onDelete}
-        >
-          <Trash2 className="size-4" />
-        </Toggle>
+        {!coverMode && (
+          <Toggle
+            label={
+              isIllustration
+                ? "Clear art from page (versions kept)"
+                : "Delete"
+            }
+            active={false}
+            onClick={chrome.onDelete}
+          >
+            <Trash2 className="size-4" />
+          </Toggle>
+        )}
       </div>
     </FloatingBarPortal>
   );
@@ -149,24 +154,40 @@ function IllustrationActions({ chrome }: { chrome: ImageToolbarChrome }) {
   const illo = usePageIllustration(chrome.pageId);
   const empty = !illo.cursor;
 
+  if (illo.coverMode) {
+    return (
+      <Toggle
+        label={empty ? "Create cover" : "Edit cover"}
+        active={imageEditSection === "refine"}
+        onClick={() => (empty ? openImageEdit("refine") : toggleImageEdit("refine"))}
+        tone={empty ? "accent" : undefined}
+      >
+        <Sparkles className="size-4" />
+        <span className="px-0.5 text-xs font-medium">
+          {empty ? "Create cover" : "Edit cover"}
+        </span>
+      </Toggle>
+    );
+  }
+
   return (
     <>
       {empty ? (
         // Open the docked toolbox first — never auto-start a generation from here.
         <Toggle
-          label={illo.coverMode ? "Generate cover" : "Generate illustration"}
+          label="Generate illustration"
           active={imageEditSection === "refine"}
           onClick={() => openImageEdit("refine")}
           tone="accent"
         >
           <Sparkles className="size-4" />
           <span className="hidden px-0.5 text-xs font-medium sm:inline">
-            {illo.coverMode ? "Generate cover" : "Generate illustration"}
+            Generate illustration
           </span>
         </Toggle>
       ) : (
         <Toggle
-          label={illo.coverMode ? "Edit cover" : "Edit illustration"}
+          label="Edit illustration"
           active={imageEditSection === "refine"}
           onClick={() => toggleImageEdit("refine")}
         >
@@ -180,7 +201,6 @@ function IllustrationActions({ chrome }: { chrome: ImageToolbarChrome }) {
         dirty={illo.isStale}
         anchors={illo.anchors}
         activeIds={illo.activeIds}
-        coverMode={illo.coverMode}
         onClick={() => toggleImageEdit("characters")}
       />
       {!empty && illo.isStale && (
@@ -232,7 +252,11 @@ function MoreMenu({ chrome }: { chrome: ImageToolbarChrome }) {
     <div ref={rootRef} className="relative shrink-0">
       <Toggle
         label="More"
-        active={open || imageEditSection !== null}
+        active={
+          open ||
+          (imageEditSection !== null &&
+            !(coverMode && imageEditSection === "refine"))
+        }
         onClick={() => setOpen((o) => !o)}
       >
         <MoreHorizontal className="size-4" />
@@ -246,6 +270,14 @@ function MoreMenu({ chrome }: { chrome: ImageToolbarChrome }) {
       >
         {isIllustration && (
           <>
+            {coverMode && (
+              <MenuRow
+                icon={<Users className="size-4" />}
+                label="Characters & places"
+                active={imageEditSection === "characters"}
+                onClick={() => openPanel("characters")}
+              />
+            )}
             <MenuRow
               icon={<Wand2 className="size-4" />}
               label={coverMode ? "Cover scene" : "Scene"}
@@ -292,6 +324,20 @@ function MoreMenu({ chrome }: { chrome: ImageToolbarChrome }) {
             }}
           />
         )}
+        {coverMode && (
+          <>
+            <div className="my-1 border-t border-ink-100" />
+            <MenuRow
+              icon={<Trash2 className="size-4" />}
+              label="Clear cover art"
+              danger
+              onClick={() => {
+                chrome.onDelete();
+                setOpen(false);
+              }}
+            />
+          </>
+        )}
       </PortalToolbarFlyout>
     </div>
   );
@@ -328,14 +374,12 @@ function CastToggle({
   dirty,
   anchors,
   activeIds,
-  coverMode,
   onClick,
 }: {
   active: boolean;
   dirty: boolean;
   anchors: Anchor[];
   activeIds: string[];
-  coverMode?: boolean;
   onClick: () => void;
 }) {
   const activeAnchors = activeIds
@@ -345,12 +389,8 @@ function CastToggle({
   const count = activeAnchors.length;
   const label =
     count === 0
-      ? coverMode
-        ? "On this cover — add characters & places"
-        : "In this picture — add characters & places"
-      : coverMode
-        ? `On this cover · ${count}`
-        : `In this picture · ${count}`;
+      ? "In this picture — add characters & places"
+      : `In this picture · ${count}`;
 
   return (
     <button
@@ -449,11 +489,13 @@ function MenuRow({
   icon,
   label,
   active,
+  danger,
   onClick,
 }: {
   icon?: React.ReactNode;
   label: string;
   active?: boolean;
+  danger?: boolean;
   onClick: () => void;
 }) {
   return (
@@ -462,7 +504,11 @@ function MenuRow({
       onClick={onClick}
       className={cn(
         "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition hover:bg-ink-50",
-        active ? "text-brand-700" : "text-ink-600",
+        danger
+          ? "text-red-600 hover:bg-red-50"
+          : active
+            ? "text-brand-700"
+            : "text-ink-600",
       )}
     >
       {icon}

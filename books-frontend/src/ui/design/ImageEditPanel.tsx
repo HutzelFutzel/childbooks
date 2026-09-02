@@ -349,7 +349,7 @@ function RefineSection({ illo }: { illo: ReturnType<typeof usePageIllustration> 
   );
 }
 
-/** Title / bake / wrap / matching-set — secondary once the cover already has art. */
+/** Secondary cover details, collapsed until the user asks for them. */
 function CoverSetupDisclosure() {
   const [open, setOpen] = useState(false);
   return (
@@ -360,9 +360,9 @@ function CoverSetupDisclosure() {
         className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left transition hover:bg-ink-50"
       >
         <span className="min-w-0">
-          <span className="block text-xs font-semibold text-ink-700">Cover setup</span>
+          <span className="block text-xs font-semibold text-ink-700">Cover details</span>
           <span className="block text-[11px] text-ink-400">
-            Title, bake, wrap &amp; matching set
+            Text and front/back generation settings
           </span>
         </span>
         <ChevronDown
@@ -409,7 +409,7 @@ function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustrati
 
   return (
     <div className="space-y-3 p-4">
-      <CastPicker illo={illo} defaultOpen={!cursor} />
+      {!coverMode && <CastPicker illo={illo} defaultOpen={!cursor} />}
 
       {!cursor ? (
         <>
@@ -481,23 +481,27 @@ function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustrati
 
           <div>
             <p className="mb-1.5 text-xs font-medium text-ink-600">
-              Change this {subjectLabel}
+              {coverMode ? "Quick edit" : `Change this ${subjectLabel}`}
             </p>
             <Input
               value={edit}
               onChange={(e) => setEdit(e.target.value)}
-              placeholder="warmer light, bigger smile…"
+              placeholder={
+                coverMode ? "warmer colors, larger title area…" : "warmer light, bigger smile…"
+              }
               onKeyDown={(e) => {
                 if (e.key !== "Enter" || generating) return;
                 if (edit.trim()) void applyEdit();
                 else void tryAgain();
               }}
             />
-            <p className="mt-1.5 text-[11px] leading-snug text-ink-400">
-              {edit.trim()
-                ? "Applies your tweak to the current drawing — same scene."
-                : "Leave blank for a fresh drawing of the same scene, or type a small tweak."}
-            </p>
+            {!coverMode && (
+              <p className="mt-1.5 text-[11px] leading-snug text-ink-400">
+                {edit.trim()
+                  ? "Applies your tweak to the current drawing — same scene."
+                  : "Leave blank for a fresh drawing of the same scene, or type a small tweak."}
+              </p>
+            )}
           </div>
 
           {/* One CTA: typed text → apply tweak; empty → new version. Avoids
@@ -526,13 +530,15 @@ function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustrati
             </Button>
           )}
 
-          <button
-            type="button"
-            className="text-left text-[11px] font-medium text-brand-600 hover:text-brand-700"
-            onClick={() => openImageEdit("scene")}
-          >
-            Want a different scene? Edit what’s happening →
-          </button>
+          {!coverMode && (
+            <button
+              type="button"
+              className="text-left text-[11px] font-medium text-brand-600 hover:text-brand-700"
+              onClick={() => openImageEdit("scene")}
+            >
+              Want a different scene? Edit what’s happening →
+            </button>
+          )}
         </>
       )}
     </div>
