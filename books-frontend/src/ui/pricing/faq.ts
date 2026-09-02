@@ -49,7 +49,8 @@ export function pricingFaq(
   const minPages = Math.min(...products.map((p) => p.conditions.pages.min));
   const maxPages = Math.max(...products.map((p) => p.conditions.pages.max));
   const taxInclusive = products.some((p) => p.taxBehavior[currency] === "inclusive");
-  const anyDiscount = products.some((p) => Object.values(p.planPrintDiscountPct).some((v) => v > 0));
+  const allDiscounts = products.flatMap((p) => Object.values(p.planPrintDiscountPct)).filter((v) => v > 0);
+  const maxDiscount = allDiscounts.length > 0 ? Math.max(...allDiscounts) : 0;
 
   const faq: PricingFaqItem[] = [
     {
@@ -62,7 +63,7 @@ export function pricingFaq(
     {
       question: "Why does the price stay the same when I add a few pages?",
       answer:
-        "Printing is priced in page brackets rather than per page, because the bindery charges by band. Adding pages inside your current bracket costs nothing extra, and crossing into the next one steps the price up. The brackets are listed under the page slider, so you can see how much room you have left.",
+        "Printing is priced in page brackets rather than per page, because the bindery charges by band. Adding pages inside your current bracket costs nothing extra, and crossing into the next one steps the price up. You can view the page brackets in the detailed pricing section below.",
     },
     {
       question: "Is shipping included in the price?",
@@ -93,11 +94,11 @@ export function pricingFaq(
     },
   ];
 
-  if (anyDiscount) {
+  if (maxDiscount > 0) {
     faq.push({
-      question: "Do subscribers pay less for printing?",
+      question: "Do members get a discount on printing?",
       answer:
-        "Yes. Paid plans include a discount on every print order, which is applied automatically at checkout. You can see what each plan would pay by switching the buyer in the price panel — no subscription is needed to use the calculator or to order at the standard price.",
+        `Yes. Active membership plans include up to ${maxDiscount}% off printed books, applied automatically at checkout. You do not need a membership to order books at standard prices.`,
     });
   }
 

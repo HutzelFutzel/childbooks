@@ -1,11 +1,4 @@
-/**
- * The pricing FAQ as plain, always-open markup.
- *
- * Not an accordion: the answers are the page's indexable content and the reason
- * it can rank for the questions people actually type, and content hidden behind a
- * click is content a reader has to hunt for. A `<dl>` also gives the FAQPage
- * structured data an on-page counterpart that says the same words.
- */
+/** A compact native disclosure list. Answers remain present in the server HTML. */
 import { cn } from "../lib/cn";
 import type { PricingFaqItem } from "./faq";
 
@@ -18,13 +11,23 @@ export function PricingFaq({
 }) {
   if (items.length === 0) return null;
   return (
-    <dl className={cn("grid gap-5 sm:grid-cols-2", className)}>
+    <div className={cn("divide-y divide-ink-200 border-y border-ink-200", className)}>
       {items.map((item) => (
-        <div key={item.question} className="rounded-2xl border border-ink-200 bg-white p-5">
-          <dt className="text-sm font-semibold text-ink-900">{item.question}</dt>
-          <dd className="mt-1.5 text-[13px] leading-relaxed text-ink-600">{item.answer}</dd>
-        </div>
+        <details key={item.question} className="group">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-4 py-4 text-sm font-semibold text-ink-800">
+            {item.question}
+            <span
+              aria-hidden
+              className="text-lg font-normal text-ink-400 transition-transform group-open:rotate-45"
+            >
+              +
+            </span>
+          </summary>
+          <p className="max-w-3xl pb-5 pr-8 text-sm leading-relaxed text-ink-600">
+            {item.answer}
+          </p>
+        </details>
       ))}
-    </dl>
+    </div>
   );
 }

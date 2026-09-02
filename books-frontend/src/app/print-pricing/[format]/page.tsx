@@ -117,7 +117,6 @@ export default async function FormatPricingPage({
   const name = formatName(product);
   const slug = formatSlug(product.spec);
   const faq = pricingFaq([product], settings, currency);
-  const others = siblings.filter((p) => p.sku !== product.sku);
 
   return (
     <>
@@ -135,7 +134,7 @@ export default async function FormatPricingPage({
         faq={faq}
       />
       <Nav siteName={branding.brandName} logoUrl={logoUrl} />
-      <main className="mx-auto max-w-6xl px-6 pb-20 pt-28 sm:pt-32">
+      <main className="mx-auto max-w-5xl px-6 pb-20 pt-28 sm:pt-32">
         <nav aria-label="Breadcrumb" className="mb-6 text-xs text-ink-500">
           <Link href="/print-pricing" className="underline decoration-ink-300 underline-offset-2 hover:text-ink-700">
             Print pricing
@@ -144,14 +143,12 @@ export default async function FormatPricingPage({
           <span className="capitalize text-ink-700">{name}</span>
         </nav>
 
-        <header className="max-w-2xl">
+        <header className="max-w-xl">
           <h1 className="font-display text-3xl font-bold capitalize tracking-tight text-ink-900 sm:text-4xl">
-            {name} print pricing
+            See what this {bindingNoun(product.spec.binding)} will cost
           </h1>
-          <p className="mt-4 text-lg text-ink-600">
-            {product.tagline ||
-              `Takes ${product.conditions.pages.min}–${product.conditions.pages.max} pages, in steps of ${product.conditions.pages.step}.`}{" "}
-            Prices below are what you would pay, not an estimate.
+          <p className="mt-3 text-base leading-relaxed text-ink-600">
+            Choose a few details to see your price. No account or purchase required.
           </p>
         </header>
 
@@ -170,68 +167,63 @@ export default async function FormatPricingPage({
           />
         </section>
 
-        <section aria-labelledby="brackets" className="mt-16">
-          <h2 id="brackets" className="font-display text-2xl font-bold tracking-tight text-ink-900">
-            Price per copy by page count
-          </h2>
-          <p className="mt-2 max-w-2xl text-sm text-ink-600">
-            One copy at the standard specification, in {currency}.
-          </p>
-          <div className="mt-6">
-            <PriceTable
-              products={[product]}
-              settings={settings}
-              currency={currency}
-              linkFormats={false}
-            />
-          </div>
-        </section>
+        <details className="group mx-auto mt-14 max-w-4xl border-y border-ink-200">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-4 py-5 text-sm font-semibold text-ink-800">
+            Detailed pricing and delivery
+            <span
+              aria-hidden
+              className="text-lg font-normal text-ink-400 transition-transform group-open:rotate-45"
+            >
+              +
+            </span>
+          </summary>
+          <div className="space-y-9 pb-6">
+            <section aria-labelledby="brackets">
+              <h2 id="brackets" className="font-display text-lg font-bold tracking-tight text-ink-900">
+                Price by page count
+              </h2>
+              <p className="mb-5 mt-1 max-w-2xl text-sm leading-relaxed text-ink-600">
+                One copy at the standard specification, in {currency}. Printing is charged in page
+                brackets, so adding pages within a bracket does not change the price.
+              </p>
+              <PriceTable
+                products={[product]}
+                settings={settings}
+                currency={currency}
+                linkFormats={false}
+              />
+            </section>
 
-        <section aria-labelledby="shipping" className="mt-16">
-          <h2 id="shipping" className="font-display text-2xl font-bold tracking-tight text-ink-900">
-            Shipping for one copy
-          </h2>
-          <p className="mt-2 max-w-2xl text-sm text-ink-600">
-            What we charge to ship, in {currency}. Shipping scales with the number of copies, so
-            ordering several together costs less per book. The exact amount is confirmed against a
-            live carrier quote for your address at checkout.
-          </p>
-          <div className="mt-6">
-            <ShippingTable product={product} currency={currency} />
-          </div>
-        </section>
+            <section aria-labelledby="shipping">
+              <h2 id="shipping" className="font-display text-lg font-bold tracking-tight text-ink-900">
+                Delivery for one copy
+              </h2>
+              <p className="mb-5 mt-1 max-w-2xl text-sm leading-relaxed text-ink-600">
+                Delivery scales with the number of copies and is confirmed against a live carrier
+                quote for your address at checkout.
+              </p>
+              <ShippingTable product={product} currency={currency} />
+            </section>
 
-        {product.description && (
-          <section aria-labelledby="about" className="mt-16 max-w-2xl">
-            <h2 id="about" className="font-display text-2xl font-bold tracking-tight text-ink-900">
-              About this format
-            </h2>
-            <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-ink-600">
-              {product.description}
-            </p>
-          </section>
-        )}
+            {product.description && (
+              <section aria-labelledby="about" className="max-w-2xl">
+                <h2 id="about" className="font-display text-lg font-bold tracking-tight text-ink-900">
+                  About this format
+                </h2>
+                <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-ink-600">
+                  {product.description}
+                </p>
+              </section>
+            )}
+          </div>
+        </details>
 
         {faq.length > 0 && (
-          <section aria-labelledby="format-faq" className="mt-16">
-            <h2 id="format-faq" className="font-display text-2xl font-bold tracking-tight text-ink-900">
-              Questions about this format
+          <section aria-labelledby="format-faq" className="mx-auto mt-16 max-w-4xl">
+            <h2 id="format-faq" className="font-display text-xl font-bold tracking-tight text-ink-900">
+              Common questions
             </h2>
-            <PricingFaq items={faq} className="mt-6" />
-          </section>
-        )}
-
-        {others.length > 0 && (
-          <section aria-labelledby="other-formats" className="mt-16">
-            <h2
-              id="other-formats"
-              className="font-display text-2xl font-bold tracking-tight text-ink-900"
-            >
-              Other formats
-            </h2>
-            <div className="mt-6">
-              <PriceTable products={others} settings={settings} currency={currency} />
-            </div>
+            <PricingFaq items={faq} className="mt-4" />
           </section>
         )}
       </main>

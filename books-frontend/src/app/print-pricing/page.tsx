@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import { getBrandingConfig } from "../../server/branding";
 import { getLegalConfig } from "../../server/legal";
 import { getSeoConfig } from "../../server/seo";
@@ -85,18 +84,17 @@ export default async function PrintPricingPage({
         faq={faq}
       />
       <Nav siteName={branding.brandName} logoUrl={logoUrl} />
-      <main className="mx-auto max-w-6xl px-6 pb-20 pt-28 sm:pt-32">
-        <header className="mx-auto max-w-2xl text-center">
+      <main className="mx-auto max-w-5xl px-6 pb-20 pt-28 sm:pt-32">
+        <header className="mx-auto max-w-xl text-center">
           <h1 className="font-display text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl">
-            What a printed book costs
+            See what your printed book will cost
           </h1>
-          <p className="mt-4 text-lg text-ink-600">
-            Every price on this page is the price you would pay — the same figures our checkout
-            charges from. Change anything and watch the number move.
+          <p className="mt-3 text-base leading-relaxed text-ink-600">
+            Choose a few details to see your price. No account or purchase required.
           </p>
         </header>
 
-        <section aria-labelledby="calculator" className="mt-12">
+        <section aria-labelledby="calculator" className="mt-10">
           <h2 id="calculator" className="sr-only">
             Price calculator
           </h2>
@@ -111,87 +109,41 @@ export default async function PrintPricingPage({
         </section>
 
         {products.length > 0 && (
-          <section aria-labelledby="price-table" className="mt-16">
-            <h2
-              id="price-table"
-              className="font-display text-2xl font-bold tracking-tight text-ink-900"
-            >
-              Price per copy, by format and length
-            </h2>
-            <p className="mt-2 max-w-2xl text-sm text-ink-600">
-              A single copy at the standard specification, in {currency}. Longer books cost more to
-              print, so each format is priced in page brackets — see a format&apos;s own page for
-              its full bracket table and shipping rates.
-            </p>
-            <div className="mt-6">
+          <details className="group mx-auto mt-14 max-w-4xl border-y border-ink-200">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-4 py-5 text-sm font-semibold text-ink-800">
+              Detailed pricing by format and page count
+              <span
+                aria-hidden
+                className="text-lg font-normal text-ink-400 transition-transform group-open:rotate-45"
+              >
+                +
+              </span>
+            </summary>
+            <div className="pb-6">
+              <p className="mb-5 max-w-2xl text-sm leading-relaxed text-ink-600">
+                Prices below are for one copy at the standard specification, in {currency}.
+                Printing is charged in page brackets, so adding pages within a bracket does not
+                change the price.
+              </p>
               <PriceTable products={products} settings={settings} currency={currency} />
+              <p className="mt-5 text-sm leading-relaxed text-ink-500">
+                The final total depends on format, page count, print options, number of copies,
+                destination, and delivery speed.
+              </p>
             </div>
-          </section>
+          </details>
         )}
-
-        <section aria-labelledby="how-pricing-works" className="mt-16">
-          <h2
-            id="how-pricing-works"
-            className="font-display text-2xl font-bold tracking-tight text-ink-900"
-          >
-            What moves the price
-          </h2>
-          <div className="mt-6 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-            <Explainer title="Format">
-              The trim size and the binding. A hardcover costs more to make than a stapled softcover,
-              and each binding accepts a different range of lengths.
-            </Explainer>
-            <Explainer title="Length">
-              Pages are the biggest lever on a long book. Printing is billed in brackets, so the
-              price steps rather than climbing with every page you add.
-            </Explainer>
-            <Explainer title="Print and paper">
-              Colour on heavy coated stock is what makes illustrations sing, and it costs several
-              times what black and white on light uncoated paper does — per page, so the gap widens
-              with length.
-            </Explainer>
-            <Explainer title="Destination and speed">
-              Shipping is charged separately, scales with the number of copies, and varies by country.
-              Not every carrier speed reaches every market.
-            </Explainer>
-          </div>
-        </section>
 
         {faq.length > 0 && (
-          <section aria-labelledby="pricing-faq" className="mt-16">
-            <h2 id="pricing-faq" className="font-display text-2xl font-bold tracking-tight text-ink-900">
-              Questions about print pricing
+          <section aria-labelledby="pricing-faq" className="mx-auto mt-16 max-w-4xl">
+            <h2 id="pricing-faq" className="font-display text-xl font-bold tracking-tight text-ink-900">
+              Common questions
             </h2>
-            <PricingFaq items={faq} className="mt-6" />
+            <PricingFaq items={faq} className="mt-4" />
           </section>
         )}
-
-        <div className="mt-16 rounded-3xl border border-brand-200 bg-brand-50 px-6 py-8 text-center">
-          <h2 className="font-display text-xl font-bold text-ink-900">
-            Make the book first — decide on printing later
-          </h2>
-          <p className="mx-auto mt-2 max-w-xl text-sm text-ink-600">
-            You can write and illustrate a complete book for free, then come back to these numbers
-            when you want to hold it. Nothing here is decided until you order.
-          </p>
-          <Link
-            href="/studio"
-            className="mt-5 inline-flex items-center justify-center rounded-2xl bg-brand-600 px-6 py-3 text-sm font-semibold text-(--color-brand-foreground) shadow-soft transition hover:bg-brand-700"
-          >
-            Start your book
-          </Link>
-        </div>
       </main>
       <Footer siteName={branding.brandName} logoUrl={logoUrl} legal={legal} />
     </>
-  );
-}
-
-function Explainer({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div className="rounded-2xl border border-ink-200 bg-white p-5">
-      <h3 className="text-sm font-semibold text-ink-900">{title}</h3>
-      <p className="mt-1.5 text-[13px] leading-relaxed text-ink-600">{children}</p>
-    </div>
   );
 }

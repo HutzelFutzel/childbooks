@@ -105,12 +105,13 @@ export function PlansDialog() {
   };
 
   return (
-    <Modal open={open} onClose={close} title="Plans" size="max-w-3xl">
+    <Modal open={open} onClose={close} title="Memberships" size="max-w-3xl">
       <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="max-w-md text-xs leading-relaxed text-ink-500">
-            Pick the plan that fits how much you create. Every plan includes a monthly bundle of Sparks
-            (cheaper than buying packs) plus perks. Cancel anytime.
+            Membership is for creating stories, not recurring book deliveries. Paid memberships
+            include monthly Sparks for writing and illustrating, plus creative tools and member
+            pricing. Printed books are always ordered separately. Cancel anytime.
           </p>
           {hasAnnual && (
             <div className="inline-flex items-center rounded-full bg-ink-100 p-0.5 text-xs font-medium">
@@ -140,7 +141,7 @@ export function PlansDialog() {
               <Sparkles className="size-6" />
             </span>
             <p className="text-sm font-medium text-ink-700">No plans available yet</p>
-            <p className="max-w-sm text-sm text-ink-500">Subscription plans haven&apos;t been published yet.</p>
+            <p className="max-w-sm text-sm text-ink-500">Memberships haven&apos;t been published yet.</p>
           </div>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -256,15 +257,14 @@ export function PlansDialog() {
 }
 
 /**
- * Top-bar trigger for the plans dialog. Shows the current plan name when
- * subscribed, otherwise an "Upgrade" affordance. Hidden when no purchasable plan
+ * Top-bar trigger for the memberships dialog. Shows the current membership name
+ * when subscribed, otherwise a clear "Membership" affordance. Hidden when no purchasable plan
  * is configured.
  */
 export function PlansButton() {
   const open = useBillingUiStore((s) => s.openPlans);
   const plans = useAppConfigStore((s) => s.plans.plans);
   const subscriptions = useSubscriptionStore((s) => s.subscriptions);
-  const subscriptionsLoading = useSubscriptionStore((s) => s.loading);
 
   const hasPaidPlans = plans.some(
     (p) => p.status === "active" && !p.isFree && Object.keys(p.prices).length > 0,
@@ -273,12 +273,7 @@ export function PlansButton() {
 
   const active = subscriptions.find((s) => ["active", "trialing", "past_due"].includes(s.status)) ?? null;
   const currentPlan = findPublicPlanByPriceId(plans, active?.priceId ?? null);
-  const label =
-    currentPlan && !currentPlan.isFree
-      ? currentPlan.name
-      : subscriptionsLoading
-        ? "Plans"
-        : "Upgrade";
+  const label = currentPlan && !currentPlan.isFree ? currentPlan.name : "Membership";
 
   return (
     <Button variant="ghost" size="sm" leftIcon={<Sparkles className="size-4" />} onClick={open}>

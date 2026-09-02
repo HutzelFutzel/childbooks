@@ -29,7 +29,7 @@ function currencyFor(plan: PublicPlan): string {
 function bullets(plan: PublicPlan): string[] {
   const out: string[] = [];
   if (plan.grant.monthlySparks > 0) {
-    out.push(`${plan.grant.monthlySparks.toLocaleString()} Sparks every month`);
+    out.push(`${plan.grant.monthlySparks.toLocaleString()} Sparks to create with every month`);
   }
   if (plan.grant.annualBonusSparks > 0) {
     out.push(`+${plan.grant.annualBonusSparks.toLocaleString()} bonus Sparks on annual`);
@@ -62,10 +62,11 @@ export function Pricing({ initial }: { initial: PublicPlansConfig }) {
       <div className="mx-auto max-w-6xl px-6">
         <Reveal className="mx-auto max-w-2xl text-center">
           <h2 id="pricing-title" className="font-display text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl">
-            Simple plans that grow with your stories
+            Create more stories with a membership
           </h2>
           <p className="mt-4 text-lg text-ink-600">
-            Start free. Upgrade for more Sparks, cheaper prints, and premium extras.
+            Membership gives you monthly Sparks for creating and illustrating, plus creative tools
+            and member pricing. Printed books are always ordered separately.
           </p>
 
           {/* Billing interval toggle */}
@@ -104,6 +105,9 @@ export function Pricing({ initial }: { initial: PublicPlansConfig }) {
                       {plan.badges[0]}
                     </span>
                   )}
+                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-ink-400">
+                    {plan.isFree ? "Free account" : "Membership"}
+                  </p>
                   <h3 className="text-lg font-bold text-ink-900">{plan.name}</h3>
                   {plan.tagline && <p className="mt-1 text-sm text-ink-500">{plan.tagline}</p>}
 
@@ -140,7 +144,7 @@ export function Pricing({ initial }: { initial: PublicPlansConfig }) {
                         : "border border-ink-200 text-ink-700 hover:border-ink-300",
                     )}
                   >
-                    {plan.isFree ? "Start for free" : "Choose plan"}
+                    {plan.isFree ? "Start for free" : `Choose ${plan.name}`}
                     {featured && <Sparkles className="size-4" />}
                   </Link>
                 </div>
@@ -150,7 +154,8 @@ export function Pricing({ initial }: { initial: PublicPlansConfig }) {
         </div>
 
         <p className="mt-8 text-center text-sm text-ink-500">
-          Prices shown for reference. Manage your subscription anytime in the studio.
+          Membership renews monthly or yearly and can be cancelled anytime. It never sends books
+          automatically.
         </p>
       </div>
     </section>

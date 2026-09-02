@@ -171,10 +171,10 @@ export function PlanUpsell({
         <Sparkles className="size-4" />
       </span>
       <div className="min-w-0 flex-1">
-        <p className="text-sm font-semibold text-ink-800">Making more books?</p>
+        <p className="text-sm font-semibold text-ink-800">Creating stories regularly?</p>
         <p className="mt-0.5 text-xs leading-relaxed text-ink-600">
-          {plan.name} members get {benefit}, from {money(monthly, baseCurrency)} a month. Cancel
-          whenever you like.
+          {plan.name} membership includes {benefit}, from {money(monthly, baseCurrency)} a month.
+          Printed books are ordered separately. Cancel anytime.
         </p>
       </div>
       <Button size="sm" variant="secondary" onClick={openPlans}>

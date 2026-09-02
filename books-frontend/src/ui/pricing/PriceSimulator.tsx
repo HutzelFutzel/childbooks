@@ -3,16 +3,13 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Info, Package, Truck } from "lucide-react";
 import type { CatalogMediaConfig } from "../../core/config/catalogMedia";
 import type { PublicPlan } from "../../core/config/plans";
 import {
-  formatSlug,
   type PricingSettings,
   type PublicProduct,
 } from "../../core/config/products";
 import {
-  pickTier,
   publicMarketsFor,
   publicShippingMethodsFor,
   simulatePublicOrder,
@@ -29,7 +26,7 @@ import { VariantPicker } from "../checkout/VariantPicker";
 import { Field } from "../components/Input";
 import { Select } from "../components/Select";
 import { cn } from "../lib/cn";
-import { formatMoney, pricingHref, trimLabel } from "./format";
+import { formatMoney, trimLabel } from "./format";
 
 /** Fallback labels for shipping speeds a product hasn't renamed. */
 const SHIPPING_LABEL: Record<ShippingMethod, string> = {
@@ -77,10 +74,9 @@ export function PriceSimulator({
   currency: string;
   /**
    * Preselect a buyer's own plan (from `?plan=`, typically a deep link from
-   * inside the Studio) so the receipt opens on what they'd actually pay instead
-   * of the list price a guest would see. Purely a starting point — the "Price
-   * as" rows below remain switchable, so this never turns the comparison into
-   * the only number shown.
+   * inside the Studio) so the quote includes their real member price. Guests see
+   * the standard price; hypothetical plan switching does not belong in a print
+   * quote because it hides the recurring membership cost.
    */
   planId?: string | null;
   lockedFormat?: PublicProduct;
@@ -106,7 +102,7 @@ export function PriceSimulator({
   const [copies, setCopies] = useState(1);
   const [pages, setPages] = useState(product?.conditions.pages.min ?? 24);
   const [method, setMethod] = useState<ShippingMethod | "">("");
-  const [planId, setPlanId] = useState<string | null>(initialPlanId ?? null);
+  const planId = initialPlanId ?? null;
 
   // Countries and speeds come from the product, so the tool can never quote a
   // route checkout would refuse.
@@ -147,8 +143,12 @@ export function PriceSimulator({
    */
   const chooseCurrency = (next: string) => {
     setCurrency(next);
-    const query = next === settings.baseCurrency ? "" : `?currency=${encodeURIComponent(next)}`;
-    router.replace(`${pathname}${query}`, { scroll: false });
+    const query = new URLSearchParams();
+    if (next !== settings.baseCurrency) query.set("currency", next);
+    if (planId) query.set("plan", planId);
+    const serialized = query.toString();
+    const suffix = serialized ? `?${serialized}` : "";
+    router.replace(`${pathname}${suffix}`, { scroll: false });
   };
 
   useEffect(() => {
@@ -196,16 +196,30 @@ export function PriceSimulator({
     [product, settings, currency, pages, copies, variant, country, method, planId],
   );
 
-  // Plans worth offering as a comparison: only ones whose discount this product
-  // can actually honour, since the projection has already clamped each to what
-  // the price can carry.
-  const discountPlans = useMemo(
-    () =>
-      plans
-        .filter((p) => p.status === "active" && (product?.planPrintDiscountPct[p.id] ?? 0) > 0)
-        .sort((a, b) => a.sortOrder - b.sortOrder),
-    [plans, product],
-  );
+  const currentPlan = plans.find((plan) => plan.id === planId) ?? null;
+
+  // If active paid plans offer a print discount on this product, compute the best member quote
+  const memberOffer = useMemo(() => {
+    if (!product || !variant) return null;
+    const candidates = plans
+      .filter((p) => !p.isFree && p.status === "active" && (product.planPrintDiscountPct[p.id] ?? 0) > 0)
+      .map((p) => {
+        const pct = product.planPrintDiscountPct[p.id] ?? 0;
+        const memberQuote = simulatePublicOrder(product, settings, {
+          currency,
+          pages,
+          copies,
+          variant,
+          destinationCountry: country || undefined,
+          shippingMethod: (method as ShippingMethod) || undefined,
+          planId: p.id,
+        });
+        return { plan: p, pct, quote: memberQuote };
+      })
+      .sort((a, b) => b.pct - a.pct);
+
+    return candidates[0] ?? null;
+  }, [product, variant, plans, settings, currency, pages, copies, country, method]);
 
   if (!product) {
     return (
@@ -220,240 +234,211 @@ export function PriceSimulator({
     value: m,
     label: product.shipping.methods.find((x) => x.method === m)?.label || SHIPPING_LABEL[m] || m,
   }));
+  const formatOptions = products.map((p) => ({
+    value: p.sku,
+    label: `${bindingNoun(p.spec.binding)}, ${trimLabel(p.spec.pageTrim)}`,
+  }));
+  const availableCopies = copyOptions(maxCopies);
+  const copyIndex = Math.max(0, availableCopies.indexOf(copies));
+  const changeCopies = (direction: -1 | 1) => {
+    const next = availableCopies[copyIndex + direction];
+    if (next != null) setCopies(next);
+  };
 
   return (
-    <div className={cn("grid gap-6 lg:grid-cols-[1fr_20rem] lg:items-start", className)}>
-      {/* ---- Controls ---- */}
-      <div className="space-y-6 rounded-3xl border border-ink-200 bg-white p-5 shadow-soft sm:p-6">
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Ship to">
-            <Select
-              options={countries.map((c) => ({ value: c, label: countryLabel(c) }))}
-              value={country}
-              onChange={(e) => setCountry(e.target.value)}
-            />
-          </Field>
-          <Field label="Currency">
-            <Select
-              options={currencies.map((c) => ({ value: c, label: c }))}
-              value={currency}
-              onChange={(e) => chooseCurrency(e.target.value)}
-            />
-          </Field>
-        </div>
+    <div
+      className={cn(
+        "mx-auto max-w-4xl overflow-hidden rounded-3xl border border-ink-200 bg-white shadow-soft",
+        className,
+      )}
+    >
+      <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.8fr)]">
+        <div className="space-y-6 p-6 sm:p-8">
+          {!lockedFormat && products.length > 1 && (
+            <Field label="Format">
+              <Select options={formatOptions} value={product.sku} onChange={(e) => setSku(e.target.value)} />
+            </Field>
+          )}
 
-        {!lockedFormat && products.length > 1 && (
           <fieldset className="space-y-2">
-            <legend className="text-[12px] font-semibold text-ink-800">Book format</legend>
-            <p className="text-[11px] text-ink-500">
-              The page size and how the book is bound. Everything else is a choice you make on top of it.
-            </p>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {products.map((p) => {
-                const selected = p.sku === product.sku;
-                const from = pickTier(p.priceTiers ?? [], p.conditions.pages.min)?.prices[currency];
-                return (
-                  <button
-                    key={p.sku}
-                    type="button"
-                    onClick={() => setSku(p.sku)}
-                    aria-pressed={selected}
-                    className={cn(
-                      "rounded-lg px-2.5 py-2 text-left ring-1 ring-inset transition",
-                      selected ? "bg-brand-50 ring-brand-300" : "bg-white ring-ink-200 hover:ring-ink-300",
-                    )}
-                  >
-                    <span className="flex items-baseline justify-between gap-2">
-                      <span className="text-[12px] font-medium capitalize text-ink-800">
-                        {bindingNoun(p.spec.binding)}
-                      </span>
-                      {from != null && (
-                        <span className="shrink-0 text-[11px] tabular-nums text-ink-500">
-                          from {formatMoney(from, currency)}
-                        </span>
-                      )}
-                    </span>
-                    <span className="mt-0.5 block text-[11px] text-ink-500">
-                      {trimLabel(p.spec.pageTrim)} · {p.conditions.pages.min}–{p.conditions.pages.max} pages
-                    </span>
-                  </button>
-                );
-              })}
+            <legend className="flex w-full items-baseline justify-between gap-3 text-sm font-medium text-ink-700">
+              <span>Pages</span>
+              <span className="tabular-nums text-ink-500">{pages}</span>
+            </legend>
+            <input
+              type="range"
+              min={minPages}
+              max={maxPages}
+              step={pageStep}
+              value={pages}
+              onChange={(e) => setPages(Number(e.target.value))}
+              aria-label="Number of interior pages"
+              className="w-full accent-brand-600"
+            />
+            <div className="flex justify-between text-xs tabular-nums text-ink-400">
+              <span>{minPages}</span>
+              <span>{maxPages}</span>
             </div>
           </fieldset>
-        )}
 
-        {/* Pages. The slider steps by the binding's own increment, and the tier
-            edges are marked: seeing where the price brackets fall is the single
-            most useful thing this tool can show. */}
-        <fieldset className="space-y-2">
-          <legend className="flex w-full items-baseline justify-between gap-2 text-[12px] font-semibold text-ink-800">
-            <span>Pages</span>
-            <span className="tabular-nums font-normal text-ink-500">{pages}</span>
-          </legend>
-          <input
-            type="range"
-            min={minPages}
-            max={maxPages}
-            step={pageStep}
-            value={pages}
-            onChange={(e) => setPages(Number(e.target.value))}
-            aria-label="Number of interior pages"
-            className="w-full accent-brand-600"
-          />
-          <div className="flex justify-between text-[10px] tabular-nums text-ink-400">
-            <span>{minPages}</span>
-            <span>{maxPages}</span>
+          <div className="grid gap-5 sm:grid-cols-2">
+            <Field label="Copies">
+              <div className="flex h-11 items-center justify-between rounded-xl2 ring-1 ring-inset ring-ink-200">
+                <button
+                  type="button"
+                  onClick={() => changeCopies(-1)}
+                  disabled={copyIndex === 0}
+                  aria-label="Fewer copies"
+                  className="flex h-full w-11 items-center justify-center rounded-l-xl2 text-lg text-ink-500 transition hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  −
+                </button>
+                <span className="tabular-nums text-sm font-medium text-ink-800">{copies}</span>
+                <button
+                  type="button"
+                  onClick={() => changeCopies(1)}
+                  disabled={copyIndex >= availableCopies.length - 1}
+                  aria-label="More copies"
+                  className="flex h-full w-11 items-center justify-center rounded-r-xl2 text-lg text-ink-500 transition hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  +
+                </button>
+              </div>
+            </Field>
+            <Field label="Deliver to">
+              <Select
+                options={countries.map((c) => ({ value: c, label: countryLabel(c) }))}
+                value={country}
+                onChange={(e) => setCountry(e.target.value)}
+              />
+            </Field>
           </div>
-          <PriceBrackets product={product} currency={currency} pages={pages} />
-        </fieldset>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          <Field label="Copies" hint={`Up to ${maxCopies} per order`}>
-            <Select
-              options={copyOptions(maxCopies).map((n) => ({ value: String(n), label: String(n) }))}
-              value={String(copies)}
-              onChange={(e) => setCopies(Number(e.target.value))}
-            />
-          </Field>
-          <Field label="Delivery speed">
-            <Select
-              options={shippingMethodOptions}
-              value={method}
-              onChange={(e) => setMethod(e.target.value as ShippingMethod)}
-              disabled={shippingMethodOptions.length === 0}
-            />
-          </Field>
+          <details className="border-t border-ink-100 pt-5">
+            <summary className="cursor-pointer text-sm font-medium text-ink-600 hover:text-ink-900">
+              Advanced options
+            </summary>
+            <div className="mt-5 space-y-5">
+              <div className="grid gap-5 sm:grid-cols-2">
+                <Field label="Currency">
+                  <Select
+                    options={currencies.map((c) => ({ value: c, label: c }))}
+                    value={currency}
+                    onChange={(e) => chooseCurrency(e.target.value)}
+                  />
+                </Field>
+                <Field label="Delivery speed">
+                  <Select
+                    options={shippingMethodOptions}
+                    value={method}
+                    onChange={(e) => setMethod(e.target.value as ShippingMethod)}
+                    disabled={shippingMethodOptions.length === 0}
+                  />
+                </Field>
+              </div>
+              {variant && (
+                <VariantPicker
+                  policy={variantPolicy}
+                  value={variant}
+                  onChange={setVariant}
+                  currency={currency}
+                  pages={pages}
+                  media={media}
+                />
+              )}
+            </div>
+          </details>
         </div>
 
-        {variant && (
-          <VariantPicker
-            policy={variantPolicy}
-            value={variant}
-            onChange={setVariant}
-            currency={currency}
-            pages={pages}
-            media={media}
-          />
-        )}
-      </div>
-
-      {/* ---- Receipt ---- */}
-      <div className="lg:sticky lg:top-24">
-        <div className="rounded-3xl border border-ink-200 bg-white p-5 shadow-soft">
-          <div className="mb-3 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-ink-400">
-            <Package className="size-3.5" /> Your price
-          </div>
-
-          {/* `variant` is narrowed alongside the quote: the quote only exists
-              when one is resolved, and the plan rows below re-price with it. */}
+        <div className="border-t border-ink-100 bg-ink-50/50 p-6 sm:p-8 lg:border-l lg:border-t-0">
           {quote && variant ? (
-            <>
-              <div className="space-y-1.5 text-sm">
-                <Row
-                  label={`${quote.copies} × ${formatMoney(quote.unitPrice, currency)}`}
-                  value={formatMoney(quote.items, currency)}
-                />
-                {quote.discountPct > 0 && (
-                  <p className="text-[11px] text-emerald-600">
-                    Includes {quote.discountPct}% member discount (list{" "}
-                    {formatMoney(quote.listUnitPrice, currency)} per copy).
-                  </p>
-                )}
-                <Row
-                  label={
-                    <span className="inline-flex items-center gap-1">
-                      <Truck className="size-3.5 text-ink-400" /> Shipping
-                    </span>
-                  }
-                  value={
-                    quote.shipping == null
-                      ? shippingFallbackText(quote.shippingNote)
-                      : quote.shipping === 0
-                        ? "Free"
-                        : formatMoney(quote.shipping, currency)
-                  }
-                />
-                <div className="my-2 h-px bg-ink-100" />
-                <Row
-                  label="Total"
-                  value={quote.total == null ? "—" : formatMoney(quote.total, currency)}
-                  bold
-                />
-                <p className="pt-1 text-[11px] leading-relaxed text-ink-500">
-                  {quote.taxBehavior === "inclusive"
-                    ? "Includes VAT where it applies."
-                    : "Sales tax, where it applies, is added at checkout."}
-                </p>
-              </div>
+            <div className="flex h-full flex-col">
+              <p className="text-sm font-medium text-ink-600">Estimated total</p>
+              <p className="mt-2 font-display text-4xl font-bold tracking-tight text-ink-900">
+                {formatMoney(quote.total ?? quote.items, currency)}
+              </p>
+              <p className="mt-1 text-sm text-ink-500">
+                {quote.total == null
+                  ? "Plus delivery, confirmed at checkout"
+                  : `For ${quote.copies} ${quote.copies === 1 ? "copy" : "copies"}, including delivery`}
+              </p>
 
-              {discountPlans.length > 0 && (
-                <div className="mt-4 border-t border-ink-100 pt-4">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-                    Price as
+              <details className="mt-6 border-y border-ink-200 py-3 text-sm">
+                <summary className="cursor-pointer font-medium text-ink-600 hover:text-ink-900">
+                  Price details
+                </summary>
+                <div className="mt-3 space-y-2">
+                  <Row
+                    label={`${quote.copies} × ${formatMoney(quote.unitPrice, currency)}`}
+                    value={formatMoney(quote.items, currency)}
+                  />
+                  <Row
+                    label="Delivery"
+                    value={
+                      quote.shipping == null
+                        ? shippingFallbackText(quote.shippingNote)
+                        : quote.shipping === 0
+                          ? "Free"
+                          : formatMoney(quote.shipping, currency)
+                    }
+                  />
+                  {quote.discountPct > 0 ? (
+                    <p className="text-xs leading-relaxed text-emerald-700">
+                      Includes your {quote.discountPct}% {currentPlan?.name ?? "member"} print discount.
+                    </p>
+                  ) : memberOffer ? (
+                    <p className="text-xs leading-relaxed text-ink-600">
+                      With {memberOffer.plan.name} membership ({memberOffer.pct}% off books), this total is{" "}
+                      <span className="font-semibold text-ink-900">
+                        {formatMoney(memberOffer.quote.total ?? memberOffer.quote.items, currency)}
+                      </span>
+                      .
+                    </p>
+                  ) : null}
+                  <p className="text-xs leading-relaxed text-ink-500">
+                    {quote.taxBehavior === "inclusive"
+                      ? "Includes VAT where it applies."
+                      : "Sales tax, where it applies, is added at checkout."}
                   </p>
-                  <div className="mt-2 space-y-1">
-                    <PlanRow
-                      label="No subscription"
-                      selected={planId === null}
-                      onSelect={() => setPlanId(null)}
-                      product={product}
-                      settings={settings}
-                      scenario={{ currency, pages, copies, variant, country, method }}
-                      planId={null}
-                    />
-                    {discountPlans.map((plan) => (
-                      <PlanRow
-                        key={plan.id}
-                        label={plan.name}
-                        note={`${product.planPrintDiscountPct[plan.id]}% off`}
-                        selected={planId === plan.id}
-                        onSelect={() => setPlanId(plan.id)}
-                        product={product}
-                        settings={settings}
-                        scenario={{ currency, pages, copies, variant, country, method }}
-                        planId={plan.id}
-                      />
-                    ))}
-                  </div>
                 </div>
-              )}
+              </details>
 
               <Link
                 href="/studio"
-                className="mt-5 flex w-full items-center justify-center rounded-2xl bg-brand-600 px-5 py-3 text-sm font-semibold text-(--color-brand-foreground) shadow-soft transition hover:bg-brand-700"
+                className="mt-6 flex w-full items-center justify-center rounded-2xl bg-brand-600 px-5 py-3 text-sm font-semibold text-(--color-brand-foreground) shadow-soft transition hover:bg-brand-700"
               >
-                Start your book
+                Start making your book
               </Link>
-              <p className="mt-3 flex items-start gap-1.5 text-[11px] leading-relaxed text-ink-400">
-                <Info className="mt-px size-3.5 shrink-0" />
-                {quote.shippingNote === "estimated"
-                  ? "The book price is exact. Shipping to this destination is an estimate until the carrier quotes your address at checkout."
-                  : "The book price is exact. Shipping is confirmed against a live carrier quote at checkout."}
+              <p className="mt-3 text-center text-xs leading-relaxed text-ink-500">
+                No purchase is required until you order.
               </p>
-            </>
+            </div>
           ) : (
             <p className="text-sm text-ink-500">Choose a format to see pricing.</p>
           )}
         </div>
-
-        {!lockedFormat && (
-          <p className="mt-3 px-1 text-[11px] text-ink-400">
-            Looking at one format?{" "}
-            <Link
-              href={pricingHref(
-                `/print-pricing/${formatSlug(product.spec)}`,
-                currency,
-                settings.baseCurrency,
-              )}
-              className="underline decoration-ink-300 underline-offset-2 hover:text-ink-600"
-            >
-              See {bindingNoun(product.spec.binding)} pricing in detail
-            </Link>
-            .
-          </p>
-        )}
       </div>
+
+      {memberOffer && (
+        <p className="border-t border-ink-100 bg-brand-50/40 px-6 py-3.5 text-center text-xs leading-relaxed text-ink-600 sm:px-8">
+          {quote && quote.discountPct > 0 ? (
+            <span>
+              Your {quote.discountPct}% {currentPlan?.name ?? "member"} print discount is applied to this order.
+            </span>
+          ) : (
+            <span>
+              Members pay{" "}
+              <span className="font-semibold text-ink-900">
+                {formatMoney(memberOffer.quote.total ?? memberOffer.quote.items, currency)}
+              </span>{" "}
+              for this order ({memberOffer.pct}% off with {memberOffer.plan.name}).{" "}
+              <Link href="/#pricing" className="font-medium text-brand-700 underline underline-offset-2 hover:text-brand-800">
+                See membership plans
+              </Link>
+            </span>
+          )}
+        </p>
+      )}
     </div>
   );
 }
@@ -478,129 +463,14 @@ function shippingFallbackText(note: string): string {
 function Row({
   label,
   value,
-  bold,
 }: {
   label: React.ReactNode;
   value: React.ReactNode;
-  bold?: boolean;
 }) {
   return (
     <div className="flex items-baseline justify-between gap-3">
-      <span className={bold ? "font-semibold text-ink-800" : "text-ink-600"}>{label}</span>
-      <span
-        className={cn(
-          "shrink-0 tabular-nums",
-          bold ? "text-base font-semibold text-ink-900" : "text-ink-700",
-        )}
-      >
-        {value}
-      </span>
+      <span className="text-ink-600">{label}</span>
+      <span className="shrink-0 tabular-nums text-ink-700">{value}</span>
     </div>
-  );
-}
-
-/** One selectable buyer context, with the total that buyer would pay. */
-function PlanRow({
-  label,
-  note,
-  selected,
-  onSelect,
-  product,
-  settings,
-  scenario,
-  planId,
-}: {
-  label: string;
-  note?: string;
-  selected: boolean;
-  onSelect: () => void;
-  product: PublicProduct;
-  settings: PricingSettings;
-  scenario: {
-    currency: string;
-    pages: number;
-    copies: number;
-    variant: VariantSelection;
-    country: string;
-    method: ShippingMethod | "";
-  };
-  planId: string | null;
-}) {
-  const quote = simulatePublicOrder(product, settings, {
-    currency: scenario.currency,
-    pages: scenario.pages,
-    copies: scenario.copies,
-    variant: scenario.variant,
-    destinationCountry: scenario.country || undefined,
-    shippingMethod: (scenario.method as ShippingMethod) || undefined,
-    planId,
-  });
-  return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-pressed={selected}
-      className={cn(
-        "flex w-full items-baseline justify-between gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] ring-1 ring-inset transition",
-        selected ? "bg-brand-50 ring-brand-300" : "bg-white ring-ink-200 hover:ring-ink-300",
-      )}
-    >
-      <span className="min-w-0 truncate text-ink-700">
-        {label}
-        {note && <span className="ml-1.5 text-emerald-600">{note}</span>}
-      </span>
-      <span className="shrink-0 tabular-nums font-medium text-ink-900">
-        {quote.total == null
-          ? formatMoney(quote.items, scenario.currency)
-          : formatMoney(quote.total, scenario.currency)}
-      </span>
-    </button>
-  );
-}
-
-/**
- * The page brackets this format is priced in, with the active one marked.
- *
- * Shown because it answers the question the slider provokes. A customer who
- * watches the total stay flat from 64 to 80 pages and then jump assumes
- * something is broken; one who can see the brackets understands they have
- * headroom to fill, which is both true and useful.
- */
-function PriceBrackets({
-  product,
-  currency,
-  pages,
-}: {
-  product: PublicProduct;
-  currency: string;
-  pages: number;
-}) {
-  const tiers = (product.priceTiers ?? []).filter((t) => (t.prices[currency] ?? 0) > 0);
-  if (tiers.length <= 1) return null;
-  const active = pickTier(tiers, pages);
-  const { min, max } = product.conditions.pages;
-  return (
-    <ul className="mt-1 space-y-0.5">
-      {tiers.map((t) => {
-        const from = Math.max(min, t.minPages);
-        const to = Math.min(max, t.maxPages);
-        if (from > to) return null;
-        const isActive = t === active;
-        return (
-          <li
-            key={`${t.minPages}-${t.maxPages}`}
-            className={cn(
-              "flex items-baseline justify-between gap-2 rounded px-1.5 py-0.5 text-[11px] tabular-nums",
-              isActive ? "bg-brand-50 font-medium text-ink-800" : "text-ink-500",
-            )}
-          >
-            <span>
-              {from}–{to} pages
-            </span>
-            <span>{formatMoney(t.prices[currency], currency)} per copy</span>
-          </li>
-        );
-      })}
-    </ul>
   );
 }
