@@ -186,37 +186,50 @@ export function EditableImage({
         <button
           type="button"
           onClick={() => inputRef.current?.click()}
-          className="absolute inset-0 flex items-center justify-center bg-ink-900/0 opacity-0 outline-none transition group-hover:bg-ink-900/40 group-hover:opacity-100 focus-visible:bg-ink-900/40 focus-visible:opacity-100"
+          className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-ink-900/0 p-2 opacity-0 outline-none transition group-hover:bg-ink-900/50 group-hover:opacity-100 focus-visible:bg-ink-900/50 focus-visible:opacity-100"
           aria-label={`Replace ${label}`}
         >
-          <span className="inline-flex items-center gap-2 rounded-full bg-white/95 px-4 py-2 text-sm font-semibold text-ink-800 shadow-soft">
-            <Upload className="size-4" />
-            Drop or click to replace
+          <span className="inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-white/95 text-ink-800 shadow-soft">
+            <Upload className="size-4.5" />
+          </span>
+          <span className="rounded-full bg-white/95 px-2.5 py-0.5 text-xs font-semibold text-ink-800 shadow-soft">
+            Replace
           </span>
         </button>
       )}
 
-      {/* Confirmation bar while a dropped image is pending upload. */}
+      {/* Confirmation overlay while a dropped image is pending upload. */}
       {pending && (
-        <div className="absolute inset-x-0 bottom-3 flex items-center justify-center gap-2 px-3">
-          <button
-            type="button"
-            onClick={() => void accept()}
-            disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-full bg-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-lifted transition hover:bg-emerald-700 disabled:opacity-60"
-          >
-            {busy ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4" />}
-            {busy ? "Uploading…" : "Accept"}
-          </button>
-          <button
-            type="button"
-            onClick={cancel}
-            disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2 text-sm font-semibold text-ink-700 shadow-lifted transition hover:bg-ink-50 disabled:opacity-60"
-          >
-            <X className="size-4" />
-            Cancel
-          </button>
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-ink-900/60 p-2 backdrop-blur-xs">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                void accept();
+              }}
+              disabled={busy}
+              title="Save and upload"
+              className="inline-flex size-9 items-center justify-center rounded-full bg-emerald-600 text-white shadow-lifted transition hover:bg-emerald-700 disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="size-4 animate-spin" /> : <Check className="size-4.5 stroke-[2.5]" />}
+            </button>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                cancel();
+              }}
+              disabled={busy}
+              title="Cancel"
+              className="inline-flex size-9 items-center justify-center rounded-full bg-white text-ink-700 shadow-lifted transition hover:bg-ink-100 disabled:opacity-60"
+            >
+              <X className="size-4.5 stroke-[2.5]" />
+            </button>
+          </div>
+          <span className="rounded-full bg-black/60 px-2 py-0.5 text-[11px] font-semibold text-white drop-shadow">
+            {busy ? "Uploading…" : "Save photo?"}
+          </span>
         </div>
       )}
 
