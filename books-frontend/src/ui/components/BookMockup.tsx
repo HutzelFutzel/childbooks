@@ -32,10 +32,9 @@ export interface BookMockupProps {
 /**
  * A beautiful, tactile hardcover book mockup built from the user's real cover art.
  * Features realistic hardcover binding anatomy:
- * - Hardcover board with rounded outer edges and overhang ("squares")
+ * - Hardcover board with rounded outer edges
  * - 3D cylindrical spine wrap with edge highlight
  * - Embossed/debossed hinge crease (gutter joint) with specular catch
- * - Visible cream-colored paper page block with page-edge texture
  * - Satin laminate surface sheen & natural layered ambient occlusion
  */
 export function BookMockup({
@@ -131,7 +130,7 @@ export function BookMockup({
     </div>
   );
 
-  // Flat Presentation: Realistic hardcover with visible page block and overhang
+  // Flat Presentation: Realistic hardcover with clean shadow
   if (variant === "flat") {
     return (
       <div
@@ -142,33 +141,6 @@ export function BookMockup({
         <div
           aria-hidden
           className="pointer-events-none absolute -inset-x-1 bottom-0 h-4 rounded-[100%] bg-ink-900/15 blur-md transition-all duration-300 group-hover:h-6 group-hover:bg-ink-900/20 group-hover:blur-lg"
-        />
-
-        {/* Back Cover Board Lip & Page Block Behind Front Cover */}
-        {/* Right page block (the visible paper edge) */}
-        <div
-          aria-hidden
-          className="absolute inset-y-0.5 -right-1 w-1.75 rounded-r-xs border-r border-ink-200/80 bg-linear-to-r from-ink-100 via-[#fcfbfa] to-[#e8e4d8] shadow-xs"
-          style={{
-            backgroundImage:
-              "repeating-linear-gradient(to bottom, #fcfbfa 0px, #fcfbfa 2px, #e4e0d4 3px, #e4e0d4 4px)",
-          }}
-        />
-
-        {/* Bottom page block edge */}
-        <div
-          aria-hidden
-          className="absolute -bottom-0.75 inset-x-1.5 h-1 rounded-b-xs border-b border-ink-200/80 bg-linear-to-b from-ink-100 via-[#f8f6f0] to-[#dfdacb]"
-          style={{
-            backgroundImage:
-              "repeating-linear-gradient(to right, #f8f6f0 0px, #f8f6f0 3px, #e2ddd0 4px, #e2ddd0 5px)",
-          }}
-        />
-
-        {/* Rigid Back Cover Overhang Corner */}
-        <div
-          aria-hidden
-          className="absolute -bottom-1 -right-1.25 size-3 rounded-br-sm bg-ink-700/80 shadow-xs"
         />
 
         {/* Front Hardcover Board */}
@@ -198,13 +170,11 @@ export function BookMockup({
         {/* 3D Paper Block (Right Edge) */}
         <div
           aria-hidden
-          className="absolute right-0 top-0.5 h-[calc(100%-4px)] rounded-r-xs border-r border-ink-200 bg-linear-to-r from-[#f8f6f0] via-[#faf8f2] to-[#e4e0d4]"
+          className="absolute right-0 top-0.5 h-[calc(100%-4px)] rounded-r-xs border-r border-ink-200 bg-linear-to-r from-[#eae6da] via-[#f7f5ee] to-[#e4dfd2]"
           style={{
             width: DEPTH,
             transform: `rotateY(90deg) translateZ(${DEPTH / 2}px)`,
             transformOrigin: "right center",
-            backgroundImage:
-              "repeating-linear-gradient(to bottom, #faf8f2 0px, #faf8f2 2px, #e2ded0 3px, #e2ded0 4px)",
           }}
         />
 

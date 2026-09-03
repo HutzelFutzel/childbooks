@@ -6,13 +6,22 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ChevronLeft, ChevronRight, X } from "lucide-react";
+import { BookOpen, ChevronLeft, ChevronRight, X } from "lucide-react";
 import type { PageDesign } from "../../core/types";
 import { PageStage } from "../design/PageStage";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { defaultIllustrationFocus, type DesignPage } from "../design/designInit";
+import { cn } from "../lib/cn";
 import { useStudio } from "./StudioContext";
-import { DeadPageFill, type DisplaySpread, type Entry, type SpreadSide } from "./SpreadEditor";
+import {
+  COVER_META,
+  coverSideOf,
+  DeadPageFill,
+  sideAspect,
+  type DisplaySpread,
+  type Entry,
+  type SpreadSide,
+} from "./SpreadEditor";
 
 const FOLD_GRADIENT =
   "linear-gradient(to right, rgba(15,23,42,0) 0%, rgba(15,23,42,0.12) 42%, rgba(15,23,42,0.2) 50%, rgba(15,23,42,0.12) 58%, rgba(15,23,42,0) 100%)";
@@ -94,7 +103,14 @@ export function BookPreview({
     >
       {/* Top bar */}
       <div className="flex items-center justify-between px-5 py-3 text-white/90">
-        <span id={titleId} className="text-sm font-medium">Book preview</span>
+        <div className="flex items-center gap-2.5">
+          <span id={titleId} className="text-sm font-medium">Book preview</span>
+          {disp?.cover && (
+            <span className="rounded-md border border-brand-400/30 bg-brand-500/20 px-2 py-0.5 text-[11px] font-medium text-brand-200">
+              {disp.cover === "front" ? "Front cover" : "Back cover"}
+            </span>
+          )}
+        </div>
         <span className="text-xs text-white/60" aria-live="polite">{disp?.label}</span>
         <button
           ref={closeRef}
@@ -117,7 +133,7 @@ export function BookPreview({
             <AnimatePresence mode="wait" custom={dir}>
               <motion.div
                 key={disp.id}
-                className="w-full"
+                className="flex w-full items-center justify-center"
                 custom={dir}
                 initial={
                   reduceMotion ? { opacity: 0 } : { opacity: 0, x: dir * 40, rotateY: dir * 8 }
@@ -151,22 +167,25 @@ export function BookPreview({
       </div>
 
       {/* Dots */}
-      <div className="flex max-w-full items-center justify-start gap-0.5 overflow-x-auto px-4 pb-4 sm:justify-center sm:pb-5">
+      <div className="flex max-w-full items-center justify-start gap-1 overflow-x-auto px-4 pb-4 sm:justify-center sm:pb-5">
         {displays.map((d, i) => (
           <button
             key={d.id}
             type="button"
             onClick={() => go(i, i > index ? 1 : -1)}
             aria-label={`Go to ${d.label}`}
+            title={d.label}
             aria-current={i === index ? "page" : undefined}
             className="flex size-6 shrink-0 items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
           >
             <span
-              className={
+              className={cn(
+                "transition-all",
                 i === index
-                  ? "h-1.5 w-4 rounded-full bg-white transition-all"
-                  : "size-1.5 rounded-full bg-white/35 transition-all hover:bg-white/60"
-              }
+                  ? "h-1.5 w-4 rounded-full bg-white"
+                  : "size-1.5 rounded-full bg-white/35 hover:bg-white/60",
+                d.cover && i !== index && "bg-brand-300/50 hover:bg-brand-300/80",
+              )}
             />
           </button>
         ))}
@@ -176,7 +195,83 @@ export function BookPreview({
   );
 }
 
+function PreviewCover({ disp }: { disp: DisplaySpread }) {
+  const isFront = disp.cover === "front";
+  const side = disp.kind === "pair" ? coverSideOf(disp) : null;
+  const entry =
+    side && side.kind === "page" ? side.entry : disp.kind === "full" ? disp.entry : null;
+  const meta = disp.cover ? COVER_META[disp.cover] : null;
+  const aspect = entry?.page.aspect ?? 1;
+
+  return (
+    <div className="relative flex w-full items-center justify-center">
+      {/* Closed-book cover presentation sized to exactly one page (50% width of the spread) so height matches page spreads */}
+      <div
+        className={cn(
+          "relative w-1/2 overflow-hidden bg-white shadow-lifted transition-all",
+          isFront ? "rounded-r-xs rounded-l-sm" : "rounded-l-xs rounded-r-sm",
+        )}
+      >
+        {entry ? (
+          <PreviewPage entry={entry} />
+        ) : (
+          <div
+            className="flex w-full flex-col items-center justify-center gap-2 bg-ink-900/60 p-8 text-center text-white"
+            style={{ aspectRatio: String(aspect) }}
+          >
+            <BookOpen className="size-8 text-white/40" />
+            <span className="text-sm font-semibold text-white/80">{meta?.title ?? "Cover"}</span>
+            <span className="text-xs text-white/50">No cover artwork yet</span>
+          </div>
+        )}
+
+        {/* Tactile spine and book-edge treatment */}
+        {isFront ? (
+          <>
+            {/* Left bound spine crease shadow */}
+            <div
+              className="pointer-events-none absolute inset-y-0 left-0 w-6 bg-linear-to-r from-black/35 via-black/12 to-transparent"
+              aria-hidden="true"
+            />
+            {/* Subtle spine hinge highlight */}
+            <div
+              className="pointer-events-none absolute inset-y-0 left-3 w-px bg-white/20"
+              aria-hidden="true"
+            />
+            {/* Right page trim edge */}
+            <div
+              className="pointer-events-none absolute inset-y-0 right-0 w-2 bg-linear-to-l from-black/15 to-transparent"
+              aria-hidden="true"
+            />
+          </>
+        ) : (
+          <>
+            {/* Right bound spine crease shadow */}
+            <div
+              className="pointer-events-none absolute inset-y-0 right-0 w-6 bg-linear-to-l from-black/35 via-black/12 to-transparent"
+              aria-hidden="true"
+            />
+            {/* Subtle spine hinge highlight */}
+            <div
+              className="pointer-events-none absolute inset-y-0 right-3 w-px bg-white/20"
+              aria-hidden="true"
+            />
+            {/* Left page trim edge */}
+            <div
+              className="pointer-events-none absolute inset-y-0 left-0 w-2 bg-linear-to-r from-black/15 to-transparent"
+              aria-hidden="true"
+            />
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PreviewSpread({ disp }: { disp: DisplaySpread }) {
+  if (disp.cover) {
+    return <PreviewCover disp={disp} />;
+  }
   if (disp.kind === "full") {
     return (
       <div className="relative w-full overflow-hidden bg-white shadow-lifted">
@@ -195,11 +290,6 @@ function PreviewSpread({ disp }: { disp: DisplaySpread }) {
       />
     </div>
   );
-}
-
-function sideAspect(left: SpreadSide, right: SpreadSide): number {
-  const fromPage = (s: SpreadSide) => (s.kind === "page" ? s.entry.page.aspect : undefined);
-  return fromPage(left) ?? fromPage(right) ?? 1;
 }
 
 function PreviewHalf({ side, aspect }: { side: SpreadSide; aspect: number }) {
