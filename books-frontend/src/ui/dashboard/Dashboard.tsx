@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertTriangle,
@@ -22,6 +23,7 @@ import { Skeleton } from "../components/Skeleton";
 import { fadeRise } from "../lib/motion";
 import { notify } from "../lib/notify";
 import { ProjectCard } from "./ProjectCard";
+import { defaultDestination, studioPath } from "../studio/studioRoutes";
 
 type SortOption = "recent" | "title" | "created";
 
@@ -110,10 +112,10 @@ function DashboardEmpty({
 }
 
 export function Dashboard() {
+  const router = useRouter();
   const projects = useProjectsStore((s) => s.projects);
   const projectsLoaded = useProjectsStore((s) => s.loaded);
   const createProject = useProjectsStore((s) => s.createProject);
-  const openProject = useProjectsStore((s) => s.openProject);
   const deleteProject = useProjectsStore((s) => s.deleteProject);
   const hasAnyKey = useSettingsStore((s) => s.hasAnyKey());
   const isGuest = useAuthStore((s) => s.accessLevel === "guest");
@@ -128,14 +130,17 @@ export function Dashboard() {
     if (creating) return;
     setCreating(true);
     try {
-      await createProject(title);
+      const projectId = await createProject(title, false);
+      router.push(studioPath(projectId, "story"), { scroll: false });
     } finally {
       setCreating(false);
     }
   };
 
   const handleOpen = (id: string) => {
-    openProject(id);
+    const project = projects.find((candidate) => candidate.id === id);
+    if (!project) return;
+    router.push(studioPath(project.id, defaultDestination(project)), { scroll: false });
   };
 
   const confirmDelete = async () => {

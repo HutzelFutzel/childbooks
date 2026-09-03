@@ -3,8 +3,7 @@ import { Button } from "../components/Button";
 import { cn } from "../lib/cn";
 import { useStudio } from "./StudioContext";
 import { computeProgress } from "./studioSteps";
-
-type StudioDestination = "story" | "style" | "cast" | "pages" | "order";
+import type { StudioDestination } from "./studioRoutes";
 
 const DESTINATIONS: { id: StudioDestination; label: string }[] = [
   { id: "story", label: "Story" },
@@ -21,27 +20,9 @@ const DESTINATIONS: { id: StudioDestination; label: string }[] = [
  * the canvas keeps almost the full viewport.
  */
 export function StudioNavigator() {
-  const {
-    project,
-    step,
-    setStep,
-    styleSetupOpen,
-    openStyleSetup,
-    closeStyleSetup,
-  } = useStudio();
+  const { project, destination: active, navigate } = useStudio();
   const progress = computeProgress(project);
   const styleReady = project.config.styleReady !== false;
-
-  const active: StudioDestination =
-    step === "story"
-      ? "story"
-      : step === "order"
-        ? "order"
-        : styleSetupOpen || project.config.styleReady === false
-          ? "style"
-          : step === "anchors"
-            ? "cast"
-            : "pages";
 
   const isDone = (id: StudioDestination) => {
     if (id === "story") return progress.story.done;
@@ -56,29 +37,6 @@ export function StudioNavigator() {
     if (id === "pages") return progress.edit.detail;
     return undefined;
   };
-
-  function navigate(id: StudioDestination) {
-    if (id === "story") {
-      closeStyleSetup();
-      setStep("story");
-      return;
-    }
-    if (id === "style") {
-      if (step === "story" || step === "order") setStep("anchors");
-      openStyleSetup();
-      return;
-    }
-    closeStyleSetup();
-    if (id === "cast") {
-      setStep("anchors");
-      return;
-    }
-    if (id === "pages") {
-      setStep("edit");
-      return;
-    }
-    setStep("order");
-  }
 
   return (
     <nav

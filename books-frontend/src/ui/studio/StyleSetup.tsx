@@ -5,6 +5,7 @@
  * with existing art opens a confirm that renews cast → pages when Sparks allow.
  */
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { AlertTriangle, ArrowRight, Clock, Sparkles } from "lucide-react";
 import type { ArtStyleSelection, BookConfig } from "../../core/types";
 import { resolveArtStyleLabel } from "../../core/prompts/style";
@@ -19,6 +20,7 @@ import { notify } from "../lib/notify";
 import { isArtStyleChosen } from "../wizard/schema";
 import { artStylesEqual, StyleStep } from "../wizard/steps/StyleStep";
 import { useStudio } from "./StudioContext";
+import { studioPath } from "./studioRoutes";
 import {
   startStyleRenew,
   styleRenewCounts,
@@ -27,6 +29,7 @@ import {
 } from "./styleRenew";
 
 export function StyleSetup() {
+  const router = useRouter();
   const { project, setStep, closeStyleSetup } = useStudio();
   const config = useProjectsStore((s) => s.current()?.config);
   const updateConfig = useProjectsStore((s) => s.updateConfig);
@@ -75,7 +78,7 @@ export function StyleSetup() {
       await commitStyle(draft);
       setConfirmOpen(false);
       closeStyleSetup();
-      if (firstTime) setStep("edit");
+      setStep("edit");
     } finally {
       setBusy(false);
     }
@@ -101,6 +104,7 @@ export function StyleSetup() {
       if (!started) return;
       setConfirmOpen(false);
       closeStyleSetup();
+      setStep("edit");
       notify.success(
         "Updating your book",
         "New versions are being created in the new style. This can take a few minutes — you can keep working.",
@@ -129,6 +133,7 @@ export function StyleSetup() {
   function onCancel() {
     setDraft(committed);
     closeStyleSetup();
+    router.replace(studioPath(project.id, "pages"), { scroll: false });
   }
 
   return (

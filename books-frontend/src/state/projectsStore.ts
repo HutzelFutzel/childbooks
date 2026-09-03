@@ -48,6 +48,10 @@ function stageIndex(stage: ProjectStage): number {
   return STAGE_ORDER.indexOf(stage);
 }
 
+// Prevent a slower load for a previous Firebase identity from replacing the
+// project list after the user has already switched accounts.
+let projectLoadGeneration = 0;
+
 interface ProjectsState {
   projects: Project[];
   currentId: string | null;
@@ -156,8 +160,17 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   async load() {
+    const generation = ++projectLoadGeneration;
+    set({
+      projects: [],
+      currentId: null,
+      loaded: false,
+      staleProjectId: null,
+      saveFailedProjectId: null,
+    });
     const { projects } = await getRepos();
     const list = await projects.list();
+    if (generation !== projectLoadGeneration) return;
     set({ projects: list, loaded: true });
   },
 
@@ -231,6 +244,9 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   openProject(id) {
+    // Route ids are untrusted input. Only select a project that was loaded from
+    // the active user's UID-scoped Firestore store.
+    if (!get().projects.some((project) => project.id === id)) return;
     set({ currentId: id });
   },
 

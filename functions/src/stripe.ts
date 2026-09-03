@@ -897,6 +897,12 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
   // `rewardful: "false"` when a print order is outside the referring campaign's
   // scope — Rewardful reads it off the charge and creates no commission.
   const affiliateMeta = await affiliateChargeMetadata(uid, "order");
+  const studioReturnPath = args.merchantReference
+    ? `/studio/${encodeURIComponent(args.merchantReference)}/order`
+    : "/studio";
+  const projectParam = args.merchantReference
+    ? `&project=${encodeURIComponent(args.merchantReference)}`
+    : "";
   const session = await createCheckoutSession({
     mode: "payment",
     customer: customerId,
@@ -910,8 +916,8 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     // `payment` is what the confirmation screen keys on: it opens on our own
     // payment id (not the Stripe session) so it can follow the record live —
     // including the fulfillment leg, which happens after this redirect.
-    success_url: `${appBaseUrl()}/studio?checkout=success&payment=${paymentId}&session_id={CHECKOUT_SESSION_ID}`,
-    cancel_url: `${appBaseUrl()}/studio?checkout=cancel`,
+    success_url: `${appBaseUrl()}${studioReturnPath}?checkout=success&payment=${paymentId}${projectParam}&session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${appBaseUrl()}${studioReturnPath}?checkout=cancel`,
   });
 
   await createPendingPayment({
@@ -1443,8 +1449,8 @@ export function registerStripeUserRoutes(app: Express): void {
         payment_intent_data: {
           metadata: { paymentId, uid, kind: "ebook", ...(await affiliateChargeMetadata(uid, "ebook")) },
         },
-        success_url: `${appBaseUrl()}/studio?ebook=success&payment=${paymentId}&project=${encodeURIComponent(body.projectId)}`,
-        cancel_url: `${appBaseUrl()}/studio?ebook=cancel`,
+        success_url: `${appBaseUrl()}/studio/${encodeURIComponent(body.projectId)}/order?ebook=success&payment=${paymentId}&project=${encodeURIComponent(body.projectId)}`,
+        cancel_url: `${appBaseUrl()}/studio/${encodeURIComponent(body.projectId)}/order?ebook=cancel`,
       });
 
       const ebook: EbookFulfillment = {

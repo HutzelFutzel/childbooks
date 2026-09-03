@@ -18,6 +18,7 @@
  * payment id, so a refresh lands right back here.
  */
 import { useEffect, useMemo, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -85,6 +86,8 @@ const UPSELL_CONTEXT: Partial<Record<PurchaseKind, UpsellContext>> = {
 };
 
 export function PurchaseConfirmation() {
+  const router = useRouter();
+  const pathname = usePathname();
   const confirmation = useCheckoutUiStore((s) => s.confirmation);
   const close = useCheckoutUiStore((s) => s.closeConfirmation);
 
@@ -99,7 +102,7 @@ export function PurchaseConfirmation() {
         params.delete(key);
       }
       const qs = params.toString();
-      window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
+      router.replace(pathname + (qs ? `?${qs}` : ""), { scroll: false });
     }
   };
 

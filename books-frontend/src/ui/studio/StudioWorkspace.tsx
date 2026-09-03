@@ -11,14 +11,27 @@ import { StudioNavigator } from "./StudioNavigator";
 import { StyleRenewBanner } from "./StyleRenewBanner";
 import { StoryStage } from "./StoryStage";
 import { OrderStage } from "./OrderStage";
-import { initialStep, primaryOf } from "./studioSteps";
+import { primaryOf } from "./studioSteps";
+import type { StudioDestination } from "./studioRoutes";
 import { useStudioHotkeys } from "./useStudioHotkeys";
 
 /** The single unified workspace. Keyed by project id in the parent so all local
  * state (selection, auto-run guards) resets cleanly when switching books. */
-export function StudioWorkspace({ project }: { project: Project }) {
+export function StudioWorkspace({
+  project,
+  destination,
+  onNavigate,
+}: {
+  project: Project;
+  destination: StudioDestination;
+  onNavigate: (destination: StudioDestination) => void;
+}) {
   return (
-    <StudioProvider project={project} initialStep={initialStep(project)}>
+    <StudioProvider
+      project={project}
+      destination={destination}
+      onNavigate={onNavigate}
+    >
       <StudioInner project={project} />
     </StudioProvider>
   );

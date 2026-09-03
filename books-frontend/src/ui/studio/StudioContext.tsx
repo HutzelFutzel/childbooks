@@ -55,6 +55,11 @@ import type { PageSubject } from "./PageEditorCard";
 import { computeProgress, type StudioStep } from "./studioSteps";
 import { useStudioPanelStore } from "./studioPanelStore";
 import {
+  destinationForStep,
+  stepForDestination,
+  type StudioDestination,
+} from "./studioRoutes";
+import {
   applyStudioSnapshot,
   bindStudioProjectCommit,
   takeStudioSnapshot,
@@ -319,6 +324,8 @@ interface StudioContextValue {
   cancelGeneration: () => void;
 
   // guided flow (Story → Anchors → Edit → Order)
+  destination: StudioDestination;
+  navigate: (destination: StudioDestination) => void;
   step: StudioStep;
   setStep: (step: StudioStep) => void;
   /** Jump to the Story step (used by "Edit story" affordances). */
@@ -499,11 +506,13 @@ export function useStudio(): StudioContextValue {
 
 export function StudioProvider({
   project,
-  initialStep,
+  destination,
+  onNavigate,
   children,
 }: {
   project: Project;
-  initialStep: StudioStep;
+  destination: StudioDestination;
+  onNavigate: (destination: StudioDestination) => void;
   children: React.ReactNode;
 }) {
   const setDesign = useProjectsStore((s) => s.setDesign);
@@ -526,9 +535,9 @@ export function StudioProvider({
   const [generatingAnchors, setGA] = useState<Set<string>>(new Set());
   const [generatingPages, setGP] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
-  const [step, setStepRaw] = useState<StudioStep>(initialStep);
+  const [step, setStepRaw] = useState<StudioStep>(() => stepForDestination(destination));
   const [designSetupOpen, setDesignSetupOpen] = useState(false);
-  const [styleSetupOpen, setStyleSetupOpen] = useState(false);
+  const [styleSetupOpen, setStyleSetupOpen] = useState(destination === "style");
   const [snap, setSnap] = useState(true);
   const [grid, setGrid] = useState(false);
   const [guides, setGuides] = useState(true);
@@ -546,6 +555,13 @@ export function StudioProvider({
   /** Active coalesce key — see {@link HistoryOpts.coalesce}. */
   const coalesceKey = useRef<string | null>(null);
   const genAbort = useRef<AbortController | null>(null);
+
+  // Browser history owns the workflow destination. Local state only adapts the
+  // five URL destinations to the existing four-stage editor implementation.
+  useEffect(() => {
+    setStepRaw(stepForDestination(destination));
+    setStyleSetupOpen(destination === "style");
+  }, [destination]);
 
   const startGeneration = useCallback(() => {
     genAbort.current?.abort();
@@ -656,16 +672,17 @@ export function StudioProvider({
     void setDesign({ ...design, version: DESIGN_VERSION, pages: nextPages });
   }, [bookLanguages, design, pages, project, setDesign, typography]);
 
-  // Guarded step navigation: every workflow affordance goes through one gate.
-  // A blocked jump explains what's still missing instead of silently failing.
-  const setStep = useCallback(
-    (next: StudioStep) => {
+  // Guarded route navigation: every workflow affordance goes through one gate.
+  // A blocked jump explains what's still missing instead of changing history.
+  const navigate = useCallback(
+    (nextDestination: StudioDestination) => {
       // Read the LIVE project from the store (not the render-time prop): the
       // story step advances the stage and navigates in the same tick, so the
       // captured prop can be one update behind.
       const live =
         useProjectsStore.getState().projects.find((p) => p.id === project.id) ?? project;
       const progress = computeProgress(live);
+      const next = stepForDestination(nextDestination);
       if (!progress[next].unlocked) {
         if (next === "order") {
           notify.info(
@@ -682,9 +699,18 @@ export function StudioProvider({
         }
         return;
       }
-      setStepRaw(next);
+      onNavigate(nextDestination);
     },
-    [project],
+    [onNavigate, project],
+  );
+
+  const setStep = useCallback(
+    (next: StudioStep) => {
+      const live =
+        useProjectsStore.getState().projects.find((p) => p.id === project.id) ?? project;
+      navigate(destinationForStep(live, next));
+    },
+    [navigate, project],
   );
 
   const openSetup = useCallback(() => setStep("story"), [setStep]);
@@ -1953,6 +1979,8 @@ export function StudioProvider({
             setBusy,
             startGeneration,
             cancelGeneration,
+            destination,
+            navigate,
             step,
             setStep,
             openSetup,
@@ -2043,6 +2071,8 @@ export function StudioProvider({
       setBusy,
       startGeneration,
       cancelGeneration,
+      destination,
+      navigate,
       step,
       setStep,
       openSetup,

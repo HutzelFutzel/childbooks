@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { MotionConfig } from "framer-motion";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/ui/components/Button";
@@ -23,7 +24,7 @@ import { SettingsDialog } from "@/ui/settings/SettingsDialog";
 import { ImageTierPromptDialog } from "@/ui/settings/ImageTierPromptDialog";
 import { SparksShortfallDialog } from "@/ui/layout/SparksShortfallDialog";
 import { ProjectWorkspace } from "@/ui/project/ProjectWorkspace";
-import { useProjectsStore } from "@/state/projectsStore";
+import { flushProjectSaves, useProjectsStore } from "@/state/projectsStore";
 import { useSettingsStore } from "@/state/settingsStore";
 import { useAuthStore } from "@/state/authStore";
 import { useJobsStore } from "@/state/jobsStore";
@@ -45,8 +46,19 @@ import { claimPendingReferral, rememberReferralCode } from "@/platform/referrals
 import { SessionTracker } from "@/ui/analytics/SessionTracker";
 import { InviteFriendsDialog } from "@/ui/referrals/InviteFriendsDialog";
 import { notify } from "@/ui/lib/notify";
+import {
+  defaultDestination,
+  fallbackDestination,
+  parseStudioPath,
+  studioPath,
+  type StudioDestination,
+} from "@/ui/studio/studioRoutes";
 
 export default function StudioApp() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const route = useMemo(() => parseStudioPath(pathname), [pathname]);
+  const projects = useProjectsStore((s) => s.projects);
   const loadProjects = useProjectsStore((s) => s.load);
   const loadSettings = useSettingsStore((s) => s.load);
   const projectsLoaded = useProjectsStore((s) => s.loaded);
@@ -55,6 +67,7 @@ export default function StudioApp() {
     (s) => s.projects.find((project) => project.id === s.currentId)?.title,
   );
   const createProject = useProjectsStore((s) => s.createProject);
+  const openProject = useProjectsStore((s) => s.openProject);
   const closeProject = useProjectsStore((s) => s.closeProject);
   const initAuth = useAuthStore((s) => s.init);
   const uid = useAuthStore((s) => s.user?.uid ?? null);
@@ -84,6 +97,8 @@ export default function StudioApp() {
   const closeInvite = useAccountUiStore((s) => s.closeInvite);
   const openInvite = useAccountUiStore((s) => s.openInvite);
   const openConfirmation = useCheckoutUiStore((s) => s.openConfirmation);
+  const [projectsOwnerUid, setProjectsOwnerUid] = useState<string | null>(null);
+  const rejectedBookRef = useRef<string | null>(null);
 
   useEffect(() => {
     initAuth();
@@ -99,10 +114,73 @@ export default function StudioApp() {
   // Closing first ensures a previous identity's open project never leaks across.
   useEffect(() => {
     if (!uid) return;
+    const loadingUid = uid;
+    setProjectsOwnerUid(null);
     closeProject();
-    void loadProjects();
+    void loadProjects().then(() => {
+      if (useAuthStore.getState().user?.uid === loadingUid) {
+        setProjectsOwnerUid(loadingUid);
+      }
+    });
     void loadSettings();
   }, [uid, closeProject, loadProjects, loadSettings]);
+
+  // The route is the source of truth for both the active book and workflow
+  // destination. A route id is never trusted on its own: it can only select a
+  // book returned from the active identity's UID-scoped Firestore collection.
+  useEffect(() => {
+    if (
+      !uid ||
+      accessLevel === "loading" ||
+      !projectsLoaded ||
+      projectsOwnerUid !== uid
+    ) {
+      return;
+    }
+
+    if (route.kind === "invalid") {
+      closeProject();
+      router.replace("/studio", { scroll: false });
+      return;
+    }
+
+    if (route.kind === "library") {
+      rejectedBookRef.current = null;
+      if (currentId) closeProject();
+      return;
+    }
+
+    const project = projects.find((candidate) => candidate.id === route.bookId);
+    if (!project) {
+      closeProject();
+      if (rejectedBookRef.current !== route.bookId) {
+        rejectedBookRef.current = route.bookId;
+        notify.info("Book not found", "That storybook is unavailable or belongs to another account.");
+      }
+      router.replace("/studio", { scroll: false });
+      return;
+    }
+
+    rejectedBookRef.current = null;
+    if (currentId !== project.id) openProject(project.id);
+
+    const requested = route.destination ?? defaultDestination(project);
+    const allowed = fallbackDestination(project, requested);
+    if (route.destination !== allowed) {
+      router.replace(studioPath(project.id, allowed), { scroll: false });
+    }
+  }, [
+    accessLevel,
+    closeProject,
+    currentId,
+    openProject,
+    projects,
+    projectsLoaded,
+    projectsOwnerUid,
+    route,
+    router,
+    uid,
+  ]);
 
   // Track (and reconcile) the open project's generation jobs. This surfaces
   // background progress and applies results that finished while away.
@@ -229,8 +307,8 @@ export default function StudioApp() {
     params.delete("hero");
     params.delete("invite");
     const qs = params.toString();
-    window.history.replaceState({}, "", window.location.pathname + (qs ? `?${qs}` : ""));
-  }, [openConfirmation, openInvite]);
+    router.replace(pathname + (qs ? `?${qs}` : ""), { scroll: false });
+  }, [openConfirmation, openInvite, pathname, router]);
 
   // Fulfil the landing-page on-ramp: once the (guest) session and project list
   // are ready, create the promised storybook and drop the visitor straight into
@@ -251,8 +329,10 @@ export default function StudioApp() {
       return;
     }
     if (!heroName) return;
-    void createProject(`${heroName}'s Storybook`);
-  }, [uid, projectsLoaded, accessLevel, createProject]);
+    void createProject(`${heroName}'s Storybook`, false).then((projectId) => {
+      router.replace(studioPath(projectId, "story"), { scroll: false });
+    });
+  }, [uid, projectsLoaded, accessLevel, createProject, router]);
 
   // Attach a remembered referral code to whatever identity exists NOW — guest
   // included. Attribution has to happen while the invite link is still the reason
@@ -296,7 +376,43 @@ export default function StudioApp() {
   // stay account-gated). Unverified accounts see a reminder banner instead of
   // a hard gate. `loading` still blocks so a stale currentId from a previous
   // identity can never leak in before auth resolves.
-  const inProject = currentId !== null && accessLevel !== "loading";
+  const routedProject =
+    route.kind === "project"
+      ? projects.find((project) => project.id === route.bookId) ?? null
+      : null;
+  const activeDestination =
+    route.kind === "project" && routedProject
+      ? fallbackDestination(
+          routedProject,
+          route.destination ?? defaultDestination(routedProject),
+        )
+      : null;
+  const inProject =
+    route.kind === "project" &&
+    currentId === route.bookId &&
+    routedProject !== null &&
+    activeDestination !== null &&
+    projectsOwnerUid === uid &&
+    accessLevel !== "loading";
+  const resolvingRoute =
+    accessLevel === "loading" ||
+    route.kind === "invalid" ||
+    (route.kind === "project" && !inProject) ||
+    (uid !== null && (!projectsLoaded || projectsOwnerUid !== uid));
+
+  const navigateStudio = useCallback(
+    (destination: StudioDestination) => {
+      if (route.kind !== "project") return;
+      router.push(studioPath(route.bookId, destination), { scroll: false });
+    },
+    [route, router],
+  );
+
+  const navigateLibrary = useCallback(() => {
+    void flushProjectSaves().finally(() => {
+      router.push("/studio", { scroll: false });
+    });
+  }, [router]);
 
   return (
     <MotionConfig reducedMotion="user">
@@ -332,7 +448,7 @@ export default function StudioApp() {
               variant="ghost"
               size="sm"
               leftIcon={<ArrowLeft className="size-4" />}
-              onClick={() => closeProject()}
+              onClick={navigateLibrary}
             >
               Library
             </Button>
@@ -346,12 +462,15 @@ export default function StudioApp() {
       <LowSparksBanner />
 
       <main className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-canvas">
-        {accessLevel === "loading" ? (
+        {resolvingRoute ? (
           <div className="flex flex-1 items-center justify-center">
             <Loader2 className="size-7 animate-spin text-brand-400" />
           </div>
         ) : inProject ? (
-          <ProjectWorkspace />
+          <ProjectWorkspace
+            destination={activeDestination}
+            onNavigate={navigateStudio}
+          />
         ) : (
           <Dashboard />
         )}
