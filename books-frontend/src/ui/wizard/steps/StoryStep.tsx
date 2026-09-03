@@ -3,35 +3,22 @@
 import { useMemo, useState, useEffect } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
-  BookOpen,
-  Languages,
   PenLine,
   RefreshCw,
   Sparkles,
-  Users,
-  Wand2,
+  X,
 } from "lucide-react";
 import type { StoryBrief } from "../../../core/types";
-import {
-  ageBandLabel,
-  storyModeInfo,
-  type StoryMode,
-} from "../../../core/config/storyCraftCatalog";
-import {
-  getBookLanguage,
-  type BookLanguageId,
-} from "../../../core/config/bookLanguages";
+import { type StoryMode } from "../../../core/config/storyCraftCatalog";
+import { type BookLanguageId } from "../../../core/config/bookLanguages";
 import { resolveStoryCraft } from "../../../core/config/storyCraft";
 import {
   createDefaultStoryBrief,
   isDraftStale,
-  namedHeroes,
-  wordCount,
 } from "../../../core/story/brief";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { GuidedComposer } from "../../studio/story/GuidedComposer";
 import { CoWriteComposer } from "../../studio/story/CoWriteComposer";
-import { AgeFitCheck } from "../../studio/story/AgeFitCheck";
 import { StoryManuscript } from "../../studio/story/StoryManuscript";
 import { StoryDiffActions, StoryDiffReview } from "../../studio/story/StoryDiffReview";
 import { StoryRefinePanel } from "../../studio/story/StoryRefinePanel";
@@ -40,19 +27,21 @@ import { StoryModePicker } from "../../studio/story/StoryModePicker";
 import { useStoryDraft } from "../../studio/story/useStoryDraft";
 import { useStoryRevision } from "../../studio/story/useStoryRevision";
 import { Button } from "../../components/Button";
-import { cn } from "../../lib/cn";
-import { fadeRise, spring } from "../../lib/motion";
+import { fadeRise } from "../../lib/motion";
 import type { StepProps } from "./types";
 
 /**
  * The Story step:
- * 1. Desktop: State-of-the-art 2-column authoring workbench.
- *    - Left: Focused prompt & craft generator (Guided / Co-write) with micro-stepper.
- *    - Right: Full-height Manuscript desk with internal scrollable editor.
- * 2. Mobile/Tablet: Intuitive tabbed switcher between prompt generator & full manuscript view.
- * 3. Distraction-free mode for author's own story with real-time age & reading guidance.
+ * 1. Before a draft: one focused creation task, without a competing blank editor.
+ * 2. After a draft: the manuscript is primary and AI changes stay attached to it.
+ * 3. Regeneration and optional checks remain available through progressive disclosure.
  */
-export function StoryStep({ config, update }: StepProps) {
+export function StoryStep({
+  config,
+  update,
+  storyToolsOpen = false,
+  onStoryToolsOpenChange,
+}: StepProps) {
   const storyCraft = useAppConfigStore((s) => s.storyCraft);
   const craft = useMemo(
     () => resolveStoryCraft(config.ageRangeId, storyCraft),
@@ -73,26 +62,10 @@ export function StoryStep({ config, update }: StepProps) {
   const reviewing = reviewReady && reviewOpen;
 
   const hasStory = config.storyText.trim().length > 0;
-  const words = wordCount(config.storyText.trim());
+  const canRefine = config.storyText.trim().length >= 20;
   const brief: StoryBrief =
     config.storyBrief ?? createDefaultStoryBrief(hasStory ? "own" : "guided");
   const chosen = Boolean(config.storyBrief) || hasStory;
-
-  // On mobile (< lg), track active tab: "composer" or "manuscript"
-  const [mobileTab, setMobileTab] = useState<"composer" | "manuscript">(
-    hasStory || brief.mode === "own" ? "manuscript" : "composer"
-  );
-
-  // Auto-switch to manuscript on mobile when generation finishes
-  useEffect(() => {
-    if (hasStory && !writing) {
-      setMobileTab("manuscript");
-    }
-  }, [hasStory, writing]);
-
-  useEffect(() => {
-    if (reviewing) setMobileTab("manuscript");
-  }, [reviewing]);
 
   useEffect(() => {
     if (reviewReady) setReviewOpen(true);
@@ -117,12 +90,15 @@ export function StoryStep({ config, update }: StepProps) {
 
   const setMode = (mode: StoryMode) => {
     if (mode === brief.mode && config.storyBrief) return;
-    patchBrief({ mode });
-    if (mode === "own") {
-      setMobileTab("manuscript");
-    } else if (!hasStory) {
-      setMobileTab("composer");
-    }
+    patchBrief({
+      mode,
+      ...(mode === "own"
+        ? {
+            generatedForAge: config.ageRangeId,
+            generatedForLocale: (config.contentLocale ?? "en-US") as BookLanguageId,
+          }
+        : {}),
+    });
   };
 
   const stale = isDraftStale(
@@ -132,18 +108,15 @@ export function StoryStep({ config, update }: StepProps) {
     config.readingModeId,
     config.contentLocale,
   );
-  const originAge = brief.generatedForAge ?? (hasStory ? "0-2" : undefined);
+  const originAge = brief.generatedForAge;
   const ageChanged =
     hasStory && Boolean(originAge) && originAge !== config.ageRangeId;
-  const originLocale: BookLanguageId = (brief.generatedForLocale as BookLanguageId) ?? "en-US";
   const currentLocale: BookLanguageId = (config.contentLocale as BookLanguageId) ?? "en-US";
-  const languageChanged = hasStory && originLocale !== currentLocale;
+  const knownOriginLocale = brief.generatedForLocale as BookLanguageId | undefined;
+  const originLocale = knownOriginLocale ?? currentLocale;
+  const languageChanged =
+    hasStory && Boolean(knownOriginLocale) && originLocale !== currentLocale;
   const needsAdaptation = languageChanged || ageChanged;
-
-  const originLang = getBookLanguage(originLocale);
-  const targetLang = getBookLanguage(currentLocale);
-
-  const modeInfo = storyModeInfo(brief.mode);
 
   // Initial first-time view: 3 mode cards
   if (!chosen) {
@@ -154,162 +127,71 @@ export function StoryStep({ config, update }: StepProps) {
         animate="show"
         className="flex h-full min-h-0 flex-col items-center justify-center overflow-y-auto p-4"
       >
-        <div className="my-auto w-full max-w-4xl space-y-7 py-4">
+        <div className="my-auto w-full max-w-4xl space-y-5 py-4">
           <div className="text-center">
-            <h2 className="font-display text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">
-              How would you like to create your story?
+            <h2 className="font-display text-xl font-bold tracking-tight text-ink-900 sm:text-2xl">
+              Choose how to begin
             </h2>
-            <p className="mx-auto mt-2 max-w-lg text-sm leading-relaxed text-ink-500">
-              Whichever path you choose, you&apos;ll be able to read and edit every word — perfectly pitched for {ageBandLabel(config.ageRangeId)}.
+            <p className="mx-auto mt-1.5 max-w-lg text-sm leading-relaxed text-ink-500">
+              You’ll be able to edit every word before continuing.
             </p>
           </div>
-          <StoryModePicker value={brief.mode} onChange={setMode} />
+          <StoryModePicker value={null} onChange={setMode} />
         </div>
       </motion.div>
     );
   }
 
-  // ---------------------------------------------------------------------------
-  // 1. Author's Own Words Mode (Distraction-Free Full-Screen Desk)
-  // ---------------------------------------------------------------------------
-  if (brief.mode === "own") {
+  const manuscript = (
+    <StoryManuscript
+      key="story-manuscript"
+      storyText={config.storyText}
+      onChange={(storyText, options) => update({ storyText }, options)}
+      placeholder={
+        brief.mode === "own"
+          ? "Write or paste your story here…"
+          : "Your story will appear here when it’s ready."
+      }
+      headerAction={revisionHeaderAction}
+      reviewing={reviewing}
+      writing={writing}
+      translating={translating}
+      reviewContent={
+        reviewing && revisionFlow.revision ? (
+          <StoryDiffReview
+            revision={revisionFlow.revision}
+            currentStory={config.storyText}
+            onDecide={revisionFlow.decide}
+          />
+        ) : null
+      }
+      reviewFooter={
+        reviewing && revisionFlow.revision ? (
+          <StoryDiffActions
+            revision={revisionFlow.revision}
+            currentStory={config.storyText}
+            saving={revisionFlow.saving}
+            onKeepAll={revisionFlow.keepAll}
+            onKeepSelected={revisionFlow.keepSelected}
+            onDiscardAll={revisionFlow.discardAll}
+          />
+        ) : null
+      }
+      className={canRefine && !needsAdaptation ? "rounded-t-none" : undefined}
+    />
+  );
+
+  // Once a draft exists, the story is the workspace. AI changes stay attached
+  // to it; creating another version opens from the workspace toolbar.
+  // The same tree also hosts an empty manual manuscript so the first keystroke
+  // cannot remount the textarea and steal focus.
+  if (hasStory || brief.mode === "own") {
     return (
-      <div className="flex h-full min-h-0 flex-1 flex-col space-y-3">
-        {/* Compact mode switcher — keep the manuscript's vertical space. */}
-        <div className="flex shrink-0 items-center rounded-2xl bg-white/80 p-2 shadow-2xs ring-1 ring-ink-100 backdrop-blur sm:px-3.5">
-          <div className="flex items-center gap-2">
-            <StoryModePicker value={brief.mode} onChange={setMode} compact />
-          </div>
-        </div>
-
-        {/* Full-Height Manuscript Desk */}
-        <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row">
-          {hasStory && (
-            <div className="space-y-3 shrink-0 lg:w-90">
-              <StoryAdaptCard
-                languageChanged={languageChanged}
-                ageChanged={ageChanged}
-                originLocale={originLocale}
-                currentLocale={currentLocale}
-                originAge={originAge}
-                targetAge={config.ageRangeId}
-                translating={translating}
-                writing={writing}
-                onConfirm={confirmWithoutRewrite}
-                onAdapt={() => translate(originLocale, currentLocale)}
-              />
-              <StoryRefinePanel
-                revision={revisionFlow.revision}
-                starting={revisionFlow.starting}
-                onStart={revisionFlow.start}
-              />
-              <AgeFitCheck
-                storyText={config.storyText}
-                ageRangeId={config.ageRangeId}
-                craft={craft}
-              />
-            </div>
-          )}
-          <div className="flex min-h-0 flex-1 flex-col">
-            <StoryManuscript
-              storyText={config.storyText}
-              onChange={(storyText, options) => update({ storyText }, options)}
-              placeholder="Write or paste your story here… Tell an unforgettable tale for your little reader."
-              headerAction={revisionHeaderAction}
-              reviewing={reviewing}
-              writing={writing}
-              translating={translating}
-              reviewContent={
-                reviewing && revisionFlow.revision ? (
-                  <StoryDiffReview
-                    revision={revisionFlow.revision}
-                    currentStory={config.storyText}
-                    onDecide={revisionFlow.decide}
-                  />
-                ) : null
-              }
-              reviewFooter={
-                reviewing && revisionFlow.revision ? (
-                  <StoryDiffActions
-                    revision={revisionFlow.revision}
-                    currentStory={config.storyText}
-                    saving={revisionFlow.saving}
-                    onKeepAll={revisionFlow.keepAll}
-                    onKeepSelected={revisionFlow.keepSelected}
-                    onDiscardAll={revisionFlow.discardAll}
-                  />
-                ) : null
-              }
-            />
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  // ---------------------------------------------------------------------------
-  // 2. Guided & Co-Write 2-Column Responsive Workspace
-  // ---------------------------------------------------------------------------
-  return (
-    <div className="flex h-full min-h-0 flex-1 flex-col">
-      {/* Mobile Tab Switcher (< lg screens) */}
-      <div className="mb-3 flex shrink-0 items-center justify-between gap-2 rounded-2xl bg-white/90 p-1.5 shadow-2xs ring-1 ring-ink-100 lg:hidden">
-        <div className="flex flex-1 items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setMobileTab("composer")}
-            className={cn(
-              "flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-semibold transition",
-              mobileTab === "composer"
-                ? "bg-brand-600 text-white shadow-soft"
-                : "text-ink-600 hover:bg-ink-50"
-            )}
-          >
-            <Wand2 className="size-3.5" />
-            <span>Prompt & Idea</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setMobileTab("manuscript")}
-            className={cn(
-              "flex flex-1 items-center justify-center gap-1.5 rounded-xl py-2 text-xs font-semibold transition",
-              mobileTab === "manuscript"
-                ? "bg-brand-600 text-white shadow-soft"
-                : "text-ink-600 hover:bg-ink-50"
-            )}
-          >
-            <BookOpen className="size-3.5" />
-            <span>Manuscript {words > 0 ? `(${words}w)` : ""}</span>
-          </button>
-        </div>
-      </div>
-
-      {/* 2-Column Split Body on Desktop, Tabbed on Mobile */}
-      <div className="flex min-h-0 flex-1 flex-col gap-4 lg:flex-row lg:gap-5">
-        {/* Left Column: Generator Form & Mode Details */}
-        <div
-          className={cn(
-            "flex min-h-0 flex-col space-y-3.5 lg:w-102.5 xl:w-115 lg:shrink-0",
-            mobileTab === "manuscript" ? "hidden lg:flex" : "flex flex-1"
-          )}
-        >
-          {/* Top Bar inside column */}
-          <div className="flex shrink-0 items-center justify-between gap-2 rounded-2xl bg-white/80 p-2 shadow-2xs ring-1 ring-ink-100 backdrop-blur">
-            <StoryModePicker value={brief.mode} onChange={setMode} compact />
-          </div>
-
-          {/* Scrollable inputs column */}
-          <div className="min-h-0 flex-1 space-y-3.5 overflow-y-auto pr-1 sm:pr-2">
-            {hasStory && (
-              <StoryRefinePanel
-                revision={revisionFlow.revision}
-                starting={revisionFlow.starting}
-                onStart={revisionFlow.start}
-              />
-            )}
-
-            {/* Interactive Adaptation / Translation Transfer Card */}
+      <div className="relative flex h-full min-h-0 flex-1 overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col gap-3">
+          {hasStory && needsAdaptation && (
             <StoryAdaptCard
+              key="story-adaptation"
               languageChanged={languageChanged}
               ageChanged={ageChanged}
               originLocale={originLocale}
@@ -321,30 +203,88 @@ export function StoryStep({ config, update }: StepProps) {
               onConfirm={confirmWithoutRewrite}
               onAdapt={() => translate(originLocale, currentLocale)}
             />
+          )}
 
-            {/* Composer Details Changed Notice (when parameters changed but not age/language) */}
-            {!needsAdaptation && stale && (
-              <div className="flex items-start gap-2 rounded-2xl bg-amber-50 p-3 text-amber-900 ring-1 ring-amber-100 text-xs">
-                <RefreshCw className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
-                <p className="leading-relaxed">
-                  Details changed since draft was written. Write again to update.
-                </p>
+          <div key="manuscript-workspace" className="flex min-h-0 flex-1 flex-col">
+            {!hasStory && (
+              <div
+                key="empty-story-method"
+                className="mb-3 shrink-0 rounded-xl bg-white p-2 ring-1 ring-ink-200"
+              >
+                <StoryModePicker value={brief.mode} onChange={setMode} compact />
               </div>
             )}
+            {canRefine && !needsAdaptation && (
+              <StoryRefinePanel
+                key="story-refine"
+                revision={revisionFlow.revision}
+                starting={revisionFlow.starting}
+                onStart={revisionFlow.start}
+                attached
+              />
+            )}
+            {manuscript}
+          </div>
+        </div>
 
-            {/* Main Form Composer */}
-            {hasStory ? (
-              <details className="group rounded-2xl bg-white ring-1 ring-ink-100">
-                <summary className="cursor-pointer list-none px-4 py-3 text-xs font-bold text-ink-600">
-                  Original story details
-                  <span className="ml-1.5 text-ink-400 group-open:hidden">›</span>
-                </summary>
-                <div className="border-t border-ink-100 p-2">
+        <AnimatePresence>
+          {hasStory && storyToolsOpen && (
+            <>
+              <motion.button
+                type="button"
+                aria-label="Close new version panel"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                onClick={() => onStoryToolsOpenChange?.(false)}
+                className="absolute inset-0 z-20 bg-ink-900/15"
+              />
+              <motion.aside
+                aria-label="Create another story version"
+                initial={{ x: "100%" }}
+                animate={{ x: 0 }}
+                exit={{ x: "100%" }}
+                transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                className="absolute inset-y-0 right-0 z-30 flex w-full max-w-md flex-col border-l border-ink-200 bg-white shadow-lifted"
+              >
+                <div className="flex min-h-16 shrink-0 items-center justify-between gap-3 border-b border-ink-200 px-5">
+                  <div>
+                    <h3 className="text-base font-semibold text-ink-900">Create a new version</h3>
+                    <p className="mt-0.5 text-sm text-ink-500">Your current story remains available with Undo.</p>
+                  </div>
+                  <button
+                    type="button"
+                    aria-label="Close new version panel"
+                    onClick={() => onStoryToolsOpenChange?.(false)}
+                    className="inline-flex size-9 items-center justify-center rounded-xl text-ink-500 transition hover:bg-ink-100 hover:text-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+                  >
+                    <X aria-hidden className="size-4" />
+                  </button>
+                </div>
+
+                <div className="min-h-0 flex-1 space-y-5 overflow-y-auto p-5">
+                  <div>
+                    <p className="mb-2 text-sm font-medium text-ink-700">Choose a method</p>
+                    <StoryModePicker
+                      value={brief.mode === "own" ? null : brief.mode}
+                      onChange={setMode}
+                      allowedModes={["guided", "co-write"]}
+                      compact
+                    />
+                  </div>
+
+                  {!needsAdaptation && stale && (
+                    <div className="flex items-start gap-2 rounded-xl bg-amber-50 p-3 text-xs text-amber-900 ring-1 ring-amber-100">
+                      <RefreshCw aria-hidden className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
+                      <p>These details changed after this version was created.</p>
+                    </div>
+                  )}
+
                   {brief.mode === "guided" && (
                     <GuidedComposer
                       brief={brief}
                       craft={craft}
-                      hasStory={hasStory}
+                      hasStory
                       onChange={patchBrief}
                       draft={storyDraft}
                     />
@@ -353,76 +293,45 @@ export function StoryStep({ config, update }: StepProps) {
                     <CoWriteComposer
                       brief={brief}
                       craft={craft}
-                      hasStory={hasStory}
+                      hasStory
                       onChange={patchBrief}
                       draft={storyDraft}
                     />
                   )}
                 </div>
-              </details>
-            ) : (
-              <>
-                {brief.mode === "guided" && (
-                  <GuidedComposer
-                    brief={brief}
-                    craft={craft}
-                    hasStory={hasStory}
-                    onChange={patchBrief}
-                    draft={storyDraft}
-                  />
-                )}
-                {brief.mode === "co-write" && (
-                  <CoWriteComposer
-                    brief={brief}
-                    craft={craft}
-                    hasStory={hasStory}
-                    onChange={patchBrief}
-                    draft={storyDraft}
-                  />
-                )}
-              </>
-            )}
-          </div>
-        </div>
-
-        {/* Right Column: Full-Height Story Manuscript Desk */}
-        <div
-          className={cn(
-            "flex min-h-0 flex-1 flex-col",
-            mobileTab === "composer" ? "hidden lg:flex" : "flex flex-1"
+              </motion.aside>
+            </>
           )}
-        >
-          <StoryManuscript
-            storyText={config.storyText}
-            onChange={(storyText, options) => update({ storyText }, options)}
-            placeholder="Your story will appear here as it's written — or start typing to shape it yourself."
-            headerAction={revisionHeaderAction}
-            reviewing={reviewing}
-            writing={writing}
-            translating={translating}
-            reviewContent={
-              reviewing && revisionFlow.revision ? (
-                <StoryDiffReview
-                  revision={revisionFlow.revision}
-                  currentStory={config.storyText}
-                  onDecide={revisionFlow.decide}
-                />
-              ) : null
-            }
-            reviewFooter={
-              reviewing && revisionFlow.revision ? (
-                <StoryDiffActions
-                  revision={revisionFlow.revision}
-                  currentStory={config.storyText}
-                  saving={revisionFlow.saving}
-                  onKeepAll={revisionFlow.keepAll}
-                  onKeepSelected={revisionFlow.keepSelected}
-                  onDiscardAll={revisionFlow.discardAll}
-                />
-              ) : null
-            }
-          />
+        </AnimatePresence>
+      </div>
+    );
+  }
+
+  // Before the first draft, show only the chosen task. A blank manuscript next
+  // to a generator creates a second, competing starting point.
+  return (
+    <div className="h-full overflow-y-auto">
+      <div className="mx-auto w-full max-w-3xl space-y-3 pb-4">
+        <div className="rounded-xl bg-white p-2 ring-1 ring-ink-200">
+          <StoryModePicker value={brief.mode} onChange={setMode} compact />
         </div>
+        {brief.mode === "guided" ? (
+          <GuidedComposer
+            brief={brief}
+            craft={craft}
+            hasStory={false}
+            onChange={patchBrief}
+            draft={storyDraft}
+          />
+        ) : (
+          <CoWriteComposer
+            brief={brief}
+            craft={craft}
+            hasStory={false}
+            onChange={patchBrief}
+            draft={storyDraft}
+          />
+        )}
       </div>
     </div>
   );

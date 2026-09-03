@@ -143,11 +143,15 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "patchContract",
-        "Return a short summary and a list of independent exact replacements. For each replacement, `before` must be copied character-for-character from the current manuscript and must occur exactly once. `after` is the complete replacement text; use an empty `after` only for a requested deletion. Include enough surrounding text in `before` to make it unique, but keep each replacement as small as practical. Replacements must not overlap. Never return a fully rewritten manuscript.",
+        "Return a short summary and a list of independent exact replacements. For each replacement, `before` must be copied character-for-character from the current manuscript and must occur exactly once. `after` is the complete replacement text; use an empty `after` only for a requested deletion. Include enough surrounding text in `before` to make it unique, but keep each replacement as small as practical. Replacements must not overlap. Never rewrite the full manuscript unless the author explicitly asks to create or replace the whole story.",
       ),
       blk(
         "scope",
         "If a selected passage is supplied, every replacement must stay completely inside that passage. Otherwise, touch only the minimum passages necessary for the request.",
+      ),
+      blk(
+        "formatting",
+        "Preserve existing paragraph breaks for local edits. When writing a new or substantially expanded passage, format it as short semantic paragraphs separated by a blank line (`\\n\\n`). Never hard-wrap lines merely to fit a visual width.",
       ),
       blk("language", "{{languageInstruction}} Keep the manuscript in its current language."),
       blk("ageGuidance", "{{ageGuidance}}"),

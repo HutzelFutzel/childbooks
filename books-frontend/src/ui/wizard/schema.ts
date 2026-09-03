@@ -26,7 +26,7 @@ const artStyleSchema = z
     "Pick a style or describe your own.",
   );
 
-/** Story step only — audience + text. Art style is confirmed in Design · Cast. */
+/** Story step only — reader (language + age) + text. Art style is confirmed in Design · Cast. */
 export const storyConfigSchema = z
   .object({
     storyText: z.string().trim().min(20, "Please enter at least a sentence or two of story."),

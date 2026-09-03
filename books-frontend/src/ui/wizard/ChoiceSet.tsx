@@ -83,6 +83,22 @@ export function ChoiceTile({
   );
 }
 
+/** Quiet group label for a choice grid — same voice as {@link SubChoice}. */
+export function ChoiceSection({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="space-y-3">
+      <h3 className="text-xs font-medium text-ink-400">{label}</h3>
+      {children}
+    </section>
+  );
+}
+
 export function SubChoice({
   label,
   value,
@@ -98,7 +114,7 @@ export function SubChoice({
     options.length <= 2
       ? "grid-cols-2"
       : options.length === 3
-        ? "grid-cols-1 sm:grid-cols-3"
+        ? "grid-cols-3"
         : "grid-cols-2 sm:grid-cols-4";
 
   return (

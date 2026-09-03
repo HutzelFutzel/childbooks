@@ -125,6 +125,28 @@ function occurrences(haystack: string, needle: string): number[] {
   return out;
 }
 
+function formatExpandedPassage(before: string, after: string): string {
+  const trimmed = after.trim();
+  if (/\n\s*\n/u.test(trimmed)) return after;
+
+  const substantiallyExpanded =
+    trimmed.length >= 180 && trimmed.length >= Math.max(120, before.trim().length * 2);
+  if (!substantiallyExpanded) return after;
+
+  const sentences =
+    trimmed
+      .match(/[^.!?。！？]+(?:[.!?。！？]+["'’”»)]*|$)/gu)
+      ?.map((sentence) => sentence.trim())
+      .filter(Boolean) ?? [];
+  if (sentences.length < 3) return after;
+
+  const paragraphs: string[] = [];
+  for (let index = 0; index < sentences.length; index += 2) {
+    paragraphs.push(sentences.slice(index, index + 2).join(" "));
+  }
+  return paragraphs.join("\n\n");
+}
+
 /**
  * Validate model-authored replacements against the immutable base manuscript.
  * Every `before` must identify one unique, non-overlapping span. That makes it
@@ -142,7 +164,8 @@ export function validateStoryRevision(
   const changes: StoryRevisionChange[] = [];
 
   for (const [index, raw] of result.changes.entries()) {
-    if (raw.before === raw.after) continue;
+    const after = formatExpandedPassage(raw.before, raw.after);
+    if (raw.before === after) continue;
     if (!raw.before) {
       throw new Error("An insertion did not include an exact manuscript anchor.");
     }
@@ -166,7 +189,7 @@ export function validateStoryRevision(
     changes.push({
       id: `change-${index + 1}`,
       before: raw.before,
-      after: raw.after,
+      after,
       reason: raw.reason.trim().slice(0, 180) || "Requested story change",
       baseStart: start,
       baseEnd: end,

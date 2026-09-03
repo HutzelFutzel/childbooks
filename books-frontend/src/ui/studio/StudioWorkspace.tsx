@@ -96,7 +96,7 @@ function StudioInner({ project }: { project: Project }) {
   return (
     <StudioDndProvider>
       <div className="flex min-h-0 flex-1 flex-col">
-        {inStudio && step !== "story" && <StudioNavigator />}
+        {inStudio && <StudioNavigator />}
         {/* Mounted once here (not inside Design) so a running style transfer
             keeps advancing cast → pages wherever the reader navigates. */}
         <StyleRenewBanner />

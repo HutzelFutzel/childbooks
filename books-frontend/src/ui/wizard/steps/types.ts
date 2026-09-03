@@ -7,4 +7,6 @@ export interface StepProps {
     patch: Partial<BookConfig>,
     options?: StoryHistoryOptions,
   ) => void;
+  storyToolsOpen?: boolean;
+  onStoryToolsOpenChange?: (open: boolean) => void;
 }

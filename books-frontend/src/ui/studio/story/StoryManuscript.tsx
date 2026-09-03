@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Check, Feather, Loader2, Plus, Scissors, Sparkles, Wand2 } from "lucide-react";
+import { Check, Loader2, Plus, Scissors, Sparkles, Wand2 } from "lucide-react";
 import { useProjectsStore } from "../../../state/projectsStore";
 import { getBookLanguage } from "../../../core/config/bookLanguages";
 import { wordCount } from "../../../core/story/brief";
@@ -103,9 +103,7 @@ export function StoryManuscript({
   const words = wordCount(trimmed);
   const empty = !trimmed;
   const isReady = trimmed.length >= READY_CHARS;
-  const readMinutes = Math.max(1, Math.ceil(words / 90));
   const busy = writing || translating;
-  const busyLabel = translating ? "Translating story…" : "Writing story…";
 
   // Helper to commit beats state and notify parent
   const commitBeats = useCallback(
@@ -309,12 +307,12 @@ export function StoryManuscript({
   return (
     <div
       className={cn(
-        "flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-3xl bg-white shadow-soft ring-1 ring-ink-100 transition",
+        "flex h-full min-h-0 flex-1 flex-col overflow-hidden rounded-2xl bg-white shadow-soft ring-1 ring-ink-200",
         className,
       )}
     >
       {/* Title & Language Bar */}
-      <div className="shrink-0 border-b border-ink-100/80 bg-linear-to-b from-brand-50/40 via-white to-white px-5 pt-4 pb-3 sm:px-7 sm:pt-5">
+      <div className="shrink-0 border-b border-ink-100 bg-white px-5 py-3 sm:px-7 sm:py-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <label className="block min-w-0 flex-1">
             <span className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-ink-400">
@@ -346,33 +344,19 @@ export function StoryManuscript({
           </label>
           <div className="flex items-center gap-2">
             {headerAction}
-            {busy && (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-2.5 py-1 text-[11px] font-bold text-brand-700 ring-1 ring-brand-200">
-                <Sparkles className="size-3 animate-spin text-brand-500" />
-                {translating ? "Translating…" : "Writing story…"}
-              </span>
-            )}
             {reviewing && (
               <span className="inline-flex items-center gap-1.5 rounded-full bg-violet-100 px-2.5 py-1 text-[11px] font-bold text-violet-700 ring-1 ring-violet-200">
                 <Sparkles className="size-3" />
                 Review mode
               </span>
             )}
-            <div
-              tabIndex={0}
-              role="status"
-              aria-label={`Story language: ${language.endonym} (${language.regionShort})`}
-              title={`${language.endonym} (${language.regionShort})`}
-              className="group/lang inline-flex h-7 items-center gap-1.5 rounded-full bg-white px-1.5 py-0.5 shadow-2xs ring-1 ring-ink-200/80 cursor-default select-none transition-all duration-200 ease-out hover:px-2.5 hover:ring-ink-300 focus:outline-none focus:ring-brand-400 focus:px-2.5"
+            <span
+              aria-label={`Story language: ${language.endonym}`}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-ink-500"
             >
-              <span className="text-sm select-none shrink-0">{language.flag}</span>
-              <span className="max-w-0 overflow-hidden whitespace-nowrap opacity-0 transition-all duration-200 ease-out group-hover/lang:max-w-44 group-hover/lang:opacity-100 group-focus/lang:max-w-44 group-focus/lang:opacity-100 text-[11px] font-semibold text-ink-700">
-                {language.endonym}
-                <span className="ml-1 text-ink-400 font-mono text-[10px]">
-                  ({language.regionShort})
-                </span>
-              </span>
-            </div>
+              <span aria-hidden>{language.flag}</span>
+              <span className="hidden sm:inline">{language.endonym}</span>
+            </span>
           </div>
         </div>
       </div>
@@ -399,12 +383,7 @@ export function StoryManuscript({
       </AnimatePresence>
 
       {/* Internal Scrollable Story Manuscript Body */}
-      <div className="relative flex min-h-0 flex-1 flex-col bg-linear-to-b from-white via-white to-ink-50/30">
-        <div
-          aria-hidden
-          className="pointer-events-none absolute inset-y-3 left-0 w-1 bg-linear-to-b from-brand-200/0 via-brand-300/60 to-brand-200/0 sm:left-2"
-        />
-
+      <div className="relative flex min-h-0 flex-1 flex-col bg-white">
         <div className="flex min-h-0 flex-1 overflow-hidden p-1">
           {reviewing ? (
             <div className="min-h-0 flex-1 overflow-hidden">{reviewContent}</div>
@@ -473,20 +452,6 @@ export function StoryManuscript({
                   }
                 />
               ))}
-
-              {/* Bottom Add Section button when multiple sections exist */}
-              {beats.length > 1 && (
-                <div className="pt-2 pb-6 flex justify-center">
-                  <button
-                    type="button"
-                    onClick={() => handleAddBeat()}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-ink-200 bg-white/80 px-4 py-1.5 text-xs font-semibold text-ink-600 shadow-2xs transition hover:border-brand-400 hover:bg-brand-50 hover:text-brand-700"
-                  >
-                    <Plus className="size-3.5 text-brand-600" />
-                    <span>Add next section</span>
-                  </button>
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -498,34 +463,11 @@ export function StoryManuscript({
           reviewFooter
         ) : (
           <>
-            <div className="flex flex-wrap items-center gap-3 text-xs text-ink-500">
-              <div className="flex items-center gap-1.5">
-                <Feather className="size-3.5 text-ink-400" />
-                <span className="tabular-nums font-semibold text-ink-700">
-                  {words === 0
-                    ? "No words yet"
-                    : `${words.toLocaleString()} word${words === 1 ? "" : "s"}`}
-                </span>
-              </div>
-
-              {beats.length > 1 && (
-                <>
-                  <span className="text-ink-300">•</span>
-                  <span className="text-ink-600 font-medium">
-                    {beats.length} sections
-                  </span>
-                </>
-              )}
-
-              {words > 0 && (
-                <>
-                  <span className="text-ink-300">•</span>
-                  <span className="text-ink-500">
-                    ~{readMinutes} min read
-                  </span>
-                </>
-              )}
-            </div>
+            <span className="text-xs tabular-nums text-ink-500">
+              {words === 0
+                ? "No words yet"
+                : `${words.toLocaleString()} word${words === 1 ? "" : "s"}`}
+            </span>
 
             <div className="flex items-center gap-2">
               {beats.length <= 1 && !empty && (
@@ -554,8 +496,6 @@ export function StoryManuscript({
               <StatusChip
                 empty={empty}
                 ready={isReady}
-                busy={busy}
-                busyLabel={busyLabel}
               />
             </div>
           </>
@@ -568,22 +508,10 @@ export function StoryManuscript({
 function StatusChip({
   empty,
   ready,
-  busy,
-  busyLabel,
 }: {
   empty: boolean;
   ready: boolean;
-  busy?: boolean;
-  busyLabel?: string;
 }) {
-  if (busy) {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full bg-brand-50 px-2.5 py-1 text-[11px] font-medium text-brand-700 ring-1 ring-brand-100">
-        <Loader2 className="size-3 animate-spin text-brand-600" />
-        {busyLabel ?? "Writing story…"}
-      </span>
-    );
-  }
   if (empty) {
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-ink-400 ring-1 ring-ink-100">

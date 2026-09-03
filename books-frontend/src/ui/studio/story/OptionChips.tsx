@@ -7,7 +7,6 @@ import type { StoryOption } from "../../../core/config/storyCraftCatalog";
 import { Input } from "../../components/Input";
 import { Tooltip } from "../../components/Tooltip";
 import { cn } from "../../lib/cn";
-import { spring } from "../../lib/motion";
 import type { StoryHistoryOptions } from "./storyUndo";
 
 export interface OptionChipsProps {
@@ -111,35 +110,35 @@ export function OptionChips({
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-1.5">
         <div className="flex items-center gap-1.5">
-          <span className="text-xs font-bold uppercase tracking-wider text-ink-600">
+          <span className="text-sm font-medium text-ink-700">
             {label}
           </span>
           {hint && (
-            <span className="text-[11px] font-normal text-ink-400">· {hint}</span>
+            <span className="text-xs font-normal text-ink-400">· {hint}</span>
           )}
         </div>
 
         <div className="flex items-center gap-1.5">
           {multiple && (
-            <span className="inline-flex items-center gap-1 rounded-md bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold tracking-wide text-brand-700 ring-1 ring-inset ring-brand-200/70">
+            <span className="text-xs text-ink-500">
               Pick up to {maxSelectable}
             </span>
           )}
           {optional && (
-            <span className="rounded-md bg-ink-100/70 px-1.5 py-0.5 text-[10px] font-medium text-ink-500">
-              optional
+            <span className="text-xs text-ink-400">
+              Optional
             </span>
           )}
         </div>
       </div>
 
       {subhint && (
-        <p className="text-[11px] leading-tight text-ink-400">{subhint}</p>
+        <p className="text-xs leading-relaxed text-ink-500">{subhint}</p>
       )}
 
       {/* Chips Cloud */}
       <div className="flex flex-wrap gap-1.5">
-        {options.map((option, i) => {
+        {options.map((option) => {
           const isSelected = activeIds.includes(option.id);
 
           return (
@@ -164,25 +163,22 @@ export function OptionChips({
                 </div>
               }
             >
-              <motion.button
+              <button
                 type="button"
-                initial={{ opacity: 0, y: 4 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ ...spring, delay: Math.min(i, 8) * 0.015 }}
                 onClick={() => handleToggleOption(option.id)}
                 aria-pressed={isSelected}
                 className={cn(
-                  "group relative inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all duration-150 select-none",
+                  "inline-flex min-h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-medium transition-colors select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
                   isSelected
-                    ? "bg-brand-600 text-white shadow-soft ring-1 ring-brand-600 font-semibold scale-[1.01]"
-                    : "bg-white text-ink-700 ring-1 ring-ink-200/90 hover:bg-ink-50 hover:ring-brand-300 hover:text-ink-900 shadow-2xs",
+                    ? "bg-ink-900 text-white"
+                    : "bg-white text-ink-700 ring-1 ring-ink-200 hover:bg-ink-50 hover:text-ink-900",
                 )}
               >
                 {isSelected && (
                   <Check className="size-3 shrink-0 stroke-[2.5]" />
                 )}
                 <span>{option.label}</span>
-              </motion.button>
+              </button>
             </Tooltip>
           );
         })}
@@ -203,10 +199,10 @@ export function OptionChips({
             }
           }}
           className={cn(
-            "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition select-none",
+            "inline-flex min-h-9 items-center gap-1.5 rounded-lg px-3 text-sm font-medium transition-colors select-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
             customOpen
-              ? "bg-ink-800 text-white shadow-soft ring-1 ring-ink-900 font-semibold"
-              : "bg-white/80 text-ink-600 ring-1 ring-dashed ring-ink-300 hover:bg-ink-50 hover:ring-ink-400 hover:text-ink-800",
+              ? "bg-ink-900 text-white"
+              : "bg-white text-ink-600 ring-1 ring-dashed ring-ink-300 hover:bg-ink-50 hover:text-ink-800",
           )}
         >
           <Pencil className="size-3" />

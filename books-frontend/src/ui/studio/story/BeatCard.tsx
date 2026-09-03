@@ -79,22 +79,6 @@ export function BeatCard({
         data-beat-id={beat.id}
         className="flex min-h-0 flex-1 flex-col h-full w-full"
       >
-        {/* Subtle quick-action header when text is present to split easily */}
-        {beat.text.trim().length > 0 && (
-          <div className="flex items-center justify-end px-5 pt-2 sm:px-8">
-            <button
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={handleSplit}
-              title="Split story into sections at the current cursor position"
-              className="inline-flex items-center gap-1.5 rounded-lg border border-ink-200/80 bg-white/90 px-2.5 py-1 text-xs font-medium text-ink-600 shadow-2xs transition hover:border-brand-300 hover:bg-brand-50 hover:text-brand-700 active:scale-95"
-            >
-              <Scissors className="size-3.5 text-brand-600" />
-              <span>Split at cursor</span>
-            </button>
-          </div>
-        )}
-
         <textarea
           ref={textareaRef}
           lang={language.id}

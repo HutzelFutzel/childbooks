@@ -1,13 +1,15 @@
 /**
- * Focused Story workspace. First-run walks Language → Audience → Story in one
- * compact wayfinder; art style is the next blocking decision.
+ * Focused Story workspace. First-run walks Reader → Story in one compact
+ * wayfinder; art style is the next blocking decision.
  */
 import { useMemo, useState } from "react";
 import {
   ArrowRight,
   Check,
   Redo2,
+  RefreshCw,
   Undo2,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 import type { BookConfig } from "../../core/types";
@@ -60,7 +62,10 @@ export function StoryWorkspace() {
     [config],
   );
 
-  const [topicId, setTopicId] = useState<TopicId>(topics[0]?.id ?? "language");
+  const [topicId, setTopicId] = useState<TopicId>(
+    firstRun ? (topics[0]?.id ?? "reader") : "story",
+  );
+  const [storyToolsOpen, setStoryToolsOpen] = useState(false);
   // Furthest guided index reached — review mode unlocks everything.
   const [furthest, setFurthest] = useState(0);
 
@@ -78,10 +83,12 @@ export function StoryWorkspace() {
   const isLast = index === topics.length - 1;
 
   const hasStory = Boolean(cfg.storyText?.trim());
-  const originLocale: BookLanguageId = (cfg.storyBrief?.generatedForLocale as BookLanguageId) ?? "en-US";
   const currentLocale: BookLanguageId = (cfg.contentLocale as BookLanguageId) ?? "en-US";
-  const languageChanged = hasStory && originLocale !== currentLocale;
-  const originAge = cfg.storyBrief?.generatedForAge ?? (hasStory ? "0-2" : undefined);
+  const knownOriginLocale = cfg.storyBrief?.generatedForLocale as BookLanguageId | undefined;
+  const originLocale = knownOriginLocale ?? currentLocale;
+  const languageChanged =
+    hasStory && Boolean(knownOriginLocale) && originLocale !== currentLocale;
+  const originAge = cfg.storyBrief?.generatedForAge;
   const ageChanged = hasStory && Boolean(originAge) && originAge !== cfg.ageRangeId;
   const needsAdaptation = languageChanged || ageChanged;
 
@@ -95,6 +102,7 @@ export function StoryWorkspace() {
   function selectTopic(id: TopicId) {
     const i = topics.findIndex((t) => t.id === id);
     if (i < 0 || !topicReachable(i)) return;
+    if (id !== "story") setStoryToolsOpen(false);
     setFurthest((f) => Math.max(f, i));
     setTopicId(id);
   }
@@ -156,73 +164,113 @@ export function StoryWorkspace() {
           : topics[index + 1]
             ? `Continue to ${stripTitle(topics[index + 1]!).toLowerCase()}`
             : "Continue";
-  const primaryDisabled = firstRun
-    ? !answered || (isLast && !ready)
-    : !ready;
-
   return (
     <div className="relative flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-ink-100 bg-white px-2 py-2 sm:px-4">
-        <span className="text-sm font-semibold text-ink-900 sm:hidden">Story</span>
-        <StoryTopicNav
-          topics={topics}
-          config={cfg}
-          activeId={topic.id}
-          firstRun={firstRun}
-          furthest={furthest}
-          onSelect={selectTopic}
-          reachable={topicReachable}
-        />
+        {firstRun ? (
+          <StoryTopicNav
+            topics={topics}
+            config={cfg}
+            activeId={topic.id}
+            firstRun={firstRun}
+            furthest={furthest}
+            onSelect={selectTopic}
+            reachable={topicReachable}
+          />
+        ) : (
+          <div className="flex min-w-0 flex-1 items-center gap-1">
+            <Button
+              size="sm"
+              variant="ghost"
+              leftIcon={topic.id === "story" ? <Users className="size-4" /> : undefined}
+              onClick={() => selectTopic(topic.id === "story" ? "reader" : "story")}
+            >
+              {topic.id === "story" ? "Audience settings" : "Back to story"}
+            </Button>
+            {topic.id === "story" && hasStory && (
+              <Button
+                size="sm"
+                variant={storyToolsOpen ? "secondary" : "ghost"}
+                leftIcon={<RefreshCw className="size-4" />}
+                aria-expanded={storyToolsOpen}
+                onClick={() => setStoryToolsOpen((open) => !open)}
+              >
+                New version
+              </Button>
+            )}
+          </div>
+        )}
 
         <div className="ml-auto flex shrink-0 items-center gap-2">
-          <div className="flex items-center rounded-xl bg-ink-50 p-0.5 ring-1 ring-ink-100">
-            <button
-              type="button"
-              onClick={storyUndo}
-              disabled={!canStoryUndo}
-              title="Undo story change (⌘Z)"
-              aria-label="Undo story change"
-              className="inline-flex size-7 items-center justify-center rounded-lg text-ink-600 transition hover:bg-white disabled:cursor-not-allowed disabled:text-ink-300"
+          {firstRun && topic.id === "story" && hasStory && (
+            <Button
+              size="sm"
+              variant={storyToolsOpen ? "secondary" : "ghost"}
+              leftIcon={<RefreshCw className="size-4" />}
+              aria-expanded={storyToolsOpen}
+              onClick={() => setStoryToolsOpen((open) => !open)}
             >
-              <Undo2 className="size-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={storyRedo}
-              disabled={!canStoryRedo}
-              title="Redo story change (⌘⇧Z)"
-              aria-label="Redo story change"
-              className="inline-flex size-7 items-center justify-center rounded-lg text-ink-600 transition hover:bg-white disabled:cursor-not-allowed disabled:text-ink-300"
+              New version
+            </Button>
+          )}
+          {(canStoryUndo || canStoryRedo) && (
+            <div className="flex items-center rounded-xl bg-ink-50 p-0.5 ring-1 ring-ink-100">
+              <button
+                type="button"
+                onClick={storyUndo}
+                disabled={!canStoryUndo}
+                title="Undo story change (⌘Z)"
+                aria-label="Undo story change"
+                className="inline-flex size-7 items-center justify-center rounded-lg text-ink-600 transition hover:bg-white disabled:cursor-not-allowed disabled:text-ink-300"
+              >
+                <Undo2 className="size-3.5" />
+              </button>
+              <button
+                type="button"
+                onClick={storyRedo}
+                disabled={!canStoryRedo}
+                title="Redo story change (⌘⇧Z)"
+                aria-label="Redo story change"
+                className="inline-flex size-7 items-center justify-center rounded-lg text-ink-600 transition hover:bg-white disabled:cursor-not-allowed disabled:text-ink-300"
+              >
+                <Redo2 className="size-3.5" />
+              </button>
+            </div>
+          )}
+          {firstRun && (topic.id !== "story" || answered) && (
+            <Button
+              size="sm"
+              rightIcon={<ArrowRight className="size-4" />}
+              onClick={onPrimary}
             >
-              <Redo2 className="size-3.5" />
-            </button>
-          </div>
-          <Button
-            size="sm"
-            disabled={primaryDisabled}
-            rightIcon={<ArrowRight className="size-4" />}
-            onClick={onPrimary}
-          >
-            {primaryLabel}
-          </Button>
+              {primaryLabel}
+            </Button>
+          )}
         </div>
       </div>
 
       <div className="relative min-h-0 min-w-0 flex-1">
         <div className="absolute inset-0 flex flex-col bg-ink-50/30">
-          <div className="shrink-0 border-b border-ink-100 bg-white px-4 py-3 sm:px-6">
-            <h2 className="text-base font-semibold text-ink-900">{topic.title}</h2>
-            {topic.subtitle && (
-              <p className="mt-0.5 text-sm text-ink-500">{topic.subtitle}</p>
-            )}
-          </div>
+          {topic.id !== "story" && (
+            <div className="shrink-0 border-b border-ink-100 bg-white px-4 py-3 sm:px-6">
+              <h2 className="text-base font-semibold text-ink-900">{topic.title}</h2>
+              {topic.subtitle && (
+                <p className="mt-0.5 text-sm text-ink-500">{topic.subtitle}</p>
+              )}
+            </div>
+          )}
           {topic.id === "story" ? (
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-3 sm:p-4 lg:p-5">
-              {topic.render({ config: cfg, update })}
+              {topic.render({
+                config: cfg,
+                update,
+                storyToolsOpen,
+                onStoryToolsOpenChange: setStoryToolsOpen,
+              })}
             </div>
           ) : (
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
-              <div className="mx-auto w-full max-w-3xl">
+              <div className="mx-auto w-full max-w-5xl">
                 {topic.render({ config: cfg, update })}
               </div>
             </div>
@@ -253,7 +301,7 @@ function StoryTopicNav({
   return (
     <nav
       aria-label="Story setup"
-      className="order-2 flex min-w-0 basis-full items-center gap-1 overflow-x-auto sm:order-none sm:flex-1 sm:basis-auto"
+      className="order-2 flex min-w-0 basis-full items-center gap-1 overflow-x-auto sm:order-0 sm:flex-1 sm:basis-auto"
     >
       {topics.map((q, i) => {
         const Icon = q.icon as LucideIcon;
@@ -296,10 +344,8 @@ function StoryTopicNav({
 /** Short strip labels — full titles stay in the stage header. */
 function stripTitle(q: GuidedQuestion): string {
   switch (q.id) {
-    case "language":
-      return "Language";
-    case "age":
-      return "Audience";
+    case "reader":
+      return "Reader";
     case "story":
       return "Story";
     default:

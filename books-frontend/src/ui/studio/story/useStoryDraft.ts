@@ -79,7 +79,9 @@ export function useStoryDraft(): UseStoryDraft {
         }
         notify.success(
           isFirstDraft ? "Your story is written" : "A fresh take on your story",
-          "Read it below and change anything you like — it's yours now.",
+          isFirstDraft
+            ? "Read it below and change anything you like — it’s yours now."
+            : "Read the new version below. You can undo to restore the previous one.",
         );
       } catch (err) {
         notify.error(err);
@@ -115,7 +117,7 @@ export function useStoryDraft(): UseStoryDraft {
         const { ageRangeId, readingModeId } = live.config;
         const brief: StoryBrief =
           live.config.storyBrief ?? createDefaultStoryBrief("own");
-        const prevAge = brief.generatedForAge ?? (story ? "0-2" : undefined);
+        const prevAge = brief.generatedForAge ?? ageRangeId;
         const ageChanged = Boolean(prevAge) && prevAge !== ageRangeId;
         const langChanged = source !== target;
 

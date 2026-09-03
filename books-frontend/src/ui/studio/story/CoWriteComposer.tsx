@@ -78,28 +78,21 @@ export function CoWriteComposer({
   return (
     <section className="space-y-3">
       {/* Header & Sub-step Stepper Card */}
-      <div className="overflow-hidden rounded-2xl bg-aurora p-3 shadow-2xs ring-1 ring-sky-200/50">
-        <div className="flex items-center gap-2.5">
-          <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-sky-500 text-white shadow-soft">
-            <Users className="size-4" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between gap-1">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-sky-700">
-                Write it together
-              </span>
-              <span className="rounded-full bg-sky-100/80 px-2 py-0.5 text-[10px] font-bold text-sky-800">
-                Step {currentStepIndex + 1} of {CO_WRITE_STEPS.length}
-              </span>
-            </div>
-            <h2 className="truncate font-display text-sm font-bold tracking-tight text-ink-900">
-              {activeStep.label} — {activeStep.subtitle}
-            </h2>
+      <div className="overflow-hidden rounded-xl border border-ink-200 bg-white p-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 className="text-base font-semibold text-ink-900">Story details</h2>
+            <p className="mt-0.5 truncate text-sm text-ink-500">
+              {activeStep.label} · {activeStep.subtitle}
+            </p>
           </div>
+          <span className="shrink-0 text-xs font-medium text-ink-500">
+            {currentStepIndex + 1} of {CO_WRITE_STEPS.length}
+          </span>
         </div>
 
         {/* 3-Step Pill Bar */}
-        <div className="mt-2.5 grid grid-cols-3 gap-1 rounded-xl bg-white/70 p-1 shadow-2xs ring-1 ring-ink-100">
+        <div className="mt-3 grid grid-cols-3 gap-1 rounded-lg bg-ink-100/70 p-1">
           {CO_WRITE_STEPS.map((step, i) => {
             const selected = i === currentStepIndex;
             const done = isStepDone(i);
@@ -110,10 +103,10 @@ export function CoWriteComposer({
                 type="button"
                 onClick={() => setCurrentStepIndex(i)}
                 className={cn(
-                  "flex items-center justify-center gap-1 rounded-lg py-1 text-xs font-semibold transition",
+                  "flex min-h-9 items-center justify-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
                   selected
-                    ? "bg-white text-sky-800 shadow-2xs ring-1 ring-sky-200"
-                    : "text-ink-500 hover:bg-white/50 hover:text-ink-800"
+                    ? "bg-white text-ink-900 shadow-2xs"
+                    : "text-ink-500 hover:bg-white/60 hover:text-ink-800"
                 )}
               >
                 <span
@@ -122,7 +115,7 @@ export function CoWriteComposer({
                     done && !selected
                       ? "bg-emerald-500 text-white"
                       : selected
-                      ? "bg-sky-500 text-white"
+                      ? "bg-ink-800 text-white"
                       : "bg-ink-200/80 text-ink-600"
                   )}
                 >
@@ -136,7 +129,7 @@ export function CoWriteComposer({
       </div>
 
       {/* Step Body Card */}
-      <div className="rounded-2xl bg-white p-3.5 shadow-soft ring-1 ring-ink-100 sm:p-4">
+      <div className="rounded-xl border border-ink-200 bg-white p-4">
         <AnimatePresence mode="wait">
           {currentStepIndex === 0 && (
             <motion.div
@@ -148,7 +141,7 @@ export function CoWriteComposer({
               className="space-y-3"
             >
               <div className="space-y-0.5">
-                <h3 className="font-display text-sm font-bold text-ink-900">
+                <h3 className="text-sm font-semibold text-ink-900">
                   Who are the heroes?
                 </h3>
                 <p className="text-[11px] leading-relaxed text-ink-500">
@@ -172,7 +165,7 @@ export function CoWriteComposer({
               className="space-y-3"
             >
               <div className="space-y-0.5">
-                <h3 className="font-display text-sm font-bold text-ink-900">
+                <h3 className="text-sm font-semibold text-ink-900">
                   What happens in the story?
                 </h3>
                 <p className="text-[11px] leading-relaxed text-ink-500">
@@ -182,7 +175,7 @@ export function CoWriteComposer({
 
               <div className="space-y-2.5 pt-0.5">
                 <label className="block">
-                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                  <span className="mb-1.5 block text-sm font-medium text-ink-700">
                     The occasion or moment <span className="text-rose-500">*</span>
                   </span>
                   <Textarea
@@ -203,7 +196,7 @@ export function CoWriteComposer({
 
                 <div className="space-y-2.5">
                   <label className="block">
-                    <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                    <span className="mb-1.5 block text-sm font-medium text-ink-700">
                       When <span className="font-normal text-ink-400">(optional)</span>
                     </span>
                     <Input
@@ -221,7 +214,7 @@ export function CoWriteComposer({
                     />
                   </label>
                   <label className="block">
-                    <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                    <span className="mb-1.5 block text-sm font-medium text-ink-700">
                       Where <span className="font-normal text-ink-400">(optional)</span>
                     </span>
                     <Input
@@ -241,7 +234,7 @@ export function CoWriteComposer({
                 </div>
 
                 <label className="block">
-                  <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
+                  <span className="mb-1.5 block text-sm font-medium text-ink-700">
                     Must include <span className="font-normal text-ink-400">(optional)</span>
                   </span>
                   <Input
@@ -272,7 +265,7 @@ export function CoWriteComposer({
               className="space-y-3.5"
             >
               <div className="space-y-0.5">
-                <h3 className="font-display text-sm font-bold text-ink-900">
+                <h3 className="text-sm font-semibold text-ink-900">
                   How should it be told?
                 </h3>
                 <p className="text-[11px] leading-relaxed text-ink-500">
@@ -353,13 +346,17 @@ export function CoWriteComposer({
               <Button
                 disabled={!canWrite && !writing}
                 loading={writing}
-                variant="magic"
+                variant="primary"
                 size="sm"
                 leftIcon={!writing ? (hasStory ? <RotateCcw className="size-3.5" /> : <Wand2 className="size-3.5" />) : undefined}
                 onClick={() => void write(brief)}
                 className="h-8 text-xs shadow-soft"
               >
-                {writing ? "Writing…" : hasStory ? "Write again" : "Write story"}
+                {writing
+                  ? "Writing…"
+                  : hasStory
+                    ? "Generate a new version"
+                    : "Write story"}
               </Button>
             )}
 

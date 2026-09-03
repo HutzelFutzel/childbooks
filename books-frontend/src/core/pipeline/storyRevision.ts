@@ -58,6 +58,7 @@ export async function reviseStory(input: ReviseStoryInput): Promise<StoryRevisio
           "Your previous patch could not be applied.",
           `Reason: ${repair.slice(0, 500)}`,
           "Return a corrected patch now. Copy every `before` value exactly from the manuscript, include a non-empty unique anchor for insertions, keep replacements independent and non-overlapping, and include `summary`, `before`, `after`, and `reason` using exactly those field names.",
+          "For new or substantially expanded prose, use short semantic paragraphs separated by blank lines. Do not hard-wrap lines.",
         ].join("\n"),
       });
     }

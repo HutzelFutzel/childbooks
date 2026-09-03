@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import {
   Check,
   CheckCheck,
@@ -133,6 +133,7 @@ function InlineChange({
   detached?: boolean;
   onDecide: (id: string, decision: StoryRevisionDecision) => Promise<void>;
 }) {
+  const [controlsOpen, setControlsOpen] = useState(false);
   const display = splitChangeContext(change.currentText, change.suggestedText);
   const displayKind =
     !display.before && display.after
@@ -148,6 +149,88 @@ function InlineChange({
       : displayKind === "delete"
         ? "border-rose-300 bg-rose-50/55"
         : "border-sky-300 bg-sky-50/45";
+  const inline =
+    !change.conflict &&
+    !detached &&
+    !display.before.includes("\n") &&
+    !display.after.includes("\n") &&
+    Math.max(display.before.length, display.after.length) <= 180;
+
+  async function decide(next: StoryRevisionDecision) {
+    setControlsOpen(false);
+    await onDecide(change.id, next);
+  }
+
+  if (inline) {
+    return (
+      <>
+        {display.prefix && <span>{display.prefix}</span>}
+        <span id={`story-change-${change.id}`} className="relative inline">
+          <button
+            type="button"
+            aria-expanded={controlsOpen}
+            aria-label={`${label} ${index + 1} of ${total}. Review this suggestion.`}
+            onClick={() => setControlsOpen((open) => !open)}
+            className={cn(
+              "inline rounded-sm px-0.5 text-left font-serif focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
+              "box-decoration-clone [-webkit-box-decoration-break:clone]",
+              decision === "accepted" && "bg-emerald-100/70",
+              decision === "rejected" && "bg-ink-100",
+            )}
+          >
+            {display.before && (
+              <del
+                className={cn(
+                  "rounded-sm bg-rose-100/80 text-rose-900 decoration-rose-500/80",
+                  decision === "accepted" && "opacity-45",
+                  decision === "rejected" && "bg-transparent text-ink-800 no-underline opacity-100",
+                )}
+              >
+                {display.before}
+              </del>
+            )}
+            {display.before && display.after && <span aria-hidden> </span>}
+            {display.after && (
+              <ins
+                className={cn(
+                  "rounded-sm bg-emerald-100/80 text-emerald-950 no-underline",
+                  decision === "rejected" && "opacity-40 line-through",
+                )}
+              >
+                {display.after}
+              </ins>
+            )}
+          </button>
+
+          {controlsOpen && (
+            <span
+              role="group"
+              aria-label={`Actions for ${label.toLowerCase()} suggestion`}
+              className="ml-1 inline-flex translate-y-0.5 items-center gap-1 rounded-lg bg-white p-1 font-sans shadow-soft ring-1 ring-ink-200"
+            >
+              <button
+                type="button"
+                onClick={() => void decide("rejected")}
+                className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-ink-600 transition-colors hover:bg-rose-50 hover:text-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+              >
+                <X aria-hidden className="size-3" />
+                Discard
+              </button>
+              <button
+                type="button"
+                onClick={() => void decide("accepted")}
+                className="inline-flex h-7 items-center gap-1 rounded-md bg-ink-900 px-2 text-xs font-medium text-white transition-colors hover:bg-ink-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+              >
+                <Check aria-hidden className="size-3" />
+                Keep
+              </button>
+            </span>
+          )}
+        </span>
+        {display.suffix && <span>{display.suffix}</span>}
+      </>
+    );
+  }
 
   return (
     <>

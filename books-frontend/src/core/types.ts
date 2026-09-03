@@ -221,7 +221,7 @@ export function createDefaultConfig(initialLocale?: BookLanguageId): BookConfig 
 
 /**
  * The high-level mode a project is in.
- *   - `setup`  — first-run story configuration (audience + text), before the studio.
+ *   - `setup`  — first-run story configuration (reader + text), before the studio.
  *   - `studio` — the single unified workspace (Design cast/pages, Order, …).
  */
 export type ProjectStage = "setup" | "studio";

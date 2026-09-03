@@ -78,7 +78,7 @@ export function useStoryRevision() {
       try {
         await startStoryRevision(project, instruction);
       } catch (err) {
-        notify.error("Couldn’t refine the story", (err as Error).message);
+        notify.errorWithDescription("Couldn’t refine the story", (err as Error).message);
         throw err;
       } finally {
         setStarting(false);
@@ -140,7 +140,7 @@ export function useStoryRevision() {
             return { ...item, decisions, decisionContexts };
           }),
         );
-        notify.error("Review wasn’t saved", (err as Error).message);
+        notify.errorWithDescription("Review wasn’t saved", (err as Error).message);
       }
     },
     [project, revision],
@@ -204,7 +204,7 @@ export function useStoryRevision() {
           "The manuscript has been updated.",
         );
       } catch (err) {
-        notify.error("Revision wasn’t applied", (err as Error).message);
+        notify.errorWithDescription("Revision wasn’t applied", (err as Error).message);
       } finally {
         setSaving(false);
       }

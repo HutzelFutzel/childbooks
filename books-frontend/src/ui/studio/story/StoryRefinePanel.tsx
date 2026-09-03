@@ -1,26 +1,27 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CheckCircle2, LoaderCircle, RotateCw, Send, Sparkles, TriangleAlert } from "lucide-react";
+import { CheckCircle2, LoaderCircle, PenLine, RotateCw, Send, TriangleAlert } from "lucide-react";
 import type { StoryRevisionWithId } from "../../../platform/storyRevisions";
 import { Button } from "../../components/Button";
-
-const EXAMPLES = [
-  "Make the ending a little warmer",
-  "Add a short bedtime stanza",
-  "Make it about 50 words longer",
-];
+import { cn } from "../../lib/cn";
 
 export function StoryRefinePanel({
   revision,
   starting,
   onStart,
+  attached = false,
 }: {
   revision: StoryRevisionWithId | null;
   starting: boolean;
   onStart: (instruction: string) => Promise<void>;
+  attached?: boolean;
 }) {
   const [instruction, setInstruction] = useState("");
+  const shellClass = cn(
+    "shrink-0 border border-ink-200 bg-white px-4 py-3",
+    attached ? "rounded-t-2xl border-b-0" : "rounded-2xl",
+  );
 
   useEffect(() => {
     if (revision?.status === "error") setInstruction(revision.instruction);
@@ -28,16 +29,12 @@ export function StoryRefinePanel({
 
   if (revision?.status === "pending" || revision?.status === "running") {
     return (
-      <section className="rounded-3xl border border-brand-200 bg-linear-to-br from-brand-50 via-white to-violet-50/60 p-4 shadow-soft">
-        <div className="flex items-start gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-2xl bg-brand-600 text-white shadow-soft">
-            <LoaderCircle className="size-4 animate-spin" />
-          </span>
-          <div>
-            <h3 className="font-display text-sm font-bold text-ink-900">Refining your story…</h3>
-            <p className="mt-1 text-xs leading-relaxed text-ink-600">
-              “{revision.instruction}”
-            </p>
+      <section className={shellClass} aria-live="polite">
+        <div className="flex items-center gap-3">
+          <LoaderCircle className="size-4 shrink-0 animate-spin text-brand-600" />
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-ink-900">Preparing your changes…</h3>
+            <p className="truncate text-xs text-ink-500">“{revision.instruction}”</p>
           </div>
         </div>
       </section>
@@ -48,16 +45,12 @@ export function StoryRefinePanel({
     const decided = Object.keys(revision.decisions ?? {}).length;
     const total = revision.proposal?.changes.length ?? 0;
     return (
-      <section className="rounded-3xl border border-emerald-200 bg-emerald-50/70 p-4 shadow-2xs">
-        <div className="flex items-start gap-3">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-2xl bg-emerald-600 text-white">
-            <CheckCircle2 className="size-4" />
-          </span>
+      <section className={cn(shellClass, "bg-emerald-50/60")} aria-live="polite">
+        <div className="flex items-center gap-3">
+          <CheckCircle2 className="size-4 shrink-0 text-emerald-600" />
           <div>
-            <h3 className="font-display text-sm font-bold text-ink-900">Changes ready to review</h3>
-            <p className="mt-2 text-[11px] font-semibold text-emerald-700">
-              {decided} of {total} changes reviewed in the manuscript
-            </p>
+            <h3 className="text-sm font-semibold text-ink-900">Review the suggested changes below</h3>
+            <p className="text-xs text-emerald-700">{decided} of {total} reviewed</p>
           </div>
         </div>
       </section>
@@ -77,41 +70,47 @@ export function StoryRefinePanel({
   };
 
   return (
-    <section className="rounded-3xl border border-brand-200/80 bg-white p-4 shadow-soft ring-1 ring-brand-100/70">
-      <div className="flex items-start gap-2.5">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-600 ring-1 ring-brand-100">
-          {failed ? <TriangleAlert className="size-4 text-amber-600" /> : <Sparkles className="size-4" />}
-        </span>
-        <div>
-          <h3 className="font-display text-sm font-bold text-ink-900">
-            {failed ? "That revision didn’t work" : "Refine this story"}
+    <section className={shellClass}>
+      <div className="flex items-center gap-2">
+        {failed ? (
+          <TriangleAlert aria-hidden className="size-4 shrink-0 text-amber-600" />
+        ) : (
+          <PenLine aria-hidden className="size-4 shrink-0 text-ink-500" />
+        )}
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-ink-900">
+            {failed ? "Try that change again" : "Change this story with AI"}
           </h3>
-          <p className="mt-0.5 text-[11px] leading-relaxed text-ink-500">
+          <p className="text-xs text-ink-500">
             {failed
-              ? revision.error ?? "Try describing the change another way."
-              : "Ask for one focused change. Nothing is applied until you review it."}
+              ? revision.error ?? "Describe the change another way."
+              : "Describe one change. You’ll review it before anything is applied."}
           </p>
         </div>
       </div>
 
-      <div className="mt-3 rounded-2xl bg-ink-50/80 p-2 ring-1 ring-ink-100">
-        <textarea
-          data-native-undo
-          value={instruction}
-          onChange={(event) => setInstruction(event.target.value)}
-          onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void submit();
-          }}
-          rows={3}
-          maxLength={1200}
-          placeholder="E.g. Add a stanza where they get ready for bed…"
-          className="w-full resize-none border-0 bg-transparent px-2 py-1.5 text-sm leading-relaxed text-ink-800 outline-none placeholder:text-ink-300"
-        />
-        <div className="flex items-center justify-between gap-2 px-1">
-          <span className="text-[10px] text-ink-400">⌘ Enter to send</span>
+      <div className="mt-2 flex flex-col gap-2 rounded-xl bg-ink-50 p-2 ring-1 ring-ink-100 sm:flex-row sm:items-end">
+        <label className="min-w-0 flex-1" htmlFor="story-refine-instruction">
+          <span className="sr-only">Describe a change to this story</span>
+          <textarea
+            id="story-refine-instruction"
+            data-native-undo
+            value={instruction}
+            onChange={(event) => setInstruction(event.target.value)}
+            onKeyDown={(event) => {
+              if ((event.metaKey || event.ctrlKey) && event.key === "Enter") void submit();
+            }}
+            rows={2}
+            maxLength={1200}
+            placeholder="For example: Make the ending warmer…"
+            className="w-full resize-none border-0 bg-transparent px-2 py-1 text-sm leading-relaxed text-ink-800 outline-none placeholder:text-ink-400 focus:ring-0"
+          />
+        </label>
+        <div className="flex shrink-0 items-center justify-between gap-2 sm:flex-col sm:items-end">
+          <span className="text-[11px] text-ink-400">⌘ Enter</span>
           <Button
             size="sm"
-            variant="magic"
+            variant="primary"
             loading={starting}
             disabled={!instruction.trim() || starting}
             leftIcon={failed ? <RotateCw className="size-3.5" /> : <Send className="size-3.5" />}
@@ -122,21 +121,6 @@ export function StoryRefinePanel({
           </Button>
         </div>
       </div>
-
-      {!failed && (
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
-          {EXAMPLES.map((example) => (
-            <button
-              key={example}
-              type="button"
-              onClick={() => setInstruction(example)}
-              className="rounded-full bg-brand-50 px-2.5 py-1 text-[10.5px] font-medium text-brand-700 transition hover:bg-brand-100"
-            >
-              {example}
-            </button>
-          ))}
-        </div>
-      )}
     </section>
   );
 }

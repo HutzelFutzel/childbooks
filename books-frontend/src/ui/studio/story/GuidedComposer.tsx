@@ -72,34 +72,18 @@ export function GuidedComposer({
   };
 
   return (
-    <section className="relative overflow-hidden rounded-2xl bg-aurora p-4 shadow-soft ring-1 ring-magic-300/40 sm:p-5">
-      <div
-        aria-hidden
-        className="pointer-events-none absolute -right-10 -top-12 h-40 w-40 rounded-full bg-magic-300/30 blur-3xl"
-      />
-      <div
-        aria-hidden
-        className="pointer-events-none absolute -bottom-16 -left-8 h-36 w-36 rounded-full bg-brand-200/35 blur-3xl"
-      />
-
-      <div className="relative space-y-4">
-        <div className="flex items-center gap-2.5">
-          <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-magic-500 text-white shadow-soft">
-            <Wand2 className="size-4.5" />
-          </span>
-          <div className="min-w-0 flex-1">
-            <p className="text-[10.5px] font-semibold uppercase tracking-[0.14em] text-magic-700">
-              Write it for me
-            </p>
-            <h2 className="font-display text-base font-bold tracking-tight text-ink-900">
-              Start with a little magic
-            </h2>
-          </div>
+    <section className="rounded-xl border border-ink-200 bg-white p-4 sm:p-5">
+      <div className="space-y-5">
+        <div>
+          <h2 className="text-base font-semibold text-ink-900">Story details</h2>
+          <p className="mt-1 text-sm leading-relaxed text-ink-500">
+            Add the essentials and we’ll create a complete draft.
+          </p>
         </div>
 
         <label className="block">
-          <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-            Who is the book for?
+          <span className="mb-1.5 block text-sm font-medium text-ink-700">
+            Main character
           </span>
           <div className="w-full">
             <HeroNamesInput
@@ -112,7 +96,7 @@ export function GuidedComposer({
               placeholder="e.g. Mila (or enter names for siblings)"
             />
           </div>
-          <span className="mt-1 block text-[11px] text-ink-400">
+          <span className="mt-1.5 block text-xs text-ink-500">
             {effectiveHeroes.length > 1
               ? `${
                   effectiveHeroes.length === 2
@@ -164,20 +148,24 @@ export function GuidedComposer({
           customPlaceholder="e.g. bedtime lullaby rhythm"
         />
 
-        <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-ink-100/60">
+        <div className="flex flex-wrap items-center gap-3 border-t border-ink-100 pt-4">
           <Button
             disabled={!canWrite && !writing}
             loading={writing}
-            variant="magic"
+            variant="primary"
             size="sm"
             leftIcon={!writing ? (hasStory ? <RotateCcw className="size-3.5" /> : <Wand2 className="size-3.5" />) : undefined}
             onClick={handleWrite}
-            className="h-8.5 text-xs shadow-soft"
+            className="h-9 text-sm"
           >
-            {writing ? "Writing your story…" : hasStory ? "Write again" : "Write my story"}
+            {writing
+              ? "Writing your story…"
+              : hasStory
+                ? "Generate a new version"
+                : "Write my story"}
           </Button>
 
-          <span className="flex items-center gap-1 text-[11px] text-ink-400">
+          <span className="flex items-center gap-1 text-xs text-ink-500">
             {writing ? (
               <>
                 <Loader2 className="size-3 animate-spin text-magic-500" />

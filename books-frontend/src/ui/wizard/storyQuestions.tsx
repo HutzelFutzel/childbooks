@@ -1,12 +1,11 @@
-import { BookText, Languages, Users } from "lucide-react";
+import { BookText, Users } from "lucide-react";
 import { AGE_RANGES } from "../../core/config/options";
 import { getBookLanguage, isBookLanguageId } from "../../core/config/bookLanguages";
 import { wordCount } from "../../core/story/brief";
 import { ageBandHasReadingModes, readingModeLabel } from "../../core/config/ageWritingCatalog";
 import { storyModeInfo } from "../../core/config/storyCraftCatalog";
 import type { GuidedQuestion } from "./GuidedQuestions";
-import { AudienceStep } from "./steps/AudienceStep";
-import { LanguageStep } from "./steps/LanguageStep";
+import { ReaderStep } from "./steps/ReaderStep";
 import { StoryStep } from "./steps/StoryStep";
 
 function ageLabel(id: string): string {
@@ -19,36 +18,27 @@ function ageLabel(id: string): string {
  */
 export const STORY_QUESTIONS: GuidedQuestion[] = [
   {
-    id: "language",
-    title: "What language does your little reader speak?",
-    subtitle:
-      "Pick the language your child loves listening to for their adventure.",
-    icon: Languages,
-    isAnswered: (config) => isBookLanguageId(config.contentLocale ?? "en-US"),
+    id: "reader",
+    title: "Language & reading level",
+    subtitle: "Choose the language and reading level for this book.",
+    icon: Users,
+    isAnswered: (config) =>
+      isBookLanguageId(config.contentLocale ?? "en-US") &&
+      Boolean(config.ageRangeId) &&
+      (!ageBandHasReadingModes(config.ageRangeId) || Boolean(config.readingModeId)),
     summary: (config) => {
       const lang = getBookLanguage(config.contentLocale);
-      return `${lang.flag} ${lang.endonym} · ${lang.regionShort}`;
+      const age = ageBandHasReadingModes(config.ageRangeId) && config.readingModeId
+        ? `${ageLabel(config.ageRangeId)} · ${readingModeLabel(config.readingModeId)}`
+        : ageLabel(config.ageRangeId);
+      return `${lang.endonym} · ${age}`;
     },
-    render: (props) => <LanguageStep {...props} />,
-  },
-  {
-    id: "age",
-    title: "Who will treasure this book?",
-    subtitle: "We’ll match the words, pacing, and picture density to their age — so it feels written just for them.",
-    icon: Users,
-    isAnswered: (c) =>
-      Boolean(c.ageRangeId) && (!ageBandHasReadingModes(c.ageRangeId) || Boolean(c.readingModeId)),
-    summary: (c) =>
-      ageBandHasReadingModes(c.ageRangeId) && c.readingModeId
-        ? `${ageLabel(c.ageRangeId)} · ${readingModeLabel(c.readingModeId)}`
-        : ageLabel(c.ageRangeId),
-    render: (props) => <AudienceStep {...props} />,
+    render: (props) => <ReaderStep {...props} />,
   },
   {
     id: "story",
-    title: "What’s the story?",
-    subtitle:
-      "Let us write it, build it together from your own details, or bring your own words — you’ll shape every page in the studio next.",
+    title: "Create your story",
+    subtitle: "Start with a little help or bring your own words.",
     icon: BookText,
     isAnswered: (c) => c.storyText.trim().length >= 20,
     summary: (c) => {

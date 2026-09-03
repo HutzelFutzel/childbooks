@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { Plus } from "lucide-react";
 import type { StoryBeatItem } from "../../../core/story/beats";
-import { beatWordCount, defaultBeatLabel } from "../../../core/story/beats";
+import { defaultBeatLabel } from "../../../core/story/beats";
 import { spring } from "../../lib/motion";
 import { cn } from "../../lib/cn";
 import { InfoHint } from "../../components/InfoHint";
@@ -84,7 +84,6 @@ export function BeatNavigator({
           {beats.map((beat, index) => {
             const isActive = index === activeIndex;
             const label = beat.title.trim() || defaultBeatLabel(index);
-            const words = beatWordCount(beat);
 
             return (
               <button
@@ -93,7 +92,7 @@ export function BeatNavigator({
                 type="button"
                 role="tab"
                 aria-selected={isActive}
-                aria-label={`Jump to ${label} (${words} words)`}
+                aria-label={`Jump to ${label}`}
                 onClick={() => onSelectBeat(index)}
                 className={cn(
                   "group relative inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-xs transition-colors duration-150 select-none",
@@ -125,17 +124,6 @@ export function BeatNavigator({
                 <span className="relative z-10 max-w-28 truncate sm:max-w-44 text-left font-medium">
                   {label}
                 </span>
-
-                {words > 0 && (
-                  <span
-                    className={cn(
-                      "relative z-10 text-[10px] tabular-nums transition-colors",
-                      isActive ? "text-brand-100" : "text-ink-400 font-mono",
-                    )}
-                  >
-                    {words}w
-                  </span>
-                )}
               </button>
             );
           })}
