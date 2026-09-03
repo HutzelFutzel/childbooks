@@ -11,11 +11,11 @@
  * re-renders and swaps in a fresh PDF at no charge.
  */
 import { useEffect, useMemo, useState } from "react";
-import { BookOpen, Download, Loader2 } from "lucide-react";
+import { ArrowLeft, BookOpen, Check, Download, Loader2, ShieldCheck } from "lucide-react";
 import { pageTrimForConfig } from "../../core/book";
 import { renderFingerprint } from "../../core/print/fingerprint";
 import { fetchRenderAvailability, renderBook } from "../../platform/renders";
-import type { BookDesign, Project } from "../../core/types";
+import { COVER_FRONT_ID, type BookDesign, type Project } from "../../core/types";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import {
   fetchEbookQuote,
@@ -25,26 +25,26 @@ import {
 import { fetchDownloadLink } from "../../platform/downloads";
 import { useCheckoutUiStore } from "../../state/checkoutUiStore";
 import { flushProjectSaves } from "../../state/projectsStore";
-import { PlanUpsell } from "../billing/PlanUpsell";
-import { OfferPreviewNote } from "./OfferPreviewNote";
 import { Button } from "../components/Button";
-import { Modal } from "../components/Modal";
+import { BookMockup } from "../components/BookMockup";
+import { Card, CardBody, CardHeader, CardTitle } from "../components/Card";
+import type { DesignPage } from "../design/designInit";
 import { notify } from "../lib/notify";
 
 type Phase = "quote" | "ready" | "rendering" | "redirecting";
 
-export function EbookDialog({
-  open,
-  onClose,
+export function EbookCheckout({
+  onBack,
   project,
   design,
+  cover,
   initialQuote = null,
 }: {
-  open: boolean;
-  onClose: () => void;
+  onBack: () => void;
   project: Project;
   /** Only for the fingerprint now — the server renders from the saved book. */
   design: BookDesign;
+  cover?: DesignPage;
   /**
    * A quote the caller already fetched (e.g. the order screen, so its "Get the
    * ebook" card can read "Download your ebook" before this dialog ever opens).
@@ -62,9 +62,9 @@ export function EbookDialog({
   // digital edition is the same book in the same shape — worth saying, since the
   // size was chosen for a printed object.
   const trim = pageTrimForConfig(project.config);
-  const [phase, setPhase] = useState<Phase>("quote");
+  const [phase, setPhase] = useState<Phase>(initialQuote ? "ready" : "quote");
   const [status, setStatus] = useState("");
-  const [quote, setQuote] = useState<EbookQuote | null>(null);
+  const [quote, setQuote] = useState<EbookQuote | null>(initialQuote);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
   const fingerprint = useMemo(() => renderFingerprint(project, design), [project, design]);
@@ -93,7 +93,6 @@ export function EbookDialog({
   }
 
   useEffect(() => {
-    if (!open) return;
     // A seeded quote already answers the question this phase exists to
     // answer ("owned, included, or priced at X?") — skip straight to "ready"
     // instead of flashing a spinner over an answer the caller already has.
@@ -121,7 +120,7 @@ export function EbookDialog({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, project.id, baseCurrency, initialQuote]);
+  }, [project.id, baseCurrency, initialQuote]);
 
   /**
    * A book that hasn't changed since it was last rendered doesn't need to be
@@ -173,7 +172,7 @@ export function EbookDialog({
         // product, and it belongs on a screen with a button, not in a toast.
         setQuote((q) => (q ? { ...q, owned: true, ownedFingerprint: fingerprint } : q));
         setPhase("ready");
-        onClose();
+        onBack();
         openConfirmation({ kind: "ebook", projectId: project.id });
         return;
       }
@@ -187,151 +186,186 @@ export function EbookDialog({
   const busy = phase === "rendering" || phase === "redirecting";
 
   return (
-    // Closing during "rendering" is allowed — the render is the server's job
-    // now and finishes (or fails) on its own, cached either way, so walking
-    // away costs nothing and a slow render can never trap the user. Only the
-    // brief "redirecting" step (checkout request in flight) is locked.
-    <Modal
-      open={open}
-      onClose={phase === "redirecting" ? () => {} : onClose}
-      title="Your book as an ebook"
-      size="max-w-md"
-    >
-      {phase === "quote" && (
-        <div className="flex items-center justify-center gap-2 py-8 text-sm text-ink-500">
-          <Loader2 className="size-4 animate-spin" /> Checking the price…
-        </div>
-      )}
-
-      {phase !== "quote" && quote?.owned && (
-        <div className="space-y-4 py-2 text-center">
-          <p className="text-sm text-ink-600">
-            You already own the digital edition of <span className="font-semibold">{project.title}</span>.
+    <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 lg:py-8">
+      <header className="flex items-start gap-4">
+        <Button
+          variant="ghost"
+          size="sm"
+          leftIcon={<ArrowLeft className="size-4" />}
+          onClick={onBack}
+          disabled={phase === "redirecting"}
+          className="mt-0.5 shrink-0"
+        >
+          Back
+        </Button>
+        <div>
+          <h1 className="font-display text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">
+            Your digital edition
+          </h1>
+          <p className="mt-1 text-sm leading-relaxed text-ink-500">
+            Keep the finished book as a high-quality PDF you can read anywhere.
           </p>
-          <Button
-            leftIcon={<Download className="size-4" />}
-            loading={downloading}
-            onClick={() => void downloadOwned()}
-          >
-            Download your ebook
-          </Button>
-          <p className="text-xs text-ink-400">Find it anytime under Downloads in your account menu.</p>
+        </div>
+      </header>
 
-          {/* Owning the ebook used to mean being stuck with whatever PDF was
-              made at purchase time, forever — no amount of editing the design
-              afterward ever produced a new one. This re-renders and swaps in
-              the current design at no extra cost: it's the same ebook, just
-              caught up. */}
-          {mayBeStale && (
-            <div className="border-t border-ink-100 pt-4">
-              <p className="text-xs text-ink-500">
-                Changed the design since buying this? Get a fresh PDF with your latest edits — free,
-                since you already own it.
+      <div className="mt-6 grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <Card>
+          <CardBody className="grid gap-7 p-5 sm:p-7 md:grid-cols-[13rem_minmax(0,1fr)] md:items-center">
+            <div className="flex min-h-64 items-center justify-center rounded-2xl bg-ink-50 p-5">
+              <BookMockup
+                blobId={cover?.blobId}
+                pageDesign={design.pages[COVER_FRONT_ID]}
+                aspect={cover?.aspect ?? trim.widthIn / trim.heightIn}
+                width={150}
+                variant="flat"
+              />
+            </div>
+
+            <div>
+              <span className="flex size-10 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                <BookOpen className="size-5" />
+              </span>
+              <h2 className="mt-4 font-display text-2xl font-bold tracking-tight text-ink-900">
+                {quote?.owned ? "Ready whenever you are" : "The same story, made portable"}
+              </h2>
+              <p className="mt-2 text-sm leading-relaxed text-ink-600">
+                Your complete {trim.widthIn} × {trim.heightIn} in book, prepared as a crisp PDF
+                for tablets, phones and computers.
               </p>
-              {busy && (
-                <div className="mt-3 flex items-center justify-center gap-2 rounded-xl bg-ink-50 px-4 py-3 text-xs text-ink-500">
-                  <Loader2 className="size-4 animate-spin text-brand-500" /> {status}
+              <ul className="mt-5 space-y-3 text-sm text-ink-700">
+                {[
+                  "Every illustrated page in reading order",
+                  "One file to keep and read on any device",
+                  "Available again anytime from Downloads",
+                ].map((item) => (
+                  <li key={item} className="flex items-start gap-2.5">
+                    <Check className="mt-0.5 size-4 shrink-0 text-brand-600" />
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+
+              {quote?.owned && mayBeStale && (
+                <div className="mt-6 rounded-2xl border border-ink-200 bg-ink-50 px-4 py-3">
+                  <p className="text-sm font-semibold text-ink-800">Your design has changed</p>
+                  <p className="mt-1 text-xs leading-relaxed text-ink-500">
+                    Refresh the PDF with your latest edits at no extra cost.
+                  </p>
+                  <Button
+                    className="mt-3"
+                    variant="secondary"
+                    loading={busy}
+                    onClick={() => void buy()}
+                  >
+                    Update digital edition
+                  </Button>
                 </div>
               )}
-              {error && <p className="mt-2 text-xs text-rose-600">{error}</p>}
-              <Button
-                className="mt-3 w-full"
-                variant="secondary"
-                loading={busy}
-                onClick={() => void buy()}
-              >
-                {busy ? "One moment…" : "Update to your latest design"}
-              </Button>
             </div>
-          )}
-        </div>
-      )}
+          </CardBody>
+        </Card>
 
-      {phase !== "quote" && quote && !quote.owned && !quote.enabled && (
-        <p className="py-6 text-center text-sm text-ink-500">
-          Ebooks aren't available right now. Please check back later.
-        </p>
-      )}
+        <aside className="lg:sticky lg:top-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Digital edition</CardTitle>
+            </CardHeader>
+            <CardBody className="space-y-5">
+              <div>
+                <p className="truncate text-sm font-semibold text-ink-900">{project.title}</p>
+                <p className="mt-1 text-xs text-ink-500">High-quality PDF · Downloadable</p>
+              </div>
 
-      {phase !== "quote" && quote && !quote.owned && quote.enabled && (
-        <div className="space-y-4">
-          <div className="flex items-start gap-3 rounded-2xl bg-brand-50/60 p-4">
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-brand-600 text-(--color-brand-foreground)">
-              <BookOpen className="size-5" />
-            </span>
-            <div>
-              <p className="text-sm font-semibold text-ink-800">{project.title} — digital edition</p>
-              <p className="mt-0.5 text-xs text-ink-500">
-                A beautiful, high-quality PDF of your finished book — read it on any tablet, phone or
-                computer, forever. Pages are the {trim.widthIn} × {trim.heightIn} in shape you
-                designed, so it reads exactly like the printed copy.
-              </p>
-            </div>
-          </div>
+              <div className="border-y border-ink-100 py-4">
+                {phase === "quote" ? (
+                  <div className="flex items-center gap-2 text-sm text-ink-500">
+                    <Loader2 className="size-4 animate-spin" /> Checking availability…
+                  </div>
+                ) : quote ? (
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="text-sm text-ink-600">
+                      {quote.owned ? "Your copy" : "Total"}
+                    </span>
+                    <span className="text-right">
+                      {!quote.owned && quote.price < quote.listPrice && (
+                        <span className="mr-2 text-xs text-ink-400 line-through">
+                          {money(quote.listPrice, quote.currency)}
+                        </span>
+                      )}
+                      <span className="text-xl font-bold text-ink-900">
+                        {quote.owned
+                          ? "Purchased"
+                          : quote.included
+                            ? "Included"
+                            : money(quote.price, quote.currency)}
+                      </span>
+                    </span>
+                  </div>
+                ) : (
+                  <p className="text-sm text-rose-600">{error ?? "Price unavailable."}</p>
+                )}
+              </div>
 
-          <div className="flex items-baseline justify-between rounded-xl border border-ink-100 px-4 py-3">
-            <span className="text-sm text-ink-600">Price</span>
-            <span className="text-right">
-              {quote.price < quote.listPrice && (
-                <span className="mr-2 text-xs text-ink-400 line-through">
-                  {money(quote.listPrice, quote.currency)}
-                </span>
+              {quote?.included && quote.planName && (
+                <p className="text-xs leading-relaxed text-emerald-700">
+                  Included with your {quote.planName} plan.
+                </p>
               )}
-              <span className="text-lg font-bold text-ink-900">
-                {quote.included ? "Included" : money(quote.price, quote.currency)}
-              </span>
-            </span>
-          </div>
-          {quote.included && quote.planName && (
-            <p className="text-xs text-emerald-700">
-              Digital editions are included with your {quote.planName} plan.
-            </p>
-          )}
-          {!quote.included && quote.planName && (
-            <p className="text-xs text-emerald-700">Your {quote.planName} member price.</p>
-          )}
-          {quote.discountPct > 0 && (
-            <p className="text-xs text-emerald-700">
-              Includes your {quote.discountPct}% discount for owning the printed book.
-            </p>
-          )}
-          {/* Nothing to earn on a purchase that isn't happening — an "included"
-              ebook costs nothing and triggers nothing. */}
-          {!quote.included && (
-            <OfferPreviewNote itemType="ebook" amount={quote.price} projectId={project.id} />
-          )}
-          {/* One quiet line, never a step: a non-member can see what a plan would
-              cost them here without being pulled out of the purchase they came
-              for. Renders nothing for members, or if no plan is cheaper. */}
-          <PlanUpsell context="ebook" variant="inline" />
+              {quote && !quote.included && quote.planName && (
+                <p className="text-xs leading-relaxed text-emerald-700">
+                  Your {quote.planName} member price is applied.
+                </p>
+              )}
+              {quote && quote.discountPct > 0 && (
+                <p className="text-xs leading-relaxed text-emerald-700">
+                  Includes your {quote.discountPct}% printed-book owner discount.
+                </p>
+              )}
 
-          {busy && (
-            <div className="flex items-center gap-2 rounded-xl bg-ink-50 px-4 py-3 text-xs text-ink-500">
-              <Loader2 className="size-4 animate-spin text-brand-500" /> {status}
-            </div>
-          )}
-          {error && <p className="text-xs text-rose-600">{error}</p>}
+              {busy && (
+                <div className="flex items-center gap-2 rounded-xl bg-brand-50 px-3 py-2.5 text-xs text-brand-700">
+                  <Loader2 className="size-4 animate-spin" /> {status}
+                </div>
+              )}
+              {error && quote && <p className="text-xs leading-relaxed text-rose-600">{error}</p>}
 
-          <Button className="w-full" size="lg" loading={busy} onClick={() => void buy()}>
-            {busy
-              ? "One moment…"
-              : quote.included
-                ? "Get your ebook — included in your plan"
-                : `Buy the ebook · ${money(quote.price, quote.currency)}`}
-          </Button>
-          <p className="text-center text-[11px] text-ink-400">
-            {quote.included
-              ? "No payment needed — this is part of your plan."
-              : "Secure payment by Stripe. Your download unlocks right after payment."}
-          </p>
-        </div>
-      )}
+              {quote?.owned ? (
+                <Button
+                  className="w-full"
+                  size="lg"
+                  leftIcon={<Download className="size-4" />}
+                  loading={downloading}
+                  onClick={() => void downloadOwned()}
+                >
+                  Download your ebook
+                </Button>
+              ) : quote?.enabled ? (
+                <Button className="w-full" size="lg" loading={busy} onClick={() => void buy()}>
+                  {busy
+                    ? "Preparing your ebook…"
+                    : quote.included
+                      ? "Add to Downloads"
+                      : `Continue to payment · ${money(quote.price, quote.currency)}`}
+                </Button>
+              ) : (
+                <Button className="w-full" size="lg" disabled>
+                  Currently unavailable
+                </Button>
+              )}
 
-      {phase !== "quote" && !quote && error && (
-        <p className="py-6 text-center text-sm text-rose-600">{error}</p>
-      )}
-
-    </Modal>
+              <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-ink-400">
+                <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
+                {quote?.owned
+                  ? "This ebook is already in your account."
+                  : quote?.included
+                    ? "No payment is needed."
+                    : "Stripe securely handles payment. Your download unlocks right after purchase."}
+              </p>
+            </CardBody>
+          </Card>
+        </aside>
+      </div>
+    </div>
   );
 }
 

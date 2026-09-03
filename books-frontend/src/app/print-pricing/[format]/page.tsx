@@ -197,8 +197,8 @@ export default async function FormatPricingPage({
                 Price by page count
               </h2>
               <p className="mb-5 mt-1 max-w-2xl text-sm leading-relaxed text-ink-600">
-                One copy at the standard specification, in {currency}. Printing is charged in page
-                brackets, so adding pages within a bracket does not change the price.
+                One copy in {currency}. Printing is charged in page brackets, so adding pages
+                within a bracket does not change the price.
               </p>
               <PriceTable
                 products={[product]}

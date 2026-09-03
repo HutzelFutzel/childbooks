@@ -60,6 +60,8 @@ import {
 import {
   costVariantKey,
   enumerateVariants,
+  offeredValues,
+  simplifiedPrintVariant,
   variantKey,
   variantPriceDelta,
 } from "../books-frontend/src/core/config/variants";
@@ -1058,6 +1060,23 @@ for (const target of [25, 45]) {
       { id: "dream-weaver", printDiscountPct: 20 },
     ],
   });
+
+  const simplifiedVariantMismatches = offeredValues(publicProduct.variants, "finish").flatMap(
+    (finish) => {
+      const variant = simplifiedPrintVariant(publicProduct.variants, finish);
+      return !variant ||
+        variant.print !== "premium-colour" ||
+        variant.paper !== "80-coated-white" ||
+        variant.finish !== finish
+        ? [finish]
+        : [];
+    },
+  );
+  check(
+    "the simplified storefront always uses premium colour on 80# paper",
+    simplifiedVariantMismatches.length === 0,
+    simplifiedVariantMismatches[0],
+  );
 
   const priceMismatches: string[] = [];
   for (const cur of settings.currencies) {

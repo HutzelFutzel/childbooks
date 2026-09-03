@@ -121,13 +121,12 @@ export default async function PrintPricingPage({
             </summary>
             <div className="pb-6">
               <p className="mb-5 max-w-2xl text-sm leading-relaxed text-ink-600">
-                Prices below are for one copy at the standard specification, in {currency}.
-                Printing is charged in page brackets, so adding pages within a bracket does not
-                change the price.
+                Prices below are for one copy in {currency}. Printing is charged in page brackets,
+                so adding pages within a bracket does not change the price.
               </p>
               <PriceTable products={products} settings={settings} currency={currency} />
               <p className="mt-5 text-sm leading-relaxed text-ink-500">
-                The final total depends on format, page count, print options, number of copies,
+                The final total depends on binding, page count, cover finish, number of copies,
                 destination, and delivery speed.
               </p>
             </div>

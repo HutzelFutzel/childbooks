@@ -28,6 +28,7 @@ export function VariantPicker({
   currency = "USD",
   pages = 0,
   media: mediaOverride,
+  visibleAxes = VARIANT_AXES,
   className,
 }: {
   policy: ProductVariantPolicy;
@@ -47,13 +48,15 @@ export function VariantPicker({
    * subscriptions to show a handful of thumbnails.
    */
   media?: CatalogMediaConfig;
+  /** Product attributes this surface intentionally lets a customer choose. */
+  visibleAxes?: readonly VariantAxisId[];
   className?: string;
 }) {
   const storeMedia = useAppConfigStore((s) => s.catalogMedia);
   const media = mediaOverride ?? storeMedia;
 
   // Hide axes with only one offered value — there's nothing to choose.
-  const axes = VARIANT_AXES.filter((axis) => offeredValues(policy, axis).length > 1);
+  const axes = visibleAxes.filter((axis) => offeredValues(policy, axis).length > 1);
   if (axes.length === 0) return null;
 
   const pick = (axis: VariantAxisId, nextValue: string) => {

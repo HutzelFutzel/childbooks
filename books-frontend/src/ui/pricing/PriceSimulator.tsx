@@ -15,13 +15,13 @@ import {
   simulatePublicOrder,
 } from "../../core/config/productMath";
 import {
-  firstAllowedVariant,
   normalizeVariantPolicy,
+  simplifiedPrintVariant,
   type VariantSelection,
 } from "../../core/config/variants";
 import { countryLabel } from "../../core/analytics/markets";
 import { bindingNoun } from "../../core/fulfillment";
-import type { ShippingMethod } from "../../core/fulfillment/types";
+import type { Binding, ShippingMethod } from "../../core/fulfillment/types";
 import { VariantPicker } from "../checkout/VariantPicker";
 import { Field } from "../components/Input";
 import { Select } from "../components/Select";
@@ -173,8 +173,8 @@ export function PriceSimulator({
 
   useEffect(() => {
     setVariant((current) => {
-      const preferred = current ?? product?.defaultVariant;
-      return firstAllowedVariant(variantPolicy, preferred) ?? null;
+      const finish = current?.finish ?? product?.defaultVariant?.finish;
+      return simplifiedPrintVariant(variantPolicy, finish) ?? null;
     });
   }, [variantPolicy, product]);
 
@@ -234,10 +234,54 @@ export function PriceSimulator({
     value: m,
     label: product.shipping.methods.find((x) => x.method === m)?.label || SHIPPING_LABEL[m] || m,
   }));
-  const formatOptions = products.map((p) => ({
-    value: p.sku,
-    label: `${bindingNoun(p.spec.binding)}, ${trimLabel(p.spec.pageTrim)}`,
-  }));
+
+  const trimOptions = useMemo(() => {
+    const seen = new Set<string>();
+    const list: { key: string; label: string }[] = [];
+    for (const p of products) {
+      const key = trimKey(p.spec.pageTrim);
+      if (!seen.has(key)) {
+        seen.add(key);
+        const shape = p.spec.orientation ? `${capitalize(p.spec.orientation)} · ` : "";
+        list.push({
+          key,
+          label: `${shape}${trimLabel(p.spec.pageTrim)}`,
+        });
+      }
+    }
+    return list;
+  }, [products]);
+
+  const currentTrimKey = product ? trimKey(product.spec.pageTrim) : (trimOptions[0]?.key ?? "");
+
+  const availableBindingsForTrim = useMemo(() => {
+    if (!currentTrimKey) return [];
+    return products.filter((p) => trimKey(p.spec.pageTrim) === currentTrimKey);
+  }, [products, currentTrimKey]);
+
+  const bindingOptions = useMemo(() => {
+    return availableBindingsForTrim.map((p) => ({
+      value: p.spec.binding,
+      label: capitalize(bindingNoun(p.spec.binding)),
+    }));
+  }, [availableBindingsForTrim]);
+
+  const handleTrimChange = (nextTrimKey: string) => {
+    const matchingTrimProducts = products.filter((p) => trimKey(p.spec.pageTrim) === nextTrimKey);
+    if (matchingTrimProducts.length === 0) return;
+    const currentBinding = product?.spec.binding;
+    const sameBindingProduct = matchingTrimProducts.find((p) => p.spec.binding === currentBinding);
+    const targetProduct = sameBindingProduct ?? matchingTrimProducts[0];
+    setSku(targetProduct.sku);
+  };
+
+  const handleBindingChange = (nextBinding: string) => {
+    const targetProduct = availableBindingsForTrim.find((p) => p.spec.binding === nextBinding);
+    if (targetProduct) {
+      setSku(targetProduct.sku);
+    }
+  };
+
   const availableCopies = copyOptions(maxCopies);
   const copyIndex = Math.max(0, availableCopies.indexOf(copies));
   const changeCopies = (direction: -1 | 1) => {
@@ -255,9 +299,23 @@ export function PriceSimulator({
       <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(18rem,0.8fr)]">
         <div className="space-y-6 p-6 sm:p-8">
           {!lockedFormat && products.length > 1 && (
-            <Field label="Format">
-              <Select options={formatOptions} value={product.sku} onChange={(e) => setSku(e.target.value)} />
-            </Field>
+            <div className="grid gap-5 sm:grid-cols-2">
+              <Field label="Size">
+                <Select
+                  options={trimOptions.map((t) => ({ value: t.key, label: t.label }))}
+                  value={currentTrimKey}
+                  onChange={(e) => handleTrimChange(e.target.value)}
+                />
+              </Field>
+              <Field label="Binding">
+                <Select
+                  options={bindingOptions}
+                  value={product.spec.binding}
+                  onChange={(e) => handleBindingChange(e.target.value)}
+                  disabled={bindingOptions.length <= 1}
+                />
+              </Field>
+            </div>
           )}
 
           <fieldset className="space-y-2">
@@ -314,6 +372,20 @@ export function PriceSimulator({
             </Field>
           </div>
 
+          {variant && (
+            <VariantPicker
+              policy={variantPolicy}
+              value={variant}
+              onChange={(next) =>
+                setVariant(simplifiedPrintVariant(variantPolicy, next.finish) ?? variant)
+              }
+              currency={currency}
+              pages={pages}
+              media={media}
+              visibleAxes={["finish"]}
+            />
+          )}
+
           <details className="border-t border-ink-100 pt-5">
             <summary className="cursor-pointer text-sm font-medium text-ink-600 hover:text-ink-900">
               Advanced options
@@ -336,16 +408,6 @@ export function PriceSimulator({
                   />
                 </Field>
               </div>
-              {variant && (
-                <VariantPicker
-                  policy={variantPolicy}
-                  value={variant}
-                  onChange={setVariant}
-                  currency={currency}
-                  pages={pages}
-                  media={media}
-                />
-              )}
             </div>
           </details>
         </div>
@@ -473,4 +535,12 @@ function Row({
       <span className="shrink-0 tabular-nums text-ink-700">{value}</span>
     </div>
   );
+}
+
+function trimKey(trim: { width: number; height: number; unit?: string }): string {
+  return `${trim.width}x${trim.height}${trim.unit ?? "in"}`;
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }

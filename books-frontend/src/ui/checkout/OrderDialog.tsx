@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2, Package, ShieldCheck, TriangleAlert, Truck } from "lucide-react";
+import { ArrowLeft, Loader2, Package, ShieldCheck, TriangleAlert, Truck } from "lucide-react";
 import { bookProductForConfig } from "../../core/book";
 import { findPublicPlanByPriceId } from "../../core/config/plans";
 import {
@@ -20,9 +20,9 @@ import { subdivisionsFor } from "../../core/config/subdivisions";
 import { countryFlag, countryLabel } from "../../core/analytics/markets";
 import {
   createDefaultVariantPolicy,
-  firstAllowedVariant,
   normalizeVariantPolicy,
-  variantAllowed,
+  simplifiedPrintVariant,
+  variantOptionLabel,
   type VariantSelection,
 } from "../../core/config/variants";
 import { buildOrderDraft } from "../../core/fulfillment/draft";
@@ -56,16 +56,14 @@ import { useAppConfigStore } from "../../state/appConfigStore";
 import { useSubscriptionStore } from "../../state/subscriptionStore";
 import { useFormatsForConfigSize } from "../hooks/useOfferableFormats";
 import { useShipCountry } from "../hooks/useShipCountry";
-import { PlanUpsell } from "../billing/PlanUpsell";
 import { Button } from "../components/Button";
+import { Card, CardBody, CardHeader, CardTitle } from "../components/Card";
 import { Field, Input } from "../components/Input";
-import { Modal } from "../components/Modal";
 import { Select } from "../components/Select";
 import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
 import type { DesignPage } from "../design/designInit";
 import { buildCoverPlan } from "../design/printTargets";
-import { OfferPreviewNote } from "./OfferPreviewNote";
 import { FormatPicker } from "./FormatPicker";
 import { VariantPicker } from "./VariantPicker";
 import {
@@ -106,15 +104,13 @@ const DEV_PREFILL = isDev()
     }
   : null;
 
-export function OrderDialog({
-  open,
-  onClose,
+export function OrderCheckout({
+  onBack,
   project,
   pages,
   design,
 }: {
-  open: boolean;
-  onClose: () => void;
+  onBack: () => void;
   project: Project;
   pages: DesignPage[];
   design: BookDesign;
@@ -177,23 +173,17 @@ export function OrderDialog({
   );
   const defaultVariant = useMemo(
     () =>
-      firstAllowedVariant(
+      simplifiedPrintVariant(
         variantPolicy,
-        catalogProduct?.defaultVariant ?? variantFromSku(product.sku) ?? BASE_VARIANT,
+        (catalogProduct?.defaultVariant ?? variantFromSku(product.sku) ?? BASE_VARIANT).finish,
       ) ?? BASE_VARIANT,
     [variantPolicy, catalogProduct, product.sku],
   );
   const [variant, setVariant] = useState<VariantSelection>(defaultVariant);
-  // Changing the binding changes which print/paper/finish options exist (saddle
-  // stitch has no standard-colour package, for one). Keep what the customer
-  // already chose wherever the new format still sells it, and only fall back to
-  // the default for the parts it doesn't.
+  // Changing the binding can change which finishes exist. Preserve the visible
+  // finish choice while re-applying the fixed picture-book interior spec.
   useEffect(() => {
-    setVariant((prev) =>
-      variantAllowed(variantPolicy, prev)
-        ? prev
-        : firstAllowedVariant(variantPolicy, prev) ?? defaultVariant,
-    );
+    setVariant((prev) => simplifiedPrintVariant(variantPolicy, prev.finish) ?? defaultVariant);
   }, [variantPolicy, defaultVariant]);
 
   const printSku = useMemo(
@@ -450,8 +440,8 @@ export function OrderDialog({
   );
 
   useEffect(() => {
-    if (open) setContactEmail((e) => e || email);
-  }, [open, email]);
+    setContactEmail((e) => e || email);
+  }, [email]);
 
   // Fill an empty country once, from the geo hint if we have one and otherwise
   // from the only market on offer.
@@ -462,10 +452,10 @@ export function OrderDialog({
   // guess is only safe because it is the EMPTY case — a saved address or
   // anything the customer typed is left alone.
   useEffect(() => {
-    if (!open || country) return;
+    if (country) return;
     const seed = geoCountry || (countryOptions.length === 1 ? countryOptions[0].value : "");
     if (seed) setCountry(seed);
-  }, [open, country, geoCountry, countryOptions]);
+  }, [country, geoCountry, countryOptions]);
 
   // Keep the selection inside what this destination offers. Runs on every
   // country change, not just on open: the previous speed may not exist there,
@@ -486,11 +476,11 @@ export function OrderDialog({
   // Deliberately not run while the list is empty: that's the catalog still
   // loading, not a destination that refuses everything.
   useEffect(() => {
-    if (!open || formats.length === 0) return;
+    if (formats.length === 0) return;
     if (!formats.some((f) => f.sku === project.config.productSku)) {
       void updateConfig({ productSku: formats[0].sku });
     }
-  }, [open, formats, project.config.productSku, updateConfig]);
+  }, [formats, project.config.productSku, updateConfig]);
 
   // Editing any address field detaches from the picked saved address, so saving
   // creates a new entry instead of silently overwriting the selected one.
@@ -515,14 +505,8 @@ export function OrderDialog({
     setCountry(a.country || "");
   };
 
-  // Prefill from the preferred saved address when the dialog opens (once).
+  // Prefill from the preferred saved address once.
   useEffect(() => {
-    if (!open) {
-      prefilledRef.current = false;
-      setAddressChoice("unreviewed");
-      setReviewedSuggestion("");
-      return;
-    }
     if (prefilledRef.current || DEV_PREFILL) return;
     const preferred = preferredAddress();
     if (preferred) {
@@ -530,15 +514,14 @@ export function OrderDialog({
       applyAddress(preferred);
     }
     // Depend on the address count so prefill still fires if the saved addresses
-    // finish loading AFTER the dialog opened. The ref guards against re-running
+    // finish loading after checkout mounted. The ref guards against re-running
     // on every keystroke. applyAddress/preferredAddress are intentionally omitted.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, savedAddresses.length]);
+  }, [savedAddresses.length]);
 
   // Live shipping/price quote (no print files needed) whenever the inputs change.
   // Held until there's enough of a destination address for the provider to price.
   useEffect(() => {
-    if (!open) return;
     const seq = ++quoteSeq.current;
     if (!canQuote) {
       setQuoting(false);
@@ -591,7 +574,6 @@ export function OrderDialog({
     }, 500);
     return () => clearTimeout(t);
   }, [
-    open,
     product.sku,
     variant,
     copies,
@@ -686,6 +668,32 @@ export function OrderDialog({
     !requirementError &&
     !addressNeedsReview;
 
+  const checkoutBlockReason = !accessGate.ok
+    ? "This binding requires an eligible membership."
+    : requirementError
+      ? requirementError
+      : !marketsLoaded
+        ? "Loading available destinations…"
+        : unserviced
+          ? `Choose a destination we currently ship to.`
+          : regionUnrecognised
+            ? "Choose a recognised state or province."
+            : !addressComplete
+              ? "Complete the required delivery address fields."
+              : shippingChoices.length === 0
+                ? "Choose a destination with an available delivery method."
+                : addressUnverifiable
+                  ? "Correct the delivery address before continuing."
+                  : addressNeedsReview
+                    ? "Review the carrier's address suggestion."
+                    : quoting
+                      ? "Updating the delivery total…"
+                      : quoteError
+                        ? quoteError
+                        : !quote
+                          ? "Add the city and postal code to calculate the total."
+                          : null;
+
   async function beginRender() {
     if (requirementError) {
       notify.error(requirementError);
@@ -704,7 +712,7 @@ export function OrderDialog({
       return;
     }
     if (!canOrder) {
-      notify.error("Add a recipient name, phone number and full shipping address.");
+      notify.error(checkoutBlockReason ?? "Review the order details before continuing.");
       return;
     }
     try {
@@ -810,42 +818,67 @@ export function OrderDialog({
   }
 
   const busy = phase === "rendering" || phase === "submitting";
+  const checkoutCtaLabel =
+    phase === "rendering"
+      ? "Preparing your book…"
+      : phase === "submitting"
+        ? "Opening secure payment…"
+        : addressUnverifiable
+          ? "Check your address"
+          : addressNeedsReview
+            ? "Confirm your address"
+            : "Continue to secure payment";
 
   return (
-    // Closing during "rendering" is allowed — it unmounts the asset runner and
-    // safely abandons the render (nothing uploaded/charged yet), so a hung
-    // render can't trap the user. Only "submitting" (checkout request already
-    // in flight) is locked.
-    <Modal
-      open={open}
-      onClose={phase === "submitting" ? () => {} : onClose}
-      title="Order a printed book"
-      size="max-w-xl"
-      footer={
-        <div className="flex w-full items-center justify-end gap-2">
-          <Button variant="ghost" onClick={onClose} disabled={phase === "submitting"}>
-            Cancel
-          </Button>
+    <div className="mx-auto w-full max-w-6xl px-4 pb-28 pt-6 sm:px-6 lg:py-8">
+      <header className="flex items-start gap-4">
+        <Button
+          variant="ghost"
+          size="sm"
+          leftIcon={<ArrowLeft className="size-4" />}
+          onClick={onBack}
+          disabled={phase === "submitting"}
+          className="mt-0.5 shrink-0"
+        >
+          Back
+        </Button>
+        <div className="min-w-0">
+          <h1 className="font-display text-2xl font-bold tracking-tight text-ink-900 sm:text-3xl">
+            Order your printed book
+          </h1>
+          <p className="mt-1 text-sm leading-relaxed text-ink-500">
+            Choose how it is bound, add a delivery address, then review the total before payment.
+          </p>
+        </div>
+      </header>
+
+      <div className="fixed inset-x-4 bottom-4 z-30 rounded-2xl border border-ink-200 bg-white/95 p-2.5 shadow-lifted backdrop-blur lg:hidden">
+        <div className="flex items-center gap-3">
+          <div className="min-w-0 flex-1 pl-1">
+            <p className="text-[11px] font-medium text-ink-500">Estimated total</p>
+            <p className="truncate text-sm font-bold text-ink-900">
+              {quote ? money(String(quote.total), quote.currency) : checkoutBlockReason}
+            </p>
+          </div>
           <Button
             onClick={() => void beginRender()}
             loading={busy}
             disabled={busy || !canOrder || !accessGate.ok}
           >
-            {phase === "rendering"
-              ? "Preparing files…"
-              : phase === "submitting"
-                ? "Redirecting…"
-                : addressUnverifiable
-                  ? "Check your address"
-                  : addressNeedsReview
-                    ? "Confirm your address"
-                    : "Continue to payment"}
+            {checkoutCtaLabel}
           </Button>
         </div>
-      }
-    >
-      {
-        <div className="space-y-5">
+      </div>
+
+      <div className="mt-6 grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <Card>
+          <CardBody className="space-y-5 p-5 sm:p-6">
+          <div>
+            <h2 className="font-display text-lg font-semibold text-ink-900">Book options</h2>
+            <p className="mt-1 text-xs leading-relaxed text-ink-500">
+              Choose the binding and cover finish for this copy.
+            </p>
+          </div>
           {/* Product */}
           <div className="flex items-start gap-3 rounded-xl border border-ink-100 bg-ink-50 px-3.5 py-3">
             <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
@@ -922,10 +955,20 @@ export function OrderDialog({
           <VariantPicker
             policy={variantPolicy}
             value={variant}
-            onChange={setVariant}
+            onChange={(next) =>
+              setVariant(simplifiedPrintVariant(variantPolicy, next.finish) ?? defaultVariant)
+            }
             currency={currency}
             pages={pageCount}
+            visibleAxes={["finish"]}
           />
+
+          <div className="border-t border-ink-100 pt-5">
+            <h2 className="font-display text-lg font-semibold text-ink-900">Delivery address</h2>
+            <p className="mt-1 text-xs leading-relaxed text-ink-500">
+              Used by the printer and carrier to deliver your book.
+            </p>
+          </div>
 
           {/* Saved address picker — lets returning customers reuse an address. */}
           {addressesLoading && savedAddresses.length === 0 ? (
@@ -951,8 +994,8 @@ export function OrderDialog({
 
           {/* Recipient — wrapped in a form with autocomplete tokens so the
               browser can offer to autofill the whole shipping block at once. */}
-          <form className="grid grid-cols-2 gap-3" onSubmit={(e) => e.preventDefault()}>
-            <Field label="Recipient name" required className="col-span-2">
+          <form className="grid grid-cols-1 gap-3 sm:grid-cols-2" onSubmit={(e) => e.preventDefault()}>
+            <Field label="Recipient name" required className="sm:col-span-2">
               <Input
                 value={name}
                 onChange={(e) => editAddr(setName, e.target.value)}
@@ -978,7 +1021,7 @@ export function OrderDialog({
                 autoComplete="shipping tel"
               />
             </Field>
-            <Field label="Address" required className="col-span-2">
+            <Field label="Address" required className="sm:col-span-2">
               <Input
                 value={line1}
                 onChange={(e) => editAddr(setLine1, e.target.value)}
@@ -986,7 +1029,7 @@ export function OrderDialog({
                 autoComplete="shipping address-line1"
               />
             </Field>
-            <Field label="Address line 2" className="col-span-2">
+            <Field label="Address line 2" className="sm:col-span-2">
               <Input
                 value={line2}
                 onChange={(e) => editAddr(setLine2, e.target.value)}
@@ -1043,7 +1086,7 @@ export function OrderDialog({
             <Field
               label="Country"
               required
-              className={unserviced ? "col-span-2" : undefined}
+              className={unserviced ? "sm:col-span-2" : undefined}
               error={
                 unserviced
                   ? `We're sorry — we don't currently ship to ${countryLabel(country)}. Choose another destination to continue.`
@@ -1072,7 +1115,7 @@ export function OrderDialog({
               <Field
                 label={`Recipient ${taxIdLabel}`}
                 required
-                className="col-span-2"
+                className="sm:col-span-2"
                 hint="Customs in this country requires the recipient's tax number before a parcel can clear."
               >
                 <Input value={taxId} onChange={(e) => editAddr(setTaxId, e.target.value)} />
@@ -1103,6 +1146,13 @@ export function OrderDialog({
             />
             Save this address for next time
           </label>
+
+          <div className="border-t border-ink-100 pt-5">
+            <h2 className="font-display text-lg font-semibold text-ink-900">Delivery</h2>
+            <p className="mt-1 text-xs leading-relaxed text-ink-500">
+              Choose how many copies you need and how quickly they should arrive.
+            </p>
+          </div>
 
           <Field label="Copies" required className="max-w-40">
             <Input
@@ -1170,59 +1220,89 @@ export function OrderDialog({
             )}
           </Field>
 
-          {/* Quote */}
-          <div className="rounded-xl border border-ink-100 px-3.5 py-3 text-sm">
-            <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-ink-400">
-              <Truck className="size-3.5" /> Estimated cost
-            </div>
-            {quoting ? (
-              <div className="flex items-center gap-2 text-ink-500">
-                <Loader2 className="size-4 animate-spin" /> Getting a live quote…
+          </CardBody>
+        </Card>
+
+        <aside className="lg:sticky lg:top-4">
+          <Card>
+            <CardHeader>
+              <CardTitle>Order summary</CardTitle>
+            </CardHeader>
+            <CardBody className="space-y-5">
+              <div className="flex items-start gap-3">
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                  <Package className="size-4.5" />
+                </span>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-ink-900">
+                    {project.title || "Your storybook"}
+                  </p>
+                  <p className="mt-0.5 text-xs leading-relaxed text-ink-500">
+                    {product.trim.widthIn}×{product.trim.heightIn}″ · {pageCount} pages
+                  </p>
+                  <p className="text-xs capitalize text-ink-500">
+                    {bindingNoun(product.binding)} · {variantOptionLabel("finish", variant.finish)} cover
+                  </p>
+                  <p className="text-xs text-ink-500">
+                    {copies} {copies === 1 ? "copy" : "copies"}
+                  </p>
+                </div>
               </div>
-            ) : quote ? (
-              <>
-                <QuoteLines quote={quote} />
-                {/* What this order earns them, before they commit to it. */}
-                <OfferPreviewNote
-                  itemType="print"
-                  amount={quote.total}
-                  productId={catalogProduct?.id}
-                  projectId={project.id}
-                  className="mt-2"
-                />
-                {/* Only when the customer isn't already getting a member price —
-                    otherwise this would advertise a discount they have. */}
-                {quote.discountPct === 0 && (
-                  <PlanUpsell context="print" variant="inline" className="mt-2" />
+
+              <div className="border-t border-ink-100 pt-4 text-sm">
+                <div className="mb-2 flex items-center gap-1.5 text-xs font-medium text-ink-500">
+                  <Truck className="size-3.5" /> Estimated total
+                </div>
+                {quoting ? (
+                  <div className="flex items-center gap-2 text-ink-500">
+                    <Loader2 className="size-4 animate-spin" /> Updating price…
+                  </div>
+                ) : quote ? (
+                  <QuoteLines quote={quote} />
+                ) : quoteError ? (
+                  <p className="leading-relaxed text-rose-600">{quoteError}</p>
+                ) : (
+                  <p className="leading-relaxed text-ink-500">
+                    Complete the delivery address to see the total.
+                  </p>
                 )}
-              </>
-            ) : quoteError ? (
-              <p className="text-rose-500">{quoteError}</p>
-            ) : (
-              <p className="text-ink-500">
-                Enter a city, state and postal code to see pricing.
+              </div>
+
+              {busy && (
+                <div className="flex items-center gap-2 rounded-xl bg-brand-50 px-3 py-2.5 text-sm text-brand-700">
+                  <Loader2 className="size-4 animate-spin" />
+                  <span className="truncate" title={status}>
+                    {status}
+                  </span>
+                </div>
+              )}
+
+              <Button
+                size="lg"
+                className="w-full"
+                onClick={() => void beginRender()}
+                loading={busy}
+                disabled={busy || !canOrder || !accessGate.ok}
+              >
+                {checkoutCtaLabel}
+              </Button>
+
+              {!busy && checkoutBlockReason && (
+                <p className="-mt-2 text-center text-xs leading-relaxed text-ink-500">
+                  {checkoutBlockReason}
+                </p>
+              )}
+
+              <p className="flex items-start gap-1.5 text-[11px] leading-relaxed text-ink-400">
+                <ShieldCheck className="mt-0.5 size-3.5 shrink-0" />
+                Stripe securely handles payment and shows tax before you pay. Your book goes to
+                print only after payment succeeds.
               </p>
-            )}
-          </div>
-
-          {busy && (
-            <div className="flex items-center gap-2 rounded-xl border border-brand-100 bg-brand-50 px-3 py-2.5 text-sm text-brand-700">
-              <Loader2 className="size-4 animate-spin" />
-              <span className="truncate" title={status}>
-                {status}
-              </span>
-            </div>
-          )}
-
-          <p className="flex items-center gap-1.5 text-[11px] leading-relaxed text-ink-400">
-            <ShieldCheck className="size-3.5 shrink-0" />
-            Payment is processed securely by Stripe. You'll review the final total — including any
-            tax — before paying. Your order is sent to print only after payment succeeds.
-          </p>
-        </div>
-      }
-
-    </Modal>
+            </CardBody>
+          </Card>
+        </aside>
+      </div>
+    </div>
   );
 }
 

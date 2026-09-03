@@ -57,8 +57,8 @@ export function pricingFaq(
       question: "How much does it cost to print a children's book?",
       answer:
         Number.isFinite(cheapest)
-          ? `Printing starts at ${formatMoney(cheapest, currency)} per copy for a single book, plus shipping. The exact price depends on the format, how many pages the book has, how the pages are printed and how many copies you order — the calculator on this page shows the real figure for any combination.`
-          : "The price depends on the format, the page count, the print specification and the number of copies. The calculator on this page shows the real figure for any combination.",
+          ? `Printing starts at ${formatMoney(cheapest, currency)} per copy for a single book, plus shipping. The exact price depends on the binding, page count, cover finish and how many copies you order — the calculator on this page shows the real figure for any combination.`
+          : "The price depends on the binding, page count, cover finish and number of copies. The calculator on this page shows the real figure for any combination.",
     },
     {
       question: "Why does the price stay the same when I add a few pages?",

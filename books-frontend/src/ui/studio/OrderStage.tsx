@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence } from "framer-motion";
 import {
+  ArrowRight,
+  CheckCircle2,
   Download,
   Eye,
   Loader2,
@@ -9,7 +11,7 @@ import {
   TriangleAlert,
 } from "lucide-react";
 import { bookProductForConfig } from "../../core/book";
-import { ebookPlanPrice, findPublicProductForSku, formatSlug } from "../../core/config/products";
+import { ebookPlanPrice, findPublicProductForSku } from "../../core/config/products";
 import { findPublicPlanByPriceId } from "../../core/config/plans";
 import { renderFingerprint } from "../../core/print/fingerprint";
 import { fetchEbookQuote, type EbookQuote } from "../../platform/payments";
@@ -22,11 +24,12 @@ import { notify } from "../lib/notify";
 import { illustrationUnits } from "../../state/bookUnits";
 import { Button } from "../components/Button";
 import { BookMockup } from "../components/BookMockup";
+import { Callout } from "../components/Callout";
+import { Card, CardBody } from "../components/Card";
 import { Celebrate } from "../components/Celebrate";
-import { StageHeader } from "../components/StageHeader";
 import { fmtMoney } from "../admin/tabs/products/parts";
-import { OrderDialog } from "../checkout/OrderDialog";
-import { EbookDialog } from "../checkout/EbookDialog";
+import { OrderCheckout } from "../checkout/OrderDialog";
+import { EbookCheckout } from "../checkout/EbookDialog";
 import { useFormatsForConfigSize } from "../hooks/useOfferableFormats";
 import { useStudio } from "./StudioContext";
 import { buildDisplaySpreads, type Entry } from "./SpreadEditor";
@@ -216,37 +219,11 @@ export function OrderStage() {
   }, [ebookSettings, baseCurrency, currentPlan]);
 
   // Whether the owned ebook might be behind the current design (same check
-  // `EbookDialog` makes) — shown as a note on the card so an owner already
+  // `EbookCheckout` makes) — shown as a note on the card so an owner already
   // knows a free refresh is waiting, instead of finding out only after
   // opening the dialog.
   const fingerprint = useMemo(() => renderFingerprint(project, design), [project, design]);
   const ebookStale = ebookOwned && ebookQuote?.ownedFingerprint !== fingerprint;
-
-  // The format to send someone to on the public price calculator: the one this
-  // project is actually configured for, when the admin still sells it, else
-  // whichever printable binding is — always an OFFERABLE entry (never the raw
-  // catalog lookup), so the link can't land on a page that 404s because the
-  // format it names has been withdrawn since. `offerable` already only holds
-  // offerable, active entries (see `useOfferableFormats`).
-  const priceLinkProduct = useMemo(
-    () =>
-      offerable.get(bookProduct.sku) ??
-      printable.map((f) => offerable.get(f.sku)).find((p) => p != null) ??
-      null,
-    [offerable, bookProduct.sku, printable],
-  );
-
-  // Carries the buyer's own plan along only when it actually discounts THIS
-  // format — a plan id the calculator can't apply would just fail to highlight
-  // any "Price as" row, which is silent enough to be worth avoiding rather than
-  // silent enough to ignore.
-  const priceLinkHref = useMemo(() => {
-    if (!priceLinkProduct) return null;
-    const path = `/print-pricing/${formatSlug(priceLinkProduct.spec)}`;
-    if (!currentPlan) return path;
-    const discounted = (priceLinkProduct.planPrintDiscountPct[currentPlan.id] ?? 0) > 0;
-    return discounted ? `${path}?plan=${encodeURIComponent(currentPlan.id)}` : path;
-  }, [priceLinkProduct, currentPlan]);
 
   const cover = pages.find((p) => p.id === COVER_FRONT_ID) ?? pages[0];
 
@@ -276,6 +253,29 @@ export function OrderStage() {
     return buildDisplaySpreads(doc, entries);
   }, [project.screenplay, pages]);
 
+  if (ordering) {
+    return (
+      <OrderCheckout
+        onBack={() => setOrdering(false)}
+        project={project}
+        pages={pages}
+        design={design}
+      />
+    );
+  }
+
+  if (buyingEbook) {
+    return (
+      <EbookCheckout
+        onBack={() => setBuyingEbook(false)}
+        project={project}
+        design={design}
+        cover={cover}
+        initialQuote={ebookQuote}
+      />
+    );
+  }
+
   // Name the one extra step up front, so the account ask at the buy button
   // never feels like a surprise wall.
   const purchaseNote =
@@ -286,96 +286,123 @@ export function OrderStage() {
         : undefined;
 
   return (
-    <div className="mx-auto w-full max-w-3xl px-5 py-8">
-      <StageHeader
-        title="Preview & order"
-        subtitle="Review your book, then choose a printed copy or digital edition."
-      />
+    <div className="mx-auto w-full max-w-5xl px-4 py-7 sm:px-6 sm:py-9">
+      <header className="max-w-2xl">
+        <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-brand-700">
+          <CheckCircle2 className="size-4" /> Book ready
+        </p>
+        <h1 className="mt-3 font-display text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl">
+          Review your book
+        </h1>
+        <p className="mt-2 text-sm leading-relaxed text-ink-600 sm:text-base">
+          Take one final look, then choose the edition you want.
+        </p>
+      </header>
 
-      <div className="relative flex flex-col items-center gap-6 rounded-2xl border border-ink-200 bg-white p-6 sm:flex-row sm:items-center">
+      <Card className="relative mt-7 overflow-hidden">
         <Celebrate play={celebrate} />
-        <BookMockup
-          blobId={cover?.blobId}
-          pageDesign={project.design?.pages[COVER_FRONT_ID]}
-          aspect={cover?.aspect ?? 1}
-          className="shrink-0 py-2"
-        />
-        <div className="flex min-w-0 flex-1 flex-col justify-center gap-3 text-center sm:text-left">
-          <div>
-            <h2 className="truncate text-lg font-bold text-ink-900">{project.title}</h2>
-            <p className="text-sm text-ink-500">
-              {pageCount} page{pageCount === 1 ? "" : "s"} · {sizeLabel}
-            </p>
+        <CardBody className="grid gap-0 p-0 md:grid-cols-[17rem_minmax(0,1fr)]">
+          <div className="flex min-h-72 items-center justify-center bg-ink-50 p-8">
+            <BookMockup
+              blobId={cover?.blobId}
+              pageDesign={project.design?.pages[COVER_FRONT_ID]}
+              aspect={cover?.aspect ?? 1}
+              width={180}
+              variant="flat"
+            />
           </div>
-          <Button
-            variant="secondary"
-            className="self-center sm:self-start"
-            leftIcon={<Eye className="size-4" />}
-            onClick={() => setPreviewing(true)}
-            disabled={displays.length === 0}
-          >
-            Preview the book
-          </Button>
-        </div>
-      </div>
+          <div className="flex min-w-0 flex-col justify-center p-6 sm:p-8">
+            <h2 className="truncate font-display text-2xl font-bold tracking-tight text-ink-900">
+              {project.title}
+            </h2>
+            <div className="mt-3 flex flex-wrap gap-x-5 gap-y-2 text-sm text-ink-500">
+              <span>{pageCount} {pageCount === 1 ? "page" : "pages"}</span>
+              <span>{sizeLabel}</span>
+            </div>
+            <p className="mt-5 max-w-xl text-sm leading-relaxed text-ink-600">
+              Flip through the finished pages and check the cover, text and illustrations before
+              ordering or downloading.
+            </p>
+            <Button
+              variant="secondary"
+              className="mt-5 self-start"
+              leftIcon={<Eye className="size-4" />}
+              onClick={() => setPreviewing(true)}
+              disabled={displays.length === 0}
+            >
+              Preview every page
+            </Button>
+          </div>
+        </CardBody>
+      </Card>
 
       {missingArt > 0 && (
-        <div className="mt-4 flex items-start gap-2 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-          <span>
-            {missingArt} page{missingArt === 1 ? "" : "s"} still {missingArt === 1 ? "has" : "have"} no
-            illustration and will print blank.{" "}
-            <button onClick={() => setStep("edit")} className="font-semibold underline">
+        <Callout
+          tone="warning"
+          icon={TriangleAlert}
+          className="mt-4"
+          title={`${missingArt} ${missingArt === 1 ? "page is" : "pages are"} missing artwork`}
+          action={
+            <Button size="sm" variant="secondary" onClick={() => setStep("edit")}>
               Finish designing
-            </button>{" "}
-            first, or continue anyway.
-          </span>
-        </div>
+            </Button>
+          }
+        >
+          Missing illustrations will appear blank in either edition.
+        </Callout>
       )}
 
       {printBlockedReason && (
-        <div className="mt-4 flex items-start gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-          <TriangleAlert className="mt-0.5 size-4 shrink-0" />
-          <span>
-            {printBlockedReason}{" "}
-            <button onClick={() => setStep("edit")} className="font-semibold underline">
-              Back to design
-            </button>
-            {ebookEnabled ? " to adjust it. The digital edition is still available." : " to adjust it."}
-          </span>
-        </div>
+        <Callout
+          tone="danger"
+          icon={TriangleAlert}
+          className="mt-4"
+          title="This page count cannot be printed"
+          action={
+            <Button size="sm" variant="secondary" onClick={() => setStep("edit")}>
+              Adjust pages
+            </Button>
+          }
+        >
+          {printBlockedReason}
+          {ebookEnabled ? " The digital edition is still available." : ""}
+        </Callout>
       )}
 
-      <div className={`mt-6 grid gap-4 ${ebookEnabled ? "sm:grid-cols-2" : ""}`}>
-        <OptionCard
+      <section className="mt-9" aria-labelledby="edition-heading">
+        <div>
+          <h2 id="edition-heading" className="font-display text-xl font-bold text-ink-900">
+            Choose an edition
+          </h2>
+          <p className="mt-1 text-sm text-ink-500">You can come back for the other edition anytime.</p>
+        </div>
+
+        <div className={`mt-4 grid gap-4 ${ebookEnabled ? "md:grid-cols-2" : ""}`}>
+        <EditionCard
+          eyebrow="Printed edition"
           icon={<ShoppingBag className="size-6" />}
-          tone="brand"
-          title="Order a printed book"
-          desc="Professionally printed, bound and shipped to your door."
+          featured
+          title="A book to hold"
+          description="Professionally printed and bound, with delivery tracking to your door."
           price={printFromPrice != null ? `from ${fmtMoney(printFromPrice, baseCurrency)} + shipping` : undefined}
-          priceLink={
-            priceLinkHref
-              ? { href: priceLinkHref, label: "See the exact price & shipping" }
-              : undefined
-          }
-          cta="Order print"
-          note={printBlocked ? printBlockedReason ?? undefined : purchaseNote}
+          cta="Choose print options"
+          note={printBlocked ? "Adjust the page count before ordering." : purchaseNote}
           disabled={printBlocked}
           onClick={() => requireFullAccount(() => setOrdering(true))}
         />
         {ebookEnabled && (
-          <OptionCard
+          <EditionCard
+            eyebrow="Digital edition"
             icon={ebookOwned ? <Download className="size-6" /> : <Tablet className="size-6" />}
-            tone={ebookOwned ? "brand" : "neutral"}
             title={
-              ebookQuoteLoading ? "Checking your ebook…" : ebookOwned ? "Your ebook" : "Get the ebook"
+              ebookQuoteLoading ? "Checking your ebook…" : ebookOwned ? "Already yours" : "Read it anywhere"
             }
-            desc={
+            description={
               ebookQuoteLoading
-                ? "Looking up whether you already own the digital edition."
+                ? "Checking your account for this digital edition."
                 : ebookOwned
-                  ? "You already own the digital edition — download it any time, on any device."
-                  : "A high-quality PDF of your book — read it on any device, forever."
+                  ? "Download the high-quality PDF again whenever you need it."
+                  : "A high-quality PDF for tablets, phones and computers."
             }
             price={
               // Owning it is the whole story — showing a price alongside "already
@@ -392,7 +419,7 @@ export function OrderStage() {
                         ? `${fmtMoney(ebookDisplay.price, baseCurrency)} · ${ebookDisplay.planName} price`
                         : fmtMoney(ebookDisplay.price, baseCurrency)
             }
-            cta={ebookOwned ? "Download your ebook" : "Get the ebook"}
+            cta={ebookOwned ? "Open digital edition" : "Choose digital edition"}
             note={
               ebookQuoteLoading
                 ? undefined
@@ -407,23 +434,8 @@ export function OrderStage() {
             onClick={() => requireFullAccount(() => setBuyingEbook(true))}
           />
         )}
-      </div>
-
-      <OrderDialog
-        open={ordering}
-        onClose={() => setOrdering(false)}
-        project={project}
-        pages={pages}
-        design={design}
-      />
-
-      <EbookDialog
-        open={buyingEbook}
-        onClose={() => setBuyingEbook(false)}
-        project={project}
-        design={design}
-        initialQuote={ebookQuote}
-      />
+        </div>
+      </section>
 
       <AnimatePresence>
         {previewing && displays.length > 0 && (
@@ -434,81 +446,68 @@ export function OrderStage() {
   );
 }
 
-function OptionCard({
+function EditionCard({
+  eyebrow,
   icon,
   title,
-  desc,
+  description,
   price,
-  priceLink,
   cta,
   note,
   onClick,
-  tone,
+  featured,
   loading,
   disabled,
 }: {
+  eyebrow: string;
   icon: React.ReactNode;
   title: string;
-  desc: string;
+  description: string;
   /** Shown up front so nobody has to click to learn what it costs. */
   price?: string;
-  /**
-   * A way to see the number behind `price` in full before committing — the
-   * print card's "from $X + shipping" is an entry price, and this is where
-   * someone finds out what shipping to their own country actually is without
-   * opening checkout to ask. Opens in a new tab: the Studio is a full-screen
-   * editor a project is open in, so navigating away to check a price would
-   * cost the visitor their place in it.
-   */
-  priceLink?: { href: string; label: string };
   cta: string;
   /** Small line under the CTA (e.g. the account/verify requirement). */
   note?: string;
   onClick: () => void;
-  tone: "brand" | "neutral";
+  featured?: boolean;
   loading?: boolean;
   /** Greys out the card + disables the CTA (e.g. the book doesn't fit this format). */
   disabled?: boolean;
 }) {
   return (
-    <motion.div
-      className={`flex flex-col gap-3 rounded-2xl border border-ink-200 bg-white p-5 ${
-        disabled ? "opacity-60" : ""
-      }`}
+    <Card
+      className={`flex min-h-72 flex-col overflow-hidden ${
+        featured ? "ring-brand-200" : ""
+      } ${disabled ? "opacity-60" : ""}`}
     >
-      <span
-        className={
-          tone === "brand"
-            ? "flex size-12 items-center justify-center rounded-2xl bg-brand-600 text-(--color-brand-foreground) shadow-soft"
-            : "flex size-12 items-center justify-center rounded-2xl bg-ink-100 text-ink-600"
-        }
-      >
-        {loading ? <Loader2 className="size-6 animate-spin" /> : icon}
-      </span>
-      <div className="flex-1">
-        <h3 className="text-sm font-bold text-ink-900">{title}</h3>
-        <p className="mt-1 text-xs leading-relaxed text-ink-500">{desc}</p>
-        {price && <p className="mt-2 text-sm font-bold text-ink-800">{price}</p>}
-        {priceLink && (
-          <a
-            href={priceLink.href}
-            target="_blank"
-            rel="noreferrer"
-            className="mt-1 inline-block text-[11px] text-ink-400 underline decoration-ink-300 underline-offset-2 hover:text-brand-600"
+      <CardBody className="flex h-full flex-1 flex-col p-5 sm:p-6">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-400">{eyebrow}</p>
+            <h3 className="mt-2 font-display text-xl font-bold tracking-tight text-ink-900">{title}</h3>
+          </div>
+          <span className={`flex size-11 shrink-0 items-center justify-center rounded-xl ${
+            featured ? "bg-brand-600 text-(--color-brand-foreground)" : "bg-ink-100 text-ink-600"
+          }`}>
+            {loading ? <Loader2 className="size-5 animate-spin" /> : icon}
+          </span>
+        </div>
+        <p className="mt-3 text-sm leading-relaxed text-ink-500">{description}</p>
+        <div className="mt-auto pt-6">
+          {price && <p className="mb-3 text-sm font-semibold text-ink-800">{price}</p>}
+          <Button
+            className="w-full"
+            variant={featured ? "primary" : "secondary"}
+            rightIcon={<ArrowRight className="size-4" />}
+            loading={loading}
+            disabled={disabled}
+            onClick={onClick}
           >
-            {priceLink.label} ↗
-          </a>
-        )}
-      </div>
-      <Button
-        variant={tone === "brand" ? "primary" : "secondary"}
-        loading={loading}
-        disabled={disabled}
-        onClick={onClick}
-      >
-        {cta}
-      </Button>
-      {note && <p className="-mt-1 text-center text-[11px] leading-relaxed text-ink-400">{note}</p>}
-    </motion.div>
+            {cta}
+          </Button>
+          {note && <p className="mt-2 text-center text-[11px] leading-relaxed text-ink-400">{note}</p>}
+        </div>
+      </CardBody>
+    </Card>
   );
 }

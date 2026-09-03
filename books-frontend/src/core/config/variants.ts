@@ -425,6 +425,24 @@ export function firstAllowedVariant(
   return [...all].sort((a, b) => distanceFrom(a, base) - distanceFrom(b, base))[0];
 }
 
+/**
+ * Customer-facing print specification for illustrated books.
+ *
+ * Paper and interior print quality are intentionally not choices in the
+ * storefront. Every quote and order uses the provider-recommended picture-book
+ * specification, while cover finish remains a visible choice.
+ */
+export function simplifiedPrintVariant(
+  policy: ProductVariantPolicy,
+  preferredFinish = "gloss",
+): VariantSelection | undefined {
+  return firstAllowedVariant(policy, {
+    print: "premium-colour",
+    paper: "80-coated-white",
+    finish: preferredFinish,
+  });
+}
+
 function distanceFrom(selection: VariantSelection, base: VariantSelection): number {
   return VARIANT_AXES.reduce(
     (total, axis, i) => total + (selection[axis] === base[axis] ? 0 : 2 ** (VARIANT_AXES.length - i)),
