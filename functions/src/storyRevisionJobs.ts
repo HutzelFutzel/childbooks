@@ -279,6 +279,10 @@ async function runRevision(uid: string, jobId: string): Promise<void> {
       targetId: "story",
       source: "worker",
       quotedSparks: job.quotedSparks,
+      // Leased work: a worker that dies after settling but before writing the
+      // proposal is re-claimed once the lease expires. Key the charge to the
+      // job so the retry re-drafts without billing the reader twice.
+      settleKey: `storyRevision:${jobId}`,
       startedAt,
       models: { text: model },
     });

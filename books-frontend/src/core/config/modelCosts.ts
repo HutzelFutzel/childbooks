@@ -59,7 +59,18 @@ export type ImageOutputCost =
 
 export type ModelCost =
   | ({ kind: "text"; largePrompt?: LargePromptRates } & TextRates)
-  | { kind: "image"; input: number; output: ImageOutputCost };
+  | {
+      kind: "image";
+      input: number;
+      output: ImageOutputCost;
+      /**
+       * $ per 1M THINKING tokens, for image models that reason before drawing.
+       * Providers bill these as ordinary text output, not at the (much higher)
+       * image-output rate, so they carry their own rate here. Omit/0 when the
+       * model doesn't think or the rate is folded into the per-image price.
+       */
+      thinking?: number;
+    };
 
 export interface ModelCostTable {
   version: 1;
@@ -99,15 +110,24 @@ function perMillion(tokens: number | undefined, rate: number): number {
 function costForText(c: Extract<ModelCost, { kind: "text" }>, u: UsageSample): number {
   const big = c.largePrompt && (u.inputTokens ?? 0) > c.largePrompt.overTokens;
   const r: TextRates = big ? c.largePrompt! : c;
+  // Providers report cached tokens as a SUBSET of the input count, so the cached
+  // portion has to come out of the full-rate bucket before it's charged at the
+  // cache rate — otherwise every cache hit is billed twice, at a higher total
+  // than a cache miss.
+  const cached = Math.min(u.cachedInputTokens ?? 0, u.inputTokens ?? 0);
+  const fullRateInput = (u.inputTokens ?? 0) - cached;
   return (
-    perMillion(u.inputTokens, r.input) +
+    perMillion(fullRateInput, r.input) +
     perMillion(u.outputTokens, r.output) +
-    perMillion(u.cachedInputTokens, r.cachedInput ?? 0)
+    perMillion(cached, r.cachedInput ?? 0)
   );
 }
 
 function costForImage(c: Extract<ModelCost, { kind: "image" }>, u: UsageSample): number {
-  let total = perMillion(u.inputTokens, c.input) + perMillion(u.imageInputTokens, c.input);
+  let total =
+    perMillion(u.inputTokens, c.input) +
+    perMillion(u.imageInputTokens, c.input) +
+    perMillion(u.outputTokens, c.thinking ?? 0);
   const images = u.images ?? 0;
   switch (c.output.mode) {
     case "perMillionTokens":
@@ -138,11 +158,25 @@ export function costForUsage(cost: ModelCost | undefined, usage: UsageSample): n
 // ---- Public projection -------------------------------------------------------
 
 /**
- * The reference usage the storefront Spark estimates assume (one standard
- * image). Shared between the projection below and `useTierEstimate` so the
- * public per-image rate and the client's lookup always agree.
+ * Output tokens one standard 1024x1024 image costs on a token-billed image model
+ * (Gemini bills a square image at a flat 1290 tokens). Without it the reference
+ * usage below prices every `perMillionTokens` model at $0.00 — which silently
+ * disabled the rate-table rung of the Spark estimate ladder for the whole Google
+ * tier, and with it the outlier clamp on the cost window.
  */
-export const PUBLIC_IMAGE_ESTIMATE_USAGE: UsageSample = { images: 1, size: "1024x1024" };
+export const NOMINAL_IMAGE_OUTPUT_TOKENS = 1290;
+
+/**
+ * The reference usage the storefront Spark estimates assume (one standard
+ * image). Shared between the projection below, `useTierEstimate` and the
+ * server's pre-flight reserve, so the public per-image rate and every lookup
+ * that falls back to it always agree.
+ */
+export const PUBLIC_IMAGE_ESTIMATE_USAGE: UsageSample = {
+  images: 1,
+  size: "1024x1024",
+  imageOutputTokens: NOMINAL_IMAGE_OUTPUT_TOKENS,
+};
 
 /**
  * World-readable projection of the cost table (`appConfig/modelCostsPublic`),
@@ -190,6 +224,7 @@ const modelCostSchema = z.discriminatedUnion("kind", [
     kind: z.literal("image"),
     input: z.number().nonnegative(),
     output: imageOutputSchema,
+    thinking: z.number().nonnegative().optional(),
   }),
 ]);
 

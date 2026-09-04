@@ -109,6 +109,12 @@ export interface MeterAndSettleArgs {
   source: "sync" | "worker";
   /** What the user was quoted before starting, when the caller knows it. */
   quotedSparks?: number;
+  /**
+   * A stable id for the unit of work, so a re-driven task charges once. See
+   * {@link SettleOptions.settleKey}; omit it for synchronous requests, where a
+   * repeat is the user deliberately asking again.
+   */
+  settleKey?: string;
   startedAt: number;
   outcome?: RunOutcome;
   errorCode?: string;
@@ -178,6 +184,7 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
       // Denormalized onto the ledger entry so a campaign can refund "everything
       // you spent on fast renders" with a query rather than a join through here.
       tier: args.tier,
+      settleKey: args.settleKey,
     });
 
     const { billable, unbilled } = splitBillable(args.events);

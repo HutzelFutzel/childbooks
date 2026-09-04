@@ -22,7 +22,7 @@
  * lots FIFO and record the paid/free split on the ledger entry, so the finance
  * stream can distinguish recognized revenue from promotional cost.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { getFirestore, FieldValue, type Transaction } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { getImageCostStats, getModelCostTable, getSparksConfig } from "./appConfig";
@@ -41,8 +41,15 @@ import {
   type LedgerEntryType,
   type SparksConfig,
 } from "../../books-frontend/src/core/config/sparks";
-import { costForUsage, costKey } from "../../books-frontend/src/core/config/modelCosts";
-import { recentCostSamples } from "../../books-frontend/src/core/config/imageCostStats";
+import {
+  costForUsage,
+  costKey,
+  PUBLIC_IMAGE_ESTIMATE_USAGE,
+} from "../../books-frontend/src/core/config/modelCosts";
+import {
+  recentCostSamples,
+  type CostSampleKind,
+} from "../../books-frontend/src/core/config/imageCostStats";
 import { ALL_IMAGE_ACTION_IDS, type ImageActionId } from "../../books-frontend/src/core/ai/actions";
 import { type ImageTier } from "../../books-frontend/src/core/config/modelConfig";
 import { splitBillable, type UsageEvent } from "./usage";
@@ -56,10 +63,12 @@ async function nominalRateCostUsd(action: ImageActionId, tier: ImageTier): Promi
   try {
     const { imageModel } = await resolveImageModels(action, tier);
     const costs = await getModelCostTable();
-    return costForUsage(costs.models[costKey(imageModel.provider, imageModel.id)], {
-      images: 1,
-      size: "1024x1024",
-    });
+    return costForUsage(
+      costs.models[costKey(imageModel.provider, imageModel.id)],
+      // The same reference image the storefront prices, so the server's reserve
+      // and the studio's quote can never disagree about the rate-table rung.
+      PUBLIC_IMAGE_ESTIMATE_USAGE,
+    );
   } catch {
     return null;
   }
@@ -498,11 +507,73 @@ async function usdForEvents(events: UsageEvent[]): Promise<number> {
   return total;
 }
 
+/** Models in this event set that the cost table has no rate for. */
+async function unpricedModels(events: UsageEvent[]): Promise<string[]> {
+  if (events.length === 0) return [];
+  const costs = await getModelCostTable();
+  const missing = new Set<string>();
+  for (const e of events) {
+    const key = costKey(e.provider, e.model);
+    if (costForUsage(costs.models[key], e.usage) == null) missing.add(key);
+  }
+  return [...missing];
+}
+
+/**
+ * A cost-derived action that settled to nothing did one of two things: it really
+ * was free, or a model is missing from the cost table and the whole render was
+ * given away. The second is a silent revenue leak — the user is quoted the
+ * action's estimate and charged zero — so it gets the same waste marker a failed
+ * settlement does rather than being left to a monthly aggregate flag.
+ */
+async function reportUnpricedIfNeeded(
+  uid: string,
+  action: string,
+  config: SparksConfig,
+  billable: UsageEvent[],
+  costUsd: number,
+  opts: SettleOptions,
+): Promise<void> {
+  if (config.actions[action]?.mode !== "derived") return;
+  if (billable.length === 0 || costUsd > 0) return;
+  const models = await unpricedModels(billable);
+  if (models.length === 0) return;
+  console.error("[sparks] derived action priced at 0 — model missing from the cost table", {
+    uid,
+    action,
+    models,
+  });
+  await recordFinanceEvent({
+    category: "waste",
+    kind: "unpricedModel",
+    amountUsd: 0,
+    uid,
+    projectId: opts.projectId,
+    meta: {
+      action,
+      models,
+      ...(opts.tier ? { tier: opts.tier } : {}),
+      ...(opts.runId ? { runId: opts.runId } : {}),
+    },
+  });
+}
+
 export interface SettleOptions {
   /** The project the action belongs to (stamped on ledger + finance events). */
   projectId?: string;
   /** The action run this settlement belongs to (see `actionRun.ts`). */
   runId?: string;
+  /**
+   * A stable identifier for the unit of work being paid for — NOT for the
+   * attempt. Queue delivery is at-least-once and the reaper re-drives a task
+   * whose worker died after rendering, so without this a crash between "charged"
+   * and "marked done" bills the same page twice. Given one, the ledger entry
+   * takes a deterministic id and the second settlement is a no-op.
+   *
+   * Provider cost is deliberately NOT deduped on it: a re-render really did call
+   * the provider again, and that dollar is real whether or not we charge for it.
+   */
+  settleKey?: string;
   /**
    * The image tier this action rendered at.
    *
@@ -553,13 +624,38 @@ export async function settleActionCost(
     // the quote would promise "free" and then bill for it.
     const multiplier = planMultiplier * campaignMultiplier;
     const price = priceForAction(config, action, costUsd, multiplier);
-    if (price <= 0) return { sparks: 0, costUsd, breakdown: null };
+    if (price <= 0) {
+      await reportUnpricedIfNeeded(uid, action, config, billable, costUsd, opts);
+      return { sparks: 0, costUsd, breakdown: null };
+    }
     const breakdown = await deductSparks(uid, price, action, {
       projectId: opts.projectId,
       runId: opts.runId,
       tier: opts.tier,
       model: primaryModel(billable),
+      settleKey: opts.settleKey,
     });
+    // A null breakdown means this unit of work was already paid for by an
+    // earlier attempt — the render happened again, the charge did not. Marked
+    // explicitly so the resulting "quoted N, charged 0" run reads as a re-drive
+    // rather than as the revenue leak it would otherwise be indistinguishable
+    // from; the provider cost of the second render is booked as usual.
+    if (!breakdown) {
+      await recordFinanceEvent({
+        category: "waste",
+        kind: "resettleSkipped",
+        amountUsd: 0,
+        uid,
+        projectId: opts.projectId,
+        meta: {
+          action,
+          sparks: price,
+          ...(opts.tier ? { tier: opts.tier } : {}),
+          ...(opts.runId ? { runId: opts.runId } : {}),
+        },
+      });
+      return { sparks: 0, costUsd, breakdown: null };
+    }
     await recordFinanceEvent({
       category: "sparks",
       kind: "sparkSpend",
@@ -814,22 +910,39 @@ interface SpendContext {
   runId?: string;
   tier?: ImageTier;
   model?: string;
+  /** See {@link SettleOptions.settleKey} — makes the deduction idempotent. */
+  settleKey?: string;
+}
+
+/**
+ * A ledger doc id derived from a settle key. Hashed rather than used raw so an
+ * arbitrary caller-supplied key can never contain a `/` and address a different
+ * collection, and so the id stays a fixed length.
+ */
+function spendLedgerId(settleKey: string): string {
+  return `spend_${createHash("sha256").update(settleKey).digest("hex").slice(0, 32)}`;
 }
 
 /**
  * Deduct Sparks (allowed to dip into the negative buffer) + append a ledger
- * entry, consuming lots FIFO. Returns the paid/free breakdown of the spend.
+ * entry, consuming lots FIFO. Returns the paid/free breakdown of the spend, or
+ * null when `ctx.settleKey` names work that was already charged for.
  */
 async function deductSparks(
   uid: string,
   amount: number,
   reason: string,
   ctx: SpendContext = {},
-): Promise<SpendBreakdown> {
+): Promise<SpendBreakdown | null> {
   ensureAdmin();
   const userRef = db().doc(`users/${uid}`);
-  const ledgerRef = userRef.collection("sparksLedger").doc(randomUUID());
+  const ledgerRef = userRef
+    .collection("sparksLedger")
+    .doc(ctx.settleKey ? spendLedgerId(ctx.settleKey) : randomUUID());
   return db().runTransaction(async (tx) => {
+    // Read the idempotency marker FIRST: Firestore requires every read before
+    // any write, and a hit means there is nothing left to do.
+    if (ctx.settleKey && (await tx.get(ledgerRef)).exists) return null;
     const userSnap = await tx.get(userRef);
     const lots = await readLots(tx, uid);
     const current = (userSnap.get("sparkBalance") as number) ?? 0;
@@ -867,14 +980,16 @@ async function deductSparks(
 /**
  * The Spark estimate to pre-check (reserve) for one action (config + plan
  * aware). For image actions priced as "derived", the reserve uses the UPPER
- * bound of the recent-cost window for the chosen tier (falling back to the
- * model's rate-table cost, then the flat configured estimate) so we never start
- * a render the user can't afford. Settlement still charges the exact cost.
+ * bound of the recent-cost window for the chosen tier and render kind (falling
+ * back to the model's rate-table cost, then the flat configured estimate) so we
+ * never start a render the user can't afford. Settlement still charges the
+ * exact cost.
  */
 export async function estimateForUser(
   uid: string,
   action: string,
   tier: ImageTier,
+  kind: CostSampleKind = "fresh",
 ): Promise<number> {
   const config = await getSparksConfig();
   if (!config.enabled) return 0;
@@ -893,7 +1008,7 @@ export async function estimateForUser(
       nominalRateCostUsd(action, tier),
     ]);
     const range = estimateSparkRange(config, {
-      samples: recentCostSamples(stats, action, tier),
+      samples: recentCostSamples(stats, action, tier, kind),
       rateCostUsd,
       fallbackSparks: rule.estimatedSparks,
     });
@@ -901,6 +1016,15 @@ export async function estimateForUser(
     return Math.max(0, Math.round(maxEstimateSparks(range) * m));
   }
   return estimateForAction(config, action, multiplier);
+}
+
+export interface AffordActionOptions extends AffordOptions {
+  /**
+   * Whether this run is an edit. Edits are priced from their own cost window
+   * because they spend one image call per subject, so reserving a fresh
+   * render's estimate for one systematically under-quoted the charge.
+   */
+  kind?: CostSampleKind;
 }
 
 /**
@@ -914,9 +1038,9 @@ export async function ensureAffordAction(
   uid: string,
   action: string,
   tier: ImageTier,
-  opts: AffordOptions = {},
+  opts: AffordActionOptions = {},
 ): Promise<number> {
-  const estimate = await estimateForUser(uid, action, tier);
+  const estimate = await estimateForUser(uid, action, tier, opts.kind ?? "fresh");
   await ensureAfford(uid, estimate, opts);
   return estimate;
 }

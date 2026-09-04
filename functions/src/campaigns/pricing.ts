@@ -21,7 +21,7 @@ import {
   type CampaignRule,
   type UserFacts,
 } from "../../../books-frontend/src/core/config/campaigns";
-import type { ImageTier } from "../../../books-frontend/src/core/config/modelConfig";
+import { IMAGE_TIERS, type ImageTier } from "../../../books-frontend/src/core/config/modelConfig";
 import { getCampaignsConfig } from "../appConfig";
 import { userFacts } from "./facts";
 
@@ -73,36 +73,75 @@ export async function campaignActionMultiplier(
   }
 }
 
+/** What a standing campaign does to one action's price, across both tiers. */
+export interface ActionPriceOverride {
+  /** Campaign multiplier per tier (1 = untouched, 0 = free). */
+  tiers: Record<ImageTier, number>;
+  /**
+   * The campaign responsible for the best discount, so the studio can say WHY
+   * the number is small. An unexplained discount reads as a bug; a labelled one
+   * reads as a gift.
+   */
+  note: { campaignId: string; label: string } | null;
+}
+
 /**
- * Which campaign (if any) is making this action cheaper, so the studio can say
- * so next to the price instead of just showing a suspiciously small number. An
- * unexplained discount reads as a bug; a labelled one reads as a gift.
+ * Every standing price override that applies to this account, for the given
+ * actions, in one pass.
+ *
+ * The studio prices several action+tier combinations at once, and going through
+ * {@link campaignActionMultiplier} for each would reload the account's facts
+ * once per combination. Same config, same evaluator, same rules — just resolved
+ * once, so the quote the client renders can't disagree with the one the server
+ * reserves against.
+ *
+ * Fails OPEN (no overrides = full price) for the same reason as above.
  */
-export async function campaignPriceNote(
+export async function standingPriceOverrides(
   uid: string,
-  action: string,
-  tier: ImageTier | null,
-): Promise<{ campaignId: string; label: string } | null> {
+  actions: readonly string[],
+): Promise<Record<string, ActionPriceOverride>> {
+  const untouched = (): ActionPriceOverride => ({
+    tiers: { quick: 1, premium: 1 },
+    note: null,
+  });
+  const out: Record<string, ActionPriceOverride> = {};
+  for (const action of actions) out[action] = untouched();
+
   try {
     const config = await getCampaignsConfig();
-    if (!config.enabled) return null;
+    if (!config.enabled) return out;
+    const live = config.campaigns.filter(
+      (c: Campaign) => campaignIsLive(c) && c.rules.some((r) => r.enabled && r.trigger === "always"),
+    );
+    if (live.length === 0) return out;
+
     const user = await userFacts(uid);
-    let best: { campaignId: string; label: string; multiplier: number } | null = null;
-    for (const campaign of config.campaigns) {
-      if (!campaignIsLive(campaign)) continue;
-      if (!audienceVerdict(campaign, user).eligible) continue;
-      const rules = campaign.rules.filter((r) => r.enabled && r.trigger === "always");
-      const multiplier = actionPriceMultiplier(rules, action, tier);
-      if (multiplier < 1 && (!best || multiplier < best.multiplier)) {
-        best = {
-          campaignId: campaign.id,
-          label: campaign.presentation.headline.trim() || campaign.name,
-          multiplier,
-        };
+    const eligible = live.filter((c) => audienceVerdict(c, user).eligible);
+    if (eligible.length === 0) return out;
+
+    for (const action of actions) {
+      // Track the single most generous campaign per action so the label next to
+      // the price names the promotion the customer is actually getting.
+      let best: { campaignId: string; label: string; multiplier: number } | null = null;
+      for (const campaign of eligible) {
+        const rules = campaign.rules.filter((r) => r.enabled && r.trigger === "always");
+        for (const tier of IMAGE_TIERS) {
+          const multiplier = actionPriceMultiplier(rules, action, tier);
+          out[action].tiers[tier] = Math.min(out[action].tiers[tier], multiplier);
+          if (multiplier < 1 && (!best || multiplier < best.multiplier)) {
+            best = {
+              campaignId: campaign.id,
+              label: campaign.presentation.headline.trim() || campaign.name,
+              multiplier,
+            };
+          }
+        }
       }
+      out[action].note = best ? { campaignId: best.campaignId, label: best.label } : null;
     }
-    return best ? { campaignId: best.campaignId, label: best.label } : null;
+    return out;
   } catch {
-    return null;
+    return out;
   }
 }

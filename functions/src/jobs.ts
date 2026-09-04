@@ -55,6 +55,8 @@ import { containedAnchorsFor } from "../../books-frontend/src/core/book/anchorGr
 import { effectiveAnchorIds } from "../../books-frontend/src/core/book/anchorRefs";
 import { spreadsById } from "../../books-frontend/src/core/book/units";
 import { DISPATCH_KEY } from "../../books-frontend/src/core/config/latencyStats";
+import type { ImageActionId } from "../../books-frontend/src/core/ai/actions";
+import type { CostSampleKind } from "../../books-frontend/src/core/config/imageCostStats";
 import { latencyKindOf as kindOf } from "./latency";
 import {
   applyAnchorRender,
@@ -170,6 +172,48 @@ function illustrationActionFor(taskId: string): "pageIllustration" | "coverIllus
   return isCoverId(taskId) ? "coverIllustration" : "pageIllustration";
 }
 
+/** The Spark action one task will SETTLE as — the same one it must be quoted at. */
+function taskAction(kind: JobKind, taskId: string): ImageActionId {
+  return kind === "anchors" ? "anchorImage" : illustrationActionFor(taskId);
+}
+
+/**
+ * Which cost window one task is priced from. Mirrors the `isEdit` each worker
+ * derives at settle time: an image task from its render request, a pipeline task
+ * from its run options.
+ */
+function taskQuoteKind(spec: AnyJob["tasks"][number] | TaskDoc): CostSampleKind {
+  const req = "request" in spec ? spec.request : undefined;
+  if (req) return req.composite || req.maskBlobId ? "edit" : "fresh";
+  const edit = "options" in spec ? spec.options?.edit : undefined;
+  return typeof edit === "string" && edit.trim().length > 0 ? "edit" : "fresh";
+}
+
+/**
+ * Key one task's quote by everything that moves its price: the action it settles
+ * as (a cover costs more than a page) and whether it's an edit (which spends one
+ * image call per subject). One number per batch under-quoted every mixed batch.
+ */
+function quoteKey(action: ImageActionId, kind: CostSampleKind): string {
+  return kind === "edit" ? `${action}:edit` : action;
+}
+
+/**
+ * What the user was quoted for one task of this job.
+ *
+ * Falls back to the action's fresh quote, then to the flat `quotedSparks` for
+ * jobs expanded before the map existed, so in-flight work keeps reporting a real
+ * quote instead of a zero that would read as "quoted free, charged 12".
+ */
+function quotedFor(
+  job: AnyJob,
+  action: ImageActionId,
+  kind: CostSampleKind = "fresh",
+): number | undefined {
+  const quoted = job.quotedByAction;
+  return quoted?.[quoteKey(action, kind)] ?? quoted?.[action] ?? job.quotedSparks;
+}
+
 function isTerminal(status: JobStatus): boolean {
   return status === "done" || status === "error";
 }
@@ -177,6 +221,19 @@ function isTerminal(status: JobStatus): boolean {
 /** Model role a job kind resolves against (covers reuse the page model). */
 function modelRoleFor(kind: Exclude<JobKind, "screenplay">): "pageIllustration" | "anchorImage" {
   return kind === "anchors" ? "anchorImage" : "pageIllustration";
+}
+
+/**
+ * The wallet's idempotency key for one task.
+ *
+ * Cloud Tasks delivery is at-least-once, and the reaper deliberately re-drives a
+ * task whose worker died mid-flight — it can't tell "died before rendering" from
+ * "died after rendering but before marking done". Keying the charge to the task
+ * rather than to the attempt means the second run re-renders (we pay the
+ * provider again, which is real) but bills the reader once.
+ */
+function taskSettleKey(jobId: string, taskId: string): string {
+  return `job:${jobId}:${taskId}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -312,7 +369,7 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
   }
 
   let tier: ImageTier | undefined;
-  let quotedSparks: number | undefined;
+  let quotedByAction: Record<string, number> | undefined;
   if (job.kind !== "screenplay") {
     // Guests render on the cheap tier only and get no negative buffer. Everyone
     // else must have stated a tier — the job fails loudly rather than rendering
@@ -320,11 +377,27 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
     tier = requireTier(job.tier, caller.guest);
     // Pre-check image work before dispatch. Text screenplay generation keeps
     // the existing settle-after-use behavior of the synchronous endpoint.
-    const action = job.kind === "anchors" ? "anchorImage" : "pageIllustration";
-    quotedSparks = await estimateForUser(uid, action, tier);
-    await ensureAfford(uid, quotedSparks * specs.length, {
-      noNegativeBuffer: caller.guest,
-    });
+    //
+    // Quote each task against the action AND cost window it will SETTLE from. A
+    // batch is not uniform: the covers inside a page batch settle as
+    // `coverIllustration` on a larger, dearer canvas, and an edit spends one
+    // image call per subject — so pricing the whole batch as a fresh page
+    // under-reserved every book with a cover or an edit in it, and recorded a
+    // quote the charge was guaranteed to beat.
+    const keys = specs.map((spec) =>
+      quoteKey(taskAction(job.kind, spec.id), taskQuoteKind(spec)),
+    );
+    const quotes: Record<string, number> = {};
+    for (const spec of specs) {
+      const action = taskAction(job.kind, spec.id);
+      const kind = taskQuoteKind(spec);
+      const key = quoteKey(action, kind);
+      if (key in quotes) continue;
+      quotes[key] = await estimateForUser(uid, action, tier, kind);
+    }
+    quotedByAction = quotes;
+    const total = keys.reduce((sum, key) => sum + (quotes[key] ?? 0), 0);
+    await ensureAfford(uid, total, { noNegativeBuffer: caller.guest });
   }
 
   await applyFeatureGate(uid, job);
@@ -356,7 +429,7 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
     progress: { total: specs.length, completed: 0, failed: 0 },
     // Persist image billing/model choices only for image-bearing jobs.
     ...(tier ? { tier } : {}),
-    ...(quotedSparks !== undefined ? { quotedSparks } : {}),
+    ...(quotedByAction ? { quotedByAction } : {}),
     // Persist the feature-gated snapshot so workers render against it.
     ...(job.kind !== "image"
       ? { project: (job as PipelineRefreshJob | AnchorsJob | ScreenplayJob).project }
@@ -548,6 +621,7 @@ async function runImageTask(args: {
     targetId: taskId,
     source: "worker",
     quotedSparks: args.quotedSparks,
+    settleKey: taskSettleKey(jobId, taskId),
     startedAt,
     models: { image: model },
     latency: { kind: isEdit ? "edit" : "fresh", refs: req.references?.length ?? 0 },
@@ -624,6 +698,7 @@ async function renderTask(
       jobId,
       targetId: task.id,
       source: "worker",
+      settleKey: taskSettleKey(jobId, task.id),
       startedAt,
       models: { text: model },
     });
@@ -668,7 +743,7 @@ async function renderTask(
       jobId,
       taskId: task.id,
       startedAt,
-      quotedSparks: job.quotedSparks,
+      quotedSparks: quotedFor(job, action, taskQuoteKind(task)),
     });
     return {
       result: stampImageProvenance({ blobId, mimeType }, tier, models.imageModel),
@@ -699,7 +774,8 @@ async function renderTask(
       jobId,
       targetId: task.id,
       source: "worker",
-      quotedSparks: job.quotedSparks,
+      quotedSparks: quotedFor(job, action, isEdit ? "edit" : "fresh"),
+      settleKey: taskSettleKey(jobId, task.id),
       startedAt,
       models: { image: models.imageModel, text: models.textModel },
       latency: {
@@ -734,7 +810,8 @@ async function renderTask(
     jobId,
     targetId: task.id,
     source: "worker",
-    quotedSparks: job.quotedSparks,
+    quotedSparks: quotedFor(job, "anchorImage", isEdit ? "edit" : "fresh"),
+    settleKey: taskSettleKey(jobId, task.id),
     startedAt,
     models: { image: models.anchorImageModel, text: models.textModel },
     latency: {

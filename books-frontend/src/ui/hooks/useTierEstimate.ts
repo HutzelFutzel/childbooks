@@ -14,7 +14,11 @@ import {
   PUBLIC_IMAGE_ESTIMATE_USAGE,
   type ModelCostTable,
 } from "../../core/config/modelCosts";
-import { recentCostSamples, type ImageCostStats } from "../../core/config/imageCostStats";
+import {
+  recentCostSamples,
+  type CostSampleKind,
+  type ImageCostStats,
+} from "../../core/config/imageCostStats";
 import {
   estimateSparkRange,
   type SparkEstimateRange,
@@ -22,6 +26,7 @@ import {
 } from "../../core/config/sparks";
 import { resolveImageModelClient } from "../../platform/aiResolve";
 import { useAppConfigStore } from "../../state/appConfigStore";
+import { useCampaignMultiplier } from "../../state/priceOverridesStore";
 import { usePlanActionMultiplier } from "../../state/subscriptionStore";
 
 /**
@@ -37,6 +42,7 @@ export function tierSparkRange(
   action: ImageActionId,
   tier: ImageTier,
   planMultiplier = 1,
+  kind: CostSampleKind = "fresh",
 ): SparkEstimateRange | null {
   if (!sparks.enabled) return null;
   const m = planMultiplier > 0 ? planMultiplier : 1;
@@ -55,7 +61,7 @@ export function tierSparkRange(
     : null;
   return applyM(
     estimateSparkRange(sparks, {
-      samples: recentCostSamples(stats, action, tier),
+      samples: recentCostSamples(stats, action, tier, kind),
       rateCostUsd,
       fallbackSparks: rule?.estimatedSparks ?? 0,
     }),
@@ -89,17 +95,23 @@ export function sumTierRanges(ranges: (SparkEstimateRange | null)[]): SparkEstim
 export function useTierSparkEstimate(
   action: ImageActionId,
   tier: ImageTier,
+  kind: CostSampleKind = "fresh",
 ): SparkEstimateRange | null {
   const sparks = useAppConfigStore((s) => s.sparks);
   const modelCosts = useAppConfigStore((s) => s.modelCosts);
   const stats = useAppConfigStore((s) => s.imageCostStats);
   const modelConfig = useAppConfigStore((s) => s.modelConfig);
-  const multiplier = usePlanActionMultiplier(action);
+  const planMultiplier = usePlanActionMultiplier(action);
+  // The campaign override multiplies the plan's, exactly as `estimateForUser`
+  // does server-side. Quoting without it promised full price through a
+  // "renders are free" week and then charged nothing.
+  const campaignMultiplier = useCampaignMultiplier(action, tier);
+  const multiplier = planMultiplier * campaignMultiplier;
 
   return useMemo(
-    () => tierSparkRange(sparks, modelCosts, stats, action, tier, multiplier),
+    () => tierSparkRange(sparks, modelCosts, stats, action, tier, multiplier, kind),
     // modelConfig participates via resolveImageModelClient (reads live config).
-    [sparks, modelCosts, stats, modelConfig, action, tier, multiplier],
+    [sparks, modelCosts, stats, modelConfig, action, tier, multiplier, kind],
   );
 }
 

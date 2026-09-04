@@ -82,7 +82,13 @@ export function usePageIllustration(pageId: string) {
     genSpread ? s.activeUnitIds.has(genSpread.id) : false,
   );
   const generating = generatingPages.has(pageId) || jobActive;
-  const sparkRange = useImageActionRange(coverMode ? "coverIllustration" : "pageIllustration");
+  // An edit is priced from the edit window: it re-renders one region per subject
+  // rather than one image for the page, so quoting it as a fresh render
+  // undershot the charge by however many subjects the instruction touches.
+  const sparkRange = useImageActionRange(
+    coverMode ? "coverIllustration" : "pageIllustration",
+    edit.trim() ? "edit" : "fresh",
+  );
 
   const subjectRef = subject
     ? subject.kind === "spread"

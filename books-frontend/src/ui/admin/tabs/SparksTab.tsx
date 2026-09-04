@@ -16,7 +16,11 @@ import {
   type ActionPricingMode,
   type SparksConfig,
 } from "../../../core/config/sparks";
-import { costForUsage, costKey } from "../../../core/config/modelCosts";
+import {
+  costForUsage,
+  costKey,
+  PUBLIC_IMAGE_ESTIMATE_USAGE,
+} from "../../../core/config/modelCosts";
 import { resolveImageModel } from "../../../core/config/modelConfig";
 import { grantLiabilityUsd, sparkUnitEconomics } from "../../../core/config/economics";
 import { TEXT_ACTIONS, IMAGE_ACTIONS, type ImageActionId } from "../../../core/ai/actions";
@@ -81,8 +85,10 @@ export function SparksTab() {
     const sel = resolveImageModel(modelConfig, actionId as ImageActionId, "premium");
     if (!sel) return null;
     const cost = modelCosts.models[costKey(sel.provider, sel.id)];
-    // A nominal single-image usage to illustrate the price.
-    const usd = costForUsage(cost, { images: 1 });
+    // The same reference image the storefront quotes, so this preview can't
+    // disagree with the price a customer is shown. It carries a nominal output
+    // token count, without which every token-billed model previews at 0 ✦.
+    const usd = costForUsage(cost, PUBLIC_IMAGE_ESTIMATE_USAGE);
     if (usd == null) return null;
     return sparksForCostUsd(draft, usd);
   };

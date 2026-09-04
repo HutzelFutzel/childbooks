@@ -614,7 +614,7 @@ function CastMemberCard({
             <>
               <Sparkles className="size-3.5" />
               Create this look
-              <SparkEstimateCost range={sparkRange} />
+              <SparkEstimateCost range={sparkRange} action="anchorImage" />
             </>
           )}
         </button>

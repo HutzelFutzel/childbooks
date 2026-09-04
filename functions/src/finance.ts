@@ -58,6 +58,10 @@ export type FinanceKind =
   // waste
   | "failedCalls" // 0 (count marker) — failed/timed-out provider attempts
   | "fulfillmentFailed" // 0 (marker) — paid order whose print job failed
+  | "qcCost" // 0 (marker) — repair passes we absorb (dollars booked by providerCost)
+  | "settleFailed" // 0 (marker) — an action completed but the wallet write threw
+  | "unpricedModel" // 0 (marker) — a cost-derived action gave a render away for free
+  | "resettleSkipped" // 0 (marker) — a re-driven task re-rendered; the charge was deduped
   // infra
   | "cloudCost" // − Google Cloud / Firebase spend (BigQuery billing export)
   | "infraBudget" // − prorated share of the admin-entered monthly infra budget

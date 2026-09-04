@@ -35,6 +35,7 @@ import { DownloadsDialog } from "@/ui/checkout/DownloadsDialog";
 import { useProfileStore } from "@/state/profileStore";
 import { useAppConfigStore } from "@/state/appConfigStore";
 import { useSparksStore } from "@/state/sparksStore";
+import { usePriceOverridesStore } from "@/state/priceOverridesStore";
 import { useSubscriptionStore } from "@/state/subscriptionStore";
 import { SparksBadge } from "@/ui/layout/SparksBadge";
 import { PlansDialog } from "@/ui/billing/PlansDialog";
@@ -86,6 +87,8 @@ export default function StudioApp() {
   const subscribeConfig = useAppConfigStore((s) => s.subscribe);
   const watchSparks = useSparksStore((s) => s.watch);
   const stopSparks = useSparksStore((s) => s.stop);
+  const loadPriceOverrides = usePriceOverridesStore((s) => s.load);
+  const resetPriceOverrides = usePriceOverridesStore((s) => s.reset);
   const watchSubs = useSubscriptionStore((s) => s.watch);
   const stopSubs = useSubscriptionStore((s) => s.stop);
   const sparksEnabled = useAppConfigStore((s) => s.sparks.enabled);
@@ -240,6 +243,19 @@ export default function StudioApp() {
     watchSparks();
     return () => stopSparks();
   }, [uid, accessLevel, watchSparks, stopSparks]);
+
+  // Campaign price overrides are per-identity and, unlike everything else a
+  // Spark quote needs, not world-readable — so they're fetched rather than
+  // subscribed, and dropped on identity change so one account's promotion can
+  // never price another's renders.
+  useEffect(() => {
+    if (!uid || accessLevel === "loading") {
+      resetPriceOverrides();
+      return;
+    }
+    loadPriceOverrides();
+    return () => resetPriceOverrides();
+  }, [uid, accessLevel, loadPriceOverrides, resetPriceOverrides]);
 
   // Surface the result of a Stripe Checkout redirect. A SUCCESS opens the
   // confirmation screen and leaves its params in place, so a refresh comes

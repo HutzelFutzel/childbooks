@@ -213,7 +213,7 @@ export function AnchorEditor({
               onClick={() => void generate({ edit, useReference: true })}
             >
               Apply change
-              <SparkEstimateCost range={sparkRange} />
+              <SparkEstimateCost range={sparkRange} action="anchorImage" />
             </Button>
           </div>
         )}
@@ -326,7 +326,7 @@ export function AnchorEditor({
                   onClick={() => void generate({ useReference: false })}
                 >
                   Redesign
-                  <SparkEstimateCost range={sparkRange} />
+                  <SparkEstimateCost range={sparkRange} action="anchorImage" />
                 </Button>
               </div>
             )}

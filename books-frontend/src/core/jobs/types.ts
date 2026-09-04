@@ -57,8 +57,19 @@ export interface JobLease {
    * against at expand time. Recorded next to the eventual charge on the action
    * run, so a quote that systematically undershoots is visible instead of only
    * being felt by the user.
+   *
+   * @deprecated Superseded by {@link quotedByAction}; still read as a fallback
+   * for jobs expanded before that existed.
    */
   quotedSparks?: number;
+  /**
+   * Server-written: the Spark estimate per SETTLING action, keyed by action id
+   * and suffixed `:edit` for edit tasks. A batch is not uniform — the covers
+   * inside a page batch settle as `coverIllustration` on a larger canvas, and an
+   * edit spends one image call per subject — so one number per batch quoted
+   * every book with a cover or an edit in it below what it always cost.
+   */
+  quotedByAction?: Record<string, number>;
 }
 
 /** A reference image, addressed by its blob id in `users/{uid}/blobs/{id}`. */

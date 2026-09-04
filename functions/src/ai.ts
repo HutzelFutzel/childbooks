@@ -19,7 +19,9 @@ import { withUsage } from "./usage";
 import { meterAndSettle, runKindOf } from "./actionRun";
 import { touchProject } from "./projects";
 import { ensureAffordAction, InsufficientSparks } from "./sparks";
+import { standingPriceOverrides } from "./campaigns/pricing";
 import { ensureWithinQuota, incrementQuota, QuotaExceeded } from "./quotas";
+import { ALL_IMAGE_ACTION_IDS } from "../../books-frontend/src/core/ai/actions";
 import {
   apiKeyFor,
   ImageTierRequired,
@@ -385,8 +387,10 @@ export function registerAiRoutes(app: Express): void {
       // Guests render on the cheap tier only and get no negative buffer.
       const guest = isAnonymousToken(req.authToken);
       const tier = requireTier(rawTier, guest);
+      const anchorIsEdit = typeof options?.edit === "string" && options.edit.trim().length > 0;
       const quotedSparks = await ensureAffordAction(req.uid!, "anchorImage", tier, {
         noNegativeBuffer: guest,
+        kind: anchorIsEdit ? "edit" : "fresh",
       });
       const [models, prompts, caps] = await Promise.all([
         resolveImageModels("anchorImage", tier),
@@ -398,7 +402,6 @@ export function registerAiRoutes(app: Express): void {
       const { value, events, stats } = await withUsage(() =>
         renderAnchor(project, anchor, options ?? {}, env),
       );
-      const isAnchorEdit = typeof options?.edit === "string" && options.edit.trim().length > 0;
       await meterAndSettle({
         uid: req.uid!,
         action: "anchorImage",
@@ -407,7 +410,7 @@ export function registerAiRoutes(app: Express): void {
         stats,
         projectId: project.id,
         project,
-        kind: runKindOf(options, isAnchorEdit),
+        kind: runKindOf(options, anchorIsEdit),
         targetId: anchorId,
         source: "sync",
         quotedSparks,
@@ -462,8 +465,12 @@ export function registerAiRoutes(app: Express): void {
       // per-book edit quota (scoped to the project); fresh generations don't.
       const isEdit = typeof options?.edit === "string" && options.edit.trim().length > 0;
       if (isEdit) await ensureWithinQuota(req.uid!, "editsPerBook", project.id);
+      // A manual mask is an edit for pricing too — it takes the same surgical
+      // path, and `meterAndSettle` below already classifies it that way.
+      const editKind = isEdit || Boolean(options?.mask) ? "edit" : "fresh";
       const quotedSparks = await ensureAffordAction(req.uid!, action, tier, {
         noNegativeBuffer: guest,
+        kind: editKind,
       });
       const [models, prompts, caps] = await Promise.all([
         resolveImageModels(cover ? "coverIllustration" : "pageIllustration", tier),
@@ -514,6 +521,32 @@ export function registerAiRoutes(app: Express): void {
       res.json(value);
     } catch (err) {
       sendError(res, err);
+    }
+  });
+
+  // --- Pricing ---------------------------------------------------------------
+
+  /**
+   * The standing campaign price overrides that apply to THIS caller.
+   *
+   * Everything else the studio needs to quote a render is world-readable config
+   * it already subscribes to (the Sparks peg, the cost table, the recent-cost
+   * window, the plan's own multiplier). Campaign overrides are the exception:
+   * they depend on audience eligibility, which is evaluated against account
+   * facts the client can't see. Without this the studio quoted the undiscounted
+   * price all the way through a "renders are free this week" promotion, while
+   * the wallet charged the discounted one — the exact quote/charge split
+   * `campaigns/pricing.ts` exists to prevent, just pointing the other way.
+   *
+   * Soft-fails to "no overrides": a price preview that can't load must show the
+   * normal price, never block generation.
+   */
+  app.get("/ai/price-overrides", async (req: AuthedRequest, res: Response) => {
+    try {
+      res.json({ actions: await standingPriceOverrides(req.uid!, ALL_IMAGE_ACTION_IDS) });
+    } catch (err) {
+      console.warn("[ai] price overrides failed", err);
+      res.json({ actions: {} });
     }
   });
 

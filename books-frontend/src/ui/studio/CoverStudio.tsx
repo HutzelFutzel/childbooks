@@ -377,7 +377,7 @@ export function CoverToolsPanel({
               onClick={() => void coverIllo.updateScene()}
             >
               Update cover
-              <SparkEstimateCost range={coverIllo.sparkRange} />
+              <SparkEstimateCost range={coverIllo.sparkRange} action="coverIllustration" />
             </Button>
           </div>
         </div>
@@ -401,7 +401,7 @@ export function CoverToolsPanel({
                   onClick={() => void generateSet()}
                 >
                   Regenerate
-                  <SparkEstimateCost range={setCostRange} />
+                  <SparkEstimateCost range={setCostRange} action="coverIllustration" />
                 </Button>
                 <Button
                   size="sm"
@@ -527,7 +527,7 @@ export function CoverToolsPanel({
           onClick={() => void generateSet()}
         >
           Create front &amp; back
-          <SparkEstimateCost range={setCostRange} />
+          <SparkEstimateCost range={setCostRange} action="coverIllustration" />
         </Button>
         {!wrap && (
           <div className="grid grid-cols-2 gap-2">
@@ -539,7 +539,7 @@ export function CoverToolsPanel({
               onClick={() => void generateFront()}
             >
               Front
-              <SparkEstimateCost range={frontCostRange} />
+              <SparkEstimateCost range={frontCostRange} action="coverIllustration" />
             </Button>
             <Button
               variant="secondary"
@@ -549,7 +549,7 @@ export function CoverToolsPanel({
               onClick={() => void generateBack()}
             >
               Back
-              <SparkEstimateCost range={backCostRange} />
+              <SparkEstimateCost range={backCostRange} action="coverIllustration" />
             </Button>
           </div>
         )}
@@ -636,7 +636,7 @@ function CoverCreationStart({
           : mode === "finished"
             ? "Create front & back — finished"
             : "Create front & back — fast draft"}
-        <SparkEstimateCost range={costRange} />
+        <SparkEstimateCost range={costRange} action="coverIllustration" />
       </Button>
 
       <button

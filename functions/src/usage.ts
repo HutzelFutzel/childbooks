@@ -16,8 +16,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { getModelCostTable, recordImageCostSample } from "./appConfig";
+import type { CostSampleKind } from "../../books-frontend/src/core/config/imageCostStats";
 import { recordFinanceEvent } from "./finance";
-import { costForUsage, costKey, type UsageSample } from "../../books-frontend/src/core/config/modelCosts";
+import {
+  costForUsage,
+  costKey,
+  PUBLIC_IMAGE_ESTIMATE_USAGE,
+  type UsageSample,
+} from "../../books-frontend/src/core/config/modelCosts";
 import type { ProviderId } from "../../books-frontend/src/core/config/options";
 import { ALL_IMAGE_ACTION_IDS, type ImageActionId } from "../../books-frontend/src/core/ai/actions";
 import type { ImageTier } from "../../books-frontend/src/core/config/modelConfig";
@@ -38,6 +44,15 @@ export interface UsageEvent {
    * per-step breakdown of that combined total.
    */
   step?: string;
+  /**
+   * Identifies the individual {@link withStep} INVOCATION this call was made
+   * inside, as opposed to the step's label. A step that legitimately fans out
+   * (one `subjectEdit` per subject) enters the scope once per unit of work and
+   * so gets one id each, while a call retried inside a single scope reuses its
+   * id — which is what lets {@link splitBillable} bill the work and absorb the
+   * retry without having to guess which is which from the label alone.
+   */
+  stepId?: number;
   /** Wall-clock duration of the provider HTTP call, for latency telemetry. */
   durationMs?: number;
 }
@@ -53,10 +68,11 @@ export interface UsageEvent {
 export const NON_BILLABLE_STEPS = new Set(["gridCheck", "imageRepair", "dedupe", "embedded"]);
 
 /**
- * Chargeable calls of the primary `image` step per action. `generateImage` is
- * wrapped in `withRetry`, so a call that bills but returns unusable output can
- * produce a second priced event under the same label; capping here means that
- * retry lands on us rather than on the user.
+ * Chargeable image calls per pipeline step INVOCATION. Every image call site is
+ * wrapped in `withRetry`, so one unit of work can emit a second priced event
+ * when the first attempt returns unusable output; capping per invocation means
+ * that retry lands on us rather than on the user, while a step that genuinely
+ * renders N images (one `subjectEdit` per subject) still bills all N.
  */
 const MAX_BILLABLE_IMAGE_CALLS = 1;
 
@@ -74,13 +90,23 @@ interface Collector {
 }
 
 const storage = new AsyncLocalStorage<Collector>();
+
+/** One entry of the step scope: the label plus the invocation it belongs to. */
+interface StepScope {
+  step: string;
+  id: number;
+}
+
 /**
  * Tracks the current semantic step. Separate from the usage collector so nested,
  * concurrent steps (e.g. parallel per-subject edits) each carry their own label
  * — AsyncLocalStorage propagates it through the awaited provider call that
  * `meteredFetch` records.
  */
-const stepStorage = new AsyncLocalStorage<string>();
+const stepStorage = new AsyncLocalStorage<StepScope>();
+
+/** Monotonic source of {@link StepScope} ids; only ever compared for equality. */
+let nextStepId = 0;
 
 /** Run `fn` with a fresh usage collector; provider calls inside are recorded. */
 export function withUsage<T>(
@@ -99,7 +125,8 @@ export function withUsage<T>(
  * Combines with `withUsage`: the events still roll up into one action total.
  */
 export function withStep<T>(step: string, fn: () => Promise<T>): Promise<T> {
-  return stepStorage.run(step, fn);
+  nextStepId += 1;
+  return stepStorage.run({ step, id: nextStepId }, fn);
 }
 
 export interface BillableSplit {
@@ -118,16 +145,21 @@ export interface BillableSplit {
 export function splitBillable(events: UsageEvent[]): BillableSplit {
   const billable: UsageEvent[] = [];
   const unbilled: UsageEvent[] = [];
-  let imageCalls = 0;
+  // Calls made outside any `withStep` scope share a bucket: an unlabelled path
+  // is a single logical render (the direct-render worker), so its retries must
+  // be absorbed too rather than falling through the cap uncounted.
+  const imageCallsByScope = new Map<number | string, number>();
   for (const e of events) {
     const step = e.step ?? "";
     if (NON_BILLABLE_STEPS.has(step)) {
       unbilled.push(e);
       continue;
     }
-    if (step === "image") {
-      imageCalls += 1;
-      if (imageCalls > MAX_BILLABLE_IMAGE_CALLS) {
+    if (e.modality === "image") {
+      const scope = e.stepId ?? `${step}:unscoped`;
+      const seen = (imageCallsByScope.get(scope) ?? 0) + 1;
+      imageCallsByScope.set(scope, seen);
+      if (seen > MAX_BILLABLE_IMAGE_CALLS) {
         unbilled.push(e);
         continue;
       }
@@ -140,8 +172,8 @@ export function splitBillable(events: UsageEvent[]): BillableSplit {
 function push(event: UsageEvent): void {
   const c = storage.getStore();
   if (!c) return;
-  const step = stepStorage.getStore();
-  c.events.push(step ? { ...event, step } : event);
+  const scope = stepStorage.getStore();
+  c.events.push(scope ? { ...event, step: scope.step, stepId: scope.id } : event);
 }
 
 function providerForHost(url: string): ProviderId | null {
@@ -166,10 +198,15 @@ function parseUsage(
     const usageRaw = b.usage as Record<string, unknown> | undefined;
     const model = (b.model as string | undefined) ?? reqModel ?? "unknown";
     if (isImage) {
+      // Count the images the response actually carries rather than assuming one:
+      // a body with no `data` produced nothing to bill for, and per-image pricing
+      // has to scale with `n` when a call ever asks for more than one.
+      const images = Array.isArray(b.data) ? b.data.length : 0;
+      if (images === 0) return null;
       const sample: UsageSample = {
         inputTokens: num(usageRaw?.input_tokens),
         imageOutputTokens: num(usageRaw?.output_tokens),
-        images: 1,
+        images,
         size: reqSize,
       };
       return { provider, model, modality: "image", usage: sample };
@@ -191,12 +228,46 @@ function parseUsage(
     (b.modelVersion as string | undefined) ?? modelFromGeminiUrl(url) ?? reqModel ?? "unknown";
   const modality = model.includes("image") ? "image" : "text";
   const promptTokens = num(meta.promptTokenCount);
-  const candidateTokens = num(meta.candidatesTokenCount) + num(meta.thoughtsTokenCount);
-  const sample: UsageSample =
-    modality === "image"
-      ? { inputTokens: promptTokens, imageOutputTokens: candidateTokens, images: 1 }
-      : { inputTokens: promptTokens, outputTokens: candidateTokens };
+  if (modality === "image") {
+    // A safety-blocked prompt comes back 200 with a finishReason and no inline
+    // data, so count the images the response really carries.
+    const images = countGeminiImageParts(b);
+    if (images === 0) return null;
+    return {
+      provider,
+      model,
+      modality,
+      usage: {
+        inputTokens: promptTokens,
+        // Only the image tokens belong at the image-output rate. Thinking tokens
+        // are billed as ordinary text output by the provider, so folding them in
+        // here priced them at (typically) an order of magnitude too much.
+        imageOutputTokens: num(meta.candidatesTokenCount),
+        outputTokens: num(meta.thoughtsTokenCount),
+        images,
+      },
+    };
+  }
+  const sample: UsageSample = {
+    inputTokens: promptTokens,
+    outputTokens: num(meta.candidatesTokenCount) + num(meta.thoughtsTokenCount),
+  };
   return { provider, model, modality, usage: sample };
+}
+
+/** How many inline images a Gemini generation response actually returned. */
+function countGeminiImageParts(body: Record<string, unknown>): number {
+  const candidates = body.candidates;
+  if (!Array.isArray(candidates)) return 0;
+  let images = 0;
+  for (const candidate of candidates) {
+    const parts = (candidate as { content?: { parts?: unknown } })?.content?.parts;
+    if (!Array.isArray(parts)) continue;
+    for (const part of parts) {
+      if ((part as { inlineData?: unknown })?.inlineData) images += 1;
+    }
+  }
+  return images;
 }
 
 function modelFromGeminiUrl(url: string): string | undefined {
@@ -323,7 +394,12 @@ export async function meteredFetch(url: string, init?: RequestInit): Promise<Res
     if (provider && collector) {
       if (!res.ok) collector.stats.failures += 1;
       const contentType = res.headers.get("content-type") ?? "";
-      if (contentType.includes("application/json")) {
+      // Only a SUCCESSFUL response describes work the provider will invoice us
+      // for. An error body still parses as JSON, and the OpenAI image branch
+      // below infers `images: 1` from the endpoint rather than from a usage
+      // block — so metering a 429 would bill the user a full image for a render
+      // that never happened. Failures are counted in `stats`, never priced.
+      if (res.ok && contentType.includes("application/json")) {
         const reqModel = modelFromRequestBody(init);
         const reqSize = sizeFromRequest(init);
         const json = await res.clone().json();
@@ -413,7 +489,7 @@ export async function recordUsage(
 
     // The user pays for what they asked for; repair passes are on us. Both are
     // written as line items — only the billable half reaches the wallet.
-    const { unbilled } = splitBillable(events);
+    const { billable, unbilled } = splitBillable(events);
     const unbilledSet = new Set(unbilled);
 
     const totals = emptyTotals();
@@ -544,23 +620,38 @@ export async function recordUsage(
     }
 
     // Feed the rolling window that powers Spark estimate ranges. Only a fully
-    // priced, FRESH render qualifies: partial costs would skew the range, and
-    // edit re-rolls carry extra sub-calls that don't represent a fresh render.
+    // priced render qualifies — a partial cost would skew the range.
+    //
+    // Edits keep their OWN window rather than being dropped: they fan out into a
+    // localization call plus one image call per subject, so pooling them with
+    // fresh renders skewed the fresh range upward, and dropping them left every
+    // edit quoted at a fresh render's price and charged several times that.
     //
     // The sample is the BILLABLE total, not the full one: this window drives
     // both the quoted price and the pre-flight reserve, so feeding it repair
     // costs we never charge would quote users a price they'll never pay — and
     // `ensureAfford` would block them at it.
-    if (tier && knownCost && totals.billableUsd > 0 && isImageAction(action) && !opts.isEdit) {
+    if (tier && knownCost && totals.billableUsd > 0 && isImageAction(action)) {
+      const kind: CostSampleKind = opts.isEdit ? "edit" : "fresh";
       // Sanity clamp: a sample wildly above the model's nominal per-image rate
       // is a misconfigured cost entry or an outlier batch — don't poison the
-      // window (and with it the pre-flight reserve) for the next 10 calls.
+      // window (and with it the pre-flight reserve) for the next 10 calls. An
+      // edit legitimately spends several images, so its ceiling scales with the
+      // number of image calls it actually made.
       const nominal = imageModelKey
-        ? costForUsage(costs.models[imageModelKey], { images: 1, size: "1024x1024" })
+        ? costForUsage(costs.models[imageModelKey], PUBLIC_IMAGE_ESTIMATE_USAGE)
         : null;
-      const outlier = nominal != null && nominal > 0 && totals.billableUsd > nominal * 10;
+      const imageCalls = Math.max(1, billable.filter((e) => e.modality === "image").length);
+      const ceiling = nominal != null && nominal > 0 ? nominal * 10 * imageCalls : null;
+      const outlier = ceiling != null && totals.billableUsd > ceiling;
       if (!outlier) {
-        await recordImageCostSample(action, tier, totals.billableUsd, imageModelKey ?? undefined);
+        await recordImageCostSample(
+          action,
+          tier,
+          totals.billableUsd,
+          imageModelKey ?? undefined,
+          kind,
+        );
       }
     }
     return totals;

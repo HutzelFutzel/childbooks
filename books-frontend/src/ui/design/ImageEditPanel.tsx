@@ -434,7 +434,7 @@ function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustrati
             }}
           >
             {coverMode ? "Generate cover" : "Generate illustration"}
-            <SparkEstimateCost range={sparkRange} />
+            <SparkEstimateCost range={sparkRange} action={coverMode ? "coverIllustration" : "pageIllustration"} />
           </Button>
         </>
       ) : (
@@ -515,7 +515,7 @@ function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustrati
               onClick={() => void applyEdit()}
             >
               Apply change
-              <SparkEstimateCost range={sparkRange} />
+              <SparkEstimateCost range={sparkRange} action={coverMode ? "coverIllustration" : "pageIllustration"} />
             </Button>
           ) : (
             <Button
@@ -526,7 +526,7 @@ function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustrati
               onClick={() => void tryAgain()}
             >
               New version
-              <SparkEstimateCost range={sparkRange} />
+              <SparkEstimateCost range={sparkRange} action={coverMode ? "coverIllustration" : "pageIllustration"} />
             </Button>
           )}
 
@@ -599,7 +599,7 @@ function SceneSection({ illo }: { illo: ReturnType<typeof usePageIllustration> }
           onClick={() => void tryAgain()}
         >
           New version
-          <SparkEstimateCost range={sparkRange} />
+          <SparkEstimateCost range={sparkRange} action={coverMode ? "coverIllustration" : "pageIllustration"} />
         </Button>
       ) : null}
 

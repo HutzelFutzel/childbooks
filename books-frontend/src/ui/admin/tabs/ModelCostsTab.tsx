@@ -272,6 +272,13 @@ function ImageCostEditor({ cost, onChange }: { cost: ImageCost; onChange: (c: Im
           </div>
         )}
       </Section>
+
+      <Section
+        title="Thinking tokens"
+        hint="USD per 1,000,000 thinking tokens, for image models that reason before drawing. Providers bill these as ordinary text output — leave at 0 when the model doesn't think or the cost is already inside the per-image price."
+      >
+        <NumberField label="Thinking" value={cost.thinking ?? 0} step="0.000001" className="w-full sm:w-48" onChange={(n) => onChange({ ...cost, thinking: n })} />
+      </Section>
     </div>
   );
 }
@@ -323,7 +330,9 @@ function summarizeCost(c: ModelCost): string {
       : o.mode === "perImage"
         ? `${m(o.rate)}/image`
         : `by size (${Object.keys(o.bySize).length}) · fallback ${m(o.fallback)}/image`;
-  return `in ${m(c.input)}/1M · ${out}`;
+  const parts = [`in ${m(c.input)}/1M`, out];
+  if (c.thinking) parts.push(`thinking ${m(c.thinking)}/1M`);
+  return parts.join(" · ");
 }
 
 export function ModelCostsTab() {

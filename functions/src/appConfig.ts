@@ -61,6 +61,7 @@ import {
 import {
   appendCostSample,
   normalizeImageCostStats,
+  type CostSampleKind,
   type ImageCostStats,
 } from "../../books-frontend/src/core/config/imageCostStats";
 import {
@@ -411,6 +412,7 @@ export async function recordImageCostSample(
   tier: ImageTier,
   costUsd: number,
   modelKey?: string,
+  kind: CostSampleKind = "fresh",
 ): Promise<void> {
   ensureAdmin();
   const db = getFirestore();
@@ -418,7 +420,7 @@ export async function recordImageCostSample(
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const current = normalizeImageCostStats(snap.exists ? snap.data() : undefined);
-    tx.set(ref, appendCostSample(current, action, tier, costUsd, modelKey), { merge: false });
+    tx.set(ref, appendCostSample(current, action, tier, costUsd, modelKey, kind), { merge: false });
   });
   cache.delete(IMAGE_COST_STATS_DOC);
 }

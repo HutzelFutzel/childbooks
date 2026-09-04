@@ -4,9 +4,13 @@
  * Spark estimate RANGE (e.g. "3–5 ✦") before a generation runs.
  *
  * Only the last {@link COST_WINDOW_SIZE} measured USD costs are retained per
- * `${action}:${tier}` — enough to derive a stable min/max without exposing any
+ * {@link costStatsKey} — enough to derive a stable min/max without exposing any
  * per-user data (these are aggregate call costs, and the peg/markup that turn
  * them into Sparks are already public in `appConfig/sparks`).
+ *
+ * Fresh renders and edits are windowed separately: an edit re-renders one region
+ * per subject, so a single window would both inflate the fresh estimate and
+ * under-quote the edit.
  *
  * Settlement still charges the EXACT measured cost of each call; this window
  * only feeds the pre-flight reserve and the displayed estimate.
@@ -30,13 +34,27 @@ export interface CostSamples {
 
 export interface ImageCostStats {
   version: 1;
-  /** Keyed by `${action}:${tier}`. */
+  /** Keyed by {@link costStatsKey}. */
   stats: Record<string, CostSamples>;
   updatedAt: number;
 }
 
-export function costStatsKey(action: ImageActionId, tier: ImageTier): string {
-  return `${action}:${tier}`;
+/**
+ * Which shape of render a window describes. An edit fans out into a localization
+ * call plus one image call PER subject, so it routinely costs several times what
+ * a fresh render of the same page does. Pooling the two made every edit quote
+ * undershoot its charge; keeping them apart lets each quote from its own history.
+ */
+export type CostSampleKind = "fresh" | "edit";
+
+export function costStatsKey(
+  action: ImageActionId,
+  tier: ImageTier,
+  kind: CostSampleKind = "fresh",
+): string {
+  // "fresh" keeps its original unsuffixed key so the windows already collected
+  // in production keep feeding the estimates they were collected for.
+  return kind === "edit" ? `${action}:${tier}:edit` : `${action}:${tier}`;
 }
 
 export function createDefaultImageCostStats(): ImageCostStats {
@@ -64,13 +82,23 @@ export function normalizeImageCostStats(input: unknown): ImageCostStats {
   return { version: 1, stats: out, updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : 0 };
 }
 
-/** The recent cost samples for one action+tier (empty when none recorded). */
+/**
+ * The recent cost samples for one action+tier+kind (empty when none recorded).
+ *
+ * An edit window that hasn't filled yet falls back to the fresh window rather
+ * than to the flat configured estimate: a fresh render's measured cost is a
+ * closer floor for an edit than a hand-typed number, and it stops a newly-added
+ * tier from quoting the fallback for its first ten edits.
+ */
 export function recentCostSamples(
   stats: ImageCostStats,
   action: ImageActionId,
   tier: ImageTier,
+  kind: CostSampleKind = "fresh",
 ): number[] {
-  return stats.stats[costStatsKey(action, tier)]?.samples ?? [];
+  const own = stats.stats[costStatsKey(action, tier, kind)]?.samples ?? [];
+  if (own.length > 0 || kind === "fresh") return own;
+  return stats.stats[costStatsKey(action, tier, "fresh")]?.samples ?? [];
 }
 
 /**
@@ -85,8 +113,9 @@ export function appendCostSample(
   tier: ImageTier,
   costUsd: number,
   modelKey?: string,
+  kind: CostSampleKind = "fresh",
 ): ImageCostStats {
-  const key = costStatsKey(action, tier);
+  const key = costStatsKey(action, tier, kind);
   const entry = stats.stats[key];
   const sameModel = !modelKey || !entry?.modelKey || entry.modelKey === modelKey;
   const prev = sameModel ? (entry?.samples ?? []) : [];
