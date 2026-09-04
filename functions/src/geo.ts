@@ -1,16 +1,22 @@
 /**
- * Coarse, privacy-preserving country derivation for blog analytics.
+ * Coarse, privacy-preserving country derivation.
  *
  * We deliberately DO NOT geolocate a stored IP. Country is inferred, in order,
  * from:
- *   1. an edge/CDN geo header (if the deployment sits behind one), then
- *   2. the region subtag of the browser locale (e.g. "de-DE" → DE), then
- *   3. a compact IANA-timezone → country map (e.g. "Europe/Berlin" → DE).
- * All three are already-exposed, non-precise signals — never fine-grained
- * geolocation — and the raw IP is used only transiently for the daily unique
- * hash (see blogStats.ts) and never written anywhere.
+ *   1. a real CDN geo header (Cloudflare / Fastly / Vercel — not App Engine),
+ *   2. a compact IANA-timezone → country map (e.g. "Europe/Berlin" → DE),
+ *   3. the region subtag of a non-English browser locale (e.g. "de-DE" → DE).
  *
- * Result is an ISO-3166 alpha-2 code, or "ZZ" when nothing is known.
+ * Timezone precedes locale because locale is a LANGUAGE preference. Chrome's
+ * default worldwide is `en-US`; treating that as location is how every
+ * English-UI visitor in Germany was stamped US. English region tags are
+ * ignored entirely. Accept-Language lists are reduced to their first tag, so
+ * `de,en-US;q=0.9` cannot match a later `-US`.
+ *
+ * All three signals are already-exposed and non-precise. The raw IP is used
+ * only transiently for the daily unique hash (see blogStats.ts) and never
+ * written anywhere. Result is an ISO-3166 alpha-2 code, or "ZZ" when nothing
+ * is known.
  */
 import type { IncomingHttpHeaders } from "node:http";
 import type { Express, Request, Response } from "express";
@@ -18,13 +24,27 @@ import {
   parseDeviceFacts,
   type DeviceFacts,
 } from "../../books-frontend/src/core/analytics/device";
+import { UNKNOWN_COUNTRY } from "../../books-frontend/src/core/analytics/markets";
 
+/**
+ * Where a guess came from, strongest first. Writers use this so a locale
+ * fallback cannot overwrite a timezone (or CDN) reading, which is the
+ * historical US-for-everyone bug in the other direction.
+ */
+export type GeoSource = "header" | "tz" | "locale" | "unknown";
+
+export interface GeoGuess {
+  country: string;
+  source: GeoSource;
+}
+
+/** CDN headers that actually reflect the visitor. App Engine / generic geo
+ *  headers are omitted: Cloud Functions 2nd gen sits in us-central1 and
+ *  `x-appengine-country` is either unset or the function's region (US), which
+ *  would stamp every visitor American before locale or timezone could speak. */
 const GEO_HEADERS = [
   "cf-ipcountry", // Cloudflare
   "x-vercel-ip-country",
-  "x-appengine-country", // Google App Engine / some GFE paths
-  "x-country-code",
-  "x-geo-country",
   "fastly-country-code",
 ];
 
@@ -48,16 +68,39 @@ function headerCountry(headers: IncomingHttpHeaders): string | null {
   return null;
 }
 
-/** Region subtag from a BCP-47 locale: "pt-BR" → BR, "en" → null. */
+/** First BCP-47 tag, stripping Accept-Language weights (`de-DE,de;q=0.9` → `de-DE`). */
+export function primaryLocaleTag(locale: string): string {
+  const first = (locale || "").split(",")[0] ?? "";
+  return first.split(";")[0].trim();
+}
+
+/**
+ * Region subtag from a BCP-47 locale: "pt-BR" → BR, "de-DE" → DE, "en" → null.
+ *
+ * English region tags (`en-US`, `en-GB`, …) return null. They name a language
+ * variant, not a location, and `en-US` is the default Chrome locale worldwide.
+ * Only the first tag is read, so a German-primary Accept-Language list that
+ * later mentions `en-US` cannot become US.
+ */
 export function regionFromLocale(locale: string): string | null {
-  const m = /[-_]([A-Za-z]{2})(?![A-Za-z])/.exec(locale || "");
-  return m ? validCountry(m[1]) : null;
+  const tag = primaryLocaleTag(locale);
+  if (!tag) return null;
+  try {
+    const loc = new Intl.Locale(tag);
+    if (loc.language === "en") return null;
+    return loc.region ? validCountry(loc.region) : null;
+  } catch {
+    const m = /^([a-zA-Z]{2,3})(?:-[a-zA-Z]{4})?-([A-Za-z]{2})\b/.exec(tag);
+    if (!m) return null;
+    if (m[1].toLowerCase() === "en") return null;
+    return validCountry(m[2]);
+  }
 }
 
 /**
  * Compact IANA timezone → ISO country map covering the vast majority of real
- * traffic. Not exhaustive (unmapped zones fall through to "ZZ"), but a strong
- * fallback when the browser locale carries no region subtag.
+ * traffic. Not exhaustive (unmapped zones fall through to "ZZ"), but the
+ * strongest location signal we have without storing an IP.
  */
 const TZ_COUNTRY: Record<string, string> = {
   // North America
@@ -118,13 +161,35 @@ export function countryFromSignals(opts: {
   headers: IncomingHttpHeaders;
   locale?: string;
   tz?: string;
-}): string {
-  return (
-    headerCountry(opts.headers) ??
-    regionFromLocale(opts.locale ?? "") ??
-    countryFromTz(opts.tz ?? "") ??
-    "ZZ"
-  );
+}): GeoGuess {
+  const fromHeader = headerCountry(opts.headers);
+  if (fromHeader) return { country: fromHeader, source: "header" };
+  const fromTz = countryFromTz(opts.tz ?? "");
+  if (fromTz) return { country: fromTz, source: "tz" };
+  const fromLocale = regionFromLocale(opts.locale ?? "");
+  if (fromLocale) return { country: fromLocale, source: "locale" };
+  return { country: UNKNOWN_COUNTRY, source: "unknown" };
+}
+
+/**
+ * Whether `next` should replace a country already stored on the user doc.
+ *
+ * Locale is a language preference: it may fill a blank, never overwrite.
+ * Header and timezone are location signals: they write when missing OR when
+ * they disagree with what's stored, so a German whose old locale stamp is US
+ * is corrected on the next session ping without a backfill job.
+ */
+export function shouldWriteCountry(
+  next: GeoGuess,
+  existing: string | null | undefined,
+): boolean {
+  if (next.source === "unknown" || next.country === UNKNOWN_COUNTRY) return false;
+  const have =
+    typeof existing === "string" &&
+    existing.length === 2 &&
+    existing.toUpperCase() !== UNKNOWN_COUNTRY;
+  if (next.source === "locale") return !have;
+  return !have || existing!.toUpperCase() !== next.country;
 }
 
 /**
@@ -132,20 +197,21 @@ export function countryFromSignals(opts: {
  * country instead of on a hardcoded "US".
  *
  * Deliberately the same coarse derivation the analytics use, and for the same
- * privacy reason: edge header, then locale region, then timezone. No IP is
- * geolocated and none is stored. That makes it a HINT and nothing more, which
- * is exactly the right strength for this job — the answer only preselects a
- * dropdown the customer can change, and it is never the thing that decides
- * what they're allowed to buy. That decision belongs to the destination they
- * actually enter, checked server-side at quote time.
+ * privacy reason: CDN header, then timezone, then a non-English locale region.
+ * No IP is geolocated and none is stored. That makes it a HINT and nothing
+ * more — the answer only preselects a dropdown the customer can change, and it
+ * is never the thing that decides what they're allowed to buy. That decision
+ * belongs to the destination they actually enter, checked server-side at quote
+ * time.
  *
  * Tokenless: this runs on the marketing pages and in the wizard, long before
  * anyone signs in.
  *
- * NOTE ON DEPLOYMENT: none of the edge headers above are set by Firebase App
- * Hosting on its own, so in practice the locale and timezone fallbacks do the
- * work until a CDN that sets one is put in front. Both come from the browser,
- * so treat the result as the visitor's own claim about where they are.
+ * NOTE ON DEPLOYMENT: Firebase App Hosting and Cloud Functions 2nd gen set
+ * none of the CDN headers above, so in practice the timezone (and, for
+ * non-English UIs, locale) fallbacks do the work until a CDN that sets one is
+ * put in front. Both come from the browser, so treat the result as the
+ * visitor's own claim about where they are.
  */
 export function registerGeoRoutes(app: Express): void {
   app.get("/geo/country", (req: Request, res: Response) => {
@@ -153,15 +219,18 @@ export function registerGeoRoutes(app: Express): void {
       const raw = req.query[key];
       return typeof raw === "string" ? raw.slice(0, 100) : undefined;
     };
-    const country = countryFromSignals({
+    // `locale` and `tz` are query params the client reads from the browser.
+    // Accept-Language is a weighted LIST and must not be fed to a parser that
+    // looks for a region subtag — `de,en-US;q=0.9` used to become US.
+    const guess = countryFromSignals({
       headers: req.headers,
-      locale: one("locale") ?? req.headers["accept-language"]?.toString(),
+      locale: one("locale"),
       tz: one("tz"),
     });
     // Varies per visitor, so it must never land in a shared cache. Short-lived
     // because a wrong guess should stop being repeated quickly.
     res.set("Cache-Control", "private, max-age=300");
-    res.json({ country: country === "ZZ" ? null : country });
+    res.json({ country: guess.country === UNKNOWN_COUNTRY ? null : guess.country });
   });
 }
 

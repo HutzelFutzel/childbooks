@@ -270,7 +270,7 @@ export function registerBlogTrackingRoute(app: Express): void {
         headers: req.headers,
         locale: String(body.locale ?? ""),
         tz: String(body.tz ?? ""),
-      });
+      }).country;
       const referrerHost = hostOf(String(body.referrer ?? ""));
       const channel = channelFor(referrerHost, String(body.utmMedium ?? ""));
       const bucket = type === "read" ? Number(body.bucket) : undefined;

@@ -336,7 +336,7 @@ const PAID_LIKE_STATUSES = new Set(["paid", "refunded", "partially_refunded"]);
 /** Per-user fields the dashboard reads off the `users/{uid}` doc. */
 interface UserMeta {
   sparkBalance: number | null;
-  /** Market, denormalized by the auth blocking functions (see analyticsEvents.ts). */
+  /** Market, denormalized from timezone (or a CDN header) at welcome / session ping. */
   country: string | null;
   /** Timestamp when user registered / linked a permanent account. */
   signedUpAt: number | null;
@@ -818,12 +818,13 @@ function resolveUserCountries(
   const out = new Map<string, string>();
   for (const u of users) {
     const country =
-      // 1. Denormalized at sign-in/login from the client locale — the freshest.
-      meta.get(u.uid)?.country ??
-      // 2. An event inside the window, for accounts whose doc predates capture.
-      eventCountryByUid.get(u.uid) ??
-      // 3. Where they had a book shipped — slow but definitive.
+      // 1. Where they had a book billed/shipped — evidence, not a locale guess.
+      //    Recovers Germans stamped US by Chrome's default `en-US`.
       revenue.get(u.uid)?.country ??
+      // 2. Denormalized from timezone (or a CDN header) at sign-in / session ping.
+      meta.get(u.uid)?.country ??
+      // 3. An event inside the window, for accounts whose doc predates capture.
+      eventCountryByUid.get(u.uid) ??
       UNKNOWN_COUNTRY;
     out.set(u.uid, country);
   }

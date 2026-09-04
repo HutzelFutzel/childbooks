@@ -36,7 +36,7 @@ import express, { type Express, type Request, type Response } from "express";
 import { FieldValue, getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import type { AuthedRequest } from "./auth";
-import { countryFromSignals, deviceFactsFromHeaders } from "./geo";
+import { countryFromSignals, deviceFactsFromHeaders, shouldWriteCountry, type GeoGuess } from "./geo";
 import {
   browserVersionKey,
   isUnknownDevice,
@@ -101,7 +101,7 @@ interface PingInput {
   facts: DeviceFacts;
   /** Viewport bucket, or null when the client had no analytics consent. */
   viewport: string | null;
-  country: string;
+  geo: GeoGuess;
   at: number;
 }
 
@@ -124,17 +124,23 @@ async function applyToProfile(input: PingInput): Promise<PingOutcome> {
   const ref = db.doc(`users/${input.uid}`);
 
   let state: DeviceState = { firstDevice: null, switchedAt: null, lastSeenAt: null, sessions: 0 };
+  let existingCountry: string | undefined;
   try {
     const snap = await ref.get();
-    if (snap.exists) state = readState(snap.data());
+    if (snap.exists) {
+      const data = snap.data();
+      state = readState(data);
+      existingCountry = typeof data?.country === "string" ? data.country : undefined;
+    }
   } catch {
     // Treated as a first-ever session. A duplicate "first" is a far smaller
     // error than dropping the ping entirely.
   }
 
+  const writeCountry = shouldWriteCountry(input.geo, existingCountry);
   const newSession =
     state.lastSeenAt == null || input.at - state.lastSeenAt > SESSION_GAP_MS;
-  if (!newSession && input.at - (state.lastSeenAt ?? 0) < EXTEND_WRITE_MS) {
+  if (!newSession && !writeCountry && input.at - (state.lastSeenAt ?? 0) < EXTEND_WRITE_MS) {
     return { newSession: false };
   }
 
@@ -171,7 +177,7 @@ async function applyToProfile(input: PingInput): Promise<PingOutcome> {
       patch["meta.device.switchedAt"] = input.at;
     }
   }
-  if (input.country && input.country !== "ZZ") patch.country = input.country;
+  if (writeCountry) patch.country = input.geo.country;
 
   // Dotted field paths need `update`, which fails on a missing doc — so fall
   // back to a create for the very first ping of a brand-new identity. The
@@ -182,7 +188,7 @@ async function applyToProfile(input: PingInput): Promise<PingOutcome> {
   } catch {
     await ref.set(
       {
-        ...(input.country !== "ZZ" ? { country: input.country } : {}),
+        ...(writeCountry ? { country: input.geo.country } : {}),
         meta: {
           lastActiveAt: input.at,
           device: {
@@ -379,7 +385,7 @@ export function registerSessionRoutes(app: Express): void {
       if (isUnknownDevice(facts)) return;
 
       const body = (req.body ?? {}) as Record<string, unknown>;
-      const country = countryFromSignals({
+      const geo = countryFromSignals({
         headers: req.headers,
         locale: typeof body.locale === "string" ? body.locale : "",
         tz: typeof body.tz === "string" ? body.tz : "",
@@ -399,7 +405,7 @@ export function registerSessionRoutes(app: Express): void {
       }
 
       ensureAdmin();
-      const { newSession } = await applyToProfile({ uid, facts, viewport, country, at: now });
+      const { newSession } = await applyToProfile({ uid, facts, viewport, geo, at: now });
       if (newSession) await bumpDay(facts, viewport, now);
     } catch (err) {
       console.error("[session-ping] failed", err);

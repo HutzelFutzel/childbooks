@@ -28,6 +28,7 @@
 import { create } from "zustand";
 import { backendFetch } from "../platform/backend";
 import { isIsoCountry } from "../core/config/countries";
+import { browserGeoHints } from "../core/analytics/geoHints";
 
 const STORAGE_KEY = "childbooks.shipCountry";
 
@@ -80,18 +81,13 @@ export const useShipCountryStore = create<ShipCountryState>((set, get) => ({
     try {
       // The browser's own timezone and language are the fallbacks the backend
       // uses when no CDN geo header is present, and only the client can read
-      // them. Sent as hints, never trusted as identity.
+      // them. Sent as hints, never trusted as identity. Timezone is the
+      // stronger location signal — locale is a language, and `en-US` is not
+      // "this person is in the United States".
       const params = new URLSearchParams();
-      try {
-        const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        if (tz) params.set("tz", tz);
-      } catch {
-        // Intl is universally available, but a locked-down environment that
-        // throws here should still get the header/language answer.
-      }
-      if (typeof navigator !== "undefined" && navigator.language) {
-        params.set("locale", navigator.language);
-      }
+      const { locale, tz } = browserGeoHints();
+      if (tz) params.set("tz", tz);
+      if (locale) params.set("locale", locale);
       const res = await backendFetch(`/geo/country?${params}`);
       if (!res.ok) return;
       const json = (await res.json()) as { country?: string | null };

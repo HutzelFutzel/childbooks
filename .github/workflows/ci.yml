@@ -60,6 +60,9 @@ jobs:
       - name: Check print geometry invariants
         run: yarn check:print-geometry
 
+      - name: Check geo inference invariants
+        run: yarn check:geo
+
       # App Hosting applies apphosting.yaml's env when it builds; a bare
       # `yarn build:web` here would not, and NEXT_PUBLIC_* are inlined at build
       # time. Load them so this really is the same build production gets.

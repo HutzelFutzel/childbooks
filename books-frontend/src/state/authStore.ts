@@ -17,6 +17,7 @@ import {
 import { doc, getDoc } from "firebase/firestore";
 import { getFirebaseAuth, getFirebaseDb, useEmulators } from "../lib/firebase";
 import { backendFetch } from "../platform/backend";
+import { browserGeoHints } from "../core/analytics/geoHints";
 import { useProjectsStore } from "./projectsStore";
 
 /**
@@ -36,10 +37,13 @@ export interface SignupConsent {
 
 async function requestWelcomeEmail(consent?: SignupConsent): Promise<void> {
   try {
+    // Timezone is the signal that stops English-UI visitors in Germany being
+    // stamped US. Locale is a language preference; the backend treats English
+    // region tags as non-location. Both have to come from the browser.
     await backendFetch("/auth/welcome", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(consent ?? {}),
+      body: JSON.stringify({ ...(consent ?? {}), ...browserGeoHints() }),
     });
   } catch (err) {
     console.warn("[auth] welcome/verification email request failed", err);
@@ -275,7 +279,11 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (!user || user.emailVerified) return;
     // Re-send a FRESH branded verification email via the backend. Surface a
     // failure so the banner can toast it.
-    const res = await backendFetch("/auth/welcome", { method: "POST" });
+    const res = await backendFetch("/auth/welcome", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(browserGeoHints()),
+    });
     if (!res.ok) throw new Error("Could not send the verification email. Please try again.");
   },
 

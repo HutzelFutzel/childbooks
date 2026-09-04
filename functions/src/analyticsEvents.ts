@@ -18,13 +18,14 @@
  * this collection — an event without them predates capture, which is a different
  * fact from "desktop" and is reported as such.
  *
- * `country` is the MARKET the event came from, derived from the already-exposed
- * locale/IP signals the blocking event carries (see geo.ts — never a stored IP,
- * never fine-grained geolocation). Without it every per-market number and every
- * local-time-of-day curve on the dashboard would be unbuildable, since Auth
- * itself records no location. The same code is denormalized onto `users/{uid}`
- * so the cross-user scans can group by market from a single collection read
- * instead of re-deriving it per request.
+ * `country` is the MARKET the event came from. Auth blocking events only
+ * carry the client's BCP-47 locale — no timezone, no CDN header — so the
+ * country written HERE is `regionFromLocale` (English region tags ignored,
+ * because `en-US` is Chrome's default worldwide and is not a location). The
+ * durable `users/{uid}.country` stamp is owned by `/auth/welcome` and
+ * `/session/ping`, which can see timezone. Slack for real signups is also
+ * fired from welcome, not from these triggers: pinging here raced welcome
+ * and won with US for every English-UI visitor.
  *
  * The admin Analysis dashboard queries this collection by `at` range. Writes are
  * STRICTLY best-effort: a throw here would block the user's authentication, so
@@ -37,9 +38,7 @@ import { beforeUserCreated, beforeUserSignedIn } from "firebase-functions/v2/ide
 import type { AuthBlockingEvent, AuthUserRecord } from "firebase-functions/v2/identity";
 import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
-import { notifySlack, formatSignupSlackMessage, getSparksSpent } from "./notify";
-import { SLACK_WEBHOOK_URL } from "./secrets";
-import { regionFromLocale } from "./geo";
+import { regionFromLocale, shouldWriteCountry, type GeoGuess } from "./geo";
 import { UNKNOWN_COUNTRY } from "../../books-frontend/src/core/analytics/markets";
 import {
   isUnknownDevice,
@@ -55,9 +54,11 @@ function sourceOf(user: AuthUserRecord): string {
 }
 
 /**
- * Market for a blocking event. The event carries the client's BCP-47 locale,
- * whose region subtag ("de-DE" → DE) is the only location signal available at
- * auth time — Auth records none and there's no request header to read here.
+ * Market for a blocking event. Auth carries only the client's BCP-47 locale —
+ * no timezone, no CDN header. `regionFromLocale` ignores English region tags
+ * (`en-US` is Chrome's default worldwide, not a location), so English-UI
+ * visitors land in ZZ here and the real stamp is left to `/auth/welcome` and
+ * `/session/ping`, which can see timezone.
  */
 function countryOf(event: AuthBlockingEvent): string {
   return regionFromLocale(event.locale ?? "") ?? UNKNOWN_COUNTRY;
@@ -105,18 +106,16 @@ async function record(
           }
         : {}),
     });
-    // Denormalize the market onto the user doc so the dashboard's per-market
-    // grouping is a single `users` read rather than a join against the event
-    // log (which only covers the selected window). Only overwrite with a known
-    // country — a signal-less sign-in must not erase a good earlier reading.
+    // Do not denormalize locale onto `users.country`. Auth blocking events
+    // carry no timezone, and `en-US` as a locale is not a location — writing
+    // it here is how the admin dashboard called every English-UI visitor
+    // American. `/auth/welcome` and `/session/ping` see timezone and own the
+    // durable stamp. The event log still records what we knew at auth time
+    // (ZZ for English UIs, DE for `de-DE`, …).
     const patch: Record<string, unknown> = {};
     if (source !== "anonymous" && type === "signup") {
       patch.signedUpAt = now;
       patch.signupSource = source;
-    }
-    if (country !== UNKNOWN_COUNTRY) {
-      patch.country = country;
-      if (type === "signup") patch.signupCountry = country;
     }
     // Same reasoning for the device rollup. `signupDevice` anchors every
     // cross-device cohort ("created the account on a phone — then what?"), so
@@ -148,44 +147,26 @@ async function record(
     // Best-effort: never block authentication on analytics.
   }
 
-  // Ping Slack (#growth) for REAL new accounts only — everyone starts as an
-  // anonymous guest, so those would be pure noise. Deduped on uid; prod-only and
-  // best-effort (notifySlack swallows failures, so it can't block sign-in).
-  if (type === "signup" && source !== "anonymous") {
-    let guestSparksSpent = 0;
-    try {
-      guestSparksSpent = await getSparksSpent(user.uid);
-    } catch {
-      // Best-effort
-    }
-
-    await notifySlack({
-      channel: "growth",
-      messageKey: "signup",
-      ref: `signup_${user.uid}`,
-      text: formatSignupSlackMessage({
-        email: user.email ?? user.uid,
-        providerId: source,
-        country,
-        device: device.device,
-        os: device.os,
-        browser: device.browser,
-        guestSparksSpent,
-      }),
-    });
-  }
+  // Slack for real (non-guest) signups lives on `/auth/welcome`. That handler
+  // sees timezone; this blocking function does not. Pinging from here raced
+  // welcome and won with `en-US` → US, so #growth called every German an
+  // American. Deduped on uid, the correct welcome ping then never sent.
 }
 
 /**
  * Record a non-anonymous signup event and stamp `signedUpAt` on the user doc.
  * Called from `/auth/welcome` when a user creates/links a real account.
- * Idempotent: if `users/{uid}.signedUpAt` is already set, it will not duplicate.
+ * Idempotent on the event: if `users/{uid}.signedUpAt` is already set, it will
+ * not duplicate the analytics row — but a stronger geo guess (timezone vs a
+ * leftover locale stamp) still updates `country`, so a German whose guest
+ * session was minted as US is corrected at upgrade.
  */
 export async function recordSignupEvent(opts: {
   uid: string;
   email: string | null;
   providerId: string;
   country: string;
+  geo?: GeoGuess;
   device?: DeviceFacts;
   at?: number;
 }): Promise<void> {
@@ -196,15 +177,36 @@ export async function recordSignupEvent(opts: {
     const userRef = db.doc(`users/${opts.uid}`);
     const userSnap = await userRef.get();
     const existing = userSnap.data() ?? {};
+    const existingCountry =
+      typeof existing.country === "string" ? existing.country : undefined;
+    const guess: GeoGuess = opts.geo ?? {
+      country: opts.country,
+      source: opts.country === UNKNOWN_COUNTRY ? "unknown" : "locale",
+    };
+    const writeCountry = shouldWriteCountry(guess, existingCountry);
+
     if (typeof existing.signedUpAt === "number") {
-      return; // Already stamped as signed up.
+      if (writeCountry) {
+        await userRef.set(
+          {
+            country: guess.country,
+            ...(typeof existing.signupCountry === "string" ? {} : { signupCountry: guess.country }),
+          },
+          { merge: true },
+        );
+      }
+      return;
     }
 
     const patch: Record<string, unknown> = {
       signedUpAt: at,
       signupSource: opts.providerId,
     };
-    if (opts.country !== UNKNOWN_COUNTRY) {
+    if (writeCountry) {
+      patch.country = guess.country;
+      patch.signupCountry = guess.country;
+    } else if (opts.country !== UNKNOWN_COUNTRY && !existingCountry) {
+      // Slack/display country from a saved fallback, with no stronger guess.
       patch.country = opts.country;
       patch.signupCountry = opts.country;
     }
@@ -227,7 +229,7 @@ export async function recordSignupEvent(opts: {
       uid: opts.uid,
       email: opts.email ? opts.email.toLowerCase() : null,
       source: opts.providerId,
-      country: opts.country,
+      country: writeCountry ? guess.country : opts.country,
       at,
       ...(known && opts.device
         ? {
@@ -243,16 +245,12 @@ export async function recordSignupEvent(opts: {
   }
 }
 
-// The signup ping needs the Slack webhook URL in this function's env too (the
-// blocking functions run separately from `api`), so bind the secret here.
-const BLOCKING_OPTS = { secrets: [SLACK_WEBHOOK_URL] };
-
 /** Fired once when an account (incl. anonymous guests) is first created. */
-export const onBeforeCreate = beforeUserCreated(BLOCKING_OPTS, async (event) => {
+export const onBeforeCreate = beforeUserCreated(async (event) => {
   if (event.data) await record("signup", event.data, countryOf(event), deviceOf(event));
 });
 
 /** Fired on every sign-in (not token refresh). */
-export const onBeforeSignIn = beforeUserSignedIn(BLOCKING_OPTS, async (event) => {
+export const onBeforeSignIn = beforeUserSignedIn(async (event) => {
   if (event.data) await record("login", event.data, countryOf(event), deviceOf(event));
 });

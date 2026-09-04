@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { backendFetch } from "../../platform/backend";
+import { browserGeoHints } from "../../core/analytics/geoHints";
 import { useAuthStore } from "../../state/authStore";
 import { useConsentStore } from "../../state/consentStore";
 
@@ -69,18 +70,11 @@ export function SessionTracker() {
       const now = Date.now();
       if (cancelled || now - lastSent < MIN_INTERVAL_MS) return;
       lastSent = now;
-      let tz = "";
-      try {
-        tz = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
-      } catch {
-        // Ancient/locked-down browser — the backend falls back to the locale.
-      }
       void backendFetch("/session/ping", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          locale: navigator.language || "",
-          tz,
+          ...browserGeoHints(),
           ...(consentRef.current ? { viewport: window.innerWidth } : {}),
         }),
         keepalive: true,

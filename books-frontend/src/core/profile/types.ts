@@ -286,7 +286,7 @@ export function migrateAddress(id: string, raw: unknown): SavedAddress {
     city: str(d.city),
     region: str(d.region),
     postal: str(d.postal),
-    country: str(d.country, "US"),
+    country: str(d.country),
     createdAt: num(d.createdAt),
     updatedAt: num(d.updatedAt),
   };

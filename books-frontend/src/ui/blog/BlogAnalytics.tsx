@@ -2,6 +2,7 @@
 
 import { useEffect } from "react";
 import { backendUrl } from "../../platform/backend";
+import { browserGeoHints } from "../../core/analytics/geoHints";
 
 /**
  * Cookieless, first-party analytics beacon for a single article. Mounted on the
@@ -26,14 +27,7 @@ export function BlogAnalytics({ slug }: { slug: string }) {
     const params = new URLSearchParams(window.location.search);
     const base = {
       slug,
-      locale: navigator.language || "",
-      tz: (() => {
-        try {
-          return Intl.DateTimeFormat().resolvedOptions().timeZone || "";
-        } catch {
-          return "";
-        }
-      })(),
+      ...browserGeoHints(),
     };
 
     const send = (payload: Record<string, unknown>) => {

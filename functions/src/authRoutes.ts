@@ -131,10 +131,16 @@ export function registerAuthRoutes(app: Express): void {
       });
 
       // Enrich the signup alert with location, device facts, and guest sparks history.
-      let country = countryFromSignals({
+      // Timezone (from the body) is the location signal; Accept-Language is a
+      // language list and must not be parsed as one. English-UI visitors in
+      // Germany used to become US here.
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const guess = countryFromSignals({
         headers: req.headers,
-        locale: req.headers["accept-language"]?.toString(),
+        locale: typeof body.locale === "string" ? body.locale.slice(0, 100) : "",
+        tz: typeof body.tz === "string" ? body.tz.slice(0, 100) : "",
       });
+      let country = guess.country;
       const deviceFacts = deviceFactsFromHeaders(req.headers);
 
       try {
@@ -171,6 +177,7 @@ export function registerAuthRoutes(app: Express): void {
         email,
         providerId,
         country,
+        geo: guess,
         device: deviceFacts,
       });
 
