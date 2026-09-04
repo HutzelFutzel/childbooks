@@ -12,6 +12,12 @@ export type ProviderErrorKind =
   | "not_found" // model / endpoint missing
   | "parse" // response could not be parsed / validated
   | "aborted" // request cancelled
+  // The provider accepted the request and then took longer than its budget.
+  // Distinct from `transient` because retrying costs another FULL budget —
+  // enough, on a text call, to blow the enclosing function's whole deadline —
+  // and distinct from `aborted` because nobody cancelled it, so it is a real
+  // failure the user must be told about rather than a silent no-op.
+  | "timeout"
   | "unknown";
 
 export interface ProviderErrorOptions {
@@ -88,13 +94,15 @@ export function describeError(err: unknown): string {
       case "auth":
         return "AI generation isn't available right now. It's managed on the server — please try again shortly.";
       case "rate_limit":
-        return "Rate limit reached. The app will retry automatically.";
+        return "The AI service is busy right now. Please try again in a moment.";
       case "transient":
-        return "A temporary network/server issue occurred. Retrying…";
+        return "A temporary network/server issue occurred. Please try again.";
       case "not_found":
         return err.message || "The requested model or resource was not found.";
       case "parse":
         return "The model returned an unexpected response. Try again.";
+      case "timeout":
+        return "The AI service took too long to respond. Please try again.";
       case "aborted":
         return "The request was cancelled.";
       default:

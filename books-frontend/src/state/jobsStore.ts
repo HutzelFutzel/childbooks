@@ -66,6 +66,8 @@ interface JobsState {
   activeUnitIds: Set<string>;
   /** Latest durable screenplay attempt for the open project. */
   screenplayJob: ScreenplayJobSummary | null;
+  /** Automatic recoveries spent on this project (see MAX_AUTO_SCREENPLAY_RETRIES). */
+  screenplayAutoRetries: number;
   /** True after the initial project-jobs snapshot has arrived. */
   jobsLoaded: boolean;
   projectId: string | null;
@@ -81,6 +83,16 @@ interface JobsState {
 // Results currently being written. Snapshots can arrive faster than a write
 // persists, so this guards against applying the same task twice in flight.
 const inFlight = new Set<string>();
+
+/**
+ * How many times the studio silently re-drafts a screenplay that failed.
+ *
+ * One is enough to ride out a transient provider fault, which is what most
+ * failures are. Past that the problem is probably about this particular story,
+ * and re-running it just spends the reader's Sparks on the same error — so the
+ * explicit "Try again" in Cast and Pages takes over.
+ */
+const MAX_AUTO_SCREENPLAY_RETRIES = 1;
 
 /** True if the spread's tree already contains a version backed by `blobId`. */
 function hasBlob(project: Project, spreadId: string, blobId: string): boolean {
@@ -218,6 +230,7 @@ export const useJobsStore = create<JobsState>((set, get) => ({
   active: [],
   activeUnitIds: new Set<string>(),
   screenplayJob: null,
+  screenplayAutoRetries: 0,
   jobsLoaded: false,
   projectId: null,
   unsub: null,
@@ -229,6 +242,7 @@ export const useJobsStore = create<JobsState>((set, get) => ({
       active: [],
       activeUnitIds: new Set<string>(),
       screenplayJob: null,
+      screenplayAutoRetries: 0,
       jobsLoaded: false,
       projectId,
       unsub: null,
@@ -341,7 +355,23 @@ export const useJobsStore = create<JobsState>((set, get) => ({
   async startScreenplay(project, retry = false) {
     const current = get().screenplayJob;
     if (current?.status === "pending" || current?.status === "running") return;
-    if (!retry && current) return;
+
+    // A failed screenplay used to be a dead end. Its id is deterministic
+    // (`screenplay-{projectId}-{generatedAt}`) and stays occupied by an errored
+    // document; `onGenerationJob` only fires on create, the reaper skips
+    // terminal jobs, and this guard refused to start while any job existed. So
+    // the book sat with no pages until the user happened to find "Try again".
+    // Recover once by ourselves, then leave it to them.
+    let auto = false;
+    if (!retry && current) {
+      if (current.status !== "error") return;
+      if (get().screenplayAutoRetries >= MAX_AUTO_SCREENPLAY_RETRIES) return;
+      auto = true;
+      set((s) => ({ screenplayAutoRetries: s.screenplayAutoRetries + 1 }));
+    }
+    // Either kind of retry needs a FRESH id — the deterministic one is taken by
+    // the attempt that failed, and writing it again is a no-op.
+    const freshId = retry || auto;
 
     const optimisticId = `starting-${Date.now()}`;
     set({
@@ -352,7 +382,7 @@ export const useJobsStore = create<JobsState>((set, get) => ({
       },
     });
     try {
-      const id = await createScreenplayJob(project, { retry });
+      const id = await createScreenplayJob(project, { retry: freshId });
       set((state) => ({
         screenplayJob:
           state.screenplayJob?.id === optimisticId
@@ -377,6 +407,7 @@ export const useJobsStore = create<JobsState>((set, get) => ({
       active: [],
       activeUnitIds: new Set<string>(),
       screenplayJob: null,
+      screenplayAutoRetries: 0,
       jobsLoaded: false,
       projectId: null,
       unsub: null,

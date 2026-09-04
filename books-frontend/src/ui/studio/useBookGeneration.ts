@@ -71,6 +71,9 @@ export function useBookGeneration() {
     }
     const signal = startGeneration();
     let failures = 0;
+    let pagesStarted = false;
+    // Job-level failures only — per-unit ones come back as a count, so a batch
+    // that loses five pages reports that once instead of five toasts deep.
     const onError = (err: unknown) => {
       if (isAbortError(err)) return; // cancellations are not failures
       failures += 1;
@@ -81,15 +84,24 @@ export function useBookGeneration() {
       // A refused batch (no tier chosen, or not enough Sparks) stops the whole
       // run: pages cost more than the anchors we already couldn't pay for, and
       // the gate's own dialog is the message the user needs to see.
-      const started = await generateAllAnchors(useProjectsStore.getState().current()!, setAnchorGenerating, onError, signal);
-      const pagesStarted =
-        started && !signal.aborted
-          ? await generateAllPages(useProjectsStore.getState().current()!, setPageGenerating, onError, signal)
-          : started;
+      const anchors = await generateAllAnchors(useProjectsStore.getState().current()!, setAnchorGenerating, onError, signal);
+      failures += anchors.failed;
+
+      const runPages = anchors.started && !signal.aborted;
+      if (runPages) {
+        const pages = await generateAllPages(
+          useProjectsStore.getState().current()!,
+          setPageGenerating,
+          onError,
+          signal,
+        );
+        failures += pages.failed;
+        pagesStarted = pages.started;
+      }
 
       if (signal.aborted) {
         notify.info("Generation cancelled", "Anything already finished was kept.");
-      } else if (!started || !pagesStarted) {
+      } else if (!anchors.started || !pagesStarted) {
         // The gate already explained itself on screen.
       } else if (failures === 0) {
         notify.success("Your book is generated", "Tap any page to refine the art or layout.");

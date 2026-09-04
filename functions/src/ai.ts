@@ -22,6 +22,7 @@ import { ensureAffordAction, InsufficientSparks } from "./sparks";
 import { standingPriceOverrides } from "./campaigns/pricing";
 import { ensureWithinQuota, incrementQuota, QuotaExceeded } from "./quotas";
 import { ALL_IMAGE_ACTION_IDS } from "../../books-frontend/src/core/ai/actions";
+import { ProviderError } from "../../books-frontend/src/core/errors";
 import {
   apiKeyFor,
   ImageTierRequired,
@@ -70,6 +71,28 @@ function withTextModel(config: BookConfig, model: ModelSelection): BookConfig {
   return { ...config, textModel: model };
 }
 
+/**
+ * Wall-clock budget for one `/ai/*` request, kept under the `api` function's own
+ * 300s timeout.
+ *
+ * Without a deadline of our own the platform is the only thing that stops a slow
+ * request, and it stops it by killing the instance — the client then gets an
+ * unparseable 5xx body and shows "Request failed (500)." after five minutes of
+ * spinning. Worse, nothing bounded the pipelines' retry budgets against the
+ * function's: a text call may retry up to four times at 210–240s each, which
+ * cannot fit however fast the provider is.
+ *
+ * `AbortSignal.timeout` (rather than a plain controller) is deliberate: it
+ * aborts with a `TimeoutError`, which the provider layer classifies as
+ * `kind: "timeout"` — non-retryable, and honestly described to the user as the
+ * provider being too slow instead of as a cancellation.
+ */
+const REQUEST_BUDGET_MS = 280_000;
+
+function requestDeadline(): AbortSignal {
+  return AbortSignal.timeout(REQUEST_BUDGET_MS);
+}
+
 function sendError(res: Response, err: unknown): void {
   if (err instanceof InsufficientSparks) {
     // 402 Payment Required — the client surfaces a Spark top-up prompt.
@@ -101,6 +124,27 @@ function sendError(res: Response, err: unknown): void {
         message: err.message,
         code: "intent_ambiguous",
         candidates: err.candidates,
+      },
+    });
+    return;
+  }
+  // Carry the provider error's KIND across the wire, not just its message.
+  // Without it the client rebuilds every failure as a bare `Error` and prints
+  // the raw provider string, so all of `describeError`'s copy — the rate-limit,
+  // timeout and parse wording — was unreachable for anything going through
+  // HTTP. `retryable` rides along so the client never invites a retry of a
+  // request that can only fail the same way again.
+  if (err instanceof ProviderError) {
+    // Always 502/504 — never the provider's own status. 401/403 here mean "the
+    // CALLER's auth" everywhere else in this API, so forwarding a provider key
+    // rejection as 401 would send `backendFetch` off to refresh a session that
+    // was never the problem and then prompt the user to sign in again.
+    res.status(err.kind === "timeout" ? 504 : 502).json({
+      error: {
+        message: err.message,
+        code: "provider_error",
+        kind: err.kind,
+        retryable: err.retryable,
       },
     });
     return;
@@ -147,6 +191,7 @@ export function registerAiRoutes(app: Express): void {
           creds: { apiKey: apiKeyFor(model.provider) },
           model: model.id,
           prompts,
+          signal: requestDeadline(),
         }),
       );
       await meterAndSettle({
@@ -198,6 +243,7 @@ export function registerAiRoutes(app: Express): void {
           creds: { apiKey: apiKeyFor(model.provider) },
           model: model.id,
           prompts,
+          signal: requestDeadline(),
         }),
       );
       await meterAndSettle({
@@ -235,6 +281,7 @@ export function registerAiRoutes(app: Express): void {
           creds: { apiKey: apiKeyFor(model.provider) },
           model: model.id,
           prompts,
+          signal: requestDeadline(),
         }),
       );
       await meterAndSettle({
@@ -267,6 +314,7 @@ export function registerAiRoutes(app: Express): void {
           creds: { apiKey: apiKeyFor(model.provider) },
           model: model.id,
           prompts,
+          signal: requestDeadline(),
         }),
       );
       await meterAndSettle({
@@ -310,6 +358,7 @@ export function registerAiRoutes(app: Express): void {
             .filter((a) => a.id !== anchorId)
             .map((a) => ({ name: a.name, type: a.type, description: a.description })),
           prompts,
+          signal: requestDeadline(),
         }),
       );
       await meterAndSettle({
@@ -349,6 +398,7 @@ export function registerAiRoutes(app: Express): void {
           edit,
           previous,
           prompts,
+          signal: requestDeadline(),
         }),
       );
       await meterAndSettle({
@@ -400,7 +450,7 @@ export function registerAiRoutes(app: Express): void {
       const env = backendPipelineEnv(req.uid!, models, prompts, caps);
       const startedAt = Date.now();
       const { value, events, stats } = await withUsage(() =>
-        renderAnchor(project, anchor, options ?? {}, env),
+        renderAnchor(project, anchor, { ...(options ?? {}), signal: requestDeadline() }, env),
       );
       await meterAndSettle({
         uid: req.uid!,
@@ -480,14 +530,13 @@ export function registerAiRoutes(app: Express): void {
       const env = backendPipelineEnv(req.uid!, models, prompts, caps);
       const startedAt = Date.now();
       const { value, events, stats } = await withUsage(async () => {
+        const signal = requestDeadline();
         if (coverContinuationBlobId) {
           const front = await env.loadBlob(coverContinuationBlobId);
           if (!front) throw new Error("The front cover couldn't be loaded for continuation.");
-          return renderCoverContinuation(project, spread, front, env, {
-            signal: undefined,
-          });
+          return renderCoverContinuation(project, spread, front, env, { signal });
         }
-        return renderIllustration(project, spread, options ?? {}, env);
+        return renderIllustration(project, spread, { ...(options ?? {}), signal }, env);
       });
       await meterAndSettle({
         uid: req.uid!,

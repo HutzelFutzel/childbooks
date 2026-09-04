@@ -25,7 +25,9 @@ setGlobalOptions({ region: "us-central1", maxInstances: 40 });
 // Generation fan-out: the Firestore-triggered enqueuer that expands a job
 // (users/{uid}/jobs/{jobId}) into a Cloud Tasks graph, the per-task worker that
 // renders one unit, and the scheduled reaper that re-drives stalled jobs.
-export { onGenerationJob, runFanTask, reapStuckJobs } from "./jobs";
+// `runTextTask` is a SEPARATE queue on purpose: screenplay drafting must not
+// wait behind a batch of multi-minute image renders on the fan-out queue.
+export { onGenerationJob, runFanTask, runTextTask, reapStuckJobs } from "./jobs";
 
 // Scheduled cleanup of stale anonymous (guest) accounts + their data.
 export { cleanupAnonymousUsers } from "./cleanup";

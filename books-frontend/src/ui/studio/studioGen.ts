@@ -6,7 +6,7 @@
 import type { AnchorTask, RefreshTask, TaskDoc } from "../../core/jobs/types";
 import type { ResolvedModels } from "../../core/models/registry";
 import type { Project } from "../../core/types";
-import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
+import { COVER_BACK_ID, COVER_FRONT_ID, SPINE_ID } from "../../core/types";
 import { containedAnchorsFor } from "../../core/book/anchorGraph";
 import {
   currentAnchorImage,
@@ -16,6 +16,7 @@ import {
   staleIllustrationSpreadIds,
 } from "../../state/ai";
 import { illustrationUnits } from "../../state/bookUnits";
+import { ProviderError } from "../../core/errors";
 import {
   createAnchorsJob,
   createRefreshJob,
@@ -30,9 +31,28 @@ import { useSparksStore } from "../../state/sparksStore";
 import { warnBatchShortfall } from "../../state/sparksShortfallPrompt";
 import { estimateForAction } from "../../core/config/sparks";
 import type { ImageActionId } from "../../core/ai/actions";
+import type { CostSampleKind } from "../../core/config/imageCostStats";
 import { currentActionMultiplier } from "../../state/subscriptionStore";
+import {
+  campaignMultiplierFor,
+  usePriceOverridesStore,
+} from "../../state/priceOverridesStore";
+import { tierSparkRange } from "../hooks/useTierEstimate";
 import { requireImageTier } from "../../state/imageTierPrompt";
 import type { ImageTier } from "../../core/config/modelConfig";
+
+/** One unit of a batch, priced the way the server will settle it. */
+interface BatchUnit {
+  action: ImageActionId;
+  kind?: CostSampleKind;
+}
+
+/** The Spark action an illustration unit settles as (covers cost more). */
+function illustrationActionForId(id: string): ImageActionId {
+  return id === COVER_FRONT_ID || id === COVER_BACK_ID || id === SPINE_ID
+    ? "coverIllustration"
+    : "pageIllustration";
+}
 
 /**
  * Mirror the server's pre-flight Spark check on the client so a batch we can't
@@ -40,27 +60,57 @@ import type { ImageTier } from "../../core/config/modelConfig";
  * errors). The server remains authoritative. Returns false when the batch can't
  * start within the negative buffer.
  *
- * Prices with `estimateForAction` rather than the richer tier-aware range the
- * buttons preview, because this has to agree with the server's reserve: quoting
- * a shortfall the server then disagrees with would send the user to buy an
- * amount that still doesn't let the batch run.
+ * Priced per unit, exactly as `expandJob` quotes it: the UPPER bound of the
+ * tier's recent-cost window, for the action and cost window each unit will
+ * actually settle from. The flat `estimateForAction` this used to call is a
+ * different number entirely for `derived` image pricing, and the gap multiplied
+ * by the batch size — so a batch the client waved through was refused wholesale
+ * by the server's reserve, with a bare "not enough Sparks" toast and not one
+ * page rendered.
  */
-function ensureBatchAffordable(action: ImageActionId, count: number): boolean {
-  const { sparks } = useAppConfigStore.getState();
-  if (!sparks.enabled || count <= 0) return true;
-  const perUnit = estimateForAction(sparks, action, currentActionMultiplier(action));
-  const estimate = perUnit * count;
+function ensureBatchAffordable(units: BatchUnit[], tier: ImageTier): boolean {
+  const { sparks, modelCosts, imageCostStats } = useAppConfigStore.getState();
+  if (!sparks.enabled || units.length === 0) return true;
+
+  const overrides = usePriceOverridesStore.getState().actions;
+  const priced = new Map<string, number>();
+  const priceOf = ({ action, kind = "fresh" }: BatchUnit): number => {
+    const key = `${action}:${kind}`;
+    const hit = priced.get(key);
+    if (hit !== undefined) return hit;
+    const multiplier =
+      currentActionMultiplier(action) * campaignMultiplierFor(overrides, action, tier);
+    const range = tierSparkRange(
+      sparks,
+      modelCosts,
+      imageCostStats,
+      action,
+      tier,
+      multiplier,
+      kind,
+    );
+    // No range means the economy can't price it here; fall back to the flat
+    // configured estimate rather than quoting free.
+    const value = range ? range.maxSparks : estimateForAction(sparks, action, multiplier);
+    priced.set(key, value);
+    return value;
+  };
+
+  const estimate = units.reduce((sum, unit) => sum + priceOf(unit), 0);
   if (estimate <= 0) return true;
   const balance = useSparksStore.getState().balance;
   if (balance - estimate >= -sparks.maxNegativeSparks) return true;
 
   // How far the wallet actually goes, so the warning can say "enough for 6 of
   // them" instead of only naming a price. The buffer is part of the spendable
-  // amount here for the same reason the check above allows it.
+  // amount here for the same reason the check above allows it. A mixed batch is
+  // reported against its average unit, which is what "how many of these fit"
+  // means when they aren't all the same price.
   const spendable = balance + sparks.maxNegativeSparks;
+  const perUnit = estimate / units.length;
   warnBatchShortfall({
-    action,
-    requested: count,
+    action: units[0].action,
+    requested: units.length,
     affordable: perUnit > 0 ? Math.max(0, Math.floor(spendable / perUnit)) : 0,
     estimate,
     balance,
@@ -73,6 +123,24 @@ function ensureBatchAffordable(action: ImageActionId, count: number): boolean {
 export { coverSpread, illustrationUnits } from "../../state/bookUnits";
 
 type SetGen = (id: string, on: boolean) => void;
+
+/**
+ * A failed task as an error the UI can describe. The worker records the
+ * provider failure class next to the message, so a job failure reads the same
+ * as a synchronous one rather than relaying a raw provider string.
+ */
+function taskError(task: TaskDoc): Error {
+  const message = task.error || "Generation failed.";
+  return task.errorKind ? new ProviderError(message, { kind: task.errorKind }) : new Error(message);
+}
+
+/** What a batch run reports back: whether it ran at all, and how much failed. */
+export interface BatchOutcome {
+  /** False when a gate refused the batch before it started (already explained). */
+  started: boolean;
+  /** Units that errored. Counted rather than toasted, for the caller's summary. */
+  failed: number;
+}
 
 /**
  * Safety bound on watching a single job from the client. The worker always
@@ -101,10 +169,17 @@ async function watchJob(
     eagerReconcile?: boolean;
     /** Fires once per task the first time it reaches done/error. */
     onTaskSettled?: (task: TaskDoc) => void;
+    /**
+     * Suppress the per-task error toast, leaving the failure count to the
+     * caller's own summary. A twelve-page batch that lost five pages used to
+     * fire five toasts and then a sixth saying five items had failed.
+     */
+    quietTaskErrors?: boolean;
     onError: (err: unknown) => void;
   },
-): Promise<void> {
+): Promise<{ failed: number }> {
   const handled = new Set<string>();
+  const failedTasks = new Set<string>();
   let surfacedError = false;
   await new Promise<void>((resolve) => {
     let timer: ReturnType<typeof setTimeout>;
@@ -128,8 +203,9 @@ async function watchJob(
           opts.onTaskSettled?.(task);
         } else if (task.status === "error") {
           handled.add(task.id);
+          failedTasks.add(task.id);
           surfacedError = true;
-          opts.onError(new Error(task.error || "Generation failed."));
+          if (!opts.quietTaskErrors) opts.onError(taskError(task));
           opts.onTaskSettled?.(task);
         }
       }
@@ -146,6 +222,7 @@ async function watchJob(
     });
     timer = setTimeout(finish, JOB_WATCH_TIMEOUT_MS);
   });
+  return { failed: failedTasks.size };
 }
 
 /**
@@ -181,9 +258,11 @@ async function waitForAnchorImages(ids: string[], signal?: AbortSignal): Promise
  * `skipIds` leaves in-progress looks alone so a one-off create doesn't get
  * re-queued by "create remaining".
  *
- * Returns false when a gate refused the batch before it started — no tier
+ * `started` is false when a gate refused the batch before it began — no tier
  * chosen, or not enough Sparks. Both cases already put an explanation on screen,
  * so the caller must stay quiet rather than report success over the top of it.
+ * `failed` counts the units that errored, for the caller's own summary; those
+ * failures are deliberately NOT toasted one by one.
  */
 export async function generateAllAnchors(
   project: Project,
@@ -191,11 +270,11 @@ export async function generateAllAnchors(
   onError: (err: unknown) => void,
   signal?: AbortSignal,
   skipIds?: ReadonlySet<string>,
-): Promise<boolean> {
+): Promise<BatchOutcome> {
   const pending = (project.anchors ?? []).filter(
     (a) => a.include && !currentAnchorImage(a) && !skipIds?.has(a.id),
   );
-  if (pending.length === 0) return true;
+  if (pending.length === 0) return { started: true, failed: 0 };
   // Paint every card as busy before auth/profile/tier checks or network work.
   pending.forEach((a) => setGen(a.id, true));
   let tier: ImageTier | null;
@@ -204,15 +283,15 @@ export async function generateAllAnchors(
   } catch (err) {
     pending.forEach((a) => setGen(a.id, false));
     onError(err);
-    return false;
+    return { started: false, failed: 0 };
   }
   if (!tier) {
     pending.forEach((a) => setGen(a.id, false));
-    return false;
+    return { started: false, failed: 0 };
   }
-  if (!ensureBatchAffordable("anchorImage", pending.length)) {
+  if (!ensureBatchAffordable(pending.map(() => ({ action: "anchorImage" })), tier)) {
     pending.forEach((a) => setGen(a.id, false));
-    return false;
+    return { started: false, failed: 0 };
   }
 
   let models: ResolvedModels;
@@ -221,31 +300,33 @@ export async function generateAllAnchors(
   } catch (err) {
     pending.forEach((a) => setGen(a.id, false));
     onError(err);
-    return true;
+    return { started: true, failed: 0 };
   }
 
   const tasks: AnchorTask[] = pending.map((a) => ({ id: a.id, status: "pending" }));
   const succeeded: string[] = [];
+  let failed = 0;
   try {
     const jobId = await createAnchorsJob(project, models, tasks, tier);
     // Fold finished renders in eagerly so the page-generation step that follows
     // sees the new anchor images instead of racing the store's own reconcile.
-    await watchJob(jobId, project.id, {
+    ({ failed } = await watchJob(jobId, project.id, {
       signal,
       eagerReconcile: true,
+      quietTaskErrors: true,
       onError,
       onTaskSettled: (task) => {
         setGen(task.id, false);
         if (task.status === "done") succeeded.push(task.id);
       },
-    });
+    }));
     if (!signal?.aborted) await waitForAnchorImages(succeeded, signal);
   } catch (err) {
     onError(err);
   } finally {
     pending.forEach((a) => setGen(a.id, false));
   }
-  return true;
+  return { started: true, failed };
 }
 
 /**
@@ -257,26 +338,27 @@ export async function generateAllAnchors(
  * Because the work runs server-side, it continues even if the browser is closed;
  * this call simply tracks the job for the current session.
  *
- * Returns false when a gate refused the batch, exactly as
- * {@link generateAllAnchors} does.
+ * Reports `started`/`failed` exactly as {@link generateAllAnchors} does.
  */
 export async function generateAllPages(
   project: Project,
   setGen: SetGen,
   onError: (err: unknown) => void,
   signal?: AbortSignal,
-): Promise<boolean> {
+): Promise<BatchOutcome> {
   const pending = illustrationUnits(project).filter((s) => !currentIllustration(project, s.id));
-  if (pending.length === 0) return true;
+  if (pending.length === 0) return { started: true, failed: 0 };
   const tier = await requireImageTier();
-  if (!tier) return false;
-  if (!ensureBatchAffordable("pageIllustration", pending.length)) return false;
+  if (!tier) return { started: false, failed: 0 };
+  if (!ensureBatchAffordable(pending.map((s) => ({ action: illustrationActionForId(s.id) })), tier))
+    return { started: false, failed: 0 };
   pending.forEach((s) => setGen(s.id, true));
 
   // Enqueue one job; the backend worker renders every task. Results are applied
   // to the version trees by the jobs store (which also reconciles work that
   // finishes after the studio closes), so here we only mirror per-spread status
   // into the local spinners and surface failures.
+  let failed = 0;
   try {
     const models = getResolvedModels(tier);
     const tasks: RefreshTask[] = pending.map((s) => ({
@@ -285,17 +367,18 @@ export async function generateAllPages(
       options: {},
     }));
     const jobId = await createRefreshJob(project, models, tasks, tier);
-    await watchJob(jobId, project.id, {
+    ({ failed } = await watchJob(jobId, project.id, {
       signal,
+      quietTaskErrors: true,
       onError,
       onTaskSettled: (task) => setGen(task.id, false),
-    });
+    }));
   } catch (err) {
     onError(err);
   } finally {
     pending.forEach((s) => setGen(s.id, false));
   }
-  return true;
+  return { started: true, failed };
 }
 
 /**
@@ -322,11 +405,14 @@ export async function refreshSpread(
   },
   onError: (err: unknown) => void,
 ): Promise<void> {
-  const isCover = spreadId === COVER_FRONT_ID || spreadId === COVER_BACK_ID;
   const { tier: requestedTier, ...runOptions } = options;
   const tier = requestedTier ?? (await requireImageTier());
   if (!tier) return;
-  if (!ensureBatchAffordable(isCover ? "coverIllustration" : "pageIllustration", 1)) return;
+  const refreshUnit: BatchUnit = {
+    action: illustrationActionForId(spreadId),
+    kind: runOptions.edit?.trim() ? "edit" : "fresh",
+  };
+  if (!ensureBatchAffordable([refreshUnit], tier)) return;
 
   try {
     const models = getResolvedModels(tier);
@@ -384,7 +470,11 @@ export async function generateAnchorViaJob(
   const missingChildren = containedAnchorsFor(anchor, project.anchors ?? []).filter(
     (c) => !currentAnchorImage(c),
   );
-  if (!ensureBatchAffordable("anchorImage", 1 + missingChildren.length)) return false;
+  const anchorUnits: BatchUnit[] = [
+    ...missingChildren.map<BatchUnit>(() => ({ action: "anchorImage" })),
+    { action: "anchorImage", kind: runOptions.edit?.trim() ? "edit" : "fresh" },
+  ];
+  if (!ensureBatchAffordable(anchorUnits, tier)) return false;
 
   try {
     const models = getResolvedModels(tier);
@@ -435,7 +525,7 @@ export async function updateStaleAnchors(
   if (stale.length === 0) return 0;
   const tier = await requireImageTier();
   if (!tier) return 0;
-  if (!ensureBatchAffordable("anchorImage", stale.length)) return 0;
+  if (!ensureBatchAffordable(stale.map(() => ({ action: "anchorImage" })), tier)) return 0;
 
   try {
     const models = getResolvedModels(tier);
@@ -479,7 +569,7 @@ export async function updateAnchorsThenSpread(
   if (ids.length > 0) {
     const tier = await requireImageTier();
     if (!tier) return;
-    if (!ensureBatchAffordable("anchorImage", ids.length)) return;
+    if (!ensureBatchAffordable(ids.map(() => ({ action: "anchorImage" })), tier)) return;
     try {
       const models = getResolvedModels(tier);
       const tasks: AnchorTask[] = ids.map((id) => ({

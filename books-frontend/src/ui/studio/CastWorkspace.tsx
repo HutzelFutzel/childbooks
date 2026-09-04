@@ -238,7 +238,7 @@ export function CastWorkspace({
     let failures = 0;
     setBusy(true);
     try {
-      const started = await generateAllAnchors(
+      const outcome = await generateAllAnchors(
         current,
         setAnchorGenerating,
         (err) => {
@@ -249,7 +249,18 @@ export function CastWorkspace({
         signal,
         skipIds,
       );
-      if (started && !signal.aborted && failures === 0) {
+      failures += outcome.failed;
+      if (!outcome.started || signal.aborted) {
+        // A refused batch already explained itself; a cancelled one is not a
+        // failure worth reporting.
+      } else if (failures > 0) {
+        // Per-look failures arrive as a count rather than one toast each, so
+        // this is the only place they get reported.
+        notify.info(
+          "Finished with some errors",
+          `${failures} look${failures === 1 ? "" : "s"} couldn't be generated — tap one to try again.`,
+        );
+      } else {
         const after = useProjectsStore.getState().current();
         const unfinished = (after?.anchors ?? []).some(
           (anchor) => anchor.include && !currentAnchorImage(anchor),

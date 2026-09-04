@@ -51,6 +51,7 @@ import { normalizeImageTier, type ImageTier } from "../../books-frontend/src/cor
 import { ALL_SECRETS } from "./secrets";
 import { downloadBlob, ensureAdmin, uploadBlob } from "./storage";
 import type { ResolvedModels } from "../../books-frontend/src/core/models/registry";
+import { ProviderError } from "../../books-frontend/src/core/errors";
 import { containedAnchorsFor } from "../../books-frontend/src/core/book/anchorGraph";
 import { effectiveAnchorIds } from "../../books-frontend/src/core/book/anchorRefs";
 import { spreadsById } from "../../books-frontend/src/core/book/units";
@@ -99,6 +100,22 @@ import {
 
 /** The Cloud Tasks queue backing {@link runFanTask} (== the function name). */
 const FAN_QUEUE = "runFanTask";
+/**
+ * Text generation runs on its OWN queue ({@link runTextTask}).
+ *
+ * Both kinds of work used to share `runFanTask`, whose fleet-wide dispatch cap
+ * exists to protect the image provider. That cap is small on purpose, so a
+ * single "illustrate 12 pages" batch filled it with multi-minute renders and
+ * every screenplay behind them simply waited — a cheap 30s text call queued
+ * behind expensive image work it has no resource conflict with. Separate queues
+ * remove the head-of-line blocking entirely.
+ */
+const TEXT_QUEUE = "runTextTask";
+
+/** Which queue a job kind's tasks belong on. */
+function queueForKind(kind: JobKind): string {
+  return kind === "screenplay" ? TEXT_QUEUE : FAN_QUEUE;
+}
 
 /**
  * How long a worker owns a claimed task before another dispatch may re-claim it.
@@ -128,10 +145,32 @@ const REAP_BUDGET_MS = 400_000;
  * enqueued. `concurrency` lets one warm instance serve several tasks (fewer
  * cold starts) within its memory budget.
  */
-const WORKER_CONCURRENCY = Number(process.env.FAN_WORKER_CONCURRENCY) || 4;
-const MAX_CONCURRENT_DISPATCHES = Number(process.env.FAN_MAX_CONCURRENT) || 20;
-const MAX_DISPATCHES_PER_SEC = Number(process.env.FAN_MAX_PER_SEC) || 10;
+/**
+ * Two, not four: each concurrent render holds decoded image buffers (references,
+ * the result, mask composites) in the same 2GiB instance, and an OOM kills every
+ * task sharing it — turning one heavy page into several failed ones. More,
+ * smaller instances cost a little more and fail one task at a time.
+ */
+const WORKER_CONCURRENCY = Number(process.env.FAN_WORKER_CONCURRENCY) || 2;
+/**
+ * Halved from 20. Twenty simultaneous renders on one provider key reliably trip
+ * the per-minute image limit, and until the worker started handing throttles
+ * back to the queue that came back as permanently failed pages. Retries are the
+ * real safety net now, so this doesn't need to be tiny — just low enough that a
+ * throttle is occasional rather than the normal state of a large batch.
+ */
+const MAX_CONCURRENT_DISPATCHES = Number(process.env.FAN_MAX_CONCURRENT) || 10;
+const MAX_DISPATCHES_PER_SEC = Number(process.env.FAN_MAX_PER_SEC) || 5;
 const TASK_MAX_ATTEMPTS = Number(process.env.FAN_MAX_ATTEMPTS) || 3;
+
+/**
+ * Text queue shape. Screenplay drafting is one structured call — no shared
+ * provider rate limit with images and a fraction of the memory — so it can run
+ * far wider than the image fleet without endangering anything.
+ */
+const TEXT_WORKER_CONCURRENCY = Number(process.env.TEXT_WORKER_CONCURRENCY) || 8;
+const TEXT_MAX_CONCURRENT_DISPATCHES = Number(process.env.TEXT_MAX_CONCURRENT) || 20;
+const TEXT_MAX_DISPATCHES_PER_SEC = Number(process.env.TEXT_MAX_PER_SEC) || 10;
 
 function db() {
   return getFirestore();
@@ -245,9 +284,14 @@ function taskSettleKey(jobId: string, taskId: string): string {
  * enqueue is logged but not thrown, because the reaper re-queues any ready task
  * a job is missing — so a transient queue hiccup can't strand a job.
  */
-async function enqueueTasks(uid: string, jobId: string, taskIds: string[]): Promise<void> {
+async function enqueueTasks(
+  uid: string,
+  jobId: string,
+  taskIds: string[],
+  kind: JobKind,
+): Promise<void> {
   if (taskIds.length === 0) return;
-  const queue = getFunctions().taskQueue(FAN_QUEUE);
+  const queue = getFunctions().taskQueue(queueForKind(kind));
   await Promise.all(
     taskIds.map((taskId) =>
       queue.enqueue({ uid, jobId, taskId }).catch((err) => {
@@ -440,7 +484,7 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
   // Dispatch roots (no dependencies). Dependents are enqueued as their deps
   // complete — or by the reaper if a completion's dispatch is lost.
   const roots = specs.filter((s) => (dependsMap.get(s.id) ?? []).length === 0).map((s) => s.id);
-  await enqueueTasks(uid, ref.id, roots);
+  await enqueueTasks(uid, ref.id, roots, job.kind);
 }
 
 // ---------------------------------------------------------------------------
@@ -453,17 +497,39 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
  * it's done/held/gone (caller no-ops — this is how at-least-once delivery and
  * duplicate dispatches are deduplicated).
  */
-async function claimTask(taskRef: DocumentReference): Promise<TaskDoc | null> {
+async function claimTask(taskRef: DocumentReference, owner: string): Promise<TaskDoc | null> {
   return db().runTransaction(async (tx) => {
     const snap = await tx.get(taskRef);
     if (!snap.exists) return null;
     const task = snap.data() as TaskDoc;
     if (isTerminal(task.status)) return null;
     const now = Date.now();
-    if (typeof task.claimedUntil === "number" && task.claimedUntil > now) return null;
+    const held = typeof task.claimedUntil === "number" && task.claimedUntil > now;
+    // A live lease blocks everyone EXCEPT the owner that took it. `owner` is the
+    // Cloud Tasks task name, which is stable across that task's retries, so an
+    // attempt whose instance died hard (OOM/timeout, leaving the lease behind)
+    // can re-take its own work. Without this the retries — all of which land
+    // inside the six-minute lease — silently no-op and return 2xx, Cloud Tasks
+    // considers the task delivered, and it sits "running" until the reaper
+    // eventually notices the whole job went quiet.
+    if (held && task.claimedBy !== owner) return null;
     const claimedUntil = now + TASK_LEASE_MS;
-    tx.update(taskRef, { status: "running", claimedUntil, updatedAt: now });
-    return { ...task, status: "running", claimedUntil };
+    tx.update(taskRef, { status: "running", claimedBy: owner, claimedUntil, updatedAt: now });
+    return { ...task, status: "running", claimedBy: owner, claimedUntil };
+  });
+}
+
+/**
+ * Hand a task back to the queue without failing it — used when the render hit a
+ * throttle or a transient upstream fault and Cloud Tasks still has attempts
+ * left. Clearing the lease matters: the retry must be able to claim it again.
+ */
+async function releaseTask(taskRef: DocumentReference): Promise<void> {
+  await taskRef.update({
+    status: "pending",
+    claimedBy: null,
+    claimedUntil: 0,
+    updatedAt: Date.now(),
   });
 }
 
@@ -475,10 +541,19 @@ async function readDeps(uid: string, jobId: string, depIds: string[]): Promise<T
   return snaps.filter((s) => s.exists).map((s) => s.data() as TaskDoc);
 }
 
-async function markTaskError(taskRef: DocumentReference, message: string): Promise<void> {
+async function markTaskError(
+  taskRef: DocumentReference,
+  message: string,
+  cause?: unknown,
+): Promise<void> {
+  // Record the provider failure class alongside the message so the studio can
+  // describe it properly instead of relaying a raw provider string.
+  const kind = cause instanceof ProviderError ? cause.kind : undefined;
   await taskRef.update({
     status: "error",
     error: message,
+    ...(kind ? { errorKind: kind } : {}),
+    claimedBy: null,
     claimedUntil: 0,
     updatedAt: Date.now(),
   });
@@ -521,6 +596,7 @@ async function enqueueReadyDependents(
   uid: string,
   jobId: string,
   doneTaskId: string,
+  kind: JobKind,
 ): Promise<void> {
   const q = await tasksCol(uid, jobId).where("dependsOn", "array-contains", doneTaskId).get();
   const candidates = q.docs
@@ -532,7 +608,7 @@ async function enqueueReadyDependents(
     const allDone = c.dependsOn.every((id) => deps.find((d) => d.id === id)?.status === "done");
     if (allDone) ready.push(c.id);
   }
-  await enqueueTasks(uid, jobId, ready);
+  await enqueueTasks(uid, jobId, ready, kind);
 }
 
 /**
@@ -870,14 +946,133 @@ export const onGenerationJob = onDocumentCreated(
 );
 
 /**
- * WORKER: render exactly one task. Claims it (dedupes duplicate/at-least-once
- * dispatch), verifies its dependencies, renders under a per-task timeout, writes
- * the result, advances aggregate progress, and dispatches now-ready dependents.
- * A render failure is TERMINAL for the task (returns 2xx, no Cloud Tasks retry);
- * only a hard crash (OOM/timeout) surfaces as non-2xx so Cloud Tasks retries the
- * infrastructure failure per `retryConfig`.
+ * Should this failure be handed back to Cloud Tasks instead of failing the task?
+ *
+ * Only faults that say nothing about the request itself: a throttle or a
+ * transient upstream fault will very likely succeed on the identical call
+ * later. Everything else — a bad prompt, a missing spread, a parse failure — is
+ * a verdict, and repeating it just asks the same question again.
+ *
+ * This matters most under fan-out. A dozen parallel renders reliably trip the
+ * image provider's per-minute limit, and the pipeline's own single retry fires
+ * about a second later, well inside that same minute, so it fails too. Cloud
+ * Tasks retries on a 5–60s backoff, which is the right timescale for a
+ * per-minute quota — but it only ever saw 2xx, because the worker swallowed
+ * every render error. That is why a big batch came back with pages that had
+ * simply given up.
  */
-export const runFanTask = onTaskDispatched<{ uid: string; jobId: string; taskId: string }>(
+function isRetryableRenderError(err: unknown): boolean {
+  return err instanceof ProviderError && err.retryable;
+}
+
+/** What a dispatched task carries — enough to find the job and the task doc. */
+type TaskPayload = { uid: string; jobId: string; taskId: string };
+
+/**
+ * WORKER BODY (shared by {@link runFanTask} and {@link runTextTask}): render
+ * exactly one task. Claims it (dedupes duplicate/at-least-once dispatch),
+ * verifies its dependencies, renders under a per-task timeout, writes the
+ * result, advances aggregate progress, and dispatches now-ready dependents.
+ */
+async function handleTask(data: TaskPayload, owner: string, attempt: number): Promise<void> {
+  ensureAdmin();
+  const { uid, jobId, taskId } = data;
+  if (!uid || !jobId || !taskId) return;
+
+  const ref = jobRef(uid, jobId);
+  const jobSnap = await ref.get();
+  if (!jobSnap.exists) return;
+  const job = jobSnap.data() as AnyJob;
+  if (isTerminal(job.status)) return;
+
+  const taskRef = tasksCol(uid, jobId).doc(taskId);
+  const task = await claimTask(taskRef, owner);
+  if (!task) return; // terminal, held by another live worker, or gone
+
+  // Dependency gate. A failed dependency permanently blocks this task; deps
+  // that aren't done yet mean a premature dispatch — release and let the
+  // dep's completion (or the reaper) re-queue us when truly ready.
+  if (task.dependsOn && task.dependsOn.length > 0) {
+    const deps = await readDeps(uid, jobId, task.dependsOn);
+    if (deps.some((d) => d.status === "error")) {
+      await markTaskError(taskRef, "Skipped: a dependency failed to generate.");
+      await finalizeIfComplete(ref, "fail");
+      return;
+    }
+    const allDone = task.dependsOn.every((id) => deps.find((d) => d.id === id)?.status === "done");
+    if (!allDone) {
+      await releaseTask(taskRef);
+      return;
+    }
+  }
+
+  // `expandJob` validated this and persisted it onto the job doc (guests
+  // already downgraded), so this only re-reads a known-good value.
+  const tier = normalizeImageTier(job.tier);
+  const timeout = withTaskTimeout();
+  let result: TaskResult;
+  let stats: TaskStats;
+  try {
+    ({ result, stats } = await renderTask(uid, jobId, job, task, tier, timeout.signal));
+  } catch (err) {
+    if (attempt < TASK_MAX_ATTEMPTS && isRetryableRenderError(err)) {
+      // Non-2xx so Cloud Tasks retries on its backoff. Release first: the retry
+      // has to be able to claim the task again.
+      await releaseTask(taskRef);
+      logger.warn("[fan] retryable render failure — returning to the queue", {
+        jobId,
+        taskId,
+        attempt,
+        err: String(err),
+      });
+      throw err;
+    }
+    await markTaskError(taskRef, (err as Error)?.message ?? "Generation failed.", err);
+    await finalizeIfComplete(ref, "fail");
+    return;
+  } finally {
+    timeout.done();
+  }
+
+  await taskRef.update({
+    status: "done",
+    result,
+    stats,
+    claimedBy: null,
+    claimedUntil: 0,
+    updatedAt: Date.now(),
+  });
+
+  // Bookkeeping from here on. It must never be able to un-deliver the render
+  // above: these two used to sit inside the render's own try/catch, so a
+  // Firestore contention abort on the shared job document — which is exactly
+  // what a dozen pages finishing at once produces — flipped a rendered,
+  // already-charged page to "error" and threw its result away. The reaper
+  // recomputes progress from the task docs, so swallowing these is safe.
+  await finalizeIfComplete(ref, "success").catch((err) => {
+    logger.error("[fan] progress update failed (render kept)", { jobId, taskId, err: String(err) });
+  });
+  await enqueueReadyDependents(uid, jobId, taskId, job.kind).catch((err) => {
+    logger.error("[fan] dependent dispatch failed", { jobId, taskId, err: String(err) });
+  });
+}
+
+/**
+ * Both workers run the same body. `req.id` is the Cloud Tasks task name, stable
+ * across that task's retries, which is what lets a retry reclaim a lease its
+ * own crashed attempt left behind.
+ */
+function dispatch(req: { data: TaskPayload; id?: string; retryCount?: number }): Promise<void> {
+  const owner = req.id ?? `${req.data.jobId}:${req.data.taskId}`;
+  return handleTask(req.data, owner, (req.retryCount ?? 0) + 1);
+}
+
+/**
+ * IMAGE WORKER. Its fleet-wide dispatch cap is the single knob protecting the
+ * image provider from bursts, so it stays deliberately small — see
+ * {@link MAX_CONCURRENT_DISPATCHES}.
+ */
+export const runFanTask = onTaskDispatched<TaskPayload>(
   {
     secrets: ALL_SECRETS,
     memory: "2GiB",
@@ -893,62 +1088,31 @@ export const runFanTask = onTaskDispatched<{ uid: string; jobId: string; taskId:
       maxDispatchesPerSecond: MAX_DISPATCHES_PER_SEC,
     },
   },
-  async (req) => {
-    ensureAdmin();
-    const { uid, jobId, taskId } = req.data;
-    if (!uid || !jobId || !taskId) return;
+  dispatch,
+);
 
-    const ref = jobRef(uid, jobId);
-    const jobSnap = await ref.get();
-    if (!jobSnap.exists) return;
-    const job = jobSnap.data() as AnyJob;
-    if (isTerminal(job.status)) return;
-
-    const taskRef = tasksCol(uid, jobId).doc(taskId);
-    const task = await claimTask(taskRef);
-    if (!task) return; // terminal, held by a live worker, or gone
-
-    // Dependency gate. A failed dependency permanently blocks this task; deps
-    // that aren't done yet mean a premature dispatch — release and let the
-    // dep's completion (or the reaper) re-queue us when truly ready.
-    if (task.dependsOn && task.dependsOn.length > 0) {
-      const deps = await readDeps(uid, jobId, task.dependsOn);
-      if (deps.some((d) => d.status === "error")) {
-        await markTaskError(taskRef, "Skipped: a dependency failed to generate.");
-        await finalizeIfComplete(ref, "fail");
-        return;
-      }
-      const allDone = task.dependsOn.every(
-        (id) => deps.find((d) => d.id === id)?.status === "done",
-      );
-      if (!allDone) {
-        await taskRef.update({ status: "pending", claimedUntil: 0, updatedAt: Date.now() });
-        return;
-      }
-    }
-
-    // `expandJob` validated this and persisted it onto the job doc (guests
-    // already downgraded), so this only re-reads a known-good value.
-    const tier = normalizeImageTier(job.tier);
-    const timeout = withTaskTimeout();
-    try {
-      const { result, stats } = await renderTask(uid, jobId, job, task, tier, timeout.signal);
-      await taskRef.update({
-        status: "done",
-        result,
-        stats,
-        claimedUntil: 0,
-        updatedAt: Date.now(),
-      });
-      await finalizeIfComplete(ref, "success");
-      await enqueueReadyDependents(uid, jobId, taskId);
-    } catch (err) {
-      await markTaskError(taskRef, (err as Error)?.message ?? "Generation failed.");
-      await finalizeIfComplete(ref, "fail");
-    } finally {
-      timeout.done();
-    }
+/**
+ * TEXT WORKER — screenplay drafting on its own queue, so a cheap 30s text call
+ * never waits behind a batch of multi-minute image renders. Text has no shared
+ * rate limit with images and needs a fraction of the memory, so it runs wider.
+ */
+export const runTextTask = onTaskDispatched<TaskPayload>(
+  {
+    secrets: ALL_SECRETS,
+    memory: "512MiB",
+    timeoutSeconds: 300,
+    concurrency: TEXT_WORKER_CONCURRENCY,
+    retryConfig: {
+      maxAttempts: TASK_MAX_ATTEMPTS,
+      minBackoffSeconds: 5,
+      maxBackoffSeconds: 60,
+    },
+    rateLimits: {
+      maxConcurrentDispatches: TEXT_MAX_CONCURRENT_DISPATCHES,
+      maxDispatchesPerSecond: TEXT_MAX_DISPATCHES_PER_SEC,
+    },
   },
+  dispatch,
 );
 
 // ---------------------------------------------------------------------------
@@ -1022,7 +1186,7 @@ async function resumeJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
   );
 
   if (ready.length > 0) {
-    await enqueueTasks(uid, ref.id, ready.map((t) => t.id));
+    await enqueueTasks(uid, ref.id, ready.map((t) => t.id), job.kind);
     return;
   }
 

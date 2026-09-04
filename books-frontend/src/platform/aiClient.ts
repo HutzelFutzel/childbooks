@@ -15,6 +15,7 @@ import { slimProjectForRender } from "../core/book/slimProject";
 import type { AnchorRender, AnchorRunOptions } from "../core/pipeline/anchorRun";
 import type { IllustrationRender, IllustrationRunOptions } from "../core/pipeline/illustrationRun";
 import { IntentAmbiguousError } from "../core/pipeline/intentResolve";
+import { ProviderError, type ProviderErrorKind } from "../core/errors";
 import type { ImageTier } from "../core/config/modelConfig";
 
 export { IntentAmbiguousError };
@@ -35,6 +36,8 @@ interface ErrorBody {
   error?: {
     message?: string;
     code?: string;
+    kind?: ProviderErrorKind;
+    retryable?: boolean;
     balance?: number;
     needed?: number;
     candidates?: { anchorId: string; name: string; brief?: string }[];
@@ -71,6 +74,17 @@ async function postAi<T>(path: string, body: unknown, signal?: AbortSignal): Pro
         useAuthStore.getState().openAuthDialog();
       }
       throw new InsufficientSparksError(message, balance, needed);
+    }
+    // An upstream provider failure keeps its KIND across the wire, so the
+    // toast can say "the AI service took too long" instead of relaying a raw
+    // provider string. Rebuilt as a real ProviderError so every consumer of
+    // `describeError` / `isAbortError` behaves the same as it does in-process.
+    if (parsed?.error?.code === "provider_error" && parsed.error.kind) {
+      throw new ProviderError(message, {
+        kind: parsed.error.kind,
+        status: res.status,
+        retryable: parsed.error.retryable,
+      });
     }
     throw new Error(message);
   }

@@ -10,6 +10,23 @@ function isAbort(err: unknown): boolean {
   return err instanceof DOMException && err.name === "AbortError";
 }
 
+/**
+ * A request that ran out of time rather than failing.
+ *
+ * `AbortSignal.timeout()` aborts with a `TimeoutError`, NOT an `AbortError` —
+ * the spec keeps them apart precisely so a deadline can be told from a cancel,
+ * and Node ≥20 rejects `fetch` with that reason verbatim. Classifying it as a
+ * generic network failure made it retryable, so a text call that hung for its
+ * full 210s budget was immediately started again and the enclosing 300s
+ * function was killed mid-retry — five minutes of waiting for "Network request
+ * failed". Some runtimes still re-wrap the reason, so match the message too.
+ */
+function isTimeout(err: unknown): boolean {
+  if (err instanceof DOMException && err.name === "TimeoutError") return true;
+  if (err instanceof Error && err.name === "TimeoutError") return true;
+  return err instanceof Error && /timed?\s*out/i.test(err.message);
+}
+
 async function safeText(res: Response): Promise<string> {
   try {
     return await res.text();
@@ -44,6 +61,13 @@ export async function requestJson<T>(
   } catch (err) {
     if (isAbort(err)) {
       throw new ProviderError("Request aborted", { kind: "aborted", provider, cause: err });
+    }
+    if (isTimeout(err)) {
+      throw new ProviderError(`The ${provider} request timed out`, {
+        kind: "timeout",
+        provider,
+        cause: err,
+      });
     }
     throw new ProviderError("Network request failed", {
       kind: "transient",

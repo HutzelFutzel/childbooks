@@ -86,14 +86,19 @@ function StudioInner({ project }: { project: Project }) {
 
   // Auto-enqueue the screenplay once analysis is ready. The project-jobs
   // snapshot must arrive first so reopening or a second tab cannot duplicate a
-  // durable attempt that is already pending, complete, or failed.
+  // durable attempt that is already pending or complete.
+  //
+  // A FAILED attempt is deliberately let through: nothing else re-drives one
+  // (its id is taken, the trigger is create-only, the reaper skips terminal
+  // jobs), so a book could sit with no pages forever. `startScreenplay` decides
+  // whether the recovery budget allows it, which also stops this from looping.
   useEffect(() => {
     if (
       !inStudio ||
       !jobsLoaded ||
       !project.analysis ||
       project.screenplay ||
-      screenplayJob
+      (screenplayJob && screenplayJob.status !== "error")
     ) {
       return;
     }

@@ -8,6 +8,7 @@
  * the result, reporting progress on the job document.
  */
 import type { ProviderId } from "../config/options";
+import type { ProviderErrorKind } from "../errors";
 import type { ImageTier } from "../config/modelConfig";
 import type { ResolvedModels } from "../models/registry";
 import type { AnchorRender } from "../pipeline/anchorRun";
@@ -300,9 +301,21 @@ export interface TaskDoc {
   /** kind-specific render output (present when `status === "done"`). */
   result?: TaskResult;
   error?: string;
+  /**
+   * The provider failure class behind `error`, when there was one. Lets the
+   * studio describe a job failure with the same wording as a synchronous one
+   * ("the AI service took too long") instead of relaying a raw provider string.
+   */
+  errorKind?: ProviderErrorKind;
   stats?: TaskStats;
   /** Epoch ms a worker holds this task; guards duplicate at-least-once dispatch. */
   claimedUntil?: number;
+  /**
+   * Who holds the lease — the Cloud Tasks task name, which is stable across
+   * that task's retries. Lets a retry re-claim a lease its own crashed attempt
+   * left behind, while still locking out unrelated duplicate dispatches.
+   */
+  claimedBy?: string | null;
   updatedAt: number;
 }
 
