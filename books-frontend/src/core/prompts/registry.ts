@@ -215,6 +215,14 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "You are a children's-book art director. Analyze the story and identify every subject that must look IDENTICAL each time it appears so the illustrations stay consistent. Include recurring CHARACTERS (people, animals, creatures), important PLACES/settings, and significant recurring OBJECTS. Skip one-off background details that never need to match. For each, write a concise but vivid, self-contained visual description (appearance, colors, distinguishing features) grounded in the story; infer sensible details where the story is silent. Describe only the subject itself — do NOT mention the art style, medium, rendering technique, family tree, or relationship graph. Rank importance: high = central/appears often, medium = recurring, low = minor but still needs consistency. For CHARACTERS ONLY, also set three fields. \"ageYears\" is the character's age in years when stated or strongly implied; omit it rather than guessing when the story gives no reliable basis. \"bodyPlan\" is the character's gross body layout: \"bipedal\" for anyone who stands upright on two legs (people, robots, a bear in a waistcoat, a standing toy), \"quadruped\" for four-legged animals that walk on all fours, \"avian\" for birds, \"aquatic\" for fish and other swimming or serpentine bodies, \"amorphous\" for everything without a clear limbed body (a cloud, a teapot with a face, a blob). \"heightCm\" is a private approximate real-world scale hint based on age and species (a 5-year-old child is about 110, an adult about 170, a house cat about 25 at the shoulder); omit it rather than guessing. Leave all three fields out for places and objects. Separately list only EMBEDDINGS needed for rendering: a named place or object that physically contains another extracted subject which must appear inside its reference sheet (for example a specific lamp on a specific desk). Return each as {container, subject}, never nest more than one level, and use an empty list when none are essential. Also write a 1-2 sentence summary of the story's visual world.",
       ),
       blk(
+        "ageSeparation",
+        'AGE HAS ONE SOURCE OF TRUTH: for characters, put numeric age only in "ageYears". Never include a numeric age, "years old", "year-old", or "aged N" in "description"; that field is for visible appearance such as face, hair, clothing, colors, and distinguishing features.',
+      ),
+      blk(
+        "distinctWardrobe",
+        "For every human or clothed anthropomorphic character, include a concrete signature outfit in the visual description. When the story is silent, invent an age- and context-appropriate outfit, and make its garment combination and dominant colors visibly distinct from every other character's outfit.",
+      ),
+      blk(
         "language",
         "The story is written in {{languageName}}. Understand names and details in that language, preserve every proper name exactly, and return visual descriptions and the summary in English for the illustration pipeline.",
       ),
@@ -237,6 +245,14 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk(
         "role",
         'You are a children\'s-book art director. Write a concise but vivid VISUAL description for a single {{type}} named "{{name}}" that must stay consistent across the book. Ground it in the story; infer sensible, specific details (appearance, colors, distinguishing features) where the story is silent. Describe only the subject itself — do NOT mention the art style, medium or rendering technique. If this subject\'s look depends on another listed subject (a relative to resemble, or an object/place it contains), reference that subject by its EXACT name. Reply with ONLY the description text — no preamble, no quotes — in 1-3 sentences.',
+      ),
+      blk(
+        "ageSeparation",
+        'When "{{type}}" is a character, do not include a numeric age, "years old", "year-old", or "aged N". Age is stored separately from the visual description.',
+      ),
+      blk(
+        "distinctWardrobe",
+        'When "{{type}}" is a human or clothed anthropomorphic character, include a concrete signature outfit. If the story is silent, invent a distinctive age- and context-appropriate outfit rather than a generic children\'s-book uniform.',
       ),
       blk(
         "language",
@@ -432,6 +448,11 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "characterAge",
         "{{anchorName}} is {{age}}. Keep face, body proportions and apparent life stage believable for this age and species.",
         "hasAge",
+      ),
+      blk(
+        "characterWardrobe",
+        "Use the character's visual description and extra direction as the source of truth for clothing. If neither specifies clothing, invent a character-specific outfit appropriate to this subject; do not derive an outfit from the general art-style palette.",
+        "isCharacter",
       ),
       blk("userGuidance", "{{userGuidance}}", "hasUserGuidance"),
       blk(

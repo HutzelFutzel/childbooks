@@ -42,7 +42,7 @@ import { serverConfig } from "./config";
 import { compositeMaskedRegion, downscaleReference } from "./imaging";
 import { backendPipelineEnv } from "./pipelineEnv";
 import { loadModelCapabilities, loadPromptContext, recordLatencySamples } from "./appConfig";
-import { requireTier, resolveImageModels } from "./modelResolve";
+import { requireTier, resolveImageModels, resolveTextAction } from "./modelResolve";
 import { withUsage, type CallStats } from "./usage";
 import { meterAndSettle, runKindOf } from "./actionRun";
 import { featureAllowedForUser } from "./plans";
@@ -62,6 +62,7 @@ import {
   type AnchorRender,
 } from "../../books-frontend/src/core/pipeline/anchorRun";
 import { renderIllustration } from "../../books-frontend/src/core/pipeline/illustrationRun";
+import { generateScreenplay } from "../../books-frontend/src/core/pipeline/screenplay";
 import { stampImageProvenance } from "../../books-frontend/src/core/pipeline/imageProvenance";
 import { withRetry } from "../../books-frontend/src/core/pipeline/retry";
 import { getImageProvider } from "../../books-frontend/src/core/providers";
@@ -70,7 +71,12 @@ import type {
   ReferenceImage,
 } from "../../books-frontend/src/core/providers/types";
 import type { ProviderId } from "../../books-frontend/src/core/config/options";
-import { COVER_BACK_ID, COVER_FRONT_ID, SPINE_ID } from "../../books-frontend/src/core/types";
+import {
+  COVER_BACK_ID,
+  COVER_FRONT_ID,
+  SPINE_ID,
+  type BookConfig,
+} from "../../books-frontend/src/core/types";
 import {
   type AnchorsJob,
   type AnchorTask,
@@ -82,6 +88,8 @@ import {
   type JobTask,
   type PipelineRefreshJob,
   type RefreshTask,
+  type ScreenplayJob,
+  type ScreenplayTask,
   type TaskDoc,
   type TaskResult,
   type TaskStats,
@@ -167,7 +175,7 @@ function isTerminal(status: JobStatus): boolean {
 }
 
 /** Model role a job kind resolves against (covers reuse the page model). */
-function modelRoleFor(kind: JobKind): "pageIllustration" | "anchorImage" {
+function modelRoleFor(kind: Exclude<JobKind, "screenplay">): "pageIllustration" | "anchorImage" {
   return kind === "anchors" ? "anchorImage" : "pageIllustration";
 }
 
@@ -259,13 +267,17 @@ async function applyFeatureGate(uid: string, job: AnyJob): Promise<AnyJob> {
 }
 
 /** Build the per-kind payload fields for a task doc (omitting undefined). */
-function taskPayload(kind: JobKind, spec: JobTask | RefreshTask | AnchorTask): Partial<TaskDoc> {
+function taskPayload(
+  kind: JobKind,
+  spec: JobTask | RefreshTask | AnchorTask | ScreenplayTask,
+): Partial<TaskDoc> {
   if (kind === "image") {
     const s = spec as JobTask;
     const out: Partial<TaskDoc> = { request: s.request };
     if (s.referenceUses) out.referenceUses = s.referenceUses;
     return out;
   }
+  if (kind === "screenplay") return {};
   const s = spec as RefreshTask | AnchorTask;
   return { options: s.options ?? {} };
 }
@@ -299,17 +311,21 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
     return;
   }
 
-  // Guests render on the cheap tier only and get no negative buffer. Everyone
-  // else must have stated a tier — the job fails loudly rather than rendering
-  // (and charging for) a quality the user never chose.
-  const tier = requireTier(job.tier, caller.guest);
-  // Pre-check the whole batch is affordable (within the negative buffer) so we
-  // don't dispatch work the user can't pay for; each task settles as it renders.
-  const action = job.kind === "anchors" ? "anchorImage" : "pageIllustration";
-  const quotedSparks = await estimateForUser(uid, action, tier);
-  await ensureAfford(uid, quotedSparks * specs.length, {
-    noNegativeBuffer: caller.guest,
-  });
+  let tier: ImageTier | undefined;
+  let quotedSparks: number | undefined;
+  if (job.kind !== "screenplay") {
+    // Guests render on the cheap tier only and get no negative buffer. Everyone
+    // else must have stated a tier — the job fails loudly rather than rendering
+    // (and charging for) a quality the user never chose.
+    tier = requireTier(job.tier, caller.guest);
+    // Pre-check image work before dispatch. Text screenplay generation keeps
+    // the existing settle-after-use behavior of the synchronous endpoint.
+    const action = job.kind === "anchors" ? "anchorImage" : "pageIllustration";
+    quotedSparks = await estimateForUser(uid, action, tier);
+    await ensureAfford(uid, quotedSparks * specs.length, {
+      noNegativeBuffer: caller.guest,
+    });
+  }
 
   await applyFeatureGate(uid, job);
 
@@ -338,13 +354,13 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
     expanded: true,
     updatedAt: now,
     progress: { total: specs.length, completed: 0, failed: 0 },
-    // Persist the (possibly guest-downgraded) tier so workers render with it.
-    tier,
-    // What each task in this batch was quoted at, so the worker can record the
-    // quote next to the eventual charge on the run.
-    quotedSparks,
+    // Persist image billing/model choices only for image-bearing jobs.
+    ...(tier ? { tier } : {}),
+    ...(quotedSparks !== undefined ? { quotedSparks } : {}),
     // Persist the feature-gated snapshot so workers render against it.
-    ...(job.kind !== "image" ? { project: (job as PipelineRefreshJob | AnchorsJob).project } : {}),
+    ...(job.kind !== "image"
+      ? { project: (job as PipelineRefreshJob | AnchorsJob | ScreenplayJob).project }
+      : {}),
   });
   await batch.commit();
 
@@ -579,6 +595,44 @@ async function renderTask(
   tier: ImageTier,
   signal: AbortSignal,
 ): Promise<{ result: TaskResult; stats: TaskStats }> {
+  if (job.kind === "screenplay") {
+    const [model, prompts] = await Promise.all([
+      resolveTextAction("screenplay"),
+      loadPromptContext(),
+    ]);
+    const project = job.project;
+    const startedAt = Date.now();
+    const config: BookConfig = { ...project.config, textModel: model };
+    const { value: screenplay, events, stats } = await withUsage(() =>
+      generateScreenplay({
+        config,
+        anchors: project.anchors ?? [],
+        creds: { apiKey: apiKeyFor(model.provider) },
+        model: model.id,
+        prompts,
+        signal,
+      }),
+    );
+    await meterAndSettle({
+      uid,
+      action: "screenplay",
+      events,
+      stats,
+      projectId: job.projectId ?? project.id,
+      project,
+      kind: "fresh",
+      jobId,
+      targetId: task.id,
+      source: "worker",
+      startedAt,
+      models: { text: model },
+    });
+    return {
+      result: screenplay,
+      stats: { ms: Date.now() - startedAt, ...stats },
+    };
+  }
+
   const [models, prompts, caps] = await Promise.all([
     resolveImageModels(modelRoleFor(job.kind), tier),
     loadPromptContext(),

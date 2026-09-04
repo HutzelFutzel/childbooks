@@ -131,7 +131,12 @@ export function isTextOverflowing(box: TextBox, pageAspect: number, baseSize: nu
 export function fitBoxHeightPct(box: TextBox, pageAspect: number): number {
   const inner = innerFor(box, pageAspect, 1e6);
   const m = measure(box, box.fontSizePct * VH, inner);
-  const boxH = m.height + 2 * inner.pad;
+  // Konva's glyph ink can extend slightly beyond its nominal line box (most
+  // visibly at the cap height and descenders). Exact line-box height therefore
+  // clips the first/last row even when wrapping was measured correctly. Keep
+  // half a line of breathing room, split above and below by vertical alignment.
+  const inkSafety = box.fontSizePct * VH * box.lineHeight * 0.5;
+  const boxH = m.height + 2 * inner.pad + inkSafety;
   return Math.min(0.98, Math.max(0.04, boxH / VH));
 }
 

@@ -58,6 +58,8 @@ export interface StructuredRequest<T> {
    */
   images?: InputImage[];
   temperature?: number;
+  /** Upper bound for structured responses that may contain many book pages. */
+  maxOutputTokens?: number;
   signal?: AbortSignal;
 }
 

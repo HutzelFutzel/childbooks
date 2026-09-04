@@ -196,10 +196,24 @@ export async function generateAllAnchors(
     (a) => a.include && !currentAnchorImage(a) && !skipIds?.has(a.id),
   );
   if (pending.length === 0) return true;
-  const tier = await requireImageTier();
-  if (!tier) return false;
-  if (!ensureBatchAffordable("anchorImage", pending.length)) return false;
+  // Paint every card as busy before auth/profile/tier checks or network work.
   pending.forEach((a) => setGen(a.id, true));
+  let tier: ImageTier | null;
+  try {
+    tier = await requireImageTier();
+  } catch (err) {
+    pending.forEach((a) => setGen(a.id, false));
+    onError(err);
+    return false;
+  }
+  if (!tier) {
+    pending.forEach((a) => setGen(a.id, false));
+    return false;
+  }
+  if (!ensureBatchAffordable("anchorImage", pending.length)) {
+    pending.forEach((a) => setGen(a.id, false));
+    return false;
+  }
 
   let models: ResolvedModels;
   try {
@@ -329,9 +343,10 @@ export async function refreshSpread(
 
 /**
  * Generate (or iterate on) a SINGLE anchor through the backend job queue —
- * non-blocking, same as pages: only the enqueue is awaited; the per-anchor
- * "working" state is driven by the jobs store's `activeUnitIds` and the result
- * is folded into the anchor's version tree on reconcile.
+ * non-blocking, same as pages: only the enqueue is awaited. `onSettled` closes
+ * the optimistic loading state once the queued job reaches a terminal state;
+ * the jobs store independently preserves progress across reloads and folds the
+ * result into the anchor's version tree on reconcile.
  *
  * Dependency expansion: when the anchor CONTAINS other anchors that have no
  * image yet (e.g. generating "hospital room" before its "hospital bed"), the
@@ -349,20 +364,27 @@ export async function generateAnchorViaJob(
     tier?: ImageTier;
   },
   onError: (err: unknown) => void,
-): Promise<void> {
+  onSettled?: () => void,
+): Promise<boolean> {
   const anchor = (project.anchors ?? []).find((a) => a.id === anchorId);
   if (!anchor) {
     onError(new Error("Anchor not found."));
-    return;
+    return false;
   }
   const { tier: requestedTier, ...runOptions } = options;
-  const tier = requestedTier ?? (await requireImageTier());
-  if (!tier) return;
+  let tier: ImageTier | null;
+  try {
+    tier = requestedTier ?? (await requireImageTier());
+  } catch (err) {
+    onError(err);
+    return false;
+  }
+  if (!tier) return false;
 
   const missingChildren = containedAnchorsFor(anchor, project.anchors ?? []).filter(
     (c) => !currentAnchorImage(c),
   );
-  if (!ensureBatchAffordable("anchorImage", 1 + missingChildren.length)) return;
+  if (!ensureBatchAffordable("anchorImage", 1 + missingChildren.length)) return false;
 
   try {
     const models = getResolvedModels(tier);
@@ -378,9 +400,19 @@ export async function generateAnchorViaJob(
     // store's `activeUnitIds`, so nothing to clear here). Reconciling eagerly
     // from the job's own task subcollection means a single regeneration lands
     // even if the project-wide collection-group listener is unavailable.
-    void watchJob(jobId, project.id, { eagerReconcile: true, onError });
+    void watchJob(jobId, project.id, { eagerReconcile: true, onError })
+      .then(async () => {
+        // Do not clear the optimistic card state until the terminal result has
+        // actually been folded into the live anchor.
+        const finalTasks = await fetchJobTasks(jobId);
+        await reconcileTasksNow(finalTasks, project.id);
+      })
+      .catch(onError)
+      .finally(() => onSettled?.());
+    return true;
   } catch (err) {
     onError(err);
+    return false;
   }
 }
 

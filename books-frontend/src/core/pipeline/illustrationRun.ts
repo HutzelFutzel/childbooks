@@ -265,28 +265,6 @@ export function applyIllustrationRender(
   return pruneVersionTree(next, DEFAULT_MAX_VERSIONS);
 }
 
-/**
- * Resolve the book's selected art style into a leading "style" reference image,
- * or null when it uses a custom style / none is configured. The exemplar steers
- * the rendering technique; the textual style description stays in the prompt as
- * a complement and as the fallback when no image is available.
- */
-export async function loadStyleReference(
-  env: PipelineEnv,
-  config: Project["config"],
-): Promise<ReferenceImage | null> {
-  const presetId = config.artStyle?.presetId;
-  if (!presetId) return null;
-  const data = await env.loadStyleImage(presetId);
-  if (!data) return null;
-  return {
-    base64: data.base64,
-    mimeType: data.mimeType,
-    role: "style",
-    label: "art style reference",
-  };
-}
-
 export { IntentAmbiguousError } from "./intentResolve";
 
 /**
@@ -1256,10 +1234,10 @@ export async function renderIllustration(
   const referencedAnchors: Anchor[] = [];
   const describedAnchors: Anchor[] = [];
   const keptAnchors: Anchor[] = [];
-  // Lead with the art-style exemplar (when configured) so it applies to the
-  // whole page. Skipped for inpainting: the mask aligns to the FIRST reference
-  // image, so that slot must stay the page being edited.
-  let hasStyleRef = false;
+  // Art style is supplied through its detailed text description. The uploaded
+  // example remains a selection thumbnail only: content-bearing style images
+  // can leak their subjects, clothes, and props into generated pages.
+  const hasStyleRef = false;
   let hasScaleChart = false;
   if (!inpaint) {
     const needsSheet = (a: Anchor): boolean => {
@@ -1281,28 +1259,19 @@ export async function renderIllustration(
       else if (needsSheet(a)) sheetAnchors.push(a);
       else keptAnchors.push(a);
     }
-    // Load the style exemplar and the needed anchor blobs in parallel (order is
-    // restored below so references still line up with the prompt legend).
-    const [styleRef, anchorData] = await Promise.all([
-      loadStyleReference(env, project.config),
-      Promise.all(
-        sheetAnchors.map(async (a) => {
-          const img = currentAnchorImage(a);
-          const raw = img ? await env.loadBlob(img.blobId) : null;
-          if (!raw) return null;
-          // Reference-only payload: downscale so 4-6 full-res sheets don't
-          // balloon the request into provider-stalling territory. The full-res
-          // original is kept alongside it because the size chart crops a single
-          // cell out of the sheet and then enlarges it — cropping the already
-          // downscaled copy would leave the chart visibly soft.
-          return { payload: await asRefPayload(env, raw), raw };
-        }),
-      ),
-    ]);
-    if (styleRef) {
-      references.push(styleRef);
-      hasStyleRef = true;
-    }
+    const anchorData = await Promise.all(
+      sheetAnchors.map(async (a) => {
+        const img = currentAnchorImage(a);
+        const raw = img ? await env.loadBlob(img.blobId) : null;
+        if (!raw) return null;
+        // Reference-only payload: downscale so 4-6 full-res sheets don't
+        // balloon the request into provider-stalling territory. The full-res
+        // original is kept alongside it because the size chart crops a single
+        // cell out of the sheet and then enlarges it — cropping the already
+        // downscaled copy would leave the chart visibly soft.
+        return { payload: await asRefPayload(env, raw), raw };
+      }),
+    );
 
     // A size chart for the characters on this page, from the sheets we just
     // loaded. Assembled here (not per anchor) because relative height only

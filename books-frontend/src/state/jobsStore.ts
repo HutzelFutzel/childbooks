@@ -20,9 +20,11 @@ import { normalizeImageTier, type ImageTier } from "../core/config/modelConfig";
 import { applyAnchorRender, type AnchorRender } from "../core/pipeline/anchorRun";
 import { applyIllustrationRender, type IllustrationRender } from "../core/pipeline/illustrationRun";
 import type { TaskDoc } from "../core/jobs/types";
-import type { Project, ScreenplaySpread } from "../core/types";
-import { allVersions } from "../core/versioning";
+import type { Project, ScreenplayDoc, ScreenplaySpread } from "../core/types";
+import { allVersions, createVersionTree } from "../core/versioning";
 import {
+  createScreenplayJob,
+  fetchJobTasks,
   subscribeProjectJobs,
   subscribeProjectTasks,
   type JobWithId,
@@ -45,6 +47,13 @@ export interface JobSummary {
   action: "anchorImage" | "pageIllustration";
 }
 
+export interface ScreenplayJobSummary {
+  id: string;
+  status: JobWithId["status"];
+  createdAt: number;
+  error?: string;
+}
+
 interface JobsState {
   /** Jobs that are still pending or running for the open project. */
   active: JobSummary[];
@@ -55,10 +64,16 @@ interface JobsState {
    * the job finishes and its result reconciles.
    */
   activeUnitIds: Set<string>;
+  /** Latest durable screenplay attempt for the open project. */
+  screenplayJob: ScreenplayJobSummary | null;
+  /** True after the initial project-jobs snapshot has arrived. */
+  jobsLoaded: boolean;
   projectId: string | null;
   unsub: Unsubscribe | null;
   /** Begin tracking jobs for a project (idempotent for the same id). */
   watch: (projectId: string) => void;
+  /** Enqueue the initial screenplay, or a fresh attempt after an error. */
+  startScreenplay: (project: Project, retry?: boolean) => Promise<void>;
   /** Stop tracking and clear state. */
   stop: () => void;
 }
@@ -125,6 +140,27 @@ async function reconcileTasks(tasks: TaskDoc[], projectId: string): Promise<void
   for (const task of tasks) {
     if (task.status !== "done" || !task.result) continue;
 
+    if (task.kind === "screenplay") {
+      const key = `${task.jobId}:${task.id}`;
+      if (inFlight.has(key)) continue;
+
+      const project = liveProject(projectId);
+      if (!project) return;
+      // Initial screenplay attempts are idempotent: if two tabs managed to
+      // finish, the first reconciled document wins instead of creating an
+      // unexplained revision.
+      if (project.screenplay) continue;
+
+      inFlight.add(key);
+      try {
+        const versions = createVersionTree(task.result as ScreenplayDoc, { label: "Initial" });
+        await useProjectsStore.getState().setScreenplay(versions);
+      } finally {
+        inFlight.delete(key);
+      }
+      continue;
+    }
+
     if (task.kind === "anchors") {
       const render = task.result as AnchorRender;
       const key = `${task.jobId}:${task.id}`;
@@ -181,17 +217,31 @@ export async function reconcileTasksNow(tasks: TaskDoc[], projectId: string): Pr
 export const useJobsStore = create<JobsState>((set, get) => ({
   active: [],
   activeUnitIds: new Set<string>(),
+  screenplayJob: null,
+  jobsLoaded: false,
   projectId: null,
   unsub: null,
 
   watch(projectId) {
     if (get().projectId === projectId && get().unsub) return;
     get().unsub?.();
+    set({
+      active: [],
+      activeUnitIds: new Set<string>(),
+      screenplayJob: null,
+      jobsLoaded: false,
+      projectId,
+      unsub: null,
+    });
 
     // Job docs drive the aggregate progress indicator.
     const unsubJobs = subscribeProjectJobs(projectId, (jobs) => {
       const active = jobs
-        .filter((j) => j.status === "pending" || j.status === "running")
+        .filter(
+          (j) =>
+            j.kind !== "screenplay" &&
+            (j.status === "pending" || j.status === "running"),
+        )
         .sort((a, b) => b.createdAt - a.createdAt)
         .map<JobSummary>((j) => ({
           id: j.id,
@@ -203,7 +253,55 @@ export const useJobsStore = create<JobsState>((set, get) => ({
           tier: normalizeImageTier(j.tier),
           action: j.kind === "anchors" ? "anchorImage" : "pageIllustration",
         }));
-      set({ active });
+      const latestScreenplay = jobs
+        .filter((j) => j.kind === "screenplay")
+        .sort((a, b) => b.createdAt - a.createdAt)[0];
+      set((state) => ({
+        active,
+        jobsLoaded: true,
+        screenplayJob: latestScreenplay
+          ? {
+              id: latestScreenplay.id,
+              status: latestScreenplay.status,
+              createdAt: latestScreenplay.createdAt,
+              error:
+                latestScreenplay.error ??
+                (state.screenplayJob?.id === latestScreenplay.id
+                  ? state.screenplayJob.error
+                  : undefined),
+            }
+          : state.screenplayJob?.id.startsWith("starting-")
+            ? state.screenplayJob
+            : null,
+      }));
+      if (
+        latestScreenplay &&
+        (latestScreenplay.status === "done" || latestScreenplay.status === "error")
+      ) {
+        // Do not depend solely on the collection-group listener: fetch this
+        // terminal job directly so a missing index/dropped listener cannot
+        // leave the screenplay spinner frozen after backend completion.
+        void fetchJobTasks(latestScreenplay.id)
+          .then((tasks) => {
+            const failed = tasks.find(
+              (task) => task.kind === "screenplay" && task.status === "error",
+            );
+            if (failed) {
+              set((state) => ({
+                screenplayJob:
+                  state.screenplayJob?.id === latestScreenplay.id
+                    ? { ...state.screenplayJob, status: "error", error: failed.error }
+                    : state.screenplayJob,
+              }));
+            }
+            if (tasks.some((task) => task.kind === "screenplay" && task.status === "done")) {
+              return reconcileTasks(tasks, projectId);
+            }
+          })
+          .catch((err) => {
+            console.error("[jobs] screenplay reconciliation failed.", err);
+          });
+      }
     });
 
     // Task docs drive per-unit "updating" state and result reconciliation. Live
@@ -212,9 +310,24 @@ export const useJobsStore = create<JobsState>((set, get) => ({
     const unsubTasks = subscribeProjectTasks(projectId, (tasks) => {
       const activeUnitIds = new Set<string>();
       for (const t of tasks) {
-        if (t.status !== "done" && t.status !== "error") activeUnitIds.add(t.id);
+        if (
+          t.kind !== "screenplay" &&
+          t.status !== "done" &&
+          t.status !== "error"
+        ) {
+          activeUnitIds.add(t.id);
+        }
       }
-      set({ activeUnitIds });
+      const failedScreenplay = tasks
+        .filter((t) => t.kind === "screenplay" && t.status === "error")
+        .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+      set((state) => ({
+        activeUnitIds,
+        screenplayJob:
+          failedScreenplay && state.screenplayJob?.id === failedScreenplay.jobId
+            ? { ...state.screenplayJob, status: "error", error: failedScreenplay.error }
+            : state.screenplayJob,
+      }));
       if (tasks.some((t) => t.status === "done")) void reconcileTasks(tasks, projectId);
     });
 
@@ -222,11 +335,51 @@ export const useJobsStore = create<JobsState>((set, get) => ({
       unsubJobs();
       unsubTasks();
     };
-    set({ projectId, unsub });
+    set({ unsub });
+  },
+
+  async startScreenplay(project, retry = false) {
+    const current = get().screenplayJob;
+    if (current?.status === "pending" || current?.status === "running") return;
+    if (!retry && current) return;
+
+    const optimisticId = `starting-${Date.now()}`;
+    set({
+      screenplayJob: {
+        id: optimisticId,
+        status: "pending",
+        createdAt: Date.now(),
+      },
+    });
+    try {
+      const id = await createScreenplayJob(project, { retry });
+      set((state) => ({
+        screenplayJob:
+          state.screenplayJob?.id === optimisticId
+            ? { id, status: "pending", createdAt: Date.now() }
+            : state.screenplayJob,
+      }));
+    } catch (err) {
+      const message = (err as Error)?.message ?? "The page-by-page draft could not start.";
+      set((state) => ({
+        screenplayJob:
+          state.screenplayJob?.id === optimisticId
+            ? { id: optimisticId, status: "error", createdAt: Date.now(), error: message }
+            : state.screenplayJob,
+      }));
+      throw err;
+    }
   },
 
   stop() {
     get().unsub?.();
-    set({ active: [], activeUnitIds: new Set<string>(), projectId: null, unsub: null });
+    set({
+      active: [],
+      activeUnitIds: new Set<string>(),
+      screenplayJob: null,
+      jobsLoaded: false,
+      projectId: null,
+      unsub: null,
+    });
   },
 }));

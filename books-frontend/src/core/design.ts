@@ -292,7 +292,7 @@ export interface PageDesign {
 }
 
 /** Bumped when the saved design shape changes in a way that needs migrating. */
-export const DESIGN_VERSION = 1;
+export const DESIGN_VERSION = 4;
 
 export interface BookDesign {
   /** Schema version of the saved design (see {@link DESIGN_VERSION}). */

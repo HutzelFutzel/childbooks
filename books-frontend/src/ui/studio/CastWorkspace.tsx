@@ -1,5 +1,5 @@
 /**
- * Characters & places is an optional consistency checkpoint, not a miniature editor.
+ * Characters & places is the required consistency checkpoint before Pages.
  *
  * The default path is one glance at the inferred cast and one action to create
  * every missing look. A member opens an optional drawer for corrections and
@@ -16,6 +16,7 @@ import {
   Loader2,
   Pencil,
   Plus,
+  RefreshCw,
   Sparkles,
   Trash2,
   Wand2,
@@ -23,7 +24,8 @@ import {
 import type { Anchor } from "../../core/types";
 import { anchorThumbBlobId, analyzeCurrentStory, currentAnchorImage } from "../../state/ai";
 import { isAbortError } from "../../core/errors";
-import { useJobsStore } from "../../state/jobsStore";
+import { stripNumericAgeFromDescription } from "../../core/book/anchorDescription";
+import { useJobsStore, type ScreenplayJobSummary } from "../../state/jobsStore";
 import { useProjectsStore } from "../../state/projectsStore";
 import { AnchorEditor } from "../anchors/AnchorEditor";
 import { ANCHOR_TYPE_ICON } from "../anchors/AnchorCard";
@@ -76,10 +78,13 @@ export function CastWorkspace({
     startGeneration,
   } = useStudio();
   const setAnchors = useProjectsStore((s) => s.setAnchors);
+  const updateConfig = useProjectsStore((s) => s.updateConfig);
   const updateAnchor = useProjectsStore((s) => s.updateAnchor);
   const removeAnchor = useProjectsStore((s) => s.removeAnchor);
   const patchAnalysis = useProjectsStore((s) => s.patchAnalysis);
   const activeJobUnitIds = useJobsStore((s) => s.activeUnitIds);
+  const screenplayJob = useJobsStore((s) => s.screenplayJob);
+  const startScreenplay = useJobsStore((s) => s.startScreenplay);
   const models = useResolvedModels();
   const isMobile = useMediaQuery("(max-width: 767px)");
   const [analyzing, setAnalyzing] = useState(false);
@@ -106,15 +111,22 @@ export function CastWorkspace({
 
   const batchRange = useImageBatchRange([{ action: "anchorImage", count: remaining }]);
 
-  // Age is useful prompt context, not a form gate. Old projects may not have
-  // the field, so fill it once from the book's audience and keep moving.
+  // Keep age in its dedicated field. Old projects may have a numeric age baked
+  // into the description or no age field at all, so normalize both once.
   useEffect(() => {
     const fallbackAge = suggestedAgeForAudience(project.config.ageRangeId);
-    const next = allAnchors.map((anchor) =>
-      anchor.type === "character" && anchor.ageYears === undefined
-        ? { ...anchor, ageYears: fallbackAge, ageSource: "suggested" as const }
-        : anchor,
-    );
+    const next = allAnchors.map((anchor) => {
+      if (anchor.type !== "character") return anchor;
+      const description = stripNumericAgeFromDescription(anchor.description);
+      if (anchor.ageYears !== undefined && description === anchor.description) return anchor;
+      return {
+        ...anchor,
+        description,
+        ...(anchor.ageYears === undefined
+          ? { ageYears: fallbackAge, ageSource: "suggested" as const }
+          : {}),
+      };
+    });
     if (next.some((anchor, index) => anchor !== allAnchors[index])) {
       void setAnchors(next);
     }
@@ -161,8 +173,26 @@ export function CastWorkspace({
       ageYears: suggestedAgeForAudience(project.config.ageRangeId),
       ageSource: "suggested",
     };
+    void updateConfig({ castReady: false });
     await setAnchors([...allAnchors, next]);
     setEditingAnchorId(next.id);
+  }
+
+  function continueToPages() {
+    // The Zustand mutation is synchronous, so the route guard observes the
+    // confirmation immediately while persistence completes in the background.
+    void updateConfig({ castReady: true });
+    setStep("edit");
+  }
+
+  async function retryScreenplay() {
+    const current = useProjectsStore.getState().current();
+    if (!current?.analysis) return;
+    try {
+      await startScreenplay(current, true);
+    } catch (err) {
+      notify.error(err);
+    }
   }
 
   async function generateAll() {
@@ -185,7 +215,9 @@ export function CastWorkspace({
         : anchor,
     );
     if (normalized.some((anchor, index) => anchor !== latest.anchors?.[index])) {
-      await setAnchors(normalized);
+      // The store updates synchronously; persistence can continue while the
+      // job snapshots that fresh in-memory project.
+      void setAnchors(normalized);
     }
 
     const current = useProjectsStore.getState().current();
@@ -240,20 +272,29 @@ export function CastWorkspace({
     const target = latest.anchors?.find((anchor) => anchor.id === anchorId);
     if (!target) return;
 
+    // Respond on the click tick, before persistence/tier/network awaits.
+    setAnchorGenerating(anchorId, true);
     if (!target.description.trim()) {
-      await updateAnchor(anchorId, {
+      // updateAnchor mutates Zustand synchronously; the debounced save does not
+      // need to block creation of the job's embedded project snapshot.
+      void updateAnchor(anchorId, {
         description: `A recurring ${target.type} from this story, in the book's chosen art style.`,
       });
     }
 
     const current = useProjectsStore.getState().current();
-    if (!current) return;
-    setAnchorGenerating(anchorId, true);
-    try {
-      await generateAnchorViaJob(current, anchorId, {}, (error) => notify.error(error));
-    } finally {
+    if (!current) {
       setAnchorGenerating(anchorId, false);
+      return;
     }
+    const started = await generateAnchorViaJob(
+      current,
+      anchorId,
+      {},
+      (error) => notify.error(error),
+      () => setAnchorGenerating(anchorId, false),
+    );
+    if (!started) setAnchorGenerating(anchorId, false);
   }
 
   if (analysisPending) {
@@ -395,6 +436,7 @@ export function CastWorkspace({
       <CastActionBar
         canProceed={canProceed}
         screenplayReady={Boolean(project.screenplay)}
+        screenplayJob={screenplayJob}
         busy={busy}
         activeGeneratingCount={activeGeneratingCount}
         ready={ready}
@@ -402,7 +444,8 @@ export function CastWorkspace({
         remaining={remaining}
         batchRange={batchRange}
         onGenerate={() => void generateAll()}
-        onContinue={() => setStep("edit")}
+        onContinue={continueToPages}
+        onRetryScreenplay={() => void retryScreenplay()}
       />
 
       <Drawer
@@ -496,25 +539,22 @@ function CastMemberCard({
         className="relative block w-full overflow-hidden bg-ink-50 text-left"
         aria-label={`Edit ${anchor.name}`}
       >
-        {generating ? (
-          <div className="aspect-3/2">
-            <GenerationOverlay action="anchorImage" compact />
-          </div>
-        ) : (
-          <BlobThumbnail
-            blobId={anchorThumbBlobId(anchor)}
-            alt={anchor.name}
-            aspect={3 / 2}
-            className="rounded-none"
-            fallback={
-              <span className="flex flex-col items-center gap-2 text-brand-400">
-                <span className="flex size-12 items-center justify-center rounded-2xl bg-white shadow-soft ring-1 ring-brand-100">
-                  <Icon className="size-5" />
-                </span>
-                <span className="text-xs font-semibold text-ink-500">Ready to create</span>
+        <BlobThumbnail
+          blobId={anchorThumbBlobId(anchor)}
+          alt={anchor.name}
+          aspect={3 / 2}
+          className="rounded-none"
+          fallback={
+            <span className="flex flex-col items-center gap-2 text-brand-400">
+              <span className="flex size-12 items-center justify-center rounded-2xl bg-white shadow-soft ring-1 ring-brand-100">
+                <Icon className="size-5" />
               </span>
-            }
-          />
+              <span className="text-xs font-semibold text-ink-500">Ready to create</span>
+            </span>
+          }
+        />
+        {generating && (
+          <GenerationOverlay action="anchorImage" compact className="bg-magic" />
         )}
 
         <span
@@ -627,6 +667,7 @@ function AgeChip({
 function CastActionBar({
   canProceed,
   screenplayReady,
+  screenplayJob,
   busy,
   activeGeneratingCount,
   ready,
@@ -635,9 +676,11 @@ function CastActionBar({
   batchRange,
   onGenerate,
   onContinue,
+  onRetryScreenplay,
 }: {
   canProceed: boolean;
   screenplayReady: boolean;
+  screenplayJob: ScreenplayJobSummary | null;
   busy: boolean;
   activeGeneratingCount: number;
   ready: number;
@@ -646,9 +689,13 @@ function CastActionBar({
   batchRange: ReturnType<typeof useImageBatchRange>;
   onGenerate: () => void;
   onContinue: () => void;
+  onRetryScreenplay: () => void;
 }) {
   const creatingNow = Math.max(activeGeneratingCount, busy ? remaining : 0);
-  const statusLabel = busy
+  const screenplayFailed = screenplayJob?.status === "error";
+  const statusLabel = screenplayFailed
+    ? "The page draft needs another try"
+    : busy
     ? `Creating ${creatingNow} ${creatingNow === 1 ? "look" : "looks"}…`
     : canProceed
       ? total === 0
@@ -659,7 +706,9 @@ function CastActionBar({
         : activeGeneratingCount > 0
           ? `Creating ${activeGeneratingCount} ${activeGeneratingCount === 1 ? "look" : "looks"}…`
           : `${total} ${total === 1 ? "look" : "looks"} ready to create`;
-  const statusHint = busy
+  const statusHint = screenplayFailed
+    ? screenplayJob.error ?? "The first attempt stopped before the pages were ready."
+    : busy
     ? "You can leave this step while the cast is being created."
     : canProceed
       ? "You can still refine any card later."
@@ -692,7 +741,15 @@ function CastActionBar({
           </div>
         </div>
 
-        {canProceed ? (
+        {canProceed && screenplayFailed ? (
+          <Button
+            className="w-full sm:w-auto"
+            leftIcon={<RefreshCw className="size-4" />}
+            onClick={onRetryScreenplay}
+          >
+            Try preparing pages again
+          </Button>
+        ) : canProceed ? (
           <Button
             className="w-full sm:w-auto"
             disabled={!screenplayReady}

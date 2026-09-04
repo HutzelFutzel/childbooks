@@ -534,12 +534,10 @@ export function buildIllustrationTask(
     }
   }
 
-  // Lead with the art-style exemplar when the selected preset has an example
-  // image configured; the worker resolves + prepends the actual image so the
-  // task payload stays small.
+  // Art-style example images are selection thumbnails only. Generation uses
+  // the detailed text description so subjects and clothes cannot leak from an
+  // example image into the book.
   const artStyles = useAppConfigStore.getState().artStyles;
-  const presetId = project.config.artStyle?.presetId ?? undefined;
-  const hasStyleRef = Boolean(presetId && artStyles?.examples?.[presetId]);
 
   // The same plan the interactive path and the design editor use, so a bulk
   // render can't compose its pages differently from a single one.
@@ -552,7 +550,7 @@ export function buildIllustrationTask(
     refreshAnchors: [],
     describedAnchors,
     removedAnchors: [],
-    hasStyleRef,
+    hasStyleRef: false,
     hasCompositionRef: false,
     maskMode: false,
     bakeText: spread.bakeText,
@@ -572,7 +570,6 @@ export function buildIllustrationTask(
     prompt,
     size: chooseImageSize(spread.kind, project.config, layoutPlan, imageModel.provider),
     references: references.length ? references : undefined,
-    ...(hasStyleRef && presetId ? { stylePresetId: presetId } : {}),
   };
 
   return {

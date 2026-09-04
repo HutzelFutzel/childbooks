@@ -7,7 +7,7 @@ import { useStudio } from "./StudioContext";
 
 /**
  * The book-setup gate for the Design step: the physical choices the page layout
- * has to be built on, asked before any art exists, and a summary hub on return.
+ * has to be built on, asked before the page canvas opens, and a summary hub on return.
  * Confirming sets `designReady`, so subsequent visits open straight to the
  * canvas and this becomes reachable as a summary from the toolbar.
  *

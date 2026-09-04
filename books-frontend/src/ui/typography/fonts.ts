@@ -145,17 +145,41 @@ export const FONTS: FontDef[] = BASE_FONTS.map((font) => ({
 const byId = new Map(FONTS.map((f) => [f.id, f]));
 const byFamily = new Map(FONTS.map((f) => [f.family, f]));
 const loaded = new Set<string>();
+const loading = new Map<string, Promise<void>>();
 
 export function getFont(idOrFamily: string): FontDef | undefined {
   return byId.get(idOrFamily) ?? byFamily.get(idOrFamily);
 }
 
-/** Lazily inject a font's CSS (idempotent). Accepts an id or family name. */
-export function loadFont(idOrFamily: string): void {
+/**
+ * Lazily inject a font's CSS and wait until its face is usable for canvas text
+ * measurement. Idempotent; accepts an id or family name.
+ */
+export function loadFontReady(idOrFamily: string): Promise<void> {
   const font = getFont(idOrFamily);
-  if (!font || loaded.has(font.id)) return;
-  loaded.add(font.id);
-  void font.load().catch(() => loaded.delete(font.id));
+  if (!font || loaded.has(font.id)) return Promise.resolve();
+  const pending = loading.get(font.id);
+  if (pending) return pending;
+
+  const promise = font
+    .load()
+    .then(async () => {
+      if (typeof document !== "undefined" && document.fonts) {
+        await document.fonts.load(`16px "${font.family}"`);
+      }
+      loaded.add(font.id);
+    })
+    .catch(() => {
+      // Rendering can still use the generic fallback; a later call may retry.
+    })
+    .finally(() => loading.delete(font.id));
+  loading.set(font.id, promise);
+  return promise;
+}
+
+/** Fire-and-forget font loading for renderers and pickers. */
+export function loadFont(idOrFamily: string): void {
+  void loadFontReady(idOrFamily);
 }
 
 /** A safe CSS font-family stack for a chosen family. */

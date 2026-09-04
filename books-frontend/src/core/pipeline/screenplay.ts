@@ -168,6 +168,7 @@ export async function generateScreenplay(
         schema: screenplaySchema,
         schemaName: "screenplay",
         temperature: config.textHandling === "exact" ? 0.2 : 0.6,
+        maxOutputTokens: 16_384,
         messages: [
           { role: "system", content: system },
           { role: "user", content: user },

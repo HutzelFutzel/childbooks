@@ -33,6 +33,7 @@ import {
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { getCursor } from "../../core/versioning";
 import { staleIllustrationSpreadIds } from "../../state/ai";
+import { useJobsStore } from "../../state/jobsStore";
 import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { Popover } from "../components/Popover";
@@ -97,6 +98,8 @@ export function BookCanvas() {
   const closeToolPanel = useStudioPanelStore((s) => s.closeToolPanel);
   const toggleToolPanel = useStudioPanelStore((s) => s.toggleToolPanel);
   const models = useResolvedModels();
+  const screenplayJob = useJobsStore((s) => s.screenplayJob);
+  const startScreenplay = useJobsStore((s) => s.startScreenplay);
   const [previewing, setPreviewing] = useState(false);
   const closePreview = useCallback(() => setPreviewing(false), []);
   const closeInspector = useCallback(() => {
@@ -170,6 +173,10 @@ export function BookCanvas() {
     return activeDisp ? displayEntries(activeDisp)[0]?.entry.page.id : undefined;
   }, [selection, activeDisp]);
 
+  const retryScreenplay = useCallback(() => {
+    void startScreenplay(project, true).catch((err) => notify.error(err));
+  }, [project, startScreenplay]);
+
   /** Every live page on the open canvas — powers the Arrange panel. */
   const arrangePages = useMemo(() => {
     if (!activeDisp) return [];
@@ -182,7 +189,21 @@ export function BookCanvas() {
   if (!doc) {
     return (
       <div className="flex flex-1 flex-col items-center justify-center bg-aurora">
-        {models ? (
+        {screenplayJob?.status === "error" ? (
+          <EmptyState
+            icon={BookText}
+            title="The page draft stopped"
+            description={
+              screenplayJob.error ??
+              "Your story and cast are safe. Start another page-by-page draft when you're ready."
+            }
+            action={
+              <Button leftIcon={<RefreshCw className="size-4" />} onClick={retryScreenplay}>
+                Try again
+              </Button>
+            }
+          />
+        ) : models ? (
           <PipelineStepper
             title="Drafting your book…"
             subtitle="We're turning your story into a page-by-page screenplay. Characters & places appear in the sidebar as they're found."

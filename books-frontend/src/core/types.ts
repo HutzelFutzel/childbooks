@@ -175,6 +175,13 @@ export interface BookConfig {
    */
   styleReady?: boolean;
   /**
+   * Whether the reader has explicitly completed the Characters & places
+   * checkpoint. This is separate from derived image counts so an empty analysis
+   * cannot silently skip Cast. Legacy projects with complete cast artwork are
+   * inferred as ready by the workflow progress helper.
+   */
+  castReady?: boolean;
+  /**
    * An in-flight art-style transfer. Persisted (rather than held in component
    * state) so the cascade survives a reload: cast sheets are re-rendered first,
    * then the pages that use them. Cleared once every listed unit carries the

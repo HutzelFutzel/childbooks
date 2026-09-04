@@ -74,10 +74,16 @@ export function AnchorEditor({
   ) {
     if (!project) return;
     setGenerating(true);
-    try {
-      await generateAnchorViaJob(project, anchor.id, options, (error) => notify.error(error));
+    const started = await generateAnchorViaJob(
+      project,
+      anchor.id,
+      options,
+      (error) => notify.error(error),
+      () => setGenerating(false),
+    );
+    if (started) {
       setEdit("");
-    } finally {
+    } else {
       setGenerating(false);
     }
   }
@@ -251,7 +257,10 @@ export function AnchorEditor({
               )}
             </div>
 
-            <Field label="Visual description" hint="Inferred from your story. Edit only if needed.">
+            <Field
+              label="Visual description"
+              hint="Appearance only — age is controlled by the Age field."
+            >
               <Textarea
                 value={anchor.description}
                 onChange={(event) =>

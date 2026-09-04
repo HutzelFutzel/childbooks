@@ -38,6 +38,7 @@ import {
   buildDesignPages,
   defaultDesign,
   defaultIllustrationFocus,
+  migrateGeneratedTextBoxHeights,
   newImageId,
   newTextBoxId,
   pagesNeedingRelayout,
@@ -50,6 +51,7 @@ import { newShapeId, shapeStyleDefaults } from "../design/shapes";
 import { fitBoxHeightPct, fitFontSizePct } from "../design/textFit";
 import type { SpanRef } from "../design/TextBoxView";
 import { notify, toast } from "../lib/notify";
+import { loadFontReady } from "../typography/fonts";
 import { buildDisplaySpreads, type DisplaySpread, type Entry, type SpreadSide } from "./spreadModel";
 import type { PageSubject } from "./PageEditorCard";
 import { computeProgress, type StudioStep } from "./studioSteps";
@@ -590,6 +592,24 @@ export function StudioProvider({
     [project.screenplay, project.title, project.config, project.illustrations],
   );
   const design = project.design ?? null;
+  const [measureFontFamily, setMeasureFontFamily] = useState<string | null>(null);
+
+  // Canvas text metrics use the actual book font. Measuring before its lazy CSS
+  // and font face are ready can under-count wrapped lines and clip the ending.
+  useEffect(() => {
+    const family = design?.defaultFontFamily;
+    if (!family) {
+      setMeasureFontFamily(null);
+      return;
+    }
+    let cancelled = false;
+    void loadFontReady(family).then(() => {
+      if (!cancelled) setMeasureFontFamily(family);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [design?.defaultFontFamily]);
 
   // --- "what's on screen" resolution (drives paste-in-place) --------------
   //
@@ -658,6 +678,7 @@ export function StudioProvider({
       void setDesign(defaultDesign(project, bookLanguages, typography));
       return;
     }
+    if (measureFontFamily !== design.defaultFontFamily) return;
     const missing = pages.filter((p) => !design.pages[p.id]);
     const stale = pagesNeedingRelayout(design, pages);
     const needsVersion = design.version !== DESIGN_VERSION;
@@ -669,8 +690,14 @@ export function StudioProvider({
       const current = nextPages[p.id];
       if (current) nextPages[p.id] = relayoutPageDesign(design, p, current);
     }
+    if (needsVersion) {
+      for (const p of pages) {
+        const current = nextPages[p.id];
+        if (current) nextPages[p.id] = migrateGeneratedTextBoxHeights(p, current);
+      }
+    }
     void setDesign({ ...design, version: DESIGN_VERSION, pages: nextPages });
-  }, [bookLanguages, design, pages, project, setDesign, typography]);
+  }, [bookLanguages, design, measureFontFamily, pages, project, setDesign, typography]);
 
   // Guarded route navigation: every workflow affordance goes through one gate.
   // A blocked jump explains what's still missing instead of changing history.
@@ -684,15 +711,27 @@ export function StudioProvider({
       const progress = computeProgress(live);
       const next = stepForDestination(nextDestination);
       if (!progress[next].unlocked) {
-        if (next === "order") {
+        if ((next === "edit" || next === "order") && !progress.anchors.done) {
+          if (live.config.styleReady === false) {
+            notify.info(
+              "Choose an art style first",
+              "Pick the look for your book, then continue to its characters and places.",
+            );
+          } else {
+            notify.info(
+              "Create your characters first",
+              "Finish the Characters & places step before opening the book.",
+            );
+          }
+        } else if (next === "order") {
           notify.info(
             "Your book is still being prepared",
             "The page-by-page draft needs to finish before you can preview or order it.",
           );
         } else if (next === "edit" && live.stage === "studio") {
           notify.info(
-            "Choose an art style first",
-            "Pick the look for your book, then its pages will open automatically.",
+            "Your pages are still being prepared",
+            "The page-by-page draft needs to finish before the book can open.",
           );
         } else {
           notify.info("One step at a time", "Finish the Story step first.");

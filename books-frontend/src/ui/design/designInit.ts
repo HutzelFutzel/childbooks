@@ -34,6 +34,7 @@ import {
 } from "../../core/config/typography";
 import { defaultFontForAge, getFont } from "../typography/fonts";
 import { getPreset } from "./presets";
+import { fitBoxHeightPct } from "./textFit";
 
 export interface DesignPage {
   id: string;
@@ -229,6 +230,28 @@ function makeTextBox(input: {
 }
 
 /**
+ * Size a generated box to its wrapped text while keeping it positioned inside
+ * the layout slot that reserved space for it. The slot itself remains
+ * full-height for illustration prompting; only the editor's interactive box
+ * hugs the words.
+ */
+function hugTextInRect(box: TextBox, container: NormRect, pageAspect: number): TextBox {
+  const h = Math.min(container.h, fitBoxHeightPct(box, pageAspect));
+  const y =
+    box.vAlign === "top"
+      ? container.y
+      : box.vAlign === "bottom"
+        ? container.y + container.h - h
+        : container.y + (container.h - h) / 2;
+  return {
+    ...box,
+    rect: { ...container, y, h },
+    autoHeight: true,
+    autoFit: false,
+  };
+}
+
+/**
  * The illustration element for a plan that places art beside the text.
  *
  * Full-bleed pages need none: the page surface draws the illustration behind
@@ -365,21 +388,20 @@ export function seedPageDesign(design: BookDesign, page: DesignPage): PageDesign
       .forEach((slot, i) => {
         const text = textForSlot(slot, page);
         if (!text.trim()) return;
-        boxes.push(
-          makeTextBox({
-            rect: slot.pageRect,
-            text,
-            family: design.defaultFontFamily,
-            sizePct: design.defaultFontSizePct,
-            presetId: slot.presetId ?? "plain",
-            z: i + 1,
-            slotId: slot.id,
-            role: "story-body",
-            align: slot.align,
-            vAlign: slot.vAlign,
-            name: slot.label,
-          }),
-        );
+        const box = makeTextBox({
+          rect: slot.pageRect,
+          text,
+          family: design.defaultFontFamily,
+          sizePct: design.defaultFontSizePct,
+          presetId: slot.presetId ?? "plain",
+          z: i + 1,
+          slotId: slot.id,
+          role: "story-body",
+          align: slot.align,
+          vAlign: slot.vAlign,
+          name: slot.label,
+        });
+        boxes.push(hugTextInRect(box, slot.pageRect, page.aspect));
       });
   }
   const art = page.isCover ? null : insetIllustration(page.plan, 0);
@@ -418,7 +440,7 @@ export function relayoutPageDesign(
     if (!slot) return box;
     seen.add(slot.id);
     const preset = getPreset(slot.presetId ?? box.presetId);
-    return {
+    const laidOut = {
       ...box,
       rect: slot.pageRect,
       presetId: slot.presetId ?? box.presetId,
@@ -429,6 +451,11 @@ export function relayoutPageDesign(
       stroke: preset.defaults.stroke,
       padding: preset.padding,
     };
+    // Preserve fixed-height behavior after an explicit manual resize
+    // (autoHeight === false). Generated and legacy untouched boxes hug content.
+    return box.autoHeight === false
+      ? laidOut
+      : hugTextInRect(laidOut, slot.pageRect, page.aspect);
   });
 
   let z = textBoxes.reduce((max, b) => Math.max(max, b.z), 0);
@@ -437,21 +464,20 @@ export function relayoutPageDesign(
     const text = textForSlot(slot, page);
     if (!text.trim()) continue;
     z += 1;
-    textBoxes.push(
-      makeTextBox({
-        rect: slot.pageRect,
-        text,
-        family: design.defaultFontFamily,
-        sizePct: design.defaultFontSizePct,
-        presetId: slot.presetId ?? "plain",
-        z,
-        slotId: slot.id,
-        role: "story-body",
-        align: slot.align,
-        vAlign: slot.vAlign,
-        name: slot.label,
-      }),
-    );
+    const box = makeTextBox({
+      rect: slot.pageRect,
+      text,
+      family: design.defaultFontFamily,
+      sizePct: design.defaultFontSizePct,
+      presetId: slot.presetId ?? "plain",
+      z,
+      slotId: slot.id,
+      role: "story-body",
+      align: slot.align,
+      vAlign: slot.vAlign,
+      name: slot.label,
+    });
+    textBoxes.push(hugTextInRect(box, slot.pageRect, page.aspect));
   }
 
   // The artwork's own placement is layout-owned too: inset art moves to the new
@@ -482,6 +508,45 @@ export function relayoutPageDesign(
   if (nextImages.length > 0) next.images = nextImages;
   else delete next.images;
   return next;
+}
+
+/**
+ * Upgrade layout-owned story boxes created before font-aware auto-height
+ * measurement. An explicit `false` records a user's manual resize and is left
+ * alone. Existing auto-height boxes keep their centre if the corrected
+ * measurement makes them taller.
+ */
+export function migrateGeneratedTextBoxHeights(
+  page: DesignPage,
+  pageDesign: PageDesign,
+): PageDesign {
+  if (page.isCover) return pageDesign;
+  const slots = new Map(
+    page.plan.slots.filter((s) => s.role === "text").map((s) => [s.id, s] as const),
+  );
+  let changed = false;
+  const textBoxes = pageDesign.textBoxes.map((box) => {
+    if (box.role !== "story-body" || !box.slotId || box.autoHeight === false) {
+      return box;
+    }
+    const slot = slots.get(box.slotId);
+    if (!slot) return box;
+    const oldCenterY = box.rect.y + box.rect.h / 2;
+    const container = {
+      x: box.rect.x,
+      y: slot.pageRect.y,
+      w: box.rect.w,
+      h: slot.pageRect.h,
+    };
+    const fitted = hugTextInRect({ ...box, rect: container }, container, page.aspect);
+    const y = Math.max(
+      container.y,
+      Math.min(container.y + container.h - fitted.rect.h, oldCenterY - fitted.rect.h / 2),
+    );
+    changed = true;
+    return { ...fitted, rect: { ...fitted.rect, y } };
+  });
+  return changed ? { ...pageDesign, textBoxes } : pageDesign;
 }
 
 /** Pages whose stored layout no longer matches the project's active one. */

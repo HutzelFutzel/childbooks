@@ -1,11 +1,10 @@
 /**
  * The guided studio flow:
  *
- *   Story → Style → Book (with optional Cast refinement) → Order
+ *   Story → Style → Cast → Book → Order
  *
- * The book becomes available as soon as Story and Style are ready. Cast images
- * remain part of the generation pipeline, but they no longer block someone
- * from seeing the screenplay and page layout.
+ * Cast references are required before the book opens so every recurring
+ * character and place has a consistent look before page art is created.
  */
 import type { Project } from "../../core/types";
 import { currentAnchorImage, currentIllustration } from "../../state/ai";
@@ -67,10 +66,11 @@ export function designChapterOf(
   return "cast";
 }
 
-/** Pages are home once the required art-style choice has been made. */
+/** Open Cast until every required reference is ready, then open Pages. */
 export function preferredDesignStep(project: Project): StudioStep {
   if (project.config.styleReady === false) return "anchors";
-  return "edit";
+  const progress = computeProgress(project);
+  return progress.anchors.done && Boolean(project.screenplay) ? "edit" : "anchors";
 }
 
 /**
@@ -83,9 +83,16 @@ export function computeProgress(project: Project): StudioProgress {
   const anchors = (project.anchors ?? []).filter((a) => a.include);
   const anchorsTotal = anchors.length;
   const anchorsReady = anchors.filter((a) => currentAnchorImage(a)).length;
-  // With no anchors at all, the step is trivially satisfied once analysis ran.
+  // Cast is a real checkpoint, not just an image count. For legacy projects
+  // only, infer confirmation when every non-empty cast entry already has art.
+  const castConfirmed =
+    project.config.castReady ??
+    (anchorsTotal > 0 && anchorsReady === anchorsTotal);
   const anchorsDone =
-    setupDone && Boolean(project.analysis) && (anchorsTotal === 0 || anchorsReady === anchorsTotal);
+    setupDone &&
+    Boolean(project.analysis) &&
+    castConfirmed &&
+    (anchorsTotal === 0 || anchorsReady === anchorsTotal);
 
   const units = illustrationUnits(project);
   const pagesTotal = units.length;
@@ -106,9 +113,8 @@ export function computeProgress(project: Project): StudioProgress {
   };
 
   const pages: StepProgress = {
-    // Show the book immediately after Style. The canvas owns its screenplay
-    // loading state, and batch generation creates references before page art.
-    unlocked: setupDone && project.config.styleReady !== false,
+    // The screenplay and every required Cast reference must be ready first.
+    unlocked: setupDone && anchorsDone && hasScreenplay,
     done: editDone,
     detail: pagesTotal > 0 ? `${pagesReady} / ${pagesTotal}` : undefined,
     ratio: pagesTotal > 0 ? pagesReady / pagesTotal : 0,
@@ -131,9 +137,9 @@ export function computeProgress(project: Project): StudioProgress {
     edit: pages,
     design,
     order: {
-      // Preview is useful before every illustration is complete. OrderStage
-      // clearly identifies blank art and blocks only genuinely invalid print.
-      unlocked: setupDone && hasScreenplay,
+      // Preview can open before every page illustration is complete, but never
+      // before the required Cast checkpoint.
+      unlocked: setupDone && anchorsDone && hasScreenplay,
       done: false,
       ratio: 0,
     },
@@ -147,6 +153,6 @@ export function computeProgress(project: Project): StudioProgress {
 /** The step the studio should open on for a given project state. */
 export function initialStep(project: Project): StudioStep {
   if (project.stage === "setup") return "story";
-  // Returning readers land on their book, not on a setup checkpoint.
+  // Do not skip an unfinished Cast when reopening a book.
   return preferredDesignStep(project);
 }

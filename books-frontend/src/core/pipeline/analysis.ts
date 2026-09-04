@@ -6,6 +6,7 @@
 import { z } from "zod";
 import { AGE_RANGES } from "../config/options";
 import { getBookLanguage } from "../config/bookLanguages";
+import { stripNumericAgeFromDescription } from "../book/anchorDescription";
 import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import type { Anchor, AnchorImportance, AnchorType, BookConfig } from "../types";
@@ -18,7 +19,11 @@ import { renderTextPrompt } from "../prompts/render";
 const anchorItemSchema = z.object({
   name: z.string(),
   type: z.enum(["character", "place", "object"]),
-  description: z.string(),
+  description: z
+    .string()
+    .describe(
+      "Visible appearance only: face, hair, clothing, colors, and distinguishing features. Never include numeric age; age belongs only in ageYears.",
+    ),
   importance: z.enum(["high", "medium", "low"]),
   /** Characters only; ignored for places/objects. */
   bodyPlan: z.enum(["bipedal", "quadruped", "avian", "aquatic", "amorphous"]).nullish(),
@@ -28,7 +33,12 @@ const anchorItemSchema = z.object({
    */
   heightCm: z.number().nullish(),
   /** Characters only; copied from the author's cast brief when available. */
-  ageYears: z.number().min(0).max(120).nullish(),
+  ageYears: z
+    .number()
+    .min(0)
+    .max(120)
+    .nullish()
+    .describe("Character age in years. This is the only numeric age field."),
 });
 
 const embeddingItemSchema = z.object({
@@ -193,7 +203,9 @@ export async function analyzeStory(
       name: a.name,
       source: "analysis",
       type: a.type as AnchorType,
-      description: a.description,
+      description: isCharacter
+        ? stripNumericAgeFromDescription(a.description)
+        : a.description,
       importance: a.importance as AnchorImportance,
       mode: "creative",
       include: true,
@@ -267,5 +279,8 @@ export async function generateAnchorDescription(
       }),
     { signal },
   );
-  return res.text.trim();
+  const description = res.text.trim();
+  return type === "character"
+    ? stripNumericAgeFromDescription(description)
+    : description;
 }

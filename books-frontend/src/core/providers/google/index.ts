@@ -175,6 +175,7 @@ export const googleTextProvider: TextProvider = {
           contents: finalContents,
           generationConfig: {
             temperature: req.temperature ?? 0.4,
+            maxOutputTokens: req.maxOutputTokens,
             responseMimeType: "application/json",
             ...(responseSchema ? { responseSchema } : {}),
           },

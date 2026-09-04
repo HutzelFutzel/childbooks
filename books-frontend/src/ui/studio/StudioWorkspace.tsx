@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { Project } from "../../core/types";
-import { analyzeCurrentStory, generateScreenplayVersion } from "../../state/ai";
+import { analyzeCurrentStory } from "../../state/ai";
+import { useJobsStore } from "../../state/jobsStore";
 import { useResolvedModels } from "../hooks/useResolvedModels";
 import { notify } from "../lib/notify";
 import { DesignWorkspace } from "./DesignWorkspace";
@@ -43,7 +44,9 @@ function StudioInner({ project }: { project: Project }) {
   const models = useResolvedModels();
   useStudioHotkeys();
 
-  const startedScreenplay = useRef(false);
+  const jobsLoaded = useJobsStore((s) => s.jobsLoaded);
+  const screenplayJob = useJobsStore((s) => s.screenplayJob);
+  const startScreenplay = useJobsStore((s) => s.startScreenplay);
   const [analysisRun, setAnalysisRun] = useState<{
     status: "idle" | "running" | "error";
     message?: string;
@@ -81,19 +84,29 @@ function StudioInner({ project }: { project: Project }) {
     void runAnalysis();
   }, [inStudio, project.analysis, analysisRun.status, runAnalysis]);
 
-  // Auto-draft the screenplay once the analysis is done. We intentionally do NOT
-  // require any anchors: a story can legitimately have none (or the analyzer may
-  // find none), and gating on anchors there left the canvas stuck forever.
+  // Auto-enqueue the screenplay once analysis is ready. The project-jobs
+  // snapshot must arrive first so reopening or a second tab cannot duplicate a
+  // durable attempt that is already pending, complete, or failed.
   useEffect(() => {
-    if (!inStudio || !models) return;
-    if (project.analysis && !project.screenplay && !startedScreenplay.current) {
-      startedScreenplay.current = true;
-      void generateScreenplayVersion().catch((err) => {
-        startedScreenplay.current = false;
-        notify.error(err);
-      });
+    if (
+      !inStudio ||
+      !jobsLoaded ||
+      !project.analysis ||
+      project.screenplay ||
+      screenplayJob
+    ) {
+      return;
     }
-  }, [inStudio, models, project.analysis, project.screenplay]);
+    void startScreenplay(project).catch((err) => notify.error(err));
+  }, [
+    inStudio,
+    jobsLoaded,
+    project,
+    project.analysis,
+    project.screenplay,
+    screenplayJob,
+    startScreenplay,
+  ]);
 
   // Reset design-setup / docked tools when the step changes. Style stays open
   // across anchors↔edit so Design chapters can reopen Style from Pages.

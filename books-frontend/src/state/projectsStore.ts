@@ -334,6 +334,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       return {
         ...p,
         analysis,
+        config: { ...p.config, castReady: false },
         anchors: reconciled.map((anchor) => ({
           ...anchor,
           containedIds: [...(embeddedByContainer.get(anchor.id) ?? [])],

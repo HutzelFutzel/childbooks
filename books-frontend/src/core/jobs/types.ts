@@ -12,12 +12,12 @@ import type { ImageTier } from "../config/modelConfig";
 import type { ResolvedModels } from "../models/registry";
 import type { AnchorRender } from "../pipeline/anchorRun";
 import type { IllustrationRender } from "../pipeline/illustrationRun";
-import type { ModelSelection, Project, ReferenceUse } from "../types";
+import type { ModelSelection, Project, ReferenceUse, ScreenplayDoc } from "../types";
 
 export type JobStatus = "pending" | "running" | "done" | "error";
 
-/** The three generation pipelines a job/task can run. */
-export type JobKind = "image" | "refresh" | "anchors";
+/** The generation pipelines a job/task can run. */
+export type JobKind = "image" | "refresh" | "anchors" | "screenplay";
 
 /**
  * Legacy time-estimate constant. With the Cloud Tasks fan-out each task runs on
@@ -211,8 +211,36 @@ export interface AnchorsJob extends JobLease {
   progress: JobProgress;
 }
 
+/** The single durable task used to draft a book's initial screenplay. */
+export interface ScreenplayTask {
+  id: "screenplay";
+  status: JobStatus;
+  error?: string;
+  result?: ScreenplayDoc;
+  stats?: TaskStats;
+}
+
+/**
+ * A resumable initial-screenplay job. The text-only project snapshot contains
+ * the story config and analyzed cast; the finished document is reconciled into
+ * the client's version tree just like image task results.
+ */
+export interface ScreenplayJob extends JobLease {
+  kind: "screenplay";
+  status: JobStatus;
+  projectId?: string;
+  /** Text jobs do not use image quality tiers. */
+  tier?: undefined;
+  createdAt: number;
+  updatedAt: number;
+  error?: string;
+  project: Project;
+  tasks: ScreenplayTask[];
+  progress: JobProgress;
+}
+
 /** Any job document stored under `users/{uid}/jobs/{id}`. */
-export type AnyJob = GenerationJob | PipelineRefreshJob | AnchorsJob;
+export type AnyJob = GenerationJob | PipelineRefreshJob | AnchorsJob | ScreenplayJob;
 
 /** Kind-specific render output stored on a finished {@link TaskDoc}. */
 export type TaskResult =
@@ -224,7 +252,8 @@ export type TaskResult =
       imageModel?: ModelSelection;
     } // image
   | IllustrationRender // refresh
-  | AnchorRender; // anchors
+  | AnchorRender // anchors
+  | ScreenplayDoc; // screenplay
 
 /**
  * A single unit of work in the Cloud Tasks fan-out, stored at

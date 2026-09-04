@@ -116,7 +116,7 @@ export function StoryWorkspace() {
     if (firstRun) {
       // Style is the only remaining blocking decision. Analysis and screenplay
       // drafting continue in the background while the reader chooses it.
-      await updateConfig({ styleReady: false });
+      await updateConfig({ styleReady: false, castReady: false });
       await advanceStage("studio");
       setStep("anchors");
       return;

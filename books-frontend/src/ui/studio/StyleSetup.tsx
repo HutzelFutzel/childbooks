@@ -5,7 +5,6 @@
  * with existing art opens a confirm that renews cast → pages when Sparks allow.
  */
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { AlertTriangle, ArrowRight, Clock, Sparkles } from "lucide-react";
 import type { ArtStyleSelection, BookConfig } from "../../core/types";
 import { resolveArtStyleLabel } from "../../core/prompts/style";
@@ -20,7 +19,7 @@ import { notify } from "../lib/notify";
 import { isArtStyleChosen } from "../wizard/schema";
 import { artStylesEqual, StyleStep } from "../wizard/steps/StyleStep";
 import { useStudio } from "./StudioContext";
-import { studioPath } from "./studioRoutes";
+import { preferredDesignStep } from "./studioSteps";
 import {
   startStyleRenew,
   styleRenewCounts,
@@ -29,8 +28,7 @@ import {
 } from "./styleRenew";
 
 export function StyleSetup() {
-  const router = useRouter();
-  const { project, setStep, closeStyleSetup } = useStudio();
+  const { project, navigate, setStep, closeStyleSetup } = useStudio();
   const config = useProjectsStore((s) => s.current()?.config);
   const updateConfig = useProjectsStore((s) => s.updateConfig);
   const artStyles = useAppConfigStore((s) => s.artStyles);
@@ -65,6 +63,7 @@ export function StyleSetup() {
   async function commitStyle(next: ArtStyleSelection) {
     const patch: Partial<BookConfig> = { artStyle: next };
     if (firstTime) patch.styleReady = true;
+    if (firstTime || !artStylesEqual(next, committed)) patch.castReady = false;
     await updateConfig(patch);
   }
 
@@ -78,7 +77,12 @@ export function StyleSetup() {
       await commitStyle(draft);
       setConfirmOpen(false);
       closeStyleSetup();
-      setStep("edit");
+      if (firstTime || dirty) {
+        navigate("cast");
+      } else {
+        const current = useProjectsStore.getState().current() ?? project;
+        setStep(preferredDesignStep(current));
+      }
     } finally {
       setBusy(false);
     }
@@ -104,7 +108,7 @@ export function StyleSetup() {
       if (!started) return;
       setConfirmOpen(false);
       closeStyleSetup();
-      setStep("edit");
+      navigate("cast");
       notify.success(
         "Updating your book",
         "New versions are being created in the new style. This can take a few minutes — you can keep working.",
@@ -133,7 +137,8 @@ export function StyleSetup() {
   function onCancel() {
     setDraft(committed);
     closeStyleSetup();
-    router.replace(studioPath(project.id, "pages"), { scroll: false });
+    const current = useProjectsStore.getState().current() ?? project;
+    setStep(preferredDesignStep(current));
   }
 
   return (
@@ -161,7 +166,7 @@ export function StyleSetup() {
             rightIcon={<ArrowRight className="size-4" />}
             onClick={onPrimary}
           >
-            {firstTime ? "Choose page size" : dirty ? "Apply style" : "Done"}
+            {firstTime ? "Continue to characters" : dirty ? "Apply style" : "Done"}
           </Button>
         </div>
       </header>

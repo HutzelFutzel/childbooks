@@ -237,16 +237,19 @@ function sizeFromRequest(init?: RequestInit): string | undefined {
   return undefined;
 }
 
-/**
- * Per-provider upper bound on a single request, kept well below the worker's
- * 540s function timeout. A healthy Gemini image call completes in 8-30s, so
- * anything past 90s is a stalled request that should fail fast (and retry)
- * instead of eating the whole job window — two silent 240s stalls used to turn
- * a "fast tier" render into 8+ minutes. OpenAI's gpt-image at high quality can
- * legitimately run for minutes, so it keeps a higher ceiling.
- */
-const PROVIDER_TIMEOUT_MS: Record<ProviderId, number> = {
+/** Image calls should fail fast; healthy Gemini image renders take seconds. */
+const IMAGE_PROVIDER_TIMEOUT_MS: Record<ProviderId, number> = {
   google: 90_000,
+  openai: 240_000,
+};
+/**
+ * Structured text can legitimately take longer than image generation,
+ * especially a full screenplay from a reasoning model. Keep it below the
+ * worker's four-minute task lease while no longer applying the image-only 90s
+ * cutoff that caused production screenplay jobs to die.
+ */
+const TEXT_PROVIDER_TIMEOUT_MS: Record<ProviderId, number> = {
+  google: 210_000,
   openai: 240_000,
 };
 const DEFAULT_TIMEOUT_MS = 240_000;
@@ -290,12 +293,18 @@ function isImageGenerationCall(provider: ProviderId, url: string, init?: Request
 export async function meteredFetch(url: string, init?: RequestInit): Promise<Response> {
   const provider = providerForHost(url);
   const collector = storage.getStore();
+  const imageGeneration = Boolean(provider && isImageGenerationCall(provider, url, init));
   const release =
-    provider && isImageGenerationCall(provider, url, init) ? await acquireImageSlot() : null;
+    provider && imageGeneration ? await acquireImageSlot() : null;
   // Start the timeout clock only once the request actually goes out (time
   // spent queued in the semaphore must not eat into the request budget).
+  const timeoutMs = provider
+    ? imageGeneration
+      ? IMAGE_PROVIDER_TIMEOUT_MS[provider]
+      : TEXT_PROVIDER_TIMEOUT_MS[provider]
+    : DEFAULT_TIMEOUT_MS;
   const timeout = AbortSignal.timeout(
-    provider ? PROVIDER_TIMEOUT_MS[provider] : DEFAULT_TIMEOUT_MS,
+    timeoutMs,
   );
   const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
   if (provider && collector) collector.stats.calls += 1;

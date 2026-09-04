@@ -18,6 +18,7 @@ import {
   getDocs,
   onSnapshot,
   query,
+  runTransaction,
   where,
   type Unsubscribe,
 } from "firebase/firestore";
@@ -32,6 +33,7 @@ import type {
   JobTask,
   PipelineRefreshJob,
   RefreshTask,
+  ScreenplayJob,
   TaskDoc,
 } from "../core/jobs/types";
 import type { Project } from "../core/types";
@@ -143,6 +145,44 @@ export async function createAnchorsJob(
   };
   const ref = await addDoc(collection(getFirebaseDb(), `users/${uid()}/jobs`), job);
   return ref.id;
+}
+
+/**
+ * Ensure the initial screenplay is drafted by a durable worker. Automatic
+ * starts use a deterministic id so remounts/tabs cannot enqueue duplicates;
+ * an explicit retry creates a fresh job after a terminal failure.
+ */
+export async function createScreenplayJob(
+  project: Project,
+  options: { retry?: boolean } = {},
+): Promise<string> {
+  if (!project.analysis) throw new Error("Analyze the story before drafting its pages.");
+  const now = Date.now();
+  const job: ScreenplayJob = {
+    kind: "screenplay",
+    status: "pending",
+    projectId: project.id,
+    createdAt: now,
+    updatedAt: now,
+    leaseExpiresAt: 0,
+    runCount: 0,
+    project: slimProjectForRender(project, {}),
+    tasks: [{ id: "screenplay", status: "pending" }],
+    progress: { total: 1, completed: 0, failed: 0 },
+  };
+  const col = collection(getFirebaseDb(), `users/${uid()}/jobs`);
+  if (options.retry) {
+    const ref = await addDoc(col, job);
+    return ref.id;
+  }
+
+  const jobId = `screenplay-${project.id}-${project.analysis.generatedAt}`;
+  const ref = doc(col, jobId);
+  await runTransaction(getFirebaseDb(), async (tx) => {
+    const existing = await tx.get(ref);
+    if (!existing.exists()) tx.set(ref, job);
+  });
+  return jobId;
 }
 
 /**

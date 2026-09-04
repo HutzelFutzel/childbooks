@@ -25,7 +25,6 @@ import { artStyleKey } from "../prompts/style";
 import { anchorSignature, currentAnchorImage } from "./provenance";
 import {
   asRefPayload,
-  loadStyleReference,
   removeRegionsInPlace,
   type PipelineEnv,
 } from "./illustrationRun";
@@ -229,11 +228,9 @@ export async function renderAnchor(
     references = [...containedRefs, ...(subjectRef ? [subjectRef] : [])];
   }
 
-  // Lead with the art-style exemplar so a from-scratch/variation/restyled sheet
-  // matches the selected style. Skipped for edit-from-image, which must
-  // preserve the existing sheet's style (adding a style ref could restyle it).
-  const styleRef = editFromImage ? null : await loadStyleReference(env, project.config);
-  if (styleRef) references = [styleRef, ...references];
+  // Art style is text-only here. Content-bearing example images are selection
+  // thumbnails, not generation references: image models can copy their
+  // characters, clothes, and props even when instructed to use only the style.
 
   // Ordered reference legend so the model can bind each image to the right
   // subject (essential for OpenAI, whose images carry no labels). MUST mirror
@@ -254,7 +251,6 @@ export async function renderAnchor(
     mentionedAnchors,
     edit: options.edit,
     editFromImage,
-    hasStyleRef: Boolean(styleRef),
     restyle,
     baseLayout,
     legend: references.length > 0 ? legend : undefined,
@@ -316,7 +312,6 @@ export async function renderAnchor(
           mentionedAnchors,
           edit: options.edit,
           editFromImage,
-          hasStyleRef: Boolean(styleRef),
           restyle,
           legend: references.length > 0 ? legend : undefined,
           actualPanelCount: actualCount,

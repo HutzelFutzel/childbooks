@@ -153,6 +153,7 @@ export const openaiTextProvider: TextProvider = {
           model: req.model,
           messages,
           temperature: req.temperature ?? 0.4,
+          max_completion_tokens: req.maxOutputTokens,
           response_format: responseFormat,
         }),
       });
