@@ -49,10 +49,16 @@ export function AnchorEditor({
 
   const [edit, setEdit] = useState("");
   const [name, setName] = useState(anchor.name);
+  const [age, setAge] = useState(String(anchor.ageYears ?? 6));
+  const [description, setDescription] = useState(anchor.description);
+  const [userGuidance, setUserGuidance] = useState(anchor.userGuidance ?? "");
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmVersionId, setConfirmVersionId] = useState<string | null>(null);
 
   useEffect(() => setName(anchor.name), [anchor.id, anchor.name]);
+  useEffect(() => setAge(String(anchor.ageYears ?? 6)), [anchor.id, anchor.ageYears]);
+  useEffect(() => setDescription(anchor.description), [anchor.id, anchor.description]);
+  useEffect(() => setUserGuidance(anchor.userGuidance ?? ""), [anchor.id, anchor.userGuidance]);
 
   const cursorId = anchor.versions?.cursorId;
   const cursorNode = cursorId ? anchor.versions?.nodes[cursorId] : undefined;
@@ -115,6 +121,16 @@ export function AnchorEditor({
       return;
     }
     if (trimmed !== anchor.name) void renameAnchor(anchor.id, trimmed);
+  }
+
+  function commitAge() {
+    const parsed = Math.min(120, Math.max(0, Number(age)));
+    if (Number.isFinite(parsed) && parsed !== anchor.ageYears) {
+      void updateAnchor(anchor.id, { ageYears: parsed, ageSource: "author" });
+      setAge(String(parsed));
+    } else {
+      setAge(String(anchor.ageYears ?? 6));
+    }
   }
 
   const staleReason =
@@ -245,13 +261,21 @@ export function AnchorEditor({
                     type="number"
                     min={0}
                     max={120}
-                    value={anchor.ageYears ?? 6}
-                    onChange={(event) =>
-                      void updateAnchor(anchor.id, {
-                        ageYears: Math.min(120, Math.max(0, Number(event.target.value) || 0)),
-                        ageSource: "author",
-                      })
-                    }
+                    value={age}
+                    onChange={(event) => {
+                      setAge(event.target.value);
+                      const num = Number(event.target.value);
+                      if (event.target.value !== "" && Number.isFinite(num)) {
+                        const clamped = Math.min(120, Math.max(0, num));
+                        if (clamped !== anchor.ageYears) {
+                          void updateAnchor(anchor.id, { ageYears: clamped, ageSource: "author" });
+                        }
+                      }
+                    }}
+                    onBlur={commitAge}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") event.currentTarget.blur();
+                    }}
                   />
                 </Field>
               )}
@@ -262,13 +286,14 @@ export function AnchorEditor({
               hint="Appearance only — age is controlled by the Age field."
             >
               <Textarea
-                value={anchor.description}
-                onChange={(event) =>
+                value={description}
+                onChange={(event) => {
+                  setDescription(event.target.value);
                   void updateAnchor(anchor.id, {
                     description: event.target.value,
                     descriptionUserEdited: true,
-                  })
-                }
+                  });
+                }}
                 rows={4}
                 placeholder="What should stay recognizable on every page?"
               />
@@ -276,10 +301,11 @@ export function AnchorEditor({
 
             <Field label="Extra direction" hint="Optional">
               <Textarea
-                value={anchor.userGuidance ?? ""}
-                onChange={(event) =>
-                  void updateAnchor(anchor.id, { userGuidance: event.target.value })
-                }
+                value={userGuidance}
+                onChange={(event) => {
+                  setUserGuidance(event.target.value);
+                  void updateAnchor(anchor.id, { userGuidance: event.target.value });
+                }}
                 rows={2}
                 placeholder="A detail the story does not mention…"
               />

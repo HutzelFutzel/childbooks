@@ -115,19 +115,21 @@ export function CastWorkspace({
   // into the description or no age field at all, so normalize both once.
   useEffect(() => {
     const fallbackAge = suggestedAgeForAudience(project.config.ageRangeId);
+    let changed = false;
     const next = allAnchors.map((anchor) => {
-      if (anchor.type !== "character") return anchor;
-      const description = stripNumericAgeFromDescription(anchor.description);
-      if (anchor.ageYears !== undefined && description === anchor.description) return anchor;
+      if (anchor.type !== "character" || anchor.ageYears !== undefined) return anchor;
+      changed = true;
+      const description = anchor.descriptionUserEdited
+        ? anchor.description
+        : stripNumericAgeFromDescription(anchor.description);
       return {
         ...anchor,
         description,
-        ...(anchor.ageYears === undefined
-          ? { ageYears: fallbackAge, ageSource: "suggested" as const }
-          : {}),
+        ageYears: fallbackAge,
+        ageSource: "suggested" as const,
       };
     });
-    if (next.some((anchor, index) => anchor !== allAnchors[index])) {
+    if (changed) {
       void setAnchors(next);
     }
   }, [allAnchors, project.config.ageRangeId, setAnchors]);

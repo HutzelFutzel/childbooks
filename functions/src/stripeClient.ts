@@ -108,3 +108,15 @@ export function appBaseUrl(): string {
 export function isSandbox(): boolean {
   return serverConfig().stripe.env !== "live";
 }
+
+/**
+ * Which Stripe account the active key talks to.
+ *
+ * Anything PERSISTED that names a Stripe object (customer ids, above all) has to
+ * be scoped by this: the two environments are separate accounts, so an id minted
+ * in one is `resource_missing` in the other, and the sandbox↔live toggle can
+ * flip which one is active while those stored ids stay put.
+ */
+export function activeBillingEnv(): BillingEnv {
+  return isSandbox() ? "sandbox" : "live";
+}

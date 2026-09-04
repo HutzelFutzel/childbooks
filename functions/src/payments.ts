@@ -20,6 +20,7 @@ import { getFirestore, FieldValue, type Query } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { toUsd } from "./finance";
 import { normalizeCountry, UNKNOWN_COUNTRY } from "../../books-frontend/src/core/analytics/markets";
+import type { BillingEnv } from "../../books-frontend/src/core/config/plans";
 import type { OrderDraft } from "../../books-frontend/src/core/fulfillment/types";
 
 function db() {
@@ -908,21 +909,83 @@ export async function upsertSubscription(sub: SubscriptionUpsert): Promise<void>
   ]);
 }
 
-/** Look up the buyer uid for a Stripe customer id (set during checkout). */
+/**
+ * Look up the buyer uid for a Stripe customer id (set during checkout).
+ *
+ * Searches the full history of ids rather than just the active one: a webhook
+ * can arrive for a customer in the environment we are no longer pointed at
+ * (a late event, a refund on an old sandbox charge), and dropping it on the
+ * floor would silently skip fulfillment bookkeeping.
+ */
 export async function findUidByCustomerId(customerId: string): Promise<string | null> {
-  const q = await db().collection("users").where("stripeCustomerId", "==", customerId).limit(1).get();
-  return q.empty ? null : q.docs[0].id;
+  const byHistory = await db()
+    .collection("users")
+    .where("stripeCustomerIds", "array-contains", customerId)
+    .limit(1)
+    .get();
+  if (!byHistory.empty) return byHistory.docs[0].id;
+  // Profiles last written before the environment split only have the flat field.
+  const byActive = await db().collection("users").where("stripeCustomerId", "==", customerId).limit(1).get();
+  return byActive.empty ? null : byActive.docs[0].id;
 }
 
-/** Persist the Stripe customer id on the user's profile (idempotent). */
-export async function saveStripeCustomerId(uid: string, customerId: string): Promise<void> {
-  await db().doc(`users/${uid}`).set({ stripeCustomerId: customerId }, { merge: true });
+/**
+ * Persist the Stripe customer id for a user in one billing environment
+ * (idempotent).
+ *
+ * Three fields, because they answer three different questions:
+ *   - `stripeCustomerIdByEnv.<env>` — the customer to use when THIS environment
+ *     is active. The load-bearing one: without the scoping, a live-mode key gets
+ *     handed a test-mode `cus_…` after the toggle flips and every checkout for
+ *     that user dies on `resource_missing`.
+ *   - `stripeCustomerId` — mirror of whichever environment is active, so
+ *     existing readers and Firestore rules keep working unchanged.
+ *   - `stripeCustomerIds` — every id ever issued to the user, for the reverse
+ *     lookup in `findUidByCustomerId`.
+ */
+export async function saveStripeCustomerId(uid: string, customerId: string, env: BillingEnv): Promise<void> {
+  await db()
+    .doc(`users/${uid}`)
+    .set(
+      {
+        stripeCustomerIdByEnv: { [env]: customerId },
+        stripeCustomerId: customerId,
+        stripeCustomerIds: FieldValue.arrayUnion(customerId),
+      },
+      { merge: true },
+    );
 }
 
-/** Read a previously-saved Stripe customer id for a user, if any. */
-export async function getStripeCustomerId(uid: string): Promise<string | null> {
+/**
+ * Read the saved Stripe customer id for a user in one billing environment.
+ *
+ * Falls back to the flat pre-split field, which records no environment: it is
+ * correct for whichever account minted it and missing in the other, so callers
+ * must confirm it still resolves before using it (see `ensureCustomer`).
+ */
+export async function getStripeCustomerId(uid: string, env: BillingEnv): Promise<string | null> {
   const snap = await db().doc(`users/${uid}`).get();
-  return snap.exists ? ((snap.get("stripeCustomerId") as string) ?? null) : null;
+  if (!snap.exists) return null;
+  const scoped = snap.get(`stripeCustomerIdByEnv.${env}`) as string | undefined;
+  return scoped ?? ((snap.get("stripeCustomerId") as string) ?? null);
+}
+
+/**
+ * Drop a customer id that Stripe no longer recognizes, so the next checkout
+ * mints a fresh one instead of retrying an id that can never resolve.
+ */
+export async function forgetStripeCustomerId(uid: string, customerId: string): Promise<void> {
+  const ref = db().doc(`users/${uid}`);
+  const snap = await ref.get();
+  if (!snap.exists) return;
+  const patch: Record<string, unknown> = { stripeCustomerIds: FieldValue.arrayRemove(customerId) };
+  if (snap.get("stripeCustomerId") === customerId) patch.stripeCustomerId = FieldValue.delete();
+  for (const env of ["sandbox", "live"] as const) {
+    if (snap.get(`stripeCustomerIdByEnv.${env}`) === customerId) {
+      patch[`stripeCustomerIdByEnv.${env}`] = FieldValue.delete();
+    }
+  }
+  await ref.update(patch);
 }
 
 /**

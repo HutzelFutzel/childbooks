@@ -70,6 +70,7 @@ import type {
   ShippingMethod,
 } from "../../books-frontend/src/core/fulfillment/types";
 import {
+  activeBillingEnv,
   appBaseUrl,
   getStripe,
   isSandbox,
@@ -83,6 +84,7 @@ import {
   draftRecipient,
   findPaymentIdByStripeId,
   findUidByCustomerId,
+  forgetStripeCustomerId,
   getAdminPayment,
   getStripeCustomerId,
   listFailedFulfillments,
@@ -350,7 +352,35 @@ async function createCheckoutSession(
 }
 
 /**
- * Get (or lazily create) the Stripe customer for a user.
+ * Whether a stored customer id still resolves in the ACTIVE Stripe account.
+ *
+ * Two ways a saved id goes bad: it was minted in the other environment (the
+ * sandbox↔live toggle moved under it), or it was deleted in the Dashboard. Both
+ * surface as `resource_missing`, and both are recoverable by minting a new
+ * customer. Any OTHER failure — auth, rate limit, outage — is rethrown: treating
+ * those as "missing" would quietly fork a second customer per checkout attempt
+ * and scatter one buyer's payment methods and tax location across all of them.
+ */
+async function customerResolves(customerId: string): Promise<boolean> {
+  try {
+    const customer = await getStripe().customers.retrieve(customerId);
+    return !(customer as Stripe.DeletedCustomer).deleted;
+  } catch (err) {
+    if ((err as { code?: string }).code === "resource_missing") return false;
+    throw err;
+  }
+}
+
+/**
+ * Get (or lazily create) the Stripe customer for a user, in the active
+ * environment.
+ *
+ * Self-healing on purpose. Every checkout path funnels through here, so a
+ * customer id that the active Stripe key can't see used to take down ALL of
+ * them at once (Sparks packs and gifts, plans, print orders, reorders, paid
+ * ebooks) with a generic 500, and the only repair was editing Firestore by hand.
+ * Now a stale id is verified, discarded, and replaced in the environment that
+ * actually needs it.
  *
  * Also the single choke point where affiliate attribution reaches Stripe: every
  * checkout path resolves its customer here, so stamping the referral once at
@@ -358,19 +388,89 @@ async function createCheckoutSession(
  * before the person followed an affiliate link.
  */
 async function ensureCustomer(uid: string, email?: string | null): Promise<string> {
-  const existing = await getStripeCustomerId(uid);
-  if (existing) {
+  const env = activeBillingEnv();
+  const existing = await getStripeCustomerId(uid, env);
+  if (existing && (await customerResolves(existing))) {
+    // Re-save even on a hit: for a pre-split id this back-fills the scoped
+    // field, so the next checkout skips the round trip above.
+    await saveStripeCustomerId(uid, existing, env);
     await stampCustomerAttribution(uid, existing);
     return existing;
   }
-  const stripe = getStripe();
-  const customer = await stripe.customers.create({
+  if (existing) {
+    console.warn(`[stripe] customer ${existing} not found in ${env} for uid ${uid} — creating a replacement`);
+    await forgetStripeCustomerId(uid, existing).catch(() => {});
+  }
+  const customer = await getStripe().customers.create({
     email: email ?? undefined,
     metadata: { uid },
   });
-  await saveStripeCustomerId(uid, customer.id);
+  await saveStripeCustomerId(uid, customer.id, env);
   await stampCustomerAttribution(uid, customer.id);
   return customer.id;
+}
+
+/**
+ * A checkout that died server-side: log it, alert, and answer the buyer.
+ *
+ * The alert is the point. A broken checkout is silent by construction — the
+ * buyer reads a toast that sounds retryable, gives up, and the only trace is a
+ * `console.error` in a log nobody is watching. That is how a stale Stripe
+ * customer id took every purchase path to zero for weeks without a single
+ * report. Deduped per surface per hour so a sustained outage pings #ops once an
+ * hour instead of once per abandoned buyer, while still naming which button is
+ * dead and which Stripe environment it died in.
+ */
+async function checkoutFailed(res: Response, err: unknown, surface: string, message?: string): Promise<void> {
+  console.error(`[stripe] ${surface} checkout failed`, err);
+  await raiseAlert({
+    severity: "critical",
+    kind: "checkout_failed",
+    message: `${surface} checkout failed: ${(err as Error)?.message ?? "unknown error"}`,
+    meta: { surface, env: activeBillingEnv(), stripeCode: (err as { code?: string }).code ?? null },
+    ref: `${surface}_${Math.floor(Date.now() / 3_600_000)}`,
+  });
+  clientError(res, message ?? "We couldn't start checkout. Please try again.", 500);
+}
+
+/** A portal session URL, or the client-facing reason there isn't one. */
+type PortalResult = { url: string } | { error: string; status: number };
+
+/**
+ * Open a Stripe Customer Portal session for a user.
+ *
+ * The two ways this fails are both permanent, and neither deserves the "please
+ * try again" that a 500 implies:
+ *   - The portal needs a saved configuration, held PER STRIPE ACCOUNT. Sandbox
+ *     having one says nothing about live, so the first live subscriber hits a
+ *     hard `invalid_request` unless someone configured it in the Dashboard.
+ *   - The stored customer can belong to the other environment. Checkout heals
+ *     that by minting a replacement, but there is nothing to manage on a
+ *     customer this account has never seen.
+ */
+async function openBillingPortal(uid: string): Promise<PortalResult> {
+  const customerId = await getStripeCustomerId(uid, activeBillingEnv());
+  if (!customerId) return { error: "No billing account yet.", status: 404 };
+  try {
+    const session = await getStripe().billingPortal.sessions.create({
+      customer: customerId,
+      return_url: `${appBaseUrl()}/studio`,
+    });
+    return { url: session.url };
+  } catch (err) {
+    if ((err as { code?: string }).code === "resource_missing") {
+      return { error: "No billing account yet.", status: 404 };
+    }
+    // Distinguishable in the logs from a transient Stripe failure, because the
+    // fix is a one-time Dashboard change (Settings → Billing → Customer portal)
+    // rather than a retry.
+    const message = (err as Error)?.message ?? "";
+    if (/configuration/i.test(message)) {
+      console.error("[stripe] Customer Portal has no configuration in this environment", err);
+      return { error: "Billing management isn't available yet. Please contact support.", status: 503 };
+    }
+    throw err;
+  }
 }
 
 // ---- Print-order checkout core ----------------------------------------------
@@ -1136,8 +1236,7 @@ export function registerStripeUserRoutes(app: Express): void {
         clientError(res, err.clientMessage, 409);
         return;
       }
-      console.error("[stripe] checkout failed", err);
-      clientError(res, "We couldn't start checkout. Please try again.", 500);
+      await checkoutFailed(res, err, "print order");
     }
   });
 
@@ -1475,8 +1574,7 @@ export function registerStripeUserRoutes(app: Express): void {
 
       res.json({ url: session.url, paymentId });
     } catch (err) {
-      console.error("[stripe] ebook checkout failed", err);
-      clientError(res, "We couldn't start the ebook checkout. Please try again.", 500);
+      await checkoutFailed(res, err, "ebook", "We couldn't start the ebook checkout. Please try again.");
     }
   });
 
@@ -1569,8 +1667,7 @@ export function registerStripeUserRoutes(app: Express): void {
       }
       res.json({ url: result.url, paymentId: result.paymentId });
     } catch (err) {
-      console.error("[stripe] reorder failed", err);
-      clientError(res, "We couldn't start checkout. Please try again.", 500);
+      await checkoutFailed(res, err, "reorder");
     }
   });
 
@@ -1595,16 +1692,20 @@ export function registerStripeUserRoutes(app: Express): void {
       // Portal (which upgrades/downgrades the existing subscription with
       // proration) instead of opening a second Checkout subscription.
       if (await hasActiveSubscription(uid)) {
-        const customerId = await getStripeCustomerId(uid);
-        if (customerId) {
-          const portal = await getStripe().billingPortal.sessions.create({
-            customer: customerId,
-            return_url: `${appBaseUrl()}/studio`,
-          });
+        const portal = await openBillingPortal(uid);
+        if ("url" in portal) {
           res.json({ url: portal.url, portal: true });
           return;
         }
-        clientError(res, "You already have an active subscription. Manage it from your account menu.");
+        // Pointing them at the account menu only helps if the portal works from
+        // there — which is the same call that just failed.
+        clientError(
+          res,
+          portal.status === 404
+            ? "You already have an active subscription. Manage it from your account menu."
+            : portal.error,
+          portal.status === 404 ? 400 : portal.status,
+        );
         return;
       }
 
@@ -1664,8 +1765,7 @@ export function registerStripeUserRoutes(app: Express): void {
       });
       res.json({ url: session.url });
     } catch (err) {
-      console.error("[stripe] subscription checkout failed", err);
-      clientError(res, "We couldn't start checkout. Please try again.", 500);
+      await checkoutFailed(res, err, "subscription");
     }
   });
 
@@ -1751,8 +1851,7 @@ export function registerStripeUserRoutes(app: Express): void {
       });
       res.json({ url: session.url, paymentId });
     } catch (err) {
-      console.error("[stripe] sparks-pack checkout failed", err);
-      clientError(res, "We couldn't start checkout. Please try again.", 500);
+      await checkoutFailed(res, err, "sparks pack");
     }
   });
 
@@ -1791,6 +1890,18 @@ export function registerStripeUserRoutes(app: Express): void {
       const paymentId = randomUUID();
       const giftCode = newGiftCode();
       const customerId = await ensureCustomer(uid, req.authToken?.email);
+      // Same `pack` scope the direct top-up uses: a gift is still a Spark pack
+      // purchase, and the wallet promises earned discounts "apply automatically
+      // at checkout" without carving out gifts. Nothing new is exploitable — the
+      // buyer could apply the identical discount to a pack for themselves.
+      const earned = await earnedDiscount({
+        uid,
+        itemType: "pack",
+        paymentId,
+        settings: await getPricingSettings(),
+        amount: price,
+      });
+      const chargedPrice = earned ? discountedAmount(price, earned.percentOff) : price;
       const meta = {
         paymentId,
         uid,
@@ -1809,8 +1920,11 @@ export function registerStripeUserRoutes(app: Express): void {
             quantity: 1,
             price_data: {
               currency: currency.toLowerCase(),
-              unit_amount: toMinor(price, currency),
-              product_data: { name: `Gift: ${totalSparks} Sparks (${pack.label})` },
+              unit_amount: toMinor(chargedPrice, currency),
+              product_data: {
+                name: `Gift: ${totalSparks} Sparks (${pack.label})`,
+                description: earned ? `Discount applied: ${earned.summary}.` : undefined,
+              },
             },
           },
         ],
@@ -1826,18 +1940,17 @@ export function registerStripeUserRoutes(app: Express): void {
         paymentId,
         uid,
         kind: "sparkGift",
-        amount: price,
+        amount: chargedPrice,
         currency,
         description: `Gift: ${totalSparks} Sparks`,
         stripeSessionId: session.id,
         stripeCustomerId: customerId,
         ...checkoutDevice(req),
-        items: [{ label: `Gift: ${totalSparks} Sparks`, amount: price, quantity: 1 }],
+        items: [{ label: `Gift: ${totalSparks} Sparks`, amount: chargedPrice, quantity: 1 }],
       });
       res.json({ url: session.url, paymentId, giftCode });
     } catch (err) {
-      console.error("[stripe] sparks-gift checkout failed", err);
-      clientError(res, "We couldn't start checkout. Please try again.", 500);
+      await checkoutFailed(res, err, "sparks gift");
     }
   });
 
@@ -1900,15 +2013,11 @@ export function registerStripeUserRoutes(app: Express): void {
         clientError(res, "Payments are temporarily unavailable.", 503);
         return;
       }
-      const customerId = await getStripeCustomerId(req.uid!);
-      if (!customerId) {
-        clientError(res, "No billing account yet.", 404);
+      const portal = await openBillingPortal(req.uid!);
+      if (!("url" in portal)) {
+        clientError(res, portal.error, portal.status);
         return;
       }
-      const portal = await getStripe().billingPortal.sessions.create({
-        customer: customerId,
-        return_url: `${appBaseUrl()}/studio`,
-      });
       res.json({ url: portal.url });
     } catch (err) {
       console.error("[stripe] portal failed", err);
@@ -2431,7 +2540,9 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
 
       if (session.customer && uid) {
         const customerId = typeof session.customer === "string" ? session.customer : session.customer.id;
-        await saveStripeCustomerId(uid, customerId).catch(() => {});
+        // Signature-verified against this environment's webhook secret, so the
+        // active env is the one that minted this customer.
+        await saveStripeCustomerId(uid, customerId, activeBillingEnv()).catch(() => {});
       }
 
       if (kind === "subscription") {
@@ -2543,6 +2654,31 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
           productId: (session.metadata?.productId as string) || undefined,
         });
       }
+      return;
+    }
+
+    // The buyer abandoned Checkout and Stripe closed the session. Without this,
+    // the payment document sits "pending" forever and shows up in the user's
+    // receipts as a purchase that never resolves.
+    case "checkout.session.expired": {
+      const session = event.data.object as Stripe.Checkout.Session;
+      const paymentId = (session.metadata?.paymentId as string) || session.client_reference_id || "";
+      const uid = (session.metadata?.uid as string) || "";
+      if (!paymentId || !uid) return;
+      const payment = await getAdminPayment(paymentId);
+      // A session can expire AFTER it was paid via a delayed method; never walk
+      // a settled payment backwards.
+      if (!payment || payment.status !== "pending") return;
+      await updatePayment({ paymentId, uid, status: "failed", event: "checkout.session.expired" });
+      return;
+    }
+
+    // The customer was deleted in Stripe. Forget the id so the next checkout
+    // mints a replacement instead of failing on an id that can't come back.
+    case "customer.deleted": {
+      const customer = event.data.object as Stripe.Customer;
+      const uid = (customer.metadata?.uid as string) || (await findUidByCustomerId(customer.id));
+      if (uid) await forgetStripeCustomerId(uid, customer.id).catch(() => {});
       return;
     }
 

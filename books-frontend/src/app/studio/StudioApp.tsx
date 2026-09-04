@@ -167,7 +167,11 @@ export default function StudioApp() {
     const requested = route.destination ?? defaultDestination(project);
     const allowed = fallbackDestination(project, requested);
     if (route.destination !== allowed) {
-      router.replace(studioPath(project.id, allowed), { scroll: false });
+      // Keep the query: a Stripe return can land on a destination this book
+      // isn't eligible for, and rewriting the path bare would throw away the
+      // `payment` id the confirmation screen needs to survive a refresh.
+      const search = typeof window === "undefined" ? "" : window.location.search;
+      router.replace(`${studioPath(project.id, allowed)}${search}`, { scroll: false });
     }
   }, [
     accessLevel,
