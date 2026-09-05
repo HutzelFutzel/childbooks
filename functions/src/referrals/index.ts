@@ -18,14 +18,12 @@ import {
   type RewardView,
 } from "../../../books-frontend/src/core/config/referral";
 import { onReferralEvent } from "./events";
-import { findRedeemableDiscount, reserveDiscount } from "./redemption";
 import {
   checkEligibility,
   ensureReferralCode,
   invitesLeftToday,
   shareUrlFor,
 } from "./invitations";
-import { createReferralCoupon } from "./stripeRewards";
 import { db, listInvitationsFor, listRewardsFor, type InvitationDoc, type RewardDoc } from "./store";
 
 export { ensureReferralCode, shareUrlFor, declineUrlFor, sendInvitations, acceptInvitation, declineInvitation, previewInvitation, checkEligibility } from "./invitations";
@@ -162,23 +160,7 @@ export async function onSubscriptionInvoicePaid(args: {
   }
 }
 
-/**
- * A one-off Stripe coupon for an earned membership discount, reserved for this
- * checkout. Memberships are the one place a referral discount has to exist as a
- * real Stripe coupon, because Stripe generates the invoice.
- */
-export async function planDiscountCoupon(
-  uid: string,
-  reservationRef: string,
-): Promise<{ couponId: string; rewardId: string; percentOff: number } | null> {
-  const earned = await findRedeemableDiscount(uid, "plan");
-  if (!earned) return null;
-  if (!(await reserveDiscount(earned.rewardId, reservationRef))) return null;
-  const couponId = await createReferralCoupon({
-    percentOff: earned.percentOff,
-    expiresAt: Date.now() + 86_400_000,
-    name: `Referral: ${earned.summary}`,
-  });
-  if (!couponId) return null;
-  return { couponId, rewardId: earned.rewardId, percentOff: earned.percentOff };
-}
+// A membership discount used to be resolved here, referral-only. It now runs
+// through the shared resolver in the checkout route with every other source, so
+// a referral perk, a campaign offer and a typed code compete for the one Stripe
+// coupon a subscription can carry.

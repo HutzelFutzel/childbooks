@@ -84,6 +84,13 @@ import {
   type SparksConfig,
 } from "../../books-frontend/src/core/config/sparks";
 import {
+  couponsConfigSchema,
+  createDefaultCouponsConfig,
+  normalizeCouponsConfig,
+  publicCouponsProjection,
+  type CouponsConfig,
+} from "../../books-frontend/src/core/config/coupons";
+import {
   BRAND_ASSET_SLOTS,
   createDefaultBrandingConfig,
   MAX_BACK_COVER_LOGO_SIZE_CM,
@@ -97,6 +104,7 @@ import {
 import {
   findQrCode,
   normalizeQrCodesConfig,
+  qrEncodedValue,
   QR_LOGO_QUIET_COLOR_DEFAULT,
   QR_LOGO_QUIET_DEFAULT,
   QR_LOGO_QUIET_MAX,
@@ -251,6 +259,13 @@ const AFFILIATE_CONFIG_DOC = "adminSettings/affiliates";
 // projection keeps those and strips the rest. See `publicCampaignsProjection`.
 const CAMPAIGNS_DOC = "adminSettings/campaigns";
 const CAMPAIGNS_PUBLIC_DOC = "appConfig/campaigns";
+// Private, with a projection that publishes only the master switch. Unlike
+// campaigns — where the client evaluates offers speculatively and therefore
+// needs the real rules — every coupon is validated server-side on entry, so the
+// client needs no rules at all. A world-readable copy would publish every
+// unredeemed shared code in the system, which is the entire asset.
+const COUPONS_DOC = "adminSettings/coupons";
+const COUPONS_PUBLIC_DOC = "appConfig/coupons";
 // Private, and with no projection at all: the client never renders a survey it
 // chose for itself. It asks `/account/survey` what to show, and the server answers
 // with at most one — having already applied targeting, sampling and everything
@@ -592,6 +607,38 @@ export async function saveCampaignsConfig(input: unknown): Promise<CampaignsConf
   const normalized = normalizeCampaignsConfig({ ...parsed, updatedAt: Date.now() });
   await writeDoc(CAMPAIGNS_DOC, normalized);
   await writeDoc(CAMPAIGNS_PUBLIC_DOC, publicCampaignsProjection(normalized));
+  return normalized;
+}
+
+// ---- Coupons ---------------------------------------------------------------
+
+export function getCouponsConfig(): Promise<CouponsConfig> {
+  return readDoc(COUPONS_DOC, normalizeCouponsConfig);
+}
+
+export function defaultCouponsConfig(): CouponsConfig {
+  return createDefaultCouponsConfig();
+}
+
+/**
+ * Validate + persist the coupon catalog.
+ *
+ * The schema is where an unbounded coupon is caught — an active public code with
+ * no cap and no budget, a no-code coupon with no audience (which would discount
+ * every order for everyone), a 100%-off code with no redemption limit. The
+ * normalizer re-applies the same guards, so a hand-edited Firestore doc can't
+ * smuggle past them either.
+ *
+ * Codes themselves are NOT stored here. The catalog holds the offer; the
+ * redeemable strings live in their own collection so a lookup is one document
+ * read rather than a scan, and so a generated batch of ten thousand codes
+ * doesn't have to fit in a config document. See `coupons/store.ts`.
+ */
+export async function saveCouponsConfig(input: unknown): Promise<CouponsConfig> {
+  const parsed = couponsConfigSchema.parse(input);
+  const normalized = normalizeCouponsConfig({ ...parsed, updatedAt: Date.now() });
+  await writeDoc(COUPONS_DOC, normalized);
+  await writeDoc(COUPONS_PUBLIC_DOC, publicCouponsProjection(normalized));
   return normalized;
 }
 
@@ -964,6 +1011,7 @@ export interface QrCodeSaveInput {
   id?: string;
   name: string;
   data: string;
+  tracked: boolean;
   errorCorrectionLevel: QrErrorCorrectionLevel;
   margin: number;
   scalePx: number;
@@ -1095,11 +1143,15 @@ async function resolveLogoBufferForRender(
 export async function previewQrCode(
   input: QrCodeSaveInput,
 ): Promise<{ contentType: string; base64: string }> {
-  const draft = draftQrCode(input, "preview");
+  // Keyed on the real id whenever there is one, so a tracked code's preview
+  // encodes the same `/q/{id}` the saved render will — the preview doubles as
+  // the download for an unsaved draft, and a downloadable file that differs
+  // from the saved one is a poster pointing somewhere nobody chose.
+  const draft = draftQrCode(input, input.id ?? "preview");
   const existing = input.id ? findQrCode(await getQrCodesConfig(), input.id) : undefined;
   const logoBuffer = await resolveLogoBufferForRender(input.logo, existing);
   const rendered = await renderQrCode({
-    data: draft.data,
+    data: qrEncodedValue(draft, (await getSeoConfig()).siteUrl),
     format: draft.format,
     errorCorrectionLevel: draft.errorCorrectionLevel,
     margin: draft.margin,
@@ -1165,7 +1217,9 @@ export async function saveQrCode(input: QrCodeSaveInput): Promise<QrCodesConfig>
   }
 
   const rendered = await renderQrCode({
-    data: draft.data,
+    // A tracked code encodes the `/q/{id}` hop rather than the destination —
+    // `id` is already resolved above, so this is the real URL even on create.
+    data: qrEncodedValue(draft, (await getSeoConfig()).siteUrl),
     format: draft.format,
     errorCorrectionLevel: draft.errorCorrectionLevel,
     margin: draft.margin,

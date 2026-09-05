@@ -84,6 +84,7 @@ function user(over: Partial<UserFacts> = {}): UserFacts {
     buyerRole: null,
     buyerRoles: [],
     surveyAnswers: [],
+    arrivedVia: [],
     ...over,
   };
 }
@@ -130,6 +131,8 @@ function restrictiveCondition(kind: RuleConditionKind): RuleCondition {
       return { kind, planIds: ["studio"] };
     case "country":
       return { kind, countries: ["US"] };
+    case "arrivedVia":
+      return { kind, tokens: ["qr:berlin-window"] };
     case "productId":
       return { kind, productIds: ["sku-1"] };
     case "surveyId":
@@ -222,6 +225,30 @@ check(
 check(
   "a silent account fails a buyerRole condition (ever)",
   conditionApplies({ kind: "buyerRole", roles: ["parent"], mode: "ever" }, user(), purchase()) !== null,
+);
+// An account with no recorded arrival is the common case (most visits are
+// direct), so a campaign targeted at a QR poster must read as "not them" rather
+// than "everybody".
+check(
+  "an account with no recorded arrival fails an arrivedVia condition",
+  conditionApplies({ kind: "arrivedVia", tokens: ["qr:berlin-window"] }, user(), purchase()) !== null,
+);
+check(
+  "an arrivedVia condition matches the account that scanned it",
+  conditionApplies(
+    { kind: "arrivedVia", tokens: ["qr:berlin-window"] },
+    user({ arrivedVia: ["qr:berlin-window"] }),
+    purchase(),
+  ) === null,
+);
+check(
+  "an empty arrivedVia condition restricts nothing",
+  conditionApplies({ kind: "arrivedVia", tokens: [] }, user(), purchase()) === null,
+);
+check(
+  "an arrivedVia refusal doesn't quote the customer's own source back at them",
+  !/berlin/i.test(describeCondition({ kind: "arrivedVia", tokens: ["qr:berlin-window"] })),
+  describeCondition({ kind: "arrivedVia", tokens: ["qr:berlin-window"] }),
 );
 check(
   "a silent account fails a surveyAnswer condition",

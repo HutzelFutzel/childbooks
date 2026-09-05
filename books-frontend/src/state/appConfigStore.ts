@@ -124,6 +124,16 @@ import {
   type SimulationResult,
 } from "../core/config/campaigns";
 import {
+  normalizeCouponsConfig,
+  type Coupon,
+  type CouponCodeRow,
+  type CouponGrantRow,
+  type CouponRedemptionRow,
+  type CouponReport,
+  type CouponRow,
+  type CouponsConfig,
+} from "../core/config/coupons";
+import {
   normalizeSurveysConfig,
   type SurveyReport,
   type SurveysConfig,
@@ -160,6 +170,8 @@ import {
   type QrDotStyle,
   type QrErrorCorrectionLevel,
   type QrFormat,
+  type QrAnalysisReport,
+  type QrScanStats,
 } from "../core/config/qrCodes";
 
 /** What the admin form sends to create, update, or preview a QR code. */
@@ -170,6 +182,8 @@ export interface QrCodeInput {
   id?: string;
   name: string;
   data: string;
+  /** Encode `/q/{id}` and forward scans to `data`, instead of encoding `data`. */
+  tracked: boolean;
   errorCorrectionLevel: QrErrorCorrectionLevel;
   margin: number;
   scalePx: number;
@@ -470,6 +484,17 @@ interface AppConfigState {
    */
   campaigns: CampaignsConfig;
   /**
+   * Whether the coupon engine is on — the ONLY thing the coupon catalog
+   * publishes.
+   *
+   * Unlike campaigns, no rules are exposed: every code is validated server-side
+   * on entry, so the client needs none, and a world-readable copy of the catalog
+   * would hand out every unredeemed code in the system. This one boolean exists
+   * purely so checkout knows whether to render a code field at all — offering
+   * one that can never work is worse than not offering one.
+   */
+  couponsEnabled: boolean;
+  /**
    * The affiliate scope map. NOT a live snapshot like the rest: it lives in the
    * admin-only `adminSettings/affiliates` doc, so it's fetched through the
    * backend when the admin tab opens.
@@ -581,6 +606,50 @@ interface AppConfigState {
   ) => Promise<SimulationResult>;
   /** Daily series + measured lift for one campaign. */
   loadCampaignReport: (campaignId: string, from?: number, to?: number) => Promise<CampaignReport>;
+  /** The full coupon catalog, including drafts (admin-only, so an explicit fetch). */
+  loadCouponsConfig: () => Promise<CouponsConfig>;
+  saveCouponsConfig: (config: CouponsConfig) => Promise<CouponsConfig>;
+  /** Every coupon with its live counters — the Coupons tab's list. */
+  loadCouponRows: () => Promise<{ enabled: boolean; coupons: CouponRow[] }>;
+  /** Daily series, rejection breakdown and remaining caps for one coupon. */
+  loadCouponReport: (couponId: string, from?: number, to?: number) => Promise<CouponReport>;
+  /**
+   * Mint a batch of single-use codes. The strings come back ONCE, in this
+   * response — afterwards they're only ever shown masked, so the caller has to
+   * hand them to the operator now or not at all.
+   */
+  generateCouponCodes: (
+    couponId: string,
+    args: { count: number; length?: number; prefix?: string },
+  ) => Promise<{ batchId: string; created: number; codes: string[] }>;
+  /** Every code for a coupon, masked, with its usage — the leak-hunting view. */
+  loadCouponCodes: (couponId: string) => Promise<CouponCodeRow[]>;
+  /** Kill a leaked batch, or every code for a coupon. */
+  revokeCouponCodes: (couponId: string, batchId?: string) => Promise<number>;
+  /**
+   * Attach a no-code coupon to one account by hand (the make-good path).
+   *
+   * Takes a uid or an email, because an operator working a support ticket has
+   * the latter. The server resolves it and returns the uid it landed on, so the
+   * caller can say who actually got it.
+   */
+  grantCoupon: (
+    couponId: string,
+    account: { uid?: string; email?: string },
+  ) => Promise<{ granted: boolean; uid?: string; summary?: string; message?: string }>;
+  /** Who holds this coupon, newest first — including revoked grants. */
+  loadCouponGrants: (couponId: string) => Promise<CouponGrantRow[]>;
+  /** Take a hand-granted coupon back off an account. */
+  revokeCouponGrant: (couponId: string, uid: string) => Promise<void>;
+  /** Recent redemptions, for the report's activity list and for support. */
+  loadCouponRedemptions: (couponId?: string) => Promise<CouponRedemptionRow[]>;
+  /** Cancel one redemption, handing the use back. */
+  voidCouponRedemption: (id: string) => Promise<boolean>;
+  /** What a (possibly unsaved) coupon would take off an order of this size. */
+  simulateCoupon: (
+    coupon: Coupon,
+    subtotal: number,
+  ) => Promise<{ percentOff: number; discountAmount: number }>;
   /** Payouts waiting on a human decision, oldest first. */
   loadHeldRedemptions: () => Promise<HeldRedemptionView[]>;
   /** Pay out a redemption an approval or a limit held, or void it for good. */
@@ -730,6 +799,11 @@ interface AppConfigState {
   deleteQrCodeVersion: (id: string, storagePath: string) => Promise<void>;
   /** Render without saving — no Storage write, no history entry. */
   previewQrCode: (input: QrCodeInput) => Promise<{ contentType: string; base64: string }>;
+  /** Scan counts per tracked code id. Untracked codes never appear — their
+   *  scans go straight to the destination without touching a server. */
+  loadQrScanStats: () => Promise<Record<string, QrScanStats>>;
+  /** Complete scan → account → coupon grant → paid-use acquisition funnel. */
+  loadQrAnalysis: (from?: number, to?: number) => Promise<QrAnalysisReport>;
 
   // Subscription plans (admin). The PUBLIC projection lives in `plans`; the full
   // config (incl. Stripe ids) is fetched on demand from the backend.
@@ -859,6 +933,7 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   referral: createDefaultReferralConfig(),
   referralDocExists: false,
   campaigns: createDefaultCampaignsConfig(),
+  couponsEnabled: false,
   affiliates: createDefaultAffiliateConfig(),
   adminMarkets: { version: 1, markets: [], updatedAt: 0 },
   shippingSettings: createDefaultShippingSettings(),
@@ -968,6 +1043,9 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       }),
       onSnapshot(doc(db, "appConfig", "campaigns"), (snap) => {
         set({ campaigns: normalizeCampaignsConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "coupons"), (snap) => {
+        set({ couponsEnabled: snap.exists() && snap.get("enabled") === true });
       }),
       onSnapshot(doc(db, "appConfig", "plans"), (snap) => {
         set({ plans: normalizePublicPlansConfig(snap.exists() ? snap.data() : undefined) });
@@ -1099,6 +1177,132 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       // The doc now exists, so the legacy projection must stop overwriting it.
       referralDocExists: true,
     });
+  },
+
+  async loadCouponsConfig() {
+    const res = await backendFetch("/admin/config/coupons");
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load coupons.");
+    // Deliberately NOT written into a shared slot. Unlike campaigns — whose
+    // public projection every screen reads — there is no client-side coupon
+    // state at all: every code is validated server-side, and a snapshot of the
+    // catalog in the browser would publish every unredeemed code.
+    return normalizeCouponsConfig(await res.json());
+  },
+
+  async saveCouponsConfig(config) {
+    return normalizeCouponsConfig(await putJson("/admin/config/coupons", config));
+  },
+
+  async loadCouponRows() {
+    const res = await backendFetch("/admin/coupons");
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load coupons.");
+    const json = (await res.json()) as { enabled?: boolean; coupons?: CouponRow[] };
+    return { enabled: json.enabled === true, coupons: json.coupons ?? [] };
+  },
+
+  async loadCouponReport(couponId, from, to) {
+    const params = new URLSearchParams();
+    if (from != null) params.set("from", String(from));
+    if (to != null) params.set("to", String(to));
+    const qs = params.toString();
+    const res = await backendFetch(
+      `/admin/coupons/${encodeURIComponent(couponId)}/report${qs ? `?${qs}` : ""}`,
+    );
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load the coupon report.");
+    return (await res.json()) as CouponReport;
+  },
+
+  async generateCouponCodes(couponId, args) {
+    const res = await backendFetch(`/admin/coupons/${encodeURIComponent(couponId)}/codes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(args),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not generate codes.");
+    return (await res.json()) as { batchId: string; created: number; codes: string[] };
+  },
+
+  async loadCouponCodes(couponId) {
+    const res = await backendFetch(`/admin/coupons/${encodeURIComponent(couponId)}/codes`);
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load codes.");
+    const json = (await res.json()) as { codes?: CouponCodeRow[] };
+    return json.codes ?? [];
+  },
+
+  async revokeCouponCodes(couponId, batchId) {
+    const res = await backendFetch(
+      `/admin/coupons/${encodeURIComponent(couponId)}/codes/revoke`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ batchId: batchId ?? null }),
+      },
+    );
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not revoke these codes.");
+    const json = (await res.json()) as { revoked?: number };
+    return json.revoked ?? 0;
+  },
+
+  async grantCoupon(couponId, account) {
+    const res = await backendFetch(`/admin/coupons/${encodeURIComponent(couponId)}/grant`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(account),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not grant this coupon.");
+    return (await res.json()) as {
+      granted: boolean;
+      uid?: string;
+      summary?: string;
+      message?: string;
+    };
+  },
+
+  async loadCouponGrants(couponId) {
+    const res = await backendFetch(`/admin/coupons/${encodeURIComponent(couponId)}/grants`);
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load who holds this.");
+    const json = (await res.json()) as { grants?: CouponGrantRow[] };
+    return json.grants ?? [];
+  },
+
+  async revokeCouponGrant(couponId, uid) {
+    const res = await backendFetch(
+      `/admin/coupons/${encodeURIComponent(couponId)}/revoke-grant`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uid }),
+      },
+    );
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not revoke this grant.");
+  },
+
+  async loadCouponRedemptions(couponId) {
+    const qs = couponId ? `?couponId=${encodeURIComponent(couponId)}` : "";
+    const res = await backendFetch(`/admin/coupons/redemptions${qs}`);
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load redemptions.");
+    const json = (await res.json()) as { redemptions?: CouponRedemptionRow[] };
+    return json.redemptions ?? [];
+  },
+
+  async voidCouponRedemption(id) {
+    const res = await backendFetch(
+      `/admin/coupons/redemptions/${encodeURIComponent(id)}/void`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+    );
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not void this redemption.");
+    const json = (await res.json()) as { voided?: boolean };
+    return json.voided === true;
+  },
+
+  async simulateCoupon(coupon, subtotal) {
+    const res = await backendFetch("/admin/coupons/simulate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ coupon, subtotal }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not price this coupon.");
+    return (await res.json()) as { percentOff: number; discountAmount: number };
   },
 
   async loadCampaignsConfig() {
@@ -1783,6 +1987,23 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     });
     if (!res.ok) throw new Error((await safeError(res)) ?? "Could not render a preview.");
     return (await res.json()) as { contentType: string; base64: string };
+  },
+
+  async loadQrScanStats() {
+    const res = await backendFetch("/admin/qrcodes/scans");
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load scan counts.");
+    const json = (await res.json()) as { scans?: Record<string, QrScanStats> };
+    return json.scans ?? {};
+  },
+
+  async loadQrAnalysis(from, to) {
+    const params = new URLSearchParams();
+    if (from != null) params.set("from", String(from));
+    if (to != null) params.set("to", String(to));
+    const qs = params.toString();
+    const res = await backendFetch(`/admin/qrcodes/analysis${qs ? `?${qs}` : ""}`);
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load QR analysis.");
+    return (await res.json()) as QrAnalysisReport;
   },
 
   async loadAdminPosts() {

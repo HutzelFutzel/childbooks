@@ -55,6 +55,7 @@ import { flushProjectSaves, useProjectsStore } from "../../state/projectsStore";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useSubscriptionStore } from "../../state/subscriptionStore";
 import { useFormatsForConfigSize } from "../hooks/useOfferableFormats";
+import { CouponField } from "./CouponField";
 import { useShipCountry } from "../hooks/useShipCountry";
 import { Button } from "../components/Button";
 import { Card, CardBody, CardHeader, CardTitle } from "../components/Card";
@@ -280,6 +281,10 @@ export function OrderCheckout({
   // countries — the printer runs a different set of services in each — and the
   // customer only found out when the first quote failed.
   const [shipping, setShipping] = useState<ShippingMethod>("Budget");
+  // A coupon code the customer entered and the server accepted for THIS order.
+  // Held here rather than in the draft because it isn't part of the book — it's
+  // re-validated inside the checkout transaction and can be refused there.
+  const [couponCode, setCouponCode] = useState<string | null>(null);
 
   // Saved-address book: "" means a new/unsaved address is being entered.
   const [selectedAddressId, setSelectedAddressId] = useState("");
@@ -808,6 +813,7 @@ export function OrderCheckout({
         fingerprint,
         addressConfirmed:
           !validation?.suggested || addressChoiceForSuggestion !== "unreviewed",
+        couponCode: couponCode ?? undefined,
       });
       window.location.href = url;
     } catch (err) {
@@ -1265,6 +1271,20 @@ export function OrderCheckout({
                   <p className="leading-relaxed text-ink-500">
                     Complete the delivery address to see the total.
                   </p>
+                )}
+                {/* Only once there's a total: a code is validated against the
+                    order value, so offering the box before the price is known
+                    would be checking it against nothing. */}
+                {quote && (
+                  <CouponField
+                    className="mt-3"
+                    itemType="print"
+                    subtotal={quote.items}
+                    currency={quote.currency || currency}
+                    productId={offerableCatalog.get(product.sku)?.id}
+                    country={country}
+                    onChange={setCouponCode}
+                  />
                 )}
               </div>
 

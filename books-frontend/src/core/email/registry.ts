@@ -175,6 +175,36 @@ export const EMAIL_TEMPLATE_REGISTRY: Registry = {
     defaultSenderKey: "default",
     sample: { name: "Alex", kind: "referrer", benefit: "100 Sparks", sparks: 100, balance: 220 },
   },
+  coupon_granted: {
+    id: "coupon_granted",
+    label: "Coupon added to account",
+    description:
+      "Sent when a coupon is attached to an account without the customer typing anything (an auto-grant from a QR or link arrival). Without this, an auto-granted discount is invisible until checkout — which wastes the acquisition that earned it.",
+    category: "transactional",
+    defaultSenderKey: "default",
+    sample: {
+      name: "Alex",
+      summary: "20% off print books",
+      notes: ["on your first order only", "one use per account"],
+      expiresOn: "October 1, 2026",
+    },
+  },
+  coupon_redeemed: {
+    id: "coupon_redeemed",
+    label: "Coupon used",
+    description:
+      "Sent when a coupon actually comes off a settled payment. Separate from the order receipt on purpose: the receipt says what they paid, this says the discount worked.",
+    category: "transactional",
+    defaultSenderKey: "default",
+    sample: {
+      name: "Alex",
+      summary: "20% off print books",
+      savedAmount: "€8.40",
+      itemLabel: "Hardcover picture book · 24 pages",
+      orderRef: "CB-10428",
+      code: "WELCOME20",
+    },
+  },
   contact_form: {
     id: "contact_form",
     label: "Contact form submission",

@@ -10,7 +10,9 @@ import { useAppConfigStore } from "../../state/appConfigStore";
 import { useAuthStore } from "../../state/authStore";
 import { useSparksStore } from "../../state/sparksStore";
 import { Button } from "../components/Button";
+import { CouponField } from "../checkout/CouponField";
 import { OffersBlock } from "../layout/OffersBlock";
+import { CouponsBlock } from "../layout/CouponsBlock";
 import { fmtMoney } from "../admin/tabs/products/parts";
 
 export function SparksAccountContent() {
@@ -27,10 +29,16 @@ export function SparksAccountContent() {
     .slice()
     .sort((a, b) => a.sortOrder - b.sortOrder);
 
+  // Per pack, because a code is checked against the price it will come off:
+  // packs are priced far apart, so a code with a minimum spend qualifies on the
+  // big one and not the small one, and one shared box would quote the wrong
+  // saving for every row but the one it was typed under.
+  const [codes, setCodes] = useState<Record<string, string | null>>({});
+
   const buy = async (packId: string) => {
     setBusy(packId);
     try {
-      const { url } = await buySparkPack(packId, currency);
+      const { url } = await buySparkPack(packId, currency, codes[packId] ?? undefined);
       window.location.href = url;
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not start checkout.");
@@ -60,6 +68,7 @@ export function SparksAccountContent() {
       </section>
 
       <OffersBlock open />
+      <CouponsBlock open />
 
       <section>
         <h2 className="text-sm font-semibold text-ink-900">Top up</h2>
@@ -74,7 +83,8 @@ export function SparksAccountContent() {
         ) : (
           <div className="mt-4 divide-y divide-ink-100 border-y border-ink-100">
             {packs.map((pack) => {
-              const price = pack.prices[currency];
+              const raw = pack.prices[currency];
+              const price = typeof raw === "number" && raw > 0 ? raw : null;
               return (
                 <div key={pack.id} className="flex flex-wrap items-center justify-between gap-3 py-4">
                   <div>
@@ -87,15 +97,25 @@ export function SparksAccountContent() {
                       )}
                     </p>
                     <p className="mt-0.5 text-xs text-ink-500">{pack.label}</p>
+                    {price !== null && (
+                      <CouponField
+                        className="mt-2"
+                        itemType="pack"
+                        subtotal={price}
+                        currency={currency}
+                        productId={pack.id}
+                        onChange={(code) => setCodes((prev) => ({ ...prev, [pack.id]: code }))}
+                      />
+                    )}
                   </div>
                   <Button
                     size="sm"
                     variant="secondary"
                     leftIcon={busy === pack.id ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
-                    disabled={busy !== null || typeof price !== "number" || price <= 0}
+                    disabled={busy !== null || price === null}
                     onClick={() => void buy(pack.id)}
                   >
-                    {typeof price === "number" ? fmtMoney(price, currency) : "Unavailable"}
+                    {price !== null ? fmtMoney(price, currency) : "Unavailable"}
                   </Button>
                 </div>
               );

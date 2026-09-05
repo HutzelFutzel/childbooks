@@ -54,6 +54,11 @@ import { registerBlogStatsAdminRoutes, registerBlogTrackingRoute } from "./blogS
 import { registerSessionRoutes } from "./deviceStats";
 import { registerReferralPublicRoutes, registerReferralUserRoutes } from "./referrals/routes";
 import { registerCampaignUserRoutes } from "./campaigns/routes";
+import {
+  registerCouponAdminRoutes,
+  registerCouponUserRoutes,
+  registerQrRedirectRoute,
+} from "./coupons/routes";
 import { registerSurveyRoutes } from "./surveys/routes";
 import { registerAffiliateRoutes } from "./affiliates";
 import { registerAffiliateWebhookRoute } from "./affiliates/webhook";
@@ -127,6 +132,13 @@ export function createApp(): Express {
   // no account, and the decline link is the program's whole opt-out story.
   registerReferralPublicRoutes(app);
 
+  // The QR scan hop, `/q/{qrId}`. Necessarily tokenless: it's reached from a
+  // printed code by someone who has never visited the site, so it must be
+  // registered before every auth guard below. It counts the scan, resolves the
+  // current destination, and redirects — see `acquisition.ts` for why the
+  // indirection exists at all.
+  registerQrRedirectRoute(app);
+
   // Coarse "which country is this visitor in", to preselect the destination in
   // the wizard and at checkout. Tokenless because it runs on marketing pages
   // and in the guest wizard; it reads only already-exposed signals and stores
@@ -192,6 +204,8 @@ export function createApp(): Express {
   registerStripeAdminRoutes(app);
   registerReferralUserRoutes(app);
   registerCampaignUserRoutes(app);
+  registerCouponUserRoutes(app);
+  registerCouponAdminRoutes(app);
   registerSurveyRoutes(app);
   registerAffiliateRoutes(app);
   registerAffiliateAdminRoutes(app);

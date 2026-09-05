@@ -24,8 +24,10 @@ import {
 import { fetchReferralOverview, type ReferralOverview } from "../../platform/referrals";
 import { packTotalSparks } from "../../core/config/sparks";
 import { fmtMoney } from "../admin/tabs/products/parts";
+import { CouponField } from "../checkout/CouponField";
 import { useImageActionRange } from "./SparkCost";
 import { OffersBlock } from "./OffersBlock";
+import { CouponsBlock } from "./CouponsBlock";
 
 /**
  * The Spark balance pill in the top bar. Shows the live balance and opens a
@@ -50,6 +52,11 @@ export function SparksBadge() {
   const accessLevel = useAuthStore((s) => s.accessLevel);
   const openAuthDialog = useAuthStore((s) => s.openAuthDialog);
   const [busy, setBusy] = useState<string | null>(null);
+  // Codes are kept per pack, because a code is checked against the price it
+  // will come off, and the packs are priced far enough apart that a minimum
+  // spend qualifies on one and not the next. The row's code covers its gift
+  // button too: a gift is the same pack purchase, granted to somebody else.
+  const [codes, setCodes] = useState<Record<string, string | null>>({});
 
   // Glint the ✦ when Sparks ARRIVE — the little "fairy dust" moment. Spends
   // deliberately pass unannounced: animating every deduction turns the pill
@@ -101,7 +108,7 @@ export function SparksBadge() {
   const buy = async (packId: string) => {
     setBusy(packId);
     try {
-      const { url } = await buySparkPack(packId, baseCurrency);
+      const { url } = await buySparkPack(packId, baseCurrency, codes[packId] ?? undefined);
       window.location.href = url;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not start checkout.");
@@ -112,7 +119,11 @@ export function SparksBadge() {
   const buyGift = async (packId: string) => {
     setBusy(`gift-${packId}`);
     try {
-      const { url } = await buySparkGift({ packId, currency: baseCurrency });
+      const { url } = await buySparkGift({
+        packId,
+        currency: baseCurrency,
+        couponCode: codes[packId] ?? undefined,
+      });
       window.location.href = url;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not start checkout.");
@@ -239,58 +250,75 @@ export function SparksBadge() {
               offer that pays out on a top-up, is part of the decision to buy one.
               Renders nothing when there's nothing running. */}
           {accessLevel === "full" && <OffersBlock open={walletOpen} />}
+          {/* Coupons sit beside offers for the same reason: a discount the
+              customer is holding is only worth granting if they know about it
+              before they decide. */}
+          {accessLevel === "full" && <CouponsBlock open={walletOpen} />}
 
           {accessLevel === "full" && packs.length > 0 && (
             <div className="space-y-2">
               <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">Top up</div>
               {packs.map((pack) => {
-                const price = pack.prices[baseCurrency];
+                const raw = pack.prices[baseCurrency];
+                const price = typeof raw === "number" && raw > 0 ? raw : null;
                 const total = packTotalSparks(pack);
                 const suggested = pack.id === suggestedPackId;
                 return (
                   <div
                     key={pack.id}
-                    className={`flex items-center justify-between rounded-lg bg-white p-2.5 ring-1 ring-inset transition ${
+                    className={`rounded-lg bg-white p-2.5 ring-1 ring-inset transition ${
                       suggested ? "ring-2 ring-brand-400" : "ring-ink-100"
                     }`}
                   >
-                    <div>
-                      <div className="text-sm font-semibold text-ink-800">
-                        {total.toLocaleString()} Sparks
-                        {pack.bonusSparks > 0 && (
-                          <span className="ml-1.5 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
-                            +{pack.bonusSparks} bonus
-                          </span>
-                        )}
-                        {suggested && (
-                          <span className="ml-1.5 rounded bg-brand-100 px-1.5 py-0.5 text-[10px] font-medium text-brand-700">
-                            suggested
-                          </span>
-                        )}
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="text-sm font-semibold text-ink-800">
+                          {total.toLocaleString()} Sparks
+                          {pack.bonusSparks > 0 && (
+                            <span className="ml-1.5 rounded bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                              +{pack.bonusSparks} bonus
+                            </span>
+                          )}
+                          {suggested && (
+                            <span className="ml-1.5 rounded bg-brand-100 px-1.5 py-0.5 text-[10px] font-medium text-brand-700">
+                              suggested
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-ink-400">{pack.label}</div>
                       </div>
-                      <div className="text-[11px] text-ink-400">{pack.label}</div>
+                      <div className="flex items-center gap-1.5">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          title="Buy this pack as a gift — you'll get a claim code to share."
+                          leftIcon={<Gift className="size-3.5" />}
+                          loading={busy === `gift-${pack.id}`}
+                          disabled={price === null}
+                          onClick={() => buyGift(pack.id)}
+                        />
+                        <Button
+                          size="sm"
+                          variant={suggested ? "primary" : "secondary"}
+                          leftIcon={<Plus className="size-3.5" />}
+                          loading={busy === pack.id}
+                          disabled={price === null}
+                          onClick={() => buy(pack.id)}
+                        >
+                          {price !== null ? fmtMoney(price, baseCurrency) : "—"}
+                        </Button>
+                      </div>
                     </div>
-                    <div className="flex items-center gap-1.5">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        title="Buy this pack as a gift — you'll get a claim code to share."
-                        leftIcon={<Gift className="size-3.5" />}
-                        loading={busy === `gift-${pack.id}`}
-                        disabled={typeof price !== "number" || price <= 0}
-                        onClick={() => buyGift(pack.id)}
+                    {price !== null && (
+                      <CouponField
+                        className="mt-2"
+                        itemType="pack"
+                        subtotal={price}
+                        currency={baseCurrency}
+                        productId={pack.id}
+                        onChange={(code) => setCodes((prev) => ({ ...prev, [pack.id]: code }))}
                       />
-                      <Button
-                        size="sm"
-                        variant={suggested ? "primary" : "secondary"}
-                        leftIcon={<Plus className="size-3.5" />}
-                        loading={busy === pack.id}
-                        disabled={typeof price !== "number" || price <= 0}
-                        onClick={() => buy(pack.id)}
-                      >
-                        {typeof price === "number" ? fmtMoney(price, baseCurrency) : "—"}
-                      </Button>
-                    </div>
+                    )}
                   </div>
                 );
               })}

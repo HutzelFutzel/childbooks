@@ -12,6 +12,7 @@
  */
 import { getAuth } from "firebase-admin/auth";
 import type { UserFacts } from "../../../books-frontend/src/core/config/campaigns";
+import { normalizeAcquisitionProfile } from "../../../books-frontend/src/core/profile/acquisition";
 import { normalizeBuyerProfile } from "../../../books-frontend/src/core/config/surveys";
 import { hasActiveSubscription, resolveActivePlan } from "../plans";
 import { db } from "./store";
@@ -51,6 +52,9 @@ export async function userFacts(uid: string): Promise<UserFacts> {
   // anyway. Anything needing a second query would be unaffordable here: this
   // function runs on the quote path, several times per render.
   const buyer = normalizeBuyerProfile(data.surveyProfile);
+  // Arrival rides the same profile read — a QR-gated offer must be answerable on
+  // the quote path, which runs several times per render and can't afford a query.
+  const acquisition = normalizeAcquisitionProfile(data.acquisition);
 
   const value: UserFacts = {
     uid,
@@ -69,6 +73,7 @@ export async function userFacts(uid: string): Promise<UserFacts> {
     buyerRole: buyer.latestRole,
     buyerRoles: buyer.roles,
     surveyAnswers: buyer.answered,
+    arrivedVia: acquisition.tokens,
   };
   cache.set(uid, { value, at: Date.now() });
   return value;

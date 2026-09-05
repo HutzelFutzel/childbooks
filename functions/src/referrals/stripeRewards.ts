@@ -19,8 +19,8 @@
  * Every function is best-effort and returns null on failure: a reward that can't
  * be delivered is recorded as such, never thrown into a payment flow.
  */
-import type Stripe from "stripe";
-import { getStripe, isSandbox, stripeConfigured } from "../stripeClient";
+import { getStripe, stripeConfigured } from "../stripeClient";
+import { createSingleUseCoupon } from "../stripeDiscounts";
 import { db } from "./store";
 
 /** Subscription states that can carry a discount (mirrors `plans.ts`). */
@@ -54,9 +54,11 @@ export async function activeSubscription(uid: string): Promise<ActiveSubscriptio
 }
 
 /**
- * A single-use percentage coupon for one earned reward. `max_redemptions: 1`
- * plus a `redeem_by` bound means even a leaked coupon id is worth one discount
- * for a limited time.
+ * A single-use percentage coupon for one earned reward.
+ *
+ * Thin on purpose: the coupon parameters that make this safe to hand out are
+ * shared with the coupon engine, which needs the identical object for a typed
+ * code on a membership. See {@link createSingleUseCoupon}.
  */
 export async function createReferralCoupon(args: {
   percentOff: number;
@@ -65,30 +67,7 @@ export async function createReferralCoupon(args: {
   expiresAt: number;
   name: string;
 }): Promise<string | null> {
-  if (!stripeConfigured()) return null;
-  try {
-    const params: Stripe.CouponCreateParams = {
-      percent_off: Math.min(100, Math.max(1, args.percentOff)),
-      name: args.name,
-      max_redemptions: 1,
-      metadata: { source: "referral", env: isSandbox() ? "sandbox" : "live" },
-    };
-    if (args.months && args.months > 1) {
-      params.duration = "repeating";
-      params.duration_in_months = args.months;
-    } else {
-      params.duration = "once";
-    }
-    // `redeem_by` bounds when the coupon may first be applied; a repeating
-    // coupon that has already attached keeps running for its months.
-    const redeemBy = Math.floor(args.expiresAt / 1000);
-    if (redeemBy > Math.floor(Date.now() / 1000)) params.redeem_by = redeemBy;
-    const coupon = await getStripe().coupons.create(params);
-    return coupon.id;
-  } catch (err) {
-    console.error("[referrals] coupon create failed", err);
-    return null;
-  }
+  return createSingleUseCoupon({ ...args, source: "referral" });
 }
 
 /**

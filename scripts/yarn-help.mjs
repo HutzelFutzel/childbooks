@@ -26,6 +26,7 @@ const ROOT_DESCRIPTIONS = {
   "check:print": "Quote every catalog SKU against the provider (needs credentials)",
   "check:pricing": "Assert the pricing/margin/shipping invariants hold (offline)",
   "check:geo": "Assert country inference does not stamp English-UI visitors as US (offline)",
+  "check:coupons": "Assert the coupon restriction/cap/stacking invariants hold (offline)",
   deploy: "Build + deploy backend, rules, indexes, storage (+ optional --web)",
   "deploy:functions": "Build functions only, then firebase deploy --only functions",
   "deploy:rules": "Deploy Firestore rules/indexes and Storage rules only",

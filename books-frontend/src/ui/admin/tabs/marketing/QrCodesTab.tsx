@@ -27,13 +27,17 @@ import {
   QR_LOGO_QUIET_MIN,
   QR_LOGO_SIZE_MAX,
   QR_LOGO_SIZE_MIN,
+  qrTrackedUrl,
   type QrCode,
   type QrCornerStyle,
   type QrDotStyle,
   type QrErrorCorrectionLevel,
   type QrFormat,
   type QrRender,
+  type QrScanStats,
 } from "../../../../core/config/qrCodes";
+import { arrivalToken } from "../../../../core/profile/acquisition";
+import { useAdminTab } from "../../adminTabStore";
 import { Button } from "../../../components/Button";
 import { Field, Input } from "../../../components/Input";
 import { Toggle } from "../../../components/Toggle";
@@ -161,6 +165,7 @@ const QR_CORNER_STYLE_LABELS: Record<QrCornerStyle, string> = {
  */
 export function QrCodesTab() {
   const codes = useAppConfigStore((s) => s.qrCodes.codes);
+  const openAnalysis = useAdminTab((s) => s.openAnalysis);
   const [creating, setCreating] = useState(
     () => typeof window !== "undefined" && window.sessionStorage.getItem(QR_CREATING_STORAGE_KEY) === "1",
   );
@@ -179,12 +184,15 @@ export function QrCodesTab() {
     <div className="space-y-4">
       <TabIntro
         elsewhere="Want a fixed logo + URL + QR block on every book's back cover? That belongs in Marketing → Branding once it exists — this library is the general-purpose generator any feature (including that one) points at by id."
+        links={[{ label: "Analysis → QR codes", onClick: () => openAnalysis("qrCodes") }]}
       >
         Every code here is rendered by our own generator, not a free web QR API —
         nothing baked into a printed book can break because some third-party
         service rate-limits, re-brands, or disappears. Error correction, size,
         colors, quiet zone, version, mask pattern and cell/eye shape are all
-        exposed, plus an optional center logo.
+        exposed, plus an optional center logo. Turn on{" "}
+        <span className="font-medium">Track scans</span> on any saved code to count its scans, re-point it after
+        it&apos;s printed, and hand whoever scans it an arrival token a coupon can apply itself to.
       </TabIntro>
 
       {creating && <QrCodeCard code={null} onSaved={stopCreating} onCancel={stopCreating} />}
@@ -213,6 +221,7 @@ export function QrCodesTab() {
 interface QrDraft {
   name: string;
   data: string;
+  tracked: boolean;
   errorCorrectionLevel: QrErrorCorrectionLevel;
   margin: number;
   scalePx: number;
@@ -241,6 +250,7 @@ function newDraft(): QrDraft {
   return {
     name: "",
     data: "",
+    tracked: false,
     errorCorrectionLevel: "M",
     margin: 4,
     scalePx: 512,
@@ -272,6 +282,7 @@ function draftFromCode(code: QrCode): QrDraft {
   return {
     name: code.name,
     data: code.data,
+    tracked: code.tracked,
     errorCorrectionLevel: code.errorCorrectionLevel,
     margin: code.margin,
     scalePx: code.scalePx,
@@ -307,6 +318,7 @@ function draftToInput(draft: QrDraft, id?: string): QrCodeInput {
     ...(id ? { id } : {}),
     name: draft.name.trim() || "Untitled QR code",
     data: draft.data.trim(),
+    tracked: draft.tracked,
     errorCorrectionLevel: draft.errorCorrectionLevel,
     margin: draft.margin,
     scalePx: draft.scalePx,
@@ -509,6 +521,8 @@ function QrCodeCard({
   }, [
     expanded,
     draft.data,
+    // Tracking changes what's encoded, so it changes the image.
+    draft.tracked,
     draft.errorCorrectionLevel,
     draft.margin,
     draft.scalePx,
@@ -648,6 +662,11 @@ function QrCodeCard({
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <span className="truncate text-sm font-medium text-ink-800">{draft.name || "Untitled QR code"}</span>
+                {draft.tracked && (
+                  <span className="shrink-0 rounded-full bg-brand-100 px-2 py-0.5 text-[10px] font-medium text-brand-700">
+                    Tracked
+                  </span>
+                )}
                 {dirty && (
                   <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
                     Unsaved edits
@@ -702,8 +721,15 @@ function QrCodeCard({
           <div className="space-y-3">
             <Grid cols={2}>
               <TextField label="Name" value={draft.name} placeholder="e.g. Back cover CTA" onChange={(v) => patch({ name: v })} />
-              <TextField label="URL / text" value={draft.data} placeholder="https://example.com" onChange={(v) => patch({ data: v })} />
+              <TextField
+                label={draft.tracked ? "Destination URL" : "URL / text"}
+                value={draft.data}
+                placeholder="https://example.com"
+                onChange={(v) => patch({ data: v })}
+              />
             </Grid>
+
+            <TrackedPanel code={code} draft={draft} patch={patch} />
 
             <Section title="Style" hint="Every option the qrcode package exposes.">
               <Grid cols={3}>
@@ -970,6 +996,156 @@ function QrCodeCard({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Turn a code into a **tracked** one, and show what that gets you.
+ *
+ * A plain code encodes its destination directly, which is fine for "put our
+ * homepage on the back cover" and useless for attribution: the scan is
+ * indistinguishable from a direct visit, and the destination is frozen in ink.
+ * Tracked codes encode `{site}/q/{id}` instead and let the server forward the
+ * scan on — which counts it, keeps the destination editable after the poster is
+ * on a wall, and hands the scanner an arrival token a coupon can key off.
+ *
+ * Only offered on a SAVED code, because the id is what gets encoded and the
+ * server mints it. The download button works on an unsaved draft by design, so
+ * without this rule an admin could print a code pointing at a placeholder id
+ * that resolves to nothing.
+ */
+function TrackedPanel({
+  code,
+  draft,
+  patch,
+}: {
+  code: QrCode | null;
+  draft: QrDraft;
+  patch: (p: Partial<QrDraft>) => void;
+}) {
+  const siteUrl = useAppConfigStore((s) => s.seo.siteUrl);
+  const loadScans = useAppConfigStore((s) => s.loadQrScanStats);
+  const openMarketingTab = useAdminTab((s) => s.openMarketingTab);
+  const [scans, setScans] = useState<QrScanStats | null>(null);
+
+  const id = code?.id ?? null;
+  useEffect(() => {
+    if (!id || !draft.tracked) return;
+    let live = true;
+    void loadScans()
+      .then((all) => {
+        if (live) setScans(all[id] ?? null);
+      })
+      // A missing count is not worth an error toast on a settings screen.
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [id, draft.tracked, loadScans]);
+
+  const encoded = id ? qrTrackedUrl(siteUrl, id) : "";
+  const token = id ? arrivalToken("qr", id) : "";
+
+  const copy = (value: string, what: string) => {
+    void navigator.clipboard.writeText(value);
+    toast.success(`${what} copied.`);
+  };
+
+  return (
+    <Section
+      title="Track scans"
+      hint="Count scans, change where this code points after it's printed, and let a coupon apply itself to whoever scans it."
+      action={
+        <Toggle
+          checked={draft.tracked}
+          disabled={!id}
+          onChange={(v) => patch({ tracked: v })}
+          label="Track scans"
+        />
+      }
+    >
+      {!id ? (
+        <p className="text-xs text-ink-400">
+          Save this code first. Tracking encodes the code&apos;s own id, and that id is assigned when it&apos;s
+          created — offering it now would let you download an image pointing at an id that doesn&apos;t exist yet.
+        </p>
+      ) : !draft.tracked ? (
+        <p className="text-[11px] leading-relaxed text-ink-400">
+          Off: the destination above is encoded straight into the image. Nothing counts the scan, and the URL is fixed
+          for as long as the code exists in print. Turning this on re-renders the image — anything already printed
+          keeps working, because the old image still encodes the old URL.
+        </p>
+      ) : (
+        <div className="space-y-2">
+          <CopyRow
+            label="Encoded in the image"
+            value={encoded}
+            onCopy={() => copy(encoded, "Link")}
+            hint="Scans hit this, get counted, and are forwarded to the destination above."
+          />
+          <CopyRow
+            label="Coupon audience token"
+            value={token}
+            onCopy={() => copy(token, "Token")}
+            hint={
+              <>
+                Paste this into a coupon&apos;s <span className="font-medium">Arrived via</span> field to auto-grant it
+                to everyone who scans this code.{" "}
+                <button
+                  type="button"
+                  className="font-medium text-brand-600 underline-offset-2 hover:underline"
+                  onClick={() => openMarketingTab("coupons")}
+                >
+                  Coupons →
+                </button>
+              </>
+            }
+          />
+          <div className="rounded-lg bg-ink-50 px-3 py-2 text-xs text-ink-600">
+            {scans && scans.scans > 0 ? (
+              <>
+                <span className="font-semibold text-ink-800">{scans.scans.toLocaleString()}</span> scan
+                {scans.scans === 1 ? "" : "s"}
+                {scans.lastScanAt > 0 && <> · last {new Date(scans.lastScanAt).toLocaleDateString()}</>}
+              </>
+            ) : (
+              "No scans yet."
+            )}
+          </div>
+          {!siteUrl && (
+            <p className="text-[11px] leading-relaxed text-amber-700">
+              No site URL is set in SEO settings, so there&apos;s no absolute address to encode — this code still
+              renders, but with the destination encoded directly and nothing tracked. Set the site URL and save again.
+            </p>
+          )}
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function CopyRow({
+  label,
+  value,
+  hint,
+  onCopy,
+}: {
+  label: string;
+  value: string;
+  hint?: React.ReactNode;
+  onCopy: () => void;
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="text-[11px] uppercase tracking-wide text-ink-400">{label}</div>
+      <div className="flex items-center gap-2">
+        <code className="min-w-0 flex-1 truncate rounded-lg bg-ink-50 px-2 py-1.5 text-xs text-ink-700">{value}</code>
+        <Button variant="secondary" size="sm" leftIcon={<Copy className="size-3.5" />} onClick={onCopy}>
+          Copy
+        </Button>
+      </div>
+      {hint && <p className="text-[11px] leading-relaxed text-ink-400">{hint}</p>}
     </div>
   );
 }

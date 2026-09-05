@@ -49,6 +49,7 @@ import {
   Smartphone,
   Sparkles,
   Stamp,
+  Ticket,
   Type,
   UserX,
   Users,
@@ -113,6 +114,8 @@ export const ANALYSIS_TAB_META: Record<AnalysisTabId, { label: string; icon: Rea
   referrals: { label: "Referrals", icon: <Share2 className="size-4" /> },
   affiliates: { label: "Affiliates", icon: <Handshake className="size-4" /> },
   campaigns: { label: "Campaigns", icon: <Megaphone className="size-4" /> },
+  coupons: { label: "Coupons", icon: <Ticket className="size-4" /> },
+  qrCodes: { label: "QR codes", icon: <QrCode className="size-4" /> },
   surveys: { label: "Customer profile", icon: <ClipboardList className="size-4" /> },
 };
 
@@ -121,6 +124,7 @@ export const MARKETING_TAB_META: Record<MarketingTabId, { label: string; icon: R
   referrals: { label: "Referrals", icon: <Users className="size-4" /> },
   affiliates: { label: "Affiliates", icon: <Handshake className="size-4" /> },
   campaigns: { label: "Campaigns", icon: <Megaphone className="size-4" /> },
+  coupons: { label: "Coupons", icon: <Ticket className="size-4" /> },
   surveys: { label: "Surveys", icon: <ClipboardList className="size-4" /> },
   // Site & content
   announcements: { label: "Announcements", icon: <PartyPopper className="size-4" /> },

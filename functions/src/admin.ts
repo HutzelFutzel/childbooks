@@ -127,6 +127,8 @@ import {
   type QrCornerStyle,
   type QrDotStyle,
 } from "../../books-frontend/src/core/config/qrCodes";
+import { qrScanStats } from "./acquisition";
+import { qrAnalysisReport } from "./qrAnalysis";
 import { getMarketsConfig, getMarketCapability, getMarketRegistry, saveMarketsConfig } from "./markets";
 import { getShippingSettings, saveShippingSettings } from "./shipping";
 import { normalizeShippingSettings } from "../../books-frontend/src/core/config/shipping";
@@ -815,6 +817,34 @@ export function registerAdminRoutes(app: Express): void {
     }
   });
 
+  // Scan counts for the tracked codes, so "is that poster working?" is
+  // answerable without exporting anything. Only tracked codes have a number:
+  // an untracked code is encoded straight into the image and its scans never
+  // touch a server at all, which is the whole reason tracking exists.
+  app.get("/admin/qrcodes/scans", async (_req: Request, res: Response) => {
+    try {
+      const config = await getQrCodesConfig();
+      const ids = config.codes.filter((c) => c.tracked).map((c) => c.id);
+      res.json({ scans: await qrScanStats(ids) });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Full tracked-QR funnel for Analysis → QR codes. This is intentionally one
+  // report endpoint rather than one request per code: identified accounts and
+  // coupon redemptions are cross-code scans, and repeating those joins for 200
+  // codes would turn one dashboard load into 600 Firestore queries.
+  app.get("/admin/qrcodes/analysis", async (req: Request, res: Response) => {
+    try {
+      const to = Number(req.query.to) || Date.now();
+      const from = Number(req.query.from) || to - 30 * 86_400_000;
+      res.json(await qrAnalysisReport(from, to));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
   // Everything but `data` falls back to a sane default, so a partial body from
   // an older client still renders something rather than 500ing outright.
   function parseQrCodeSaveInput(body: unknown): QrCodeSaveInput {
@@ -861,6 +891,7 @@ export function registerAdminRoutes(app: Express): void {
       id: typeof b.id === "string" && b.id ? b.id : undefined,
       name: typeof b.name === "string" && b.name.trim() ? b.name.trim() : "Untitled QR code",
       data,
+      tracked: b.tracked === true,
       errorCorrectionLevel: (["L", "M", "Q", "H"] as const).includes(
         b.errorCorrectionLevel as "L" | "M" | "Q" | "H",
       )

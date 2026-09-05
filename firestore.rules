@@ -118,6 +118,14 @@ service cloud.firestore {
       return fieldUnchanged('surveyProfile');
     }
 
+    // Acquisition tokens can unlock an auto-granted coupon. They are proposed
+    // through `/account/arrival`, normalized by the backend, and must never be
+    // writable on the profile directly — otherwise a customer could add
+    // `qr:any-campaign` to their own account and manufacture eligibility.
+    function acquisitionProfileUnchanged() {
+      return fieldUnchanged('acquisition');
+    }
+
     // The device rollup the session beacon keeps at `meta.device` (form factor,
     // OS, browser, per-device session counts, the cross-device switch stamp).
     // It is EVIDENCE ABOUT the client, so it must not be writable BY the client:
@@ -147,7 +155,7 @@ service cloud.firestore {
       allow read: if signedInAs(uid);
       allow write: if signedInAs(uid) && isValidProfile(request.resource.data)
         && sparkBalanceUnchanged() && referralFieldsUnchanged() && meteringFieldsUnchanged()
-        && surveyProfileUnchanged() && deviceMetaUnchanged();
+        && surveyProfileUnchanged() && acquisitionProfileUnchanged() && deviceMetaUnchanged();
     }
     match /users/{uid}/addresses/{addressId} {
       allow create, update: if signedInAs(uid) && isValidAddress(request.resource.data);
@@ -327,6 +335,41 @@ service cloud.firestore {
       allow read, write: if false;
     }
     match /campaignStats/{doc} {
+      allow read, write: if false;
+    }
+
+    // The coupon engine. Backend-only in both directions, spelled out per
+    // collection for the same reason as the campaign engine above: this is money,
+    // and a catch-all is a rule nobody reads before adding a collection.
+    //
+    // Two of these are worth calling out specifically. `couponCodes` is keyed BY
+    // THE CODE, so a client that could read this collection could enumerate every
+    // live code by listing it — which is why validation goes through the
+    // rate-limited `/account/coupons/preview` route and never through a direct
+    // read. `couponGrants` holds the FROZEN terms a discount is calculated from,
+    // so a client that could write it could grant itself any discount it liked.
+    // Customers see their own coupons through `/account/coupons`.
+    match /couponCodes/{doc} {
+      allow read, write: if false;
+    }
+    match /couponGrants/{doc} {
+      allow read, write: if false;
+    }
+    match /couponRedemptions/{doc} {
+      allow read, write: if false;
+    }
+    match /couponCounters/{doc} {
+      allow read, write: if false;
+    }
+    match /couponAccountUsage/{doc} {
+      allow read, write: if false;
+    }
+    match /couponStats/{doc} {
+      allow read, write: if false;
+    }
+    // Server-side QR scan tallies (see `acquisition.ts`). Backend-only: the count
+    // is a metric, and a writable one is a metric anybody can inflate.
+    match /qrScans/{doc} {
       allow read, write: if false;
     }
     // Profiling survey answers. Backend-only in BOTH directions, including for the

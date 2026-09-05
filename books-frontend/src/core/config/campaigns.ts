@@ -42,6 +42,7 @@ import {
 import { IMAGE_TIERS, type ImageTier } from "./modelConfig";
 import { DISCOUNT_ITEM_LABELS, type DiscountItemType } from "./discountImpact";
 import { BUYER_ROLES, BUYER_ROLE_PHRASES, type BuyerRole } from "./buyerRoles";
+import { matchesArrival, MAX_ARRIVAL_TOKEN_LENGTH } from "../profile/acquisition";
 
 /** The Spark glyph, matched to the referral module's copy. */
 export const SPARK_SYMBOL = "✦";
@@ -217,6 +218,15 @@ export type RuleCondition =
   | { kind: "hasPlan"; planIds: string[] }
   /** Billing/geo country, ISO-2 (empty = anywhere). */
   | { kind: "country"; countries: string[] }
+  /**
+   * How the account arrived: namespaced tokens (`qr:berlin-window`) or a bare
+   * channel (`qr` = any QR arrival). Empty = any arrival.
+   *
+   * This is what makes a physical poster targetable. Matching is against every
+   * arrival ever recorded, not just the latest, because the scan that brought
+   * somebody in weeks ago is still the reason they're here.
+   */
+  | { kind: "arrivedVia"; tokens: string[] }
   /** Only these catalog product ids (print SKUs, plan ids, pack ids). */
   | { kind: "productId"; productIds: string[] }
   /** For `subscription_renewed`: which invoice number pays out (2 = 1st renewal). */
@@ -260,6 +270,7 @@ export const CONDITION_KINDS: RuleConditionKind[] = [
   "isSubscriber",
   "hasPlan",
   "country",
+  "arrivedVia",
   "productId",
   "nthInvoice",
   "surveyId",
@@ -277,6 +288,7 @@ export const CONDITION_LABELS: Record<RuleConditionKind, string> = {
   isSubscriber: "Membership",
   hasPlan: "On a specific plan",
   country: "Country",
+  arrivedVia: "How they arrived",
   productId: "Specific product",
   nthInvoice: "Which invoice",
   surveyId: "Specific survey",
@@ -304,6 +316,8 @@ export function createCondition(kind: RuleConditionKind): RuleCondition {
       return { kind, planIds: [] };
     case "country":
       return { kind, countries: [] };
+    case "arrivedVia":
+      return { kind, tokens: [] };
     case "productId":
       return { kind, productIds: [] };
     case "nthInvoice":
@@ -817,6 +831,12 @@ export interface UserFacts {
   buyerRoles: BuyerRole[];
   /** `surveyId:questionId:optionId` for every option they've ever chosen. */
   surveyAnswers: string[];
+  /**
+   * Namespaced arrival tokens recorded for this account (`qr:berlin-window`,
+   * `utm:newsletter`) — see `core/profile/acquisition`. Sticky and only-growing,
+   * like `buyerRoles`: how somebody found us is a permanent fact about them.
+   */
+  arrivedVia: string[];
 }
 
 /** Everything the evaluator knows about the event being evaluated. */
@@ -902,6 +922,15 @@ export function conditionApplies(
       return condition.countries.includes(user.country.toUpperCase())
         ? null
         : fail(`In ${user.country}, which this rule doesn't cover.`);
+    case "arrivedVia":
+      if (condition.tokens.length === 0) return null;
+      return matchesArrival(user.arrivedVia, condition.tokens)
+        ? null
+        : fail(
+            user.arrivedVia.length === 0
+              ? "No arrival source was recorded for this account."
+              : `Arrived via ${joinList(user.arrivedVia, "and")}, which this rule doesn't cover.`,
+          );
     case "productId":
       if (condition.productIds.length === 0) return null;
       if (!trigger.productId) return fail("No product on this event.");
@@ -1196,6 +1225,11 @@ export function describeCondition(condition: RuleCondition): string {
       return condition.planIds.length > 0 ? `on the ${joinList(condition.planIds, "or")} plan` : "";
     case "country":
       return condition.countries.length > 0 ? `in ${joinList(condition.countries, "or")}` : "";
+    case "arrivedVia":
+      // Deliberately vague: quoting the customer's own arrival source back at
+      // them ("because you scanned the poster in the Berlin shop") reads as
+      // surveillance, however accurate it is.
+      return condition.tokens.length > 0 ? "for visitors from this campaign" : "";
     case "productId":
       return condition.productIds.length > 0 ? `on selected products only` : "";
     case "nthInvoice":
@@ -1580,6 +1614,13 @@ function normalizeCondition(raw: unknown): RuleCondition | null {
       };
     case "minSparksSpent":
       return { kind: "minSparksSpent", sparks: Math.round(nonNegative(c.sparks, 0)) };
+    case "arrivedVia":
+      return {
+        kind: "arrivedVia",
+        tokens: stringList(c.tokens)
+          .map((t) => t.slice(0, MAX_ARRIVAL_TOKEN_LENGTH))
+          .slice(0, 50),
+      };
     default:
       return null;
   }

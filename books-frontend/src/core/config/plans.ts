@@ -494,6 +494,26 @@ export function resolvePlanByPriceId(config: PlansConfig, priceId: string | null
   return null;
 }
 
+/**
+ * What a Stripe price id actually costs, within a plan.
+ *
+ * Exists so a checkout holding nothing but a price id can still say what it is
+ * charging: a discount can't be gated on a minimum subtotal, or booked as a
+ * cost, without the amount and the currency behind the price.
+ */
+export function pricePointForId(
+  plan: PlanDefinition,
+  priceId: string,
+): { currency: string; interval: BillingInterval; point: PlanPricePoint } | null {
+  for (const [currency, byInterval] of Object.entries(plan.billing.prices)) {
+    for (const interval of BILLING_INTERVALS) {
+      const point = byInterval?.[interval];
+      if (point && pricePointHasId(point, priceId)) return { currency, interval, point };
+    }
+  }
+  return null;
+}
+
 /** The interval a Stripe price id belongs to within a plan (for grant logic). */
 export function intervalForPriceId(plan: PlanDefinition, priceId: string): BillingInterval | null {
   for (const byInterval of Object.values(plan.billing.prices)) {

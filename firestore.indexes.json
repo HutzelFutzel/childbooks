@@ -47,6 +47,22 @@
         { "fieldPath": "type", "order": "ASCENDING" },
         { "fieldPath": "at", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "couponRedemptions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "couponId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "couponGrants",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "couponId", "order": "ASCENDING" },
+        { "fieldPath": "grantedAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

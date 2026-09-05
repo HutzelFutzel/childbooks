@@ -30,6 +30,7 @@ export const SLACK_MESSAGE_IDS = [
   "subscription_cancelled",
   "referral_accepted",
   "referral_paid",
+  "coupon_redeemed",
   "contact_form",
   "affiliate_application",
   "admin_alert",
@@ -85,6 +86,13 @@ export const SLACK_MESSAGE_REGISTRY: Record<SlackMessageKey, SlackMessageMeta> =
     id: "referral_paid",
     label: "Referral paid out",
     description: "Posted to #growth when a referral reward is granted to either side.",
+    channel: "growth",
+  },
+  coupon_redeemed: {
+    id: "coupon_redeemed",
+    label: "Coupon redeemed",
+    description:
+      "Posted to #growth when a coupon is actually used on a settled payment — not when someone merely types a valid code. Carries the code, the discount given, and the order it came off, so a leaked or over-performing code is visible while it's still cheap to pause.",
     channel: "growth",
   },
   contact_form: {

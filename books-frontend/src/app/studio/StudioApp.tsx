@@ -44,6 +44,7 @@ import { useAccountUiStore } from "@/state/accountUiStore";
 import { useCheckoutUiStore, type PurchaseKind } from "@/state/checkoutUiStore";
 import { PurchaseConfirmation } from "@/ui/checkout/PurchaseConfirmation";
 import { claimPendingReferral, rememberReferralCode } from "@/platform/referrals";
+import { captureArrival, claimPendingArrival } from "@/platform/acquisition";
 import { SessionTracker } from "@/ui/analytics/SessionTracker";
 import { InviteFriendsDialog } from "@/ui/referrals/InviteFriendsDialog";
 import { notify } from "@/ui/lib/notify";
@@ -278,6 +279,11 @@ export default function StudioApp() {
     // A referral landing (`?ref=CODE`) is remembered until there's an identity to
     // attach it to (see the claim effect below).
     if (ref) rememberReferralCode(ref);
+    // A QR scan or campaign link (`?qr=`, `?lt=`, `?utm_*`) is parked the same
+    // way and for the same reason — see `platform/acquisition`. Separate from
+    // `?ref=`: that says who invited them, this says where they came from, and
+    // an auto-applied coupon keys on the second.
+    const capturedArrival = captureArrival();
     // `?invite=1` — where the "invite someone else" button in our own emails lands.
     if (invite) openInvite();
     // A landing-page on-ramp (`?hero=Name`) is remembered until the guest
@@ -289,7 +295,19 @@ export default function StudioApp() {
         /* storage unavailable — they just land on the library */
       }
     }
-    if (!checkout && !subscription && !sparks && !gift && !ebook && !ref && !hero && !invite) return;
+    if (
+      !checkout &&
+      !subscription &&
+      !sparks &&
+      !gift &&
+      !ebook &&
+      !ref &&
+      !hero &&
+      !invite &&
+      !capturedArrival
+    ) {
+      return;
+    }
 
     const success: PurchaseKind | null =
       checkout === "success"
@@ -326,6 +344,12 @@ export default function StudioApp() {
     params.delete("ref");
     params.delete("hero");
     params.delete("invite");
+    // Stripped once parked. A tracking parameter left in the address bar rides
+    // along into any link this person shares, which would attribute the
+    // recipient to a poster they never saw.
+    for (const key of ["qr", "lt", "utm_source", "utm_medium", "utm_campaign"]) {
+      params.delete(key);
+    }
     const qs = params.toString();
     router.replace(pathname + (qs ? `?${qs}` : ""), { scroll: false });
   }, [openConfirmation, openInvite, pathname, router]);
@@ -365,6 +389,19 @@ export default function StudioApp() {
       if (outcome === "attributed") {
         notify.success("Invite accepted", "Your friend's invitation is linked to your account.");
       }
+    });
+  }, [uid, accessLevel]);
+
+  // Offer the parked arrival to the backend, and say so if it earned them
+  // something. Only for a FULL account: a coupon handed to a guest session is a
+  // coupon handed to anyone who opens an incognito window, and the server
+  // refuses those anyway — announcing it here would promise what it won't give.
+  useEffect(() => {
+    if (!uid || accessLevel !== "full") return;
+    void claimPendingArrival().then((granted) => {
+      const first = granted[0];
+      if (!first) return;
+      notify.success("A discount was added to your account", first.summary);
     });
   }, [uid, accessLevel]);
 

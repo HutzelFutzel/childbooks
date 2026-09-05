@@ -25,8 +25,14 @@ export function ContactDialog() {
   const links = visibleLegalLinks(legal, "footer");
 
   return (
-    <Modal open={open} onClose={close} title="Contact us" size="max-w-lg">
-      <ContactForm bare privacyUrl={privacyUrl} />
+    <Modal open={open} onClose={close} title="Help & support" size="max-w-lg">
+      <div className="mb-4">
+        <p className="text-xs leading-relaxed text-ink-500">
+          Need a hand with your book, an order, or your account? Send our team a message without leaving your workspace.
+        </p>
+      </div>
+
+      <ContactForm bare privacyUrl={privacyUrl} onSuccess={close} />
 
       {(links.length > 0 || cookieEnabled) && (
         <div className="mt-5 flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-ink-100 pt-3 text-[11px] text-ink-400">

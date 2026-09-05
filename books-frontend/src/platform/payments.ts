@@ -100,6 +100,17 @@ export interface CheckoutInput {
   fingerprint?: string;
   /** Customer reviewed the carrier's suggested correction, when one exists. */
   addressConfirmed?: boolean;
+  /**
+   * A coupon code the customer entered. Sent as typed and re-validated server
+   * side inside the pricing transaction — the client's earlier check was a
+   * preview, and a code that expired or hit its cap in between has to fail here
+   * rather than be honored on the strength of a stale preview.
+   *
+   * An invalid code fails the checkout with an explanation instead of being
+   * dropped: silently charging full price for an order the customer submitted
+   * expecting a discount is the one outcome worse than refusing it.
+   */
+  couponCode?: string;
 }
 
 /**
@@ -109,7 +120,7 @@ export interface CheckoutInput {
 export async function startOrderCheckout(
   input: CheckoutInput & { variant?: VariantSelection },
 ): Promise<{ url: string; paymentId: string }> {
-  const { draft, pageCount, variant, fingerprint, addressConfirmed } = input;
+  const { draft, pageCount, variant, fingerprint, addressConfirmed, couponCode } = input;
   const assets = await Promise.all(draft.assets.map(assetToWire));
   const body = {
     // Format identity (base SKU). The server composes the print SKU from
@@ -126,6 +137,7 @@ export async function startOrderCheckout(
     assets,
     fingerprint,
     addressConfirmed,
+    couponCode,
   };
   const res = await backendFetch("/checkout", {
     method: "POST",
@@ -260,6 +272,7 @@ export async function startEbookCheckout(input: {
   title: string;
   currency: string;
   fingerprint: string;
+  couponCode?: string;
 }): Promise<{ url: string } | { granted: true }> {
   const res = await backendFetch("/checkout/ebook", {
     method: "POST",
@@ -269,6 +282,7 @@ export async function startEbookCheckout(input: {
       title: input.title,
       currency: input.currency,
       fingerprint: input.fingerprint,
+      couponCode: input.couponCode,
     }),
   });
   if (!res.ok) throw new Error(await errorMessage(res, "We couldn't start the ebook checkout."));
@@ -285,6 +299,12 @@ export interface SubscriptionCheckoutInput {
   priceId?: string;
   interval?: "month" | "year";
   currency?: string;
+  /**
+   * A coupon code the customer typed. Validated server-side, where it competes
+   * with any referral or campaign offer for the ONE Stripe coupon a
+   * subscription can carry.
+   */
+  couponCode?: string;
 }
 
 /** Start a subscription checkout for a configured plan (or a raw Stripe price). */
@@ -301,11 +321,15 @@ export async function startSubscriptionCheckout(input: SubscriptionCheckoutInput
 }
 
 /** Buy a one-time Spark top-up pack. Returns the Stripe Checkout URL. */
-export async function buySparkPack(packId: string, currency: string): Promise<{ url: string }> {
+export async function buySparkPack(
+  packId: string,
+  currency: string,
+  couponCode?: string,
+): Promise<{ url: string }> {
   const res = await backendFetch("/checkout/sparks-pack", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ packId, currency }),
+    body: JSON.stringify({ packId, currency, couponCode }),
   });
   if (!res.ok) throw new Error(await errorMessage(res, "We couldn't start checkout."));
   const json = (await res.json()) as { url?: string };
@@ -322,6 +346,7 @@ export async function buySparkGift(input: {
   currency: string;
   recipientEmail?: string;
   message?: string;
+  couponCode?: string;
 }): Promise<{ url: string }> {
   const res = await backendFetch("/checkout/sparks-gift", {
     method: "POST",

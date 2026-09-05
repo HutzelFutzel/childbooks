@@ -63,6 +63,8 @@ export type AnalysisTabId =
   | "referrals"
   | "affiliates"
   | "campaigns"
+  | "coupons"
+  | "qrCodes"
   | "surveys";
 
 /**
@@ -94,8 +96,8 @@ export const ANALYSIS_GROUPS: {
     id: "growth",
     label: "Growth",
     description:
-      "Where new users come from, whether the referral, affiliate and campaign programs pay for themselves, and who your customers actually are.",
-    tabs: ["referrals", "affiliates", "campaigns", "surveys"],
+      "Where new users come from, whether the referral, affiliate, campaign and coupon programs pay for themselves, and who your customers actually are.",
+    tabs: ["referrals", "affiliates", "campaigns", "coupons", "qrCodes", "surveys"],
   },
 ];
 
@@ -112,6 +114,7 @@ export type MarketingTabId =
   | "referrals" // invite-a-friend program (rules, impact, funnel)
   | "affiliates" // Rewardful affiliate program (master switch + what earns)
   | "campaigns" // promotions: refunds, gifts, price breaks, purchase discounts
+  | "coupons" // codes a customer types, and codes that apply themselves
   | "surveys" // the questions asked after checkout, and who gets asked them
   // Site & content — how the brand shows up publicly.
   | "announcements"
@@ -135,8 +138,8 @@ export const MARKETING_GROUPS: {
     id: "growth",
     label: "Growth",
     description:
-      "Programs that acquire, reward, or learn from customers — referrals, affiliates, campaigns, and the surveys that feed targeting.",
-    tabs: ["referrals", "affiliates", "campaigns", "surveys"],
+      "Programs that acquire, reward, or learn from customers — referrals, affiliates, campaigns, coupon codes, and the surveys that feed targeting.",
+    tabs: ["referrals", "affiliates", "campaigns", "coupons", "surveys"],
   },
   {
     id: "site",

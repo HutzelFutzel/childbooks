@@ -388,6 +388,87 @@ export const RENDERERS: { [Id in keyof EmailTemplateVarsMap]: TemplateRenderer<I
     return assemble(ctx, subject, "Your reward is here", body, text);
   },
 
+  coupon_granted: (vars, ctx) => {
+    const shopUrl = vars.shopUrl ?? `${ctx.brand.siteUrl}/studio`;
+    const subject = `${vars.summary} — waiting on your account`;
+    // The caveats are listed rather than summarized. Someone who reads "20% off"
+    // and discovers at checkout that it was print-only has been misled by our
+    // brevity, not by the coupon.
+    const notes = (vars.notes ?? []).filter((n) => n.trim());
+    const body = [
+      heading("You've got a discount waiting", ctx.brand),
+      paragraph(`${greeting(vars.name)} thanks for scanning — here's what that got you.`),
+      calloutBox(
+        [
+          `<strong>${escapeHtml(vars.summary)}</strong>`,
+          vars.code ? `Code: <strong>${escapeHtml(vars.code)}</strong>` : "Applied automatically at checkout — nothing to type.",
+          notes.length ? notes.map((n) => escapeHtml(n)).join(" · ") : "",
+          vars.expiresOn ? `Valid until <strong>${escapeHtml(vars.expiresOn)}</strong>` : "",
+        ]
+          .filter(Boolean)
+          .join("<br/>"),
+        ctx.brand,
+      ),
+      button("Make your book", shopUrl, ctx.brand),
+    ].join("\n");
+    const text = [
+      greeting(vars.name),
+      "",
+      `You've got a discount waiting: ${vars.summary}`,
+      vars.code ? `Code: ${vars.code}` : "It applies automatically at checkout — nothing to type.",
+      ...notes,
+      vars.expiresOn ? `Valid until ${vars.expiresOn}` : "",
+      "",
+      `Make your book: ${shopUrl}`,
+    ]
+      .filter((line) => line !== "")
+      .join("\n");
+    return assemble(ctx, subject, "You've got a discount waiting", body, text);
+  },
+
+  coupon_redeemed: (vars, ctx) => {
+    const subject = `You saved ${vars.savedAmount} on your order`;
+    const body = [
+      heading(`You saved ${escapeHtml(vars.savedAmount)}`, ctx.brand),
+      paragraph(`${greeting(vars.name)} your discount was applied — here's the detail.`),
+      calloutBox(
+        [
+          `<strong>${escapeHtml(vars.itemLabel)}</strong>`,
+          `${escapeHtml(vars.summary)} — <strong>${escapeHtml(vars.savedAmount)}</strong> off`,
+          vars.code ? `Code used: <strong>${escapeHtml(vars.code)}</strong>` : "",
+          vars.orderRef ? `Order reference: <strong>${escapeHtml(vars.orderRef)}</strong>` : "",
+        ]
+          .filter(Boolean)
+          .join("<br/>"),
+        ctx.brand,
+      ),
+      // Only stated when there genuinely is another use left. "You have 0 uses
+      // left" is worse than saying nothing.
+      vars.usesLeft && vars.usesLeft > 0
+        ? paragraph(
+            `You can use this ${vars.usesLeft === 1 ? "one more time" : `${vars.usesLeft} more times`}.`,
+          )
+        : "",
+      button("Start another book", `${ctx.brand.siteUrl}/studio`, ctx.brand),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const text = [
+      greeting(vars.name),
+      "",
+      `You saved ${vars.savedAmount} on ${vars.itemLabel}.`,
+      `${vars.summary}`,
+      vars.code ? `Code used: ${vars.code}` : "",
+      vars.orderRef ? `Order reference: ${vars.orderRef}` : "",
+      vars.usesLeft && vars.usesLeft > 0 ? `Uses left: ${vars.usesLeft}` : "",
+      "",
+      `Studio: ${ctx.brand.siteUrl}/studio`,
+    ]
+      .filter((line) => line !== "")
+      .join("\n");
+    return assemble(ctx, subject, `You saved ${vars.savedAmount}`, body, text);
+  },
+
   contact_form: (vars, ctx) => {
     const topic = vars.topic?.trim();
     const subject = topic

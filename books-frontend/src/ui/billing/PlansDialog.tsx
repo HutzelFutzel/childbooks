@@ -12,6 +12,7 @@ import { startSubscriptionCheckout, openBillingPortal } from "../../platform/pay
 import { findPublicPlanByPriceId, type BillingInterval, type PublicPlan } from "../../core/config/plans";
 import { ebookPlanPrice, type EbookSettings } from "../../core/config/products";
 import { fmtMoney } from "../admin/tabs/products/parts";
+import { CouponField } from "../checkout/CouponField";
 
 /** Selling-point bullets derived from a plan's entitlements + grant. */
 function planPerks(
@@ -77,6 +78,10 @@ export function PlansContent() {
   const [interval, setInterval] = useState<BillingInterval>("month");
   const [busy, setBusy] = useState<string | null>(null);
   const [portalBusy, setPortalBusy] = useState(false);
+  // Per plan, because a code is checked against the price it will be applied
+  // to: one accepted on the annual tier can fall below the minimum on monthly,
+  // and a single shared box would quote whichever plan happened to be typed in.
+  const [codes, setCodes] = useState<Record<string, string | null>>({});
 
   const active = subscriptions.find((s) => ["active", "trialing", "past_due"].includes(s.status)) ?? null;
   const currentPlan = useMemo(
@@ -95,7 +100,12 @@ export function PlansContent() {
   const subscribe = async (plan: PublicPlan) => {
     setBusy(plan.id);
     try {
-      const { url } = await startSubscriptionCheckout({ planId: plan.id, interval, currency: baseCurrency });
+      const { url } = await startSubscriptionCheckout({
+        planId: plan.id,
+        interval,
+        currency: baseCurrency,
+        couponCode: codes[plan.id] ?? undefined,
+      });
       window.location.href = url;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not start checkout.");
@@ -243,6 +253,21 @@ export function PlansContent() {
                       </Button>
                     )}
                   </div>
+
+                  {/* Under the button, not above it: the code is for the person
+                      who already decided on this plan. Not offered when the
+                      action is the billing portal — Stripe owns that screen, and
+                      a code typed here would go nowhere. */}
+                  {!isCurrent && !plan.isFree && price && !(currentPlan && !currentPlan.isFree) && (
+                    <CouponField
+                      className="mt-2"
+                      itemType="plan"
+                      subtotal={price.amount}
+                      currency={baseCurrency}
+                      productId={plan.id}
+                      onChange={(code) => setCodes((prev) => ({ ...prev, [plan.id]: code }))}
+                    />
+                  )}
                 </div>
               );
             })}

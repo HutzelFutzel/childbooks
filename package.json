@@ -29,6 +29,7 @@
     "check:pricing": "node scripts/check-pricing.mjs",
     "check:geo": "node scripts/check-geo.mjs",
     "check:campaigns": "node scripts/check-campaigns.mjs",
+    "check:coupons": "node scripts/check-coupons.mjs",
     "check:surveys": "node scripts/check-surveys.mjs",
     "check:book-fonts": "node scripts/check-book-fonts.mjs",
     "deploy": "node scripts/deploy.mjs",

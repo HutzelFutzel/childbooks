@@ -559,6 +559,19 @@ const ROUTE_RULES: RouteRule[] = [
   { test: /^\/admin\/campaigns\/simulate$/, gate: key("marketing.campaigns", "read") },
   { test: /^\/admin\/campaigns\/[^/]+\/report$/, gate: key("analysis.campaigns", "read") },
   { test: /^\/admin\/campaigns\/held$/, gate: key("analysis.campaigns", "read") },
+  // Coupons. The report is gated on Analysis; everything that mints, revokes or
+  // hands out a code is gated on Marketing — and the two ANALYSIS entries come
+  // first, because `/admin/coupons/...` would otherwise be swallowed by the
+  // catch-all below them.
+  { test: /^\/admin\/coupons\/[^/]+\/report$/, gate: key("analysis.coupons", "read") },
+  { test: /^\/admin\/coupons\/redemptions$/, gate: key("analysis.coupons", "read") },
+  // Revoking a leaked code and voiding a settled redemption both reach into
+  // money that has already moved, so they sit behind `dangerous` rather than a
+  // plain write grant — the same footing as releasing a held campaign payout.
+  { test: /^\/admin\/coupons\/redemptions\/[^/]+\/void$/, gate: capability("dangerous") },
+  { test: /^\/admin\/coupons\/[^/]+\/codes\/revoke$/, gate: capability("dangerous") },
+  { test: /^\/admin\/config\/coupons$/, gate: key("marketing.coupons") },
+  { test: /^\/admin\/coupons(\/|$)/, gate: key("marketing.coupons") },
   { test: /^\/admin\/config\/surveys$/, gate: key("marketing.surveys") },
   { test: /^\/admin\/surveys\/report$/, gate: key("analysis.surveys", "read") },
 
@@ -571,6 +584,10 @@ const ROUTE_RULES: RouteRule[] = [
   { test: /^\/admin\/branding(\/|$)/, gate: key("marketing.branding") },
   { test: /^\/admin\/site-images?(\/|$)/, gate: key("marketing.branding") },
   { test: /^\/admin\/site-content(\/|$)/, gate: key("marketing.branding") },
+  // The funnel is an Analysis surface; keep it before the Marketing catch-all
+  // so an analyst can read performance without gaining permission to re-point
+  // or re-render a code that is already in print.
+  { test: /^\/admin\/qrcodes\/analysis$/, gate: key("analysis.qrCodes", "read") },
   { test: /^\/admin\/qrcodes(\/|$)/, gate: key("marketing.qrCodes") },
 
   // Analysis (view-only surfaces the matrix still separately write-gates,

@@ -23,6 +23,7 @@ import {
   type EbookQuote,
 } from "../../platform/payments";
 import { fetchDownloadLink } from "../../platform/downloads";
+import { CouponField } from "./CouponField";
 import { useCheckoutUiStore } from "../../state/checkoutUiStore";
 import { flushProjectSaves } from "../../state/projectsStore";
 import { Button } from "../components/Button";
@@ -67,6 +68,9 @@ export function EbookCheckout({
   const [quote, setQuote] = useState<EbookQuote | null>(initialQuote);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState(false);
+  // Re-validated inside the checkout transaction; this is only what the
+  // customer entered and the server accepted a moment ago.
+  const [couponCode, setCouponCode] = useState<string | null>(null);
   const fingerprint = useMemo(() => renderFingerprint(project, design), [project, design]);
   // Whether the owned copy might be behind the current design. Unknown for
   // entitlements delivered before we tracked this (`ownedFingerprint` null) —
@@ -164,6 +168,7 @@ export function EbookCheckout({
         title: project.title,
         currency: quote?.currency ?? baseCurrency,
         fingerprint,
+        couponCode: couponCode ?? undefined,
       });
       if ("granted" in result) {
         // Included with the plan, or a free refresh of an ebook already
@@ -320,6 +325,19 @@ export function EbookCheckout({
                 <p className="text-xs leading-relaxed text-emerald-700">
                   Includes your {quote.discountPct}% printed-book owner discount.
                 </p>
+              )}
+
+              {/* Nothing to discount when it's already owned or included in the
+                  plan — a code box next to a €0 total is an invitation to waste
+                  a single-use code. */}
+              {quote && quote.enabled && !quote.owned && !quote.included && quote.price > 0 && (
+                <CouponField
+                  itemType="ebook"
+                  subtotal={quote.price}
+                  currency={quote.currency}
+                  productId="ebook"
+                  onChange={setCouponCode}
+                />
               )}
 
               {busy && (

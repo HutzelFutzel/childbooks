@@ -67,6 +67,7 @@ import { SparksTab } from "./tabs/SparksTab";
 import { ReferralsTab } from "./tabs/ReferralsTab";
 import { AffiliatesTab } from "./tabs/AffiliatesTab";
 import { CampaignsTab } from "./tabs/CampaignsTab";
+import { CouponsTab } from "./tabs/CouponsTab";
 import { SurveysTab } from "./tabs/SurveysTab";
 import { SystemHealthTab } from "./tabs/SystemHealthTab";
 import { SeoTab } from "./tabs/marketing/SeoTab";
@@ -560,6 +561,7 @@ export default function AdminApp() {
                       {marketingTab === "referrals" && <ReferralsTab />}
                       {marketingTab === "affiliates" && <AffiliatesTab />}
                       {marketingTab === "campaigns" && <CampaignsTab />}
+                      {marketingTab === "coupons" && <CouponsTab />}
                       {marketingTab === "surveys" && <SurveysTab />}
                       {marketingTab === "announcements" && <AnnouncementsTab />}
                       {marketingTab === "seo" && <SeoTab />}

@@ -32,6 +32,7 @@ import { sendWelcomeEmail } from "./email/triggers";
 import { notifySlack, formatSignupSlackMessage, getSparksSpent } from "./notify";
 import { recordSignupEvent } from "./analyticsEvents";
 import { onCampaignEvent } from "./campaigns";
+import { grantAndAnnounce } from "./coupons/routes";
 import { countryFromSignals, deviceFactsFromHeaders } from "./geo";
 import { UNKNOWN_COUNTRY } from "../../books-frontend/src/core/analytics/markets";
 import {
@@ -203,6 +204,13 @@ export function registerAuthRoutes(app: Express): void {
       // campaign engine would be adding latency to every sign-in for the sake of
       // a promotion. Idempotent on the uid downstream.
       await onCampaignEvent(uid, "signup");
+
+      // Auto-granted coupons, for the same reason and at the same moment: this
+      // is where an account that came off a QR poster first becomes something a
+      // coupon can be attached to. Also run on every recorded arrival (see
+      // `/account/arrival`), because the scan can just as easily happen AFTER
+      // signup — and which order it happened in must not change what they get.
+      await grantAndAnnounce(uid, "signup").catch(() => {});
 
       res.json({ ok: true, sent: result.ok, verified: user.emailVerified });
     } catch (err) {

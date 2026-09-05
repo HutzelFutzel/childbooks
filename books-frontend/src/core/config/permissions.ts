@@ -90,6 +90,7 @@ const MARKETING_TAB_EXHAUSTIVE: Record<MarketingTabId, true> = {
   referrals: true,
   affiliates: true,
   campaigns: true,
+  coupons: true,
   surveys: true,
   announcements: true,
   seo: true,
@@ -108,6 +109,8 @@ const ANALYSIS_TAB_EXHAUSTIVE: Record<AnalysisTabId, true> = {
   referrals: true,
   affiliates: true,
   campaigns: true,
+  coupons: true,
+  qrCodes: true,
   surveys: true,
 };
 const COMMUNICATION_TAB_EXHAUSTIVE: Record<CommunicationTabId, true> = {

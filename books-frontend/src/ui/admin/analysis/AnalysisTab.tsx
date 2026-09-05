@@ -35,6 +35,8 @@ import { DevicePicker } from "./DevicePicker";
 import { ReferralsAnalysis } from "./ReferralsAnalysis";
 import { AffiliatesAnalysis } from "./AffiliatesAnalysis";
 import { CampaignsAnalysis } from "./CampaignsAnalysis";
+import { CouponsAnalysis } from "./CouponsAnalysis";
+import { QrCodesAnalysis } from "./QrCodesAnalysis";
 import { SurveysAnalysis } from "./SurveysAnalysis";
 import { MarketPicker } from "./MarketPicker";
 import { MarketsCard } from "./MarketsCard";
@@ -192,12 +194,14 @@ export function AnalysisTab() {
             </Link>
           ))}
         </div>
-        <MarketPicker
-          value={country}
-          markets={knownMarkets}
-          onChange={setCountry}
-          disabled={loading}
-        />
+        {section !== "qrCodes" && (
+          <MarketPicker
+            value={country}
+            markets={knownMarkets}
+            onChange={setCountry}
+            disabled={loading}
+          />
+        )}
       </div>
 
       <p className="text-xs text-ink-400">{activeGroup.description}</p>
@@ -213,7 +217,7 @@ export function AnalysisTab() {
         onChange={(id) => setSection(id as Section)}
       />
 
-      {country && (
+      {country && section !== "qrCodes" && (
         <div className="flex items-center gap-2 rounded-xl bg-brand-50 px-3.5 py-2 text-sm text-brand-800 ring-1 ring-brand-100">
           <span>
             Showing <strong>{countryFlag(country)} {countryLabel(country)}</strong> only — every
@@ -238,6 +242,8 @@ export function AnalysisTab() {
       {section === "referrals" && <ReferralsAnalysis />}
       {section === "affiliates" && <AffiliatesAnalysis />}
       {section === "campaigns" && <CampaignsAnalysis />}
+      {section === "coupons" && <CouponsAnalysis />}
+      {section === "qrCodes" && <QrCodesAnalysis />}
       {section === "surveys" && <SurveysAnalysis />}
       {section === "devices" && <DevicesAnalysis />}
 

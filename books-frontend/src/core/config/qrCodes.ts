@@ -23,6 +23,7 @@
  */
 import type { BrandAssetSlot } from "./branding";
 import { MAX_ASSET_HISTORY } from "./branding";
+import { normalizeArrivalId } from "../profile/acquisition";
 
 /** Mirrors the `qrcode` package's `errorCorrectionLevel` option exactly. */
 export const QR_ERROR_CORRECTION_LEVELS = ["L", "M", "Q", "H"] as const;
@@ -92,8 +93,16 @@ export interface QrCode {
   id: string;
   /** Admin label, e.g. "Back cover CTA". */
   name: string;
-  /** The URL or text actually encoded. */
+  /** Where a scan ends up. Encoded directly unless `tracked` is on. */
   data: string;
+  /**
+   * Route scans through `/q/{id}` instead of encoding `data` directly.
+   *
+   * Off by default, and that default is the point: a code already printed in a
+   * book has to keep rendering byte-for-byte as it always has, so tracking is
+   * something a code opts into rather than something that happens to it.
+   */
+  tracked: boolean;
   errorCorrectionLevel: QrErrorCorrectionLevel;
   /** Quiet-zone size, in modules (the package's own unit). */
   margin: number;
@@ -129,6 +138,104 @@ export interface QrCode {
 export interface QrCodesConfig {
   version: 1;
   codes: QrCode[];
+}
+
+/**
+ * Server-side scan tallies for a tracked code, kept in `qrScans/{id}` (see
+ * `functions/src/acquisition.ts`). Shared here rather than declared on the
+ * backend so the admin list and the writer agree on the shape.
+ */
+export interface QrScanStats {
+  qrId: string;
+  scans: number;
+  lastScanAt: number;
+  daily: Record<string, number>;
+}
+
+/** One UTC day in the tracked-QR acquisition funnel. */
+export interface QrAnalysisDay {
+  day: string;
+  /** Scan events, not unique devices or people. */
+  scans: number;
+  /** Accounts whose FIRST recorded arrival was this QR on this day. */
+  firstTouchAccounts: number;
+  /** Coupon entitlements created because of this QR on this day. */
+  couponGrants: number;
+  /** Those QR-attributed grants that became paid coupon uses on this day. */
+  couponRedemptions: number;
+  /** Eligible order subtotal by charged currency; currencies are never summed. */
+  orderValueByCurrency: Record<string, number>;
+  /** Discount given by charged currency; currencies are never summed. */
+  discountByCurrency: Record<string, number>;
+}
+
+export interface QrAnalysisWindowTotals extends Omit<QrAnalysisDay, "day"> {}
+
+export interface QrAnalysisLifetimeTotals {
+  scans: number;
+  /** Unique accounts that have ever recorded this QR token. */
+  identifiedAccounts: number;
+  /** Accounts for which this QR is the first recorded arrival. */
+  firstTouchAccounts: number;
+  couponGrants: number;
+  /** Current net uses on QR-attributed grants (refund restorations subtract). */
+  couponRedemptions: number;
+}
+
+export interface QrAnalysisRates {
+  /** Lifetime identified accounts / lifetime scan events. */
+  scanToIdentifiedPct: number | null;
+  /** Window coupon grants / window scan events. */
+  scanToGrantPct: number | null;
+  /** Window paid uses / window coupon grants. */
+  grantToRedemptionPct: number | null;
+}
+
+export interface QrAnalysisLinkedCoupon {
+  id: string;
+  name: string;
+  status: "draft" | "active" | "paused" | "ended";
+}
+
+/** One tracked code's performance, including the funnel and daily series. */
+export interface QrAnalysisCode {
+  qrId: string;
+  name: string;
+  destination: string;
+  updatedAt: number;
+  lastScanAt: number;
+  linkedCoupons: QrAnalysisLinkedCoupon[];
+  totals: QrAnalysisWindowTotals;
+  previousTotals: QrAnalysisWindowTotals;
+  lifetime: QrAnalysisLifetimeTotals;
+  rates: QrAnalysisRates;
+  series: QrAnalysisDay[];
+}
+
+/** Complete Analysis → QR codes payload. */
+export interface QrAnalysisReport {
+  from: number;
+  to: number;
+  previousFrom: number;
+  previousTo: number;
+  generatedAt: number;
+  trackedCodes: number;
+  untrackedCodes: number;
+  totals: QrAnalysisWindowTotals;
+  previousTotals: QrAnalysisWindowTotals;
+  lifetime: QrAnalysisLifetimeTotals;
+  rates: QrAnalysisRates;
+  series: QrAnalysisDay[];
+  codes: QrAnalysisCode[];
+  /**
+   * A true value means that source exceeded its defensive read cap. The
+   * affected account/grant/redemption numbers are lower bounds.
+   */
+  capped: {
+    users: boolean;
+    grants: boolean;
+    redemptions: boolean;
+  };
 }
 
 /** Hard cap on the library so a runaway script can't grow the doc unbounded. */
@@ -240,6 +347,7 @@ function normalizeQrCode(input: unknown, fallbackId: () => string): QrCode | nul
     id: typeof c.id === "string" && c.id ? c.id : fallbackId(),
     name: str(c.name, "Untitled QR code", 200),
     data,
+    tracked: c.tracked === true,
     errorCorrectionLevel: (QR_ERROR_CORRECTION_LEVELS as readonly string[]).includes(
       c.errorCorrectionLevel as string,
     )
@@ -289,4 +397,81 @@ export function normalizeQrCodesConfig(input: unknown): QrCodesConfig {
 
 export function findQrCode(config: QrCodesConfig, id: string): QrCode | undefined {
   return config.codes.find((c) => c.id === id);
+}
+
+/** The `/q/{id}` hop a tracked code's image points at. */
+export function qrTrackedUrl(siteUrl: string, id: string): string {
+  return `${siteUrl.replace(/\/+$/, "")}/q/${encodeURIComponent(id)}`;
+}
+
+/**
+ * What a code's image actually encodes.
+ *
+ * The one place that answers this, shared by the render path and the preview so
+ * a downloaded file can't differ from what the admin was looking at. `data`
+ * keeps meaning "the destination" in both cases — `resolveQrArrival` reads the
+ * same field when it forwards a tracked scan on, which is what keeps the two
+ * halves of the indirection from having to agree about anything else.
+ */
+export function qrEncodedValue(
+  code: Pick<QrCode, "id" | "data" | "tracked">,
+  siteUrl: string,
+): string {
+  if (!code.tracked) return code.data;
+  const site = siteUrl.replace(/\/+$/, "");
+  // No site URL configured yet: a bare "/q/x" would print a code that resolves
+  // to nothing at all, so fall back to encoding the destination. An
+  // unattributed code that works beats a tracked one that doesn't.
+  return site ? qrTrackedUrl(site, code.id) : code.data;
+}
+
+/**
+ * Where a tracked scan should be sent, with the arrival token attached.
+ *
+ * Returns `""` when there's nowhere safe to go, which the caller turns into the
+ * homepage. Three refusals, each for its own reason:
+ *
+ *   - **Not a URL** (a plain-text QR, a phone number, a bare hostname): there's
+ *     nothing to redirect to. Relative paths are fine — an admin who typed
+ *     `/shop` means our own site — but "looks like a URL" has to be decided
+ *     before parsing, because `new URL` will happily read any string at all as
+ *     a path relative to our domain and hand back a 404 with a straight face.
+ *   - **Not http(s)**: a `javascript:` or `data:` destination reached through
+ *     our own domain is a redirect we'd be lending our reputation to.
+ *   - **Another `/q/` path**: it would redirect to itself until the browser gave
+ *     up. A misconfigured code that lands on the homepage is a bad scan; one
+ *     that shows "too many redirects" is a bad brand.
+ *
+ * An off-site destination is passed through UNCHANGED and simply isn't
+ * attributed — appending our tracking parameter to somebody else's URL would
+ * leak our campaign structure to them, and an open redirect through `/q/` would
+ * turn every printed code we own into a link to anywhere.
+ */
+export function qrScanDestination(data: string, qrId: string, siteUrl: string): string {
+  const trimmed = data.trim();
+  if (!trimmed) return "";
+  if (/\s/.test(trimmed)) return "";
+  if (!/^[a-z][a-z0-9+.-]*:/i.test(trimmed) && !trimmed.startsWith("/")) return "";
+  const site = siteUrl.replace(/\/+$/, "");
+  let url: URL;
+  try {
+    url = new URL(trimmed, site || undefined);
+  } catch {
+    return "";
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return "";
+  const ourHost = site ? safeHost(site) : null;
+  if (ourHost && url.host !== ourHost) return url.toString();
+  if (/^\/q(\/|$)/.test(url.pathname)) return "";
+  const id = normalizeArrivalId(qrId);
+  if (id) url.searchParams.set("qr", id);
+  return url.toString();
+}
+
+function safeHost(value: string): string | null {
+  try {
+    return new URL(value).host;
+  } catch {
+    return null;
+  }
 }

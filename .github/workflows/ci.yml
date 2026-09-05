@@ -63,6 +63,13 @@ jobs:
       - name: Check geo inference invariants
         run: yarn check:geo
 
+      # Coupon properties that typechecking can't see and that fail silently by
+      # giving money away: a restriction an unknown fact turns into a free pass,
+      # two offers stacking past break-even, a cap that doesn't bind at its
+      # boundary, a public projection that ships unredeemed codes to the browser.
+      - name: Check coupon invariants
+        run: yarn check:coupons
+
       # App Hosting applies apphosting.yaml's env when it builds; a bare
       # `yarn build:web` here would not, and NEXT_PUBLIC_* are inlined at build
       # time. Load them so this really is the same build production gets.

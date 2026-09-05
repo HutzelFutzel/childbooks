@@ -34,6 +34,8 @@ export const EMAIL_TEMPLATE_IDS = [
   "referral_invite_accepted",
   "referral_reminder",
   "referral_reward",
+  "coupon_granted",
+  "coupon_redeemed",
   "contact_form",
   "contact_form_ack",
   "affiliate_application_ack",
@@ -176,6 +178,43 @@ export interface EmailTemplateVarsMap {
     balance?: number;
     /** How to use it, when the reward isn't simply added to the balance. */
     howToUse?: string;
+  };
+  /**
+   * A discount is now waiting on the account, without the customer having typed
+   * anything — the auto-grant case (they scanned a code, we recognized the
+   * arrival, they signed up).
+   *
+   * This email exists because a silent auto-grant is indistinguishable from no
+   * grant at all: the whole point of the poster was to make someone feel they
+   * got something, and a discount they only discover at checkout (or never)
+   * wasted the acquisition. `summary` and `notes` are the FROZEN promise from the
+   * grant's terms, never re-derived — the coupon may have been edited since.
+   */
+  coupon_granted: {
+    name?: string;
+    summary: string;
+    notes?: string[];
+    /** Present only for a code they'd have to type; auto-grants have none. */
+    code?: string;
+    expiresOn?: string;
+    shopUrl?: string;
+  };
+  /**
+   * A coupon actually came off a payment. Sent alongside (not instead of) the
+   * order receipt: the receipt proves what they paid, this proves the discount
+   * worked, and conflating the two is how "did my code apply?" support tickets
+   * start.
+   */
+  coupon_redeemed: {
+    name?: string;
+    summary: string;
+    /** Formatted with its currency symbol by the caller, e.g. "€8.40". */
+    savedAmount: string;
+    itemLabel: string;
+    orderRef?: string;
+    code?: string;
+    /** Set when the same coupon can still be used again. */
+    usesLeft?: number;
   };
   /** Sent to the support inbox when a visitor submits the public contact form. */
   contact_form: { fromName: string; fromEmail: string; topic?: string; message: string };

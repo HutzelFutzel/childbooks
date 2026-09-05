@@ -98,6 +98,73 @@ export async function sendSparksPurchasedEmail(args: {
   });
 }
 
+/**
+ * "You've got a discount waiting" — sent when a coupon is attached to an account
+ * the customer never typed anything for.
+ *
+ * Deduped on (uid, coupon) rather than on a timestamp, because the grant itself
+ * is created at most once per pair: re-running the auto-grant sweep must not
+ * re-announce a discount somebody already knows about.
+ */
+export async function sendCouponGrantedEmail(args: {
+  uid: string;
+  couponId: string;
+  summary: string;
+  notes?: string[];
+  code?: string | null;
+  endsAt?: number;
+}): Promise<void> {
+  await sendTemplatedEmail({
+    templateId: "coupon_granted",
+    uid: args.uid,
+    vars: {
+      summary: args.summary,
+      notes: args.notes,
+      code: args.code ?? undefined,
+      expiresOn: args.endsAt ? formatDate(args.endsAt) : undefined,
+    },
+    dedupeKey: `coupon_granted_${args.uid}_${args.couponId}`,
+  });
+}
+
+/**
+ * "You saved X" — sent when a coupon actually comes off a settled payment.
+ *
+ * Deduped on the payment AND the coupon: an order that carried two coupons
+ * should say so twice, while a retried webhook says so once.
+ */
+export async function sendCouponRedeemedEmail(args: {
+  uid: string;
+  summary: string;
+  savedAmount: string;
+  itemLabel: string;
+  orderRef?: string;
+  code?: string | null;
+  usesLeft?: number | null;
+}): Promise<void> {
+  await sendTemplatedEmail({
+    templateId: "coupon_redeemed",
+    uid: args.uid,
+    vars: {
+      summary: args.summary,
+      savedAmount: args.savedAmount,
+      itemLabel: args.itemLabel,
+      orderRef: args.orderRef,
+      code: args.code ?? undefined,
+      usesLeft: args.usesLeft ?? undefined,
+    },
+    dedupeKey: `coupon_used_${args.orderRef ?? ""}_${args.code ?? args.summary}`,
+  });
+}
+
+function formatDate(at: number): string {
+  return new Date(at).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
 export async function sendGiftPurchasedEmail(args: {
   uid: string;
   sparks: number;

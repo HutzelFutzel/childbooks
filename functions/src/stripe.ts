@@ -136,9 +136,9 @@ import {
   findRedeemableDiscount,
   onReferralEvent,
   onSubscriptionInvoicePaid,
-  planDiscountCoupon,
   reserveDiscount,
 } from "./referrals";
+import { createSingleUseCoupon } from "./stripeDiscounts";
 import {
   campaignClawbackForRef,
   earnedCampaignDiscounts,
@@ -148,15 +148,31 @@ import {
   reserveCampaignDiscount,
   triggerForPaymentKind,
 } from "./campaigns";
+import {
+  couponCandidates,
+  couponUserFacts,
+  releaseCoupons,
+  reserveCoupon,
+  restoreCouponsForRefund,
+  settleCoupons,
+} from "./coupons";
+import {
+  describeRejection,
+  resolveBestDiscount,
+  type CouponRejectionReason,
+  type DiscountCandidate,
+} from "../../books-frontend/src/core/config/coupons";
 import { claimGift, createPaidGift, listGiftsBought, newGiftCode } from "./gifts";
 import {
   intervalForPriceId,
   priceIdForEnv,
+  pricePointForId,
   resolvePlanByPriceId,
   type BillingInterval,
 } from "../../books-frontend/src/core/config/plans";
 import { packTotalSparks } from "../../books-frontend/src/core/config/sparks";
 import {
+  sendCouponRedeemedEmail,
   sendGiftPurchasedEmail,
   sendGiftReceivedEmail,
   sendOrderConfirmationEmail,
@@ -232,6 +248,8 @@ interface CheckoutBody {
    * absent — a reorder of an unchanged book uploads nothing at all.
    */
   fingerprint?: string;
+  /** A coupon code the customer typed. Validated server-side; never trusted. */
+  couponCode?: string;
 }
 
 function clientError(res: Response, message: string, status = 400): void {
@@ -239,9 +257,53 @@ function clientError(res: Response, message: string, status = 400): void {
 }
 
 /**
- * The best earned discount to apply to this purchase — from the referral program
- * or a marketing campaign — already reserved for `paymentId`, or null when the
- * buyer has none that can be honored.
+ * Customer-facing name for a payment kind, for the coupon email and Slack ping.
+ *
+ * Kept blunt rather than looked up: both callers have only Stripe's untyped
+ * `kind` metadata to work from, and a wrong-but-generic label beats a database
+ * read inside a webhook.
+ */
+function purchaseLabel(kind: string | undefined): string {
+  switch (kind) {
+    case "order":
+      return "your printed book";
+    case "ebook":
+      return "your digital edition";
+    case "sparkPack":
+      return "your Spark pack";
+    case "sparkGift":
+      return "your Spark gift";
+    case "subscription":
+      return "your membership";
+    default:
+      return "your order";
+  }
+}
+
+/** What actually comes off a purchase, after every source has been compared. */
+interface AppliedDiscount {
+  percentOff: number;
+  /** Frozen description, for the checkout line the buyer sees. */
+  summary: string;
+}
+
+interface DiscountOutcome {
+  applied: AppliedDiscount | null;
+  /**
+   * Why a code the customer TYPED didn't apply.
+   *
+   * Separate from `applied` because the two failures are nothing alike. A
+   * referral perk that can't be honored should quietly charge full price — the
+   * customer wasn't expecting it on this order. A code somebody typed and that
+   * silently does nothing is a support ticket, so the caller refuses the
+   * checkout and says why.
+   */
+  codeRejection: { reason: CouponRejectionReason; message: string } | null;
+}
+
+/**
+ * The best discount to apply to this purchase — from the referral program, a
+ * marketing campaign, or a coupon — already reserved for `paymentId`.
  *
  * Two clamps make it safe to hand a percentage to a customer months after the
  * program was configured: the catalog-wide `maxDiscountPct`, and whatever
@@ -249,10 +311,16 @@ function clientError(res: Response, message: string, status = 400): void {
  * leave nothing, no reward is consumed — a discount that would have to be
  * silently reduced to 0 is better saved for a purchase that can carry it.
  *
- * The two sources are compared HERE, in one place, and exactly one wins. A
- * customer holding both a referral perk and a campaign offer gets the larger of
- * the two rather than their sum: stacking is how a promotion accidentally sells
- * below cost, and it's not something either config can opt into by itself.
+ * All three sources are compared HERE, in one place, by the shared
+ * {@link resolveBestDiscount}. A customer holding a referral perk, a campaign
+ * offer and a typed code gets the best ONE of the three rather than their sum,
+ * unless every winner opts into stacking: stacking is how a promotion
+ * accidentally sells below cost, and it must not be something one config can
+ * decide by itself.
+ *
+ * Reservations are taken only for the source that actually won, so the losers
+ * stay available for the buyer's next purchase — and a single-use coupon isn't
+ * burned on a checkout where a bigger referral reward beat it.
  */
 async function earnedDiscount(args: {
   uid: string;
@@ -265,40 +333,169 @@ async function earnedDiscount(args: {
   appliedPct?: number;
   /** Deepest TOTAL discount that still breaks even (default: unbounded). */
   breakEvenPct?: number;
-}): Promise<{ percentOff: number; summary: string } | null> {
+  /** A coupon code the customer typed at checkout. */
+  couponCode?: string | null;
+  /** Currency the amount is quoted in — coupon restrictions can gate on it. */
+  currency?: string;
+  /** Catalog product / plan / pack id, when a coupon could be scoped to it. */
+  productId?: string | null;
+  /** Destination or billing country, when known. */
+  country?: string | null;
+}): Promise<DiscountOutcome> {
   try {
-    const headroom = Math.max(0, (args.breakEvenPct ?? 100) - (args.appliedPct ?? 0));
-    const clamp = (pct: number) => Math.min(effectivePercentOff(pct, args.settings), headroom);
-
-    const [referral, campaigns] = await Promise.all([
+    const currency = (args.currency ?? "").toUpperCase();
+    const [referral, campaigns, coupons] = await Promise.all([
       findRedeemableDiscount(args.uid, args.itemType),
       earnedCampaignDiscounts(args.uid, args.itemType),
+      couponCandidates({
+        uid: args.uid,
+        code: args.couponCode ?? null,
+        purchase: {
+          itemType: args.itemType,
+          subtotal: args.amount,
+          currency,
+          productId: args.productId ?? null,
+          country: args.country ?? null,
+        },
+      }),
     ]);
     const campaign = campaigns[0] ?? null;
 
-    const referralPct = referral ? clamp(referral.percentOff) : 0;
-    const campaignPct = campaign ? clamp(campaign.percentOff) : 0;
-    if (referralPct <= 0 && campaignPct <= 0) return null;
+    // Everything is expressed in the one shape the resolver compares, so no
+    // source can smuggle in its own idea of what beats what.
+    const candidates: DiscountCandidate[] = [];
+    if (referral) {
+      candidates.push({
+        source: "referral",
+        percentOff: referral.percentOff,
+        summary: referral.summary,
+        handle: referral.rewardId,
+        // Referral rewards have never been stackable and this isn't the change
+        // that makes them so.
+        stackable: false,
+        priority: 0,
+      });
+    }
+    if (campaign) {
+      candidates.push({
+        source: "campaign",
+        percentOff: campaign.percentOff,
+        summary: campaign.summary,
+        handle: campaign.redemptionId,
+        stackable: campaign.stackable,
+        priority: campaign.priority,
+      });
+    }
+    for (const coupon of coupons.candidates) {
+      candidates.push({
+        source: "coupon",
+        percentOff: coupon.percentOff,
+        summary: coupon.summary,
+        handle: coupon.couponId,
+        stackable: coupon.stackable,
+        priority: coupon.priority,
+      });
+    }
 
-    // Reserve only the one that's actually being used, so the loser stays
-    // available for the buyer's next purchase.
-    if (campaignPct >= referralPct && campaign) {
-      const discount = args.amount - discountedAmount(args.amount, campaignPct);
-      if (await reserveCampaignDiscount(campaign.redemptionId, args.paymentId, discount)) {
-        return { percentOff: campaignPct, summary: campaign.summary };
+    const resolution = resolveBestDiscount({
+      candidates,
+      maxDiscountPct: effectivePercentOff(100, args.settings),
+      appliedPct: args.appliedPct,
+      breakEvenPct: args.breakEvenPct,
+    });
+
+    // A code the customer typed that never made it into the resolution needs an
+    // explanation, whether it was refused on its own merits or simply lost.
+    const typed = coupons.typedCodeVerdict;
+    const typedCoupon = typed?.ok
+      ? coupons.candidates.find((c) => c.couponId === typed.couponId) ?? null
+      : null;
+    let codeRejection: DiscountOutcome["codeRejection"] = null;
+    if (typed && !typed.ok) {
+      codeRejection = { reason: typed.reason, message: typed.message };
+    } else if (typedCoupon) {
+      const lost = resolution.rejected.find(
+        (r) => r.candidate.source === "coupon" && r.candidate.handle === typedCoupon.couponId,
+      );
+      const won = resolution.applied.some(
+        (c) => c.source === "coupon" && c.handle === typedCoupon.couponId,
+      );
+      if (!won) {
+        const reason = lost?.reason ?? "better_offer_active";
+        codeRejection = { reason, message: describeRejection(reason) };
       }
     }
-    if (referral && referralPct > 0) {
-      const discount = args.amount - discountedAmount(args.amount, referralPct);
-      if (await reserveDiscount(referral.rewardId, args.paymentId, discount)) {
-        return { percentOff: referralPct, summary: referral.summary };
+
+    if (resolution.applied.length === 0 || resolution.percentOff <= 0) {
+      return { applied: null, codeRejection };
+    }
+
+    // Reserve every winner. The percentage each one is credited with is its
+    // SHARE of the resolved total, not its configured rate — when a stack was
+    // clamped, the books have to reflect what was actually given away.
+    const total = resolution.applied.reduce((sum, c) => sum + c.percentOff, 0);
+    const summaries: string[] = [];
+    let reservedPct = 0;
+    for (const candidate of resolution.applied) {
+      const share =
+        total > 0
+          ? Math.round(((candidate.percentOff / total) * resolution.percentOff) * 10) / 10
+          : 0;
+      if (share <= 0) continue;
+      const discount = args.amount - discountedAmount(args.amount, share);
+      let ok = false;
+      switch (candidate.source) {
+        case "referral":
+          ok = await reserveDiscount(candidate.handle, args.paymentId, discount);
+          break;
+        case "campaign":
+          ok = await reserveCampaignDiscount(candidate.handle, args.paymentId, discount);
+          break;
+        case "coupon": {
+          const coupon = coupons.candidates.find((c) => c.couponId === candidate.handle);
+          if (!coupon) break;
+          ok = await reserveCoupon({
+            uid: args.uid,
+            candidate: coupon,
+            paymentRef: args.paymentId,
+            itemType: args.itemType,
+            percentOff: share,
+            discountAmount: discount,
+            originalSubtotal: args.amount,
+            currency,
+          });
+          // Losing the reservation race means somebody else is mid-checkout with
+          // the same single-use code. The buyer needs to hear that rather than
+          // be quietly charged full price on an order they thought was discounted.
+          if (!ok && coupon.code) {
+            codeRejection = {
+              reason: "code_exhausted",
+              message: describeRejection("code_exhausted"),
+            };
+          }
+          break;
+        }
+      }
+      if (ok) {
+        reservedPct += share;
+        summaries.push(candidate.summary);
       }
     }
-    return null;
+
+    if (reservedPct <= 0) return { applied: null, codeRejection };
+    return {
+      applied: {
+        percentOff: Math.round(reservedPct * 10) / 10,
+        summary: summaries.join(" + "),
+      },
+      codeRejection,
+    };
   } catch (err) {
-    // An earned perk must never be the reason a purchase can't be started.
-    console.warn("[stripe] earned discount lookup failed", err);
-    return null;
+    // An earned perk must never be the reason a purchase can't be started. A
+    // typed code is the one exception, and it's handled above rather than here:
+    // if the whole resolver threw, we genuinely don't know why the code failed.
+    console.warn("[stripe] discount resolution failed", err);
+    return { applied: null, codeRejection: null };
   }
 }
 
@@ -341,6 +538,98 @@ async function notifyCampaignsOfPurchase(args: {
   } catch (err) {
     // A campaign must never be the reason a paid order isn't fulfilled.
     console.warn("[campaigns] purchase hook failed", args.paymentId, err);
+  }
+}
+
+/**
+ * Settle any coupon this payment consumed, then tell the customer and the team.
+ *
+ * The Slack ping fires HERE, on settlement, and not when a code merely
+ * validates. The distinction is the whole value of the notification: a valid
+ * code typed into a checkout that's then abandoned is noise, while a code
+ * actually coming off money is the signal that a leaked or over-performing
+ * coupon is costing something — and it needs to arrive while pausing it is still
+ * cheap.
+ *
+ * Both notifications are deduplicated by their own layers (`notifySlack`'s `ref`
+ * marker, the email sender's dedupe key) rather than by a guard here, because
+ * Stripe will retry this webhook and the settlement itself is already
+ * idempotent.
+ */
+async function settleCouponsForPurchase(args: {
+  uid: string;
+  paymentId: string;
+  /** Gross in the charged currency. */
+  amount: number;
+  currency: string;
+  itemLabel: string;
+}): Promise<void> {
+  try {
+    // `purchaseCount` is read BEFORE the purchase hooks bump it, so "was this a
+    // new customer?" is answered about the moment the coupon was used, which is
+    // what the acquisition report is asking.
+    const facts = await couponUserFacts(args.uid).catch(() => null);
+    const settled = await settleCoupons({
+      paymentRef: args.paymentId,
+      revenue: await toUsd(args.amount, args.currency).catch(() => 0),
+      isNewCustomer: (facts?.purchaseCount ?? 1) <= 1,
+    });
+    if (settled.length === 0) return;
+
+    for (const { redemption, usesLeft } of settled) {
+      await sendCouponRedeemedEmail({
+        uid: args.uid,
+        summary: redemption.terms?.summary ?? redemption.couponName,
+        savedAmount: money(redemption.discountAmount, redemption.currency),
+        itemLabel: args.itemLabel,
+        orderRef: args.paymentId,
+        code: redemption.code,
+        usesLeft,
+      }).catch(() => {});
+
+      await notifySlack({
+        messageKey: "coupon_redeemed",
+        // Keyed on the redemption, not the payment: an order that somehow
+        // carried two coupons is two facts worth knowing.
+        ref: `coupon_${redemption.id}`,
+        text:
+          `Coupon used — ${redemption.couponName}` +
+          `${redemption.code ? ` (${redemption.code})` : " (applied automatically)"}: ` +
+          `${money(redemption.discountAmount, redemption.currency)} off ${args.itemLabel}` +
+          ` · order ${money(args.amount, args.currency)}`,
+      }).catch(() => {});
+    }
+  } catch (err) {
+    // A coupon must never be the reason a paid order isn't fulfilled.
+    console.warn("[coupons] purchase hook failed", args.paymentId, err);
+  }
+}
+
+/**
+ * Give back the coupon that paid for a refunded MEMBERSHIP invoice.
+ *
+ * Memberships have no payment document to key on — Stripe raises those invoices
+ * itself — so the reservation ref is read off the subscription, which is where
+ * checkout stamped it. That's also why the discount is verified against THIS
+ * invoice before anything is restored: the ref stays on the subscription for
+ * life, so a refunded renewal would otherwise hand back a coupon that was spent
+ * on the first invoice months ago.
+ */
+async function restoreMembershipCoupons(invoiceId: string): Promise<void> {
+  try {
+    const invoice = await getStripe().invoices.retrieve(invoiceId);
+    const discounted = (invoice.total_discount_amounts ?? []).some((d) => d.amount > 0);
+    if (!discounted) return;
+    const meta = (
+      invoice as unknown as {
+        subscription_details?: { metadata?: Record<string, string> | null } | null;
+      }
+    ).subscription_details?.metadata;
+    const ref = typeof meta?.discountRef === "string" ? meta.discountRef : "";
+    // Always a full refund here: the caller only reaches this on one.
+    if (ref) await restoreCouponsForRefund({ paymentRef: ref, isFullRefund: true });
+  } catch (err) {
+    console.warn("[coupons] membership refund restore failed", invoiceId, err);
   }
 }
 
@@ -517,6 +806,8 @@ interface PrintCheckoutArgs {
   addressConfirmed?: boolean;
   sourceFileUrls: { interior?: string; cover?: string };
   merchantReference: string | null;
+  /** A coupon code the customer typed in the order dialog. */
+  couponCode?: string | null;
 }
 
 type PrintCheckoutResult =
@@ -902,7 +1193,7 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
   // an earned discount is RESERVED against it — the reservation is what makes the
   // reward single-use across an abandoned checkout.
   const paymentId = randomUUID();
-  const earned = await earnedDiscount({
+  const { applied: earned, codeRejection } = await earnedDiscount({
     uid,
     itemType: "print",
     paymentId,
@@ -910,7 +1201,19 @@ async function createPrintCheckout(args: PrintCheckoutArgs): Promise<PrintChecko
     amount: planPrice * copies,
     appliedPct: discountPct,
     breakEvenPct: breakEvenDiscountPct,
+    couponCode: args.couponCode,
+    currency,
+    productId: product.id,
+    country: destinationCountry,
   });
+  // A code the customer typed that didn't apply STOPS the checkout. Charging
+  // them full price and letting them discover it on the receipt is the one
+  // outcome guaranteed to become a support ticket — and any reservation taken a
+  // moment ago is released, since this session will never exist.
+  if (codeRejection) {
+    await releaseCoupons(paymentId, `code refused: ${codeRejection.reason}`);
+    return { ok: false, error: codeRejection.message };
+  }
   const unitPrice = earned ? discountedAmount(planPrice, earned.percentOff) : planPrice;
 
   // The provider downloads the print files LATER, on its own schedule, so a URL
@@ -1224,6 +1527,7 @@ export function registerStripeUserRoutes(app: Express): void {
         addressConfirmed: body.addressConfirmed === true,
         sourceFileUrls,
         merchantReference: body.merchantReference ?? null,
+        couponCode: body.couponCode ?? null,
       });
       if (!result.ok) {
         clientError(res, result.error);
@@ -1398,6 +1702,8 @@ export function registerStripeUserRoutes(app: Express): void {
         contentType?: string;
         /** Content fingerprint of an already-assembled render, if there is one. */
         fingerprint?: string;
+        /** A coupon code the customer typed. Validated server-side; never trusted. */
+        couponCode?: string;
       };
       if (!body.projectId || !(body.pdfBase64 || body.fingerprint)) {
         clientError(res, "Missing ebook details.");
@@ -1504,13 +1810,21 @@ export function registerStripeUserRoutes(app: Express): void {
 
       // The digital edition has no unit cost to protect, so the only clamp that
       // matters is the catalog-wide maximum discount.
-      const earned = await earnedDiscount({
+      const { applied: earned, codeRejection } = await earnedDiscount({
         uid,
         itemType: "ebook",
         paymentId,
         settings,
         amount: quote.price,
+        couponCode: body.couponCode ?? null,
+        currency,
+        productId: "ebook",
       });
+      if (codeRejection) {
+        await releaseCoupons(paymentId, `code refused: ${codeRejection.reason}`);
+        clientError(res, codeRejection.message);
+        return;
+      }
       const price = earned ? discountedAmount(quote.price, earned.percentOff) : quote.price;
 
       const session = await createCheckoutSession({
@@ -1686,6 +2000,7 @@ export function registerStripeUserRoutes(app: Express): void {
         planId?: string;
         interval?: BillingInterval;
         currency?: string;
+        couponCode?: string;
       };
 
       // One live subscription per account: plan CHANGES go through the Customer
@@ -1709,10 +2024,10 @@ export function registerStripeUserRoutes(app: Express): void {
         return;
       }
 
+      const plansConfig = await getPlansConfig();
       let priceId = body.priceId?.trim() || "";
       if (!priceId && body.planId) {
-        const config = await getPlansConfig();
-        const plan = config.plans.find((p) => p.id === body.planId);
+        const plan = plansConfig.plans.find((p) => p.id === body.planId);
         if (!plan || plan.isFree) {
           clientError(res, "That plan isn't available.");
           return;
@@ -1730,11 +2045,65 @@ export function registerStripeUserRoutes(app: Express): void {
         return;
       }
 
+      // What's being discounted, resolved from the PRICE rather than from the
+      // request. The back-compat raw-priceId path then gets exactly the same
+      // coupon restrictions (minimum subtotal, currency, which plans qualify)
+      // as the normal one, instead of a subtotal of zero that quietly passes
+      // every minimum ever configured.
+      const plan = resolvePlanByPriceId(plansConfig, priceId);
+      const priced = plan ? pricePointForId(plan, priceId) : null;
+
       const customerId = await ensureCustomer(uid, req.authToken?.email);
-      // Membership is the one place a referral discount has to be a real Stripe
-      // coupon: Stripe generates the invoice, so we can't just quote less.
       const subscriptionRef = randomUUID();
-      const referral = await planDiscountCoupon(uid, subscriptionRef);
+      // Membership is the one place a discount has to be a real Stripe coupon:
+      // Stripe generates the invoice, so we can't just quote less. What that
+      // coupon is WORTH is decided by the same resolver every other checkout
+      // runs — which this route previously skipped, taking the referral perk
+      // directly and never seeing a campaign offer or a typed code at all.
+      const { applied: earned, codeRejection } = await earnedDiscount({
+        uid,
+        itemType: "plan",
+        paymentId: subscriptionRef,
+        settings: await getPricingSettings(),
+        amount: priced?.point.amount ?? 0,
+        couponCode: body.couponCode ?? null,
+        currency: priced?.currency ?? (body.currency || "USD").toUpperCase(),
+        productId: plan?.id ?? null,
+      });
+      if (codeRejection) {
+        await releaseCoupons(subscriptionRef, `code refused: ${codeRejection.reason}`);
+        clientError(res, codeRejection.message);
+        return;
+      }
+      // The discount is one Stripe coupon regardless of how many sources won:
+      // `earned.percentOff` is already the resolved total, and a stack split
+      // across two coupon objects would double-apply on the same invoice.
+      const stripeCouponId = earned
+        ? await createSingleUseCoupon({
+            percentOff: earned.percentOff,
+            // A day is plenty: the coupon is minted for THIS checkout, and the
+            // session itself expires within 24 hours.
+            expiresAt: Date.now() + 86_400_000,
+            name: earned.summary,
+            source: "coupon",
+          })
+        : null;
+      if (earned && !stripeCouponId) {
+        // Reserved, then Stripe refused to hold it. Hand the coupon back so a
+        // single-use code isn't burned on a discount nobody received. (A
+        // referral or campaign reservation lapses on its own TTL, as it always
+        // has when this path failed.)
+        await releaseCoupons(subscriptionRef, "stripe coupon unavailable");
+        if (body.couponCode?.trim()) {
+          clientError(
+            res,
+            "We couldn't apply that code to a membership just now. Please try again in a minute.",
+            503,
+          );
+          return;
+        }
+      }
+      const discounted = Boolean(earned && stripeCouponId);
       // Tax configuration is binding. If Stripe Tax is not ready, checkout
       // fails rather than silently creating an untaxed subscription.
       const session = await createCheckoutSession({
@@ -1743,12 +2112,15 @@ export function registerStripeUserRoutes(app: Express): void {
         customer_update: { address: "auto", name: "auto" },
         automatic_tax: { enabled: true },
         line_items: [{ price: priceId, quantity: 1 }],
-        ...(referral ? { discounts: [{ coupon: referral.couponId }] } : {}),
+        ...(stripeCouponId ? { discounts: [{ coupon: stripeCouponId }] } : {}),
         metadata: {
           uid,
           kind: "subscription",
-          // The reservation ref, so the invoice webhook can settle the reward.
-          ...(referral ? { referralRef: subscriptionRef } : {}),
+          // The reservation ref, so the webhooks can settle — or hand back —
+          // whatever this checkout is holding. Was `referralRef` when a referral
+          // perk was the only thing that could win; the invoice hook still reads
+          // that name for subscriptions stamped before this.
+          ...(discounted ? { discountRef: subscriptionRef } : {}),
         },
         // Stamp uid on the subscription so invoice grants can attribute Sparks.
         // The affiliate flag rides on the SUBSCRIPTION rather than a charge so it
@@ -1756,7 +2128,7 @@ export function registerStripeUserRoutes(app: Express): void {
         subscription_data: {
           metadata: {
             uid,
-            ...(referral ? { referralRef: subscriptionRef } : {}),
+            ...(discounted ? { discountRef: subscriptionRef } : {}),
             ...(await affiliateChargeMetadata(uid, "subscription")),
           },
         },
@@ -1798,13 +2170,21 @@ export function registerStripeUserRoutes(app: Express): void {
       const totalSparks = packTotalSparks(pack);
       const paymentId = randomUUID();
       const customerId = await ensureCustomer(uid, req.authToken?.email);
-      const earned = await earnedDiscount({
+      const { applied: earned, codeRejection } = await earnedDiscount({
         uid,
         itemType: "pack",
         paymentId,
         settings: await getPricingSettings(),
         amount: price,
+        couponCode: (req.body as { couponCode?: string })?.couponCode ?? null,
+        currency,
+        productId: pack.id,
       });
+      if (codeRejection) {
+        await releaseCoupons(paymentId, `code refused: ${codeRejection.reason}`);
+        clientError(res, codeRejection.message);
+        return;
+      }
       const chargedPrice = earned ? discountedAmount(price, earned.percentOff) : price;
       const session = await createCheckoutSession({
         mode: "payment",
@@ -1894,13 +2274,21 @@ export function registerStripeUserRoutes(app: Express): void {
       // purchase, and the wallet promises earned discounts "apply automatically
       // at checkout" without carving out gifts. Nothing new is exploitable — the
       // buyer could apply the identical discount to a pack for themselves.
-      const earned = await earnedDiscount({
+      const { applied: earned, codeRejection } = await earnedDiscount({
         uid,
         itemType: "pack",
         paymentId,
         settings: await getPricingSettings(),
         amount: price,
+        couponCode: (body as { couponCode?: string }).couponCode ?? null,
+        currency,
+        productId: pack.id,
       });
+      if (codeRejection) {
+        await releaseCoupons(paymentId, `code refused: ${codeRejection.reason}`);
+        clientError(res, codeRejection.message);
+        return;
+      }
       const chargedPrice = earned ? discountedAmount(price, earned.percentOff) : price;
       const meta = {
         paymentId,
@@ -2504,10 +2892,18 @@ async function grantSubscriptionSparks(invoice: Stripe.Invoice): Promise<void> {
           amount: gross,
         });
       }
-      // `subtotal` is the invoice BEFORE the coupon, so it's what the referral
-      // discount actually cost us — `amount_paid` is what's left after it.
-      if (typeof subMeta?.referralRef === "string") {
-        await finalizeDiscountsForPayment(subMeta.referralRef, toMajor(invoice.subtotal ?? 0, currency));
+      // `subtotal` is the invoice BEFORE the coupon, so it's what the discount
+      // actually cost us — `amount_paid` is what's left after it. `referralRef`
+      // is the old name for this same ref, still stamped on every subscription
+      // created before a campaign offer or a typed code could win a membership
+      // discount; both are read so those keep settling.
+      const discountRef =
+        (typeof subMeta?.discountRef === "string" ? subMeta.discountRef : "") ||
+        (typeof subMeta?.referralRef === "string" ? subMeta.referralRef : "");
+      if (discountRef) {
+        const discountCost = toMajor(invoice.subtotal ?? 0, currency);
+        await finalizeDiscountsForPayment(discountRef, discountCost);
+        await finalizeCampaignDiscounts(discountRef, discountCost);
       }
 
       // Campaign triggers for membership, keyed on the SAME invoice count the
@@ -2548,6 +2944,29 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
       if (kind === "subscription") {
         // Subscription details arrive via customer.subscription.* events; the
         // recurring Spark grant happens on invoice.paid.
+        //
+        // A coupon, though, is settled HERE rather than waiting for the invoice
+        // like the referral reward does. The two need different things: the
+        // reward is priced off the invoice subtotal, so it can't be booked
+        // until there is one, while a coupon's discount was frozen the moment
+        // it was reserved. Settling at the earliest honest point is what keeps
+        // "you have 1 use left" true while the customer is still on the
+        // thank-you page.
+        const discountRef = (session.metadata?.discountRef as string) || "";
+        // "unpaid" is a subscription whose first invoice hasn't cleared; the
+        // coupon stays reserved and lapses if it never does. Everything else,
+        // including the 100%-off case Stripe marks `no_payment_required`, is a
+        // discount that has been applied.
+        if (discountRef && uid && session.payment_status !== "unpaid") {
+          await settleCouponsForPurchase({
+            uid,
+            paymentId: discountRef,
+            amount:
+              session.amount_total != null ? toMajor(session.amount_total, session.currency ?? "usd") : 0,
+            currency: session.currency ?? "",
+            itemLabel: purchaseLabel("subscription"),
+          });
+        }
         return;
       }
       if (!paymentId || !uid) return;
@@ -2653,6 +3072,13 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
           amount: gross,
           productId: (session.metadata?.productId as string) || undefined,
         });
+        await settleCouponsForPurchase({
+          uid,
+          paymentId,
+          amount: gross ?? 0,
+          currency: session.currency ?? "",
+          itemLabel: purchaseLabel(kind),
+        });
       }
       return;
     }
@@ -2662,6 +3088,14 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
     // receipts as a purchase that never resolves.
     case "checkout.session.expired": {
       const session = event.data.object as Stripe.Checkout.Session;
+      // A membership session has no payment document of its own — Stripe raises
+      // that invoice — so there's nothing to mark failed, but the coupon it was
+      // holding still has to come back.
+      if (session.metadata?.kind === "subscription") {
+        const discountRef = (session.metadata?.discountRef as string) || "";
+        if (discountRef) await releaseCoupons(discountRef, "checkout.session.expired");
+        return;
+      }
       const paymentId = (session.metadata?.paymentId as string) || session.client_reference_id || "";
       const uid = (session.metadata?.uid as string) || "";
       if (!paymentId || !uid) return;
@@ -2670,6 +3104,11 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
       // a settled payment backwards.
       if (!payment || payment.status !== "pending") return;
       await updatePayment({ paymentId, uid, status: "failed", event: "checkout.session.expired" });
+      // Hand every held coupon back. Without this the reservation only lapses
+      // after its TTL, which for a single-use code means the person holding it
+      // is told "already used" for half an hour after walking away from a
+      // checkout they never completed.
+      await releaseCoupons(paymentId, "checkout.session.expired");
       return;
     }
 
@@ -2809,6 +3248,13 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         amount: gross,
         productId: (pi.metadata?.productId as string) || undefined,
       });
+      await settleCouponsForPurchase({
+        uid,
+        paymentId,
+        amount: gross,
+        currency: pi.currency ?? "",
+        itemLabel: purchaseLabel(kind),
+      });
 
       // Celebratory ping (#growth). Deduped on the paymentId so a webhook retry
       // (or the checkout.session.completed safety-net) can't double-post.
@@ -2835,6 +3281,7 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
       const uid = (pi.metadata?.uid as string) || "";
       if (!paymentId || !uid) return;
       await updatePayment({ paymentId, uid, status: "failed", event: "payment_intent.payment_failed" });
+      await releaseCoupons(paymentId, "payment_intent.payment_failed");
       return;
     }
 
@@ -2854,6 +3301,7 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
             console.warn("[stripe] referral clawback failed", err);
           });
           await campaignClawbackForRef(invoiceId);
+          await restoreMembershipCoupons(invoiceId);
         }
         return;
       }
@@ -2916,6 +3364,12 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         // purchase is the cheapest attack on a spend-refund campaign.
         await campaignClawbackForRef(paymentId);
       }
+      // Coupons go the OTHER way from referral and campaign clawback, and that
+      // asymmetry is deliberate. A reward paid out has to be taken back; a
+      // coupon use has to be given back. So this runs on partial refunds too and
+      // lets each coupon's own `refundPolicy` decide — the operator knows
+      // whether a make-good code should survive the refund it accompanied.
+      await restoreCouponsForRefund({ paymentRef: paymentId, isFullRefund: fullyRefunded });
       // A refunded print order may already be at (or past) the printer —
       // fulfillment isn't auto-cancelled, so a human must decide what to do.
       if (payment.kind === "order" && refunded > 0) {
