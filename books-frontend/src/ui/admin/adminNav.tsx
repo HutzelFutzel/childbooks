@@ -56,9 +56,9 @@ import {
 } from "lucide-react";
 import {
   ANALYSIS_GROUPS,
+  adminHref,
   CONFIG_GROUPS,
   MARKETING_GROUPS,
-  useAdminTab,
   type AdminSection,
   type AnalysisTabId,
   type CommunicationTabId,
@@ -149,7 +149,7 @@ export interface NavEntry {
   icon: ReactNode;
   sectionLabel: string;
   groupLabel?: string;
-  go: () => void;
+  href: string;
   /** The grant this entry needs to be reachable — omitted for owner-only entries. */
   key?: PermissionKey;
   /** True for entries only owners should ever see (the Permissions page itself). */
@@ -169,7 +169,7 @@ function buildNavIndex(): NavEntry[] {
         sectionLabel: "Configuration",
         groupLabel: group.label,
         key: `configuration.${tab}`,
-        go: () => useAdminTab.getState().openConfigTab(tab),
+        href: adminHref("configuration", tab),
       });
     }
   }
@@ -184,7 +184,7 @@ function buildNavIndex(): NavEntry[] {
         sectionLabel: "Analysis",
         groupLabel: group.label,
         key: `analysis.${tab}`,
-        go: () => useAdminTab.getState().openAnalysis(tab),
+        href: adminHref("analysis", tab),
       });
     }
   }
@@ -199,7 +199,7 @@ function buildNavIndex(): NavEntry[] {
         sectionLabel: "Marketing",
         groupLabel: group.label,
         key: `marketing.${tab}`,
-        go: () => useAdminTab.getState().openMarketingTab(tab),
+        href: adminHref("marketing", tab),
       });
     }
   }
@@ -211,7 +211,7 @@ function buildNavIndex(): NavEntry[] {
       icon: tab.icon,
       sectionLabel: "Communication",
       key: `communication.${tab.id}`,
-      go: () => useAdminTab.getState().openCommunicationTab(tab.id),
+      href: adminHref("communication", tab.id),
     });
   }
 
@@ -222,7 +222,7 @@ function buildNavIndex(): NavEntry[] {
       icon: tab.icon,
       sectionLabel: "Legal & Privacy",
       key: `legal.${tab.id}`,
-      go: () => useAdminTab.getState().openLegalTab(tab.id),
+      href: adminHref("legal", tab.id),
     });
   }
 
@@ -232,7 +232,7 @@ function buildNavIndex(): NavEntry[] {
     icon: <KeyRound className="size-4" />,
     sectionLabel: "Permissions",
     ownerOnly: true,
-    go: () => useAdminTab.getState().setSection("permissions"),
+    href: adminHref("permissions"),
   });
 
   return entries;

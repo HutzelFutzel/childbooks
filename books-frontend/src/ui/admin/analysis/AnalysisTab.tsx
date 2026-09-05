@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { AlertTriangle, Download, Loader2, RefreshCw } from "lucide-react";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
 import type {
@@ -13,7 +14,7 @@ import { useAdminAnalytics } from "../../../state/adminAnalyticsStore";
 import { useAdminFinance } from "../../../state/adminFinanceStore";
 import { useAdminMarket } from "../../../state/adminMarketStore";
 import { useAdminPayments } from "../../../state/adminPaymentsStore";
-import { ANALYSIS_GROUPS, useAdminTab, type AnalysisGroupId, type AnalysisTabId } from "../adminTabStore";
+import { ANALYSIS_GROUPS, adminHref, useAdminTab, type AnalysisTabId } from "../adminTabStore";
 import { ANALYSIS_TAB_META } from "../adminNav";
 import { filterReadableTabs, SectionGate } from "../AccessGate";
 import { useAdminAccess } from "../../../state/adminAccessStore";
@@ -106,7 +107,6 @@ export function AnalysisTab() {
   const section = useAdminTab((s) => s.analysisTab);
   const setSection = useAdminTab((s) => s.setAnalysisTab);
   const group = useAdminTab((s) => s.analysisGroup);
-  const setGroup = useAdminTab((s) => s.setAnalysisGroup);
   const canRead = useAdminAccess((s) => s.canRead);
   // `canRead` is a stable zustand action reference for the whole session, so
   // memoizing on it alone would freeze this list at whatever it returned on
@@ -177,10 +177,10 @@ export function AnalysisTab() {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-2">
           {visibleGroups.map((g) => (
-            <button
+            <Link
               key={g.id}
-              type="button"
-              onClick={() => setGroup(g.id as AnalysisGroupId)}
+              href={adminHref("analysis", g.tabs[0] ?? "users")}
+              aria-current={group === g.id ? "location" : undefined}
               className={
                 "rounded-full px-3 py-1.5 text-xs font-semibold transition-colors " +
                 (group === g.id
@@ -189,7 +189,7 @@ export function AnalysisTab() {
               }
             >
               {g.label}
-            </button>
+            </Link>
           ))}
         </div>
         <MarketPicker
@@ -207,6 +207,7 @@ export function AnalysisTab() {
           id,
           label: ANALYSIS_TAB_META[id].label,
           icon: ANALYSIS_TAB_META[id].icon,
+          href: adminHref("analysis", id),
         }))}
         value={section}
         onChange={(id) => setSection(id as Section)}

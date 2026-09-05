@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { usePathname, useRouter } from "next/navigation";
 import { ArrowLeft, ChevronRight, Eye, FlaskConical, Loader2, Rocket, Search, ShieldAlert } from "lucide-react";
 import { Button } from "@/ui/components/Button";
 import { Tabs } from "@/ui/components/Tabs";
@@ -25,15 +26,16 @@ import { filterReadableTabs, SectionGate } from "./AccessGate";
 import type { PermissionKey } from "@/core/config/permissions";
 import {
   useAdminTab,
+  adminHref,
+  adminSectionHref,
+  canonicalAdminPath,
   ANALYSIS_GROUPS,
   CONFIG_GROUPS,
   MARKETING_GROUPS,
   type AdminSection,
-  type ConfigGroupId,
   type ConfigTabId,
   type CommunicationTabId,
   type LegalTabId,
-  type MarketingGroupId,
   type MarketingTabId,
 } from "./adminTabStore";
 import {
@@ -43,6 +45,7 @@ import {
   MARKETING_TAB_META,
   COMMUNICATION_TABS,
   LEGAL_TABS,
+  NAV_INDEX,
 } from "./adminNav";
 import { CommandPalette } from "./CommandPalette";
 import { ModelConfigTab } from "./tabs/ModelConfigTab";
@@ -167,6 +170,7 @@ function BillingEnvBadge({ onOpenSystemHealth }: { onOpenSystemHealth: () => voi
  */
 export default function AdminApp() {
   const router = useRouter();
+  const pathname = usePathname();
   const initAuth = useAuthStore((s) => s.init);
   const ready = useAuthStore((s) => s.ready);
   const isAdmin = useAuthStore((s) => s.isAdmin);
@@ -175,11 +179,9 @@ export default function AdminApp() {
   const section = useAdminTab((s) => s.section);
   const setSection = useAdminTab((s) => s.setSection);
   const configGroup = useAdminTab((s) => s.configGroup);
-  const setConfigGroup = useAdminTab((s) => s.setConfigGroup);
   const configTab = useAdminTab((s) => s.configTab);
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
   const marketingGroup = useAdminTab((s) => s.marketingGroup);
-  const setMarketingGroup = useAdminTab((s) => s.setMarketingGroup);
   const marketingTab = useAdminTab((s) => s.marketingTab);
   const setMarketingTab = useAdminTab((s) => s.setMarketingTab);
   const communicationTab = useAdminTab((s) => s.communicationTab);
@@ -189,13 +191,13 @@ export default function AdminApp() {
   // Only needed here for the breadcrumb — AnalysisTab owns its own copies for
   // rendering its group pills.
   const analysisGroup = useAdminTab((s) => s.analysisGroup);
-  const setAnalysisGroup = useAdminTab((s) => s.setAnalysisGroup);
   const analysisTab = useAdminTab((s) => s.analysisTab);
   const ordersOpen = useAccountUiStore((s) => s.ordersOpen);
   const closeOrders = useAccountUiStore((s) => s.closeOrders);
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   const initAccess = useAdminAccess((s) => s.init);
+  const accessLoaded = useAdminAccess((s) => s.loaded);
   const canRead = useAdminAccess((s) => s.canRead);
   // `canRead` is a stable function reference for the whole session (it's a
   // zustand action, never reassigned), so memoizing on it alone would freeze
@@ -221,10 +223,41 @@ export default function AdminApp() {
     void initAccess();
   }, [isAdmin, subscribeConfig, subscribeAdminModelCosts, initAccess]);
 
+  useEffect(() => {
+    const canonical = canonicalAdminPath(pathname);
+    if (canonical !== pathname) router.replace(canonical);
+  }, [pathname, router]);
+
+  useEffect(() => {
+    if (!isAdmin || !accessLoaded) return;
+    const current = NAV_INDEX.find((entry) => entry.href === canonicalAdminPath(pathname));
+    const currentIsReachable =
+      current && (current.ownerOnly ? isOwnerAccess : !current.key || canRead(current.key));
+    if (currentIsReachable) return;
+
+    const fallback = NAV_INDEX.find((entry) =>
+      entry.ownerOnly ? isOwnerAccess : !entry.key || canRead(entry.key),
+    );
+    if (fallback && fallback.href !== pathname) router.replace(fallback.href);
+  }, [accessLoaded, canRead, isAdmin, isOwnerAccess, me, pathname, router, viewAsUid]);
+
   const active = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
-  // "Permissions" is never shown to a plain admin — the API refuses them too,
-  // but there's no reason to even show a link that 403s.
-  const visibleSections = SECTIONS.filter((s) => s.id !== "permissions" || isOwnerAccess);
+  const canReachEntry = (entry: (typeof NAV_INDEX)[number]) =>
+    entry.ownerOnly ? isOwnerAccess : !entry.key || canRead(entry.key);
+  // Hide sections with no readable destination and point each remaining
+  // section at its first permitted page, not necessarily its global default.
+  const visibleSections = SECTIONS.filter(
+    (candidate) =>
+      (candidate.id !== "permissions" || isOwnerAccess) &&
+      (!accessLoaded ||
+        NAV_INDEX.some(
+          (entry) => entry.id.startsWith(`${candidate.id}:`) && canReachEntry(entry),
+        )),
+  );
+  const hrefForSection = (target: AdminSection) =>
+    NAV_INDEX.find(
+      (entry) => entry.id.startsWith(`${target}:`) && canReachEntry(entry),
+    )?.href ?? adminSectionHref(target);
 
   const visibleConfigGroups = useMemo(
     () =>
@@ -239,6 +272,7 @@ export default function AdminApp() {
     id,
     label: CONFIG_TAB_META[id].label,
     icon: CONFIG_TAB_META[id].icon,
+    href: adminHref("configuration", id),
   }));
 
   const visibleMarketingGroups = useMemo(
@@ -256,6 +290,7 @@ export default function AdminApp() {
     id,
     label: MARKETING_TAB_META[id].label,
     icon: MARKETING_TAB_META[id].icon,
+    href: adminHref("marketing", id),
   }));
 
   const visibleCommunicationTabs = useMemo(
@@ -273,36 +308,45 @@ export default function AdminApp() {
   // scrolls out of the way once you're reading a tab's content. Segments with
   // an `onClick` jump back up a level (e.g. clicking the group name resets to
   // that group's first tab); the leaf segment is inert.
-  const breadcrumb: { label: string; onClick?: () => void }[] = (() => {
+  const breadcrumb: { label: string; href?: string }[] = (() => {
     switch (section) {
       case "configuration":
         return [
-          { label: "Configuration" },
-          { label: activeGroup.label, onClick: () => setConfigGroup(activeGroup.id) },
+          { label: "Configuration", href: adminHref("configuration") },
+          {
+            label: activeGroup.label,
+            href: adminHref("configuration", activeGroup.tabs[0] ?? "overview"),
+          },
           { label: CONFIG_TAB_META[configTab].label },
         ];
       case "analysis": {
         const group = ANALYSIS_GROUPS.find((g) => g.id === analysisGroup) ?? ANALYSIS_GROUPS[0];
         return [
-          { label: "Analysis" },
-          { label: group.label, onClick: () => setAnalysisGroup(group.id) },
+          { label: "Analysis", href: adminHref("analysis") },
+          {
+            label: group.label,
+            href: adminHref("analysis", group.tabs[0] ?? "users"),
+          },
           { label: ANALYSIS_TAB_META[analysisTab].label },
         ];
       }
       case "marketing":
         return [
-          { label: "Marketing" },
-          { label: activeMarketingGroup.label, onClick: () => setMarketingGroup(activeMarketingGroup.id) },
+          { label: "Marketing", href: adminHref("marketing") },
+          {
+            label: activeMarketingGroup.label,
+            href: adminHref("marketing", activeMarketingGroup.tabs[0] ?? "referrals"),
+          },
           { label: MARKETING_TAB_META[marketingTab].label },
         ];
       case "communication":
         return [
-          { label: "Communication" },
+          { label: "Communication", href: adminHref("communication") },
           { label: COMMUNICATION_TABS.find((t) => t.id === communicationTab)?.label ?? "" },
         ];
       case "legal":
         return [
-          { label: "Legal & Privacy" },
+          { label: "Legal & Privacy", href: adminHref("legal") },
           { label: LEGAL_TABS.find((t) => t.id === legalTab)?.label ?? "" },
         ];
       default:
@@ -324,10 +368,7 @@ export default function AdminApp() {
           <>
             {isAdmin && (
               <BillingEnvBadge
-                onOpenSystemHealth={() => {
-                  setSection("configuration");
-                  setConfigTab("system");
-                }}
+                onOpenSystemHealth={() => setConfigTab("system")}
               />
             )}
             <HelpButton />
@@ -374,9 +415,10 @@ export default function AdminApp() {
               </button>
               <nav className="space-y-1">
                 {visibleSections.map((s) => (
-                  <button
+                  <Link
                     key={s.id}
-                    onClick={() => setSection(s.id)}
+                    href={section === s.id ? canonicalAdminPath(pathname) : hrefForSection(s.id)}
+                    aria-current={section === s.id ? "page" : undefined}
                     className={cn(
                       "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
                       section === s.id
@@ -386,7 +428,7 @@ export default function AdminApp() {
                   >
                     {s.icon}
                     {s.label}
-                  </button>
+                  </Link>
                 ))}
               </nav>
             </aside>
@@ -395,7 +437,15 @@ export default function AdminApp() {
               {/* Mobile section switcher */}
               <div className="sticky top-0 z-10 border-b border-ink-100 bg-canvas/80 px-5 py-2 backdrop-blur sm:hidden">
                 <Tabs
-                  items={visibleSections.map((s) => ({ id: s.id, label: s.label, icon: s.icon }))}
+                  items={visibleSections.map((s) => ({
+                    id: s.id,
+                    label: s.label,
+                    icon: s.icon,
+                    href:
+                      section === s.id
+                        ? canonicalAdminPath(pathname)
+                        : hrefForSection(s.id),
+                  }))}
                   value={section}
                   onChange={(id) => setSection(id as AdminSection)}
                 />
@@ -406,14 +456,13 @@ export default function AdminApp() {
                   {breadcrumb.map((crumb, i) => (
                     <span key={i} className="flex items-center gap-1">
                       {i > 0 && <ChevronRight className="size-3 shrink-0" />}
-                      {crumb.onClick ? (
-                        <button
-                          type="button"
-                          onClick={crumb.onClick}
+                      {crumb.href && i !== breadcrumb.length - 1 ? (
+                        <Link
+                          href={crumb.href}
                           className="rounded px-0.5 transition-colors hover:text-ink-600 hover:underline"
                         >
                           {crumb.label}
-                        </button>
+                        </Link>
                       ) : (
                         <span className={i === breadcrumb.length - 1 ? "text-ink-600" : undefined}>
                           {crumb.label}
@@ -447,10 +496,13 @@ export default function AdminApp() {
                   <div className="space-y-5">
                     <div className="flex flex-wrap gap-2">
                       {visibleConfigGroups.map((group) => (
-                        <button
+                        <Link
                           key={group.id}
-                          type="button"
-                          onClick={() => setConfigGroup(group.id as ConfigGroupId)}
+                          href={adminHref(
+                            "configuration",
+                            group.tabs[0] as ConfigTabId,
+                          )}
+                          aria-current={configGroup === group.id ? "location" : undefined}
                           className={cn(
                             "rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
                             configGroup === group.id
@@ -459,7 +511,7 @@ export default function AdminApp() {
                           )}
                         >
                           {group.label}
-                        </button>
+                        </Link>
                       ))}
                     </div>
                     <p className="text-xs text-ink-400">{activeGroup.description}</p>
@@ -480,10 +532,13 @@ export default function AdminApp() {
                   <div className="space-y-5">
                     <div className="flex flex-wrap gap-2">
                       {visibleMarketingGroups.map((group) => (
-                        <button
+                        <Link
                           key={group.id}
-                          type="button"
-                          onClick={() => setMarketingGroup(group.id as MarketingGroupId)}
+                          href={adminHref(
+                            "marketing",
+                            group.tabs[0] as MarketingTabId,
+                          )}
+                          aria-current={marketingGroup === group.id ? "location" : undefined}
                           className={cn(
                             "rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
                             marketingGroup === group.id
@@ -492,7 +547,7 @@ export default function AdminApp() {
                           )}
                         >
                           {group.label}
-                        </button>
+                        </Link>
                       ))}
                     </div>
                     <p className="text-xs text-ink-400">{activeMarketingGroup.description}</p>
@@ -517,7 +572,10 @@ export default function AdminApp() {
                 {section === "communication" && (
                   <div className="space-y-6">
                     <Tabs
-                      items={visibleCommunicationTabs}
+                      items={visibleCommunicationTabs.map((tab) => ({
+                        ...tab,
+                        href: adminHref("communication", tab.id),
+                      }))}
                       value={communicationTab}
                       onChange={(id) => setCommunicationTab(id as CommunicationTabId)}
                     />
@@ -531,7 +589,10 @@ export default function AdminApp() {
                 {section === "legal" && (
                   <div className="space-y-6">
                     <Tabs
-                      items={visibleLegalTabs}
+                      items={visibleLegalTabs.map((tab) => ({
+                        ...tab,
+                        href: adminHref("legal", tab.id),
+                      }))}
                       value={legalTab}
                       onChange={(id) => setLegalTab(id as LegalTabId)}
                     />

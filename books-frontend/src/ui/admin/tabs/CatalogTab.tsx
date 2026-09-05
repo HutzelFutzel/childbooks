@@ -1,8 +1,9 @@
 "use client";
 
 import { BookOpen, Sparkles, Tablet } from "lucide-react";
+import Link from "next/link";
 import { cn } from "../../lib/cn";
-import { useAdminTab, type CatalogSegment } from "../adminTabStore";
+import { adminHref, useAdminTab, type CatalogSegment } from "../adminTabStore";
 import { ProductsTab } from "./ProductsTab";
 import { EbookTab } from "./EbookTab";
 import { PacksTab } from "./PacksTab";
@@ -21,16 +22,17 @@ const SEGMENTS: { id: CatalogSegment; label: string; icon: React.ReactNode }[] =
  */
 export function CatalogTab() {
   const segment = useAdminTab((s) => s.catalogSegment);
-  const setSegment = useAdminTab((s) => s.setCatalogSegment);
 
   return (
     <div className="space-y-5">
       <div className="inline-flex flex-wrap gap-1 rounded-xl bg-ink-100/70 p-1">
         {SEGMENTS.map((s) => (
-          <button
+          <Link
             key={s.id}
-            type="button"
-            onClick={() => setSegment(s.id)}
+            href={`${adminHref("configuration", "catalog")}${
+              s.id === "print" ? "" : `?segment=${s.id}`
+            }`}
+            aria-current={segment === s.id ? "page" : undefined}
             className={cn(
               "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium transition",
               segment === s.id
@@ -40,7 +42,7 @@ export function CatalogTab() {
           >
             {s.icon}
             {s.label}
-          </button>
+          </Link>
         ))}
       </div>
 

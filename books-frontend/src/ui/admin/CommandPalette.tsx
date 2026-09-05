@@ -7,6 +7,8 @@
  * instead of hunting through Marketing's tab strip. See `adminNav.tsx`.
  */
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Search } from "lucide-react";
 import { Modal } from "../components/Modal";
 import { NAV_INDEX, type NavEntry } from "./adminNav";
@@ -19,6 +21,7 @@ export function CommandPalette({
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
+  const router = useRouter();
   const [query, setQuery] = useState("");
   const [highlighted, setHighlighted] = useState(0);
   const canRead = useAdminAccess((s) => s.canRead);
@@ -61,7 +64,7 @@ export function CommandPalette({
   }, [results.length]);
 
   const select = (entry: NavEntry) => {
-    entry.go();
+    router.push(entry.href);
     onOpenChange(false);
   };
 
@@ -102,10 +105,10 @@ export function CommandPalette({
           <p className="px-2 py-6 text-center text-sm text-ink-400">Nothing matches &ldquo;{query}&rdquo;.</p>
         ) : (
           results.map((entry, i) => (
-            <button
+            <Link
               key={entry.id}
-              type="button"
-              onClick={() => select(entry)}
+              href={entry.href}
+              onClick={() => onOpenChange(false)}
               onMouseEnter={() => setHighlighted(i)}
               className={`flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors ${
                 i === highlighted ? "bg-brand-50 text-brand-700" : "text-ink-700 hover:bg-ink-50"
@@ -125,7 +128,7 @@ export function CommandPalette({
                   {entry.groupLabel ? ` · ${entry.groupLabel}` : ""}
                 </span>
               </span>
-            </button>
+            </Link>
           ))
         )}
       </div>

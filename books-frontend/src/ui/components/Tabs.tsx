@@ -1,5 +1,6 @@
 import { motion } from "framer-motion";
 import { useId } from "react";
+import Link from "next/link";
 import { cn } from "../lib/cn";
 import { spring } from "../lib/motion";
 
@@ -7,6 +8,8 @@ export interface TabItem {
   id: string;
   label: string;
   icon?: React.ReactNode;
+  /** When present, the tab is real navigation and participates in browser history. */
+  href?: string;
 }
 
 export interface TabsProps {
@@ -34,16 +37,13 @@ export function Tabs({ items, value, onChange, className, fullWidth }: TabsProps
     >
       {items.map((item) => {
         const active = item.id === value;
-        return (
-          <button
-            key={item.id}
-            onClick={() => onChange(item.id)}
-            className={cn(
-              "relative inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium whitespace-nowrap transition-colors",
-              fullWidth ? "min-w-0 flex-1 justify-center px-2 text-xs sm:px-3.5 sm:text-sm" : "shrink-0",
-              active ? "text-ink-900" : "text-ink-500 hover:text-ink-700",
-            )}
-          >
+        const classNames = cn(
+          "relative inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-sm font-medium whitespace-nowrap transition-colors",
+          fullWidth ? "min-w-0 flex-1 justify-center px-2 text-xs sm:px-3.5 sm:text-sm" : "shrink-0",
+          active ? "text-ink-900" : "text-ink-500 hover:text-ink-700",
+        );
+        const content = (
+          <>
             {active && (
               <motion.span
                 layoutId={`tab-${layoutId}`}
@@ -55,6 +55,30 @@ export function Tabs({ items, value, onChange, className, fullWidth }: TabsProps
               {item.icon}
               <span className={fullWidth ? "truncate" : undefined}>{item.label}</span>
             </span>
+          </>
+        );
+
+        if (item.href) {
+          return (
+            <Link
+              key={item.id}
+              href={item.href}
+              aria-current={active ? "page" : undefined}
+              className={classNames}
+            >
+              {content}
+            </Link>
+          );
+        }
+
+        return (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => onChange(item.id)}
+            className={classNames}
+          >
+            {content}
           </button>
         );
       })}
