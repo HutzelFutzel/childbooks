@@ -48,6 +48,15 @@ import { cn } from "../lib/cn";
 const MAX_RECIPIENTS = 10;
 
 export function InviteFriendsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <Modal open={open} onClose={onClose} title="Invite friends" size="max-w-2xl">
+      <InviteFriendsContent active={open} />
+    </Modal>
+  );
+}
+
+/** Route-friendly referral body shared with the legacy modal. */
+export function InviteFriendsContent({ active = true }: { active?: boolean }) {
   const [overview, setOverview] = useState<ReferralOverview | null>(null);
   const [loading, setLoading] = useState(false);
   const [emails, setEmails] = useState("");
@@ -56,13 +65,13 @@ export function InviteFriendsDialog({ open, onClose }: { open: boolean; onClose:
   const [results, setResults] = useState<SendResult[] | null>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!active) return;
     setLoading(true);
     fetchReferralOverview()
       .then(setOverview)
       .catch(() => setOverview(null))
       .finally(() => setLoading(false));
-  }, [open]);
+  }, [active]);
 
   const addresses = parseEmails(emails);
   const tooMany = addresses.length > MAX_RECIPIENTS;
@@ -100,111 +109,109 @@ export function InviteFriendsDialog({ open, onClose }: { open: boolean; onClose:
   };
 
   return (
-    <Modal open={open} onClose={onClose} title="Invite friends" size="max-w-2xl">
-      {loading && !overview ? (
-        <div className="flex items-center justify-center gap-2 py-12 text-ink-500">
-          <Loader2 className="size-5 animate-spin" /> Loading…
-        </div>
-      ) : !overview ? (
-        <p className="py-10 text-center text-sm text-ink-500">
-          Invitations aren't available right now. Please try again later.
-        </p>
-      ) : (
-        <div className="-mx-1 max-h-[72vh] space-y-5 overflow-y-auto px-1 py-1">
-          <Offer overview={overview} />
+    loading && !overview ? (
+      <div className="flex items-center justify-center gap-2 py-12 text-ink-500">
+        <Loader2 className="size-5 animate-spin" /> Loading…
+      </div>
+    ) : !overview ? (
+      <p className="py-10 text-center text-sm text-ink-500">
+        Invitations aren't available right now. Please try again later.
+      </p>
+    ) : (
+      <div className="space-y-5">
+        <Offer overview={overview} />
 
-          {overview.enabled && (
-            <>
-              <section className="space-y-2">
-                <SectionTitle icon={<Mail className="size-3.5" />}>Invite by email</SectionTitle>
-                {overview.canInvite ? (
-                  <>
-                    <Input
-                      value={emails}
-                      onChange={(e) => setEmails(e.target.value)}
-                      placeholder="friend@example.com, another@example.com"
-                      autoComplete="off"
-                    />
-                    <Textarea
-                      value={personalMessage}
-                      onChange={(e) => setPersonalMessage(e.target.value.slice(0, 500))}
-                      placeholder="Add a note (optional) — invitations with a personal line get opened far more often."
-                      rows={2}
-                    />
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="text-xs text-ink-500">
-                        {overview.invitationsLeftToday > 0
-                          ? `${overview.invitationsLeftToday} invitation${
-                              overview.invitationsLeftToday === 1 ? "" : "s"
-                            } left today`
-                          : "You've used today's invitations — your link keeps working."}
-                      </p>
-                      <Button
-                        size="sm"
-                        loading={sending}
-                        disabled={addresses.length === 0 || tooMany || overview.invitationsLeftToday === 0}
-                        leftIcon={<Mail className="size-4" />}
-                        onClick={() => void send()}
-                      >
-                        {addresses.length > 1 ? `Send ${addresses.length} invitations` : "Send invitation"}
-                      </Button>
-                    </div>
-                    {tooMany && (
-                      <p className="text-xs text-red-600">
-                        Up to {MAX_RECIPIENTS} addresses at a time, please.
-                      </p>
-                    )}
-                    {results && <SendResults results={results} />}
-                  </>
-                ) : (
-                  <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
-                    {overview.cannotInviteReason ?? "Invitations aren't available for your account yet."}
-                  </p>
-                )}
-              </section>
-
-              <section className="space-y-2">
-                <SectionTitle icon={<Link2 className="size-3.5" />}>Or share your link</SectionTitle>
-                <button
-                  type="button"
-                  onClick={copyLink}
-                  className="flex w-full items-center justify-between gap-3 rounded-xl bg-ink-50/70 px-3 py-2.5 text-left transition hover:bg-ink-100"
-                >
-                  <span className="truncate font-mono text-xs text-ink-600">{overview.shareUrl}</span>
-                  <span className="flex shrink-0 items-center gap-1 text-xs font-semibold text-brand-700">
-                    <Copy className="size-3.5" /> Copy
-                  </span>
-                </button>
-              </section>
-            </>
-          )}
-
-          {overview.invitations.length > 0 && (
+        {overview.enabled && (
+          <>
             <section className="space-y-2">
-              <SectionTitle icon={<Users className="size-3.5" />}>
-                Your invitations ({overview.invitations.length})
-              </SectionTitle>
-              <div className="space-y-2">
-                {overview.invitations.map((inv) => (
-                  <InvitationRow key={inv.id} invitation={inv} />
-                ))}
-              </div>
+              <SectionTitle icon={<Mail className="size-3.5" />}>Invite by email</SectionTitle>
+              {overview.canInvite ? (
+                <>
+                  <Input
+                    value={emails}
+                    onChange={(e) => setEmails(e.target.value)}
+                    placeholder="friend@example.com, another@example.com"
+                    autoComplete="off"
+                  />
+                  <Textarea
+                    value={personalMessage}
+                    onChange={(e) => setPersonalMessage(e.target.value.slice(0, 500))}
+                    placeholder="Add a note (optional) — invitations with a personal line get opened far more often."
+                    rows={2}
+                  />
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="text-xs text-ink-500">
+                      {overview.invitationsLeftToday > 0
+                        ? `${overview.invitationsLeftToday} invitation${
+                            overview.invitationsLeftToday === 1 ? "" : "s"
+                          } left today`
+                        : "You've used today's invitations — your link keeps working."}
+                    </p>
+                    <Button
+                      size="sm"
+                      loading={sending}
+                      disabled={addresses.length === 0 || tooMany || overview.invitationsLeftToday === 0}
+                      leftIcon={<Mail className="size-4" />}
+                      onClick={() => void send()}
+                    >
+                      {addresses.length > 1 ? `Send ${addresses.length} invitations` : "Send invitation"}
+                    </Button>
+                  </div>
+                  {tooMany && (
+                    <p className="text-xs text-red-600">
+                      Up to {MAX_RECIPIENTS} addresses at a time, please.
+                    </p>
+                  )}
+                  {results && <SendResults results={results} />}
+                </>
+              ) : (
+                <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  {overview.cannotInviteReason ?? "Invitations aren't available for your account yet."}
+                </p>
+              )}
             </section>
-          )}
 
-          {overview.rewards.length > 0 && (
             <section className="space-y-2">
-              <SectionTitle icon={<Gift className="size-3.5" />}>Your rewards</SectionTitle>
-              <div className="space-y-2">
-                {overview.rewards.map((reward) => (
-                  <RewardRow key={reward.id} reward={reward} />
-                ))}
-              </div>
+              <SectionTitle icon={<Link2 className="size-3.5" />}>Or share your link</SectionTitle>
+              <button
+                type="button"
+                onClick={copyLink}
+                className="flex w-full items-center justify-between gap-3 rounded-xl bg-ink-50/70 px-3 py-2.5 text-left transition hover:bg-ink-100"
+              >
+                <span className="truncate font-mono text-xs text-ink-600">{overview.shareUrl}</span>
+                <span className="flex shrink-0 items-center gap-1 text-xs font-semibold text-brand-700">
+                  <Copy className="size-3.5" /> Copy
+                </span>
+              </button>
             </section>
-          )}
-        </div>
-      )}
-    </Modal>
+          </>
+        )}
+
+        {overview.invitations.length > 0 && (
+          <section className="space-y-2">
+            <SectionTitle icon={<Users className="size-3.5" />}>
+              Your invitations ({overview.invitations.length})
+            </SectionTitle>
+            <div className="space-y-2">
+              {overview.invitations.map((inv) => (
+                <InvitationRow key={inv.id} invitation={inv} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {overview.rewards.length > 0 && (
+          <section className="space-y-2">
+            <SectionTitle icon={<Gift className="size-3.5" />}>Your rewards</SectionTitle>
+            <div className="space-y-2">
+              {overview.rewards.map((reward) => (
+                <RewardRow key={reward.id} reward={reward} />
+              ))}
+            </div>
+          </section>
+        )}
+      </div>
+    )
   );
 }
 
@@ -227,7 +234,7 @@ function Offer({ overview }: { overview: ReferralOverview }) {
     );
   }
   return (
-    <div className="rounded-2xl bg-gradient-to-br from-brand-50 to-emerald-50 p-4">
+    <div className="rounded-2xl bg-linear-to-br from-brand-50 to-emerald-50 p-4">
       <h3 className="text-base font-semibold text-ink-800">{overview.headline}</h3>
       <p className="mt-1 text-sm text-ink-600">{overview.subline}</p>
       <div className="mt-3 grid gap-2 sm:grid-cols-2">

@@ -38,40 +38,47 @@ const TYPE_LABEL: Record<string, string> = {
 };
 
 export function DownloadsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <Modal open={open} onClose={onClose} title="Your downloads" size="max-w-2xl">
+      <DownloadsContent active={open} />
+    </Modal>
+  );
+}
+
+/** Route-friendly downloads body shared with the legacy modal. */
+export function DownloadsContent({ active = true }: { active?: boolean }) {
   const downloads = useDownloadsStore((s) => s.downloads);
   const loading = useDownloadsStore((s) => s.loading);
 
   // Clear the "new" badge when the user actually looks at the list. The backend
   // stamps seenAt; the live subscription reflects it back into the store.
   useEffect(() => {
-    if (open) void markDownloadsSeen();
-  }, [open]);
+    if (active) void markDownloadsSeen();
+  }, [active]);
 
   return (
-    <Modal open={open} onClose={onClose} title="Your downloads" size="max-w-2xl">
-      {loading ? (
-        <div className="flex items-center justify-center gap-2 py-12 text-ink-500">
-          <Loader2 className="size-5 animate-spin" /> Loading your downloads…
-        </div>
-      ) : downloads.length === 0 ? (
-        <div className="flex flex-col items-center gap-2 py-12 text-center">
-          <span className="flex size-12 items-center justify-center rounded-2xl bg-brand-50 text-brand-500">
-            <Download className="size-6" />
-          </span>
-          <p className="text-sm font-medium text-ink-700">No downloads yet</p>
-          <p className="max-w-sm text-sm text-ink-500">
-            When you buy the digital edition of a book it'll appear here to download anytime, on any
-            device.
-          </p>
-        </div>
-      ) : (
-        <div className="-mx-1 max-h-[68vh] space-y-3 overflow-y-auto px-1 py-1">
-          {downloads.map((d) => (
-            <DownloadCard key={d.id} download={d} />
-          ))}
-        </div>
-      )}
-    </Modal>
+    loading ? (
+      <div className="flex items-center justify-center gap-2 py-12 text-ink-500">
+        <Loader2 className="size-5 animate-spin" /> Loading your downloads…
+      </div>
+    ) : downloads.length === 0 ? (
+      <div className="flex flex-col items-center gap-2 py-12 text-center">
+        <span className="flex size-12 items-center justify-center rounded-2xl bg-brand-50 text-brand-500">
+          <Download className="size-6" />
+        </span>
+        <p className="text-sm font-medium text-ink-700">No downloads yet</p>
+        <p className="max-w-sm text-sm text-ink-500">
+          When you buy the digital edition of a book it'll appear here to download anytime, on any
+          device.
+        </p>
+      </div>
+    ) : (
+      <div className="space-y-3">
+        {downloads.map((d) => (
+          <DownloadCard key={d.id} download={d} />
+        ))}
+      </div>
+    )
   );
 }
 

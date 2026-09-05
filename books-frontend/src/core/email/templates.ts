@@ -324,13 +324,13 @@ export const RENDERERS: { [Id in keyof EmailTemplateVarsMap]: TemplateRenderer<I
             ctx.brand,
           )
         : "",
-      button("Invite someone else", `${ctx.brand.siteUrl}/studio?invite=1`, ctx.brand),
+      button("Invite someone else", `${ctx.brand.siteUrl}/account/invites`, ctx.brand),
     ]
       .filter(Boolean)
       .join("\n");
     const text = `${greeting(vars.name)}\n\n${vars.friendName ?? "Someone you invited"} accepted your invitation.${
       vars.benefit ? `\n${vars.benefit}${vars.pending ? ` — it lands after ${vars.pending}.` : "."}` : ""
-    }\n\nInvite someone else: ${ctx.brand.siteUrl}/studio?invite=1`;
+    }\n\nInvite someone else: ${ctx.brand.siteUrl}/account/invites`;
     return assemble(ctx, subject, "Your friend joined", body, text);
   },
 

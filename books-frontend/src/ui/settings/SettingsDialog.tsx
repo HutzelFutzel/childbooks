@@ -99,54 +99,62 @@ function SurveyPreference() {
 export function SettingsDialog() {
   const open = useAccountUiStore((s) => s.settingsOpen);
   const close = useAccountUiStore((s) => s.closeSettings);
+
+  return (
+    <Modal open={open} onClose={close} title="Settings" size="max-w-lg">
+      <SettingsContent onSignedOut={close} />
+    </Modal>
+  );
+}
+
+/** Route-friendly settings body shared with the legacy modal entry point. */
+export function SettingsContent({ onSignedOut }: { onSignedOut?: () => void }) {
   const user = useAuthStore((s) => s.user);
   const signOutUser = useAuthStore((s) => s.signOutUser);
   const tier = usePreferredImageTier();
   const profileLoaded = useProfileStore((s) => s.profileLoaded);
 
   return (
-    <Modal open={open} onClose={close} title="Settings" size="max-w-lg">
-      <div className="space-y-6">
-        <Section
-          icon={<ImageIcon className="size-4" />}
-          title="Image quality"
-          hint="Applies to every image you generate. You can switch anytime — even per image."
-        >
-          {profileLoaded && tier === null && (
-            <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
-              You haven&apos;t picked a default yet. Choose one below — you&apos;ll be able to change
-              it here or right on any generate button.
-            </p>
-          )}
-          <ImageTierPicker value={tier} onChange={(t) => void setPreferredImageTier(t)} />
-        </Section>
-
-        {user && !user.isAnonymous && <SurveyPreference />}
-
-        {user && !user.isAnonymous && (
-          <Section icon={<UserIcon className="size-4" />} title="Account">
-            <div className="flex items-center justify-between gap-3 rounded-xl bg-ink-50/60 px-3 py-2.5">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-ink-800">{userLabel(user)}</p>
-                {userSecondaryLine(user) && (
-                  <p className="truncate text-xs text-ink-500">{userSecondaryLine(user)}</p>
-                )}
-              </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                leftIcon={<LogOut className="size-4" />}
-                onClick={() => {
-                  close();
-                  void signOutUser();
-                }}
-              >
-                Sign out
-              </Button>
-            </div>
-          </Section>
+    <div className="space-y-6">
+      <Section
+        icon={<ImageIcon className="size-4" />}
+        title="Image quality"
+        hint="Applies to every image you generate. You can switch anytime — even per image."
+      >
+        {profileLoaded && tier === null && (
+          <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
+            You haven&apos;t picked a default yet. Choose one below — you&apos;ll be able to change
+            it here or right on any generate button.
+          </p>
         )}
-      </div>
-    </Modal>
+        <ImageTierPicker value={tier} onChange={(t) => void setPreferredImageTier(t)} />
+      </Section>
+
+      {user && !user.isAnonymous && <SurveyPreference />}
+
+      {user && !user.isAnonymous && (
+        <Section icon={<UserIcon className="size-4" />} title="Account">
+          <div className="flex items-center justify-between gap-3 rounded-xl bg-ink-50/60 px-3 py-2.5">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-ink-800">{userLabel(user)}</p>
+              {userSecondaryLine(user) && (
+                <p className="truncate text-xs text-ink-500">{userSecondaryLine(user)}</p>
+              )}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              leftIcon={<LogOut className="size-4" />}
+              onClick={() => {
+                onSignedOut?.();
+                void signOutUser();
+              }}
+            >
+              Sign out
+            </Button>
+          </div>
+        </Section>
+      )}
+    </div>
   );
 }

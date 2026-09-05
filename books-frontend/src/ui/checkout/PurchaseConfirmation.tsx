@@ -171,8 +171,8 @@ export function PurchaseConfirmation() {
 
 /** Pride-moment invite CTA — the highest-converting placement for the program. */
 function InviteAfterPurchase({ onInvite }: { onInvite: () => void }) {
+  const router = useRouter();
   const referral = useAppConfigStore((s) => s.referral);
-  const openInvite = useAccountUiStore((s) => s.openInvite);
   if (!referral.enabled) return null;
   const teaser = inviteTeaser(freezeTerms(referral));
   return (
@@ -180,7 +180,7 @@ function InviteAfterPurchase({ onInvite }: { onInvite: () => void }) {
       type="button"
       onClick={() => {
         onInvite();
-        openInvite();
+        router.push("/account/invites");
       }}
       className="mt-6 flex w-full items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50/80 px-4 py-3 text-left transition hover:bg-emerald-50"
     >

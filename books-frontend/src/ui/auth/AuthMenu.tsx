@@ -12,11 +12,10 @@ import {
   Package,
   Settings,
   Shield,
+  Sparkles,
   Users,
 } from "lucide-react";
 import { useAuthStore } from "../../state/authStore";
-import { useAccountUiStore } from "../../state/accountUiStore";
-import { useBillingUiStore } from "../../state/billingUiStore";
 import { useOrdersStore } from "../../state/ordersStore";
 import { unseenDownloadCount, useDownloadsStore } from "../../state/downloadsStore";
 import { useConsentStore } from "../../state/consentStore";
@@ -42,13 +41,8 @@ export function AuthMenu() {
   const isAdmin = useAuthStore((s) => s.isAdmin);
   const signOutUser = useAuthStore((s) => s.signOutUser);
   const openAuthDialog = useAuthStore((s) => s.openAuthDialog);
-  const openSettings = useAccountUiStore((s) => s.openSettings);
-  const openOrders = useAccountUiStore((s) => s.openOrders);
-  const openDownloads = useAccountUiStore((s) => s.openDownloads);
-  const openInvite = useAccountUiStore((s) => s.openInvite);
   const accessLevel = useAuthStore((s) => s.accessLevel);
   const referralEnabled = useAppConfigStore((s) => s.referral.enabled);
-  const openPlans = useBillingUiStore((s) => s.openPlans);
   const openCookiePreferences = useConsentStore((s) => s.openPreferences);
   const legal = useAppConfigStore((s) => s.legal);
   const cookieEnabled = useAppConfigStore((s) => s.cookieConfig.enabled);
@@ -88,26 +82,30 @@ export function AuthMenu() {
 
           <div className="py-1">
             <MenuSectionLabel>Account</MenuSectionLabel>
-            <MenuItem icon={<Settings className="size-4" />} label="Settings" onClick={() => { close(); openSettings(); }} />
-            <MenuItem icon={<CreditCard className="size-4" />} label="Plans" onClick={() => { close(); openPlans(); }} />
+            <MenuItem icon={<Settings className="size-4" />} label="Settings" href="/account/settings" onClick={close} />
+            <MenuItem icon={<Sparkles className="size-4" />} label="Sparks" href="/account/sparks" onClick={close} />
+            <MenuItem icon={<CreditCard className="size-4" />} label="Membership" href="/account/membership" onClick={close} />
             <MenuItem
               icon={<Package className="size-4" />}
               label="Orders"
               badge={ordersNeedAttention}
-              onClick={() => { close(); openOrders(); }}
+              href="/account/orders"
+              onClick={close}
             />
             <MenuItem
               icon={<Download className="size-4" />}
               label="Downloads"
               badge={unseenDownloads > 0}
               count={unseenDownloads}
-              onClick={() => { close(); openDownloads(); }}
+              href="/account/downloads"
+              onClick={close}
             />
             {referralEnabled && accessLevel !== "guest" && (
               <MenuItem
                 icon={<Users className="size-4" />}
                 label="Invite friends"
-                onClick={() => { close(); openInvite(); }}
+                href="/account/invites"
+                onClick={close}
               />
             )}
           </div>

@@ -1,15 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Sparkles, Plus, ArrowDownRight, ArrowUpRight, Gift, Copy, Loader2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Modal } from "../components/Modal";
+import { Popover } from "../components/Popover";
 import { Button } from "../components/Button";
 import { Input } from "../components/Input";
 import { Skeleton } from "../components/Skeleton";
 import { useSparksStore } from "../../state/sparksStore";
 import { useSparksUiStore } from "../../state/sparksUiStore";
-import { useBillingUiStore } from "../../state/billingUiStore";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useAuthStore } from "../../state/authStore";
 import {
@@ -20,7 +22,6 @@ import {
   type SparkGiftSummary,
 } from "../../platform/payments";
 import { fetchReferralOverview, type ReferralOverview } from "../../platform/referrals";
-import { useAccountUiStore } from "../../state/accountUiStore";
 import { packTotalSparks } from "../../core/config/sparks";
 import { fmtMoney } from "../admin/tabs/products/parts";
 import { useImageActionRange } from "./SparkCost";
@@ -33,6 +34,7 @@ import { OffersBlock } from "./OffersBlock";
  * automatically and pre-suggest a pack. Only rendered when the economy is on.
  */
 export function SparksBadge() {
+  const router = useRouter();
   const balance = useSparksStore((s) => s.balance);
   const balanceLoading = useSparksStore((s) => s.loading);
   const ledger = useSparksStore((s) => s.ledger);
@@ -42,7 +44,6 @@ export function SparksBadge() {
   const needed = useSparksUiStore((s) => s.needed);
   const openWallet = useSparksUiStore((s) => s.openWallet);
   const closeWallet = useSparksUiStore((s) => s.closeWallet);
-  const openPlans = useBillingUiStore((s) => s.openPlans);
   const hasPaidPlans = useAppConfigStore((s) =>
     s.plans.plans.some((p) => p.status === "active" && !p.isFree && Object.keys(p.prices).length > 0),
   );
@@ -121,26 +122,55 @@ export function SparksBadge() {
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => openWallet()}
-        // Quiet by default, loud only when it matters: the balance stays a
-        // neutral, low-contrast pill until it can't cover the next render, and
-        // only then turns amber.
-        className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm ring-1 ring-inset transition ${
-          low
-            ? "bg-amber-50 font-semibold text-amber-700 ring-amber-200 hover:bg-amber-100"
-            : "bg-white/60 font-medium text-ink-500 ring-ink-200/70 hover:bg-white hover:text-ink-700"
-        }`}
-        title="Your Sparks"
+      <Popover
+        align="end"
+        panelClassName="w-72 p-0 overflow-hidden"
+        trigger={
+          <span
+            // Quiet by default, loud only when it matters: the balance stays a
+            // neutral, low-contrast pill until it can't cover the next render.
+            className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm ring-1 ring-inset transition ${
+              low
+                ? "bg-amber-50 font-semibold text-amber-700 ring-amber-200 group-hover:bg-amber-100"
+                : "bg-white/60 font-medium text-ink-500 ring-ink-200/70 group-hover:bg-white group-hover:text-ink-700"
+            }`}
+            title="Your Sparks"
+          >
+            <span className="sr-only">Sparks balance:</span>
+            <Sparkles key={glintKey} className={glintKey > 0 ? "size-4 animate-glint" : "size-4"} />
+            {balanceLoading ? (
+              <Skeleton className="h-4 w-8" rounded="full" />
+            ) : (
+              balance.toLocaleString()
+            )}
+          </span>
+        }
       >
-        <Sparkles key={glintKey} className={glintKey > 0 ? "size-4 animate-glint" : "size-4"} />
-        {balanceLoading ? (
-          <Skeleton className="h-4 w-8" rounded="full" />
-        ) : (
-          balance.toLocaleString()
+        {(close) => (
+          <>
+            <div className="px-4 py-3.5">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Sparks balance</p>
+              <p className="mt-1 flex items-center gap-2 font-display text-2xl font-bold text-ink-900">
+                <Sparkles className="size-5 text-magic-500" />
+                {balanceLoading ? "—" : balance.toLocaleString()}
+              </p>
+              <p className="mt-1 text-xs leading-relaxed text-ink-500">
+                Sparks power image generation. Story and text steps stay free.
+              </p>
+              {outOf && <p className="mt-2 text-xs font-medium text-amber-700">Top up to keep illustrating.</p>}
+              {runningLow && <p className="mt-2 text-xs font-medium text-amber-700">Running low for another page.</p>}
+            </div>
+            <Link
+              href="/account/sparks"
+              onClick={close}
+              className="flex items-center justify-center gap-1.5 border-t border-ink-100 bg-ink-50/70 px-4 py-2.5 text-xs font-semibold text-brand-700 transition hover:bg-brand-50"
+            >
+              Manage Sparks
+              <span aria-hidden>→</span>
+            </Link>
+          </>
         )}
-      </button>
+      </Popover>
 
       <Modal open={walletOpen} onClose={closeWallet} title="Your Sparks" size="max-w-md">
         <div className="space-y-4">
@@ -274,7 +304,7 @@ export function SparksBadge() {
               type="button"
               onClick={() => {
                 closeWallet();
-                openPlans();
+                router.push("/account/membership");
               }}
               className="flex w-full items-center justify-center gap-1.5 rounded-lg bg-brand-50 py-2 text-xs font-medium text-brand-700 transition hover:bg-brand-100"
             >
@@ -319,12 +349,17 @@ export function SparksBadge() {
  * opens; failures degrade to just the redeemer.
  */
 function GiftsAndInvites({ open }: { open: boolean }) {
+  const router = useRouter();
   const [code, setCode] = useState("");
   const [claiming, setClaiming] = useState(false);
   const [referral, setReferral] = useState<ReferralOverview | null>(null);
   const [gifts, setGifts] = useState<SparkGiftSummary[]>([]);
   const [loadingExtras, setLoadingExtras] = useState(false);
-  const openInvite = useAccountUiStore((s) => s.openInvite);
+  const closeWallet = useSparksUiStore((s) => s.closeWallet);
+  const openInvite = () => {
+    closeWallet();
+    router.push("/account/invites");
+  };
 
   useEffect(() => {
     if (!open) return;

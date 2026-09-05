@@ -57,6 +57,16 @@ function planPerks(
 export function PlansDialog() {
   const open = useBillingUiStore((s) => s.plansOpen);
   const close = useBillingUiStore((s) => s.closePlans);
+
+  return (
+    <Modal open={open} onClose={close} title="Memberships" size="max-w-3xl">
+      <PlansContent />
+    </Modal>
+  );
+}
+
+/** Route-friendly memberships body shared with the legacy modal. */
+export function PlansContent() {
   const plans = useAppConfigStore((s) => s.plans.plans);
   const configLoaded = useAppConfigStore((s) => s.loaded);
   const baseCurrency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
@@ -105,8 +115,7 @@ export function PlansDialog() {
   };
 
   return (
-    <Modal open={open} onClose={close} title="Memberships" size="max-w-3xl">
-      <div className="space-y-4">
+    <div className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <p className="max-w-md text-xs leading-relaxed text-ink-500">
             Membership is for creating stories, not recurring book deliveries. Paid memberships
@@ -251,8 +260,7 @@ export function PlansDialog() {
             </Button>
           </div>
         )}
-      </div>
-    </Modal>
+    </div>
   );
 }
 

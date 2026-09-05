@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
-import { Menu, Shield, LogOut, Sparkles, X } from "lucide-react";
+import { Menu, Shield, LogOut, Settings, Sparkles, X } from "lucide-react";
 import { cn } from "../lib/cn";
 import { isDev } from "../../platform/runtime";
 import { useAuthStore } from "../../state/authStore";
@@ -160,6 +160,13 @@ export function Nav({ siteName, logoUrl }: { siteName: string; logoUrl?: string 
                 <div className="mt-1 flex flex-col gap-1 border-t border-ink-100 pt-2 sm:hidden">
                   {signedIn ? (
                     <>
+                      <Link
+                        href="/account/settings"
+                        onClick={() => setMenuOpen(false)}
+                        className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-ink-700 transition-colors hover:bg-ink-100/70"
+                      >
+                        <Settings className="size-4" /> Account settings
+                      </Link>
                       {isAdmin && (
                         <Link
                           href="/admin"

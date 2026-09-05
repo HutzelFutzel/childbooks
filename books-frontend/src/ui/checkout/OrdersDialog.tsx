@@ -51,6 +51,15 @@ function formatDate(ms: number | null): string {
 }
 
 export function OrdersDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <Modal open={open} onClose={onClose} title="Orders & payments" size="max-w-2xl">
+      <OrdersContent />
+    </Modal>
+  );
+}
+
+/** Route-friendly order and receipt history shared with the legacy modal. */
+export function OrdersContent() {
   const orders = useOrdersStore((s) => s.orders);
   const loading = useOrdersStore((s) => s.loading);
   const payments = usePaymentsStore((s) => s.payments);
@@ -69,7 +78,7 @@ export function OrdersDialog({ open, onClose }: { open: boolean; onClose: () => 
   }, []);
 
   return (
-    <Modal open={open} onClose={onClose} title="Orders & payments" size="max-w-2xl">
+    <>
       <div className="mb-4">
         <Tabs
           items={[
@@ -98,7 +107,7 @@ export function OrdersDialog({ open, onClose }: { open: boolean; onClose: () => 
             </p>
           </div>
         ) : (
-          <div className="-mx-1 max-h-[68vh] space-y-3 overflow-y-auto px-1 py-1">
+          <div className="space-y-3">
             {orders.map((order) => (
               <OrderCard key={order.id} order={order} productLabel={productLabel} />
             ))}
@@ -119,13 +128,13 @@ export function OrdersDialog({ open, onClose }: { open: boolean; onClose: () => 
           </p>
         </div>
       ) : (
-        <div className="-mx-1 max-h-[68vh] space-y-3 overflow-y-auto px-1 py-1">
+        <div className="space-y-3">
           {payments.map((p) => (
             <PaymentCard key={p.id} payment={p} />
           ))}
         </div>
       )}
-    </Modal>
+    </>
   );
 }
 

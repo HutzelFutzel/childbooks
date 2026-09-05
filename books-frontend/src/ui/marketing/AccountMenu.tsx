@@ -1,6 +1,6 @@
 "use client";
 
-import { BookOpen, LogOut, Shield } from "lucide-react";
+import { BookOpen, LogOut, Settings, Shield } from "lucide-react";
 import { useAuthStore } from "../../state/authStore";
 import { Button } from "../components/Button";
 import { Popover } from "../components/Popover";
@@ -55,6 +55,7 @@ export function AccountMenu() {
             <MenuHeader user={user} />
             <div className="py-1">
               <MenuItem icon={<BookOpen className="size-4" />} label="Open the Studio" href="/studio" onClick={close} />
+              <MenuItem icon={<Settings className="size-4" />} label="Account settings" href="/account/settings" onClick={close} />
             </div>
 
             {isAdmin && (
