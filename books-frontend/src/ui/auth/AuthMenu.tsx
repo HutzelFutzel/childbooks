@@ -27,7 +27,7 @@ import { MenuDivider, MenuHeader, MenuItem, MenuSectionLabel, UserMenuTrigger } 
 
 /**
  * The account dropdown — the single home for user actions that used to clutter
- * the top bar: Settings (image quality + account), Plans, Orders, Admin, and
+ * the top bar: Settings, Plans, Orders, Admin, and
  * Sign out. Signed-out users just get a "Sign in" button.
  *
  * "Contact us" deliberately isn't duplicated in here — the always-visible

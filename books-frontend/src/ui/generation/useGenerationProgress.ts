@@ -4,14 +4,13 @@
  */
 import { useEffect, useMemo, useState } from "react";
 import type { ImageActionId } from "../../core/ai/actions";
-import { IMAGE_TIERS, type ImageTier } from "../../core/config/modelConfig";
+import { CUSTOMER_IMAGE_TIER } from "../../core/config/modelConfig";
 import {
   estimateTaskRange,
   formatDurationRange,
   type DurationRange,
 } from "../../core/config/latencyStats";
 import { useAppConfigStore } from "../../state/appConfigStore";
-import { usePreferredImageTier } from "../../state/imageTier";
 
 const PHASES: Partial<Record<ImageActionId, string[]>> = {
   pageIllustration: [
@@ -40,20 +39,12 @@ export function formatElapsed(ms: number): string {
 export function useGenerationProgress(
   action: ImageActionId,
   refCount = 0,
-  tier?: ImageTier,
 ) {
   const latencyStats = useAppConfigStore((s) => s.latencyStats);
-  const preferred = usePreferredImageTier();
-  const effectiveTier = tier ?? preferred;
 
   const estimate: DurationRange = useMemo(() => {
-    const tiers = effectiveTier ? [effectiveTier] : IMAGE_TIERS;
-    const ranges = tiers.map((t) => estimateTaskRange(latencyStats, action, t, "fresh", refCount));
-    return {
-      minMs: Math.min(...ranges.map((r) => r.minMs)),
-      maxMs: Math.max(...ranges.map((r) => r.maxMs)),
-    };
-  }, [latencyStats, action, effectiveTier, refCount]);
+    return estimateTaskRange(latencyStats, action, CUSTOMER_IMAGE_TIER, "fresh", refCount);
+  }, [latencyStats, action, refCount]);
 
   const [start] = useState(() => Date.now());
   const [now, setNow] = useState(() => Date.now());

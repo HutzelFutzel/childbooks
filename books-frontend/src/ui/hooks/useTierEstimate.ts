@@ -69,9 +69,8 @@ export function tierSparkRange(
 }
 
 /**
- * Widest range covering every candidate (min of mins, max of maxes). Used for
- * previews shown BEFORE the user has picked a quality tier: spanning both tiers
- * is honest about the spread, where quoting one tier's price would not be.
+ * Widest range covering every candidate (min of mins, max of maxes). Used when
+ * combining model-backed estimates that share one customer-facing action.
  */
 export function spanTierRanges(ranges: (SparkEstimateRange | null)[]): SparkEstimateRange | null {
   const valid = ranges.filter((r): r is SparkEstimateRange => r != null);

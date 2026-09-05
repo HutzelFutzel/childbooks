@@ -53,8 +53,7 @@ import {
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../core/types";
 import { coverSpread } from "./bookUnits";
 import { resolveImageModelClient, resolveModelsClient } from "../platform/aiResolve";
-import { type ImageTier } from "../core/config/modelConfig";
-import { requireImageTier } from "./imageTierPrompt";
+import { CUSTOMER_IMAGE_TIER, type ImageTier } from "../core/config/modelConfig";
 import { useProjectsStore } from "./projectsStore";
 import { useSettingsStore } from "./settingsStore";
 import { useAppConfigStore } from "./appConfigStore";
@@ -145,8 +144,6 @@ export interface GenerateAnchorOptions {
   fromNodeId?: string;
   /** Use the source version's image as a reference for consistency. */
   useReference?: boolean;
-  /** Quality tier to generate at (defaults to the user's preferred tier). */
-  tier?: ImageTier;
   signal?: AbortSignal;
 }
 
@@ -163,13 +160,11 @@ export async function generateAnchorVersion(
   if (!project) throw new Error("No active project.");
   const anchor = project.anchors?.find((a) => a.id === anchorId);
   if (!anchor) throw new Error("Anchor not found.");
-  const { tier, ...runOptions } = options;
-  const resolvedTier = tier ?? (await requireImageTier());
-  if (!resolvedTier) return;
+  const resolvedTier = CUSTOMER_IMAGE_TIER;
   const render = await anchorImageRemote(
     project,
     anchorId,
-    runOptions as AnchorRunOptions,
+    options as AnchorRunOptions,
     resolvedTier,
   );
   const versions = applyAnchorRender(anchor.versions, render);
@@ -218,8 +213,6 @@ export interface GenerateIllustrationOptions {
   useReference?: boolean;
   /** Inpainting mask (transparent hole = region to change). Forces composition ref. */
   mask?: ReferenceImage;
-  /** Quality tier to generate at (defaults to the user's preferred tier). */
-  tier?: ImageTier;
   signal?: AbortSignal;
 }
 
@@ -401,13 +394,11 @@ export async function generateIllustrationVersion(
 ): Promise<void> {
   const project = useProjectsStore.getState().current();
   if (!project) throw new Error("No active project.");
-  const { tier, ...runOptions } = options;
-  const resolvedTier = tier ?? (await requireImageTier());
-  if (!resolvedTier) return;
+  const resolvedTier = CUSTOMER_IMAGE_TIER;
   const render = await illustrationRemote(
     project,
     spread.id,
-    runOptions as IllustrationRunOptions,
+    options as IllustrationRunOptions,
     resolvedTier,
   );
   if (!render) return;
@@ -443,17 +434,15 @@ export async function generateIllustrationVersion(
  * the front's and raise the back's exactly when each is actually in flight,
  * instead of holding both "generating" for the whole pair.
  *
- * Returns false when the tier prompt was opened (no generation happened yet).
+ * Returns false only when generation cannot continue after the front render.
  */
 export async function generateCoverWrap(options: {
-  tier?: ImageTier;
   onFrontSettled?: () => void;
   onBackStart?: () => void;
 } = {}): Promise<boolean> {
   const project = useProjectsStore.getState().current();
   if (!project) throw new Error("No active project.");
-  const resolvedTier = options.tier ?? (await requireImageTier());
-  if (!resolvedTier) return false;
+  const resolvedTier = CUSTOMER_IMAGE_TIER;
   const doc = project.screenplay ? getCursor(project.screenplay).content : undefined;
   const frontSpec = doc?.frontCover;
   const backSpec = doc?.backCover;
@@ -461,7 +450,7 @@ export async function generateCoverWrap(options: {
 
   // FRONT — an ordinary front-cover generation, folded into its version tree
   // (and shown on canvas) as soon as it's ready, before the back even starts.
-  await generateIllustrationVersion(coverSpread(COVER_FRONT_ID, frontSpec), { tier: resolvedTier });
+  await generateIllustrationVersion(coverSpread(COVER_FRONT_ID, frontSpec));
   options.onFrontSettled?.();
 
   // BACK — references the front's freshly-saved image (by blob id, since the

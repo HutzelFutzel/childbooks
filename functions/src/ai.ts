@@ -9,8 +9,8 @@
  * work still goes through the Firestore job queue (`jobs.ts`).
  *
  * Mounted under `/ai`, guarded by `requireAuth` in `app.ts` — guests generate
- * too (low-friction trial), but with guest limits: forced "quick" tier and no
- * negative-balance buffer, so a guest can never spend past their granted Sparks.
+ * too (low-friction trial), at the same production quality but without a
+ * negative-balance buffer, so a guest can never spend past granted Sparks.
  */
 import express, { type Express, type Response } from "express";
 import { isAnonymousToken, type AuthedRequest } from "./auth";
@@ -25,7 +25,6 @@ import { ALL_IMAGE_ACTION_IDS } from "../../books-frontend/src/core/ai/actions";
 import { ProviderError } from "../../books-frontend/src/core/errors";
 import {
   apiKeyFor,
-  ImageTierRequired,
   requireTier,
   resolveImageModels,
   resolveTextAction,
@@ -103,12 +102,6 @@ function sendError(res: Response, err: unknown): void {
   }
   if (err instanceof ServiceUnavailable) {
     res.status(503).json({ error: { message: err.message } });
-    return;
-  }
-  if (err instanceof ImageTierRequired) {
-    // 400 — the client's tier gate should have caught this; say so plainly
-    // rather than silently rendering at a quality the user never chose.
-    res.status(400).json({ error: { message: err.message, code: "image_tier_required" } });
     return;
   }
   if (err instanceof QuotaExceeded) {
@@ -434,7 +427,7 @@ export function registerAiRoutes(app: Express): void {
         res.status(400).json({ error: { message: "Anchor not found." } });
         return;
       }
-      // Guests render on the cheap tier only and get no negative buffer.
+      // Guests receive the same production quality, with no negative buffer.
       const guest = isAnonymousToken(req.authToken);
       const tier = requireTier(rawTier, guest);
       const anchorIsEdit = typeof options?.edit === "string" && options.edit.trim().length > 0;
@@ -502,15 +495,11 @@ export function registerAiRoutes(app: Express): void {
       }
       const cover = isCoverId(spreadId);
       const action = cover ? "coverIllustration" : "pageIllustration";
-      // Guests render on the cheap tier only and get no negative buffer.
+      // Guests receive the same production quality, with no negative buffer.
       const guest = isAnonymousToken(req.authToken);
-      // A genuinely continuous back cover needs a mask-capable model, which
-      // only the premium tier offers (see `renderCoverContinuation`) — force
-      // it regardless of what the client asked for. Guests still get their
-      // usual tier from `requireTier`; the render then fails with a clear
-      // message rather than silently falling back to a lesser result.
-      const tier =
-        coverContinuationBlobId && !guest ? "premium" : requireTier(rawTier, guest);
+      // A continuous back cover uses the same production-quality binding as
+      // every other customer image.
+      const tier = requireTier(rawTier, guest);
       // An "edit" is a re-roll carrying an instruction. These count against the
       // per-book edit quota (scoped to the project); fresh generations don't.
       const isEdit = typeof options?.edit === "string" && options.edit.trim().length > 0;

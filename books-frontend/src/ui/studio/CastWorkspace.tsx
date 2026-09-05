@@ -33,7 +33,6 @@ import { BlobThumbnail } from "../components/BlobThumbnail";
 import { Button } from "../components/Button";
 import { Celebrate } from "../components/Celebrate";
 import { Drawer } from "../components/Drawer";
-import { FastDraftBadge } from "../components/FastDraftBadge";
 import { GenerationOverlay } from "../generation/GenerationOverlay";
 import { PipelineStepper, type PipelinePhase } from "../generation/PipelineStepper";
 import { Modal } from "../components/Modal";
@@ -582,9 +581,6 @@ function CastMemberCard({
         >
           {generating ? "Creating…" : image ? "Ready" : "Needs look"}
         </span>
-        {image?.imageTier === "quick" && (
-          <FastDraftBadge compact className="left-auto right-12 top-3" />
-        )}
       </button>
 
       <div className="flex items-center gap-3 px-4 py-3">

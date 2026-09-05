@@ -8,9 +8,8 @@ import { serverConfig } from "./config";
 import { getModelConfig } from "./appConfig";
 import { ALL_PROVIDERS } from "../../books-frontend/src/core/providers";
 import {
-  GUEST_IMAGE_TIER,
-  parseImageTier,
-  resolveImageModel,
+  CUSTOMER_IMAGE_TIER,
+  resolveBoundImageModel,
   resolveTextModel,
   TEXT_SPEEDS,
   type ImageTier,
@@ -22,26 +21,16 @@ import type { ModelSelection } from "../../books-frontend/src/core/types";
 
 export class ServiceUnavailable extends Error {}
 
-/** The caller didn't state which image quality to render at. */
-export class ImageTierRequired extends Error {
-  constructor() {
-    super("Choose an image quality before generating.");
-  }
-}
-
 const UNAVAILABLE = "AI generation isn't available right now. It's being set up on the server.";
 
 /**
- * The tier a request renders at. Guests are always downgraded to the guest tier
- * (premium is account-only). For everyone else the choice must be explicit —
- * defaulting here would spend a user's Sparks on a quality level they never
- * picked, which is exactly what the client-side gate exists to prevent.
+ * The tier a customer request renders at. The request fields remain accepted so
+ * stale clients and historical job documents keep working, but they cannot
+ * lower the finished-art quality bar. Guests are limited through Sparks rather
+ * than receiving visibly worse illustrations.
  */
-export function requireTier(rawTier: unknown, guest: boolean): ImageTier {
-  if (guest) return GUEST_IMAGE_TIER;
-  const tier = parseImageTier(rawTier);
-  if (!tier) throw new ImageTierRequired();
-  return tier;
+export function requireTier(_rawTier: unknown, _guest: boolean): ImageTier {
+  return CUSTOMER_IMAGE_TIER;
 }
 
 export function availability(): Record<ProviderId, boolean> {
@@ -96,8 +85,8 @@ export async function resolveImageModels(
   const cfg = await getModelConfig();
   const a = availability();
   const avail = (p: ProviderId) => a[p];
-  const image = resolveImageModel(cfg, imageAction, tier, avail);
-  const anchor = resolveImageModel(cfg, "anchorImage", tier, avail);
+  const image = resolveBoundImageModel(cfg, imageAction, tier, avail);
+  const anchor = resolveBoundImageModel(cfg, "anchorImage", tier, avail);
   if (!image || !anchor) throw new ServiceUnavailable(UNAVAILABLE);
   const text = resolveTextModel(cfg, "localize", avail) ?? { provider: image.provider, id: image.id };
   const binding = resolveTextModel(cfg, "bindingPass", avail) ?? text;

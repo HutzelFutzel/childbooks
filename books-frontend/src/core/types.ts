@@ -302,11 +302,7 @@ export interface AnchorImage {
    * transfer resumable/idempotent. Absent on images predating the stamp.
    */
   artStyleKey?: string;
-  /**
-   * User-facing quality tier used to generate these pixels (`quick` = Fast,
-   * `premium` = High-Quality). Lets the studio warn when the active version was
-   * drafted on Fast. Absent on images predating the stamp.
-   */
+  /** Internal tier used to generate these pixels. Kept for provenance and cost records. */
   imageTier?: ImageTier;
   /**
    * Concrete image model that produced these pixels (provider + id). Audit /
@@ -518,7 +514,7 @@ export interface ScreenplaySpread {
   /**
    * Cover-only: when true, the title/subtitle/author below are rendered INTO
    * the generated artwork (typographic cover) instead of being laid out as
-   * editable overlay text boxes. Baked text forces the high-quality tier.
+   * editable overlay text boxes.
    */
   bakeText?: boolean;
   /** Cover-only: the exact title to bake into the art. */
@@ -543,7 +539,7 @@ export interface CoverSpec {
   /**
    * When true, the title (and optional subtitle/author) are rendered directly
    * into the cover artwork by the image model, rather than laid out as editable
-   * overlay text. Requires — and forces — the high-quality image tier.
+   * overlay text. Requires a model capable of rendering typography.
    */
   bakeText?: boolean;
   /** Author line, optionally baked into the cover artwork. */

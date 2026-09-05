@@ -8,7 +8,7 @@
  * the backend has keys for (`settingsStore`).
  */
 import {
-  resolveImageModel,
+  resolveBoundImageModel,
   resolveTextModel,
   type ImageTier,
 } from "../core/config/modelConfig";
@@ -34,7 +34,7 @@ export function resolveImageModelClient(
   tier: ImageTier,
 ): ModelSelection | null {
   const cfg = useAppConfigStore.getState().modelConfig;
-  return resolveImageModel(cfg, action, tier, availability());
+  return resolveBoundImageModel(cfg, action, tier, availability());
 }
 
 /**
@@ -47,8 +47,9 @@ export function resolveModelsClient(tier: ImageTier): ResolvedModels | null {
   const cfg = useAppConfigStore.getState().modelConfig;
   const avail = availability();
   const textModel = resolveTextModel(cfg, "screenplay", avail);
-  const imageModel = resolveImageModel(cfg, "pageIllustration", tier, avail);
+  const imageModel = resolveBoundImageModel(cfg, "pageIllustration", tier, avail);
   if (!textModel || !imageModel) return null;
-  const anchorImageModel = resolveImageModel(cfg, "anchorImage", tier, avail) ?? imageModel;
+  const anchorImageModel =
+    resolveBoundImageModel(cfg, "anchorImage", tier, avail) ?? imageModel;
   return { textModel, imageModel, anchorImageModel };
 }

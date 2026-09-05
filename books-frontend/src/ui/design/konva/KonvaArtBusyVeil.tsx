@@ -9,13 +9,12 @@ import { useEffect, useMemo, useRef } from "react";
 import Konva from "konva";
 import { Group, Rect, Text, Arc, Circle } from "react-konva";
 import type { ImageActionId } from "../../../core/ai/actions";
-import { IMAGE_TIERS } from "../../../core/config/modelConfig";
+import { CUSTOMER_IMAGE_TIER } from "../../../core/config/modelConfig";
 import {
   estimateTaskRange,
   formatDurationRange,
 } from "../../../core/config/latencyStats";
 import { useAppConfigStore } from "../../../state/appConfigStore";
-import { usePreferredImageTier } from "../../../state/imageTier";
 import {
   formatElapsed,
 } from "../../generation/useGenerationProgress";
@@ -56,20 +55,20 @@ export function KonvaArtBusyVeil({
   compact?: boolean;
 }) {
   const latencyStats = useAppConfigStore((s) => s.latencyStats);
-  const preferred = usePreferredImageTier();
 
   const { estimateLabel, estimateMaxMs } = useMemo(() => {
-    const tiers = preferred ? [preferred] : IMAGE_TIERS;
-    const ranges = tiers.map((t) =>
-      estimateTaskRange(latencyStats, action, t, "fresh", refCount),
+    const { minMs, maxMs } = estimateTaskRange(
+      latencyStats,
+      action,
+      CUSTOMER_IMAGE_TIER,
+      "fresh",
+      refCount,
     );
-    const minMs = Math.min(...ranges.map((r) => r.minMs));
-    const maxMs = Math.max(...ranges.map((r) => r.maxMs));
     return {
       estimateLabel: formatDurationRange({ minMs, maxMs }),
       estimateMaxMs: maxMs,
     };
-  }, [latencyStats, action, preferred, refCount]);
+  }, [latencyStats, action, refCount]);
 
   const phases = PHASES[action] ?? DEFAULT_PHASES;
 

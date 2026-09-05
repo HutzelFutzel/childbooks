@@ -436,10 +436,8 @@ export function ModelConfigTab() {
               <span className="text-xs font-semibold text-ink-600">Image actions</span>
             </div>
             <p className="text-xs text-ink-500">
-              Each image action binds one model per user-facing quality tier. Users pick their
-              default tier in Settings and can switch per generation, so e.g. &ldquo;{tierLabel("quick")}&rdquo;
-              can be a fast Gemini model while &ldquo;{tierLabel("premium")}&rdquo; is a higher-fidelity
-              OpenAI model.
+              Customer generation always uses the production-quality binding. The economy
+              binding remains available for internal tooling and historical jobs.
             </p>
             {imageOptions.length === 0 && (
               <div className="flex items-center gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
@@ -505,15 +503,15 @@ export function ModelConfigTab() {
         </div>
       </section>
 
-      {/* Stage 3: tier presentation */}
+      {/* Stage 3: legacy/internal tier metadata */}
       <section className="space-y-3">
         <header>
           <h3 className="text-sm font-semibold text-ink-800">
-            Stage 3 · Quality tier presentation
+            Stage 3 · Internal tier metadata
           </h3>
           <p className="text-xs text-ink-500">
-            Single source of truth for tier names, quality-picker descriptions, and notices shown
-            on generated images.
+            Retained for historical records and internal tools. These values are no longer shown
+            in the customer generation experience.
           </p>
         </header>
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -526,14 +524,14 @@ export function ModelConfigTab() {
                   onChange={(e) => setTierLabel(tier, e.target.value)}
                 />
               </Field>
-              <Field label="Quality picker description">
+              <Field label="Internal description">
                 <Textarea
                   rows={3}
                   value={draft.imageTierUi[tier].description}
                   onChange={(e) => setTierUi(tier, "description", e.target.value)}
                 />
               </Field>
-              <Field label="Notice on generated images">
+              <Field label="Legacy generated-image notice">
                 <Textarea
                   rows={4}
                   value={draft.imageTierUi[tier].generatedImageNotice}

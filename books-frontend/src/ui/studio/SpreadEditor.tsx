@@ -20,8 +20,6 @@
 import { useMemo } from "react";
 import { Ban } from "lucide-react";
 import { useJobsStore } from "../../state/jobsStore";
-import { getCursor } from "../../core/versioning";
-import { FastDraftBadge } from "../components/FastDraftBadge";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { PageStage } from "../design/PageStage";
 import { defaultIllustrationFocus } from "../design/designInit";
@@ -119,13 +117,11 @@ export function HalfFrame({
  * generation overlay so filmstrip thumbnails reflect in-flight renders.
  */
 export function PagePreview({ entry, compact }: { entry: Entry; compact?: boolean }) {
-  const { pageDesign, generatingPages, project } = useStudio();
+  const { pageDesign, generatingPages } = useStudio();
   const page = entry.page;
   const blank = isBlankEntry(entry);
   const coverMode = entry.subject.kind === "cover";
   const url = useBlobUrl(page.blobId);
-  const tree = project.illustrations?.[page.id];
-  const cursor = tree ? getCursor(tree).content : null;
   const jobActive = useJobsStore((s) => s.activeUnitIds.has(page.id));
   const generating = generatingPages.has(page.id) || jobActive;
   const refCount =
@@ -139,7 +135,6 @@ export function PagePreview({ entry, compact }: { entry: Entry; compact?: boolea
       illustrationFocus={defaultIllustrationFocus(page)}
       editable={false}
       chromeless
-      overlay={cursor?.imageTier === "quick" ? <FastDraftBadge compact /> : undefined}
       selectedId={null}
       onSelectElement={() => {}}
       onChangeElement={() => {}}

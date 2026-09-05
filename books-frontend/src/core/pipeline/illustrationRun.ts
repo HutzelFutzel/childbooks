@@ -1673,7 +1673,7 @@ export async function renderCoverContinuation(
     !env.composite.buildCoverContinuationSeed
   ) {
     throw new Error(
-      "A perfectly continuous back cover needs a mask-capable (High-Quality) image model.",
+      "Wraparound cover generation is temporarily unavailable. Please try again later.",
     );
   }
   const key = env.apiKeyFor(imageModel.provider);

@@ -26,7 +26,7 @@ import { createAnchorsJob, createRefreshJob } from "../../platform/jobs";
 import { currentAnchorImage, currentIllustration, getResolvedModels } from "../../state/ai";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { illustrationUnits } from "../../state/bookUnits";
-import { requireImageTier } from "../../state/imageTierPrompt";
+import { CUSTOMER_IMAGE_TIER } from "../../core/config/modelConfig";
 import { useProjectsStore } from "../../state/projectsStore";
 import { useSparksStore } from "../../state/sparksStore";
 import { warnBatchShortfall } from "../../state/sparksShortfallPrompt";
@@ -147,8 +147,7 @@ export async function runStyleRenewPhase(
   const ids = plan.phase === "cast" ? remaining.castIds : remaining.pageIds;
   if (ids.length === 0) return;
 
-  const tier = await requireImageTier();
-  if (!tier) return;
+  const tier = CUSTOMER_IMAGE_TIER;
 
   try {
     const models = getResolvedModels(tier);
@@ -174,8 +173,7 @@ export async function runStyleRenewPhase(
 
 /**
  * Begin a transfer to the style already committed on the project. Returns false
- * when a gate refused it (quality tier, Sparks) so the caller can keep its
- * confirm dialog open.
+ * when the Spark gate refused it so the caller can keep its confirm dialog open.
  */
 export async function startStyleRenew(
   project: Project,
@@ -184,8 +182,6 @@ export async function startStyleRenew(
   const { castIds, pageIds } = styleRenewTargets(project);
   if (castIds.length === 0 && pageIds.length === 0) return true;
 
-  const tier = await requireImageTier();
-  if (!tier) return false;
   if (!ensureStyleRenewAffordable(castIds.length, pageIds.length)) return false;
 
   const plan: StyleRenewPlan = {

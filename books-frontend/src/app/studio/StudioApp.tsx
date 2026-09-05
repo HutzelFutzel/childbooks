@@ -21,7 +21,6 @@ import { OrdersDialog } from "@/ui/checkout/OrdersDialog";
 import { ContactDialog } from "@/ui/contact/ContactDialog";
 import { HelpButton } from "@/ui/contact/HelpButton";
 import { SettingsDialog } from "@/ui/settings/SettingsDialog";
-import { ImageTierPromptDialog } from "@/ui/settings/ImageTierPromptDialog";
 import { SparksShortfallDialog } from "@/ui/layout/SparksShortfallDialog";
 import { ProjectWorkspace } from "@/ui/project/ProjectWorkspace";
 import { flushProjectSaves, useProjectsStore } from "@/state/projectsStore";
@@ -39,7 +38,6 @@ import { usePriceOverridesStore } from "@/state/priceOverridesStore";
 import { useSubscriptionStore } from "@/state/subscriptionStore";
 import { SparksBadge } from "@/ui/layout/SparksBadge";
 import { PlansDialog } from "@/ui/billing/PlansDialog";
-import { ImageTierControl } from "@/ui/settings/ImageTierControl";
 import { useAccountUiStore } from "@/state/accountUiStore";
 import { useCheckoutUiStore, type PurchaseKind } from "@/state/checkoutUiStore";
 import { PurchaseConfirmation } from "@/ui/checkout/PurchaseConfirmation";
@@ -405,10 +403,8 @@ export default function StudioApp() {
     });
   }, [uid, accessLevel]);
 
-  // Mirror the profile + saved address book for EVERY signed-in identity: the
-  // profile also holds the image-quality preference, and guests generate too —
-  // without this their choice can't be read back and they'd be asked on every
-  // single generation. Session metadata stays a full-account stamp.
+  // Mirror the profile + saved address book for every signed-in identity.
+  // Session metadata stays a full-account stamp.
   useEffect(() => {
     if (!uid || accessLevel === "loading") {
       stopProfile();
@@ -491,9 +487,6 @@ export default function StudioApp() {
         contextLabel={inProject ? currentTitle : undefined}
         right={
           <>
-            {/* Guests choose a quality too (High-Quality shows locked), so the
-                control is visible to every resolved identity. */}
-            {inProject && <ImageTierControl />}
             {accessLevel !== "loading" && sparksEnabled && <SparksBadge />}
             <HelpButton />
             <AuthMenu />
@@ -545,7 +538,6 @@ export default function StudioApp() {
         <InviteFriendsDialog open={inviteOpen} onClose={closeInvite} />
       )}
       <SettingsDialog />
-      <ImageTierPromptDialog />
       <SparksShortfallDialog />
       <PurchaseConfirmation />
       <Toaster />

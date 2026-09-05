@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import {
-  Image as ImageIcon,
   LogOut,
   MessageSquareHeart,
   User as UserIcon,
@@ -11,10 +10,8 @@ import { Modal } from "../components/Modal";
 import { Button } from "../components/Button";
 import { useAuthStore, userLabel, userSecondaryLine } from "../../state/authStore";
 import { useAccountUiStore } from "../../state/accountUiStore";
-import { usePreferredImageTier, setPreferredImageTier } from "../../state/imageTier";
 import { useProfileStore } from "../../state/profileStore";
 import { setSurveyOptOut } from "../../platform/surveys";
-import { ImageTierPicker } from "./ImageTierPicker";
 
 function Section({
   icon,
@@ -92,9 +89,7 @@ function SurveyPreference() {
 }
 
 /**
- * The user Settings modal. Currently centered on the image quality tier — the
- * user's default "Fast" vs "High-Quality" choice — plus quick account access
- * (who you're signed in as + sign out). Opened from the account dropdown.
+ * User settings and quick account access. Opened from the account dropdown.
  */
 export function SettingsDialog() {
   const open = useAccountUiStore((s) => s.settingsOpen);
@@ -111,24 +106,21 @@ export function SettingsDialog() {
 export function SettingsContent({ onSignedOut }: { onSignedOut?: () => void }) {
   const user = useAuthStore((s) => s.user);
   const signOutUser = useAuthStore((s) => s.signOutUser);
-  const tier = usePreferredImageTier();
-  const profileLoaded = useProfileStore((s) => s.profileLoaded);
+  const openAuthDialog = useAuthStore((s) => s.openAuthDialog);
 
   return (
     <div className="space-y-6">
-      <Section
-        icon={<ImageIcon className="size-4" />}
-        title="Image quality"
-        hint="Applies to every image you generate. You can switch anytime — even per image."
-      >
-        {profileLoaded && tier === null && (
-          <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
-            You haven&apos;t picked a default yet. Choose one below — you&apos;ll be able to change
-            it here or right on any generate button.
-          </p>
-        )}
-        <ImageTierPicker value={tier} onChange={(t) => void setPreferredImageTier(t)} />
-      </Section>
+      {user?.isAnonymous && (
+        <Section
+          icon={<UserIcon className="size-4" />}
+          title="Account"
+          hint="Create a free account to keep your books available across devices."
+        >
+          <Button className="w-full" onClick={() => openAuthDialog()}>
+            Sign in or create account
+          </Button>
+        </Section>
+      )}
 
       {user && !user.isAnonymous && <SurveyPreference />}
 

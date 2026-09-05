@@ -36,33 +36,31 @@ export const IMAGE_SPEED_LABELS: Record<ImageSpeed, string> = {
 };
 
 /**
- * User-facing image quality tiers. Every image generation resolves through one
- * of these; the user picks their default in Settings and can override per call.
- * Each tier binds an action to its own provider+speed slot, so e.g. "quick" can
- * be a Gemini fast model while "premium" is an OpenAI quality model.
+ * Internal image model tiers. Customer generation always uses
+ * {@link CUSTOMER_IMAGE_TIER}; both values remain in the config so historical
+ * jobs keep their provenance and admins can retain an economy binding for
+ * internal tooling or a future, explicitly separate preview product.
  */
 export type ImageTier = "quick" | "premium";
 export const IMAGE_TIERS: ImageTier[] = ["quick", "premium"];
 
 /**
- * The only tier guests can render on — premium is an account feature, and the
- * server downgrades anonymous callers to this. It is deliberately NOT a
- * fallback for signed-in users: everyone else must choose (see
- * `requireImageTier`), so nobody silently spends Sparks on a tier they never
- * picked.
+ * The quality bar for every customer-facing image. Provider/model selection is
+ * still configurable behind this binding, but guests and full accounts receive
+ * the same finished-art experience.
  */
-export const GUEST_IMAGE_TIER = "quick" as const satisfies ImageTier;
+export const CUSTOMER_IMAGE_TIER = "premium" as const satisfies ImageTier;
 
-/** Default display names for the tiers (admin-overridable via `imageTierLabels`). */
+/** Legacy/internal display names retained for admin and historical records. */
 export const DEFAULT_IMAGE_TIER_LABELS: Record<ImageTier, string> = {
-  quick: "Fast",
-  premium: "High-Quality",
+  quick: "Economy (internal)",
+  premium: "Production",
 };
 
 export interface ImageTierUiCopy {
-  /** One-line explanation shown in the quality picker. */
+  /** Legacy one-line tier explanation retained for stored admin config. */
   description: string;
-  /** Explanation attached to images created with this tier. */
+  /** Legacy generated-image notice retained for stored admin config. */
   generatedImageNotice: string;
 }
 
@@ -70,15 +68,15 @@ export interface ImageTierUiCopy {
 export const DEFAULT_IMAGE_TIER_UI: Record<ImageTier, ImageTierUiCopy> = {
   quick: {
     description:
-      "Draft quality in under a minute per image — great for layout and ideas. Expect occasional artifacts and characters drifting from their references.",
+      "Internal economy binding retained for historical jobs and future tooling.",
     generatedImageNotice:
-      "Useful for layout and ideas, but this Fast image may contain unexpected artifacts or drift from character references. Recreate it in High-Quality before using it as final art.",
+      "Created with the legacy economy binding.",
   },
   premium: {
     description:
-      "Slower per image, but subjects match their references much more closely and small flaws are auto-repaired — best for final artwork.",
+      "Production artwork binding used for every customer generation.",
     generatedImageNotice:
-      "Created in High-Quality for stronger reference matching and automatic repair of small flaws.",
+      "Created with the production artwork binding.",
   },
 };
 
@@ -88,17 +86,17 @@ export function parseImageTier(value: unknown): ImageTier | null {
 }
 
 /**
- * Coerce an untrusted value to a valid tier. Only for DISPLAY paths (progress
- * estimates on historical jobs); anything that spends Sparks must go through
- * {@link parseImageTier} and refuse to guess.
+ * Coerce an untrusted value to a valid tier for historical display paths.
+ * Missing new values resolve to the customer production tier.
  */
 export function normalizeImageTier(value: unknown): ImageTier {
-  return parseImageTier(value) ?? GUEST_IMAGE_TIER;
+  return parseImageTier(value) ?? CUSTOMER_IMAGE_TIER;
 }
 
 /**
- * Is ANY image model configured for an available provider (regardless of tier)?
- * Used to gate the generation UI before the user has picked a tier.
+ * Is any image model configured for an available provider (regardless of tier)?
+ * Internal/admin compatibility helper; customer gates use the strict production
+ * binding through `resolveBoundImageModel`.
  */
 export function resolveAnyImageModel(
   cfg: ModelConfig,
@@ -135,11 +133,11 @@ export interface ModelConfig {
   version: 1;
   slots: ModelSlots;
   textBindings: Record<TextActionId, TextSlotRef>;
-  /** Each image action binds one slot PER user-facing quality tier. */
+  /** Each image action binds one slot per internal model tier. */
   imageBindings: Record<ImageActionId, ImageTierBindings>;
-  /** Admin-overridable display labels for the quality tiers. */
+  /** Legacy/admin display labels for internal tiers. */
   imageTierLabels: Record<ImageTier, string>;
-  /** Admin-owned user-facing descriptions and generated-image notices. */
+  /** Legacy/admin presentation metadata retained for config compatibility. */
   imageTierUi: Record<ImageTier, ImageTierUiCopy>;
 }
 
@@ -241,12 +239,32 @@ export function resolveTextModel(
   return null;
 }
 
+/** Resolve only the requested tier's bound quality class across providers. */
+export function resolveBoundImageModel(
+  cfg: ModelConfig,
+  action: ImageActionId,
+  tier: ImageTier,
+  isAvailable?: (p: ProviderId) => boolean,
+): ModelSelection | null {
+  const ok = (p: ProviderId) => (isAvailable ? isAvailable(p) : true);
+  const ref = cfg.imageBindings[action]?.[tier];
+  if (!ref) return null;
+  const ordered: ProviderId[] = [
+    ref.provider,
+    ...ALL_PROVIDERS.filter((p) => p !== ref.provider),
+  ];
+  for (const p of ordered) {
+    if (ok(p) && slotFilled(cfg.slots.image[p]?.[ref.speed])) {
+      return { provider: p, id: cfg.slots.image[p][ref.speed] };
+    }
+  }
+  return null;
+}
+
 /**
- * Resolve an image action + quality tier to a concrete model. Prefers the
- * bound provider/speed for the requested tier, then the same speed on the other
- * provider. If the requested tier resolves to nothing usable it falls back to
- * the other tier's binding, then to any filled image slot — so a half-configured
- * app (e.g. only "premium" set) still generates.
+ * Tolerant internal resolver. Prefers the requested tier's binding, then the
+ * other tier and finally any configured image model. Customer generation uses
+ * {@link resolveBoundImageModel} so an outage cannot silently lower quality.
  */
 export function resolveImageModel(
   cfg: ModelConfig,
@@ -255,9 +273,11 @@ export function resolveImageModel(
   isAvailable?: (p: ProviderId) => boolean,
 ): ModelSelection | null {
   const ok = (p: ProviderId) => (isAvailable ? isAvailable(p) : true);
+  const bound = resolveBoundImageModel(cfg, action, tier, isAvailable);
+  if (bound) return bound;
   const tierOrder: ImageTier[] = [tier, ...IMAGE_TIERS.filter((t) => t !== tier)];
-  // Honor each tier's bound speed across providers, preferring the chosen tier.
-  for (const t of tierOrder) {
+  // The requested tier was checked strictly above; try internal fallbacks.
+  for (const t of tierOrder.slice(1)) {
     const ref = cfg.imageBindings[action]?.[t];
     if (!ref) continue;
     const ordered: ProviderId[] = [ref.provider, ...ALL_PROVIDERS.filter((p) => p !== ref.provider)];

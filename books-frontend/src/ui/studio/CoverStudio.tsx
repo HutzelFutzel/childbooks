@@ -4,30 +4,26 @@
  * disclosure once art exists (page-like tweaks live in ImageEditPanel).
  */
 import { useState } from "react";
-import { ArrowLeft, Check, Info, RefreshCw, RotateCcw, Sparkles, Wand2, Zap } from "lucide-react";
+import { ArrowLeft, RefreshCw, RotateCcw, Sparkles, Wand2 } from "lucide-react";
 import {
   COVER_BACK_ID,
   COVER_FRONT_ID,
   type CoverSpec,
   type ScreenplayDoc,
 } from "../../core/types";
-import { DEFAULT_IMAGE_TIER_LABELS, type ImageTier } from "../../core/config/modelConfig";
+import { CUSTOMER_IMAGE_TIER } from "../../core/config/modelConfig";
 import type { SparkEstimateRange } from "../../core/config/sparks";
 import { getCursor, updateNodeContent } from "../../core/versioning";
 import { coverTextDrift, generateCoverWrap, generateIllustrationVersion } from "../../state/ai";
-import { useAppConfigStore } from "../../state/appConfigStore";
 import { coverSpread } from "../../state/bookUnits";
-import { usePreferredImageTier } from "../../state/imageTier";
-import { requireImageTier } from "../../state/imageTierPrompt";
 import { useProjectsStore } from "../../state/projectsStore";
 import { Button } from "../components/Button";
-import { Callout } from "../components/Callout";
 import { Field, Input, Textarea } from "../components/Input";
 import { Toggle } from "../components/Toggle";
 import { CastPicker } from "../design/CastPicker";
 import { applyCoverBakeText, buildDesignPages } from "../design/designInit";
 import { useBufferedText } from "../hooks/useBufferedText";
-import { spanTierRanges, useTierSparkEstimate } from "../hooks/useTierEstimate";
+import { useTierSparkEstimate } from "../hooks/useTierEstimate";
 import { SparkEstimateCost } from "../layout/SparkCost";
 import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
@@ -38,16 +34,6 @@ import { usePageIllustration } from "./usePageIllustration";
 function scaleRange(r: SparkEstimateRange | null, n: number): SparkEstimateRange | null {
   if (!r) return null;
   return { minSparks: r.minSparks * n, maxSparks: r.maxSparks * n };
-}
-
-/** Sum two spark ranges (null-safe: a null side contributes nothing). */
-function sumRange(
-  a: SparkEstimateRange | null,
-  b: SparkEstimateRange | null,
-): SparkEstimateRange | null {
-  if (!a) return b;
-  if (!b) return a;
-  return { minSparks: a.minSparks + b.minSparks, maxSparks: a.maxSparks + b.maxSparks };
 }
 
 /**
@@ -86,17 +72,7 @@ export function CoverToolsPanel({
     return !hasArt(COVER_FRONT_ID) && !hasArt(COVER_BACK_ID);
   });
   const [customizingFirstCover, setCustomizingFirstCover] = useState(false);
-  const [creationMode, setCreationMode] = useState<"finished" | "fast">("finished");
-
-  const tierLabels = useAppConfigStore((s) => s.modelConfig.imageTierLabels);
-  const premiumLabel = tierLabels?.premium?.trim() || DEFAULT_IMAGE_TIER_LABELS.premium;
-  const quickLabel = tierLabels?.quick?.trim() || DEFAULT_IMAGE_TIER_LABELS.quick;
-
-  const userTier = usePreferredImageTier();
-  const quickRange = useTierSparkEstimate("coverIllustration", "quick");
-  const premiumRange = useTierSparkEstimate("coverIllustration", "premium");
-  const rangeForTier = (t: ImageTier | null) =>
-    t === "premium" ? premiumRange : t === "quick" ? quickRange : spanTierRanges([quickRange, premiumRange]);
+  const productionRange = useTierSparkEstimate("coverIllustration", CUSTOMER_IMAGE_TIER);
 
   const doc = project.screenplay ? getCursor(project.screenplay).content : null;
   const front = doc?.frontCover;
@@ -105,18 +81,10 @@ export function CoverToolsPanel({
   const canBakeText = (project.config.contentLocale ?? "en-US").startsWith("en-");
   const frontDrift = coverTextDrift(project, COVER_FRONT_ID);
 
-  const frontTier: ImageTier | null = frontBake ? "premium" : userTier;
-  const frontCostRange = rangeForTier(frontTier);
-  const backCostRange = rangeForTier(userTier);
-  // The matching-pair flow (`generateCoverWrap`) is TWO full renders under the
-  // hood — front, then a true outpaint continuation of it for the back. The
-  // continuation needs a mask-capable model, which only the premium tier
-  // offers, so the WHOLE pair always renders at premium regardless of the
-  // user's saved preference (see `generateWrapSet`) — its estimate is double a
-  // premium-tier render, not scaled to whatever tier the user last picked.
-  const wrapCostRange = scaleRange(rangeForTier("premium"), 2);
-  const fastSetCostRange = scaleRange(rangeForTier("quick"), 2);
-  const setCostRange = wrap ? wrapCostRange : sumRange(frontCostRange, backCostRange);
+  const frontCostRange = productionRange;
+  const backCostRange = productionRange;
+  // A cover pair is two full production-quality renders under the hood.
+  const setCostRange = scaleRange(productionRange, 2);
 
   async function patchCover(coverId: string, patch: Partial<CoverSpec>) {
     const tree = project.screenplay;
@@ -194,21 +162,21 @@ export function CoverToolsPanel({
     sceneField.flush();
   }
 
-  async function renderCover(coverId: string, tier: ImageTier) {
+  async function renderCover(coverId: string) {
     // Always read the latest screenplay — buffered scene/title edits may have
     // just flushed in this same tick.
     const live = useProjectsStore.getState().current();
     const liveDoc = live?.screenplay ? getCursor(live.screenplay).content : null;
     const spec = coverId === COVER_FRONT_ID ? liveDoc?.frontCover : liveDoc?.backCover;
     if (!spec) return;
-    await generateIllustrationVersion(coverSpread(coverId, spec), { tier });
+    await generateIllustrationVersion(coverSpread(coverId, spec));
   }
 
-  async function genCover(coverId: string, tier: ImageTier) {
+  async function genCover(coverId: string) {
     selectIllustration(coverId, { createIfMissing: true });
     setPageGenerating(coverId, true);
     try {
-      await renderCover(coverId, tier);
+      await renderCover(coverId);
     } finally {
       setPageGenerating(coverId, false);
     }
@@ -216,11 +184,9 @@ export function CoverToolsPanel({
 
   async function generateFront() {
     flushTextFields();
-    const tier = frontBake ? "premium" : await requireImageTier();
-    if (!tier) return;
     setBusy("front");
     try {
-      await genCover(COVER_FRONT_ID, tier);
+      await genCover(COVER_FRONT_ID);
     } catch (err) {
       notify.error(err);
     } finally {
@@ -230,11 +196,9 @@ export function CoverToolsPanel({
 
   async function generateBack() {
     flushTextFields();
-    const tier = await requireImageTier();
-    if (!tier) return;
     setBusy("back");
     try {
-      await genCover(COVER_BACK_ID, tier);
+      await genCover(COVER_BACK_ID);
     } catch (err) {
       notify.error(err);
     } finally {
@@ -260,26 +224,15 @@ export function CoverToolsPanel({
   }
 
   async function renderWrapPair() {
-    // The back cover is a true outpaint continuation of the front's real edge
-    // pixels, which needs a mask-capable model — only the premium tier offers
-    // that (see `renderCoverContinuation`). Forced unconditionally, like baked
-    // text, rather than asking `requireImageTier()` for the user's saved
-    // preference: a quick-tier "match" would silently fall back to a lesser
-    // (non-continuous) result.
-    const tier: ImageTier = "premium";
     await generateCoverWrap({
-      tier,
       onFrontSettled: () => undefined,
       onBackStart: () => undefined,
     });
   }
 
-  async function renderSeparatePair(tier: ImageTier) {
-    const live = useProjectsStore.getState().current();
-    const liveDoc = live?.screenplay ? getCursor(live.screenplay).content : null;
-    const setFrontTier: ImageTier = liveDoc?.frontCover?.bakeText ? "premium" : tier;
-    await renderCover(COVER_FRONT_ID, setFrontTier);
-    await renderCover(COVER_BACK_ID, tier);
+  async function renderSeparatePair() {
+    await renderCover(COVER_FRONT_ID);
+    await renderCover(COVER_BACK_ID);
   }
 
   async function generateWrapSet() {
@@ -287,36 +240,31 @@ export function CoverToolsPanel({
     return runCoverPair(renderWrapPair);
   }
 
-  async function generateSeparateSet(tier: ImageTier) {
+  async function generateSeparateSet() {
     flushTextFields();
-    return runCoverPair(() => renderSeparatePair(tier));
+    return runCoverPair(renderSeparatePair);
   }
 
   async function generateSet() {
     if (wrap) return generateWrapSet();
-    const tier = await requireImageTier();
-    if (!tier) return;
-    return generateSeparateSet(tier);
+    return generateSeparateSet();
   }
 
   async function generateStarter() {
     return runCoverPair(async () => {
       if (frontBake) await setFrontBake(false);
       flushTextFields();
-      if (creationMode === "finished") await renderWrapPair();
-      else await renderSeparatePair("quick");
+      await renderWrapPair();
     });
   }
 
   function restoreRecommendedSetup() {
     setWrap(true);
     if (frontBake) void setFrontBake(false);
-    setCreationMode("finished");
     setCustomizingFirstCover(false);
   }
 
   function customizeStarter() {
-    setWrap(creationMode === "finished");
     setCustomizingFirstCover(true);
   }
 
@@ -338,13 +286,9 @@ export function CoverToolsPanel({
     return (
       <CoverCreationStart
         title={project.title}
-        mode={creationMode}
-        premiumLabel={premiumLabel}
-        quickLabel={quickLabel}
         loading={anyBusy}
         disabled={anyBusy}
-        costRange={creationMode === "finished" ? wrapCostRange : fastSetCostRange}
-        onModeChange={setCreationMode}
+        costRange={setCostRange}
         onGenerate={() => void generateStarter()}
         onCustomize={customizeStarter}
       />
@@ -497,11 +441,6 @@ export function CoverToolsPanel({
                 label="Paint title into illustration"
               />
             </div>
-            {frontBake && (
-              <Callout tone="brand" icon={Info}>
-                Uses {premiumLabel} (not {quickLabel}).
-              </Callout>
-            )}
           </>
         )}
         <div className="flex items-center justify-between gap-3">
@@ -511,11 +450,6 @@ export function CoverToolsPanel({
           </div>
           <Toggle checked={wrap} onChange={setWrap} label="Continue the front scene onto the back" />
         </div>
-        {wrap && (
-          <Callout tone="brand" icon={Info}>
-            Uses {premiumLabel} (not {quickLabel}) — a true continuation needs it.
-          </Callout>
-        )}
       </section>
 
       <section className="space-y-2">
@@ -560,24 +494,16 @@ export function CoverToolsPanel({
 
 function CoverCreationStart({
   title,
-  mode,
-  premiumLabel,
-  quickLabel,
   loading,
   disabled,
   costRange,
-  onModeChange,
   onGenerate,
   onCustomize,
 }: {
   title: string;
-  mode: "finished" | "fast";
-  premiumLabel: string;
-  quickLabel: string;
   loading: boolean;
   disabled: boolean;
   costRange: SparkEstimateRange | null;
-  onModeChange: (mode: "finished" | "fast") => void;
   onGenerate: () => void;
   onCustomize: () => void;
 }) {
@@ -593,29 +519,20 @@ function CoverCreationStart({
           {hasTitle ? title : "Add your book title"}
         </h3>
         <p className="mt-1 text-xs leading-relaxed text-ink-500">
-          Choose how to create both sides. Your title stays editable.
+          We&apos;ll paint one connected scene across both covers. Your title stays editable.
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
-        <CoverModeOption
-          active={mode === "finished"}
-          icon={<Sparkles className="size-4" />}
-          title="Finished covers"
-          quality={premiumLabel}
-          description="Front + back · one continuous scene"
-          disabled={disabled}
-          onClick={() => onModeChange("finished")}
-        />
-        <CoverModeOption
-          active={mode === "fast"}
-          icon={<Zap className="size-4" />}
-          title="Fast draft covers"
-          quality={quickLabel}
-          description="Front + back · separate images"
-          disabled={disabled}
-          onClick={() => onModeChange("fast")}
-        />
+      <div className="flex items-start gap-3 rounded-xl border border-brand-200 bg-brand-50 p-3">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-100 text-brand-700">
+          <Sparkles className="size-4" />
+        </span>
+        <div>
+          <p className="text-sm font-semibold text-ink-800">One wraparound illustration</p>
+          <p className="mt-0.5 text-[11px] leading-relaxed text-ink-500">
+            The back continues naturally from the front for a polished, cohesive book cover.
+          </p>
+        </div>
       </div>
 
       {!hasTitle && (
@@ -631,11 +548,7 @@ function CoverCreationStart({
         leftIcon={<Sparkles className="size-4" />}
         onClick={onGenerate}
       >
-        {loading
-          ? "Creating front & back…"
-          : mode === "finished"
-            ? "Create front & back — finished"
-            : "Create front & back — fast draft"}
+        {loading ? "Creating front & back…" : "Create front & back"}
         <SparkEstimateCost range={costRange} action="coverIllustration" />
       </Button>
 
@@ -648,57 +561,5 @@ function CoverCreationStart({
         Customize before creating
       </button>
     </div>
-  );
-}
-
-function CoverModeOption({
-  active,
-  icon,
-  title,
-  quality,
-  description,
-  disabled,
-  onClick,
-}: {
-  active: boolean;
-  icon: React.ReactNode;
-  title: string;
-  quality: string;
-  description: string;
-  disabled: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(
-        "relative flex min-h-32 flex-col rounded-xl border p-3 text-left transition disabled:cursor-not-allowed disabled:opacity-50",
-        active
-          ? "border-brand-500 bg-brand-50 ring-1 ring-brand-200"
-          : "border-ink-200 bg-white hover:border-brand-300",
-      )}
-    >
-      <span
-        className={cn(
-          "flex size-8 items-center justify-center rounded-lg",
-          active ? "bg-brand-100 text-brand-700" : "bg-ink-100 text-ink-500",
-        )}
-      >
-        {icon}
-      </span>
-      {active && (
-        <span className="absolute right-2.5 top-2.5 flex size-4 items-center justify-center rounded-full bg-brand-600 text-white">
-          <Check className="size-2.5" strokeWidth={3} />
-        </span>
-      )}
-      <span className="mt-3 text-sm font-semibold text-ink-800">{title}</span>
-      <span className="mt-0.5 text-[10px] font-semibold uppercase tracking-wide text-brand-600">
-        {quality}
-      </span>
-      <span className="mt-1 text-[11px] leading-snug text-ink-500">{description}</span>
-    </button>
   );
 }

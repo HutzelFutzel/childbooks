@@ -12,20 +12,11 @@ export interface HelpTopic {
 }
 
 export const HELP: Record<string, HelpTopic> = {
-  imageQuality: {
-    title: "Fast vs. High-Quality",
-    body: "This sets the quality for every image you generate. You can switch anytime.",
-    points: [
-      "Fast — a draft in under a minute. Great for laying out the book and trying ideas; characters may drift slightly.",
-      "High-Quality — a few minutes per image, but characters match their references far more closely and small flaws are auto-repaired. Best for the final book.",
-    ],
-  },
   generationTime: {
     title: "Why does this take a while?",
     body: "Each illustration is painted from scratch and matched to your characters' reference art.",
     points: [
       "More characters or places on a page = more references to match = a little longer per image (and a few more Sparks).",
-      "High-Quality takes longer than Fast.",
       "You can leave — rendering continues in the background and appears when it's done.",
     ],
   },

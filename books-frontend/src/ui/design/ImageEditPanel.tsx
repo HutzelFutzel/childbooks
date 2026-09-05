@@ -8,7 +8,6 @@ import { useEffect, useRef, useState } from "react";
 import { ChevronDown, RefreshCw, Sparkles, Wand2 } from "lucide-react";
 import type { ImageElement } from "../../core/types";
 import { Button } from "../components/Button";
-import { FastDraftBanner } from "../components/FastDraftBanner";
 import { Modal } from "../components/Modal";
 import { Field, Input, Textarea } from "../components/Input";
 import { VersionHistoryList } from "../components/VersionHistoryList";
@@ -472,13 +471,6 @@ function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustrati
               }
             />
           )}
-          {cursor.imageTier === "quick" && (
-            <FastDraftBanner
-              upgrading={generating}
-              onUpgrade={() => void illo.upgradeQuality()}
-            />
-          )}
-
           <div>
             <p className="mb-1.5 text-xs font-medium text-ink-600">
               {coverMode ? "Quick edit" : `Change this ${subjectLabel}`}

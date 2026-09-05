@@ -9,32 +9,29 @@ import {
 import type { SparkEstimateRange } from "../../core/config/sparks";
 import type { CostSampleKind } from "../../core/config/imageCostStats";
 import type { ImageActionId } from "../../core/ai/actions";
-import { IMAGE_TIERS, type ImageTier } from "../../core/config/modelConfig";
-import { usePreferredImageTier } from "../../state/imageTier";
+import { CUSTOMER_IMAGE_TIER, type ImageTier } from "../../core/config/modelConfig";
 import { usePlanActionMultiplier, useSubscriptionStore } from "../../state/subscriptionStore";
 import { activeSubscription } from "../../platform/subscriptions";
 import { findPublicPlanByPriceId, planActionMultiplier } from "../../core/config/plans";
 import { spanTierRanges, tierSparkRange, sumTierRanges } from "../hooks/useTierEstimate";
 
 /**
- * The tiers a preview should price. Once the user has chosen, that's the one
- * they'll be charged for; before then we span both rather than quote the cheap
- * one as if it were decided.
+ * Customer previews always quote the production-quality binding. Keeping this
+ * as an array preserves the shared range helpers without exposing model tiers.
  */
-function usePreviewTiers(): ImageTier[] {
-  const tier = usePreferredImageTier();
-  return tier ? [tier] : IMAGE_TIERS;
+function customerPreviewTiers(): ImageTier[] {
+  return [CUSTOMER_IMAGE_TIER];
 }
 
 /**
- * Tier-aware Spark estimate RANGE for a single image action, tracking the user's
- * quality choice + the live cost window. Null when the economy is off.
+ * Production-quality Spark estimate range for a single image action, tracking
+ * the live cost window. Null when the economy is off.
  */
 export function useImageActionRange(
   action: ImageActionId,
   kind: CostSampleKind = "fresh",
 ): SparkEstimateRange | null {
-  const tiers = usePreviewTiers();
+  const tiers = customerPreviewTiers();
   const sparks = useAppConfigStore((s) => s.sparks);
   const modelCosts = useAppConfigStore((s) => s.modelCosts);
   const stats = useAppConfigStore((s) => s.imageCostStats);
@@ -62,7 +59,7 @@ export function useImageActionRange(
 export function useImageBatchRange(
   items: { action: ImageActionId; count: number }[],
 ): SparkEstimateRange | null {
-  const tiers = usePreviewTiers();
+  const tiers = customerPreviewTiers();
   const sparks = useAppConfigStore((s) => s.sparks);
   const modelCosts = useAppConfigStore((s) => s.modelCosts);
   const stats = useAppConfigStore((s) => s.imageCostStats);

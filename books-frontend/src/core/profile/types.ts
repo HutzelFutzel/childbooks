@@ -24,9 +24,8 @@ export const PROFILE_SCHEMA_VERSION = 1;
 /** Per-user application preferences (editable in Settings). */
 export interface UserPreferences {
   /**
-   * The user's default image quality tier. `null` means "not chosen yet" — the
-   * studio prompts a one-time pick on the first generation so the choice is
-   * always deliberate.
+   * Legacy image tier preference. New customer generation ignores this field;
+   * it remains readable so existing profile documents need no migration.
    */
   imageTier: ImageTier | null;
   /**
@@ -100,7 +99,7 @@ export interface UserProfile {
   currency: string | null;
   /** Whether the user opted in to marketing email. */
   marketingOptIn: boolean;
-  /** Per-user app preferences (image quality tier, …). */
+  /** Per-user app preferences (including legacy fields retained for compatibility). */
   preferences: UserPreferences;
   /** Small, denormalized analytics/metadata summary (NOT an event log). */
   meta: ProfileMeta;

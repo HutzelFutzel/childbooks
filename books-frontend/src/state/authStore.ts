@@ -70,7 +70,7 @@ const GUEST_FIRST = true;
 /**
  * Coarse capability gate derived from the auth state:
  *   - loading:    auth state not resolved yet (or the guest session is forming)
- *   - guest:      anonymous user — full studio, quick tier only, no purchases
+ *   - guest:      anonymous user — full studio, production art, no purchases
  *   - unverified: email/password account whose address isn't verified yet —
  *                 full studio, purchases locked until verified
  *   - full:       verified account (or Google, which is verified by the provider)

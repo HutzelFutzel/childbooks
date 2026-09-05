@@ -22,6 +22,7 @@ import { useAuthStore } from "../../state/authStore";
 import { useSubscriptionStore } from "../../state/subscriptionStore";
 import { notify } from "../lib/notify";
 import { illustrationUnits } from "../../state/bookUnits";
+import { refreshIllustrationsForPrint } from "./studioGen";
 import { Button } from "../components/Button";
 import { BookMockup } from "../components/BookMockup";
 import { Callout } from "../components/Callout";
@@ -35,8 +36,9 @@ import { useStudio } from "./StudioContext";
 import { buildDisplaySpreads, type Entry } from "./SpreadEditor";
 import { getCursor } from "../../core/versioning";
 import { physicalPageCount } from "../../core/print/pagePlan";
-import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
+import { COVER_BACK_ID, COVER_FRONT_ID, SPINE_ID } from "../../core/types";
 import { BookPreview } from "./BookPreview";
+import { SparkEstimateCost, useImageBatchRange } from "../layout/SparkCost";
 
 /**
  * The finish line: flip through the book, order a professionally
@@ -47,6 +49,7 @@ export function OrderStage() {
   const [ordering, setOrdering] = useState(false);
   const [buyingEbook, setBuyingEbook] = useState(false);
   const [previewing, setPreviewing] = useState(false);
+  const [improvingLegacyArt, setImprovingLegacyArt] = useState(false);
   // Digital edition: only offered when the admin has enabled ebook sales.
   const ebookEnabled = useAppConfigStore((s) => s.pricingSettings.ebook.enabled);
   const accessLevel = useAuthStore((s) => s.accessLevel);
@@ -117,6 +120,43 @@ export function OrderStage() {
     () => units.filter((u) => !currentIllustration(project, u.id)).length,
     [project, units],
   );
+  const legacyDraftIds = useMemo(
+    () =>
+      units
+        .filter((unit) => currentIllustration(project, unit.id)?.imageTier === "quick")
+        .map((unit) => unit.id),
+    [project, units],
+  );
+  const legacyCoverCount = legacyDraftIds.filter(
+    (id) => id === COVER_FRONT_ID || id === COVER_BACK_ID || id === SPINE_ID,
+  ).length;
+  const legacyArtRange = useImageBatchRange([
+    { action: "coverIllustration", count: legacyCoverCount },
+    {
+      action: "pageIllustration",
+      count: legacyDraftIds.length - legacyCoverCount,
+    },
+  ]);
+
+  async function improveLegacyArtwork() {
+    if (legacyDraftIds.length === 0) return;
+    setImprovingLegacyArt(true);
+    try {
+      const queued = await refreshIllustrationsForPrint(
+        project,
+        legacyDraftIds,
+        (error) => notify.error(error),
+      );
+      if (queued > 0) {
+        notify.info(
+          "Improving older artwork",
+          `${queued} illustration${queued === 1 ? " is" : "s are"} being repainted for print.`,
+        );
+      }
+    } finally {
+      setImprovingLegacyArt(false);
+    }
+  }
   // Physical leaves, not editor pages: a spread prints as two, and pagination
   // fillers print as one each. This is the number that gets priced and bound,
   // so it's the number to show and to gate on.
@@ -335,6 +375,30 @@ export function OrderStage() {
           </div>
         </CardBody>
       </Card>
+
+      {legacyDraftIds.length > 0 && (
+        <Callout
+          tone="brand"
+          className="mt-4"
+          title={`Improve ${legacyDraftIds.length} older ${
+            legacyDraftIds.length === 1 ? "illustration" : "illustrations"
+          } for print`}
+          action={
+            <Button
+              size="sm"
+              variant="secondary"
+              loading={improvingLegacyArt}
+              onClick={() => void improveLegacyArtwork()}
+            >
+              Improve all
+              <SparkEstimateCost range={legacyArtRange} />
+            </Button>
+          }
+        >
+          These were created with an earlier draft renderer. Repaint them together for stronger
+          character matching and cleaner printed artwork.
+        </Callout>
+      )}
 
       {missingArt > 0 && (
         <Callout

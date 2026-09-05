@@ -38,8 +38,7 @@ import {
   usePriceOverridesStore,
 } from "../../state/priceOverridesStore";
 import { tierSparkRange } from "../hooks/useTierEstimate";
-import { requireImageTier } from "../../state/imageTierPrompt";
-import type { ImageTier } from "../../core/config/modelConfig";
+import { CUSTOMER_IMAGE_TIER, type ImageTier } from "../../core/config/modelConfig";
 
 /** One unit of a batch, priced the way the server will settle it. */
 interface BatchUnit {
@@ -259,8 +258,8 @@ async function waitForAnchorImages(ids: string[], signal?: AbortSignal): Promise
  * re-queued by "create remaining".
  *
  * `started` is false when a gate refused the batch before it began — no tier
- * chosen, or not enough Sparks. Both cases already put an explanation on screen,
- * so the caller must stay quiet rather than report success over the top of it.
+ * affordable. That case already puts an explanation on screen, so the caller
+ * must stay quiet rather than report success over the top of it.
  * `failed` counts the units that errored, for the caller's own summary; those
  * failures are deliberately NOT toasted one by one.
  */
@@ -275,20 +274,9 @@ export async function generateAllAnchors(
     (a) => a.include && !currentAnchorImage(a) && !skipIds?.has(a.id),
   );
   if (pending.length === 0) return { started: true, failed: 0 };
-  // Paint every card as busy before auth/profile/tier checks or network work.
+  // Paint every card as busy before affordability checks or network work.
   pending.forEach((a) => setGen(a.id, true));
-  let tier: ImageTier | null;
-  try {
-    tier = await requireImageTier();
-  } catch (err) {
-    pending.forEach((a) => setGen(a.id, false));
-    onError(err);
-    return { started: false, failed: 0 };
-  }
-  if (!tier) {
-    pending.forEach((a) => setGen(a.id, false));
-    return { started: false, failed: 0 };
-  }
+  const tier = CUSTOMER_IMAGE_TIER;
   if (!ensureBatchAffordable(pending.map(() => ({ action: "anchorImage" })), tier)) {
     pending.forEach((a) => setGen(a.id, false));
     return { started: false, failed: 0 };
@@ -348,8 +336,7 @@ export async function generateAllPages(
 ): Promise<BatchOutcome> {
   const pending = illustrationUnits(project).filter((s) => !currentIllustration(project, s.id));
   if (pending.length === 0) return { started: true, failed: 0 };
-  const tier = await requireImageTier();
-  if (!tier) return { started: false, failed: 0 };
+  const tier = CUSTOMER_IMAGE_TIER;
   if (!ensureBatchAffordable(pending.map((s) => ({ action: illustrationActionForId(s.id) })), tier))
     return { started: false, failed: 0 };
   pending.forEach((s) => setGen(s.id, true));
@@ -401,22 +388,19 @@ export async function refreshSpread(
     edit?: string;
     fromNodeId?: string;
     restyle?: boolean;
-    tier?: ImageTier;
   },
   onError: (err: unknown) => void,
 ): Promise<void> {
-  const { tier: requestedTier, ...runOptions } = options;
-  const tier = requestedTier ?? (await requireImageTier());
-  if (!tier) return;
+  const tier = CUSTOMER_IMAGE_TIER;
   const refreshUnit: BatchUnit = {
     action: illustrationActionForId(spreadId),
-    kind: runOptions.edit?.trim() ? "edit" : "fresh",
+    kind: options.edit?.trim() ? "edit" : "fresh",
   };
   if (!ensureBatchAffordable([refreshUnit], tier)) return;
 
   try {
     const models = getResolvedModels(tier);
-    const tasks: RefreshTask[] = [{ id: spreadId, status: "pending", options: runOptions }];
+    const tasks: RefreshTask[] = [{ id: spreadId, status: "pending", options }];
     const jobId = await createRefreshJob(project, models, tasks, tier);
     // Fire-and-forget: fold the result in from the job's OWN task subcollection
     // rather than relying solely on the project-wide collection-group listener,
@@ -447,7 +431,6 @@ export async function generateAnchorViaJob(
     edit?: string;
     fromNodeId?: string;
     restyle?: boolean;
-    tier?: ImageTier;
   },
   onError: (err: unknown) => void,
   onSettled?: () => void,
@@ -457,22 +440,14 @@ export async function generateAnchorViaJob(
     onError(new Error("Anchor not found."));
     return false;
   }
-  const { tier: requestedTier, ...runOptions } = options;
-  let tier: ImageTier | null;
-  try {
-    tier = requestedTier ?? (await requireImageTier());
-  } catch (err) {
-    onError(err);
-    return false;
-  }
-  if (!tier) return false;
+  const tier = CUSTOMER_IMAGE_TIER;
 
   const missingChildren = containedAnchorsFor(anchor, project.anchors ?? []).filter(
     (c) => !currentAnchorImage(c),
   );
   const anchorUnits: BatchUnit[] = [
     ...missingChildren.map<BatchUnit>(() => ({ action: "anchorImage" })),
-    { action: "anchorImage", kind: runOptions.edit?.trim() ? "edit" : "fresh" },
+    { action: "anchorImage", kind: options.edit?.trim() ? "edit" : "fresh" },
   ];
   if (!ensureBatchAffordable(anchorUnits, tier)) return false;
 
@@ -480,7 +455,7 @@ export async function generateAnchorViaJob(
     const models = getResolvedModels(tier);
     const tasks: AnchorTask[] = [
       ...missingChildren.map<AnchorTask>((c) => ({ id: c.id, status: "pending" })),
-      { id: anchorId, status: "pending", options: runOptions },
+      { id: anchorId, status: "pending", options },
     ];
     const jobId = await createAnchorsJob(project, models, tasks, tier);
     // Fire-and-forget error surfacing: the enqueue returns immediately, so a
@@ -523,8 +498,7 @@ export async function updateStaleAnchors(
     return Boolean(a?.include && currentAnchorImage(a));
   });
   if (stale.length === 0) return 0;
-  const tier = await requireImageTier();
-  if (!tier) return 0;
+  const tier = CUSTOMER_IMAGE_TIER;
   if (!ensureBatchAffordable(stale.map(() => ({ action: "anchorImage" })), tier)) return 0;
 
   try {
@@ -567,8 +541,7 @@ export async function updateAnchorsThenSpread(
     return Boolean(a?.include && currentAnchorImage(a));
   });
   if (ids.length > 0) {
-    const tier = await requireImageTier();
-    if (!tier) return;
+    const tier = CUSTOMER_IMAGE_TIER;
     if (!ensureBatchAffordable(ids.map(() => ({ action: "anchorImage" })), tier)) return;
     try {
       const models = getResolvedModels(tier);
@@ -607,18 +580,39 @@ export async function refreshStalePages(
   onError: (err: unknown) => void,
 ): Promise<number> {
   const stale = staleIllustrationSpreadIds(project);
-  if (stale.length === 0) return 0;
-  const tier = await requireImageTier();
-  if (!tier) return 0;
+  return refreshIllustrationsForPrint(project, stale, onError);
+}
+
+/**
+ * Re-render a known set of existing illustrations at the customer production
+ * quality. Used by the finish step to offer one book-level upgrade for artwork
+ * created before the single-quality experience replaced draft tiers.
+ */
+export async function refreshIllustrationsForPrint(
+  project: Project,
+  ids: string[],
+  onError: (err: unknown) => void,
+): Promise<number> {
+  const unique = [...new Set(ids)].filter((id) => currentIllustration(project, id));
+  if (unique.length === 0) return 0;
+  const tier = CUSTOMER_IMAGE_TIER;
+  if (
+    !ensureBatchAffordable(
+      unique.map((id) => ({ action: illustrationActionForId(id) })),
+      tier,
+    )
+  ) {
+    return 0;
+  }
   try {
     const models = getResolvedModels(tier);
-    const tasks: RefreshTask[] = stale.map((id) => ({
+    const tasks: RefreshTask[] = unique.map((id) => ({
       id,
       status: "pending",
       options: { useReference: true },
     }));
     await createRefreshJob(project, models, tasks, tier);
-    return stale.length;
+    return unique.length;
   } catch (err) {
     onError(err);
     return 0;

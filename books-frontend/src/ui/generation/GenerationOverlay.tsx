@@ -3,7 +3,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { Clock, Sparkles } from "lucide-react";
 import type { ImageActionId } from "../../core/ai/actions";
-import type { ImageTier } from "../../core/config/modelConfig";
 import { Progress } from "../components/Progress";
 import { cn } from "../lib/cn";
 import { useGenerationProgress } from "./useGenerationProgress";
@@ -12,7 +11,6 @@ export interface GenerationOverlayProps {
   action: ImageActionId;
   /** Number of reference images involved — sharpens the time estimate. */
   refCount?: number;
-  tier?: ImageTier;
   /** Compact mode for small thumbnails (hides captions/progress text). */
   compact?: boolean;
   className?: string;
@@ -27,12 +25,11 @@ export interface GenerationOverlayProps {
 export function GenerationOverlay({
   action,
   refCount = 0,
-  tier,
   compact = false,
   className,
 }: GenerationOverlayProps) {
   const { estimateLabel, elapsedLabel, overdue, progress, phase, phaseIdx } =
-    useGenerationProgress(action, refCount, tier);
+    useGenerationProgress(action, refCount);
 
   return (
     <div

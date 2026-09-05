@@ -103,8 +103,8 @@ export function StyleSetup() {
       await commitStyle(draft);
       const fresh = useProjectsStore.getState().current() ?? project;
       const started = await startStyleRenew(fresh, (err) => notify.error(err));
-      // A refused gate (quality tier / Sparks) leaves the dialog open so the
-      // reader can top up and confirm again — the style itself is already saved.
+      // A refused Spark gate leaves the dialog open so the reader can top up
+      // and confirm again — the style itself is already saved.
       if (!started) return;
       setConfirmOpen(false);
       closeStyleSetup();

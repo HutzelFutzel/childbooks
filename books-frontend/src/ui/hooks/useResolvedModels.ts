@@ -1,5 +1,9 @@
 import { useMemo } from "react";
-import { resolveAnyImageModel, resolveTextModel } from "../../core/config/modelConfig";
+import {
+  CUSTOMER_IMAGE_TIER,
+  resolveBoundImageModel,
+  resolveTextModel,
+} from "../../core/config/modelConfig";
 import type { ResolvedModels } from "../../core/models/registry";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useSettingsStore } from "../../state/settingsStore";
@@ -7,10 +11,8 @@ import { useSettingsStore } from "../../state/settingsStore";
 /**
  * The models resolved from the admin config for the providers the backend is
  * configured for, or null when none is usable. Reactive to availability + the
- * live admin model config. Resolution is authoritative on the server; this is
- * the client mirror used to gate generation UI, so it is tier-agnostic on
- * purpose: the UI unlocks whenever ANY image model is configured for an
- * available provider, and the tier the user picks is applied at generation time.
+ * live admin model config. Resolution is authoritative on the server; this
+ * mirror gates generation only when the production-quality binding is usable.
  */
 export function useResolvedModels(): ResolvedModels | null {
   const providerAvailable = useSettingsStore((s) => s.providerAvailable);
@@ -18,9 +20,15 @@ export function useResolvedModels(): ResolvedModels | null {
   return useMemo(() => {
     const avail = (p: "openai" | "google") => Boolean(providerAvailable[p]);
     const textModel = resolveTextModel(modelConfig, "screenplay", avail);
-    const imageModel = resolveAnyImageModel(modelConfig, "pageIllustration", avail);
+    const imageModel = resolveBoundImageModel(
+      modelConfig,
+      "pageIllustration",
+      CUSTOMER_IMAGE_TIER,
+      avail,
+    );
     if (!textModel || !imageModel) return null;
-    const anchorImageModel = resolveAnyImageModel(modelConfig, "anchorImage", avail) ?? imageModel;
+    const anchorImageModel =
+      resolveBoundImageModel(modelConfig, "anchorImage", CUSTOMER_IMAGE_TIER, avail) ?? imageModel;
     return { textModel, imageModel, anchorImageModel };
   }, [modelConfig, providerAvailable]);
 }

@@ -336,9 +336,9 @@ function buildDependsOn(job: AnyJob): Map<string, string[]> {
 
 /**
  * The caller's standing for job execution (mirrors the HTTP `/ai` guard):
- * every existing account may run jobs — guests included — but guests are
- * limited to the cheap tier with no negative-balance buffer. Fails closed
- * (denied) when the account can't be loaded.
+ * every existing account may run jobs — guests included — at the same artwork
+ * quality. Guests receive no negative-balance buffer. Fails closed when the
+ * account cannot be loaded.
  */
 async function jobCallerStanding(uid: string): Promise<{ allowed: boolean; guest: boolean }> {
   try {
@@ -415,9 +415,8 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
   let tier: ImageTier | undefined;
   let quotedByAction: Record<string, number> | undefined;
   if (job.kind !== "screenplay") {
-    // Guests render on the cheap tier only and get no negative buffer. Everyone
-    // else must have stated a tier — the job fails loudly rather than rendering
-    // (and charging for) a quality the user never chose.
+    // All customer jobs render at production quality. Guests are constrained by
+    // their Spark balance and receive no negative buffer, not degraded artwork.
     tier = requireTier(job.tier, caller.guest);
     // Pre-check image work before dispatch. Text screenplay generation keeps
     // the existing settle-after-use behavior of the synchronous endpoint.

@@ -140,7 +140,7 @@ export interface GenerationJob extends JobLease {
   status: JobStatus;
   /** The project these tasks belong to (for client-side reconciliation). */
   projectId?: string;
-  /** User-chosen quality tier for this batch (server re-resolves the model). */
+  /** Internal model tier stamped on this batch (server re-resolves the model). */
   tier?: ImageTier;
   createdAt: number;
   updatedAt: number;
@@ -175,7 +175,7 @@ export interface PipelineRefreshJob extends JobLease {
   kind: "refresh";
   status: JobStatus;
   projectId?: string;
-  /** User-chosen quality tier for this batch (server re-resolves the model). */
+  /** Internal model tier stamped on this batch (server re-resolves the model). */
   tier?: ImageTier;
   createdAt: number;
   updatedAt: number;
@@ -212,7 +212,7 @@ export interface AnchorsJob extends JobLease {
   kind: "anchors";
   status: JobStatus;
   projectId?: string;
-  /** User-chosen quality tier for this batch (server re-resolves the model). */
+  /** Internal model tier stamped on this batch (server re-resolves the model). */
   tier?: ImageTier;
   createdAt: number;
   updatedAt: number;

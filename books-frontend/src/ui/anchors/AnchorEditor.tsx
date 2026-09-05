@@ -1,15 +1,12 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import type { Anchor } from "../../core/types";
-import type { ImageTier } from "../../core/config/modelConfig";
 import { layoutOf, sheetAspect, sheetSpecFor } from "../../core/pipeline/anchorLayout";
 import { allVersions, getCursor, selectVersion } from "../../core/versioning";
 import { changedAnchorsForAnchor, staleAnchorIds } from "../../state/ai";
 import { useJobsStore } from "../../state/jobsStore";
 import { useProjectsStore } from "../../state/projectsStore";
 import { Button } from "../components/Button";
-import { FastDraftBadge } from "../components/FastDraftBadge";
-import { FastDraftBanner } from "../components/FastDraftBanner";
 import { Field, Input, Textarea } from "../components/Input";
 import { ImagePreview } from "../components/ImagePreview";
 import { Modal } from "../components/Modal";
@@ -76,7 +73,7 @@ export function AnchorEditor({
   const otherChangedRefs = changedRefs.filter((candidate) => candidate.id !== anchor.id);
 
   async function generate(
-    options: { edit?: string; useReference?: boolean; tier?: ImageTier } = {},
+    options: { edit?: string; useReference?: boolean } = {},
   ) {
     if (!project) return;
     setGenerating(true);
@@ -159,7 +156,6 @@ export function AnchorEditor({
                 : "This look will be created with the rest of your cast"
             }
           />
-          {cursorNode?.content.imageTier === "quick" && <FastDraftBadge />}
         </div>
 
         {isStale && (
@@ -177,13 +173,6 @@ export function AnchorEditor({
               Update look
             </Button>
           </div>
-        )}
-
-        {cursorNode?.content.imageTier === "quick" && (
-          <FastDraftBanner
-            upgrading={generating}
-            onUpgrade={() => void generate({ useReference: true, tier: "premium" })}
-          />
         )}
 
         {hasImage && (
