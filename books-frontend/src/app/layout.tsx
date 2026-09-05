@@ -13,6 +13,7 @@ import { AffiliateTracking } from "../ui/affiliates/AffiliateTracking";
 import { ConsentManager } from "../ui/consent/ConsentManager";
 import { AnnouncementBanner } from "../ui/marketing/AnnouncementBanner";
 import { AuthInit } from "../ui/auth/AuthInit";
+import { NumberInputWheelGuard } from "../ui/forms/NumberInputWheelGuard";
 import { DevEnvironmentBanner } from "../ui/layout/DevEnvironmentBanner";
 import { getBrandingConfig } from "../server/branding";
 import { getCookieConfig } from "../server/cookieConfig";
@@ -89,6 +90,7 @@ export default async function RootLayout({
       <body>
         <DevEnvironmentBanner />
         <AuthInit />
+        <NumberInputWheelGuard />
         {children}
         {/* Cookie consent gates Google Analytics — no analytics cookies fire
             until the visitor grants the analytics category. */}
