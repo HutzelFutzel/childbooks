@@ -528,6 +528,112 @@ export interface CouponCodeRecord {
   batchId: string | null;
 }
 
+/** Marker on the lookup document owned by a `sharedCode` coupon. */
+export const SHARED_CODE_BATCH_ID = "__shared";
+
+export interface SharedCodeWrite {
+  code: string;
+  couponId: string;
+  /**
+   * Keep redemption/reservation/revocation state when the same coupon still
+   * owns the same code. A new code or an atomic transfer starts clean.
+   */
+  preserveState: boolean;
+}
+
+export interface SharedCodeReconciliation {
+  writes: SharedCodeWrite[];
+  deletes: string[];
+}
+
+function sharedCodeOwners(config: CouponsConfig): Map<string, string> {
+  const owners = new Map<string, string>();
+  for (const coupon of config.coupons) {
+    if (coupon.issuance !== "sharedCode" || !coupon.sharedCode) continue;
+    owners.set(normalizeCouponCode(coupon.sharedCode), coupon.id);
+  }
+  return owners;
+}
+
+/**
+ * Plan the code-index changes that must commit with a coupon config save.
+ *
+ * Config validation already prevents two NEW coupons from naming the same
+ * shared code. This function handles the other collision: a shared code
+ * colliding with a generated code (possibly from another coupon) already in
+ * Firestore. It also makes rename/delete/issuance changes explicit, so stale
+ * public strings cannot continue resolving after the admin removed them.
+ *
+ * Pure so the expensive edge cases are covered by the invariant suite; the
+ * backend applies the returned plan and both config documents in one Firestore
+ * transaction.
+ */
+export function reconcileSharedCodes(
+  previous: CouponsConfig,
+  next: CouponsConfig,
+  existing: ReadonlyMap<string, CouponCodeRecord>,
+): SharedCodeReconciliation {
+  const before = sharedCodeOwners(previous);
+  const after = sharedCodeOwners(next);
+  const writes: SharedCodeWrite[] = [];
+  const deletes: string[] = [];
+
+  for (const [code, couponId] of after) {
+    const record = existing.get(code);
+    if (!record) {
+      writes.push({ code, couponId, preserveState: false });
+      continue;
+    }
+
+    if (record.couponId === couponId) {
+      // A generated code from this same coupon is still a collision. Without
+      // this distinction, changing issuance would silently turn one code from a
+      // batch into the public shared code while carrying its consumed state.
+      const wasShared =
+        record.batchId === SHARED_CODE_BATCH_ID ||
+        (before.get(code) === couponId && record.batchId === null);
+      if (!wasShared) {
+        throw new Error(
+          `"${code}" already exists as a generated code. Choose a different shared code.`,
+        );
+      }
+      writes.push({ code, couponId, preserveState: true });
+      continue;
+    }
+
+    // Allow an atomic hand-off only when the existing owner is the owner being
+    // removed by THIS save. It starts with fresh counters; uses of the old
+    // coupon must never count against the new one.
+    if (
+      before.get(code) === record.couponId &&
+      (record.batchId === SHARED_CODE_BATCH_ID || record.batchId === null)
+    ) {
+      writes.push({ code, couponId, preserveState: false });
+      continue;
+    }
+
+    throw new Error(
+      `"${code}" is already assigned to another coupon. Choose a different shared code.`,
+    );
+  }
+
+  for (const code of before.keys()) {
+    if (after.has(code)) continue;
+    const record = existing.get(code);
+    // A missing doc is safe to delete idempotently. Never delete a generated
+    // or foreign code just because a stale catalog happened to name it.
+    if (
+      !record ||
+      (record.couponId === before.get(code) &&
+        (record.batchId === SHARED_CODE_BATCH_ID || record.batchId === null))
+    ) {
+      deletes.push(code);
+    }
+  }
+
+  return { writes, deletes };
+}
+
 export type CouponRedemptionStatus =
   /** Held for an in-flight checkout. */
   | "reserved"

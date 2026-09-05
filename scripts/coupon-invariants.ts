@@ -52,7 +52,9 @@ import {
   normalizeCouponDayStats,
   normalizeCouponsConfig,
   publicCouponsProjection,
+  reconcileSharedCodes,
   resolveBestDiscount,
+  SHARED_CODE_BATCH_ID,
   totalCouponDayStats,
   validateCoupon,
   type Coupon,
@@ -1065,6 +1067,133 @@ rejects("a 0% coupon", {
         }),
       ],
     }).success,
+  );
+}
+
+// ---- 11b. Saving the catalog keeps the shared-code index truthful ----------
+
+{
+  const config = (...coupons: Coupon[]) =>
+    normalizeCouponsConfig({ version: 1, enabled: true, coupons }, NOW);
+  const empty = createDefaultCouponsConfig();
+  const original = coupon();
+  const renamed = coupon({ sharedCode: "NEWCODE20" });
+
+  const created = reconcileSharedCodes(empty, config(original), new Map());
+  check(
+    "saving a new shared code creates its lookup record",
+    created.writes.length === 1 &&
+      created.writes[0]?.code === "WELCOME20" &&
+      created.writes[0]?.couponId === "c1" &&
+      created.writes[0]?.preserveState === false,
+    JSON.stringify(created),
+  );
+
+  const kept = reconcileSharedCodes(
+    config(original),
+    config(original),
+    new Map([["WELCOME20", code({ redeemedCount: 7 })]]),
+  );
+  check(
+    "saving an unchanged shared code preserves its usage",
+    kept.writes.length === 1 &&
+      kept.writes[0]?.preserveState === true &&
+      kept.deletes.length === 0,
+    JSON.stringify(kept),
+  );
+
+  const rename = reconcileSharedCodes(
+    config(original),
+    config(renamed),
+    new Map([["WELCOME20", code()]]),
+  );
+  check(
+    "renaming a shared code removes the stale lookup and creates the new one",
+    rename.deletes[0] === "WELCOME20" &&
+      rename.writes[0]?.code === "NEWCODE20" &&
+      rename.writes[0]?.preserveState === false,
+    JSON.stringify(rename),
+  );
+
+  const removed = reconcileSharedCodes(config(original), empty, new Map());
+  check(
+    "removing a shared coupon removes its public lookup",
+    removed.writes.length === 0 && removed.deletes[0] === "WELCOME20",
+    JSON.stringify(removed),
+  );
+  const conflictingRemoval = reconcileSharedCodes(
+    config(original),
+    empty,
+    new Map([["WELCOME20", code({ batchId: "generated-batch" })]]),
+  );
+  check(
+    "removing stale config cannot delete a generated code",
+    conflictingRemoval.deletes.length === 0,
+    JSON.stringify(conflictingRemoval),
+  );
+
+  let sameCouponCollision = false;
+  try {
+    reconcileSharedCodes(
+      empty,
+      config(original),
+      new Map([["WELCOME20", code({ batchId: "generated-batch" })]]),
+    );
+  } catch (err) {
+    sameCouponCollision = /generated code/i.test(String(err));
+  }
+  check(
+    "a generated code cannot silently become that coupon's shared code",
+    sameCouponCollision,
+  );
+  let historicalCollision = false;
+  try {
+    reconcileSharedCodes(
+      config(original),
+      config(original),
+      new Map([["WELCOME20", code({ batchId: "generated-batch" })]]),
+    );
+  } catch (err) {
+    historicalCollision = /generated code/i.test(String(err));
+  }
+  check(
+    "stale config cannot silently claim one of its coupon's generated codes",
+    historicalCollision,
+  );
+
+  let otherCouponCollision = false;
+  try {
+    reconcileSharedCodes(
+      empty,
+      config(original),
+      new Map([["WELCOME20", code({ couponId: "somebody-else" })]]),
+    );
+  } catch (err) {
+    otherCouponCollision = /another coupon/i.test(String(err));
+  }
+  check("an existing code owned outside the saved catalog is not stolen", otherCouponCollision);
+
+  const transferred = reconcileSharedCodes(
+    config(original),
+    config(coupon({ id: "c2", name: "Replacement" })),
+    new Map([["WELCOME20", code({ redeemedCount: 7 })]]),
+  );
+  check(
+    "an atomic shared-code transfer resets the old coupon's usage state",
+    transferred.writes[0]?.couponId === "c2" &&
+      transferred.writes[0]?.preserveState === false,
+    JSON.stringify(transferred),
+  );
+
+  const orphanRecovered = reconcileSharedCodes(
+    empty,
+    config(original),
+    new Map([["WELCOME20", code({ batchId: SHARED_CODE_BATCH_ID })]]),
+  );
+  check(
+    "a marked orphan from an interrupted historical save can be recovered",
+    orphanRecovered.writes[0]?.preserveState === true,
+    JSON.stringify(orphanRecovered),
   );
 }
 

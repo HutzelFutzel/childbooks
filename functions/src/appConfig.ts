@@ -88,8 +88,11 @@ import {
   createDefaultCouponsConfig,
   normalizeCouponsConfig,
   publicCouponsProjection,
+  reconcileSharedCodes,
+  SHARED_CODE_BATCH_ID,
   type CouponsConfig,
 } from "../../books-frontend/src/core/config/coupons";
+import { CODES, normalizeCodeRecord } from "./coupons/store";
 import {
   BRAND_ASSET_SLOTS,
   createDefaultBrandingConfig,
@@ -629,16 +632,78 @@ export function defaultCouponsConfig(): CouponsConfig {
  * normalizer re-applies the same guards, so a hand-edited Firestore doc can't
  * smuggle past them either.
  *
- * Codes themselves are NOT stored here. The catalog holds the offer; the
- * redeemable strings live in their own collection so a lookup is one document
- * read rather than a scan, and so a generated batch of ten thousand codes
- * doesn't have to fit in a config document. See `coupons/store.ts`.
+ * Redeemable strings live in `couponCodes` so validation is one point read.
+ * Shared codes are reconciled in the SAME transaction as the catalog: saving a
+ * code that is visible in the admin but absent from its lookup collection is
+ * how a valid-looking offer becomes `unknown_code` at checkout.
  */
 export async function saveCouponsConfig(input: unknown): Promise<CouponsConfig> {
   const parsed = couponsConfigSchema.parse(input);
   const normalized = normalizeCouponsConfig({ ...parsed, updatedAt: Date.now() });
-  await writeDoc(COUPONS_DOC, normalized);
-  await writeDoc(COUPONS_PUBLIC_DOC, publicCouponsProjection(normalized));
+  ensureAdmin();
+  const firestore = getFirestore();
+  const configRef = firestore.doc(COUPONS_DOC);
+  const publicRef = firestore.doc(COUPONS_PUBLIC_DOC);
+
+  await firestore.runTransaction(async (tx) => {
+    const previousSnap = await tx.get(configRef);
+    const previous = normalizeCouponsConfig(
+      previousSnap.exists ? previousSnap.data() : undefined,
+    );
+
+    const codes = new Set<string>();
+    for (const coupon of [...previous.coupons, ...normalized.coupons]) {
+      if (coupon.issuance === "sharedCode" && coupon.sharedCode) {
+        codes.add(coupon.sharedCode);
+      }
+    }
+    // Firestore transactions require every read before the first write. Read
+    // the small union of old/new shared strings in one pass, then let the pure
+    // planner decide which are creates, keeps, transfers, or removals.
+    const refs = [...codes].map((code) => firestore.doc(`${CODES}/${code}`));
+    const snaps = refs.length > 0 ? await tx.getAll(...refs) : [];
+    const existing = new Map(
+      snaps
+        .filter((snap) => snap.exists)
+        .map((snap) => [snap.id, normalizeCodeRecord(snap.id, snap.data())] as const),
+    );
+    const plan = reconcileSharedCodes(previous, normalized, existing);
+    const now = Date.now();
+
+    for (const write of plan.writes) {
+      const ref = firestore.doc(`${CODES}/${write.code}`);
+      if (write.preserveState) {
+        tx.set(
+          ref,
+          {
+            couponId: write.couponId,
+            boundUid: null,
+            batchId: SHARED_CODE_BATCH_ID,
+            updatedAt: now,
+          },
+          { merge: true },
+        );
+      } else {
+        tx.set(ref, {
+          couponId: write.couponId,
+          boundUid: null,
+          redeemedCount: 0,
+          reservedCount: 0,
+          revoked: false,
+          createdAt: now,
+          updatedAt: now,
+          batchId: SHARED_CODE_BATCH_ID,
+        });
+      }
+    }
+    for (const code of plan.deletes) tx.delete(firestore.doc(`${CODES}/${code}`));
+
+    tx.set(configRef, normalized, { merge: false });
+    tx.set(publicRef, publicCouponsProjection(normalized), { merge: false });
+  });
+
+  cache.delete(COUPONS_DOC);
+  cache.delete(COUPONS_PUBLIC_DOC);
   return normalized;
 }
 
