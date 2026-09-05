@@ -267,7 +267,12 @@ jobs:
           # Truncate on LINE boundaries, not bytes: `head -c` can cut mid-character
           # and jq rejects invalid UTF-8, which would turn a large release into an
           # empty payload. Diffs are line-oriented anyway.
-          clip() { awk -v max="$1" '{ n += length($0) + 1; if (n > max) exit; print }'; }
+          #
+          # Don't `exit` at the cap: that closes the pipe while git is still
+          # writing, and `pipefail` reports it as SIGPIPE (141) — the last
+          # failure mode after `head -c` and `jq --arg`. Drain the rest so git
+          # can finish; awk still only prints up to `max`.
+          clip() { awk -v max="$1" '{ n += length($0) + 1; if (n <= max) print }'; }
           # Write blobs to files and let jq --rawfile read them. `--arg` puts the
           # value on argv, and Linux rejects a single argument over 128KB
           # (MAX_ARG_STRLEN) — a 400KB clipped diff then dies as
