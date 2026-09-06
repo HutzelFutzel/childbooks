@@ -252,21 +252,21 @@ export interface StoryModeInfo {
 export const STORY_MODES: StoryModeInfo[] = [
   {
     id: "guided",
-    label: "Write it for me",
-    tagline: "Most magic",
+    label: "Create with AI",
+    tagline: "Full AI magic",
     description:
       "Tell us who it's about and pick a theme — we'll write the whole story. Perfect when you want something lovely in under a minute.",
   },
   {
     id: "co-write",
-    label: "Write it together",
-    tagline: "Your story, our words",
+    label: "Guided by details",
+    tagline: "Your details, AI words",
     description:
       "Give us the real people, the occasion and where it happens. We turn your details into a proper story — the one only your family could have.",
   },
   {
     id: "own",
-    label: "I'll write it myself",
+    label: "My own words",
     tagline: "Your words, untouched",
     description:
       "Write or paste your own story. We'll check it reads right for the age you chose, and never change a word unless you ask.",

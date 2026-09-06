@@ -57,9 +57,12 @@ import {
   type BuyerRole,
 } from "../../../../core/config/buyerRoles";
 import { DISCOUNT_ITEM_LABELS, type DiscountItemType } from "../../../../core/config/discountImpact";
-import { IMAGE_TIERS, type ImageTier } from "../../../../core/config/modelConfig";
+import {
+  DEFAULT_IMAGE_TIER_LABELS,
+  IMAGE_TIERS,
+  type ImageTier,
+} from "../../../../core/config/modelConfig";
 import { IMAGE_ACTIONS } from "../../../../core/ai/actions";
-import { useAppConfigStore } from "../../../../state/appConfigStore";
 import { Grid, NumberField } from "../products/parts";
 import { Chips, SwitchField } from "./parts";
 
@@ -71,8 +74,7 @@ const ITEM_OPTIONS = (["print", "ebook", "pack", "plan"] as DiscountItemType[]).
 const IMAGE_ACTION_OPTIONS = IMAGE_ACTIONS.map((a) => ({ value: a.id as string, label: a.label }));
 
 function useImageTierOptions() {
-  const labels = useAppConfigStore((s) => s.modelConfig.imageTierLabels);
-  return IMAGE_TIERS.map((value) => ({ value, label: labels[value] }));
+  return IMAGE_TIERS.map((value) => ({ value, label: DEFAULT_IMAGE_TIER_LABELS[value] }));
 }
 
 export function CampaignRuleEditor({
@@ -675,7 +677,10 @@ function RefundEffectEditor({
             allowEmpty
           />
         </Field>
-        <Field label="Only these image tiers" hint="Empty means every tier.">
+        <Field
+          label="Only these image bindings"
+          hint="Empty means every recorded binding, including unused economy jobs."
+        >
           <Chips
             options={tierOptions}
             selected={effect.scope.tiers}
@@ -733,7 +738,10 @@ function PricingEffectEditor({
           allowEmpty
         />
       </Field>
-      <Field label="Which image tiers" hint="Empty means every tier.">
+      <Field
+        label="Which image bindings"
+        hint="Empty means every recorded binding, including unused economy jobs."
+      >
         <Chips
           options={tierOptions}
           selected={effect.tiers}

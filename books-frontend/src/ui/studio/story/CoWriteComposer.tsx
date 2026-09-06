@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import type { AgeBandStoryCraft } from "../../../core/config/storyCraftCatalog";
 import type { StoryBrief } from "../../../core/types";
+import type { BookLanguageId } from "../../../core/config/bookLanguages";
 import { briefBlockers, isBriefReady } from "../../../core/story/brief";
 import { Button } from "../../components/Button";
 import { Input, Textarea } from "../../components/Input";
@@ -21,6 +22,7 @@ import { useResolvedModels } from "../../hooks/useResolvedModels";
 import { cn } from "../../lib/cn";
 import { fadeRise } from "../../lib/motion";
 import { CastEditor } from "./CastEditor";
+import { LanguageSelector } from "./LanguageSelector";
 import { OptionChips } from "./OptionChips";
 import type { UseStoryDraft } from "./useStoryDraft";
 import type { StoryHistoryOptions } from "./storyUndo";
@@ -32,7 +34,7 @@ const CO_WRITE_STEPS = [
 ] as const;
 
 /**
- * "Write it together": the reader supplies the facts — who, what, when, where —
+ * "Guided by details": the reader supplies the facts — who, what, when, where —
  * and the model supplies the storytelling.
  * Optimized with space-awareness for sidebars and responsive viewports.
  */
@@ -42,12 +44,16 @@ export function CoWriteComposer({
   hasStory,
   onChange,
   draft,
+  contentLocale,
+  onLocaleChange,
 }: {
   brief: StoryBrief;
   craft: AgeBandStoryCraft;
   hasStory: boolean;
   onChange: (patch: Partial<StoryBrief>, options?: StoryHistoryOptions) => void;
   draft: Pick<UseStoryDraft, "writing" | "write">;
+  contentLocale?: BookLanguageId;
+  onLocaleChange?: (locale: BookLanguageId) => void;
 }) {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const models = useResolvedModels();
@@ -343,21 +349,31 @@ export function CoWriteComposer({
                 Next: {CO_WRITE_STEPS[currentStepIndex + 1]?.label}
               </Button>
             ) : (
-              <Button
-                disabled={!canWrite && !writing}
-                loading={writing}
-                variant="primary"
-                size="sm"
-                leftIcon={!writing ? (hasStory ? <RotateCcw className="size-3.5" /> : <Wand2 className="size-3.5" />) : undefined}
-                onClick={() => void write(brief)}
-                className="h-8 text-xs shadow-soft"
-              >
-                {writing
-                  ? "Writing…"
-                  : hasStory
-                    ? "Generate a new version"
-                    : "Write story"}
-              </Button>
+              <>
+                {onLocaleChange && (
+                  <LanguageSelector
+                    value={contentLocale}
+                    onChange={onLocaleChange}
+                    disabled={writing}
+                    size="sm"
+                  />
+                )}
+                <Button
+                  disabled={!canWrite && !writing}
+                  loading={writing}
+                  variant="primary"
+                  size="sm"
+                  leftIcon={!writing ? (hasStory ? <RotateCcw className="size-3.5" /> : <Wand2 className="size-3.5" />) : undefined}
+                  onClick={() => void write(brief)}
+                  className="h-8 text-xs shadow-soft"
+                >
+                  {writing
+                    ? "Writing…"
+                    : hasStory
+                      ? "Generate a new version"
+                      : "Write story"}
+                </Button>
+              </>
             )}
 
           </div>

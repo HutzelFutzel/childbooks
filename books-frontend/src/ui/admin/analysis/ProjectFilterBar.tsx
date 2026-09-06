@@ -7,6 +7,7 @@ import { Input } from "../../components/Input";
 import { Select } from "../../components/Select";
 import { useAdminProjects } from "../../../state/adminProjectsStore";
 import { AGE_RANGES, ART_STYLE_PRESETS } from "../../../core/config/options";
+import { DEFAULT_IMAGE_TIER_LABELS } from "../../../core/config/modelConfig";
 import { BOOK_PRODUCTS } from "../../../core/fulfillment";
 import { MILESTONES } from "./milestones";
 
@@ -85,8 +86,8 @@ export function ProjectFilterBar() {
           className="h-9 w-36"
           options={[
             { value: "", label: "Any tier" },
-            { value: "quick", label: "Quick" },
-            { value: "premium", label: "Premium" },
+            { value: "quick", label: DEFAULT_IMAGE_TIER_LABELS.quick },
+            { value: "premium", label: DEFAULT_IMAGE_TIER_LABELS.premium },
           ]}
         />
 

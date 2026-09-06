@@ -7,8 +7,7 @@ import type { StudioDestination } from "./studioRoutes";
 
 const DESTINATIONS: { id: StudioDestination; label: string }[] = [
   { id: "story", label: "Story" },
-  { id: "style", label: "Art style" },
-  { id: "cast", label: "Characters & places" },
+  { id: "cast", label: "Book look" },
   { id: "pages", label: "Pages" },
 ];
 
@@ -22,11 +21,10 @@ const DESTINATIONS: { id: StudioDestination; label: string }[] = [
 export function StudioNavigator() {
   const { project, destination: active, navigate } = useStudio();
   const progress = computeProgress(project);
-  const styleReady = project.config.styleReady !== false;
+  const activeDestination = active === "style" ? "cast" : active;
 
   const isDone = (id: StudioDestination) => {
     if (id === "story") return progress.story.done;
-    if (id === "style") return styleReady;
     if (id === "cast") return progress.anchors.done;
     if (id === "pages") return progress.edit.done;
     return false;
@@ -46,7 +44,7 @@ export function StudioNavigator() {
       <div className="relative min-w-0 flex-1 sm:hidden">
         <select
           aria-label="Current book section"
-          value={active}
+          value={activeDestination}
           onChange={(event) => navigate(event.target.value as StudioDestination)}
           className="h-9 w-full appearance-none rounded-lg border border-ink-200 bg-white py-0 pl-3 pr-9 text-sm font-semibold text-ink-800 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
         >
@@ -66,7 +64,7 @@ export function StudioNavigator() {
 
       <div className="hidden min-w-0 flex-1 items-center gap-1 sm:flex">
         {DESTINATIONS.map(({ id, label }) => {
-          const current = active === id;
+          const current = activeDestination === id;
           const done = isDone(id);
           const progressDetail = detail(id);
 

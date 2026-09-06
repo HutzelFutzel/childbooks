@@ -10,6 +10,7 @@ import { CardHeader, CardTitle } from "../../components/Card";
 import { CostIntelligenceTab } from "../tabs/CostIntelligenceTab";
 import { useAdminProjects, type ActionRunRow } from "../../../state/adminProjectsStore";
 import { IMAGE_ACTIONS, TEXT_ACTIONS } from "../../../core/ai/actions";
+import { DEFAULT_IMAGE_TIER_LABELS } from "../../../core/config/modelConfig";
 import { downloadCsv } from "./csv";
 import { fmtDateTime, fmtNumber, fmtSparks, fmtUsd } from "./format";
 import { RangePicker } from "./RangePicker";
@@ -161,8 +162,8 @@ function RunLog() {
           className="h-9 w-32"
           options={[
             { value: "", label: "Any tier" },
-            { value: "quick", label: "Quick" },
-            { value: "premium", label: "Premium" },
+            { value: "quick", label: DEFAULT_IMAGE_TIER_LABELS.quick },
+            { value: "premium", label: DEFAULT_IMAGE_TIER_LABELS.premium },
           ]}
         />
         <Input

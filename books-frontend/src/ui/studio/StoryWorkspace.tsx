@@ -62,9 +62,11 @@ export function StoryWorkspace() {
     [config],
   );
 
-  const [topicId, setTopicId] = useState<TopicId>(
-    firstRun ? (topics[0]?.id ?? "reader") : "story",
-  );
+  const [topicId, setTopicId] = useState<TopicId>(() => {
+    if (!firstRun || !config) return "story";
+    const reader = topics.find((candidate) => candidate.id === "reader");
+    return reader?.isAnswered(config) ? "story" : (reader?.id ?? "reader");
+  });
   const [storyToolsOpen, setStoryToolsOpen] = useState(false);
   // Furthest guided index reached — review mode unlocks everything.
   const [furthest, setFurthest] = useState(0);
@@ -160,7 +162,7 @@ export function StoryWorkspace() {
       : !firstRun
         ? "Back to pages"
         : isLast
-          ? "Continue to art style"
+          ? "Continue to book look"
           : topics[index + 1]
             ? `Continue to ${stripTitle(topics[index + 1]!).toLowerCase()}`
             : "Continue";

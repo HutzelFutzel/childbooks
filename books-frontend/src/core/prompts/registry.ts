@@ -232,7 +232,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk("ageGuidance", "{{ageGuidance}}"),
       blk(
         "castHints",
-        "\nThe author wrote this story about REAL people and told us who they are. Treat this as ground truth for their names and ages — prefer it over anything you infer from the prose, and use the ages to get each character's proportions right:\n{{castHints}}",
+        "\nThe author supplied facts about these characters. Treat their names, ages, roles and visible appearance details as ground truth. Prefer them over anything inferred from the prose, and use stated ages to get proportions right:\n{{castHints}}",
         "hasCastHints",
       ),
       blk("story", "\nSTORY:\n{{story}}"),

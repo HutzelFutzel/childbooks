@@ -73,8 +73,7 @@ function bucketAxisLabel(p: ActionCostSeriesPoint, g: CostGranularity): string {
  */
 export function CostIntelligenceTab() {
   const load = useAppConfigStore((s) => s.loadActionCosts);
-  const tierLabels = useAppConfigStore((s) => s.modelConfig.imageTierLabels);
-  const tierLabel = (t: ImageTier) => tierLabels?.[t]?.trim() || DEFAULT_IMAGE_TIER_LABELS[t];
+  const tierLabel = (t: ImageTier) => DEFAULT_IMAGE_TIER_LABELS[t];
   const [granularity, setGranularity] = useState<CostGranularity>("day");
   const [units, setUnits] = useState<number>(SLIDER.day.default);
   const [report, setReport] = useState<ActionCostReport | null>(null);

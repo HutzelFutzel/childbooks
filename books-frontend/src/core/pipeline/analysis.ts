@@ -7,6 +7,7 @@ import { z } from "zod";
 import { AGE_RANGES } from "../config/options";
 import { getBookLanguage } from "../config/bookLanguages";
 import { stripNumericAgeFromDescription } from "../book/anchorDescription";
+import { defaultCharacterAge } from "../book/characterAge";
 import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import type { Anchor, AnchorImportance, AnchorType, BookConfig } from "../types";
@@ -62,21 +63,6 @@ export type AnalysisResult = z.infer<typeof analysisSchema>;
 
 function uid(): string {
   return Math.random().toString(36).slice(2, 10);
-}
-
-function suggestedCharacterAge(
-  character: { name: string; description: string; bodyPlan?: string | null },
-  ageRangeId: string,
-): number {
-  const text = `${character.name} ${character.description}`.toLowerCase();
-  if (/\b(newborn|infant|baby)\b/.test(text)) return 1;
-  if (/\b(toddler|preschooler)\b/.test(text)) return 3;
-  if (/\b(teen|teenager|adolescent)\b/.test(text)) return 15;
-  if (/\b(grandma|grandmother|grandpa|grandfather|elderly|older adult)\b/.test(text)) return 65;
-  if (/\b(mother|mom|mum|father|dad|parent|aunt|uncle|teacher|adult)\b/.test(text)) return 35;
-  if (character.bodyPlan && character.bodyPlan !== "bipedal") return 4;
-  const range = AGE_RANGES.find((item) => item.id === ageRangeId);
-  return range ? Math.round((range.min + range.max) / 2) : 6;
 }
 
 export interface AnalyzeStoryInput {
@@ -139,9 +125,8 @@ export async function analyzeStory(
   const age = AGE_RANGES.find((a) => a.id === config.ageRangeId)?.label ?? config.ageRangeId;
   const language = getBookLanguage(config.contentLocale);
   const ageTextPrompt = resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, prompts);
-  // A co-written story was built from real people the author already described.
-  // Handing those facts back saves the model from re-inferring ages and family
-  // links from prose — the two things it most often gets wrong here.
+  // Guided and co-written stories may carry facts about real people. Handing
+  // them back prevents the model from re-inferring age and appearance.
   const castHints = castPromptLines(briefOf(config));
 
   const { system, user } = renderTextPrompt(resolvePromptsConfig(prompts), "storyAnalysis", {
@@ -152,7 +137,7 @@ export async function analyzeStory(
       story: story.trim(),
       castHints,
     },
-    flags: { hasCastHints: config.storyBrief?.mode === "co-write" && castHints.length > 0 },
+    flags: { hasCastHints: castHints.length > 0 },
   });
 
   const result = await withRetry(
@@ -190,7 +175,7 @@ export async function analyzeStory(
           ? a.ageYears
           : undefined;
     const characterAge = isCharacter
-      ? (reportedAge ?? suggestedCharacterAge(a, config.ageRangeId))
+      ? (reportedAge ?? defaultCharacterAge(a, config.ageRangeId))
       : undefined;
     const ageSource =
       typeof briefAge === "number"

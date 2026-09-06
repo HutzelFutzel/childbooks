@@ -146,11 +146,11 @@ export function StyleSetup() {
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-ink-100 bg-white px-4 py-3 sm:px-6">
         <div className="min-w-0">
           <h1 className="text-base font-semibold text-ink-900">
-            {firstTime ? "Pick a look for your book" : "Art style"}
+            {firstTime ? "Choose your book’s look" : "Art style"}
           </h1>
           <p className="mt-0.5 hidden text-sm text-ink-500 sm:block">
             {firstTime
-              ? "This sets the visual direction for every character and page."
+              ? "Choose a style once. We’ll create the characters in it next."
               : "Choose a new look and we’ll update the existing artwork for you."}
           </p>
         </div>
@@ -166,7 +166,7 @@ export function StyleSetup() {
             rightIcon={<ArrowRight className="size-4" />}
             onClick={onPrimary}
           >
-            {firstTime ? "Continue to characters" : dirty ? "Apply style" : "Done"}
+            {firstTime ? "Use this style" : dirty ? "Apply style" : "Done"}
           </Button>
         </div>
       </header>

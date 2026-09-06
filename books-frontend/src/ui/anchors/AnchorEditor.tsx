@@ -43,12 +43,14 @@ export function AnchorEditor({
   const project = useProjectsStore((state) => state.current());
   const jobActive = useJobsStore((state) => state.activeUnitIds.has(anchor.id));
   const generating = generatingProp || jobActive;
+  const hasImage = Boolean(anchor.versions);
 
   const [edit, setEdit] = useState("");
   const [name, setName] = useState(anchor.name);
   const [age, setAge] = useState(String(anchor.ageYears ?? 6));
   const [description, setDescription] = useState(anchor.description);
   const [userGuidance, setUserGuidance] = useState(anchor.userGuidance ?? "");
+  const [detailsOpen, setDetailsOpen] = useState(!hasImage);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmVersionId, setConfirmVersionId] = useState<string | null>(null);
 
@@ -63,7 +65,6 @@ export function AnchorEditor({
   const fallbackLayout = layoutOf(sheetSpecFor(anchor));
   const cursorAspect = sheetAspect(cursorNode?.content.layout ?? fallbackLayout);
   const versions = anchor.versions ? allVersions(anchor.versions) : [];
-  const hasImage = Boolean(anchor.versions);
   const sparkRange = useImageActionRange("anchorImage");
   const TypeIcon = ANCHOR_TYPE_ICON[anchor.type];
 
@@ -207,9 +208,17 @@ export function AnchorEditor({
           </div>
         )}
 
-        <details className="group rounded-xl border border-ink-100 bg-ink-50/60">
+        <details
+          className="group rounded-xl border border-ink-100 bg-ink-50/60"
+          open={detailsOpen}
+          onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
+        >
           <summary className="flex cursor-pointer list-none items-center justify-between px-3.5 py-3 text-sm font-semibold text-ink-700">
-            Character details
+            {anchor.type === "character"
+              ? "Character details"
+              : anchor.type === "place"
+                ? "Place details"
+                : "Object details"}
             <ChevronDown className="size-4 text-ink-400 transition group-open:rotate-180" />
           </summary>
           <div className="space-y-3 border-t border-ink-100 bg-white px-3.5 py-4">
@@ -366,7 +375,7 @@ export function AnchorEditor({
               Ready with the rest
             </span>
             <p className="mt-1 text-brand-700">
-              Close this panel and use Create my cast to make every missing look together.
+              Close this panel and use Create all looks to make every missing look together.
             </p>
           </div>
         )}

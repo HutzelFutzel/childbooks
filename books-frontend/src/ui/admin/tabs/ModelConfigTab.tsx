@@ -2,15 +2,14 @@
 
 import { useEffect, useId, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { AlertTriangle, DollarSign, FileText, Image as ImageIcon } from "lucide-react";
+import { AlertTriangle, ChevronDown, DollarSign, FileText, Image as ImageIcon } from "lucide-react";
 import { ALL_PROVIDERS } from "../../../core/providers";
 import type { ProviderId } from "../../../core/config/options";
 import {
   configuredModels,
-  DEFAULT_IMAGE_TIER_LABELS,
+  CUSTOMER_IMAGE_TIER,
   IMAGE_SPEED_LABELS,
   IMAGE_SPEEDS,
-  IMAGE_TIERS,
   TEXT_SPEED_LABELS,
   TEXT_SPEEDS,
   type ImageSpeed,
@@ -32,7 +31,7 @@ import { classifyModel, FALLBACK_MODELS } from "../../../core/models/catalog";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useSettingsStore } from "../../../state/settingsStore";
 import { Button } from "../../components/Button";
-import { Field, Input, Textarea } from "../../components/Input";
+import { Field, Input } from "../../components/Input";
 import { Select } from "../../components/Select";
 
 const PROVIDER_LABELS: Record<ProviderId, string> = { openai: "OpenAI", google: "Google" };
@@ -199,6 +198,7 @@ export function ModelConfigTab() {
   const [draft, setDraft] = useState<ModelConfig>(stored);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [showLegacyBindings, setShowLegacyBindings] = useState(false);
 
   // Keep the draft in sync with the live config until the admin starts editing.
   useEffect(() => {
@@ -238,27 +238,6 @@ export function ModelConfigTab() {
       },
     }));
   };
-  const setTierLabel = (tier: ImageTier, label: string) => {
-    setDirty(true);
-    setDraft((d) => ({ ...d, imageTierLabels: { ...d.imageTierLabels, [tier]: label } }));
-  };
-  const setTierUi = (
-    tier: ImageTier,
-    field: "description" | "generatedImageNotice",
-    value: string,
-  ) => {
-    setDirty(true);
-    setDraft((d) => ({
-      ...d,
-      imageTierUi: {
-        ...d.imageTierUi,
-        [tier]: { ...d.imageTierUi[tier], [field]: value },
-      },
-    }));
-  };
-  const tierLabel = (tier: ImageTier) =>
-    draft.imageTierLabels?.[tier]?.trim() || DEFAULT_IMAGE_TIER_LABELS[tier];
-
   const hasCost = (p: ProviderId, modelId: string) =>
     !!modelId.trim() && !!modelCosts.models[costKey(p, modelId.trim())];
   const missingCost = useMemo(
@@ -271,32 +250,15 @@ export function ModelConfigTab() {
   const textValues = new Set(textOptions.map((o) => o.value));
   const imageValues = new Set(imageOptions.map((o) => o.value));
 
-  const presentationInvalidCount = IMAGE_TIERS.reduce(
-    (count, tier) =>
-      count +
-      [
-        draft.imageTierLabels[tier],
-        draft.imageTierUi[tier].description,
-        draft.imageTierUi[tier].generatedImageNotice,
-      ].filter((value) => !value.trim()).length,
-    0,
-  );
   const invalidCount =
     TEXT_ACTIONS.filter((a) => {
       const b = draft.textBindings[a.id];
       return !textValues.has(`${b.provider}:${b.speed}`);
     }).length +
-    IMAGE_ACTIONS.reduce((n, a) => {
-      const tiers = draft.imageBindings[a.id];
-      return (
-        n +
-        IMAGE_TIERS.filter((t) => {
-          const b = tiers?.[t];
-          return !b || !imageValues.has(`${b.provider}:${b.speed}`);
-        }).length
-      );
-    }, 0) +
-    presentationInvalidCount;
+    IMAGE_ACTIONS.filter((a) => {
+      const b = draft.imageBindings[a.id]?.[CUSTOMER_IMAGE_TIER];
+      return !b || !imageValues.has(`${b.provider}:${b.speed}`);
+    }).length;
   const allValid = invalidCount === 0;
 
   const onSave = async () => {
@@ -397,7 +359,8 @@ export function ModelConfigTab() {
         <header>
           <h3 className="text-sm font-semibold text-ink-800">Stage 2 · Action bindings</h3>
           <p className="text-xs text-ink-500">
-            Choose which model each AI action uses. Only defined slots are selectable.
+            Choose which model each AI action uses. Image actions bind to production artwork —
+            the only model customers generate with.
           </p>
         </header>
 
@@ -436,8 +399,8 @@ export function ModelConfigTab() {
               <span className="text-xs font-semibold text-ink-600">Image actions</span>
             </div>
             <p className="text-xs text-ink-500">
-              Customer generation always uses the production-quality binding. The economy
-              binding remains available for internal tooling and historical jobs.
+              Every customer illustration uses the production artwork binding. Guests and
+              signed-in accounts share this model.
             </p>
             {imageOptions.length === 0 && (
               <div className="flex items-center gap-1.5 rounded-lg bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
@@ -445,101 +408,88 @@ export function ModelConfigTab() {
                 No image model slots are defined. Add one above before binding image actions.
               </div>
             )}
-            {IMAGE_ACTIONS.map((action) => (
-              <div
-                key={action.id}
-                className="space-y-2 rounded-xl ring-1 ring-inset ring-ink-100 p-3"
+            {IMAGE_ACTIONS.map((action) => {
+              const b = draft.imageBindings[action.id]?.[CUSTOMER_IMAGE_TIER];
+              const value = b ? `${b.provider}:${b.speed}` : "";
+              return (
+                <BindingRow
+                  key={action.id}
+                  action={action}
+                  modality="image"
+                  value={value}
+                  options={imageOptions}
+                  valid={Boolean(b) && imageValues.has(value)}
+                  onChange={(provider, speed) =>
+                    setImageBinding(
+                      action.id,
+                      CUSTOMER_IMAGE_TIER,
+                      provider,
+                      speed as ImageSpeed,
+                    )
+                  }
+                />
+              );
+            })}
+            <div className="rounded-xl bg-ink-50/60 p-3 ring-1 ring-inset ring-ink-100">
+              <button
+                type="button"
+                onClick={() => setShowLegacyBindings((open) => !open)}
+                className="flex w-full items-center justify-between gap-2 text-left"
               >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <ModalityBadge modality="image" />
-                    <span className="text-sm font-medium text-ink-800">{action.label}</span>
-                  </div>
-                  <div className="text-xs text-ink-500">{action.help}</div>
-                </div>
-                {IMAGE_TIERS.map((tier) => {
-                  const b = draft.imageBindings[action.id]?.[tier];
-                  const value = b ? `${b.provider}:${b.speed}` : "";
-                  const valid = imageValues.has(value);
-                  const selectOptions = valid
-                    ? imageOptions
-                    : [{ value: "", label: "— Select a model —" }, ...imageOptions];
-                  return (
-                    <div
-                      key={tier}
-                      className={
-                        "flex flex-col gap-1.5 rounded-lg border-l-4 border-l-violet-200 px-3 py-2 sm:flex-row sm:items-center sm:justify-between" +
-                        (valid ? " bg-ink-50/40" : " bg-amber-50/60")
-                      }
-                    >
-                      <div className="flex items-center gap-2">
-                        <span className="inline-flex items-center rounded-md bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-700">
-                          {tierLabel(tier)}
-                        </span>
-                        {!valid && (
-                          <span className="flex items-center gap-1 text-xs font-medium text-amber-700">
-                            <AlertTriangle className="size-3.5" />
-                            Pick a model
-                          </span>
-                        )}
+                <span>
+                  <span className="text-xs font-semibold text-ink-700">
+                    Unused economy bindings
+                  </span>
+                  <span className="mt-0.5 block text-[11px] leading-relaxed text-ink-500">
+                    Kept for historical jobs. Customers never use these.
+                  </span>
+                </span>
+                <ChevronDown
+                  className={
+                    "size-4 shrink-0 text-ink-400 transition-transform " +
+                    (showLegacyBindings ? "rotate-180" : "")
+                  }
+                />
+              </button>
+              {showLegacyBindings && (
+                <div className="mt-3 space-y-2">
+                  {IMAGE_ACTIONS.map((action) => {
+                    const tier: ImageTier = "quick";
+                    const b = draft.imageBindings[action.id]?.[tier];
+                    const value = b ? `${b.provider}:${b.speed}` : "";
+                    const valid = Boolean(b) && imageValues.has(value);
+                    const selectOptions = valid
+                      ? imageOptions
+                      : [{ value: "", label: "— Unset —" }, ...imageOptions];
+                    return (
+                      <div
+                        key={action.id}
+                        className="flex flex-col gap-1.5 rounded-lg px-3 py-2 sm:flex-row sm:items-center sm:justify-between"
+                      >
+                        <span className="text-sm text-ink-600">{action.label}</span>
+                        <Select
+                          className="w-full sm:w-80"
+                          value={valid ? value : ""}
+                          options={selectOptions}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (!v) return;
+                            const [provider, speed] = v.split(":");
+                            setImageBinding(
+                              action.id,
+                              tier,
+                              provider as ProviderId,
+                              speed as ImageSpeed,
+                            );
+                          }}
+                        />
                       </div>
-                      <Select
-                        className="w-full sm:w-80"
-                        value={valid ? value : ""}
-                        options={selectOptions}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          if (!v) return;
-                          const [provider, speed] = v.split(":");
-                          setImageBinding(action.id, tier, provider as ProviderId, speed as ImageSpeed);
-                        }}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      {/* Stage 3: legacy/internal tier metadata */}
-      <section className="space-y-3">
-        <header>
-          <h3 className="text-sm font-semibold text-ink-800">
-            Stage 3 · Internal tier metadata
-          </h3>
-          <p className="text-xs text-ink-500">
-            Retained for historical records and internal tools. These values are no longer shown
-            in the customer generation experience.
-          </p>
-        </header>
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-          {IMAGE_TIERS.map((tier) => (
-            <div key={tier} className="space-y-3 rounded-xl bg-ink-50/50 p-4 ring-1 ring-inset ring-ink-100">
-              <Field label={tier === "quick" ? "Faster / cheaper tier name" : "Higher-quality tier name"}>
-                <Input
-                  value={draft.imageTierLabels?.[tier] ?? ""}
-                  placeholder={DEFAULT_IMAGE_TIER_LABELS[tier]}
-                  onChange={(e) => setTierLabel(tier, e.target.value)}
-                />
-              </Field>
-              <Field label="Internal description">
-                <Textarea
-                  rows={3}
-                  value={draft.imageTierUi[tier].description}
-                  onChange={(e) => setTierUi(tier, "description", e.target.value)}
-                />
-              </Field>
-              <Field label="Legacy generated-image notice">
-                <Textarea
-                  rows={4}
-                  value={draft.imageTierUi[tier].generatedImageNotice}
-                  onChange={(e) => setTierUi(tier, "generatedImageNotice", e.target.value)}
-                />
-              </Field>
+                    );
+                  })}
+                </div>
+              )}
             </div>
-          ))}
+          </div>
         </div>
       </section>
 
@@ -547,7 +497,7 @@ export function ModelConfigTab() {
         {!allValid && (
           <span className="flex items-center gap-1.5 text-xs font-medium text-amber-700">
             <AlertTriangle className="size-3.5" />
-            {invalidCount} model or presentation {invalidCount === 1 ? "field needs" : "fields need"} attention before saving.
+            {invalidCount} model {invalidCount === 1 ? "binding needs" : "bindings need"} attention before saving.
           </span>
         )}
         {dirty && (

@@ -16,6 +16,8 @@ import {
   createDefaultStoryBrief,
   isDraftStale,
 } from "../../../core/story/brief";
+import { AGE_RANGES } from "../../../core/config/options";
+import { ageBandHasReadingModes } from "../../../core/config/ageWritingCatalog";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { GuidedComposer } from "../../studio/story/GuidedComposer";
 import { CoWriteComposer } from "../../studio/story/CoWriteComposer";
@@ -27,7 +29,6 @@ import { StoryModePicker } from "../../studio/story/StoryModePicker";
 import { useStoryDraft } from "../../studio/story/useStoryDraft";
 import { useStoryRevision } from "../../studio/story/useStoryRevision";
 import { Button } from "../../components/Button";
-import { fadeRise } from "../../lib/motion";
 import type { StepProps } from "./types";
 
 /**
@@ -65,7 +66,6 @@ export function StoryStep({
   const canRefine = config.storyText.trim().length >= 20;
   const brief: StoryBrief =
     config.storyBrief ?? createDefaultStoryBrief(hasStory ? "own" : "guided");
-  const chosen = Boolean(config.storyBrief) || hasStory;
 
   useEffect(() => {
     if (reviewReady) setReviewOpen(true);
@@ -86,7 +86,28 @@ export function StoryStep({
   const patchBrief = (
     patch: Partial<StoryBrief>,
     options?: Parameters<StepProps["update"]>[1],
-  ) => update({ storyBrief: { ...brief, ...patch } }, options);
+  ) => {
+    const configPatch: Parameters<StepProps["update"]>[0] = {
+      storyBrief: { ...brief, ...patch },
+    };
+    // On the fastest guided path, the hero's exact age is the best default for
+    // reading level too. Reader settings remain available for intentional
+    // exceptions, such as an older child who prefers simpler text.
+    if (!hasStory && brief.mode === "guided" && patch.cast) {
+      const heroAge = patch.cast.find((person) => person.name.trim())?.age;
+      const ageRange = AGE_RANGES.find(
+        (candidate) =>
+          heroAge !== undefined && heroAge >= candidate.min && heroAge <= candidate.max,
+      );
+      if (ageRange) {
+        configPatch.ageRangeId = ageRange.id;
+        configPatch.readingModeId = ageBandHasReadingModes(ageRange.id)
+          ? (config.readingModeId ?? "read-aloud")
+          : null;
+      }
+    }
+    update(configPatch, options);
+  };
 
   const setMode = (mode: StoryMode) => {
     if (mode === brief.mode && config.storyBrief) return;
@@ -117,30 +138,6 @@ export function StoryStep({
   const languageChanged =
     hasStory && Boolean(knownOriginLocale) && originLocale !== currentLocale;
   const needsAdaptation = languageChanged || ageChanged;
-
-  // Initial first-time view: 3 mode cards
-  if (!chosen) {
-    return (
-      <motion.div
-        variants={fadeRise}
-        initial="hidden"
-        animate="show"
-        className="flex h-full min-h-0 flex-col items-center justify-center overflow-y-auto p-4"
-      >
-        <div className="my-auto w-full max-w-4xl space-y-5 py-4">
-          <div className="text-center">
-            <h2 className="font-display text-xl font-bold tracking-tight text-ink-900 sm:text-2xl">
-              Choose how to begin
-            </h2>
-            <p className="mx-auto mt-1.5 max-w-lg text-sm leading-relaxed text-ink-500">
-              You’ll be able to edit every word before continuing.
-            </p>
-          </div>
-          <StoryModePicker value={null} onChange={setMode} />
-        </div>
-      </motion.div>
-    );
-  }
 
   const manuscript = (
     <StoryManuscript
@@ -207,10 +204,7 @@ export function StoryStep({
 
           <div key="manuscript-workspace" className="flex min-h-0 flex-1 flex-col">
             {!hasStory && (
-              <div
-                key="empty-story-method"
-                className="mb-3 shrink-0 rounded-xl bg-white p-2 ring-1 ring-ink-200"
-              >
+              <div key="empty-story-method" className="mb-3 shrink-0">
                 <StoryModePicker value={brief.mode} onChange={setMode} compact />
               </div>
             )}
@@ -287,6 +281,8 @@ export function StoryStep({
                       hasStory
                       onChange={patchBrief}
                       draft={storyDraft}
+                      contentLocale={currentLocale}
+                      onLocaleChange={(locale) => update({ contentLocale: locale })}
                     />
                   )}
                   {brief.mode === "co-write" && (
@@ -296,6 +292,8 @@ export function StoryStep({
                       hasStory
                       onChange={patchBrief}
                       draft={storyDraft}
+                      contentLocale={currentLocale}
+                      onLocaleChange={(locale) => update({ contentLocale: locale })}
                     />
                   )}
                 </div>
@@ -307,14 +305,12 @@ export function StoryStep({
     );
   }
 
-  // Before the first draft, show only the chosen task. A blank manuscript next
-  // to a generator creates a second, competing starting point.
+  // Before the first draft, the compact method selector and its task share one
+  // surface. Guided is preselected, so the fastest path needs no mode-gate click.
   return (
     <div className="h-full overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl space-y-3 pb-4">
-        <div className="rounded-xl bg-white p-2 ring-1 ring-ink-200">
-          <StoryModePicker value={brief.mode} onChange={setMode} compact />
-        </div>
+        <StoryModePicker value={brief.mode} onChange={setMode} compact />
         {brief.mode === "guided" ? (
           <GuidedComposer
             brief={brief}
@@ -322,6 +318,8 @@ export function StoryStep({
             hasStory={false}
             onChange={patchBrief}
             draft={storyDraft}
+            contentLocale={currentLocale}
+            onLocaleChange={(locale) => update({ contentLocale: locale })}
           />
         ) : (
           <CoWriteComposer
@@ -330,6 +328,8 @@ export function StoryStep({
             hasStory={false}
             onChange={patchBrief}
             draft={storyDraft}
+            contentLocale={currentLocale}
+            onLocaleChange={(locale) => update({ contentLocale: locale })}
           />
         )}
       </div>

@@ -84,7 +84,10 @@ export function splitHeroNames(raw: string): string[] {
 
 /** The guided-mode hero names with an actual value, trimmed and properly split, in order. */
 export function namedHeroes(brief: StoryBrief): string[] {
-  const list = brief.heroNames ?? [];
+  // New guided briefs keep each hero in `cast` so age and appearance travel
+  // with the name. Fall back to `heroNames` for older projects.
+  const guidedCast = brief.mode === "guided" ? namedCast(brief).map((member) => member.name) : [];
+  const list = guidedCast.length > 0 ? guidedCast : (brief.heroNames ?? []);
   const result: string[] = [];
   const seen = new Set<string>();
   for (const item of list) {
@@ -105,10 +108,14 @@ export function namedHeroes(brief: StoryBrief): string[] {
  */
 export function isBriefReady(brief: StoryBrief): boolean {
   switch (brief.mode) {
-    case "guided":
-      return namedHeroes(brief).length > 0;
-    case "co-write":
-      return namedCast(brief).length > 0 && Boolean(brief.occasion?.trim());
+    case "guided": {
+      const heroes = namedCast(brief);
+      return heroes.length > 0 && heroes.every((hero) => hero.age !== undefined);
+    }
+    case "co-write": {
+      const cast = namedCast(brief);
+      return cast.length > 0 && cast[0]?.age !== undefined && Boolean(brief.occasion?.trim());
+    }
     case "own":
       return false;
   }
@@ -117,11 +124,17 @@ export function isBriefReady(brief: StoryBrief): boolean {
 /** Per-mode explanation of what's still missing (empty when ready). */
 export function briefBlockers(brief: StoryBrief): string[] {
   const out: string[] = [];
-  if (brief.mode === "guided" && namedHeroes(brief).length === 0) {
-    out.push("Add the name of at least one child this book is for.");
+  if (brief.mode === "guided") {
+    const heroes = namedCast(brief);
+    if (heroes.length === 0) out.push("Add the name of at least one child this book is for.");
+    else if (heroes.some((hero) => hero.age === undefined)) {
+      out.push("Add the age of each main character.");
+    }
   }
   if (brief.mode === "co-write") {
-    if (namedCast(brief).length === 0) out.push("Add at least one person the story is about.");
+    const cast = namedCast(brief);
+    if (cast.length === 0) out.push("Add at least one person the story is about.");
+    else if (cast[0]?.age === undefined) out.push("Add the main character's age.");
     if (!brief.occasion?.trim()) out.push("Say what happens — the occasion or the moment.");
   }
   return out;
@@ -136,13 +149,28 @@ export function briefBlockers(brief: StoryBrief): string[] {
 export function heroesLine(brief: StoryBrief): string {
   const names = namedHeroes(brief);
   if (names.length === 0) return "";
+  const people = namedCast(brief);
+  const detailsByName = new Map(
+    people.map((person) => [
+      person.name.trim().toLowerCase(),
+      [
+        person.age !== undefined ? `${person.age} years old` : "",
+        person.note?.trim() ?? "",
+      ].filter(Boolean),
+    ]),
+  );
+  const describe = (name: string) => {
+    const details = detailsByName.get(name.toLowerCase()) ?? [];
+    return `"${name}"${details.length > 0 ? ` (${details.join("; ")})` : ""}`;
+  };
   if (names.length === 1) {
-    return `The book is for a child called "${names[0]}", who is the hero of the story.`;
+    return `The book is for a child called ${describe(names[0]!)}, who is the hero of the story.`;
   }
+  const described = names.map(describe);
   const joined =
-    names.length === 2
-      ? names.join(" and ")
-      : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+    described.length === 2
+      ? described.join(" and ")
+      : `${described.slice(0, -1).join(", ")} and ${described[described.length - 1]}`;
   return `The book is for children called ${joined}, who are the heroes of the story — give each of them a real part to play, not just a mention.`;
 }
 

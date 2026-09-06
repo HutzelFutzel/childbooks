@@ -432,12 +432,11 @@ export interface Anchor {
   descriptionUserEdited?: boolean;
   importance: AnchorImportance;
   /**
-   * Character-only age in years. This is shown and confirmed in Cast, then
-   * carried into both reference-sheet and page prompts so proportions come
-   * from a fact the author understands rather than a hidden sizing control.
+   * Character-only age in years. This stays visible and editable in Cast, then
+   * travels into reference-sheet and page prompts to guide proportions.
    */
   ageYears?: number;
-  /** Why the current age is present, so suggested values remain transparent. */
+  /** Why the current age is present, so estimated defaults remain transparent. */
   ageSource?: "author" | "story" | "suggested";
   /**
    * Character-only: gross body layout, inferred by the story analysis. Selects

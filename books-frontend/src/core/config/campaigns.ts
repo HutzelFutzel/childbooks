@@ -1096,7 +1096,7 @@ const ACTION_LABELS: Record<string, string> = Object.fromEntries(
   [...TEXT_ACTIONS, ...IMAGE_ACTIONS].map((a) => [a.id, a.label.toLowerCase()]),
 );
 
-const TIER_LABELS: Record<ImageTier, string> = { quick: "fast", premium: "premium" };
+const TIER_LABELS: Record<ImageTier, string> = { quick: "economy", premium: "production" };
 
 function joinList(parts: string[], conjunction = "and"): string {
   if (parts.length === 0) return "";

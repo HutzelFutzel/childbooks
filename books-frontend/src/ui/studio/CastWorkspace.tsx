@@ -10,10 +10,10 @@ import { motion } from "framer-motion";
 import {
   AlertCircle,
   ArrowRight,
-  BookOpen,
   CheckCircle2,
   ImagePlus,
   Loader2,
+  Palette,
   Pencil,
   Plus,
   RefreshCw,
@@ -25,6 +25,9 @@ import type { Anchor } from "../../core/types";
 import { anchorThumbBlobId, analyzeCurrentStory, currentAnchorImage } from "../../state/ai";
 import { isAbortError } from "../../core/errors";
 import { stripNumericAgeFromDescription } from "../../core/book/anchorDescription";
+import { defaultCharacterAge } from "../../core/book/characterAge";
+import { resolveArtStyleLabel } from "../../core/prompts/style";
+import { useAppConfigStore } from "../../state/appConfigStore";
 import { useJobsStore, type ScreenplayJobSummary } from "../../state/jobsStore";
 import { useProjectsStore } from "../../state/projectsStore";
 import { AnchorEditor } from "../anchors/AnchorEditor";
@@ -34,11 +37,9 @@ import { Button } from "../components/Button";
 import { Celebrate } from "../components/Celebrate";
 import { Drawer } from "../components/Drawer";
 import { GenerationOverlay } from "../generation/GenerationOverlay";
-import { PipelineStepper, type PipelinePhase } from "../generation/PipelineStepper";
 import { Modal } from "../components/Modal";
 import {
   SparkEstimateCost,
-  useImageActionRange,
   useImageBatchRange,
 } from "../layout/SparkCost";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -46,18 +47,10 @@ import { useResolvedModels } from "../hooks/useResolvedModels";
 import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
 import { useStudio } from "./StudioContext";
-import { generateAllAnchors, generateAnchorViaJob } from "./studioGen";
-
-const ANALYSIS_PHASES: PipelinePhase[] = [
-  { id: "read", label: "Reading your story and meeting its cast", icon: BookOpen },
-];
+import { generateAllAnchors } from "./studioGen";
 
 function uid(): string {
   return Math.random().toString(36).slice(2, 10);
-}
-
-function suggestedAgeForAudience(ageRangeId: string): number {
-  return { "0-2": 2, "3-5": 5, "6-8": 7, "9-12": 10 }[ageRangeId] ?? 6;
 }
 
 export function CastWorkspace({
@@ -69,6 +62,7 @@ export function CastWorkspace({
 }) {
   const {
     project,
+    navigate,
     setStep,
     generatingAnchors,
     setAnchorGenerating,
@@ -84,6 +78,7 @@ export function CastWorkspace({
   const activeJobUnitIds = useJobsStore((s) => s.activeUnitIds);
   const screenplayJob = useJobsStore((s) => s.screenplayJob);
   const startScreenplay = useJobsStore((s) => s.startScreenplay);
+  const artStyles = useAppConfigStore((s) => s.artStyles);
   const models = useResolvedModels();
   const isMobile = useMediaQuery("(max-width: 767px)");
   const [analyzing, setAnalyzing] = useState(false);
@@ -91,10 +86,17 @@ export function CastWorkspace({
   const [editingAnchorId, setEditingAnchorId] = useState<string | null>(null);
   const [deletingAnchorId, setDeletingAnchorId] = useState<string | null>(null);
 
+  const styleLabel = project.config.artStyle?.presetId
+    ? resolveArtStyleLabel(project.config.artStyle.presetId, artStyles)
+    : "Art style";
+
   const allAnchors = project.anchors ?? [];
   const anchors = allAnchors.filter((anchor) => anchor.include);
   const ready = anchors.filter((anchor) => currentAnchorImage(anchor)).length;
   const pending = Math.max(0, anchors.length - ready);
+  const estimatedAgesCount = anchors.filter(
+    (anchor) => anchor.type === "character" && anchor.ageSource === "suggested",
+  ).length;
   const allReady = anchors.length > 0 && pending === 0;
   const canProceed = allReady || (Boolean(project.analysis) && anchors.length === 0);
   const analysisPending = !project.analysis;
@@ -111,9 +113,9 @@ export function CastWorkspace({
   const batchRange = useImageBatchRange([{ action: "anchorImage", count: remaining }]);
 
   // Keep age in its dedicated field. Old projects may have a numeric age baked
-  // into the description or no age field at all, so normalize both once.
+  // into the description or no age field at all, so normalize both once. The
+  // fallback considers role/species before using the child audience range.
   useEffect(() => {
-    const fallbackAge = suggestedAgeForAudience(project.config.ageRangeId);
     let changed = false;
     const next = allAnchors.map((anchor) => {
       if (anchor.type !== "character" || anchor.ageYears !== undefined) return anchor;
@@ -124,7 +126,7 @@ export function CastWorkspace({
       return {
         ...anchor,
         description,
-        ageYears: fallbackAge,
+        ageYears: defaultCharacterAge(anchor, project.config.ageRangeId),
         ageSource: "suggested" as const,
       };
     });
@@ -171,7 +173,10 @@ export function CastWorkspace({
       mode: "creative",
       include: true,
       source: "user",
-      ageYears: suggestedAgeForAudience(project.config.ageRangeId),
+      ageYears: defaultCharacterAge(
+        { name: "New character", description: "", bodyPlan: "bipedal" },
+        project.config.ageRangeId,
+      ),
       ageSource: "suggested",
     };
     void updateConfig({ castReady: false });
@@ -274,41 +279,6 @@ export function CastWorkspace({
     }
   }
 
-  async function generateOne(anchorId: string) {
-    if (!models) {
-      notify.error("AI generation isn't available yet — it's being set up on the server.");
-      return;
-    }
-    const latest = useProjectsStore.getState().current();
-    if (!latest) return;
-    const target = latest.anchors?.find((anchor) => anchor.id === anchorId);
-    if (!target) return;
-
-    // Respond on the click tick, before persistence/tier/network awaits.
-    setAnchorGenerating(anchorId, true);
-    if (!target.description.trim()) {
-      // updateAnchor mutates Zustand synchronously; the debounced save does not
-      // need to block creation of the job's embedded project snapshot.
-      void updateAnchor(anchorId, {
-        description: `A recurring ${target.type} from this story, in the book's chosen art style.`,
-      });
-    }
-
-    const current = useProjectsStore.getState().current();
-    if (!current) {
-      setAnchorGenerating(anchorId, false);
-      return;
-    }
-    const started = await generateAnchorViaJob(
-      current,
-      anchorId,
-      {},
-      (error) => notify.error(error),
-      () => setAnchorGenerating(anchorId, false),
-    );
-    if (!started) setAnchorGenerating(anchorId, false);
-  }
-
   if (analysisPending) {
     if (analysisRun.status === "error") {
       return (
@@ -336,13 +306,36 @@ export function CastWorkspace({
       );
     }
     return (
-      <div className="flex h-full flex-col items-center justify-center bg-aurora">
-        <PipelineStepper
-          title="Meeting your cast…"
-          subtitle="We’re finding the recurring characters and places that should stay recognizable on every page."
-          phases={ANALYSIS_PHASES}
-          activeIndex={0}
-        />
+      <div className="h-full overflow-y-auto bg-ink-50/30">
+        <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-7">
+          <header className="max-w-2xl">
+            <h1 className="font-display text-2xl font-semibold text-ink-900">
+              Preparing your characters
+            </h1>
+            <p className="mt-1.5 text-sm leading-relaxed text-ink-500">
+              We’re finding the people and places that should stay recognizable throughout your book.
+            </p>
+          </header>
+
+          <section className="mt-6" aria-label="Preparing character references">
+            <p className="text-sm font-semibold text-ink-800">Characters and places</p>
+            <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+              {[0, 1, 2].map((index) => (
+                <div
+                  key={index}
+                  className="overflow-hidden rounded-xl border border-ink-200 bg-white"
+                  aria-hidden
+                >
+                  <div className="aspect-3/2 animate-pulse bg-ink-100" />
+                  <div className="space-y-2 p-4">
+                    <div className="h-3 w-28 animate-pulse rounded-full bg-ink-100" />
+                    <div className="h-2.5 w-16 animate-pulse rounded-full bg-ink-100" />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
       </div>
     );
   }
@@ -355,13 +348,19 @@ export function CastWorkspace({
         <div className="mx-auto w-full max-w-6xl px-4 pb-32 pt-6 sm:px-7">
           <header className="max-w-2xl">
             <h1 className="font-display text-2xl font-semibold text-ink-900">
-              {allReady ? "Characters ready" : "Characters & places"}
+              {allReady
+                ? "Your book’s characters"
+                : busy || activeGeneratingCount > 0
+                  ? "Creating your book’s characters"
+                  : "Review your cast"}
             </h1>
-            <p className="mt-1.5 max-w-xl text-sm leading-relaxed text-ink-500">
+            <p className="mt-1.5 text-sm leading-relaxed text-ink-500">
               {anchors.length > 0
                 ? allReady
-                  ? "These references keep the artwork consistent. You can change them at any time."
-                  : "We found these in your story. Create the suggested looks, or adjust only what matters."
+                  ? "Check the main character, then open your pages. Tap anyone to make changes."
+                  : busy || activeGeneratingCount > 0
+                    ? "We’re creating every missing look in your chosen style."
+                    : "We found these characters and places in your story. Edit or remove anything, and add anyone we missed."
                 : "No recurring characters or places are needed for this story."}
             </p>
           </header>
@@ -391,23 +390,36 @@ export function CastWorkspace({
 
           {anchors.length > 0 ? (
             <section className="mt-6" aria-labelledby="cast-grid-title">
-              <div className="mb-3 flex items-end justify-between gap-4">
+              <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
                 <div>
                   <h2 id="cast-grid-title" className="text-sm font-semibold text-ink-800">
-                    {ready} of {anchors.length} ready
+                    Characters and places
                   </h2>
                   <p className="mt-0.5 text-xs text-ink-400">
-                    Tap a card only if you want to change the suggested details.
+                    {estimatedAgesCount > 0
+                      ? `Missing ages were estimated. Change ${estimatedAgesCount === 1 ? "it" : "them"} only if needed.`
+                      : "Tap any card to edit its details."}
                   </p>
                 </div>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => void addAnchor()}
-                  leftIcon={<Plus className="size-3.5" />}
-                >
-                  Add cast member
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    leftIcon={<Palette className="size-3.5 text-ink-500" />}
+                    onClick={() => navigate("style")}
+                    title="Change art style"
+                  >
+                    {styleLabel}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void addAnchor()}
+                    leftIcon={<Plus className="size-3.5" />}
+                  >
+                    Add character or place
+                  </Button>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -418,8 +430,8 @@ export function CastWorkspace({
                     index={index}
                     generating={generatingIds.has(anchor.id)}
                     onOpen={() => setEditingAnchorId(anchor.id)}
-                    onCreate={() => void generateOne(anchor.id)}
                     onDelete={() => setDeletingAnchorId(anchor.id)}
+                    ageEstimated={anchor.ageSource === "suggested"}
                     onAgeChange={(ageYears) =>
                       void updateAnchor(anchor.id, { ageYears, ageSource: "author" })
                     }
@@ -432,14 +444,24 @@ export function CastWorkspace({
               <span className="flex size-12 items-center justify-center rounded-2xl bg-brand-50 text-brand-600">
                 <ImagePlus className="size-5" />
               </span>
-              <button
-                type="button"
-                onClick={() => void addAnchor()}
-                className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-brand-700 hover:text-brand-800"
-              >
-                <Plus className="size-4" />
-                Add a recurring character
-              </button>
+              <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => void addAnchor()}
+                  leftIcon={<Plus className="size-3.5" />}
+                >
+                  Add character or place
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => navigate("style")}
+                  leftIcon={<Palette className="size-3.5 text-ink-500" />}
+                >
+                  {styleLabel}
+                </Button>
+              </div>
             </div>
           )}
         </div>
@@ -469,6 +491,7 @@ export function CastWorkspace({
       >
         {activeAnchor && (
           <AnchorEditor
+            key={activeAnchor.id}
             anchor={activeAnchor}
             generating={generatingAnchors.has(activeAnchor.id)}
             setGenerating={(value) => setAnchorGenerating(activeAnchor.id, value)}
@@ -513,21 +536,20 @@ function CastMemberCard({
   index,
   generating,
   onOpen,
-  onCreate,
   onDelete,
+  ageEstimated,
   onAgeChange,
 }: {
   anchor: Anchor;
   index: number;
   generating: boolean;
   onOpen: () => void;
-  onCreate: () => void;
   onDelete: () => void;
+  ageEstimated: boolean;
   onAgeChange: (age: number) => void;
 }) {
   const image = currentAnchorImage(anchor);
   const Icon = ANCHOR_TYPE_ICON[anchor.type];
-  const sparkRange = useImageActionRange("anchorImage");
 
   return (
     <motion.article
@@ -539,9 +561,9 @@ function CastMemberCard({
       <button
         type="button"
         onClick={onDelete}
-        aria-label={`Remove ${anchor.name}`}
-        title={`Remove ${anchor.name}`}
-        className="absolute right-3 top-3 z-30 flex size-8 items-center justify-center rounded-full bg-white/95 text-ink-500 opacity-100 shadow-soft ring-1 ring-ink-200 backdrop-blur transition hover:bg-red-50 hover:text-red-600 focus:opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+        aria-label={`Remove ${anchor.name} from cast`}
+        title={`Remove ${anchor.name} from cast`}
+        className="absolute right-3 top-3 z-30 flex size-8 items-center justify-center rounded-full bg-white/95 text-ink-500 shadow-soft ring-1 ring-ink-200 backdrop-blur transition hover:bg-red-50 hover:text-red-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300"
       >
         <Trash2 className="size-3.5" />
       </button>
@@ -569,18 +591,6 @@ function CastMemberCard({
           <GenerationOverlay action="anchorImage" compact className="bg-magic" />
         )}
 
-        <span
-          className={cn(
-            "absolute left-3 top-3 rounded-full px-2.5 py-1 text-[11px] font-semibold shadow-soft ring-1 ring-inset",
-            generating
-              ? "bg-white/95 text-brand-700 ring-brand-100"
-              : image
-                ? "bg-emerald-50/95 text-emerald-700 ring-emerald-200"
-                : "bg-white/95 text-ink-600 ring-ink-200",
-          )}
-        >
-          {generating ? "Creating…" : image ? "Ready" : "Needs look"}
-        </span>
       </button>
 
       <div className="flex items-center gap-3 px-4 py-3">
@@ -592,40 +602,19 @@ function CastMemberCard({
           <AgeChip
             name={anchor.name}
             age={anchor.ageYears ?? 6}
+            estimated={ageEstimated}
             onChange={onAgeChange}
           />
         )}
       </div>
-      {image ? (
-        <button
-          type="button"
-          onClick={onOpen}
-          className="mt-auto flex w-full items-center justify-center gap-1.5 border-t border-ink-100 px-4 py-2.5 text-xs font-medium text-ink-500 transition hover:bg-ink-50 hover:text-ink-700"
-        >
-          <Pencil className="size-3.5" />
-          Refine this look
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={onCreate}
-          disabled={generating}
-          className="mt-auto flex w-full items-center justify-center gap-1.5 border-t border-brand-100 bg-brand-50 px-4 py-2.5 text-xs font-semibold text-brand-700 transition hover:bg-brand-100 disabled:cursor-wait disabled:opacity-60"
-        >
-          {generating ? (
-            <>
-              <Loader2 className="size-3.5 animate-spin" />
-              Creating…
-            </>
-          ) : (
-            <>
-              <Sparkles className="size-3.5" />
-              Create this look
-              <SparkEstimateCost range={sparkRange} action="anchorImage" />
-            </>
-          )}
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={onOpen}
+        className="mt-auto flex w-full items-center justify-center gap-1.5 border-t border-ink-100 px-4 py-2.5 text-xs font-medium text-ink-500 transition hover:bg-ink-50 hover:text-ink-700"
+      >
+        <Pencil className="size-3.5" />
+        {image ? "Refine this look" : "Edit details"}
+      </button>
     </motion.article>
   );
 }
@@ -633,10 +622,12 @@ function CastMemberCard({
 function AgeChip({
   name,
   age,
+  estimated,
   onChange,
 }: {
   name: string;
   age: number;
+  estimated: boolean;
   onChange: (age: number) => void;
 }) {
   const [value, setValue] = useState(String(age));
@@ -654,7 +645,9 @@ function AgeChip({
   }
 
   return (
-    <label className="flex shrink-0 items-center gap-1 rounded-full bg-ink-50 px-2.5 py-1 text-[11px] font-medium text-ink-500 ring-1 ring-inset ring-ink-100 focus-within:ring-brand-300">
+    <label
+      className="flex shrink-0 items-center gap-1 rounded-full bg-ink-50 px-2.5 py-1 text-[11px] font-medium text-ink-500 ring-1 ring-inset ring-ink-100 focus-within:ring-brand-300"
+    >
       <span>Age</span>
       <input
         type="number"
@@ -669,6 +662,11 @@ function AgeChip({
         }}
         className="w-7 bg-transparent text-center font-semibold tabular-nums text-ink-800 outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
       />
+      {estimated && (
+        <span className="text-ink-400" title="Estimated from the story and character role">
+          · estimated
+        </span>
+      )}
     </label>
   );
 }
@@ -710,6 +708,8 @@ function CastActionBar({
       ? total === 0
         ? "No cast needed"
         : "Everything looks consistent"
+      : ready === 0 && activeGeneratingCount === 0
+        ? `${remaining} ${remaining === 1 ? "look is" : "looks are"} ready to create`
       : remaining > 0
         ? `${remaining} ${remaining === 1 ? "look" : "looks"} left`
         : activeGeneratingCount > 0
@@ -730,7 +730,7 @@ function CastActionBar({
       ? "Creating looks…"
       : ready > 0 || activeGeneratingCount > 0
         ? "Create remaining looks"
-        : "Create my cast";
+        : `Create all ${remaining} ${remaining === 1 ? "look" : "looks"}`;
 
   return (
     <div className="absolute inset-x-0 bottom-0 z-20 border-t border-ink-200 bg-white px-4 py-3 sm:px-7">
@@ -742,7 +742,11 @@ function CastActionBar({
               canProceed ? "bg-emerald-100 text-emerald-700" : "bg-brand-50 text-brand-700",
             )}
           >
-            {canProceed ? <CheckCircle2 className="size-4" /> : <Sparkles className="size-4" />}
+            {canProceed ? (
+              <CheckCircle2 className="size-4" />
+            ) : (
+              <Sparkles className="size-4" />
+            )}
           </span>
           <div>
             <p className="text-sm font-semibold text-ink-800">{statusLabel}</p>
