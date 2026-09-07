@@ -2,9 +2,11 @@ import type { Metadata, Viewport } from "next";
 import { getSeoConfig } from "../server/seo";
 import { getBrandingConfig } from "../server/branding";
 import { getPublicPlans } from "../server/plans";
+import { getPricingSettings, getPublicProducts } from "../server/products";
 import { getSiteImagesConfig } from "../server/siteImages";
 import { getSiteContentConfig } from "../server/siteContent";
 import { getLegalConfig } from "../server/legal";
+import { buildLandingPrintPricing } from "../ui/marketing/printOffers";
 import { Nav } from "../ui/marketing/Nav";
 import { Hero } from "../ui/marketing/Hero";
 import { TrustStrip } from "../ui/marketing/TrustStrip";
@@ -21,7 +23,8 @@ import { AdminEditBar } from "../ui/marketing/AdminEditBar";
 /**
  * Marketing landing page — server-rendered for SEO. Title/description, social
  * metadata, robots and structured data all come from the admin-managed SEO
- * config (`appConfig/seo`); pricing comes from the public plans projection.
+ * config (`appConfig/seo`); print prices come from the public catalog, and
+ * memberships from the public plans projection.
  * Rendered per request so admin edits appear without a redeploy.
  */
 export const dynamic = "force-dynamic";
@@ -80,17 +83,24 @@ export async function generateViewport(): Promise<Viewport> {
 }
 
 export default async function Home() {
-  const [seo, branding, plans, siteImages, siteContent, legal] = await Promise.all([
+  const [seo, branding, plans, siteImages, siteContent, legal, catalog, settings] = await Promise.all([
     getSeoConfig(),
     getBrandingConfig(),
     getPublicPlans(),
     getSiteImagesConfig(),
     getSiteContentConfig(),
     getLegalConfig(),
+    getPublicProducts(),
+    getPricingSettings(),
   ]);
   const logoUrl = branding.logo?.imageUrl ?? null;
   const images = siteImages.images;
   const text = siteContent.text;
+  const print = buildLandingPrintPricing({
+    products: catalog.products,
+    settings,
+    plans: plans.plans,
+  });
 
   return (
     <>
@@ -102,7 +112,7 @@ export default async function Home() {
         <HowItWorks images={images} text={text} />
         <Features text={text} />
         <FounderStory images={images} text={text} />
-        <Pricing initial={plans} />
+        <Pricing initial={plans} print={print} />
         <Faq items={seo.faq} />
         <CtaBand text={text} />
       </main>
