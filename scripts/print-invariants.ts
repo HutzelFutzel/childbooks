@@ -444,9 +444,11 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
     !issues.some((i) => i.code === "text-outside-safe-area" && i.pageId === "b"),
   );
 
+  // A truly blank leaf: no illustration and no copy. Pages that still have
+  // text (the design above) are not blank — they will print the words.
   const blank = preflightInterior({
-    plan: interiorLeafPlan(doc([spreadEntry("a", "single")])),
-    design,
+    plan: interiorLeafPlan(doc([spreadEntry("c", "single")])),
+    design: { ...design, pages: { ...design.pages, c: { textBoxes: [] } } },
     product: square,
     hasArtwork: () => false,
     labelFor: () => "Page 1",
@@ -454,6 +456,18 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
   check(
     "a page with no artwork is reported before it prints blank",
     blank.some((i) => i.code === "page-has-no-artwork"),
+  );
+
+  const textOnly = preflightInterior({
+    plan: interiorLeafPlan(doc([spreadEntry("b", "single")])),
+    design,
+    product: square,
+    hasArtwork: () => false,
+    labelFor: () => "Page 1",
+  });
+  check(
+    "a page with text and no illustration is not reported as blank",
+    !textOnly.some((i) => i.code === "page-has-no-artwork"),
   );
 }
 
