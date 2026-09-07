@@ -32,6 +32,8 @@ import { interiorLeafPlan, physicalPageCount } from "../../core/print/pagePlan";
 import { preflightInterior } from "../../core/print/preflight";
 import { coverDocumentKey, fetchRenderAvailability, renderBook } from "../../platform/renders";
 import { getCursor } from "../../core/versioning";
+import { illustrationUnits } from "../../state/bookUnits";
+import { unitIsDone } from "../../core/book/pageCompletion";
 import { FulfillmentError } from "../../core/fulfillment/errors";
 import type {
   Recipient,
@@ -227,7 +229,11 @@ export function OrderCheckout({
         plan: interiorLeafPlan(doc),
         design,
         product,
-        hasArtwork: (pageId) => Boolean(pages.find((p) => p.id === pageId)?.blobId),
+        hasArtwork: (pageId) => {
+          if (pages.find((p) => p.id === pageId)?.blobId) return true;
+          const unit = illustrationUnits(project).find((item) => item.id === pageId);
+          return unit ? unitIsDone(project, unit) : false;
+        },
         labelFor: (pageId) => pages.find((p) => p.id === pageId)?.label ?? "A page",
       }),
     [doc, design, product, pages],

@@ -12,6 +12,7 @@ import { useAuthStore } from "../state/authStore";
 import { useSparksUiStore } from "../state/sparksUiStore";
 import type { Anchor, Project, ScreenplayDoc, StoryBrief } from "../core/types";
 import { slimProjectForRender } from "../core/book/slimProject";
+import { bindProjectLikenessPhotos } from "./likeness";
 import type { AnchorRender, AnchorRunOptions } from "../core/pipeline/anchorRun";
 import type { IllustrationRender, IllustrationRunOptions } from "../core/pipeline/illustrationRun";
 import { IntentAmbiguousError } from "../core/pipeline/intentResolve";
@@ -204,12 +205,13 @@ export function screenplayRemote(
   );
 }
 
-export function anchorImageRemote(
+export async function anchorImageRemote(
   project: Project,
   anchorId: string,
   options: AnchorRunOptions,
   tier: ImageTier,
 ): Promise<AnchorRender> {
+  await bindProjectLikenessPhotos(project, [anchorId]);
   // Image render: keep anchors' active images (+ this anchor's branch point).
   const slim = slimProjectForRender(project, {
     keepAnchorVersions: true,

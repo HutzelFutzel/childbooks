@@ -105,7 +105,8 @@ export function preflightInterior(input: PreflightInput): PreflightIssue[] {
 
     if (!seenPages.has(pageId)) {
       seenPages.add(pageId);
-      if (!input.hasArtwork(pageId)) {
+      const hasText = visibleTextBoxes(input.design, pageId).length > 0;
+      if (!input.hasArtwork(pageId) && !hasText) {
         issues.push({
           code: "page-has-no-artwork",
           pageId,

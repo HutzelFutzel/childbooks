@@ -65,6 +65,7 @@ import { registerAffiliateWebhookRoute } from "./affiliates/webhook";
 import { registerAffiliateAdminRoutes } from "./affiliates/admin";
 import { registerAffiliateApplicationRoutes } from "./affiliates/applications";
 import { registerStoryRevisionRoutes } from "./storyRevisionJobs";
+import { registerLikenessRoutes } from "./likeness";
 
 export function createApp(): Express {
   const app = express();
@@ -155,6 +156,7 @@ export function createApp(): Express {
   // `permissions.ts` for the role/grant model and the full route table.
   app.use("/print", requireVerified);
   app.use("/ai", requireAuth);
+  app.use("/likeness", requireAuth);
   app.use("/checkout", requireVerified);
   app.use("/account", requireVerified);
   // Guest-draft import: any signed-in (even not-yet-verified) full account may
@@ -182,6 +184,7 @@ export function createApp(): Express {
   registerLuluRoutes(app);
   registerPrintSyncAdminRoutes(app);
   registerAiRoutes(app);
+  registerLikenessRoutes(app);
   registerStoryRevisionRoutes(app);
   registerMigrationRoutes(app);
   registerAuthRoutes(app);

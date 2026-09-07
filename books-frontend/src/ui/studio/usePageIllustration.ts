@@ -71,7 +71,9 @@ export function usePageIllustration(pageId: string) {
   );
 
   const coverMode = subject?.kind === "cover";
-  const blank = subject?.kind === "spread" && !!subject.spread.blankCanvas;
+  const blank =
+    subject?.kind === "spread" &&
+    (!!subject.spread.blankCanvas || subject.spread.completion === "blank");
   const genSpread = subject ? genSpreadFor(subject) : null;
 
   const tree = project.illustrations?.[pageId];

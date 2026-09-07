@@ -2,10 +2,23 @@ rules_version = '2';
 
 service firebase.storage {
   match /b/{bucket}/o {
-    // Per-user blob space: a signed-in user may read/write only their own
-    // objects under users/{uid}/**. Generated images live here.
-    match /users/{uid}/{allPaths=**} {
+    // Durable user-owned blobs (generated images and uploaded design assets).
+    match /users/{uid}/blobs/{blobId} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // One-use likeness sources are written/deleted only by the validated
+    // backend intake + generation workers. The owner may read the normalized
+    // derivative solely so the UI can show a private preview.
+    match /users/{uid}/likeness/{photoId} {
+      allow read: if false;
+      allow write: if false;
+    }
+
+    // Other per-user paths (renders, fulfillment artifacts, future sensitive
+    // lanes) are backend-managed unless explicitly opened above.
+    match /users/{uid}/{allPaths=**} {
+      allow read, write: if false;
     }
 
     // Admin-managed art-style example images. World-readable so the setup wizard

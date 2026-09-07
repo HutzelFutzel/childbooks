@@ -263,6 +263,8 @@ export const googleImageProvider: ImageProvider = {
           "SIZE CHART — these characters are drawn side by side on one ground line at their correct heights relative to each other. Copy ONLY those proportions; ignore its poses, spacing, blank background and flat arrangement:";
       } else if (ref.role === "relation") {
         label = `Context reference — this is ${ref.label ?? "a related subject"}, mentioned in the instructions. Match it where the instruction relates this subject to it (e.g. shared traits, or an item that appears in the scene):`;
+      } else if (ref.role === "likeness") {
+        label = `ONE-USE LIKENESS photo for ${ref.label ?? "the character"} — preserve the recognizable face, hair and key physical traits while fully redrawing them in the requested illustration style. Do NOT copy the photographic rendering, background, pose, lighting or incidental clothing:`;
       } else {
         label = `Appearance reference for ${ref.label ?? "a subject"} — match this exactly (face, colors, design):`;
       }

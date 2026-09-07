@@ -31,6 +31,8 @@ export { onGenerationJob, runFanTask, runTextTask, reapStuckJobs } from "./jobs"
 
 // Scheduled cleanup of stale anonymous (guest) accounts + their data.
 export { cleanupAnonymousUsers } from "./cleanup";
+// One-use character photos: hard-delete abandoned sources after 24 hours.
+export { cleanupExpiredLikenessPhotos } from "./likeness";
 
 // Scheduled retry of paid orders whose print placement failed.
 export { retryFulfillments } from "./fulfillmentRetry";

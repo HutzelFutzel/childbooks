@@ -15,6 +15,7 @@ import type {
 import { backendFetch } from "./backend";
 import { useAuthStore } from "../state/authStore";
 import { useSparksUiStore } from "../state/sparksUiStore";
+import { slimProjectForRender } from "../core/book/slimProject";
 
 export type StoryRevisionWithId = StoryRevisionJob & { id: string };
 
@@ -61,7 +62,11 @@ export async function startStoryRevision(
   const res = await backendFetch("/ai/story-revisions", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ project, instruction, selection }),
+    body: JSON.stringify({
+      project: slimProjectForRender(project, {}),
+      instruction,
+      selection,
+    }),
   });
   if (!res.ok) {
     let body: {

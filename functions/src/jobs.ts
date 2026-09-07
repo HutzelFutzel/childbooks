@@ -50,6 +50,7 @@ import { ensureAfford, estimateForUser } from "./sparks";
 import { normalizeImageTier, type ImageTier } from "../../books-frontend/src/core/config/modelConfig";
 import { ALL_SECRETS } from "./secrets";
 import { downloadBlob, ensureAdmin, uploadBlob } from "./storage";
+import { deleteLikenessPhotoForSubject } from "./likeness";
 import type { ResolvedModels } from "../../books-frontend/src/core/models/registry";
 import { ProviderError } from "../../books-frontend/src/core/errors";
 import { containedAnchorsFor } from "../../books-frontend/src/core/book/anchorGraph";
@@ -1041,6 +1042,27 @@ async function handleTask(data: TaskPayload, owner: string, attempt: number): Pr
     claimedUntil: 0,
     updatedAt: Date.now(),
   });
+
+  // A likeness source has completed its only job once the first character
+  // sheet is durably recorded. Deletion is best-effort here; the 24-hour
+  // scheduled expiry is the backstop if Storage is temporarily unavailable.
+  if (job.kind === "anchors") {
+    const createdAt = (result as AnchorRender).consumedLikenessCreatedAt;
+    if (createdAt !== undefined) {
+      await deleteLikenessPhotoForSubject(
+        uid,
+        job.project.id,
+        taskId,
+        createdAt,
+      ).catch((err) => {
+        logger.warn("[fan] likeness deletion failed; expiry will retry", {
+          jobId,
+          taskId,
+          err: String(err),
+        });
+      });
+    }
+  }
 
   // Bookkeeping from here on. It must never be able to un-deliver the render
   // above: these two used to sit inside the render's own try/catch, so a

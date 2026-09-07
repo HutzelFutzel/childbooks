@@ -467,7 +467,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "legend",
-        "The reference images are provided in this exact order: {{legend}}. Use each reference image ONLY for its stated purpose; every contained subject must be drawn matching its own reference image exactly.",
+        "The reference images are provided in this exact order: {{legend}}. Use each reference image ONLY for its stated purpose. A likeness photo defines the person's recognizable identity but must be fully transformed into the requested illustration style; every contained subject must match its own reference image exactly.",
         "hasLegend",
       ),
       blk(

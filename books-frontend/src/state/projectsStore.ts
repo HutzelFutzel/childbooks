@@ -36,6 +36,7 @@ import { removeBlob } from "./blobs";
 import { useSettingsStore } from "./settingsStore";
 import { useAppConfigStore } from "./appConfigStore";
 import { resolveShipCountry, useShipCountryStore } from "./shipCountryStore";
+import { bindLikenessPhoto, deleteLikenessPhoto } from "../platform/likeness";
 
 function genId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -46,6 +47,61 @@ function genId(): string {
 
 function stageIndex(stage: ProjectStage): number {
   return STAGE_ORDER.indexOf(stage);
+}
+
+function collectLikenessPhotoSubjects(project: Project): {
+  projectId: string;
+  subjectId: string;
+  createdAt: number;
+}[] {
+  const targets = new Map<
+    string,
+    { projectId: string; subjectId: string; createdAt: number }
+  >();
+  for (const member of project.config.storyBrief?.cast ?? []) {
+    if (!member.likenessPhoto) continue;
+    const target = {
+      projectId: project.id,
+      subjectId: member.id,
+      createdAt: member.likenessPhoto.createdAt,
+    };
+    targets.set(`${target.subjectId}:${target.createdAt}`, target);
+  }
+  for (const anchor of project.anchors ?? []) {
+    if (!anchor.likenessPhoto) continue;
+    const target = {
+      projectId: project.id,
+      subjectId: anchor.id,
+      createdAt: anchor.likenessPhoto.createdAt,
+    };
+    targets.set(`${target.subjectId}:${target.createdAt}`, target);
+  }
+  return [...targets.values()];
+}
+
+function stripLikenessPhotos(project: Project): Project {
+  const storyBrief = project.config.storyBrief;
+  return {
+    ...project,
+    config: {
+      ...project.config,
+      ...(storyBrief?.cast
+        ? {
+            storyBrief: {
+              ...storyBrief,
+              cast: storyBrief.cast.map(({ likenessPhoto: _drop, ...member }) => {
+                void _drop;
+                return member;
+              }),
+            },
+          }
+        : {}),
+    },
+    anchors: project.anchors?.map(({ likenessPhoto: _drop, ...anchor }) => {
+      void _drop;
+      return anchor;
+    }),
+  };
 }
 
 // Prevent a slower load for a previous Firebase identity from replacing the
@@ -226,14 +282,14 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     if (!original) return null;
     const now = Date.now();
     const newId = genId();
-    const duplicate: Project = {
+    const duplicate: Project = stripLikenessPhotos({
       ...JSON.parse(JSON.stringify(original)),
       id: newId,
       title: `${original.title} (Copy)`,
       createdAt: now,
       updatedAt: now,
       rev: undefined,
-    };
+    });
     const { projects } = await getRepos();
     const saved = await projects.save(duplicate);
     touchProjectRemote({ projectId: saved.id, stage: saved.stage, title: saved.title });
@@ -260,7 +316,12 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     // blobs are project-exclusive, so this is always safe; global uploaded
     // assets (settings.assets) are excluded by gcBlobs.
     const target = get().projects.find((p) => p.id === id);
-    if (target) void gcBlobs(collectProjectImageBlobIds(target));
+    if (target) {
+      void gcBlobs(collectProjectImageBlobIds(target));
+      for (const photo of collectLikenessPhotoSubjects(target)) {
+        void deleteLikenessPhoto(photo).catch(() => {});
+      }
+    }
 
     const { projects } = await getRepos();
     await projects.remove(id);
@@ -318,6 +379,14 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     // which point at anchors by id — don't drift and get silently ignored.
     await mutateCurrent(get, set, (p) => {
       const reconciled = reconcileAnchorIds(anchors, p.anchors ?? []);
+      const likenessByName = new Map<string, NonNullable<Anchor["likenessPhoto"]>[]>();
+      for (const member of p.config.storyBrief?.cast ?? []) {
+        if (!member.likenessPhoto) continue;
+        const key = normalizeAnchorName(member.name);
+        const bucket = likenessByName.get(key) ?? [];
+        bucket.push(member.likenessPhoto);
+        likenessByName.set(key, bucket);
+      }
       // Private embedding dependencies arrive keyed by name because the server
       // never sees the final reconciled ids. Resolve them here and replace the
       // old inferred set; there is intentionally no user-facing graph.
@@ -335,12 +404,42 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         ...p,
         analysis,
         config: { ...p.config, castReady: false },
-        anchors: reconciled.map((anchor) => ({
-          ...anchor,
-          containedIds: [...(embeddedByContainer.get(anchor.id) ?? [])],
-        })),
+        anchors: reconciled.map((anchor) => {
+          const bucket = likenessByName.get(normalizeAnchorName(anchor.name));
+          const likenessPhoto =
+            anchor.type === "character" && !anchor.versions
+              ? (anchor.likenessPhoto ?? bucket?.shift())
+              : anchor.likenessPhoto;
+          return {
+            ...anchor,
+            ...(likenessPhoto ? { likenessPhoto } : {}),
+            containedIds: [...(embeddedByContainer.get(anchor.id) ?? [])],
+          };
+        }),
       };
     });
+    const current = get().current();
+    if (current?.config.storyBrief?.cast) {
+      const cast = current.config.storyBrief.cast;
+      await Promise.all(
+        (current.anchors ?? []).flatMap((anchor) => {
+          const photo = anchor.likenessPhoto;
+          if (!photo) return [];
+          const source = cast.find(
+            (member) => member.likenessPhoto?.createdAt === photo.createdAt,
+          );
+          if (!source || source.id === anchor.id) return [];
+          return [
+            bindLikenessPhoto({
+              projectId: current.id,
+              fromSubjectId: source.id,
+              toSubjectId: anchor.id,
+              createdAt: photo.createdAt,
+            }),
+          ];
+        }),
+      );
+    }
   },
 
   async patchAnalysis(patch) {
@@ -384,8 +483,28 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   async removeAnchor(anchorId) {
+    const current = get().current();
+    const photo = current?.anchors?.find((anchor) => anchor.id === anchorId)
+      ?.likenessPhoto;
+    const sourceSubjectId = current?.config.storyBrief?.cast?.find(
+      (member) => member.likenessPhoto?.createdAt === photo?.createdAt,
+    )?.id;
     await mutateCurrent(get, set, (p) => ({
       ...p,
+      config:
+        photo && p.config.storyBrief?.cast
+          ? {
+              ...p.config,
+              storyBrief: {
+                ...p.config.storyBrief,
+                cast: p.config.storyBrief.cast.map((member) =>
+                  member.likenessPhoto?.createdAt === photo.createdAt
+                    ? { ...member, likenessPhoto: undefined }
+                    : member,
+                ),
+              },
+            }
+          : p.config,
       anchors: (p.anchors ?? [])
         .filter((a) => a.id !== anchorId)
         .map((a) => ({
@@ -393,6 +512,20 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
           containedIds: (a.containedIds ?? []).filter((id) => id !== anchorId),
         })),
     }));
+    if (photo && current) {
+      void deleteLikenessPhoto({
+        projectId: current.id,
+        subjectId: anchorId,
+        createdAt: photo.createdAt,
+      }).catch(() => {});
+      if (sourceSubjectId && sourceSubjectId !== anchorId) {
+        void deleteLikenessPhoto({
+          projectId: current.id,
+          subjectId: sourceSubjectId,
+          createdAt: photo.createdAt,
+        }).catch(() => {});
+      }
+    }
   },
 
   async setScreenplay(screenplay) {
@@ -430,6 +563,24 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
           ...next,
           design: withIllustrationFrame(next.design, spreadId, { focus }),
         };
+      }
+      if (blobId && next.screenplay) {
+        const screenplay = next.screenplay;
+        const doc = getCursor(screenplay).content;
+        if (doc.spreads.some((spread) => spread.id === spreadId && spread.completion)) {
+          next = {
+            ...next,
+            screenplay: updateNodeContent(screenplay, screenplay.cursorId, {
+              ...doc,
+              spreads: doc.spreads.map((spread) => {
+                if (spread.id !== spreadId || !spread.completion) return spread;
+                const { completion: _drop, ...rest } = spread;
+                void _drop;
+                return rest;
+              }),
+            }),
+          };
+        }
       }
       return next;
     });

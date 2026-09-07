@@ -13,6 +13,8 @@ export interface GenerationOverlayProps {
   refCount?: number;
   /** Compact mode for small thumbnails (hides captions/progress text). */
   compact?: boolean;
+  /** Optional plain-language status shown by compact thumbnail overlays. */
+  compactLabel?: string;
   className?: string;
 }
 
@@ -26,6 +28,7 @@ export function GenerationOverlay({
   action,
   refCount = 0,
   compact = false,
+  compactLabel,
   className,
 }: GenerationOverlayProps) {
   const { estimateLabel, elapsedLabel, overdue, progress, phase, phaseIdx } =
@@ -46,6 +49,12 @@ export function GenerationOverlay({
       >
         <Sparkles className="size-5" />
       </motion.span>
+
+      {compact && compactLabel && (
+        <p className="max-w-52 text-xs font-semibold text-ink-600">
+          {compactLabel}
+        </p>
+      )}
 
       {!compact && (
         <>

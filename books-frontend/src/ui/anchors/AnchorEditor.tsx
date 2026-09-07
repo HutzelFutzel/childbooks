@@ -9,6 +9,7 @@ import { useProjectsStore } from "../../state/projectsStore";
 import { Button } from "../components/Button";
 import { Field, Input, Textarea } from "../components/Input";
 import { ImagePreview } from "../components/ImagePreview";
+import { LikenessPhotoField } from "../components/LikenessPhotoField";
 import { Modal } from "../components/Modal";
 import { Select } from "../components/Select";
 import { VersionHistoryList } from "../components/VersionHistoryList";
@@ -158,6 +159,19 @@ export function AnchorEditor({
             }
           />
         </div>
+
+        {anchor.type === "character" && !hasImage && project && (
+          <LikenessPhotoField
+            photo={anchor.likenessPhoto}
+            projectId={project.id}
+            subjectId={anchor.id}
+            subjectName={anchor.name}
+            disabled={generating}
+            onChange={(likenessPhoto) =>
+              updateAnchor(anchor.id, { likenessPhoto })
+            }
+          />
+        )}
 
         {isStale && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-3">

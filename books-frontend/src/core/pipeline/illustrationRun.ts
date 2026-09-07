@@ -151,6 +151,14 @@ export interface PipelineEnv {
   apiKeyFor(provider: ProviderId): string;
   /** Read a stored blob as base64, or null when missing. */
   loadBlob(blobId: string): Promise<{ base64: string; mimeType: string } | null>;
+  /**
+   * Read a short-lived likeness source. Kept separate from normal blobs so
+   * browser uploads can never turn into retained project assets by accident.
+   */
+  loadLikenessPhotoForSubject?(
+    projectId: string,
+    subjectId: string,
+  ): Promise<{ base64: string; mimeType: string; createdAt: number } | null>;
   /** Persist a base64 image and return its new blob id. */
   saveImage(base64: string, mimeType: string): Promise<string>;
   /**
@@ -1056,7 +1064,9 @@ export async function renderIllustration(
   options: IllustrationRunOptions,
   env: PipelineEnv,
 ): Promise<IllustrationRender | null> {
-  if (spread.placeholder) return null; // blank pages are not illustrated
+  if (spread.placeholder || spread.blankCanvas || spread.completion === "text" || spread.completion === "blank") {
+    return null;
+  }
 
   const imageModel = env.models.imageModel;
   const key = env.apiKeyFor(imageModel.provider);

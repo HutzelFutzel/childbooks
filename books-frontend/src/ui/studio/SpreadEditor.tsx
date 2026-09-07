@@ -28,6 +28,7 @@ import { PageStagePanel } from "./PageEditorCard";
 import {
   coverSideOf,
   displayEntries,
+  entryNeedsArtwork,
   FOLD_GRADIENT,
   isBlankEntry,
   sideAspect,
@@ -226,27 +227,29 @@ export function displayStatusFor(
   generatingPages: Set<string>,
   activeUnitIds: Set<string>,
 ): UnitStatus {
-  const entries = displayEntries(disp)
-    .map((e) => e.entry)
-    .filter((e) => !isBlankEntry(e));
-  if (entries.length === 0) return "empty";
-  const ids = entries.map((e) => e.page.id);
+  const live = displayEntries(disp).map((e) => e.entry);
+  const needingArt = live.filter(entryNeedsArtwork);
+  if (live.length > 0 && needingArt.length === 0) {
+    return live.every(isBlankEntry) ? "empty" : "ready";
+  }
+  if (needingArt.length === 0) return "empty";
+  const ids = needingArt.map((e) => e.page.id);
   if (ids.some((id) => generatingPages.has(id) || activeUnitIds.has(id))) {
     return "generating";
   }
-  if (entries.some((e) => !e.page.blobId)) return "missing";
-  if (entries.some((e) => stale(e.page.id))) return "stale";
+  if (needingArt.some((e) => !e.page.blobId)) return "missing";
+  if (needingArt.some((e) => stale(e.page.id))) return "stale";
   return "ready";
 }
 
-/** Filtering ignores generation overlays; only missing or stale art needs action. */
+/** Filtering ignores generation overlays; only unfinished pages need action. */
 export function displayNeedsAttention(
   disp: DisplaySpread,
   stale: (pageId: string) => boolean,
 ): boolean {
   return displayEntries(disp)
     .map((side) => side.entry)
-    .filter((entry) => !isBlankEntry(entry))
+    .filter(entryNeedsArtwork)
     .some((entry) => !entry.page.blobId || stale(entry.page.id));
 }
 
@@ -274,7 +277,7 @@ export function useEntryStatus(entry: Entry, stale: (pageId: string) => boolean)
   const { generatingPages } = useStudio();
   const id = entry.page.id;
   const jobActive = useJobsStore((s) => s.activeUnitIds.has(id));
-  if (isBlankEntry(entry)) return "ready";
+  if (isBlankEntry(entry) || !entryNeedsArtwork(entry)) return "ready";
   const generating = generatingPages.has(id) || jobActive;
   if (generating) return "generating";
   if (!entry.page.blobId) return "missing";

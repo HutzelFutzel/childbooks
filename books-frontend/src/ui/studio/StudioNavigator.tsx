@@ -22,6 +22,11 @@ export function StudioNavigator() {
   const { project, destination: active, navigate } = useStudio();
   const progress = computeProgress(project);
   const activeDestination = active === "style" ? "cast" : active;
+  const canReviewAndOrder = progress.edit.done;
+  const mobileDestinations =
+    canReviewAndOrder || active === "order"
+      ? [...DESTINATIONS, { id: "order" as const, label: "Review & order" }]
+      : DESTINATIONS;
 
   const isDone = (id: StudioDestination) => {
     if (id === "story") return progress.story.done;
@@ -48,13 +53,11 @@ export function StudioNavigator() {
           onChange={(event) => navigate(event.target.value as StudioDestination)}
           className="h-9 w-full appearance-none rounded-lg border border-ink-200 bg-white py-0 pl-3 pr-9 text-sm font-semibold text-ink-800 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
         >
-          {[...DESTINATIONS, { id: "order" as const, label: "Preview & order" }].map(
-            ({ id, label }) => (
-              <option key={id} value={id}>
-                {label}
-              </option>
-            ),
-          )}
+          {mobileDestinations.map(({ id, label }) => (
+            <option key={id} value={id}>
+              {label}
+            </option>
+          ))}
         </select>
         <ChevronDown
           aria-hidden
@@ -93,16 +96,15 @@ export function StudioNavigator() {
         })}
       </div>
 
-      {active !== "order" && (
+      {canReviewAndOrder && active !== "order" && active !== "pages" && (
         <Button
           size="sm"
-          variant={progress.edit.done ? "primary" : "secondary"}
+          variant="primary"
           rightIcon={<ArrowRight className="size-4" />}
           onClick={() => navigate("order")}
           className="shrink-0"
         >
-          <span className="hidden sm:inline">Review & order</span>
-          <span className="sm:hidden">{progress.edit.done ? "Order" : "Review"}</span>
+          Review & order
         </Button>
       )}
     </nav>

@@ -38,6 +38,7 @@ import type {
 } from "../core/jobs/types";
 import type { Project } from "../core/types";
 import { slimProjectForRender } from "../core/book/slimProject";
+import { bindProjectLikenessPhotos } from "./likeness";
 
 /** A job document paired with its Firestore id. */
 export type JobWithId = AnyJob & { id: string };
@@ -121,6 +122,10 @@ export async function createAnchorsJob(
   tasks: AnchorTask[],
   tier: ImageTier,
 ): Promise<string> {
+  await bindProjectLikenessPhotos(
+    project,
+    tasks.map((task) => task.id),
+  );
   const now = Date.now();
   // The anchor worker honors the dependency graph, so keep ALL anchors' active
   // images; add each target anchor's branch point. Screenplay/illustrations/

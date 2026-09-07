@@ -111,7 +111,14 @@ export function reconcileScreenplaySpreadIds(
 
   const spreads = next.spreads.map((s, ni) => {
     const reusedId = nextToPrevId.get(ni);
-    return reusedId ? { ...s, id: reusedId } : s;
+    if (!reusedId) return s;
+    const previous = prevSpreads.find((spread) => spread.id === reusedId);
+    return {
+      ...s,
+      id: reusedId,
+      ...(previous?.blankCanvas ? { blankCanvas: true } : {}),
+      ...(previous?.completion ? { completion: previous.completion } : {}),
+    };
   });
   return { ...next, spreads };
 }

@@ -7,8 +7,9 @@
  * character and place has a consistent look before page art is created.
  */
 import type { Project } from "../../core/types";
-import { currentAnchorImage, currentIllustration } from "../../state/ai";
+import { currentAnchorImage } from "../../state/ai";
 import { illustrationUnits } from "../../state/bookUnits";
+import { unitIsDone } from "../../core/book/pageCompletion";
 
 /** Concrete stage shown in the workspace. */
 export type StudioStep = "story" | "anchors" | "edit" | "order";
@@ -96,7 +97,7 @@ export function computeProgress(project: Project): StudioProgress {
 
   const units = illustrationUnits(project);
   const pagesTotal = units.length;
-  const pagesReady = units.filter((u) => currentIllustration(project, u.id)).length;
+  const pagesReady = units.filter((u) => unitIsDone(project, u)).length;
   const hasScreenplay = Boolean(project.screenplay);
   const editDone = hasScreenplay && pagesTotal > 0 && pagesReady === pagesTotal;
 
@@ -137,9 +138,8 @@ export function computeProgress(project: Project): StudioProgress {
     edit: pages,
     design,
     order: {
-      // Preview can open before every page illustration is complete, but never
-      // before the required Cast checkpoint.
-      unlocked: setupDone && anchorsDone && hasScreenplay,
+      // Review & order is the conversion step, not a shortcut around Pages.
+      unlocked: setupDone && anchorsDone && editDone,
       done: false,
       ratio: 0,
     },

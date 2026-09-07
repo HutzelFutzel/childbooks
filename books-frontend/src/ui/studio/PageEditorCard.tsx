@@ -6,6 +6,7 @@ import {
   MoveUp,
   Sparkles,
   Trash2,
+  Type,
   Users,
   Wand2,
 } from "lucide-react";
@@ -35,7 +36,7 @@ import type { SpanRef } from "../design/TextBoxView";
 import { useStudio } from "./StudioContext";
 import { useStudioPanelStore } from "./studioPanelStore";
 import { coverSpread } from "./studioGen";
-import { duplicateSpread, moveSpread, removeSpread } from "./pageOps";
+import { duplicateSpread, moveSpread, removeSpread, setSpreadCompletion } from "./pageOps";
 
 export type PageSubject =
   | { kind: "spread"; spread: ScreenplaySpread }
@@ -322,12 +323,17 @@ export function PageControls({
 /** Per-page actions: move, duplicate, delete. Portaled so it isn't buried under the canvas. */
 export function PageMenu({ spreadId }: { spreadId: string }) {
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const { project } = useStudio();
+  const textOnly =
+    project.screenplay &&
+    getCursor(project.screenplay).content.spreads.find((s) => s.id === spreadId)
+      ?.completion === "text";
   return (
     <>
       <Popover
         side="bottom"
         align="end"
-        panelClassName="w-40 p-1"
+        panelClassName="w-48 p-1"
         trigger={
           <span
             title="Page options"
@@ -365,6 +371,15 @@ export function PageMenu({ spreadId }: { spreadId: string }) {
               }}
             >
               Duplicate
+            </MenuItem>
+            <MenuItem
+              icon={<Type className="size-4" />}
+              onClick={() => {
+                setSpreadCompletion(spreadId, textOnly ? undefined : "text");
+                close();
+              }}
+            >
+              {textOnly ? "Need illustration" : "Text only"}
             </MenuItem>
             <MenuItem
               icon={<Trash2 className="size-4" />}

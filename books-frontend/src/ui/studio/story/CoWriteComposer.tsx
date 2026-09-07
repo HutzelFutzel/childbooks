@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import {
+  AlertCircle,
   ArrowLeft,
   ArrowRight,
   BookOpen,
@@ -380,9 +381,10 @@ export function CoWriteComposer({
         </div>
 
         {currentStepIndex === CO_WRITE_STEPS.length - 1 && blockers.length > 0 && !writing && (
-          <p className="mt-1.5 text-right text-[11px] text-amber-700">
-            {blockers[0]}
-          </p>
+          <div className="mt-2.5 flex items-center justify-end gap-1.5 rounded-lg border border-amber-200/80 bg-amber-50/80 px-2.5 py-1 text-[11px] font-medium text-amber-800">
+            <AlertCircle className="size-3.5 shrink-0 text-amber-600" />
+            <span>{blockers[0]}</span>
+          </div>
         )}
       </div>
     </section>

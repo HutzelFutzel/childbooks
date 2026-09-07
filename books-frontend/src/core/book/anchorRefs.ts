@@ -88,6 +88,7 @@ export function reconcileAnchorIds(next: Anchor[], prev: Anchor[]): Anchor[] {
       ageYears: keepAuthorAge ? match.ageYears : a.ageYears,
       ageSource: keepAuthorAge ? (match.ageSource ?? "author") : a.ageSource,
       userGuidance: match.userGuidance,
+      likenessPhoto: match.likenessPhoto,
       containedIds: match.containedIds,
       versions: a.versions ?? match.versions,
     };

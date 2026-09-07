@@ -10,9 +10,9 @@ import {
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
+  ArrowRight,
   BookText,
   Check,
-  CheckCircle2,
   Eye,
   History,
   Layers as LayersIcon,
@@ -48,6 +48,7 @@ import { AssetsLibrary } from "./AssetsLibrary";
 import { ElementPanel, elementPanelHasContent } from "./ElementPanel";
 import { PageFilmstrip } from "./PageFilmstrip";
 import { PageMenu, PageStagePanel } from "./PageEditorCard";
+import { setSpreadCompletion } from "./pageOps";
 import { PairPageStagePanel } from "./PairPageStage";
 import { useStudio } from "./StudioContext";
 import { useStudioPanelStore, type StudioToolPanel } from "./studioPanelStore";
@@ -63,6 +64,7 @@ import {
   HalfFrame,
   isBlankEntry,
   isPlainPagePair,
+  entryNeedsArtwork,
   sideAspect,
   useEntryStatus,
   COVER_META,
@@ -566,11 +568,11 @@ function InspectorDock({
 
 /**
  * The single "next best action" for the whole book, always visible in the
- * toolbar: generate what's missing → update what's stale → all set. Replaces
- * scattered per-panel batch buttons so there's exactly one place to look.
+ * toolbar: generate what's missing → update what's stale → review & order.
  */
 function NextActionChip() {
   const gen = useBookGeneration();
+  const { navigate } = useStudio();
 
   if (!gen.modelsReady) return null;
 
@@ -628,9 +630,14 @@ function NextActionChip() {
 
   if (gen.everythingDone) {
     return (
-      <span className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
-        <CheckCircle2 className="size-3.5" /> All pages ready
-      </span>
+      <Button
+        size="sm"
+        variant="primary"
+        rightIcon={<ArrowRight className="size-4" />}
+        onClick={() => navigate("order")}
+      >
+        Review & order
+      </Button>
     );
   }
 
@@ -871,6 +878,8 @@ function PageChip({
 }) {
   const { project, setPageGenerating, selectIllustration, pageDesign } = useStudio();
   const blank = isBlankEntry(entry);
+  const textOnly =
+    entry.subject.kind === "spread" && entry.subject.spread.completion === "text";
   const status = useEntryStatus(entry, stale);
   const page = entry.page;
   const coverMode = entry.subject.kind === "cover";
@@ -879,7 +888,17 @@ function PageChip({
   const tree = project.illustrations?.[page.id];
   const cursor = tree ? getCursor(tree).content : null;
   const hasHistory = Boolean(cursor?.blobId);
-  const needsArt = !blank && !hasHistory;
+  const needsArt = entryNeedsArtwork(entry) && !hasHistory;
+
+  function markTextOnly() {
+    if (entry.subject.kind !== "spread") return;
+    setSpreadCompletion(entry.subject.spread.id, "text");
+  }
+
+  function addIllustration() {
+    if (entry.subject.kind === "spread") setSpreadCompletion(entry.subject.spread.id, undefined);
+    onOpenIllustration();
+  }
 
   async function updateStaleArt() {
     selectIllustration(page.id);
@@ -911,21 +930,47 @@ function PageChip({
           )}
 
           {needsArt && status !== "generating" && (
-            <ChipButton
-              label={coverMode ? "Generate cover" : "Generate illustration"}
-              title={
-                coverMode
-                  ? "Open cover tools — set title options, then generate"
-                  : "Open illustration tools — check cast & scene, then generate"
-              }
-              onClick={onOpenIllustration}
-              tone="brand"
-            >
-              <Sparkles className="size-3.5" />
-            </ChipButton>
+            <>
+              <ChipButton
+                label={coverMode ? "Generate cover" : "Generate illustration"}
+                title={
+                  coverMode
+                    ? "Open cover tools — set title options, then generate"
+                    : "Open illustration tools — check cast & scene, then generate"
+                }
+                onClick={onOpenIllustration}
+                tone="brand"
+              >
+                <Sparkles className="size-3.5" />
+              </ChipButton>
+              {!coverMode && (
+                <ChipButton
+                  label="Text only"
+                  title="Finish this page without an illustration"
+                  onClick={markTextOnly}
+                >
+                  <Type className="size-3.5" />
+                </ChipButton>
+              )}
+            </>
           )}
 
-          {!needsArt && !hasFrame && status !== "generating" && (
+          {textOnly && status !== "generating" && (
+            <>
+              <span className="hidden px-1 text-[11px] font-medium text-ink-500 sm:inline">
+                Text only
+              </span>
+              <ChipButton
+                label="Add illustration"
+                title="Create artwork for this page"
+                onClick={addIllustration}
+              >
+                <Sparkles className="size-3.5" />
+              </ChipButton>
+            </>
+          )}
+
+          {!textOnly && hasHistory && !hasFrame && status !== "generating" && (
             <ChipButton
               label="Restore"
               title="Put the last saved version back on the page"
@@ -935,7 +980,7 @@ function PageChip({
             </ChipButton>
           )}
 
-          {hasFrame && status === "stale" && (
+          {!textOnly && hasFrame && status === "stale" && (
             <>
               <span
                 className="hidden max-w-36 truncate px-1 text-[11px] font-medium text-amber-700 sm:inline"
@@ -954,7 +999,7 @@ function PageChip({
             </>
           )}
 
-          {hasFrame && status === "ready" && (
+          {!textOnly && hasFrame && status === "ready" && (
             <Check className="mx-1 size-3.5 text-emerald-500" aria-label="Art ready" />
           )}
         </>

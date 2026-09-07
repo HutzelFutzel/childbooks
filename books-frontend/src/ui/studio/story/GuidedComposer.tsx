@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ChevronDown, Loader2, RotateCcw, Sparkles, Wand2 } from "lucide-react";
+import { AlertCircle, ChevronDown, Loader2, RotateCcw, Sparkles, Wand2 } from "lucide-react";
 import type { AgeBandStoryCraft } from "../../../core/config/storyCraftCatalog";
 import type { StoryBrief } from "../../../core/types";
 import type { BookLanguageId } from "../../../core/config/bookLanguages";
@@ -47,6 +47,7 @@ export function GuidedComposer({
   const prefilled = useRef(false);
   const people = brief.cast ?? [];
   const heroes = namedCast(brief);
+  const missingAgeHeroes = heroes.filter((hero) => hero.age === undefined);
   const hasAdvancedPreferences = Boolean(
     brief.themeId ||
       brief.deviceId ||
@@ -83,7 +84,7 @@ export function GuidedComposer({
 
   const canWrite = Boolean(
     heroes.length > 0 &&
-      heroes.every((hero) => hero.age !== undefined) &&
+      missingAgeHeroes.length === 0 &&
       models &&
       !writing,
   );
@@ -190,44 +191,57 @@ export function GuidedComposer({
           </div>
         )}
 
-        <div className="flex flex-wrap items-center gap-2.5 border-t border-ink-100 pt-4">
-          <Button
-            disabled={!canWrite && !writing}
-            loading={writing}
-            variant="primary"
-            size="sm"
-            leftIcon={!writing ? (hasStory ? <RotateCcw className="size-3.5" /> : <Wand2 className="size-3.5" />) : undefined}
-            onClick={handleWrite}
-            className="h-9 text-sm"
-          >
-            {writing
-              ? "Writing your story…"
-              : hasStory
-                ? "Generate a new version"
-                : "Write my story"}
-          </Button>
+        <div className="flex flex-col gap-3 border-t border-ink-100 pt-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <Button
+              disabled={!canWrite && !writing}
+              loading={writing}
+              variant="primary"
+              size="sm"
+              leftIcon={!writing ? (hasStory ? <RotateCcw className="size-3.5" /> : <Wand2 className="size-3.5" />) : undefined}
+              onClick={handleWrite}
+              className="h-9 text-sm"
+            >
+              {writing
+                ? "Writing your story…"
+                : hasStory
+                  ? "Generate a new version"
+                  : "Write my story"}
+            </Button>
 
-          {onLocaleChange && (
-            <LanguageSelector
-              value={contentLocale}
-              onChange={onLocaleChange}
-              disabled={writing}
-            />
-          )}
-
-          <span className="flex items-center gap-1 text-xs text-ink-500">
-            {writing ? (
-              <>
-                <Loader2 className="size-3 animate-spin text-magic-500" />
-                A few seconds…
-              </>
-            ) : (
-              <>
-                <Sparkles className="size-3 text-magic-500" />
-                Edit words anytime
-              </>
+            {onLocaleChange && (
+              <LanguageSelector
+                value={contentLocale}
+                onChange={onLocaleChange}
+                disabled={writing}
+              />
             )}
-          </span>
+          </div>
+
+          <div className="flex items-center text-xs">
+            {writing ? (
+              <span className="flex items-center gap-1.5 text-ink-500">
+                <Loader2 className="size-3.5 animate-spin text-brand-600" />
+                <span>Writing your story in a few seconds…</span>
+              </span>
+            ) : !canWrite ? (
+              <span className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200/80 bg-amber-50/80 px-2.5 py-1 text-[11px] font-medium text-amber-800">
+                <AlertCircle className="size-3.5 shrink-0 text-amber-600" />
+                <span>
+                  {heroes.length === 0
+                    ? "Enter a character name above to start"
+                    : missingAgeHeroes.length === 1
+                      ? `Add ${missingAgeHeroes[0]?.name}’s age to create story`
+                      : `Add ages for ${missingAgeHeroes.map((h) => h.name).join(" & ")} to create story`}
+                </span>
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 text-ink-500">
+                <Sparkles className="size-3 text-magic-500" />
+                <span>Ready to create · Edit words anytime</span>
+              </span>
+            )}
+          </div>
         </div>
       </div>
     </section>

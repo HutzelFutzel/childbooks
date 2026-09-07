@@ -87,6 +87,13 @@
       ]
     },
     {
+      "collectionGroup": "likenessPhotos",
+      "fieldPath": "expiresAt",
+      "indexes": [
+        { "order": "ASCENDING", "queryScope": "COLLECTION_GROUP" }
+      ]
+    },
+    {
       "collectionGroup": "usage",
       "fieldPath": "runId",
       "indexes": [

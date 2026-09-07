@@ -725,8 +725,12 @@ export function StudioProvider({
           }
         } else if (next === "order") {
           notify.info(
-            "Your book is still being prepared",
-            "The page-by-page draft needs to finish before you can preview or order it.",
+            progress.edit.unlocked
+              ? "Finish the pages first"
+              : "Your book is still being prepared",
+            progress.edit.unlocked
+              ? "Create artwork for every page, then you can review and order."
+              : "The page-by-page draft needs to finish before you can preview or order it.",
           );
         } else if (next === "edit" && live.stage === "studio") {
           notify.info(

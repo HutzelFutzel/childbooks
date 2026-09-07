@@ -21,6 +21,7 @@ import type { ResolvedModels } from "../../books-frontend/src/core/models/regist
 import type { ProviderId } from "../../books-frontend/src/core/config/options";
 import type { PromptContext } from "../../books-frontend/src/core/prompts/context";
 import type { CapabilityOverrides } from "../../books-frontend/src/core/config/modelCapabilities";
+import { loadLikenessPhotoForSubject } from "./likeness";
 
 function apiKeyFor(provider: ProviderId): string {
   const cfg = serverConfig();
@@ -88,6 +89,8 @@ export function backendPipelineEnv(
     apiKeyFor,
     modelCapabilities,
     loadBlob: (id) => downloadBlobBase64(uid, id),
+    loadLikenessPhotoForSubject: (projectId, subjectId) =>
+      loadLikenessPhotoForSubject(uid, projectId, subjectId),
     saveImage: (base64, mimeType) => uploadBlob(uid, b64ToBuf(base64), mimeType),
     loadStyleImage: (presetId) => loadStyleImageFor(prompts, presetId),
     // Reference payload shrinker: multi-megabyte stored PNGs sent inline are the

@@ -15,12 +15,19 @@ const bookLanguageIdSchema = z.enum(
   BOOK_LANGUAGES.map((language) => language.id) as [BookLanguageId, ...BookLanguageId[]],
 );
 
+const likenessPhotoSchema = z.object({
+  createdAt: z.number(),
+  expiresAt: z.number(),
+  consentVersion: z.string().min(1).max(40),
+});
+
 const storyCastMemberSchema = z.object({
   id: z.string().min(1),
   name: z.string().max(80),
   role: z.string().max(200).optional(),
   age: z.number().int().min(0).max(120).optional(),
   note: z.string().max(500).optional(),
+  likenessPhoto: likenessPhotoSchema.optional(),
 });
 
 /**
@@ -126,16 +133,30 @@ export function briefBlockers(brief: StoryBrief): string[] {
   const out: string[] = [];
   if (brief.mode === "guided") {
     const heroes = namedCast(brief);
-    if (heroes.length === 0) out.push("Add the name of at least one child this book is for.");
-    else if (heroes.some((hero) => hero.age === undefined)) {
-      out.push("Add the age of each main character.");
+    if (heroes.length === 0) {
+      out.push("Add the name of at least one child this book is for.");
+    } else {
+      const missingAge = heroes.filter((hero) => hero.age === undefined);
+      if (missingAge.length === 1) {
+        out.push(`Add ${missingAge[0]?.name}’s age to create the story.`);
+      } else if (missingAge.length > 1) {
+        out.push(`Add ages for ${missingAge.map((h) => h.name).join(" and ")} to create the story.`);
+      }
     }
   }
   if (brief.mode === "co-write") {
     const cast = namedCast(brief);
-    if (cast.length === 0) out.push("Add at least one person the story is about.");
-    else if (cast[0]?.age === undefined) out.push("Add the main character's age.");
-    if (!brief.occasion?.trim()) out.push("Say what happens — the occasion or the moment.");
+    if (cast.length === 0) {
+      out.push("Add at least one person the story is about.");
+    } else {
+      const missingAge = cast.filter((hero) => hero.age === undefined);
+      if (missingAge.length > 0) {
+        out.push(`Add ${missingAge[0]?.name ?? "the main character"}’s age to create the story.`);
+      }
+    }
+    if (!brief.occasion?.trim()) {
+      out.push("Say what happens — the occasion or the moment.");
+    }
   }
   return out;
 }

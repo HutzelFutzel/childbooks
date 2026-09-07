@@ -24,8 +24,28 @@ function newSpread(opts: NewSpreadOpts = {}): ScreenplaySpread {
     illustration: "",
     layoutNote: "",
     anchorIds: [],
-    blankCanvas: opts.blankCanvas,
+    ...(opts.blankCanvas ? { blankCanvas: true, completion: "blank" as const } : {}),
   };
+}
+
+/** Mark an interior page done without artwork, or clear that opt-out. */
+export function setSpreadCompletion(
+  spreadId: string,
+  completion: "blank" | "text" | undefined,
+): void {
+  commitStudioProject((p) =>
+    withSpreads(p, (spreads) =>
+      spreads.map((spread) => {
+        if (spread.id !== spreadId) return spread;
+        if (completion === undefined) {
+          const { completion: _drop, ...rest } = spread;
+          void _drop;
+          return rest;
+        }
+        return { ...spread, completion };
+      }),
+    ),
+  );
 }
 
 function withSpreads(

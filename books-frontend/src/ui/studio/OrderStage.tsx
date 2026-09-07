@@ -17,11 +17,12 @@ import { renderFingerprint } from "../../core/print/fingerprint";
 import { fetchEbookQuote, type EbookQuote } from "../../platform/payments";
 import { activeSubscription } from "../../platform/subscriptions";
 import { currentIllustration } from "../../state/ai";
+import { illustrationUnits } from "../../state/bookUnits";
+import { unitIsDone } from "../../core/book/pageCompletion";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useAuthStore } from "../../state/authStore";
 import { useSubscriptionStore } from "../../state/subscriptionStore";
 import { notify } from "../lib/notify";
-import { illustrationUnits } from "../../state/bookUnits";
 import { refreshIllustrationsForPrint } from "./studioGen";
 import { Button } from "../components/Button";
 import { BookMockup } from "../components/BookMockup";
@@ -117,7 +118,7 @@ export function OrderStage() {
 
   const units = illustrationUnits(project);
   const missingArt = useMemo(
-    () => units.filter((u) => !currentIllustration(project, u.id)).length,
+    () => units.filter((u) => !unitIsDone(project, u)).length,
     [project, units],
   );
   const legacyDraftIds = useMemo(
@@ -405,14 +406,14 @@ export function OrderStage() {
           tone="warning"
           icon={TriangleAlert}
           className="mt-4"
-          title={`${missingArt} ${missingArt === 1 ? "page is" : "pages are"} missing artwork`}
+          title={`${missingArt} ${missingArt === 1 ? "page is not" : "pages are not"} finished yet`}
           action={
             <Button size="sm" variant="secondary" onClick={() => setStep("edit")}>
               Finish designing
             </Button>
           }
         >
-          Missing illustrations will appear blank in either edition.
+          Finish every page — illustrated, text-only, or blank — before ordering.
         </Callout>
       )}
 

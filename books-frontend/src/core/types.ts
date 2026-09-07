@@ -55,6 +55,23 @@ export interface ArtStyleSelection {
   customDescription?: string;
 }
 
+/** Bump whenever the just-in-time likeness permission copy materially changes. */
+export const LIKENESS_CONSENT_VERSION = "2026-09-06";
+
+/**
+ * Short-lived pointer to a privately stored likeness photo.
+ *
+ * The source bytes are never embedded in a project document. They live in the
+ * backend-only likeness lane, are used for the first character sheet, and are
+ * deleted immediately after that render succeeds (or by the hard expiry).
+ */
+export interface LikenessPhotoRef {
+  createdAt: number;
+  expiresAt: number;
+  /** Version of the just-in-time permission statement accepted on upload. */
+  consentVersion: string;
+}
+
 /** One named person or creature the story is about (co-write mode). */
 export interface StoryCastMember {
   id: string;
@@ -65,6 +82,8 @@ export interface StoryCastMember {
   age?: number;
   /** Anything else worth knowing: "loves dinosaurs", "always loses a shoe". */
   note?: string;
+  /** Optional one-use photo for carrying this person's likeness into Cast. */
+  likenessPhoto?: LikenessPhotoRef;
 }
 
 /**
@@ -454,6 +473,11 @@ export interface Anchor {
   mode: AnchorMode;
   /** Optional user creative direction for this specific anchor. */
   userGuidance?: string;
+  /**
+   * Character-only, short-lived likeness source. Cleared when the first
+   * photo-backed reference sheet succeeds; never retained as a version image.
+   */
+  likenessPhoto?: LikenessPhotoRef;
   /** Whether to generate an anchor image for this subject. */
   include: boolean;
   /**
@@ -505,6 +529,12 @@ export interface ScreenplaySpread {
    * with background color, patterns, text and shapes. Skips the generation UI.
    */
   blankCanvas?: boolean;
+  /**
+   * Explicit non-art completion. Illustrated pages are derived from current
+   * artwork instead of storing this. `"text"` means the user finished the page
+   * without an illustration.
+   */
+  completion?: "blank" | "text";
   /**
    * How text is handled on this page: baked into the art ("in-image") or laid
    * out by the app as an editable overlay ("overlay", the default).

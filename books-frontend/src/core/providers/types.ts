@@ -77,6 +77,9 @@ export interface ReferenceImage {
   /**
    * What this reference is for:
    *   - "subject": an appearance reference (an anchor/character/place).
+   *   - "likeness": a one-use real-person photo. Preserve recognizable facial
+   *     identity and key physical traits, but not its photographic style,
+   *     background, pose or incidental clothing.
    *   - "composition": the previous/current page, used only for layout & pose.
    *   - "relation": a related subject for context (a relative to resemble, or an
    *     object/place contained in the subject being drawn).
@@ -89,7 +92,14 @@ export interface ReferenceImage {
    *     only the rendering technique changes. Never "match this exactly", which
    *     would preserve the very style we're replacing.
    */
-  role?: "subject" | "composition" | "relation" | "style" | "scale" | "restyleBase";
+  role?:
+    | "subject"
+    | "likeness"
+    | "composition"
+    | "relation"
+    | "style"
+    | "scale"
+    | "restyleBase";
 }
 
 export interface ImageRequest {

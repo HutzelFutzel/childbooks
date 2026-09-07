@@ -16,6 +16,7 @@ import {
   staleIllustrationSpreadIds,
 } from "../../state/ai";
 import { illustrationUnits } from "../../state/bookUnits";
+import { unitIsDone } from "../../core/book/pageCompletion";
 import { ProviderError } from "../../core/errors";
 import {
   createAnchorsJob,
@@ -334,7 +335,7 @@ export async function generateAllPages(
   onError: (err: unknown) => void,
   signal?: AbortSignal,
 ): Promise<BatchOutcome> {
-  const pending = illustrationUnits(project).filter((s) => !currentIllustration(project, s.id));
+  const pending = illustrationUnits(project).filter((s) => !unitIsDone(project, s));
   if (pending.length === 0) return { started: true, failed: 0 };
   const tier = CUSTOMER_IMAGE_TIER;
   if (!ensureBatchAffordable(pending.map((s) => ({ action: illustrationActionForId(s.id) })), tier))

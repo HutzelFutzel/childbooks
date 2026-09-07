@@ -65,6 +65,8 @@ export interface AnchorRender {
   imageTier?: AnchorImage["imageTier"];
   /** Concrete model used for this render (stamped at the host boundary). */
   imageModel?: AnchorImage["imageModel"];
+  /** Timestamp receipt for the one-use source; never contains its private object id. */
+  consumedLikenessCreatedAt?: number;
 }
 
 /** Wrap an anchor render into a (new or extended) version tree. Pure. */
@@ -207,6 +209,25 @@ export async function renderAnchor(
     throw new Error("The current reference sheet could not be loaded for the style update.");
   }
 
+  // A real-person photo is a one-use seed for the FIRST character sheet only.
+  // Later edits use the generated sheet, never the source photo, so the source
+  // can be deleted as soon as this initial render succeeds.
+  let likenessRef: ReferenceImage | null = null;
+  let likenessCreatedAt: number | undefined;
+  if (anchor.type === "character" && !isIteration && env.loadLikenessPhotoForSubject) {
+    const raw = await env.loadLikenessPhotoForSubject(project.id, anchor.id);
+    if (raw) {
+      const data = await asRefPayload(env, raw);
+      likenessCreatedAt = raw.createdAt;
+      likenessRef = {
+        base64: data.base64,
+        mimeType: data.mimeType,
+        role: "likeness",
+        label: anchor.name,
+      };
+    }
+  }
+
   // gpt-image-2's images/edits endpoint composes a NEW image from every
   // reference it's given (no mask = no single "canvas" image), so we can pass
   // the anchor's own likeness together with its contained references — even on
@@ -223,9 +244,17 @@ export async function renderAnchor(
     // second copy — a restyle must not change what is in the picture.
     references = [subjectRef!];
   } else if (editFromImage || isOpenAI) {
-    references = [...(subjectRef ? [subjectRef] : []), ...containedRefs];
+    references = [
+      ...(subjectRef ? [subjectRef] : []),
+      ...(likenessRef ? [likenessRef] : []),
+      ...containedRefs,
+    ];
   } else {
-    references = [...containedRefs, ...(subjectRef ? [subjectRef] : [])];
+    references = [
+      ...(likenessRef ? [likenessRef] : []),
+      ...containedRefs,
+      ...(subjectRef ? [subjectRef] : []),
+    ];
   }
 
   // Art style is text-only here. Content-bearing example images are selection
@@ -238,6 +267,9 @@ export async function renderAnchor(
   const legendNames = references.map((r) => {
     if (r.role === "style") return "an art-style reference (match its style only, not its content)";
     if (r.role === "restyleBase") return `the sheet of ${anchor.name} being re-rendered`;
+    if (r.role === "likeness") {
+      return `a one-use likeness photo of ${anchor.name} (preserve recognizable facial identity and key physical traits; redraw fully in the requested art style; ignore its background, pose, lighting and incidental clothing)`;
+    }
     if (r.label === anchor.name) return `the current reference sheet of ${anchor.name}`;
     return `${r.label ?? "a contained subject"} (must match this reference exactly)`;
   });
@@ -462,5 +494,8 @@ export async function renderAnchor(
     label: restyle ? "New style" : options.edit?.trim() || (isIteration ? "Variation" : "Initial"),
     parentId: sourceNodeId,
     artStyleKey: artStyleKey(project.config.artStyle),
+    ...(likenessRef && likenessCreatedAt !== undefined
+      ? { consumedLikenessCreatedAt: likenessCreatedAt }
+      : {}),
   };
 }

@@ -6,9 +6,9 @@
  */
 import { useMemo, useState } from "react";
 import { isAbortError } from "../../core/errors";
+import { unitIsDone } from "../../core/book/pageCompletion";
 import {
   currentAnchorImage,
-  currentIllustration,
   staleAnchorIds,
   staleIllustrationSpreadIds,
 } from "../../state/ai";
@@ -47,10 +47,11 @@ export function useBookGeneration() {
   const staleAnchorCount = anchors.filter((a) => stale.has(a.id) && currentAnchorImage(a)).length;
 
   const units = illustrationUnits(project);
-  const pagesReady = units.filter((s) => currentIllustration(project, s.id)).length;
+  const pagesReady = units.filter((s) => unitIsDone(project, s)).length;
+  const pendingArtwork = units.filter((s) => !unitIsDone(project, s)).length;
 
   const pendingAnchors = Math.max(0, anchors.length - anchorsReady);
-  const pendingPages = Math.max(0, units.length - pagesReady);
+  const pendingPages = pendingArtwork;
   const pendingCount = pendingAnchors + pendingPages;
   const staleCount = stalePageCount + staleAnchorCount;
 

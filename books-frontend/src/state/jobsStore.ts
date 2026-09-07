@@ -186,7 +186,36 @@ async function reconcileTasks(tasks: TaskDoc[], projectId: string): Promise<void
       inFlight.add(key);
       try {
         const versions = applyAnchorRender(anchor.versions, render);
-        await useProjectsStore.getState().updateAnchor(task.id, { versions });
+        const usedPhotoCreatedAt = render.consumedLikenessCreatedAt;
+        await useProjectsStore.getState().patchCurrent((current) => ({
+          ...current,
+          config:
+            usedPhotoCreatedAt !== undefined && current.config.storyBrief?.cast
+              ? {
+                  ...current.config,
+                  storyBrief: {
+                    ...current.config.storyBrief,
+                    cast: current.config.storyBrief.cast.map((member) =>
+                      member.likenessPhoto?.createdAt === usedPhotoCreatedAt
+                        ? { ...member, likenessPhoto: undefined }
+                        : member,
+                    ),
+                  },
+                }
+              : current.config,
+          anchors: current.anchors?.map((candidate) =>
+            candidate.id === task.id
+              ? {
+                  ...candidate,
+                  versions,
+                  ...(usedPhotoCreatedAt !== undefined &&
+                  candidate.likenessPhoto?.createdAt === usedPhotoCreatedAt
+                    ? { likenessPhoto: undefined }
+                    : {}),
+                }
+              : candidate,
+          ),
+        }));
       } finally {
         inFlight.delete(key);
       }

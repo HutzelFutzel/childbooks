@@ -53,6 +53,7 @@ import {
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../core/types";
 import { coverSpread } from "./bookUnits";
 import { resolveImageModelClient, resolveModelsClient } from "../platform/aiResolve";
+import { deleteLikenessPhoto } from "../platform/likeness";
 import { CUSTOMER_IMAGE_TIER, type ImageTier } from "../core/config/modelConfig";
 import { useProjectsStore } from "./projectsStore";
 import { useSettingsStore } from "./settingsStore";
@@ -168,7 +169,43 @@ export async function generateAnchorVersion(
     resolvedTier,
   );
   const versions = applyAnchorRender(anchor.versions, render);
-  await useProjectsStore.getState().updateAnchor(anchorId, { versions });
+  const usedPhotoCreatedAt = render.consumedLikenessCreatedAt;
+  await useProjectsStore.getState().patchCurrent((current) => ({
+    ...current,
+    config:
+      usedPhotoCreatedAt !== undefined && current.config.storyBrief?.cast
+        ? {
+            ...current.config,
+            storyBrief: {
+              ...current.config.storyBrief,
+              cast: current.config.storyBrief.cast.map((member) =>
+                member.likenessPhoto?.createdAt === usedPhotoCreatedAt
+                  ? { ...member, likenessPhoto: undefined }
+                  : member,
+              ),
+            },
+          }
+        : current.config,
+    anchors: current.anchors?.map((candidate) =>
+      candidate.id === anchorId
+        ? {
+            ...candidate,
+            versions,
+            ...(usedPhotoCreatedAt !== undefined &&
+            candidate.likenessPhoto?.createdAt === usedPhotoCreatedAt
+              ? { likenessPhoto: undefined }
+              : {}),
+          }
+        : candidate,
+    ),
+  }));
+  if (usedPhotoCreatedAt !== undefined) {
+    void deleteLikenessPhoto({
+      projectId: project.id,
+      subjectId: anchorId,
+      createdAt: usedPhotoCreatedAt,
+    }).catch(() => {});
+  }
 }
 
 export interface GenerateScreenplayOptions {

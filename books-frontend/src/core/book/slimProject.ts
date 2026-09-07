@@ -56,7 +56,11 @@ export function slimProjectForRender(project: Project, opts: SlimOptions): Proje
     if (t.nodeId) anchorNodeById.set(t.id, [...(anchorNodeById.get(t.id) ?? []), t.nodeId]);
   }
 
-  const anchors = project.anchors?.map((a) => {
+  const anchors = project.anchors?.map((source) => {
+    // A worker resolves temporary photos from its backend-only binding table.
+    // Never serialize even the UI's short-lived status receipt into a job.
+    const { likenessPhoto: _dropPhoto, ...a } = source;
+    void _dropPhoto;
     if (!a.versions) return a;
     if (!keepAnchorVersions) {
       const { versions: _drop, ...rest } = a;
@@ -80,6 +84,20 @@ export function slimProjectForRender(project: Project, opts: SlimOptions): Proje
       ? keepLineages(project.screenplay, [])
       : undefined;
 
+  const config = project.config.storyBrief?.cast?.some((member) => member.likenessPhoto)
+    ? {
+        ...project.config,
+        storyBrief: {
+          ...project.config.storyBrief,
+          cast: project.config.storyBrief.cast.map((member) => {
+            const { likenessPhoto: _drop, ...rest } = member;
+            void _drop;
+            return rest;
+          }),
+        },
+      }
+    : project.config;
+
   return {
     id: project.id,
     title: project.title,
@@ -87,7 +105,7 @@ export function slimProjectForRender(project: Project, opts: SlimOptions): Proje
     updatedAt: project.updatedAt,
     stage: project.stage,
     furthestStage: project.furthestStage,
-    config: project.config,
+    config,
     ...(anchors ? { anchors } : {}),
     ...(screenplay ? { screenplay } : {}),
     ...(illustrations ? { illustrations } : {}),

@@ -33,6 +33,7 @@ import { useProjectsStore } from "../../state/projectsStore";
 import { AnchorEditor } from "../anchors/AnchorEditor";
 import { ANCHOR_TYPE_ICON } from "../anchors/AnchorCard";
 import { BlobThumbnail } from "../components/BlobThumbnail";
+import { useLikenessPhotoUrl } from "../components/LikenessPhotoField";
 import { Button } from "../components/Button";
 import { Celebrate } from "../components/Celebrate";
 import { Drawer } from "../components/Drawer";
@@ -48,6 +49,7 @@ import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
 import { useStudio } from "./StudioContext";
 import { generateAllAnchors } from "./studioGen";
+import { likenessPhotoExpired } from "../../platform/likeness";
 
 function uid(): string {
   return Math.random().toString(36).slice(2, 10);
@@ -96,6 +98,11 @@ export function CastWorkspace({
   const pending = Math.max(0, anchors.length - ready);
   const estimatedAgesCount = anchors.filter(
     (anchor) => anchor.type === "character" && anchor.ageSource === "suggested",
+  ).length;
+  const expiredPhotoCount = anchors.filter(
+    (anchor) =>
+      !currentAnchorImage(anchor) &&
+      likenessPhotoExpired(anchor.likenessPhoto),
   ).length;
   const allReady = anchors.length > 0 && pending === 0;
   const canProceed = allReady || (Boolean(project.analysis) && anchors.length === 0);
@@ -476,6 +483,7 @@ export function CastWorkspace({
         ready={ready}
         total={anchors.length}
         remaining={remaining}
+        expiredPhotoCount={expiredPhotoCount}
         batchRange={batchRange}
         onGenerate={() => void generateAll()}
         onContinue={continueToPages}
@@ -550,6 +558,27 @@ function CastMemberCard({
 }) {
   const image = currentAnchorImage(anchor);
   const Icon = ANCHOR_TYPE_ICON[anchor.type];
+  const photoExpired =
+    anchor.type === "character" &&
+    !image &&
+    likenessPhotoExpired(anchor.likenessPhoto);
+  const photoReady =
+    anchor.type === "character" &&
+    !image &&
+    Boolean(anchor.likenessPhoto) &&
+    !likenessPhotoExpired(anchor.likenessPhoto);
+
+  const project = useProjectsStore((state) => state.current());
+  const projectId = project?.id ?? "";
+  const sourceMember = project?.config.storyBrief?.cast?.find(
+    (m) => m.likenessPhoto?.createdAt === anchor.likenessPhoto?.createdAt,
+  );
+  const photoSubjectId = sourceMember?.id ?? anchor.id;
+  const { url: likenessUrl, loading: likenessLoading } = useLikenessPhotoUrl(
+    projectId,
+    photoSubjectId,
+    photoReady ? anchor.likenessPhoto : undefined,
+  );
 
   return (
     <motion.article
@@ -579,16 +608,62 @@ function CastMemberCard({
           aspect={3 / 2}
           className="rounded-none"
           fallback={
-            <span className="flex flex-col items-center gap-2 text-brand-400">
-              <span className="flex size-12 items-center justify-center rounded-2xl bg-white shadow-soft ring-1 ring-brand-100">
-                <Icon className="size-5" />
+            <span className="flex max-w-60 flex-col items-center px-4 text-center">
+              {photoReady ? (
+                <div className="relative mb-2 flex size-14 items-center justify-center overflow-hidden rounded-2xl bg-ink-100 shadow-soft ring-2 ring-white ring-offset-2 ring-offset-emerald-100">
+                  {likenessUrl ? (
+                    <img
+                      src={likenessUrl}
+                      alt={`Photo for ${anchor.name}`}
+                      className="size-full object-cover"
+                    />
+                  ) : likenessLoading ? (
+                    <div className="size-full animate-pulse bg-ink-200" />
+                  ) : (
+                    <Icon className="size-5 text-brand-400" />
+                  )}
+                  <span className="absolute -bottom-1 -right-1 flex size-5 items-center justify-center rounded-full bg-emerald-500 text-white ring-2 ring-white shadow-xs">
+                    <CheckCircle2 className="size-3.5" />
+                  </span>
+                </div>
+              ) : (
+                <span className="relative mb-2.5 flex size-12 items-center justify-center rounded-2xl bg-white text-brand-400 shadow-soft ring-1 ring-brand-100">
+                  <Icon className="size-5" />
+                </span>
+              )}
+              <span
+                className={cn(
+                  "text-[10px] font-bold uppercase tracking-[0.16em]",
+                  photoReady ? "text-emerald-700" : "text-brand-400",
+                )}
+              >
+                {photoReady ? "From your photo" : "Illustrated look"}
               </span>
-              <span className="text-xs font-semibold text-ink-500">Ready to create</span>
+              <span className="mt-1 text-xs font-semibold text-ink-700">
+                {photoExpired
+                  ? "Photo expired — tap to fix"
+                  : photoReady
+                    ? "Ready to create illustrated look"
+                    : "Ready to create from details"}
+              </span>
+              {photoReady && (
+                <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200/60">
+                  <Sparkles className="size-3 text-emerald-600" />
+                  Photo attached
+                </span>
+              )}
             </span>
           }
         />
         {generating && (
-          <GenerationOverlay action="anchorImage" compact className="bg-magic" />
+          <GenerationOverlay
+            action="anchorImage"
+            compact
+            compactLabel={
+              photoReady ? "Creating from your photo…" : "Creating illustrated look…"
+            }
+            className="bg-magic"
+          />
         )}
 
       </button>
@@ -680,6 +755,7 @@ function CastActionBar({
   ready,
   total,
   remaining,
+  expiredPhotoCount,
   batchRange,
   onGenerate,
   onContinue,
@@ -693,6 +769,7 @@ function CastActionBar({
   ready: number;
   total: number;
   remaining: number;
+  expiredPhotoCount: number;
   batchRange: ReturnType<typeof useImageBatchRange>;
   onGenerate: () => void;
   onContinue: () => void;
@@ -704,6 +781,8 @@ function CastActionBar({
     ? "The page draft needs another try"
     : busy
     ? `Creating ${creatingNow} ${creatingNow === 1 ? "look" : "looks"}…`
+    : expiredPhotoCount > 0
+      ? `${expiredPhotoCount} ${expiredPhotoCount === 1 ? "photo needs" : "photos need"} to be added again`
     : canProceed
       ? total === 0
         ? "No cast needed"
@@ -719,6 +798,8 @@ function CastActionBar({
     ? screenplayJob.error ?? "The first attempt stopped before the pages were ready."
     : busy
     ? "You can leave this step while the cast is being created."
+    : expiredPhotoCount > 0
+      ? "Tap the affected character to replace or remove the expired photo."
     : canProceed
       ? "You can still refine any card later."
       : remaining > 0 && activeGeneratingCount > 0
@@ -775,7 +856,7 @@ function CastActionBar({
           <Button
             className="w-full sm:w-auto"
             loading={busy}
-            disabled={total === 0 || remaining === 0}
+            disabled={total === 0 || remaining === 0 || expiredPhotoCount > 0}
             leftIcon={!busy ? <Sparkles className="size-4" /> : undefined}
             onClick={onGenerate}
           >

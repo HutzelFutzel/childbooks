@@ -10,6 +10,7 @@
  */
 import type { ScreenplayDoc } from "../../core/types";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
+import { unitNeedsArtwork } from "../../core/book/pageCompletion";
 import { paginate, type PageSlot } from "../../core/pipeline/pagination";
 import type { DesignPage } from "../design/designInit";
 import type { PageSubject } from "./PageEditorCard";
@@ -173,6 +174,13 @@ export function displayEntries(disp: DisplaySpread): { entry: Entry; label: stri
 
 export function isBlankEntry(entry: Entry): boolean {
   return entry.subject.kind === "spread" && !!entry.subject.spread.blankCanvas;
+}
+
+/** True when this page still requires generated artwork to be considered done. */
+export function entryNeedsArtwork(entry: Entry): boolean {
+  if (isBlankEntry(entry)) return false;
+  if (entry.subject.kind === "spread") return unitNeedsArtwork(entry.subject.spread);
+  return true;
 }
 
 /**
