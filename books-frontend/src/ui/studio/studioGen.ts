@@ -25,7 +25,7 @@ import {
   subscribeJob,
   subscribeJobTasks,
 } from "../../platform/jobs";
-import { reconcileTasksNow } from "../../state/jobsStore";
+import { reconcileTasksNow, useJobsStore } from "../../state/jobsStore";
 import { useProjectsStore } from "../../state/projectsStore";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useSparksStore } from "../../state/sparksStore";
@@ -45,6 +45,25 @@ import { CUSTOMER_IMAGE_TIER, type ImageTier } from "../../core/config/modelConf
 interface BatchUnit {
   action: ImageActionId;
   kind?: CostSampleKind;
+}
+
+/**
+ * Covers the short window between a click and the task subscription observing
+ * the new backend job. Without it, a fast second click can enqueue another job
+ * for the same page while `activeUnitIds` is still empty.
+ */
+const locallyQueuedIllustrations = new Set<string>();
+
+function illustrationQueueKey(projectId: string, unitId: string): string {
+  return `${projectId}:${unitId}`;
+}
+
+function illustrationIsQueued(projectId: string, unitId: string): boolean {
+  const jobs = useJobsStore.getState();
+  return (
+    locallyQueuedIllustrations.has(illustrationQueueKey(projectId, unitId)) ||
+    (jobs.projectId === projectId && jobs.activeUnitIds.has(unitId))
+  );
 }
 
 /** The Spark action an illustration unit settles as (covers cost more). */
@@ -194,7 +213,9 @@ async function watchJob(
     unsubTasks = subscribeJobTasks(jobId, (tasks) => {
       if (opts.signal?.aborted) return finish();
       if (opts.eagerReconcile && tasks.some((t) => t.status === "done")) {
-        void reconcileTasksNow(tasks, projectId);
+        void reconcileTasksNow(tasks, projectId).catch((err) => {
+          console.error("[jobs] eager task reconciliation failed.", err);
+        });
       }
       for (const task of tasks) {
         if (handled.has(task.id)) continue;
@@ -335,11 +356,15 @@ export async function generateAllPages(
   onError: (err: unknown) => void,
   signal?: AbortSignal,
 ): Promise<BatchOutcome> {
-  const pending = illustrationUnits(project).filter((s) => !unitIsDone(project, s));
+  const pending = illustrationUnits(project).filter(
+    (s) => !unitIsDone(project, s) && !illustrationIsQueued(project.id, s.id),
+  );
   if (pending.length === 0) return { started: true, failed: 0 };
   const tier = CUSTOMER_IMAGE_TIER;
   if (!ensureBatchAffordable(pending.map((s) => ({ action: illustrationActionForId(s.id) })), tier))
     return { started: false, failed: 0 };
+  const queueKeys = pending.map((s) => illustrationQueueKey(project.id, s.id));
+  queueKeys.forEach((key) => locallyQueuedIllustrations.add(key));
   pending.forEach((s) => setGen(s.id, true));
 
   // Enqueue one job; the backend worker renders every task. Results are applied
@@ -364,6 +389,7 @@ export async function generateAllPages(
   } catch (err) {
     onError(err);
   } finally {
+    queueKeys.forEach((key) => locallyQueuedIllustrations.delete(key));
     pending.forEach((s) => setGen(s.id, false));
   }
   return { started: true, failed };
@@ -392,6 +418,7 @@ export async function refreshSpread(
   },
   onError: (err: unknown) => void,
 ): Promise<void> {
+  if (illustrationIsQueued(project.id, spreadId)) return;
   const tier = CUSTOMER_IMAGE_TIER;
   const refreshUnit: BatchUnit = {
     action: illustrationActionForId(spreadId),
@@ -399,6 +426,9 @@ export async function refreshSpread(
   };
   if (!ensureBatchAffordable([refreshUnit], tier)) return;
 
+  const queueKey = illustrationQueueKey(project.id, spreadId);
+  locallyQueuedIllustrations.add(queueKey);
+  let handedToWatcher = false;
   try {
     const models = getResolvedModels(tier);
     const tasks: RefreshTask[] = [{ id: spreadId, status: "pending", options }];
@@ -406,9 +436,14 @@ export async function refreshSpread(
     // Fire-and-forget: fold the result in from the job's OWN task subcollection
     // rather than relying solely on the project-wide collection-group listener,
     // and surface render failures that would otherwise pass silently.
-    void watchJob(jobId, project.id, { eagerReconcile: true, onError });
+    handedToWatcher = true;
+    void watchJob(jobId, project.id, { eagerReconcile: true, onError }).finally(() => {
+      locallyQueuedIllustrations.delete(queueKey);
+    });
   } catch (err) {
     onError(err);
+  } finally {
+    if (!handedToWatcher) locallyQueuedIllustrations.delete(queueKey);
   }
 }
 

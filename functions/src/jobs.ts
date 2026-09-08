@@ -30,6 +30,7 @@ import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { onTaskDispatched } from "firebase-functions/v2/tasks";
 import { logger } from "firebase-functions/v2";
+import { randomUUID } from "node:crypto";
 import {
   getFirestore,
   type CollectionReference,
@@ -460,6 +461,7 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
       status: "pending",
       dependsOn: dependsMap.get(spec.id) ?? [],
       ...taskPayload(job.kind, spec),
+      reconciliationVersion: 1,
       updatedAt: now,
     };
     // Batch commits are atomic, so on any (rare) re-expansion no task doc can
@@ -497,7 +499,13 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
  * it's done/held/gone (caller no-ops — this is how at-least-once delivery and
  * duplicate dispatches are deduplicated).
  */
-async function claimTask(taskRef: DocumentReference, owner: string): Promise<TaskDoc | null> {
+type ClaimedTask = TaskDoc & { claimToken: string };
+
+async function claimTask(
+  taskRef: DocumentReference,
+  owner: string,
+  claimToken: string,
+): Promise<ClaimedTask | null> {
   return db().runTransaction(async (tx) => {
     const snap = await tx.get(taskRef);
     if (!snap.exists) return null;
@@ -505,17 +513,21 @@ async function claimTask(taskRef: DocumentReference, owner: string): Promise<Tas
     if (isTerminal(task.status)) return null;
     const now = Date.now();
     const held = typeof task.claimedUntil === "number" && task.claimedUntil > now;
-    // A live lease blocks everyone EXCEPT the owner that took it. `owner` is the
-    // Cloud Tasks task name, which is stable across that task's retries, so an
-    // attempt whose instance died hard (OOM/timeout, leaving the lease behind)
-    // can re-take its own work. Without this the retries — all of which land
-    // inside the six-minute lease — silently no-op and return 2xx, Cloud Tasks
-    // considers the task delivered, and it sits "running" until the reaper
-    // eventually notices the whole job went quiet.
-    if (held && task.claimedBy !== owner) return null;
+    // Cloud Tasks keeps the same task name across retries. Letting the same
+    // `owner` through here therefore allows an overlapping retry to render the
+    // same task concurrently and overwrite its result with a second blob.
+    // Retryable failures explicitly release the lease below; hard-dead workers
+    // are recovered after expiry by the reaper.
+    if (held) return null;
     const claimedUntil = now + TASK_LEASE_MS;
-    tx.update(taskRef, { status: "running", claimedBy: owner, claimedUntil, updatedAt: now });
-    return { ...task, status: "running", claimedBy: owner, claimedUntil };
+    tx.update(taskRef, {
+      status: "running",
+      claimedBy: owner,
+      claimToken,
+      claimedUntil,
+      updatedAt: now,
+    });
+    return { ...task, status: "running", claimedBy: owner, claimToken, claimedUntil };
   });
 }
 
@@ -524,12 +536,20 @@ async function claimTask(taskRef: DocumentReference, owner: string): Promise<Tas
  * throttle or a transient upstream fault and Cloud Tasks still has attempts
  * left. Clearing the lease matters: the retry must be able to claim it again.
  */
-async function releaseTask(taskRef: DocumentReference): Promise<void> {
-  await taskRef.update({
-    status: "pending",
-    claimedBy: null,
-    claimedUntil: 0,
-    updatedAt: Date.now(),
+async function releaseTask(taskRef: DocumentReference, claimToken: string): Promise<boolean> {
+  return db().runTransaction(async (tx) => {
+    const snap = await tx.get(taskRef);
+    if (!snap.exists) return false;
+    const task = snap.data() as TaskDoc;
+    if (isTerminal(task.status) || task.claimToken !== claimToken) return false;
+    tx.update(taskRef, {
+      status: "pending",
+      claimedBy: null,
+      claimToken: null,
+      claimedUntil: 0,
+      updatedAt: Date.now(),
+    });
+    return true;
   });
 }
 
@@ -543,19 +563,53 @@ async function readDeps(uid: string, jobId: string, depIds: string[]): Promise<T
 
 async function markTaskError(
   taskRef: DocumentReference,
+  claimToken: string,
   message: string,
   cause?: unknown,
-): Promise<void> {
+): Promise<boolean> {
   // Record the provider failure class alongside the message so the studio can
   // describe it properly instead of relaying a raw provider string.
   const kind = cause instanceof ProviderError ? cause.kind : undefined;
-  await taskRef.update({
-    status: "error",
-    error: message,
-    ...(kind ? { errorKind: kind } : {}),
-    claimedBy: null,
-    claimedUntil: 0,
-    updatedAt: Date.now(),
+  return db().runTransaction(async (tx) => {
+    const snap = await tx.get(taskRef);
+    if (!snap.exists) return false;
+    const task = snap.data() as TaskDoc;
+    if (isTerminal(task.status) || task.claimToken !== claimToken) return false;
+    tx.update(taskRef, {
+      status: "error",
+      error: message,
+      ...(kind ? { errorKind: kind } : {}),
+      claimedBy: null,
+      claimToken: null,
+      claimedUntil: 0,
+      updatedAt: Date.now(),
+    });
+    return true;
+  });
+}
+
+/** Commit a render only while this invocation still owns the task lease. */
+async function completeTask(
+  taskRef: DocumentReference,
+  claimToken: string,
+  result: TaskResult,
+  stats: TaskStats,
+): Promise<boolean> {
+  return db().runTransaction(async (tx) => {
+    const snap = await tx.get(taskRef);
+    if (!snap.exists) return false;
+    const task = snap.data() as TaskDoc;
+    if (isTerminal(task.status) || task.claimToken !== claimToken) return false;
+    tx.update(taskRef, {
+      status: "done",
+      result,
+      stats,
+      claimedBy: null,
+      claimToken: null,
+      claimedUntil: 0,
+      updatedAt: Date.now(),
+    });
+    return true;
   });
 }
 
@@ -986,7 +1040,8 @@ async function handleTask(data: TaskPayload, owner: string, attempt: number): Pr
   if (isTerminal(job.status)) return;
 
   const taskRef = tasksCol(uid, jobId).doc(taskId);
-  const task = await claimTask(taskRef, owner);
+  const claimToken = randomUUID();
+  const task = await claimTask(taskRef, owner, claimToken);
   if (!task) return; // terminal, held by another live worker, or gone
 
   // Dependency gate. A failed dependency permanently blocks this task; deps
@@ -995,13 +1050,17 @@ async function handleTask(data: TaskPayload, owner: string, attempt: number): Pr
   if (task.dependsOn && task.dependsOn.length > 0) {
     const deps = await readDeps(uid, jobId, task.dependsOn);
     if (deps.some((d) => d.status === "error")) {
-      await markTaskError(taskRef, "Skipped: a dependency failed to generate.");
-      await finalizeIfComplete(ref, "fail");
+      const marked = await markTaskError(
+        taskRef,
+        claimToken,
+        "Skipped: a dependency failed to generate.",
+      );
+      if (marked) await finalizeIfComplete(ref, "fail");
       return;
     }
     const allDone = task.dependsOn.every((id) => deps.find((d) => d.id === id)?.status === "done");
     if (!allDone) {
-      await releaseTask(taskRef);
+      await releaseTask(taskRef, claimToken);
       return;
     }
   }
@@ -1018,7 +1077,8 @@ async function handleTask(data: TaskPayload, owner: string, attempt: number): Pr
     if (attempt < TASK_MAX_ATTEMPTS && isRetryableRenderError(err)) {
       // Non-2xx so Cloud Tasks retries on its backoff. Release first: the retry
       // has to be able to claim the task again.
-      await releaseTask(taskRef);
+      const released = await releaseTask(taskRef, claimToken);
+      if (!released) return;
       logger.warn("[fan] retryable render failure — returning to the queue", {
         jobId,
         taskId,
@@ -1027,21 +1087,20 @@ async function handleTask(data: TaskPayload, owner: string, attempt: number): Pr
       });
       throw err;
     }
-    await markTaskError(taskRef, (err as Error)?.message ?? "Generation failed.", err);
-    await finalizeIfComplete(ref, "fail");
+    const marked = await markTaskError(
+      taskRef,
+      claimToken,
+      (err as Error)?.message ?? "Generation failed.",
+      err,
+    );
+    if (marked) await finalizeIfComplete(ref, "fail");
     return;
   } finally {
     timeout.done();
   }
 
-  await taskRef.update({
-    status: "done",
-    result,
-    stats,
-    claimedBy: null,
-    claimedUntil: 0,
-    updatedAt: Date.now(),
-  });
+  const completed = await completeTask(taskRef, claimToken, result, stats);
+  if (!completed) return;
 
   // A likeness source has completed its only job once the first character
   // sheet is durably recorded. Deletion is best-effort here; the 24-hour
@@ -1079,9 +1138,9 @@ async function handleTask(data: TaskPayload, owner: string, attempt: number): Pr
 }
 
 /**
- * Both workers run the same body. `req.id` is the Cloud Tasks task name, stable
- * across that task's retries, which is what lets a retry reclaim a lease its
- * own crashed attempt left behind.
+ * Both workers run the same body. `req.id` is the Cloud Tasks task name, useful
+ * for diagnostics but stable across retries; a unique invocation token fences
+ * actual ownership inside `handleTask`.
  */
 function dispatch(req: { data: TaskPayload; id?: string; retryCount?: number }): Promise<void> {
   const owner = req.id ?? `${req.data.jobId}:${req.data.taskId}`;

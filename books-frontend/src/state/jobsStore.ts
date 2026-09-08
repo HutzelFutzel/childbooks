@@ -11,8 +11,9 @@
  *      so work that finished while away appears the moment the studio reopens.
  *
  * Reconciliation is idempotent: a result is only applied if its blob isn't
- * already present in the unit's version tree, so repeated snapshots (or reopening
- * twice) never duplicate versions.
+ * already present, then the task receives a durable `appliedAt` receipt. That
+ * receipt also prevents an old task from resurrecting a version after the user
+ * deletes it or bounded history pruning removes it.
  */
 import { create } from "zustand";
 import type { Unsubscribe } from "firebase/firestore";
@@ -25,6 +26,7 @@ import { allVersions, createVersionTree } from "../core/versioning";
 import {
   createScreenplayJob,
   fetchJobTasks,
+  markTaskApplied,
   subscribeProjectJobs,
   subscribeProjectTasks,
   type JobWithId,
@@ -120,27 +122,40 @@ function liveProject(projectId: string): Project | null {
  * against concurrent in-flight writes. `apply` does the kind-specific folding.
  */
 async function applyTask(
-  jobId: string,
-  taskId: string,
+  task: TaskDoc,
   blobId: string,
   projectId: string,
   apply: (project: Project, spread: ScreenplaySpread) => Promise<void>,
 ): Promise<boolean> {
-  const key = `${jobId}:${taskId}`;
+  const key = `${task.jobId}:${task.id}`;
   if (inFlight.has(key)) return true;
 
   const project = liveProject(projectId);
   if (!project) return false; // project switched away — stop reconciling
-  const spread = spreadsById(project).get(taskId);
-  if (!spread || hasBlob(project, taskId, blobId)) return true;
+  const spread = spreadsById(project).get(task.id);
+  if (!spread || hasBlob(project, task.id, blobId)) {
+    await markTaskApplied(task.jobId, task.id);
+    return true;
+  }
 
   inFlight.add(key);
   try {
     await apply(project, spread);
+    await markTaskApplied(task.jobId, task.id);
   } finally {
     inFlight.delete(key);
   }
   return true;
+}
+
+/** Whether a legacy task's result is already represented in the live project. */
+function taskResultIsPresent(task: TaskDoc, project: Project): boolean {
+  if (task.kind === "screenplay") return Boolean(project.screenplay);
+  if (task.kind === "anchors") {
+    return anchorHasBlob(project, task.id, (task.result as AnchorRender).blobId);
+  }
+  const blobId = (task.result as IllustrationRender).blobId;
+  return hasBlob(project, task.id, blobId);
 }
 
 /**
@@ -150,7 +165,21 @@ async function applyTask(
  */
 async function reconcileTasks(tasks: TaskDoc[], projectId: string): Promise<void> {
   for (const task of tasks) {
-    if (task.status !== "done" || !task.result) continue;
+    if (task.status !== "done" || !task.result || task.appliedAt) continue;
+
+    // Tasks created before reconciliation receipts existed are historical in
+    // almost every case. Mark known/already-obsolete results as consumed rather
+    // than resurrecting versions deleted or pruned before this release. A
+    // legacy task newer than the project may have finished during deployment,
+    // so it still gets one normal reconciliation pass.
+    if (task.reconciliationVersion !== 1) {
+      const project = liveProject(projectId);
+      if (!project) return;
+      if (taskResultIsPresent(task, project) || task.updatedAt <= project.updatedAt) {
+        await markTaskApplied(task.jobId, task.id);
+        continue;
+      }
+    }
 
     if (task.kind === "screenplay") {
       const key = `${task.jobId}:${task.id}`;
@@ -161,12 +190,16 @@ async function reconcileTasks(tasks: TaskDoc[], projectId: string): Promise<void
       // Initial screenplay attempts are idempotent: if two tabs managed to
       // finish, the first reconciled document wins instead of creating an
       // unexplained revision.
-      if (project.screenplay) continue;
+      if (project.screenplay) {
+        await markTaskApplied(task.jobId, task.id);
+        continue;
+      }
 
       inFlight.add(key);
       try {
         const versions = createVersionTree(task.result as ScreenplayDoc, { label: "Initial" });
         await useProjectsStore.getState().setScreenplay(versions);
+        await markTaskApplied(task.jobId, task.id);
       } finally {
         inFlight.delete(key);
       }
@@ -181,7 +214,10 @@ async function reconcileTasks(tasks: TaskDoc[], projectId: string): Promise<void
       const project = liveProject(projectId);
       if (!project) return;
       const anchor = project.anchors?.find((a) => a.id === task.id);
-      if (!anchor || anchorHasBlob(project, task.id, render.blobId)) continue;
+      if (!anchor || anchorHasBlob(project, task.id, render.blobId)) {
+        await markTaskApplied(task.jobId, task.id);
+        continue;
+      }
 
       inFlight.add(key);
       try {
@@ -216,6 +252,7 @@ async function reconcileTasks(tasks: TaskDoc[], projectId: string): Promise<void
               : candidate,
           ),
         }));
+        await markTaskApplied(task.jobId, task.id);
       } finally {
         inFlight.delete(key);
       }
@@ -224,7 +261,7 @@ async function reconcileTasks(tasks: TaskDoc[], projectId: string): Promise<void
 
     if (task.kind === "refresh") {
       const render = task.result as IllustrationRender;
-      const keep = await applyTask(task.jobId, task.id, render.blobId, projectId, async (project, spread) => {
+      const keep = await applyTask(task, render.blobId, projectId, async (project, spread) => {
         // The worker produced a full render (provenance + label + parent); fold
         // it into the live tree as the project owner (single writer).
         const tree = applyIllustrationRender(project.illustrations?.[spread.id], render);
@@ -238,7 +275,7 @@ async function reconcileTasks(tasks: TaskDoc[], projectId: string): Promise<void
     const result = task.result as { blobId: string; mimeType: string };
     const prompt = task.request?.prompt ?? "";
     const referenceUses = task.referenceUses;
-    const keep = await applyTask(task.jobId, task.id, result.blobId, projectId, async (project, spread) => {
+    const keep = await applyTask(task, result.blobId, projectId, async (project, spread) => {
       await applyIllustrationResult(project, spread, result, prompt, referenceUses);
     });
     if (!keep) return;
@@ -371,7 +408,11 @@ export const useJobsStore = create<JobsState>((set, get) => ({
             ? { ...state.screenplayJob, status: "error", error: failedScreenplay.error }
             : state.screenplayJob,
       }));
-      if (tasks.some((t) => t.status === "done")) void reconcileTasks(tasks, projectId);
+      if (tasks.some((t) => t.status === "done" && !t.appliedAt)) {
+        void reconcileTasks(tasks, projectId).catch((err) => {
+          console.error("[jobs] task reconciliation failed.", err);
+        });
+      }
     });
 
     const unsub = () => {

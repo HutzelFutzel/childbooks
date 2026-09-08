@@ -61,9 +61,16 @@ service cloud.firestore {
     // Per-task docs are read by the owner (also via the project-scoped
     // collection-group query, which needs a rule that authorizes by the doc's
     // own `uid` field — the path wildcard can't be correlated to a field filter
-    // for group queries). Writes fall through to default-deny (backend only).
+    // for group queries). The sole client write is an `appliedAt` receipt after
+    // a done result has been folded into the owner's project; every render and
+    // status field remains backend-only.
     match /{path=**}/tasks/{taskId} {
       allow read: if request.auth != null && resource.data.uid == request.auth.uid;
+      allow update: if request.auth != null
+        && resource.data.uid == request.auth.uid
+        && resource.data.status == 'done'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['appliedAt'])
+        && request.resource.data.appliedAt is int;
     }
 
     // The Spark balance is backend-authoritative (written only via the Admin SDK

@@ -247,6 +247,12 @@ export function applyIllustrationRender(
   tree: VersionTree<IllustrationImage> | undefined,
   render: IllustrationRender,
 ): VersionTree<IllustrationImage> {
+  // Snapshot listeners and eager job watchers can deliver the same completed
+  // task independently. A blob is one immutable render, so folding it twice
+  // must not manufacture another user-visible version or move the cursor.
+  if (tree && Object.values(tree.nodes).some((node) => node.content.blobId === render.blobId)) {
+    return tree;
+  }
   const content: IllustrationImage = {
     blobId: render.blobId,
     mimeType: render.mimeType,

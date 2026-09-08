@@ -19,6 +19,7 @@ import {
   onSnapshot,
   query,
   runTransaction,
+  updateDoc,
   where,
   type Unsubscribe,
 } from "firebase/firestore";
@@ -47,6 +48,16 @@ function uid(): string {
   const u = getFirebaseAuth().currentUser?.uid;
   if (!u) throw new Error("You must be signed in to start a generation job.");
   return u;
+}
+
+/** Stable compact id for a generation intent (safe as a Firestore document id). */
+async function intentId(prefix: string, value: unknown): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify(value));
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  const hex = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(
+    "",
+  );
+  return `${prefix}-${hex.slice(0, 32)}`;
 }
 
 /** Create an image-render job and return its id. */
@@ -85,7 +96,6 @@ export async function createRefreshJob(
   tasks: RefreshTask[],
   tier: ImageTier,
 ): Promise<string> {
-  const now = Date.now();
   // Persisted in Firestore (1 MB cap): embed only what the worker renders — the
   // screenplay, the anchors' active images, and the targeted spreads' trees.
   const slim = slimProjectForRender(project, {
@@ -93,22 +103,59 @@ export async function createRefreshJob(
     keepAnchorVersions: true,
     illustrationTargets: tasks.map((t) => ({ id: t.id, nodeId: t.options?.fromNodeId })),
   });
-  const job: PipelineRefreshJob = {
-    kind: "refresh",
-    status: "pending",
-    projectId: project.id,
-    tier,
-    createdAt: now,
-    updatedAt: now,
-    leaseExpiresAt: 0,
-    runCount: 0,
-    project: slim,
-    models,
-    tasks,
-    progress: { total: tasks.length, completed: 0, failed: 0 },
+  const buildJob = (): PipelineRefreshJob => {
+    const now = Date.now();
+    return {
+      kind: "refresh",
+      status: "pending",
+      projectId: project.id,
+      tier,
+      createdAt: now,
+      updatedAt: now,
+      leaseExpiresAt: 0,
+      runCount: 0,
+      project: slim,
+      models,
+      tasks,
+      progress: { total: tasks.length, completed: 0, failed: 0 },
+    };
   };
-  const ref = await addDoc(collection(getFirebaseDb(), `users/${uid()}/jobs`), job);
-  return ref.id;
+
+  // The project revision + source cursor identify one user intent. Two tabs (or
+  // two rapid handlers) starting from that same state therefore transact on the
+  // same document: only one create trigger and one set of renders can exist.
+  // Once the result is reconciled, the project revision/cursor changes and an
+  // intentional "new version" naturally gets a new id.
+  const jobId = await intentId("refresh", {
+    projectId: project.id,
+    revision: project.rev ?? null,
+    updatedAt: project.updatedAt,
+    tasks: tasks.map((task) => ({
+      id: task.id,
+      sourceCursorId: project.illustrations?.[task.id]?.cursorId ?? null,
+      options: task.options ?? {},
+    })),
+  });
+  const db = getFirebaseDb();
+  const col = collection(db, `users/${uid()}/jobs`);
+  const intentRef = doc(col, jobId);
+  return runTransaction(db, async (tx) => {
+    const existing = await tx.get(intentRef);
+    if (!existing.exists()) {
+      tx.set(intentRef, buildJob());
+      return intentRef.id;
+    }
+    const status = (existing.data() as PipelineRefreshJob).status;
+    if (status === "pending" || status === "running" || status === "done") {
+      return intentRef.id;
+    }
+
+    // A terminal failure occupies the deterministic id and create triggers do
+    // not run on overwrite, so an explicit retry needs a fresh document.
+    const retryRef = doc(col);
+    tx.set(retryRef, buildJob());
+    return retryRef.id;
+  });
 }
 
 /**
@@ -268,4 +315,14 @@ export async function fetchJobTasks(jobId: string): Promise<TaskDoc[]> {
   const col = collection(getFirebaseDb(), `users/${uid()}/jobs/${jobId}/tasks`);
   const snap = await getDocs(col);
   return snap.docs.map((d) => d.data() as TaskDoc);
+}
+
+/**
+ * Persist the reconciliation receipt on the backend-owned task. Security rules
+ * permit the owner to change this field only after the task is done.
+ */
+export async function markTaskApplied(jobId: string, taskId: string): Promise<void> {
+  await updateDoc(doc(getFirebaseDb(), `users/${uid()}/jobs/${jobId}/tasks`, taskId), {
+    appliedAt: Date.now(),
+  });
 }

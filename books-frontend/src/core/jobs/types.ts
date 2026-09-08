@@ -300,6 +300,17 @@ export interface TaskDoc {
   referenceUses?: ReferenceUse[];
   /** kind-specific render output (present when `status === "done"`). */
   result?: TaskResult;
+  /**
+   * Set on tasks created by the durable-receipt reconciliation protocol.
+   * Missing on legacy tasks, whose absent results must not be resurrected.
+   */
+  reconciliationVersion?: 1;
+  /**
+   * Client-written receipt after the result is durably folded into the project.
+   * Prevents historical completed tasks from recreating versions the user later
+   * deletes or that version-history pruning removes.
+   */
+  appliedAt?: number;
   error?: string;
   /**
    * The provider failure class behind `error`, when there was one. Lets the
@@ -311,11 +322,16 @@ export interface TaskDoc {
   /** Epoch ms a worker holds this task; guards duplicate at-least-once dispatch. */
   claimedUntil?: number;
   /**
-   * Who holds the lease — the Cloud Tasks task name, which is stable across
-   * that task's retries. Lets a retry re-claim a lease its own crashed attempt
-   * left behind, while still locking out unrelated duplicate dispatches.
+   * Cloud Tasks task name that acquired the lease. This is diagnostic only:
+   * retries share the same name, so ownership is fenced by `claimToken`.
    */
   claimedBy?: string | null;
+  /**
+   * Unique per worker invocation. Every release/terminal write must match it,
+   * preventing an overlapping retry from overwriting a result after losing the
+   * lease.
+   */
+  claimToken?: string | null;
   updatedAt: number;
 }
 
