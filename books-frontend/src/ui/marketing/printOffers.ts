@@ -58,10 +58,10 @@ const FAMILY: Record<
   }
 > = {
   paperback: {
-    // Trade paperback first: a 4-page stapled booklet is cheaper to print but
-    // is not the picture book a landing-page visitor is pricing.
-    preferred: ["perfect-bound"],
-    bindings: ["perfect-bound", "saddle-stitch", "coil-bound"],
+    // Saddle-stitch (stapled) first so the landing page shows the entry format
+    // starting from 4 pages.
+    preferred: ["saddle-stitch"],
+    bindings: ["saddle-stitch", "perfect-bound", "coil-bound"],
     label: "Paperback",
     blurb: "A flexible printed cover. Light to hold at bedtime.",
     featured: false,
