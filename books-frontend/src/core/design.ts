@@ -172,6 +172,93 @@ export interface TextBox {
   minHeightPct?: number;
 }
 
+/** Semantic groups that can share typography without coupling their layout. */
+export type SharedTextStyleKey =
+  | "story-body"
+  | "book-title"
+  | "book-subtitle"
+  | "custom-page"
+  | "custom-cover";
+
+/**
+ * Book-wide typography only. Alignment, geometry, plates, presets and effects
+ * remain page-local so applying a shared text style cannot flatten layouts.
+ */
+export interface SharedTextStyle {
+  fontFamily: string;
+  fontSizePct: number;
+  color: ColorValue;
+  lineHeight: number;
+  /** Included only when the source box uses the mark uniformly. */
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+}
+
+/** Extract the safe, shareable typography from a text box. */
+export function sharedTextStyleOf(box: TextBox): SharedTextStyle {
+  const spans = box.paragraphs.flatMap((paragraph) => paragraph.spans).filter((span) => span.text);
+  const style: SharedTextStyle = {
+    fontFamily: box.fontFamily,
+    fontSizePct: box.fontSizePct,
+    color: box.color,
+    lineHeight: box.lineHeight,
+  };
+  for (const key of ["bold", "italic", "underline"] as const) {
+    if (spans.length === 0) continue;
+    if (spans.every((span) => Boolean(span[key]))) style[key] = true;
+    else if (spans.every((span) => !span[key])) style[key] = false;
+  }
+  return style;
+}
+
+/** Apply shared typography while preserving content and intentional mixed marks. */
+export function withSharedTextStyle(box: TextBox, style: SharedTextStyle): TextBox {
+  const paragraphs = box.paragraphs.map((paragraph) => ({
+    ...paragraph,
+    spans: paragraph.spans.map((span) => {
+      // Base typography should win consistently across the group.
+      const {
+        color: _color,
+        fontFamily: _fontFamily,
+        sizeMul: _sizeMul,
+        ...next
+      } = span;
+      void _color;
+      void _fontFamily;
+      void _sizeMul;
+      for (const key of ["bold", "italic", "underline"] as const) {
+        if (style[key] === true) next[key] = true;
+        else if (style[key] === false) delete next[key];
+      }
+      return next;
+    }),
+  }));
+  return {
+    ...box,
+    fontFamily: style.fontFamily,
+    fontSizePct: style.fontSizePct,
+    color: style.color,
+    lineHeight: style.lineHeight,
+    paragraphs,
+  };
+}
+
+export function sharedTextStylesEqual(a: TextBox, b: SharedTextStyle): boolean {
+  const current = sharedTextStyleOf(a);
+  if (
+    current.fontFamily !== b.fontFamily ||
+    current.fontSizePct !== b.fontSizePct ||
+    current.color !== b.color ||
+    current.lineHeight !== b.lineHeight
+  ) {
+    return false;
+  }
+  return (["bold", "italic", "underline"] as const).every(
+    (key) => b[key] === undefined || current[key] === b[key],
+  );
+}
+
 /** A decorative vector element: geometric shapes and speech bubbles. */
 export type ShapeKind =
   | "rect"
@@ -303,6 +390,8 @@ export interface BookDesign {
   defaultTitleFontFamily?: string;
   /** Age-based default size as a fraction of page height. */
   defaultFontSizePct: number;
+  /** Role-aware typography used by existing boxes and anything seeded later. */
+  sharedTextStyles?: Partial<Record<SharedTextStyleKey, SharedTextStyle>>;
   /** Per-page design keyed by spread id (and cover ids). */
   pages: Record<string, PageDesign>;
 }

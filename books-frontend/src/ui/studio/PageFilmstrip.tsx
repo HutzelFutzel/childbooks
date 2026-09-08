@@ -7,33 +7,43 @@
  *
  * Width is user-resizable (drag the right edge) and persisted locally.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowLeft,
   ArrowRight,
   ArrowUp,
   BookOpen,
-  CheckCircle2,
+  Copy,
   GripVertical,
-  Loader2,
   MoreHorizontal,
   Plus,
   RefreshCw,
   Sparkles,
+  Trash2,
+  Type,
 } from "lucide-react";
+import { Button } from "../components/Button";
+import { Modal } from "../components/Modal";
 import { Popover } from "../components/Popover";
+import { ArtworkOrbit } from "../design/ArtworkOrbit";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { cn } from "../lib/cn";
 import {
   contentSpreadIds,
-  displayNeedsAttention,
+  displayEntries,
   SpreadThumbnail,
   useDisplayStatuses,
   type DisplaySpread,
   type UnitStatus,
 } from "./SpreadEditor";
-import { insertSpreadAt, moveSpreadBefore } from "./pageOps";
+import {
+  duplicateSpread,
+  insertSpreadAt,
+  moveSpreadBefore,
+  removeSpread,
+  setSpreadCompletion,
+} from "./pageOps";
 
 const WIDTH_KEY = "childbooks.filmstripWidth";
 const WIDTH_MIN = 140;
@@ -62,30 +72,14 @@ export function PageFilmstrip({
   const [dragId, setDragId] = useState<string | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [width, setWidth] = useState(WIDTH_DEFAULT);
-  const [filter, setFilter] = useState<"all" | "attention">("all");
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; label: string } | null>(null);
   const resizing = useRef<{ startX: number; startW: number } | null>(null);
   const isMobile = useMediaQuery("(max-width: 767px)");
   const statuses = useDisplayStatuses(displays, stale);
-  const attentionDisplays = useMemo(
-    () => displays.filter((disp) => displayNeedsAttention(disp, stale)),
-    [displays, stale],
-  );
-  const visibleDisplays = filter === "attention" ? attentionDisplays : displays;
   const movableDisplays = useMemo(
     () => displays.filter((disp) => contentSpreadIds(disp).length > 0),
     [displays],
   );
-
-  useEffect(() => {
-    if (
-      filter !== "attention" ||
-      attentionDisplays.length === 0 ||
-      attentionDisplays.some((disp) => disp.id === activeId)
-    ) {
-      return;
-    }
-    onSelect(attentionDisplays[0].id);
-  }, [activeId, attentionDisplays, filter, onSelect]);
 
   useEffect(() => {
     setWidth(readStoredWidth());
@@ -152,29 +146,8 @@ export function PageFilmstrip({
     }
   }
 
-  const lastInsert = displays.length ? displays[displays.length - 1].endInsertIndex : 0;
-
   const list = (
     <>
-      <div
-        className={cn(
-          "shrink-0 border-b border-ink-100",
-          isMobile ? "px-2 py-1.5" : "px-2.5 py-2",
-        )}
-      >
-        <div className={cn("grid grid-cols-2 rounded-lg bg-ink-50 p-0.5", isMobile && "max-w-56")}>
-          <FilterButton active={filter === "all"} onClick={() => setFilter("all")}>
-            All
-          </FilterButton>
-          <FilterButton
-            active={filter === "attention"}
-            count={attentionDisplays.length}
-            onClick={() => setFilter("attention")}
-          >
-            Issues
-          </FilterButton>
-        </div>
-      </div>
       <div
         className={cn(
           "min-h-0 flex-1",
@@ -183,26 +156,11 @@ export function PageFilmstrip({
             : "space-y-1.5 overflow-y-auto px-2.5 py-3",
         )}
       >
-        {filter === "all" && displays.length === 0 && (
+        {displays.length === 0 && (
           <InsertRow at={0} horizontal={isMobile} />
         )}
-        {filter === "attention" && visibleDisplays.length === 0 && (
-          <div
-            className={cn(
-              "flex flex-col items-center gap-1.5 px-2 text-center",
-              isMobile ? "min-w-full py-2" : "py-6",
-            )}
-          >
-            <CheckCircle2 className="size-5 text-emerald-500" />
-            <p className="text-xs font-semibold text-ink-600">All pages are ready</p>
-            <p className="text-[11px] leading-snug text-ink-400">
-              Missing or outdated pages will appear here.
-            </p>
-          </div>
-        )}
-        {visibleDisplays.map((disp) => {
-          const reorderable =
-            filter === "all" && contentSpreadIds(disp).length > 0;
+        {displays.map((disp, visibleIndex) => {
+          const reorderable = contentSpreadIds(disp).length > 0;
           const moveIndex = movableDisplays.findIndex((item) => item.id === disp.id);
           const moveEarlier = () => {
             if (moveIndex <= 0) return;
@@ -217,34 +175,42 @@ export function PageFilmstrip({
             const beforeId = afterNext ? contentSpreadIds(afterNext)[0] ?? null : null;
             moveSpreadBefore(ids, beforeId);
           };
+          const section = sectionForDisplay(disp);
+          const previousSection =
+            visibleIndex > 0 ? sectionForDisplay(displays[visibleIndex - 1]) : null;
           return (
-            <FilmstripCell
-              key={disp.id}
-              disp={disp}
-              active={disp.id === activeId}
-              status={statuses.get(disp.id) ?? "ready"}
-              horizontal={isMobile}
-              reorderable={reorderable}
-              canMoveEarlier={reorderable && moveIndex > 0}
-              canMoveLater={reorderable && moveIndex < movableDisplays.length - 1}
-              onMoveEarlier={moveEarlier}
-              onMoveLater={moveLater}
-              dragging={dragId === disp.id}
-              dropBefore={overId === disp.id && dragId !== null && dragId !== disp.id}
-              onSelect={() => onSelect(disp.id)}
-              onGrabStart={() => reorderable && setDragId(disp.id)}
-              onGrabMove={handleMove}
-              onGrabEnd={handleUp}
-              onGrabCancel={() => {
-                setDragId(null);
-                setOverId(null);
-              }}
-            />
+            <Fragment key={disp.id}>
+              {!isMobile && section !== previousSection && (
+                <FilmstripSectionLabel>{section}</FilmstripSectionLabel>
+              )}
+              <FilmstripCell
+                disp={disp}
+                active={disp.id === activeId}
+                status={statuses.get(disp.id) ?? "ready"}
+                horizontal={isMobile}
+                reorderable={reorderable}
+                canMoveEarlier={reorderable && moveIndex > 0}
+                canMoveLater={reorderable && moveIndex < movableDisplays.length - 1}
+                onMoveEarlier={moveEarlier}
+                onMoveLater={moveLater}
+                dragging={dragId === disp.id}
+                dropBefore={overId === disp.id && dragId !== null && dragId !== disp.id}
+                onSelect={() => onSelect(disp.id)}
+                onGrabStart={() => reorderable && setDragId(disp.id)}
+                onGrabMove={handleMove}
+                onGrabEnd={handleUp}
+                onGrabCancel={() => {
+                  setDragId(null);
+                  setOverId(null);
+                }}
+                onRequestDelete={(id, label) => setDeleteTarget({ id, label })}
+              />
+              {disp.cover !== "back" && (
+                <InsertRow at={disp.endInsertIndex} horizontal={isMobile} />
+              )}
+            </Fragment>
           );
         })}
-        {filter === "all" && displays.length > 0 && (
-          <InsertRow at={lastInsert} horizontal={isMobile} />
-        )}
       </div>
     </>
   );
@@ -291,38 +257,46 @@ export function PageFilmstrip({
           <span className="w-px bg-transparent transition group-hover:bg-brand-300 group-active:bg-brand-400" />
         </div>
       )}
+      <Modal
+        open={deleteTarget !== null}
+        onClose={() => setDeleteTarget(null)}
+        title={`Delete ${deleteTarget?.label ?? "page"}?`}
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setDeleteTarget(null)}>
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                if (deleteTarget) removeSpread(deleteTarget.id);
+                setDeleteTarget(null);
+              }}
+            >
+              Delete
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-ink-600">
+          This removes the page and its artwork. You can undo if you change your mind.
+        </p>
+      </Modal>
     </div>
   );
 }
 
-function FilterButton({
-  active,
-  count,
-  children,
-  onClick,
-}: {
-  active: boolean;
-  count?: number;
-  children: React.ReactNode;
-  onClick: () => void;
-}) {
+function sectionForDisplay(disp: DisplaySpread): "Front cover" | "Pages" | "Back cover" {
+  if (disp.cover === "front") return "Front cover";
+  if (disp.cover === "back") return "Back cover";
+  return "Pages";
+}
+
+function FilmstripSectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <button
-      type="button"
-      aria-pressed={active}
-      onClick={onClick}
-      className={cn(
-        "flex min-h-8 items-center justify-center gap-1 rounded-md px-1.5 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
-        active ? "bg-white text-brand-700 shadow-soft" : "text-ink-500 hover:text-ink-700",
-      )}
-    >
+    <p className="px-1 pt-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-400">
       {children}
-      {count != null && count > 0 && (
-        <span className="min-w-4 rounded-full bg-amber-100 px-1 text-center text-[10px] tabular-nums text-amber-800">
-          {count}
-        </span>
-      )}
-    </button>
+    </p>
   );
 }
 
@@ -331,7 +305,7 @@ function InsertRow({ at, horizontal = false }: { at: number; horizontal?: boolea
     <div
       className={cn(
         "group relative flex items-center justify-center",
-        horizontal ? "h-full min-h-16 w-8 shrink-0 self-stretch" : "h-4",
+        horizontal ? "h-full min-h-16 w-7 shrink-0 self-stretch" : "h-3",
       )}
     >
       <div
@@ -342,40 +316,55 @@ function InsertRow({ at, horizontal = false }: { at: number; horizontal?: boolea
             : "inset-x-3 top-1/2 h-px -translate-y-1/2",
         )}
       />
-      <Popover
-        align="center"
-        side={horizontal ? "bottom" : "top"}
-        trigger={
-          <span className="relative z-10 flex size-7 items-center justify-center rounded-full border border-ink-200 bg-white text-ink-400 shadow-soft transition hover:border-brand-300 hover:text-brand-600 group-focus-visible:ring-2 group-focus-visible:ring-brand-400">
-            <Plus className="size-3" />
-            <span className="sr-only">Insert page here</span>
-          </span>
-        }
-        panelClassName="w-44"
+      <button
+        type="button"
+        title="Insert page here"
+        aria-label="Insert page here"
+        onClick={() => insertSpreadAt(at)}
+        className={cn(
+          "relative z-10 flex size-6 items-center justify-center rounded-full border border-ink-200 bg-white text-ink-400 shadow-sm transition hover:border-brand-300 hover:text-brand-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
+          !horizontal && "scale-75 opacity-0 group-hover:scale-100 group-hover:opacity-100 focus:scale-100 focus:opacity-100",
+        )}
       >
-        {(close) => (
-          <div className="flex flex-col gap-0.5">
-            <button
-              onClick={() => {
-                insertSpreadAt(at);
-                close();
-              }}
-              className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs font-medium text-ink-600 transition hover:bg-ink-50"
+        <Plus className="size-3" />
+      </button>
+      <div
+        className={cn(
+          "absolute z-20",
+          horizontal ? "bottom-0 left-1/2 -translate-x-1/2" : "right-1 top-1/2 -translate-y-1/2",
+        )}
+      >
+        <Popover
+          align="center"
+          side={horizontal ? "bottom" : "top"}
+          trigger={
+            <span
+              title="More insert options"
+              className={cn(
+                "flex size-5 items-center justify-center rounded-md bg-white text-ink-400 shadow-sm transition hover:text-brand-600 group-focus-visible:ring-2 group-focus-visible:ring-brand-400",
+                !horizontal && "opacity-0 group-hover:opacity-100",
+              )}
             >
-              <Plus className="size-3.5" /> New page
-            </button>
+              <MoreHorizontal className="size-3" />
+              <span className="sr-only">More insert options</span>
+            </span>
+          }
+          panelClassName="w-44 p-1.5"
+        >
+          {(close) => (
             <button
+              type="button"
               onClick={() => {
                 insertSpreadAt(at, { blankCanvas: true });
                 close();
               }}
-              className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-left text-xs font-medium text-ink-600 transition hover:bg-ink-50"
+              className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-xs font-medium text-ink-600 transition hover:bg-ink-50"
             >
               <BookOpen className="size-3.5" /> Blank page
             </button>
-          </div>
-        )}
-      </Popover>
+          )}
+        </Popover>
+      </div>
     </div>
   );
 }
@@ -397,6 +386,7 @@ function FilmstripCell({
   onGrabCancel,
   onMoveEarlier,
   onMoveLater,
+  onRequestDelete,
 }: {
   disp: DisplaySpread;
   active: boolean;
@@ -414,6 +404,7 @@ function FilmstripCell({
   onGrabCancel: () => void;
   onMoveEarlier: () => void;
   onMoveLater: () => void;
+  onRequestDelete: (id: string, label: string) => void;
 }) {
   const statusLabel =
     status === "generating"
@@ -425,6 +416,15 @@ function FilmstripCell({
           : status === "empty"
             ? "Intentionally blank"
             : "Ready";
+  const structurePages = displayEntries(disp).flatMap(({ entry, label }) =>
+    entry.subject.kind === "spread"
+      ? [{
+          id: entry.subject.spread.id,
+          label,
+          textOnly: entry.subject.spread.completion === "text",
+        }]
+      : [],
+  );
   return (
     <div
       data-filmstrip-id={disp.id}
@@ -446,12 +446,14 @@ function FilmstripCell({
       )}
       <button
         onClick={onSelect}
-        title={disp.label}
+        title={`${disp.label} · ${statusLabel}`}
         aria-label={`${disp.label}. ${statusLabel}`}
         aria-current={active ? "page" : undefined}
         className={cn(
           "group relative block w-full overflow-hidden rounded-lg bg-white ring-2 transition focus-visible:outline-none focus-visible:ring-brand-500 focus-visible:ring-offset-2",
           active ? "ring-brand-500" : "ring-ink-200 hover:ring-brand-300",
+          status === "generating" &&
+            "shadow-[0_0_0_3px_rgba(124,108,242,0.14)] ring-brand-400",
         )}
       >
         <div className="pointer-events-none">
@@ -473,11 +475,11 @@ function FilmstripCell({
         >
           <Popover
             align="start"
-            panelClassName="w-40 p-1.5"
+            panelClassName="w-52 p-1.5"
             trigger={
               <span className="flex size-6 items-center justify-center rounded-md bg-white/90 text-ink-400 shadow-soft backdrop-blur transition hover:text-brand-600 group-focus-visible:ring-2 group-focus-visible:ring-brand-400">
                 <MoreHorizontal className="size-3.5" />
-                <span className="sr-only">Reorder {disp.label}</span>
+                <span className="sr-only">Options for {disp.label}</span>
               </span>
             }
           >
@@ -513,6 +515,45 @@ function FilmstripCell({
                     close();
                   }}
                 />
+                {structurePages.length > 0 && <div className="my-1 border-t border-ink-100" />}
+                {structurePages.map((page) => (
+                  <div key={page.id}>
+                    {structurePages.length > 1 && (
+                      <p className="px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+                        {page.label}
+                      </p>
+                    )}
+                    <MoveButton
+                      icon={<Copy className="size-3.5" />}
+                      label="Duplicate"
+                      disabled={false}
+                      onClick={() => {
+                        duplicateSpread(page.id);
+                        close();
+                      }}
+                    />
+                    <MoveButton
+                      icon={<Type className="size-3.5" />}
+                      label={page.textOnly ? "Require illustration" : "Text only"}
+                      disabled={false}
+                      onClick={() => {
+                        setSpreadCompletion(page.id, page.textOnly ? undefined : "text");
+                        close();
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onRequestDelete(page.id, page.label);
+                        close();
+                      }}
+                      className="flex min-h-9 w-full items-center gap-2 rounded-lg px-2 text-left text-xs font-medium text-red-600 transition hover:bg-red-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
+                    >
+                      <Trash2 className="size-3.5" />
+                      Delete
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
           </Popover>
@@ -572,10 +613,20 @@ function MoveButton({
 
 function StatusDot({ status }: { status: UnitStatus }) {
   if (status === "empty" || status === "ready") return null;
+  if (status === "generating") {
+    return (
+      <span
+        aria-hidden
+        className="absolute inset-x-1 bottom-1 flex h-6 items-center justify-center gap-1.5 rounded-full border border-white/70 bg-white/90 px-1.5 text-[9px] font-semibold text-brand-700 shadow-soft backdrop-blur"
+      >
+        <ArtworkOrbit className="size-3.5" />
+        <span className="min-w-0 truncate">Creating…</span>
+      </span>
+    );
+  }
   const meta = {
     missing: { icon: Sparkles, cls: "bg-brand-500" },
     stale: { icon: RefreshCw, cls: "bg-accent-500" },
-    generating: { icon: Loader2, cls: "bg-brand-500" },
   }[status];
   const Icon = meta.icon;
   return (
@@ -586,7 +637,7 @@ function StatusDot({ status }: { status: UnitStatus }) {
         meta.cls,
       )}
     >
-      <Icon className={cn("size-2.5", status === "generating" && "animate-spin")} />
+      <Icon className="size-2.5" />
     </span>
   );
 }

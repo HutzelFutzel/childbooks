@@ -6,8 +6,8 @@ import { create } from "zustand";
 import type { ImageEditSection } from "../design/ImageEditPanel";
 import type { TextEditSection } from "../design/TextEditPanel";
 
-/** Docked tools opened from the Add dock (mutually exclusive). */
-export type StudioToolPanel = "layers" | "view" | "setup";
+/** Docked tools opened from the page toolbar (mutually exclusive). */
+export type StudioToolPanel = "layers" | "setup";
 
 type ImageEditCloseGuard = ((proceed: () => void) => boolean) | null;
 

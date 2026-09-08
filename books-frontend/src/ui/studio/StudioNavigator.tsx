@@ -1,5 +1,4 @@
-import { ArrowRight, Check, ChevronDown } from "lucide-react";
-import { Button } from "../components/Button";
+import { Check, ChevronDown } from "lucide-react";
 import { cn } from "../lib/cn";
 import { useStudio } from "./StudioContext";
 import { computeProgress } from "./studioSteps";
@@ -9,6 +8,7 @@ const DESTINATIONS: { id: StudioDestination; label: string }[] = [
   { id: "story", label: "Story" },
   { id: "cast", label: "Book look" },
   { id: "pages", label: "Pages" },
+  { id: "order", label: "Review & order" },
 ];
 
 /**
@@ -22,11 +22,9 @@ export function StudioNavigator() {
   const { project, destination: active, navigate } = useStudio();
   const progress = computeProgress(project);
   const activeDestination = active === "style" ? "cast" : active;
-  const canReviewAndOrder = progress.edit.done;
-  const mobileDestinations =
-    canReviewAndOrder || active === "order"
-      ? [...DESTINATIONS, { id: "order" as const, label: "Review & order" }]
-      : DESTINATIONS;
+  const destinations = progress.order.unlocked
+    ? DESTINATIONS
+    : DESTINATIONS.filter(({ id }) => id !== "order");
 
   const isDone = (id: StudioDestination) => {
     if (id === "story") return progress.story.done;
@@ -53,7 +51,7 @@ export function StudioNavigator() {
           onChange={(event) => navigate(event.target.value as StudioDestination)}
           className="h-9 w-full appearance-none rounded-lg border border-ink-200 bg-white py-0 pl-3 pr-9 text-sm font-semibold text-ink-800 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
         >
-          {mobileDestinations.map(({ id, label }) => (
+          {destinations.map(({ id, label }) => (
             <option key={id} value={id}>
               {label}
             </option>
@@ -66,7 +64,7 @@ export function StudioNavigator() {
       </div>
 
       <div className="hidden min-w-0 flex-1 items-center gap-1 sm:flex">
-        {DESTINATIONS.map(({ id, label }) => {
+        {destinations.map(({ id, label }) => {
           const current = activeDestination === id;
           const done = isDone(id);
           const progressDetail = detail(id);
@@ -96,17 +94,6 @@ export function StudioNavigator() {
         })}
       </div>
 
-      {canReviewAndOrder && active !== "order" && active !== "pages" && (
-        <Button
-          size="sm"
-          variant="primary"
-          rightIcon={<ArrowRight className="size-4" />}
-          onClick={() => navigate("order")}
-          className="shrink-0"
-        >
-          Review & order
-        </Button>
-      )}
     </nav>
   );
 }

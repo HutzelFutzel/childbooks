@@ -18,7 +18,6 @@
  * both the main stage and the filmstrip share.
  */
 import { useMemo } from "react";
-import { Ban } from "lucide-react";
 import { useJobsStore } from "../../state/jobsStore";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { PageStage } from "../design/PageStage";
@@ -39,34 +38,16 @@ import {
 
 export * from "./spreadModel";
 
-/**
- * Fill for a `SpreadSide` that isn't a real page at all — the book's binding
- * means one side of a facing pair is sometimes structurally empty (page 1 is
- * always a lone right-hand page, so its facing left is the inside of the
- * front cover; a book with an odd number of leaves ends the same way on the
- * last spread). A diagonal hatch + explicit caption makes it obvious this
- * isn't a blank/undesigned page — there's nothing to add here, ever.
- */
+/** Quiet structural fill for a side that does not exist in the printed book. */
 export function DeadPageFill({ aspect, compact = false }: { aspect: number; compact?: boolean }) {
   return (
     <div
-      className="flex w-full items-center justify-center bg-ink-50"
-      style={{
-        aspectRatio: String(aspect),
-        backgroundImage:
-          "repeating-linear-gradient(135deg, rgba(15,23,42,0.05) 0px, rgba(15,23,42,0.05) 5px, transparent 5px, transparent 13px)",
-      }}
-    >
-      {!compact && (
-        <div className="flex flex-col items-center gap-1.5 px-4 text-center">
-          <Ban className="size-5 text-ink-300" />
-          <span className="text-[11px] font-semibold text-ink-400">No page here</span>
-          <span className="max-w-[16ch] text-[10px] leading-snug text-ink-300">
-            The printed book doesn&apos;t have a page on this side.
-          </span>
-        </div>
-      )}
-    </div>
+      role={compact ? undefined : "img"}
+      aria-label={compact ? undefined : "No printed page on this side"}
+      aria-hidden={compact || undefined}
+      className="w-full bg-ink-100/55"
+      style={{ aspectRatio: String(aspect) }}
+    />
   );
 }
 
@@ -104,9 +85,7 @@ export function HalfFrame({
   }
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 items-center justify-center">
-      <div className="flex w-full items-center justify-center" style={{ aspectRatio: String(aspect) }}>
-        <span className="text-[11px] font-medium text-ink-300">Blank page</span>
-      </div>
+      <div className="w-full bg-white" style={{ aspectRatio: String(aspect) }} />
     </div>
   );
 }
@@ -117,17 +96,11 @@ export function HalfFrame({
  * editor, but no Konva transformers/selection. Still shows the live
  * generation overlay so filmstrip thumbnails reflect in-flight renders.
  */
-export function PagePreview({ entry, compact }: { entry: Entry; compact?: boolean }) {
-  const { pageDesign, generatingPages } = useStudio();
+export function PagePreview({ entry }: { entry: Entry }) {
+  const { pageDesign } = useStudio();
   const page = entry.page;
   const blank = isBlankEntry(entry);
-  const coverMode = entry.subject.kind === "cover";
   const url = useBlobUrl(page.blobId);
-  const jobActive = useJobsStore((s) => s.activeUnitIds.has(page.id));
-  const generating = generatingPages.has(page.id) || jobActive;
-  const refCount =
-    (entry.subject.kind === "spread" ? entry.subject.spread.anchorIds : entry.subject.cover.anchorIds)
-      ?.length ?? 0;
   return (
     <PageStage
       pageDesign={pageDesign(page.id)}
@@ -139,18 +112,6 @@ export function PagePreview({ entry, compact }: { entry: Entry; compact?: boolea
       selectedId={null}
       onSelectElement={() => {}}
       onChangeElement={() => {}}
-      artBusy={
-        generating && !blank
-          ? {
-              left: {
-                action: coverMode ? "coverIllustration" : "pageIllustration",
-                refCount,
-                compact: compact ?? true,
-                illustrationId: page.id,
-              },
-            }
-          : undefined
-      }
     />
   );
 }
@@ -212,7 +173,7 @@ export function SpreadThumbnail({ disp }: { disp: DisplaySpread }) {
       <PreviewHalfFrame side={disp.left} aspect={sideAspect(disp.left, disp.right)} />
       <PreviewHalfFrame side={disp.right} aspect={sideAspect(disp.left, disp.right)} />
       <div
-        className="pointer-events-none absolute inset-y-0 left-1/2 w-3 -translate-x-1/2"
+        className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2"
         style={{ background: FOLD_GRADIENT }}
       />
     </div>
@@ -240,17 +201,6 @@ export function displayStatusFor(
   if (needingArt.some((e) => !e.page.blobId)) return "missing";
   if (needingArt.some((e) => stale(e.page.id))) return "stale";
   return "ready";
-}
-
-/** Filtering ignores generation overlays; only unfinished pages need action. */
-export function displayNeedsAttention(
-  disp: DisplaySpread,
-  stale: (pageId: string) => boolean,
-): boolean {
-  return displayEntries(disp)
-    .map((side) => side.entry)
-    .filter(entryNeedsArtwork)
-    .some((entry) => !entry.page.blobId || stale(entry.page.id));
 }
 
 /** Statuses for a whole display list, shared by filtering and status dots. */

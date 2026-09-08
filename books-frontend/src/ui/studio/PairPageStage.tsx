@@ -82,6 +82,8 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
     copyBoxStyle,
     pasteBoxStyle,
     hasCopiedBoxStyle,
+    textStyleScope,
+    applyTextStyleToScope,
     endHistoryGesture,
     undo,
     redo,
@@ -279,6 +281,10 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
         onCopyStyle: (boxId) => copyBoxStyle(elementOwner.get(boxId) ?? left.page.id, boxId),
         onPasteStyle: (boxId) => pasteBoxStyle(elementOwner.get(boxId) ?? left.page.id, boxId),
         canPasteStyle: hasCopiedBoxStyle,
+        styleScope: (boxId) =>
+          textStyleScope(elementOwner.get(boxId) ?? left.page.id, boxId),
+        onApplyStyleToScope: (boxId) =>
+          applyTextStyleToScope(elementOwner.get(boxId) ?? left.page.id, boxId),
         onGestureEnd: endHistoryGesture,
         onDiscardEdit: () => {
           undo();

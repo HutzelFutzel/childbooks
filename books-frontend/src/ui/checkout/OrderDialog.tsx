@@ -219,6 +219,10 @@ export function OrderCheckout({
   );
   const contentPages = useMemo(() => physicalPageCount(doc), [doc]);
   const pageCount = normalizePageCount(product, contentPages);
+  const incompleteUnits = useMemo(
+    () => illustrationUnits(project).filter((unit) => !unitIsDone(project, unit)).length,
+    [project],
+  );
 
   // Placement problems the editor can't show, because it has no idea where the
   // knife lands or where the binding curves. Advisory: the margins are comfort,
@@ -639,6 +643,11 @@ export function OrderCheckout({
     const fix = alternative
       ? ` ${capitalize(bindingNoun(alternative.binding))} takes a book this length — switch below.`
       : "";
+    if (incompleteUnits > 0) {
+      return `${incompleteUnits} ${
+        incompleteUnits === 1 ? "page needs" : "pages need"
+      } artwork or an explicit text-only/blank treatment before ordering.`;
+    }
     if (contentPages < minPages) {
       return `A ${bindingNoun(product.binding)} needs at least ${minPages} pages — your book has ${contentPages}.${
         fix || ` Add ${minPages - contentPages} more before ordering.`
@@ -653,7 +662,16 @@ export function OrderCheckout({
       return `You can order up to ${maxCopies} copies at a time.`;
     }
     return null;
-  }, [contentPages, minPages, maxPages, copies, maxCopies, product.binding, alternative]);
+  }, [
+    incompleteUnits,
+    contentPages,
+    minPages,
+    maxPages,
+    copies,
+    maxCopies,
+    product.binding,
+    alternative,
+  ]);
 
   const addressComplete = Boolean(
     name.trim() &&

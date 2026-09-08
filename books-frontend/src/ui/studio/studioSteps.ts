@@ -138,8 +138,10 @@ export function computeProgress(project: Project): StudioProgress {
     edit: pages,
     design,
     order: {
-      // Review & order is the conversion step, not a shortcut around Pages.
-      unlocked: setupDone && anchorsDone && editDone,
+      // Reveal Review only after the reader has completed the first Pages
+      // setup and reached the canvas. Purchasing performs the stricter per-page
+      // readiness check inside the order stage.
+      unlocked: pages.unlocked && project.config.designReady === true,
       done: false,
       ratio: 0,
     },

@@ -11,13 +11,12 @@ import { createPortal } from "react-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   ArrowRight,
+  BookOpen,
   BookText,
-  Check,
+  ChevronDown,
   Eye,
-  History,
   Layers as LayersIcon,
   LayoutTemplate,
-  Loader2,
   MoreHorizontal,
   Plus,
   Redo2,
@@ -25,6 +24,7 @@ import {
   LayoutGrid,
   SlidersHorizontal,
   Sparkles,
+  Shapes,
   Type,
   Undo2,
   Users,
@@ -34,10 +34,12 @@ import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { getCursor } from "../../core/versioning";
 import { staleIllustrationSpreadIds } from "../../state/ai";
 import { useJobsStore } from "../../state/jobsStore";
+import { useProjectsStore } from "../../state/projectsStore";
 import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { Popover } from "../components/Popover";
-import { SparkEstimateCost } from "../layout/SparkCost";
+import { ArtworkOrbit } from "../design/ArtworkOrbit";
+import { SparkEstimateCost, useImageBatchRange } from "../layout/SparkCost";
 import { PipelineStepper, type PipelinePhase } from "../generation/PipelineStepper";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useResolvedModels } from "../hooks/useResolvedModels";
@@ -47,11 +49,10 @@ import { useDialogFocus } from "../lib/dialogFocus";
 import { AssetsLibrary } from "./AssetsLibrary";
 import { ElementPanel, elementPanelHasContent } from "./ElementPanel";
 import { PageFilmstrip } from "./PageFilmstrip";
-import { PageMenu, PageStagePanel } from "./PageEditorCard";
-import { setSpreadCompletion } from "./pageOps";
+import { PageStagePanel } from "./PageEditorCard";
 import { PairPageStagePanel } from "./PairPageStage";
 import { useStudio } from "./StudioContext";
-import { useStudioPanelStore, type StudioToolPanel } from "./studioPanelStore";
+import { useStudioPanelStore } from "./studioPanelStore";
 import { refreshSpread, updateAnchorsThenSpread } from "./studioGen";
 import { useBookGeneration } from "./useBookGeneration";
 import { BookPreview } from "./BookPreview";
@@ -62,16 +63,14 @@ import {
   displayEntries,
   FOLD_GRADIENT,
   HalfFrame,
-  isBlankEntry,
   isPlainPagePair,
   entryNeedsArtwork,
   sideAspect,
-  useEntryStatus,
-  COVER_META,
+  useDisplayStatus,
   type DisplaySpread,
   type Entry,
-  type SpreadSide,
 } from "./SpreadEditor";
+import { activeSurfaceFor } from "./surfaceCapabilities";
 
 const SCREENPLAY_PHASES: PipelinePhase[] = [
   { id: "cast", label: "Casting characters & places", icon: Users },
@@ -174,6 +173,13 @@ export function BookCanvas() {
     if (selection.kind !== "none" && "pageId" in selection) return selection.pageId;
     return activeDisp ? displayEntries(activeDisp)[0]?.entry.page.id : undefined;
   }, [selection, activeDisp]);
+  const activePageLabel = useMemo(
+    () =>
+      activeDisp
+        ? displayEntries(activeDisp).find(({ entry }) => entry.page.id === activePageId)?.label
+        : undefined,
+    [activeDisp, activePageId],
+  );
 
   const retryScreenplay = useCallback(() => {
     void startScreenplay(project, true).catch((err) => notify.error(err));
@@ -226,9 +232,18 @@ export function BookCanvas() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* Toolbar */}
-      <div className="flex min-w-0 items-center justify-between gap-2 border-b border-ink-100 bg-white/70 px-2 py-2 backdrop-blur sm:px-5 sm:py-2.5">
-        <div className="flex min-w-0 items-center">
-          <NextActionChip />
+      <div className="flex min-w-0 items-center justify-between gap-2 border-b border-ink-100 bg-white px-2 py-1.5 sm:px-4">
+        <div className="flex min-w-0 items-center gap-1">
+          {activeDisp && <SurfaceIdentity disp={activeDisp} />}
+          <span className="mx-1 hidden h-5 w-px bg-ink-200 sm:block" />
+          <PageAddMenu pageId={activePageId} pageLabel={activePageLabel} />
+          <ToolbarIconButton
+            icon={<LayersIcon className="size-4" />}
+            label="Arrange"
+            active={toolPanel === "layers"}
+            disabled={!activePageId}
+            onClick={() => toggleToolPanel("layers")}
+          />
         </div>
         <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
           {/* Undo / redo stay visible on desktop and move into More on mobile. */}
@@ -253,21 +268,29 @@ export function BookCanvas() {
             </button>
             <span className="mx-0.5 h-5 w-px bg-ink-200" />
           </div>
-          <Button
-            size="sm"
-            variant="secondary"
-            leftIcon={<Eye className="size-4" />}
-            onClick={() => setPreviewing(true)}
-          >
-            Preview
-          </Button>
+          <div className="hidden sm:block">
+            <Button
+              size="sm"
+              variant="secondary"
+              leftIcon={<Eye className="size-4" />}
+              onClick={() => setPreviewing(true)}
+            >
+              Preview
+            </Button>
+          </div>
           <PagesToolbarMore
-            viewOpen={toolPanel === "view"}
             onUndo={undo}
             onRedo={redo}
-            onToggleView={() => toggleToolPanel("view")}
+            onPreview={() => setPreviewing(true)}
             onOpenSetup={openDesignSetup}
           />
+          {activeDisp && (
+            <SurfacePrimaryAction
+              disp={activeDisp}
+              stale={isStale}
+              onCustomize={(entry) => openIllustrationTools(entry)}
+            />
+          )}
         </div>
       </div>
 
@@ -280,11 +303,11 @@ export function BookCanvas() {
           stale={isStale}
         />
 
-        {/* Stage + inspector dock as siblings so the panel never covers chips. */}
+        {/* Stage + inspector dock as siblings so tools never cover the book. */}
         <div className="flex min-h-0 min-w-0 flex-1 flex-row">
           <div className="relative min-h-0 min-w-0 flex-1">
             <div
-              className="absolute inset-0 flex flex-col bg-ink-50/40 px-3 pb-20 pt-3 sm:px-5 sm:pt-4"
+              className="absolute inset-0 flex flex-col bg-ink-50/40 p-3 sm:p-5"
               onMouseDown={(e) => {
                 // Click anywhere in the empty canvas area (outside the page surface
                 // and the floating element toolbox, which is a separate subtree) to
@@ -304,11 +327,7 @@ export function BookCanvas() {
               }}
             >
               {activeDisp ? (
-                <ActiveSpreadStage
-                  disp={activeDisp}
-                  stale={isStale}
-                  onOpenIllustration={(entry) => openIllustrationTools(entry)}
-                />
+                <ActiveSpreadStage disp={activeDisp} />
               ) : (
                 <div className="flex min-h-0 flex-1 items-center justify-center">
                   <EmptyState
@@ -320,13 +339,6 @@ export function BookCanvas() {
               )}
             </div>
 
-            {activeDisp && (
-              <AddDock
-                activePageId={activePageId}
-                toolPanel={toolPanel}
-                onToggleTool={toggleToolPanel}
-              />
-            )}
           </div>
 
           <AnimatePresence>
@@ -361,19 +373,161 @@ export function BookCanvas() {
   );
 }
 
+function SurfaceIdentity({ disp }: { disp: DisplaySpread }) {
+  const surface = activeSurfaceFor(disp);
+  return (
+    <div className="flex min-w-0 max-w-28 items-center gap-2 px-1.5 sm:max-w-none">
+      <BookOpen className="hidden size-4 shrink-0 text-ink-400 sm:block" />
+      <span className="truncate text-sm font-semibold text-ink-800">{surface.label}</span>
+    </div>
+  );
+}
+
+function PageAddMenu({
+  pageId,
+  pageLabel,
+}: {
+  pageId?: string;
+  pageLabel?: string;
+}) {
+  const { addText, addShape, addAssetImage } = useStudio();
+  if (!pageId) {
+    return (
+      <ToolbarIconButton
+        icon={<Plus className="size-4" />}
+        label="Select a page to add content"
+        disabled
+        onClick={() => undefined}
+      />
+    );
+  }
+  return (
+    <Popover
+      align="start"
+      side="bottom"
+      panelClassName="w-72 p-2"
+      trigger={(open) => (
+        <span
+          title={`Add to ${pageLabel ?? "page"}`}
+          className={cn(
+            "flex size-9 items-center justify-center rounded-lg text-sm font-semibold transition sm:w-auto sm:px-2.5",
+            open ? "bg-brand-50 text-brand-700" : "text-ink-600 hover:bg-ink-100",
+          )}
+        >
+          <Plus className="size-4" />
+          <span className="ml-1.5 hidden sm:inline">Add</span>
+        </span>
+      )}
+    >
+      {(close) => (
+        <div>
+          <p className="px-2.5 pb-1.5 text-[11px] font-medium text-ink-400">
+            Add to {pageLabel ?? "this page"}
+          </p>
+          <AddMenuRow
+            icon={<Type className="size-4" />}
+            label="Text"
+            hint="Story text or an empty text box"
+            onClick={() => {
+              addText(pageId);
+              close();
+            }}
+          />
+          <AddMenuRow
+            icon={<Shapes className="size-4" />}
+            label="Shape"
+            hint="Add a shape, then choose its style"
+            onClick={() => {
+              addShape(pageId, "rounded-rect");
+              close();
+            }}
+          />
+          <div className="my-1 border-t border-ink-100" />
+          <div className="px-1.5 py-1.5">
+            <AssetsLibrary
+              onPlace={(asset) => {
+                addAssetImage(pageId, asset);
+                close();
+              }}
+            />
+          </div>
+        </div>
+      )}
+    </Popover>
+  );
+}
+
+function AddMenuRow({
+  icon,
+  label,
+  hint,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  hint: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2 text-left text-ink-700 transition hover:bg-ink-50"
+    >
+      <span className="mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
+        {icon}
+      </span>
+      <span className="min-w-0">
+        <span className="block text-sm font-semibold">{label}</span>
+        <span className="block text-[11px] leading-snug text-ink-400">{hint}</span>
+      </span>
+    </button>
+  );
+}
+
+function ToolbarIconButton({
+  icon,
+  label,
+  active,
+  disabled,
+  onClick,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      aria-pressed={active}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        "flex size-9 items-center justify-center rounded-lg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 disabled:pointer-events-none disabled:opacity-35",
+        active ? "bg-brand-50 text-brand-700" : "text-ink-500 hover:bg-ink-100 hover:text-ink-800",
+      )}
+    >
+      {icon}
+    </button>
+  );
+}
+
 function PagesToolbarMore({
-  viewOpen,
   onUndo,
   onRedo,
-  onToggleView,
+  onPreview,
   onOpenSetup,
 }: {
-  viewOpen: boolean;
   onUndo: () => void;
   onRedo: () => void;
-  onToggleView: () => void;
+  onPreview: () => void;
   onOpenSetup: () => void;
 }) {
+  const { snap, grid, guides, toggleSnap, toggleGrid, toggleGuides } = useStudio();
   return (
     <Popover
       align="end"
@@ -383,7 +537,7 @@ function PagesToolbarMore({
           title="More page tools"
           className={cn(
             "inline-flex size-8 items-center justify-center rounded-lg border text-ink-500 transition group-focus-visible:ring-2 group-focus-visible:ring-brand-400",
-            open || viewOpen
+            open
               ? "border-brand-200 bg-brand-50 text-brand-700"
               : "border-ink-200 bg-white hover:bg-ink-50 hover:text-ink-700",
           )}
@@ -413,16 +567,24 @@ function PagesToolbarMore({
               }}
             />
           </div>
-          <PagesToolbarMenuItem
-            icon={<SlidersHorizontal className="size-4" />}
-            label="Canvas view"
-            description="Snapping, grid and print guides"
-            active={viewOpen}
-            onClick={() => {
-              onToggleView();
-              close();
-            }}
-          />
+          <div className="sm:hidden">
+            <PagesToolbarMenuItem
+              icon={<Eye className="size-4" />}
+              label="Preview"
+              onClick={() => {
+                onPreview();
+                close();
+              }}
+            />
+            <div className="my-1 border-t border-ink-100" />
+          </div>
+          <p className="px-2.5 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+            Canvas
+          </p>
+          <ToolbarToggleRow label="Snap to guides" active={snap} onClick={toggleSnap} />
+          <ToolbarToggleRow label="Grid" active={grid} onClick={toggleGrid} />
+          <ToolbarToggleRow label="Print guides" active={guides} onClick={toggleGuides} />
+          <div className="my-1 border-t border-ink-100" />
           <PagesToolbarMenuItem
             icon={<LayoutTemplate className="size-4" />}
             label="Book setup"
@@ -438,27 +600,57 @@ function PagesToolbarMore({
   );
 }
 
+function ToolbarToggleRow({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="menuitemcheckbox"
+      aria-checked={active}
+      onClick={onClick}
+      className="flex min-h-9 w-full items-center justify-between gap-3 rounded-lg px-2.5 text-left text-xs font-medium text-ink-700 transition hover:bg-ink-50"
+    >
+      {label}
+      <span
+        className={cn(
+          "h-4 w-7 rounded-full p-0.5 transition",
+          active ? "bg-brand-500" : "bg-ink-200",
+        )}
+      >
+        <span
+          className={cn(
+            "block size-3 rounded-full bg-white shadow-sm transition-transform",
+            active && "translate-x-3",
+          )}
+        />
+      </span>
+    </button>
+  );
+}
+
 function PagesToolbarMenuItem({
   icon,
   label,
   description,
-  active,
   onClick,
 }: {
   icon: React.ReactNode;
   label: string;
   description?: string;
-  active?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={cn(
-        "flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left transition",
-        active ? "bg-brand-50 text-brand-700" : "text-ink-700 hover:bg-ink-50",
-      )}
+      className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left text-ink-700 transition hover:bg-ink-50"
     >
       <span className="mt-0.5 shrink-0">{icon}</span>
       <span className="min-w-0">
@@ -567,6 +759,189 @@ function InspectorDock({
 }
 
 /**
+ * Exactly one primary action for the open surface. Missing/stale artwork is
+ * handled in one click; the adjacent disclosure opens page-specific inputs.
+ */
+function SurfacePrimaryAction({
+  disp,
+  stale,
+  onCustomize,
+}: {
+  disp: DisplaySpread;
+  stale: (pageId: string) => boolean;
+  onCustomize: (entry: Entry) => void;
+}) {
+  const {
+    project,
+    selectIllustration,
+    setPageGenerating,
+  } = useStudio();
+  const gen = useBookGeneration();
+  const status = useDisplayStatus(disp, stale);
+  const surface = activeSurfaceFor(disp);
+
+  const artworkEntries = surface.entries
+    .map(({ entry, label }) => ({ entry, label }))
+    .filter(({ entry }) => entryNeedsArtwork(entry));
+  const missingEntries = artworkEntries.filter(({ entry }) => {
+    const tree = project.illustrations?.[entry.page.id];
+    const blobId = tree ? getCursor(tree).content.blobId : entry.page.blobId;
+    return !blobId;
+  });
+  const staleEntries = artworkEntries.filter(({ entry }) => stale(entry.page.id));
+  const targets = status === "stale" ? staleEntries : missingEntries;
+  const coverCount = targets.filter(({ entry }) => entry.subject.kind === "cover").length;
+  const pageCount = targets.length - coverCount;
+  const actionRange = useImageBatchRange([
+    { action: "coverIllustration", count: coverCount },
+    { action: "pageIllustration", count: pageCount },
+  ]);
+
+  async function createArtwork() {
+    for (const { entry } of targets) {
+      const pageId = entry.page.id;
+      const live =
+        useProjectsStore.getState().projects.find((candidate) => candidate.id === project.id) ??
+        project;
+      selectIllustration(pageId, { createIfMissing: true });
+      setPageGenerating(pageId, true);
+      try {
+        await refreshSpread(live, pageId, {}, (err) => notify.error(err));
+      } finally {
+        setPageGenerating(pageId, false);
+      }
+    }
+  }
+
+  async function updateArtwork() {
+    for (const { entry } of targets) {
+      const pageId = entry.page.id;
+      const live =
+        useProjectsStore.getState().projects.find((candidate) => candidate.id === project.id) ??
+        project;
+      selectIllustration(pageId, { createIfMissing: true });
+      setPageGenerating(pageId, true);
+      try {
+        const changed = changedAnchorsForSpread(live, pageId);
+        const staleSet = new Set(staleAnchorIds(live));
+        const staleRefs = changed.filter((anchor) => staleSet.has(anchor.id)).map((anchor) => anchor.id);
+        if (staleRefs.length > 0) {
+          await updateAnchorsThenSpread(live, pageId, staleRefs, (err) => notify.error(err));
+        } else {
+          await refreshSpread(
+            live,
+            pageId,
+            { useReference: true },
+            (err) => notify.error(err),
+          );
+        }
+      } finally {
+        setPageGenerating(pageId, false);
+      }
+    }
+  }
+
+  if (!gen.modelsReady) return null;
+  if (gen.busy) return <NextActionChip />;
+  if (status === "generating") {
+    return (
+      <span className="inline-flex h-9 items-center gap-1.5 px-2 text-xs font-semibold text-brand-700">
+        <ArtworkOrbit />
+        <span className="hidden sm:inline">Creating artwork…</span>
+      </span>
+    );
+  }
+  if ((status !== "missing" && status !== "stale") || targets.length === 0) {
+    return <NextActionChip />;
+  }
+
+  const primaryLabel =
+    status === "stale"
+      ? targets.length > 1
+        ? `Update ${targets.length} pages`
+        : surface.definition.kind === "front-cover" || surface.definition.kind === "back-cover"
+          ? "Update cover"
+          : surface.definition.kind === "spread"
+            ? "Update spread"
+            : "Update page"
+      : targets.length > 1
+        ? `Illustrate ${targets.length} pages`
+        : surface.definition.createArtworkLabel;
+
+  return (
+    <div className="flex items-center gap-1">
+      <Button
+        size="sm"
+        variant="magic"
+        loading={false}
+        leftIcon={status === "stale" ? <RefreshCw className="size-4" /> : <Sparkles className="size-4" />}
+        onClick={() => void (status === "stale" ? updateArtwork() : createArtwork())}
+      >
+        <span className="hidden max-w-36 truncate sm:inline">{primaryLabel}</span>
+        <span className="sm:hidden">
+          {status === "stale"
+            ? "Update"
+            : surface.definition.kind === "front-cover" || surface.definition.kind === "back-cover"
+              ? "Create"
+              : "Illustrate"}
+        </span>
+        <span className="hidden sm:inline-flex">
+          <SparkEstimateCost range={actionRange} />
+        </span>
+      </Button>
+      <Popover
+        align="end"
+        side="bottom"
+        panelClassName="w-60 p-1.5"
+        trigger={
+          <span
+            title="Artwork options"
+            className="flex size-9 items-center justify-center rounded-xl bg-magic-700 text-white shadow-soft transition hover:brightness-110 group-focus-visible:ring-2 group-focus-visible:ring-magic-300"
+          >
+            <ChevronDown className="size-4" />
+            <span className="sr-only">Artwork options</span>
+          </span>
+        }
+      >
+        {(close) => (
+          <div className="space-y-0.5">
+            {artworkEntries.map(({ entry, label }) => (
+              <PagesToolbarMenuItem
+                key={entry.page.id}
+                icon={<SlidersHorizontal className="size-4" />}
+                label={
+                  artworkEntries.length > 1
+                    ? `Customize ${label}`
+                    : surface.definition.customizeArtworkLabel
+                }
+                description="Scene, characters and versions"
+                onClick={() => {
+                  onCustomize(entry);
+                  close();
+                }}
+              />
+            ))}
+            {gen.pendingCount > targets.length && (
+              <>
+                <div className="my-1 border-t border-ink-100" />
+                <PagesToolbarMenuItem
+                  icon={<Sparkles className="size-4" />}
+                  label={`Illustrate all ${gen.pendingCount} remaining`}
+                  onClick={() => {
+                    void gen.generateEverything();
+                    close();
+                  }}
+                />
+              </>
+            )}
+          </div>
+        )}
+      </Popover>
+    </div>
+  );
+}
+
+/**
  * The single "next best action" for the whole book, always visible in the
  * toolbar: generate what's missing → update what's stale → review & order.
  */
@@ -579,7 +954,7 @@ function NextActionChip() {
   if (gen.busy) {
     return (
       <span className="flex items-center gap-1 rounded-full bg-brand-50 py-1 pl-3 pr-1 text-xs font-semibold text-brand-700 ring-1 ring-brand-200">
-        <Loader2 className="size-3.5 animate-spin" />
+        <ArtworkOrbit />
         <span className="hidden sm:inline">Illustrating your book…</span>
         <span className="sm:hidden">Illustrating…</span>
         <button
@@ -606,7 +981,9 @@ function NextActionChip() {
       <Button size="sm" leftIcon={<Sparkles className="size-4" />} onClick={() => void gen.generateEverything()}>
         <span className="hidden sm:inline">{label}</span>
         <span className="sm:hidden">Create artwork</span>
-        <SparkEstimateCost range={gen.batchRange} />
+        <span className="hidden sm:inline-flex">
+          <SparkEstimateCost range={gen.batchRange} />
+        </span>
       </Button>
     );
   }
@@ -644,45 +1021,20 @@ function NextActionChip() {
   return null;
 }
 
-/**
- * The whole active spread, sized to fill the stage (Canva-style fit) — a cover
- * treatment for covers, one wide frame for a true double-page spread, or two
- * facing single pages with a fold. A small chip sits above each live page with
- * contextual art actions.
- */
-const ActiveSpreadStage = memo(function ActiveSpreadStage({
-  disp,
-  stale,
-  onOpenIllustration,
-}: {
-  disp: DisplaySpread;
-  stale: (pageId: string) => boolean;
-  onOpenIllustration: (entry: Entry) => void;
-}) {
+/** The book is the focus: no labels or controls compete with the live surface. */
+const ActiveSpreadStage = memo(function ActiveSpreadStage({ disp }: { disp: DisplaySpread }) {
   if (disp.cover && disp.kind === "pair") {
     const side = coverSideOf(disp);
-    const meta = COVER_META[disp.cover];
     if (!side || side.kind !== "page") {
       return (
         <div className="flex min-h-0 flex-1 items-center justify-center text-sm text-ink-400">
-          No {meta.title.toLowerCase()} yet.
+          No cover yet.
         </div>
       );
     }
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <div
-          className="relative z-10 mb-2 flex shrink-0 justify-center"
-          data-floating-bar-obstacle
-        >
-          <PageChip
-            entry={side.entry}
-            label={meta.title}
-            stale={stale}
-            onOpenIllustration={() => onOpenIllustration(side.entry)}
-          />
-        </div>
-        <StageFitFrame ring="brand">
+        <StageFitFrame>
           <PageStagePanel
             page={side.entry.page}
             subject={side.entry.subject}
@@ -690,7 +1042,6 @@ const ActiveSpreadStage = memo(function ActiveSpreadStage({
             fitParent
           />
         </StageFitFrame>
-        <p className="mt-2 shrink-0 text-center text-xs text-ink-400">{meta.hint}</p>
       </div>
     );
   }
@@ -698,17 +1049,6 @@ const ActiveSpreadStage = memo(function ActiveSpreadStage({
   if (disp.kind === "full") {
     return (
       <div className="flex min-h-0 flex-1 flex-col">
-        <div
-          className="relative z-10 mb-2 flex shrink-0 justify-center"
-          data-floating-bar-obstacle
-        >
-          <PageChip
-            entry={disp.entry}
-            label={disp.label}
-            stale={stale}
-            onOpenIllustration={() => onOpenIllustration(disp.entry)}
-          />
-        </div>
         <StageFitFrame>
           <PageStagePanel
             page={disp.entry.page}
@@ -725,13 +1065,6 @@ const ActiveSpreadStage = memo(function ActiveSpreadStage({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div
-        className="relative z-10 mb-2 flex shrink-0 items-center justify-between gap-3"
-        data-floating-bar-obstacle
-      >
-        <SideChip side={disp.left} stale={stale} onOpenIllustration={onOpenIllustration} />
-        <SideChip side={disp.right} stale={stale} onOpenIllustration={onOpenIllustration} />
-      </div>
       <StageFitFrame aspect={pairAspect}>
         <div className="relative flex h-full w-full">
           {isPlainPagePair(disp) ? (
@@ -746,7 +1079,7 @@ const ActiveSpreadStage = memo(function ActiveSpreadStage({
             </>
           )}
           <div
-            className="pointer-events-none absolute inset-y-0 left-1/2 w-10 -translate-x-1/2"
+            className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2"
             style={{ background: FOLD_GRADIENT }}
           />
         </div>
@@ -763,12 +1096,10 @@ const ActiveSpreadStage = memo(function ActiveSpreadStage({
 function StageFitFrame({
   children,
   aspect,
-  ring = "ink",
 }: {
   children: React.ReactNode;
   /** When set, sizes the chrome box to this aspect (e.g. facing pair). */
   aspect?: number;
-  ring?: "ink" | "brand";
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [box, setBox] = useState<{ w: number; h: number } | null>(null);
@@ -799,8 +1130,7 @@ function StageFitFrame({
   }, [aspect]);
 
   const chromeCls = cn(
-    "overflow-hidden bg-white shadow-lifted",
-    ring === "brand" ? "ring-2 ring-brand-200" : "ring-1 ring-ink-200",
+    "overflow-hidden bg-white shadow-soft ring-1 ring-ink-200",
     aspect == null && "w-max max-h-full max-w-full",
   );
 
@@ -814,354 +1144,5 @@ function StageFitFrame({
         {children}
       </div>
     </div>
-  );
-}
-
-function SideChip({
-  side,
-  stale,
-  onOpenIllustration,
-}: {
-  side: SpreadSide;
-  stale: (pageId: string) => boolean;
-  onOpenIllustration: (entry: Entry) => void;
-}) {
-  if (side.kind === "page") {
-    return (
-      <PageChip
-        entry={side.entry}
-        label={side.label}
-        stale={stale}
-        onOpenIllustration={() => onOpenIllustration(side.entry)}
-      />
-    );
-  }
-  if (side.kind === "filler") {
-    return (
-      <span className="rounded-full bg-ink-50 px-3 py-1.5 text-xs text-ink-400 ring-1 ring-ink-100">
-        {side.label} · Blank
-      </span>
-    );
-  }
-  if (side.kind === "edge") {
-    return (
-      <span
-        className="rounded-full bg-ink-50 px-3 py-1.5 text-xs text-ink-300 ring-1 ring-ink-100"
-        title="The printed book doesn't have a page on this side."
-      >
-        No page here
-      </span>
-    );
-  }
-  return <span aria-hidden />;
-}
-
-/**
- * Per-page chip above the canvas: contextual art actions live here so the page
- * surface stays free for editing text/layout.
- *
- * - No art yet: Generate illustration/cover (opens toolbox — never auto-starts)
- * - Cleared art with history: Restore
- * - Art present + stale: warning + Update
- * - Art present + ready: status only (edit via selecting the art)
- */
-function PageChip({
-  entry,
-  label,
-  stale,
-  onOpenIllustration,
-}: {
-  entry: Entry;
-  label: string;
-  stale: (pageId: string) => boolean;
-  onOpenIllustration: () => void;
-}) {
-  const { project, setPageGenerating, selectIllustration, pageDesign } = useStudio();
-  const blank = isBlankEntry(entry);
-  const textOnly =
-    entry.subject.kind === "spread" && entry.subject.spread.completion === "text";
-  const status = useEntryStatus(entry, stale);
-  const page = entry.page;
-  const coverMode = entry.subject.kind === "cover";
-
-  const hasFrame = (pageDesign(page.id).images ?? []).some((im) => im.kind === "illustration");
-  const tree = project.illustrations?.[page.id];
-  const cursor = tree ? getCursor(tree).content : null;
-  const hasHistory = Boolean(cursor?.blobId);
-  const needsArt = entryNeedsArtwork(entry) && !hasHistory;
-
-  function markTextOnly() {
-    if (entry.subject.kind !== "spread") return;
-    setSpreadCompletion(entry.subject.spread.id, "text");
-  }
-
-  function addIllustration() {
-    if (entry.subject.kind === "spread") setSpreadCompletion(entry.subject.spread.id, undefined);
-    onOpenIllustration();
-  }
-
-  async function updateStaleArt() {
-    selectIllustration(page.id);
-    setPageGenerating(page.id, true);
-    try {
-      const changed = changedAnchorsForSpread(project, page.id);
-      const staleSet = new Set(staleAnchorIds(project));
-      const staleRefs = changed.filter((a) => staleSet.has(a.id)).map((a) => a.id);
-      if (staleRefs.length > 0) {
-        await updateAnchorsThenSpread(project, page.id, staleRefs, (err) => notify.error(err));
-      } else {
-        await refreshSpread(project, page.id, { useReference: true }, (err) => notify.error(err));
-      }
-    } finally {
-      setPageGenerating(page.id, false);
-    }
-  }
-
-  return (
-    <div className="inline-flex max-w-full items-center gap-0.5 rounded-full bg-white/95 px-2 py-1 shadow-soft ring-1 ring-ink-200 backdrop-blur-sm">
-      <span className="truncate px-1 text-xs font-semibold text-ink-700">{label}</span>
-      {!blank && (
-        <>
-          {status === "generating" && (
-            <span className="inline-flex items-center gap-1 px-1.5 text-[11px] font-medium text-brand-600">
-              <Loader2 className="size-3.5 animate-spin" />
-              <span className="hidden sm:inline">Generating…</span>
-            </span>
-          )}
-
-          {needsArt && status !== "generating" && (
-            <>
-              <ChipButton
-                label={coverMode ? "Generate cover" : "Generate illustration"}
-                title={
-                  coverMode
-                    ? "Open cover tools — set title options, then generate"
-                    : "Open illustration tools — check cast & scene, then generate"
-                }
-                onClick={onOpenIllustration}
-                tone="brand"
-              >
-                <Sparkles className="size-3.5" />
-              </ChipButton>
-              {!coverMode && (
-                <ChipButton
-                  label="Text only"
-                  title="Finish this page without an illustration"
-                  onClick={markTextOnly}
-                >
-                  <Type className="size-3.5" />
-                </ChipButton>
-              )}
-            </>
-          )}
-
-          {textOnly && status !== "generating" && (
-            <>
-              <span className="hidden px-1 text-[11px] font-medium text-ink-500 sm:inline">
-                Text only
-              </span>
-              <ChipButton
-                label="Add illustration"
-                title="Create artwork for this page"
-                onClick={addIllustration}
-              >
-                <Sparkles className="size-3.5" />
-              </ChipButton>
-            </>
-          )}
-
-          {!textOnly && hasHistory && !hasFrame && status !== "generating" && (
-            <ChipButton
-              label="Restore"
-              title="Put the last saved version back on the page"
-              onClick={() => selectIllustration(page.id)}
-            >
-              <History className="size-3.5" />
-            </ChipButton>
-          )}
-
-          {!textOnly && hasFrame && status === "stale" && (
-            <>
-              <span
-                className="hidden max-w-36 truncate px-1 text-[11px] font-medium text-amber-700 sm:inline"
-                title="Characters or places on this page changed since the art was made"
-              >
-                Outdated
-              </span>
-              <ChipButton
-                label="Update"
-                title="Update scene for changed characters & places"
-                onClick={() => void updateStaleArt()}
-                tone="accent"
-              >
-                <RefreshCw className="size-3.5" />
-              </ChipButton>
-            </>
-          )}
-
-          {!textOnly && hasFrame && status === "ready" && (
-            <Check className="mx-1 size-3.5 text-emerald-500" aria-label="Art ready" />
-          )}
-        </>
-      )}
-      {entry.subject.kind === "spread" && <PageMenu spreadId={entry.subject.spread.id} />}
-    </div>
-  );
-}
-
-function ChipButton({
-  children,
-  onClick,
-  title,
-  label,
-  tone,
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-  title: string;
-  label?: string;
-  tone?: "brand" | "accent";
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-semibold transition",
-        tone === "brand" && "bg-brand-50 text-brand-700 ring-1 ring-brand-200 hover:bg-brand-100",
-        tone === "accent" && "bg-amber-50 text-amber-800 ring-1 ring-amber-200 hover:bg-amber-100",
-        !tone && "text-ink-600 hover:bg-ink-100",
-      )}
-    >
-      {children}
-      {label && <span>{label}</span>}
-    </button>
-  );
-}
-
-/** Compact page-local dock. Add choices stay hidden until requested. */
-function AddDock({
-  activePageId,
-  toolPanel,
-  onToggleTool,
-}: {
-  activePageId?: string;
-  toolPanel: StudioToolPanel | null;
-  onToggleTool: (panel: StudioToolPanel) => void;
-}) {
-  const { addText, addAssetImage } = useStudio();
-  const pageId = activePageId;
-
-  return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-30 flex justify-center">
-      <div
-        className="pointer-events-auto flex items-center gap-1 rounded-full bg-white/95 p-1.5 shadow-lifted ring-1 ring-ink-200 backdrop-blur-sm"
-        data-floating-bar-obstacle
-      >
-        {pageId ? (
-          <Popover
-            side="top"
-            align="center"
-            panelClassName="w-72 p-2"
-            trigger={(open) => (
-              <span
-                title="Add something to this page"
-                className={cn(
-                  "flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-semibold transition group-focus-visible:ring-2 group-focus-visible:ring-brand-400",
-                  open
-                    ? "bg-brand-50 text-brand-700"
-                    : "text-ink-700 hover:bg-ink-100",
-                )}
-              >
-                <Plus className="size-4" />
-                Add
-              </span>
-            )}
-          >
-            {(close) => (
-              <div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    addText(pageId);
-                    close();
-                  }}
-                  className="flex w-full items-start gap-2.5 rounded-xl px-2.5 py-2.5 text-left text-ink-700 transition hover:bg-ink-50"
-                >
-                  <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-700">
-                    <Type className="size-4" />
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block text-sm font-semibold">Text box</span>
-                    <span className="block text-[11px] leading-snug text-ink-400">
-                      Add story text or an empty text box
-                    </span>
-                  </span>
-                </button>
-                <div className="my-1 border-t border-ink-100" />
-                <div className="px-1.5 py-1.5">
-                  <AssetsLibrary
-                    onPlace={(asset) => {
-                      addAssetImage(pageId, asset);
-                      close();
-                    }}
-                  />
-                </div>
-              </div>
-            )}
-          </Popover>
-        ) : (
-          <DockButton
-            icon={<Plus className="size-4" />}
-            label="Add"
-            disabled
-            onClick={() => undefined}
-          />
-        )}
-        <span className="mx-0.5 h-5 w-px bg-ink-200" />
-        <DockButton
-          icon={<LayersIcon className="size-4" />}
-          label="Arrange"
-          title="Reorder layers on the pages in this canvas"
-          active={toolPanel === "layers"}
-          disabled={!pageId}
-          onClick={() => onToggleTool("layers")}
-        />
-      </div>
-    </div>
-  );
-}
-
-function DockButton({
-  icon,
-  label,
-  title,
-  onClick,
-  disabled,
-  active,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  title?: string;
-  onClick: () => void;
-  disabled?: boolean;
-  active?: boolean;
-}) {
-  return (
-    <motion.button
-      whileTap={{ scale: 0.95 }}
-      onClick={onClick}
-      disabled={disabled}
-      title={title ?? label}
-      className={cn(
-        "flex items-center gap-1.5 rounded-full px-3 py-2 text-sm font-medium transition disabled:pointer-events-none disabled:opacity-40",
-        active
-          ? "bg-brand-50 text-brand-700 ring-1 ring-brand-200"
-          : "text-ink-600 hover:bg-ink-100",
-      )}
-    >
-      {icon} <span className="hidden sm:inline">{label}</span>
-    </motion.button>
   );
 }

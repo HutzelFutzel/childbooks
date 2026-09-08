@@ -408,8 +408,6 @@ function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustrati
 
   return (
     <div className="space-y-3 p-4">
-      {!coverMode && <CastPicker illo={illo} defaultOpen={!cursor} />}
-
       {!cursor ? (
         <>
           {genSpread && (

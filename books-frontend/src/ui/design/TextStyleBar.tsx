@@ -23,6 +23,7 @@ import {
   Search,
   Square,
   Trash2,
+  Type,
   Underline,
 } from "lucide-react";
 import type { HAlign, TextBox, VAlign } from "../../core/types";
@@ -80,6 +81,12 @@ export type TextBoxToolbarChrome = {
   onCopyStyle: () => void;
   onPasteStyle: () => void;
   canPasteStyle: boolean;
+  applyStyleToScope?: {
+    label: string;
+    count: number;
+    applied: boolean;
+    onApply: () => void;
+  };
 };
 
 /**
@@ -199,7 +206,7 @@ function MoreMenu({ chrome }: { chrome: TextBoxToolbarChrome }) {
         onClose={() => setOpen(false)}
         triggerRef={rootRef}
         align="end"
-        className="min-w-44 overflow-hidden py-1"
+        className="min-w-52 overflow-hidden py-1"
       >
         <MenuItem
           icon={<Blend className="size-4" />}
@@ -219,6 +226,30 @@ function MoreMenu({ chrome }: { chrome: TextBoxToolbarChrome }) {
           onClick={() => openPanel("background")}
         />
         <div className="my-1 border-t border-ink-100" />
+        {chrome.applyStyleToScope && (
+          <>
+            <MenuItem
+              icon={
+                chrome.applyStyleToScope.applied
+                  ? <Check className="size-4" />
+                  : <Type className="size-4" />
+              }
+              label={
+                chrome.applyStyleToScope.applied
+                  ? `Applied to ${chrome.applyStyleToScope.label}`
+                  : `Apply to ${chrome.applyStyleToScope.label}`
+              }
+              meta={`${chrome.applyStyleToScope.count}`}
+              disabled={chrome.applyStyleToScope.applied}
+              disabledReason="Every matching text box already uses this typography"
+              onClick={() => {
+                chrome.applyStyleToScope?.onApply();
+                setOpen(false);
+              }}
+            />
+            <div className="my-1 border-t border-ink-100" />
+          </>
+        )}
         <MenuItem
           icon={<Paintbrush className="size-4" />}
           label="Copy style"
@@ -255,17 +286,26 @@ function MenuItem({
   onClick,
   active,
   disabled,
+  disabledReason,
+  meta,
 }: {
   icon: React.ReactNode;
   label: string;
   onClick: () => void;
   active?: boolean;
   disabled?: boolean;
+  disabledReason?: string;
+  meta?: string;
 }) {
   return (
     <button
       type="button"
-      title={disabled && label === "Paste style" ? "Copy a text box's style first" : label}
+      title={
+        disabled
+          ? disabledReason ??
+            (label === "Paste style" ? "Copy a text box's style first" : label)
+          : label
+      }
       onClick={onClick}
       disabled={disabled}
       className={cn(
@@ -277,7 +317,8 @@ function MenuItem({
       )}
     >
       <span className="text-ink-500">{icon}</span>
-      {label}
+      <span className="min-w-0 flex-1">{label}</span>
+      {meta && <span className="tabular-nums text-ink-400">{meta}</span>}
     </button>
   );
 }

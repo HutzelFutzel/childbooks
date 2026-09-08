@@ -142,8 +142,7 @@ export function buildDisplaySpreads(doc: ScreenplayDoc, entries: Entry[]): Displ
   return out;
 }
 
-export const FOLD_GRADIENT =
-  "linear-gradient(to right, rgba(15,23,42,0) 0%, rgba(15,23,42,0.10) 42%, rgba(15,23,42,0.16) 50%, rgba(15,23,42,0.10) 58%, rgba(15,23,42,0) 100%)";
+export const FOLD_GRADIENT = "rgba(15,23,42,0.16)";
 
 export function sideAspect(left: SpreadSide, right: SpreadSide): number {
   const fromPage = (s: SpreadSide) => (s.kind === "page" ? s.entry.page.aspect : undefined);

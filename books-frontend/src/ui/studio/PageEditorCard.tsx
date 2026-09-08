@@ -1,12 +1,6 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
-  Copy,
-  MoreHorizontal,
-  MoveDown,
-  MoveUp,
   Sparkles,
-  Trash2,
-  Type,
   Users,
   Wand2,
 } from "lucide-react";
@@ -23,10 +17,7 @@ import { getCursor } from "../../core/versioning";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useJobsStore } from "../../state/jobsStore";
 import { Button } from "../components/Button";
-import { Modal } from "../components/Modal";
-import { Popover } from "../components/Popover";
 import { useBlobUrl } from "../hooks/useBlobUrl";
-import { cn } from "../lib/cn";
 import { PageStage } from "../design/PageStage";
 import {
   defaultIllustrationFocus,
@@ -36,7 +27,6 @@ import type { SpanRef } from "../design/TextBoxView";
 import { useStudio } from "./StudioContext";
 import { useStudioPanelStore } from "./studioPanelStore";
 import { coverSpread } from "./studioGen";
-import { duplicateSpread, moveSpread, removeSpread, setSpreadCompletion } from "./pageOps";
 
 export type PageSubject =
   | { kind: "spread"; spread: ScreenplaySpread }
@@ -90,6 +80,8 @@ export function PageStagePanel({
     copyBoxStyle,
     pasteBoxStyle,
     hasCopiedBoxStyle,
+    textStyleScope,
+    applyTextStyleToScope,
     endHistoryGesture,
     undo,
     redo,
@@ -213,6 +205,8 @@ export function PageStagePanel({
         onCopyStyle: (boxId) => copyBoxStyle(page.id, boxId),
         onPasteStyle: (boxId) => pasteBoxStyle(page.id, boxId),
         canPasteStyle: hasCopiedBoxStyle,
+        styleScope: (boxId) => textStyleScope(page.id, boxId),
+        onApplyStyleToScope: (boxId) => applyTextStyleToScope(page.id, boxId),
         onGestureEnd: endHistoryGesture,
         onDiscardEdit: () => {
           undo();
@@ -317,135 +311,6 @@ export function PageControls({
         </Button>
       </div>
     </div>
-  );
-}
-
-/** Per-page actions: move, duplicate, delete. Portaled so it isn't buried under the canvas. */
-export function PageMenu({ spreadId }: { spreadId: string }) {
-  const [confirmingDelete, setConfirmingDelete] = useState(false);
-  const { project } = useStudio();
-  const textOnly =
-    project.screenplay &&
-    getCursor(project.screenplay).content.spreads.find((s) => s.id === spreadId)
-      ?.completion === "text";
-  return (
-    <>
-      <Popover
-        side="bottom"
-        align="end"
-        panelClassName="w-48 p-1"
-        trigger={
-          <span
-            title="Page options"
-            className="inline-flex rounded-lg p-1.5 text-ink-400 transition hover:bg-ink-100 hover:text-ink-700"
-          >
-            <MoreHorizontal className="size-4" />
-          </span>
-        }
-      >
-        {(close) => (
-          <div className="flex flex-col">
-            <MenuItem
-              icon={<MoveUp className="size-4" />}
-              onClick={() => {
-                moveSpread(spreadId, -1);
-                close();
-              }}
-            >
-              Move up
-            </MenuItem>
-            <MenuItem
-              icon={<MoveDown className="size-4" />}
-              onClick={() => {
-                moveSpread(spreadId, 1);
-                close();
-              }}
-            >
-              Move down
-            </MenuItem>
-            <MenuItem
-              icon={<Copy className="size-4" />}
-              onClick={() => {
-                duplicateSpread(spreadId);
-                close();
-              }}
-            >
-              Duplicate
-            </MenuItem>
-            <MenuItem
-              icon={<Type className="size-4" />}
-              onClick={() => {
-                setSpreadCompletion(spreadId, textOnly ? undefined : "text");
-                close();
-              }}
-            >
-              {textOnly ? "Need illustration" : "Text only"}
-            </MenuItem>
-            <MenuItem
-              icon={<Trash2 className="size-4" />}
-              danger
-              onClick={() => {
-                setConfirmingDelete(true);
-                close();
-              }}
-            >
-              Delete
-            </MenuItem>
-          </div>
-        )}
-      </Popover>
-
-      <Modal
-        open={confirmingDelete}
-        onClose={() => setConfirmingDelete(false)}
-        title="Delete this page?"
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setConfirmingDelete(false)}>
-              Cancel
-            </Button>
-            <Button
-              variant="danger"
-              onClick={() => {
-                setConfirmingDelete(false);
-                removeSpread(spreadId);
-              }}
-            >
-              Delete
-            </Button>
-          </>
-        }
-      >
-        <p className="text-sm text-ink-600">
-          This removes the page and its generated art from the book. You can undo
-          if you change your mind.
-        </p>
-      </Modal>
-    </>
-  );
-}
-
-function MenuItem({
-  children,
-  icon,
-  onClick,
-  danger,
-}: {
-  children: React.ReactNode;
-  icon: React.ReactNode;
-  onClick: () => void;
-  danger?: boolean;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition hover:bg-ink-50",
-        danger ? "text-red-600 hover:bg-red-50" : "text-ink-600",
-      )}
-    >
-      {icon} {children}
-    </button>
   );
 }
 

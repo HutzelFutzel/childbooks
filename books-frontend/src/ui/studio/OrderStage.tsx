@@ -121,6 +121,7 @@ export function OrderStage() {
     () => units.filter((u) => !unitIsDone(project, u)).length,
     [project, units],
   );
+  const readyToOrder = missingArt === 0;
   const legacyDraftIds = useMemo(
     () =>
       units
@@ -329,14 +330,23 @@ export function OrderStage() {
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-7 sm:px-6 sm:py-9">
       <header className="max-w-2xl">
-        <p className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-brand-700">
-          <CheckCircle2 className="size-4" /> Book ready
+        <p
+          className={`flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] ${
+            readyToOrder ? "text-emerald-700" : "text-brand-700"
+          }`}
+        >
+          {readyToOrder && <CheckCircle2 className="size-4" />}
+          {readyToOrder ? "Ready to order" : "Review"}
         </p>
         <h1 className="mt-3 font-display text-3xl font-bold tracking-tight text-ink-900 sm:text-4xl">
           Review your book
         </h1>
         <p className="mt-2 text-sm leading-relaxed text-ink-600 sm:text-base">
-          Take one final look, then choose the edition you want.
+          {readyToOrder
+            ? "Take one final look, then choose the edition you want."
+            : `Review the whole book now. ${missingArt} ${
+                missingArt === 1 ? "page still needs" : "pages still need"
+              } a final choice before ordering.`}
         </p>
       </header>
 
@@ -361,8 +371,8 @@ export function OrderStage() {
               <span>{sizeLabel}</span>
             </div>
             <p className="mt-5 max-w-xl text-sm leading-relaxed text-ink-600">
-              Flip through the finished pages and check the cover, text and illustrations before
-              ordering or downloading.
+              Flip through every page and check the cover, text and illustrations. You can review
+              at any time; purchasing unlocks automatically when every page has a final treatment.
             </p>
             <Button
               variant="secondary"
@@ -406,14 +416,17 @@ export function OrderStage() {
           tone="warning"
           icon={TriangleAlert}
           className="mt-4"
-          title={`${missingArt} ${missingArt === 1 ? "page is not" : "pages are not"} finished yet`}
+          title={`${missingArt} ${
+            missingArt === 1 ? "page needs" : "pages need"
+          } a final treatment`}
           action={
             <Button size="sm" variant="secondary" onClick={() => setStep("edit")}>
-              Finish designing
+              Open pages
             </Button>
           }
         >
-          Finish every page — illustrated, text-only, or blank — before ordering.
+          Add artwork, or explicitly keep an interior page text-only or blank. No separate
+          &ldquo;Done&rdquo; action is required.
         </Callout>
       )}
 
@@ -451,8 +464,16 @@ export function OrderStage() {
           description="Professionally printed and bound, with delivery tracking to your door."
           price={printFromPrice != null ? `from ${fmtMoney(printFromPrice, baseCurrency)} + shipping` : undefined}
           cta="Choose print options"
-          note={printBlocked ? "Adjust the page count before ordering." : purchaseNote}
-          disabled={printBlocked}
+          note={
+            !readyToOrder
+              ? `${missingArt} ${
+                  missingArt === 1 ? "page needs" : "pages need"
+                } a final treatment before ordering.`
+              : printBlocked
+                ? "Adjust the page count before ordering."
+                : purchaseNote
+          }
+          disabled={!readyToOrder || printBlocked}
           onClick={() => requireFullAccount(() => setOrdering(true))}
         />
         {ebookEnabled && (
@@ -492,10 +513,14 @@ export function OrderStage() {
                   ? ebookStale
                     ? "Design updated since you bought this — a free refresh is ready inside."
                     : "Find it anytime under Downloads in your account menu."
-                  : purchaseNote
+                  : !readyToOrder
+                    ? `${missingArt} ${
+                        missingArt === 1 ? "page needs" : "pages need"
+                      } a final treatment before purchasing.`
+                    : purchaseNote
             }
             loading={ebookQuoteLoading}
-            disabled={ebookQuoteLoading}
+            disabled={ebookQuoteLoading || (!ebookOwned && !readyToOrder)}
             onClick={() => requireFullAccount(() => setBuyingEbook(true))}
           />
         )}

@@ -1,40 +1,32 @@
 /**
  * Docked contextual panel for shapes, Arrange (layers), and Canva-style
  * sheets for text/images. Sits as a layout sibling of the stage so the canvas
- * shrinks instead of the panel covering page chips. Everyday styling stays on
+ * shrinks instead of the panel covering the book. Everyday styling stays on
  * the floating bars.
  */
 import { useState } from "react";
 import {
   Blend,
   BringToFront,
-  Check,
   ChevronDown,
   ChevronUp,
   Crop,
   Eye,
   EyeOff,
-  Grid3x3,
   GripVertical,
-  History,
   Image as ImageIcon,
   Layers as LayersIcon,
   LayoutTemplate,
   Lock,
-  Magnet,
   SendToBack,
   Shapes,
-  SlidersHorizontal,
   Sparkles,
   Square,
-  SquareDashed,
   Type,
   Unlock,
-  Users,
-  Wand2,
   X,
 } from "lucide-react";
-import type { PageDesign } from "../../core/types";
+import { COVER_BACK_ID, type PageDesign } from "../../core/types";
 import { textFromParagraphs } from "../../core/design";
 import { cn } from "../lib/cn";
 import { ImageEditPanel, type ImageEditSection } from "../design/ImageEditPanel";
@@ -53,27 +45,26 @@ const TEXT_SECTION_META: Record<
   background: { title: "Background", icon: <Square className="size-4" /> },
 };
 
-const IMAGE_SECTION_META: Record<
-  ImageEditSection,
+const DEEP_IMAGE_SECTION_META: Record<
+  Extract<ImageEditSection, "effects" | "frame">,
   { title: string; icon: React.ReactNode }
 > = {
-  refine: { title: "Edit illustration", icon: <Sparkles className="size-4" /> },
-  characters: { title: "In this picture", icon: <Users className="size-4" /> },
-  scene: { title: "Scene", icon: <Wand2 className="size-4" /> },
-  versions: { title: "Versions", icon: <History className="size-4" /> },
   effects: { title: "Effects", icon: <Blend className="size-4" /> },
   frame: { title: "Frame & position", icon: <Crop className="size-4" /> },
 };
 
-/** Cover pages get cover-specific sheet titles (not page-illustration wording). */
-const COVER_SECTION_META: Partial<
-  Record<ImageEditSection, { title: string; icon: React.ReactNode }>
-> = {
-  refine: { title: "Edit cover", icon: <Sparkles className="size-4" /> },
-  characters: { title: "On this cover", icon: <Users className="size-4" /> },
-  scene: { title: "Cover scene", icon: <Wand2 className="size-4" /> },
-  versions: { title: "Cover versions", icon: <History className="size-4" /> },
-};
+const ARTWORK_SECTIONS = [
+  { id: "refine", label: "Edit" },
+  { id: "characters", label: "Cast" },
+  { id: "scene", label: "Scene" },
+  { id: "versions", label: "Versions" },
+] as const satisfies readonly { id: ImageEditSection; label: string }[];
+
+type ArtworkSection = (typeof ARTWORK_SECTIONS)[number]["id"];
+
+function isArtworkSection(section: ImageEditSection): section is ArtworkSection {
+  return ARTWORK_SECTIONS.some((item) => item.id === section);
+}
 
 /** Card shell shared by every mode: header with an icon/title + close, then content. */
 function PanelShell({
@@ -130,7 +121,7 @@ export function ElementPanel({
   arrangePages,
   onClose,
 }: {
-  /** Docked tool opened from the Add dock (arrange / view / setup). */
+  /** Docked tool opened from the page toolbar (arrange / setup). */
   toolPanel: StudioToolPanel | null;
   /** Every live page on the current canvas (1–2), for the Arrange panel. */
   arrangePages: ArrangePageRef[];
@@ -167,19 +158,6 @@ export function ElementPanel({
         <div className="p-4">
           <ArrangePanel pages={arrangePages} />
         </div>
-      </PanelShell>
-    );
-  }
-
-  if (toolPanel === "view") {
-    return (
-      <PanelShell
-        icon={<SlidersHorizontal className="size-4" />}
-        title="View"
-        subtitle="Snap, grid & print guides"
-        onClose={onClose}
-      >
-        <ViewPanel />
       </PanelShell>
     );
   }
@@ -234,17 +212,38 @@ export function ElementPanel({
           null;
     const needsFrame = imageEditSection === "effects" || imageEditSection === "frame";
     if (!needsFrame || image) {
-      const coverMode = subjectForPage(pageId, studio.project)?.kind === "cover";
-      const meta =
-        (coverMode ? COVER_SECTION_META[imageEditSection] : null) ??
-        IMAGE_SECTION_META[imageEditSection];
+      const subject = subjectForPage(pageId, studio.project);
+      const artworkSection = isArtworkSection(imageEditSection);
+      const pageArtwork = !image || image.kind === "illustration";
+      const showArtworkNavigation = artworkSection && pageArtwork;
+      const pageLabel = studio.pages.find((p) => p.id === pageId)?.label;
+      const deepMeta = artworkSection
+        ? { title: "Image", icon: <ImageIcon className="size-4" /> }
+        : DEEP_IMAGE_SECTION_META[imageEditSection];
+      const title =
+        showArtworkNavigation && subject?.kind === "cover"
+          ? subject.coverId === COVER_BACK_ID
+            ? "Back cover"
+            : "Front cover"
+          : showArtworkNavigation
+            ? "Page illustration"
+            : deepMeta.title;
+      const icon = showArtworkNavigation
+        ? <Sparkles className="size-4" />
+        : deepMeta.icon;
       return (
         <PanelShell
-          icon={meta.icon}
-          title={meta.title}
-          subtitle={studio.pages.find((p) => p.id === pageId)?.label}
+          icon={icon}
+          title={title}
+          subtitle={pageLabel}
           onClose={closeImageEdit}
         >
+          {showArtworkNavigation && (
+            <ArtworkSectionTabs
+              active={imageEditSection}
+              onChange={(section) => useStudioPanelStore.getState().openImageEdit(section)}
+            />
+          )}
           <ImageEditPanel
             pageId={pageId}
             image={image}
@@ -287,6 +286,41 @@ export function ElementPanel({
   }
 
   return null;
+}
+
+function ArtworkSectionTabs({
+  active,
+  onChange,
+}: {
+  active: ArtworkSection;
+  onChange: (section: ArtworkSection) => void;
+}) {
+  return (
+    <div
+      role="tablist"
+      aria-label="Artwork settings"
+      className="sticky top-0 z-10 grid grid-cols-4 border-b border-ink-100 bg-white px-2"
+    >
+      {ARTWORK_SECTIONS.map((section) => (
+        <button
+          key={section.id}
+          type="button"
+          role="tab"
+          aria-selected={active === section.id}
+          onClick={() => onChange(section.id)}
+          className={cn(
+            "relative min-h-10 px-1 text-[11px] font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand-400",
+            active === section.id ? "text-brand-700" : "text-ink-400 hover:text-ink-700",
+          )}
+        >
+          {section.label}
+          {active === section.id && (
+            <span className="absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-brand-500" />
+          )}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 interface LayerRow {
@@ -583,63 +617,5 @@ export function elementPanelHasContent(
   // Generate / cast tools before any illustration frame exists.
   if (selection.kind === "page" && imageEditOpen) return true;
   return selection.kind === "shape";
-}
-
-function ViewPanel() {
-  const { snap, grid, guides, toggleSnap, toggleGrid, toggleGuides } = useStudio();
-  return (
-    <div className="flex flex-col gap-0.5 p-2">
-      <ViewRow
-        icon={<Magnet className="size-4" />}
-        label="Snap to guides"
-        active={snap}
-        onClick={toggleSnap}
-      />
-      <ViewRow icon={<Grid3x3 className="size-4" />} label="Grid" active={grid} onClick={toggleGrid} />
-      <ViewRow
-        icon={<SquareDashed className="size-4" />}
-        label="Print guides"
-        hint="Safe area + gutter"
-        active={guides}
-        onClick={toggleGuides}
-      />
-    </div>
-  );
-}
-
-function ViewRow({
-  icon,
-  label,
-  hint,
-  active,
-  onClick,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  hint?: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition hover:bg-ink-50"
-    >
-      <span className="text-ink-400">{icon}</span>
-      <span className="min-w-0 flex-1 leading-tight">
-        <span className="block text-sm font-medium text-ink-700">{label}</span>
-        {hint && <span className="block text-[11px] text-ink-400">{hint}</span>}
-      </span>
-      <span
-        className={cn(
-          "flex size-4 shrink-0 items-center justify-center rounded border transition",
-          active ? "border-brand-500 bg-brand-500 text-white" : "border-ink-300 text-transparent",
-        )}
-      >
-        <Check className="size-3" strokeWidth={3} />
-      </span>
-    </button>
-  );
 }
 

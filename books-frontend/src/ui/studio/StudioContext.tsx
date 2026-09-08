@@ -15,7 +15,13 @@ import {
   useRef,
   useState,
 } from "react";
-import { textFromParagraphs, wordParagraphs } from "../../core/design";
+import {
+  sharedTextStyleOf,
+  sharedTextStylesEqual,
+  textFromParagraphs,
+  withSharedTextStyle,
+  wordParagraphs,
+} from "../../core/design";
 import type { PageSide } from "../../core/book/layouts";
 import {
   COVER_BACK_ID,
@@ -27,6 +33,8 @@ import {
   type Project,
   type ShapeElement,
   type ShapeKind,
+  type SharedTextStyle,
+  type SharedTextStyleKey,
   type TextBox,
   type TextSpan,
 } from "../../core/types";
@@ -89,6 +97,49 @@ export type Selection =
   | { kind: "anchor"; anchorId: string };
 
 export type AlignEdge = "left" | "hcenter" | "right" | "top" | "vcenter" | "bottom";
+
+export interface TextStyleScopeSummary {
+  /** Human-readable target used by the compact toolbar action. */
+  label: string;
+  /** Includes the selected source box. */
+  count: number;
+  /** True when every eligible box already has the source typography. */
+  applied: boolean;
+}
+
+function textStyleScopeKey(pageId: string, box: TextBox): SharedTextStyleKey {
+  if (box.role) return box.role;
+  return pageId === COVER_FRONT_ID || pageId === COVER_BACK_ID
+    ? "custom-cover"
+    : "custom-page";
+}
+
+function textStyleScopeLabel(key: SharedTextStyleKey): string {
+  switch (key) {
+    case "story-body":
+      return "all story text";
+    case "book-title":
+      return "all book titles";
+    case "book-subtitle":
+      return "all cover subtitles";
+    case "custom-cover":
+      return "all custom cover text";
+    case "custom-page":
+      return "all custom page text";
+  }
+}
+
+function sharedTextStyleValuesEqual(a: SharedTextStyle, b: SharedTextStyle): boolean {
+  return (
+    a.fontFamily === b.fontFamily &&
+    a.fontSizePct === b.fontSizePct &&
+    a.color === b.color &&
+    a.lineHeight === b.lineHeight &&
+    a.bold === b.bold &&
+    a.italic === b.italic &&
+    a.underline === b.underline
+  );
+}
 
 /** Push a linked cover overlay edit into the project / screenplay fields. */
 /** True when the page has saved AI art (a blob in the illustrations tree). */
@@ -212,6 +263,8 @@ interface StudioContextValue {
     opts?: HistoryOpts,
   ) => void;
   patchSpan: (pageId: string, boxId: string, ref: SpanRef, patch: Partial<TextSpan>) => void;
+  textStyleScope: (pageId: string, boxId: string) => TextStyleScopeSummary | null;
+  applyTextStyleToScope: (pageId: string, boxId: string) => void;
   deleteBox: (pageId: string, boxId: string) => void;
   duplicateBox: (pageId: string, boxId: string) => void;
   reorderBox: (pageId: string, boxId: string, dir: -1 | 1) => void;
@@ -536,6 +589,9 @@ export function StudioProvider({
   const [editingDispId, setEditingDispId] = useState<string | null>(null);
   const [generatingAnchors, setGA] = useState<Set<string>>(new Set());
   const [generatingPages, setGP] = useState<Set<string>>(new Set());
+  const pageGenerationClearTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
   const [busy, setBusy] = useState(false);
   const [step, setStepRaw] = useState<StudioStep>(() => stepForDestination(destination));
   const [designSetupOpen, setDesignSetupOpen] = useState(false);
@@ -724,14 +780,17 @@ export function StudioProvider({
             );
           }
         } else if (next === "order") {
-          notify.info(
-            progress.edit.unlocked
-              ? "Finish the pages first"
-              : "Your book is still being prepared",
-            progress.edit.unlocked
-              ? "Create artwork for every page, then you can review and order."
-              : "The page-by-page draft needs to finish before you can preview or order it.",
-          );
+          if (progress.edit.unlocked && live.config.designReady !== true) {
+            notify.info(
+              "Open Pages first",
+              "Confirm the page setup and open the book before reviewing it.",
+            );
+          } else {
+            notify.info(
+              "Your book is still being prepared",
+              "The page-by-page draft needs to finish before you can review it.",
+            );
+          }
         } else if (next === "edit" && live.stage === "studio") {
           notify.info(
             "Your pages are still being prepared",
@@ -799,13 +858,38 @@ export function StudioProvider({
     });
   }, []);
   const setPageGenerating = useCallback((id: string, on: boolean) => {
-    setGP((prev) => {
-      const next = new Set(prev);
-      if (on) next.add(id);
-      else next.delete(id);
-      return next;
-    });
+    const pendingClear = pageGenerationClearTimers.current.get(id);
+    if (pendingClear) {
+      clearTimeout(pendingClear);
+      pageGenerationClearTimers.current.delete(id);
+    }
+    if (on) {
+      setGP((prev) => new Set(prev).add(id));
+      return;
+    }
+    // Bridge the short handoff from local enqueue state to the Firestore task
+    // subscription, and give a completed blob enough time to decode. Without
+    // this grace period the canvas briefly flashed idle between both states.
+    const timer = setTimeout(() => {
+      pageGenerationClearTimers.current.delete(id);
+      setGP((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }, 1200);
+    pageGenerationClearTimers.current.set(id, timer);
   }, []);
+
+  useEffect(
+    () => () => {
+      for (const timer of pageGenerationClearTimers.current.values()) {
+        clearTimeout(timer);
+      }
+      pageGenerationClearTimers.current.clear();
+    },
+    [],
+  );
 
   const endHistoryGesture = useCallback(() => {
     coalesceKey.current = null;
@@ -1119,11 +1203,98 @@ export function StudioProvider({
     [commit, mutatePage],
   );
 
+  const textStyleScope = useCallback(
+    (pageId: string, boxId: string): TextStyleScopeSummary | null => {
+      if (!design) return null;
+      const source = design.pages[pageId]?.textBoxes.find((box) => box.id === boxId);
+      if (!source || source.locked) return null;
+      const key = textStyleScopeKey(pageId, source);
+      const style = sharedTextStyleOf(source);
+      const targets = Object.entries(design.pages).flatMap(([targetPageId, page]) =>
+        page.textBoxes.filter(
+          (box) => !box.locked && textStyleScopeKey(targetPageId, box) === key,
+        ),
+      );
+      if (targets.length <= 1) return null;
+      return {
+        label: textStyleScopeLabel(key),
+        count: targets.length,
+        applied:
+          !!design.sharedTextStyles?.[key] &&
+          sharedTextStyleValuesEqual(design.sharedTextStyles[key], style) &&
+          targets.every((box) => sharedTextStylesEqual(box, style)),
+      };
+    },
+    [design],
+  );
+
+  const applyTextStyleToScope = useCallback(
+    (pageId: string, boxId: string) => {
+      const summary = textStyleScope(pageId, boxId);
+      if (!summary || summary.applied) return;
+      commit((d) => {
+        const source = d.pages[pageId]?.textBoxes.find((box) => box.id === boxId);
+        if (!source || source.locked) return d;
+        const key = textStyleScopeKey(pageId, source);
+        const style = sharedTextStyleOf(source);
+
+        d.sharedTextStyles = { ...d.sharedTextStyles, [key]: style };
+        if (key === "story-body") {
+          d.defaultFontFamily = style.fontFamily;
+          d.defaultFontSizePct = style.fontSizePct;
+        } else if (key === "book-title") {
+          d.defaultTitleFontFamily = style.fontFamily;
+        }
+
+        for (const [targetPageId, page] of Object.entries(d.pages)) {
+          let changed = false;
+          const textBoxes = page.textBoxes.map((box) => {
+            if (
+              box.id === boxId ||
+              box.locked ||
+              textStyleScopeKey(targetPageId, box) !== key ||
+              sharedTextStylesEqual(box, style)
+            ) {
+              return box;
+            }
+            changed = true;
+            let next = withSharedTextStyle(box, style);
+            const aspect = pages.find((candidate) => candidate.id === targetPageId)?.aspect;
+            if (next.autoHeight && aspect) {
+              const h = Math.max(fitBoxHeightPct(next, aspect), next.minHeightPct ?? 0);
+              next = {
+                ...next,
+                rect: {
+                  ...next.rect,
+                  h,
+                  y: Math.max(0, Math.min(1 - h, next.rect.y)),
+                },
+              };
+            }
+            return next;
+          });
+          if (changed) d.pages[targetPageId] = { ...page, textBoxes };
+        }
+        return d;
+      });
+      toast("Text style applied", {
+        description: `${summary.count} text boxes now share this typography.`,
+        action: { label: "Undo", onClick: undo },
+      });
+    },
+    [commit, pages, textStyleScope, undo],
+  );
+
   const addBox = useCallback(
-    (pageId: string, center?: Point, text = "New text") => {
+    (
+      pageId: string,
+      center?: Point,
+      text = "New text",
+      role?: TextBox["role"],
+    ) => {
       if (!design) return;
       const preset = getPreset("card");
-      const box: TextBox = {
+      let box: TextBox = {
         id: newTextBoxId(),
         rect: centeredRect(0.4, 0.2, center),
         z: topZ(design.pages[pageId]) + 1,
@@ -1143,7 +1314,15 @@ export function StudioProvider({
         // no surprise re-fitting — so we leave auto-fit off.
         autoHeight: true,
         autoFit: false,
+        ...(role ? { role } : {}),
       };
+      const scopeKey =
+        role ??
+        (pageId === COVER_FRONT_ID || pageId === COVER_BACK_ID
+          ? "custom-cover"
+          : "custom-page");
+      const storedStyle = design.sharedTextStyles?.[scopeKey];
+      if (storedStyle) box = withSharedTextStyle(box, storedStyle);
       const page = pages.find((p) => p.id === pageId);
       if (page) box.rect = { ...box.rect, h: fitBoxHeightPct(box, page.aspect) };
       commit((d) => mutatePage(d, pageId, (pd) => ({ ...pd, textBoxes: [...pd.textBoxes, box] })));
@@ -1193,7 +1372,7 @@ export function StudioProvider({
       // Prefer screenplay text when it's missing; else recently removed on an
       // empty page; else a blank box.
       if (seed && !storyOnPage) {
-        addBox(pageId, center, seed);
+        addBox(pageId, center, seed, "story-body");
         return;
       }
       if (pd.textBoxes.length === 0 && restoreDeletedBox(pageId)) return;
@@ -1970,6 +2149,8 @@ export function StudioProvider({
             addText,
             patchBox,
             patchSpan,
+            textStyleScope,
+            applyTextStyleToScope,
             deleteBox,
             duplicateBox,
             reorderBox,
@@ -2062,6 +2243,8 @@ export function StudioProvider({
       addText,
       patchBox,
       patchSpan,
+      textStyleScope,
+      applyTextStyleToScope,
       deleteBox,
       duplicateBox,
       reorderBox,

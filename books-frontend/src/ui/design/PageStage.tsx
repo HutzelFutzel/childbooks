@@ -278,6 +278,10 @@ export function PageStage({
     onCopyStyle: (boxId: string) => void;
     onPasteStyle: (boxId: string) => void;
     canPasteStyle: boolean;
+    styleScope: (
+      boxId: string,
+    ) => { label: string; count: number; applied: boolean } | null;
+    onApplyStyleToScope: (boxId: string) => void;
     /** Close a coalesced undo gesture (slider drag / colour scrub). */
     onGestureEnd: () => void;
     /**
@@ -808,6 +812,15 @@ export function PageStage({
           onCopyStyle: () => textToolbar.onCopyStyle(selectedTextBox.id),
           onPasteStyle: () => textToolbar.onPasteStyle(selectedTextBox.id),
           canPasteStyle: textToolbar.canPasteStyle,
+          applyStyleToScope: (() => {
+            const scope = textToolbar.styleScope(selectedTextBox.id);
+            return scope
+              ? {
+                  ...scope,
+                  onApply: () => textToolbar.onApplyStyleToScope(selectedTextBox.id),
+                }
+              : undefined;
+          })(),
         }
       : undefined;
 

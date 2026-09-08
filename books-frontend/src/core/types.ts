@@ -657,6 +657,8 @@ export type {
   ElementEffects,
   ShadowTarget,
   TextBox,
+  SharedTextStyle,
+  SharedTextStyleKey,
   TextParagraph,
   TextSpan,
   PatternConfig,
@@ -665,4 +667,10 @@ export type {
   HAlign,
   VAlign,
 } from "./design";
-export { DESIGN_VERSION, resolveIllustrationSlotId } from "./design";
+export {
+  DESIGN_VERSION,
+  resolveIllustrationSlotId,
+  sharedTextStyleOf,
+  sharedTextStylesEqual,
+  withSharedTextStyle,
+} from "./design";

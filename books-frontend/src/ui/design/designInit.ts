@@ -23,9 +23,11 @@ import {
   type NormRect,
   type PageDesign,
   type Project,
+  type SharedTextStyle,
+  type SharedTextStyleKey,
   type TextBox,
 } from "../../core/types";
-import { wordParagraphs } from "../../core/design";
+import { withSharedTextStyle, wordParagraphs } from "../../core/design";
 import type { BookLanguagesConfig } from "../../core/config/bookLanguages";
 import { getBookLanguage } from "../../core/config/bookLanguages";
 import {
@@ -205,9 +207,10 @@ function makeTextBox(input: {
   align?: TextBox["align"];
   vAlign?: TextBox["vAlign"];
   name?: string;
+  sharedStyle?: SharedTextStyle;
 }): TextBox {
   const preset = getPreset(input.presetId);
-  return {
+  const box: TextBox = {
     id: uid(),
     rect: input.rect,
     z: input.z,
@@ -227,6 +230,14 @@ function makeTextBox(input: {
     ...(input.role ? { role: input.role } : {}),
     ...(input.name ? { name: input.name } : {}),
   };
+  return input.sharedStyle ? withSharedTextStyle(box, input.sharedStyle) : box;
+}
+
+function sharedStyle(
+  design: BookDesign,
+  key: SharedTextStyleKey,
+): SharedTextStyle | undefined {
+  return design.sharedTextStyles?.[key];
 }
 
 /**
@@ -321,6 +332,10 @@ export function applyCoverBakeText(
       sizePct: Math.min(0.13, design.defaultFontSizePct * 1.7),
       presetId: "shadowed",
       z: nextZ++,
+      sharedStyle: sharedStyle(
+        design,
+        page.id === COVER_FRONT_ID ? "book-title" : "custom-cover",
+      ),
     });
     if (page.id === COVER_FRONT_ID) titleBox.role = "book-title";
     boxes.push(titleBox);
@@ -334,6 +349,7 @@ export function applyCoverBakeText(
       sizePct: design.defaultFontSizePct,
       presetId: "shadowed",
       z: nextZ++,
+      sharedStyle: sharedStyle(design, "book-subtitle"),
     });
     subtitleBox.role = "book-subtitle";
     boxes.push(subtitleBox);
@@ -362,6 +378,10 @@ export function seedPageDesign(design: BookDesign, page: DesignPage): PageDesign
         sizePct: Math.min(0.13, design.defaultFontSizePct * 1.7),
         presetId: "shadowed",
         z: 1,
+        sharedStyle: sharedStyle(
+          design,
+          page.id === COVER_FRONT_ID ? "book-title" : "custom-cover",
+        ),
       });
       // Front-cover title stays linked to the project / story title.
       if (page.id === COVER_FRONT_ID) titleBox.role = "book-title";
@@ -375,6 +395,7 @@ export function seedPageDesign(design: BookDesign, page: DesignPage): PageDesign
         sizePct: design.defaultFontSizePct,
         presetId: "shadowed",
         z: 2,
+        sharedStyle: sharedStyle(design, "book-subtitle"),
       });
       // Tagged so toggling baked cover text can remove exactly the seeded
       // title/subtitle without touching any boxes the user added themselves.
@@ -400,6 +421,7 @@ export function seedPageDesign(design: BookDesign, page: DesignPage): PageDesign
           align: slot.align,
           vAlign: slot.vAlign,
           name: slot.label,
+          sharedStyle: sharedStyle(design, "story-body"),
         });
         boxes.push(hugTextInRect(box, slot.pageRect, page.aspect));
       });
@@ -453,9 +475,12 @@ export function relayoutPageDesign(
     };
     // Preserve fixed-height behavior after an explicit manual resize
     // (autoHeight === false). Generated and legacy untouched boxes hug content.
+    const styled = design.sharedTextStyles?.["story-body"]
+      ? withSharedTextStyle(laidOut, design.sharedTextStyles["story-body"])
+      : laidOut;
     return box.autoHeight === false
-      ? laidOut
-      : hugTextInRect(laidOut, slot.pageRect, page.aspect);
+      ? styled
+      : hugTextInRect(styled, slot.pageRect, page.aspect);
   });
 
   let z = textBoxes.reduce((max, b) => Math.max(max, b.z), 0);
@@ -476,6 +501,7 @@ export function relayoutPageDesign(
       align: slot.align,
       vAlign: slot.vAlign,
       name: slot.label,
+      sharedStyle: sharedStyle(design, "story-body"),
     });
     textBoxes.push(hugTextInRect(box, slot.pageRect, page.aspect));
   }
