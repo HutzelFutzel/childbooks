@@ -5,7 +5,12 @@
  */
 import { bookProductForConfig } from "../book";
 import { getImageProvider } from "../providers";
-import type { ProviderId } from "../config/options";
+import {
+  capabilitiesFor,
+  resolveImageSize,
+  type ImageModelCapabilities,
+} from "../config/modelCapabilities";
+import { rectAspect, surfaceAspect } from "../book/grid";
 import type {
   ImageResult,
   ProviderCredentials,
@@ -19,29 +24,6 @@ import { layoutPromptFacts, type LayoutPlan } from "../book/layouts";
 import { relativeHeightsText } from "../book/anchorScale";
 import { withRetry } from "./retry";
 
-/** Canvas sizes the OpenAI image endpoint accepts, with their aspect ratios. */
-const OPENAI_SIZES: [string, number][] = [
-  ["1024x1536", 1024 / 1536],
-  ["1024x1024", 1],
-  ["1536x1024", 1536 / 1024],
-];
-
-function nearestSize(options: [string, number][], target: number): string {
-  let best = options[0];
-  for (const opt of options) {
-    if (Math.abs(opt[1] - target) < Math.abs(best[1] - target)) best = opt;
-  }
-  return best[0];
-}
-
-/** A "WxH" whose ratio is exactly `aspect` (Gemini reads the ratio, not the px). */
-function exactRatioSize(aspect: number): string {
-  const base = 1024;
-  return aspect >= 1
-    ? `${Math.round(base * aspect)}x${base}`
-    : `${base}x${Math.round(base / aspect)}`;
-}
-
 /**
  * The aspect the generated artwork should have: the page surface for full-bleed
  * art, or the art rectangle's own shape when the layout places art beside the
@@ -53,32 +35,35 @@ export function renderAspect(
   config: Pick<BookConfig, "bookSize" | "productSku">,
   plan?: LayoutPlan | null,
 ): number {
-  const pageAspect = bookProductForConfig(config).aspect;
-  const surface = kind === "spread" ? pageAspect * 2 : pageAspect;
-  if (plan?.mode === "inset-art") {
-    return (plan.artRect.w * surface) / plan.artRect.h;
-  }
+  const surface = surfaceAspect(
+    bookProductForConfig(config).aspect,
+    kind === "spread" ? "spread" : "page",
+  );
+  // Full-bleed art is the surface; inset art is its own rectangle on it. Both
+  // go through the shared rect→aspect maths, so a region authored as a grid
+  // fraction and one authored as a rect resolve identically.
+  if (plan?.mode === "inset-art") return rectAspect(plan.artRect, surface);
   return surface;
 }
 
 /**
- * Choose a provider-friendly canvas size for a page/spread.
+ * Choose the canvas to ask for, for a page/spread.
  *
- * OpenAI accepts three fixed sizes, so the target is snapped to the nearest.
- * Gemini reads only an aspect ratio and snaps to its own finer set of nine, so
- * it is handed the true ratio instead of one pre-rounded to a page shape — which
- * means the fast model can actually fit an unusual art rectangle more closely
- * than the premium one.
+ * The shape comes from the geometry ({@link renderAspect}); which canvas can
+ * carry that shape comes from the model's own capability entry, so a model that
+ * accepts arbitrary resolutions gets the page's exact aspect while a bucketed
+ * one gets its nearest offering. Passing `caps` rather than a provider id is
+ * the point: an admin correction to a model's geometry now reaches generation,
+ * not just the layout picker.
  */
 export function chooseImageSize(
   kind: ScreenplaySpread["kind"],
   config: Pick<BookConfig, "bookSize" | "productSku">,
   plan?: LayoutPlan | null,
-  provider?: ProviderId,
+  caps?: ImageModelCapabilities | null,
 ): string {
   const target = renderAspect(kind, config, plan);
-  if (provider === "google") return exactRatioSize(target);
-  return nearestSize(OPENAI_SIZES, target);
+  return resolveImageSize(caps ?? capabilitiesFor(null), target).size;
 }
 
 export interface BuildIllustrationPromptInput {

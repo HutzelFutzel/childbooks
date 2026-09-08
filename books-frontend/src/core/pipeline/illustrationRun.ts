@@ -935,7 +935,12 @@ async function tryStructuredEdit(args: {
   const edit = options.edit?.trim();
   if (!edit || !isFullyStructured(ops)) return null;
 
-  const size = chooseImageSize(spread.kind, project.config);
+  const size = chooseImageSize(
+    spread.kind,
+    project.config,
+    null,
+    capabilitiesFor(imageModel, env.modelCapabilities),
+  );
 
   let current = compositionData;
   const depictedByAnchor = new Map(
@@ -1076,6 +1081,9 @@ export async function renderIllustration(
 
   const imageModel = env.models.imageModel;
   const key = env.apiKeyFor(imageModel.provider);
+  // Resolved once: every canvas this render asks for, and every in-place path
+  // it may take, has to agree about what this model can do.
+  const caps = capabilitiesFor(imageModel, env.modelCapabilities);
   // In-place rectangle surgery needs a real inpainting mask. Which models offer
   // one is model knowledge, not a provider assumption, so it comes from the
   // capability table; models without it fall through to a whole-page,
@@ -1083,8 +1091,7 @@ export async function renderIllustration(
   // A restyle must repaint every pixel, so the in-place paths are off: they
   // keep everything outside the edited region untouched, which is precisely the
   // artwork that has to change.
-  const surgicalCapable =
-    capabilitiesFor(imageModel, env.modelCapabilities).maskEditing && !options.restyle;
+  const surgicalCapable = caps.maskEditing && !options.restyle;
 
   // Resolve the spread's anchors in their declared order, so reference images
   // line up with how they're enumerated in the prompt.
@@ -1389,7 +1396,7 @@ export async function renderIllustration(
       page: compositionData,
       imageModel,
       imageKey: key,
-      size: chooseImageSize(spread.kind, project.config),
+      size: chooseImageSize(spread.kind, project.config, null, caps),
       env,
       signal: options.signal,
     });
@@ -1402,7 +1409,7 @@ export async function renderIllustration(
         config: project.config,
         imageModel,
         imageKey: key,
-        size: chooseImageSize(spread.kind, project.config),
+        size: chooseImageSize(spread.kind, project.config, null, caps),
         env,
         signal: options.signal,
       });
@@ -1440,7 +1447,7 @@ export async function renderIllustration(
       page: compositionData,
       imageModel,
       imageKey: key,
-      size: chooseImageSize(spread.kind, project.config),
+      size: chooseImageSize(spread.kind, project.config, null, caps),
       env,
       signal: options.signal,
     });
@@ -1477,7 +1484,7 @@ export async function renderIllustration(
         config: project.config,
         imageModel,
         imageKey: key,
-        size: chooseImageSize(spread.kind, project.config),
+        size: chooseImageSize(spread.kind, project.config, null, caps),
         env,
         signal: options.signal,
       });
@@ -1567,7 +1574,7 @@ export async function renderIllustration(
   const result = await runStep("image", () =>
     generateIllustrationImage({
       prompt,
-      size: chooseImageSize(spread.kind, project.config, layoutPlan, imageModel.provider),
+      size: chooseImageSize(spread.kind, project.config, layoutPlan, caps),
       creds: { apiKey: key },
       model: imageModel.id,
       providerId: imageModel.provider,
@@ -1610,7 +1617,7 @@ export async function renderIllustration(
     config: project.config,
     imageModel,
     imageKey: key,
-    size: chooseImageSize(spread.kind, project.config, layoutPlan, imageModel.provider),
+    size: chooseImageSize(spread.kind, project.config, layoutPlan, caps),
     env,
     signal: options.signal,
   });
@@ -1684,16 +1691,16 @@ export async function renderCoverContinuation(
   if (backSpread.placeholder) return null;
 
   const imageModel = env.models.imageModel;
-  if (
-    !capabilitiesFor(imageModel, env.modelCapabilities).maskEditing ||
-    !env.composite.buildCoverContinuationSeed
-  ) {
+  const caps = capabilitiesFor(imageModel, env.modelCapabilities);
+  if (!caps.maskEditing || !env.composite.buildCoverContinuationSeed) {
     throw new Error(
       "Wraparound cover generation is temporarily unavailable. Please try again later.",
     );
   }
   const key = env.apiKeyFor(imageModel.provider);
-  const size = chooseImageSize(backSpread.kind, project.config);
+  // The seed canvas is built at these pixels, so the size has to be one the
+  // model will actually return — not a nominal ratio carrier.
+  const size = chooseImageSize(backSpread.kind, project.config, null, caps);
   const [width, height] = size.split("x").map((n) => parseInt(n, 10));
 
   const seedResult = await env.composite.buildCoverContinuationSeed({

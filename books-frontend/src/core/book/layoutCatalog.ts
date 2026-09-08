@@ -16,7 +16,7 @@ import type { PlanEntitlements } from "../config/plans";
 import { layoutAllowed } from "../config/entitlements";
 import type { ImageTier } from "../config/modelConfig";
 import type { ImageModelCapabilities } from "../config/modelCapabilities";
-import { nearestAspect } from "../config/modelCapabilities";
+import { aspectFit, MAX_ASPECT_MISMATCH } from "../config/modelCapabilities";
 import {
   examplesForLayout,
   type LayoutExample,
@@ -237,8 +237,8 @@ function insetArtFit(
   if (req.maxArtAspect != null && artAspect > req.maxArtAspect) {
     return { ok: false, reason: "The artwork would be too wide at this book size." };
   }
-  const { error } = nearestAspect(caps, artAspect);
-  if (error > 0.25) {
+  const { error } = aspectFit(caps, artAspect);
+  if (error > MAX_ASPECT_MISMATCH) {
     return {
       ok: false,
       reason: "The selected image model can't produce artwork of that shape.",

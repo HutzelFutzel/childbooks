@@ -5,6 +5,7 @@ import { ProviderError } from "../../errors";
 import { providerHttp } from "../httpContext";
 import { requestJson } from "../http-helpers";
 import { toGeminiSchema } from "./schema";
+import { capabilitiesFor, ratioTokenForSize } from "../../config/modelCapabilities";
 import type {
   ImageProvider,
   ImageRequest,
@@ -206,32 +207,16 @@ export const googleTextProvider: TextProvider = {
   },
 };
 
-/** Map a "WxH" size to the nearest aspect ratio Gemini accepts. */
-function aspectRatioFor(size?: string): string | undefined {
-  if (!size) return undefined;
-  const m = size.match(/^(\d+)x(\d+)$/);
-  if (!m) return undefined;
-  const w = Number(m[1]);
-  const h = Number(m[2]);
-  if (!w || !h) return undefined;
-  const supported: [string, number][] = [
-    ["21:9", 21 / 9],
-    ["16:9", 16 / 9],
-    ["3:2", 3 / 2],
-    ["4:3", 4 / 3],
-    ["5:4", 5 / 4],
-    ["1:1", 1],
-    ["4:5", 4 / 5],
-    ["3:4", 3 / 4],
-    ["2:3", 2 / 3],
-    ["9:16", 9 / 16],
-  ];
-  const target = w / h;
-  let best = supported[0];
-  for (const opt of supported) {
-    if (Math.abs(opt[1] - target) < Math.abs(best[1] - target)) best = opt;
-  }
-  return best[0];
+/**
+ * Gemini's own name for the requested canvas's ratio.
+ *
+ * The bucket list lives in `config/modelCapabilities`, which is where the
+ * pipeline picked this canvas from in the first place — so the token recovered
+ * here is the exact bucket that was chosen, and a model whose buckets differ
+ * (the 3.1 Flash Image panoramas) is handled without this adapter knowing.
+ */
+function aspectRatioFor(model: string, size?: string): string | undefined {
+  return ratioTokenForSize(capabilitiesFor({ provider: "google", id: model }), size);
 }
 
 export const googleImageProvider: ImageProvider = {
@@ -281,7 +266,7 @@ export const googleImageProvider: ImageProvider = {
       });
     }
 
-    const aspectRatio = aspectRatioFor(req.size);
+    const aspectRatio = aspectRatioFor(req.model, req.size);
     const json = await requestJson<GenerateContentResponse>(
       "google",
       `${base()}/v1beta/models/${req.model}:generateContent`,

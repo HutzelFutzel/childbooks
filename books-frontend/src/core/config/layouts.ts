@@ -18,7 +18,7 @@ import { z } from "zod";
 import type { BookSize } from "./options";
 import type { ImageTier, ImageSlotRef } from "./modelConfig";
 import type { CompositionMode, PageSide } from "../book/layouts";
-import type { CapabilityOverrides } from "./modelCapabilities";
+import { capabilityOverridesSchema, type CapabilityOverrides } from "./modelCapabilities";
 
 /**
  * A showcase image for the layout picker.
@@ -185,17 +185,7 @@ export const layoutsConfigSchema = z.object({
       onFail: z.enum(["ignore", "warn", "scrim", "retry-once"]).optional(),
     })
     .optional(),
-  capabilities: z
-    .record(
-      z.string().max(120),
-      z.object({
-        maskEditing: z.boolean().optional(),
-        maxReferenceImages: z.number().int().min(1).max(32).optional(),
-        exactPixelSize: z.boolean().optional(),
-        aspectRatios: z.array(z.number().positive().max(10)).min(1).max(24).optional(),
-        negativeSpaceControl: z.enum(["weak", "strong"]).optional(),
-        textRendering: z.enum(["none", "weak", "strong"]).optional(),
-      }),
-    )
-    .optional(),
+  // Owned by `modelCapabilities.ts`, which is the only module that knows what
+  // an image model can do — restating its fields here is how the two drifted.
+  capabilities: capabilityOverridesSchema.optional(),
 });

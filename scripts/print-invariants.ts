@@ -47,7 +47,31 @@ import {
 import { validateTreatments } from "../books-frontend/src/core/book/treatments";
 import { bindingSideFor } from "../books-frontend/src/core/book/pageLayout";
 import { computePageGuides, resolveFormatCapabilities } from "../books-frontend/src/core/book/format";
-import { chooseImageSize } from "../books-frontend/src/core/pipeline/illustration";
+import { chooseImageSize, renderAspect } from "../books-frontend/src/core/pipeline/illustration";
+import {
+  fullGridArea,
+  gridAreaAspect,
+  gridRect,
+  isValidGridArea,
+  matchGridPreset,
+  normalizeGridArea,
+  surfaceAspect as regionSurfaceAspect,
+  GRID_PRESETS,
+  type GridArea,
+} from "../books-frontend/src/core/book/grid";
+import {
+  aspectFit,
+  aspectIsProducible,
+  capabilitiesFor,
+  capabilityKey,
+  parseSize,
+  ratioTokenForSize,
+  resolveImageSize,
+  sanitizeImageSize,
+  sizingReport,
+  MAX_ASPECT_MISMATCH,
+  type ImageModelCapabilities,
+} from "../books-frontend/src/core/config/modelCapabilities";
 import { bookSizeFromAspect } from "../books-frontend/src/core/config/options";
 import { defaultTemplate, PROMPT_ACTIONS } from "../books-frontend/src/core/prompts/registry";
 
@@ -61,6 +85,16 @@ function check(name: string, ok: boolean, detail?: string): void {
 
 function near(a: number, b: number, tolerance = 1e-6): boolean {
   return Math.abs(a - b) <= tolerance;
+}
+
+/** Distinct resolved geometries among grid areas, for de-duplication checks. */
+function gridGeometryKeys(areas: GridArea[]): Set<string> {
+  return new Set(
+    areas.map((area) => {
+      const r = gridRect(area);
+      return [r.x, r.y, r.w, r.h].map((n) => n.toFixed(6)).join(":");
+    }),
+  );
 }
 
 const DPI = 300;
@@ -617,17 +651,305 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
     }
   }
 
+  // ---- Region geometry -----------------------------------------------------
+
+  // A grid area is an authoring convenience that must resolve to the same
+  // rectangle everywhere, at any denominator. These are the properties that
+  // make "the top-left tile of a 2×2" mean one thing to the editor, the prompt
+  // and the image request.
+  {
+    check("the full surface is one whole cell", near(gridRect(fullGridArea()).w, 1));
+
+    for (const preset of GRID_PRESETS) {
+      const rect = gridRect(preset.area);
+      check(
+        `grid preset "${preset.id}" resolves inside the surface`,
+        rect.x >= -1e-9 &&
+          rect.y >= -1e-9 &&
+          rect.w > 0 &&
+          rect.h > 0 &&
+          rect.x + rect.w <= 1 + 1e-9 &&
+          rect.y + rect.h <= 1 + 1e-9,
+      );
+      check(`grid preset "${preset.id}" is a valid area`, isValidGridArea(preset.area));
+      check(`grid preset "${preset.id}" round-trips through its own geometry`, Boolean(matchGridPreset(preset.area)));
+    }
+
+    // Equivalent fractions are one preset, not two that drift apart.
+    check(
+      "equivalent fractions collapse to a single preset",
+      gridGeometryKeys(GRID_PRESETS.map((p) => p.area)).size === GRID_PRESETS.length,
+    );
+
+    // The denominator is data. Sixths and tenths have to work with no code
+    // change, because that is the whole claim the grid makes.
+    for (const divisions of [6, 7, 8, 10]) {
+      const area = {
+        columns: divisions,
+        rows: 1,
+        column: 0,
+        row: 0,
+        columnSpan: divisions - 1,
+        rowSpan: 1,
+      };
+      check(
+        `a ${divisions}ths grid resolves without a code change`,
+        near(gridRect(area).w, (divisions - 1) / divisions),
+      );
+    }
+
+    // Out-of-bounds areas are refused rather than clamped into a differently
+    // shaped picture.
+    check(
+      "a region running off the grid is refused",
+      !isValidGridArea({ columns: 3, rows: 1, column: 2, row: 0, columnSpan: 2, rowSpan: 1 }),
+    );
+    check("a malformed stored area is refused", normalizeGridArea({ columns: 0 }) === null);
+
+    // A tile that is half the width and half the height of its surface has the
+    // surface's own shape — the property that makes tiling format-independent.
+    for (const product of LULU_BOOK_PRODUCTS) {
+      for (const surface of ["page", "spread"] as const) {
+        const shape = regionSurfaceAspect(product.aspect, surface);
+        const quarter = { columns: 2, rows: 2, column: 0, row: 0, columnSpan: 1, rowSpan: 1 };
+        check(
+          `${product.sku} (${surface}): a 2×2 tile keeps the surface shape`,
+          near(gridAreaAspect(quarter, shape), shape, 1e-9),
+        );
+        const twoFifths = { columns: 5, rows: 1, column: 0, row: 0, columnSpan: 2, rowSpan: 1 };
+        check(
+          `${product.sku} (${surface}): a 2/5 column is 2/5 of the surface shape`,
+          near(gridAreaAspect(twoFifths, shape), shape * 0.4, 1e-9),
+        );
+      }
+    }
+  }
+
+  // ---- Requested canvas ----------------------------------------------------
+
   // The generated canvas must match the shape of the region it fills, or the
   // page crops it — the failure that looks like "the model ignored my prompt".
-  for (const product of [square, saddle] as BookProduct[]) {
-    const config = { productSku: product.sku, bookSize: bookSizeFromAspect(product.aspect) };
-    const [w, h] = chooseImageSize("single", config).split("x").map(Number);
-    const requested = w / h;
-    check(
-      `${product.sku}: a full-page render is generated at roughly the page shape`,
-      Math.abs(requested - product.aspect) / product.aspect < 0.3,
-      `asked for ${requested.toFixed(2)}, page is ${product.aspect.toFixed(2)}`,
-    );
+  // Checked for every trim, both surfaces, and every sizing mode a model can
+  // be in, because the mode is what decides how closely the shape can be hit.
+  {
+    const modes: { label: string; caps: ImageModelCapabilities }[] = [
+      { label: "arbitrary", caps: capabilitiesFor({ provider: "openai", id: "gpt-image-2" }) },
+      { label: "fixed", caps: capabilitiesFor({ provider: "openai", id: "gpt-image-1" }) },
+      { label: "buckets", caps: capabilitiesFor({ provider: "google", id: "gemini-3-pro-image" }) },
+    ];
+
+    for (const product of LULU_BOOK_PRODUCTS) {
+      const config = { productSku: product.sku, bookSize: bookSizeFromAspect(product.aspect) };
+      for (const kind of ["single", "spread"] as const) {
+        const target = renderAspect(kind, config);
+        for (const { label, caps } of modes) {
+          const resolved = resolveImageSize(caps, target);
+          const dims = parseSize(resolved.size);
+          check(`${product.sku} ${kind}/${label}: the canvas parses`, Boolean(dims));
+          if (!dims) continue;
+
+          // What the resolver reports and what it emitted must agree, or the
+          // mismatch used for gating is measuring a canvas nobody asked for.
+          check(
+            `${product.sku} ${kind}/${label}: reported ratio matches the canvas`,
+            near(dims.width / dims.height, resolved.ratio, 0.01),
+            `${resolved.size} is ${(dims.width / dims.height).toFixed(3)}, reported ${resolved.ratio.toFixed(3)}`,
+          );
+
+          // Gating and generation must not disagree about the fit: a layout
+          // offered because the shape "fits" has to be generated at that fit.
+          check(
+            `${product.sku} ${kind}/${label}: gating and generation agree on the fit`,
+            near(aspectFit(caps, target).error, resolved.error, 0.01),
+          );
+
+          // A shape the model can't reach is allowed to exist — the fixed-size
+          // canvases genuinely cannot render a 2.6:1 landscape spread — but the
+          // system has to KNOW it rather than silently crop 40% of the frame,
+          // because that judgment is what gating and the warnings run on.
+          check(
+            `${product.sku} ${kind}/${label}: the model's own verdict matches the fit`,
+            aspectIsProducible(caps, target) === (resolved.error <= MAX_ASPECT_MISMATCH),
+            `off by ${(resolved.error * 100).toFixed(1)}%`,
+          );
+
+          // The models pages are actually rendered with must clear the budget
+          // on every trim and both surfaces — no book ships pre-cropped.
+          if (label !== "fixed") {
+            check(
+              `${product.sku} ${kind}/${label}: the canvas is within the crop budget`,
+              resolved.error <= MAX_ASPECT_MISMATCH,
+              `off by ${(resolved.error * 100).toFixed(1)}%`,
+            );
+          }
+
+          // The pipeline entry point has to return the same canvas as the
+          // policy it delegates to.
+          check(
+            `${product.sku} ${kind}/${label}: chooseImageSize matches the policy`,
+            chooseImageSize(kind, config, null, caps) === resolved.size,
+          );
+
+          // An untrusted canvas is re-derived to a supported one, and a
+          // supported one survives untouched.
+          check(
+            `${product.sku} ${kind}/${label}: a supported canvas survives sanitizing`,
+            sanitizeImageSize(caps, resolved.size) === resolved.size,
+          );
+        }
+
+        // A model that accepts arbitrary resolutions has no excuse to miss the
+        // shape at all — this is what makes an exact page render possible.
+        const exact = resolveImageSize(modes[0].caps, target);
+        check(
+          `${product.sku} ${kind}: an arbitrary-size model hits the page shape`,
+          exact.error < 0.02,
+          `off by ${(exact.error * 100).toFixed(2)}%`,
+        );
+      }
+    }
+
+    // Every constraint `gpt-image-2` documents, on every shape we can ask for.
+    const arbitrary = capabilitiesFor({ provider: "openai", id: "gpt-image-2" });
+    const sizing = arbitrary.sizing;
+    check("gpt-image-2 is modelled as an arbitrary-size model", sizing.mode === "arbitrary");
+    if (sizing.mode === "arbitrary") {
+      for (const target of [0.2, 0.5, 17 / 22, 1, 22 / 17, 2, 44 / 17, 6]) {
+        const dims = parseSize(resolveImageSize(arbitrary, target).size);
+        if (!dims) {
+          check(`gpt-image-2 @ ${target.toFixed(2)}: canvas parses`, false);
+          continue;
+        }
+        const { width, height } = dims;
+        const long = Math.max(width, height);
+        const short = Math.min(width, height);
+        check(
+          `gpt-image-2 @ ${target.toFixed(2)}: both edges are multiples of ${sizing.multipleOf}`,
+          width % sizing.multipleOf === 0 && height % sizing.multipleOf === 0,
+          `${width}x${height}`,
+        );
+        check(
+          `gpt-image-2 @ ${target.toFixed(2)}: the long edge is within the ceiling`,
+          long <= sizing.maxEdge,
+          `${long} > ${sizing.maxEdge}`,
+        );
+        check(
+          `gpt-image-2 @ ${target.toFixed(2)}: the area is within the pixel bounds`,
+          width * height >= sizing.minPixels && width * height <= sizing.maxPixels,
+          `${(width * height).toLocaleString()} px`,
+        );
+        check(
+          `gpt-image-2 @ ${target.toFixed(2)}: the ratio is within the ceiling`,
+          long / short <= sizing.maxRatio + 1e-9,
+          `${(long / short).toFixed(2)}:1`,
+        );
+      }
+
+      // Cost control: an inflated canvas from a client is brought back to the
+      // budget rather than billed at whatever it asked for.
+      const greedy = sanitizeImageSize(arbitrary, "3824x3824");
+      const greedyDims = greedy ? parseSize(greedy) : null;
+      check(
+        "an oversized client canvas is cut back to the budget",
+        Boolean(greedyDims) &&
+          greedyDims!.width * greedyDims!.height <= sizing.pixelBudget * 1.1,
+        greedy,
+      );
+    }
+
+    // The admin panel reads its table off `sizingReport`, so the report must
+    // not claim a resolution we don't choose: a bucketed model is asked for a
+    // shape and picks its own pixels, and quoting a print DPI for one would be
+    // inventing a number an admin would then make decisions on.
+    {
+      const surfaces = LULU_BOOK_PRODUCTS.slice(0, 3).map((p) => ({
+        label: p.sku,
+        aspect: p.aspect,
+        widthIn: p.trim.widthIn,
+      }));
+      for (const { label, caps } of modes) {
+        for (const row of sizingReport(caps, surfaces)) {
+          if (caps.sizing.mode === "ratioBuckets") {
+            check(`${label}: the report names a shape rather than a resolution`, Boolean(row.token));
+            check(`${label}: the report quotes no print DPI it can't know`, row.dpi === undefined);
+          } else {
+            check(`${label}: the report quotes the print DPI it does know`, (row.dpi ?? 0) > 0);
+          }
+          // Whatever the panel shows has to be what the pipeline would ask for.
+          check(
+            `${label}: the report matches the requested canvas`,
+            row.size === resolveImageSize(caps, row.target).size,
+          );
+        }
+      }
+    }
+
+    // A bucketed model's canvas has to carry its ratio back out, or the Gemini
+    // adapter sends a token for a shape nobody chose.
+    for (const modelId of ["gemini-3-pro-image", "gemini-3.1-flash-image"]) {
+      const caps = capabilitiesFor({ provider: "google", id: modelId });
+      if (caps.sizing.mode !== "ratioBuckets") {
+        check(`${modelId} is modelled as a bucketed model`, false);
+        continue;
+      }
+      for (const bucket of caps.sizing.ratios) {
+        const size = resolveImageSize(caps, bucket.ratio).size;
+        check(
+          `${modelId}: a ${bucket.token} canvas reads back as ${bucket.token}`,
+          ratioTokenForSize(caps, size) === bucket.token,
+          `${size} → ${ratioTokenForSize(caps, size)}`,
+        );
+      }
+    }
+
+    // An admin correction has to reach generation, not just the layout picker
+    // — the drift this consolidation exists to remove.
+    {
+      const model = { provider: "openai" as const, id: "gpt-image-2" };
+      const restricted = capabilitiesFor(model, {
+        [capabilityKey(model.provider, model.id)]: { ratios: ["1:1"] },
+      });
+      check(
+        "an admin ratio restriction reaches the requested canvas",
+        resolveImageSize(restricted, 2).size === resolveImageSize(restricted, 0.5).size,
+        resolveImageSize(restricted, 2).size,
+      );
+      check(
+        "an admin ratio restriction reaches layout gating",
+        aspectFit(restricted, 2).error > MAX_ASPECT_MISMATCH,
+      );
+
+      // The resolution knob has to move in both directions. Lowering it is the
+      // cost lever; raising it is the print-DPI lever. A version of this that
+      // only ever clamped DOWN silently ignored half the admin screen's options.
+      const areaAt = (maxPixels: number): number => {
+        const caps = capabilitiesFor(model, {
+          [capabilityKey(model.provider, model.id)]: { maxPixels },
+        });
+        const dims = parseSize(resolveImageSize(caps, 1).size);
+        return dims ? dims.width * dims.height : 0;
+      };
+      const shippedArea = areaAt(
+        capabilitiesFor(model).sizing.mode === "arbitrary"
+          ? (capabilitiesFor(model).sizing as { pixelBudget: number }).pixelBudget
+          : 1,
+      );
+      check(
+        "an admin resolution cap reaches the requested canvas",
+        areaAt(1_048_576) <= 1_048_576,
+        `${areaAt(1_048_576).toLocaleString()} px`,
+      );
+      check(
+        "an admin resolution increase reaches the requested canvas",
+        areaAt(8_000_000) > shippedArea,
+        `${areaAt(8_000_000).toLocaleString()} px vs shipped ${shippedArea.toLocaleString()}`,
+      );
+      check(
+        "a resolution below the model's floor is clamped, not honoured",
+        areaAt(1) >= sizing.minPixels,
+        `${areaAt(1).toLocaleString()} px`,
+      );
+    }
   }
 
   // Every variable the layout blocks interpolate has to be declared, or the

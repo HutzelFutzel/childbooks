@@ -49,6 +49,11 @@ import { meterAndSettle, runKindOf } from "./actionRun";
 import { featureAllowedForUser } from "./plans";
 import { ensureAfford, estimateForUser } from "./sparks";
 import { normalizeImageTier, type ImageTier } from "../../books-frontend/src/core/config/modelConfig";
+import {
+  capabilitiesFor,
+  sanitizeImageSize,
+  type CapabilityOverrides,
+} from "../../books-frontend/src/core/config/modelCapabilities";
 import { ALL_SECRETS } from "./secrets";
 import { downloadBlob, ensureAdmin, uploadBlob } from "./storage";
 import { deleteLikenessPhotoForSubject } from "./likeness";
@@ -674,6 +679,8 @@ async function runImageTask(args: {
   uid: string;
   req: ImageRenderRequest;
   model: ResolvedModels["imageModel"];
+  /** Admin capability overlay, so the canvas is checked against this model. */
+  caps: CapabilityOverrides;
   tier: ImageTier;
   action: "pageIllustration" | "coverIllustration";
   projectId: string | undefined;
@@ -721,7 +728,12 @@ async function runImageTask(args: {
   const imageReq: ImageRequest = {
     model: model.id,
     prompt: req.prompt,
-    size: req.size,
+    // The client assembles the request, so its canvas is untrusted input: keep
+    // only the SHAPE it asked for and re-resolve the pixels against the model
+    // resolved here. A task that named a size this model can't produce, or an
+    // 8 MP one (image tokens scale with area), lands on the same canvas the
+    // pipeline would have chosen itself.
+    size: sanitizeImageSize(capabilitiesFor(model, args.caps), req.size),
     quality: req.quality,
     references: references.length ? references : undefined,
     mask,
@@ -865,6 +877,7 @@ async function renderTask(
       uid,
       req,
       model: models.imageModel,
+      caps,
       tier,
       action,
       projectId,

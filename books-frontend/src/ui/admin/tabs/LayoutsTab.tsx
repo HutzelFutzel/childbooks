@@ -14,7 +14,7 @@ import { layoutAvailability, layoutFindings, resolveLayout } from "../../../core
 import { REGION_TREATMENTS, getTreatment } from "../../../core/book/treatments";
 import { BOOK_PRODUCTS } from "../../../core/fulfillment";
 import { bookSizeFromAspect, type BookSize } from "../../../core/config/options";
-import type { LayoutOverride, LayoutsConfig } from "../../../core/config/layouts";
+import type { LayoutExample, LayoutOverride, LayoutsConfig } from "../../../core/config/layouts";
 import { DEFAULT_LAYOUT_QUALITY } from "../../../core/config/layouts";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { Button } from "../../components/Button";
@@ -24,6 +24,8 @@ import { Toggle } from "../../components/Toggle";
 import { LayoutSchematic } from "../../design/LayoutSchematic";
 import { cn } from "../../lib/cn";
 import { Section } from "./products/parts";
+import { ImageGeometryPanel } from "./ImageGeometryPanel";
+import type { CapabilityOverrides } from "../../../core/config/modelCapabilities";
 
 /** Read a File as bare base64 (no data: prefix) + its mime type. */
 function readBase64(file: File): Promise<{ base64: string; mimeType: string }> {
@@ -43,6 +45,9 @@ function readBase64(file: File): Promise<{ base64: string; mimeType: string }> {
 }
 
 const SHAPES: BookSize[] = ["square", "landscape", "portrait"];
+
+/** Stable empty result for layouts with no showcase images. See below. */
+const NO_EXAMPLES: LayoutExample[] = [];
 
 /** One product per distinct trim, for the size-availability matrix. */
 function representativeProducts() {
@@ -100,7 +105,10 @@ function AvailabilityMatrix({
 }
 
 function ExampleGallery({ layoutId }: { layoutId: string }) {
-  const examples = useAppConfigStore((s) => s.layouts.overrides[layoutId]?.examples ?? []);
+  // Shared constant, not a fresh `[]`: a store selector is a snapshot getter,
+  // so returning a new reference for a layout that has no examples yet makes
+  // every read look like a change and React reports a possible infinite loop.
+  const examples = useAppConfigStore((s) => s.layouts.overrides[layoutId]?.examples ?? NO_EXAMPLES);
   const upload = useAppConfigStore((s) => s.uploadLayoutImage);
   const inputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
@@ -411,6 +419,16 @@ export function LayoutsTab() {
     setDirty(true);
   };
 
+  const setCapabilities = (capabilities: CapabilityOverrides | undefined) => {
+    setDraft((prev) => {
+      const next = { ...prev };
+      if (capabilities) next.capabilities = capabilities;
+      else delete next.capabilities;
+      return next;
+    });
+    setDirty(true);
+  };
+
   const onSave = async () => {
     setSaving(true);
     try {
@@ -516,6 +534,8 @@ export function LayoutsTab() {
           </Field>
         </div>
       </Section>
+
+      <ImageGeometryPanel config={draft} onChange={setCapabilities} />
 
       <div className="space-y-3">
         {allBookLayouts().map((layout) => (

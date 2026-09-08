@@ -55,6 +55,7 @@ import { coverSpread } from "./bookUnits";
 import { resolveImageModelClient, resolveModelsClient } from "../platform/aiResolve";
 import { deleteLikenessPhoto } from "../platform/likeness";
 import { CUSTOMER_IMAGE_TIER, type ImageTier } from "../core/config/modelConfig";
+import { capabilitiesFor } from "../core/config/modelCapabilities";
 import { useProjectsStore } from "./projectsStore";
 import { useSettingsStore } from "./settingsStore";
 import { useAppConfigStore } from "./appConfigStore";
@@ -594,7 +595,15 @@ export function buildIllustrationTask(
     provider: imageModel.provider,
     model: imageModel.id,
     prompt,
-    size: chooseImageSize(spread.kind, project.config, layoutPlan, imageModel.provider),
+    // Advisory: the worker re-resolves this against the model it actually
+    // picks (see `sanitizeImageSize`), so a stale client can't queue a canvas
+    // the server-side model won't produce.
+    size: chooseImageSize(
+      spread.kind,
+      project.config,
+      layoutPlan,
+      capabilitiesFor(imageModel, useAppConfigStore.getState().layouts.capabilities),
+    ),
     references: references.length ? references : undefined,
   };
 
