@@ -1,8 +1,9 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Konva from "konva";
 import { Group, Image as KonvaImage, Rect } from "react-konva";
 import type { ImageElement } from "../../../core/types";
 import type { ImageActionId } from "../../../core/ai/actions";
+import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useBlobUrl } from "../../hooks/useBlobUrl";
 import { konvaShadow } from "../effects";
 import { useImage } from "./useImage";
@@ -35,6 +36,10 @@ export function KonvaImageElement({
   const assetUrl = useBlobUrl(el.kind === "asset" ? el.blobId : undefined);
   const url = el.kind === "illustration" ? illustrationUrl : assetUrl ?? undefined;
   const image = useImage(url);
+  const maskUrl = useAppConfigStore(
+    (state) => state.imageMasks.assets.find((mask) => mask.id === el.imageMaskId)?.imageUrl,
+  );
+  const maskImage = useImage(maskUrl);
   const imgRef = useRef<Konva.Image>(null);
   const bgRef = useRef<Konva.Image>(null);
 
@@ -52,9 +57,22 @@ export function KonvaImageElement({
   const backdropBlurPx = pageHeight * 0.04;
 
   // Gaussian blur needs an offscreen cache; (re)build it when relevant inputs change.
+  const maskedCanvas = useMaskedCanvas({
+    image,
+    mask: maskImage,
+    enabled: Boolean(el.imageMaskId),
+    w,
+    h,
+    fit: el.fit,
+    zoom: el.zoom,
+    focus: el.focus,
+    showBackdrop,
+    backdropBlurPx,
+  });
+
   useEffect(() => {
     const node = imgRef.current;
-    if (!node || !image) return;
+    if (!node || !(maskedCanvas ?? image)) return;
     if (blurPx > 0) {
       node.cache();
       node.filters([Konva.Filters.Blur]);
@@ -64,7 +82,7 @@ export function KonvaImageElement({
       node.clearCache();
     }
     node.getLayer()?.batchDraw();
-  }, [blurPx, image, w, h, el.fit]);
+  }, [blurPx, image, maskedCanvas, w, h, el.fit]);
 
   // Cache + blur the backdrop copy (only mounted when a contained illustration
   // needs the fill).
@@ -111,11 +129,24 @@ export function KonvaImageElement({
       {image && (
         <Group
           clipFunc={
-            cornerR > 0
+            !el.imageMaskId && cornerR > 0
               ? (ctx) => roundedRectPath(ctx, 0, 0, w, h, cornerR)
               : undefined
           }
         >
+          {el.imageMaskId ? (
+            maskedCanvas ? (
+              <KonvaImage
+                ref={imgRef}
+                image={maskedCanvas}
+                width={w}
+                height={h}
+                listening={false}
+                {...shadow}
+              />
+            ) : null
+          ) : (
+            <>
           {showBackdrop && iw > 0 && ih > 0 && (
             <KonvaImage
               ref={bgRef}
@@ -140,6 +171,8 @@ export function KonvaImageElement({
             listening={false}
             {...shadow}
           />
+            </>
+          )}
         </Group>
       )}
       {/* Soft placeholder when generating before the first bitmap lands. */}
@@ -157,6 +190,120 @@ export function KonvaImageElement({
       )}
     </>
   );
+}
+
+function useMaskedCanvas({
+  image,
+  mask,
+  enabled,
+  w,
+  h,
+  fit,
+  zoom,
+  focus,
+  showBackdrop,
+  backdropBlurPx,
+}: {
+  image: HTMLImageElement | null;
+  mask: HTMLImageElement | null;
+  enabled: boolean;
+  w: number;
+  h: number;
+  fit: ImageElement["fit"];
+  zoom?: number;
+  focus?: ImageElement["focus"];
+  showBackdrop: boolean;
+  backdropBlurPx: number;
+}): HTMLCanvasElement | null {
+  const [result, setResult] = useState<{
+    sourceKey: string;
+    canvas: HTMLCanvasElement;
+  } | null>(null);
+  const sourceKey =
+    enabled && image && mask
+      ? `${image.currentSrc || image.src}|${mask.currentSrc || mask.src}`
+      : null;
+
+  useEffect(() => {
+    if (!sourceKey || !image || !mask || w <= 0 || h <= 0) {
+      setResult(null);
+      return;
+    }
+    const iw = image.naturalWidth || image.width;
+    const ih = image.naturalHeight || image.height;
+    if (!iw || !ih) {
+      setResult(null);
+      return;
+    }
+
+    const cw = Math.max(1, Math.ceil(w));
+    const ch = Math.max(1, Math.ceil(h));
+    const next = document.createElement("canvas");
+    next.width = cw;
+    next.height = ch;
+    const ctx = next.getContext("2d");
+    if (!ctx) {
+      setResult(null);
+      return;
+    }
+    ctx.scale(cw / w, ch / h);
+
+    const cropForCover = () => {
+      const effectiveZoom = Math.max(1, zoom ?? 1);
+      const scale = Math.max(w / iw, h / ih) * effectiveZoom;
+      const cropW = w / scale;
+      const cropH = h / scale;
+      const fx = focus?.x ?? 0.5;
+      const fy = focus?.y ?? 0.5;
+      return {
+        x: clamp(fx * iw - cropW / 2, 0, Math.max(0, iw - cropW)),
+        y: clamp(fy * ih - cropH / 2, 0, Math.max(0, ih - cropH)),
+        width: cropW,
+        height: cropH,
+      };
+    };
+    const drawCover = () => {
+      const crop = cropForCover();
+      ctx.drawImage(image, crop.x, crop.y, crop.width, crop.height, 0, 0, w, h);
+    };
+
+    if (showBackdrop) {
+      ctx.save();
+      ctx.filter = `blur(${backdropBlurPx}px)`;
+      ctx.globalAlpha = 0.85;
+      drawCover();
+      ctx.restore();
+    }
+    if (fit === "contain") {
+      const scale = Math.min(w / iw, h / ih);
+      const dw = iw * scale;
+      const dh = ih * scale;
+      ctx.drawImage(image, (w - dw) / 2, (h - dh) / 2, dw, dh);
+    } else {
+      drawCover();
+    }
+
+    ctx.globalCompositeOperation = "destination-in";
+    ctx.globalAlpha = 1;
+    ctx.filter = "none";
+    ctx.drawImage(mask, 0, 0, w, h);
+    setResult({ sourceKey, canvas: next });
+  }, [
+    image,
+    mask,
+    enabled,
+    w,
+    h,
+    fit,
+    zoom,
+    focus?.x,
+    focus?.y,
+    showBackdrop,
+    backdropBlurPx,
+    sourceKey,
+  ]);
+
+  return result?.sourceKey === sourceKey ? result.canvas : null;
 }
 
 function clamp(v: number, min: number, max: number) {

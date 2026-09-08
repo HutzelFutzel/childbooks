@@ -38,7 +38,7 @@ import { logger } from "firebase-functions/v2";
 import { onTaskDispatched } from "firebase-functions/v2/tasks";
 import sharp from "sharp";
 import type { Browser, Page } from "puppeteer-core";
-import { getBrandingConfig } from "./appConfig";
+import { getBrandingConfig, getImageMasksConfig } from "./appConfig";
 import type { AuthedRequest } from "./auth";
 import { isEmulator, launchBrowser } from "./browser";
 import { downloadBlob, ensureAdmin } from "./storage";
@@ -48,7 +48,7 @@ import {
   cmToIn,
   SAFETY_MARGIN_IN as COVER_SAFETY_MARGIN_IN,
 } from "../../books-frontend/src/core/book/format";
-import { COVER_BACK_ID } from "../../books-frontend/src/core/types";
+import { COVER_BACK_ID, type Project } from "../../books-frontend/src/core/types";
 import {
   assembleDocument,
   saveRasters,
@@ -124,6 +124,17 @@ function projectRef(uid: string, projectId: string) {
 
 function clientError(res: Response, message: string, status = 400): void {
   res.status(status).json({ error: { message } });
+}
+
+/** Unique immutable image-shape revisions referenced by this design. */
+function imageMaskIds(project: Project): string[] {
+  const ids = new Set<string>();
+  for (const page of Object.values(project.design?.pages ?? {})) {
+    for (const image of page.images ?? []) {
+      if (image.imageMaskId) ids.add(image.imageMaskId);
+    }
+  }
+  return [...ids];
 }
 
 /** Constant-time token check — a render token is a credential like any other. */
@@ -253,12 +264,27 @@ export function registerRenderJobRoutes(app: Express): void {
       // Resolved server-side, from the admin config the render page has no
       // other way to reach — this is what makes the backcover logo something
       // the book being rendered can't opt out of.
-      const branding = await getBrandingConfig();
+      const project = JSON.parse(raw) as Project;
+      const [branding, imageMasks] = await Promise.all([
+        getBrandingConfig(),
+        getImageMasksConfig(),
+      ]);
       const logo = branding.backCoverLogo;
+      const byId = new Map(imageMasks.assets.map((asset) => [asset.id, asset.imageUrl]));
+      const maskUrls: Record<string, string> = {};
+      for (const id of imageMaskIds(project)) {
+        const url = byId.get(id);
+        if (!url) {
+          clientError(res, "One of this book's image shapes is no longer available.", 409);
+          return;
+        }
+        maskUrls[id] = url;
+      }
       res.json({
         fingerprint: job.fingerprint,
         documents: job.documents,
-        project: JSON.parse(raw),
+        project,
+        imageMaskUrls: maskUrls,
         backCoverLogoUrl: logo?.imageUrl ?? null,
         backCoverLogoAspect: typeof logo?.aspect === "number" ? logo.aspect : null,
         backCoverLogoSizeCm: branding.backCoverLogoSizeCm,

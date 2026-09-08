@@ -181,6 +181,26 @@ export async function uploadLayoutImage(
 }
 
 /**
+ * Store one immutable, normalized image-shape PNG. The id is the revision:
+ * uploads are never overwritten, so books that reference an archived shape
+ * keep rendering exactly as authored.
+ */
+export async function uploadImageMask(
+  id: string,
+  png: Buffer,
+): Promise<{ storagePath: string; publicUrl: string }> {
+  const safeId = id.replace(/[^a-z0-9_-]/gi, "").slice(0, 80);
+  if (!safeId) throw new Error("The image-shape id is invalid.");
+  const storagePath = `public/imageMasks/${safeId}/mask.png`;
+  await blobBucket().file(storagePath).save(png, {
+    contentType: "image/png",
+    resumable: false,
+    metadata: { cacheControl: "public,max-age=31536000,immutable" },
+  });
+  return { storagePath, publicUrl: publicMediaUrl(storagePath) };
+}
+
+/**
  * Upload a catalog picture — of a print option, a book, the digital edition or a
  * Spark pack — to the world-readable `public/catalogMedia/{scope}/{id}/...`
  * space. The caller passes an already-parsed key; the segments are sanitized

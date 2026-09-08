@@ -72,15 +72,17 @@ export function ImageInspector({
         <p className="mt-1.5 text-[11px] leading-snug text-ink-400">
           {isFill ? fitOptions[0].hint : fitOptions[1].hint}
         </p>
-        <Slider
-          label="Corners"
-          min={0}
-          max={0.5}
-          step={0.02}
-          value={image.corner ?? 0}
-          onChange={(corner) => onChange({ corner: corner || undefined }, coalesce("corner"))}
-          onGestureEnd={onGestureEnd}
-        />
+        {!image.imageMaskId && (
+          <Slider
+            label="Corners"
+            min={0}
+            max={0.5}
+            step={0.02}
+            value={image.corner ?? 0}
+            onChange={(corner) => onChange({ corner: corner || undefined }, coalesce("corner"))}
+            onGestureEnd={onGestureEnd}
+          />
+        )}
       </Section>
 
       {!isFill && (

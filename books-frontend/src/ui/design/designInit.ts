@@ -507,9 +507,9 @@ export function relayoutPageDesign(
   }
 
   // The artwork's own placement is layout-owned too: inset art moves to the new
-  // art rectangle, and switching back to full-bleed drops the placed element so
-  // the page surface draws the illustration edge to edge again. A crop the user
-  // adjusted themselves (zoom/focus) is carried over rather than reset.
+  // art rectangle and full-bleed expands the same durable element to the whole
+  // surface. Keeping the element preserves non-destructive presentation such as
+  // crop, focus and image shape across layout changes.
   const images = pageDesign.images ?? [];
   const existingArt = images.find((im) => im.kind === "illustration");
   const others = images.filter((im) => im.kind !== "illustration");
@@ -520,7 +520,7 @@ export function relayoutPageDesign(
       : insetIllustration(page.plan, Math.min(0, ...images.map((im) => im.z)) - 1);
     nextImages = art ? [...others, art] : others;
   } else if (existingArt) {
-    nextImages = others;
+    nextImages = [...others, { ...existingArt, rect: { x: 0, y: 0, w: 1, h: 1 } }];
   }
 
   // Built by omission rather than by assigning `undefined`: the design is

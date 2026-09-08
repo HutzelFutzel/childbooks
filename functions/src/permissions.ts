@@ -513,6 +513,7 @@ const ROUTE_RULES: RouteRule[] = [
   { test: /^\/admin\/art-styles\/[^/]+\/image$/, gate: key("configuration.artStyles", "write") },
   { test: /^\/admin\/config\/layouts$/, gate: key("configuration.layouts") },
   { test: /^\/admin\/layouts\/[^/]+\/image$/, gate: key("configuration.layouts", "write") },
+  { test: /^\/admin\/image-masks(\/[^/]+)?$/, gate: key("configuration.layouts", "write") },
   { test: /^\/admin\/config\/age-writing$/, gate: key("configuration.ageWriting") },
   { test: /^\/admin\/config\/story-craft$/, gate: key("configuration.storyCraft") },
   { test: /^\/admin\/config\/typography$/, gate: key("configuration.typography") },

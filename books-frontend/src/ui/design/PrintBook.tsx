@@ -3,6 +3,7 @@ import { EXPORT_DPI } from "../../core/config/options";
 import { COVER_BACK_ID, type BookDesign } from "../../core/types";
 import { CompositedPage, type ResolvedArtwork } from "./CompositedPage";
 import { defaultIllustrationFocus, type DesignPage } from "./designInit";
+import type { ResolvedImageMasks } from "./imageMasks";
 
 export type { ResolvedArtwork };
 
@@ -40,6 +41,7 @@ export function PrintBook({
   targets,
   design,
   artwork,
+  imageMasks,
   trimIn,
   forExport = false,
   backCoverLogoUrl,
@@ -50,6 +52,8 @@ export function PrintBook({
   design: BookDesign;
   /** Pre-resolved artwork. When omitted, pages fetch their own (on-screen path). */
   artwork?: ResolvedArtwork;
+  /** Immutable image-shape URLs resolved before a print render mounts. */
+  imageMasks?: ResolvedImageMasks;
   /** When set, emits an `@page` rule sized to the book's real trim for `window.print()`. */
   trimIn?: { widthIn: number; heightIn: number };
   /** Export mode renders pages stacked with no page-break CSS for snapshotting. */
@@ -80,6 +84,7 @@ export function PrintBook({
           target={target}
           design={design}
           artwork={artwork}
+          imageMasks={imageMasks}
           forExport={forExport}
           backCoverLogoUrl={backCoverLogoUrl}
           backCoverLogoAspect={backCoverLogoAspect}
@@ -101,6 +106,7 @@ function PrintTargetView({
   target,
   design,
   artwork,
+  imageMasks,
   forExport,
   backCoverLogoUrl,
   backCoverLogoAspect,
@@ -109,6 +115,7 @@ function PrintTargetView({
   target: PrintTarget;
   design: BookDesign;
   artwork?: ResolvedArtwork;
+  imageMasks?: ResolvedImageMasks;
   forExport: boolean;
   backCoverLogoUrl?: string | null;
   backCoverLogoAspect?: number | null;
@@ -148,6 +155,7 @@ function PrintTargetView({
           bleedPx={target.bleedPx}
           illustrationBlobId={target.page.blobId}
           artwork={artwork}
+          imageMasks={imageMasks}
           illustrationFocus={defaultIllustrationFocus(target.page)}
         />
       </div>

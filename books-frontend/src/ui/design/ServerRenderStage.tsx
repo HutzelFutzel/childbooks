@@ -69,6 +69,8 @@ interface RenderState {
   captures: CaptureSpec[];
   design: BookDesign;
   artwork: LoadedArtwork;
+  /** Sanitized mask SVGs fetched and decoded before capture. */
+  imageMasks: LoadedArtwork;
   /** The admin-configured backcover logo's public URL, or null if unset. */
   backCoverLogoUrl: string | null;
   /** Intrinsic height÷width of the backcover logo (drives the fixed-edge rule). */
@@ -127,7 +129,9 @@ export function ServerRenderStage() {
         const stage = stageRef.current;
         if (!stage) throw new Error("The render stage did not mount.");
         await waitForStageReady(stage, {
-          expectedImages: expectedImageCount(state.targets, state.design, state.artwork.artwork),
+          expectedImages:
+            expectedImageCount(state.targets, state.design, state.artwork.artwork) +
+            Object.keys(state.imageMasks.artwork).length,
         });
         window.__bookRender = {
           ready: true,
@@ -148,11 +152,20 @@ export function ServerRenderStage() {
         targets={state.targets}
         design={state.design}
         artwork={state.artwork.artwork}
+        imageMasks={state.imageMasks.artwork}
         forExport
         backCoverLogoUrl={state.backCoverLogoUrl}
         backCoverLogoAspect={state.backCoverLogoAspect}
         backCoverLogoSizeCm={state.backCoverLogoSizeCm}
       />
+      <div aria-hidden style={{ display: "none" }}>
+        {Object.entries(state.imageMasks.artwork).map(([id, url]) => (
+          // Explicit preload participates in waitForStageReady; CSS masks do not
+          // appear in querySelectorAll("img") on their own.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img key={id} src={url} alt="" />
+        ))}
+      </div>
       {state.spine && (
         <PrintSpine
           id={SPINE_CAPTURE_ID}
@@ -202,6 +215,7 @@ async function prepare(): Promise<RenderState> {
     fingerprint: string;
     documents: DocumentRequest[];
     project: Project;
+    imageMaskUrls: Record<string, string>;
     backCoverLogoUrl: string | null;
     backCoverLogoAspect: number | null;
     backCoverLogoSizeCm: number | null;
@@ -283,6 +297,12 @@ async function prepare(): Promise<RenderState> {
     );
   }
   const artwork = await loadArtworkFromUrls(sources);
+  let imageMasks: LoadedArtwork;
+  try {
+    imageMasks = await loadArtworkFromUrls(payload.imageMaskUrls ?? {});
+  } catch {
+    throw new Error("One of this book's image shapes could not be loaded.");
+  }
 
   if (spineRequest && spineFromBlobId) {
     const colors = await spineColorsFrom(artwork.artwork[spineFromBlobId]);
@@ -294,6 +314,7 @@ async function prepare(): Promise<RenderState> {
     captures,
     design,
     artwork,
+    imageMasks,
     backCoverLogoUrl: payload.backCoverLogoUrl,
     backCoverLogoAspect: payload.backCoverLogoAspect,
     backCoverLogoSizeCm: payload.backCoverLogoSizeCm,

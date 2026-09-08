@@ -217,15 +217,17 @@ function FrameSection({
             ? "Fills the frame — edges may be cropped. Use Position on the toolbar to drag the picture."
             : "Shows the whole picture. Leftover bars can be soft-filled or left clear."}
         </p>
-        <Slider
-          label="Corners"
-          min={0}
-          max={0.5}
-          step={0.02}
-          value={image.corner ?? 0}
-          onChange={(corner) => onPatch({ corner: corner || undefined }, coalesce("corner"))}
-          onGestureEnd={onGestureEnd}
-        />
+        {!image.imageMaskId && (
+          <Slider
+            label="Corners"
+            min={0}
+            max={0.5}
+            step={0.02}
+            value={image.corner ?? 0}
+            onChange={(corner) => onPatch({ corner: corner || undefined }, coalesce("corner"))}
+            onGestureEnd={onGestureEnd}
+          />
+        )}
       </Section>
       {!isFill && (
         <Section title="Leftover space">

@@ -1,6 +1,8 @@
 import type { ImageElement, PageDesign, ShapeElement, TextBox } from "../../core/types";
 import { useBlobUrl } from "../hooks/useBlobUrl";
+import { useAppConfigStore } from "../../state/appConfigStore";
 import { cssFilter } from "./effects";
+import { imageMaskStyle, type ResolvedImageMasks } from "./imageMasks";
 import { PatternFill } from "./patterns";
 import { ShapeSvg } from "./ShapeRender";
 import { TextBoxView } from "./TextBoxView";
@@ -39,6 +41,7 @@ export function CompositedPage({
   illustrationBlobId,
   illustrationUrl,
   artwork,
+  imageMasks,
   illustrationFocus,
 }: {
   pageDesign: PageDesign;
@@ -49,8 +52,11 @@ export function CompositedPage({
   /** Pre-resolved illustration URL. Wins over fetching `illustrationBlobId`. */
   illustrationUrl?: string | null;
   artwork?: ResolvedArtwork;
+  /** Pre-resolved immutable mask URLs (print); public catalog is the UI fallback. */
+  imageMasks?: ResolvedImageMasks;
   illustrationFocus?: { x: number; y: number };
 }) {
+  const configuredMasks = useAppConfigStore((state) => state.imageMasks.assets);
   const fetched = useBlobUrl(
     illustrationUrl || artwork ? undefined : illustrationBlobId,
   );
@@ -154,6 +160,12 @@ export function CompositedPage({
                   h={h}
                   illustrationUrl={url ?? undefined}
                   artwork={artwork}
+                  maskUrl={
+                    el.image.imageMaskId
+                      ? imageMasks?.[el.image.imageMaskId] ??
+                        configuredMasks.find((mask) => mask.id === el.image?.imageMaskId)?.imageUrl
+                      : undefined
+                  }
                 />
               ) : null}
             </div>
@@ -170,22 +182,35 @@ function CompositedImage({
   h,
   illustrationUrl,
   artwork,
+  maskUrl,
 }: {
   image: ImageElement;
   w: number;
   h: number;
   illustrationUrl?: string;
   artwork?: ResolvedArtwork;
+  maskUrl?: string;
 }) {
   const fetched = useBlobUrl(artwork || image.kind !== "asset" ? undefined : image.blobId);
   const assetUrl = (image.blobId ? artwork?.[image.blobId] : undefined) ?? fetched;
   const src = image.kind === "illustration" ? illustrationUrl : assetUrl ?? undefined;
   if (!src) return null;
-  const radius = (image.corner ?? 0) * Math.min(w, h);
-  const showBackdrop = image.fit === "contain" && image.kind === "illustration";
+  const radius = image.imageMaskId ? 0 : (image.corner ?? 0) * Math.min(w, h);
+  const mask = imageMaskStyle(maskUrl);
+  const backdropMode = image.fitBackdrop ?? (image.kind === "illustration" ? "blur" : "none");
+  const showBackdrop = image.fit === "contain" && backdropMode === "blur";
   if (showBackdrop) {
     return (
-      <div style={{ position: "relative", width: w, height: h, overflow: "hidden", borderRadius: radius }}>
+      <div
+        style={{
+          position: "relative",
+          width: w,
+          height: h,
+          overflow: "hidden",
+          borderRadius: radius,
+          ...mask,
+        }}
+      >
         <img
           src={src}
           alt=""
@@ -210,7 +235,9 @@ function CompositedImage({
   }
   if (image.fit === "contain") {
     return (
-      <img src={src} alt="" style={{ width: w, height: h, objectFit: "contain", borderRadius: radius }} />
+      <div style={{ width: w, height: h, overflow: "hidden", borderRadius: radius, ...mask }}>
+        <img src={src} alt="" style={{ width: w, height: h, objectFit: "contain" }} />
+      </div>
     );
   }
   const zoom = Math.max(1, image.zoom ?? 1);
@@ -218,7 +245,16 @@ function CompositedImage({
   const fy = image.focus?.y ?? 0.5;
   const pos = `${(fx * 100).toFixed(2)}% ${(fy * 100).toFixed(2)}%`;
   return (
-    <div style={{ position: "relative", width: w, height: h, overflow: "hidden", borderRadius: radius }}>
+    <div
+      style={{
+        position: "relative",
+        width: w,
+        height: h,
+        overflow: "hidden",
+        borderRadius: radius,
+        ...mask,
+      }}
+    >
       <img
         src={src}
         alt=""

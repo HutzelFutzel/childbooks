@@ -26,6 +26,11 @@ import {
   type LayoutsConfig,
 } from "../core/config/layouts";
 import {
+  createDefaultImageMasksConfig,
+  normalizeImageMasksConfig,
+  type ImageMasksConfig,
+} from "../core/config/imageMasks";
+import {
   createDefaultAgeWritingConfig,
   normalizeAgeWritingConfig,
   type AgeWritingConfig,
@@ -410,6 +415,8 @@ interface AppConfigState {
   artStyles: ArtStylesConfig;
   /** Admin overlay for the structural page layouts (titles, sizes, showcase). */
   layouts: LayoutsConfig;
+  /** Reusable, immutable SVG shapes applied non-destructively to images. */
+  imageMasks: ImageMasksConfig;
   ageWriting: AgeWritingConfig;
   /** Per-age-band story themes, stylistic devices and drafting rules. */
   storyCraft: StoryCraftConfig;
@@ -576,6 +583,8 @@ interface AppConfigState {
     mimeType: string,
     meta?: { shape?: string; side?: string; alt?: string },
   ) => Promise<void>;
+  uploadImageMask: (name: string, base64: string, mimeType: string) => Promise<void>;
+  patchImageMask: (id: string, patch: { name?: string; archived?: boolean }) => Promise<void>;
   saveAgeWriting: (config: AgeWritingConfig) => Promise<void>;
   saveStoryCraft: (config: StoryCraftConfig) => Promise<void>;
   saveTypography: (config: TypographyConfig) => Promise<void>;
@@ -915,6 +924,7 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   modelConfig: createDefaultModelConfig(),
   artStyles: createDefaultArtStylesConfig(),
   layouts: createDefaultLayoutsConfig(),
+  imageMasks: createDefaultImageMasksConfig(),
   ageWriting: createDefaultAgeWritingConfig(),
   storyCraft: createDefaultStoryCraftConfig(),
   typography: createDefaultTypographyConfig(),
@@ -966,6 +976,9 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       }),
       onSnapshot(doc(db, "appConfig", "layouts"), (snap) => {
         set({ layouts: normalizeLayoutsConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "imageMasks"), (snap) => {
+        set({ imageMasks: normalizeImageMasksConfig(snap.exists() ? snap.data() : undefined) });
       }),
       onSnapshot(doc(db, "appConfig", "ageWriting"), (snap) => {
         set({ ageWriting: normalizeAgeWritingConfig(snap.exists() ? snap.data() : undefined) });
@@ -1747,6 +1760,26 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       body: JSON.stringify({ base64, mimeType, ...meta }),
     });
     if (!res.ok) throw new Error((await safeError(res)) ?? "Upload failed.");
+  },
+
+  async uploadImageMask(name, base64, mimeType) {
+    const res = await backendFetch("/admin/image-masks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, base64, mimeType }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Upload failed.");
+    set({ imageMasks: normalizeImageMasksConfig(await res.json()) });
+  },
+
+  async patchImageMask(id, patch) {
+    const res = await backendFetch(`/admin/image-masks/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not update image shape.");
+    set({ imageMasks: normalizeImageMasksConfig(await res.json()) });
   },
 
   async uploadSiteImage(slot, base64, mimeType, alt) {

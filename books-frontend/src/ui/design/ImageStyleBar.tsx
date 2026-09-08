@@ -3,13 +3,14 @@
  * Everyday controls stay on the row; Refine / Characters / Scene / Versions /
  * Effects open the docked ImageEditPanel.
  */
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   Crop,
   History,
   Lock,
   MoreHorizontal,
   RefreshCw,
+  Shapes,
   Sparkles,
   Square,
   Trash2,
@@ -20,6 +21,7 @@ import type { Anchor, ImageElement } from "../../core/types";
 import { cn } from "../lib/cn";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { anchorThumbBlobId } from "../../state/ai";
+import { useAppConfigStore } from "../../state/appConfigStore";
 import { useStudio } from "../studio/StudioContext";
 import { useStudioPanelStore } from "../studio/studioPanelStore";
 import { subjectForPage, usePageIllustration } from "../studio/usePageIllustration";
@@ -27,6 +29,7 @@ import type { ImageEditSection } from "./ImageEditPanel";
 import { FloatingBarPortal } from "./FloatingBarPortal";
 import type { FloatingBarPlacement } from "./floatingBarPlacement";
 import { PortalToolbarFlyout } from "./toolbarFlyout";
+import { imageMaskStyle } from "./imageMasks";
 
 export type ImageToolbarChrome = {
   image: ImageElement;
@@ -38,6 +41,8 @@ export type ImageToolbarChrome = {
   onDuplicate: () => void;
   onDelete: () => void;
   onToggleLock: () => void;
+  /** Ephemeral page preview; null restores the saved shape. */
+  onPreviewShape: (shape: { imageMaskId?: string; corner?: number } | null) => void;
 };
 
 /** Effective letterbox mode for Fit — matches KonvaImageElement defaults. */
@@ -105,6 +110,8 @@ export function ImageStyleBar({
           </div>
         )}
 
+        <ShapePicker chrome={chrome} />
+
         {!coverMode && !isFill && (
           <Toggle
             label={softFill ? "Soft fill on leftover space" : "Transparent leftover space"}
@@ -144,6 +151,124 @@ export function ImageStyleBar({
         )}
       </div>
     </FloatingBarPortal>
+  );
+}
+
+function ShapePicker({ chrome }: { chrome: ImageToolbarChrome }) {
+  const maskAssets = useAppConfigStore((state) => state.imageMasks.assets);
+  const masks = useMemo(() => maskAssets.filter((mask) => !mask.archived), [maskAssets]);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+
+  if (masks.length === 0) return null;
+  const active = Boolean(chrome.image.imageMaskId || (chrome.image.corner ?? 0) > 0);
+
+  const choose = (patch: Partial<ImageElement>) => {
+    chrome.onPreviewShape(null);
+    chrome.onPatch(patch);
+    setOpen(false);
+  };
+  const close = () => {
+    chrome.onPreviewShape(null);
+    setOpen(false);
+  };
+
+  return (
+    <div ref={rootRef} className="relative shrink-0">
+      <Toggle label="Shape" active={active || open} onClick={() => setOpen((value) => !value)}>
+        <Shapes className="size-4" />
+        <span className="hidden px-0.5 text-xs font-medium sm:inline">Shape</span>
+      </Toggle>
+      <PortalToolbarFlyout
+        open={open}
+        onClose={close}
+        triggerRef={rootRef}
+        className="w-72 p-2"
+      >
+        <div className="px-1 pb-2">
+          <p className="text-[11px] font-medium text-ink-600">Image shape</p>
+          <p className="text-[10px] text-ink-400">Hover to preview on the page · click to apply</p>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          <ShapeOption
+            label="Original"
+            active={!chrome.image.imageMaskId && !(chrome.image.corner && chrome.image.corner > 0)}
+            onPreview={() => chrome.onPreviewShape({ imageMaskId: undefined, corner: undefined })}
+            onPreviewEnd={() => chrome.onPreviewShape(null)}
+            onClick={() => choose({ imageMaskId: undefined, corner: undefined })}
+          />
+          <ShapeOption
+            label="Rounded"
+            rounded
+            active={!chrome.image.imageMaskId && (chrome.image.corner ?? 0) > 0}
+            onPreview={() => chrome.onPreviewShape({ imageMaskId: undefined, corner: 0.1 })}
+            onPreviewEnd={() => chrome.onPreviewShape(null)}
+            onClick={() => choose({ imageMaskId: undefined, corner: 0.1 })}
+          />
+          {masks.map((mask) => (
+            <ShapeOption
+              key={mask.id}
+              label={mask.name}
+              maskUrl={mask.imageUrl}
+              active={chrome.image.imageMaskId === mask.id}
+              onPreview={() => chrome.onPreviewShape({ imageMaskId: mask.id, corner: undefined })}
+              onPreviewEnd={() => chrome.onPreviewShape(null)}
+              onClick={() => choose({ imageMaskId: mask.id, corner: undefined })}
+            />
+          ))}
+        </div>
+      </PortalToolbarFlyout>
+    </div>
+  );
+}
+
+function ShapeOption({
+  label,
+  maskUrl,
+  rounded,
+  active,
+  onPreview,
+  onPreviewEnd,
+  onClick,
+}: {
+  label: string;
+  maskUrl?: string;
+  rounded?: boolean;
+  active: boolean;
+  onPreview: () => void;
+  onPreviewEnd: () => void;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-pressed={active}
+      onPointerEnter={onPreview}
+      onPointerLeave={onPreviewEnd}
+      onFocus={onPreview}
+      onBlur={onPreviewEnd}
+      onClick={onClick}
+      className={cn(
+        "min-w-0 rounded-lg border p-1.5 text-left transition",
+        active
+          ? "border-brand-400 bg-brand-50 ring-1 ring-brand-200"
+          : "border-ink-200 hover:border-ink-300 hover:bg-ink-50",
+      )}
+    >
+      <div className="flex h-12 items-center justify-center overflow-hidden rounded-md bg-black p-1">
+        <div
+          className="size-full bg-white"
+          style={{
+            borderRadius: rounded ? 10 : undefined,
+            ...imageMaskStyle(maskUrl),
+          }}
+        />
+      </div>
+      <span className="mt-1 block truncate px-0.5 text-[10px] font-medium text-ink-600">
+        {label}
+      </span>
+    </button>
   );
 }
 

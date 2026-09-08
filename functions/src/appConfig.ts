@@ -222,11 +222,17 @@ import {
   type LayoutExample,
   type LayoutsConfig,
 } from "../../books-frontend/src/core/config/layouts";
+import {
+  normalizeImageMasksConfig,
+  type ImageMaskAsset,
+  type ImageMasksConfig,
+} from "../../books-frontend/src/core/config/imageMasks";
 import type { CapabilityOverrides } from "../../books-frontend/src/core/config/modelCapabilities";
 
 const MODELS_DOC = "appConfig/models";
 const ART_STYLES_DOC = "appConfig/artStyles";
 const LAYOUTS_DOC = "appConfig/layouts";
+const IMAGE_MASKS_DOC = "appConfig/imageMasks";
 const AGE_WRITING_DOC = "appConfig/ageWriting";
 const STORY_CRAFT_DOC = "appConfig/storyCraft";
 const TYPOGRAPHY_DOC = "appConfig/typography";
@@ -319,6 +325,9 @@ export function getArtStylesConfig(): Promise<ArtStylesConfig> {
 }
 export function getLayoutsConfig(): Promise<LayoutsConfig> {
   return readDoc(LAYOUTS_DOC, normalizeLayoutsConfig);
+}
+export function getImageMasksConfig(): Promise<ImageMasksConfig> {
+  return readDoc(IMAGE_MASKS_DOC, normalizeImageMasksConfig);
 }
 export function getAgeWritingConfig(): Promise<AgeWritingConfig> {
   return readDoc(AGE_WRITING_DOC, normalizeAgeWritingConfig);
@@ -1567,5 +1576,66 @@ export async function removeLayoutExample(
     overrides: { ...current.overrides, [layoutId]: { ...override, examples } },
   });
   await writeDoc(LAYOUTS_DOC, next);
+  return next;
+}
+
+/** Add one immutable image shape to the public catalog. */
+export async function addImageMask(asset: ImageMaskAsset): Promise<ImageMasksConfig> {
+  ensureAdmin();
+  const ref = getFirestore().doc(IMAGE_MASKS_DOC);
+  const next = await getFirestore().runTransaction(async (transaction) => {
+    const snap = await transaction.get(ref);
+    const current = normalizeImageMasksConfig(snap.exists ? snap.data() : undefined);
+    if (current.assets.some((entry) => entry.id === asset.id)) {
+      throw new Error("That image shape already exists.");
+    }
+    if (current.assets.filter((entry) => !entry.archived).length >= 40) {
+      throw new Error("The image-shape catalog is full. Archive unused shapes before adding more.");
+    }
+    if (current.assets.length >= 200) {
+      throw new Error("The image-shape revision history is full.");
+    }
+    const updated = normalizeImageMasksConfig({
+      ...current,
+      assets: [...current.assets, asset],
+    });
+    transaction.set(ref, updated);
+    return updated;
+  });
+  cache.delete(IMAGE_MASKS_DOC);
+  return next;
+}
+
+/** Rename or archive a shape without changing the immutable SVG revision. */
+export async function patchImageMask(
+  id: string,
+  patch: { name?: string; archived?: boolean },
+): Promise<ImageMasksConfig> {
+  ensureAdmin();
+  const ref = getFirestore().doc(IMAGE_MASKS_DOC);
+  const next = await getFirestore().runTransaction(async (transaction) => {
+    const snap = await transaction.get(ref);
+    const current = normalizeImageMasksConfig(snap.exists ? snap.data() : undefined);
+    if (!current.assets.some((asset) => asset.id === id)) {
+      throw new Error("Image shape not found.");
+    }
+    const now = Date.now();
+    const assets = current.assets.map((asset) => {
+      if (asset.id !== id) return asset;
+      const updated = {
+        ...asset,
+        ...(patch.name !== undefined ? { name: patch.name.trim().slice(0, 80) } : {}),
+        updatedAt: now,
+      };
+      if (patch.archived === true) updated.archived = true;
+      else if (patch.archived === false) delete updated.archived;
+      return updated;
+    });
+    if (assets.some((asset) => !asset.name)) throw new Error("Image shapes need a name.");
+    const updated = normalizeImageMasksConfig({ ...current, assets });
+    transaction.set(ref, updated);
+    return updated;
+  });
+  cache.delete(IMAGE_MASKS_DOC);
   return next;
 }

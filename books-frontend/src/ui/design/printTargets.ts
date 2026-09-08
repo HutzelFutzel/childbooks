@@ -228,8 +228,9 @@ export function expectedImageCount(
       if (image.hidden) continue;
       const src = image.kind === "illustration" ? pageArt : image.blobId && artwork[image.blobId];
       if (!src) continue;
-      // A contained illustration draws a blurred backdrop copy behind itself.
-      count += image.fit === "contain" && image.kind === "illustration" ? 2 : 1;
+      // A contained image draws a second copy only when soft fill is active.
+      const backdrop = image.fitBackdrop ?? (image.kind === "illustration" ? "blur" : "none");
+      count += image.fit === "contain" && backdrop === "blur" ? 2 : 1;
     }
   }
   return count;

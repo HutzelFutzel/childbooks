@@ -28,6 +28,12 @@ service firebase.storage {
       allow write: if false;
     }
 
+    // Sanitized reusable SVG masks for non-destructive image shapes.
+    match /public/imageMasks/{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     match /public/branding/{allPaths=**} {
       allow read: if true;
       allow write: if false;

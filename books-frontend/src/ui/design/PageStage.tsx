@@ -35,6 +35,8 @@ import { KonvaShape } from "./ShapeRender";
 import { useImage } from "./konva/useImage";
 import { usePatternImage } from "./konva/usePatternImage";
 import { useBlobUrl } from "../hooks/useBlobUrl";
+import { useAppConfigStore } from "../../state/appConfigStore";
+import { imageMaskStyle } from "./imageMasks";
 import { getPreset } from "./presets";
 import { effectiveBaseSize, minContentWidthPct } from "./textFit";
 import { isBubble } from "./shapes";
@@ -338,6 +340,14 @@ export function PageStage({
   const [, setFontTick] = useState(0);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [reframeId, setReframeId] = useState<string | null>(null);
+  const [imageShapePreview, setImageShapePreview] = useState<{
+    imageId: string;
+    imageMaskId?: string;
+    corner?: number;
+  } | null>(null);
+  useEffect(() => {
+    setImageShapePreview(null);
+  }, [selectedId]);
   // Screen placement for selection toolbars (recomputed on scroll/resize).
   const [boxBarPos, setBoxBarPos] = useState<FloatingBarPlacement | null>(null);
   const [imageBarPos, setImageBarPos] = useState<FloatingBarPlacement | null>(null);
@@ -676,6 +686,9 @@ export function PageStage({
   const showImageBar = Boolean(
     selectedImageEl && imageToolbar && selectedId !== reframeId,
   );
+  useEffect(() => {
+    if (!showImageBar) setImageShapePreview(null);
+  }, [showImageBar]);
   const imageBarId = showImageBar ? selectedId : null;
   useEffect(() => {
     if (!imageBarId) {
@@ -745,6 +758,8 @@ export function PageStage({
           onDuplicate: () => imageToolbar.onDuplicate(selectedImageEl.id),
           onDelete: () => imageToolbar.onDelete(selectedImageEl.id),
           onToggleLock: () => imageToolbar.onToggleLock(selectedImageEl.id),
+          onPreviewShape: (preview) =>
+            setImageShapePreview(preview ? { imageId: selectedImageEl.id, ...preview } : null),
         }
       : undefined;
 
@@ -1064,6 +1079,14 @@ export function PageStage({
                 const rect = el.rect;
                 const w = rect.w * W;
                 const h = rect.h * H;
+                const renderedImage =
+                  el.image && imageShapePreview?.imageId === el.id
+                    ? {
+                        ...el.image,
+                        imageMaskId: imageShapePreview.imageMaskId,
+                        corner: imageShapePreview.corner,
+                      }
+                    : el.image;
                 const opacity =
                   el.kind === "text"
                     ? el.box?.effects?.opacity ?? 1
@@ -1272,7 +1295,7 @@ export function PageStage({
                       <KonvaShape shape={el.shape} w={w} h={h} pageHeight={H} />
                     ) : el.image ? (
                       <KonvaImageElement
-                        el={el.image}
+                        el={renderedImage ?? el.image}
                         w={w}
                         h={h}
                         pageHeight={H}
@@ -1968,6 +1991,9 @@ function ReframeOverlay({
   const assetUrl = useBlobUrl(el.kind === "asset" ? el.blobId : undefined);
   const url = el.kind === "illustration" ? illustrationUrl : assetUrl ?? undefined;
   const image = useImage(url);
+  const maskUrl = useAppConfigStore(
+    (state) => state.imageMasks.assets.find((mask) => mask.id === el.imageMaskId)?.imageUrl,
+  );
   const panDrag = useRef<{ x: number; y: number; fx: number; fy: number } | null>(null);
   const resizeDrag = useRef<{
     corner: CropCorner;
@@ -2033,7 +2059,7 @@ function ReframeOverlay({
   const fh = el.rect.h * H;
   const fl = el.rect.x * W;
   const ft = el.rect.y * H;
-  const radius = (el.corner ?? 0) * Math.min(fw, fh);
+  const radius = el.imageMaskId ? 0 : (el.corner ?? 0) * Math.min(fw, fh);
 
   const iw = image ? image.naturalWidth || image.width : 0;
   const ih = image ? image.naturalHeight || image.height : 0;
@@ -2170,7 +2196,10 @@ function ReframeOverlay({
           />
         )}
         {/* In-frame slice at full opacity. */}
-        <div className="absolute inset-0 overflow-hidden" style={{ borderRadius: "inherit" }}>
+        <div
+          className="absolute inset-0 overflow-hidden"
+          style={{ borderRadius: "inherit", ...imageMaskStyle(maskUrl) }}
+        >
           {url && (
             <img
               src={url}

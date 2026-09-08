@@ -5,6 +5,7 @@
  * (clients never write the config docs directly — the rules deny it).
  */
 import express, { type Express, type Request, type Response } from "express";
+import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { ZodError } from "zod";
 import type { AuthedRequest } from "./auth";
@@ -42,6 +43,8 @@ import {
   saveLayoutsConfig,
   addLayoutExample,
   removeLayoutExample,
+  addImageMask,
+  patchImageMask,
   saveAgeWritingConfig,
   saveStoryCraftConfig,
   saveTypographyConfig,
@@ -103,11 +106,13 @@ import {
   deletePublicObject,
   uploadArtStyleImage,
   uploadLayoutImage,
+  uploadImageMask,
   uploadBrandingAsset,
   uploadBrandingWatermark,
   uploadCatalogPhoto,
   uploadSiteImage,
 } from "./storage";
+import { compileImageMaskSvg, ImageMaskValidationError } from "./imageMasks";
 import {
   isCatalogMediaKey,
   parseCatalogMediaKey,
@@ -604,6 +609,81 @@ export function registerAdminRoutes(app: Express): void {
       }
       await deletePublicObject(storagePath);
       res.json(await removeLayoutExample(layoutId, storagePath));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // ---- Reusable image shapes ----------------------------------------------
+
+  // Upload one immutable black/white square SVG. It is sanitized and compiled
+  // to one alpha mask; user images are only masked at render time.
+  app.post("/admin/image-masks", json, async (req: Request, res: Response) => {
+    let uploadedPath: string | undefined;
+    try {
+      const { base64, mimeType, name } = (req.body ?? {}) as {
+        base64?: string;
+        mimeType?: string;
+        name?: string;
+      };
+      if (!base64 || mimeType !== "image/svg+xml") {
+        res.status(400).json({ error: { message: "Choose an SVG file." } });
+        return;
+      }
+      const cleanName = String(name ?? "").trim().slice(0, 80);
+      if (!cleanName) {
+        res.status(400).json({ error: { message: "Image shapes need a name." } });
+        return;
+      }
+      const mask = await compileImageMaskSvg(Buffer.from(base64, "base64"));
+      const id = randomUUID();
+      const uploaded = await uploadImageMask(id, mask);
+      uploadedPath = uploaded.storagePath;
+      const now = Date.now();
+      res.json(
+        await addImageMask({
+          id,
+          name: cleanName,
+          imageUrl: uploaded.publicUrl,
+          storagePath: uploaded.storagePath,
+          createdAt: now,
+          updatedAt: now,
+        }),
+      );
+    } catch (err) {
+      if (uploadedPath) await deletePublicObject(uploadedPath).catch(() => undefined);
+      if (err instanceof ImageMaskValidationError) {
+        res.status(400).json({ error: { message: err.message } });
+        return;
+      }
+      handleError(res, err);
+    }
+  });
+
+  app.patch("/admin/image-masks/:maskId", json, async (req: Request, res: Response) => {
+    try {
+      const id = String(req.params.maskId);
+      const body = (req.body ?? {}) as { name?: unknown; archived?: unknown };
+      const patch: { name?: string; archived?: boolean } = {};
+      if (body.name !== undefined) {
+        if (typeof body.name !== "string" || !body.name.trim()) {
+          res.status(400).json({ error: { message: "Image shapes need a name." } });
+          return;
+        }
+        patch.name = body.name;
+      }
+      if (body.archived !== undefined) {
+        if (typeof body.archived !== "boolean") {
+          res.status(400).json({ error: { message: "archived must be true or false." } });
+          return;
+        }
+        patch.archived = body.archived;
+      }
+      if (patch.name === undefined && patch.archived === undefined) {
+        res.status(400).json({ error: { message: "Nothing to update." } });
+        return;
+      }
+      res.json(await patchImageMask(id, patch));
     } catch (err) {
       handleError(res, err);
     }

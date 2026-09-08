@@ -25,6 +25,7 @@ import { LayoutSchematic } from "../../design/LayoutSchematic";
 import { cn } from "../../lib/cn";
 import { Section } from "./products/parts";
 import { ImageGeometryPanel } from "./ImageGeometryPanel";
+import { ImageMasksPanel } from "./ImageMasksPanel";
 import type { CapabilityOverrides } from "../../../core/config/modelCapabilities";
 
 /** Read a File as bare base64 (no data: prefix) + its mime type. */
@@ -464,6 +465,8 @@ export function LayoutsTab() {
           Save changes
         </Button>
       </div>
+
+      <ImageMasksPanel />
 
       {findings.length > 0 && (
         <Section title="Checks" hint="Run live against the book sizes you sell.">

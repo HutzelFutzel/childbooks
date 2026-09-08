@@ -351,6 +351,12 @@ export interface ImageElement {
   opacity?: number;
   /** Corner radius as a fraction of the smaller side. */
   corner?: number;
+  /**
+   * Immutable admin-catalog image-shape id. The bitmap is never rewritten:
+   * renderers apply the referenced alpha SVG after fit/zoom/focus. Mutually
+   * exclusive with `corner` in the UI; legacy documents may omit it.
+   */
+  imageMaskId?: string;
   effects?: ElementEffects;
   locked?: boolean;
   name?: string;
