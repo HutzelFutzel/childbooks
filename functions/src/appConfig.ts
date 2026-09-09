@@ -764,11 +764,14 @@ export async function saveAffiliateConfig(input: unknown): Promise<AffiliateConf
 }
 
 /**
- * Admin corrections to the shipped image-model capability table. Lives on the
- * layouts doc because that's where the model-behaviour knowledge is curated.
+ * Admin corrections to the shipped image-model capability table.
+ *
+ * New writes live with model routing. The layouts fallback keeps deployments
+ * that used the earlier storage location working until their next model save.
  */
 export async function loadModelCapabilities(): Promise<CapabilityOverrides> {
-  return (await getLayoutsConfig()).capabilities ?? {};
+  const [models, layouts] = await Promise.all([getModelConfig(), getLayoutsConfig()]);
+  return { ...(layouts.capabilities ?? {}), ...(models.capabilities ?? {}) };
 }
 
 /** Admin-managed prompt overlays used by text and image pipelines. */

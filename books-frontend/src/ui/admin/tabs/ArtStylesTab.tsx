@@ -8,7 +8,9 @@ import { resolveArtStyleText } from "../../../core/prompts/style";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { Button } from "../../components/Button";
 import { Field, Input, Textarea } from "../../components/Input";
+import { Select } from "../../components/Select";
 import { Section } from "./products/parts";
+import type { ImageBackgroundIntent } from "../../../core/config/imageGeneration";
 
 /** Read a File as bare base64 (no data: prefix) + its mime type. */
 function readBase64(file: File): Promise<{ base64: string; mimeType: string }> {
@@ -34,6 +36,8 @@ function StyleEditor({
   promptText,
   onPromptChange,
   onPromptReset,
+  background,
+  onBackgroundChange,
 }: {
   presetId: string;
   label: string;
@@ -44,6 +48,8 @@ function StyleEditor({
   promptText: string | undefined;
   onPromptChange: (text: string) => void;
   onPromptReset: () => void;
+  background: ImageBackgroundIntent;
+  onBackgroundChange: (value: ImageBackgroundIntent) => void;
 }) {
   const example = useAppConfigStore((s) => s.artStyles.examples[presetId]);
   const upload = useAppConfigStore((s) => s.uploadArtStyleImage);
@@ -79,6 +85,7 @@ function StyleEditor({
         version: 1,
         examples: {},
         labels: {},
+        generationHints: {},
         promptDescriptions: promptText?.trim()
           ? { [presetId]: { text: promptText, updatedAt: 0 } }
           : promptDescriptions,
@@ -147,6 +154,24 @@ function StyleEditor({
               className="font-mono text-xs leading-relaxed"
             />
           </Field>
+          <Field
+            label="Inset artwork background"
+            hint="Transparent is best-effort. Full-bleed pages, covers and unsupported models remain opaque."
+          >
+            <Select
+              value={background}
+              onChange={(event) =>
+                onBackgroundChange(event.target.value as ImageBackgroundIntent)
+              }
+              options={[
+                { value: "default", label: "Normal background" },
+                {
+                  value: "prefer-transparent",
+                  label: "Transparent when supported",
+                },
+              ]}
+            />
+          </Field>
           <p className="text-[11px] text-ink-400">
             Resolved preview: <span className="text-ink-500">{preview.slice(0, 140)}…</span>
           </p>
@@ -180,6 +205,9 @@ export function ArtStylesTab() {
 
   const [promptDescriptions, setPromptDescriptions] = useState(stored.promptDescriptions);
   const [labels, setLabels] = useState(stored.labels);
+  const [generationHints, setGenerationHints] = useState(
+    stored.generationHints,
+  );
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -187,8 +215,14 @@ export function ArtStylesTab() {
     if (!dirty) {
       setPromptDescriptions(stored.promptDescriptions);
       setLabels(stored.labels);
+      setGenerationHints(stored.generationHints);
     }
-  }, [stored.promptDescriptions, stored.labels, dirty]);
+  }, [
+    stored.promptDescriptions,
+    stored.labels,
+    stored.generationHints,
+    dirty,
+  ]);
 
   const onSave = async () => {
     setSaving(true);
@@ -198,6 +232,7 @@ export function ArtStylesTab() {
         examples: stored.examples,
         promptDescriptions,
         labels,
+        generationHints,
       });
       setDirty(false);
       toast.success("Art style settings saved.");
@@ -242,11 +277,32 @@ export function ArtStylesTab() {
     setDirty(true);
   };
 
+  const setBackground = (
+    presetId: string,
+    background: ImageBackgroundIntent,
+  ) => {
+    setGenerationHints((previous) => {
+      const next = { ...previous };
+      if (background === "default") delete next[presetId];
+      else next[presetId] = { ...next[presetId], background };
+      return next;
+    });
+    setDirty(true);
+  };
+
   const unchanged = useMemo(
     () =>
       JSON.stringify(promptDescriptions) === JSON.stringify(stored.promptDescriptions) &&
-      JSON.stringify(labels) === JSON.stringify(stored.labels),
-    [promptDescriptions, labels, stored.promptDescriptions, stored.labels],
+      JSON.stringify(labels) === JSON.stringify(stored.labels) &&
+      JSON.stringify(generationHints) === JSON.stringify(stored.generationHints),
+    [
+      promptDescriptions,
+      labels,
+      generationHints,
+      stored.promptDescriptions,
+      stored.labels,
+      stored.generationHints,
+    ],
   );
 
   return (
@@ -275,6 +331,12 @@ export function ArtStylesTab() {
             promptText={promptDescriptions[preset.id]?.text}
             onPromptChange={(text) => setPrompt(preset.id, text)}
             onPromptReset={() => resetPrompt(preset.id)}
+            background={
+              generationHints[preset.id]?.background ?? "default"
+            }
+            onBackgroundChange={(value) =>
+              setBackground(preset.id, value)
+            }
           />
         ))}
       </div>

@@ -41,6 +41,17 @@ interface ImagesResponse {
   data: { b64_json?: string; url?: string }[];
 }
 
+function outputMime(req: ImageRequest): string {
+  switch (req.output?.format) {
+    case "jpeg":
+      return "image/jpeg";
+    case "webp":
+      return "image/webp";
+    default:
+      return "image/png";
+  }
+}
+
 function extractJson(text: string): string {
   const trimmed = text.trim();
   // Strip ```json fences if present.
@@ -223,6 +234,12 @@ export const openaiImageProvider: ImageProvider = {
       form.append("prompt", req.prompt);
       if (req.size) form.append("size", req.size);
       if (req.quality) form.append("quality", req.quality);
+      if (req.inputFidelity) form.append("input_fidelity", req.inputFidelity);
+      if (req.output?.format) form.append("output_format", req.output.format);
+      if (req.output?.background) form.append("background", req.output.background);
+      if (req.output?.compression !== undefined) {
+        form.append("output_compression", String(req.output.compression));
+      }
       req.references.forEach((ref, i) => {
         const bytes = Uint8Array.from(atob(ref.base64), (c) => c.charCodeAt(0));
         const blob = new Blob([bytes], { type: ref.mimeType });
@@ -252,7 +269,7 @@ export const openaiImageProvider: ImageProvider = {
           provider: "openai",
         });
       }
-      return { base64: b64, mimeType: "image/png", model: req.model };
+      return { base64: b64, mimeType: outputMime(req), model: req.model };
     }
 
     const json = await requestJson<ImagesResponse>(
@@ -266,6 +283,10 @@ export const openaiImageProvider: ImageProvider = {
           model: req.model,
           prompt: req.prompt,
           size: req.size ?? "1024x1024",
+          quality: req.quality,
+          output_format: req.output?.format,
+          background: req.output?.background,
+          output_compression: req.output?.compression,
           n: 1,
         }),
       },
@@ -277,6 +298,6 @@ export const openaiImageProvider: ImageProvider = {
         provider: "openai",
       });
     }
-    return { base64: b64, mimeType: "image/png", model: req.model };
+    return { base64: b64, mimeType: outputMime(req), model: req.model };
   },
 };

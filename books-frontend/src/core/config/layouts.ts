@@ -19,6 +19,10 @@ import type { BookSize } from "./options";
 import type { ImageTier, ImageSlotRef } from "./modelConfig";
 import type { CompositionMode, PageSide } from "../book/layouts";
 import { capabilityOverridesSchema, type CapabilityOverrides } from "./modelCapabilities";
+import {
+  imageGenerationHintsSchema,
+  type ImageGenerationHints,
+} from "./imageGeneration";
 
 /**
  * A showcase image for the layout picker.
@@ -65,6 +69,8 @@ export interface LayoutOverride {
   slots?: Record<string, LayoutSlotOverride>;
   /** Pin this layout to a specific model, falling back to the action binding. */
   imageBinding?: Partial<Record<ImageTier, ImageSlotRef>>;
+  /** Best-effort provider-neutral output preferences for this layout. */
+  imageGeneration?: ImageGenerationHints;
   examples?: LayoutExample[];
 }
 
@@ -173,6 +179,7 @@ const layoutOverrideSchema = z.object({
     )
     .optional(),
   imageBinding: z.record(z.enum(["quick", "premium"]), imageSlotRefSchema).optional(),
+  imageGeneration: imageGenerationHintsSchema.optional(),
   examples: z.array(layoutExampleSchema).max(24).optional(),
 });
 

@@ -12,6 +12,7 @@
 import { z } from "zod";
 import type { Modality, ModelTier, ProviderId } from "./options";
 import type { ImageOutputCost, ModelCost } from "./modelCosts";
+import type { ImageModelCapabilities } from "./modelCapabilities";
 
 export const costSuggestionSchema = z.object({
   /** False when the model id can't be found in the excerpt. */
@@ -88,6 +89,10 @@ export interface ModelResolutionResult extends CostSuggestionResult {
   modelId: string;
   modality: Modality;
   tier: ModelTier;
+  /** Effective shipped profile for image models; absent for text models. */
+  imageCapabilities?: ImageModelCapabilities;
+  /** Raw methods reported by the provider's model-list endpoint, when present. */
+  reportedCapabilities?: string[];
 }
 
 /** Convert the flat extraction into the canonical `ModelCost`. */

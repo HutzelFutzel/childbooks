@@ -7,6 +7,10 @@
  * swatch otherwise.
  */
 import { z } from "zod";
+import {
+  imageGenerationHintsSchema,
+  type ImageGenerationHints,
+} from "./imageGeneration";
 
 export interface ArtStyleExample {
   /** Public URL of the uploaded example image. */
@@ -34,10 +38,18 @@ export interface ArtStylesConfig {
   promptDescriptions: Record<string, ArtStylePromptDescription>;
   /** Admin overrides for the display title of a preset. */
   labels: Record<string, ArtStyleLabel>;
+  /** Provider-neutral output preferences, keyed by preset id. */
+  generationHints: Record<string, ImageGenerationHints>;
 }
 
 export function createDefaultArtStylesConfig(): ArtStylesConfig {
-  return { version: 1, examples: {}, promptDescriptions: {}, labels: {} };
+  return {
+    version: 1,
+    examples: {},
+    promptDescriptions: {},
+    labels: {},
+    generationHints: {},
+  };
 }
 
 export function normalizeArtStylesConfig(input: unknown): ArtStylesConfig {
@@ -47,6 +59,7 @@ export function normalizeArtStylesConfig(input: unknown): ArtStylesConfig {
     examples: stored.examples ?? {},
     promptDescriptions: stored.promptDescriptions ?? {},
     labels: stored.labels ?? {},
+    generationHints: stored.generationHints ?? {},
   };
 }
 
@@ -75,6 +88,10 @@ export const artStylesConfigSchema = z.object({
         updatedAt: z.number(),
       }),
     )
+    .optional()
+    .default({}),
+  generationHints: z
+    .record(z.string(), imageGenerationHintsSchema)
     .optional()
     .default({}),
 });

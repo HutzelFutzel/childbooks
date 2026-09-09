@@ -12,6 +12,7 @@ import {
 } from "../config/modelCapabilities";
 import { rectAspect, surfaceAspect } from "../book/grid";
 import type {
+  ImageRequest,
   ImageResult,
   ProviderCredentials,
   ReferenceImage,
@@ -155,6 +156,8 @@ export interface BuildIllustrationPromptInput {
   layoutPlan?: LayoutPlan | null;
   /** When set, a weak model skips the painted calm treatment in the prompt. */
   capabilities?: ImageModelCapabilities | null;
+  /** Native alpha was resolved for this inset-art request. */
+  transparentBackground?: boolean;
 }
 
 export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): string {
@@ -182,6 +185,7 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
     prompts,
     layoutPlan,
     capabilities,
+    transparentBackground = false,
   } = input;
   const styleText = resolveArtStyleText(config.artStyle, prompts);
 
@@ -226,7 +230,7 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
   // instruction entirely, so it suppresses these.
   const facts = layoutPlan
     ? layoutPromptFacts(layoutPlan, renderAspect(spread.kind, config), {
-        negativeSpaceControl: capabilities?.negativeSpaceControl,
+        negativeSpaceControl: capabilities?.traits.negativeSpaceControl,
       })
     : null;
   const pageNote = spread.layoutNote.trim();
@@ -344,7 +348,20 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
       // gated the same way so split art is not told to clear the outer edges.
       layoutCalmBand: Boolean(facts?.hasCalmBand) && !bakeTextActive,
       hasRegionTreatment: Boolean(facts?.treatmentInstruction) && !bakeTextActive,
-      layoutInsetArt: Boolean(facts?.isInsetArt) && !bakeTextActive,
+      layoutInsetOpaque:
+        Boolean(facts?.isInsetArt) &&
+        !bakeTextActive &&
+        !transparentBackground,
+      // Backward-compatible alias for stored prompt overrides created before
+      // transparent inset artwork introduced the two explicit branches.
+      layoutInsetArt:
+        Boolean(facts?.isInsetArt) &&
+        !bakeTextActive &&
+        !transparentBackground,
+      layoutInsetTransparent:
+        Boolean(facts?.isInsetArt) &&
+        !bakeTextActive &&
+        transparentBackground,
       bleedSpread: spread.kind === "spread" && !facts?.isInsetArt,
       bleedSingle: spread.kind !== "spread" && !facts?.isInsetArt,
       bakeText: bakeTextActive,
@@ -470,13 +487,29 @@ export async function generateIllustrationImage(input: {
   providerId: Parameters<typeof getImageProvider>[0];
   references?: ReferenceImage[];
   mask?: ReferenceImage;
-  quality?: "low" | "medium" | "high" | "auto";
+  quality?: ImageRequest["quality"];
+  resolution?: string;
+  inputFidelity?: ImageRequest["inputFidelity"];
+  output?: ImageRequest["output"];
   /** Cover typography is being rendered into the art — keep text allowed. */
   allowText?: boolean;
   signal?: AbortSignal;
 }): Promise<ImageResult> {
-  const { prompt, size, creds, model, providerId, references, mask, quality, allowText, signal } =
-    input;
+  const {
+    prompt,
+    size,
+    creds,
+    model,
+    providerId,
+    references,
+    mask,
+    quality,
+    resolution,
+    inputFidelity,
+    output,
+    allowText,
+    signal,
+  } = input;
   const provider = getImageProvider(providerId);
   // Image calls are the slow, user-visible ones: one retry only, so a stalled
   // provider fails the render in bounded time instead of silently burning
@@ -490,6 +523,9 @@ export async function generateIllustrationImage(input: {
         references,
         mask,
         quality,
+        resolution,
+        inputFidelity,
+        output,
         allowText,
         signal,
       }),

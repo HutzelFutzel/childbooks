@@ -24,9 +24,7 @@ import { Toggle } from "../../components/Toggle";
 import { LayoutSchematic } from "../../design/LayoutSchematic";
 import { cn } from "../../lib/cn";
 import { Section } from "./products/parts";
-import { ImageGeometryPanel } from "./ImageGeometryPanel";
 import { ImageMasksPanel } from "./ImageMasksPanel";
-import type { CapabilityOverrides } from "../../../core/config/modelCapabilities";
 
 /** Read a File as bare base64 (no data: prefix) + its mime type. */
 function readBase64(file: File): Promise<{ base64: string; mimeType: string }> {
@@ -341,6 +339,41 @@ function LayoutEditor({
           </div>
         </Field>
 
+        <Field
+          label="Inset artwork background"
+          hint="Used only when this layout places art beside the text. Full-bleed pages and covers remain opaque."
+        >
+          <Select
+            value={override.imageGeneration?.background ?? "default"}
+            onChange={(event) => {
+              const background = event.target.value;
+              const next = { ...override };
+              if (background === "default") {
+                const imageGeneration = { ...next.imageGeneration };
+                delete imageGeneration.background;
+                if (Object.keys(imageGeneration).length > 0) {
+                  next.imageGeneration = imageGeneration;
+                } else {
+                  delete next.imageGeneration;
+                }
+              } else {
+                next.imageGeneration = {
+                  ...next.imageGeneration,
+                  background: "prefer-transparent",
+                };
+              }
+              onChange(next);
+            }}
+            options={[
+              { value: "default", label: "Inherit from art style" },
+              {
+                value: "prefer-transparent",
+                label: "Transparent when supported",
+              },
+            ]}
+          />
+        </Field>
+
         {slots.length > 0 && (
           <Field
             label="Text regions"
@@ -417,16 +450,6 @@ export function LayoutsTab() {
       ...prev,
       overrides: { ...prev.overrides, [layoutId]: override },
     }));
-    setDirty(true);
-  };
-
-  const setCapabilities = (capabilities: CapabilityOverrides | undefined) => {
-    setDraft((prev) => {
-      const next = { ...prev };
-      if (capabilities) next.capabilities = capabilities;
-      else delete next.capabilities;
-      return next;
-    });
     setDirty(true);
   };
 
@@ -537,8 +560,6 @@ export function LayoutsTab() {
           </Field>
         </div>
       </Section>
-
-      <ImageGeometryPanel config={draft} onChange={setCapabilities} />
 
       <div className="space-y-3">
         {allBookLayouts().map((layout) => (

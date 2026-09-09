@@ -4,6 +4,7 @@
  */
 import type { z } from "zod";
 import type { ProviderId } from "../config/options";
+import type { ImageFormat, ImageQuality } from "../config/modelCapabilities";
 
 export interface ProviderCredentials {
   apiKey: string;
@@ -122,7 +123,18 @@ export interface ImageRequest {
    * used for in-place region edits where final fidelity matters less. Providers
    * that don't support it (e.g. Gemini) ignore it.
    */
-  quality?: "low" | "medium" | "high" | "auto";
+  quality?: ImageQuality;
+  /** Provider-named output resolution tier, e.g. Gemini's "2K". */
+  resolution?: string;
+  /** How strongly an edit should preserve supplied image details. */
+  inputFidelity?: "low" | "high";
+  /** Resolved output controls. Unsupported best-effort intent is removed earlier. */
+  output?: {
+    format?: ImageFormat;
+    background?: "opaque" | "transparent" | "auto";
+    /** JPEG/WebP compression quality, 0..100. */
+    compression?: number;
+  };
   /** Reference images for character/place consistency. */
   references?: ReferenceImage[];
   /**

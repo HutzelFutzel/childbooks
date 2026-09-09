@@ -282,7 +282,14 @@ export const googleImageProvider: ImageProvider = {
           contents: [{ role: "user", parts }],
           generationConfig: {
             responseModalities: ["IMAGE"],
-            ...(aspectRatio ? { imageConfig: { aspectRatio } } : {}),
+            ...(aspectRatio || req.resolution
+              ? {
+                  imageConfig: {
+                    ...(aspectRatio ? { aspectRatio } : {}),
+                    ...(req.resolution ? { imageSize: req.resolution } : {}),
+                  },
+                }
+              : {}),
           },
         }),
       },

@@ -42,7 +42,12 @@ import "./providerHttp";
 import { serverConfig } from "./config";
 import { compositeMaskedRegion, downscaleReference } from "./imaging";
 import { backendPipelineEnv } from "./pipelineEnv";
-import { getLayoutsConfig, loadPromptContext, recordLatencySamples } from "./appConfig";
+import {
+  getLayoutsConfig,
+  loadModelCapabilities,
+  loadPromptContext,
+  recordLatencySamples,
+} from "./appConfig";
 import { requireTier, resolveImageModels, resolveTextAction } from "./modelResolve";
 import { withUsage, type CallStats } from "./usage";
 import { meterAndSettle, runKindOf } from "./actionRun";
@@ -54,6 +59,7 @@ import {
   sanitizeImageSize,
   type CapabilityOverrides,
 } from "../../books-frontend/src/core/config/modelCapabilities";
+import { resolveImageGenerationOptions } from "../../books-frontend/src/core/config/imageGeneration";
 import { ALL_SECRETS } from "./secrets";
 import { downloadBlob, ensureAdmin, uploadBlob } from "./storage";
 import { deleteLikenessPhotoForSubject } from "./likeness";
@@ -702,7 +708,12 @@ async function runImageTask(args: {
   taskId: string;
   startedAt: number;
   quotedSparks?: number;
-}): Promise<{ blobId: string; mimeType: string; stats: CallStats }> {
+}): Promise<{
+  blobId: string;
+  mimeType: string;
+  stats: CallStats;
+  generation: ReturnType<typeof resolveImageGenerationOptions>;
+}> {
   const { uid, req, model, tier, action, projectId, loadStyle, signal, jobId, taskId, startedAt } =
     args;
   const canShrink = !req.maskBlobId;
@@ -737,6 +748,11 @@ async function runImageTask(args: {
     mask = { base64: bufToBase64(buf), mimeType: "image/png" };
   }
 
+  const capabilities = capabilitiesFor(model, args.caps);
+  const generation = resolveImageGenerationOptions(capabilities, {
+    ...(req.generation ?? {}),
+    ...(req.quality ? { quality: req.quality } : {}),
+  });
   const imageReq: ImageRequest = {
     model: model.id,
     prompt: req.prompt,
@@ -745,10 +761,20 @@ async function runImageTask(args: {
     // resolved here. A task that named a size this model can't produce, or an
     // 8 MP one (image tokens scale with area), lands on the same canvas the
     // pipeline would have chosen itself.
-    size: sanitizeImageSize(capabilitiesFor(model, args.caps), req.size),
-    quality: req.quality,
-    references: references.length ? references : undefined,
-    mask,
+    size: sanitizeImageSize(capabilities, req.size),
+    quality: generation.applied.quality,
+    output:
+      generation.applied.background || generation.applied.format
+        ? {
+            background: generation.applied.background,
+            format: generation.applied.format,
+          }
+        : undefined,
+    references:
+      capabilities.operations.referenceEditing && references.length
+        ? references.slice(0, capabilities.inputs.maxReferenceImages)
+        : undefined,
+    mask: capabilities.operations.maskEditing ? mask : undefined,
     signal,
   };
 
@@ -794,7 +820,7 @@ async function runImageTask(args: {
   }
 
   const blobId = await uploadBlob(uid, finalBuf, mimeType);
-  return { blobId, mimeType, stats };
+  return { blobId, mimeType, stats, generation };
 }
 
 /** Fold a task's already-rendered anchor dependencies into a snapshot. */
@@ -862,12 +888,13 @@ async function renderTask(
     };
   }
 
-  const [models, prompts, layouts] = await Promise.all([
+  const [models, prompts, layouts, capabilities] = await Promise.all([
     resolveImageModels(modelRoleFor(job.kind), tier),
     loadPromptContext(),
     getLayoutsConfig(),
+    loadModelCapabilities(),
   ]);
-  const env = backendPipelineEnv(uid, models, prompts, layouts.capabilities, layouts);
+  const env = backendPipelineEnv(uid, models, prompts, capabilities, layouts);
   const startedAt = Date.now();
 
   if (job.kind === "image") {
@@ -885,11 +912,11 @@ async function renderTask(
       }
       return hit;
     };
-    const { blobId, mimeType, stats } = await runImageTask({
+    const { blobId, mimeType, stats, generation } = await runImageTask({
       uid,
       req,
       model: models.imageModel,
-      caps: layouts.capabilities ?? {},
+      caps: capabilities,
       tier,
       action,
       projectId,
@@ -901,7 +928,11 @@ async function renderTask(
       quotedSparks: quotedFor(job, action, taskQuoteKind(task)),
     });
     return {
-      result: stampImageProvenance({ blobId, mimeType }, tier, models.imageModel),
+      result: stampImageProvenance(
+        { blobId, mimeType, generation },
+        tier,
+        models.imageModel,
+      ),
       stats: { ms: Date.now() - startedAt, ...stats },
     };
   }

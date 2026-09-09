@@ -56,6 +56,7 @@ import { resolveImageModelClient, resolveModelsClient } from "../platform/aiReso
 import { deleteLikenessPhoto } from "../platform/likeness";
 import { CUSTOMER_IMAGE_TIER, type ImageTier } from "../core/config/modelConfig";
 import { capabilitiesFor } from "../core/config/modelCapabilities";
+import { mergeImageGenerationHints } from "../core/config/imageGeneration";
 import { useProjectsStore } from "./projectsStore";
 import { useSettingsStore } from "./settingsStore";
 import { useAppConfigStore } from "./appConfigStore";
@@ -566,7 +567,9 @@ export function buildIllustrationTask(
   // example image into the book.
   const artStyles = useAppConfigStore.getState().artStyles;
 
-  const layoutsConfig = useAppConfigStore.getState().layouts;
+  const appConfig = useAppConfigStore.getState();
+  const layoutsConfig = appConfig.layouts;
+  const modelCapabilities = appConfig.modelConfig.capabilities;
 
   // The same plan the interactive path and the design editor use, so a bulk
   // render can't compose its pages differently from a single one.
@@ -587,7 +590,7 @@ export function buildIllustrationTask(
     coverSubtitle: spread.coverSubtitle,
     coverAuthor: spread.coverAuthor,
     layoutPlan,
-    capabilities: capabilitiesFor(imageModel, layoutsConfig.capabilities),
+    capabilities: capabilitiesFor(imageModel, modelCapabilities),
     prompts: {
       artStyles,
       templates: useAppConfigStore.getState().prompts,
@@ -605,9 +608,20 @@ export function buildIllustrationTask(
       spread.kind,
       project.config,
       layoutPlan,
-      capabilitiesFor(imageModel, useAppConfigStore.getState().layouts.capabilities),
+      capabilitiesFor(imageModel, modelCapabilities),
     ),
     references: references.length ? references : undefined,
+    generation:
+      layoutPlan?.mode === "inset-art"
+        ? mergeImageGenerationHints(
+            project.config.artStyle.presetId
+              ? artStyles.generationHints[
+                  project.config.artStyle.presetId
+                ]
+              : undefined,
+            layoutsConfig.overrides[layoutPlan.layoutId]?.imageGeneration,
+          )
+        : undefined,
   };
 
   return {
@@ -633,6 +647,7 @@ export async function applyIllustrationResult(
     mimeType: string;
     imageTier?: IllustrationImage["imageTier"];
     imageModel?: IllustrationImage["imageModel"];
+    generation?: IllustrationImage["generation"];
   },
   prompt: string,
   referenceUses?: ReferenceUse[],
@@ -647,6 +662,7 @@ export async function applyIllustrationResult(
     prompt,
     ...(result.imageTier ? { imageTier: result.imageTier } : {}),
     ...(result.imageModel ? { imageModel: result.imageModel } : {}),
+    ...(result.generation ? { generation: result.generation } : {}),
   };
   const tree = project.illustrations?.[spread.id];
   const versions = tree

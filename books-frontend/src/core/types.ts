@@ -446,6 +446,8 @@ export interface IllustrationImage extends AnchorImage {
   references?: ReferenceUse[];
   /** Text strategy this image was generated for. */
   textMode?: TextMode;
+  /** Output preferences requested by the surface and applied by the model. */
+  generation?: import("./config/imageGeneration").ResolvedImageGenerationOptions;
   /**
    * Cover-only: the title/subtitle/author actually rendered INTO this image
    * (when `textMode === "in-image"`). Lets the studio warn when the book's

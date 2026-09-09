@@ -164,6 +164,7 @@ import { apiKeyFor, resolveSuggestionModel } from "./modelResolve";
 import { recordUsage, withUsage } from "./usage";
 import { getTextProvider } from "../../books-frontend/src/core/providers";
 import type { ProviderId } from "../../books-frontend/src/core/config/options";
+import { capabilitiesFor } from "../../books-frontend/src/core/config/modelCapabilities";
 import {
   activeModels,
   modelConfigSchema,
@@ -409,6 +410,17 @@ async function resolveLiveModel(
       modelId: match.model.id,
       modality: classified.modality,
       tier: classified.tier,
+      ...(classified.modality === "image"
+        ? {
+            imageCapabilities: capabilitiesFor({
+              provider: match.provider,
+              id: match.model.id,
+            }),
+            ...(match.model.capabilities
+              ? { reportedCapabilities: match.model.capabilities }
+              : {}),
+          }
+        : {}),
     },
   };
 }

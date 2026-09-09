@@ -407,5 +407,5 @@ export function effectiveTreatmentId(
   const base = getTreatment(override ?? slot?.treatmentId);
   const caps = input?.capabilities;
   if (!caps) return base.id;
-  return resolveTreatmentForModel(base, caps.negativeSpaceControl).id;
+  return resolveTreatmentForModel(base, caps.traits.negativeSpaceControl).id;
 }

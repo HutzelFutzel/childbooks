@@ -52,7 +52,11 @@ import {
 import { stampImageProvenance } from "../../books-frontend/src/core/pipeline/imageProvenance";
 import { IntentAmbiguousError } from "../../books-frontend/src/core/pipeline/intentResolve";
 import { downloadBlobBase64 } from "./storage";
-import { getLayoutsConfig, loadPromptContext } from "./appConfig";
+import {
+  getLayoutsConfig,
+  loadModelCapabilities,
+  loadPromptContext,
+} from "./appConfig";
 import { latencyKindOf } from "./latency";
 import { containedAnchorsFor } from "../../books-frontend/src/core/book/anchorGraph";
 import { effectiveAnchorIds } from "../../books-frontend/src/core/book/anchorRefs";
@@ -599,12 +603,13 @@ export function registerAiRoutes(app: Express): void {
         noNegativeBuffer: guest,
         kind: anchorIsEdit ? "edit" : "fresh",
       });
-      const [models, prompts, layouts] = await Promise.all([
+      const [models, prompts, layouts, capabilities] = await Promise.all([
         resolveImageModels("anchorImage", tier),
         loadPromptContext(),
         getLayoutsConfig(),
+        loadModelCapabilities(),
       ]);
-      const env = backendPipelineEnv(req.uid!, models, prompts, layouts.capabilities, layouts);
+      const env = backendPipelineEnv(req.uid!, models, prompts, capabilities, layouts);
       const startedAt = Date.now();
       const { value, events, stats } = await withUsage(() =>
         renderAnchor(project, anchor, { ...(options ?? {}), signal: requestDeadline() }, env),
@@ -675,12 +680,13 @@ export function registerAiRoutes(app: Express): void {
         noNegativeBuffer: guest,
         kind: editKind,
       });
-      const [models, prompts, layouts] = await Promise.all([
+      const [models, prompts, layouts, capabilities] = await Promise.all([
         resolveImageModels(cover ? "coverIllustration" : "pageIllustration", tier),
         loadPromptContext(),
         getLayoutsConfig(),
+        loadModelCapabilities(),
       ]);
-      const env = backendPipelineEnv(req.uid!, models, prompts, layouts.capabilities, layouts);
+      const env = backendPipelineEnv(req.uid!, models, prompts, capabilities, layouts);
       const startedAt = Date.now();
       const { value, events, stats } = await withUsage(async () => {
         const signal = requestDeadline();

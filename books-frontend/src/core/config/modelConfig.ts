@@ -18,6 +18,10 @@ import type { ModelSelection } from "../types";
 import { FALLBACK_MODELS } from "../models/catalog";
 import type { ImageActionId, TextActionId } from "../ai/actions";
 import { costKey, type ModelCostTable } from "./modelCosts";
+import {
+  capabilityOverridesSchema,
+  type CapabilityOverrides,
+} from "./modelCapabilities";
 
 export type TextSpeed = "ultrafast" | "fast" | "slow";
 export type ImageSpeed = "fast" | "slow";
@@ -139,6 +143,8 @@ export interface ModelConfig {
   imageTierLabels: Record<ImageTier, string>;
   /** Legacy/admin presentation metadata retained for config compatibility. */
   imageTierUi: Record<ImageTier, ImageTierUiCopy>;
+  /** Validated corrections layered over the shipped image-model profiles. */
+  capabilities?: CapabilityOverrides;
 }
 
 /** Look up a model id in a provider's catalog fallback for a given modality+economy. */
@@ -204,6 +210,7 @@ export function createDefaultModelConfig(): ModelConfig {
       quick: { ...DEFAULT_IMAGE_TIER_UI.quick },
       premium: { ...DEFAULT_IMAGE_TIER_UI.premium },
     },
+    capabilities: {},
   };
 }
 
@@ -441,6 +448,7 @@ export function normalizeModelConfig(input: unknown): ModelConfig {
             : def.imageTierUi.premium.generatedImageNotice,
       },
     },
+    capabilities: stored.capabilities ?? {},
   };
 }
 
@@ -490,4 +498,5 @@ export const modelConfigSchema = z.object({
       }),
     )
     .optional(),
+  capabilities: capabilityOverridesSchema.optional(),
 });

@@ -80,6 +80,7 @@ import {
   MAX_ASPECT_MISMATCH,
   type ImageModelCapabilities,
 } from "../books-frontend/src/core/config/modelCapabilities";
+import { resolveImageGenerationOptions } from "../books-frontend/src/core/config/imageGeneration";
 import { bookSizeFromAspect } from "../books-frontend/src/core/config/options";
 import { defaultTemplate, PROMPT_ACTIONS } from "../books-frontend/src/core/prompts/registry";
 import {
@@ -1203,6 +1204,80 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
       { label: "fixed", caps: capabilitiesFor({ provider: "openai", id: "gpt-image-1" }) },
       { label: "buckets", caps: capabilitiesFor({ provider: "google", id: "gemini-3-pro-image" }) },
     ];
+
+    const flare = capabilitiesFor({
+      provider: "openai",
+      id: "gpt-image-2.5-flare-2026-09-08",
+    });
+    const sunburst = capabilitiesFor({
+      provider: "openai",
+      id: "gpt-image-2.5-sunburst",
+    });
+    const nanoPro = capabilitiesFor({
+      provider: "google",
+      id: "gemini-3-pro-image",
+    });
+    check(
+      "dated GPT Image 2.5 Flare snapshots inherit the Flare profile",
+      flare.profile === "openai-images-v2.5-flare" &&
+        flare.sizing.mode === "arbitrary",
+    );
+    check(
+      "GPT Image 2.5 supports the extended quality ladder",
+      flare.outputs.qualityLevels.includes("max") &&
+        sunburst.outputs.qualityLevels.includes("xhigh"),
+    );
+    check(
+      "GPT Image 2.5 exposes native transparency",
+      flare.outputs.backgrounds.includes("transparent"),
+    );
+    check(
+      "profile matching is anchored rather than a model-id substring match",
+      capabilitiesFor({
+        provider: "openai",
+        id: "custom-gpt-image-2-wrapper",
+      }).profile === "openai-images-default",
+    );
+    check(
+      "Nano Banana Pro keeps transparency out of its effective profile",
+      !nanoPro.outputs.backgrounds.includes("transparent"),
+    );
+    check(
+      "Nano Banana Pro carries role-aware reference limits",
+      nanoPro.inputs.maxReferenceImages === 14 &&
+        nanoPro.inputs.roleLimits?.subject === 5,
+    );
+
+    const transparentOpenAI = resolveImageGenerationOptions(flare, {
+      background: "prefer-transparent",
+    });
+    const transparentGoogle = resolveImageGenerationOptions(nanoPro, {
+      background: "prefer-transparent",
+    });
+    check(
+      "best-effort transparency becomes a PNG option on supported models",
+      transparentOpenAI.applied.background === "transparent" &&
+        transparentOpenAI.applied.format === "png",
+    );
+    check(
+      "best-effort transparency is omitted on unsupported models",
+      transparentGoogle.applied.background === undefined &&
+        transparentGoogle.skipped.includes("transparent-background"),
+    );
+    const disabledTransparency = capabilitiesFor(
+      { provider: "openai", id: "gpt-image-2.5-flare" },
+      {
+        [capabilityKey("openai", "gpt-image-2.5-flare")]: {
+          outputs: { backgrounds: ["opaque"] },
+        },
+      },
+    );
+    check(
+      "an exact admin capability correction reaches request resolution",
+      resolveImageGenerationOptions(disabledTransparency, {
+        background: "prefer-transparent",
+      }).skipped.includes("transparent-background"),
+    );
 
     for (const product of LULU_BOOK_PRODUCTS) {
       const config = { productSku: product.sku, bookSize: bookSizeFromAspect(product.aspect) };

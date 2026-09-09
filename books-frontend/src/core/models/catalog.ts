@@ -56,7 +56,7 @@ const EXCLUDE_KEYWORDS = [
   "learnlm",
 ];
 
-const ECONOMY_KEYWORDS = ["mini", "nano", "lite", "flash"];
+const ECONOMY_KEYWORDS = ["mini", "nano", "lite", "flash", "flare"];
 
 function hasExcluded(id: string): boolean {
   return EXCLUDE_KEYWORDS.some((k) => id.includes(k));
@@ -115,8 +115,8 @@ export const FALLBACK_MODELS: Record<ProviderId, ModelInfo[]> = {
   openai: [
     { provider: "openai", id: "gpt-5.5", displayName: "GPT-5.5", modality: "text", tier: "premium", discovered: false },
     { provider: "openai", id: "gpt-5.4-mini", displayName: "GPT-5.4 Mini", modality: "text", tier: "economy", discovered: false },
-    { provider: "openai", id: "gpt-image-2", displayName: "GPT Image 2", modality: "image", tier: "premium", supportsReferenceImages: true, discovered: false },
-    { provider: "openai", id: "gpt-image-2-mini", displayName: "GPT Image 2 Mini", modality: "image", tier: "economy", supportsReferenceImages: true, discovered: false },
+    { provider: "openai", id: "gpt-image-2.5-sunburst", displayName: "GPT Image 2.5 Sunburst", modality: "image", tier: "premium", supportsReferenceImages: true, discovered: false },
+    { provider: "openai", id: "gpt-image-2.5-flare", displayName: "GPT Image 2.5 Flare", modality: "image", tier: "economy", supportsReferenceImages: true, discovered: false },
   ],
   google: [
     { provider: "google", id: "gemini-3.1-pro", displayName: "Gemini 3.1 Pro", modality: "text", tier: "premium", discovered: false },

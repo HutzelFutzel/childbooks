@@ -31,6 +31,7 @@ import {
 } from "./illustrationRun";
 import { resolveMentionedAnchors } from "./intentResolve";
 import { countSheetPanels, locateEmbeddedObsolete, type SubjectBox } from "./localize";
+import { capabilitiesFor } from "../config/modelCapabilities";
 
 export interface AnchorRunOptions {
   /** Extra revision instruction, e.g. "make her smile". */
@@ -148,12 +149,20 @@ export async function renderAnchor(
   // Anchors normally use a faster/cheaper dedicated model. But when a
   // place/object embeds other anchors (e.g. a room containing a specific bed),
   // the embedded subjects must stay pixel-consistent with their own reference
-  // sheets — which needs higher fidelity — so prefer GPT Image if available.
+  // sheets — which needs higher fidelity — so prefer the production model when
+  // its profile says it can bind references strongly.
   const hasEmbedded = anchor.type !== "character" && containedAnchors.length > 0;
+  const productionCaps = capabilitiesFor(
+    env.models.imageModel,
+    env.modelCapabilities,
+  );
   const imageModel =
-    hasEmbedded && env.models.imageModel.provider === "openai"
+    hasEmbedded &&
+    productionCaps.operations.referenceEditing &&
+    productionCaps.traits.referenceConsistency === "strong"
       ? env.models.imageModel
       : env.models.anchorImageModel;
+  const imageCapabilities = capabilitiesFor(imageModel, env.modelCapabilities);
   const key = env.apiKeyFor(imageModel.provider);
 
   // Contained children are drawn INTO this sheet and must match their own
@@ -262,7 +271,8 @@ export async function renderAnchor(
   // We still lead with the anchor's own image when present so an edit is framed
   // as a change to that sheet. Gemini composes labeled references regardless of
   // order.
-  const isOpenAI = imageModel.provider === "openai";
+  const usesOrderedReferences =
+    imageCapabilities.inputs.referenceBinding === "ordered";
   const editFromImage = isEdit && Boolean(subjectRef);
   let references: ReferenceImage[];
   if (restyle) {
@@ -270,7 +280,7 @@ export async function renderAnchor(
     // drawn into it, and re-sending their sheets invites the model to add a
     // second copy — a restyle must not change what is in the picture.
     references = [subjectRef!];
-  } else if (editFromImage || isOpenAI) {
+  } else if (editFromImage || usesOrderedReferences) {
     references = [
       ...(subjectRef ? [subjectRef] : []),
       ...(likenessRef ? [likenessRef] : []),
@@ -332,7 +342,13 @@ export async function renderAnchor(
       creds: { apiKey: key },
       model: imageModel.id,
       providerId: imageModel.provider,
-      references: references.length ? references : undefined,
+      references:
+        imageCapabilities.operations.referenceEditing && references.length
+          ? references.slice(
+              0,
+              imageCapabilities.inputs.maxReferenceImages,
+            )
+          : undefined,
       signal: options.signal,
       // Cast references have one landscape output contract, including restyles
       // of legacy square/portrait sheets.
@@ -395,7 +411,14 @@ export async function renderAnchor(
             creds: { apiKey: key },
             model: imageModel.id,
             providerId: imageModel.provider,
-            references: references.length ? references : undefined,
+            references:
+              imageCapabilities.operations.referenceEditing &&
+              references.length
+                ? references.slice(
+                    0,
+                    imageCapabilities.inputs.maxReferenceImages,
+                  )
+                : undefined,
             signal: options.signal,
             size: spec.size,
           }),
@@ -409,10 +432,13 @@ export async function renderAnchor(
   // Embedded de-dup on reference sheets: when this place/object contains other
   // anchors, erase generic default instances (e.g. a default bed) that conflict
   // with the anchored embedded design. Respects multi-angle panel layout.
-  // OpenAI only: its edits endpoint honors a real inpainting mask. Gemini
-  // regenerates the full frame, so pasting a rectangle back produces seams —
-  // worse than leaving the sheet untouched.
-  if (hasEmbedded && containedAnchors.length > 0 && imageModel.provider === "openai") {
+  // Only mask-capable profiles can repair in place. Models that regenerate the
+  // full frame would leave visible seams after the region is composited back.
+  if (
+    hasEmbedded &&
+    containedAnchors.length > 0 &&
+    imageCapabilities.operations.maskEditing
+  ) {
     const bindModel = env.models.bindingModel ?? env.models.textModel;
     try {
       const bindKey = env.apiKeyFor(bindModel.provider);

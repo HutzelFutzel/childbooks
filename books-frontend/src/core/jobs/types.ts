@@ -14,6 +14,11 @@ import type { ResolvedModels } from "../models/registry";
 import type { AnchorRender } from "../pipeline/anchorRun";
 import type { IllustrationRender } from "../pipeline/illustrationRun";
 import type { ModelSelection, Project, ReferenceUse, ScreenplayDoc } from "../types";
+import type { ImageQuality } from "../config/modelCapabilities";
+import type {
+  ImageGenerationHints,
+  ResolvedImageGenerationOptions,
+} from "../config/imageGeneration";
 
 export type JobStatus = "pending" | "running" | "done" | "error";
 
@@ -86,7 +91,9 @@ export interface ImageRenderRequest {
   model: string;
   prompt: string;
   size?: string;
-  quality?: "low" | "medium" | "high" | "auto";
+  quality?: ImageQuality;
+  /** Surface-level preference; the worker intersects it with its resolved model. */
+  generation?: ImageGenerationHints;
   references?: BlobRef[];
   /**
    * Art-style preset whose example image should be prepended as a leading
@@ -262,6 +269,7 @@ export type TaskResult =
       /** Quality tier + model stamped by the worker (optional on legacy results). */
       imageTier?: ImageTier;
       imageModel?: ModelSelection;
+      generation?: ResolvedImageGenerationOptions;
     } // image
   | IllustrationRender // refresh
   | AnchorRender // anchors

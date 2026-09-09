@@ -55,6 +55,11 @@ import type { CompositionMode, LayoutPlan, PageSide } from "../book/layouts";
 import { planPageLayout } from "../book/pageLayout";
 import { capabilitiesFor, type CapabilityOverrides } from "../config/modelCapabilities";
 import {
+  mergeImageGenerationHints,
+  resolveImageGenerationOptions,
+  type ResolvedImageGenerationOptions,
+} from "../config/imageGeneration";
+import {
   canonicalEditText,
   IntentAmbiguousError,
   isFullyStructured,
@@ -243,6 +248,8 @@ export interface IllustrationRender {
   imageTier?: IllustrationImage["imageTier"];
   /** Concrete model used for this render (stamped at the host boundary). */
   imageModel?: IllustrationImage["imageModel"];
+  /** Best-effort output preferences and what the selected model applied. */
+  generation?: ResolvedImageGenerationOptions;
 }
 
 /** Wrap a render into a (new or extended) version tree. Pure. */
@@ -269,6 +276,7 @@ export function applyIllustrationRender(
     ...(render.artStyleKey ? { artStyleKey: render.artStyleKey } : {}),
     ...(render.imageTier ? { imageTier: render.imageTier } : {}),
     ...(render.imageModel ? { imageModel: render.imageModel } : {}),
+    ...(render.generation ? { generation: render.generation } : {}),
   };
   const next = tree
     ? addVersion(tree, content, {
@@ -328,6 +336,26 @@ export function resolveLayoutPlan(
   }
 }
 
+/** Resolve style defaults first, then the selected layout's more specific hint. */
+function generationHintsFor(
+  project: Project,
+  layoutPlan: LayoutPlan | undefined,
+  env: PipelineEnv,
+) {
+  // Alpha output is meaningful only when artwork sits on the page as an inset
+  // layer. Covers and full-bleed art must remain opaque for print/export.
+  if (layoutPlan?.mode !== "inset-art") return {};
+  const presetId = project.config.artStyle.presetId;
+  return mergeImageGenerationHints(
+    presetId
+      ? env.prompts?.artStyles?.generationHints?.[presetId]
+      : undefined,
+    layoutPlan
+      ? env.layoutsConfig?.overrides[layoutPlan.layoutId]?.imageGeneration
+      : undefined,
+  );
+}
+
 /**
  * Best-effort reference downscale through the env's optional hook. Returns the
  * original image when the host can't resize or the hook fails. Only ever used
@@ -367,7 +395,10 @@ export async function removeRegionsInPlace(args: {
   const { removals, page, config, imageModel, imageKey, size, env, signal, step, strict } = args;
   if (removals.length === 0) return null;
   const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
-  const isOpenAI = imageModel.provider === "openai";
+  const supportsMask = capabilitiesFor(
+    imageModel,
+    env.modelCapabilities,
+  ).operations.maskEditing;
 
   let current = page;
   let removed = 0;
@@ -384,7 +415,7 @@ export async function removeRegionsInPlace(args: {
           prompt: buildRemoveRegionPrompt({
             subjectName: r.name,
             config,
-            maskMode: isOpenAI,
+            maskMode: supportsMask,
             prompts: env.prompts,
           }),
           size,
@@ -394,7 +425,7 @@ export async function removeRegionsInPlace(args: {
           references: [
             { base64: current.base64, mimeType: current.mimeType, role: "composition" },
           ],
-          mask: isOpenAI ? mask : undefined,
+          mask: supportsMask ? mask : undefined,
           // Small masked region, composited back — low quality is visually
           // equivalent here and roughly halves the per-edit latency.
           quality: "low",
@@ -471,7 +502,10 @@ async function bindAndRepairPage(args: {
   const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
   // Repairing a duplicate subject paints over one region and leaves the rest
   // untouched, which needs the same mask support the surgical edits do.
-  const canRepair = capabilitiesFor(imageModel, env.modelCapabilities).maskEditing;
+  const canRepair = capabilitiesFor(
+    imageModel,
+    env.modelCapabilities,
+  ).operations.maskEditing;
 
   // Vision models only need to LOCATE subjects (normalized boxes), so a
   // downscaled copy keeps the payload small without affecting the result.
@@ -636,7 +670,10 @@ async function trySurgicalReplaceOne(args: {
   const { config, targetBox, sourceAnchor, sourceRef, page, imageModel, imageKey, size, env, signal } =
     args;
   const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
-  const isOpenAI = imageModel.provider === "openai";
+  const supportsMask = capabilitiesFor(
+    imageModel,
+    env.modelCapabilities,
+  ).operations.maskEditing;
   try {
     const mask = await env.composite.buildHoleMask({
       pageBase64: page.base64,
@@ -649,7 +686,7 @@ async function trySurgicalReplaceOne(args: {
         prompt: buildAnchorSwapPrompt({
           anchor: sourceAnchor,
           config,
-          maskMode: isOpenAI,
+          maskMode: supportsMask,
           prompts: env.prompts,
         }),
         size,
@@ -660,7 +697,7 @@ async function trySurgicalReplaceOne(args: {
           { base64: page.base64, mimeType: page.mimeType, role: "composition" },
           { base64: sourceRef.base64, mimeType: sourceRef.mimeType, role: "subject", label: sourceAnchor.name },
         ],
-        mask: isOpenAI ? mask : undefined,
+        mask: supportsMask ? mask : undefined,
         // Small masked region, composited back — low quality suffices.
         quality: "low",
         signal,
@@ -701,7 +738,10 @@ async function trySurgicalModifyOne(args: {
   const { config, targetAnchor, instruction, targetBox, sheetRef, page, imageModel, imageKey, size, env, signal } =
     args;
   const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
-  const isOpenAI = imageModel.provider === "openai";
+  const supportsMask = capabilitiesFor(
+    imageModel,
+    env.modelCapabilities,
+  ).operations.maskEditing;
   try {
     const mask = await env.composite.buildHoleMask({
       pageBase64: page.base64,
@@ -726,7 +766,7 @@ async function trySurgicalModifyOne(args: {
           anchor: targetAnchor,
           instruction,
           config,
-          maskMode: isOpenAI,
+          maskMode: supportsMask,
           hasSheetRef: Boolean(sheetRef),
           prompts: env.prompts,
         }),
@@ -735,7 +775,7 @@ async function trySurgicalModifyOne(args: {
         model: imageModel.id,
         providerId: imageModel.provider,
         references,
-        mask: isOpenAI ? mask : undefined,
+        mask: supportsMask ? mask : undefined,
         // Small masked region, composited back — low quality suffices.
         quality: "low",
         signal,
@@ -789,7 +829,10 @@ async function trySurgicalAnchorUpdate(args: {
   } catch {
     return null;
   }
-  const isOpenAI = imageModel.provider === "openai";
+  const supportsMask = capabilitiesFor(
+    imageModel,
+    env.modelCapabilities,
+  ).operations.maskEditing;
 
   // Load the NEW reference image for each changed subject (in parallel).
   type Subject = {
@@ -852,7 +895,7 @@ async function trySurgicalAnchorUpdate(args: {
           prompt: buildAnchorSwapPrompt({
             anchor: s.anchor,
             config: args.config,
-            maskMode: isOpenAI,
+            maskMode: supportsMask,
             prompts: env.prompts,
           }),
           size,
@@ -862,7 +905,7 @@ async function trySurgicalAnchorUpdate(args: {
           references,
           // OpenAI constrains the edit to the masked region; Gemini regenerates the
           // full frame and we rely on the composite below to keep the rest intact.
-          mask: isOpenAI ? mask : undefined,
+          mask: supportsMask ? mask : undefined,
           // Small masked region, composited back — low quality suffices.
           quality: "low",
           signal,
@@ -1099,7 +1142,7 @@ export async function renderIllustration(
   // A restyle must repaint every pixel, so the in-place paths are off: they
   // keep everything outside the edited region untouched, which is precisely the
   // artwork that has to change.
-  const surgicalCapable = caps.maskEditing && !options.restyle;
+  const surgicalCapable = caps.operations.maskEditing && !options.restyle;
 
   // Resolve the spread's anchors in their declared order, so reference images
   // line up with how they're enumerated in the prompt.
@@ -1545,6 +1588,10 @@ export async function renderIllustration(
   }
 
   const layoutPlan = resolveLayoutPlan(project, spread, env.layoutsConfig);
+  const generation = resolveImageGenerationOptions(
+    caps,
+    generationHintsFor(project, layoutPlan, env),
+  );
 
   const prompt = buildIllustrationPrompt({
     spread,
@@ -1577,6 +1624,8 @@ export async function renderIllustration(
     // are compiled from this plan (grid fraction on overlay layouts).
     layoutPlan,
     capabilities: caps,
+    transparentBackground:
+      generation.applied.background === "transparent",
   });
 
   const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
@@ -1587,8 +1636,18 @@ export async function renderIllustration(
       creds: { apiKey: key },
       model: imageModel.id,
       providerId: imageModel.provider,
-      references: references.length ? references : undefined,
+      references:
+        caps.operations.referenceEditing && references.length
+          ? references.slice(0, caps.inputs.maxReferenceImages)
+          : undefined,
       mask: maskMode ? options.mask : undefined,
+      output:
+        generation.applied.background || generation.applied.format
+          ? {
+              background: generation.applied.background,
+              format: generation.applied.format,
+            }
+          : undefined,
       allowText: Boolean(spread.bakeText),
       signal: options.signal,
     }),
@@ -1646,6 +1705,7 @@ export async function renderIllustration(
     // Only whole-page renders carry the stamp: the surgical paths above leave
     // most pixels in whatever style they were already drawn in.
     artStyleKey: artStyleKey(project.config.artStyle),
+    generation,
   };
 }
 
@@ -1687,7 +1747,8 @@ export async function runIllustration(
  *
  * Only works on a mask-capable, sharp-backed host (`env.composite
  * .buildCoverContinuationSeed`) — callers should resolve a mask-capable image
- * model (see `capabilitiesFor(...).maskEditing`) before calling; this throws
+ * model (see `capabilitiesFor(...).operations.maskEditing`) before calling;
+ * this throws
  * a friendly error otherwise rather than silently degrading to a worse result.
  */
 export async function renderCoverContinuation(
@@ -1701,7 +1762,11 @@ export async function renderCoverContinuation(
 
   const imageModel = env.models.imageModel;
   const caps = capabilitiesFor(imageModel, env.modelCapabilities);
-  if (!caps.maskEditing || !env.composite.buildCoverContinuationSeed) {
+  if (
+    !caps.operations.maskEditing ||
+    !caps.operations.outpainting ||
+    !env.composite.buildCoverContinuationSeed
+  ) {
     throw new Error(
       "Wraparound cover generation is temporarily unavailable. Please try again later.",
     );

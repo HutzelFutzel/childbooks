@@ -54,6 +54,8 @@ import {
   ModelCostEditor,
   summarizeCost,
 } from "./ModelCostsTab";
+import { ImageCapabilitiesPanel } from "./ImageGeometryPanel";
+import type { CapabilityOverrides } from "../../../core/config/modelCapabilities";
 
 const PROVIDER_LABELS: Record<ProviderId, string> = {
   openai: "OpenAI",
@@ -540,6 +542,16 @@ export function ModelConfigTab() {
     setDirty(true);
   };
 
+  const setCapabilities = (
+    capabilities: CapabilityOverrides | undefined,
+  ) => {
+    setDraft((config) => ({
+      ...config,
+      capabilities: capabilities ?? {},
+    }));
+    setDirty(true);
+  };
+
   const renderSlot = (targetValue: SlotTarget) => {
     const currentModel = modelAt(draft, targetValue).trim();
     const cost = priceForSlot(
@@ -755,8 +767,8 @@ export function ModelConfigTab() {
             {forcedTarget ? `Replace ${slotTargetLabel(forcedTarget)}` : "Add or replace a model"}
           </h2>
           <p className="text-xs text-ink-500">
-            Enter an exact model id. We detect the provider, confirm it is live, and fetch its
-            official price.
+            Enter an exact model id. We confirm it is live, load its capability profile, and
+            fetch its official price.
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
@@ -822,6 +834,41 @@ export function ModelConfigTab() {
                 <p className="mt-1 text-xs font-medium text-ink-700">
                   {summarizeCost(resolution.modelCost)}
                 </p>
+                {resolution.imageCapabilities && (
+                  <div className="mt-2 flex flex-wrap gap-1">
+                    <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-medium text-sky-700">
+                      {resolution.imageCapabilities.profile}
+                    </span>
+                    <span className="rounded-full bg-ink-50 px-2 py-0.5 text-[10px] text-ink-600">
+                      {resolution.imageCapabilities.operations.maskEditing
+                        ? "Masked edits"
+                        : "Reference edits"}
+                    </span>
+                    <span className="rounded-full bg-ink-50 px-2 py-0.5 text-[10px] text-ink-600">
+                      {resolution.imageCapabilities.inputs.maxReferenceImages} references
+                    </span>
+                    <span className="rounded-full bg-ink-50 px-2 py-0.5 text-[10px] text-ink-600">
+                      {resolution.imageCapabilities.outputs.backgrounds.includes(
+                        "transparent",
+                      )
+                        ? "Native transparency"
+                        : "Opaque output"}
+                    </span>
+                    <span className="rounded-full bg-ink-50 px-2 py-0.5 text-[10px] text-ink-600">
+                      {resolution.imageCapabilities.outputs.formats
+                        .map((format) => format.toUpperCase())
+                        .join(", ")}
+                    </span>
+                    {resolution.imageCapabilities.outputs.qualityLevels.length >
+                      0 && (
+                      <span className="rounded-full bg-ink-50 px-2 py-0.5 text-[10px] text-ink-600">
+                        {resolution.imageCapabilities.outputs.qualityLevels.join(
+                          ", ",
+                        )}
+                      </span>
+                    )}
+                  </div>
+                )}
                 {resolution.approximate && (
                   <p className="mt-1 text-xs text-amber-700">
                     Pricing is from the closest documented variant{" "}
@@ -834,6 +881,11 @@ export function ModelConfigTab() {
                     Source: “{resolution.sourceQuote}”
                   </p>
                 )}
+                {resolution.reportedCapabilities?.length ? (
+                  <p className="mt-1 text-[11px] text-ink-500">
+                    Provider reports: {resolution.reportedCapabilities.join(", ")}
+                  </p>
+                ) : null}
               </div>
               <div className="w-full space-y-2 sm:w-72">
                 <Field label="Use for">
@@ -869,6 +921,11 @@ export function ModelConfigTab() {
           </div>
         )}
       </section>
+
+      <ImageCapabilitiesPanel
+        config={draft}
+        onChange={setCapabilities}
+      />
 
       <section className="space-y-3">
         <div>

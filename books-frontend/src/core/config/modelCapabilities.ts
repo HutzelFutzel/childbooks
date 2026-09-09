@@ -76,20 +76,67 @@ export type ImageSizing =
       pixelBudget: number;
     };
 
+export const IMAGE_FORMATS = ["png", "webp", "jpeg"] as const;
+export type ImageFormat = (typeof IMAGE_FORMATS)[number];
+
+export const IMAGE_QUALITIES = [
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+  "auto",
+] as const;
+export type ImageQuality = (typeof IMAGE_QUALITIES)[number];
+
+export const CAPABILITY_RATINGS = ["none", "weak", "strong"] as const;
+export type CapabilityRating = (typeof CAPABILITY_RATINGS)[number];
+
 export interface ImageModelCapabilities {
-  /** Accepts an alignment mask, so a region can be edited in place. */
-  maskEditing: boolean;
-  /** How many reference images can be attached to one request. */
-  maxReferenceImages: number;
+  /** Code-level wire strategy. Admin overrides cannot invent a transport. */
+  transport: "openai-images" | "google-generate-content";
+  /** Stable shipped profile name, shown as provenance in the admin. */
+  profile: string;
+  operations: {
+    generate: boolean;
+    referenceEditing: boolean;
+    /** Accepts an alignment mask, so a region can be edited in place. */
+    maskEditing: boolean;
+    outpainting: boolean;
+    /** Conversational edit state, when the implemented transport supports it. */
+    multiTurnEditing: boolean;
+  };
+  inputs: {
+    /** How many reference images can be attached to one request. */
+    maxReferenceImages: number;
+    /** Optional provider limits by semantic reference role. */
+    roleLimits?: Partial<Record<"subject" | "object" | "style", number>>;
+    formats: ImageFormat[];
+    referenceBinding: "ordered" | "labeled";
+    inputFidelityLevels: Array<"low" | "high">;
+  };
   /** The only description of what shapes and sizes this model can return. */
   sizing: ImageSizing;
-  /**
-   * How reliably the model honours "keep this region calm". `weak` models get
-   * the deterministic post-processed treatment instead of the painted one.
-   */
-  negativeSpaceControl: "weak" | "strong";
-  /** How well it renders legible words (only matters for baked cover text). */
-  textRendering: "none" | "weak" | "strong";
+  outputs: {
+    formats: ImageFormat[];
+    backgrounds: Array<"opaque" | "transparent" | "auto">;
+    qualityLevels: ImageQuality[];
+    /** Provider-named resolution tiers, independent from aspect ratio. */
+    resolutions: string[];
+    compression: boolean;
+    partialImageStreaming: boolean;
+    maxImagesPerRequest: number;
+  };
+  traits: {
+    /** How reliably the model honours "keep this region calm". */
+    negativeSpaceControl: "weak" | "strong";
+    /** How well it renders legible words in baked cover art. */
+    textRendering: CapabilityRating;
+    promptAdherence: CapabilityRating;
+    referenceConsistency: CapabilityRating;
+    editingPrecision: CapabilityRating;
+    latency: "fast" | "balanced" | "slow";
+  };
 }
 
 /**
@@ -144,7 +191,7 @@ function vocabulary(...tokens: string[]): AspectRatioOption[] {
   });
 }
 
-/** The nine buckets every current Gemini image model accepts. */
+/** The standard buckets current Gemini image models accept. */
 const GEMINI_RATIOS = vocabulary(
   "21:9",
   "16:9",
@@ -187,48 +234,238 @@ const OPENAI_ARBITRARY: ImageSizing = {
 /** Per-provider baseline, used when no model-specific entry matches. */
 const PROVIDER_DEFAULTS: Record<ProviderId, ImageModelCapabilities> = {
   openai: {
-    maskEditing: true,
-    maxReferenceImages: 8,
+    transport: "openai-images",
+    profile: "openai-images-default",
+    operations: {
+      generate: true,
+      referenceEditing: true,
+      maskEditing: true,
+      outpainting: true,
+      multiTurnEditing: false,
+    },
+    inputs: {
+      maxReferenceImages: 16,
+      formats: ["png", "webp", "jpeg"],
+      referenceBinding: "ordered",
+      inputFidelityLevels: [],
+    },
     // Conservative: the fixed trio is what every GPT image model takes, and
     // `gpt-image-2` widens it below.
     sizing: { mode: "fixedSizes", sizes: OPENAI_FIXED_SIZES },
-    negativeSpaceControl: "strong",
-    textRendering: "strong",
+    outputs: {
+      formats: ["png", "webp", "jpeg"],
+      backgrounds: ["opaque", "auto"],
+      qualityLevels: ["low", "medium", "high", "auto"],
+      resolutions: [],
+      compression: true,
+      partialImageStreaming: false,
+      maxImagesPerRequest: 1,
+    },
+    traits: {
+      negativeSpaceControl: "strong",
+      textRendering: "strong",
+      promptAdherence: "strong",
+      referenceConsistency: "strong",
+      editingPrecision: "strong",
+      latency: "balanced",
+    },
   },
   google: {
-    // The Gemini image endpoint takes no mask; regional edits are done by
-    // regenerating the frame and compositing the region ourselves.
-    maskEditing: false,
-    maxReferenceImages: 8,
+    transport: "google-generate-content",
+    profile: "google-image-default",
+    operations: {
+      generate: true,
+      referenceEditing: true,
+      // Gemini takes no alignment mask; regional edits regenerate the frame.
+      maskEditing: false,
+      outpainting: false,
+      multiTurnEditing: false,
+    },
+    inputs: {
+      maxReferenceImages: 8,
+      formats: ["png", "webp", "jpeg"],
+      referenceBinding: "labeled",
+      inputFidelityLevels: [],
+    },
     sizing: { mode: "ratioBuckets", ratios: GEMINI_RATIOS, shortEdge: 1024 },
-    negativeSpaceControl: "weak",
-    textRendering: "weak",
+    outputs: {
+      formats: ["png"],
+      backgrounds: ["opaque"],
+      qualityLevels: [],
+      resolutions: ["1K"],
+      compression: false,
+      partialImageStreaming: false,
+      maxImagesPerRequest: 1,
+    },
+    traits: {
+      negativeSpaceControl: "weak",
+      textRendering: "weak",
+      promptAdherence: "strong",
+      referenceConsistency: "strong",
+      editingPrecision: "weak",
+      latency: "balanced",
+    },
   },
 };
 
-/** Model-id substring → overrides on top of the provider baseline. */
-const MODEL_OVERRIDES: { provider: ProviderId; match: string; caps: Partial<ImageModelCapabilities> }[] = [
-  // The mini tier trades instruction-following for speed and cost.
-  { provider: "openai", match: "mini", caps: { negativeSpaceControl: "weak", textRendering: "weak" } },
-  // Arbitrary resolutions, so a page can be generated at its true shape.
-  { provider: "openai", match: "gpt-image-2", caps: { sizing: OPENAI_ARBITRARY } },
-  { provider: "google", match: "pro", caps: { negativeSpaceControl: "strong" } },
+type CapabilityPatch = {
+  profile?: string;
+  transport?: ImageModelCapabilities["transport"];
+  operations?: Partial<ImageModelCapabilities["operations"]>;
+  inputs?: Partial<ImageModelCapabilities["inputs"]>;
+  sizing?: ImageSizing;
+  outputs?: Partial<ImageModelCapabilities["outputs"]>;
+  traits?: Partial<ImageModelCapabilities["traits"]>;
+};
+
+/**
+ * Model-family profiles. Broad matches apply first; specific profiles layer on
+ * top, so dated snapshots inherit their family's behavior without becoming a
+ * new code path.
+ */
+const MODEL_PROFILES: {
+  provider: ProviderId;
+  match: RegExp;
+  priority: number;
+  caps: CapabilityPatch;
+}[] = [
+  {
+    provider: "openai",
+    match: /^gpt-image-.*mini(?:$|-)/,
+    priority: 50,
+    caps: {
+      profile: "openai-images-mini",
+      traits: {
+        negativeSpaceControl: "weak",
+        textRendering: "weak",
+        promptAdherence: "weak",
+        referenceConsistency: "weak",
+        editingPrecision: "weak",
+        latency: "fast",
+      },
+    },
+  },
+  {
+    provider: "openai",
+    match: /^gpt-image-2(?:\.\d+)?(?:$|-)/,
+    priority: 20,
+    caps: {
+      profile: "openai-images-v2",
+      sizing: OPENAI_ARBITRARY,
+      inputs: { inputFidelityLevels: ["low", "high"] },
+      outputs: { backgrounds: ["opaque", "transparent", "auto"] },
+    },
+  },
+  {
+    provider: "openai",
+    match: /^gpt-image-2\.5-(?:flare|sunburst)(?:$|-)/,
+    priority: 30,
+    caps: {
+      profile: "openai-images-v2.5",
+      outputs: {
+        qualityLevels: ["low", "medium", "high", "xhigh", "max", "auto"],
+      },
+    },
+  },
+  {
+    provider: "openai",
+    match: /^gpt-image-2\.5-flare(?:$|-)/,
+    priority: 40,
+    caps: { profile: "openai-images-v2.5-flare", traits: { latency: "fast" } },
+  },
+  {
+    provider: "openai",
+    match: /^gpt-image-2\.5-sunburst(?:$|-)/,
+    priority: 40,
+    caps: {
+      profile: "openai-images-v2.5-sunburst",
+      traits: { editingPrecision: "strong", latency: "slow" },
+    },
+  },
   {
     provider: "google",
-    match: "3.1-flash-image",
+    match: /^gemini-3-pro-image(?:$|-)/,
+    priority: 20,
     caps: {
+      profile: "gemini-3-pro-image",
+      inputs: {
+        maxReferenceImages: 14,
+        roleLimits: { object: 6, subject: 5, style: 3 },
+      },
       sizing: {
         mode: "ratioBuckets",
         ratios: [...GEMINI_RATIOS, ...GEMINI_EXTREME_RATIOS],
         shortEdge: 1024,
       },
+      outputs: { resolutions: ["1K", "2K", "4K"] },
+      traits: {
+        negativeSpaceControl: "strong",
+        textRendering: "strong",
+        promptAdherence: "strong",
+        referenceConsistency: "strong",
+        editingPrecision: "strong",
+        latency: "slow",
+      },
+    },
+  },
+  {
+    provider: "google",
+    match: /^gemini-3\.1-flash-image(?:$|-)/,
+    priority: 20,
+    caps: {
+      profile: "gemini-3.1-flash-image",
+      inputs: {
+        maxReferenceImages: 14,
+        roleLimits: { object: 10, subject: 4 },
+      },
+      sizing: {
+        mode: "ratioBuckets",
+        ratios: [...GEMINI_RATIOS, ...GEMINI_EXTREME_RATIOS],
+        shortEdge: 1024,
+      },
+      outputs: { resolutions: ["512", "1K", "2K", "4K"] },
+      traits: { textRendering: "strong", latency: "fast" },
     },
   },
 ];
 
+function mergeCapabilities(
+  base: ImageModelCapabilities,
+  patch: CapabilityPatch,
+): ImageModelCapabilities {
+  return {
+    ...base,
+    ...patch,
+    operations: { ...base.operations, ...(patch.operations ?? {}) },
+    inputs: { ...base.inputs, ...(patch.inputs ?? {}) },
+    outputs: { ...base.outputs, ...(patch.outputs ?? {}) },
+    traits: { ...base.traits, ...(patch.traits ?? {}) },
+  };
+}
+
+function enforceCapabilityInvariants(
+  capabilities: ImageModelCapabilities,
+): ImageModelCapabilities {
+  const referenceEditing =
+    capabilities.operations.generate &&
+    capabilities.operations.referenceEditing &&
+    capabilities.inputs.maxReferenceImages > 0;
+  const maskEditing =
+    referenceEditing && capabilities.operations.maskEditing;
+  return {
+    ...capabilities,
+    operations: {
+      ...capabilities.operations,
+      referenceEditing,
+      maskEditing,
+      outpainting: maskEditing && capabilities.operations.outpainting,
+    },
+  };
+}
+
 /** Key an admin override is stored under. */
 export function capabilityKey(provider: ProviderId, modelId: string): string {
-  return `${provider}:${modelId}`;
+  return `${provider}:${modelId.trim().toLowerCase()}`;
 }
 
 export type CapabilityOverrides = Record<string, CapabilityOverride>;
@@ -244,12 +481,14 @@ export function capabilitiesFor(
   const provider: ProviderId = selection?.provider ?? "openai";
   const base = PROVIDER_DEFAULTS[provider] ?? PROVIDER_DEFAULTS.openai;
   const id = (selection?.id ?? "").toLowerCase();
-  let caps: ImageModelCapabilities = { ...base };
-  for (const o of MODEL_OVERRIDES) {
-    if (o.provider === provider && id.includes(o.match)) caps = { ...caps, ...o.caps };
+  let caps: ImageModelCapabilities = mergeCapabilities(base, {});
+  for (const profile of [...MODEL_PROFILES].sort((a, b) => a.priority - b.priority)) {
+    if (profile.provider === provider && profile.match.test(id)) {
+      caps = mergeCapabilities(caps, profile.caps);
+    }
   }
   const admin = selection ? overrides?.[capabilityKey(provider, selection.id)] : undefined;
-  return admin ? applyOverride(caps, admin) : caps;
+  return enforceCapabilityInvariants(admin ? applyOverride(caps, admin) : caps);
 }
 
 // ---- Aspect fit ------------------------------------------------------------
@@ -680,13 +919,56 @@ const imageSizingSchema = z.discriminatedUnion("mode", [
 /**
  * What an admin may correct, in the shape they'd want to type it.
  *
- * `sizing` replaces the geometry policy wholesale; `ratios` and `maxPixels` are
- * the two corrections that actually get made in practice — "this model doesn't
- * really do 21:9" and "stop spending 8 MP a page" — and are applied on top of
- * whatever mode the model is in, so neither requires restating the rest.
+ * Nested groups replace only the facts an admin explicitly corrected.
+ * Geometry keeps two shorthand controls — `ratios` and `maxPixels` — because
+ * they are the common operational corrections and should not require an admin
+ * to restate the model's entire sizing contract.
  */
 export const imageCapabilitiesSchema = z
   .object({
+    operations: z
+      .object({
+        referenceEditing: z.boolean(),
+        maskEditing: z.boolean(),
+        outpainting: z.boolean(),
+      })
+      .partial(),
+    inputs: z
+      .object({
+        maxReferenceImages: z.number().int().min(0).max(64),
+        roleLimits: z
+          .object({
+            subject: z.number().int().min(0).max(64),
+            object: z.number().int().min(0).max(64),
+            style: z.number().int().min(0).max(64),
+          })
+          .partial(),
+        formats: z.array(z.enum(IMAGE_FORMATS)).min(1),
+        referenceBinding: z.enum(["ordered", "labeled"]),
+        inputFidelityLevels: z.array(z.enum(["low", "high"])),
+      })
+      .partial(),
+    outputs: z
+      .object({
+        formats: z.array(z.enum(IMAGE_FORMATS)).min(1),
+        backgrounds: z.array(z.enum(["opaque", "transparent", "auto"])).min(1),
+        qualityLevels: z.array(z.enum(IMAGE_QUALITIES)),
+        resolutions: z.array(z.string().min(1).max(20)).max(12),
+        compression: z.boolean(),
+      })
+      .partial(),
+    traits: z
+      .object({
+        negativeSpaceControl: z.enum(["weak", "strong"]),
+        textRendering: z.enum(CAPABILITY_RATINGS),
+        promptAdherence: z.enum(CAPABILITY_RATINGS),
+        referenceConsistency: z.enum(CAPABILITY_RATINGS),
+        editingPrecision: z.enum(CAPABILITY_RATINGS),
+        latency: z.enum(["fast", "balanced", "slow"]),
+      })
+      .partial(),
+    // Legacy flat fields remain readable so existing Firestore overrides migrate
+    // without changing behavior. New admin writes use the nested groups above.
     maskEditing: z.boolean(),
     maxReferenceImages: z.number().int().min(1).max(32),
     negativeSpaceControl: z.enum(["weak", "strong"]),
@@ -749,11 +1031,32 @@ function applyOverride(
   base: ImageModelCapabilities,
   override: CapabilityOverride,
 ): ImageModelCapabilities {
+  const nested = mergeCapabilities(base, {
+    operations: {
+      ...override.operations,
+      ...(override.maskEditing !== undefined
+        ? { maskEditing: override.maskEditing }
+        : {}),
+    },
+    inputs: {
+      ...override.inputs,
+      ...(override.maxReferenceImages !== undefined
+        ? { maxReferenceImages: override.maxReferenceImages }
+        : {}),
+    },
+    outputs: override.outputs,
+    traits: {
+      ...override.traits,
+      ...(override.negativeSpaceControl !== undefined
+        ? { negativeSpaceControl: override.negativeSpaceControl }
+        : {}),
+      ...(override.textRendering !== undefined
+        ? { textRendering: override.textRendering }
+        : {}),
+    },
+  });
   return {
-    maskEditing: override.maskEditing ?? base.maskEditing,
-    maxReferenceImages: override.maxReferenceImages ?? base.maxReferenceImages,
-    negativeSpaceControl: override.negativeSpaceControl ?? base.negativeSpaceControl,
-    textRendering: override.textRendering ?? base.textRendering,
+    ...nested,
     sizing: sizingFromOverride(base.sizing, override),
   };
 }

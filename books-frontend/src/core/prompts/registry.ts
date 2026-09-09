@@ -792,7 +792,12 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk(
         "layoutInsetFill",
         "This illustration is placed BESIDE the text rather than underneath it, so no space needs reserving for words: compose a {{artAspect}} image that fills its own frame edge to edge, with the main subject well inside the frame. Do not leave a calm empty band along one side.",
-        "layoutInsetArt",
+        "layoutInsetOpaque",
+      ),
+      blk(
+        "layoutInsetTransparent",
+        "This illustration is placed on the page as transparent cutout artwork beside the text. Isolate the complete subject and essential foreground objects on a genuinely transparent background with clean natural edges and no rectangular backdrop, scenery panel, checkerboard pattern, matte, border or frame.",
+        "layoutInsetTransparent",
       ),
       blk(
         "layoutStagingNote",
@@ -1615,6 +1620,8 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           layoutGeneric: false,
           layoutCalmBand: true,
           hasRegionTreatment: true,
+          layoutInsetOpaque: false,
+          layoutInsetTransparent: false,
           layoutInsetArt: false,
           bleedSpread: false,
           bleedSingle: true,
