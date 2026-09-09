@@ -17,11 +17,13 @@ import {
   COVER_META,
   coverSideOf,
   DeadPageFill,
+  PairPreview,
   sideAspect,
   type DisplaySpread,
   type Entry,
   type SpreadSide,
 } from "./SpreadEditor";
+import { isPlainPagePair } from "./spreadModel";
 
 const FOLD_GRADIENT =
   "linear-gradient(to right, rgba(15,23,42,0) 0%, rgba(15,23,42,0.12) 42%, rgba(15,23,42,0.2) 50%, rgba(15,23,42,0.12) 58%, rgba(15,23,42,0) 100%)";
@@ -276,6 +278,17 @@ function PreviewSpread({ disp }: { disp: DisplaySpread }) {
     return (
       <div className="relative w-full overflow-hidden bg-white shadow-lifted">
         <PreviewPage entry={disp.entry} />
+      </div>
+    );
+  }
+  if (isPlainPagePair(disp)) {
+    return (
+      <div className="relative w-full overflow-hidden bg-white shadow-lifted">
+        <PairPreview left={disp.left.entry} right={disp.right.entry} />
+        <div
+          className="pointer-events-none absolute inset-y-0 left-1/2 w-10 -translate-x-1/2"
+          style={{ background: FOLD_GRADIENT }}
+        />
       </div>
     );
   }

@@ -7,7 +7,7 @@ import {
 import type { Anchor, CoverSpec, ScreenplaySpread } from "../../core/types";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { wordParagraphs } from "../../core/design";
-import { applyTextBoxPatchToShape, shapeTextDefaults } from "../design/shapeText";
+import { lastTextPaintFor, patchedShapeText, shapeTextForNew } from "../design/lastPaint";
 import { bookProductForConfig, formatCapabilitiesForProject } from "../../core/book";
 import {
   computeBackCoverLogoZone,
@@ -211,10 +211,15 @@ export function PageStagePanel({
         const shape = pageDesign(page.id).shapes?.find((s) => s.id === id);
         if (shape) {
           patchShape(page.id, id, {
-            text: applyTextBoxPatchToShape(shape, { paragraphs }, {
-              fontFamily: design.defaultFontFamily,
-              fontSizePct: design.defaultFontSizePct,
-            }),
+            text: patchedShapeText(
+              shape,
+              { paragraphs },
+              {
+                fontFamily: design.defaultFontFamily,
+                fontSizePct: design.defaultFontSizePct,
+              },
+              lastTextPaintFor(design, shape),
+            ),
           });
           return;
         }
@@ -224,10 +229,15 @@ export function PageStagePanel({
         const shape = pageDesign(page.id).shapes?.find((s) => s.id === id);
         if (shape) {
           patchShape(page.id, id, {
-            text: applyTextBoxPatchToShape(shape, { paragraphs }, {
-              fontFamily: design.defaultFontFamily,
-              fontSizePct: design.defaultFontSizePct,
-            }),
+            text: patchedShapeText(
+              shape,
+              { paragraphs },
+              {
+                fontFamily: design.defaultFontFamily,
+                fontSizePct: design.defaultFontSizePct,
+              },
+              lastTextPaintFor(design, shape),
+            ),
           });
           return;
         }
@@ -240,10 +250,15 @@ export function PageStagePanel({
             page.id,
             id,
             {
-              text: applyTextBoxPatchToShape(shape, patch, {
-                fontFamily: design.defaultFontFamily,
-                fontSizePct: design.defaultFontSizePct,
-              }),
+              text: patchedShapeText(
+                shape,
+                patch,
+                {
+                  fontFamily: design.defaultFontFamily,
+                  fontSizePct: design.defaultFontSizePct,
+                },
+                lastTextPaintFor(design, shape),
+              ),
             },
             opts,
           );
@@ -295,10 +310,14 @@ export function PageStagePanel({
         },
         onGestureEnd: endHistoryGesture,
         newText: (shape) =>
-          shapeTextDefaults(shape, {
-            fontFamily: design.defaultFontFamily,
-            fontSizePct: design.defaultFontSizePct,
-          }),
+          shapeTextForNew(
+            shape,
+            {
+              fontFamily: design.defaultFontFamily,
+              fontSizePct: design.defaultFontSizePct,
+            },
+            lastTextPaintFor(design, shape),
+          ),
       }}
       selectedSpan={selectedSpan}
       onSelectSpan={(ref: SpanRef | null) => {

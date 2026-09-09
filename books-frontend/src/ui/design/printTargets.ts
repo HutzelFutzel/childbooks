@@ -19,9 +19,11 @@ import {
   spreadLeaves,
   type PageGeometry,
 } from "../../core/print/geometry";
+import { paginate } from "../../core/pipeline/pagination";
 import { interiorLeafPlan, type LeafPlan } from "../../core/print/pagePlan";
 import { getCursor } from "../../core/versioning";
-import { COVER_BACK_ID, COVER_FRONT_ID, type BookDesign, type Project } from "../../core/types";
+import { COVER_BACK_ID, COVER_FRONT_ID, type BookDesign, type PageDesign, type Project } from "../../core/types";
+import { withFacingOverflow } from "../../core/book/pairSurface";
 import type { DesignPage } from "./designInit";
 import type { PrintTarget, ResolvedArtwork } from "./PrintBook";
 
@@ -73,8 +75,11 @@ export function buildEbookTargets(
     ...pages.filter((p) => p.id === COVER_BACK_ID),
   ];
 
+  const overflowById = ebookOverflowNeighbors(project, pages);
+
   return ordered.map((page) => {
     const geo = isSpread(page, product) ? spread : single;
+    const overflowFrom = overflowById.get(page.id);
     return {
       id: page.id,
       page,
@@ -84,8 +89,42 @@ export function buildEbookTargets(
       bleedPx: 0,
       widthIn: geo.widthIn,
       heightIn: geo.heightIn,
+      ...(overflowFrom ? { overflowFrom } : {}),
     };
   });
+}
+
+/** Facing singles in the ebook: each leaf paints the neighbor's fold overflow. */
+function ebookOverflowNeighbors(
+  project: Project,
+  pages: DesignPage[],
+): Map<string, { page: DesignPage; fromRight: boolean }> {
+  const out = new Map<string, { page: DesignPage; fromRight: boolean }>();
+  const doc = project.screenplay ? getCursor(project.screenplay).content : null;
+  if (!doc) return out;
+  const byId = pageById(pages);
+  for (const pair of paginate(doc).pairs) {
+    const left = pair.left;
+    const right = pair.right;
+    if (!left || !right) continue;
+    if (left.spread === right.spread || left.spread.placeholder || right.spread.placeholder) continue;
+    if (left.spread.kind !== "single" || right.spread.kind !== "single") continue;
+    const leftPage = byId.get(left.spread.id);
+    const rightPage = byId.get(right.spread.id);
+    if (!leftPage || !rightPage) continue;
+    out.set(left.spread.id, { page: rightPage, fromRight: true });
+    out.set(right.spread.id, { page: leftPage, fromRight: false });
+  }
+  return out;
+}
+
+/** The other single that faces this leaf, when both are ordinary pages. */
+function facingSinglePartner(leaves: LeafPlan[], leaf: LeafPlan): LeafPlan | null {
+  if (!leaf.sourcePageId || leaf.half) return null;
+  const partnerNumber = leaf.side === "left" ? leaf.pageNumber + 1 : leaf.pageNumber - 1;
+  const partner = leaves.find((item) => item.pageNumber === partnerNumber) ?? null;
+  if (!partner?.sourcePageId || partner.half) return null;
+  return partner;
 }
 
 export interface InteriorPlan {
@@ -157,6 +196,39 @@ export function buildInteriorPlan(
         },
       });
     } else {
+      const partner = facingSinglePartner(leaves, leaf);
+      const partnerPage = partner?.sourcePageId ? byId.get(partner.sourcePageId) : undefined;
+      if (partner && partnerPage) {
+        const window = halves[leaf.side];
+        const horizontalBleed = splitBleedPixels(
+          window.widthPx,
+          single.trimWidthPx,
+          spread.bleedPx,
+        );
+        targets.push({
+          id: leaf.id,
+          page,
+          documentIndex,
+          label: page.label,
+          surfaceWidthPx: spread.widthPx,
+          surfaceHeightPx: spread.heightPx,
+          bleedPx: spread.bleedPx,
+          clip: { xPx: window.xPx, widthPx: window.widthPx },
+          widthIn: window.widthIn,
+          heightIn: spread.heightIn,
+          pairWith: partnerPage,
+          pairRole: leaf.side,
+          // Same fold treatment as a true spread: real neighbour pixels in the
+          // gutter overlap, synthesized bleed only on the physical outside.
+          bleedFill: {
+            top: verticalBleed.start,
+            bottom: verticalBleed.end,
+            left: leaf.side === "left" ? horizontalBleed.start : 0,
+            right: leaf.side === "right" ? horizontalBleed.end : 0,
+          },
+        });
+        continue;
+      }
       const horizontalBleed = splitBleedPixels(
         single.widthPx,
         single.trimWidthPx,
@@ -249,13 +321,22 @@ export function buildCoverPlan(
   return { targets, geometry, panelWidthIn: geometry.trimWidthIn + geometry.bleedIn };
 }
 
+function targetDesignPages(target: PlannedTarget): DesignPage[] {
+  const pages = [target.page];
+  if (target.pairWith) pages.push(target.pairWith);
+  if (target.overflowFrom) pages.push(target.overflowFrom.page);
+  return pages;
+}
+
 /** Every blob a set of targets needs before it can be captured. */
 export function artworkBlobIds(targets: PlannedTarget[], design: BookDesign): string[] {
   const ids = new Set<string>();
   for (const target of targets) {
-    if (target.page.blobId) ids.add(target.page.blobId);
-    for (const image of design.pages[target.page.id]?.images ?? []) {
-      if (image.kind === "asset" && image.blobId) ids.add(image.blobId);
+    for (const page of targetDesignPages(target)) {
+      if (page.blobId) ids.add(page.blobId);
+      for (const image of design.pages[page.id]?.images ?? []) {
+        if (image.kind === "asset" && image.blobId) ids.add(image.blobId);
+      }
     }
   }
   return [...ids];
@@ -269,25 +350,65 @@ export function artworkBlobIds(targets: PlannedTarget[], design: BookDesign): st
  * full-bleed illustration unless a placed illustration element replaced it,
  * plus every placed image — and the blurred backdrop behind a contained one.
  */
+function countDrawnImages(
+  pd: PageDesign,
+  artwork: ResolvedArtwork,
+  pageArt: string | undefined,
+  overflow?: { art: string | undefined; leaf: "left" | "right" },
+): number {
+  let count = 0;
+  const images = pd.images ?? [];
+  const hasOwnIllustrationEl = images.some(
+    (im) =>
+      im.kind === "illustration" && !(overflow && im.pairLeaf === overflow.leaf),
+  );
+  if (pageArt && !hasOwnIllustrationEl) count += 1;
+  for (const image of images) {
+    if (image.hidden) continue;
+    const src =
+      image.kind === "illustration"
+        ? overflow && image.pairLeaf === overflow.leaf
+          ? overflow.art
+          : pageArt
+        : image.blobId && artwork[image.blobId];
+    if (!src) continue;
+    const backdrop = image.fitBackdrop ?? (image.kind === "illustration" ? "blur" : "none");
+    count += image.fit === "contain" && backdrop === "blur" ? 2 : 1;
+  }
+  return count;
+}
+
 export function expectedImageCount(
   targets: PlannedTarget[],
   design: BookDesign,
   artwork: ResolvedArtwork,
 ): number {
   let count = 0;
+  const empty: PageDesign = { textBoxes: [] };
   for (const target of targets) {
-    const pd = design.pages[target.page.id];
-    const images = pd?.images ?? [];
-    const hasIllustrationEl = images.some((im) => im.kind === "illustration");
-    const pageArt = target.page.blobId ? artwork[target.page.blobId] : undefined;
-    if (pageArt && !hasIllustrationEl) count += 1;
-    for (const image of images) {
-      if (image.hidden) continue;
-      const src = image.kind === "illustration" ? pageArt : image.blobId && artwork[image.blobId];
-      if (!src) continue;
-      // A contained image draws a second copy only when soft fill is active.
-      const backdrop = image.fitBackdrop ?? (image.kind === "illustration" ? "blur" : "none");
-      count += image.fit === "contain" && backdrop === "blur" ? 2 : 1;
+    if (target.overflowFrom && !target.pairWith) {
+      const self = design.pages[target.page.id] ?? empty;
+      const neighbor = design.pages[target.overflowFrom.page.id] ?? empty;
+      const pd = withFacingOverflow(self, neighbor, target.overflowFrom.fromRight);
+      count += countDrawnImages(
+        pd,
+        artwork,
+        target.page.blobId ? artwork[target.page.blobId] : undefined,
+        {
+          art: target.overflowFrom.page.blobId
+            ? artwork[target.overflowFrom.page.blobId]
+            : undefined,
+          leaf: target.overflowFrom.fromRight ? "right" : "left",
+        },
+      );
+      continue;
+    }
+    for (const page of targetDesignPages(target)) {
+      count += countDrawnImages(
+        design.pages[page.id] ?? empty,
+        artwork,
+        page.blobId ? artwork[page.blobId] : undefined,
+      );
     }
   }
   return count;

@@ -169,6 +169,7 @@ export function PortalToolbarFlyout({
   return createPortal(
     <div
       ref={panelRef}
+      data-text-style-bar
       className={cn("z-100 rounded-xl border border-ink-200 bg-white shadow-lifted", className)}
       style={style}
       onPointerDown={(e) => e.stopPropagation()}

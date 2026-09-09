@@ -1,6 +1,7 @@
 import { backCoverLogoSizeIn, SAFETY_MARGIN_IN } from "../../core/book/format";
 import { EXPORT_DPI } from "../../core/config/options";
-import { COVER_BACK_ID, COVER_FRONT_ID, type BookDesign } from "../../core/types";
+import { COVER_BACK_ID, COVER_FRONT_ID, type BookDesign, type PageDesign } from "../../core/types";
+import { mergePairDesign, withFacingOverflow } from "../../core/book/pairSurface";
 import { CompositedPage, type ResolvedArtwork } from "./CompositedPage";
 import { defaultIllustrationFocus, type DesignPage } from "./designInit";
 import type { ResolvedImageMasks } from "./imageMasks";
@@ -28,6 +29,19 @@ export interface PrintTarget {
   bleedPx: number;
   /** Horizontal slice of the surface to expose, if not all of it. */
   clip?: { xPx: number; widthPx: number };
+  /**
+   * Facing partner when this leaf is captured as half of a virtual pair
+   * (two singles printed like a true spread so overlay elements can cross
+   * the fold). `page` is this leaf; `pairWith` is the other.
+   */
+  pairWith?: DesignPage;
+  /** Which half of the virtual pair this capture is. */
+  pairRole?: "left" | "right";
+  /**
+   * Ebook / single-leaf: the facing neighbor whose overflowing overlays
+   * should be painted onto this page.
+   */
+  overflowFrom?: { page: DesignPage; fromRight: boolean };
 }
 
 /**
@@ -122,7 +136,24 @@ function PrintTargetView({
   backCoverLogoSizeCm?: number | null;
 }) {
   const clip = target.clip;
-  const pd = design.pages[target.page.id] ?? { textBoxes: [] };
+  const empty: PageDesign = { textBoxes: [] };
+  const selfPd = design.pages[target.page.id] ?? empty;
+  const pair =
+    target.pairWith && target.pairRole
+      ? target.pairRole === "left"
+        ? { left: target.page, right: target.pairWith }
+        : { left: target.pairWith, right: target.page }
+      : null;
+  const leftPd = pair ? (design.pages[pair.left.id] ?? empty) : selfPd;
+  const rightPd = pair ? (design.pages[pair.right.id] ?? empty) : null;
+  const overflowPd = target.overflowFrom
+    ? (design.pages[target.overflowFrom.page.id] ?? empty)
+    : null;
+  const pd = pair
+    ? mergePairDesign(leftPd, rightPd ?? empty)
+    : overflowPd
+      ? withFacingOverflow(selfPd, overflowPd, target.overflowFrom!.fromRight)
+      : selfPd;
   const containerWidthPx = clip ? clip.widthPx : target.surfaceWidthPx;
   return (
     <div
@@ -160,10 +191,27 @@ function PrintTargetView({
             bottom: true,
             left: target.id !== COVER_FRONT_ID,
           }}
-          illustrationBlobId={target.page.blobId}
+          illustrationBlobId={pair ? pair.left.blobId : target.page.blobId}
           artwork={artwork}
           imageMasks={imageMasks}
-          illustrationFocus={defaultIllustrationFocus(target.page)}
+          illustrationFocus={defaultIllustrationFocus(pair ? pair.left : target.page)}
+          rightSurface={
+            pair
+              ? {
+                  background: rightPd?.background,
+                  illustrationBlobId: pair.right.blobId,
+                  illustrationFocus: defaultIllustrationFocus(pair.right),
+                }
+              : undefined
+          }
+          overflowIllustration={
+            target.overflowFrom
+              ? {
+                  blobId: target.overflowFrom.page.blobId,
+                  pairLeaf: target.overflowFrom.fromRight ? "right" : "left",
+                }
+              : undefined
+          }
         />
       </div>
       {target.page.id === COVER_BACK_ID && backCoverLogoUrl && (

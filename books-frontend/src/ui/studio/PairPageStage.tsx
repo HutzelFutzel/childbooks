@@ -9,18 +9,20 @@
  * Approach: flatten both pages' elements into one *virtual* combined
  * `PageDesign` (each page's normalized rect halved into its own half of the
  * surface) and feed that into the unmodified element-rendering half of
- * `PageStage`; only the background/illustration paint (which can't be
- * flattened, since each side has its own art) uses `PageStage`'s
- * `rightSurface` prop to draw two independent halves. Every element callback
- * is routed back to whichever real page currently owns that id — and, when a
- * drag/resize moves an element's center across the x=0.5 fold, ownership is
- * reassigned (`moveElementToPage`) and its rect is re-expressed in the new
- * owner's own normalized space.
+ * `PageStage`. Page backgrounds stay per-leaf via `rightSurface`. Generated
+ * page art may overflow the fold like any overlay, but it stays bound to its
+ * owner leaf (bitmap + ownership) — only placed overlays reassign when their
+ * center crosses x=0.5 (`moveElementToPage`).
  */
 import { useMemo } from "react";
-import type { NormRect, PageDesign } from "../../core/types";
+import type { PageDesign } from "../../core/types";
 import { wordParagraphs } from "../../core/design";
-import { applyTextBoxPatchToShape, shapeTextDefaults } from "../design/shapeText";
+import {
+  fromCombinedRect,
+  mergePairDesign,
+  pairElementOwners,
+} from "../../core/book/pairSurface";
+import { lastTextPaintFor, patchedShapeText, shapeTextForNew } from "../design/lastPaint";
 import { bookProductForConfig, formatCapabilitiesForProject } from "../../core/book";
 import { computePageGuides } from "../../core/book/format";
 import { getCursor } from "../../core/versioning";
@@ -37,30 +39,6 @@ type ModelKind = "box" | "shape" | "image";
 
 function toModelKind(kind: StageElementKind): ModelKind {
   return kind === "text" ? "box" : kind;
-}
-
-/** Map a page-local (0..1) rect into its half of the combined double-wide surface. */
-function toCombinedRect(rect: NormRect, isRight: boolean): NormRect {
-  return { x: (isRight ? 0.5 : 0) + rect.x / 2, y: rect.y, w: rect.w / 2, h: rect.h };
-}
-
-/** Inverse of {@link toCombinedRect} — combined-space rect back to page-local. */
-function fromCombinedRect(rect: NormRect, isRight: boolean): NormRect {
-  return { x: (rect.x - (isRight ? 0.5 : 0)) * 2, y: rect.y, w: rect.w * 2, h: rect.h };
-}
-
-/** Keep a combined-space rect inside its owner half (page art can't cross the fold). */
-function clampCombinedRectToHalf(rect: NormRect, ownerIsRight: boolean): NormRect {
-  const minX = ownerIsRight ? 0.5 : 0;
-  const maxX = ownerIsRight ? 1 : 0.5;
-  const maxW = maxX - minX;
-  const w = Math.min(rect.w, maxW);
-  const x = Math.max(minX, Math.min(maxX - w, rect.x));
-  return { x, y: rect.y, w, h: rect.h };
-}
-
-function mapElements<T extends { rect: NormRect }>(list: T[], isRight: boolean): T[] {
-  return list.map((el) => ({ ...el, rect: toCombinedRect(el.rect, isRight) }));
 }
 
 export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry }) {
@@ -106,28 +84,12 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
   const leftBlank = isBlankEntry(left);
   const rightBlank = isBlankEntry(right);
 
-  const merged: PageDesign = useMemo(
-    () => ({
-      // The left page's background paints as the stage's "primary" surface;
-      // the right page's own background comes through `rightSurface` below.
-      background: leftPd.background,
-      textBoxes: [...mapElements(leftPd.textBoxes, false), ...mapElements(rightPd.textBoxes, true)],
-      shapes: [...mapElements(leftPd.shapes ?? [], false), ...mapElements(rightPd.shapes ?? [], true)],
-      images: [...mapElements(leftPd.images ?? [], false), ...mapElements(rightPd.images ?? [], true)],
-    }),
-    [leftPd, rightPd],
-  );
+  const merged: PageDesign = useMemo(() => mergePairDesign(leftPd, rightPd), [leftPd, rightPd]);
 
-  const elementOwner = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const b of leftPd.textBoxes) map.set(b.id, left.page.id);
-    for (const s of leftPd.shapes ?? []) map.set(s.id, left.page.id);
-    for (const im of leftPd.images ?? []) map.set(im.id, left.page.id);
-    for (const b of rightPd.textBoxes) map.set(b.id, right.page.id);
-    for (const s of rightPd.shapes ?? []) map.set(s.id, right.page.id);
-    for (const im of rightPd.images ?? []) map.set(im.id, right.page.id);
-    return map;
-  }, [leftPd, rightPd, left.page.id, right.page.id]);
+  const elementOwner = useMemo(
+    () => pairElementOwners(leftPd, rightPd, left.page.id, right.page.id),
+    [leftPd, rightPd, left.page.id, right.page.id],
+  );
 
   const leftTree = project.illustrations?.[left.page.id];
   const leftCursor = leftTree ? getCursor(leftTree).content : null;
@@ -216,25 +178,22 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
         const ownerId = elementOwner.get(id) ?? left.page.id;
         const modelKind = toModelKind(kind);
         if (patch.rect) {
-          const centerX = patch.rect.x + patch.rect.w / 2;
-          const isRight = centerX >= 0.5;
-          const destId = isRight ? right.page.id : left.page.id;
           const ownerIsRight = ownerId === right.page.id;
-
-          // Page AI art stays on its page — clamp to the owner half instead of
-          // reassigning ownership (which swapped bitmaps / left ghosts).
-          if (destId !== ownerId && modelKind === "image") {
+          if (modelKind === "image") {
             const im = pageDesign(ownerId).images?.find((x) => x.id === id);
+            // Page AI art stays on its owner leaf; the frame may cross the fold.
             if (im?.kind === "illustration") {
-              const clamped = clampCombinedRectToHalf(patch.rect, ownerIsRight);
               applyPatch(ownerId, id, modelKind, {
                 ...patch,
-                rect: fromCombinedRect(clamped, ownerIsRight),
+                rect: fromCombinedRect(patch.rect, ownerIsRight),
               });
               return;
             }
           }
 
+          const centerX = patch.rect.x + patch.rect.w / 2;
+          const isRight = centerX >= 0.5;
+          const destId = isRight ? right.page.id : left.page.id;
           const localRect = fromCombinedRect(patch.rect, isRight);
           if (destId === ownerId) {
             // No crossing: one normal patch (keeps rotation/minHeightPct, if
@@ -255,12 +214,11 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
           patchImage(ownerId, id, patch);
           return;
         }
-        // Overlay works in combined stage space; store page-local rects.
+        // Combined stage space → page-local, including overflow past the fold.
         const ownerIsRight = ownerId === right.page.id;
-        const clamped = clampCombinedRectToHalf(patch.rect, ownerIsRight);
         patchImage(ownerId, id, {
           ...patch,
-          rect: fromCombinedRect(clamped, ownerIsRight),
+          rect: fromCombinedRect(patch.rect, ownerIsRight),
         });
       }}
       onSelectArt={(side) => selectIllustration(side === "right" ? right.page.id : left.page.id)}
@@ -277,10 +235,15 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
         const shape = pageDesign(pageId).shapes?.find((s) => s.id === id);
         if (shape) {
           patchShape(pageId, id, {
-            text: applyTextBoxPatchToShape(shape, { paragraphs }, {
-              fontFamily: design.defaultFontFamily,
-              fontSizePct: design.defaultFontSizePct,
-            }),
+            text: patchedShapeText(
+              shape,
+              { paragraphs },
+              {
+                fontFamily: design.defaultFontFamily,
+                fontSizePct: design.defaultFontSizePct,
+              },
+              lastTextPaintFor(design, shape),
+            ),
           });
           return;
         }
@@ -291,10 +254,15 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
         const shape = pageDesign(pageId).shapes?.find((s) => s.id === id);
         if (shape) {
           patchShape(pageId, id, {
-            text: applyTextBoxPatchToShape(shape, { paragraphs }, {
-              fontFamily: design.defaultFontFamily,
-              fontSizePct: design.defaultFontSizePct,
-            }),
+            text: patchedShapeText(
+              shape,
+              { paragraphs },
+              {
+                fontFamily: design.defaultFontFamily,
+                fontSizePct: design.defaultFontSizePct,
+              },
+              lastTextPaintFor(design, shape),
+            ),
           });
           return;
         }
@@ -308,10 +276,15 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
             pageId,
             id,
             {
-              text: applyTextBoxPatchToShape(shape, patch, {
-                fontFamily: design.defaultFontFamily,
-                fontSizePct: design.defaultFontSizePct,
-              }),
+              text: patchedShapeText(
+                shape,
+                patch,
+                {
+                  fontFamily: design.defaultFontFamily,
+                  fontSizePct: design.defaultFontSizePct,
+                },
+                lastTextPaintFor(design, shape),
+              ),
             },
             opts,
           );
@@ -372,10 +345,14 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
         },
         onGestureEnd: endHistoryGesture,
         newText: (shape) =>
-          shapeTextDefaults(shape, {
-            fontFamily: design.defaultFontFamily,
-            fontSizePct: design.defaultFontSizePct,
-          }),
+          shapeTextForNew(
+            shape,
+            {
+              fontFamily: design.defaultFontFamily,
+              fontSizePct: design.defaultFontSizePct,
+            },
+            lastTextPaintFor(design, shape),
+          ),
       }}
       selectedSpan={selectedSpan}
       onSelectSpan={(ref: SpanRef | null) => {

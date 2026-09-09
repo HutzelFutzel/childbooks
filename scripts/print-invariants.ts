@@ -86,9 +86,19 @@ import {
 } from "../books-frontend/src/core/imageGeometry";
 import {
   buildCoverPlan,
+  buildEbookTargets,
   buildInteriorPlan,
 } from "../books-frontend/src/ui/design/printTargets";
 import type { DesignPage } from "../books-frontend/src/ui/design/designInit";
+import {
+  fromCombinedRect,
+  illustrationLeaf,
+  joinPairDesign,
+  mergePairDesign,
+  toCombinedRect,
+  withFacingOverflow,
+} from "../books-frontend/src/core/book/pairSurface";
+import type { PageDesign } from "../books-frontend/src/core/types";
 
 const failures: string[] = [];
 const checks: string[] = [];
@@ -471,6 +481,165 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
       targets.find((target) => target.id === "b")?.documentIndex === 2,
     JSON.stringify(targets.map(({ id, documentIndex }) => ({ id, documentIndex }))),
   );
+}
+
+// ---- Facing-pair compositor ------------------------------------------------
+
+{
+  const local = { x: 0.2, y: 0.1, w: 0.4, h: 0.3 };
+  const combined = toCombinedRect(local, false);
+  const back = fromCombinedRect(combined, false);
+  check(
+    "page-local rects round-trip through combined space",
+    near(back.x, local.x) && near(back.y, local.y) && near(back.w, local.w) && near(back.h, local.h),
+    JSON.stringify({ combined, back }),
+  );
+
+  const spanning = { x: 0.7, y: 0.2, w: 0.6, h: 0.4 };
+  const wide = toCombinedRect(spanning, false);
+  check(
+    "a spanning left-page rect crosses the fold in combined space",
+    wide.x < 0.5 && wide.x + wide.w > 0.5,
+    JSON.stringify(wide),
+  );
+
+  const leftPd: PageDesign = {
+    textBoxes: [{ id: "t-left", rect: spanning, z: 1, paragraphs: [] } as PageDesign["textBoxes"][number]],
+  };
+  const rightPd: PageDesign = { textBoxes: [] };
+  const guests = withFacingOverflow(rightPd, leftPd, false);
+  check(
+    "the facing right leaf receives the overflowing half",
+    guests.textBoxes.length === 1 && near(guests.textBoxes[0].rect.x, spanning.x - 1),
+    JSON.stringify(guests.textBoxes[0]?.rect),
+  );
+
+  const merged = mergePairDesign(leftPd, rightPd);
+  check(
+    "merged pair design keeps one copy of a spanning box",
+    merged.textBoxes.length === 1 && near(merged.textBoxes[0].rect.x, wide.x),
+  );
+}
+
+{
+  const art = {
+    id: "art-l",
+    kind: "illustration" as const,
+    rect: { x: 0.4, y: 0, w: 1.2, h: 1 },
+    z: 0,
+    fit: "cover" as const,
+  };
+  const leftPd: PageDesign = { textBoxes: [], images: [art] };
+  const rightPd: PageDesign = { textBoxes: [] };
+  const guests = withFacingOverflow(rightPd, leftPd, false);
+  const guest = guests.images?.[0];
+  check(
+    "the facing right leaf receives overflowing page art",
+    Boolean(guest) &&
+      guest?.id === "art-l" &&
+      guest?.pairLeaf === "left" &&
+      near(guest?.rect.x ?? 0, art.rect.x - 1),
+    JSON.stringify(guest?.rect),
+  );
+
+  const merged = mergePairDesign(leftPd, rightPd);
+  const mergedArt = merged.images?.[0];
+  check(
+    "merged page art stays bound to its owner leaf past the fold",
+    mergedArt?.pairLeaf === "left" &&
+      illustrationLeaf(mergedArt) === "left" &&
+      (mergedArt?.rect.x ?? 0) + (mergedArt?.rect.w ?? 0) > 0.5,
+    JSON.stringify(mergedArt),
+  );
+}
+
+{
+  const facing = doc([
+    spreadEntry("a", "single"),
+    spreadEntry("b", "single"),
+    spreadEntry("c", "single"),
+  ]);
+  const project = {
+    config: { productSku: square.sku, bookSize: "square" },
+    screenplay: createVersionTree(facing),
+  } as unknown as Project;
+  const pages = ["a", "b", "c"].map(
+    (id) =>
+      ({
+        id,
+        label: id,
+        aspect: square.aspect,
+        isCover: false,
+      }) as DesignPage,
+  );
+  const targets = buildInteriorPlan(project, pages, DPI).targets;
+  const first = targets.find((target) => target.id === "a");
+  const verso = targets.find((target) => target.id === "b");
+  const recto = targets.find((target) => target.id === "c");
+  check("page one stays a lone right-hand capture", !first?.pairWith);
+  check(
+    "facing singles print as a virtual spread",
+    Boolean(verso?.pairWith && verso.pairRole === "left" && verso.pairWith.id === "c") &&
+      Boolean(recto?.pairWith && recto.pairRole === "right" && recto.pairWith.id === "b"),
+    JSON.stringify({
+      b: { pair: verso?.pairWith?.id, role: verso?.pairRole },
+      c: { pair: recto?.pairWith?.id, role: recto?.pairRole },
+    }),
+  );
+  check(
+    "virtual-pair bleed keeps real fold overlap",
+    Boolean(
+      verso?.bleedFill &&
+        recto?.bleedFill &&
+        verso.bleedFill.left > 0 &&
+        verso.bleedFill.right === 0 &&
+        recto.bleedFill.left === 0 &&
+        recto.bleedFill.right > 0,
+    ),
+    JSON.stringify({ left: verso?.bleedFill, right: recto?.bleedFill }),
+  );
+
+  const ebook = buildEbookTargets(project, pages, DPI);
+  check(
+    "the ebook paints neighbor overflow onto each facing single",
+    ebook.find((t) => t.id === "b")?.overflowFrom?.page.id === "c" &&
+      ebook.find((t) => t.id === "c")?.overflowFrom?.page.id === "b" &&
+      !ebook.find((t) => t.id === "a")?.overflowFrom,
+  );
+}
+
+{
+  const leftPd: PageDesign = {
+    textBoxes: [{ id: "keep", rect: { x: 0.1, y: 0.1, w: 0.3, h: 0.2 }, z: 1, paragraphs: [] } as PageDesign["textBoxes"][number]],
+    images: [
+      {
+        id: "art-r",
+        kind: "illustration",
+        rect: { x: 0, y: 0, w: 1, h: 1 },
+        z: 0,
+        fit: "cover",
+      } as PageDesign["images"] extends (infer I)[] | undefined ? I : never,
+    ],
+  };
+  const rightPd: PageDesign = {
+    textBoxes: [{ id: "cross", rect: { x: -0.2, y: 0.2, w: 0.5, h: 0.2 }, z: 1, paragraphs: [] } as PageDesign["textBoxes"][number]],
+    images: [
+      {
+        id: "drop-me",
+        kind: "illustration",
+        rect: { x: 0, y: 0, w: 1, h: 1 },
+        z: 0,
+        fit: "cover",
+      } as PageDesign["images"] extends (infer I)[] | undefined ? I : never,
+    ],
+  };
+  const joined = joinPairDesign(leftPd, rightPd);
+  check(
+    "joining a pair drops the right leaf's page art",
+    (joined.images ?? []).every((image) => image.id !== "drop-me") &&
+      joined.textBoxes.some((box) => box.id === "cross"),
+  );
+
 }
 
 // ---- Interior assembly -----------------------------------------------------

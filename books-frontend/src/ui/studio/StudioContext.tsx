@@ -56,7 +56,19 @@ import {
   type DesignPage,
 } from "../design/designInit";
 import { getPreset } from "../design/presets";
-import { newShapeId, shapeStyleDefaults } from "../design/shapes";
+import {
+  applyLastCustomText,
+  customTextScope,
+  lastShapePaintFor,
+  lastShapeTextFor,
+  patchHasShapePaint,
+  patchHasTextPaint,
+  rememberCustomTextPaint,
+  rememberShapePaint,
+  shapeStyleForNew,
+  shapeTextForNew,
+} from "../design/lastPaint";
+import { newShapeId } from "../design/shapes";
 import { fitBoxHeightPct, fitFontSizePct } from "../design/textFit";
 import type { SpanRef } from "../design/TextBoxView";
 import { notify, toast } from "../lib/notify";
@@ -1183,35 +1195,38 @@ export function StudioProvider({
         "fontFamily" in patch ||
         "minHeightPct" in patch ||
         "rect" in patch;
-      commit(
-        (d) =>
-          mutatePage(d, pageId, (pd) => ({
-            ...pd,
-            textBoxes: pd.textBoxes.map((b) => {
-              if (b.id !== boxId) return b;
-              let next = { ...b, ...patch };
-              // Auto-height boxes render at max(target floor, content height): they
-              // grow as text is added and can never be shorter than the text, but a
-              // larger user-set target (minHeightPct) leaves room to breathe.
-              // Skip when the patch itself turns auto-height off (a manual resize)
-              // — otherwise we'd restore content height and the opposite edge of
-              // the box would jump instead of the font shrinking to fit.
-              if (
-                next.autoHeight &&
-                patch.autoHeight !== false &&
-                affectsHeight &&
-                aspect
-              ) {
-                const contentH = fitBoxHeightPct(next, aspect);
-                const h = Math.max(contentH, next.minHeightPct ?? 0);
-                const y = Math.max(0, Math.min(1 - h, next.rect.y));
-                next = { ...next, rect: { ...next.rect, h, y } };
-              }
-              return next;
-            }),
-          })),
-        opts,
-      );
+      commit((d) => {
+        mutatePage(d, pageId, (pd) => ({
+          ...pd,
+          textBoxes: pd.textBoxes.map((b) => {
+            if (b.id !== boxId) return b;
+            let next = { ...b, ...patch };
+            // Auto-height boxes render at max(target floor, content height): they
+            // grow as text is added and can never be shorter than the text, but a
+            // larger user-set target (minHeightPct) leaves room to breathe.
+            // Skip when the patch itself turns auto-height off (a manual resize)
+            // — otherwise we'd restore content height and the opposite edge of
+            // the box would jump instead of the font shrinking to fit.
+            if (
+              next.autoHeight &&
+              patch.autoHeight !== false &&
+              affectsHeight &&
+              aspect
+            ) {
+              const contentH = fitBoxHeightPct(next, aspect);
+              const h = Math.max(contentH, next.minHeightPct ?? 0);
+              const y = Math.max(0, Math.min(1 - h, next.rect.y));
+              next = { ...next, rect: { ...next.rect, h, y } };
+            }
+            return next;
+          }),
+        }));
+        if (patchHasTextPaint(patch)) {
+          const box = d.pages[pageId]?.textBoxes.find((b) => b.id === boxId);
+          if (box) rememberCustomTextPaint(d, pageId, box);
+        }
+        return d;
+      }, opts);
       // Linked cover title/subtitle: push canvas → project when the edit isn't
       // mid-coalesce (live typing). Coalesced sessions flush via endHistoryGesture.
       if (!opts?.coalesce && pageId === COVER_FRONT_ID && patch.paragraphs) {
@@ -1355,6 +1370,9 @@ export function StudioProvider({
         autoFit: false,
         ...(role ? { role } : {}),
       };
+      const lastCustom = customTextScope(pageId, box);
+      const lastPaint = lastCustom ? design.lastCustomTextStyle?.[lastCustom] : undefined;
+      if (lastPaint) box = applyLastCustomText(box, lastPaint);
       const scopeKey =
         role ??
         (pageId === COVER_FRONT_ID || pageId === COVER_BACK_ID
@@ -1460,7 +1478,11 @@ export function StudioProvider({
         },
         z: topZ(design!.pages[pageId]) + 1,
       };
-      commit((d) => mutatePage(d, pageId, (pd) => ({ ...pd, textBoxes: [...pd.textBoxes, copy] })));
+      commit((d) => {
+        mutatePage(d, pageId, (pd) => ({ ...pd, textBoxes: [...pd.textBoxes, copy] }));
+        rememberCustomTextPaint(d, pageId, copy);
+        return d;
+      });
       setSelection({ kind: "box", pageId, boxId: copy.id, span: null });
     },
     [commit, design, mutatePage],
@@ -1494,12 +1516,27 @@ export function StudioProvider({
       const w = Math.min(0.6, h / aspect);
       const pd = design.pages[pageId];
       const top = topZ(pd);
+      const lastPaint = lastShapePaintFor(design, kind);
+      const style = shapeStyleForNew(kind, lastPaint);
+      const lastText = lastShapeTextFor(design) ?? lastPaint?.text;
       const shape: ShapeElement = {
         id: newShapeId(),
         kind,
         rect: centeredRect(w, h, center),
         z: top + 1,
-        ...shapeStyleDefaults(kind),
+        ...style,
+        ...(lastText
+          ? {
+              text: shapeTextForNew(
+                { kind, fill: style.fill },
+                {
+                  fontFamily: design.defaultFontFamily,
+                  fontSizePct: design.defaultFontSizePct,
+                },
+                { fill: style.fill, text: lastText },
+              ),
+            }
+          : {}),
       };
       commit((d) =>
         mutatePage(d, pageId, (pdraft) => ({ ...pdraft, shapes: [...(pdraft.shapes ?? []), shape] })),
@@ -1511,14 +1548,17 @@ export function StudioProvider({
 
   const patchShape = useCallback(
     (pageId: string, shapeId: string, patch: Partial<ShapeElement>, opts?: HistoryOpts) => {
-      commit(
-        (d) =>
-          mutatePage(d, pageId, (pd) => ({
-            ...pd,
-            shapes: (pd.shapes ?? []).map((s) => (s.id === shapeId ? { ...s, ...patch } : s)),
-          })),
-        opts,
-      );
+      commit((d) => {
+        mutatePage(d, pageId, (pd) => ({
+          ...pd,
+          shapes: (pd.shapes ?? []).map((s) => (s.id === shapeId ? { ...s, ...patch } : s)),
+        }));
+        if (patchHasShapePaint(patch)) {
+          const shape = d.pages[pageId]?.shapes?.find((s) => s.id === shapeId);
+          if (shape) rememberShapePaint(d, shape);
+        }
+        return d;
+      }, opts);
     },
     [commit, mutatePage],
   );
@@ -1550,9 +1590,11 @@ export function StudioProvider({
         },
         z: topZ(design!.pages[pageId]) + 1,
       };
-      commit((d) =>
-        mutatePage(d, pageId, (pd) => ({ ...pd, shapes: [...(pd.shapes ?? []), copy] })),
-      );
+      commit((d) => {
+        mutatePage(d, pageId, (pd) => ({ ...pd, shapes: [...(pd.shapes ?? []), copy] }));
+        rememberShapePaint(d, copy);
+        return d;
+      });
       setSelection({ kind: "shape", pageId, shapeId: copy.id });
     },
     [commit, design, mutatePage],
@@ -2137,7 +2179,7 @@ export function StudioProvider({
       }
       // Page AI art is bound to its illustration unit — never migrate across
       // facing pages (that swapped art / left ghost copies on pair stages).
-      // PairPageStage clamps the drag on its side; this is the safety net.
+      // PairPageStage keeps ownership on the owner leaf; this is the safety net.
       if (kind === "image") {
         const fromPd = useProjectsStore.getState().current()?.design?.pages[fromPageId];
         const el = fromPd?.images?.find((im) => im.id === elementId);

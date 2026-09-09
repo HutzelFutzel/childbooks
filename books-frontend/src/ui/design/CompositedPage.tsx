@@ -1,12 +1,14 @@
 import { useState, type CSSProperties } from "react";
 import type {
   ImageElement,
+  PageBackground,
   PageDesign,
   PrintBleedMode,
   ShapeElement,
   TextBox,
 } from "../../core/types";
 import { coverPlacement, type FrameInsets } from "../../core/imageGeometry";
+import { illustrationLeaf } from "../../core/book/pairSurface";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { cssFilter } from "./effects";
@@ -22,6 +24,21 @@ import { TextBoxView } from "./TextBoxView";
  * in here, so a page renders its illustration on its first paint.
  */
 export type ResolvedArtwork = Record<string, string>;
+
+/** Second leaf of a facing pair: own background and page art, same trim height. */
+export interface CompositedRightSurface {
+  background?: PageBackground;
+  illustrationBlobId?: string;
+  illustrationUrl?: string | null;
+  illustrationFocus?: { x: number; y: number };
+}
+
+/** Neighbor page art on a single-leaf (ebook) capture, bound by `pairLeaf`. */
+export interface OverflowIllustration {
+  blobId?: string;
+  url?: string | null;
+  pairLeaf: "left" | "right";
+}
 
 interface Stacked {
   id: string;
@@ -55,6 +72,8 @@ export function CompositedPage({
   artwork,
   imageMasks,
   illustrationFocus,
+  rightSurface,
+  overflowIllustration,
 }: {
   pageDesign: PageDesign;
   surfaceWidthPx: number;
@@ -70,6 +89,10 @@ export function CompositedPage({
   /** Pre-resolved immutable mask URLs (print); public catalog is the UI fallback. */
   imageMasks?: ResolvedImageMasks;
   illustrationFocus?: { x: number; y: number };
+  /** Facing right leaf — backgrounds and page art stay per-page. */
+  rightSurface?: CompositedRightSurface;
+  /** Ebook guest: overflowing neighbor page art, keyed by `pairLeaf`. */
+  overflowIllustration?: OverflowIllustration;
 }) {
   const configuredMasks = useAppConfigStore((state) => state.imageMasks.assets);
   const fetched = useBlobUrl(
@@ -79,9 +102,47 @@ export function CompositedPage({
     illustrationUrl ??
     (illustrationBlobId ? artwork?.[illustrationBlobId] : undefined) ??
     fetched;
+  const rightFetched = useBlobUrl(
+    rightSurface && (rightSurface.illustrationUrl || artwork)
+      ? undefined
+      : rightSurface?.illustrationBlobId,
+  );
+  const rightUrl = rightSurface
+    ? (rightSurface.illustrationUrl ??
+      (rightSurface.illustrationBlobId
+        ? artwork?.[rightSurface.illustrationBlobId]
+        : undefined) ??
+      rightFetched)
+    : undefined;
+  const overflowFetched = useBlobUrl(
+    overflowIllustration && (overflowIllustration.url || artwork)
+      ? undefined
+      : overflowIllustration?.blobId,
+  );
+  const overflowUrl = overflowIllustration
+    ? (overflowIllustration.url ??
+      (overflowIllustration.blobId
+        ? artwork?.[overflowIllustration.blobId]
+        : undefined) ??
+      overflowFetched)
+    : undefined;
 
   const W = surfaceWidthPx - bleedPx * 2;
   const H = surfaceHeightPx - bleedPx * 2;
+  const foldX = bleedPx + W / 2;
+  const ownerLeaf = (image: ImageElement) => illustrationLeaf(image);
+  const imageOnRight = (image: ImageElement) =>
+    Boolean(rightSurface) && ownerLeaf(image) === "right";
+  const urlForImage = (image: ImageElement) => {
+    if (
+      image.kind === "illustration" &&
+      overflowIllustration &&
+      image.pairLeaf === overflowIllustration.pairLeaf
+    ) {
+      return overflowUrl;
+    }
+    return imageOnRight(image) ? rightUrl : url;
+  };
   const fitIllustrationsToBleed = bleedPx > 0 && bleedMode === "fit";
   const physicalBleedSides = bleedSides ?? {
     top: true,
@@ -90,7 +151,16 @@ export function CompositedPage({
     left: true,
   };
 
-  const hasIllustrationEl = (pageDesign.images ?? []).some((im) => im.kind === "illustration");
+  const isOwnIllustration = (im: ImageElement) =>
+    im.kind === "illustration" &&
+    !(overflowIllustration && im.pairLeaf === overflowIllustration.pairLeaf);
+  const hasIllustrationEl = (pageDesign.images ?? []).some(isOwnIllustration);
+  const hasIllustrationElLeft = (pageDesign.images ?? []).some(
+    (im) => isOwnIllustration(im) && !imageOnRight(im),
+  );
+  const hasIllustrationElRight = (pageDesign.images ?? []).some(
+    (im) => isOwnIllustration(im) && imageOnRight(im),
+  );
   const illustrationBleedInsets = (image: ImageElement): FrameInsets | undefined => {
     if (
       !fitIllustrationsToBleed ||
@@ -102,13 +172,15 @@ export function CompositedPage({
     ) {
       return undefined;
     }
+    const pageStart = 0;
+    const pageEnd = 1;
     const tolerance = 0.001;
     const insets = {
       top:
         physicalBleedSides.top && image.rect.y <= tolerance ? bleedPx : 0,
       right:
         physicalBleedSides.right &&
-        image.rect.x + image.rect.w >= 1 - tolerance
+        image.rect.x + image.rect.w >= pageEnd - tolerance
           ? bleedPx
           : 0,
       bottom:
@@ -117,7 +189,7 @@ export function CompositedPage({
           ? bleedPx
           : 0,
       left:
-        physicalBleedSides.left && image.rect.x <= tolerance ? bleedPx : 0,
+        physicalBleedSides.left && image.rect.x <= pageStart + tolerance ? bleedPx : 0,
     };
     return insets.top + insets.right + insets.bottom + insets.left > 0
       ? insets
@@ -171,24 +243,50 @@ export function CompositedPage({
         height: surfaceHeightPx,
       }}
     >
-      {url && !hasIllustrationEl && (
-        <div
-          style={{
-            position: "absolute",
-            left: bleedPx - legacyBleed.left,
-            top: bleedPx - legacyBleed.top,
-            width: legacyW,
-            height: legacyH,
-            overflow: "hidden",
-          }}
-        >
-          <CoverImage
-            src={url}
-            w={legacyW}
-            h={legacyH}
-            focus={illustrationFocus}
-          />
-        </div>
+      {rightSurface ? (
+        <>
+          {url && !hasIllustrationElLeft && (
+            <LegacyHalfArt
+              src={url}
+              left={bleedPx - (physicalBleedSides.left ? legacyBleed.left : 0)}
+              top={bleedPx - legacyBleed.top}
+              width={W / 2 + (physicalBleedSides.left ? legacyBleed.left : 0)}
+              height={legacyH}
+              focus={illustrationFocus}
+            />
+          )}
+          {rightUrl && !hasIllustrationElRight && (
+            <LegacyHalfArt
+              src={rightUrl}
+              left={foldX}
+              top={bleedPx - legacyBleed.top}
+              width={W / 2 + (physicalBleedSides.right ? legacyBleed.right : 0)}
+              height={legacyH}
+              focus={rightSurface.illustrationFocus}
+            />
+          )}
+        </>
+      ) : (
+        url &&
+        !hasIllustrationEl && (
+          <div
+            style={{
+              position: "absolute",
+              left: bleedPx - legacyBleed.left,
+              top: bleedPx - legacyBleed.top,
+              width: legacyW,
+              height: legacyH,
+              overflow: "hidden",
+            }}
+          >
+            <CoverImage
+              src={url}
+              w={legacyW}
+              h={legacyH}
+              focus={illustrationFocus}
+            />
+          </div>
+        )
       )}
       {stacked.map((el) => {
         if (!el.image) return null;
@@ -216,7 +314,7 @@ export function CompositedPage({
               w={renderW}
               h={renderH}
               pageHeight={H}
-              illustrationUrl={url ?? undefined}
+              illustrationUrl={urlForImage(el.image) ?? undefined}
               artwork={artwork}
             />
           </div>
@@ -273,10 +371,29 @@ export function CompositedPage({
         overflow: "hidden",
       }}
     >
-      {pageDesign.background?.color && (
-        <div style={{ position: "absolute", inset: 0, background: pageDesign.background.color }} />
+      {rightSurface ? (
+        <>
+          <HalfBackground
+            background={pageDesign.background}
+            left={0}
+            width={foldX}
+            height={surfaceHeightPx}
+          />
+          <HalfBackground
+            background={rightSurface.background}
+            left={foldX}
+            width={surfaceWidthPx - foldX}
+            height={surfaceHeightPx}
+          />
+        </>
+      ) : (
+        <>
+          {pageDesign.background?.color && (
+            <div style={{ position: "absolute", inset: 0, background: pageDesign.background.color }} />
+          )}
+          {pageDesign.background?.pattern && <PatternFill config={pageDesign.background.pattern} />}
+        </>
       )}
-      {pageDesign.background?.pattern && <PatternFill config={pageDesign.background.pattern} />}
       {fittedBleedStrips.map((strip) => (
         <div
           key={strip.id}
@@ -313,24 +430,50 @@ export function CompositedPage({
           overflow: "hidden",
         }}
       >
-        {url && !hasIllustrationEl && (
-          <div
-            style={{
-              position: "absolute",
-              left: -legacyBleed.left,
-              top: -legacyBleed.top,
-              width: legacyW,
-              height: legacyH,
-              overflow: "hidden",
-            }}
-          >
-            <CoverImage
-              src={url}
-              w={legacyW}
-              h={legacyH}
-              focus={illustrationFocus}
-            />
-          </div>
+        {rightSurface ? (
+          <>
+            {url && !hasIllustrationElLeft && (
+              <LegacyHalfArt
+                src={url}
+                left={-legacyBleed.left}
+                top={-legacyBleed.top}
+                width={W / 2 + legacyBleed.left}
+                height={legacyH}
+                focus={illustrationFocus}
+              />
+            )}
+            {rightUrl && !hasIllustrationElRight && (
+              <LegacyHalfArt
+                src={rightUrl}
+                left={W / 2}
+                top={-legacyBleed.top}
+                width={W / 2 + legacyBleed.right}
+                height={legacyH}
+                focus={rightSurface.illustrationFocus}
+              />
+            )}
+          </>
+        ) : (
+          url &&
+          !hasIllustrationEl && (
+            <div
+              style={{
+                position: "absolute",
+                left: -legacyBleed.left,
+                top: -legacyBleed.top,
+                width: legacyW,
+                height: legacyH,
+                overflow: "hidden",
+              }}
+            >
+              <CoverImage
+                src={url}
+                w={legacyW}
+                h={legacyH}
+                focus={illustrationFocus}
+              />
+            </div>
+          )
         )}
         {stacked.map((el) => {
           const w = el.rect.w * W;
@@ -372,7 +515,7 @@ export function CompositedPage({
                   w={renderW}
                   h={renderH}
                   pageHeight={H}
-                  illustrationUrl={url ?? undefined}
+                  illustrationUrl={urlForImage(el.image) ?? undefined}
                   artwork={artwork}
                   maskUrl={
                     el.image.imageMaskId
@@ -386,6 +529,67 @@ export function CompositedPage({
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function HalfBackground({
+  background,
+  left,
+  width,
+  height,
+}: {
+  background?: PageBackground;
+  left: number;
+  width: number;
+  height: number;
+}) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left,
+        top: 0,
+        width,
+        height,
+        overflow: "hidden",
+      }}
+    >
+      {background?.color && (
+        <div style={{ position: "absolute", inset: 0, background: background.color }} />
+      )}
+      {background?.pattern && <PatternFill config={background.pattern} />}
+    </div>
+  );
+}
+
+function LegacyHalfArt({
+  src,
+  left,
+  top,
+  width,
+  height,
+  focus,
+}: {
+  src: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  focus?: { x: number; y: number };
+}) {
+  return (
+    <div
+      style={{
+        position: "absolute",
+        left,
+        top,
+        width,
+        height,
+        overflow: "hidden",
+      }}
+    >
+      <CoverImage src={src} w={width} h={height} focus={focus} />
     </div>
   );
 }

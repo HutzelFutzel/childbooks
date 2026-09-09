@@ -14,6 +14,7 @@ import {
   ArrowRight,
   ArrowUp,
   BookOpen,
+  Columns2,
   Copy,
   GripVertical,
   MoreHorizontal,
@@ -32,6 +33,7 @@ import { cn } from "../lib/cn";
 import {
   contentSpreadIds,
   displayEntries,
+  isPlainPagePair,
   SpreadThumbnail,
   useDisplayStatuses,
   type DisplaySpread,
@@ -40,6 +42,7 @@ import {
 import {
   duplicateSpread,
   insertSpreadAt,
+  joinFacingPair,
   moveSpreadBefore,
   removeSpread,
   setSpreadCompletion,
@@ -196,6 +199,7 @@ export function PageFilmstrip({
                 dragging={dragId === disp.id}
                 dropBefore={overId === disp.id && dragId !== null && dragId !== disp.id}
                 onSelect={() => onSelect(disp.id)}
+                onSelectDisplay={onSelect}
                 onGrabStart={() => reorderable && setDragId(disp.id)}
                 onGrabMove={handleMove}
                 onGrabEnd={handleUp}
@@ -380,6 +384,7 @@ function FilmstripCell({
   dragging,
   dropBefore,
   onSelect,
+  onSelectDisplay,
   onGrabStart,
   onGrabMove,
   onGrabEnd,
@@ -398,6 +403,7 @@ function FilmstripCell({
   dragging: boolean;
   dropBefore: boolean;
   onSelect: () => void;
+  onSelectDisplay: (id: string) => void;
   onGrabStart: () => void;
   onGrabMove: (x: number, y: number) => void;
   onGrabEnd: (x: number, y: number) => void;
@@ -515,7 +521,26 @@ function FilmstripCell({
                     close();
                   }}
                 />
-                {structurePages.length > 0 && <div className="my-1 border-t border-ink-100" />}
+                {isPlainPagePair(disp) && (
+                  <>
+                    <MoveButton
+                      icon={<Columns2 className="size-3.5" />}
+                      label="Illustrate as one scene"
+                      disabled={false}
+                      onClick={() => {
+                        const leftId = disp.left.entry.page.id;
+                        const rightId = disp.right.entry.page.id;
+                        joinFacingPair(leftId, rightId);
+                        onSelectDisplay(`disp-${leftId}`);
+                        close();
+                      }}
+                    />
+                    <div className="my-1 border-t border-ink-100" />
+                  </>
+                )}
+                {structurePages.length > 0 && !isPlainPagePair(disp) && (
+                  <div className="my-1 border-t border-ink-100" />
+                )}
                 {structurePages.map((page) => (
                   <div key={page.id}>
                     {structurePages.length > 1 && (

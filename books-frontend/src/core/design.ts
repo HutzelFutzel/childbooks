@@ -7,7 +7,10 @@
 /** Any CSS color string, including rgba() with alpha. */
 export type ColorValue = string;
 
-/** A rectangle normalized to the page: x/y/w/h in 0..1. */
+/**
+ * A rectangle normalized to the page: x/y/w/h as fractions of the page size.
+ * Values may fall outside 0..1 when an element continues onto a facing page.
+ */
 export interface NormRect {
   x: number;
   y: number;
@@ -342,6 +345,12 @@ export interface ImageElement {
    * element its own slot id so loading/reconcile target the right frame.
    */
   illustrationId?: string;
+  /**
+   * Render-only hint set when two facing pages are flattened into one surface:
+   * which leaf this illustration is bound to. Never the saved source of truth —
+   * the owner page is. Lets a frame cross the fold without swapping bitmaps.
+   */
+  pairLeaf?: "left" | "right";
   /** Asset blob id (assets only; illustration pulls from the page blob). */
   blobId?: string;
   /** How the bitmap fills its rect. */
@@ -409,6 +418,50 @@ export type PrintBleedMode = "fit" | "mirror";
 /** Bumped when the saved design shape changes in a way that needs migrating. */
 export const DESIGN_VERSION = 5;
 
+/** Sticky fill/stroke used when adding another geometric shape or speech bubble. */
+export interface LastShapeTextPaint {
+  fontFamily: string;
+  fontSizePct: number;
+  color: ColorValue;
+  align: HAlign;
+  vAlign: VAlign;
+  lineHeight: number;
+  padding?: number;
+}
+
+export interface LastShapePaint {
+  fill: ColorValue;
+  stroke?: ColorValue;
+  strokeWidth?: number;
+  opacity?: number;
+  effects?: ElementEffects;
+  corner?: number;
+  /** Inner type (not copy) from the last shape in this family that had text. */
+  text?: LastShapeTextPaint;
+}
+
+/**
+ * Sticky look used when adding another custom (user-placed) text box.
+ * Geometry, copy, and auto-height stay per-box so a new box still hugs its text.
+ */
+export interface LastCustomTextPaint {
+  presetId: string;
+  fontFamily: string;
+  fontSizePct: number;
+  color: ColorValue;
+  align: HAlign;
+  vAlign: VAlign;
+  lineHeight: number;
+  fill?: ColorValue;
+  stroke?: ColorValue;
+  padding?: number;
+  pattern?: PatternConfig;
+  effects?: ElementEffects;
+  backdropBlur?: number;
+}
+
+export type LastCustomTextScope = Extract<SharedTextStyleKey, "custom-page" | "custom-cover">;
+
 export interface BookDesign {
   /** Schema version of the saved design (see {@link DESIGN_VERSION}). */
   version?: number;
@@ -420,6 +473,22 @@ export interface BookDesign {
   defaultFontSizePct: number;
   /** Role-aware typography used by existing boxes and anything seeded later. */
   sharedTextStyles?: Partial<Record<SharedTextStyleKey, SharedTextStyle>>;
+  /**
+   * Last paint applied to a geometric shape vs a speech bubble. Fill/stroke stay
+   * per family so a green star does not become a green bubble. Inner type is
+   * shared (`text`) so the last font follows the next shape of either kind.
+   */
+  lastShapeStyle?: {
+    geometric?: LastShapePaint;
+    bubble?: LastShapePaint;
+    /** Last inner type from any shape family. */
+    text?: LastShapeTextPaint;
+  };
+  /**
+   * Last look applied to a user-placed text box, scoped to pages vs covers so
+   * a cover title treatment does not leak into interior extras.
+   */
+  lastCustomTextStyle?: Partial<Record<LastCustomTextScope, LastCustomTextPaint>>;
   /**
    * Paper color inherited by newly seeded pages after “Apply to all pages”.
    * Per-page {@link PageDesign.background} remains the source of truth for

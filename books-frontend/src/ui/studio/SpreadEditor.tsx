@@ -20,6 +20,8 @@
 import { useMemo } from "react";
 import { useJobsStore } from "../../state/jobsStore";
 import { useBlobUrl } from "../hooks/useBlobUrl";
+import { mergePairDesign } from "../../core/book/pairSurface";
+import { getCursor } from "../../core/versioning";
 import { PageStage } from "../design/PageStage";
 import { defaultIllustrationFocus } from "../design/designInit";
 import { useStudio } from "./StudioContext";
@@ -30,6 +32,7 @@ import {
   entryNeedsArtwork,
   FOLD_GRADIENT,
   isBlankEntry,
+  isPlainPagePair,
   sideAspect,
   type DisplaySpread,
   type Entry,
@@ -116,6 +119,44 @@ export function PagePreview({ entry }: { entry: Entry }) {
   );
 }
 
+/**
+ * Static facing pair: the same merged surface the live editor uses, so an
+ * element that crosses the fold is visible on both leaves here too.
+ */
+export function PairPreview({ left, right }: { left: Entry; right: Entry }) {
+  const { project, pageDesign } = useStudio();
+  const leftPd = pageDesign(left.page.id);
+  const rightPd = pageDesign(right.page.id);
+  const merged = useMemo(() => mergePairDesign(leftPd, rightPd), [leftPd, rightPd]);
+  const leftBlank = isBlankEntry(left);
+  const rightBlank = isBlankEntry(right);
+  const leftTree = project.illustrations?.[left.page.id];
+  const leftCursor = leftTree ? getCursor(leftTree).content : null;
+  const leftUrl = useBlobUrl(leftCursor?.blobId ?? left.page.blobId);
+  const rightTree = project.illustrations?.[right.page.id];
+  const rightCursor = rightTree ? getCursor(rightTree).content : null;
+  const rightUrl = useBlobUrl(rightCursor?.blobId ?? right.page.blobId);
+  const aspect = (left.page.aspect || right.page.aspect || 1) * 2;
+  return (
+    <PageStage
+      pageDesign={merged}
+      imageUrl={leftBlank ? undefined : leftUrl ?? undefined}
+      aspect={aspect}
+      illustrationFocus={defaultIllustrationFocus(left.page)}
+      rightSurface={{
+        imageUrl: rightBlank ? undefined : rightUrl ?? undefined,
+        illustrationFocus: defaultIllustrationFocus(right.page),
+        background: rightPd.background,
+      }}
+      editable={false}
+      chromeless
+      selectedId={null}
+      onSelectElement={() => {}}
+      onChangeElement={() => {}}
+    />
+  );
+}
+
 function PreviewHalfFrame({ side, aspect }: { side: SpreadSide; aspect: number }) {
   if (side.kind === "page") {
     return (
@@ -168,6 +209,17 @@ function CoverThumbnail({ disp }: { disp: Extract<DisplaySpread, { kind: "pair" 
 export function SpreadThumbnail({ disp }: { disp: DisplaySpread }) {
   if (disp.kind === "full") return <PagePreview entry={disp.entry} />;
   if (disp.cover) return <CoverThumbnail disp={disp} />;
+  if (isPlainPagePair(disp)) {
+    return (
+      <div className="relative w-full">
+        <PairPreview left={disp.left.entry} right={disp.right.entry} />
+        <div
+          className="pointer-events-none absolute inset-y-0 left-1/2 w-px -translate-x-1/2"
+          style={{ background: FOLD_GRADIENT }}
+        />
+      </div>
+    );
+  }
   return (
     <div className="relative flex w-full">
       <PreviewHalfFrame side={disp.left} aspect={sideAspect(disp.left, disp.right)} />

@@ -94,11 +94,10 @@ export function shapePath(kind: ShapeKind, w: number, h: number, opts: ShapeGeom
       return `M 0 0 H ${r(w)} V ${r(h)} H 0 Z`;
     case "rounded-rect":
       return roundedRect(0, 0, w, h, corner(w, h, opts.corner ?? 0.16));
-    case "circle": {
-      const rad = Math.min(w, h) / 2;
-      return ellipse(w / 2, h / 2, rad, rad);
-    }
+    case "circle":
     case "ellipse":
+      // Both fill the box. Circle starts square; a free drag stretches it
+      // into an oval. Shift on the Transformer keeps the original ratio.
       return ellipse(w / 2, h / 2, w / 2, h / 2);
     case "triangle":
       return `M ${r(w / 2)} 0 L ${r(w)} ${r(h)} L 0 ${r(h)} Z`;

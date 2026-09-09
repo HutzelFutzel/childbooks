@@ -25,6 +25,7 @@ import { ImageStyleBar, type ImageToolbarChrome } from "./ImageStyleBar";
 import { ShapeStyleBar, type ShapeToolbarChrome } from "./ShapeStyleBar";
 import { PrintBleedOverlay } from "./PrintBleedOverlay";
 import { PrintGuideTooltip } from "./PrintGuideTooltip";
+import { ResizeHint } from "./ResizeHint";
 import { hitTestPrintGuide, type PrintGuideHot } from "./printGuideHover";
 import { FloatingBarPortal } from "./FloatingBarPortal";
 import {
@@ -52,6 +53,7 @@ import { getPreset } from "./presets";
 import { effectiveBaseSize, minContentWidthPct } from "./textFit";
 import { isBubble } from "./shapes";
 import type { SpanRef } from "./TextBoxView";
+import { illustrationLeaf } from "../../core/book/pairSurface";
 
 const MIN_PX = 16;
 const SNAP_PX = 6;
@@ -102,6 +104,25 @@ function sanitizeRect(rect: NormRect): NormRect {
   const h = Math.max(0.05, finiteOr(rect.h, 0.2));
   if (x === rect.x && y === rect.y && w === rect.w && h === rect.h) return rect;
   return { x, y, w, h };
+}
+
+function isCoarsePointer(evt: unknown): boolean {
+  if (typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches) {
+    return true;
+  }
+  if (evt instanceof PointerEvent) return evt.pointerType === "touch";
+  return evt instanceof TouchEvent;
+}
+
+function clientPoint(evt: unknown): { x: number; y: number } | null {
+  if (evt instanceof MouseEvent || evt instanceof PointerEvent) {
+    return { x: evt.clientX, y: evt.clientY };
+  }
+  if (evt instanceof TouchEvent) {
+    const t = evt.touches[0] ?? evt.changedTouches[0];
+    return t ? { x: t.clientX, y: t.clientY } : null;
+  }
+  return null;
 }
 
 export type ElementKind = "text" | "shape" | "image";
@@ -406,6 +427,24 @@ export function PageStage({
    * the opposite corner jump instead of the box resizing.
    */
   const transformingIdRef = useRef<string | null>(null);
+  const [resizeHint, setResizeHint] = useState<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    setResizeHint(null);
+  }, [selectedId, editable]);
+
+  useEffect(() => {
+    if (!resizeHint) return;
+    const clear = () => setResizeHint(null);
+    window.addEventListener("pointerup", clear);
+    window.addEventListener("pointercancel", clear);
+    window.addEventListener("blur", clear);
+    return () => {
+      window.removeEventListener("pointerup", clear);
+      window.removeEventListener("pointercancel", clear);
+      window.removeEventListener("blur", clear);
+    };
+  }, [resizeHint]);
 
   useEffect(() => {
     if (!printGuides && !rightSurface?.printGuides && !showGutter) {
@@ -527,9 +566,10 @@ export function PageStage({
       return undefined;
     }
     const rect = imageElement.rect;
-    const centerX = rect.x + rect.w / 2;
-    const pageStart = rightSurface && centerX >= 0.5 ? 0.5 : 0;
-    const pageEnd = rightSurface && centerX < 0.5 ? 0.5 : 1;
+    // Pair surfaces are one combined trim: only the outer edges get bleed.
+    // A left-leaf frame that merely touches the fold must not grow into it.
+    const pageStart = 0;
+    const pageEnd = 1;
     const tolerance = 0.001;
     const insets = {
       top: bleedSides.top && rect.y <= tolerance ? bleedY : 0,
@@ -577,7 +617,7 @@ export function PageStage({
       // a full-page invisible hit target that opened crop/zoom on double-click.
       .filter((im) => {
         if (im.kind !== "illustration") return true;
-        const onRight = Boolean(rightSurface) && im.rect.x + im.rect.w / 2 >= 0.5;
+        const onRight = Boolean(rightSurface) && illustrationLeaf(im) === "right";
         const url = onRight ? rightSurface?.imageUrl : imageUrl;
         if (url) return true;
         return Boolean(
@@ -603,20 +643,20 @@ export function PageStage({
 
   // When the generated illustration has been turned into a movable element,
   // suppress the full-bleed background so it isn't drawn twice. With a
-  // `rightSurface`, `pageDesign` holds BOTH halves' elements (merged into one
-  // combined space), so each half's flag is scoped by which half the movable
-  // illustration's rect center actually sits in.
+  // `rightSurface`, each half's flag is scoped by the illustration's owner
+  // leaf (`pairLeaf`), not the fold-crossing center — a left frame may span
+  // into the right half without hiding the right leaf's own art.
   // Only count frames that actually have art (or are generating) — empty
   // ghosts must not hide the page surface or steal clicks.
   const hasIllustrationEl = (pageDesign.images ?? []).some((im) => {
     if (im.kind !== "illustration") return false;
-    if (rightSurface && im.rect.x + im.rect.w / 2 >= 0.5) return false;
+    if (rightSurface && illustrationLeaf(im) === "right") return false;
     return Boolean(imageUrl) || Boolean(imageElementBusySpec(im, artBusy, Boolean(rightSurface)));
   });
   const hasIllustrationElRight = rightSurface
     ? (pageDesign.images ?? []).some((im) => {
         if (im.kind !== "illustration") return false;
-        if (im.rect.x + im.rect.w / 2 < 0.5) return false;
+        if (illustrationLeaf(im) === "left") return false;
         return (
           Boolean(rightSurface.imageUrl) ||
           Boolean(imageElementBusySpec(im, artBusy, true))
@@ -690,7 +730,7 @@ export function PageStage({
       (im) =>
         im.kind === "illustration" &&
         im.fit !== "contain" &&
-        (side === "right") === (Boolean(rightSurface) && im.rect.x + im.rect.w / 2 >= 0.5) &&
+        (side === "right") === (Boolean(rightSurface) && illustrationLeaf(im) === "right") &&
         imageElementHasPixels(im, imageUrl, rightSurface),
     );
     if (illus) {
@@ -769,7 +809,7 @@ export function PageStage({
   // Same Canva toolbar whether the box is selected or being edited — editing
   // owns its own bar instance so character styles can target the live selection.
   const showBoxBar = Boolean(
-    editable && selectedTextBox && onStyleBox && editingId !== selectedId,
+    editable && selectedTextBox && onStyleBox && editingId !== selectedId && !resizeHint,
   );
   const boxBarId = showBoxBar ? selectedId : null;
   useEffect(() => {
@@ -815,7 +855,7 @@ export function PageStage({
       ? (pageDesign.images ?? []).find((im) => im.id === selectedId)
       : undefined;
   const showImageBar = Boolean(
-    selectedImageEl && imageToolbar && selectedId !== reframeId,
+    selectedImageEl && imageToolbar && selectedId !== reframeId && !resizeHint,
   );
   useEffect(() => {
     if (!showImageBar) setImageShapePreview(null);
@@ -898,7 +938,9 @@ export function PageStage({
     editable && selectedId && shapeToolbar
       ? (pageDesign.shapes ?? []).find((s) => s.id === selectedId && !s.hidden)
       : undefined;
-  const showShapeBar = Boolean(selectedShapeEl && shapeToolbar && editingId !== selectedId);
+  const showShapeBar = Boolean(
+    selectedShapeEl && shapeToolbar && editingId !== selectedId && !resizeHint,
+  );
   const shapeBarId = showShapeBar ? selectedId : null;
   useEffect(() => {
     if (!shapeBarId) {
@@ -1566,10 +1608,9 @@ export function PageStage({
                         pageHeight={H}
                         bleedInsets={fittedBleedInsets(renderedImage ?? el.image)}
                         illustrationUrl={
-                          // Pair stages: each half has its own AI art. Pick URL by
-                          // which half the element's center sits in — never feed
-                          // the left page's bitmap to a right-page illustration.
-                          rightSurface && el.image.rect.x + el.image.rect.w / 2 >= 0.5
+                          // Pair stages: each half has its own AI art. Pick URL
+                          // by owner leaf, not the fold-crossing center.
+                          rightSurface && illustrationLeaf(el.image) === "right"
                             ? rightSurface.imageUrl
                             : imageUrl
                         }
@@ -1765,6 +1806,17 @@ export function PageStage({
                   anchorCornerRadius={2}
                   borderStroke="rgba(99,102,241,0.9)"
                   anchorStroke="rgba(99,102,241,0.9)"
+                  onTransformStart={(e: KonvaEventObject<Event>) => {
+                    const anchor = trRef.current?.getActiveAnchor() ?? "";
+                    if (anchor === "rotater" || isCoarsePointer(e.evt)) return;
+                    setResizeHint(
+                      clientPoint(e.evt) ?? {
+                        x: window.innerWidth / 2,
+                        y: window.innerHeight / 2,
+                      },
+                    );
+                  }}
+                  onTransformEnd={() => setResizeHint(null)}
                   boundBoxFunc={(oldBox, newBox) => {
                     // Height is never floored for text: shrinking a box vertically
                     // is how you shrink its text (the font auto-fits). Width still
@@ -1921,7 +1973,7 @@ export function PageStage({
             H={H}
             containerEl={containerRef.current}
             illustrationUrl={
-              rightSurface && reframeEl.rect.x + reframeEl.rect.w / 2 >= 0.5
+              rightSurface && illustrationLeaf(reframeEl) === "right"
                 ? rightSurface.imageUrl
                 : imageUrl
             }
@@ -1974,6 +2026,7 @@ export function PageStage({
           y={guideTip?.y ?? 0}
         />
       )}
+      {editable && <ResizeHint active={Boolean(resizeHint)} origin={resizeHint} />}
     </div>
   );
 }
@@ -2274,13 +2327,15 @@ function InlineTextEditor({
             onBlur={(e) => {
               // Keep editing alive when the floating toolbar (portaled) is clicked.
               const next = e.relatedTarget as Node | null;
-              if (next && document.body.contains(next)) {
-                const bar = (next as HTMLElement).closest?.("[data-text-style-bar]");
-                if (bar) {
-                  ref.current?.focus();
-                  return;
-                }
-                if ((next as HTMLElement).closest?.("[data-color-picker-popover]")) {
+              if (next && document.body.contains(next) && next instanceof Element) {
+                const chrome = next.closest(
+                  "[data-text-style-bar], [data-color-picker-popover]",
+                );
+                if (chrome) {
+                  // Don't steal focus from the font search field.
+                  if (!next.closest("input, textarea, select")) {
+                    ref.current?.focus();
+                  }
                   return;
                 }
               }
@@ -2724,7 +2779,7 @@ function imageElementBusySpec(
   paired: boolean,
 ): ArtBusySpec | null {
   if (!artBusy || im.kind !== "illustration") return null;
-  const onRight = paired && im.rect.x + im.rect.w / 2 >= 0.5;
+  const onRight = paired && illustrationLeaf(im) === "right";
   const spec = onRight ? artBusy.right : artBusy.left;
   if (!spec) return null;
   // Prefer durable slot match; legacy elements without illustrationId follow the half.
@@ -2741,6 +2796,6 @@ function imageElementHasPixels(
   rightSurface: SecondSurface | undefined,
 ): boolean {
   if (im.kind === "asset") return Boolean(im.blobId);
-  const onRight = Boolean(rightSurface) && im.rect.x + im.rect.w / 2 >= 0.5;
+  const onRight = Boolean(rightSurface) && illustrationLeaf(im) === "right";
   return Boolean(onRight ? rightSurface?.imageUrl : imageUrl);
 }

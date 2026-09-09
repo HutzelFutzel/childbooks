@@ -29,10 +29,25 @@ export function shapeTextPadFrac(shape: Pick<ShapeElement, "kind" | "text">): nu
 
 /** Dark ink on light fills, white on dark — so a first double-click is readable. */
 export function contrastInk(fill: string): string {
-  const { r, g, b, a } = parseColor(fill);
+  return luminanceOnWhite(fill) > 0.55 ? "#1f2430" : "#ffffff";
+}
+
+function luminanceOnWhite(color: string): number {
+  const { r, g, b, a } = parseColor(color);
   const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-  const onWhite = lum * a + (1 - a);
-  return onWhite > 0.55 ? "#1f2430" : "#ffffff";
+  return lum * a + (1 - a);
+}
+
+/**
+ * Keep a preferred ink when it still reads on `fill`; otherwise the same
+ * light/dark pick {@link contrastInk} would make for a first double-click.
+ */
+export function readableShapeInk(fill: string, preferred?: string): string {
+  const fallback = contrastInk(fill);
+  if (!preferred) return fallback;
+  const fillIsLight = luminanceOnWhite(fill) > 0.55;
+  const preferredIsLight = luminanceOnWhite(preferred) > 0.55;
+  return fillIsLight === preferredIsLight ? fallback : preferred;
 }
 
 export function shapeTextDefaults(

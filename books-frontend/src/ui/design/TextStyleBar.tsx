@@ -529,6 +529,7 @@ function FontField({ value, onChange }: { value: string; onChange: (family: stri
         createPortal(
           <div
             ref={menuRef}
+            data-text-style-bar
             className="fixed z-100 overflow-hidden rounded-2xl border border-ink-200 bg-white shadow-2xl ring-1 ring-black/5"
             style={{
               left: menuPos.left,
