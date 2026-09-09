@@ -22,6 +22,10 @@ import { fontStack, loadFont } from "../typography/fonts";
 import { cn } from "../lib/cn";
 import { TextStyleBar, type TextBoxToolbarChrome, type TextStyleKey } from "./TextStyleBar";
 import { ImageStyleBar, type ImageToolbarChrome } from "./ImageStyleBar";
+import { ShapeStyleBar, type ShapeToolbarChrome } from "./ShapeStyleBar";
+import { PrintBleedOverlay } from "./PrintBleedOverlay";
+import { PrintGuideTooltip } from "./PrintGuideTooltip";
+import { hitTestPrintGuide, type PrintGuideHot } from "./printGuideHover";
 import { FloatingBarPortal } from "./FloatingBarPortal";
 import {
   placeFloatingBar,
@@ -183,6 +187,7 @@ export function PageStage({
   onStyleBox,
   textToolbar,
   imageToolbar,
+  shapeToolbar,
   editable = true,
   dropId,
   showGutter = false,
@@ -255,6 +260,21 @@ export function PageStage({
     onDuplicate: (imageId: string) => void;
     onDelete: (imageId: string) => void;
     onToggleLock: (imageId: string) => void;
+  };
+  /**
+   * Canva-style chrome for decorative shapes / speech bubbles. Fill, outline,
+   * and shadow stay on the floating bar; lock lives in Arrange.
+   */
+  shapeToolbar?: {
+    onPatch: (
+      shapeId: string,
+      patch: Partial<ShapeElement>,
+      opts?: { coalesce?: string },
+    ) => void;
+    onDuplicate: (shapeId: string) => void;
+    onDelete: (shapeId: string) => void;
+    onToggleLock: (shapeId: string) => void;
+    onGestureEnd: () => void;
   };
   /** Empty-state CTA when the (left) page has no illustration yet. */
   emptyArt?: React.ReactNode;
@@ -369,6 +389,9 @@ export function PageStage({
   // Screen placement for selection toolbars (recomputed on scroll/resize).
   const [boxBarPos, setBoxBarPos] = useState<FloatingBarPlacement | null>(null);
   const [imageBarPos, setImageBarPos] = useState<FloatingBarPlacement | null>(null);
+  const [shapeBarPos, setShapeBarPos] = useState<FloatingBarPlacement | null>(null);
+  const [guideHot, setGuideHot] = useState<PrintGuideHot | null>(null);
+  const [guideTip, setGuideTip] = useState<{ x: number; y: number } | null>(null);
   const [guides, setGuides] = useState<{ x: number[]; y: number[] }>({ x: [], y: [] });
   const groupRefs = useRef<Map<string, Konva.Group>>(new Map());
   const textBoxRefs = useRef<Map<string, KonvaTextBoxHandle>>(new Map());
@@ -380,6 +403,13 @@ export function PageStage({
    * the opposite corner jump instead of the box resizing.
    */
   const transformingIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!printGuides && !rightSurface?.printGuides && !showGutter) {
+      setGuideHot(null);
+      setGuideTip(null);
+    }
+  }, [printGuides, rightSurface?.printGuides, showGutter]);
 
   const image = useImage(imageUrl);
   const bgPattern = usePatternImage(pageDesign.background?.pattern);
@@ -856,6 +886,60 @@ export function PageStage({
         }
       : undefined;
 
+  const selectedShapeEl =
+    editable && selectedId && shapeToolbar
+      ? (pageDesign.shapes ?? []).find((s) => s.id === selectedId && !s.hidden)
+      : undefined;
+  const showShapeBar = Boolean(selectedShapeEl && shapeToolbar);
+  const shapeBarId = showShapeBar ? selectedId : null;
+  useEffect(() => {
+    if (!shapeBarId) {
+      setShapeBarPos(null);
+      return;
+    }
+    const update = () => {
+      const container = containerRef.current;
+      const node = groupRefs.current.get(shapeBarId);
+      const stage = node?.getStage();
+      if (!container || !node || !stage) {
+        setShapeBarPos(null);
+        return;
+      }
+      const b = node.getClientRect({ relativeTo: stage });
+      const r = container.getBoundingClientRect();
+      setShapeBarPos(
+        placeFloatingBar({
+          anchor: {
+            left: r.left + b.x,
+            top: r.top + b.y,
+            right: r.left + b.x + b.width,
+            bottom: r.top + b.y + b.height,
+          },
+          obstacles: queryFloatingBarObstacles(),
+        }),
+      );
+    };
+    update();
+    window.addEventListener("scroll", update, true);
+    window.addEventListener("resize", update);
+    return () => {
+      window.removeEventListener("scroll", update, true);
+      window.removeEventListener("resize", update);
+    };
+  }, [shapeBarId, W, H, pageDesign]);
+
+  const shapeChrome: ShapeToolbarChrome | undefined =
+    selectedShapeEl && shapeToolbar
+      ? {
+          shape: selectedShapeEl,
+          onPatch: (patch, opts) => shapeToolbar.onPatch(selectedShapeEl.id, patch, opts),
+          onDuplicate: () => shapeToolbar.onDuplicate(selectedShapeEl.id),
+          onDelete: () => shapeToolbar.onDelete(selectedShapeEl.id),
+          onToggleLock: () => shapeToolbar.onToggleLock(selectedShapeEl.id),
+          onGestureEnd: shapeToolbar.onGestureEnd,
+        }
+      : undefined;
+
   // Character marks are active when every non-empty span carries them — the
   // selected box *is* the selection in Canva terms.
   const boxSpans = (selectedTextBox?.paragraphs.flatMap((p) => p.spans) ?? []).filter(
@@ -880,10 +964,14 @@ export function PageStage({
   const setBoxColor = (color: string) => {
     if (!selectedTextBox || !onStyleBox) return;
     // Uniform colour for the selection (whole box): drop span colour overrides.
-    onStyleBox(selectedTextBox.id, {
-      color,
-      paragraphs: mapSpans((s) => ({ ...s, color: undefined })),
-    });
+    onStyleBox(
+      selectedTextBox.id,
+      {
+        color,
+        paragraphs: mapSpans((s) => ({ ...s, color: undefined })),
+      },
+      { coalesce: `color-${selectedTextBox.id}` },
+    );
   };
 
   /** Box chrome patches; size changes also clear leftover per-span size multipliers. */
@@ -1020,21 +1108,13 @@ export function PageStage({
         }}
       >
         {printBleed?.visible && bleedX > 0 && bleedY > 0 && (
-          <div
-            data-print-bleed=""
-            aria-hidden="true"
-            className="pointer-events-none absolute z-0"
-            style={{
-              left: bleedSides.left ? -bleedX : 0,
-              top: bleedSides.top ? -bleedY : 0,
-              width:
-                W + (bleedSides.left ? bleedX : 0) + (bleedSides.right ? bleedX : 0),
-              height:
-                H + (bleedSides.top ? bleedY : 0) + (bleedSides.bottom ? bleedY : 0),
-              background:
-                "repeating-linear-gradient(135deg, rgba(8,145,178,0.17) 0 5px, rgba(8,145,178,0.06) 5px 10px)",
-              boxShadow: "0 0 0 1px rgba(8,145,178,0.42)",
-            }}
+          <PrintBleedOverlay
+            W={W}
+            H={H}
+            bleedX={bleedX}
+            bleedY={bleedY}
+            sides={bleedSides}
+            sizeIn={printBleed.sizeIn}
           />
         )}
         <div
@@ -1043,6 +1123,7 @@ export function PageStage({
           className={cn(
             "absolute inset-0 z-10 overflow-hidden bg-white",
             !chromeless && "shadow-soft ring-1 ring-ink-200",
+            guideHot && "cursor-help",
           )}
         >
         {W > 0 && H > 0 && (
@@ -1087,6 +1168,41 @@ export function PageStage({
               if (e.target !== stage) return;
               const pos = stage?.getPointerPosition();
               requestAdjustArt(pos && W > 0 ? pos.x / W : 0);
+            }}
+            onMouseMove={(e: KonvaEventObject<MouseEvent>) => {
+              if (transformingIdRef.current || reframeId) {
+                if (guideHot) {
+                  setGuideHot(null);
+                  setGuideTip(null);
+                }
+                return;
+              }
+              if (!printGuides && !rightSurface?.printGuides && !showGutter) return;
+              const stage = e.target.getStage();
+              const pos = stage?.getPointerPosition();
+              if (!pos) return;
+              const next = hitTestPrintGuide(
+                pos.x,
+                pos.y,
+                W,
+                H,
+                printGuides,
+                rightSurface?.printGuides,
+                showGutter,
+              );
+              setGuideHot((prev) =>
+                prev?.kind === next?.kind && prev?.page === next?.page ? prev : next,
+              );
+              if (next) setGuideTip({ x: e.evt.clientX, y: e.evt.clientY });
+              else setGuideTip(null);
+              const host = stage?.container();
+              if (host) host.style.cursor = next ? "help" : "";
+            }}
+            onMouseLeave={() => {
+              setGuideHot(null);
+              setGuideTip(null);
+              const host = containerRef.current?.querySelector("canvas")?.parentElement;
+              if (host) host.style.cursor = "";
             }}
           >
             <Layer>
@@ -1497,17 +1613,22 @@ export function PageStage({
 
               {W > 0 &&
                 H > 0 &&
-                [printGuides ? { g: printGuides, x0: 0 } : null, rightSurface?.printGuides ? { g: rightSurface.printGuides, x0: surfaceW } : null]
-                  .filter((entry): entry is { g: NonNullable<typeof printGuides>; x0: number } => entry !== null)
-                  .map(({ g, x0 }, i) => (
-                    <Fragment key={i}>
+                [printGuides ? { g: printGuides, x0: 0, page: 0 as const } : null, rightSurface?.printGuides ? { g: rightSurface.printGuides, x0: surfaceW, page: 1 as const } : null]
+                  .filter((entry): entry is { g: NonNullable<typeof printGuides>; x0: number; page: 0 | 1 } => entry !== null)
+                  .map(({ g, x0, page }) => {
+                    const gutterHot = guideHot?.kind === "gutter" && guideHot.page === page;
+                    const safeHot = guideHot?.kind === "safe" && guideHot.page === page;
+                    const barcodeHot = guideHot?.kind === "barcode" && guideHot.page === page;
+                    const logoHot = guideHot?.kind === "logo" && guideHot.page === page;
+                    return (
+                    <Fragment key={page}>
                       {g.gutter && (
                         <Rect
                           x={x0 + g.gutter.x * surfaceW}
                           y={0}
                           width={g.gutter.w * surfaceW}
                           height={H}
-                          fill="rgba(244,63,94,0.10)"
+                          fill={gutterHot ? "rgba(244,63,94,0.28)" : "rgba(244,63,94,0.10)"}
                           listening={false}
                         />
                       )}
@@ -1516,8 +1637,8 @@ export function PageStage({
                         y={g.safe.y * H}
                         width={g.safe.w * surfaceW}
                         height={g.safe.h * H}
-                        stroke="rgba(16,185,129,0.85)"
-                        strokeWidth={1}
+                        stroke={safeHot ? "rgba(16,185,129,1)" : "rgba(16,185,129,0.85)"}
+                        strokeWidth={safeHot ? 2.25 : 1}
                         dash={[6, 5]}
                         listening={false}
                       />
@@ -1528,9 +1649,9 @@ export function PageStage({
                             y={g.barcode.y * H}
                             width={g.barcode.w * surfaceW}
                             height={g.barcode.h * H}
-                            fill="rgba(15,23,42,0.06)"
-                            stroke="rgba(15,23,42,0.45)"
-                            strokeWidth={1}
+                            fill={barcodeHot ? "rgba(15,23,42,0.14)" : "rgba(15,23,42,0.06)"}
+                            stroke={barcodeHot ? "rgba(15,23,42,0.7)" : "rgba(15,23,42,0.45)"}
+                            strokeWidth={barcodeHot ? 1.5 : 1}
                             dash={[4, 4]}
                             listening={false}
                           />
@@ -1543,7 +1664,7 @@ export function PageStage({
                             align="center"
                             verticalAlign="middle"
                             fontSize={11}
-                            fill="rgba(15,23,42,0.55)"
+                            fill={barcodeHot ? "rgba(15,23,42,0.78)" : "rgba(15,23,42,0.55)"}
                             listening={false}
                           />
                         </>
@@ -1555,9 +1676,9 @@ export function PageStage({
                             y={g.logo.y * H}
                             width={g.logo.w * surfaceW}
                             height={g.logo.h * H}
-                            fill="rgba(15,23,42,0.06)"
-                            stroke="rgba(15,23,42,0.45)"
-                            strokeWidth={1}
+                            fill={logoHot ? "rgba(15,23,42,0.14)" : "rgba(15,23,42,0.06)"}
+                            stroke={logoHot ? "rgba(15,23,42,0.7)" : "rgba(15,23,42,0.45)"}
+                            strokeWidth={logoHot ? 1.5 : 1}
                             dash={[4, 4]}
                             listening={false}
                           />
@@ -1570,26 +1691,27 @@ export function PageStage({
                             align="center"
                             verticalAlign="middle"
                             fontSize={11}
-                            fill="rgba(15,23,42,0.55)"
+                            fill={logoHot ? "rgba(15,23,42,0.78)" : "rgba(15,23,42,0.55)"}
                             listening={false}
                           />
                         </>
                       )}
                     </Fragment>
-                  ))}
+                    );
+                  })}
 
               {showGutter && W > 0 && H > 0 && (
                 <>
                   <Line
                     points={[W / 2, 0, W / 2, H]}
-                    stroke="rgba(255,255,255,0.65)"
-                    strokeWidth={2}
+                    stroke={guideHot?.kind === "fold" ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.65)"}
+                    strokeWidth={guideHot?.kind === "fold" ? 3 : 2}
                     listening={false}
                   />
                   <Line
                     points={[W / 2, 0, W / 2, H]}
-                    stroke="rgba(15,23,42,0.45)"
-                    strokeWidth={1}
+                    stroke={guideHot?.kind === "fold" ? "rgba(15,23,42,0.7)" : "rgba(15,23,42,0.45)"}
+                    strokeWidth={guideHot?.kind === "fold" ? 1.5 : 1}
                     dash={[7, 7]}
                     listening={false}
                   />
@@ -1757,6 +1879,18 @@ export function PageStage({
 
       {showImageBar && imageBarPos && imageChrome && (
         <ImageStyleBar placement={imageBarPos} chrome={imageChrome} />
+      )}
+
+      {showShapeBar && shapeBarPos && shapeChrome && (
+        <ShapeStyleBar placement={shapeBarPos} chrome={shapeChrome} />
+      )}
+
+      {editable && (
+        <PrintGuideTooltip
+          kind={guideHot && guideTip ? guideHot.kind : null}
+          x={guideTip?.x ?? 0}
+          y={guideTip?.y ?? 0}
+        />
       )}
     </div>
   );

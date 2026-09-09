@@ -105,10 +105,6 @@ export function useStudioHotkeys() {
           panels.closeImageEdit();
           return;
         }
-        if (panels.textEditSection) {
-          panels.closeTextEdit();
-          return;
-        }
         if (s.selection.kind !== "none") s.select({ kind: "none" });
         return;
       }

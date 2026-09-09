@@ -85,7 +85,6 @@ import {
   type StorySnapshotPatch,
 } from "./story/storyUndo";
 
-export type { TextEditSection } from "../design/TextEditPanel";
 export type { ImageEditSection } from "../design/ImageEditPanel";
 export type { StudioToolPanel } from "./studioPanelStore";
 
@@ -321,7 +320,7 @@ interface StudioContextValue {
   grid: boolean;
   /** Show print-safety guides (safe margin + gutter) on the page surfaces. */
   guides: boolean;
-  /** Show the physical strip that the printer trims away. Defaults on. */
+  /** Show the physical strip that the printer trims away. Defaults off. */
   bleedVisible: boolean;
   /** How edge illustrations supply artwork for that physical strip. */
   bleedMode: PrintBleedMode;
@@ -606,7 +605,7 @@ export function StudioProvider({
   const [snap, setSnap] = useState(true);
   const [grid, setGrid] = useState(false);
   const [guides, setGuides] = useState(true);
-  const [bleedVisible, setBleedVisible] = useState(true);
+  const [bleedVisible, setBleedVisible] = useState(false);
   const history = useRef<{ past: StudioSnapshot[]; future: StudioSnapshot[] }>({
     past: [],
     future: [],
@@ -830,7 +829,8 @@ export function StudioProvider({
 
   const select = useCallback((sel: Selection) => {
     setSelection(sel);
-    const kind = sel.kind === "box" ? "box" : sel.kind === "image" ? "image" : "other";
+    const kind =
+      sel.kind === "box" ? "box" : sel.kind === "image" ? "image" : sel.kind === "shape" ? "shape" : "other";
     useStudioPanelStore.getState().onSelectionKind(kind);
   }, []);
 

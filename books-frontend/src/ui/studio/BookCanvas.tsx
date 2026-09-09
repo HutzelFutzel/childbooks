@@ -25,7 +25,6 @@ import {
   LayoutGrid,
   SlidersHorizontal,
   Sparkles,
-  Shapes,
   Type,
   Undo2,
   Users,
@@ -41,6 +40,7 @@ import { EmptyState } from "../components/EmptyState";
 import { Popover } from "../components/Popover";
 import { Tooltip } from "../components/Tooltip";
 import { ArtworkOrbit } from "../design/ArtworkOrbit";
+import { ShapeKindPicker } from "../design/ShapeKindPicker";
 import { SparkEstimateCost, useImageBatchRange } from "../layout/SparkCost";
 import { PipelineStepper, type PipelinePhase } from "../generation/PipelineStepper";
 import { useMediaQuery } from "../hooks/useMediaQuery";
@@ -93,11 +93,9 @@ export function BookCanvas() {
     redo,
     openDesignSetup,
   } = useStudio();
-  const textEditSection = useStudioPanelStore((s) => s.textEditSection);
   const imageEditSection = useStudioPanelStore((s) => s.imageEditSection);
   const toolPanel = useStudioPanelStore((s) => s.toolPanel);
   const closeImageEdit = useStudioPanelStore((s) => s.closeImageEdit);
-  const closeTextEdit = useStudioPanelStore((s) => s.closeTextEdit);
   const closeToolPanel = useStudioPanelStore((s) => s.closeToolPanel);
   const toggleToolPanel = useStudioPanelStore((s) => s.toggleToolPanel);
   const models = useResolvedModels();
@@ -107,9 +105,8 @@ export function BookCanvas() {
   const closePreview = useCallback(() => setPreviewing(false), []);
   const closeInspector = useCallback(() => {
     closeToolPanel();
-    closeTextEdit();
     closeImageEdit();
-  }, [closeImageEdit, closeTextEdit, closeToolPanel]);
+  }, [closeImageEdit, closeToolPanel]);
 
   /** Toggle docked illustration tools for a page (same control opens/closes). */
   const openIllustrationTools = useCallback(
@@ -344,12 +341,7 @@ export function BookCanvas() {
           </div>
 
           <AnimatePresence>
-            {elementPanelHasContent(
-              selection,
-              toolPanel,
-              !!textEditSection,
-              !!imageEditSection,
-            ) && (
+            {elementPanelHasContent(selection, toolPanel, !!imageEditSection) && (
               <InspectorDock key="inspector-dock" onClose={closeInspector}>
                 <ElementPanel
                   toolPanel={toolPanel}
@@ -407,7 +399,7 @@ function PageAddMenu({
     <Popover
       align="start"
       side="bottom"
-      panelClassName="w-72 p-2"
+      panelClassName="w-80 p-2"
       trigger={(open) => (
         <span
           title={`Add to ${pageLabel ?? "page"}`}
@@ -435,15 +427,15 @@ function PageAddMenu({
               close();
             }}
           />
-          <AddMenuRow
-            icon={<Shapes className="size-4" />}
-            label="Shape"
-            hint="Add a shape, then choose its style"
-            onClick={() => {
-              addShape(pageId, "rounded-rect");
-              close();
-            }}
-          />
+          <div className="my-1 border-t border-ink-100" />
+          <div className="px-2.5 py-1.5">
+            <ShapeKindPicker
+              onSelect={(kind) => {
+                addShape(pageId, kind);
+                close();
+              }}
+            />
+          </div>
           <div className="my-1 border-t border-ink-100" />
           <div className="px-1.5 py-1.5">
             <AssetsLibrary
@@ -598,7 +590,12 @@ function PagesToolbarMore({
           </p>
           <ToolbarToggleRow label="Snap to guides" active={snap} onClick={toggleSnap} />
           <ToolbarToggleRow label="Grid" active={grid} onClick={toggleGrid} />
-          <ToolbarToggleRow label="Print guides" active={guides} onClick={toggleGuides} />
+          <ToolbarToggleRow
+            label="Print guides"
+            active={guides}
+            onClick={toggleGuides}
+            help="Safety margin, binding gutter, and reserved print areas. Hover a guide on the page to see what it means."
+          />
           <ToolbarToggleRow
             label="Show print bleed"
             active={bleedVisible}

@@ -1,10 +1,9 @@
 /**
- * Docked inspector chrome (illustration / text edit sheets + Add-dock tools).
+ * Docked inspector chrome (illustration sheets + Arrange / Setup tools).
  * Kept out of StudioContext so opening a panel doesn't re-render the Konva stage.
  */
 import { create } from "zustand";
 import type { ImageEditSection } from "../design/ImageEditPanel";
-import type { TextEditSection } from "../design/TextEditPanel";
 
 /** Docked tools opened from the page toolbar (mutually exclusive). */
 export type StudioToolPanel = "layers" | "setup";
@@ -12,14 +11,9 @@ export type StudioToolPanel = "layers" | "setup";
 type ImageEditCloseGuard = ((proceed: () => void) => boolean) | null;
 
 type StudioPanelState = {
-  textEditSection: TextEditSection | null;
   imageEditSection: ImageEditSection | null;
   toolPanel: StudioToolPanel | null;
   imageEditCloseGuard: ImageEditCloseGuard;
-
-  openTextEdit: (section: TextEditSection) => void;
-  toggleTextEdit: (section: TextEditSection) => void;
-  closeTextEdit: () => void;
 
   openImageEdit: (section: ImageEditSection) => void;
   toggleImageEdit: (section: ImageEditSection) => void;
@@ -31,8 +25,8 @@ type StudioPanelState = {
   toggleToolPanel: (panel: StudioToolPanel) => void;
   openLayersPanel: () => void;
 
-  /** Clear edit sheets when selection leaves that element kind. */
-  onSelectionKind: (kind: "box" | "image" | "other") => void;
+  /** Clear illustration sheets when selection leaves that element kind. */
+  onSelectionKind: (kind: "box" | "image" | "shape" | "other") => void;
   /** Reset all dock chrome (e.g. leaving Design). */
   reset: () => void;
 };
@@ -47,24 +41,14 @@ function runGuard(guard: ImageEditCloseGuard, action: () => void): void {
 }
 
 export const useStudioPanelStore = create<StudioPanelState>((set, get) => ({
-  textEditSection: null,
   imageEditSection: null,
   toolPanel: null,
   imageEditCloseGuard: null,
 
-  openTextEdit: (section) =>
-    set({ textEditSection: section, imageEditSection: null, toolPanel: null }),
-  toggleTextEdit: (section) => {
-    const cur = get().textEditSection;
-    if (cur === section) set({ textEditSection: null });
-    else set({ textEditSection: section, imageEditSection: null, toolPanel: null });
-  },
-  closeTextEdit: () => set({ textEditSection: null }),
-
   openImageEdit: (section) => {
     if (get().imageEditSection === section) return;
     runGuard(get().imageEditCloseGuard, () =>
-      set({ imageEditSection: section, textEditSection: null, toolPanel: null }),
+      set({ imageEditSection: section, toolPanel: null }),
     );
   },
   toggleImageEdit: (section) => {
@@ -81,7 +65,10 @@ export const useStudioPanelStore = create<StudioPanelState>((set, get) => ({
 
   openToolPanel: (panel) => {
     runGuard(get().imageEditCloseGuard, () =>
-      set({ toolPanel: panel, textEditSection: null, imageEditSection: null }),
+      set({
+        toolPanel: panel,
+        imageEditSection: null,
+      }),
     );
   },
   closeToolPanel: () => set({ toolPanel: null }),
@@ -94,12 +81,10 @@ export const useStudioPanelStore = create<StudioPanelState>((set, get) => ({
   onSelectionKind: (kind) => {
     // Match prior StudioContext.select behaviour: clear sheets without the
     // dirty-cast guard when the selection simply moves away.
-    if (kind !== "box") set({ textEditSection: null });
     if (kind !== "image") set({ imageEditSection: null });
   },
   reset: () =>
     set({
-      textEditSection: null,
       imageEditSection: null,
       toolPanel: null,
       imageEditCloseGuard: null,

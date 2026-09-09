@@ -161,3 +161,21 @@ export function defaultShadow(): NonNullable<ElementEffects["shadow"]> {
     target: "box",
   };
 }
+
+/** Glyph drop-shadow for text boxes (letters, not the plate). */
+export function defaultGlyphShadow(): NonNullable<ElementEffects["shadow"]> {
+  return { ...defaultShadow(), target: "text" };
+}
+
+/** Write backdropBlur and clear any legacy content blur on effects.blur. */
+export function backdropBlurPatch(box: TextBox, value: number): Partial<TextBox> {
+  const backdropBlur = value > 0 ? value : undefined;
+  const patch: Partial<TextBox> = { backdropBlur };
+  if (box.effects?.blur != null) {
+    const next: ElementEffects = { ...box.effects, blur: undefined };
+    const empty =
+      !next.shadow && !next.blur && (next.opacity === undefined || next.opacity === 1);
+    patch.effects = empty ? undefined : next;
+  }
+  return patch;
+}

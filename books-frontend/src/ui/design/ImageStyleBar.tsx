@@ -6,11 +6,11 @@
 import { useMemo, useRef, useState } from "react";
 import {
   Crop,
+  Frame,
   History,
   Lock,
   MoreHorizontal,
   RefreshCw,
-  Shapes,
   Sparkles,
   Square,
   Trash2,
@@ -175,9 +175,9 @@ function ShapePicker({ chrome }: { chrome: ImageToolbarChrome }) {
 
   return (
     <div ref={rootRef} className="relative shrink-0">
-      <Toggle label="Shape" active={active || open} onClick={() => setOpen((value) => !value)}>
-        <Shapes className="size-4" />
-        <span className="hidden px-0.5 text-xs font-medium sm:inline">Shape</span>
+      <Toggle label="Frame" active={active || open} onClick={() => setOpen((value) => !value)}>
+        <Frame className="size-4" />
+        <span className="hidden px-0.5 text-xs font-medium sm:inline">Frame</span>
       </Toggle>
       <PortalToolbarFlyout
         open={open}
@@ -186,7 +186,7 @@ function ShapePicker({ chrome }: { chrome: ImageToolbarChrome }) {
         className="w-72 p-2"
       >
         <div className="px-1 pb-2">
-          <p className="text-[11px] font-medium text-ink-600">Image shape</p>
+          <p className="text-[11px] font-medium text-ink-600">Photo frame</p>
           <p className="text-[10px] text-ink-400">Hover to preview on the page · click to apply</p>
         </div>
         <div className="grid grid-cols-3 gap-2">
@@ -426,7 +426,7 @@ function MoreMenu({ chrome }: { chrome: ImageToolbarChrome }) {
         {chrome.canCrop !== false && (
           <MenuRow
             icon={<Crop className="size-4" />}
-            label="Frame & position"
+            label="Crop & position"
             active={imageEditSection === "frame"}
             onClick={() => openPanel("frame")}
           />

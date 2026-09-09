@@ -79,6 +79,8 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
     deleteBox,
     duplicateImage,
     deleteImage,
+    duplicateShape,
+    deleteShape,
     copyBoxStyle,
     pasteBoxStyle,
     hasCopiedBoxStyle,
@@ -315,6 +317,19 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
           const im = pageDesign(pageId).images?.find((x) => x.id === imageId);
           if (im) patchImage(pageId, imageId, { locked: !im.locked });
         },
+      }}
+      shapeToolbar={{
+        onPatch: (shapeId, patch, opts) =>
+          patchShape(elementOwner.get(shapeId) ?? left.page.id, shapeId, patch, opts),
+        onDuplicate: (shapeId) =>
+          duplicateShape(elementOwner.get(shapeId) ?? left.page.id, shapeId),
+        onDelete: (shapeId) => deleteShape(elementOwner.get(shapeId) ?? left.page.id, shapeId),
+        onToggleLock: (shapeId) => {
+          const pageId = elementOwner.get(shapeId) ?? left.page.id;
+          const shape = pageDesign(pageId).shapes?.find((x) => x.id === shapeId);
+          if (shape) patchShape(pageId, shapeId, { locked: !shape.locked });
+        },
+        onGestureEnd: endHistoryGesture,
       }}
       selectedSpan={selectedSpan}
       onSelectSpan={(ref: SpanRef | null) => {

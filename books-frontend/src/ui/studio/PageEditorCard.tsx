@@ -77,6 +77,8 @@ export function PageStagePanel({
     deleteBox,
     duplicateImage,
     deleteImage,
+    duplicateShape,
+    deleteShape,
     copyBoxStyle,
     pasteBoxStyle,
     hasCopiedBoxStyle,
@@ -240,6 +242,16 @@ export function PageStagePanel({
           const im = pageDesign(page.id).images?.find((x) => x.id === imageId);
           if (im) patchImage(page.id, imageId, { locked: !im.locked });
         },
+      }}
+      shapeToolbar={{
+        onPatch: (shapeId, patch, opts) => patchShape(page.id, shapeId, patch, opts),
+        onDuplicate: (shapeId) => duplicateShape(page.id, shapeId),
+        onDelete: (shapeId) => deleteShape(page.id, shapeId),
+        onToggleLock: (shapeId) => {
+          const shape = pageDesign(page.id).shapes?.find((x) => x.id === shapeId);
+          if (shape) patchShape(page.id, shapeId, { locked: !shape.locked });
+        },
+        onGestureEnd: endHistoryGesture,
       }}
       selectedSpan={selectedSpan}
       onSelectSpan={(ref: SpanRef | null) => {

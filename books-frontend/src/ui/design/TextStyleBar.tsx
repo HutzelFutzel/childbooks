@@ -8,12 +8,10 @@ import {
   AlignRight,
   ArrowDownToLine,
   ArrowUpToLine,
-  Blend,
   Bold,
   Check,
   ChevronDown,
   ClipboardPaste,
-  Copy,
   Italic,
   Minus,
   MoreHorizontal,
@@ -21,7 +19,6 @@ import {
   Paintbrush,
   Plus,
   Search,
-  Square,
   Trash2,
   Type,
   Underline,
@@ -48,14 +45,11 @@ import {
 } from "../typography/fonts";
 import { getBookLanguage } from "../../core/config/bookLanguages";
 import { cn } from "../lib/cn";
-import { parseColor } from "./color";
 import { ColorField } from "./ColorPicker";
-import { effectiveBackdropBlur } from "./effects";
+import { ShadowFlyout } from "./ShadowFlyout";
 import { effectiveFontSizePct } from "./textFit";
-import { useStudioPanelStore } from "../studio/studioPanelStore";
-import type { TextEditSection } from "./TextEditPanel";
 import type { FloatingBarPlacement } from "./floatingBarPlacement";
-import { PortalToolbarFlyout } from "./toolbarFlyout";
+import { PortalToolbarFlyout, placeViewportFlyout } from "./toolbarFlyout";
 
 export type TextStyleKey = "bold" | "italic" | "underline";
 
@@ -90,8 +84,8 @@ export type TextBoxToolbarChrome = {
 };
 
 /**
- * Slim Canva-style floating toolbar: everyday type controls on the row;
- * Effects / Background / style / duplicate live under More.
+ * Slim Canva-style floating toolbar: type and shadow on the row.
+ * Apply / copy / paste style live under More. No dock.
  */
 export function TextStyleBar({
   placement,
@@ -116,8 +110,11 @@ export function TextStyleBar({
     <FloatingBarPortal
       placement={placement}
       data-text-style-bar
-      // Keep the caret / box selection alive when a control is clicked.
-      onMouseDown={(e) => e.preventDefault()}
+      onMouseDown={(e) => {
+        // Keep the caret / box selection alive, but don't block sliders / fields.
+        if ((e.target as HTMLElement).closest("input, button, select, textarea, a")) return;
+        e.preventDefault();
+      }}
     >
       <div className="flex max-w-[calc(100vw-16px)] items-center gap-0.5 overflow-x-auto rounded-xl border border-ink-200 bg-white/95 p-1 shadow-lifted backdrop-blur">
         {chrome && (
@@ -130,12 +127,10 @@ export function TextStyleBar({
             <SizeStepper chrome={chrome} />
             <span className="mx-0.5 h-5 w-px shrink-0 bg-ink-200" />
             <AlignMenu
-              value={chrome.box.align}
-              onChange={(align) => chrome.onPatch({ align })}
-            />
-            <VAlignMenu
-              value={chrome.box.vAlign}
-              onChange={(vAlign) => chrome.onPatch({ vAlign })}
+              align={chrome.box.align}
+              vAlign={chrome.box.vAlign}
+              onAlign={(align) => chrome.onPatch({ align })}
+              onVAlign={(vAlign) => chrome.onPatch({ vAlign })}
             />
             <span className="mx-0.5 h-5 w-px shrink-0 bg-ink-200" />
           </>
@@ -156,14 +151,22 @@ export function TextStyleBar({
         <ColorField
           value={color ?? "#1f2937"}
           onChange={onColor}
-          allowAlpha={false}
+          allowAlpha
           compact
-          label="Text color"
+          look="glyph"
+          label="Text"
         />
 
         {chrome && (
           <>
             <span className="mx-0.5 h-5 w-px shrink-0 bg-ink-200" />
+            <ShadowFlyout
+              effects={chrome.box.effects}
+              coalesceKey={`shadow-${chrome.box.id}`}
+              textGlyphs
+              onChange={(effects, opts) => chrome.onPatch({ effects }, opts)}
+              onGestureEnd={chrome.onGestureEnd}
+            />
             <MoreMenu chrome={chrome} />
             <Toggle label="Delete" active={false} onClick={chrome.onDelete}>
               <Trash2 className="size-4" />
@@ -175,30 +178,14 @@ export function TextStyleBar({
   );
 }
 
-/** Overflow menu: Effects / Background (docked panel) + style / duplicate. */
+/** Overflow: apply / copy / paste style. Duplicate is ⌘D; lock lives in Arrange. */
 function MoreMenu({ chrome }: { chrome: TextBoxToolbarChrome }) {
-  const textEditSection = useStudioPanelStore((s) => s.textEditSection);
-  const toggleTextEdit = useStudioPanelStore((s) => s.toggleTextEdit);
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
 
-  const hasBg =
-    (chrome.box.fill !== undefined && parseColor(chrome.box.fill).a > 0) ||
-    effectiveBackdropBlur(chrome.box) > 0;
-  const hasEffects = !!chrome.box.effects?.shadow;
-
-  const openPanel = (section: TextEditSection) => {
-    toggleTextEdit(section);
-    setOpen(false);
-  };
-
   return (
     <div ref={rootRef} className="relative shrink-0">
-      <Toggle
-        label="More"
-        active={open || textEditSection !== null || hasEffects || hasBg}
-        onClick={() => setOpen((o) => !o)}
-      >
+      <Toggle label="More" active={open} onClick={() => setOpen((o) => !o)}>
         <MoreHorizontal className="size-4" />
       </Toggle>
       <PortalToolbarFlyout
@@ -208,24 +195,6 @@ function MoreMenu({ chrome }: { chrome: TextBoxToolbarChrome }) {
         align="end"
         className="min-w-52 overflow-hidden py-1"
       >
-        <MenuItem
-          icon={<Blend className="size-4" />}
-          label="Effects"
-          active={textEditSection === "effects" || hasEffects}
-          onClick={() => openPanel("effects")}
-        />
-        <MenuItem
-          icon={
-            <Square
-              className="size-4"
-              style={hasBg ? { fill: chrome.box.fill, color: chrome.box.fill } : undefined}
-            />
-          }
-          label="Background"
-          active={textEditSection === "background" || hasBg}
-          onClick={() => openPanel("background")}
-        />
-        <div className="my-1 border-t border-ink-100" />
         {chrome.applyStyleToScope && (
           <>
             <MenuItem
@@ -264,14 +233,6 @@ function MoreMenu({ chrome }: { chrome: TextBoxToolbarChrome }) {
           disabled={!chrome.canPasteStyle}
           onClick={() => {
             chrome.onPasteStyle();
-            setOpen(false);
-          }}
-        />
-        <MenuItem
-          icon={<Copy className="size-4" />}
-          label="Duplicate"
-          onClick={() => {
-            chrome.onDuplicate();
             setOpen(false);
           }}
         />
@@ -385,94 +346,68 @@ function SizeStepper({ chrome }: { chrome: TextBoxToolbarChrome }) {
   );
 }
 
-/** Single align button + menu — saves three toolbar slots vs a full segment. */
+/** Horizontal + vertical align in one flyout. */
 function AlignMenu({
-  value,
-  onChange,
+  align,
+  vAlign,
+  onAlign,
+  onVAlign,
 }: {
-  value: HAlign;
-  onChange: (a: HAlign) => void;
+  align: HAlign;
+  vAlign: VAlign;
+  onAlign: (a: HAlign) => void;
+  onVAlign: (a: VAlign) => void;
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
-  const opts: { id: HAlign; icon: React.ReactNode; title: string }[] = [
+  const hOpts: { id: HAlign; icon: React.ReactNode; title: string }[] = [
     { id: "left", icon: <AlignLeft className="size-4" />, title: "Align left" },
     { id: "center", icon: <AlignCenter className="size-4" />, title: "Align centre" },
     { id: "right", icon: <AlignRight className="size-4" />, title: "Align right" },
     { id: "justify", icon: <AlignJustify className="size-4" />, title: "Justify" },
   ];
-  const current = opts.find((o) => o.id === value) ?? opts[0];
-
-  return (
-    <div ref={rootRef} className="relative shrink-0">
-      <Toggle label={current.title} active={open} onClick={() => setOpen((o) => !o)}>
-        {current.icon}
-      </Toggle>
-      <PortalToolbarFlyout
-        open={open}
-        onClose={() => setOpen(false)}
-        triggerRef={rootRef}
-        className="flex gap-0.5 p-1"
-      >
-        {opts.map((o) => (
-          <Toggle
-            key={o.id}
-            label={o.title}
-            active={value === o.id}
-            onClick={() => {
-              onChange(o.id);
-              setOpen(false);
-            }}
-          >
-            {o.icon}
-          </Toggle>
-        ))}
-      </PortalToolbarFlyout>
-    </div>
-  );
-}
-
-/** Vertical align — sits beside horizontal align on the bar. */
-function VAlignMenu({
-  value,
-  onChange,
-}: {
-  value: VAlign;
-  onChange: (a: VAlign) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const opts: { id: VAlign; icon: React.ReactNode; title: string }[] = [
+  const vOpts: { id: VAlign; icon: React.ReactNode; title: string }[] = [
     { id: "top", icon: <ArrowUpToLine className="size-4" />, title: "Align top" },
     { id: "center", icon: <MoveVertical className="size-4" />, title: "Align middle" },
     { id: "bottom", icon: <ArrowDownToLine className="size-4" />, title: "Align bottom" },
   ];
-  const current = opts.find((o) => o.id === value) ?? opts[1];
+  const current = hOpts.find((o) => o.id === align) ?? hOpts[0];
 
   return (
     <div ref={rootRef} className="relative shrink-0">
-      <Toggle label={current.title} active={open} onClick={() => setOpen((o) => !o)}>
+      <Toggle label="Align" active={open} onClick={() => setOpen((o) => !o)}>
         {current.icon}
       </Toggle>
       <PortalToolbarFlyout
         open={open}
         onClose={() => setOpen(false)}
         triggerRef={rootRef}
-        className="flex gap-0.5 p-1"
+        className="flex flex-col gap-1 p-1.5"
       >
-        {opts.map((o) => (
-          <Toggle
-            key={o.id}
-            label={o.title}
-            active={value === o.id}
-            onClick={() => {
-              onChange(o.id);
-              setOpen(false);
-            }}
-          >
-            {o.icon}
-          </Toggle>
-        ))}
+        <div className="flex gap-0.5">
+          {hOpts.map((o) => (
+            <Toggle
+              key={o.id}
+              label={o.title}
+              active={align === o.id}
+              onClick={() => onAlign(o.id)}
+            >
+              {o.icon}
+            </Toggle>
+          ))}
+        </div>
+        <div className="flex gap-0.5">
+          {vOpts.map((o) => (
+            <Toggle
+              key={o.id}
+              label={o.title}
+              active={vAlign === o.id}
+              onClick={() => onVAlign(o.id)}
+            >
+              {o.icon}
+            </Toggle>
+          ))}
+        </div>
       </PortalToolbarFlyout>
     </div>
   );
@@ -493,7 +428,12 @@ function FontField({ value, onChange }: { value: string; onChange: (family: stri
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<"all" | FontCategory>("all");
-  const [menuPos, setMenuPos] = useState<{ left: number; top: number; width: number } | null>(null);
+  const [menuPos, setMenuPos] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    maxHeight?: number;
+  } | null>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -509,13 +449,26 @@ function FontField({ value, onChange }: { value: string; onChange: (family: stri
       const el = triggerRef.current;
       if (!el) return;
       const r = el.getBoundingClientRect();
-      setMenuPos({ left: Math.max(12, r.left), top: r.bottom + 6, width: 340 });
+      const panel = menuRef.current;
+      const box = placeViewportFlyout({
+        trigger: r,
+        width: panel?.offsetWidth ?? 340,
+        height: panel?.offsetHeight || 480,
+      });
+      setMenuPos({
+        left: box.left,
+        top: box.top,
+        width: 340,
+        maxHeight: box.maxHeight,
+      });
     };
     place();
+    const raf = requestAnimationFrame(place);
     requestAnimationFrame(() => searchRef.current?.focus());
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
     return () => {
+      cancelAnimationFrame(raf);
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
@@ -577,7 +530,14 @@ function FontField({ value, onChange }: { value: string; onChange: (family: stri
           <div
             ref={menuRef}
             className="fixed z-100 overflow-hidden rounded-2xl border border-ink-200 bg-white shadow-2xl ring-1 ring-black/5"
-            style={{ left: menuPos.left, top: menuPos.top, width: menuPos.width }}
+            style={{
+              left: menuPos.left,
+              top: menuPos.top,
+              width: menuPos.width,
+              ...(menuPos.maxHeight
+                ? { maxHeight: menuPos.maxHeight, overflowY: "auto" }
+                : {}),
+            }}
             onMouseDown={(e) => e.stopPropagation()}
           >
             {/* Header: Language certified notice */}

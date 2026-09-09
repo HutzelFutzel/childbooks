@@ -16,10 +16,80 @@ import { createPortal } from "react-dom";
 import { cn } from "../lib/cn";
 
 const GAP = 4;
+const MARGIN = 8;
+
+/** Keep a flyout fully inside the viewport: prefer below, flip above, then clamp. */
+export function placeViewportFlyout(opts: {
+  trigger: DOMRect;
+  width: number;
+  height: number;
+  gap?: number;
+  margin?: number;
+  align?: "start" | "end";
+}): { left: number; top: number; maxHeight?: number } {
+  const gap = opts.gap ?? GAP;
+  const margin = opts.margin ?? MARGIN;
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const width = Math.min(Math.max(opts.width, 1), vw - margin * 2);
+  const spaceBelow = vh - margin - (opts.trigger.bottom + gap);
+  const spaceAbove = opts.trigger.top - margin - gap;
+  const canFitBelow = spaceBelow >= opts.height;
+  const canFitAbove = spaceAbove >= opts.height;
+  const placeBelow =
+    canFitBelow || (!canFitAbove && spaceBelow >= spaceAbove);
+
+  let top: number;
+  let maxHeight: number | undefined;
+  if (placeBelow) {
+    top = opts.trigger.bottom + gap;
+    const available = vh - margin - top;
+    if (opts.height > available) maxHeight = Math.max(96, available);
+  } else {
+    const h = Math.min(opts.height, Math.max(96, spaceAbove));
+    top = opts.trigger.top - gap - h;
+    if (top < margin) top = margin;
+    if (opts.height > spaceAbove) maxHeight = Math.max(96, spaceAbove);
+  }
+
+  let left =
+    opts.align === "end" ? opts.trigger.right - width : opts.trigger.left;
+  left = Math.min(Math.max(margin, left), vw - margin - width);
+
+  const usedH = maxHeight ?? opts.height;
+  if (top + usedH > vh - margin) {
+    maxHeight = Math.max(96, vh - margin - top);
+  }
+
+  return { left, top, maxHeight };
+}
+
+function flyoutStyle(
+  trigger: DOMRect,
+  panel: HTMLElement | null,
+  align: "start" | "end",
+  fallbackH: number,
+): CSSProperties {
+  const box = placeViewportFlyout({
+    trigger,
+    width: panel?.offsetWidth ?? 240,
+    height: panel?.offsetHeight || fallbackH,
+    align,
+  });
+  return {
+    position: "fixed",
+    left: box.left,
+    top: box.top,
+    ...(box.maxHeight
+      ? { maxHeight: box.maxHeight, overflowY: "auto" as const }
+      : {}),
+  };
+}
 
 export function useToolbarFlyoutPosition(
   open: boolean,
   triggerRef: RefObject<HTMLElement | null>,
+  panelRef: RefObject<HTMLElement | null>,
   align: "start" | "end" = "start",
 ): CSSProperties | null {
   const [style, setStyle] = useState<CSSProperties | null>(null);
@@ -32,29 +102,18 @@ export function useToolbarFlyoutPosition(
     const place = () => {
       const el = triggerRef.current;
       if (!el) return;
-      const r = el.getBoundingClientRect();
-      const next: CSSProperties = {
-        position: "fixed",
-        top: r.bottom + GAP,
-      };
-      if (align === "end") next.right = window.innerWidth - r.right;
-      else next.left = r.left;
-      // Flip above when there's no room below.
-      const estimatedH = 200;
-      if (r.bottom + GAP + estimatedH > window.innerHeight - 8 && r.top > estimatedH) {
-        delete next.top;
-        next.bottom = window.innerHeight - r.top + GAP;
-      }
-      setStyle(next);
+      setStyle(flyoutStyle(el.getBoundingClientRect(), panelRef.current, align, 360));
     };
     place();
+    const raf = requestAnimationFrame(place);
     window.addEventListener("scroll", place, true);
     window.addEventListener("resize", place);
     return () => {
+      cancelAnimationFrame(raf);
       window.removeEventListener("scroll", place, true);
       window.removeEventListener("resize", place);
     };
-  }, [open, triggerRef, align]);
+  }, [open, triggerRef, panelRef, align]);
 
   return style;
 }
@@ -102,7 +161,7 @@ export function PortalToolbarFlyout({
   children: ReactNode;
 }) {
   const panelRef = useRef<HTMLDivElement>(null);
-  const style = useToolbarFlyoutPosition(open, triggerRef, align);
+  const style = useToolbarFlyoutPosition(open, triggerRef, panelRef, align);
   useToolbarFlyoutDismiss(open, onClose, triggerRef, panelRef);
 
   if (!open || !style || typeof document === "undefined") return null;
@@ -112,9 +171,17 @@ export function PortalToolbarFlyout({
       ref={panelRef}
       className={cn("z-100 rounded-xl border border-ink-200 bg-white shadow-lifted", className)}
       style={style}
+      onPointerDown={(e) => e.stopPropagation()}
       onMouseDown={(e) => {
-        // Keep text-box selection / caret alive, but don't block menu buttons.
-        if ((e.target as HTMLElement).closest("input, button, select, textarea, a")) return;
+        e.stopPropagation();
+        // Keep text-box selection / caret alive, but don't block sliders / buttons.
+        if (
+          (e.target as HTMLElement).closest(
+            "input, button, select, textarea, a, [role='switch']",
+          )
+        ) {
+          return;
+        }
         e.preventDefault();
       }}
     >

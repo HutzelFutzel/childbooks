@@ -1,8 +1,8 @@
 /**
- * Docked contextual panel for shapes, Arrange (layers), and Canva-style
- * sheets for text/images. Sits as a layout sibling of the stage so the canvas
- * shrinks instead of the panel covering the book. Everyday styling stays on
- * the floating bars.
+ * Docked contextual panel for Arrange (layers), book setup, and illustration
+ * sheets. Sits as a layout sibling of the stage so the canvas shrinks instead of
+ * the panel covering the book. Everyday text and shape styling stays on the
+ * floating bars.
  */
 import { useState } from "react";
 import {
@@ -21,7 +21,6 @@ import {
   SendToBack,
   Shapes,
   Sparkles,
-  Square,
   Type,
   Unlock,
   X,
@@ -30,27 +29,17 @@ import { COVER_BACK_ID, type PageDesign } from "../../core/types";
 import { textFromParagraphs } from "../../core/design";
 import { cn } from "../lib/cn";
 import { ImageEditPanel, type ImageEditSection } from "../design/ImageEditPanel";
-import { ShapeInspector } from "../design/ShapeInspector";
-import { TextEditPanel, type TextEditSection } from "../design/TextEditPanel";
 import { DockSetupPanel } from "./DockSetupPanel";
 import { useStudio, type Selection } from "./StudioContext";
 import { useStudioPanelStore, type StudioToolPanel } from "./studioPanelStore";
 import { subjectForPage } from "./usePageIllustration";
-
-const TEXT_SECTION_META: Record<
-  TextEditSection,
-  { title: string; icon: React.ReactNode }
-> = {
-  effects: { title: "Effects", icon: <Blend className="size-4" /> },
-  background: { title: "Background", icon: <Square className="size-4" /> },
-};
 
 const DEEP_IMAGE_SECTION_META: Record<
   Extract<ImageEditSection, "effects" | "frame">,
   { title: string; icon: React.ReactNode }
 > = {
   effects: { title: "Effects", icon: <Blend className="size-4" /> },
-  frame: { title: "Frame & position", icon: <Crop className="size-4" /> },
+  frame: { title: "Crop & position", icon: <Crop className="size-4" /> },
 };
 
 const ARTWORK_SECTIONS = [
@@ -129,18 +118,8 @@ export function ElementPanel({
 }) {
   const studio = useStudio();
   const { selection } = studio;
-  const textEditSection = useStudioPanelStore((s) => s.textEditSection);
   const imageEditSection = useStudioPanelStore((s) => s.imageEditSection);
-  const closeTextEdit = useStudioPanelStore((s) => s.closeTextEdit);
   const closeImageEdit = useStudioPanelStore((s) => s.closeImageEdit);
-
-  // Closing an element's inspector always dismisses the whole floating panel
-  // (not just the element) — deselect AND clear any pending layers request, so
-  // the X button never surprises you by falling back to a different view.
-  const dismiss = (pageId: string) => {
-    studio.select({ kind: "page", pageId });
-    onClose();
-  };
 
   // Tool panels win over edit sheets so docked tools stay reachable.
   if (toolPanel === "layers" && arrangePages.length > 0) {
@@ -171,29 +150,6 @@ export function ElementPanel({
         onClose={onClose}
       >
         <DockSetupPanel />
-      </PanelShell>
-    );
-  }
-
-  // Text edit sheet: opened from the floating toolbar (Effects / Background)
-  // so deep controls sit beside the canvas, never over the selected text.
-  if (selection.kind === "box" && studio.selectedBox && textEditSection) {
-    const box = studio.selectedBox;
-    const pageId = selection.pageId;
-    const meta = TEXT_SECTION_META[textEditSection];
-    return (
-      <PanelShell
-        icon={meta.icon}
-        title={meta.title}
-        subtitle={studio.pages.find((p) => p.id === pageId)?.label}
-        onClose={closeTextEdit}
-      >
-        <TextEditPanel
-          box={box}
-          section={textEditSection}
-          onPatch={(patch, opts) => studio.patchBox(pageId, box.id, patch, opts)}
-          onGestureEnd={studio.endHistoryGesture}
-        />
       </PanelShell>
     );
   }
@@ -261,28 +217,6 @@ export function ElementPanel({
         </PanelShell>
       );
     }
-  }
-
-  if (selection.kind === "shape" && studio.selectedShape) {
-    const shape = studio.selectedShape;
-    const pageId = selection.pageId;
-    return (
-      <PanelShell
-        icon={<Shapes className="size-4" />}
-        title="Shape"
-        subtitle={studio.pages.find((p) => p.id === pageId)?.label}
-        onClose={() => dismiss(pageId)}
-      >
-        <ShapeInspector
-          shape={shape}
-          onChange={(patch, opts) => studio.patchShape(pageId, shape.id, patch, opts)}
-          onGestureEnd={studio.endHistoryGesture}
-          onDelete={() => studio.deleteShape(pageId, shape.id)}
-          onDuplicate={() => studio.duplicateShape(pageId, shape.id)}
-          onAlign={(edge) => studio.alignShape(pageId, shape.id, edge)}
-        />
-      </PanelShell>
-    );
   }
 
   return null;
@@ -608,14 +542,11 @@ function LayerOrderBtn({
 export function elementPanelHasContent(
   selection: Selection,
   toolPanel: StudioToolPanel | null,
-  textEditOpen = false,
   imageEditOpen = false,
 ): boolean {
   if (toolPanel) return true;
-  if (selection.kind === "box" && textEditOpen) return true;
   if (selection.kind === "image" && imageEditOpen) return true;
   // Generate / cast tools before any illustration frame exists.
-  if (selection.kind === "page" && imageEditOpen) return true;
-  return selection.kind === "shape";
+  return selection.kind === "page" && imageEditOpen;
 }
 

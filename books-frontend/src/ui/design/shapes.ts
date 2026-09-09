@@ -32,6 +32,12 @@ const CORNERED: ShapeKind[] = ["rounded-rect", "bubble-rect"];
 export function isBubble(kind: ShapeKind): boolean {
   return BUBBLES.includes(kind);
 }
+
+/** Grouped catalog for Add menus and the floating shape picker. */
+export const SHAPE_GROUPS: { id: "speech" | "shapes"; label: string; defs: ShapeDef[] }[] = [
+  { id: "speech", label: "Speech", defs: SHAPE_DEFS.filter((def) => isBubble(def.id)) },
+  { id: "shapes", label: "Shapes", defs: SHAPE_DEFS.filter((def) => !isBubble(def.id)) },
+];
 export function hasCorner(kind: ShapeKind): boolean {
   return CORNERED.includes(kind);
 }
