@@ -654,6 +654,7 @@ export type {
   PageBackground,
   ShapeElement,
   ShapeKind,
+  ShapeText,
   ImageElement,
   ElementEffects,
   ShadowTarget,

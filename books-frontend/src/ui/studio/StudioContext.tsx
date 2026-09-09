@@ -60,6 +60,7 @@ import { newShapeId, shapeStyleDefaults } from "../design/shapes";
 import { fitBoxHeightPct, fitFontSizePct } from "../design/textFit";
 import type { SpanRef } from "../design/TextBoxView";
 import { notify, toast } from "../lib/notify";
+import { isInteriorPageId, pageColorOf, pageColorsEqual } from "./pageBackground";
 import { loadFontReady } from "../typography/fonts";
 import { buildDisplaySpreads, type DisplaySpread, type Entry, type SpreadSide } from "./spreadModel";
 import type { PageSubject } from "./PageEditorCard";
@@ -168,6 +169,11 @@ export type HistoryOpts = {
    * or by any mutation without a matching key.
    */
   coalesce?: string;
+  /**
+   * Apply even a coalesced write immediately. Inline text commit uses this so
+   * the editor unmount doesn't race a deferred empty seed.
+   */
+  flush?: boolean;
 };
 
 /** A normalized point on a page (0..1 in each axis). */
@@ -234,6 +240,8 @@ interface StudioContextValue {
   // design ops (page-scoped)
   undo: () => void;
   redo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
   /**
    * End a coalesced history gesture (slider drag, inline edit session). The next
    * mutation starts a fresh undo step.
@@ -370,7 +378,16 @@ interface StudioContextValue {
   /** Whether a box style is currently on the clipboard, ready to paste. */
   hasCopiedBoxStyle: boolean;
 
-  setPageBackground: (pageId: string, patch: Partial<NonNullable<PageDesign["background"]>>) => void;
+  setPageBackground: (
+    pageId: string,
+    patch: Partial<NonNullable<PageDesign["background"]>>,
+    opts?: HistoryOpts,
+  ) => void;
+  /**
+   * Copy this page's paper color onto every interior page and remember it for
+   * pages seeded later. Covers are left alone. One undo step.
+   */
+  applyPageBackgroundToAll: (pageId: string) => void;
 
   // generation progress (namespaced sets)
   generatingAnchors: Set<string>;
@@ -615,6 +632,7 @@ export function StudioProvider({
     future: [],
   });
   const [storyHistoryVersion, setStoryHistoryVersion] = useState(0);
+  const [designHistoryVersion, setDesignHistoryVersion] = useState(0);
   const storyCoalesceKey = useRef<string | null>(null);
   const storyCoalesceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Active coalesce key — see {@link HistoryOpts.coalesce}. */
@@ -1011,6 +1029,7 @@ export function StudioProvider({
     history.current.past.push(takeStudioSnapshot(p));
     if (history.current.past.length > 80) history.current.past.shift();
     history.current.future = [];
+    setDesignHistoryVersion((v) => v + 1);
   }, []);
 
   /**
@@ -1026,6 +1045,7 @@ export function StudioProvider({
     });
     if (history.current.past.length > 80) history.current.past.shift();
     history.current.future = [];
+    setDesignHistoryVersion((v) => v + 1);
   }, []);
 
   /** Clear selection when its page no longer exists after undo/redo. */
@@ -1060,8 +1080,9 @@ export function StudioProvider({
       };
       const next = mutate(draft);
       // Coalesced gestures (sliders / formatting) can be deferred; discrete
-      // edits stay synchronous so selection/undo feel immediate.
-      if (merging) {
+      // edits stay synchronous so selection/undo feel immediate. `flush` is for
+      // commits that must land before the next paint (inline text blur).
+      if (merging && !opts?.flush) {
         startTransition(() => {
           void setDesign(next);
         });
@@ -1097,6 +1118,7 @@ export function StudioProvider({
     coalesceKey.current = null;
     history.current.future.push(takeStudioSnapshot(p));
     const snap = past.pop()!;
+    setDesignHistoryVersion((v) => v + 1);
     void useProjectsStore
       .getState()
       .patchCurrent((cur) => applyStudioSnapshot(cur, snap))
@@ -1113,6 +1135,7 @@ export function StudioProvider({
     coalesceKey.current = null;
     history.current.past.push(takeStudioSnapshot(p));
     const snap = future.pop()!;
+    setDesignHistoryVersion((v) => v + 1);
     void useProjectsStore
       .getState()
       .patchCurrent((cur) => applyStudioSnapshot(cur, snap))
@@ -1121,6 +1144,14 @@ export function StudioProvider({
         if (next) sanitizeSelection(next);
       });
   }, [sanitizeSelection]);
+
+  const designHistoryAvailability = useMemo(
+    () => ({
+      canUndo: history.current.past.length > 0,
+      canRedo: history.current.future.length > 0,
+    }),
+    [designHistoryVersion],
+  );
 
   const mutatePage = useCallback(
     (d: BookDesign, pageId: string, fn: (pd: PageDesign) => PageDesign): BookDesign => {
@@ -1934,12 +1965,39 @@ export function StudioProvider({
   );
 
   const setPageBackground = useCallback(
-    (pageId: string, patch: Partial<NonNullable<PageDesign["background"]>>) => {
-      commit((d) =>
-        mutatePage(d, pageId, (pd) => ({ ...pd, background: { ...pd.background, ...patch } })),
+    (pageId: string, patch: Partial<NonNullable<PageDesign["background"]>>, opts?: HistoryOpts) => {
+      commit(
+        (d) =>
+          mutatePage(d, pageId, (pd) => ({ ...pd, background: { ...pd.background, ...patch } })),
+        opts,
       );
     },
     [commit, mutatePage],
+  );
+
+  const applyPageBackgroundToAll = useCallback(
+    (pageId: string) => {
+      if (!design) return;
+      const color = pageColorOf(design.pages[pageId]);
+      commit((d) => {
+        d.defaultPageBackground = { ...d.defaultPageBackground, color };
+        for (const [id, page] of Object.entries(d.pages)) {
+          if (!isInteriorPageId(id)) continue;
+          if (pageColorsEqual(pageColorOf(page), color)) continue;
+          d.pages[id] = { ...page, background: { ...page.background, color } };
+        }
+        return d;
+      });
+      const count = Object.keys(design.pages).filter(isInteriorPageId).length;
+      toast("Page color applied", {
+        description:
+          count <= 1
+            ? "New pages will use this color too."
+            : `${count} pages now share this paper color. Covers are unchanged.`,
+        action: { label: "Undo", onClick: undo },
+      });
+    },
+    [commit, design, undo],
   );
 
   // --- selection-scoped helpers & clipboard -------------------------------
@@ -2014,15 +2072,27 @@ export function StudioProvider({
 
   const nudgeSelected = useCallback(
     (dx: number, dy: number) => {
+      const id =
+        selection.kind === "box"
+          ? selection.boxId
+          : selection.kind === "shape"
+            ? selection.shapeId
+            : selection.kind === "image"
+              ? selection.imageId
+              : null;
+      if (!id || (selection.kind !== "box" && selection.kind !== "shape" && selection.kind !== "image")) {
+        return;
+      }
+      const opts = { coalesce: `nudge-${id}` };
       if (selection.kind === "box") {
-        const b = design?.pages[selection.pageId]?.textBoxes.find((x) => x.id === selection.boxId);
-        if (b) patchBox(selection.pageId, selection.boxId, { rect: nudgeRect(b.rect, dx, dy) });
+        const b = design?.pages[selection.pageId]?.textBoxes.find((x) => x.id === id);
+        if (b) patchBox(selection.pageId, id, { rect: nudgeRect(b.rect, dx, dy) }, opts);
       } else if (selection.kind === "shape") {
-        const s = design?.pages[selection.pageId]?.shapes?.find((x) => x.id === selection.shapeId);
-        if (s) patchShape(selection.pageId, selection.shapeId, { rect: nudgeRect(s.rect, dx, dy) });
-      } else if (selection.kind === "image") {
-        const im = design?.pages[selection.pageId]?.images?.find((x) => x.id === selection.imageId);
-        if (im) patchImage(selection.pageId, selection.imageId, { rect: nudgeRect(im.rect, dx, dy) });
+        const s = design?.pages[selection.pageId]?.shapes?.find((x) => x.id === id);
+        if (s) patchShape(selection.pageId, id, { rect: nudgeRect(s.rect, dx, dy) }, opts);
+      } else {
+        const im = design?.pages[selection.pageId]?.images?.find((x) => x.id === id);
+        if (im) patchImage(selection.pageId, id, { rect: nudgeRect(im.rect, dx, dy) }, opts);
       }
     },
     [selection, design, patchBox, patchShape, patchImage],
@@ -2157,6 +2227,8 @@ export function StudioProvider({
             setEditingDisp,
             undo,
             redo,
+            canUndo: designHistoryAvailability.canUndo,
+            canRedo: designHistoryAvailability.canRedo,
             endHistoryGesture,
             storyUndo,
             storyRedo,
@@ -2218,6 +2290,7 @@ export function StudioProvider({
             pasteBoxStyle,
             hasCopiedBoxStyle,
             setPageBackground,
+            applyPageBackgroundToAll,
             generatingAnchors,
             generatingPages,
             setAnchorGenerating,
@@ -2256,6 +2329,7 @@ export function StudioProvider({
       setEditingDisp,
       undo,
       redo,
+      designHistoryAvailability,
       endHistoryGesture,
       storyUndo,
       storyRedo,
@@ -2316,6 +2390,7 @@ export function StudioProvider({
       pasteBoxStyle,
       hasCopiedBoxStyle,
       setPageBackground,
+      applyPageBackgroundToAll,
       generatingAnchors,
       generatingPages,
       setAnchorGenerating,

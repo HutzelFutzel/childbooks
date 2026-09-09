@@ -51,6 +51,7 @@ import { useDialogFocus } from "../lib/dialogFocus";
 import { AssetsLibrary } from "./AssetsLibrary";
 import { ElementPanel, elementPanelHasContent } from "./ElementPanel";
 import { PageFilmstrip } from "./PageFilmstrip";
+import { PageColorControl } from "./PageColorControl";
 import { PageStagePanel } from "./PageEditorCard";
 import { PairPageStagePanel } from "./PairPageStage";
 import { useStudio } from "./StudioContext";
@@ -91,6 +92,8 @@ export function BookCanvas() {
     setEditingDisp,
     undo,
     redo,
+    canUndo,
+    canRedo,
     openDesignSetup,
   } = useStudio();
   const imageEditSection = useStudioPanelStore((s) => s.imageEditSection);
@@ -103,6 +106,13 @@ export function BookCanvas() {
   const startScreenplay = useJobsStore((s) => s.startScreenplay);
   const [previewing, setPreviewing] = useState(false);
   const closePreview = useCallback(() => setPreviewing(false), []);
+  const openPreview = useCallback(() => {
+    // Typing in a shape isn't written until blur. Preview reads the store, so
+    // commit the live editor first or the copy looks like it vanished.
+    const el = document.activeElement;
+    if (el instanceof HTMLElement && el.isContentEditable) el.blur();
+    setPreviewing(true);
+  }, []);
   const closeInspector = useCallback(() => {
     closeToolPanel();
     closeImageEdit();
@@ -243,6 +253,11 @@ export function BookCanvas() {
             disabled={!activePageId}
             onClick={() => toggleToolPanel("layers")}
           />
+          {activePageId && (
+            <div className="flex size-9 items-center justify-center">
+              <PageColorControl pageId={activePageId} compact />
+            </div>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-1 sm:gap-1.5">
           {/* Undo / redo stay visible on desktop and move into More on mobile. */}
@@ -250,18 +265,20 @@ export function BookCanvas() {
             <button
               type="button"
               onClick={undo}
+              disabled={!canUndo}
               title="Undo"
               aria-label="Undo"
-              className="flex size-9 items-center justify-center rounded-lg text-ink-500 transition hover:bg-ink-100 hover:text-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+              className="flex size-9 items-center justify-center rounded-lg text-ink-500 transition hover:bg-ink-100 hover:text-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 disabled:pointer-events-none disabled:opacity-35"
             >
               <Undo2 className="size-4" />
             </button>
             <button
               type="button"
               onClick={redo}
+              disabled={!canRedo}
               title="Redo"
               aria-label="Redo"
-              className="flex size-9 items-center justify-center rounded-lg text-ink-500 transition hover:bg-ink-100 hover:text-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+              className="flex size-9 items-center justify-center rounded-lg text-ink-500 transition hover:bg-ink-100 hover:text-ink-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 disabled:pointer-events-none disabled:opacity-35"
             >
               <Redo2 className="size-4" />
             </button>
@@ -272,7 +289,7 @@ export function BookCanvas() {
               size="sm"
               variant="secondary"
               leftIcon={<Eye className="size-4" />}
-              onClick={() => setPreviewing(true)}
+              onClick={openPreview}
             >
               Preview
             </Button>
@@ -280,7 +297,9 @@ export function BookCanvas() {
           <PagesToolbarMore
             onUndo={undo}
             onRedo={redo}
-            onPreview={() => setPreviewing(true)}
+            canUndo={canUndo}
+            canRedo={canRedo}
+            onPreview={openPreview}
             onOpenSetup={openDesignSetup}
           />
           {activeDisp && (
@@ -515,11 +534,15 @@ function ToolbarIconButton({
 function PagesToolbarMore({
   onUndo,
   onRedo,
+  canUndo,
+  canRedo,
   onPreview,
   onOpenSetup,
 }: {
   onUndo: () => void;
   onRedo: () => void;
+  canUndo: boolean;
+  canRedo: boolean;
   onPreview: () => void;
   onOpenSetup: () => void;
 }) {
@@ -560,6 +583,7 @@ function PagesToolbarMore({
             <PagesToolbarMenuItem
               icon={<Undo2 className="size-4" />}
               label="Undo"
+              disabled={!canUndo}
               onClick={() => {
                 onUndo();
                 close();
@@ -568,6 +592,7 @@ function PagesToolbarMore({
             <PagesToolbarMenuItem
               icon={<Redo2 className="size-4" />}
               label="Redo"
+              disabled={!canRedo}
               onClick={() => {
                 onRedo();
                 close();
@@ -740,18 +765,21 @@ function PagesToolbarMenuItem({
   icon,
   label,
   description,
+  disabled,
   onClick,
 }: {
   icon: React.ReactNode;
   label: string;
   description?: string;
+  disabled?: boolean;
   onClick: () => void;
 }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
-      className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left text-ink-700 transition hover:bg-ink-50"
+      className="flex w-full items-start gap-2.5 rounded-lg px-2.5 py-2 text-left text-ink-700 transition hover:bg-ink-50 disabled:pointer-events-none disabled:opacity-35"
     >
       <span className="mt-0.5 shrink-0">{icon}</span>
       <span className="min-w-0">

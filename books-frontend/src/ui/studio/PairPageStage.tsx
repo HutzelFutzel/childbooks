@@ -20,6 +20,7 @@
 import { useMemo } from "react";
 import type { NormRect, PageDesign } from "../../core/types";
 import { wordParagraphs } from "../../core/design";
+import { applyTextBoxPatchToShape, shapeTextDefaults } from "../design/shapeText";
 import { bookProductForConfig, formatCapabilitiesForProject } from "../../core/book";
 import { computePageGuides } from "../../core/book/format";
 import { getCursor } from "../../core/versioning";
@@ -65,6 +66,7 @@ function mapElements<T extends { rect: NormRect }>(list: T[], isRight: boolean):
 export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry }) {
   const {
     project,
+    design,
     selection,
     select,
     pageDesign,
@@ -269,15 +271,54 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
       }
       autoReframeId={pendingReframeImageId}
       onAutoReframeConsumed={clearPendingReframe}
-      onEditText={(id, value) =>
-        patchBox(elementOwner.get(id) ?? left.page.id, id, { paragraphs: wordParagraphs(value) })
-      }
-      onEditRichText={(id, paragraphs) =>
-        patchBox(elementOwner.get(id) ?? left.page.id, id, { paragraphs })
-      }
-      onStyleBox={(id, patch, opts) =>
-        patchBox(elementOwner.get(id) ?? left.page.id, id, patch, opts)
-      }
+      onEditText={(id, value) => {
+        const pageId = elementOwner.get(id) ?? left.page.id;
+        const paragraphs = wordParagraphs(value);
+        const shape = pageDesign(pageId).shapes?.find((s) => s.id === id);
+        if (shape) {
+          patchShape(pageId, id, {
+            text: applyTextBoxPatchToShape(shape, { paragraphs }, {
+              fontFamily: design.defaultFontFamily,
+              fontSizePct: design.defaultFontSizePct,
+            }),
+          });
+          return;
+        }
+        patchBox(pageId, id, { paragraphs });
+      }}
+      onEditRichText={(id, paragraphs) => {
+        const pageId = elementOwner.get(id) ?? left.page.id;
+        const shape = pageDesign(pageId).shapes?.find((s) => s.id === id);
+        if (shape) {
+          patchShape(pageId, id, {
+            text: applyTextBoxPatchToShape(shape, { paragraphs }, {
+              fontFamily: design.defaultFontFamily,
+              fontSizePct: design.defaultFontSizePct,
+            }),
+          });
+          return;
+        }
+        patchBox(pageId, id, { paragraphs });
+      }}
+      onStyleBox={(id, patch, opts) => {
+        const pageId = elementOwner.get(id) ?? left.page.id;
+        const shape = pageDesign(pageId).shapes?.find((s) => s.id === id);
+        if (shape) {
+          patchShape(
+            pageId,
+            id,
+            {
+              text: applyTextBoxPatchToShape(shape, patch, {
+                fontFamily: design.defaultFontFamily,
+                fontSizePct: design.defaultFontSizePct,
+              }),
+            },
+            opts,
+          );
+          return;
+        }
+        patchBox(pageId, id, patch, opts);
+      }}
       textToolbar={{
         pageWidthIn: trim.widthIn,
         pageHeightIn: trim.heightIn,
@@ -330,6 +371,11 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
           if (shape) patchShape(pageId, shapeId, { locked: !shape.locked });
         },
         onGestureEnd: endHistoryGesture,
+        newText: (shape) =>
+          shapeTextDefaults(shape, {
+            fontFamily: design.defaultFontFamily,
+            fontSizePct: design.defaultFontSizePct,
+          }),
       }}
       selectedSpan={selectedSpan}
       onSelectSpan={(ref: SpanRef | null) => {

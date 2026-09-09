@@ -433,7 +433,9 @@ export function seedPageDesign(design: BookDesign, page: DesignPage): PageDesign
     layoutId: page.plan.layoutId,
     compositionMode: page.plan.mode,
     ...(art ? { images: [art] } : {}),
-    ...(page.plan.background ? { background: page.plan.background } : {}),
+    ...((page.plan.background ?? design.defaultPageBackground)
+      ? { background: page.plan.background ?? { ...design.defaultPageBackground } }
+      : {}),
   };
 }
 

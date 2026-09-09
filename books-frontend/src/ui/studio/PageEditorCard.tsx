@@ -7,6 +7,7 @@ import {
 import type { Anchor, CoverSpec, ScreenplaySpread } from "../../core/types";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { wordParagraphs } from "../../core/design";
+import { applyTextBoxPatchToShape, shapeTextDefaults } from "../design/shapeText";
 import { bookProductForConfig, formatCapabilitiesForProject } from "../../core/book";
 import {
   computeBackCoverLogoZone,
@@ -64,6 +65,7 @@ export function PageStagePanel({
 }) {
   const {
     project,
+    design,
     selection,
     select,
     pageDesign,
@@ -204,11 +206,51 @@ export function PageStagePanel({
       onAdjustArt={() => selectIllustration(page.id, { enterReframe: true })}
       autoReframeId={pendingReframeImageId}
       onAutoReframeConsumed={clearPendingReframe}
-      onEditText={(id, value) =>
-        patchBox(page.id, id, { paragraphs: wordParagraphs(value) })
-      }
-      onEditRichText={(id, paragraphs) => patchBox(page.id, id, { paragraphs })}
-      onStyleBox={(id, patch, opts) => patchBox(page.id, id, patch, opts)}
+      onEditText={(id, value) => {
+        const paragraphs = wordParagraphs(value);
+        const shape = pageDesign(page.id).shapes?.find((s) => s.id === id);
+        if (shape) {
+          patchShape(page.id, id, {
+            text: applyTextBoxPatchToShape(shape, { paragraphs }, {
+              fontFamily: design.defaultFontFamily,
+              fontSizePct: design.defaultFontSizePct,
+            }),
+          });
+          return;
+        }
+        patchBox(page.id, id, { paragraphs });
+      }}
+      onEditRichText={(id, paragraphs) => {
+        const shape = pageDesign(page.id).shapes?.find((s) => s.id === id);
+        if (shape) {
+          patchShape(page.id, id, {
+            text: applyTextBoxPatchToShape(shape, { paragraphs }, {
+              fontFamily: design.defaultFontFamily,
+              fontSizePct: design.defaultFontSizePct,
+            }),
+          });
+          return;
+        }
+        patchBox(page.id, id, { paragraphs });
+      }}
+      onStyleBox={(id, patch, opts) => {
+        const shape = pageDesign(page.id).shapes?.find((s) => s.id === id);
+        if (shape) {
+          patchShape(
+            page.id,
+            id,
+            {
+              text: applyTextBoxPatchToShape(shape, patch, {
+                fontFamily: design.defaultFontFamily,
+                fontSizePct: design.defaultFontSizePct,
+              }),
+            },
+            opts,
+          );
+          return;
+        }
+        patchBox(page.id, id, patch, opts);
+      }}
       textToolbar={{
         pageWidthIn: trim.widthIn,
         pageHeightIn: trim.heightIn,
@@ -252,6 +294,11 @@ export function PageStagePanel({
           if (shape) patchShape(page.id, shapeId, { locked: !shape.locked });
         },
         onGestureEnd: endHistoryGesture,
+        newText: (shape) =>
+          shapeTextDefaults(shape, {
+            fontFamily: design.defaultFontFamily,
+            fontSizePct: design.defaultFontSizePct,
+          }),
       }}
       selectedSpan={selectedSpan}
       onSelectSpan={(ref: SpanRef | null) => {

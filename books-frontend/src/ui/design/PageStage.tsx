@@ -42,6 +42,7 @@ import { KonvaTextBox, type KonvaTextBoxHandle } from "./konva/KonvaTextBox";
 import { KonvaImageElement } from "./konva/KonvaImageElement";
 import { KonvaArtBusyVeil } from "./konva/KonvaArtBusyVeil";
 import { KonvaShape } from "./ShapeRender";
+import { shapeTextAsBox, shapeTextIsEmpty } from "./shapeText";
 import { useImage } from "./konva/useImage";
 import { usePatternImage } from "./konva/usePatternImage";
 import { useBlobUrl } from "../hooks/useBlobUrl";
@@ -269,12 +270,14 @@ export function PageStage({
     onPatch: (
       shapeId: string,
       patch: Partial<ShapeElement>,
-      opts?: { coalesce?: string },
+      opts?: { coalesce?: string; flush?: boolean },
     ) => void;
     onDuplicate: (shapeId: string) => void;
     onDelete: (shapeId: string) => void;
     onToggleLock: (shapeId: string) => void;
     onGestureEnd: () => void;
+    /** Seed empty copy on first double-click. */
+    newText: (shape: ShapeElement) => NonNullable<ShapeElement["text"]>;
   };
   /** Empty-state CTA when the (left) page has no illustration yet. */
   emptyArt?: React.ReactNode;
@@ -298,7 +301,7 @@ export function PageStage({
   onStyleBox?: (
     id: string,
     patch: Partial<TextBox>,
-    opts?: { coalesce?: string },
+    opts?: { coalesce?: string; flush?: boolean },
   ) => void;
   /**
    * Canva-style whole-box chrome (font/size/align/⋯ More). When provided with
@@ -745,8 +748,13 @@ export function PageStage({
     onSelectSpan?.(null);
   }
 
+  const editingShape = editingId
+    ? (pageDesign.shapes ?? []).find((s) => s.id === editingId && !s.hidden)
+    : undefined;
   const editingBox = editingId
-    ? pageDesign.textBoxes.find((b) => b.id === editingId && !b.hidden)
+    ? editingShape
+      ? shapeTextAsBox(editingShape, editingShape.text ?? shapeToolbar?.newText(editingShape))
+      : pageDesign.textBoxes.find((b) => b.id === editingId && !b.hidden)
     : undefined;
 
   // Minimum width (px) the selected text box may be resized to before words start
@@ -890,7 +898,7 @@ export function PageStage({
     editable && selectedId && shapeToolbar
       ? (pageDesign.shapes ?? []).find((s) => s.id === selectedId && !s.hidden)
       : undefined;
-  const showShapeBar = Boolean(selectedShapeEl && shapeToolbar);
+  const showShapeBar = Boolean(selectedShapeEl && shapeToolbar && editingId !== selectedId);
   const shapeBarId = showShapeBar ? selectedId : null;
   useEffect(() => {
     if (!shapeBarId) {
@@ -1391,6 +1399,12 @@ export function PageStage({
                         setReframeId(el.id);
                         return;
                       }
+                      if (el.shape && shapeToolbar && (onEditText || onEditRichText || onStyleBox)) {
+                        e.cancelBubble = true;
+                        select();
+                        setEditingId(el.id);
+                        return;
+                      }
                       if (!el.box || !(onEditText || onEditRichText)) return;
                       e.cancelBubble = true;
                       select();
@@ -1407,6 +1421,12 @@ export function PageStage({
                         e.cancelBubble = true;
                         select();
                         setReframeId(el.id);
+                        return;
+                      }
+                      if (el.shape && shapeToolbar && (onEditText || onEditRichText || onStyleBox)) {
+                        e.cancelBubble = true;
+                        select();
+                        setEditingId(el.id);
                         return;
                       }
                       if (!el.box || !(onEditText || onEditRichText)) return;
@@ -1440,7 +1460,7 @@ export function PageStage({
                       transformingIdRef.current = el.id;
                       // Counter-scale the words imperatively so glyphs aren't
                       // stretched with the Transformer's non-uniform scale.
-                      if (el.kind !== "text") return;
+                      if (el.kind !== "text" && !el.shape?.text) return;
                       const n = e.target as Konva.Group;
                       textBoxRefs.current.get(el.id)?.setLiveScale(n.scaleX(), n.scaleY());
                     }}
@@ -1526,7 +1546,18 @@ export function PageStage({
                         selectedSpan={selectedId === el.id ? selectedSpan : null}
                       />
                     ) : el.shape ? (
-                      <KonvaShape shape={el.shape} w={w} h={h} pageHeight={H} />
+                      <KonvaShape
+                        ref={(handle) => {
+                          if (handle) textBoxRefs.current.set(el.id, handle);
+                          else textBoxRefs.current.delete(el.id);
+                        }}
+                        shape={el.shape}
+                        w={w}
+                        h={h}
+                        pageHeight={H}
+                        pageAspect={aspect}
+                        hideText={editable && editingId === el.id}
+                      />
                     ) : el.image ? (
                       <KonvaImageElement
                         el={renderedImage ?? el.image}
@@ -1784,11 +1815,12 @@ export function PageStage({
                     readingModeId: textToolbar.readingModeId,
                     onPatch: (patch, opts) => {
                       if (patch.fontSizePct !== undefined) {
+                        const source = patch.paragraphs ?? editingBox.paragraphs;
                         onStyleBox(
                           editingBox.id,
                           {
                             ...patch,
-                            paragraphs: editingBox.paragraphs.map((p) => ({
+                            paragraphs: source.map((p) => ({
                               ...p,
                               spans: p.spans.map((s) => ({ ...s, sizeMul: undefined })),
                             })),
@@ -1800,30 +1832,80 @@ export function PageStage({
                       onStyleBox(editingBox.id, patch, opts);
                     },
                     onGestureEnd: textToolbar.onGestureEnd,
-                    onDuplicate: () => textToolbar.onDuplicate(editingBox.id),
+                    onDuplicate: () => {
+                      if (editingShape) shapeToolbar?.onDuplicate(editingShape.id);
+                      else textToolbar.onDuplicate(editingBox.id);
+                    },
                     onDelete: () => {
-                      textToolbar.onDelete(editingBox.id);
+                      if (editingShape) shapeToolbar?.onDelete(editingShape.id);
+                      else textToolbar.onDelete(editingBox.id);
                       setEditingId(null);
                     },
-                    onToggleLock: () => textToolbar.onToggleLock(editingBox.id),
-                    onCopyStyle: () => textToolbar.onCopyStyle(editingBox.id),
-                    onPasteStyle: () => textToolbar.onPasteStyle(editingBox.id),
-                    canPasteStyle: textToolbar.canPasteStyle,
+                    onToggleLock: () => {
+                      if (editingShape) shapeToolbar?.onToggleLock(editingShape.id);
+                      else textToolbar.onToggleLock(editingBox.id);
+                    },
+                    onCopyStyle: () => {
+                      if (!editingShape) textToolbar.onCopyStyle(editingBox.id);
+                    },
+                    onPasteStyle: () => {
+                      if (!editingShape) textToolbar.onPasteStyle(editingBox.id);
+                    },
+                    canPasteStyle: !editingShape && textToolbar.canPasteStyle,
                   }
                 : undefined
             }
             onLiveSync={
               onStyleBox
-                ? (paragraphs) =>
-                    onStyleBox(editingBox.id, { paragraphs }, { coalesce: `edit-${editingBox.id}` })
+                ? (paragraphs) => {
+                    const editOpts = { coalesce: `edit-${editingBox.id}`, flush: true };
+                    if (editingShape && shapeToolbar) {
+                      shapeToolbar.onPatch(
+                        editingShape.id,
+                        {
+                          text: {
+                            ...(editingShape.text ?? shapeToolbar.newText(editingShape)),
+                            paragraphs,
+                          },
+                        },
+                        editOpts,
+                      );
+                      return;
+                    }
+                    onStyleBox(editingBox.id, { paragraphs }, editOpts);
+                  }
                 : undefined
             }
-            onCommit={() => {
+            onCommit={(paragraphs) => {
+              const kept = takeEditorCopy(editingBox.id, paragraphs);
+              if (editingShape && shapeToolbar) {
+                const editOpts = { coalesce: `edit-${editingShape.id}`, flush: true };
+                if (shapeTextIsEmpty({ paragraphs: kept })) {
+                  if (editingShape.text) {
+                    shapeToolbar.onPatch(editingShape.id, { text: undefined }, editOpts);
+                  }
+                } else {
+                  shapeToolbar.onPatch(
+                    editingShape.id,
+                    {
+                      text: {
+                        ...(editingShape.text ?? shapeToolbar.newText(editingShape)),
+                        paragraphs: kept,
+                      },
+                    },
+                    editOpts,
+                  );
+                }
+              }
               textToolbar?.onGestureEnd();
               setEditingId(null);
             }}
             onCancel={(discarded) => {
-              if (discarded) textToolbar?.onDiscardEdit();
+              liveEditorCopy.delete(editingBox.id);
+              // Typing-only sessions never wrote; undoing would revert the last
+              // real design edit (adding the shape, etc.).
+              if (discarded && editingShape?.text) textToolbar?.onDiscardEdit();
+              else if (discarded && !editingShape) textToolbar?.onDiscardEdit();
               else textToolbar?.onGestureEnd();
               setEditingId(null);
             }}
@@ -1897,6 +1979,23 @@ export function PageStage({
 }
 
 /**
+ * Survives an InlineTextEditor remount (blur-time parse of an empty seed would
+ * otherwise wipe what the user just typed).
+ */
+const liveEditorCopy = new Map<string, TextParagraph[]>();
+
+function keepEditorCopy(id: string, paragraphs: TextParagraph[]): TextParagraph[] {
+  if (!shapeTextIsEmpty({ paragraphs })) liveEditorCopy.set(id, paragraphs);
+  return liveEditorCopy.get(id) ?? paragraphs;
+}
+
+function takeEditorCopy(id: string, paragraphs: TextParagraph[]): TextParagraph[] {
+  const kept = keepEditorCopy(id, paragraphs);
+  liveEditorCopy.delete(id);
+  return kept;
+}
+
+/**
  * In-place text editor that renders with the *exact* same styling as the result
  * renderer (chrome stays on the canvas behind it; this only owns the words), so
  * editing is true WYSIWYG: same font, size, color, alignment, padding and
@@ -1924,7 +2023,8 @@ function InlineTextEditor({
   chrome?: TextBoxToolbarChrome;
   /** Push current editor paragraphs into the design (coalesced undo). */
   onLiveSync?: (paragraphs: TextParagraph[]) => void;
-  onCommit: () => void;
+  /** Called after the final flush; `paragraphs` is the editor DOM, not store state. */
+  onCommit: (paragraphs: TextParagraph[]) => void;
   /** `discarded` true when the user cancelled a dirty session (Escape). */
   onCancel: (discarded: boolean) => void;
   onUndo?: () => void;
@@ -1934,6 +2034,13 @@ function InlineTextEditor({
   const wrapRef = useRef<HTMLDivElement>(null);
   const done = useRef(false);
   const dirty = useRef(false);
+  const lastParagraphs = useRef<TextParagraph[]>(box.paragraphs);
+  const onLiveSyncRef = useRef(onLiveSync);
+  onLiveSyncRef.current = onLiveSync;
+  const onCommitRef = useRef(onCommit);
+  onCommitRef.current = onCommit;
+  const onCancelRef = useRef(onCancel);
+  onCancelRef.current = onCancel;
   const syncTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [marks, setMarks] = useState({ bold: false, italic: false, underline: false });
   const [barPos, setBarPos] = useState<FloatingBarPlacement | null>(null);
@@ -1944,14 +2051,15 @@ function InlineTextEditor({
    * flush on toolbar formatting (immediate) and when the session ends.
    */
   const syncLive = (immediate = false) => {
-    if (!ref.current || !onLiveSync) return;
+    if (!ref.current || !onLiveSyncRef.current) return;
     dirty.current = true;
+    lastParagraphs.current = keepEditorCopy(box.id, editorToParagraphs(ref.current));
     if (!immediate) return;
     if (syncTimer.current) {
       clearTimeout(syncTimer.current);
       syncTimer.current = null;
     }
-    onLiveSync(editorToParagraphs(ref.current));
+    onLiveSyncRef.current(lastParagraphs.current);
   };
 
   useEffect(() => {
@@ -1966,6 +2074,17 @@ function InlineTextEditor({
     sel?.addRange(range);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const obs = new MutationObserver(() => {
+      lastParagraphs.current = keepEditorCopy(box.id, editorToParagraphs(el));
+      dirty.current = true;
+    });
+    obs.observe(el, { childList: true, subtree: true, characterData: true });
+    return () => obs.disconnect();
+  }, [box.id]);
 
   // Pin the toolbar to the text box (Canva), flipping below page chips / dock.
   useEffect(() => {
@@ -2010,7 +2129,7 @@ function InlineTextEditor({
     return () => document.removeEventListener("selectionchange", onSel);
   }, []);
 
-  function finish(save: boolean) {
+  function finish(save: boolean, from?: HTMLElement | null) {
     if (done.current) return;
     done.current = true;
     if (syncTimer.current) {
@@ -2018,15 +2137,35 @@ function InlineTextEditor({
       syncTimer.current = null;
     }
     if (save) {
-      // Flush final DOM into the coalesced step only when the session changed.
-      if (dirty.current && ref.current && onLiveSync) {
-        onLiveSync(editorToParagraphs(ref.current));
-      }
-      onCommit();
+      const node = from ?? ref.current;
+      if (node) keepEditorCopy(box.id, editorToParagraphs(node));
+      const paragraphs = liveEditorCopy.get(box.id) ?? lastParagraphs.current;
+      lastParagraphs.current = paragraphs;
+      if (onLiveSyncRef.current) onLiveSyncRef.current(paragraphs);
+      onCommitRef.current(paragraphs);
     } else {
-      onCancel(dirty.current);
+      onCancelRef.current(dirty.current);
     }
   }
+  const finishRef = useRef(finish);
+  finishRef.current = finish;
+
+  // The Konva canvas isn't focusable, so click-away doesn't always blur.
+  // Commit on pointerdown outside the editor / text toolbar instead.
+  useEffect(() => {
+    const onDown = (e: PointerEvent) => {
+      if (done.current) return;
+      const t = e.target;
+      if (!(t instanceof Node)) return;
+      if (wrapRef.current?.contains(t)) return;
+      if (t instanceof Element && t.closest("[data-text-style-bar], [data-color-picker-popover]")) {
+        return;
+      }
+      finishRef.current(true);
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, []);
 
   // ⌘Z / ⌘⇧Z → design undo/redo (not the browser's contentEditable stack).
   useEffect(() => {
@@ -2068,8 +2207,20 @@ function InlineTextEditor({
   const pad = (box.padding ?? preset.padding) * Math.min(boxW, boxH);
 
   // While editing, chrome must reflect the live box; keep onPatch bound to the
-  // latest box identity from the parent-built chrome object.
-  const liveChrome = chrome ? { ...chrome, box } : undefined;
+  // latest box identity from the parent-built chrome object. Toolbar patches
+  // (font size, etc.) otherwise rewrite the store with the empty seed copy.
+  const liveChrome = chrome
+    ? {
+        ...chrome,
+        box,
+        onPatch: (patch: Partial<TextBox>, opts?: { coalesce?: string }) => {
+          const paragraphs = ref.current
+            ? keepEditorCopy(box.id, editorToParagraphs(ref.current))
+            : box.paragraphs;
+          chrome.onPatch(patch.paragraphs ? patch : { ...patch, paragraphs }, opts);
+        },
+      }
+    : undefined;
 
   return (
     <>
@@ -2116,6 +2267,9 @@ function InlineTextEditor({
             spellCheck={false}
             onInput={() => {
               dirty.current = true;
+              if (ref.current) {
+                lastParagraphs.current = keepEditorCopy(box.id, editorToParagraphs(ref.current));
+              }
             }}
             onBlur={(e) => {
               // Keep editing alive when the floating toolbar (portaled) is clicked.
@@ -2130,7 +2284,7 @@ function InlineTextEditor({
                   return;
                 }
               }
-              finish(true);
+              finish(true, e.currentTarget);
             }}
             onKeyDown={(e) => {
               if (e.key === "Escape") {

@@ -365,7 +365,7 @@ export function CompositedPage({
               {el.box ? (
                 <TextBoxView box={el.box} pageHeight={H} w={w} h={h} aspect={W / H} />
               ) : el.shape ? (
-                <ShapeSvg shape={el.shape} w={w} h={h} pageHeight={H} />
+                <ShapeSvg shape={el.shape} w={w} h={h} pageHeight={H} aspect={W / H} />
               ) : el.image ? (
                 <CompositedImage
                   image={el.image}

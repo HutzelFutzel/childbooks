@@ -303,6 +303,25 @@ export interface ShapeElement {
   hidden?: boolean;
   /** Shadow / blur effects. */
   effects?: ElementEffects;
+  /**
+   * Optional copy drawn in the shape, like a text box. Omitted or empty means
+   * the shape is decorative. Double-click in the editor seeds this.
+   */
+  text?: ShapeText;
+}
+
+/** Typography + copy nested in a {@link ShapeElement} (speech bubble, etc.). */
+export interface ShapeText {
+  paragraphs: TextParagraph[];
+  fontFamily: string;
+  /** Base font size as a fraction of page height. */
+  fontSizePct: number;
+  color: ColorValue;
+  align: HAlign;
+  vAlign: VAlign;
+  lineHeight: number;
+  /** Inner padding as a fraction of the smaller box dimension. */
+  padding?: number;
 }
 
 /**
@@ -401,6 +420,12 @@ export interface BookDesign {
   defaultFontSizePct: number;
   /** Role-aware typography used by existing boxes and anything seeded later. */
   sharedTextStyles?: Partial<Record<SharedTextStyleKey, SharedTextStyle>>;
+  /**
+   * Paper color inherited by newly seeded pages after “Apply to all pages”.
+   * Per-page {@link PageDesign.background} remains the source of truth for
+   * already-designed pages.
+   */
+  defaultPageBackground?: PageBackground;
   /** Book-wide physical print choices. Screen editions ignore these settings. */
   printSettings?: {
     /**

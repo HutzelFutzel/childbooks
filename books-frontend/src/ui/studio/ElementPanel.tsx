@@ -146,10 +146,14 @@ export function ElementPanel({
       <PanelShell
         icon={<LayoutTemplate className="size-4" />}
         title="Book setup"
-        subtitle="Size & layout"
+        subtitle="Size, layout and page color"
         onClose={onClose}
       >
-        <DockSetupPanel />
+        <DockSetupPanel
+          pageId={
+            "pageId" in selection ? selection.pageId : arrangePages[0]?.id
+          }
+        />
       </PanelShell>
     );
   }
@@ -282,7 +286,10 @@ function layerRowsForPage(pd: PageDesign): LayerRow[] {
       id: s.id,
       kind: "shape" as const,
       z: s.z,
-      label: s.name?.trim() || s.kind,
+      label:
+        s.name?.trim() ||
+        (s.text ? textFromParagraphs(s.text.paragraphs).trim() : "") ||
+        s.kind,
       hidden: s.hidden,
       locked: s.locked,
     })),

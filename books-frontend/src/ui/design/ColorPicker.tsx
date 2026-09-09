@@ -72,6 +72,7 @@ export function ColorField({
   live = compact,
   look = "swatch",
   footer,
+  onOpenChange,
 }: {
   label?: string;
   value: string;
@@ -88,6 +89,8 @@ export function ColorField({
   look?: "swatch" | "glyph" | "stroke";
   /** Extra controls (outline weight) inside the popover. */
   footer?: ReactNode;
+  /** Fires when the popover opens or closes (close = end a coalesced undo). */
+  onOpenChange?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<RGBA>(() => parseColor(value));
@@ -144,6 +147,7 @@ export function ColorField({
     }
     setOpen(false);
     setMenuPos(null);
+    onOpenChange?.(false);
   };
 
   // Keep the closed swatch in sync with external value.
@@ -254,7 +258,14 @@ export function ColorField({
       <button
         ref={triggerRef}
         type="button"
-        onClick={() => (open ? close(true) : setOpen(true))}
+        onClick={() => {
+          if (open) {
+            close(true);
+            return;
+          }
+          setOpen(true);
+          onOpenChange?.(true);
+        }}
         title={label ?? "Choose color"}
         aria-label={label ?? "Choose color"}
         className={cn(

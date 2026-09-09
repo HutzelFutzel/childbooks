@@ -4,6 +4,7 @@
  * colour) across edits. Scope follows the live selection — Canva-style; there
  * is no separate "box style" vs "word style" mode in the UI.
  */
+import { textFromParagraphs, wordParagraphs } from "../../core/design";
 import type { TextParagraph, TextSpan } from "../../core/types";
 
 interface Style {
@@ -143,7 +144,14 @@ export function editorToParagraphs(root: HTMLElement): TextParagraph[] {
     }
   }
 
-  return paragraphs.length ? paragraphs : [{ spans: [{ text: "" }] }];
+  const parsed = paragraphs.length ? paragraphs : [{ spans: [{ text: "" }] }];
+  // Some browsers leave the visible copy in innerText while the node tree
+  // we walk is empty (especially on blur). Don't treat that as "no text".
+  if (!textFromParagraphs(parsed).trim()) {
+    const raw = (root.innerText ?? root.textContent ?? "").replace(/\u00a0/g, " ");
+    if (raw.trim()) return wordParagraphs(raw);
+  }
+  return parsed;
 }
 
 function styleOf(span: TextSpan): Style {

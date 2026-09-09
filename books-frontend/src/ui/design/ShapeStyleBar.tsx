@@ -55,10 +55,30 @@ export function ShapeStyleBar({
           onChange={(fill) =>
             chrome.onPatch({ fill }, { coalesce: `fill-${chrome.shape.id}` })
           }
+          onOpenChange={(open) => {
+            if (!open) chrome.onGestureEnd();
+          }}
           compact
           look="swatch"
           label="Fill"
         />
+        {chrome.shape.text && (
+          <ColorField
+            value={chrome.shape.text.color}
+            onChange={(color) =>
+              chrome.onPatch(
+                { text: { ...chrome.shape.text!, color } },
+                { coalesce: `shape-text-color-${chrome.shape.id}` },
+              )
+            }
+            onOpenChange={(open) => {
+              if (!open) chrome.onGestureEnd();
+            }}
+            compact
+            look="glyph"
+            label="Text"
+          />
+        )}
         <ColorField
           value={chrome.shape.stroke ?? "rgba(0,0,0,0)"}
           onChange={(stroke) => {
@@ -67,6 +87,9 @@ export function ShapeStyleBar({
               patch.strokeWidth = DEFAULT_OUTLINE_WIDTH;
             }
             chrome.onPatch(patch, { coalesce: `stroke-${chrome.shape.id}` });
+          }}
+          onOpenChange={(open) => {
+            if (!open) chrome.onGestureEnd();
           }}
           compact
           look="stroke"
