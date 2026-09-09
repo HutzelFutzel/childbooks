@@ -153,6 +153,8 @@ export interface BuildIllustrationPromptInput {
    * covers) skips the layout guidance.
    */
   layoutPlan?: LayoutPlan | null;
+  /** When set, a weak model skips the painted calm treatment in the prompt. */
+  capabilities?: ImageModelCapabilities | null;
 }
 
 export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): string {
@@ -179,6 +181,7 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
     edit,
     prompts,
     layoutPlan,
+    capabilities,
   } = input;
   const styleText = resolveArtStyleText(config.artStyle, prompts);
 
@@ -222,11 +225,14 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
   const bakeTextActive = bakeParts.length > 0;
   const bakeTextInstruction = bakeParts.join(", ");
 
-  // Structural layout facts are COMPILED from the plan's rectangles (see
-  // `layoutPromptFacts`) rather than written by hand, so widening a text column
-  // rewrites the instruction automatically. Baking cover text replaces the
-  // reserve-space instruction entirely, so it suppresses these.
-  const facts = layoutPlan ? layoutPromptFacts(layoutPlan, renderAspect(spread.kind, config)) : null;
+  // Structural layout facts are COMPILED from the plan (grid fraction when the
+  // slot was authored as one). Baking cover text replaces the reserve-space
+  // instruction entirely, so it suppresses these.
+  const facts = layoutPlan
+    ? layoutPromptFacts(layoutPlan, renderAspect(spread.kind, config), {
+        negativeSpaceControl: capabilities?.negativeSpaceControl,
+      })
+    : null;
   const pageNote = spread.layoutNote.trim();
   const listOf = (arr: Anchor[]) =>
     arr

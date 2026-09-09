@@ -416,7 +416,7 @@ export interface PageDesign {
 export type PrintBleedMode = "fit" | "mirror";
 
 /** Bumped when the saved design shape changes in a way that needs migrating. */
-export const DESIGN_VERSION = 5;
+export const DESIGN_VERSION = 6;
 
 /** Sticky fill/stroke used when adding another geometric shape or speech bubble. */
 export interface LastShapeTextPaint {
@@ -495,6 +495,12 @@ export interface BookDesign {
    * already-designed pages.
    */
   defaultPageBackground?: PageBackground;
+  /**
+   * Image-shape id applied to newly generated story illustrations. Chosen once
+   * when Pages first opens if the admin catalog has frames; the reader can
+   * still change or clear any page. Covers never inherit this.
+   */
+  defaultImageMaskId?: string;
   /** Book-wide physical print choices. Screen editions ignore these settings. */
   printSettings?: {
     /**
@@ -579,7 +585,7 @@ function newIllustrationElementId(): string {
 export function withIllustrationFrame(
   design: BookDesign,
   pageId: string,
-  opts?: { focus?: { x: number; y: number }; rect?: NormRect },
+  opts?: { focus?: { x: number; y: number }; rect?: NormRect; imageMaskId?: string },
 ): BookDesign {
   const pd = design.pages[pageId] ?? { textBoxes: [] };
   if ((pd.images ?? []).some((im) => im.kind === "illustration")) return design;
@@ -599,6 +605,7 @@ export function withIllustrationFrame(
     fit: "cover",
     name: "Illustration",
     ...(opts?.focus ? { focus: opts.focus } : {}),
+    ...(opts?.imageMaskId ? { imageMaskId: opts.imageMaskId } : {}),
   };
   return {
     ...design,

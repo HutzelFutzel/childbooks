@@ -47,6 +47,8 @@ import {
   buildDesignPages,
   defaultDesign,
   defaultIllustrationFocus,
+  LEGACY_DEFAULT_FONTS,
+  migrateDesignToCurrentVersion,
   migrateGeneratedTextBoxHeights,
   newImageId,
   newTextBoxId,
@@ -76,7 +78,8 @@ import { isInteriorPageId, pageColorOf, pageColorsEqual } from "./pageBackground
 import { loadFontReady } from "../typography/fonts";
 import { buildDisplaySpreads, type DisplaySpread, type Entry, type SpreadSide } from "./spreadModel";
 import type { PageSubject } from "./PageEditorCard";
-import { computeProgress, type StudioStep } from "./studioSteps";
+import { computeProgress, designChapterOf, type StudioStep } from "./studioSteps";
+import { pickRandomActiveMaskId } from "../../core/config/imageMasks";
 import { useStudioPanelStore } from "./studioPanelStore";
 import {
   destinationForStep,
@@ -771,11 +774,22 @@ export function StudioProvider({
       void setDesign(defaultDesign(project, bookLanguages, typography));
       return;
     }
+
+    const needsVersion = design.version !== DESIGN_VERSION;
+    const needsFontUpgrade =
+      LEGACY_DEFAULT_FONTS.has(design.defaultFontFamily) || !design.defaultFontFamily;
+
+    // Run full schema/font migration if the design carries an older version or legacy font default
+    if (needsVersion || needsFontUpgrade) {
+      const migrated = migrateDesignToCurrentVersion(design, pages);
+      void setDesign(migrated);
+      return;
+    }
+
     if (measureFontFamily !== design.defaultFontFamily) return;
     const missing = pages.filter((p) => !design.pages[p.id]);
     const stale = pagesNeedingRelayout(design, pages);
-    const needsVersion = design.version !== DESIGN_VERSION;
-    if (missing.length === 0 && stale.length === 0 && !needsVersion) return;
+    if (missing.length === 0 && stale.length === 0) return;
 
     const nextPages = { ...design.pages };
     for (const p of missing) nextPages[p.id] = seedPageDesign(design, p);
@@ -783,14 +797,35 @@ export function StudioProvider({
       const current = nextPages[p.id];
       if (current) nextPages[p.id] = relayoutPageDesign(design, p, current);
     }
-    if (needsVersion) {
-      for (const p of pages) {
-        const current = nextPages[p.id];
-        if (current) nextPages[p.id] = migrateGeneratedTextBoxHeights(p, current);
-      }
-    }
     void setDesign({ ...design, version: DESIGN_VERSION, pages: nextPages });
   }, [bookLanguages, design, measureFontFamily, pages, project, setDesign, typography]);
+
+  // One book-level frame, chosen the first time Pages opens if the catalog
+  // has any. Applied to existing story illustrations that have no shape yet;
+  // later creates read `design.defaultImageMaskId`. Covers stay unframed.
+  const imageMasks = useAppConfigStore((s) => s.imageMasks);
+  const designChapter = designChapterOf(step, project.config.styleReady, styleSetupOpen);
+  useEffect(() => {
+    if (designChapter !== "pages" || !design || design.defaultImageMaskId) return;
+    const maskId = pickRandomActiveMaskId(imageMasks);
+    if (!maskId) return;
+    const nextPages = { ...design.pages };
+    for (const page of pages) {
+      if (page.isCover) continue;
+      const pd = nextPages[page.id];
+      if (!pd?.images?.length) continue;
+      let changed = false;
+      const images = pd.images.map((im) => {
+        if (im.kind !== "illustration" || im.imageMaskId || (im.corner ?? 0) > 0) {
+          return im;
+        }
+        changed = true;
+        return { ...im, imageMaskId: maskId };
+      });
+      if (changed) nextPages[page.id] = { ...pd, images };
+    }
+    void setDesign({ ...design, defaultImageMaskId: maskId, pages: nextPages });
+  }, [design, designChapter, imageMasks, pages, setDesign]);
 
   // Guarded route navigation: every workflow affordance goes through one gate.
   // A blocked jump explains what's still missing instead of changing history.
@@ -1821,6 +1856,11 @@ export function StudioProvider({
 
       const page = pages.find((p) => p.id === pageId);
       const focus = page ? defaultIllustrationFocus(page) : undefined;
+      const bookDesign = useProjectsStore.getState().current()?.design;
+      const defaultMaskId =
+        pageId !== COVER_FRONT_ID && pageId !== COVER_BACK_ID
+          ? bookDesign?.defaultImageMaskId
+          : undefined;
       const img: ImageElement = {
         id: newImageId(),
         kind: "illustration",
@@ -1830,6 +1870,7 @@ export function StudioProvider({
         z: bottomZ(latest) - 1,
         fit: "cover",
         ...(focus ? { focus } : {}),
+        ...(defaultMaskId ? { imageMaskId: defaultMaskId } : {}),
         name: "Illustration",
       };
       // Lock with the new id before the async store write lands.

@@ -73,7 +73,7 @@ export function shapeTextIsEmpty(text: Pick<ShapeText, "paragraphs"> | undefined
 /** Presentational text box for layout / print / the inline editor. */
 export function shapeTextAsBox(
   shape: ShapeElement,
-  text: ShapeText = shape.text ?? shapeTextDefaults(shape, { fontFamily: "Georgia", fontSizePct: 0.036 }),
+  text: ShapeText = shape.text ?? shapeTextDefaults(shape, { fontFamily: "Itim", fontSizePct: 0.036 }),
 ): TextBox {
   return {
     id: shape.id,

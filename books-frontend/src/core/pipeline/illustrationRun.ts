@@ -1566,8 +1566,9 @@ export async function renderIllustration(
     edit: promptEdit,
     prompts: env.prompts,
     // Where the text sits on this page — the prompt's composition instructions
-    // are compiled from this plan's rectangles (active layout).
+    // are compiled from this plan (grid fraction on overlay layouts).
     layoutPlan,
+    capabilities: caps,
   });
 
   const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());

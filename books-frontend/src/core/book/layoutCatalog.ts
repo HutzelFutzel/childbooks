@@ -24,6 +24,7 @@ import {
 } from "../config/layouts";
 import {
   allBookLayouts,
+  deriveArtRect,
   getBookLayout,
   type BookLayout,
   type CompositionMode,
@@ -69,7 +70,7 @@ export function resolveLayout(
     id: layout.id,
     label: o?.label?.trim() || layout.label,
     description: o?.description?.trim() || layout.description,
-    order: o?.order ?? 100,
+    order: o?.order ?? layout.order ?? 100,
     enabled: o?.enabled !== false,
     supportedModes,
     defaultMode:
@@ -182,6 +183,16 @@ export function layoutAvailability(
     }
   }
 
+  if (req.minTextBandIn) {
+    const shortest = shortestTextBandIn(resolved, product);
+    if (shortest != null && shortest < req.minTextBandIn) {
+      return {
+        ok: false,
+        reason: `The text band would be only ${shortest.toFixed(1)}″ tall on this page size.`,
+      };
+    }
+  }
+
   // 4. Composition mode feasibility.
   const mode = input.mode ?? resolved.defaultMode;
   if (!resolved.supportedModes.includes(mode)) {
@@ -215,6 +226,24 @@ export function narrowestTextColumnIn(
   return narrowest;
 }
 
+/** The shortest full-width text band this layout produces, in inches. */
+export function shortestTextBandIn(
+  resolved: ResolvedLayout,
+  product: Pick<BookProduct, "trim">,
+): number | null {
+  const spec = resolved.layout.spec;
+  if (!spec) return null;
+  let shortest: number | null = null;
+  for (const slots of Object.values(spec.slots)) {
+    for (const slot of slots) {
+      if (slot.role !== "text" || slot.rect.w < 0.8) continue;
+      const inches = slot.rect.h * product.trim.heightIn;
+      if (shortest == null || inches < shortest) shortest = inches;
+    }
+  }
+  return shortest;
+}
+
 /** Whether inset art on this trim lands on a shape the model can produce. */
 function insetArtFit(
   resolved: ResolvedLayout,
@@ -224,12 +253,14 @@ function insetArtFit(
   const spec = resolved.layout.spec;
   if (!spec) return null;
   const req = resolved.requirements;
-  // Approximate the art rect from the widest text slot on a single page: the
-  // exact rect needs a page count for the gutter, which the picker doesn't have.
-  const slots = spec.slots.right.filter((s) => s.role === "text");
-  const textWidth = slots.reduce((sum, s) => sum + s.rect.w, 0);
-  const artWidth = Math.max(0.05, 1 - textWidth);
-  const artAspect = artWidth * product.aspect;
+  // Approximate from a single-page (right) plan: the exact rect needs a page
+  // count for the gutter, which the picker doesn't have.
+  const textRects = spec.slots.right.filter((s) => s.role === "text").map((s) => s.rect);
+  const art = spec.artRect?.right ?? deriveArtRect(textRects);
+  if (!art) {
+    return { ok: false, reason: "This layout has no room for artwork beside the text." };
+  }
+  const artAspect = (art.w * product.aspect) / Math.max(art.h, 0.05);
 
   if (req.minArtAspect != null && artAspect < req.minArtAspect) {
     return { ok: false, reason: "The artwork would be too narrow at this book size." };

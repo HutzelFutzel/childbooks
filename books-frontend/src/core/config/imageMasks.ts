@@ -55,6 +55,13 @@ export function imageMaskById(
   return id ? config.assets.find((asset) => asset.id === id) : undefined;
 }
 
+/** One active catalog frame, or undefined when none are configured. */
+export function pickRandomActiveMaskId(config: ImageMasksConfig): string | undefined {
+  const active = activeImageMasks(config);
+  if (active.length === 0) return undefined;
+  return active[Math.floor(Math.random() * active.length)].id;
+}
+
 const imageMaskAssetSchema = z.object({
   id: z.string().min(1).max(80),
   name: z.string().min(1).max(80),

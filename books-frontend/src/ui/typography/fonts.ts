@@ -195,7 +195,7 @@ export function fontStack(family: string): string {
   return `"${name}", ${generic}`;
 }
 
-export const DEFAULT_FONT_ID = "nunito";
+export const DEFAULT_FONT_ID = "itim";
 
 export function fontSupportsBookLanguage(font: FontDef, languageId?: string | null): boolean {
   return font.coverage.includes(getBookLanguage(languageId).fontProfile);
@@ -214,7 +214,7 @@ export function fontsForBookLanguage(
   return certified.filter((font) => ids.has(font.id));
 }
 
-/** Age-appropriate default body family for a book's language. */
+/** Default body family for a book's language. */
 export function defaultFontForAge(
   ageRangeId: string,
   languageId?: string | null,
@@ -227,14 +227,10 @@ export function defaultFontForAge(
     configured && fontSupportsBookLanguage(configured, language.id) ? configured.family : undefined;
   switch (ageRangeId) {
     case "0-2":
-      return { family: configuredFamily ?? "Baloo 2" };
     case "3-5":
-      return { family: configuredFamily ?? "Nunito" };
     case "6-8":
-      return { family: configuredFamily ?? "Lora" };
     case "9-12":
-      return { family: configuredFamily ?? "Literata" };
     default:
-      return { family: configuredFamily ?? "Nunito" };
+      return { family: configuredFamily ?? "Itim" };
   }
 }

@@ -555,13 +555,16 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       // blank until the user clicks the page to materialize a frame.
       const blobId = getCursor(tree).content.blobId;
       if (blobId && next.design) {
-        const focus =
-          spreadId === COVER_FRONT_ID || spreadId === COVER_BACK_ID
-            ? { x: 0.5, y: 0 }
-            : undefined;
+        const isCover = spreadId === COVER_FRONT_ID || spreadId === COVER_BACK_ID;
+        const focus = isCover ? { x: 0.5, y: 0 } : undefined;
         next = {
           ...next,
-          design: withIllustrationFrame(next.design, spreadId, { focus }),
+          design: withIllustrationFrame(next.design, spreadId, {
+            focus,
+            ...(!isCover && next.design.defaultImageMaskId
+              ? { imageMaskId: next.design.defaultImageMaskId }
+              : {}),
+          }),
         };
       }
       if (blobId && next.screenplay) {

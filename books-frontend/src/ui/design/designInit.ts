@@ -271,7 +271,11 @@ function hugTextInRect(box: TextBox, container: NormRect, pageAspect: number): T
  * occupies exactly the rectangle the image was generated for, leaving the page
  * background visible where the text sits.
  */
-function insetIllustration(plan: LayoutPlan, z: number): ImageElement | null {
+function insetIllustration(
+  plan: LayoutPlan,
+  z: number,
+  imageMaskId?: string,
+): ImageElement | null {
   if (plan.mode !== "inset-art") return null;
   return {
     id: uid("im"),
@@ -280,6 +284,7 @@ function insetIllustration(plan: LayoutPlan, z: number): ImageElement | null {
     z,
     fit: "cover",
     name: "Illustration",
+    ...(imageMaskId ? { imageMaskId } : {}),
   };
 }
 
@@ -427,7 +432,9 @@ export function seedPageDesign(design: BookDesign, page: DesignPage): PageDesign
         boxes.push(hugTextInRect(box, slot.pageRect, page.aspect));
       });
   }
-  const art = page.isCover ? null : insetIllustration(page.plan, 0);
+  const art = page.isCover
+    ? null
+    : insetIllustration(page.plan, 0, design.defaultImageMaskId);
   return {
     textBoxes: boxes,
     layoutId: page.plan.layoutId,
@@ -520,7 +527,11 @@ export function relayoutPageDesign(
   if (page.plan.mode === "inset-art") {
     const art = existingArt
       ? { ...existingArt, rect: page.plan.artRect }
-      : insetIllustration(page.plan, Math.min(0, ...images.map((im) => im.z)) - 1);
+      : insetIllustration(
+          page.plan,
+          Math.min(0, ...images.map((im) => im.z)) - 1,
+          design.defaultImageMaskId,
+        );
     nextImages = art ? [...others, art] : others;
   } else if (existingArt) {
     nextImages = [...others, { ...existingArt, rect: { x: 0, y: 0, w: 1, h: 1 } }];
@@ -537,6 +548,119 @@ export function relayoutPageDesign(
   if (nextImages.length > 0) next.images = nextImages;
   else delete next.images;
   return next;
+}
+
+/** Legacy default fonts that are replaced with "Itim" on migration. */
+export const LEGACY_DEFAULT_FONTS = new Set([
+  "Nunito",
+  "Nunito Sans",
+  "Lora",
+  "Baloo 2",
+  "Literata",
+  "Georgia",
+]);
+
+export function migratePageDesignFonts(pageDesign: PageDesign): PageDesign {
+  let changed = false;
+  const textBoxes = pageDesign.textBoxes.map((box) => {
+    const boxFontNeedsMigration = LEGACY_DEFAULT_FONTS.has(box.fontFamily) || !box.fontFamily;
+    let boxChanged = false;
+    const paragraphs = box.paragraphs.map((p) => {
+      let paraChanged = false;
+      const spans = p.spans.map((s) => {
+        if (s.fontFamily && LEGACY_DEFAULT_FONTS.has(s.fontFamily)) {
+          paraChanged = true;
+          return { ...s, fontFamily: "Itim" };
+        }
+        return s;
+      });
+      if (paraChanged) {
+        boxChanged = true;
+        return { ...p, spans };
+      }
+      return p;
+    });
+
+    if (boxFontNeedsMigration) {
+      boxChanged = true;
+      changed = true;
+      return {
+        ...box,
+        fontFamily: "Itim",
+        paragraphs: boxChanged ? paragraphs : box.paragraphs,
+      };
+    }
+    if (boxChanged) {
+      changed = true;
+      return { ...box, paragraphs };
+    }
+    return box;
+  });
+
+  const shapes = pageDesign.shapes?.map((shape) => {
+    if (shape.text && (LEGACY_DEFAULT_FONTS.has(shape.text.fontFamily) || !shape.text.fontFamily)) {
+      changed = true;
+      return {
+        ...shape,
+        text: { ...shape.text, fontFamily: "Itim" },
+      };
+    }
+    return shape;
+  });
+
+  if (!changed) return pageDesign;
+  return {
+    ...pageDesign,
+    textBoxes,
+    ...(shapes ? { shapes } : {}),
+  };
+}
+
+export function migrateDesignToCurrentVersion(
+  design: BookDesign,
+  pages: DesignPage[],
+): BookDesign {
+  const needsFontMigration =
+    LEGACY_DEFAULT_FONTS.has(design.defaultFontFamily) || !design.defaultFontFamily;
+
+  const defaultFontFamily = needsFontMigration ? "Itim" : design.defaultFontFamily;
+  const defaultTitleFontFamily =
+    design.defaultTitleFontFamily && LEGACY_DEFAULT_FONTS.has(design.defaultTitleFontFamily)
+      ? undefined
+      : design.defaultTitleFontFamily;
+
+  const sharedTextStyles = design.sharedTextStyles
+    ? Object.fromEntries(
+        Object.entries(design.sharedTextStyles).map(([key, style]) => [
+          key,
+          style && LEGACY_DEFAULT_FONTS.has(style.fontFamily)
+            ? { ...style, fontFamily: "Itim" }
+            : style,
+        ]),
+      )
+    : undefined;
+
+  const nextPages: Record<string, PageDesign> = {};
+  for (const p of pages) {
+    const current = design.pages[p.id];
+    if (!current) continue;
+    const fontMigrated = needsFontMigration ? migratePageDesignFonts(current) : current;
+    nextPages[p.id] = migrateGeneratedTextBoxHeights(p, fontMigrated);
+  }
+  for (const [id, pd] of Object.entries(design.pages)) {
+    if (!nextPages[id]) {
+      nextPages[id] = needsFontMigration ? migratePageDesignFonts(pd) : pd;
+    }
+  }
+
+  return {
+    ...design,
+    version: DESIGN_VERSION,
+    defaultFontFamily,
+    ...(defaultTitleFontFamily !== undefined ? { defaultTitleFontFamily } : {}),
+    ...(sharedTextStyles ? { sharedTextStyles } : {}),
+    pages: nextPages,
+  };
 }
 
 /**

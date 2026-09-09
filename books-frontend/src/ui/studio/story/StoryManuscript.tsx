@@ -95,6 +95,7 @@ export function StoryManuscript({
   }, [current?.id, current?.title]);
 
   useEffect(() => {
+    loadFont("Itim");
     loadFont("Nunito");
     loadFont("Lora");
   }, []);
@@ -322,7 +323,7 @@ export function StoryManuscript({
               data-native-undo
               lang={language.id}
               dir={language.direction}
-              style={{ fontFamily: fontStack("Nunito") }}
+              style={{ fontFamily: fontStack("Itim") }}
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               onBlur={() => {

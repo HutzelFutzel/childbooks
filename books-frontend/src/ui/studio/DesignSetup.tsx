@@ -11,9 +11,9 @@ import { useStudio } from "./StudioContext";
  * Confirming sets `designReady`, so subsequent visits open straight to the
  * canvas and this becomes reachable as a summary from the toolbar.
  *
- * Today that's the page size alone. Everything else about the printed object —
- * binding, print tier, paper, cover finish — leaves the pages untouched and is
- * asked at checkout instead, so nothing here is a decision made too early.
+ * Today that's the page size and the structural layout. Everything else about
+ * the printed object — binding, print tier, paper, cover finish — leaves the
+ * pages untouched and is asked at checkout instead.
  */
 export function DesignSetup() {
   const { closeDesignSetup } = useStudio();
@@ -33,11 +33,11 @@ export function DesignSetup() {
     <div className="min-h-0 flex-1 overflow-y-auto">
       <div className="mx-auto w-full max-w-3xl px-5 py-8">
         <StageHeader
-          title={firstTime ? "Set the page size" : "Book setup"}
+          title={firstTime ? "Set up your book" : "Book setup"}
           subtitle={
             firstTime
-              ? "Choose the page shape once, then your book opens."
-              : "Review your book's page size."
+              ? "Choose the page shape and how the words sit with the pictures."
+              : "Review your book's page size and layout."
           }
           className="mb-8"
         />

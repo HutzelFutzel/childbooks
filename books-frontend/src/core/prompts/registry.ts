@@ -657,7 +657,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "layoutCalmBand",
-        "Composition: the story text is laid over this illustration, so {{calmRegions}} must stay calm and free of important subjects, faces or busy detail.",
+        "Composition: the story text is laid over this illustration. Imagine the image as a simple grid and keep {{calmRegions}} very calm — no important subjects, faces or busy detail in that band.",
         "layoutCalmBand",
       ),
       // Kept adjacent to the block above so "that area" can't be misread as the
@@ -1383,18 +1383,18 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("layoutNote", "The screenplay's own composition note for this page.", "a quiet bedtime moment, low camera"),
           V(
             "calmRegions",
-            "Compiled from the layout's text rectangles — never write this by hand.",
-            "the right third of the image (66%–100% across, 6%–94% down)",
+            "Compiled from the overlay layout's grid — never write this by hand. Empty on split layouts.",
+            "the right 1/3 of the width of the image",
           ),
           V(
             "focalRegion",
-            "Where the focal action goes, compiled from the same geometry.",
-            "the left two thirds of the image (0%–66% across, 0%–100% down)",
+            "Where the focal action goes, compiled from the same grid.",
+            "the left 2/3 of the width of the image",
           ),
           V(
             "regionTreatment",
             "How the artwork should look where the text sits (from the slot's treatment).",
-            "holds soft, gently varying background tones and nothing else",
+            "is a very calm, nearly empty stretch of soft, low-detail background — no faces, figures or busy detail",
           ),
           V("artAspect", "Inset-art only: the shape the artwork is composed for.", "portrait"),
           V("artStyle", "Resolved art-style overlay.", STYLE_SAMPLE),

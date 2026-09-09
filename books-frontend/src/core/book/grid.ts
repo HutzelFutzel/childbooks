@@ -10,10 +10,10 @@
  * The grid is deliberately NOT the stored form of a layout's geometry. It
  * resolves to a {@link NormRect}, which is what everything downstream already
  * speaks (`layouts.ts` slots, `computePageGuides`, the design editor, the
- * illustration prompt, the PDF export). Rects stay canonical for two reasons:
- * a grid cannot express a rect (`outer-text` uses `w: 0.32`, which is no clean
- * fraction), and two representations of one fact drift. So a grid is an INPUT
- * that produces geometry, never a second copy of it.
+ * illustration prompt, the PDF export). Rects stay canonical: two
+ * representations of one fact drift. A grid is an INPUT that produces
+ * geometry, never a second copy of it. Overlay layouts author their calm
+ * band as a grid so the prompt can name the same fraction the slot occupies.
  *
  * Nothing here knows about books, image models, React or Firestore — it is
  * arithmetic on fractions, shared verbatim by the frontend and the backend.
@@ -146,6 +146,43 @@ export function gridRect(area: GridArea): NormRect {
 }
 
 /**
+ * The largest grid-aligned rectangle that avoids `area`, when `area` is a
+ * full-height column or full-width band hugging an edge. A floating tile has
+ * no such rectangle — a floating tile cannot become inset art either.
+ */
+export function complementGridArea(area: GridArea): GridArea | null {
+  const fullWidth = area.columnSpan >= area.columns;
+  const fullHeight = area.rowSpan >= area.rows;
+  if (fullWidth && fullHeight) return null;
+
+  if (fullHeight && !fullWidth) {
+    if (area.column === 0) {
+      return {
+        ...area,
+        column: area.columnSpan,
+        columnSpan: area.columns - area.columnSpan,
+      };
+    }
+    if (area.column + area.columnSpan === area.columns) {
+      return { ...area, column: 0, columnSpan: area.column };
+    }
+    return null;
+  }
+
+  if (fullWidth && !fullHeight) {
+    if (area.row === 0) {
+      return { ...area, row: area.rowSpan, rowSpan: area.rows - area.rowSpan };
+    }
+    if (area.row + area.rowSpan === area.rows) {
+      return { ...area, row: 0, rowSpan: area.row };
+    }
+    return null;
+  }
+
+  return null;
+}
+
+/**
  * Width ÷ height of a rectangle drawn on a surface of the given aspect.
  *
  * `surfaceAspect` is the aspect of the whole surface the rect is normalized
@@ -241,6 +278,17 @@ export function describeGridArea(area: GridArea): string {
   }
   const text = parts.join(", ");
   return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * The same region, as a clause an image model can act on —
+ * `"the left 1/3 of the width of the image"`.
+ */
+export function describeGridAreaForPrompt(area: GridArea): string {
+  const full = area.columnSpan >= area.columns && area.rowSpan >= area.rows;
+  if (full) return "the whole image";
+  const label = describeGridArea(area);
+  return `the ${label.charAt(0).toLowerCase()}${label.slice(1)} of the image`;
 }
 
 /** `2/5 × 3/4` — the compact form, for dense tables and tooltips. */

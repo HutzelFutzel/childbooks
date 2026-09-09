@@ -256,6 +256,15 @@ export function LayoutQuestion({ config, compact }: PickerProps) {
     [layoutsConfig, shape],
   );
   const selectedId = resolveLayoutById(config.layoutId, layoutsConfig).id;
+  const choose = (option: (typeof options)[number]) => {
+    void update({ layoutId: option.id, compositionMode: option.defaultMode });
+  };
+  const overlay = options.filter((option) => option.defaultMode === "full-bleed");
+  const split = options.filter((option) => option.defaultMode === "inset-art");
+  const groups = [
+    { title: "On the picture", options: overlay },
+    { title: "Next to each other", options: split },
+  ].filter((group) => group.options.length > 0);
 
   // When only one layout is available, render an informative standard overview
   // rather than a fake selectable choice card.
@@ -328,7 +337,9 @@ export function LayoutQuestion({ config, compact }: PickerProps) {
               </div>
               <p className="text-xs leading-relaxed text-ink-600">{only.description}</p>
               <p className="text-[11px] text-ink-400">
-                Story text automatically hugs the outer page margin, leaving calm space for full-page artwork.
+                {only.defaultMode === "inset-art"
+                  ? "The illustration sits next to the story text, on its own part of the page."
+                  : "Story text sits on the illustration in a calm band the artwork keeps clear."}
               </p>
             </div>
           </div>
@@ -338,83 +349,90 @@ export function LayoutQuestion({ config, compact }: PickerProps) {
   }
 
   return (
-    <div className={cn("space-y-3", compact && "space-y-2.5")}>
-      {compact ? (
-        <div className="flex flex-col gap-2.5">
-          {options.map((option) => {
-            const availability = layoutAvailability(option, { product, config: layoutsConfig });
-            const example = option.examples[0];
-            return (
-              <CompactMediaCard
-                key={option.id}
-                selected={option.id === selectedId}
-                disabled={!availability.ok}
-                onSelect={() => void update({ layoutId: option.id })}
-                title={option.label}
-                description={
-                  availability.ok
-                    ? option.description
-                    : (availability as { reason: string }).reason
-                }
-                visual={
-                  example ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={example.imageUrl}
-                      alt={example.alt ?? `${option.label} example`}
-                      className="size-full object-cover"
-                    />
-                  ) : (
-                    <LayoutSchematic
-                      layout={option.layout}
-                      product={product}
-                      mode={option.defaultMode}
-                      className="h-full min-h-34 w-full rounded-none bg-ink-50/80 p-3"
-                    />
-                  )
-                }
-              />
-            );
-          })}
+    <div className={cn("space-y-5", compact && "space-y-4")}>
+      {groups.map((group) => (
+        <div key={group.title} className={cn("space-y-2", compact && "space-y-2")}>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+            {group.title}
+          </p>
+          {compact ? (
+            <div className="flex flex-col gap-2.5">
+              {group.options.map((option) => {
+                const availability = layoutAvailability(option, { product, config: layoutsConfig });
+                const example = option.examples[0];
+                return (
+                  <CompactMediaCard
+                    key={option.id}
+                    selected={option.id === selectedId}
+                    disabled={!availability.ok}
+                    onSelect={() => choose(option)}
+                    title={option.label}
+                    description={
+                      availability.ok
+                        ? option.description
+                        : (availability as { reason: string }).reason
+                    }
+                    visual={
+                      example ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={example.imageUrl}
+                          alt={example.alt ?? `${option.label} example`}
+                          className="size-full object-cover"
+                        />
+                      ) : (
+                        <LayoutSchematic
+                          layout={option.layout}
+                          product={product}
+                          mode={option.defaultMode}
+                          className="h-full min-h-34 w-full rounded-none bg-ink-50/80 p-3"
+                        />
+                      )
+                    }
+                  />
+                );
+              })}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {group.options.map((option) => {
+                const availability = layoutAvailability(option, { product, config: layoutsConfig });
+                const example = option.examples[0];
+                return (
+                  <OptionCard
+                    key={option.id}
+                    selected={option.id === selectedId}
+                    disabled={!availability.ok}
+                    onSelect={() => choose(option)}
+                    title={option.label}
+                    description={
+                      availability.ok
+                        ? option.description
+                        : (availability as { reason: string }).reason
+                    }
+                    visual={
+                      example ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={example.imageUrl}
+                          alt={example.alt ?? `${option.label} example`}
+                          className="h-20 w-full rounded-lg object-cover"
+                        />
+                      ) : (
+                        <LayoutSchematic
+                          layout={option.layout}
+                          product={product}
+                          mode={option.defaultMode}
+                        />
+                      )
+                    }
+                  />
+                );
+              })}
+            </div>
+          )}
         </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {options.map((option) => {
-            const availability = layoutAvailability(option, { product, config: layoutsConfig });
-            const example = option.examples[0];
-            return (
-              <OptionCard
-                key={option.id}
-                selected={option.id === selectedId}
-                disabled={!availability.ok}
-                onSelect={() => void update({ layoutId: option.id })}
-                title={option.label}
-                description={
-                  availability.ok
-                    ? option.description
-                    : (availability as { reason: string }).reason
-                }
-                visual={
-                  example ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={example.imageUrl}
-                      alt={example.alt ?? `${option.label} example`}
-                      className="h-20 w-full rounded-lg object-cover"
-                    />
-                  ) : (
-                    <LayoutSchematic
-                      layout={option.layout}
-                      product={product}
-                      mode={option.defaultMode}
-                    />
-                  )
-                }
-              />
-            );
-          })}
-        </div>
-      )}
+      ))}
 
       {artCount > 0 && !single && (
         <p className="text-xs text-ink-400">
@@ -563,7 +581,7 @@ export const DESIGN_QUESTIONS: GuidedQuestion[] = [
   {
     id: "layout",
     title: "Layout",
-    subtitle: "How each page divides between the story text and the illustration.",
+    subtitle: "Words on the picture, or next to it.",
     icon: LayoutTemplate,
     // Only ask layout as a guided question if there are multiple layouts to choose from.
     visible: (c) => {

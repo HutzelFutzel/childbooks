@@ -18,15 +18,24 @@
  * pages) can implement {@link BookLayout} directly; everything else is data,
  * which is what makes admin-authored layouts possible later without a rewrite.
  *
- * MVP ships one layout — `outer-text` — where the text hugs the OUTER edge of
- * each page over a calm band the illustration keeps clear. Adding another is
- * purely additive: register a spec here and seeding, prompts, image sizing,
- * gating and the picker all follow from it.
+ * Four shipped layouts, two families:
+ *   - overlay (`full-bleed`) — words sit on the picture in a calm band
+ *   - split (`inset-art`) — words sit next to the picture on the page colour
+ * Each layout locks to one family so the picker is a real choice, not a mode
+ * toggle. Adding another is purely additive: register a spec here and seeding,
+ * prompts, image sizing, gating and the picker all follow from it.
  */
 import type { HAlign, NormRect, PageBackground, VAlign } from "../design";
 import type { BookSize } from "../config/options";
+import {
+  complementGridArea,
+  describeGridAreaForPrompt,
+  gridAreaProblems,
+  gridRect,
+  type GridArea,
+} from "./grid";
 import { complementRect, describeRegion, describeRegions, unionRect } from "./regionText";
-import { DEFAULT_TREATMENT_ID, getTreatment, type RegionTreatment } from "./treatments";
+import { DEFAULT_TREATMENT_ID, getTreatment, resolveTreatmentForModel, type RegionTreatment } from "./treatments";
 
 /** Which physical side of the book a page sits on — drives the outer edge. */
 export type PageSide = "left" | "right" | "spread";
@@ -62,6 +71,11 @@ export interface LayoutSlot {
   role: SlotRole;
   /** Rect in SAFE-AREA space (0..1 of the page's safe rectangle). */
   rect: NormRect;
+  /**
+   * Grid the rect was authored from, when it is a clean fraction. Overlay
+   * prompts name this area so the model reserves the same band the slot uses.
+   */
+  grid?: GridArea;
   source?: SlotSource;
   /** Text preset id (see `ui/design/presets`). */
   presetId?: string;
@@ -81,6 +95,8 @@ export interface LayoutRequirements {
   trims?: { allow?: string[]; deny?: string[] };
   /** Readability floor: the narrowest text column this layout tolerates. */
   minTextColumnIn?: number;
+  /** Readability floor: the shortest full-width text band this layout tolerates. */
+  minTextBandIn?: number;
   /** Inset art only — refuse letterbox slivers. */
   minArtAspect?: number;
   maxArtAspect?: number;
@@ -94,6 +110,8 @@ export interface LayoutSpec {
   defaultMode: CompositionMode;
   supportedModes: CompositionMode[];
   premium?: boolean;
+  /** Picker order (lower first). Admin overlay can override. */
+  order?: number;
   requirements?: LayoutRequirements;
   /** Instruction for the screenplay model, so the plan it writes matches. */
   screenplayGuidance: string;
@@ -144,6 +162,7 @@ export interface BookLayout {
   defaultMode: CompositionMode;
   supportedModes: CompositionMode[];
   premium?: boolean;
+  order?: number;
   requirements?: LayoutRequirements;
   screenplayGuidance: string;
   promptKey?: string;
@@ -184,16 +203,21 @@ export function layoutFromSpec(spec: LayoutSpec): BookLayout {
     defaultMode: spec.defaultMode,
     supportedModes: spec.supportedModes,
     premium: spec.premium,
+    order: spec.order,
     requirements: spec.requirements,
     screenplayGuidance: spec.screenplayGuidance,
     promptKey: spec.promptKey,
     spec,
     plan(ctx: LayoutContext): LayoutPlan {
-      const slots = (spec.slots[ctx.side] ?? []).map<ResolvedSlot>((slot) => ({
-        ...slot,
-        pageRect: safeToPage(slot.rect, ctx.safe),
-        treatment: getTreatment(slot.treatmentId ?? DEFAULT_TREATMENT_ID),
-      }));
+      const slots = (spec.slots[ctx.side] ?? []).map<ResolvedSlot>((slot) => {
+        const rect = slot.grid ? gridRect(slot.grid) : slot.rect;
+        return {
+          ...slot,
+          rect,
+          pageRect: safeToPage(rect, ctx.safe),
+          treatment: getTreatment(slot.treatmentId ?? DEFAULT_TREATMENT_ID),
+        };
+      });
       const mode = spec.supportedModes.includes(ctx.mode) ? ctx.mode : spec.defaultMode;
       const textRects = slots
         .filter((s) => s.role === "text" || s.role === "decor")
@@ -209,80 +233,139 @@ export function layoutFromSpec(spec: LayoutSpec): BookLayout {
 
 // ---- Registered layouts ----------------------------------------------------
 
+const OUTER_COLUMN: Record<PageSide, GridArea> = {
+  left: { columns: 3, rows: 1, column: 0, row: 0, columnSpan: 1, rowSpan: 1 },
+  right: { columns: 3, rows: 1, column: 2, row: 0, columnSpan: 1, rowSpan: 1 },
+  // A spread is twice as wide, so one page-third is one sixth of the surface.
+  spread: { columns: 6, rows: 1, column: 0, row: 0, columnSpan: 1, rowSpan: 1 },
+};
+
+const BOTTOM_BAND: Record<PageSide, GridArea> = {
+  left: { columns: 1, rows: 4, column: 0, row: 3, columnSpan: 1, rowSpan: 1 },
+  right: { columns: 1, rows: 4, column: 0, row: 3, columnSpan: 1, rowSpan: 1 },
+  spread: { columns: 1, rows: 4, column: 0, row: 3, columnSpan: 1, rowSpan: 1 },
+};
+
+const COLUMN_REQUIREMENTS: LayoutRequirements = {
+  minTextColumnIn: 1.8,
+  minArtAspect: 0.4,
+  maxArtAspect: 3.2,
+};
+
+const BAND_REQUIREMENTS: LayoutRequirements = {
+  minTextBandIn: 1.2,
+  minArtAspect: 0.4,
+  maxArtAspect: 3.2,
+};
+
+function storySlots(
+  areas: Record<PageSide, GridArea>,
+  treatmentId: string,
+): Record<PageSide, LayoutSlot[]> {
+  const slot = (area: GridArea): LayoutSlot => ({
+    id: "body",
+    role: "text",
+    label: "Story text",
+    grid: area,
+    rect: gridRect(area),
+    source: "spread-text",
+    presetId: "plain",
+    align: "center",
+    vAlign: "center",
+    treatmentId,
+  });
+  return {
+    left: [slot(areas.left)],
+    right: [slot(areas.right)],
+    spread: [slot(areas.spread)],
+  };
+}
+
 /**
- * Text hugs the outer edge. Left-hand pages put it on the left, right-hand
- * pages on the right, and a double spread — twice as wide — uses a narrower
- * column on its far-left outer edge.
+ * Overlay · outer column. Words sit ON the picture along the outer edge —
+ * left on left-hand pages, right on right-hand pages.
  *
- * The rects are safe-area relative: `x: 0` is the printable left edge, so the
- * column sits flush with the margin on every trim rather than overhanging it
- * on some and floating on others.
+ * Rects are safe-area relative: `x: 0` is the printable left edge, so the
+ * column sits flush with the margin on every trim.
  */
 const OUTER_TEXT_SPEC: LayoutSpec = {
   id: "outer-text",
   label: "Text on the outer edge",
   description:
-    "Words sit in a calm column along the outer edge of each page — left on left-hand pages, right on right-hand pages — beside the illustration.",
+    "Words sit in a calm column along the outer edge of each page — on the illustration, not beside it.",
   defaultMode: "full-bleed",
-  supportedModes: ["full-bleed", "inset-art"],
-  requirements: {
-    // A column narrower than this stops being readable at picture-book sizes.
-    minTextColumnIn: 1.8,
-    minArtAspect: 0.4,
-    maxArtAspect: 3.2,
-  },
+  supportedModes: ["full-bleed"],
+  order: 10,
+  requirements: COLUMN_REQUIREMENTS,
   screenplayGuidance:
-    "Every page keeps its text in a calm column along the OUTER edge (left on left-hand pages, right on right-hand pages), about one-third of the page width, beside the illustration. In each spread's layoutNote, note that the outer-edge third stays calm and text-safe.",
-  slots: {
-    left: [
-      {
-        id: "body",
-        role: "text",
-        label: "Story text",
-        // Flush with the outer (left) margin, a third of the printable width.
-        rect: { x: 0, y: 0, w: 0.32, h: 1 },
-        source: "spread-text",
-        presetId: "plain",
-        align: "center",
-        vAlign: "center",
-        treatmentId: "calm",
-      },
-    ],
-    right: [
-      {
-        id: "body",
-        role: "text",
-        label: "Story text",
-        rect: { x: 0.68, y: 0, w: 0.32, h: 1 },
-        source: "spread-text",
-        presetId: "plain",
-        align: "center",
-        vAlign: "center",
-        treatmentId: "calm",
-      },
-    ],
-    spread: [
-      {
-        id: "body",
-        role: "text",
-        label: "Story text",
-        // A spread is twice as wide, so the same inches are half the fraction.
-        rect: { x: 0, y: 0, w: 0.17, h: 1 },
-        source: "spread-text",
-        presetId: "plain",
-        align: "center",
-        vAlign: "center",
-        treatmentId: "calm",
-      },
-    ],
-  },
+    "Every page keeps its text ON the illustration in a calm column along the OUTER edge (left on left-hand pages, right on right-hand pages) — the outer 1/3 of the page width. In each spread's layoutNote, note that the outer 1/6 of the spread stays calm and text-safe.",
+  slots: storySlots(OUTER_COLUMN, "calm"),
+};
+
+/**
+ * Overlay · bottom band. Words sit ON the picture across the lower quarter.
+ */
+const OVERLAY_BOTTOM_SPEC: LayoutSpec = {
+  id: "overlay-bottom",
+  label: "Text across the picture",
+  description:
+    "Words sit in a calm band along the bottom of the page, on top of the full-page illustration.",
+  defaultMode: "full-bleed",
+  supportedModes: ["full-bleed"],
+  order: 20,
+  requirements: BAND_REQUIREMENTS,
+  screenplayGuidance:
+    "Every page keeps its text ON the illustration in a calm band along the BOTTOM — the lower 1/4 of the page height. In each spread's layoutNote, note that the lower 1/4 stays calm and text-safe.",
+  slots: storySlots(BOTTOM_BAND, "calm"),
+};
+
+/**
+ * Split · side by side. Same outer column as `outer-text`, but the picture
+ * stops where the words begin.
+ */
+const SPLIT_SIDE_SPEC: LayoutSpec = {
+  id: "split-side",
+  label: "Picture beside the words",
+  description:
+    "The illustration fills the inner part of the page; the story sits in a column on the outer edge, on the page colour.",
+  defaultMode: "inset-art",
+  supportedModes: ["inset-art"],
+  order: 30,
+  requirements: COLUMN_REQUIREMENTS,
+  screenplayGuidance:
+    "Every page places the illustration beside the text: art on the inner side, words in a column along the OUTER edge (left on left-hand pages, right on right-hand pages). Do not leave a calm band in the artwork — the words are not on the picture.",
+  slots: storySlots(OUTER_COLUMN, "none"),
+};
+
+/**
+ * Split · stacked. Same bottom band as `overlay-bottom`, but the picture
+ * sits above the words instead of behind them.
+ */
+const SPLIT_STACK_SPEC: LayoutSpec = {
+  id: "split-stack",
+  label: "Picture above the words",
+  description:
+    "The illustration fills the top of the page; the story sits in a strip along the bottom, on the page colour.",
+  defaultMode: "inset-art",
+  supportedModes: ["inset-art"],
+  order: 40,
+  requirements: BAND_REQUIREMENTS,
+  screenplayGuidance:
+    "Every page places the illustration above the text: art on the upper three-quarters, words in a band along the BOTTOM. Do not leave a calm band in the artwork — the words are not on the picture.",
+  slots: storySlots(BOTTOM_BAND, "none"),
 };
 
 const OUTER_TEXT = layoutFromSpec(OUTER_TEXT_SPEC);
+const OVERLAY_BOTTOM = layoutFromSpec(OVERLAY_BOTTOM_SPEC);
+const SPLIT_SIDE = layoutFromSpec(SPLIT_SIDE_SPEC);
+const SPLIT_STACK = layoutFromSpec(SPLIT_STACK_SPEC);
 
 /** All registered structural layouts, keyed by id. */
 export const BOOK_LAYOUTS: Record<string, BookLayout> = {
   [OUTER_TEXT.id]: OUTER_TEXT,
+  [OVERLAY_BOTTOM.id]: OVERLAY_BOTTOM,
+  [SPLIT_SIDE.id]: SPLIT_SIDE,
+  [SPLIT_STACK.id]: SPLIT_STACK,
 };
 
 /** The default layout; also the fallback for legacy / unknown layout ids. */
@@ -344,7 +427,11 @@ export function artAspectLabel(artRect: NormRect, surfaceAspect: number): string
   return "tall portrait";
 }
 
-export function layoutPromptFacts(plan: LayoutPlan, surfaceAspect: number): LayoutPromptFacts {
+export function layoutPromptFacts(
+  plan: LayoutPlan,
+  surfaceAspect: number,
+  opts?: { negativeSpaceControl?: "weak" | "strong" },
+): LayoutPromptFacts {
   const textSlots = plan.slots.filter((s) => s.role === "text" || s.role === "decor");
   const rects = textSlots.map((s) => s.pageRect);
   const isInsetArt = plan.mode === "inset-art";
@@ -352,18 +439,36 @@ export function layoutPromptFacts(plan: LayoutPlan, surfaceAspect: number): Layo
   // Inset art physically excludes the text region, so there is nothing to keep
   // calm and no instruction to give — the guarantee is geometric.
   const hasCalmBand = !isInsetArt && rects.length > 0;
+  const grids = textSlots.map((s) => s.grid).filter((g): g is GridArea => Boolean(g));
+  const namedFromGrid = hasCalmBand && grids.length === textSlots.length;
+  const focalGrid = namedFromGrid && grids[0] ? complementGridArea(grids[0]) : null;
   const focal = complementRect(unionRect(rects));
 
   // The treatment describes only how the region should look; where it is comes
   // from the geometry above, so the two clauses don't restate each other.
-  const treatment = textSlots[0]?.treatment;
+  // Weak models skip the painted instruction — they get the location only,
+  // and the deterministic fallback after generation.
+  const treatment = resolveTreatmentForModel(
+    textSlots[0]?.treatment ?? getTreatment(DEFAULT_TREATMENT_ID),
+    opts?.negativeSpaceControl ?? "strong",
+  );
   const fragment =
-    hasCalmBand && treatment?.mechanism === "prompt" ? (treatment.promptFragment ?? "") : "";
+    hasCalmBand && treatment.mechanism === "prompt" ? (treatment.promptFragment ?? "") : "";
 
   return {
     mode: plan.mode,
-    calmRegions: hasCalmBand ? describeRegions(rects) : "",
-    focalRegion: hasCalmBand && focal ? describeRegion(focal) : "",
+    calmRegions: !hasCalmBand
+      ? ""
+      : namedFromGrid
+        ? grids.map(describeGridAreaForPrompt).join(" and ")
+        : describeRegions(rects),
+    focalRegion: !hasCalmBand
+      ? ""
+      : focalGrid
+        ? describeGridAreaForPrompt(focalGrid)
+        : focal
+          ? describeRegion(focal)
+          : "",
     treatmentInstruction: fragment,
     artAspectLabel: isInsetArt ? artAspectLabel(plan.artRect, surfaceAspect) : "",
     hasCalmBand,
@@ -393,6 +498,15 @@ export function validateLayouts(): string[] {
       for (const slot of slots) {
         if (ids.has(slot.id)) problems.push(`Layout "${spec.id}" repeats slot id "${slot.id}" on ${side}.`);
         ids.add(slot.id);
+        if (slot.grid) {
+          for (const problem of gridAreaProblems(slot.grid)) {
+            problems.push(`Layout "${spec.id}" slot "${slot.id}" (${side}): ${problem}`);
+          }
+        } else if (spec.defaultMode === "full-bleed" && slot.role === "text") {
+          problems.push(
+            `Layout "${spec.id}" overlay text slot "${slot.id}" (${side}) has no grid, so the calm-band prompt cannot name a fraction.`,
+          );
+        }
         const { x, y, w, h } = slot.rect;
         if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > 1.0001 || y + h > 1.0001) {
           problems.push(`Layout "${spec.id}" slot "${slot.id}" (${side}) is outside the safe area.`);

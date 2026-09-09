@@ -234,9 +234,8 @@ export function createDefaultConfig(initialLocale?: BookLanguageId): BookConfig 
     // Default to the square hardcover product (see BOOK_PRODUCTS / Lulu catalog).
     productSku: "0850X0850FCPRECW080CW444GXX",
     bookSize: "square",
-    // Simple, fixed layout for now: one illustration per single page with the
-    // text laid out beside it (image on one side, words on the other). The
-    // advanced graphics/text/layout knobs were removed from setup.
+    // Default overlay layout: words on the picture along the outer edge. The
+    // reader can pick a split layout in Design setup.
     graphicsDensity: "one-per-page",
     spreadUsage: "single",
     textHandling: "creative",

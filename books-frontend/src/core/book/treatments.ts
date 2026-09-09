@@ -46,7 +46,8 @@ export const REGION_TREATMENTS: RegionTreatment[] = [
       "The illustration stays soft and low-detail where the text sits — the default, and the least intrusive.",
     mechanism: "prompt",
     fallback: "scrim",
-    promptFragment: "holds soft, gently varying background tones and nothing else",
+    promptFragment:
+      "is a very calm, nearly empty stretch of soft, low-detail background — no faces, figures or busy detail",
   },
   {
     id: "flat-field",

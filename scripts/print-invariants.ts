@@ -54,6 +54,8 @@ import { bindingSideFor } from "../books-frontend/src/core/book/pageLayout";
 import { computePageGuides, resolveFormatCapabilities } from "../books-frontend/src/core/book/format";
 import { chooseImageSize, renderAspect } from "../books-frontend/src/core/pipeline/illustration";
 import {
+  complementGridArea,
+  describeGridAreaForPrompt,
   fullGridArea,
   gridAreaAspect,
   gridRect,
@@ -754,7 +756,7 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
 
 {
   const design: BookDesign = {
-    defaultFontFamily: "Nunito",
+    defaultFontFamily: "Itim",
     defaultFontSizePct: 0.06,
     pages: {
       a: {
@@ -764,7 +766,7 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
             rect: { x: 0.001, y: 0.001, w: 0.4, h: 0.2 },
             z: 1,
             presetId: "card",
-            fontFamily: "Nunito",
+            fontFamily: "Itim",
             fontSizePct: 0.06,
             color: "#000",
             align: "left",
@@ -781,7 +783,7 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
             rect: { x: 0.3, y: 0.3, w: 0.3, h: 0.2 },
             z: 1,
             presetId: "card",
-            fontFamily: "Nunito",
+            fontFamily: "Itim",
             fontSizePct: 0.06,
             color: "#000",
             align: "left",
@@ -841,7 +843,7 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
 // ---- Render fingerprint ----------------------------------------------------
 
 {
-  const design: BookDesign = { defaultFontFamily: "Nunito", defaultFontSizePct: 0.06, pages: {} };
+  const design: BookDesign = { defaultFontFamily: "Itim", defaultFontSizePct: 0.06, pages: {} };
   const base = {
     id: "p1",
     title: "The Brave Little Fox",
@@ -909,8 +911,21 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
   for (const problem of validateTreatments()) check(`treatment catalog: ${problem}`, false);
   check("the layout catalog is self-consistent", validateLayouts().length === 0);
   check("the treatment catalog is self-consistent", validateTreatments().length === 0);
+  check("the catalog ships four layouts", allBookLayouts().length === 4);
+  check(
+    "two layouts put text on the picture",
+    allBookLayouts().filter((l) => l.defaultMode === "full-bleed").length === 2,
+  );
+  check(
+    "two layouts put text next to the picture",
+    allBookLayouts().filter((l) => l.defaultMode === "inset-art").length === 2,
+  );
 
   for (const layout of allBookLayouts()) {
+    check(
+      `${layout.id} locks to a single composition family`,
+      layout.supportedModes.length === 1 && layout.supportedModes[0] === layout.defaultMode,
+    );
     for (const product of [square, saddle] as BookProduct[]) {
       const caps = resolveFormatCapabilities(product, product.minPages);
       for (const side of PAGE_SIDES) {
@@ -922,7 +937,7 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
           aspect: spread ? product.aspect * 2 : product.aspect,
           trim: product.trim,
           isCover: false,
-          mode: "full-bleed",
+          mode: layout.defaultMode,
         });
         const label = `${layout.id} · ${product.sku} · ${side}`;
 
@@ -940,12 +955,11 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
           );
         }
 
-        // The prompt must actually say where the calm band is. An empty
-        // description means the model is told nothing and the text lands on
-        // whatever the model felt like painting there.
+        // Overlay layouts must tell the model where to keep the picture calm.
+        // Split layouts have no calm band — the words are not on the art.
         const surfaceAspect = spread ? product.aspect * 2 : product.aspect;
         const facts = layoutPromptFacts(plan, surfaceAspect);
-        if (plan.slots.some((s) => s.role === "text")) {
+        if (plan.mode === "full-bleed" && plan.slots.some((s) => s.role === "text")) {
           check(`${label}: the prompt describes the calm region`, facts.calmRegions.length > 0);
           check(`${label}: the prompt describes where the focal action goes`, facts.focalRegion.length > 0);
           // A slot running the full printable height must read as a column
@@ -956,8 +970,18 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
           );
           check(
             `${label}: the calm region names a page position, not just numbers`,
-            /third|quarter|half|fifth|sixth|eighth|band|block|column|whole/.test(facts.calmRegions),
+            /third|quarter|half|fifth|sixth|eighth|band|block|column|whole|\d+\/\d+/.test(
+              facts.calmRegions,
+            ),
           );
+          const grids = plan.slots.filter((s) => s.role === "text" && s.grid);
+          if (grids.length > 0) {
+            check(
+              `${label}: overlay calm region is named as a grid fraction`,
+              /\d+\/\d+/.test(facts.calmRegions),
+              facts.calmRegions,
+            );
+          }
           if (fullHeight) {
             check(
               `${label}: a full-height text column is described as a column`,
@@ -977,6 +1001,11 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
           mode: "inset-art",
         });
         if (inset.mode === "inset-art") {
+          const insetFacts = layoutPromptFacts(inset, surfaceAspect);
+          check(
+            `${label}: split layouts do not ask the model to reserve a calm band`,
+            !insetFacts.hasCalmBand && insetFacts.calmRegions.length === 0,
+          );
           for (const slot of inset.slots.filter((s) => s.role === "text")) {
             const a = inset.artRect;
             const t = slot.pageRect;
@@ -1047,6 +1076,39 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
       !isValidGridArea({ columns: 3, rows: 1, column: 2, row: 0, columnSpan: 2, rowSpan: 1 }),
     );
     check("a malformed stored area is refused", normalizeGridArea({ columns: 0 }) === null);
+
+    const leftThird: GridArea = { columns: 3, rows: 1, column: 0, row: 0, columnSpan: 1, rowSpan: 1 };
+    const rightThird: GridArea = { columns: 3, rows: 1, column: 2, row: 0, columnSpan: 1, rowSpan: 1 };
+    const bottomQuarter: GridArea = { columns: 1, rows: 4, column: 0, row: 3, columnSpan: 1, rowSpan: 1 };
+    const leftComplement = complementGridArea(leftThird);
+    const rightComplement = complementGridArea(rightThird);
+    const bottomComplement = complementGridArea(bottomQuarter);
+    check(
+      "the complement of the left third is the right two thirds",
+      Boolean(leftComplement && near(gridRect(leftComplement).x, 1 / 3) && near(gridRect(leftComplement).w, 2 / 3)),
+    );
+    check(
+      "the complement of the right third is the left two thirds",
+      Boolean(rightComplement && near(gridRect(rightComplement).x, 0) && near(gridRect(rightComplement).w, 2 / 3)),
+    );
+    check(
+      "the complement of the bottom quarter is the top three quarters",
+      Boolean(
+        bottomComplement && near(gridRect(bottomComplement).y, 0) && near(gridRect(bottomComplement).h, 3 / 4),
+      ),
+    );
+    check(
+      "a floating tile has no grid complement",
+      complementGridArea({ columns: 3, rows: 3, column: 1, row: 1, columnSpan: 1, rowSpan: 1 }) === null,
+    );
+    check(
+      "a grid region is described as a fraction the model can act on",
+      describeGridAreaForPrompt(leftThird) === "the left 1/3 of the width of the image",
+    );
+    check(
+      "the focal complement is described as a fraction too",
+      describeGridAreaForPrompt(leftComplement!) === "the right 2/3 of the width of the image",
+    );
 
     // A tile that is half the width and half the height of its surface has the
     // surface's own shape — the property that makes tiling format-independent.

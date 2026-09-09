@@ -479,7 +479,7 @@ function LanguageCard({
                       onChange({ defaultBodyFontId: event.target.value || undefined })
                     }
                     options={[
-                      { value: "", label: "Age-based standard default (Lora / Nunito)" },
+                      { value: "", label: "Standard default (Itim)" },
                       ...fontOptions,
                     ]}
                   />
@@ -536,7 +536,7 @@ function LanguageCard({
                 <div className="rounded-xl bg-ink-50/70 p-3 ring-1 ring-ink-100">
                   <span className="text-[10px] font-medium text-ink-400 uppercase">Cover Title ({defaultTitleFont?.label ?? "Default"})</span>
                   <p
-                    style={{ fontFamily: defaultTitleFont ? fontStack(defaultTitleFont.family) : fontStack("Nunito") }}
+                    style={{ fontFamily: defaultTitleFont ? fontStack(defaultTitleFont.family) : fontStack("Itim") }}
                     className="mt-0.5 text-xl font-bold tracking-tight text-ink-900"
                   >
                     {language.storyGreeting}
@@ -547,7 +547,7 @@ function LanguageCard({
                 <div className="rounded-xl bg-ink-50/70 p-3 ring-1 ring-ink-100">
                   <span className="text-[10px] font-medium text-ink-400 uppercase">Body Story Prose ({defaultBodyFont?.label ?? "Default"})</span>
                   <p
-                    style={{ fontFamily: defaultBodyFont ? fontStack(defaultBodyFont.family) : fontStack("Lora") }}
+                    style={{ fontFamily: defaultBodyFont ? fontStack(defaultBodyFont.family) : fontStack("Itim") }}
                     className="mt-0.5 text-sm leading-relaxed text-ink-800"
                   >
                     {language.samplePhrase}
