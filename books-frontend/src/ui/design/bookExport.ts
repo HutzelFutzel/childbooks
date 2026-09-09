@@ -45,15 +45,30 @@ export async function waitForStageReady(
   const decoded = () => {
     const imgs = Array.from(root.querySelectorAll("img"));
     const ready = imgs.filter((img) => img.complete && img.naturalWidth > 0);
-    return { total: imgs.length, ready: ready.length };
+    const framed = Array.from(root.querySelectorAll<HTMLElement>("[data-cover-image]"));
+    const framingReady = framed.filter(
+      (img) => img.dataset.framingReady === "true",
+    );
+    return {
+      total: imgs.length,
+      ready: ready.length,
+      framed: framed.length,
+      framingReady: framingReady.length,
+    };
   };
 
   for (;;) {
-    const { total, ready } = decoded();
-    if (total >= opts.expectedImages && ready === total) break;
+    const { total, ready, framed, framingReady } = decoded();
+    if (
+      total >= opts.expectedImages &&
+      ready === total &&
+      framingReady === framed
+    ) {
+      break;
+    }
     if (Date.now() - start > timeoutMs) {
       throw new Error(
-        `The book's artwork didn't finish loading (${ready} of ${opts.expectedImages} images ready). Please check your connection and try again.`,
+        `The book's artwork didn't finish loading (${ready} of ${opts.expectedImages} images ready; ${framingReady} of ${framed} fill images framed). Please check your connection and try again.`,
       );
     }
     await new Promise((r) => setTimeout(r, 120));

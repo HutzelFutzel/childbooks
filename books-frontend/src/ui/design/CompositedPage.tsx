@@ -1,4 +1,12 @@
-import type { ImageElement, PageDesign, ShapeElement, TextBox } from "../../core/types";
+import { useState, type CSSProperties } from "react";
+import type {
+  ImageElement,
+  PageDesign,
+  PrintBleedMode,
+  ShapeElement,
+  TextBox,
+} from "../../core/types";
+import { coverPlacement, type FrameInsets } from "../../core/imageGeometry";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { cssFilter } from "./effects";
@@ -27,8 +35,10 @@ interface Stacked {
 }
 
 /**
- * A page surface as printed: full-bleed background + illustration, then designed
- * elements (text boxes, shapes, images) on the trim box.
+ * A page surface as printed: page background across the surface, then the
+ * illustration and designed elements in the trim box. The server capture step
+ * extends the finished trim edge into sacrificial print bleed without scaling
+ * the composition the reader approved.
  *
  * Shared by the print/export pipeline and on-screen cover previews so thumbnails
  * match what the reader gets.
@@ -38,6 +48,8 @@ export function CompositedPage({
   surfaceWidthPx,
   surfaceHeightPx,
   bleedPx = 0,
+  bleedMode = "mirror",
+  bleedSides,
   illustrationBlobId,
   illustrationUrl,
   artwork,
@@ -48,6 +60,9 @@ export function CompositedPage({
   surfaceWidthPx: number;
   surfaceHeightPx: number;
   bleedPx?: number;
+  bleedMode?: PrintBleedMode;
+  /** Physical outside edges for this target; cover spine edges are excluded. */
+  bleedSides?: { top: boolean; right: boolean; bottom: boolean; left: boolean };
   illustrationBlobId?: string;
   /** Pre-resolved illustration URL. Wins over fetching `illustrationBlobId`. */
   illustrationUrl?: string | null;
@@ -67,12 +82,57 @@ export function CompositedPage({
 
   const W = surfaceWidthPx - bleedPx * 2;
   const H = surfaceHeightPx - bleedPx * 2;
+  const fitIllustrationsToBleed = bleedPx > 0 && bleedMode === "fit";
+  const physicalBleedSides = bleedSides ?? {
+    top: true,
+    right: true,
+    bottom: true,
+    left: true,
+  };
 
   const hasIllustrationEl = (pageDesign.images ?? []).some((im) => im.kind === "illustration");
-  const bgObjectPosition = illustrationFocus
-    ? `${(illustrationFocus.x * 100).toFixed(2)}% ${(illustrationFocus.y * 100).toFixed(2)}%`
-    : undefined;
-
+  const illustrationBleedInsets = (image: ImageElement): FrameInsets | undefined => {
+    if (
+      !fitIllustrationsToBleed ||
+      image.kind !== "illustration" ||
+      image.fit === "contain" ||
+      image.imageMaskId ||
+      (image.corner ?? 0) > 0 ||
+      Math.abs(image.rotation ?? 0) > 0.001
+    ) {
+      return undefined;
+    }
+    const tolerance = 0.001;
+    const insets = {
+      top:
+        physicalBleedSides.top && image.rect.y <= tolerance ? bleedPx : 0,
+      right:
+        physicalBleedSides.right &&
+        image.rect.x + image.rect.w >= 1 - tolerance
+          ? bleedPx
+          : 0,
+      bottom:
+        physicalBleedSides.bottom &&
+        image.rect.y + image.rect.h >= 1 - tolerance
+          ? bleedPx
+          : 0,
+      left:
+        physicalBleedSides.left && image.rect.x <= tolerance ? bleedPx : 0,
+    };
+    return insets.top + insets.right + insets.bottom + insets.left > 0
+      ? insets
+      : undefined;
+  };
+  const legacyBleed = fitIllustrationsToBleed
+    ? {
+        top: physicalBleedSides.top ? bleedPx : 0,
+        right: physicalBleedSides.right ? bleedPx : 0,
+        bottom: physicalBleedSides.bottom ? bleedPx : 0,
+        left: physicalBleedSides.left ? bleedPx : 0,
+      }
+    : { top: 0, right: 0, bottom: 0, left: 0 };
+  const legacyW = W + legacyBleed.left + legacyBleed.right;
+  const legacyH = H + legacyBleed.top + legacyBleed.bottom;
   const stacked: Stacked[] = [
     ...pageDesign.textBoxes.map((b) => ({
       id: b.id,
@@ -102,31 +162,184 @@ export function CompositedPage({
     .filter((el) => !el.hidden)
     .sort((a, b) => a.z - b.z);
 
+  const renderFittedBleedArtwork = () => (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        width: surfaceWidthPx,
+        height: surfaceHeightPx,
+      }}
+    >
+      {url && !hasIllustrationEl && (
+        <div
+          style={{
+            position: "absolute",
+            left: bleedPx - legacyBleed.left,
+            top: bleedPx - legacyBleed.top,
+            width: legacyW,
+            height: legacyH,
+            overflow: "hidden",
+          }}
+        >
+          <CoverImage
+            src={url}
+            w={legacyW}
+            h={legacyH}
+            focus={illustrationFocus}
+          />
+        </div>
+      )}
+      {stacked.map((el) => {
+        if (!el.image) return null;
+        const imageBleed = illustrationBleedInsets(el.image);
+        if (!imageBleed) return null;
+        const w = el.rect.w * W;
+        const h = el.rect.h * H;
+        const renderW = w + imageBleed.left + imageBleed.right;
+        const renderH = h + imageBleed.top + imageBleed.bottom;
+        return (
+          <div
+            key={el.id}
+            style={{
+              position: "absolute",
+              left: bleedPx + el.rect.x * W - imageBleed.left,
+              top: bleedPx + el.rect.y * H - imageBleed.top,
+              width: renderW,
+              height: renderH,
+              filter: cssFilter(el.image.effects, H),
+              opacity: el.image.opacity ?? el.image.effects?.opacity ?? 1,
+            }}
+          >
+            <CompositedImage
+              image={el.image}
+              w={renderW}
+              h={renderH}
+              pageHeight={H}
+              illustrationUrl={url ?? undefined}
+              artwork={artwork}
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+  const fittedBleedStrips = fitIllustrationsToBleed
+    ? [
+        physicalBleedSides.top
+          ? { id: "top", left: 0, top: 0, width: surfaceWidthPx, height: bleedPx }
+          : null,
+        physicalBleedSides.bottom
+          ? {
+              id: "bottom",
+              left: 0,
+              top: bleedPx + H,
+              width: surfaceWidthPx,
+              height: bleedPx,
+            }
+          : null,
+        physicalBleedSides.left
+          ? { id: "left", left: 0, top: bleedPx, width: bleedPx, height: H }
+          : null,
+        physicalBleedSides.right
+          ? {
+              id: "right",
+              left: bleedPx + W,
+              top: bleedPx,
+              width: bleedPx,
+              height: H,
+            }
+          : null,
+      ].filter(
+        (
+          strip,
+        ): strip is {
+          id: string;
+          left: number;
+          top: number;
+          width: number;
+          height: number;
+        } => strip !== null,
+      )
+    : [];
+
   return (
-    <div style={{ position: "absolute", inset: 0, width: surfaceWidthPx, height: surfaceHeightPx }}>
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        width: surfaceWidthPx,
+        height: surfaceHeightPx,
+        overflow: "hidden",
+      }}
+    >
       {pageDesign.background?.color && (
         <div style={{ position: "absolute", inset: 0, background: pageDesign.background.color }} />
       )}
       {pageDesign.background?.pattern && <PatternFill config={pageDesign.background.pattern} />}
-      {url && !hasIllustrationEl && (
-        <img
-          src={url}
-          alt=""
+      {fittedBleedStrips.map((strip) => (
+        <div
+          key={strip.id}
           style={{
             position: "absolute",
-            inset: 0,
-            width: "100%",
-            height: "100%",
-            objectFit: "cover",
-            objectPosition: bgObjectPosition,
+            left: strip.left,
+            top: strip.top,
+            width: strip.width,
+            height: strip.height,
+            overflow: "hidden",
           }}
-        />
-      )}
+        >
+          <div
+            style={{
+              position: "absolute",
+              left: -strip.left,
+              top: -strip.top,
+              width: surfaceWidthPx,
+              height: surfaceHeightPx,
+            }}
+          >
+            {renderFittedBleedArtwork()}
+          </div>
+        </div>
+      ))}
 
-      <div style={{ position: "absolute", left: bleedPx, top: bleedPx, width: W, height: H }}>
+      <div
+        style={{
+          position: "absolute",
+          left: bleedPx,
+          top: bleedPx,
+          width: W,
+          height: H,
+          overflow: "hidden",
+        }}
+      >
+        {url && !hasIllustrationEl && (
+          <div
+            style={{
+              position: "absolute",
+              left: -legacyBleed.left,
+              top: -legacyBleed.top,
+              width: legacyW,
+              height: legacyH,
+              overflow: "hidden",
+            }}
+          >
+            <CoverImage
+              src={url}
+              w={legacyW}
+              h={legacyH}
+              focus={illustrationFocus}
+            />
+          </div>
+        )}
         {stacked.map((el) => {
           const w = el.rect.w * W;
           const h = el.rect.h * H;
+          const imageBleed = el.image
+            ? illustrationBleedInsets(el.image)
+            : undefined;
+          const renderW = w + (imageBleed?.left ?? 0) + (imageBleed?.right ?? 0);
+          const renderH = h + (imageBleed?.top ?? 0) + (imageBleed?.bottom ?? 0);
           const wrapEffects =
             el.shape || el.image
               ? {
@@ -143,9 +356,9 @@ export function CompositedPage({
                 position: "absolute",
                 left: 0,
                 top: 0,
-                width: w,
-                height: h,
-                transform: `translate(${el.rect.x * W}px, ${el.rect.y * H}px) rotate(${el.rotation ?? 0}deg)`,
+                width: renderW,
+                height: renderH,
+                transform: `translate(${el.rect.x * W - (imageBleed?.left ?? 0)}px, ${el.rect.y * H - (imageBleed?.top ?? 0)}px) rotate(${el.rotation ?? 0}deg)`,
                 ...wrapEffects,
               }}
             >
@@ -156,8 +369,9 @@ export function CompositedPage({
               ) : el.image ? (
                 <CompositedImage
                   image={el.image}
-                  w={w}
-                  h={h}
+                  w={renderW}
+                  h={renderH}
+                  pageHeight={H}
                   illustrationUrl={url ?? undefined}
                   artwork={artwork}
                   maskUrl={
@@ -180,6 +394,7 @@ function CompositedImage({
   image,
   w,
   h,
+  pageHeight,
   illustrationUrl,
   artwork,
   maskUrl,
@@ -187,6 +402,7 @@ function CompositedImage({
   image: ImageElement;
   w: number;
   h: number;
+  pageHeight: number;
   illustrationUrl?: string;
   artwork?: ResolvedArtwork;
   maskUrl?: string;
@@ -211,17 +427,14 @@ function CompositedImage({
           ...mask,
         }}
       >
-        <img
+        <CoverImage
           src={src}
-          alt=""
-          style={{
-            position: "absolute",
-            inset: 0,
-            width: w,
-            height: h,
-            objectFit: "cover",
-            filter: `blur(${h * 0.04}px)`,
-            transform: "scale(1.1)",
+          w={w}
+          h={h}
+          zoom={image.zoom}
+          focus={image.focus}
+          imageStyle={{
+            filter: `blur(${pageHeight * 0.04}px)`,
             opacity: 0.85,
           }}
         />
@@ -240,10 +453,6 @@ function CompositedImage({
       </div>
     );
   }
-  const zoom = Math.max(1, image.zoom ?? 1);
-  const fx = image.focus?.x ?? 0.5;
-  const fy = image.focus?.y ?? 0.5;
-  const pos = `${(fx * 100).toFixed(2)}% ${(fy * 100).toFixed(2)}%`;
   return (
     <div
       style={{
@@ -255,19 +464,84 @@ function CompositedImage({
         ...mask,
       }}
     >
-      <img
+      <CoverImage
         src={src}
-        alt=""
-        style={{
-          width: w,
-          height: h,
-          objectFit: "cover",
-          objectPosition: pos,
-          transform: zoom > 1 ? `scale(${zoom})` : undefined,
-          transformOrigin: pos,
-        }}
+        w={w}
+        h={h}
+        zoom={image.zoom}
+        focus={image.focus}
       />
     </div>
+  );
+}
+
+/**
+ * A clipped Fill image using the same source-crop semantics as Konva.
+ *
+ * CSS `object-position: 25%` means "move through 25% of the leftover space",
+ * while the editor stores 25% as the desired crop centre. Explicit bitmap
+ * placement avoids that semantic mismatch for every PDF/server capture.
+ */
+function CoverImage({
+  src,
+  w,
+  h,
+  zoom,
+  focus,
+  imageStyle,
+}: {
+  src: string;
+  w: number;
+  h: number;
+  zoom?: number;
+  focus?: { x: number; y: number };
+  imageStyle?: CSSProperties;
+}) {
+  const [natural, setNatural] = useState<{
+    src: string;
+    width: number;
+    height: number;
+  } | null>(null);
+  const current = natural?.src === src ? natural : null;
+  const placement = current
+    ? coverPlacement(current.width, current.height, w, h, zoom, focus)
+    : null;
+
+  return (
+    <img
+      src={src}
+      alt=""
+      data-cover-image=""
+      data-framing-ready={placement ? "true" : "false"}
+      onLoad={(event) => {
+        const img = event.currentTarget;
+        setNatural({
+          src,
+          width: img.naturalWidth || img.width,
+          height: img.naturalHeight || img.height,
+        });
+      }}
+      style={
+        placement
+          ? {
+              position: "absolute",
+              left: placement.x,
+              top: placement.y,
+              width: placement.width,
+              height: placement.height,
+              maxWidth: "none",
+              ...imageStyle,
+            }
+          : {
+              position: "absolute",
+              inset: 0,
+              width: w,
+              height: h,
+              objectFit: "cover",
+              ...imageStyle,
+            }
+      }
+    />
   );
 }
 

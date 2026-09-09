@@ -30,6 +30,7 @@ import {
   type BookDesign,
   type ImageElement,
   type PageDesign,
+  type PrintBleedMode,
   type Project,
   type ShapeElement,
   type ShapeKind,
@@ -320,9 +321,15 @@ interface StudioContextValue {
   grid: boolean;
   /** Show print-safety guides (safe margin + gutter) on the page surfaces. */
   guides: boolean;
+  /** Show the physical strip that the printer trims away. Defaults on. */
+  bleedVisible: boolean;
+  /** How edge illustrations supply artwork for that physical strip. */
+  bleedMode: PrintBleedMode;
   toggleSnap: () => void;
   toggleGrid: () => void;
   toggleGuides: () => void;
+  toggleBleedVisible: () => void;
+  setBleedMode: (mode: PrintBleedMode) => void;
 
   // selection-scoped helpers (drive keyboard shortcuts + copy/paste)
   /** Any element kind (text box, shape, image) can be copied/cut/pasted. */
@@ -599,6 +606,7 @@ export function StudioProvider({
   const [snap, setSnap] = useState(true);
   const [grid, setGrid] = useState(false);
   const [guides, setGuides] = useState(true);
+  const [bleedVisible, setBleedVisible] = useState(true);
   const history = useRef<{ past: StudioSnapshot[]; future: StudioSnapshot[] }>({
     past: [],
     future: [],
@@ -2117,6 +2125,17 @@ export function StudioProvider({
   const toggleSnap = useCallback(() => setSnap((v) => !v), []);
   const toggleGrid = useCallback(() => setGrid((v) => !v), []);
   const toggleGuides = useCallback(() => setGuides((v) => !v), []);
+  const toggleBleedVisible = useCallback(() => setBleedVisible((v) => !v), []);
+  const bleedMode = design?.printSettings?.bleedMode ?? "mirror";
+  const setBleedMode = useCallback(
+    (mode: PrintBleedMode) => {
+      commit((draft) => ({
+        ...draft,
+        printSettings: { ...draft.printSettings, bleedMode: mode },
+      }));
+    },
+    [commit],
+  );
 
   const value: StudioContextValue | null = useMemo(
     () =>
@@ -2179,9 +2198,13 @@ export function StudioProvider({
             snap,
             grid,
             guides,
+            bleedVisible,
+            bleedMode,
             toggleSnap,
             toggleGrid,
             toggleGuides,
+            toggleBleedVisible,
+            setBleedMode,
             copySelection,
             cutSelection,
             pasteSelection,
@@ -2273,9 +2296,13 @@ export function StudioProvider({
       snap,
       grid,
       guides,
+      bleedVisible,
+      bleedMode,
       toggleSnap,
       toggleGrid,
       toggleGuides,
+      toggleBleedVisible,
+      setBleedMode,
       copySelection,
       cutSelection,
       pasteSelection,

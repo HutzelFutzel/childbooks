@@ -352,7 +352,17 @@ async function assembleInterior(
     .sort((a, b) => a.index - b.index);
   if (rasters.length === 0) throw new Error("The book's pages haven't been uploaded yet.");
 
-  const pages = await Promise.all(rasters.map(readRaster));
+  const loaded = await Promise.all(rasters.map(readRaster));
+  const pages: Array<(typeof loaded)[number] | null> = Array(
+    rasters[rasters.length - 1].index + 1,
+  ).fill(null);
+  for (let i = 0; i < rasters.length; i++) {
+    const index = rasters[i].index;
+    if (pages[index]) {
+      throw new Error(`Two interior pages were uploaded for position ${index + 1}.`);
+    }
+    pages[index] = loaded[i];
+  }
   const bytes = await buildInteriorPdf(pages, { padToPages });
   const { path } = await createAdminAssetHost().upload(
     pdfBlob(bytes),

@@ -88,9 +88,12 @@ export function PageStagePanel({
     snap,
     grid,
     guides,
+    bleedVisible,
+    bleedMode,
     generatingPages,
   } = useStudio();
-  const trim = bookProductForConfig(project.config).trim;
+  const product = bookProductForConfig(project.config);
+  const trim = product.trim;
 
   const coverMode = subject.kind === "cover";
   const blank = subject.kind === "spread" && !!subject.spread.blankCanvas;
@@ -162,6 +165,19 @@ export function PageStagePanel({
       grid={grid}
       showGutter={isSpread}
       printGuides={printGuides}
+      printBleed={{
+        visible: bleedVisible,
+        mode: bleedMode,
+        sizeIn: product.bleedIn,
+        trimWidthIn: trim.widthIn * (isSpread ? 2 : 1),
+        trimHeightIn: trim.heightIn,
+        sides: {
+          top: true,
+          right: !coverMode || page.id === COVER_FRONT_ID,
+          bottom: true,
+          left: !coverMode || page.id === COVER_BACK_ID,
+        },
+      }}
       selectedId={selectedElementId}
       onSelectElement={(ref) => {
         if (!ref) {

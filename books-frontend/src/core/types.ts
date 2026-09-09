@@ -649,6 +649,7 @@ export type { StoryMode } from "./config/storyCraftCatalog";
 /** Re-export the Final Design layer types for one-stop importing. */
 export type {
   BookDesign,
+  PrintBleedMode,
   PageDesign,
   PageBackground,
   ShapeElement,

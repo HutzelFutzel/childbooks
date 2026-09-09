@@ -62,6 +62,8 @@ interface CaptureSpec {
   heightIn: number;
   /** Whether coming out blank means a failed render rather than a blank page. */
   mustHaveInk: boolean;
+  /** Bleed strips to synthesize after capture; trim pixels remain untouched. */
+  bleedFill?: { top: number; right: number; bottom: number; left: number };
 }
 
 interface RenderState {
@@ -246,7 +248,9 @@ async function prepare(): Promise<RenderState> {
     } else if (doc.kind === "interior") {
       const interior = buildInteriorPlan(project, pages, EXPORT_DPI);
       targets.push(...interior.targets);
-      interior.targets.forEach((t, index) => captures.push(spec(t, "interior", index, design)));
+      interior.targets.forEach((t, index) =>
+        captures.push(spec(t, "interior", t.documentIndex ?? index, design)),
+      );
     } else {
       const cover = buildCoverPlan(project, pages, EXPORT_DPI);
       targets.push(...cover.targets);
@@ -329,6 +333,23 @@ function spec(
   index: number,
   design: BookDesign,
 ): CaptureSpec {
+  const mustHaveInk = expectsInk(design, target);
+  const bleedEdges = illustrationBleedEdges(
+    design,
+    target,
+    design.printSettings?.bleedMode ?? "mirror",
+  );
+  const bleedFill = target.bleedFill
+    ? {
+        top: bleedEdges.top ? target.bleedFill.top : 0,
+        right: bleedEdges.right ? target.bleedFill.right : 0,
+        bottom: bleedEdges.bottom ? target.bleedFill.bottom : 0,
+        left: bleedEdges.left ? target.bleedFill.left : 0,
+      }
+    : null;
+  const needsBleedFill =
+    bleedFill &&
+    bleedFill.top + bleedFill.right + bleedFill.bottom + bleedFill.left > 0;
   return {
     id: target.id,
     role,
@@ -336,17 +357,82 @@ function spec(
     label: target.label,
     widthIn: target.widthIn,
     heightIn: target.heightIn,
-    mustHaveInk: expectsInk(design, target),
+    mustHaveInk,
+    ...(mustHaveInk && needsBleedFill ? { bleedFill } : {}),
   };
+}
+
+/**
+ * Which trim edges are actually occupied by illustration pixels.
+ *
+ * Background colours/patterns already paint the real bleed surface and should
+ * survive untouched beside inset, contained or masked art. Legacy pages with
+ * no illustration element use their page bitmap full-frame.
+ */
+function illustrationBleedEdges(
+  design: BookDesign,
+  target: PlannedTarget,
+  mode: "fit" | "mirror",
+): { top: boolean; right: boolean; bottom: boolean; left: boolean } {
+  const frames = (design.pages[target.page.id]?.images ?? []).filter(
+    (image) => image.kind === "illustration",
+  );
+  if (frames.length === 0) {
+    // Legacy full-frame art is expanded directly by CompositedPage in fit mode.
+    const legacyFullFrame = mode === "mirror" && Boolean(target.page.blobId);
+    return {
+      top: legacyFullFrame,
+      right: legacyFullFrame,
+      bottom: legacyFullFrame,
+      left: legacyFullFrame,
+    };
+  }
+
+  const edges = { top: false, right: false, bottom: false, left: false };
+  const tolerance = 0.001;
+  const aspect = Math.max(0.001, target.page.aspect);
+  for (const image of frames) {
+    if (
+      image.hidden ||
+      image.fit === "contain" ||
+      image.imageMaskId
+    ) {
+      continue;
+    }
+    // Unrotated cover frames are expanded into the actual bleed surface by the
+    // DOM renderer. Rotated frames use mirrored composed edges as a safe
+    // fallback because axis-aligned frame expansion would alter their angle.
+    if (
+      mode === "fit" &&
+      Math.abs(image.rotation ?? 0) <= 0.001 &&
+      (image.corner ?? 0) <= 0
+    ) {
+      continue;
+    }
+    const radians = ((image.rotation ?? 0) * Math.PI) / 180;
+    const cos = Math.abs(Math.cos(radians));
+    const sin = Math.abs(Math.sin(radians));
+    const centerX = image.rect.x + image.rect.w / 2;
+    const centerY = image.rect.y + image.rect.h / 2;
+    // Rotation happens in page pixels. Convert its axis-aligned bounds back to
+    // normalized page coordinates so non-square pages remain accurate.
+    const extentX = (cos * image.rect.w + (sin * image.rect.h) / aspect) / 2;
+    const extentY = (sin * image.rect.w * aspect + cos * image.rect.h) / 2;
+    if (centerY - extentY <= tolerance) edges.top = true;
+    if (centerX + extentX >= 1 - tolerance) edges.right = true;
+    if (centerY + extentY >= 1 - tolerance) edges.bottom = true;
+    if (centerX - extentX <= tolerance) edges.left = true;
+  }
+  return edges;
 }
 
 /**
  * Whether this page's design still expects its illustration to show up as ink.
  *
- * Mirrors the call `PrintPage` makes when it decides what to draw: a page with
- * artwork draws it full-bleed unless "Adjust art" turned it into a placed
- * element — and a placed element the user hid is a page that's SUPPOSED to be
- * without it, not a render that failed.
+ * Mirrors `CompositedPage`: legacy art without a frame still paints as the page
+ * background, while current art paints through its illustration element. A
+ * frame the user hid is a page that's SUPPOSED to be without that art, not a
+ * render that failed.
  */
 function expectsInk(design: BookDesign, target: PlannedTarget): boolean {
   if (!target.page.blobId) return false;

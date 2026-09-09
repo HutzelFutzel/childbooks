@@ -90,9 +90,12 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
     snap,
     grid,
     guides,
+    bleedVisible,
+    bleedMode,
     generatingPages,
   } = useStudio();
-  const trim = bookProductForConfig(project.config).trim;
+  const product = bookProductForConfig(project.config);
+  const trim = product.trim;
 
   const leftPd = pageDesign(left.page.id);
   const rightPd = pageDesign(right.page.id);
@@ -186,6 +189,13 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
       snap={snap}
       grid={grid}
       printGuides={leftGuides}
+      printBleed={{
+        visible: bleedVisible,
+        mode: bleedMode,
+        sizeIn: product.bleedIn,
+        trimWidthIn: trim.widthIn * 2,
+        trimHeightIn: trim.heightIn,
+      }}
       selectedId={selectedElementId}
       onSelectElement={(ref) => {
         if (!ref) {

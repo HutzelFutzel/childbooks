@@ -73,20 +73,24 @@ export interface InteriorOptions {
  * Covers are NOT included — they ship as a separate wraparound file.
  */
 export async function buildInteriorPdf(
-  pages: RasterPage[],
+  pages: Array<RasterPage | null>,
   opts: InteriorOptions = {},
 ): Promise<Uint8Array> {
-  if (pages.length === 0) throw new Error("There are no interior pages to print.");
+  const template = pages.find((page): page is RasterPage => page !== null);
+  if (!template) throw new Error("There are no interior pages to print.");
   const doc = await PDFDocument.create();
-  for (const raster of pages) await addRasterPage(doc, raster);
-
-  const target = opts.padToPages ?? 0;
-  if (target > pages.length) {
-    // Blank leaves match the last page's size so every sheet in the file is
-    // identical — a printer rejects an interior whose pages disagree.
-    const { widthIn, heightIn } = pages[pages.length - 1];
-    for (let i = pages.length; i < target; i++) {
-      doc.addPage([widthIn * PT_PER_IN, heightIn * PT_PER_IN]);
+  const pageCount = Math.max(pages.length, opts.padToPages ?? 0);
+  for (let index = 0; index < pageCount; index++) {
+    const raster = pages[index] ?? null;
+    if (raster) {
+      await addRasterPage(doc, raster);
+    } else {
+      // Planned pagination fillers and trailing binding padding use the same
+      // physical sheet as artwork pages. A printer rejects mixed page sizes.
+      doc.addPage([
+        template.widthIn * PT_PER_IN,
+        template.heightIn * PT_PER_IN,
+      ]);
     }
   }
   return doc.save();

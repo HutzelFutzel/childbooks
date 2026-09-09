@@ -3,6 +3,11 @@ import Konva from "konva";
 import { Group, Image as KonvaImage, Rect } from "react-konva";
 import type { ImageElement } from "../../../core/types";
 import type { ImageActionId } from "../../../core/ai/actions";
+import {
+  coverCropRect,
+  coverCropRectWithInsets,
+  type FrameInsets,
+} from "../../../core/imageGeometry";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useBlobUrl } from "../../hooks/useBlobUrl";
 import { konvaShadow } from "../effects";
@@ -15,6 +20,7 @@ export function KonvaImageElement({
   w,
   h,
   pageHeight,
+  bleedInsets,
   illustrationUrl,
   generating,
   busyAction,
@@ -25,6 +31,8 @@ export function KonvaImageElement({
   w: number;
   h: number;
   pageHeight: number;
+  /** Physical bleed added around this frame in fit-to-bleed mode. */
+  bleedInsets?: FrameInsets;
   /** URL for the page's generated illustration (used by kind "illustration"). */
   illustrationUrl?: string;
   /** Show an in-layer generation veil (must not change element z). */
@@ -95,19 +103,10 @@ export function KonvaImageElement({
     node.getLayer()?.batchDraw();
   }, [image, showBackdrop, backdropBlurPx, w, h]);
 
-  // Emulate object-fit: cover + object-position + an extra zoom — crop the
-  // source to the box aspect, scaled by `zoom` and positioned by `focus`.
-  function coverCropRect() {
-    const zoom = Math.max(1, el.zoom ?? 1);
-    const scale = Math.max(w / iw, h / ih) * zoom;
-    const cropW = w / scale;
-    const cropH = h / scale;
-    const fx = el.focus?.x ?? 0.5;
-    const fy = el.focus?.y ?? 0.5;
-    const x = clamp(fx * iw - cropW / 2, 0, Math.max(0, iw - cropW));
-    const y = clamp(fy * ih - cropH / 2, 0, Math.max(0, ih - cropH));
-    return { x, y, width: cropW, height: cropH };
-  }
+  const coverCrop = () =>
+    bleedInsets
+      ? coverCropRectWithInsets(iw, ih, w, h, bleedInsets, el.zoom, el.focus)
+      : coverCropRect(iw, ih, w, h, el.zoom, el.focus);
 
   let drawn = { x: 0, y: 0, width: w, height: h, crop: undefined as undefined | { x: number; y: number; width: number; height: number } };
   if (image && iw && ih) {
@@ -118,7 +117,7 @@ export function KonvaImageElement({
       drawn = { x: (w - dw) / 2, y: (h - dh) / 2, width: dw, height: dh, crop: undefined };
     } else {
       // cover: crop the source to the box aspect (object-fit: cover).
-      drawn = { x: 0, y: 0, width: w, height: h, crop: coverCropRect() };
+      drawn = { x: 0, y: 0, width: w, height: h, crop: coverCrop() };
     }
   }
 
@@ -155,7 +154,7 @@ export function KonvaImageElement({
               y={0}
               width={w}
               height={h}
-              crop={coverCropRect()}
+              crop={coverCrop()}
               opacity={0.85}
               listening={false}
             />
@@ -248,20 +247,8 @@ function useMaskedCanvas({
     }
     ctx.scale(cw / w, ch / h);
 
-    const cropForCover = () => {
-      const effectiveZoom = Math.max(1, zoom ?? 1);
-      const scale = Math.max(w / iw, h / ih) * effectiveZoom;
-      const cropW = w / scale;
-      const cropH = h / scale;
-      const fx = focus?.x ?? 0.5;
-      const fy = focus?.y ?? 0.5;
-      return {
-        x: clamp(fx * iw - cropW / 2, 0, Math.max(0, iw - cropW)),
-        y: clamp(fy * ih - cropH / 2, 0, Math.max(0, ih - cropH)),
-        width: cropW,
-        height: cropH,
-      };
-    };
+    const cropForCover = () =>
+      coverCropRect(iw, ih, w, h, zoom, focus);
     const drawCover = () => {
       const crop = cropForCover();
       ctx.drawImage(image, crop.x, crop.y, crop.width, crop.height, 0, 0, w, h);
@@ -304,10 +291,6 @@ function useMaskedCanvas({
   ]);
 
   return result?.sourceKey === sourceKey ? result.canvas : null;
-}
-
-function clamp(v: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, v));
 }
 
 function roundedRectPath(

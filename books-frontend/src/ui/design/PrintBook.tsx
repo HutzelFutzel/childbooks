@@ -1,6 +1,6 @@
 import { backCoverLogoSizeIn, SAFETY_MARGIN_IN } from "../../core/book/format";
 import { EXPORT_DPI } from "../../core/config/options";
-import { COVER_BACK_ID, type BookDesign } from "../../core/types";
+import { COVER_BACK_ID, COVER_FRONT_ID, type BookDesign } from "../../core/types";
 import { CompositedPage, type ResolvedArtwork } from "./CompositedPage";
 import { defaultIllustrationFocus, type DesignPage } from "./designInit";
 import type { ResolvedImageMasks } from "./imageMasks";
@@ -153,6 +153,13 @@ function PrintTargetView({
           surfaceWidthPx={target.surfaceWidthPx}
           surfaceHeightPx={target.surfaceHeightPx}
           bleedPx={target.bleedPx}
+          bleedMode={design.printSettings?.bleedMode ?? "mirror"}
+          bleedSides={{
+            top: true,
+            right: target.id !== COVER_BACK_ID,
+            bottom: true,
+            left: target.id !== COVER_FRONT_ID,
+          }}
           illustrationBlobId={target.page.blobId}
           artwork={artwork}
           imageMasks={imageMasks}

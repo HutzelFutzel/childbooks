@@ -384,8 +384,11 @@ export interface PageDesign {
   compositionMode?: "full-bleed" | "inset-art";
 }
 
+/** How illustrations that touch a trim edge supply the printer's bleed. */
+export type PrintBleedMode = "fit" | "mirror";
+
 /** Bumped when the saved design shape changes in a way that needs migrating. */
-export const DESIGN_VERSION = 4;
+export const DESIGN_VERSION = 5;
 
 export interface BookDesign {
   /** Schema version of the saved design (see {@link DESIGN_VERSION}). */
@@ -398,6 +401,14 @@ export interface BookDesign {
   defaultFontSizePct: number;
   /** Role-aware typography used by existing boxes and anything seeded later. */
   sharedTextStyles?: Partial<Record<SharedTextStyleKey, SharedTextStyle>>;
+  /** Book-wide physical print choices. Screen editions ignore these settings. */
+  printSettings?: {
+    /**
+     * `fit` frames edge illustrations across trim + bleed; `mirror` preserves
+     * the approved trim crop and reflects its edge into the sacrificial strip.
+     */
+    bleedMode?: PrintBleedMode;
+  };
   /** Per-page design keyed by spread id (and cover ids). */
   pages: Record<string, PageDesign>;
 }
@@ -410,6 +421,7 @@ export function createDefaultDesign(
     version: DESIGN_VERSION,
     defaultFontFamily: fontFamily,
     defaultFontSizePct: fontSizePct,
+    printSettings: { bleedMode: "mirror" },
     pages: {},
   };
 }

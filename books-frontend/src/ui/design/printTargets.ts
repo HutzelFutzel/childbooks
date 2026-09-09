@@ -15,6 +15,7 @@ import { EXPORT_DPI } from "../../core/config/options";
 import {
   coverPanelWindow,
   pageGeometry,
+  splitBleedPixels,
   spreadLeaves,
   type PageGeometry,
 } from "../../core/print/geometry";
@@ -29,9 +30,17 @@ export const SPINE_CAPTURE_ID = "__spine";
 
 export interface PlannedTarget extends PrintTarget {
   label: string;
+  /** Zero-based position in its finished document (may skip blank leaves). */
+  documentIndex?: number;
   /** Physical size of the captured slice, in inches. */
   widthIn: number;
   heightIn: number;
+  /**
+   * Illustrations are rendered in trim space so preview and PDF framing agree.
+   * The server mirrors adjacent composed pixels into these sacrificial strips
+   * without scaling or reframing that trim composition.
+   */
+  bleedFill?: { top: number; right: number; bottom: number; left: number };
 }
 
 function pageById(pages: DesignPage[]): Map<string, DesignPage> {
@@ -108,18 +117,29 @@ export function buildInteriorPlan(
   const single = pageGeometry(product, { dpi, bleed: true });
   const spread = pageGeometry(product, { dpi, bleed: true, spread: true });
   const halves = spreadLeaves(spread);
+  const verticalBleed = splitBleedPixels(
+    spread.heightPx,
+    spread.trimHeightPx,
+    spread.bleedPx,
+  );
 
   const targets: PlannedTarget[] = [];
-  for (const leaf of leaves) {
+  for (const [documentIndex, leaf] of leaves.entries()) {
     if (!leaf.sourcePageId) continue;
     const page = byId.get(leaf.sourcePageId);
     if (!page) continue;
 
     if (leaf.half) {
       const window = halves[leaf.half];
+      const horizontalBleed = splitBleedPixels(
+        window.widthPx,
+        single.trimWidthPx,
+        spread.bleedPx,
+      );
       targets.push({
         id: leaf.id,
         page,
+        documentIndex,
         label: `${page.label} (${leaf.half === "left" ? "left" : "right"} half)`,
         surfaceWidthPx: spread.widthPx,
         surfaceHeightPx: spread.heightPx,
@@ -127,17 +147,42 @@ export function buildInteriorPlan(
         clip: { xPx: window.xPx, widthPx: window.widthPx },
         widthIn: window.widthIn,
         heightIn: spread.heightIn,
+        // Keep the real neighbouring-page pixels in the fold-side overlap;
+        // only the physical outside edge needs synthesized bleed.
+        bleedFill: {
+          top: verticalBleed.start,
+          bottom: verticalBleed.end,
+          left: leaf.half === "left" ? horizontalBleed.start : 0,
+          right: leaf.half === "right" ? horizontalBleed.end : 0,
+        },
       });
     } else {
+      const horizontalBleed = splitBleedPixels(
+        single.widthPx,
+        single.trimWidthPx,
+        single.bleedPx,
+      );
+      const singleVerticalBleed = splitBleedPixels(
+        single.heightPx,
+        single.trimHeightPx,
+        single.bleedPx,
+      );
       targets.push({
         id: leaf.id,
         page,
+        documentIndex,
         label: page.label,
         surfaceWidthPx: single.widthPx,
         surfaceHeightPx: single.heightPx,
         bleedPx: single.bleedPx,
         widthIn: single.widthIn,
         heightIn: single.heightIn,
+        bleedFill: {
+          top: singleVerticalBleed.start,
+          right: horizontalBleed.end,
+          bottom: singleVerticalBleed.end,
+          left: horizontalBleed.start,
+        },
       });
     }
   }
@@ -168,6 +213,11 @@ export function buildCoverPlan(
   const geometry = pageGeometry(product, { dpi, bleed: true });
   const byId = pageById(pages);
   const targets: PlannedTarget[] = [];
+  const verticalBleed = splitBleedPixels(
+    geometry.heightPx,
+    geometry.trimHeightPx,
+    geometry.bleedPx,
+  );
 
   for (const [pageId, side] of [
     [COVER_BACK_ID, "left"],
@@ -176,6 +226,7 @@ export function buildCoverPlan(
     const page = byId.get(pageId);
     if (!page) continue;
     const window = coverPanelWindow(geometry, side);
+    const outerBleedPx = Math.max(0, window.widthPx - geometry.trimWidthPx);
     targets.push({
       id: pageId,
       page,
@@ -186,6 +237,12 @@ export function buildCoverPlan(
       clip: { xPx: window.xPx, widthPx: window.widthPx },
       widthIn: window.widthIn,
       heightIn: geometry.heightIn,
+      bleedFill: {
+        top: verticalBleed.start,
+        right: side === "right" ? outerBleedPx : 0,
+        bottom: verticalBleed.end,
+        left: side === "left" ? outerBleedPx : 0,
+      },
     });
   }
 

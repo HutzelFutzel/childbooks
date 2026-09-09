@@ -7,11 +7,17 @@ import type {
   ImageElement,
   NormRect,
   PageDesign,
+  PrintBleedMode,
   ShapeElement,
   TextBox,
   TextParagraph,
 } from "../../core/types";
 import type { ImageActionId } from "../../core/ai/actions";
+import {
+  coverCropRect,
+  coverPlacement,
+  type FrameInsets,
+} from "../../core/imageGeometry";
 import { fontStack, loadFont } from "../typography/fonts";
 import { cn } from "../lib/cn";
 import { TextStyleBar, type TextBoxToolbarChrome, type TextStyleKey } from "./TextStyleBar";
@@ -134,6 +140,15 @@ export interface SecondSurface {
   } | null;
 }
 
+export interface EditorBleed {
+  visible: boolean;
+  mode: PrintBleedMode;
+  sizeIn: number;
+  trimWidthIn: number;
+  trimHeightIn: number;
+  sides?: { top: boolean; right: boolean; bottom: boolean; left: boolean };
+}
+
 interface StageElement {
   id: string;
   kind: ElementKind;
@@ -172,6 +187,7 @@ export function PageStage({
   dropId,
   showGutter = false,
   printGuides = null,
+  printBleed,
   rightSurface,
   chromeless = false,
   /**
@@ -312,6 +328,8 @@ export function PageStage({
     barcode?: NormRect | null;
     logo?: NormRect | null;
   } | null;
+  /** Physical print bleed shown outside trim; mode also controls illustration crop. */
+  printBleed?: EditorBleed;
   /**
    * A second background/illustration surface drawn in the right half of the
    * stage — two facing single pages sharing one canvas (see `SecondSurface`).
@@ -372,7 +390,7 @@ export function PageStage({
     const el = containerRef.current;
     if (!el) return;
 
-    if (fitParent) {
+    if (fitParent || fillParent) {
       const frame =
         (wrapRef.current?.closest("[data-stage-fit]") as HTMLElement | null) ??
         wrapRef.current?.parentElement;
@@ -384,13 +402,29 @@ export function PageStage({
           setSize({ w: 0, h: 0 });
           return;
         }
-        const safeAspect = aspect > 0 ? aspect : 1;
-        let w = pw;
-        let h = w / safeAspect;
-        if (ph > 0 && h > ph) {
-          h = ph;
-          w = h * safeAspect;
-        }
+        const trimWidthIn = Math.max(0.1, printBleed?.trimWidthIn ?? aspect);
+        const trimHeightIn = Math.max(0.1, printBleed?.trimHeightIn ?? 1);
+        const shownBleedIn = printBleed?.visible ? Math.max(0, printBleed.sizeIn) : 0;
+        const sides = printBleed?.sides ?? {
+          top: true,
+          right: true,
+          bottom: true,
+          left: true,
+        };
+        const scale = Math.min(
+          pw /
+            (trimWidthIn +
+              (sides.left ? shownBleedIn : 0) +
+              (sides.right ? shownBleedIn : 0)),
+          ph > 0
+            ? ph /
+                (trimHeightIn +
+                  (sides.top ? shownBleedIn : 0) +
+                  (sides.bottom ? shownBleedIn : 0))
+            : Number.POSITIVE_INFINITY,
+        );
+        let w = trimWidthIn * scale;
+        let h = trimHeightIn * scale;
         w = Math.max(1, Math.floor(w));
         h = Math.max(1, Math.floor(h));
         el.style.width = `${w}px`;
@@ -412,7 +446,7 @@ export function PageStage({
     const ro = new ResizeObserver(update);
     ro.observe(el);
     return () => ro.disconnect();
-  }, [aspect, fitParent]);
+  }, [aspect, fillParent, fitParent, printBleed]);
 
   // Redraw once webfonts finish loading so glyph metrics are correct.
   useEffect(() => {
@@ -425,6 +459,57 @@ export function PageStage({
   }, []);
 
   const { w: W, h: H } = size;
+  const bleedX =
+    printBleed && printBleed.trimWidthIn > 0
+      ? (W * printBleed.sizeIn) / printBleed.trimWidthIn
+      : 0;
+  const bleedY =
+    printBleed && printBleed.trimHeightIn > 0
+      ? (H * printBleed.sizeIn) / printBleed.trimHeightIn
+      : 0;
+  const bleedSides = printBleed?.sides ?? {
+    top: true,
+    right: true,
+    bottom: true,
+    left: true,
+  };
+  const bleedOffsetX =
+    printBleed?.visible
+      ? ((bleedSides.left ? bleedX : 0) - (bleedSides.right ? bleedX : 0)) / 2
+      : 0;
+  const bleedOffsetY =
+    printBleed?.visible
+      ? ((bleedSides.top ? bleedY : 0) - (bleedSides.bottom ? bleedY : 0)) / 2
+      : 0;
+
+  const fittedBleedInsets = (imageElement: ImageElement): FrameInsets | undefined => {
+    if (
+      printBleed?.mode !== "fit" ||
+      imageElement.kind !== "illustration" ||
+      imageElement.fit === "contain" ||
+      imageElement.imageMaskId ||
+      (imageElement.corner ?? 0) > 0 ||
+      Math.abs(imageElement.rotation ?? 0) > 0.001
+    ) {
+      return undefined;
+    }
+    const rect = imageElement.rect;
+    const centerX = rect.x + rect.w / 2;
+    const pageStart = rightSurface && centerX >= 0.5 ? 0.5 : 0;
+    const pageEnd = rightSurface && centerX < 0.5 ? 0.5 : 1;
+    const tolerance = 0.001;
+    const insets = {
+      top: bleedSides.top && rect.y <= tolerance ? bleedY : 0,
+      right:
+        bleedSides.right && rect.x + rect.w >= pageEnd - tolerance ? bleedX : 0,
+      bottom:
+        bleedSides.bottom && rect.y + rect.h >= 1 - tolerance ? bleedY : 0,
+      left: bleedSides.left && rect.x <= pageStart + tolerance ? bleedX : 0,
+    };
+    return insets.top + insets.right + insets.bottom + insets.left > 0
+      ? insets
+      : undefined;
+  };
 
   // Text boxes, shapes and images share one z-stack so they interleave naturally.
   const elements: StageElement[] = [
@@ -605,14 +690,22 @@ export function PageStage({
   // its OWN width (half the stage), not the full combined width.
   const surfaceW = rightSurface ? W / 2 : W;
   const imageCrop = image
-    ? coverCrop(image.naturalWidth || image.width, image.naturalHeight || image.height, surfaceW, H, illustrationFocus)
+    ? coverCropRect(
+        image.naturalWidth || image.width,
+        image.naturalHeight || image.height,
+        surfaceW,
+        H,
+        1,
+        illustrationFocus,
+      )
     : undefined;
   const rightImageCrop = rightImage
-    ? coverCrop(
+    ? coverCropRect(
         rightImage.naturalWidth || rightImage.width,
         rightImage.naturalHeight || rightImage.height,
         surfaceW,
         H,
+        1,
         rightSurface?.illustrationFocus,
       )
     : undefined;
@@ -916,17 +1009,42 @@ export function PageStage({
     >
       <div
         ref={containerRef}
-        data-page-drop={dropId}
-        data-editor-surface=""
         className={cn(
-          "relative overflow-hidden bg-white",
+          "relative",
           fitParent && "max-h-full max-w-full",
-          fillParent && "h-full w-full",
           !fitParent && !fillParent && "h-auto max-h-[70vh] w-full",
-          !chromeless && "shadow-soft ring-1 ring-ink-200",
         )}
-        style={fitParent || fillParent ? undefined : { aspectRatio: String(aspect) }}
+        style={{
+          ...(fitParent || fillParent ? {} : { aspectRatio: String(aspect) }),
+          transform: `translate(${bleedOffsetX}px, ${bleedOffsetY}px)`,
+        }}
       >
+        {printBleed?.visible && bleedX > 0 && bleedY > 0 && (
+          <div
+            data-print-bleed=""
+            aria-hidden="true"
+            className="pointer-events-none absolute z-0"
+            style={{
+              left: bleedSides.left ? -bleedX : 0,
+              top: bleedSides.top ? -bleedY : 0,
+              width:
+                W + (bleedSides.left ? bleedX : 0) + (bleedSides.right ? bleedX : 0),
+              height:
+                H + (bleedSides.top ? bleedY : 0) + (bleedSides.bottom ? bleedY : 0),
+              background:
+                "repeating-linear-gradient(135deg, rgba(8,145,178,0.17) 0 5px, rgba(8,145,178,0.06) 5px 10px)",
+              boxShadow: "0 0 0 1px rgba(8,145,178,0.42)",
+            }}
+          />
+        )}
+        <div
+          data-page-drop={dropId}
+          data-editor-surface=""
+          className={cn(
+            "absolute inset-0 z-10 overflow-hidden bg-white",
+            !chromeless && "shadow-soft ring-1 ring-ink-200",
+          )}
+        >
         {W > 0 && H > 0 && (
           <Stage
             width={W}
@@ -1299,6 +1417,7 @@ export function PageStage({
                         w={w}
                         h={h}
                         pageHeight={H}
+                        bleedInsets={fittedBleedInsets(renderedImage ?? el.image)}
                         illustrationUrl={
                           // Pair stages: each half has its own AI art. Pick URL by
                           // which half the element's center sits in — never feed
@@ -1620,6 +1739,7 @@ export function PageStage({
           !artBusy?.right && (
             <div className="absolute inset-0 left-1/2 z-20">{emptyArtRight}</div>
           )}
+        </div>
       </div>
 
       {showBoxBar && boxBarPos && selectedTextBox && (
@@ -2063,18 +2183,14 @@ function ReframeOverlay({
 
   const iw = image ? image.naturalWidth || image.width : 0;
   const ih = image ? image.naturalHeight || image.height : 0;
-  const coverScale = iw && ih ? Math.max(fw / iw, fh / ih) : 1;
-  const scale = coverScale * zoom;
-  const dw = iw * scale; // displayed (ghost) bitmap size in px
-  const dh = ih * scale;
-  // Crop origin in image px, then convert to a ghost offset so the crop aligns
-  // with the frame's top-left.
-  const cropW = fw / scale;
-  const cropH = fh / scale;
-  const cx = clampN(fx * iw - cropW / 2, 0, Math.max(0, iw - cropW));
-  const cy = clampN(fy * ih - cropH / 2, 0, Math.max(0, ih - cropH));
-  const offX = -cx * scale;
-  const offY = -cy * scale;
+  const placement =
+    iw > 0 && ih > 0
+      ? coverPlacement(iw, ih, fw, fh, zoom, { x: fx, y: fy })
+      : null;
+  const dw = placement?.width ?? 0; // displayed (ghost) bitmap size in px
+  const dh = placement?.height ?? 0;
+  const offX = placement?.x ?? 0;
+  const offY = placement?.y ?? 0;
 
   function setZoom(next: number) {
     onChange({ zoom: next <= 1.001 ? undefined : Number(next.toFixed(3)) });
@@ -2311,30 +2427,6 @@ function gridLines(W: number, H: number, gridSize: number): number[][] {
   for (let x = step; x < W; x += step) lines.push([x, 0, x, H]);
   for (let y = step; y < H; y += step) lines.push([0, y, W, y]);
   return lines;
-}
-
-/**
- * Compute a Konva `crop` rect that emulates CSS `object-fit: cover`. The focal
- * point (0..1, defaults to centre) picks which part survives when the source
- * overflows the frame — covers pass a top-biased focus so a baked-in title near
- * the top edge is never clipped.
- */
-function coverCrop(
-  iw: number,
-  ih: number,
-  W: number,
-  H: number,
-  focus?: { x: number; y: number },
-) {
-  if (!iw || !ih || !W || !H) return { x: 0, y: 0, width: iw, height: ih };
-  const scale = Math.max(W / iw, H / ih);
-  const cropW = W / scale;
-  const cropH = H / scale;
-  const fx = focus?.x ?? 0.5;
-  const fy = focus?.y ?? 0.5;
-  const x = clampN((iw - cropW) * fx, 0, Math.max(0, iw - cropW));
-  const y = clampN((ih - cropH) * fy, 0, Math.max(0, ih - cropH));
-  return { x, y, width: cropW, height: cropH };
 }
 
 /** Busy spec for an illustration element, if that slot is generating. */

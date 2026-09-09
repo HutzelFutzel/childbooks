@@ -63,6 +63,21 @@ function px(inches: number, dpi: number): number {
 }
 
 /**
+ * Split total bleed pixels around a trim axis. Fractional physical bleed (for
+ * example 0.125″ × 300dpi = 37.5px) is assigned deterministically so the two
+ * sides plus trim always equal the actual raster dimension.
+ */
+export function splitBleedPixels(
+  surfacePx: number,
+  trimPx: number,
+  nominalBleedPx: number,
+): { start: number; end: number } {
+  const total = Math.max(0, surfacePx - trimPx);
+  const start = Math.min(total, Math.max(0, Math.round(nominalBleedPx)));
+  return { start, end: total - start };
+}
+
+/**
  * Geometry for one rendered surface.
  *
  * `spread` doubles the trim width: a double-page spread is drawn as a single

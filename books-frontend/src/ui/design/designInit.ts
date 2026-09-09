@@ -191,6 +191,7 @@ export function defaultDesign(
     defaultFontFamily: family,
     ...(titleFamily ? { defaultTitleFontFamily: titleFamily } : {}),
     defaultFontSizePct: sizePct,
+    printSettings: { bleedMode: "mirror" },
     pages: {},
   };
 }

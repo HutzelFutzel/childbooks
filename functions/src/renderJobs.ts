@@ -103,6 +103,8 @@ interface CaptureSpec {
   heightIn: number;
   /** Whether a blank result means a failed render rather than a blank page. */
   mustHaveInk: boolean;
+  /** Empty outer bleed strips to replace from adjacent composed pixels. */
+  bleedFill?: { top: number; right: number; bottom: number; left: number };
 }
 
 interface RenderPageState {
@@ -507,24 +509,69 @@ async function capturePage(page: Page, spec: CaptureSpec, backCoverLogoSizeCm: n
   const handle = await page.$(`[data-export-page="${cssEscape(spec.id)}"]`);
   if (!handle) throw new Error(`The book's ${spec.label} could not be prepared for printing.`);
   try {
-    const shot = (await handle.screenshot({
-      type: "jpeg",
-      quality: 92,
-      captureBeyondViewport: true,
-    })) as Buffer;
+    // Synthetic bleed needs a decode/composite pass. Capture it losslessly so
+    // the approved trim is JPEG-encoded only once, after the bleed is added.
+    const shot = spec.bleedFill
+      ? ((await handle.screenshot({
+          type: "png",
+          captureBeyondViewport: true,
+        })) as Buffer)
+      : ((await handle.screenshot({
+          type: "jpeg",
+          quality: 92,
+          captureBeyondViewport: true,
+        })) as Buffer);
+    const rendered = spec.bleedFill
+      ? await synthesizeBleed(shot, spec.bleedFill)
+      : shot;
     // The back cover carries the permanent backcover logo in its bottom-left
     // corner (see `PrintBook`), which is real ink there whether or not the
     // book's own art rendered. Checked on the rest of the page instead, so a
     // genuinely blank back cover still fails loudly.
     const forBlankCheck =
-      spec.id === COVER_BACK_ID ? await cropOutBackCoverLogo(shot, spec, backCoverLogoSizeCm) : shot;
+      spec.id === COVER_BACK_ID
+        ? await cropOutBackCoverLogo(rendered, spec, backCoverLogoSizeCm)
+        : rendered;
     if (spec.mustHaveInk && (await looksBlank(forBlankCheck))) {
       throw new Error(`${spec.label} rendered without its illustration.`);
     }
-    return shot;
+    return rendered;
   } finally {
     await handle.dispose();
   }
+}
+
+/**
+ * Preserve the approved trim composition and manufacture only the sacrificial
+ * outside bleed. Illustrations live in trim space so preview and export framing
+ * agree; their surrounding print strips are therefore otherwise blank.
+ * Mirroring the adjacent composed edge avoids scaling/reframing the page.
+ *
+ * Fold-side spread overlap is deliberately omitted from `fill` by the browser
+ * planner and therefore remains real neighbouring-page artwork.
+ */
+async function synthesizeBleed(
+  bytes: Buffer,
+  fill: { top: number; right: number; bottom: number; left: number },
+): Promise<Buffer> {
+  const { width, height } = await sharp(bytes).metadata();
+  if (!width || !height) return bytes;
+
+  const left = Math.max(0, Math.min(width - 1, Math.round(fill.left)));
+  const right = Math.max(0, Math.min(width - left - 1, Math.round(fill.right)));
+  const top = Math.max(0, Math.min(height - 1, Math.round(fill.top)));
+  const bottom = Math.max(0, Math.min(height - top - 1, Math.round(fill.bottom)));
+  if (left + right + top + bottom === 0) return bytes;
+
+  const coreWidth = width - left - right;
+  const coreHeight = height - top - bottom;
+  if (coreWidth <= 0 || coreHeight <= 0) return bytes;
+
+  return sharp(bytes)
+    .extract({ left, top, width: coreWidth, height: coreHeight })
+    .extend({ top, right, bottom, left, extendWith: "mirror" })
+    .jpeg({ quality: 92 })
+    .toBuffer();
 }
 
 // Tallest portrait logo we bother reserving for (aspect height÷width). Beyond

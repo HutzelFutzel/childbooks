@@ -15,6 +15,7 @@ import {
   BookText,
   ChevronDown,
   Eye,
+  Info,
   Layers as LayersIcon,
   LayoutTemplate,
   MoreHorizontal,
@@ -38,6 +39,7 @@ import { useProjectsStore } from "../../state/projectsStore";
 import { Button } from "../components/Button";
 import { EmptyState } from "../components/EmptyState";
 import { Popover } from "../components/Popover";
+import { Tooltip } from "../components/Tooltip";
 import { ArtworkOrbit } from "../design/ArtworkOrbit";
 import { SparkEstimateCost, useImageBatchRange } from "../layout/SparkCost";
 import { PipelineStepper, type PipelinePhase } from "../generation/PipelineStepper";
@@ -468,7 +470,7 @@ function AddMenuRow({
   hint: string;
   onClick: () => void;
 }) {
-  return (
+  const control = (
     <button
       type="button"
       onClick={onClick}
@@ -483,6 +485,7 @@ function AddMenuRow({
       </span>
     </button>
   );
+  return control;
 }
 
 function ToolbarIconButton({
@@ -498,7 +501,7 @@ function ToolbarIconButton({
   disabled?: boolean;
   onClick: () => void;
 }) {
-  return (
+  const control = (
     <button
       type="button"
       title={label}
@@ -514,6 +517,7 @@ function ToolbarIconButton({
       {icon}
     </button>
   );
+  return control;
 }
 
 function PagesToolbarMore({
@@ -527,11 +531,22 @@ function PagesToolbarMore({
   onPreview: () => void;
   onOpenSetup: () => void;
 }) {
-  const { snap, grid, guides, toggleSnap, toggleGrid, toggleGuides } = useStudio();
+  const {
+    snap,
+    grid,
+    guides,
+    bleedVisible,
+    bleedMode,
+    toggleSnap,
+    toggleGrid,
+    toggleGuides,
+    toggleBleedVisible,
+    setBleedMode,
+  } = useStudio();
   return (
     <Popover
       align="end"
-      panelClassName="w-56 p-1.5"
+      panelClassName="max-h-[min(32rem,calc(100dvh-5rem))] w-56 overflow-y-auto p-1.5"
       trigger={(open) => (
         <span
           title="More page tools"
@@ -584,6 +599,48 @@ function PagesToolbarMore({
           <ToolbarToggleRow label="Snap to guides" active={snap} onClick={toggleSnap} />
           <ToolbarToggleRow label="Grid" active={grid} onClick={toggleGrid} />
           <ToolbarToggleRow label="Print guides" active={guides} onClick={toggleGuides} />
+          <ToolbarToggleRow
+            label="Show print bleed"
+            active={bleedVisible}
+            onClick={toggleBleedVisible}
+            help="Bleed is the 0.125″ printed strip outside the cut line. It prevents white edges when trimming shifts slightly."
+          />
+          <div className="px-2.5 pb-1 pt-2">
+            <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+              Fill the bleed
+              <Tooltip
+                side="bottom"
+                align="start"
+                content="This choice changes the physical print PDF. Ebooks have no bleed."
+              >
+                <span
+                  tabIndex={0}
+                  className="inline-flex rounded text-ink-400 outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+                  aria-label="About bleed fill"
+                >
+                  <Info className="size-3" />
+                </span>
+              </Tooltip>
+            </div>
+            <div
+              role="radiogroup"
+              aria-label="Bleed fill method"
+              className="grid grid-cols-2 rounded-lg bg-ink-50 p-0.5 ring-1 ring-ink-100"
+            >
+              <BleedModeButton
+                label="Fit artwork"
+                active={bleedMode === "fit"}
+                tooltip="Frame edge illustrations across the page and bleed. The crop inside the cut line may tighten slightly."
+                onClick={() => setBleedMode("fit")}
+              />
+              <BleedModeButton
+                label="Mirror edge"
+                active={bleedMode === "mirror"}
+                tooltip="Keep the page crop exactly as edited, then reflect its outermost pixels into the area that is cut off."
+                onClick={() => setBleedMode("mirror")}
+              />
+            </div>
+          </div>
           <div className="my-1 border-t border-ink-100" />
           <PagesToolbarMenuItem
             icon={<LayoutTemplate className="size-4" />}
@@ -604,20 +661,25 @@ function ToolbarToggleRow({
   label,
   active,
   onClick,
+  help,
 }: {
   label: string;
   active: boolean;
   onClick: () => void;
+  help?: string;
 }) {
-  return (
+  const control = (
     <button
       type="button"
-      role="menuitemcheckbox"
+      role="switch"
       aria-checked={active}
       onClick={onClick}
       className="flex min-h-9 w-full items-center justify-between gap-3 rounded-lg px-2.5 text-left text-xs font-medium text-ink-700 transition hover:bg-ink-50"
     >
-      {label}
+      <span className="flex items-center gap-1.5">
+        {label}
+        {help && <Info className="size-3 text-ink-400" aria-hidden />}
+      </span>
       <span
         className={cn(
           "h-4 w-7 rounded-full p-0.5 transition",
@@ -632,6 +694,48 @@ function ToolbarToggleRow({
         />
       </span>
     </button>
+  );
+  return help ? (
+    <Tooltip className="flex w-full" side="bottom" align="start" content={help}>
+      {control}
+    </Tooltip>
+  ) : (
+    control
+  );
+}
+
+function BleedModeButton({
+  label,
+  active,
+  tooltip,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  tooltip: string;
+  onClick: () => void;
+}) {
+  return (
+    <Tooltip className="w-full" side="bottom" content={tooltip}>
+      <label
+        className={cn(
+          "flex min-h-7 w-full cursor-pointer items-center justify-center rounded-md px-2 text-[11px] font-semibold transition focus-within:ring-2 focus-within:ring-brand-400",
+          active
+            ? "bg-white text-brand-700 shadow-sm ring-1 ring-ink-100"
+            : "text-ink-500 hover:text-ink-700",
+        )}
+      >
+        <input
+          type="radio"
+          name="print-bleed-mode"
+          value={label}
+          checked={active}
+          onChange={onClick}
+          className="sr-only"
+        />
+        {label}
+      </label>
+    </Tooltip>
   );
 }
 
@@ -1130,7 +1234,7 @@ function StageFitFrame({
   }, [aspect]);
 
   const chromeCls = cn(
-    "overflow-hidden bg-white shadow-soft ring-1 ring-ink-200",
+    "overflow-visible bg-white shadow-soft ring-1 ring-ink-200",
     aspect == null && "w-max max-h-full max-w-full",
   );
 

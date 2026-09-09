@@ -21,6 +21,7 @@ import {
   coverPanelWindow,
   pageGeometry,
   safeArea,
+  splitBleedPixels,
   spreadLeaves,
   withinSafeArea,
   PT_PER_IN,
@@ -36,6 +37,10 @@ import type {
   Project,
   ScreenplayDoc,
   ScreenplaySpread,
+} from "../books-frontend/src/core/types";
+import {
+  COVER_BACK_ID,
+  COVER_FRONT_ID,
 } from "../books-frontend/src/core/types";
 import { createVersionTree } from "../books-frontend/src/core/versioning";
 import {
@@ -74,6 +79,16 @@ import {
 } from "../books-frontend/src/core/config/modelCapabilities";
 import { bookSizeFromAspect } from "../books-frontend/src/core/config/options";
 import { defaultTemplate, PROMPT_ACTIONS } from "../books-frontend/src/core/prompts/registry";
+import {
+  coverCropRect,
+  coverCropRectWithInsets,
+  coverPlacement,
+} from "../books-frontend/src/core/imageGeometry";
+import {
+  buildCoverPlan,
+  buildInteriorPlan,
+} from "../books-frontend/src/ui/design/printTargets";
+import type { DesignPage } from "../books-frontend/src/ui/design/designInit";
 
 const failures: string[] = [];
 const checks: string[] = [];
@@ -154,6 +169,67 @@ const saddle = LULU_BOOK_PRODUCTS.find((p) => p.binding === "saddle-stitch") as 
     bleed.widthPx / bleed.widthIn === DPI,
     `${bleed.widthPx / bleed.widthIn} dpi`,
   );
+
+  const horizontal = splitBleedPixels(
+    bleed.widthPx,
+    bleed.trimWidthPx,
+    bleed.bleedPx,
+  );
+  check(
+    "fractional bleed pixels and trim exactly fill the raster",
+    horizontal.start + bleed.trimWidthPx + horizontal.end === bleed.widthPx,
+    `${horizontal.start} + ${bleed.trimWidthPx} + ${horizontal.end} != ${bleed.widthPx}`,
+  );
+}
+
+// ---- Image framing ---------------------------------------------------------
+
+{
+  const crop = coverCropRect(2000, 1000, 1000, 1000, 1, { x: 0.7, y: 0.5 });
+  check(
+    "image focus means crop centre, not CSS leftover-space percentage",
+    near(crop.x, 900) && near(crop.y, 0) && near(crop.width, 1000),
+    JSON.stringify(crop),
+  );
+
+  const placement = coverPlacement(2000, 1000, 1000, 1000, 1, {
+    x: 0.7,
+    y: 0.5,
+  });
+  const scale = placement.width / 2000;
+  check(
+    "DOM placement reconstructs the canonical source crop",
+    near(-placement.x / scale, crop.x) &&
+      near(-placement.y / scale, crop.y) &&
+      near(1000 / scale, crop.width),
+    JSON.stringify(placement),
+  );
+
+  const topCover = coverCropRect(1000, 1500, 1000, 1000, 1, {
+    x: 0.5,
+    y: 0,
+  });
+  check(
+    "top-focused covers preserve the source top edge",
+    near(topCover.y, 0),
+    JSON.stringify(topCover),
+  );
+
+  const fittedTrim = coverCropRectWithInsets(
+    2000,
+    1000,
+    1000,
+    1000,
+    { top: 100, right: 100, bottom: 100, left: 100 },
+  );
+  check(
+    "fit-to-bleed shows the exact trim slice of the larger printed frame",
+    near(fittedTrim.x, 583.3333333333) &&
+      near(fittedTrim.y, 83.3333333333) &&
+      near(fittedTrim.width, 833.3333333333) &&
+      near(fittedTrim.height, 833.3333333333),
+    JSON.stringify(fittedTrim),
+  );
 }
 
 // ---- Spreads ---------------------------------------------------------------
@@ -207,6 +283,36 @@ const saddle = LULU_BOOK_PRODUCTS.find((p) => p.binding === "saddle-stitch") as 
   check(
     "each panel is anchored to its outer edge",
     back.xPx === 0 && front.xPx + front.widthPx === cover.widthPx,
+  );
+
+  const project = {
+    config: { productSku: square.sku, bookSize: "square" },
+  } as unknown as Project;
+  const coverPage = (id: string) =>
+    ({
+      id,
+      label: id,
+      aspect: square.aspect,
+      isCover: true,
+    }) as DesignPage;
+  const planned = buildCoverPlan(
+    project,
+    [coverPage(COVER_BACK_ID), coverPage(COVER_FRONT_ID)],
+    DPI,
+  ).targets;
+  const plannedBack = planned.find((target) => target.id === COVER_BACK_ID)?.bleedFill;
+  const plannedFront = planned.find((target) => target.id === COVER_FRONT_ID)?.bleedFill;
+  check(
+    "cover bleed is synthesized only on each panel's physical outside edge",
+    Boolean(
+      plannedBack &&
+        plannedFront &&
+        plannedBack.left > 0 &&
+        plannedBack.right === 0 &&
+        plannedFront.left === 0 &&
+        plannedFront.right > 0,
+    ),
+    JSON.stringify({ plannedBack, plannedFront }),
   );
 
   // Lulu returns a total cover width; the panels and the spine must tile it
@@ -267,6 +373,35 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
 }
 
 {
+  const wide = spreadEntry("wide", "spread");
+  const project = {
+    config: { productSku: square.sku, bookSize: "square" },
+    screenplay: createVersionTree(doc([wide])),
+  } as unknown as Project;
+  const page = {
+    id: wide.id,
+    label: "Wide spread",
+    aspect: square.aspect * 2,
+    isCover: false,
+  } as DesignPage;
+  const halves = buildInteriorPlan(project, [page], DPI).targets;
+  const left = halves.find((target) => target.id.endsWith("#left"))?.bleedFill;
+  const right = halves.find((target) => target.id.endsWith("#right"))?.bleedFill;
+  check(
+    "spread bleed preserves real fold overlap and fills only physical outer edges",
+    Boolean(
+      left &&
+        right &&
+        left.left > 0 &&
+        left.right === 0 &&
+        right.left === 0 &&
+        right.right > 0,
+    ),
+    JSON.stringify({ left, right }),
+  );
+}
+
+{
   const plan = interiorLeafPlan(doc([spreadEntry("a", "single"), spreadEntry("b", "single")]));
   check("a single page is one leaf", plan.length === 2);
   check(
@@ -315,6 +450,27 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
     plan[1].sourcePageId === null,
   );
   check("the physical page count counts fillers", physicalPageCount(withFiller) === 3);
+
+  const project = {
+    config: { productSku: square.sku, bookSize: "square" },
+    screenplay: createVersionTree(withFiller),
+  } as unknown as Project;
+  const pages = ["a", "b"].map(
+    (id) =>
+      ({
+        id,
+        label: id,
+        aspect: square.aspect,
+        isCover: false,
+      }) as DesignPage,
+  );
+  const targets = buildInteriorPlan(project, pages, DPI).targets;
+  check(
+    "captures retain their physical positions around pagination fillers",
+    targets.find((target) => target.id === "a")?.documentIndex === 0 &&
+      targets.find((target) => target.id === "b")?.documentIndex === 2,
+    JSON.stringify(targets.map(({ id, documentIndex }) => ({ id, documentIndex }))),
+  );
 }
 
 // ---- Interior assembly -----------------------------------------------------
@@ -346,6 +502,14 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
     "interior pages are the bleed size, in PDF points",
     near(parsed.getPage(0).getWidth(), geo.widthIn * PT_PER_IN, 0.01),
     `${parsed.getPage(0).getWidth()}pt vs ${geo.widthIn * PT_PER_IN}pt`,
+  );
+
+  const withFiller = await buildInteriorPdf([pages[0], null, pages[1]]);
+  const parsedFiller = await PDFDocument.load(withFiller);
+  check(
+    "an interior filler stays between its neighbouring artwork pages",
+    parsedFiller.getPageCount() === 3,
+    `${parsedFiller.getPageCount()} pages`,
   );
 }
 
@@ -547,6 +711,15 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
 
   const restyled: BookDesign = { ...design, defaultFontSizePct: 0.09 };
   check("changing the design invalidates the render", renderFingerprint(base, restyled) !== first);
+
+  const fittedBleed: BookDesign = {
+    ...design,
+    printSettings: { bleedMode: "fit" },
+  };
+  check(
+    "changing the bleed method invalidates the render",
+    renderFingerprint(base, fittedBleed) !== first,
+  );
 
   const reformatted = {
     ...base,
