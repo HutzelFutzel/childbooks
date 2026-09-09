@@ -188,6 +188,8 @@ export function createDefaultModelConfig(): ModelConfig {
       localize: { provider: "google", speed: "fast" },
       bindingPass: { provider: "google", speed: "fast" },
       editIntent: { provider: "google", speed: "fast" },
+      extractArtStyle: { provider: "google", speed: "fast" },
+      extractArtLook: { provider: "google", speed: "fast" },
       // Release notes read a whole diff in one call and are written for humans
       // to read verbatim, so they default to the quality slot rather than fast.
       releaseNotes: { provider: "google", speed: "slow" },

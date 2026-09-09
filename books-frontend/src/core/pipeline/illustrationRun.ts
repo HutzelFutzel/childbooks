@@ -73,6 +73,7 @@ import { heightFractions } from "../book/anchorScale";
 import { cellBox } from "./anchorLayout";
 import { anchorSignature, currentAnchorImage, currentReferenceUses } from "./provenance";
 import type { PromptContext } from "../prompts/context";
+import type { LayoutsConfig } from "../config/layouts";
 
 /** Compositing operations, in base64 terms so core stays Buffer-free. */
 export interface CompositeOps {
@@ -184,6 +185,8 @@ export interface PipelineEnv {
    * behaviour changes faster than deploys, so what a model can do is data.
    */
   modelCapabilities?: CapabilityOverrides;
+  /** Admin overlay for layouts (slot treatments, allowed composition modes). */
+  layoutsConfig?: LayoutsConfig;
   /**
    * Optional step tagger for cost attribution: wraps an internal pipeline step
    * (e.g. "image", "binding", "localize") so its provider calls are metered
@@ -282,11 +285,11 @@ export function applyIllustrationRender(
 export { IntentAmbiguousError } from "./intentResolve";
 
 /**
- * The physical side a content spread sits on (drives layout-aware, text-safe
- * composition in the prompt). A double-page spread is "spread"; a single page
- * is left/right by its page number (recto = odd = right). Returns undefined for
- * covers and synthesized spreads not present in the paginated doc, so they skip
- * the outer-edge text guidance.
+ * The physical side a content spread sits on (drives layout-aware composition
+ * in the prompt). A double-page spread is "spread"; a single page is left/right
+ * by its page number (recto = odd = right). Returns undefined for covers and
+ * synthesized spreads not present in the paginated doc, so they skip interior
+ * layout guidance.
  */
 function resolvePageSide(project: Project, spread: ScreenplaySpread): PageSide | undefined {
   if (spread.kind === "spread") return "spread";
@@ -309,12 +312,17 @@ function resolvePageSide(project: Project, spread: ScreenplaySpread): PageSide |
 export function resolveLayoutPlan(
   project: Project,
   spread: ScreenplaySpread,
+  layoutsConfig?: LayoutsConfig | null,
 ): LayoutPlan | undefined {
   if (isCoverSpread(spread)) return undefined;
   const side = resolvePageSide(project, spread);
   if (!side) return undefined;
   try {
-    return planPageLayout(project, { side, textLength: spread.text?.length ?? 0 });
+    return planPageLayout(project, {
+      side,
+      textLength: spread.text?.length ?? 0,
+      layoutsConfig,
+    });
   } catch {
     return undefined;
   }
@@ -1342,7 +1350,7 @@ export async function renderIllustration(
         references.push({
           base64: data.payload.base64,
           mimeType: data.payload.mimeType,
-          label: `${a.name} (${a.description})`,
+          label: a.name,
           role: "subject",
         });
         referencedAnchors.push(a);
@@ -1536,7 +1544,7 @@ export async function renderIllustration(
     if (structured) return structured;
   }
 
-  const layoutPlan = resolveLayoutPlan(project, spread);
+  const layoutPlan = resolveLayoutPlan(project, spread, env.layoutsConfig);
 
   const prompt = buildIllustrationPrompt({
     spread,

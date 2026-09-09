@@ -21,6 +21,7 @@ import type { ResolvedModels } from "../../books-frontend/src/core/models/regist
 import type { ProviderId } from "../../books-frontend/src/core/config/options";
 import type { PromptContext } from "../../books-frontend/src/core/prompts/context";
 import type { CapabilityOverrides } from "../../books-frontend/src/core/config/modelCapabilities";
+import type { LayoutsConfig } from "../../books-frontend/src/core/config/layouts";
 import { loadLikenessPhotoForSubject } from "./likeness";
 
 function apiKeyFor(provider: ProviderId): string {
@@ -83,11 +84,13 @@ export function backendPipelineEnv(
   models: ResolvedModels,
   prompts?: PromptContext,
   modelCapabilities?: CapabilityOverrides,
+  layoutsConfig?: LayoutsConfig,
 ): PipelineEnv {
   return {
     models,
     apiKeyFor,
     modelCapabilities,
+    layoutsConfig,
     loadBlob: (id) => downloadBlobBase64(uid, id),
     loadLikenessPhotoForSubject: (projectId, subjectId) =>
       loadLikenessPhotoForSubject(uid, projectId, subjectId),

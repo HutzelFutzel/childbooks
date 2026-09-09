@@ -5,7 +5,7 @@
  * the same way everywhere.
  */
 import { z } from "zod";
-import type { StoryBrief, StoryCastMember } from "../types";
+import { SOURCE_ART_MAX, type StoryBrief, type StoryCastMember } from "../types";
 import type { AgeBandStoryCraft } from "../config/storyCraftCatalog";
 import { optionLabel, optionsLabels } from "../config/storyCraft";
 import type { StoryMode } from "../config/storyCraftCatalog";
@@ -21,13 +21,21 @@ const likenessPhotoSchema = z.object({
   consentVersion: z.string().min(1).max(40),
 });
 
+const sourceArtSchema = z.object({
+  blobId: z.string().min(1),
+  mimeType: z.string().min(1).max(80),
+  createdAt: z.number(),
+});
+
 const storyCastMemberSchema = z.object({
   id: z.string().min(1),
   name: z.string().max(80),
   role: z.string().max(200).optional(),
   age: z.number().int().min(0).max(120).optional(),
   note: z.string().max(500).optional(),
+  lookFromArt: z.string().max(500).optional(),
   likenessPhoto: likenessPhotoSchema.optional(),
+  sourceArt: z.array(sourceArtSchema).max(SOURCE_ART_MAX).optional(),
 });
 
 /**
@@ -279,9 +287,12 @@ export function briefSummary(brief: StoryBrief, craft: AgeBandStoryCraft): strin
 export function castPromptLines(brief: StoryBrief): string {
   return namedCast(brief)
     .map((c) => {
-      const bits = [c.role?.trim(), c.age != null ? `${c.age} years old` : "", c.note?.trim()].filter(
-        Boolean,
-      );
+      const bits = [
+        c.role?.trim(),
+        c.age != null ? `${c.age} years old` : "",
+        c.lookFromArt?.trim(),
+        c.note?.trim(),
+      ].filter(Boolean);
       return `- ${c.name.trim()}${bits.length > 0 ? ` (${bits.join("; ")})` : ""}`;
     })
     .join("\n");

@@ -53,7 +53,35 @@ export interface ArtStyleSelection {
   presetId: string | null;
   /** Optional free-text creative additions / overrides. */
   customDescription?: string;
+  /**
+   * How the look was chosen. `derived` means it was extracted from uploaded
+   * character artwork (not a preset and not typed by the author). Absent on
+   * older projects — treat as a preset.
+   */
+  origin?: "preset" | "derived";
+  /**
+   * When looks conflicted, the character whose artwork won. Matched by name
+   * so it survives story re-analysis id churn. Absent when every drawing
+   * already shared one look.
+   */
+  derivedFromName?: string;
+  /**
+   * Characters whose drawings established the book look. Those keep their
+   * original rendering on the first sheet; anyone attached later is redrawn
+   * in this look. Names, not ids, so re-analysis does not drop the stamp.
+   */
+  derivedFromNames?: string[];
 }
+
+/** Existing illustrated character art kept as identity (and often style) source. */
+export interface SourceArtRef {
+  blobId: string;
+  mimeType: string;
+  createdAt: number;
+}
+
+/** Cap on extra pictures per character (canonical design is the first). */
+export const SOURCE_ART_MAX = 3;
 
 /** Bump whenever the just-in-time likeness permission copy materially changes. */
 export const LIKENESS_CONSENT_VERSION = "2026-09-06";
@@ -84,6 +112,16 @@ export interface StoryCastMember {
   note?: string;
   /** Optional one-use photo for carrying this person's likeness into Cast. */
   likenessPhoto?: LikenessPhotoRef;
+  /**
+   * Existing character drawings. First image is the canonical design; extras
+   * help identity and style. Mutually exclusive with `likenessPhoto`.
+   */
+  sourceArt?: SourceArtRef[];
+  /**
+   * Appearance read from `sourceArt`. Ground truth for species, body and
+   * clothes so analysis cannot replace a drawn animal with a human child.
+   */
+  lookFromArt?: string;
 }
 
 /**
@@ -477,6 +515,13 @@ export interface Anchor {
    * photo-backed reference sheet succeeds; never retained as a version image.
    */
   likenessPhoto?: LikenessPhotoRef;
+  /**
+   * Character-only existing drawings used as identity (and style) references
+   * for the first sheet. Kept after generation so a redo can still see them.
+   */
+  sourceArt?: SourceArtRef[];
+  /** Appearance read from `sourceArt`; wins over the analysis description. */
+  lookFromArt?: string;
   /** Whether to generate an anchor image for this subject. */
   include: boolean;
   /**

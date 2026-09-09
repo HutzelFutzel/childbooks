@@ -196,12 +196,8 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
     return renderSinglePrompt(resolvePromptsConfig(prompts), "pageIllustration/restyle", {
       vars: {
         charactersList: referencedAnchors
-          .map(
-            (a) =>
-              `${a.name} (${[
-                a.ageYears !== undefined ? `${a.ageYears} years old` : "",
-                a.description,
-              ].filter(Boolean).join("; ")})`,
+          .map((a) =>
+            a.ageYears !== undefined ? `${a.name} (${a.ageYears} years old)` : a.name,
           )
           .join("; "),
         legend: restyleLegend,
@@ -234,15 +230,15 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
       })
     : null;
   const pageNote = spread.layoutNote.trim();
-  const listOf = (arr: Anchor[]) =>
+  const listOf = (arr: Anchor[], withDescription = true) =>
     arr
-      .map(
-        (a) =>
-          `${a.name} (${[
-            a.ageYears !== undefined ? `${a.ageYears} years old` : "",
-            a.description,
-          ].filter(Boolean).join("; ")})`,
-      )
+      .map((a) => {
+        const bits = [
+          a.ageYears !== undefined ? `${a.ageYears} years old` : "",
+          withDescription ? a.description : "",
+        ].filter(Boolean);
+        return bits.length > 0 ? `${a.name} (${bits.join("; ")})` : a.name;
+      })
       .join("; ");
 
   const characters = referencedAnchors.filter((a) => a.type === "character");
@@ -306,10 +302,10 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
   return renderSinglePrompt(resolvePromptsConfig(prompts), "pageIllustration/default", {
     vars: {
       illustrationBrief: spread.illustration.trim(),
-      charactersList: listOf(characters),
-      settingsList: listOf(settings),
+      charactersList: listOf(characters, false),
+      settingsList: listOf(settings, false),
       heightsList,
-      describedList: listOf(describedAnchors),
+      describedList: listOf(describedAnchors, true),
       embeddedList,
       legend,
       castNames: castNames.join(", "),
@@ -344,10 +340,13 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
       hasLayoutNote: Boolean(pageNote) && !bakeTextActive,
       layoutGeneric: !facts && !pageNote && !bakeTextActive,
       // Keep a calm band for overlay text (full-bleed art), or compose the art
-      // to fill its own frame (inset art) — never both.
+      // to fill its own frame (inset art) — never both. Bleed/trim copy is
+      // gated the same way so split art is not told to clear the outer edges.
       layoutCalmBand: Boolean(facts?.hasCalmBand) && !bakeTextActive,
       hasRegionTreatment: Boolean(facts?.treatmentInstruction) && !bakeTextActive,
       layoutInsetArt: Boolean(facts?.isInsetArt) && !bakeTextActive,
+      bleedSpread: spread.kind === "spread" && !facts?.isInsetArt,
+      bleedSingle: spread.kind !== "spread" && !facts?.isInsetArt,
       bakeText: bakeTextActive,
       isCover,
       tailMaskEdit,

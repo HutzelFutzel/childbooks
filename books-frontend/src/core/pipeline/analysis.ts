@@ -8,9 +8,10 @@ import { AGE_RANGES } from "../config/options";
 import { getBookLanguage } from "../config/bookLanguages";
 import { stripNumericAgeFromDescription } from "../book/anchorDescription";
 import { defaultCharacterAge } from "../book/characterAge";
+import { normalizeAnchorName } from "../book/anchorRefs";
 import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
-import type { Anchor, AnchorImportance, AnchorType, BookConfig } from "../types";
+import type { Anchor, AnchorImportance, AnchorType, BodyPlan, BookConfig } from "../types";
 import { withRetry } from "./retry";
 import { briefOf, castPromptLines, namedCast } from "../story/brief";
 import { resolveAgeLlmGuidance } from "../prompts/age";
@@ -65,6 +66,12 @@ function uid(): string {
   return Math.random().toString(36).slice(2, 10);
 }
 
+export interface ArtworkLookHint {
+  name: string;
+  description: string;
+  bodyPlan?: BodyPlan;
+}
+
 export interface AnalyzeStoryInput {
   story: string;
   config: BookConfig;
@@ -72,6 +79,8 @@ export interface AnalyzeStoryInput {
   model: string;
   signal?: AbortSignal;
   prompts?: PromptContext;
+  /** Appearance already read from uploaded character drawings. */
+  artworkLooks?: ArtworkLookHint[];
 }
 
 /**
@@ -120,7 +129,7 @@ function validateEmbeddings(
 export async function analyzeStory(
   input: AnalyzeStoryInput,
 ): Promise<{ summary: string; anchors: Anchor[]; embeddings: AnalyzedEmbedding[] }> {
-  const { story, config, creds, model, signal, prompts } = input;
+  const { story, config, creds, model, signal, prompts, artworkLooks } = input;
   const provider = getTextProvider(config.textModel!.provider);
   const age = AGE_RANGES.find((a) => a.id === config.ageRangeId)?.label ?? config.ageRangeId;
   const language = getBookLanguage(config.contentLocale);
@@ -128,6 +137,15 @@ export async function analyzeStory(
   // Guided and co-written stories may carry facts about real people. Handing
   // them back prevents the model from re-inferring age and appearance.
   const castHints = castPromptLines(briefOf(config));
+  const artLooks =
+    artworkLooks
+      ?.map((look) => `- ${look.name}: ${look.description}`)
+      .join("\n") ?? "";
+  const artworkNames = namedCast(briefOf(config))
+    .filter((member) => (member.sourceArt?.length ?? 0) > 0)
+    .map((member) => member.name.trim())
+    .filter(Boolean)
+    .join(", ");
 
   const { system, user } = renderTextPrompt(resolvePromptsConfig(prompts), "storyAnalysis", {
     vars: {
@@ -136,8 +154,14 @@ export async function analyzeStory(
       languageName: language.englishName,
       story: story.trim(),
       castHints,
+      artLooks,
+      artworkNames,
     },
-    flags: { hasCastHints: castHints.length > 0 },
+    flags: {
+      hasCastHints: castHints.length > 0,
+      hasArtLooks: artLooks.length > 0,
+      hasArtworkNames: artworkNames.length > 0,
+    },
   });
 
   const result = await withRetry(
@@ -200,11 +224,113 @@ export async function analyzeStory(
     } satisfies Anchor;
   });
 
+  const fromCast = namedCast(briefOf(config))
+    .filter((member) => member.lookFromArt?.trim())
+    .map((member) => ({
+      name: member.name,
+      description: member.lookFromArt!.trim(),
+    }));
+  const looks = artworkLooks?.length ? artworkLooks : fromCast;
+  const withCast = applyArtworkLooksToAnchors(
+    attachCastArtToAnchors(injectNamedCastAnchors(anchors, config), config),
+    looks,
+  );
+
   return {
     summary: result.summary,
-    anchors,
-    embeddings: validateEmbeddings(result.embeddings ?? [], anchors),
+    anchors: withCast,
+    embeddings: validateEmbeddings(result.embeddings ?? [], withCast),
   };
+}
+
+function attachCastArtToAnchors(anchors: Anchor[], config: BookConfig): Anchor[] {
+  const byName = new Map(
+    namedCast(briefOf(config))
+      .filter((member) => member.sourceArt?.length)
+      .map((member) => [normalizeAnchorName(member.name), member] as const),
+  );
+  if (byName.size === 0) return anchors;
+  return anchors.map((anchor) => {
+    if (anchor.type !== "character") return anchor;
+    const member = byName.get(normalizeAnchorName(anchor.name));
+    if (!member?.sourceArt?.length) return anchor;
+    return {
+      ...anchor,
+      sourceArt: anchor.sourceArt?.length ? anchor.sourceArt : member.sourceArt,
+      lookFromArt: anchor.lookFromArt ?? member.lookFromArt,
+    };
+  });
+}
+
+function applyArtworkLooksToAnchors(
+  anchors: Anchor[],
+  looks: ArtworkLookHint[] | undefined,
+): Anchor[] {
+  if (!looks?.length) return anchors;
+  const byName = new Map<string, ArtworkLookHint>();
+  for (const look of looks) {
+    const key = normalizeAnchorName(look.name);
+    if (key) byName.set(key, look);
+  }
+  if (byName.size === 0) return anchors;
+  return anchors.map((anchor) => {
+    if (anchor.type !== "character") return anchor;
+    const look = byName.get(normalizeAnchorName(anchor.name));
+    if (!look) return anchor;
+    return {
+      ...anchor,
+      lookFromArt: look.description,
+      ...(anchor.descriptionUserEdited
+        ? {}
+        : {
+            description: stripNumericAgeFromDescription(look.description),
+            ...(look.bodyPlan ? { bodyPlan: look.bodyPlan } : {}),
+          }),
+    };
+  });
+}
+
+/**
+ * Named people from the story cast must appear in the analysis list — otherwise
+ * the screenplay never puts them on a page. The model is asked to include them;
+ * this is the belt-and-suspenders copy if it still omits someone.
+ */
+function injectNamedCastAnchors(anchors: Anchor[], config: BookConfig): Anchor[] {
+  const people = namedCast(briefOf(config));
+  if (people.length === 0) return anchors;
+  const existing = new Set(
+    anchors
+      .filter((anchor) => anchor.type === "character")
+      .map((anchor) => normalizeAnchorName(anchor.name))
+      .filter(Boolean),
+  );
+  const extra: Anchor[] = [];
+  for (const member of people) {
+    const name = member.name.trim();
+    const key = normalizeAnchorName(name);
+    if (!key || existing.has(key)) continue;
+    const look = member.lookFromArt?.trim();
+    const note = [member.role?.trim(), member.note?.trim()].filter(Boolean).join(". ");
+    const description = look || note || `${name}, as named by the author.`;
+    const ageYears =
+      typeof member.age === "number" ? member.age : defaultCharacterAge({ name, description }, config.ageRangeId);
+    extra.push({
+      id: uid(),
+      name,
+      source: "user",
+      type: "character",
+      description,
+      ...(look ? { lookFromArt: look } : {}),
+      ...(member.sourceArt?.length ? { sourceArt: member.sourceArt } : {}),
+      importance: "high",
+      mode: "creative",
+      include: true,
+      ageYears,
+      ageSource: typeof member.age === "number" ? "author" : "suggested",
+    });
+    existing.add(key);
+  }
+  return extra.length > 0 ? [...anchors, ...extra] : anchors;
 }
 
 export interface GenerateAnchorDescriptionInput {

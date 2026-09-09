@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, RefreshCw, Sparkles, Trash2 } from "lucide-react";
-import type { Anchor } from "../../core/types";
+import type { Anchor, LikenessPhotoRef, SourceArtRef } from "../../core/types";
 import { layoutOf, sheetAspect, sheetSpecFor } from "../../core/pipeline/anchorLayout";
 import { allVersions, getCursor, selectVersion } from "../../core/versioning";
 import { changedAnchorsForAnchor, staleAnchorIds } from "../../state/ai";
@@ -10,6 +10,7 @@ import { Button } from "../components/Button";
 import { Field, Input, Textarea } from "../components/Input";
 import { ImagePreview } from "../components/ImagePreview";
 import { LikenessPhotoField } from "../components/LikenessPhotoField";
+import { SourceArtField } from "../components/SourceArtField";
 import { Modal } from "../components/Modal";
 import { Select } from "../components/Select";
 import { VersionHistoryList } from "../components/VersionHistoryList";
@@ -18,6 +19,7 @@ import { useBlobUrlState } from "../hooks/useBlobUrl";
 import { formatList } from "../lib/formatList";
 import { notify } from "../lib/notify";
 import { generateAnchorViaJob } from "../studio/studioGen";
+import { refreshArtworkLooks } from "../../platform/artLook";
 import { ANCHOR_TYPE_ICON } from "./AnchorCard";
 
 /**
@@ -54,11 +56,13 @@ export function AnchorEditor({
   const [detailsOpen, setDetailsOpen] = useState(!hasImage);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [confirmVersionId, setConfirmVersionId] = useState<string | null>(null);
+  const [pictureKind, setPictureKind] = useState<"photo" | "artwork" | null>(null);
 
   useEffect(() => setName(anchor.name), [anchor.id, anchor.name]);
   useEffect(() => setAge(String(anchor.ageYears ?? 6)), [anchor.id, anchor.ageYears]);
   useEffect(() => setDescription(anchor.description), [anchor.id, anchor.description]);
   useEffect(() => setUserGuidance(anchor.userGuidance ?? ""), [anchor.id, anchor.userGuidance]);
+  useEffect(() => setPictureKind(null), [anchor.id]);
 
   const cursorId = anchor.versions?.cursorId;
   const cursorNode = cursorId ? anchor.versions?.nodes[cursorId] : undefined;
@@ -161,15 +165,31 @@ export function AnchorEditor({
         </div>
 
         {anchor.type === "character" && !hasImage && project && (
-          <LikenessPhotoField
-            photo={anchor.likenessPhoto}
+          <CharacterLookFields
+            anchorName={anchor.name}
             projectId={project.id}
             subjectId={anchor.id}
-            subjectName={anchor.name}
-            disabled={generating}
-            onChange={(likenessPhoto) =>
-              updateAnchor(anchor.id, { likenessPhoto })
+            generating={generating}
+            likenessPhoto={anchor.likenessPhoto}
+            sourceArt={anchor.sourceArt}
+            styleLocked={project.config.styleReady === true}
+            pictureKind={pictureKind}
+            onPictureKind={setPictureKind}
+            onLikeness={(likenessPhoto) =>
+              updateAnchor(anchor.id, {
+                likenessPhoto,
+                ...(likenessPhoto ? { sourceArt: undefined } : {}),
+              })
             }
+            onSourceArt={(sourceArt) => {
+              if (sourceArt.length === 0) setPictureKind("artwork");
+              void updateAnchor(anchor.id, {
+                sourceArt: sourceArt.length > 0 ? sourceArt : undefined,
+                likenessPhoto: undefined,
+              }).then(() => {
+                if (sourceArt.length > 0) void refreshArtworkLooks().catch(() => {});
+              });
+            }}
           />
         )}
 
@@ -450,5 +470,110 @@ export function AnchorEditor({
         </p>
       </Modal>
     </>
+  );
+}
+
+function CharacterLookFields({
+  anchorName,
+  projectId,
+  subjectId,
+  generating,
+  likenessPhoto,
+  sourceArt,
+  styleLocked,
+  pictureKind,
+  onPictureKind,
+  onLikeness,
+  onSourceArt,
+}: {
+  anchorName: string;
+  projectId: string;
+  subjectId: string;
+  generating: boolean;
+  likenessPhoto?: LikenessPhotoRef;
+  sourceArt?: SourceArtRef[];
+  styleLocked: boolean;
+  pictureKind: "photo" | "artwork" | null;
+  onPictureKind: (kind: "photo" | "artwork") => void;
+  onLikeness: (photo: LikenessPhotoRef | undefined) => void;
+  onSourceArt: (images: SourceArtRef[]) => void;
+}) {
+  const kind: "photo" | "artwork" | null = likenessPhoto
+    ? "photo"
+    : sourceArt?.length
+      ? "artwork"
+      : pictureKind;
+  const artworkHint = styleLocked
+    ? "Keep this character’s design and match it to the book’s style."
+    : "Keep this character’s design and use its art style for the book.";
+
+  if (kind === null) {
+    return (
+      <div className="grid grid-cols-1 gap-2">
+        <button
+          type="button"
+          onClick={() => onPictureKind("photo")}
+          className="rounded-xl bg-ink-50/80 px-3 py-2.5 text-left ring-1 ring-ink-100 transition hover:bg-white hover:ring-brand-200"
+        >
+          <span className="block text-xs font-semibold text-ink-800">Use a photo</span>
+          <span className="mt-0.5 block text-[11px] leading-snug text-ink-500">
+            Turn their likeness into an illustrated character.
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => onPictureKind("artwork")}
+          className="rounded-xl bg-ink-50/80 px-3 py-2.5 text-left ring-1 ring-ink-100 transition hover:bg-white hover:ring-brand-200"
+        >
+          <span className="block text-xs font-semibold text-ink-800">Use existing artwork</span>
+          <span className="mt-0.5 block text-[11px] leading-snug text-ink-500">{artworkHint}</span>
+        </button>
+      </div>
+    );
+  }
+
+  if (kind === "artwork") {
+    return (
+      <div className="space-y-1.5">
+        <SourceArtField
+          images={sourceArt ?? []}
+          subjectName={anchorName}
+          hint={artworkHint}
+          disabled={generating}
+          onChange={onSourceArt}
+        />
+        {!sourceArt?.length && (
+          <button
+            type="button"
+            onClick={() => onPictureKind("photo")}
+            className="text-[11px] font-medium text-ink-500 transition hover:text-brand-700"
+          >
+            Use a photo instead
+          </button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5">
+      <LikenessPhotoField
+        photo={likenessPhoto}
+        projectId={projectId}
+        subjectId={subjectId}
+        subjectName={anchorName}
+        disabled={generating}
+        onChange={onLikeness}
+      />
+      {!likenessPhoto && (
+        <button
+          type="button"
+          onClick={() => onPictureKind("artwork")}
+          className="text-[11px] font-medium text-ink-500 transition hover:text-brand-700"
+        >
+          Use artwork instead
+        </button>
+      )}
+    </div>
   );
 }

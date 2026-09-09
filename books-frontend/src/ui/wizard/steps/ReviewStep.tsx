@@ -11,7 +11,7 @@ import { ageBandHasReadingModes, readingModeLabel } from "../../../core/config/a
 import { bookProductForConfig } from "../../../core/book";
 import { resolveLayoutById } from "../../../core/book/layoutCatalog";
 import { selectModels } from "../../../core/models/registry";
-import { resolveArtStyleLabel } from "../../../core/prompts/style";
+import { resolveArtStyleDisplayName } from "../../../core/prompts/style";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useSettingsStore } from "../../../state/settingsStore";
 import type { StepProps } from "./types";
@@ -39,10 +39,11 @@ export function ReviewStep({ config }: StepProps) {
     [discovery, providerAvailable],
   );
 
-  const style = config.artStyle.presetId
-    ? resolveArtStyleLabel(config.artStyle.presetId, artStyles)
-    : "Custom";
-  const styleExtra = config.artStyle.customDescription?.trim();
+  const style = resolveArtStyleDisplayName(config.artStyle, artStyles);
+  const styleExtra =
+    config.artStyle.origin === "derived"
+      ? undefined
+      : config.artStyle.customDescription?.trim();
 
   const product = bookProductForConfig(config);
   const r = (n: number) => Math.round(n * 10) / 10;

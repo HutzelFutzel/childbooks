@@ -212,7 +212,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     system: [
       blk(
         "role",
-        "You are a children's-book art director. Analyze the story and identify every subject that must look IDENTICAL each time it appears so the illustrations stay consistent. Include recurring CHARACTERS (people, animals, creatures), important PLACES/settings, and significant recurring OBJECTS. Skip one-off background details that never need to match. For each, write a concise but vivid, self-contained visual description (appearance, colors, distinguishing features) grounded in the story; infer sensible details where the story is silent. Describe only the subject itself — do NOT mention the art style, medium, rendering technique, family tree, or relationship graph. Rank importance: high = central/appears often, medium = recurring, low = minor but still needs consistency. For CHARACTERS ONLY, also set three fields. \"ageYears\" is the character's age in years when stated or strongly implied; omit it rather than guessing when the story gives no reliable basis. \"bodyPlan\" is the character's gross body layout: \"bipedal\" for anyone who stands upright on two legs (people, robots, a bear in a waistcoat, a standing toy), \"quadruped\" for four-legged animals that walk on all fours, \"avian\" for birds, \"aquatic\" for fish and other swimming or serpentine bodies, \"amorphous\" for everything without a clear limbed body (a cloud, a teapot with a face, a blob). \"heightCm\" is a private approximate real-world scale hint based on age and species (a 5-year-old child is about 110, an adult about 170, a house cat about 25 at the shoulder); omit it rather than guessing. Leave all three fields out for places and objects. Separately list only EMBEDDINGS needed for rendering: a named place or object that physically contains another extracted subject which must appear inside its reference sheet (for example a specific lamp on a specific desk). Return each as {container, subject}, never nest more than one level, and use an empty list when none are essential. Also write a 1-2 sentence summary of the story's visual world.",
+        "You are a children's-book art director. Analyze the story and identify every subject that must look IDENTICAL each time it appears so the illustrations stay consistent. Include recurring CHARACTERS (people, animals, creatures), important PLACES/settings, and significant recurring OBJECTS. Skip one-off background details that never need to match. For each, write a concise but vivid, self-contained visual description (appearance, colors, distinguishing features) grounded in the story; infer sensible details where the story is silent. Describe only the subject itself — do NOT mention the art style, medium, rendering technique, family tree, or relationship graph. Rank importance: high = central/appears often, medium = recurring, low = minor but still needs consistency. For CHARACTERS ONLY, also set three fields. \"ageYears\" is the character's age in years when stated or strongly implied; omit it rather than guessing when the story gives no reliable basis. \"bodyPlan\" is the character's gross body layout: \"bipedal\" for anyone who stands upright on two legs (people, robots, a bear in a waistcoat, a standing toy), \"quadruped\" for four-legged animals that walk on all fours, \"avian\" for birds, \"aquatic\" for fish and other swimming or serpentine bodies, \"amorphous\" for everything without a clear limbed body (a cloud, a teapot with a face, a blob). \"heightCm\" is a private approximate real-world scale hint based on age and species (a 5-year-old child is about 110, an adult about 170, a house cat about 25 at the shoulder); omit it rather than guessing. Leave all three fields out for places and objects. Separately list only EMBEDDINGS needed for rendering: a named place or object that physically contains another extracted subject which must appear inside its reference sheet (for example a specific lamp on a specific desk). Return each as {container, subject}, never nest more than one level, and use an empty list when none are essential. Also write a 1-2 sentence summary of the story's visual world. A subject's NAME is a label only — do not infer species, clothing or an object's shape from the name.",
       ),
       blk(
         "ageSeparation",
@@ -220,7 +220,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "distinctWardrobe",
-        "For every human or clothed anthropomorphic character, include a concrete signature outfit in the visual description. When the story is silent, invent an age- and context-appropriate outfit, and make its garment combination and dominant colors visibly distinct from every other character's outfit.",
+        "For every human or clothed anthropomorphic character, include a concrete signature outfit in the visual description. When the story is silent, invent an age- and context-appropriate outfit, and make its garment combination and dominant colors visibly distinct from every other character's outfit. Skip this for characters whose appearance comes from existing artwork — do not invent a species, body, or outfit the drawings do not show.",
       ),
       blk(
         "language",
@@ -232,8 +232,18 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk("ageGuidance", "{{ageGuidance}}"),
       blk(
         "castHints",
-        "\nThe author supplied facts about these characters. Treat their names, ages, roles and visible appearance details as ground truth. Prefer them over anything inferred from the prose, and use stated ages to get proportions right:\n{{castHints}}",
+        "\nThe author supplied facts about these characters. Treat their names, ages, roles and visible appearance details as ground truth. Prefer them over anything inferred from the prose, and use stated ages to get proportions right. Every named person in that list MUST appear as a character anchor, even if the prose barely mentions them:\n{{castHints}}",
         "hasCastHints",
+      ),
+      blk(
+        "artLooks",
+        "\nThese characters have existing artwork. Treat the following as ground truth for species, body and clothes — do not replace a drawn animal with a human child, and do not invent outfits or body types the drawings do not show:\n{{artLooks}}",
+        "hasArtLooks",
+      ),
+      blk(
+        "artworkNames",
+        "\nThese characters have author-supplied drawings that will be attached later: {{artworkNames}}. Do not invent a different species, body type, or costume for them. If no extracted look is listed above, describe each only as \"as in the author's character artwork\".",
+        "hasArtworkNames",
       ),
       blk("story", "\nSTORY:\n{{story}}"),
     ],
@@ -273,7 +283,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     system: [
       blk(
         "role",
-        "You are an award-winning children's picture-book author and art director. Produce a complete page-by-page screenplay for the book. For each page/spread provide: the narrative text, a vivid illustration brief, a layout note, and which named anchors appear. Illustration briefs must be concrete and reference the named anchors so the art stays consistent. {{spreadGuidance}} {{textGuidance}} {{ageGuidance}} {{placementGuidance}} Also design the book's covers: a frontCover (catchy title + short subtitle + illustration brief), a backCover (a short blurb as 'title', optional subtitle, illustration brief), and a short spineText (usually the title). Only reference anchors from the provided list, by their exact names. Use an empty array if none appear. Revision requests may mention anchors by name (e.g. 'put Amanda on page 3'); use the ANCHORS list for who/what each name is, and update each spread's anchors accordingly. Pace the story well; keep text age-appropriate in length and complexity per page. PRINTABILITY: page 1 is a single right-hand page. A double-page spread occupies a facing pair, so the number of single pages BEFORE any spread must be even (insert a single page if needed). Never let a spread start on a right-hand page. Write a short overall 'notes' field with art-direction guidance.",
+        "You are an award-winning children's picture-book author and art director. Produce a complete page-by-page screenplay for the book. For each page/spread provide: the narrative text, a vivid illustration brief, a layout note, and which named anchors appear. Illustration briefs must be concrete and reference the named anchors so the art stays consistent. Match each anchor's visual description — species, body, clothing, and the actual shape of objects. An anchor's NAME is a label only: do not turn an animal into a human child, or a round balloon into a star, because of its name. {{spreadGuidance}} {{textGuidance}} {{ageGuidance}} {{placementGuidance}} Also design the book's covers: a frontCover (catchy title + short subtitle + illustration brief), a backCover (a short blurb as 'title', optional subtitle, illustration brief), and a short spineText (usually the title). Only reference anchors from the provided list, by their exact names. Use an empty array if none appear. Revision requests may mention anchors by name (e.g. 'put Amanda on page 3'); use the ANCHORS list for who/what each name is, and update each spread's anchors accordingly. Pace the story well; keep text age-appropriate in length and complexity per page. PRINTABILITY: page 1 is a single right-hand page. A double-page spread occupies a facing pair, so the number of single pages BEFORE any spread must be even (insert a single page if needed). Never let a spread start on a right-hand page. Write a short overall 'notes' field with art-direction guidance.",
       ),
       blk(
         "language",
@@ -420,6 +430,55 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     ],
   },
 
+  // core/pipeline/styleExtract.ts → extractArtStyleFromImages
+  extractArtStyle: {
+    system: [
+      blk(
+        "role",
+        "You extract the RENDERING STYLE of children's-book illustrations so another image model can continue in the same look. Look only at how the pictures are drawn — not at who or what is in them.",
+      ),
+      blk(
+        "styleOnly",
+        "Write a 1–3 sentence art-style prompt fragment covering: medium and tools, line quality, shading and lighting technique, palette quality (muted, high-key pastels, flat fills, limited vs rich — never a specific garment or hair colour), texture, finish, and picture-book illustration genre. Do NOT mention any character, creature, person, face, hair, clothing, body, pose, expression, named object, setting, scene, story, composition, camera angle, or layout. Do NOT name hues that belong to a character's design.",
+      ),
+      blk(
+        "output",
+        'Reply with JSON only. "stylePrompt" is the shared look when every drawing uses the same rendering. "compatible" is true when they share one look, false when the media or techniques clearly disagree. When compatible is false, still fill "characters" with one {id, stylePrompt} per character id listed below, each describing ONLY that drawing\'s rendering. Never put character names in any prompt.',
+      ),
+    ],
+    user: [
+      blk("legend", "{{legend}}"),
+      blk(
+        "several",
+        "There are {{characterCount}} characters. Decide whether their drawings share one rendering style.",
+        "severalCharacters",
+      ),
+    ],
+  },
+
+  // core/pipeline/lookExtract.ts → extractArtLookFromImages
+  extractArtLook: {
+    system: [
+      blk(
+        "role",
+        "You look at existing children's-book character artwork and write a visual description of WHO is drawn, so later illustration steps do not invent a different species or outfit.",
+      ),
+      blk(
+        "lookOnly",
+        "For each character, describe only what the pictures show: kind of being (hedgehog, mole, human child, robot, …), body, face, colours, and any clothing or accessories that are actually visible. If the drawing is a portrait or bust, do not invent a full-body outfit, human anatomy, or a species the picture does not show. Do not mention art style, medium, pose, background, or the story.",
+      ),
+      blk(
+        "names",
+        'A name is a label only. Do not infer that "Hugo" is a human boy or that an object named "Star Balloon" is star-shaped. bodyPlan is "bipedal" when they stand on two legs (including dressed animals), "quadruped" when they walk on four, "avian", "aquatic", or "amorphous" otherwise.',
+      ),
+      blk(
+        "output",
+        'Reply with JSON only. "characters" has one {id, description, bodyPlan} per character id listed below. description is 1–2 sentences of visible appearance in English, with no numeric age.',
+      ),
+    ],
+    user: [blk("legend", "{{legend}}")],
+  },
+
   // core/pipeline/anchors.ts → buildAnchorPrompt (from-scratch / iterate)
   "anchorImage/default": {
     single: [
@@ -533,6 +592,59 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     ],
   },
 
+  // core/pipeline/anchors.ts → buildAnchorPrompt (existing character drawing)
+  "anchorImage/fromSourceArt": {
+    single: [
+      blk(
+        "angleCharacter",
+        'A character reference sheet of "{{anchorName}}", laid out as a strict grid of exactly {{cellCount}} equal cells ({{gridShape}}), read left to right then top to bottom, evenly spaced with generous white gutters between them. Draw exactly one view per cell — no more, no fewer — in exactly this order: {{viewList}}. It is the SAME character in every cell: identical face, hair, body, proportions, colors and outfit, with only the camera angle or framing changing. Draw every whole-body cell at the same scale, as if photographed from the same distance, with the feet on a common baseline and the top of the head at the same height.',
+      ),
+      blk(
+        "gridRepair",
+        "IMPORTANT CORRECTION: a previous attempt at this exact sheet drew {{actualPanelCount}} panels instead of the required {{cellCount}}. This is critical — this time draw EXACTLY {{cellCount}} panels, no more and no fewer, one per listed view, arranged in the grid described above.",
+        "hasGridRepair",
+      ),
+      blk(
+        "source",
+        "The attached reference image(s) are EXISTING ILLUSTRATIONS of {{anchorName}}. They are the source of truth for this character's identity, design, outfit, colours and proportions. Extract only this character — ignore other people, background, scenery, furniture, text, watermarks and page edges. Invent unseen angles consistently with the same design. The first image is the canonical outfit, colours and proportions.",
+      ),
+      blk(
+        "keepRendering",
+        "Keep this character's design AND rendering exactly as drawn: the same medium, linework, shading, palette quality, texture and finish. Do not restyle them.",
+        "preserveRendering",
+      ),
+      blk(
+        "adaptRendering",
+        "Keep this character's identity, face, hair, body, outfit and item colours, but redraw them in this art style: {{artStyle}}. Do not copy the source picture's medium, lighting or background.",
+        "!preserveRendering",
+      ),
+      blk(
+        "imageWins",
+        "The drawings are the source of truth. A name is only a label — do not turn this character into a human child because of their name. Invent unseen angles from the same being in the pictures; do not invent a different species, body or outfit.",
+      ),
+      blk(
+        "description",
+        "Use this written description only for details the pictures do not show: {{description}}",
+        "hasDescription",
+      ),
+      blk(
+        "characterAge",
+        "{{anchorName}} is {{age}}. Keep face, body proportions and apparent life stage believable for this age and species.",
+        "hasAge",
+      ),
+      blk("userGuidance", "{{userGuidance}}", "hasUserGuidance"),
+      blk(
+        "legend",
+        "The reference images are provided in this exact order: {{legend}}. Use each ONLY for its stated purpose.",
+        "hasLegend",
+      ),
+      blk(
+        "background",
+        "Plain pure-white seamless background in every cell, even soft studio lighting, and no cast shadow or ground shadow beneath the subject. Nothing but the subject on white: no text, labels, captions, names, numbers, color swatches, measurement lines, arrows, callouts, grid lines, frames, borders or watermark anywhere in the image.",
+      ),
+    ],
+  },
+
   // core/pipeline/illustration.ts → buildIllustrationPrompt (art-style transfer)
   "pageIllustration/restyle": {
     single: [
@@ -590,23 +702,23 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "hasStyleRef",
       ),
       blk(
+        "bleedTrimSpread",
+        "Compose it as a full-bleed image that fills the whole canvas to all four edges, with no borders, frames, or white margins. Keep faces and important details a little inside the trim so print cutting cannot crop them, and clear of the vertical center, where the two pages meet at the binding. That print margin is not a place to leave empty for story text.",
         "bleedSpread",
-        "Compose it as a full-bleed image that fills the whole canvas to all four edges, with no borders, frames, or white margins. Keep faces and key details clear of the outer edges (which get trimmed) and clear of the vertical center, where the two pages meet at the binding.",
-        "isSpread",
       ),
       blk(
+        "bleedTrimSingle",
+        "Compose it as a full-bleed image that fills the whole canvas to all four edges, with no borders, frames, or white margins. Keep faces and important details a little inside the trim so print cutting cannot crop them. That print margin is not a place to leave empty for story text.",
         "bleedSingle",
-        "Compose it as a full-bleed image that fills the whole canvas to all four edges, with no borders, frames, or white margins. Keep faces and key details within the central safe area, clear of the outer edges, which get trimmed.",
-        "!isSpread",
       ),
       blk(
         "characters",
-        "Keep these characters looking exactly like their provided reference images — {{charactersList}}. Match each one's face, hair, colors, outfit and overall design to its own reference image; only their pose, expression and camera angle may change to fit the scene.",
+        "Keep these characters looking exactly like their provided reference images — {{charactersList}}. Match each one's species, body type, face, hair, colors, outfit and overall design to its own reference image; only their pose, expression and camera angle may change to fit the scene. If this page's description mentions clothes, species or body type that disagree with a reference, follow the image.",
         "hasCharacters",
       ),
       blk(
         "settings",
-        "These places/objects must match their reference images EXACTLY — {{settingsList}}. Keep the same architecture, layout, furniture, props, materials and colors; only the camera angle or viewpoint may change. Do not redesign, rearrange, add or remove their elements unless this page's description explicitly says the setting changed.",
+        "These places/objects must match their reference images EXACTLY — {{settingsList}}. Keep the same architecture, layout, furniture, props, materials, colors and SHAPE; only the camera angle or viewpoint may change. Do not redesign, rearrange, add or remove their elements unless this page's description explicitly says the setting changed. A name is a label only — do not draw a star-shaped balloon because an object is named Star Balloon.",
         "hasSettings",
       ),
       blk(
@@ -623,6 +735,11 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk(
         "legend",
         "The reference images are provided in this exact order: {{legend}}. Use each reference image ONLY for its matching item above, and update every one of the named subjects to match its own reference.",
+        "hasReferenced",
+      ),
+      blk(
+        "namesAreLabels",
+        "A subject's NAME is only a label. Draw the attached reference — species, body, face, clothes, and the actual shape of objects. Do not draw a human child because someone is named Hugo, and do not draw a star-shaped balloon because an object is named Star Balloon.",
         "hasReferenced",
       ),
       blk(
@@ -673,18 +790,18 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "layoutCalmBand",
       ),
       blk(
-        "layoutInsetArt",
-        "This illustration is placed BESIDE the text rather than underneath it, so no space needs reserving: compose a {{artAspect}} image that fills its own frame edge to edge, with the main subject well inside the frame.",
+        "layoutInsetFill",
+        "This illustration is placed BESIDE the text rather than underneath it, so no space needs reserving for words: compose a {{artAspect}} image that fills its own frame edge to edge, with the main subject well inside the frame. Do not leave a calm empty band along one side.",
         "layoutInsetArt",
       ),
       blk(
-        "layoutNote",
-        "Also follow this page's own composition note: {{layoutNote}}.",
+        "layoutStagingNote",
+        "Also follow this page's own camera and staging note: {{layoutNote}}. Ignore any mention of where to leave space for story text — text placement comes only from the layout composition instructions.",
         "hasLayoutNote",
       ),
       blk(
-        "layoutGeneric",
-        "Leave some clean negative space where a text block can be placed.",
+        "layoutNoInventedBand",
+        "Do not invent a reserved empty band for story text.",
         "layoutGeneric",
       ),
       blk("style", "Art style: {{artStyle}}."),
@@ -1113,8 +1230,18 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
             "The real cast from a co-written story, with ages and relationships.",
             "- Amanda (the hero; 6 years old)\n- Arthur (her twin brother; 6 years old)",
           ),
+          V(
+            "artLooks",
+            "Appearance already read from uploaded character drawings.",
+            "- Hugo: a small hedgehog with a cream muzzle and dark quills.",
+          ),
+          V(
+            "artworkNames",
+            "Names of characters who have uploaded drawings.",
+            "Hugo, Momo",
+          ),
         ],
-        sampleFlags: { hasCastHints: true },
+        sampleFlags: { hasCastHints: true, hasArtLooks: false, hasArtworkNames: false },
       },
     ],
   },
@@ -1284,6 +1411,44 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
     ],
   },
   {
+    actionId: "extractArtStyle",
+    label: "Art-style extraction (vision)",
+    description:
+      "Reads uploaded character artwork and writes a style-only prompt for the rest of the book.",
+    kind: "text",
+    templates: [
+      {
+        key: "extractArtStyle",
+        label: "Extract style",
+        description: "Style-only prompt from one or more character drawings.",
+        variables: [
+          V("legend", "Ordered caption of each attached drawing.", 'Image (1) is existing artwork of "Mila" (id "c1").'),
+          V("characterCount", "How many characters have drawings.", "2"),
+        ],
+        sampleFlags: { severalCharacters: true },
+      },
+    ],
+  },
+  {
+    actionId: "extractArtLook",
+    label: "Character-look extraction",
+    description:
+      "Reads uploaded character artwork and writes who is in the drawing so later steps do not invent a different character.",
+    kind: "text",
+    templates: [
+      {
+        key: "extractArtLook",
+        label: "Extract look",
+        description: "Species, body and visible clothes from one or more character drawings.",
+        variables: [
+          V("legend", "Ordered caption of each attached drawing.", 'Image (1) is existing artwork of "Hugo" (id "c1").'),
+          V("characterCount", "How many characters have drawings.", "2"),
+        ],
+        sampleFlags: {},
+      },
+    ],
+  },
+  {
     actionId: "anchorImage",
     label: "Anchor reference images",
     description: "Reference sheets for characters/places/objects.",
@@ -1351,6 +1516,36 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("artStyle", "Resolved art-style overlay (the NEW style).", STYLE_SAMPLE),
         ],
         sampleFlags: { hasStyleRef: true },
+      },
+      {
+        key: "anchorImage/fromSourceArt",
+        label: "From existing artwork",
+        description:
+          "Turn uploaded character drawings into a multi-angle sheet, keeping the design and optionally the rendering.",
+        variables: [
+          V("anchorName", "Anchor name.", "Mila"),
+          V("cellCount", "Number of cells in the sheet grid.", "6"),
+          V("gridShape", "Grid shape of the sheet.", "3 columns by 2 rows"),
+          V(
+            "viewList",
+            "Ordered view per cell.",
+            "(1) the full body from the front, standing straight, arms relaxed at the sides",
+          ),
+          V("description", "The anchor's visual description.", "a curious girl with red boots"),
+          V("age", "Character age.", "6 years old"),
+          V("userGuidance", "Optional extra user guidance.", "always wearing a green scarf"),
+          V("legend", "Ordered reference-image legend.", "(1) existing artwork of Mila"),
+          V("artStyle", "Resolved art-style overlay when adapting into the book look.", STYLE_SAMPLE),
+          V("actualPanelCount", "Panels actually drawn last attempt (repair retry only).", "8"),
+        ],
+        sampleFlags: {
+          hasGridRepair: false,
+          preserveRendering: true,
+          hasDescription: true,
+          hasAge: true,
+          hasUserGuidance: false,
+          hasLegend: true,
+        },
       },
     ],
   },
@@ -1421,6 +1616,8 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           layoutCalmBand: true,
           hasRegionTreatment: true,
           layoutInsetArt: false,
+          bleedSpread: false,
+          bleedSingle: true,
           bakeText: false,
           isCover: false,
           tailMaskEdit: false,

@@ -22,6 +22,7 @@ import {
   containedAnchorsFor,
 } from "../book/anchorGraph";
 import { artStyleKey } from "../prompts/style";
+import { sourceArtPreservesRendering } from "../book/sourceArt";
 import { anchorSignature, currentAnchorImage } from "./provenance";
 import {
   asRefPayload,
@@ -228,6 +229,32 @@ export async function renderAnchor(
     }
   }
 
+  // Existing drawings seed from-scratch sheets, including Redesign (which
+  // discards the previous sheet). Later edits and restyles use the generated
+  // sheet, not the original drawing.
+  const fromScratch = !isEdit && !restyle && !(isIteration && options.useReference);
+  const sourceArtRefs: ReferenceImage[] = [];
+  if (anchor.type === "character" && fromScratch && (anchor.sourceArt?.length ?? 0) > 0) {
+    for (const image of anchor.sourceArt ?? []) {
+      const raw = await env.loadBlob(image.blobId);
+      if (!raw) continue;
+      const data = await asRefPayload(env, raw);
+      sourceArtRefs.push({
+        base64: data.base64,
+        mimeType: data.mimeType,
+        role: "sourceArt",
+        label: anchor.name,
+      });
+    }
+    if (sourceArtRefs.length === 0) {
+      throw new Error("The character artwork could not be loaded.");
+    }
+  }
+  const fromSourceArt = sourceArtRefs.length > 0;
+  const preserveRendering = fromSourceArt
+    ? sourceArtPreservesRendering(project.config.artStyle, anchor.name)
+    : false;
+
   // gpt-image-2's images/edits endpoint composes a NEW image from every
   // reference it's given (no mask = no single "canvas" image), so we can pass
   // the anchor's own likeness together with its contained references — even on
@@ -247,11 +274,13 @@ export async function renderAnchor(
     references = [
       ...(subjectRef ? [subjectRef] : []),
       ...(likenessRef ? [likenessRef] : []),
+      ...sourceArtRefs,
       ...containedRefs,
     ];
   } else {
     references = [
       ...(likenessRef ? [likenessRef] : []),
+      ...sourceArtRefs,
       ...containedRefs,
       ...(subjectRef ? [subjectRef] : []),
     ];
@@ -270,6 +299,11 @@ export async function renderAnchor(
     if (r.role === "likeness") {
       return `a one-use likeness photo of ${anchor.name} (preserve recognizable facial identity and key physical traits; redraw fully in the requested art style; ignore its background, pose, lighting and incidental clothing)`;
     }
+    if (r.role === "sourceArt") {
+      return preserveRendering
+        ? `existing artwork of ${anchor.name} (keep this character exactly as drawn — identity, design, outfit, colours and rendering; extract from any background; do not restyle)`
+        : `existing artwork of ${anchor.name} (keep identity, design, outfit and colours; extract from any background; redraw in the book's art style)`;
+    }
     if (r.label === anchor.name) return `the current reference sheet of ${anchor.name}`;
     return `${r.label ?? "a contained subject"} (must match this reference exactly)`;
   });
@@ -286,6 +320,8 @@ export async function renderAnchor(
     restyle,
     baseLayout,
     legend: references.length > 0 ? legend : undefined,
+    fromSourceArt,
+    preserveRendering,
     prompts: env.prompts,
   });
 
@@ -347,6 +383,8 @@ export async function renderAnchor(
           restyle,
           legend: references.length > 0 ? legend : undefined,
           actualPanelCount: actualCount,
+          fromSourceArt,
+          preserveRendering,
           prompts: env.prompts,
         });
         // Labelled apart from the first render: this one exists because the

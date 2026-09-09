@@ -150,9 +150,11 @@ export const googleTextProvider: TextProvider = {
     let finalContents: { role: string; parts: GeminiPart[] }[] = contents;
     if (req.images?.length) {
       finalContents = contents.map((c) => ({ role: c.role, parts: [...c.parts] as GeminiPart[] }));
-      const imageParts: GeminiPart[] = req.images.map((im) => ({
-        inlineData: { mimeType: im.mimeType, data: im.base64 },
-      }));
+      const imageParts: GeminiPart[] = [];
+      for (const im of req.images) {
+        if (im.label?.trim()) imageParts.push({ text: im.label.trim() });
+        imageParts.push({ inlineData: { mimeType: im.mimeType, data: im.base64 } });
+      }
       let idx = -1;
       for (let i = finalContents.length - 1; i >= 0; i--) {
         if (finalContents[i].role === "user") {
@@ -250,6 +252,8 @@ export const googleImageProvider: ImageProvider = {
         label = `Context reference — this is ${ref.label ?? "a related subject"}, mentioned in the instructions. Match it where the instruction relates this subject to it (e.g. shared traits, or an item that appears in the scene):`;
       } else if (ref.role === "likeness") {
         label = `ONE-USE LIKENESS photo for ${ref.label ?? "the character"} — preserve the recognizable face, hair and key physical traits while fully redrawing them in the requested illustration style. Do NOT copy the photographic rendering, background, pose, lighting or incidental clothing:`;
+      } else if (ref.role === "sourceArt") {
+        label = `EXISTING ILLUSTRATION of ${ref.label ?? "the character"} — extract only this character from any background. Keep identity, design, outfit and colours. Follow the prompt for whether to keep this drawing's rendering or redraw it in the book's art style:`;
       } else {
         label = `Appearance reference for ${ref.label ?? "a subject"} — match this exactly (face, colors, design):`;
       }

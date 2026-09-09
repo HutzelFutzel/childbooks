@@ -30,6 +30,7 @@ import {
 import { withSharedTextStyle, wordParagraphs } from "../../core/design";
 import type { BookLanguagesConfig } from "../../core/config/bookLanguages";
 import { getBookLanguage } from "../../core/config/bookLanguages";
+import type { LayoutsConfig } from "../../core/config/layouts";
 import {
   defaultBodyFontSeedPt,
   type TypographyConfig,
@@ -53,7 +54,7 @@ export interface DesignPage {
   isCover: boolean;
   /** Cover-only: the title/subtitle are baked into the art, so no overlay boxes. */
   bakeText?: boolean;
-  /** Physical side this page sits on (drives the outer-edge text column). */
+  /** Physical side this page sits on (which side's layout slots apply). */
   outerSide: PageSide;
   /** The active layout's resolved plan for this page. */
   plan: LayoutPlan;
@@ -76,7 +77,10 @@ function pageLabel(pageNumbers: number[] | undefined): string {
   return `Pages ${pageNumbers[0]}–${pageNumbers[pageNumbers.length - 1]}`;
 }
 
-export function buildDesignPages(project: Project): DesignPage[] {
+export function buildDesignPages(
+  project: Project,
+  layoutsConfig?: LayoutsConfig | null,
+): DesignPage[] {
   const aspect = bookProductForConfig(project.config).aspect;
   const doc = project.screenplay ? getCursor(project.screenplay).content : null;
   const pages: DesignPage[] = [];
@@ -95,7 +99,7 @@ export function buildDesignPages(project: Project): DesignPage[] {
       coverPage(project, COVER_FRONT_ID, "Front cover", aspect, {
         ...doc.frontCover,
         title: project.title,
-      }),
+      }, layoutsConfig),
     );
   }
   if (doc) {
@@ -115,12 +119,12 @@ export function buildDesignPages(project: Project): DesignPage[] {
         layoutNote: s.layoutNote,
         isCover: false,
         outerSide: side,
-        plan: planPageLayout(project, { side, textLength: s.text.length }),
+        plan: planPageLayout(project, { side, textLength: s.text.length, layoutsConfig }),
       });
     });
   }
   if (doc?.backCover) {
-    pages.push(coverPage(project, COVER_BACK_ID, "Back cover", aspect, doc.backCover));
+    pages.push(coverPage(project, COVER_BACK_ID, "Back cover", aspect, doc.backCover, layoutsConfig));
   }
   return pages;
 }
@@ -131,6 +135,7 @@ function coverPage(
   label: string,
   aspect: number,
   spec: CoverSpec,
+  layoutsConfig?: LayoutsConfig | null,
 ): DesignPage {
   // Front cover sits on the right (recto); back cover on the left (verso).
   const side: PageSide = id === COVER_FRONT_ID ? "right" : "left";
@@ -146,7 +151,7 @@ function coverPage(
     isCover: true,
     bakeText: Boolean(spec.bakeText && (spec.title ?? "").trim()),
     outerSide: side,
-    plan: planPageLayout(project, { side, isCover: true }),
+    plan: planPageLayout(project, { side, isCover: true, layoutsConfig }),
   };
 }
 

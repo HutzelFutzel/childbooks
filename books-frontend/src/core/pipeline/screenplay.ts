@@ -80,7 +80,14 @@ function describeConfig(config: BookConfig): string {
 function describeAnchors(anchors: Anchor[]): string {
   if (anchors.length === 0) return "(none)";
   return anchors
-    .map((a) => `- ${a.name} [${a.type}]: ${a.description}`)
+    .map((a) => {
+      const look = a.lookFromArt?.trim();
+      const description = look || a.description;
+      const fromArt = a.sourceArt?.length
+        ? " Match the author's drawing; the name is a label only."
+        : "";
+      return `- ${a.name} [${a.type}]: ${description}${fromArt}`;
+    })
     .join("\n");
 }
 
@@ -117,7 +124,7 @@ export async function generateScreenplay(
       ? "Keep the author's wording EXACTLY as written; only split it across pages. Do not rewrite."
       : "You may adapt and tighten the wording to suit the age range and reading rhythm.";
 
-  const placementGuidance = `Text is ALWAYS a separate, editable overlay — never baked into the illustration. ${getBookLayout(config.layoutId).screenplayGuidance} Never request text rendered inside the artwork.`;
+  const placementGuidance = getBookLayout(config.layoutId).screenplayGuidance;
 
   const ageTextPrompt = resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, prompts);
 

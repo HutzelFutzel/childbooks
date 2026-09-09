@@ -82,13 +82,20 @@ export function reconcileAnchorIds(next: Anchor[], prev: Anchor[]): Anchor[] {
       source: match.source ?? a.source,
       mode: match.mode,
       include: match.include,
-      description:
-        match.descriptionUserEdited || match.versions ? match.description : a.description,
+      description: match.descriptionUserEdited
+        ? match.description
+        : a.lookFromArt
+          ? a.description
+          : match.versions
+            ? match.description
+            : a.description,
       descriptionUserEdited: match.descriptionUserEdited,
+      lookFromArt: a.lookFromArt ?? match.lookFromArt,
       ageYears: keepAuthorAge ? match.ageYears : a.ageYears,
       ageSource: keepAuthorAge ? (match.ageSource ?? "author") : a.ageSource,
       userGuidance: match.userGuidance,
       likenessPhoto: match.likenessPhoto,
+      sourceArt: match.sourceArt ?? a.sourceArt,
       containedIds: match.containedIds,
       versions: a.versions ?? match.versions,
     };

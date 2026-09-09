@@ -23,7 +23,9 @@
  *   - split (`inset-art`) — words sit next to the picture on the page colour
  * Each layout locks to one family so the picker is a real choice, not a mode
  * toggle. Adding another is purely additive: register a spec here and seeding,
- * prompts, image sizing, gating and the picker all follow from it.
+ * prompts, image sizing, gating and the picker all follow from it. Overlay
+ * calm regions are compiled from each text slot's grid; split layouts never
+ * ask for a painted band. Screenplay copy is compiled the same way.
  */
 import type { HAlign, NormRect, PageBackground, VAlign } from "../design";
 import type { BookSize } from "../config/options";
@@ -113,8 +115,12 @@ export interface LayoutSpec {
   /** Picker order (lower first). Admin overlay can override. */
   order?: number;
   requirements?: LayoutRequirements;
-  /** Instruction for the screenplay model, so the plan it writes matches. */
-  screenplayGuidance: string;
+  /**
+   * Optional extra screenplay note. Placement (calm bands vs inset art) is
+   * compiled from the spec's geometry in {@link compileScreenplayGuidance}, so
+   * a new layout does not need a hand-written "leave the outer edge empty".
+   */
+  screenplayGuidance?: string;
   /** Optional bespoke prompt template key (falls back to the shared one). */
   promptKey?: string;
   /** Slots per page side, in SAFE-AREA space. */
@@ -196,7 +202,7 @@ export function deriveArtRect(textRects: NormRect[]): NormRect | null {
 
 /** Build a `BookLayout` from a serializable spec. */
 export function layoutFromSpec(spec: LayoutSpec): BookLayout {
-  return {
+  const layout: BookLayout = {
     id: spec.id,
     label: spec.label,
     description: spec.description,
@@ -205,7 +211,7 @@ export function layoutFromSpec(spec: LayoutSpec): BookLayout {
     premium: spec.premium,
     order: spec.order,
     requirements: spec.requirements,
-    screenplayGuidance: spec.screenplayGuidance,
+    screenplayGuidance: "",
     promptKey: spec.promptKey,
     spec,
     plan(ctx: LayoutContext): LayoutPlan {
@@ -229,6 +235,8 @@ export function layoutFromSpec(spec: LayoutSpec): BookLayout {
       return { layoutId: spec.id, mode, side: ctx.side, slots, artRect };
     },
   };
+  layout.screenplayGuidance = compileScreenplayGuidance(layout);
+  return layout;
 }
 
 // ---- Registered layouts ----------------------------------------------------
@@ -297,8 +305,6 @@ const OUTER_TEXT_SPEC: LayoutSpec = {
   supportedModes: ["full-bleed"],
   order: 10,
   requirements: COLUMN_REQUIREMENTS,
-  screenplayGuidance:
-    "Every page keeps its text ON the illustration in a calm column along the OUTER edge (left on left-hand pages, right on right-hand pages) — the outer 1/3 of the page width. In each spread's layoutNote, note that the outer 1/6 of the spread stays calm and text-safe.",
   slots: storySlots(OUTER_COLUMN, "calm"),
 };
 
@@ -314,8 +320,6 @@ const OVERLAY_BOTTOM_SPEC: LayoutSpec = {
   supportedModes: ["full-bleed"],
   order: 20,
   requirements: BAND_REQUIREMENTS,
-  screenplayGuidance:
-    "Every page keeps its text ON the illustration in a calm band along the BOTTOM — the lower 1/4 of the page height. In each spread's layoutNote, note that the lower 1/4 stays calm and text-safe.",
   slots: storySlots(BOTTOM_BAND, "calm"),
 };
 
@@ -332,8 +336,6 @@ const SPLIT_SIDE_SPEC: LayoutSpec = {
   supportedModes: ["inset-art"],
   order: 30,
   requirements: COLUMN_REQUIREMENTS,
-  screenplayGuidance:
-    "Every page places the illustration beside the text: art on the inner side, words in a column along the OUTER edge (left on left-hand pages, right on right-hand pages). Do not leave a calm band in the artwork — the words are not on the picture.",
   slots: storySlots(OUTER_COLUMN, "none"),
 };
 
@@ -350,8 +352,6 @@ const SPLIT_STACK_SPEC: LayoutSpec = {
   supportedModes: ["inset-art"],
   order: 40,
   requirements: BAND_REQUIREMENTS,
-  screenplayGuidance:
-    "Every page places the illustration above the text: art on the upper three-quarters, words in a band along the BOTTOM. Do not leave a calm band in the artwork — the words are not on the picture.",
   slots: storySlots(BOTTOM_BAND, "none"),
 };
 
@@ -427,29 +427,41 @@ export function artAspectLabel(artRect: NormRect, surfaceAspect: number): string
   return "tall portrait";
 }
 
+/**
+ * Overlay text that the image model should keep clear. Split/inset art and
+ * "untouched" / geometric treatments do not reserve a painted band.
+ */
+function slotWantsCalmBand(slot: ResolvedSlot): boolean {
+  if (slot.role !== "text" && slot.role !== "decor") return false;
+  const treatment = slot.treatment;
+  if (treatment.id === "none" || treatment.mechanism === "geometry") return false;
+  return true;
+}
+
 export function layoutPromptFacts(
   plan: LayoutPlan,
   surfaceAspect: number,
   opts?: { negativeSpaceControl?: "weak" | "strong" },
 ): LayoutPromptFacts {
-  const textSlots = plan.slots.filter((s) => s.role === "text" || s.role === "decor");
-  const rects = textSlots.map((s) => s.pageRect);
   const isInsetArt = plan.mode === "inset-art";
-
-  // Inset art physically excludes the text region, so there is nothing to keep
-  // calm and no instruction to give — the guarantee is geometric.
-  const hasCalmBand = !isInsetArt && rects.length > 0;
-  const grids = textSlots.map((s) => s.grid).filter((g): g is GridArea => Boolean(g));
-  const namedFromGrid = hasCalmBand && grids.length === textSlots.length;
-  const focalGrid = namedFromGrid && grids[0] ? complementGridArea(grids[0]) : null;
+  const calmSlots = isInsetArt ? [] : plan.slots.filter(slotWantsCalmBand);
+  const rects = calmSlots.map((s) => s.pageRect);
+  const hasCalmBand = calmSlots.length > 0;
+  const grids = calmSlots.map((s) => s.grid).filter((g): g is GridArea => Boolean(g));
+  const namedFromGrid = hasCalmBand && grids.length === calmSlots.length && grids.length > 0;
+  // One grid's complement is itself a grid fraction. Several slots (or a
+  // floating tile) have no single complementary cell — fall back to the
+  // largest remaining rectangle so a new multi-slot overlay still names a
+  // focal region without a new prompt branch.
+  const focalGrid =
+    namedFromGrid && grids.length === 1 && grids[0] ? complementGridArea(grids[0]) : null;
   const focal = complementRect(unionRect(rects));
 
   // The treatment describes only how the region should look; where it is comes
   // from the geometry above, so the two clauses don't restate each other.
-  // Weak models skip the painted instruction — they get the location only,
-  // and the deterministic fallback after generation.
+  // Weak models skip the painted instruction — they get the location only.
   const treatment = resolveTreatmentForModel(
-    textSlots[0]?.treatment ?? getTreatment(DEFAULT_TREATMENT_ID),
+    calmSlots[0]?.treatment ?? getTreatment(DEFAULT_TREATMENT_ID),
     opts?.negativeSpaceControl ?? "strong",
   );
   const fragment =
@@ -474,6 +486,36 @@ export function layoutPromptFacts(
     hasCalmBand,
     isInsetArt,
   };
+}
+
+/**
+ * Screenplay instruction compiled from the layout's own plan, so a new layout
+ * does not need a hand-written "keep the outer edge empty".
+ *
+ * Deliberately does not name left/right/bottom fractions: the screenplay is
+ * often drafted before the reader picks a layout, and illustration prompts
+ * already compile the exact band from {@link layoutPromptFacts}.
+ */
+export function compileScreenplayGuidance(
+  layout: BookLayout,
+  mode: CompositionMode = layout.defaultMode,
+): string {
+  const plan = layout.plan({
+    side: "left",
+    safe: { x: 0, y: 0, w: 1, h: 1 },
+    aspect: 1,
+    trim: { widthIn: 8, heightIn: 8 },
+    isCover: false,
+    mode,
+  });
+  const facts = layoutPromptFacts(plan, 1);
+  const noteRule =
+    "Each page's layoutNote is camera, staging and mood only. Do not mention where story text sits, calm bands, outer edges, or negative space for words — the illustration step applies the layout from its own geometry.";
+  const placement =
+    facts.isInsetArt || !facts.hasCalmBand
+      ? "The illustration sits in its own region of the page, separate from the words. Do not leave a calm band in the artwork — the words are not on the picture."
+      : "The story text is laid over the illustration. Describe the scene, characters and setting; do not invent a particular empty band for the words.";
+  return `Text is ALWAYS a separate, editable overlay — never baked into the illustration. ${placement} ${noteRule} Never request text rendered inside the artwork.`;
 }
 
 // ---- Validation ------------------------------------------------------------

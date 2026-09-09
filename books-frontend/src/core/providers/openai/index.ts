@@ -69,10 +69,14 @@ function structuredMessages(
   for (const m of req.messages) messages.push({ role: m.role, content: m.content });
   if (!req.images?.length) return messages;
 
-  const imageParts: VisionPart[] = req.images.map((im) => ({
-    type: "image_url",
-    image_url: { url: `data:${im.mimeType};base64,${im.base64}` },
-  }));
+  const imageParts: VisionPart[] = [];
+  for (const im of req.images) {
+    if (im.label?.trim()) imageParts.push({ type: "text", text: im.label.trim() });
+    imageParts.push({
+      type: "image_url",
+      image_url: { url: `data:${im.mimeType};base64,${im.base64}` },
+    });
+  }
   let idx = -1;
   for (let i = messages.length - 1; i >= 0; i--) {
     if (messages[i].role === "user") {

@@ -26,7 +26,7 @@ import { anchorThumbBlobId, analyzeCurrentStory, currentAnchorImage } from "../.
 import { isAbortError } from "../../core/errors";
 import { stripNumericAgeFromDescription } from "../../core/book/anchorDescription";
 import { defaultCharacterAge } from "../../core/book/characterAge";
-import { resolveArtStyleLabel } from "../../core/prompts/style";
+import { resolveArtStyleDisplayName } from "../../core/prompts/style";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useJobsStore, type ScreenplayJobSummary } from "../../state/jobsStore";
 import { useProjectsStore } from "../../state/projectsStore";
@@ -34,6 +34,7 @@ import { AnchorEditor } from "../anchors/AnchorEditor";
 import { ANCHOR_TYPE_ICON } from "../anchors/AnchorCard";
 import { BlobThumbnail } from "../components/BlobThumbnail";
 import { useLikenessPhotoUrl } from "../components/LikenessPhotoField";
+import { useBlobUrlState } from "../hooks/useBlobUrl";
 import { Button } from "../components/Button";
 import { Celebrate } from "../components/Celebrate";
 import { Drawer } from "../components/Drawer";
@@ -88,9 +89,7 @@ export function CastWorkspace({
   const [editingAnchorId, setEditingAnchorId] = useState<string | null>(null);
   const [deletingAnchorId, setDeletingAnchorId] = useState<string | null>(null);
 
-  const styleLabel = project.config.artStyle?.presetId
-    ? resolveArtStyleLabel(project.config.artStyle.presetId, artStyles)
-    : "Art style";
+  const styleLabel = resolveArtStyleDisplayName(project.config.artStyle, artStyles);
 
   const allAnchors = project.anchors ?? [];
   const anchors = allAnchors.filter((anchor) => anchor.include);
@@ -366,7 +365,7 @@ export function CastWorkspace({
                 ? allReady
                   ? "Check the main character, then open your pages. Tap anyone to make changes."
                   : busy || activeGeneratingCount > 0
-                    ? "We’re creating every missing look in your chosen style."
+                    ? "We’re creating every missing look in the book’s style."
                     : "We found these characters and places in your story. Edit or remove anything, and add anyone we missed."
                 : "No recurring characters or places are needed for this story."}
             </p>
@@ -567,6 +566,10 @@ function CastMemberCard({
     !image &&
     Boolean(anchor.likenessPhoto) &&
     !likenessPhotoExpired(anchor.likenessPhoto);
+  const artReady =
+    anchor.type === "character" &&
+    !image &&
+    Boolean(anchor.sourceArt?.length);
 
   const project = useProjectsStore((state) => state.current());
   const projectId = project?.id ?? "";
@@ -578,6 +581,9 @@ function CastMemberCard({
     projectId,
     photoSubjectId,
     photoReady ? anchor.likenessPhoto : undefined,
+  );
+  const { url: sourceArtUrl, status: sourceArtStatus } = useBlobUrlState(
+    artReady ? anchor.sourceArt?.[0]?.blobId : undefined,
   );
 
   return (
@@ -609,15 +615,22 @@ function CastMemberCard({
           className="rounded-none"
           fallback={
             <span className="flex max-w-60 flex-col items-center px-4 text-center">
-              {photoReady ? (
+              {photoReady || artReady ? (
                 <div className="relative mb-2 flex size-14 items-center justify-center overflow-hidden rounded-2xl bg-ink-100 shadow-soft ring-2 ring-white ring-offset-2 ring-offset-emerald-100">
-                  {likenessUrl ? (
+                  {photoReady && likenessUrl ? (
                     <img
                       src={likenessUrl}
                       alt={`Photo for ${anchor.name}`}
                       className="size-full object-cover"
                     />
-                  ) : likenessLoading ? (
+                  ) : artReady && sourceArtUrl ? (
+                    <img
+                      src={sourceArtUrl}
+                      alt={`Artwork for ${anchor.name}`}
+                      className="size-full object-cover"
+                    />
+                  ) : (photoReady && likenessLoading) ||
+                    (artReady && sourceArtStatus === "loading") ? (
                     <div className="size-full animate-pulse bg-ink-200" />
                   ) : (
                     <Icon className="size-5 text-brand-400" />
@@ -634,22 +647,34 @@ function CastMemberCard({
               <span
                 className={cn(
                   "text-[10px] font-bold uppercase tracking-[0.16em]",
-                  photoReady ? "text-emerald-700" : "text-brand-400",
+                  photoReady || artReady ? "text-emerald-700" : "text-brand-400",
                 )}
               >
-                {photoReady ? "From your photo" : "Illustrated look"}
+                {photoReady
+                  ? "From your photo"
+                  : artReady
+                    ? "From your character artwork"
+                    : "Illustrated look"}
               </span>
               <span className="mt-1 text-xs font-semibold text-ink-700">
                 {photoExpired
                   ? "Photo expired — tap to fix"
                   : photoReady
                     ? "Ready to create illustrated look"
-                    : "Ready to create from details"}
+                    : artReady
+                      ? "Ready to create illustrated look"
+                      : "Ready to create from details"}
               </span>
               {photoReady && (
                 <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200/60">
                   <Sparkles className="size-3 text-emerald-600" />
                   Photo attached
+                </span>
+              )}
+              {artReady && (
+                <span className="mt-2 inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-[10px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-200/60">
+                  <Sparkles className="size-3 text-emerald-600" />
+                  Artwork attached
                 </span>
               )}
             </span>
@@ -660,7 +685,11 @@ function CastMemberCard({
             action="anchorImage"
             compact
             compactLabel={
-              photoReady ? "Creating from your photo…" : "Creating illustrated look…"
+              photoReady
+                ? "Creating from your photo…"
+                : artReady
+                  ? "Creating from your artwork…"
+                  : "Creating illustrated look…"
             }
             className="bg-magic"
           />

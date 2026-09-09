@@ -76,6 +76,16 @@ export interface BuildAnchorPromptInput {
    * instruction verbatim a second time.
    */
   actualPanelCount?: number;
+  /**
+   * First sheet from uploaded character drawings. Uses a dedicated prompt that
+   * extracts the subject from the source pictures rather than inventing them.
+   */
+  fromSourceArt?: boolean;
+  /**
+   * When generating from source art: keep the drawing's medium as well as the
+   * design. False means keep identity/outfit but redraw in the book style.
+   */
+  preserveRendering?: boolean;
   /** Admin prompt overlays (art-style descriptions). */
   prompts?: PromptContext;
 }
@@ -94,6 +104,8 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
     baseLayout,
     legend,
     actualPanelCount,
+    fromSourceArt = false,
+    preserveRendering = false,
     prompts,
   } = input;
   const config = resolvePromptsConfig(prompts);
@@ -143,6 +155,32 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
   const covered = new Set(contained.map((a) => a.id));
   const mentioned = mentionedAnchors.filter((a) => !covered.has(a.id));
   const spec = sheetSpecFor(anchor);
+
+  if (fromSourceArt) {
+    const look = (anchor.lookFromArt ?? "").trim();
+    return renderSinglePrompt(config, "anchorImage/fromSourceArt", {
+      vars: {
+        anchorName: anchor.name,
+        cellCount: String(spec.views.length),
+        gridShape: gridShapeText(spec),
+        viewList: viewListText(spec),
+        description: look,
+        age: anchor.ageYears !== undefined ? `${anchor.ageYears} years old` : "",
+        userGuidance: anchor.userGuidance?.trim() ?? "",
+        artStyle: styleText,
+        legend: legend ?? "",
+        actualPanelCount: String(actualPanelCount ?? ""),
+      },
+      flags: {
+        hasGridRepair: typeof actualPanelCount === "number",
+        preserveRendering,
+        hasDescription: Boolean(look),
+        hasAge: anchor.ageYears !== undefined,
+        hasUserGuidance: Boolean(anchor.userGuidance?.trim()),
+        hasLegend: Boolean(legend?.trim()),
+      },
+    });
+  }
 
   return renderSinglePrompt(config, "anchorImage/default", {
     vars: {

@@ -42,7 +42,7 @@ import "./providerHttp";
 import { serverConfig } from "./config";
 import { compositeMaskedRegion, downscaleReference } from "./imaging";
 import { backendPipelineEnv } from "./pipelineEnv";
-import { loadModelCapabilities, loadPromptContext, recordLatencySamples } from "./appConfig";
+import { getLayoutsConfig, loadPromptContext, recordLatencySamples } from "./appConfig";
 import { requireTier, resolveImageModels, resolveTextAction } from "./modelResolve";
 import { withUsage, type CallStats } from "./usage";
 import { meterAndSettle, runKindOf } from "./actionRun";
@@ -61,6 +61,11 @@ import type { ResolvedModels } from "../../books-frontend/src/core/models/regist
 import { ProviderError } from "../../books-frontend/src/core/errors";
 import { containedAnchorsFor } from "../../books-frontend/src/core/book/anchorGraph";
 import { effectiveAnchorIds } from "../../books-frontend/src/core/book/anchorRefs";
+import {
+  clampDerivedStylePrompt,
+  derivedArtStyle,
+  hasSourceArt,
+} from "../../books-frontend/src/core/book/sourceArt";
 import { spreadsById } from "../../books-frontend/src/core/book/units";
 import { DISPATCH_KEY } from "../../books-frontend/src/core/config/latencyStats";
 import type { ImageActionId } from "../../books-frontend/src/core/ai/actions";
@@ -367,8 +372,15 @@ async function applyFeatureGate(uid: string, job: AnyJob): Promise<AnyJob> {
     job.project?.config?.artStyle?.customDescription?.trim()
   ) {
     const allowed = await featureAllowedForUser(uid, "customArtStyle").catch(() => true);
-    if (!allowed) {
-      job.project.config.artStyle = { ...job.project.config.artStyle, customDescription: "" };
+    const style = job.project.config.artStyle;
+    const derived = derivedArtStyle(style) && hasSourceArt(job.project);
+    if (!allowed && !derived) {
+      job.project.config.artStyle = { ...style, customDescription: "" };
+    } else if (derived && style.customDescription) {
+      job.project.config.artStyle = {
+        ...style,
+        customDescription: clampDerivedStylePrompt(style.customDescription),
+      };
     }
   }
   return job;
@@ -850,12 +862,12 @@ async function renderTask(
     };
   }
 
-  const [models, prompts, caps] = await Promise.all([
+  const [models, prompts, layouts] = await Promise.all([
     resolveImageModels(modelRoleFor(job.kind), tier),
     loadPromptContext(),
-    loadModelCapabilities(),
+    getLayoutsConfig(),
   ]);
-  const env = backendPipelineEnv(uid, models, prompts, caps);
+  const env = backendPipelineEnv(uid, models, prompts, layouts.capabilities, layouts);
   const startedAt = Date.now();
 
   if (job.kind === "image") {
@@ -877,7 +889,7 @@ async function renderTask(
       uid,
       req,
       model: models.imageModel,
-      caps,
+      caps: layouts.capabilities ?? {},
       tier,
       action,
       projectId,

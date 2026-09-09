@@ -31,6 +31,9 @@ import {
   ServiceUnavailable,
 } from "./modelResolve";
 import { analyzeStory, generateAnchorDescription } from "../../books-frontend/src/core/pipeline/analysis";
+import { extractArtStyleFromImages, type SourceArtCharacterInput } from "../../books-frontend/src/core/pipeline/styleExtract";
+import { extractArtLookFromImages } from "../../books-frontend/src/core/pipeline/lookExtract";
+import { collectSourceArtGroups } from "../../books-frontend/src/core/book/sourceArt";
 import { generateStoryDraft } from "../../books-frontend/src/core/pipeline/storyDraft";
 import { translateStory } from "../../books-frontend/src/core/pipeline/storyTranslate";
 import { checkStoryFit } from "../../books-frontend/src/core/pipeline/storyFit";
@@ -48,7 +51,8 @@ import {
 } from "../../books-frontend/src/core/pipeline/illustrationRun";
 import { stampImageProvenance } from "../../books-frontend/src/core/pipeline/imageProvenance";
 import { IntentAmbiguousError } from "../../books-frontend/src/core/pipeline/intentResolve";
-import { loadModelCapabilities, loadPromptContext } from "./appConfig";
+import { downloadBlobBase64 } from "./storage";
+import { getLayoutsConfig, loadPromptContext } from "./appConfig";
 import { latencyKindOf } from "./latency";
 import { containedAnchorsFor } from "../../books-frontend/src/core/book/anchorGraph";
 import { effectiveAnchorIds } from "../../books-frontend/src/core/book/anchorRefs";
@@ -56,6 +60,7 @@ import {
   COVER_BACK_ID,
   COVER_FRONT_ID,
   SPINE_ID,
+  type BodyPlan,
   type BookConfig,
   type ModelSelection,
   type Project,
@@ -90,6 +95,31 @@ const REQUEST_BUDGET_MS = 280_000;
 
 function requestDeadline(): AbortSignal {
   return AbortSignal.timeout(REQUEST_BUDGET_MS);
+}
+
+async function loadSourceArtCharacters(
+  uid: string,
+  project: Project,
+): Promise<SourceArtCharacterInput[]> {
+  const groups = collectSourceArtGroups(project);
+  return (
+    await Promise.all(
+      groups.map(async (group) => {
+        const images = (
+          await Promise.all(
+            group.images.map(async (image) => {
+              try {
+                return await downloadBlobBase64(uid, image.blobId);
+              } catch {
+                return null;
+              }
+            }),
+          )
+        ).filter((row): row is { base64: string; mimeType: string } => Boolean(row));
+        return { id: group.id, name: group.name, images };
+      }),
+    )
+  ).filter((group) => group.images.length > 0);
 }
 
 function sendError(res: Response, err: unknown): void {
@@ -299,6 +329,39 @@ export function registerAiRoutes(app: Express): void {
     try {
       const { project } = req.body as { project: Project };
       const [model, prompts] = await Promise.all([resolveText("storyAnalysis"), loadPromptContext()]);
+      let artworkLooks: { name: string; description: string; bodyPlan?: BodyPlan }[] = [];
+      const sourceCharacters = await loadSourceArtCharacters(req.uid!, project).catch(() => []);
+      if (sourceCharacters.length > 0) {
+        try {
+          const lookModel = await resolveText("extractArtLook");
+          const lookStarted = Date.now();
+          const lookRun = await withUsage(() =>
+            extractArtLookFromImages({
+              characters: sourceCharacters,
+              creds: { apiKey: apiKeyFor(lookModel.provider) },
+              model: lookModel.id,
+              providerId: lookModel.provider,
+              prompts,
+              signal: requestDeadline(),
+            }),
+          );
+          await meterAndSettle({
+            uid: req.uid!,
+            action: "extractArtLook",
+            events: lookRun.events,
+            stats: lookRun.stats,
+            projectId: project.id,
+            project,
+            kind: "fresh",
+            source: "sync",
+            startedAt: lookStarted,
+            models: { text: lookModel },
+          });
+          artworkLooks = lookRun.value.characters;
+        } catch {
+          // Analysis still runs; pages then rely on the attached sheets.
+        }
+      }
       const startedAt = Date.now();
       const { value, events, stats } = await withUsage(() =>
         analyzeStory({
@@ -307,6 +370,7 @@ export function registerAiRoutes(app: Express): void {
           creds: { apiKey: apiKeyFor(model.provider) },
           model: model.id,
           prompts,
+          artworkLooks,
           signal: requestDeadline(),
         }),
       );
@@ -323,6 +387,106 @@ export function registerAiRoutes(app: Express): void {
         models: { text: model },
       });
       res.json({ ...value, model: model.id });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  app.post("/ai/extract-art-style", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const { project } = req.body as { project: Project };
+      const groups = collectSourceArtGroups(project);
+      if (groups.length === 0) {
+        res.status(400).json({ error: { message: "Add character artwork first." } });
+        return;
+      }
+      const guest = isAnonymousToken(req.authToken);
+      await ensureAffordAction(req.uid!, "extractArtStyle", requireTier(undefined, guest), {
+        noNegativeBuffer: guest,
+      });
+      const characters = await loadSourceArtCharacters(req.uid!, project);
+      if (characters.length === 0) {
+        res.status(400).json({ error: { message: "The artwork could not be loaded." } });
+        return;
+      }
+      const [model, prompts] = await Promise.all([
+        resolveText("extractArtStyle"),
+        loadPromptContext(),
+      ]);
+      const startedAt = Date.now();
+      const { value, events, stats } = await withUsage(() =>
+        extractArtStyleFromImages({
+          characters,
+          creds: { apiKey: apiKeyFor(model.provider) },
+          model: model.id,
+          providerId: model.provider,
+          prompts,
+          signal: requestDeadline(),
+        }),
+      );
+      await meterAndSettle({
+        uid: req.uid!,
+        action: "extractArtStyle",
+        events,
+        stats,
+        projectId: project.id,
+        project,
+        kind: "fresh",
+        source: "sync",
+        startedAt,
+        models: { text: model },
+      });
+      res.json(value);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  app.post("/ai/extract-art-look", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const { project } = req.body as { project: Project };
+      const groups = collectSourceArtGroups(project);
+      if (groups.length === 0) {
+        res.status(400).json({ error: { message: "Add character artwork first." } });
+        return;
+      }
+      const guest = isAnonymousToken(req.authToken);
+      await ensureAffordAction(req.uid!, "extractArtLook", requireTier(undefined, guest), {
+        noNegativeBuffer: guest,
+      });
+      const characters = await loadSourceArtCharacters(req.uid!, project);
+      if (characters.length === 0) {
+        res.status(400).json({ error: { message: "The artwork could not be loaded." } });
+        return;
+      }
+      const [model, prompts] = await Promise.all([
+        resolveText("extractArtLook"),
+        loadPromptContext(),
+      ]);
+      const startedAt = Date.now();
+      const { value, events, stats } = await withUsage(() =>
+        extractArtLookFromImages({
+          characters,
+          creds: { apiKey: apiKeyFor(model.provider) },
+          model: model.id,
+          providerId: model.provider,
+          prompts,
+          signal: requestDeadline(),
+        }),
+      );
+      await meterAndSettle({
+        uid: req.uid!,
+        action: "extractArtLook",
+        events,
+        stats,
+        projectId: project.id,
+        project,
+        kind: "fresh",
+        source: "sync",
+        startedAt,
+        models: { text: model },
+      });
+      res.json(value);
     } catch (err) {
       sendError(res, err);
     }
@@ -435,12 +599,12 @@ export function registerAiRoutes(app: Express): void {
         noNegativeBuffer: guest,
         kind: anchorIsEdit ? "edit" : "fresh",
       });
-      const [models, prompts, caps] = await Promise.all([
+      const [models, prompts, layouts] = await Promise.all([
         resolveImageModels("anchorImage", tier),
         loadPromptContext(),
-        loadModelCapabilities(),
+        getLayoutsConfig(),
       ]);
-      const env = backendPipelineEnv(req.uid!, models, prompts, caps);
+      const env = backendPipelineEnv(req.uid!, models, prompts, layouts.capabilities, layouts);
       const startedAt = Date.now();
       const { value, events, stats } = await withUsage(() =>
         renderAnchor(project, anchor, { ...(options ?? {}), signal: requestDeadline() }, env),
@@ -511,12 +675,12 @@ export function registerAiRoutes(app: Express): void {
         noNegativeBuffer: guest,
         kind: editKind,
       });
-      const [models, prompts, caps] = await Promise.all([
+      const [models, prompts, layouts] = await Promise.all([
         resolveImageModels(cover ? "coverIllustration" : "pageIllustration", tier),
         loadPromptContext(),
-        loadModelCapabilities(),
+        getLayoutsConfig(),
       ]);
-      const env = backendPipelineEnv(req.uid!, models, prompts, caps);
+      const env = backendPipelineEnv(req.uid!, models, prompts, layouts.capabilities, layouts);
       const startedAt = Date.now();
       const { value, events, stats } = await withUsage(async () => {
         const signal = requestDeadline();

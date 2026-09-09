@@ -39,6 +39,11 @@ export interface InputImage {
   /** base64-encoded image data (no data: prefix). */
   base64: string;
   mimeType: string;
+  /**
+   * Caption emitted as a text part immediately before this image so the model
+   * can bind "Image (n)" in the prompt to the right picture.
+   */
+  label?: string;
 }
 
 export interface StructuredRequest<T> {
@@ -80,6 +85,10 @@ export interface ReferenceImage {
    *   - "likeness": a one-use real-person photo. Preserve recognizable facial
    *     identity and key physical traits, but not its photographic style,
    *     background, pose or incidental clothing.
+   *   - "sourceArt": an existing illustration of this character. Preserve
+   *     identity, design, outfit and colours; extract from any background.
+   *     Rendering is kept when this drawing is the book's look, otherwise
+   *     redrawn in the book's art style.
    *   - "composition": the previous/current page, used only for layout & pose.
    *   - "relation": a related subject for context (a relative to resemble, or an
    *     object/place contained in the subject being drawn).
@@ -95,6 +104,7 @@ export interface ReferenceImage {
   role?:
     | "subject"
     | "likeness"
+    | "sourceArt"
     | "composition"
     | "relation"
     | "style"

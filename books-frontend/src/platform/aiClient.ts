@@ -14,6 +14,8 @@ import type { Anchor, Project, ScreenplayDoc, StoryBrief } from "../core/types";
 import { slimProjectForRender } from "../core/book/slimProject";
 import { bindProjectLikenessPhotos } from "./likeness";
 import type { AnchorRender, AnchorRunOptions } from "../core/pipeline/anchorRun";
+import type { ExtractArtStyleResult } from "../core/pipeline/styleExtract";
+import type { ExtractArtLookResult } from "../core/pipeline/lookExtract";
 import type { IllustrationRender, IllustrationRunOptions } from "../core/pipeline/illustrationRun";
 import { IntentAmbiguousError } from "../core/pipeline/intentResolve";
 import { ProviderError, type ProviderErrorKind } from "../core/errors";
@@ -176,6 +178,28 @@ export function storyFitRemote(
 export function analyzeStoryRemote(project: Project, signal?: AbortSignal): Promise<AnalyzeResult> {
   // Text-only: needs config.storyText; drop all version history/design.
   return postAi<AnalyzeResult>("/ai/analyze", { project: slimProjectForRender(project, {}) }, signal);
+}
+
+export function extractArtStyleRemote(
+  project: Project,
+  signal?: AbortSignal,
+): Promise<ExtractArtStyleResult> {
+  return postAi<ExtractArtStyleResult>(
+    "/ai/extract-art-style",
+    { project: slimProjectForRender(project, { keepAnchorVersions: false }) },
+    signal,
+  );
+}
+
+export function extractArtLookRemote(
+  project: Project,
+  signal?: AbortSignal,
+): Promise<ExtractArtLookResult> {
+  return postAi<ExtractArtLookResult>(
+    "/ai/extract-art-look",
+    { project: slimProjectForRender(project, { keepAnchorVersions: false }) },
+    signal,
+  );
 }
 
 export async function anchorDescriptionRemote(

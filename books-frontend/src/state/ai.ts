@@ -550,11 +550,11 @@ export function buildIllustrationTask(
     const img = currentAnchorImage(a);
     if (img) {
       references.push({
-        blobId: img.blobId,
-        mimeType: img.mimeType,
-        label: `${a.name} (${a.description})`,
-        role: "subject",
-      });
+          blobId: img.blobId,
+          mimeType: img.mimeType,
+          label: a.name,
+          role: "subject",
+        });
       referencedAnchors.push(a);
     } else {
       describedAnchors.push(a);
@@ -566,9 +566,11 @@ export function buildIllustrationTask(
   // example image into the book.
   const artStyles = useAppConfigStore.getState().artStyles;
 
+  const layoutsConfig = useAppConfigStore.getState().layouts;
+
   // The same plan the interactive path and the design editor use, so a bulk
   // render can't compose its pages differently from a single one.
-  const layoutPlan = resolveLayoutPlan(project, spread);
+  const layoutPlan = resolveLayoutPlan(project, spread, layoutsConfig);
 
   const prompt = buildIllustrationPrompt({
     spread,
@@ -585,6 +587,7 @@ export function buildIllustrationTask(
     coverSubtitle: spread.coverSubtitle,
     coverAuthor: spread.coverAuthor,
     layoutPlan,
+    capabilities: capabilitiesFor(imageModel, layoutsConfig.capabilities),
     prompts: {
       artStyles,
       templates: useAppConfigStore.getState().prompts,

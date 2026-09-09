@@ -611,6 +611,7 @@ export function StudioProvider({
   const setDesign = useProjectsStore((s) => s.setDesign);
   const bookLanguages = useAppConfigStore((s) => s.bookLanguages);
   const typography = useAppConfigStore((s) => s.typography);
+  const layoutsConfig = useAppConfigStore((s) => s.layouts);
 
   const [selection, setSelection] = useState<Selection>({ kind: "none" });
   const selectionRef = useRef(selection);
@@ -683,9 +684,9 @@ export function StudioProvider({
 
   // Rebuild pages only when layout inputs change — not on every design text patch.
   const pages = useMemo(
-    () => buildDesignPages(project),
+    () => buildDesignPages(project, layoutsConfig),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [project.screenplay, project.title, project.config, project.illustrations],
+    [project.screenplay, project.title, project.config, project.illustrations, layoutsConfig],
   );
   const design = project.design ?? null;
   const [measureFontFamily, setMeasureFontFamily] = useState<string | null>(null);

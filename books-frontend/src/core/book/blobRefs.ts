@@ -27,10 +27,15 @@ import { allVersions } from "../versioning";
 export function collectProjectImageBlobIds(project: Project): Set<string> {
   const ids = new Set<string>();
   for (const anchor of project.anchors ?? []) {
+    for (const image of anchor.sourceArt ?? []) ids.add(image.blobId);
     if (!anchor.versions) continue;
     for (const n of allVersions(anchor.versions)) {
       if (n.content.blobId) ids.add(n.content.blobId);
+      if (n.content.thumbBlobId) ids.add(n.content.thumbBlobId);
     }
+  }
+  for (const member of project.config.storyBrief?.cast ?? []) {
+    for (const image of member.sourceArt ?? []) ids.add(image.blobId);
   }
   for (const tree of Object.values(project.illustrations ?? {})) {
     for (const n of allVersions(tree)) {

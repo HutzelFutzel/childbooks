@@ -66,7 +66,7 @@ export const HELP: Record<string, HelpTopic> = {
   },
   layoutQuietZone: {
     title: "How text sits on the page",
-    body: "Illustrations are generated full-bleed with a calm area on the outer edge of each page, where your words sit. On left pages the text is on the left; on right pages it's on the right.",
+    body: "Where the words sit depends on the layout you chose. Overlay layouts keep a calm band in the artwork exactly where the text goes. Split layouts put the picture beside or above the words, so the artwork fills its own frame and does not reserve an empty band.",
   },
 };
 

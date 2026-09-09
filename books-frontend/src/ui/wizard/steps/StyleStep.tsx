@@ -50,7 +50,13 @@ export function StyleStep({
             <motion.button
               key={style.id}
               type="button"
-              onClick={() => onChange({ ...artStyle, presetId: style.id })}
+              onClick={() =>
+                onChange(
+                  artStyle.origin === "derived"
+                    ? { presetId: style.id, origin: "preset" }
+                    : { ...artStyle, presetId: style.id, origin: "preset" },
+                )
+              }
               initial={{ opacity: 0, y: 10 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ ...spring, delay: i * 0.03 }}

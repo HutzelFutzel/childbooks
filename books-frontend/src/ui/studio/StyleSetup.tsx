@@ -4,10 +4,11 @@
  * Later visits keep a draft selection so Cancel can discard. Changing style
  * with existing art opens a confirm that renews cast → pages when Sparks allow.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, ArrowRight, Clock, Sparkles } from "lucide-react";
 import type { ArtStyleSelection, BookConfig } from "../../core/types";
-import { resolveArtStyleLabel } from "../../core/prompts/style";
+import { resolveArtStyleDisplayName } from "../../core/prompts/style";
+import { hasSourceArt } from "../../core/book/sourceArt";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useProjectsStore } from "../../state/projectsStore";
 import { useSparksStore } from "../../state/sparksStore";
@@ -26,6 +27,7 @@ import {
   styleRenewEstimateParts,
   styleRenewTargets,
 } from "./styleRenew";
+import { ArtworkLookGate } from "./ArtworkLookGate";
 
 export function StyleSetup() {
   const { project, navigate, setStep, closeStyleSetup } = useStudio();
@@ -37,15 +39,42 @@ export function StyleSetup() {
   const [draft, setDraft] = useState<ArtStyleSelection>(committed);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [artworkFailed, setArtworkFailed] = useState(false);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   // Re-sync draft when reopening Style (or when committed changes externally).
   useEffect(() => {
     setDraft(committed);
-  }, [committed.presetId, committed.customDescription]);
+  }, [committed.presetId, committed.customDescription, committed.origin]);
 
   if (!config) return null;
 
   const firstTime = config.styleReady === false;
+  if (
+    firstTime &&
+    hasSourceArt(project) &&
+    config.artStyle.origin !== "derived" &&
+    !artworkFailed
+  ) {
+    return (
+      <ArtworkLookGate
+        onResolved={async (style) => {
+          if (!alive.current) return;
+          await updateConfig({ artStyle: style, styleReady: true, castReady: false });
+          if (!alive.current) return;
+          closeStyleSetup();
+          navigate("cast");
+        }}
+        onFailed={() => setArtworkFailed(true)}
+      />
+    );
+  }
   const draftConfig: BookConfig = { ...config, artStyle: draft };
   const chosen = isArtStyleChosen(draftConfig);
   const dirty = !artStylesEqual(draft, committed);
@@ -53,15 +82,27 @@ export function StyleSetup() {
   const hasArt = renew.cast > 0 || renew.pages > 0;
   const needsRenewWarn = dirty && hasArt && !firstTime;
 
-  const committedLabel = committed.presetId
-    ? resolveArtStyleLabel(committed.presetId, artStyles)
-    : "Custom";
-  const draftLabel = draft.presetId
-    ? resolveArtStyleLabel(draft.presetId, artStyles)
-    : "Custom";
+  const committedLabel = resolveArtStyleDisplayName(committed, artStyles);
+  const draftLabel = resolveArtStyleDisplayName(draft, artStyles);
 
   async function commitStyle(next: ArtStyleSelection) {
-    const patch: Partial<BookConfig> = { artStyle: next };
+    const derived = next.origin === "derived";
+    const artStyle: ArtStyleSelection = {
+      presetId: next.presetId,
+      origin: derived ? "derived" : "preset",
+    };
+    if (next.customDescription?.trim()) {
+      artStyle.customDescription = next.customDescription.trim();
+    }
+    if (derived && next.derivedFromName?.trim()) {
+      artStyle.derivedFromName = next.derivedFromName.trim();
+    }
+    if (derived && next.derivedFromNames?.length) {
+      artStyle.derivedFromNames = next.derivedFromNames
+        .map((name) => name.trim())
+        .filter(Boolean);
+    }
+    const patch: Partial<BookConfig> = { artStyle };
     if (firstTime) patch.styleReady = true;
     if (firstTime || !artStylesEqual(next, committed)) patch.castReady = false;
     await updateConfig(patch);
@@ -173,6 +214,17 @@ export function StyleSetup() {
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
         <div className="mx-auto w-full max-w-3xl space-y-6">
+          {artworkFailed && (
+            <p className="text-sm leading-relaxed text-ink-500">
+              Choose an art style. We couldn’t reliably identify the style of the uploaded artwork.
+            </p>
+          )}
+          {committed.origin === "derived" && !firstTime && (
+            <p className="text-sm leading-relaxed text-ink-500">
+              Your book currently uses the look from your character artwork. Pick a style below to
+              change it.
+            </p>
+          )}
           {needsRenewWarn && (
             <div className="flex items-start gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3.5 text-xs text-amber-900 sm:text-sm">
               <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />

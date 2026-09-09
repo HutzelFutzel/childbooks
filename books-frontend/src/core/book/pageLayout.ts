@@ -7,14 +7,16 @@
  * accounts for the real trim, safety margin and gutter of the chosen product.
  */
 import { bookProductForConfig, formatCapabilitiesForProject } from "../book";
+import type { LayoutsConfig } from "../config/layouts";
 import type { Project } from "../types";
 import { computePageGuides, type BindingSide } from "./format";
+import { resolveLayoutById } from "./layoutCatalog";
 import {
-  getBookLayout,
   type CompositionMode,
   type LayoutPlan,
   type PageSide,
 } from "./layouts";
+import { getTreatment } from "./treatments";
 
 /** Which edge binds into the spine for a page on the given side. */
 export function bindingSideFor(side: PageSide): BindingSide {
@@ -25,12 +27,17 @@ export function bindingSideFor(side: PageSide): BindingSide {
 
 /**
  * The composition mode in force for a project: the user's choice when the
- * active layout supports it, otherwise the layout's own default.
+ * (possibly admin-overlaid) layout supports it, otherwise the layout's default.
  */
-export function compositionModeForProject(project: Project): CompositionMode {
-  const layout = getBookLayout(project.config.layoutId);
+export function compositionModeForProject(
+  project: Project,
+  layoutsConfig?: LayoutsConfig | null,
+): CompositionMode {
+  const resolved = resolveLayoutById(project.config.layoutId, layoutsConfig);
   const chosen = project.config.compositionMode;
-  return chosen && layout.supportedModes.includes(chosen) ? chosen : layout.defaultMode;
+  return chosen && resolved.supportedModes.includes(chosen)
+    ? chosen
+    : resolved.defaultMode;
 }
 
 export interface PageLayoutInput {
@@ -39,10 +46,28 @@ export interface PageLayoutInput {
   textLength?: number;
   /** Override the project's mode (used by previews). */
   mode?: CompositionMode;
+  /** Admin overlay: treatments and allowed modes. */
+  layoutsConfig?: LayoutsConfig | null;
+}
+
+function applySlotTreatmentOverrides(
+  plan: LayoutPlan,
+  layoutsConfig: LayoutsConfig | null | undefined,
+): LayoutPlan {
+  const slots = layoutsConfig?.overrides[plan.layoutId]?.slots;
+  if (!slots) return plan;
+  return {
+    ...plan,
+    slots: plan.slots.map((slot) => {
+      const treatmentId = slots[slot.id]?.treatmentId;
+      if (!treatmentId) return slot;
+      return { ...slot, treatmentId, treatment: getTreatment(treatmentId) };
+    }),
+  };
 }
 
 export function planPageLayout(project: Project, input: PageLayoutInput): LayoutPlan {
-  const layout = getBookLayout(project.config.layoutId);
+  const resolved = resolveLayoutById(project.config.layoutId, input.layoutsConfig);
   const product = bookProductForConfig(project.config);
   const caps = formatCapabilitiesForProject(project);
   const spread = input.side === "spread";
@@ -52,13 +77,18 @@ export function planPageLayout(project: Project, input: PageLayoutInput): Layout
     // Covers have no gutter, so they use the plain margin on both edges.
     bindingSide: input.isCover ? "center" : bindingSideFor(input.side),
   });
-  return layout.plan({
+  const requested = input.mode ?? compositionModeForProject(project, input.layoutsConfig);
+  const mode = resolved.supportedModes.includes(requested)
+    ? requested
+    : resolved.defaultMode;
+  const plan = resolved.layout.plan({
     side: input.side,
     safe,
     aspect: spread ? product.aspect * 2 : product.aspect,
     trim: product.trim,
     isCover: input.isCover ?? false,
-    mode: input.mode ?? compositionModeForProject(project),
+    mode,
     textLength: input.textLength,
   });
+  return applySlotTreatmentOverrides(plan, input.layoutsConfig);
 }

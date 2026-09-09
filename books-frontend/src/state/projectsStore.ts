@@ -10,6 +10,7 @@ import type {
   ProjectStage,
   ScreenplayDoc,
   ScreenplaySpread,
+  SourceArtRef,
   StoryAnalysis,
 } from "../core/types";
 import {
@@ -21,6 +22,13 @@ import {
 } from "../core/versioning";
 import { normalizeAnchorName, reconcileAnchorIds } from "../core/book/anchorRefs";
 import { collectProjectImageBlobIds } from "../core/book/blobRefs";
+import {
+  applyArtworkLooks,
+  collectSourceArtBlobIds,
+  droppedSourceArtIds,
+  renameDerivedStyleNames,
+  setSourceArtOnNamedCharacters,
+} from "../core/book/sourceArt";
 import { textFromParagraphs, withIllustrationFrame, wordParagraphs } from "../core/design";
 import {
   COVER_BACK_ID,
@@ -32,7 +40,7 @@ import { detectDefaultBookLanguage } from "../core/config/bookLanguages";
 import { ProjectConflictError } from "../core/storage/repositories";
 import { getRepos } from "./repos";
 import { touchProjectRemote } from "../platform/aiClient";
-import { removeBlob } from "./blobs";
+import { copyBlob, removeBlob } from "./blobs";
 import { useSettingsStore } from "./settingsStore";
 import { useAppConfigStore } from "./appConfigStore";
 import { resolveShipCountry, useShipCountryStore } from "./shipCountryStore";
@@ -77,6 +85,55 @@ function collectLikenessPhotoSubjects(project: Project): {
     targets.set(`${target.subjectId}:${target.createdAt}`, target);
   }
   return [...targets.values()];
+}
+
+function remapSourceArt(
+  images: SourceArtRef[] | undefined,
+  remap: Map<string, string>,
+): SourceArtRef[] | undefined {
+  if (!images?.length) return undefined;
+  const next = images
+    .map((image) => {
+      const blobId = remap.get(image.blobId);
+      return blobId ? { ...image, blobId } : null;
+    })
+    .filter((image): image is SourceArtRef => Boolean(image));
+  return next.length > 0 ? next : undefined;
+}
+
+/** Duplicate drawings so the copy doesn't share blob ids with the original. */
+async function copySourceArtBlobs(project: Project): Promise<Project> {
+  const ids = [...new Set(collectSourceArtBlobIds(project))];
+  if (ids.length === 0) return project;
+  const remap = new Map<string, string>();
+  await Promise.all(
+    ids.map(async (id) => {
+      const copied = await copyBlob(id);
+      if (copied) remap.set(id, copied);
+    }),
+  );
+  const storyBrief = project.config.storyBrief;
+  return {
+    ...project,
+    config: {
+      ...project.config,
+      ...(storyBrief?.cast
+        ? {
+            storyBrief: {
+              ...storyBrief,
+              cast: storyBrief.cast.map((member) => {
+                if (!member.sourceArt?.length) return member;
+                return { ...member, sourceArt: remapSourceArt(member.sourceArt, remap) };
+              }),
+            },
+          }
+        : {}),
+    },
+    anchors: project.anchors?.map((anchor) => {
+      if (!anchor.sourceArt?.length) return anchor;
+      return { ...anchor, sourceArt: remapSourceArt(anchor.sourceArt, remap) };
+    }),
+  };
 }
 
 function stripLikenessPhotos(project: Project): Project {
@@ -202,6 +259,12 @@ interface ProjectsState {
    * snapshot) and by page ops that touch screenplay + design together.
    */
   patchCurrent: (mutator: (p: Project) => Project) => Promise<void>;
+  /**
+   * Delete blobs only if the current project no longer references them.
+   * Artwork is stored on both the story cast and character anchors; callers
+   * must not `removeBlob` those ids directly.
+   */
+  gcUnreferencedBlobs: (ids: string[]) => Promise<void>;
 }
 
 export const useProjectsStore = create<ProjectsState>((set, get) => ({
@@ -282,14 +345,16 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     if (!original) return null;
     const now = Date.now();
     const newId = genId();
-    const duplicate: Project = stripLikenessPhotos({
-      ...JSON.parse(JSON.stringify(original)),
-      id: newId,
-      title: `${original.title} (Copy)`,
-      createdAt: now,
-      updatedAt: now,
-      rev: undefined,
-    });
+    const duplicate: Project = await copySourceArtBlobs(
+      stripLikenessPhotos({
+        ...JSON.parse(JSON.stringify(original)),
+        id: newId,
+        title: `${original.title} (Copy)`,
+        createdAt: now,
+        updatedAt: now,
+        rev: undefined,
+      }),
+    );
     const { projects } = await getRepos();
     const saved = await projects.save(duplicate);
     touchProjectRemote({ projectId: saved.id, stage: saved.stage, title: saved.title });
@@ -380,12 +445,22 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     await mutateCurrent(get, set, (p) => {
       const reconciled = reconcileAnchorIds(anchors, p.anchors ?? []);
       const likenessByName = new Map<string, NonNullable<Anchor["likenessPhoto"]>[]>();
+      const sourceArtByName = new Map<string, NonNullable<Anchor["sourceArt"]>[]>();
+      const lookByName = new Map<string, string>();
       for (const member of p.config.storyBrief?.cast ?? []) {
-        if (!member.likenessPhoto) continue;
         const key = normalizeAnchorName(member.name);
-        const bucket = likenessByName.get(key) ?? [];
-        bucket.push(member.likenessPhoto);
-        likenessByName.set(key, bucket);
+        if (!key) continue;
+        if (member.likenessPhoto) {
+          const bucket = likenessByName.get(key) ?? [];
+          bucket.push(member.likenessPhoto);
+          likenessByName.set(key, bucket);
+        }
+        if (member.sourceArt?.length) {
+          const bucket = sourceArtByName.get(key) ?? [];
+          bucket.push(member.sourceArt);
+          sourceArtByName.set(key, bucket);
+        }
+        if (member.lookFromArt?.trim()) lookByName.set(key, member.lookFromArt.trim());
       }
       // Private embedding dependencies arrive keyed by name because the server
       // never sees the final reconciled ids. Resolve them here and replace the
@@ -400,7 +475,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
         ids.add(subject.id);
         embeddedByContainer.set(container.id, ids);
       }
-      return {
+      const next: Project = {
         ...p,
         analysis,
         config: { ...p.config, castReady: false },
@@ -410,13 +485,29 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
             anchor.type === "character" && !anchor.versions
               ? (anchor.likenessPhoto ?? bucket?.shift())
               : anchor.likenessPhoto;
+          const artBucket = sourceArtByName.get(normalizeAnchorName(anchor.name));
+          const sourceArt =
+            anchor.type === "character"
+              ? (anchor.sourceArt?.length ? anchor.sourceArt : artBucket?.shift())
+              : anchor.sourceArt;
+          const lookFromArt = anchor.lookFromArt ?? lookByName.get(normalizeAnchorName(anchor.name));
           return {
             ...anchor,
             ...(likenessPhoto ? { likenessPhoto } : {}),
+            ...(sourceArt?.length ? { sourceArt } : {}),
+            ...(lookFromArt ? { lookFromArt } : {}),
             containedIds: [...(embeddedByContainer.get(anchor.id) ?? [])],
           };
         }),
       };
+      const looks = next.anchors
+        ?.filter((anchor) => anchor.lookFromArt?.trim())
+        .map((anchor) => ({
+          name: anchor.name,
+          description: anchor.lookFromArt!,
+          bodyPlan: anchor.bodyPlan,
+        }));
+      return looks?.length ? applyArtworkLooks(next, looks) : next;
     });
     const current = get().current();
     if (current?.config.storyBrief?.cast) {
@@ -453,14 +544,27 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   async updateAnchor(anchorId, patch) {
-    await mutateCurrent(get, set, (p) =>
-      p.anchors
-        ? {
-            ...p,
-            anchors: p.anchors.map((a) => (a.id === anchorId ? { ...a, ...patch } : a)),
-          }
-        : p,
-    );
+    const current = get().current();
+    const previous = current?.anchors?.find((anchor) => anchor.id === anchorId);
+    const dropped =
+      "sourceArt" in patch && previous
+        ? droppedSourceArtIds(previous.sourceArt, patch.sourceArt)
+        : [];
+    await mutateCurrent(get, set, (p) => {
+      if (!p.anchors) return p;
+      let next: Project = {
+        ...p,
+        anchors: p.anchors.map((a) => (a.id === anchorId ? { ...a, ...patch } : a)),
+      };
+      if ("sourceArt" in patch) {
+        const name = next.anchors?.find((a) => a.id === anchorId)?.name ?? previous?.name;
+        if (name) next = setSourceArtOnNamedCharacters(next, name, patch.sourceArt);
+      }
+      return next;
+    });
+    if (dropped.length > 0 && current) {
+      void gcBlobsIfUnreferenced(get, current.id, dropped);
+    }
   },
 
   async renameAnchor(anchorId, name) {
@@ -470,6 +574,15 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       p.anchors
         ? {
             ...p,
+            config: {
+              ...p.config,
+              artStyle:
+                renameDerivedStyleNames(
+                  p.config.artStyle,
+                  p.anchors.find((a) => a.id === anchorId)?.name ?? "",
+                  trimmed,
+                ) ?? p.config.artStyle,
+            },
             anchors: p.anchors.map((a) => {
               if (a.id !== anchorId || a.name === trimmed) return a;
               const aliasNames = Array.from(
@@ -484,15 +597,16 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
 
   async removeAnchor(anchorId) {
     const current = get().current();
-    const photo = current?.anchors?.find((anchor) => anchor.id === anchorId)
-      ?.likenessPhoto;
+    const removed = current?.anchors?.find((anchor) => anchor.id === anchorId);
+    const photo = removed?.likenessPhoto;
+    const sourceArt = removed?.sourceArt ?? [];
     const sourceSubjectId = current?.config.storyBrief?.cast?.find(
       (member) => member.likenessPhoto?.createdAt === photo?.createdAt,
     )?.id;
     await mutateCurrent(get, set, (p) => ({
       ...p,
       config:
-        photo && p.config.storyBrief?.cast
+        p.config.storyBrief?.cast && photo
           ? {
               ...p.config,
               storyBrief: {
@@ -525,6 +639,13 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
           createdAt: photo.createdAt,
         }).catch(() => {});
       }
+    }
+    if (sourceArt.length > 0 && current) {
+      void gcBlobsIfUnreferenced(
+        get,
+        current.id,
+        sourceArt.map((image) => image.blobId),
+      );
     }
   },
 
@@ -674,6 +795,12 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
 
   async patchCurrent(mutator) {
     await mutateCurrent(get, set, mutator);
+  },
+
+  async gcUnreferencedBlobs(ids) {
+    const id = get().currentId;
+    if (!id || ids.length === 0) return;
+    await gcBlobsIfUnreferenced(get, id, ids);
   },
 
 }));

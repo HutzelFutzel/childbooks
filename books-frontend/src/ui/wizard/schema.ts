@@ -20,6 +20,9 @@ const artStyleSchema = z
   .object({
     presetId: z.string().nullable(),
     customDescription: z.string().optional(),
+    origin: z.enum(["preset", "derived"]).optional(),
+    derivedFromName: z.string().optional(),
+    derivedFromNames: z.array(z.string()).optional(),
   })
   .refine(
     (v) => v.presetId !== null || Boolean(v.customDescription?.trim()),

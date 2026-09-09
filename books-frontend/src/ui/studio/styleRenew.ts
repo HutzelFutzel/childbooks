@@ -22,6 +22,7 @@ import type { AnchorTask, RefreshTask } from "../../core/jobs/types";
 import { artStyleKey } from "../../core/prompts/style";
 import type { Project, StyleRenewPlan } from "../../core/types";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
+import { clampDerivedStylePrompt, derivedArtStyle, hasSourceArt } from "../../core/book/sourceArt";
 import { createAnchorsJob, createRefreshJob } from "../../platform/jobs";
 import { currentAnchorImage, currentIllustration, getResolvedModels } from "../../state/ai";
 import { useAppConfigStore } from "../../state/appConfigStore";
@@ -42,7 +43,11 @@ const isCoverUnit = (id: string) => id === COVER_FRONT_ID || id === COVER_BACK_I
  */
 function targetStyleKey(project: Project): string {
   const style = project.config.artStyle;
-  if (!style?.customDescription?.trim() || currentFeatureAllowed("customArtStyle")) {
+  const derived = derivedArtStyle(style) && hasSourceArt(project);
+  if (!style?.customDescription?.trim() || derived || currentFeatureAllowed("customArtStyle")) {
+    if (derived && style?.customDescription) {
+      return artStyleKey({ ...style, customDescription: clampDerivedStylePrompt(style.customDescription) });
+    }
     return artStyleKey(style);
   }
   return artStyleKey({ ...style, customDescription: "" });

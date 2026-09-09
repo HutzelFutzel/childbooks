@@ -45,6 +45,7 @@ import {
 import { createVersionTree } from "../books-frontend/src/core/versioning";
 import {
   allBookLayouts,
+  compileScreenplayGuidance,
   layoutPromptFacts,
   validateLayouts,
   PAGE_SIDES,
@@ -982,6 +983,20 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
               facts.calmRegions,
             );
           }
+          if (layout.id === "overlay-bottom") {
+            check(
+              `${label}: bottom-text overlay calms the lower band, not an outer column`,
+              /1\/4/.test(facts.calmRegions) && !/1\/3/.test(facts.calmRegions),
+              facts.calmRegions,
+            );
+          }
+          if (layout.id === "outer-text" && side !== "spread") {
+            check(
+              `${label}: outer-text overlay calms a width third`,
+              /1\/3/.test(facts.calmRegions),
+              facts.calmRegions,
+            );
+          }
           if (fullHeight) {
             check(
               `${label}: a full-height text column is described as a column`,
@@ -1020,6 +1035,53 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
         }
       }
     }
+  }
+
+  for (const layout of allBookLayouts()) {
+    const guidance = compileScreenplayGuidance(layout);
+    check(
+      `${layout.id}: screenplay guidance exists without a hand-written placement essay`,
+      guidance.length > 80,
+    );
+    check(
+      `${layout.id}: screenplay guidance does not name a page edge or grid fraction`,
+      !/left-hand|right-hand|along the OUTER|\d+\/\d+/.test(guidance),
+      guidance,
+    );
+    check(
+      `${layout.id}: screenplay leaves layoutNote as camera/staging, not text placement`,
+      /layoutNote is camera, staging and mood/i.test(guidance),
+    );
+    if (layout.defaultMode === "inset-art") {
+      check(
+        `${layout.id}: split screenplay guidance forbids a painted calm band`,
+        /do not leave a calm band/i.test(guidance),
+      );
+    } else {
+      check(
+        `${layout.id}: overlay screenplay guidance does not invent a band location`,
+        /do not invent a particular empty band/i.test(guidance),
+      );
+    }
+  }
+
+  {
+    const tpl = defaultTemplate("pageIllustration/default");
+    const blocks = tpl?.single ?? [];
+    const byId = Object.fromEntries(blocks.map((b) => [b.id, b]));
+    check(
+      "bleed copy is gated on overlay full-bleed, not every page",
+      byId.bleedTrimSingle?.enabledWhen === "bleedSingle" &&
+        byId.bleedTrimSpread?.enabledWhen === "bleedSpread",
+    );
+    check(
+      "stale layoutNotes cannot override compiled text placement",
+      /Ignore any mention of where to leave space for story text/i.test(byId.layoutStagingNote?.text ?? ""),
+    );
+    check(
+      "the generic fallback does not ask for an outer empty band",
+      /Do not invent a reserved empty band/i.test(byId.layoutNoInventedBand?.text ?? ""),
+    );
   }
 
   // ---- Region geometry -----------------------------------------------------

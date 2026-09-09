@@ -8,7 +8,7 @@
  * job, or a manual regeneration of one page all count the same.
  */
 import { useEffect, useState } from "react";
-import { resolveArtStyleLabel } from "../../core/prompts/style";
+import { resolveArtStyleDisplayName } from "../../core/prompts/style";
 import type { StyleRenewPlan } from "../../core/types";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useJobsStore } from "../../state/jobsStore";
@@ -100,9 +100,7 @@ export function useStyleRenew(): StyleRenewStatus | null {
 
   if (!project || !plan || !remaining) return null;
 
-  const styleLabel = project.config.artStyle?.presetId
-    ? resolveArtStyleLabel(project.config.artStyle.presetId, artStyles)
-    : "your new style";
+  const styleLabel = resolveArtStyleDisplayName(project.config.artStyle, artStyles);
 
   return {
     phase: plan.phase,

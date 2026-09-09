@@ -30,6 +30,16 @@ export function resolveArtStyleText(
   return parts.join(". ");
 }
 
+/** User-facing name for the current look, including artwork-derived styles. */
+export function resolveArtStyleDisplayName(
+  style: ArtStyleSelection | undefined,
+  ctx?: Pick<PromptContext, "artStyles"> | ArtStylesConfig | null,
+): string {
+  if (style?.origin === "derived") return "From your character artwork";
+  if (style?.presetId) return resolveArtStyleLabel(style.presetId, ctx);
+  return "Custom";
+}
+
 /**
  * Stable identity of an art-style selection, stamped onto every rendered image
  * so the studio can tell which artwork is still in an older look. Compares
