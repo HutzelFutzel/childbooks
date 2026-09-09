@@ -283,6 +283,21 @@ function ImageCostEditor({ cost, onChange }: { cost: ImageCost; onChange: (c: Im
   );
 }
 
+/** Shared advanced editor used by the unified Models screen. */
+export function ModelCostEditor({
+  cost,
+  onChange,
+}: {
+  cost: ModelCost;
+  onChange: (cost: ModelCost) => void;
+}) {
+  return cost.kind === "text" ? (
+    <TextCostEditor cost={cost} onChange={onChange} />
+  ) : (
+    <ImageCostEditor cost={cost} onChange={onChange} />
+  );
+}
+
 // ---- Tab -------------------------------------------------------------------
 
 interface SuggestMeta {
@@ -308,12 +323,12 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
-function costEquals(a: ModelCost, b: ModelCost): boolean {
+export function costEquals(a: ModelCost, b: ModelCost): boolean {
   return stableStringify(a) === stableStringify(b);
 }
 
 /** One-line human summary of a cost, for side-by-side conflict display. */
-function summarizeCost(c: ModelCost): string {
+export function summarizeCost(c: ModelCost): string {
   const m = (n: number) => `$${n}`;
   if (c.kind === "text") {
     const parts = [`in ${m(c.input)}/1M`, `out ${m(c.output)}/1M`];

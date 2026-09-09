@@ -18,6 +18,21 @@ function keyFor(provider: ProviderId): string {
   return (provider === "openai" ? cfg.openaiApiKey : cfg.googleApiKey) ?? "";
 }
 
+/**
+ * List a provider's live models using the server-held key. Shared by the
+ * public discovery route and admin model validation so both paths use the same
+ * short-lived cache and cannot disagree about whether a model exists.
+ */
+export async function listProviderModels(provider: ProviderId): Promise<RawModel[]> {
+  const key = keyFor(provider);
+  if (!key) throw new Error(`${provider} is not configured on the server.`);
+  const cached = modelsCache.get(provider);
+  if (cached && Date.now() - cached.at < MODELS_TTL_MS) return cached.models;
+  const models = await getTextProvider(provider).listModels({ apiKey: key });
+  modelsCache.set(provider, { at: Date.now(), models });
+  return models;
+}
+
 export function registerProviderRoutes(app: Express): void {
   app.get("/providers", (_req, res) => {
     res.json({
@@ -35,19 +50,8 @@ export function registerProviderRoutes(app: Express): void {
       res.status(400).json({ error: { message: "Unknown provider." } });
       return;
     }
-    const key = keyFor(provider);
-    if (!key) {
-      res.status(503).json({ error: { message: `${provider} is not configured on the server.` } });
-      return;
-    }
-    const cached = modelsCache.get(provider);
-    if (cached && Date.now() - cached.at < MODELS_TTL_MS) {
-      res.json({ models: cached.models });
-      return;
-    }
     try {
-      const models = await getTextProvider(provider).listModels({ apiKey: key });
-      modelsCache.set(provider, { at: Date.now(), models });
+      const models = await listProviderModels(provider);
       res.json({ models });
     } catch (err) {
       console.error(`[providers] model discovery failed (${provider})`, err);

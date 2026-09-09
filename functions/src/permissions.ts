@@ -502,11 +502,13 @@ const ROUTE_RULES: RouteRule[] = [
   { test: /^\/admin\/referrals\/void-unaccepted$/, gate: capability("dangerous") },
 
   // Configuration → AI.
+  { test: /^\/admin\/config\/model-setup$/, gate: key("configuration.models") },
   { test: /^\/admin\/config\/models$/, gate: key("configuration.models") },
   { test: /^\/admin\/config\/model-costs$/, gate: key("configuration.modelCosts") },
-  { test: /^\/admin\/suggest-costs?$/, gate: key("configuration.modelCosts", "read") },
+  { test: /^\/admin\/resolve-model$/, gate: key("configuration.models", "read") },
+  { test: /^\/admin\/suggest-costs?$/, gate: key("configuration.models", "read") },
   { test: /^\/admin\/config\/prompts$/, gate: key("configuration.prompts") },
-  { test: /^\/admin\/config$/, gate: key("configuration.modelCosts", "read") },
+  { test: /^\/admin\/config$/, gate: key("configuration.models", "read") },
 
   // Configuration → Creative.
   { test: /^\/admin\/config\/art-styles$/, gate: key("configuration.artStyles") },

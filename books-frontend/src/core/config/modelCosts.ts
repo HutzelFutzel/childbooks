@@ -90,6 +90,29 @@ export function createImageCost(): Extract<ModelCost, { kind: "image" }> {
   return { kind: "image", input: 0, output: { mode: "perImage", rate: 0 } };
 }
 
+/** True when a rate row can produce a non-zero provider cost. */
+export function hasUsableModelCost(cost: ModelCost | undefined): cost is ModelCost {
+  if (!cost) return false;
+  if (cost.kind === "text") {
+    return (
+      cost.input > 0 ||
+      cost.output > 0 ||
+      (cost.cachedInput ?? 0) > 0 ||
+      Boolean(
+        cost.largePrompt &&
+          (cost.largePrompt.input > 0 ||
+            cost.largePrompt.output > 0 ||
+            (cost.largePrompt.cachedInput ?? 0) > 0),
+      )
+    );
+  }
+  const outputPriced =
+    cost.output.mode === "perImageBySize"
+      ? cost.output.fallback > 0 || Object.values(cost.output.bySize).some((rate) => rate > 0)
+      : cost.output.rate > 0;
+  return cost.input > 0 || (cost.thinking ?? 0) > 0 || outputPriced;
+}
+
 export function createDefaultModelCostTable(): ModelCostTable {
   // Empty by default — an admin fills in real rates. Until a model has a cost,
   // `costForUsage` returns null (usage is still recorded, cost is "unknown").

@@ -51,6 +51,7 @@ import {
   saveBookLanguagesConfig,
   saveBrandingInfo,
   saveModelConfig,
+  saveModelSetup,
   saveModelCostTable,
   savePricingSettings,
   saveSeoConfig,
@@ -164,11 +165,19 @@ import { recordUsage, withUsage } from "./usage";
 import { getTextProvider } from "../../books-frontend/src/core/providers";
 import type { ProviderId } from "../../books-frontend/src/core/config/options";
 import {
+  activeModels,
+  modelConfigSchema,
+  normalizeModelConfig,
+} from "../../books-frontend/src/core/config/modelConfig";
+import { classifyModel } from "../../books-frontend/src/core/models/catalog";
+import {
   batchCostSuggestionSchema,
   suggestionToModelCost,
   type CostSuggestionResult,
+  type ModelResolutionResult,
   type RawBatchCostItem,
 } from "../../books-frontend/src/core/config/costSuggestion";
+import { listProviderModels } from "./providers";
 import { getAuth } from "firebase-admin/auth";
 import { recipientForUid, sendTemplatedEmail } from "./email/service";
 import { emailConfigured } from "./email/sender";
@@ -339,6 +348,71 @@ async function extractCostsForProvider(
   return { results, events };
 }
 
+function inferredProvider(modelId: string): ProviderId | null {
+  const id = modelId.toLowerCase();
+  if (id.startsWith("gemini")) return "google";
+  if (id.startsWith("gpt-") || /^o\d/.test(id)) return "openai";
+  return null;
+}
+
+/** Resolve one id against a provider's live catalog, then fetch official rates. */
+async function resolveLiveModel(
+  requestedId: string,
+  providerHint?: ProviderId,
+): Promise<{ result: ModelResolutionResult; events: Awaited<ReturnType<typeof withUsage>>["events"] }> {
+  const id = requestedId.trim();
+  const inferred = inferredProvider(id);
+  const candidates: ProviderId[] = providerHint
+    ? [providerHint]
+    : inferred
+      ? [inferred]
+      : ["openai", "google"];
+  let match: { provider: ProviderId; model: Awaited<ReturnType<typeof listProviderModels>>[number] } | null =
+    null;
+  const failures: string[] = [];
+
+  for (const provider of candidates) {
+    try {
+      const models = await listProviderModels(provider);
+      const model = models.find((candidate) => candidate.id.toLowerCase() === id.toLowerCase());
+      if (model) {
+        match = { provider, model };
+        break;
+      }
+    } catch (err) {
+      failures.push((err as Error)?.message ?? String(err));
+    }
+  }
+
+  if (!match) {
+    const detail = failures.length === candidates.length ? ` ${failures.join(" ")}` : "";
+    throw new Error(`"${id}" was not found in the live OpenAI or Google model catalog.${detail}`);
+  }
+  const classified = classifyModel(match.provider, match.model);
+  if (!classified) {
+    throw new Error(`"${match.model.id}" exists, but it is not a supported text or image generation model.`);
+  }
+
+  const { results, events } = await extractCostsForProvider(match.provider, [match.model.id]);
+  const pricing = results[0];
+  if (!pricing) throw new Error(`Could not inspect pricing for "${match.model.id}".`);
+  const wrongKind = pricing.modelCost && pricing.modelCost.kind !== classified.modality;
+  return {
+    events,
+    result: {
+      ...pricing,
+      found: pricing.found && !wrongKind,
+      modelCost: wrongKind ? null : pricing.modelCost,
+      notes: wrongKind
+        ? `The pricing page classified this as ${pricing.modelCost?.kind}, but the live model is ${classified.modality}.`
+        : pricing.notes,
+      modelId: match.model.id,
+      modality: classified.modality,
+      tier: classified.tier,
+    },
+  };
+}
+
 /** The provider environment currently being served (runtime override aware). */
 function activeEnv(): FulfillmentEnv {
   return serverConfig().fulfillment.lulu.env;
@@ -397,6 +471,40 @@ export function registerAdminRoutes(app: Express): void {
   app.put("/admin/config/models", json, async (req: Request, res: Response) => {
     try {
       res.json(await saveModelConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.put("/admin/config/model-setup", json, async (req: Request, res: Response) => {
+    try {
+      const config = normalizeModelConfig(modelConfigSchema.parse(req.body?.config));
+      const refs = activeModels(config);
+      const catalogs = new Map<ProviderId, Awaited<ReturnType<typeof listProviderModels>>>();
+      for (const provider of [...new Set(refs.map((model) => model.provider))]) {
+        catalogs.set(provider, await listProviderModels(provider));
+      }
+      for (const ref of refs) {
+        const live = catalogs
+          .get(ref.provider)
+          ?.find((model) => model.id.toLowerCase() === ref.modelId.toLowerCase());
+        if (!live) {
+          res.status(400).json({
+            error: { message: `${ref.provider}:${ref.modelId} is not in the provider's live model catalog.` },
+          });
+          return;
+        }
+        const classified = classifyModel(ref.provider, live);
+        if (!classified || classified.modality !== ref.modality) {
+          res.status(400).json({
+            error: {
+              message: `${ref.provider}:${ref.modelId} cannot be used as a ${ref.modality} model.`,
+            },
+          });
+          return;
+        }
+      }
+      res.json(await saveModelSetup(req.body ?? {}));
     } catch (err) {
       handleError(res, err);
     }
@@ -462,6 +570,32 @@ export function registerAdminRoutes(app: Express): void {
     try {
       res.json(await saveModelCostTable(req.body));
     } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // One safe add-model operation: prove the id exists in a live provider
+  // catalog, classify its modality, and fetch its official pricing together.
+  app.post("/admin/resolve-model", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const modelId = typeof req.body?.modelId === "string" ? req.body.modelId.trim() : "";
+      const provider =
+        req.body?.provider === "openai" || req.body?.provider === "google"
+          ? (req.body.provider as ProviderId)
+          : undefined;
+      if (!modelId) {
+        res.status(400).json({ error: { message: "Enter a model id." } });
+        return;
+      }
+      const { result, events } = await resolveLiveModel(modelId, provider);
+      await recordUsage(req.uid!, "costSuggestion", events);
+      res.json(result);
+    } catch (err) {
+      const message = (err as Error)?.message ?? "Model validation failed.";
+      if (message.includes("was not found") || message.includes("not a supported")) {
+        res.status(400).json({ error: { message } });
+        return;
+      }
       handleError(res, err);
     }
   });

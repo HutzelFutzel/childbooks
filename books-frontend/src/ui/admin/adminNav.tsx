@@ -89,7 +89,7 @@ export const CONFIG_TAB_META: Record<ConfigTabId, { label: string; icon: ReactNo
   financial: { label: "Financial settings", icon: <Coins className="size-4" /> },
   discounts: { label: "Discount planner", icon: <Percent className="size-4" /> },
   // AI pipeline
-  models: { label: "Models", icon: <Cpu className="size-4" /> },
+  models: { label: "Models & pricing", icon: <Cpu className="size-4" /> },
   modelCosts: { label: "Model costs", icon: <DollarSign className="size-4" /> },
   prompts: { label: "Prompts", icon: <MessageSquareText className="size-4" /> },
   // Creative defaults
@@ -153,6 +153,8 @@ export interface NavEntry {
   icon: ReactNode;
   sectionLabel: string;
   groupLabel?: string;
+  /** Extra command-palette matches without adding visible navigation items. */
+  keywords?: string;
   href: string;
   /** The grant this entry needs to be reachable — omitted for owner-only entries. */
   key?: PermissionKey;
@@ -172,6 +174,7 @@ function buildNavIndex(): NavEntry[] {
         icon: meta.icon,
         sectionLabel: "Configuration",
         groupLabel: group.label,
+        keywords: tab === "models" ? "model costs pricing rates" : undefined,
         key: `configuration.${tab}`,
         href: adminHref("configuration", tab),
       });

@@ -65,7 +65,10 @@ import {
   normalizeLatencyStats,
   type LatencyStats,
 } from "../core/config/latencyStats";
-import type { CostSuggestionResult } from "../core/config/costSuggestion";
+import type {
+  CostSuggestionResult,
+  ModelResolutionResult,
+} from "../core/config/costSuggestion";
 import type { ProviderId } from "../core/config/options";
 import {
   createDefaultPricingSettings,
@@ -574,6 +577,8 @@ interface AppConfigState {
 
   // Admin writes (enforced server-side; the snapshot reflects the result).
   saveModelConfig: (config: ModelConfig) => Promise<void>;
+  /** Atomically publish model routing and the matching private/public costs. */
+  saveModelSetup: (config: ModelConfig, costs: ModelCostTable) => Promise<void>;
   saveArtStyles: (config: ArtStylesConfig) => Promise<void>;
   saveLayouts: (config: LayoutsConfig) => Promise<void>;
   /** Upload a showcase image for a layout; returns the stored example. */
@@ -887,6 +892,8 @@ interface AppConfigState {
     modelId: string,
     modality: "text" | "image",
   ) => Promise<CostSuggestionResult>;
+  /** Validate a live OpenAI/Google model and fetch its official rates. */
+  resolveModel: (modelId: string, provider?: ProviderId) => Promise<ModelResolutionResult>;
 
   /**
    * Batch suggest: one server call, grouped by provider (one LLM call each, run
@@ -1134,6 +1141,14 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
 
   async saveModelConfig(config) {
     await putJson("/admin/config/models", config);
+  },
+
+  async saveModelSetup(config, costs) {
+    const result = (await putJson("/admin/config/model-setup", {
+      config,
+      costs,
+    })) as { config: ModelConfig; costs: ModelCostTable };
+    set({ modelConfig: result.config, adminModelCosts: result.costs });
   },
 
   async saveArtStyles(config) {
@@ -2100,6 +2115,16 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     });
     if (!res.ok) throw new Error((await safeError(res)) ?? "Suggestion failed.");
     return (await res.json()) as CostSuggestionResult;
+  },
+
+  async resolveModel(modelId, provider) {
+    const res = await backendFetch("/admin/resolve-model", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ modelId, ...(provider ? { provider } : {}) }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Model validation failed.");
+    return (await res.json()) as ModelResolutionResult;
   },
 
   async suggestCosts(targets) {

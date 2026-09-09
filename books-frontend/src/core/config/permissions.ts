@@ -133,7 +133,12 @@ const LEGAL_TAB_EXHAUSTIVE: Record<LegalTabId, true> = {
  * owner would even offer an admin. T1/T2 still reach it via the `isOwner`
  * bypass in `hasPermission`.
  */
-const NOT_GRANTABLE = new Set<PermissionKey>(["configuration.system"]);
+const NOT_GRANTABLE = new Set<PermissionKey>([
+  "configuration.system",
+  // Legacy key retained so existing grants deserialize, but model pricing now
+  // shares the Models screen and its permission.
+  "configuration.modelCosts",
+]);
 
 /** Every permission key that exists (including the non-grantable ones). */
 const EVERY_PERMISSION_KEY: PermissionKey[] = [

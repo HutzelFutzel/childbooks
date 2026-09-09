@@ -55,7 +55,9 @@ export function CommandPalette({
     const q = query.trim().toLowerCase();
     if (!q) return reachable;
     return reachable.filter((entry) =>
-      `${entry.label} ${entry.sectionLabel} ${entry.groupLabel ?? ""}`.toLowerCase().includes(q),
+      `${entry.label} ${entry.sectionLabel} ${entry.groupLabel ?? ""} ${entry.keywords ?? ""}`
+        .toLowerCase()
+        .includes(q),
     );
   }, [query, reachable]);
 

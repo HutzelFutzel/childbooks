@@ -177,8 +177,8 @@ export const CONFIG_GROUPS: {
   {
     id: "ai",
     label: "AI pipeline",
-    description: "What each generation actually costs to produce, and the prompts that drive it.",
-    tabs: ["models", "modelCosts", "prompts"],
+    description: "Which models run each generation step, what they cost, and the prompts they use.",
+    tabs: ["models", "prompts"],
   },
   {
     id: "creative",
@@ -302,6 +302,11 @@ export function canonicalAdminPath(pathname: string): string {
   if (section === "permissions") return adminHref("permissions");
 
   const tab = segments[2];
+  // Costs now live with model selection. Preserve old bookmarks without
+  // keeping two navigation destinations for one task.
+  if (section === "configuration" && tab === "modelCosts") {
+    return adminHref("configuration", "models");
+  }
   if (section === "analysis" && ANALYSIS_TABS.has(tab as AnalysisTabId)) {
     return adminHref("analysis", tab as AnalysisTabId);
   }

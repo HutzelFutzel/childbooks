@@ -10,7 +10,7 @@
  * ToModelCost` converts it into the real `ModelCost` shape used everywhere else.
  */
 import { z } from "zod";
-import type { ProviderId } from "./options";
+import type { Modality, ModelTier, ProviderId } from "./options";
 import type { ImageOutputCost, ModelCost } from "./modelCosts";
 
 export const costSuggestionSchema = z.object({
@@ -80,6 +80,14 @@ export interface CostSuggestionResult {
   canonicalModelId: string;
   sourceQuote: string;
   notes: string;
+}
+
+/** A live provider model plus its best official pricing match. */
+export interface ModelResolutionResult extends CostSuggestionResult {
+  /** Canonical id returned by the provider's live model-list endpoint. */
+  modelId: string;
+  modality: Modality;
+  tier: ModelTier;
 }
 
 /** Convert the flat extraction into the canonical `ModelCost`. */

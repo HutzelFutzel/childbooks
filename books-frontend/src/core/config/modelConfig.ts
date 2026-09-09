@@ -329,6 +329,31 @@ export function configuredModels(cfg: ModelConfig): ConfiguredModelRef[] {
   return out;
 }
 
+/**
+ * Concrete models currently reachable from customer-facing action bindings.
+ * Unused slots and the legacy economy image tier are deliberately excluded:
+ * they are safe drafts and must not block publishing an otherwise valid setup.
+ */
+export function activeModels(cfg: ModelConfig): ConfiguredModelRef[] {
+  const seen = new Set<string>();
+  const out: ConfiguredModelRef[] = [];
+  const add = (provider: ProviderId, modelId: string, modality: "text" | "image") => {
+    const id = modelId.trim();
+    const key = `${provider}:${id}:${modality}`;
+    if (!id || seen.has(key)) return;
+    seen.add(key);
+    out.push({ provider, modelId: id, modality });
+  };
+  for (const binding of Object.values(cfg.textBindings)) {
+    add(binding.provider, cfg.slots.text[binding.provider][binding.speed], "text");
+  }
+  for (const tiers of Object.values(cfg.imageBindings)) {
+    const binding = tiers[CUSTOMER_IMAGE_TIER];
+    add(binding.provider, cfg.slots.image[binding.provider][binding.speed], "image");
+  }
+  return out;
+}
+
 /** Configured models that have no entry in the cost table (so cost is untracked). */
 export function modelsMissingCost(cfg: ModelConfig, costs: ModelCostTable): ConfiguredModelRef[] {
   return configuredModels(cfg).filter((m) => !costs.models[costKey(m.provider, m.modelId)]);

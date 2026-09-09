@@ -18,6 +18,8 @@ import {
 } from "./storage";
 import { renderQrCode } from "./qrcode";
 import {
+  activeModels,
+  CUSTOMER_IMAGE_TIER,
   createDefaultModelConfig,
   modelConfigSchema,
   normalizeModelConfig,
@@ -52,7 +54,9 @@ import {
   type BookLanguagesConfig,
 } from "../../books-frontend/src/core/config/bookLanguages";
 import {
+  costKey,
   createDefaultModelCostTable,
+  hasUsableModelCost,
   modelCostTableSchema,
   normalizeModelCostTable,
   publicModelCostProjection,
@@ -857,6 +861,58 @@ export async function saveModelConfig(input: unknown): Promise<ModelConfig> {
   const normalized = normalizeModelConfig(parsed);
   await writeDoc(MODELS_DOC, normalized);
   return normalized;
+}
+
+/**
+ * Validate and atomically publish the model routing and its private/public cost
+ * tables. The relationship checks prevent a valid-looking pair of documents
+ * from leaving a bound action unpriced or pointed at the wrong modality.
+ * Live provider existence is checked by the admin route immediately before
+ * calling this function.
+ */
+export async function saveModelSetup(input: {
+  config?: unknown;
+  costs?: unknown;
+}): Promise<{ config: ModelConfig; costs: ModelCostTable }> {
+  const config = normalizeModelConfig(modelConfigSchema.parse(input.config));
+  const costs = modelCostTableSchema.parse(input.costs);
+
+  for (const model of activeModels(config)) {
+    const cost = costs.models[costKey(model.provider, model.modelId)];
+    if (!hasUsableModelCost(cost)) {
+      throw new Error(`${model.provider}:${model.modelId} needs a non-zero cost before it can be used.`);
+    }
+    if (cost.kind !== model.modality) {
+      throw new Error(
+        `${model.provider}:${model.modelId} is configured as ${model.modality}, but its cost is ${cost.kind}.`,
+      );
+    }
+  }
+
+  for (const [action, binding] of Object.entries(config.textBindings)) {
+    if (!config.slots.text[binding.provider]?.[binding.speed]?.trim()) {
+      throw new Error(`${action} points to an empty text model slot.`);
+    }
+  }
+  for (const [action, tiers] of Object.entries(config.imageBindings)) {
+    const binding = tiers[CUSTOMER_IMAGE_TIER];
+    if (!config.slots.image[binding.provider]?.[binding.speed]?.trim()) {
+      throw new Error(`${action} points to an empty production image model slot.`);
+    }
+  }
+
+  ensureAdmin();
+  const publicCosts = publicModelCostProjection(costs);
+  const db = getFirestore();
+  const batch = db.batch();
+  batch.set(db.doc(MODELS_DOC), config as unknown as Record<string, unknown>);
+  batch.set(db.doc(MODEL_COSTS_DOC), costs as unknown as Record<string, unknown>);
+  batch.set(db.doc(MODEL_COSTS_PUBLIC_DOC), publicCosts as unknown as Record<string, unknown>);
+  await batch.commit();
+  cache.delete(MODELS_DOC);
+  cache.delete(MODEL_COSTS_DOC);
+  cache.delete(MODEL_COSTS_PUBLIC_DOC);
+  return { config, costs };
 }
 
 export async function saveArtStylesConfig(input: unknown): Promise<ArtStylesConfig> {
