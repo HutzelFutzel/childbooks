@@ -38,6 +38,12 @@ import {
   type AgeWritingConfig,
 } from "../../books-frontend/src/core/config/ageWriting";
 import {
+  audienceConfigSchema,
+  createDefaultAudienceConfig,
+  normalizeAudienceConfig,
+  type AudienceConfig,
+} from "../../books-frontend/src/core/config/audience";
+import {
   createDefaultStoryCraftConfig,
   normalizeStoryCraftConfig,
   storyCraftConfigSchema,
@@ -238,6 +244,7 @@ const ART_STYLES_DOC = "appConfig/artStyles";
 const LAYOUTS_DOC = "appConfig/layouts";
 const IMAGE_MASKS_DOC = "appConfig/imageMasks";
 const AGE_WRITING_DOC = "appConfig/ageWriting";
+const AUDIENCE_DOC = "appConfig/audience";
 const STORY_CRAFT_DOC = "appConfig/storyCraft";
 const TYPOGRAPHY_DOC = "appConfig/typography";
 const BOOK_LANGUAGES_DOC = "appConfig/bookLanguages";
@@ -776,13 +783,17 @@ export async function loadModelCapabilities(): Promise<CapabilityOverrides> {
 
 /** Admin-managed prompt overlays used by text and image pipelines. */
 export async function loadPromptContext(): Promise<PromptContext> {
-  const [artStyles, ageWriting, storyCraft, templates] = await Promise.all([
+  const [artStyles, audience, ageWriting, storyCraft, templates] = await Promise.all([
     getArtStylesConfig(),
+    getAudienceConfig(),
+    // Still loaded: the audience resolver layers the legacy documents
+    // underneath the new one so a deployment that customised them keeps its
+    // wording until an admin edits the band in the new tab.
     getAgeWritingConfig(),
     getStoryCraftConfig(),
     getPromptsConfig(),
   ]);
-  return { artStyles, ageWriting, storyCraft, templates };
+  return { artStyles, audience, ageWriting, storyCraft, templates };
 }
 
 /** Validate + persist the prompt templates (world-readable appConfig doc). */
@@ -936,6 +947,34 @@ export async function saveAgeWritingConfig(input: unknown): Promise<AgeWritingCo
   const parsed = ageWritingConfigSchema.parse(input);
   const normalized = normalizeAgeWritingConfig(parsed);
   await writeDoc(AGE_WRITING_DOC, normalized);
+  return normalized;
+}
+
+export function getAudienceConfig(): Promise<AudienceConfig> {
+  return readDoc(AUDIENCE_DOC, normalizeAudienceConfig);
+}
+
+export function defaultAudienceConfig(): AudienceConfig {
+  return createDefaultAudienceConfig();
+}
+
+/**
+ * Validate + persist the age bands and their editorial guardrails.
+ *
+ * The revision counter is server-owned and increments on every save. It rides
+ * along on generated content (see `checkStoryFit`), which is what lets the
+ * studio tell "this reading-level check is stale because the band changed"
+ * apart from "the author edited the story".
+ */
+export async function saveAudienceConfig(input: unknown): Promise<AudienceConfig> {
+  const parsed = audienceConfigSchema.parse(input);
+  const current = await getAudienceConfig();
+  const normalized = normalizeAudienceConfig({
+    ...parsed,
+    updatedAt: Date.now(),
+    revision: (current.revision ?? 0) + 1,
+  });
+  await writeDoc(AUDIENCE_DOC, normalized);
   return normalized;
 }
 

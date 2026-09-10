@@ -36,6 +36,12 @@ import {
   type AgeWritingConfig,
 } from "../core/config/ageWriting";
 import {
+  createDefaultAudienceConfig,
+  normalizeAudienceConfig,
+  type AudienceConfig,
+} from "../core/config/audience";
+import { setActiveAudienceSource } from "../core/config/activeAudience";
+import {
   createDefaultStoryCraftConfig,
   normalizeStoryCraftConfig,
   type StoryCraftConfig,
@@ -420,7 +426,13 @@ interface AppConfigState {
   layouts: LayoutsConfig;
   /** Reusable, immutable SVG shapes applied non-destructively to images. */
   imageMasks: ImageMasksConfig;
+  /**
+   * LEGACY age guidance. Still subscribed because the audience resolver layers
+   * it underneath the new document for deployments that customised it.
+   */
   ageWriting: AgeWritingConfig;
+  /** Age bands and every editorial guardrail attached to them. */
+  audience: AudienceConfig;
   /** Per-age-band story themes, stylistic devices and drafting rules. */
   storyCraft: StoryCraftConfig;
   /** Age/format-aware font-size recommendation coefficients. */
@@ -591,6 +603,7 @@ interface AppConfigState {
   uploadImageMask: (name: string, base64: string, mimeType: string) => Promise<void>;
   patchImageMask: (id: string, patch: { name?: string; archived?: boolean }) => Promise<void>;
   saveAgeWriting: (config: AgeWritingConfig) => Promise<void>;
+  saveAudience: (config: AudienceConfig) => Promise<void>;
   saveStoryCraft: (config: StoryCraftConfig) => Promise<void>;
   saveTypography: (config: TypographyConfig) => Promise<void>;
   saveBookLanguages: (config: BookLanguagesConfig) => Promise<void>;
@@ -927,12 +940,25 @@ async function safeError(res: Response): Promise<string | null> {
   }
 }
 
+function publishAudienceSource(state: {
+  audience: AudienceConfig;
+  ageWriting: AgeWritingConfig;
+  storyCraft: StoryCraftConfig;
+}): void {
+  setActiveAudienceSource({
+    audience: state.audience,
+    ageWriting: state.ageWriting,
+    storyCraft: state.storyCraft,
+  });
+}
+
 export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   modelConfig: createDefaultModelConfig(),
   artStyles: createDefaultArtStylesConfig(),
   layouts: createDefaultLayoutsConfig(),
   imageMasks: createDefaultImageMasksConfig(),
   ageWriting: createDefaultAgeWritingConfig(),
+  audience: createDefaultAudienceConfig(),
   storyCraft: createDefaultStoryCraftConfig(),
   typography: createDefaultTypographyConfig(),
   bookLanguages: createDefaultBookLanguagesConfig(),
@@ -987,11 +1013,20 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       onSnapshot(doc(db, "appConfig", "imageMasks"), (snap) => {
         set({ imageMasks: normalizeImageMasksConfig(snap.exists() ? snap.data() : undefined) });
       }),
+      // The three age-band documents publish a shared snapshot as well as
+      // store state: a few pure validators resolve bands with nowhere to thread
+      // a config argument. See `core/config/activeAudience`.
       onSnapshot(doc(db, "appConfig", "ageWriting"), (snap) => {
         set({ ageWriting: normalizeAgeWritingConfig(snap.exists() ? snap.data() : undefined) });
+        publishAudienceSource(get());
+      }),
+      onSnapshot(doc(db, "appConfig", "audience"), (snap) => {
+        set({ audience: normalizeAudienceConfig(snap.exists() ? snap.data() : undefined) });
+        publishAudienceSource(get());
       }),
       onSnapshot(doc(db, "appConfig", "storyCraft"), (snap) => {
         set({ storyCraft: normalizeStoryCraftConfig(snap.exists() ? snap.data() : undefined) });
+        publishAudienceSource(get());
       }),
       onSnapshot(doc(db, "appConfig", "typography"), (snap) => {
         set({ typography: normalizeTypographyConfig(snap.exists() ? snap.data() : undefined) });
@@ -1161,6 +1196,11 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
 
   async saveAgeWriting(config) {
     await putJson("/admin/config/age-writing", config);
+  },
+
+  async saveAudience(config) {
+    set({ audience: normalizeAudienceConfig(await putJson("/admin/config/audience", config)) });
+    publishAudienceSource(get());
   },
 
   async saveStoryCraft(config) {

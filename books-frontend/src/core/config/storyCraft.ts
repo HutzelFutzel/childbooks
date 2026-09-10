@@ -77,10 +77,12 @@ export function normalizeStoryCraftConfig(input: unknown): StoryCraftConfig {
   const stored = (input ?? {}) as Record<string, unknown>;
   const rawBands = (stored.bands ?? {}) as Record<string, unknown>;
   const bands: StoryCraftConfig["bands"] = {};
-  for (const id of Object.keys(DEFAULT_STORY_CRAFT) as AgeBandId[]) {
+  // Any band id, not just the shipped ones: age bands are configuration now, so
+  // a themes list curated for an admin-created band has to survive a round trip.
+  for (const id of Object.keys(rawBands)) {
     const parsed = bandSchema.safeParse(rawBands[id]);
-    // Drop unparseable/unknown bands rather than letting a bad doc break the
-    // studio — the shipped catalog is always a working fallback.
+    // Drop an unparseable band rather than letting a bad doc break the studio —
+    // the shipped catalog is always a working fallback.
     if (parsed.success) bands[id] = parsed.data;
   }
   return {
@@ -140,6 +142,41 @@ export function resolveStoryCraft(
     protagonist: mergeProtagonist(base.protagonist, over.protagonist),
     safety: mergeSafety(base.safety, over.safety),
   };
+}
+
+/**
+ * The rule objects an admin overrode here before the rules moved to the
+ * audience profiles.
+ *
+ * Story craft now owns only the curated LISTS — what an author can pick from.
+ * Structure, hero age and the avoid list are editorial guardrails and live with
+ * the age band, alongside the page pacing and the rubric they have to agree
+ * with. Anything already stored here is folded into the audience document
+ * underneath the new editor, so no deployment loses its tuning.
+ */
+export function storyCraftRuleOverrides(config?: StoryCraftConfig | null): {
+  id: string;
+  structure?: StoryStructureRules;
+  protagonist?: ProtagonistRules;
+  safety?: StorySafetyRules;
+}[] {
+  const out: {
+    id: string;
+    structure?: StoryStructureRules;
+    protagonist?: ProtagonistRules;
+    safety?: StorySafetyRules;
+  }[] = [];
+  for (const [id, band] of Object.entries(config?.bands ?? {})) {
+    if (!band) continue;
+    if (!band.structure && !band.protagonist && !band.safety) continue;
+    out.push({
+      id,
+      ...(band.structure ? { structure: band.structure } : {}),
+      ...(band.protagonist ? { protagonist: band.protagonist } : {}),
+      ...(band.safety ? { safety: band.safety } : {}),
+    });
+  }
+  return out;
 }
 
 /**

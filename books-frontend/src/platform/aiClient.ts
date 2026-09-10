@@ -134,6 +134,15 @@ export interface StoryFitResult {
   verdict: "good" | "minor" | "mismatch";
   headline: string;
   notes: string[];
+  /** Per-quality calibration against the age band's rubric. */
+  dimensions?: { id: string; fit: "typical" | "lighter" | "heavier" }[];
+  /**
+   * The age band and its revision at the time of the read. A later edit to the
+   * band changes what "right for this age" means, which outdates the read just
+   * as surely as editing the story does.
+   */
+  profileId?: string;
+  profileRevision?: number;
 }
 
 /** Ask the backend to write the story described by the brief. */

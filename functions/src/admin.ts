@@ -46,6 +46,7 @@ import {
   addImageMask,
   patchImageMask,
   saveAgeWritingConfig,
+  saveAudienceConfig,
   saveStoryCraftConfig,
   saveTypographyConfig,
   saveBookLanguagesConfig,
@@ -541,6 +542,14 @@ export function registerAdminRoutes(app: Express): void {
   app.put("/admin/config/age-writing", json, async (req: Request, res: Response) => {
     try {
       res.json(await saveAgeWritingConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.put("/admin/config/audience", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveAudienceConfig(req.body));
     } catch (err) {
       handleError(res, err);
     }

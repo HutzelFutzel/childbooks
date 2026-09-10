@@ -12,6 +12,13 @@ import { ageBandLabel } from "../config/storyCraftCatalog";
 import { optionGuidance, optionsGuidance, resolveStoryCraft, type StoryCraftConfig } from "../config/storyCraft";
 import { getBookLanguage } from "../config/bookLanguages";
 import { castPromptLines, heroesLine } from "../story/brief";
+import {
+  resolveAudienceProfile,
+  resolveAvoidList,
+  type AudienceSource,
+} from "../config/audience";
+import type { AudienceProfile } from "../config/audienceCatalog";
+import { evaluationRubric, resolveAudienceOverlays } from "./audience";
 import { resolveAgeLlmGuidance } from "./age";
 import type { PromptContext } from "./context";
 import { resolvePromptsConfig } from "./context";
@@ -25,12 +32,45 @@ function craftFromCtx(
   return "storyCraft" in ctx ? ctx.storyCraft : (ctx as StoryCraftConfig);
 }
 
-/** The resolved (defaults + admin overrides) craft rules for an age band. */
+/**
+ * The rules in force for an age band.
+ *
+ * Story craft supplies the curated LISTS an author picks from; the audience
+ * profile supplies every RULE — length, beats, sentence ceiling, hero age and
+ * the avoid list — because those have to agree with the page pacing and the
+ * rubric, which live there too. Rules an admin set under the old story-craft
+ * editor are folded into the profile as a base layer, so this is a change of
+ * owner rather than a loss of configuration.
+ */
 export function resolveStoryCraftFor(
   ageRangeId: string,
-  ctx?: Pick<PromptContext, "storyCraft"> | StoryCraftConfig | null,
+  ctx?: Pick<PromptContext, "storyCraft" | "audience" | "ageWriting"> | StoryCraftConfig | null,
 ): AgeBandStoryCraft {
-  return resolveStoryCraft(ageRangeId, craftFromCtx(ctx));
+  const lists = resolveStoryCraft(ageRangeId, craftFromCtx(ctx));
+  const profile = resolveAudienceProfile(ageRangeId, audienceSourceFrom(ctx));
+  return {
+    ...lists,
+    structure: {
+      minWords: profile.structure.minWords,
+      maxWords: profile.structure.maxWords,
+      beats: profile.structure.beats,
+      maxSentenceWords: profile.structure.maxSentenceWords,
+    },
+    protagonist: profile.protagonist,
+    safety: { avoid: resolveAvoidList(profile), note: profile.safety.note },
+  };
+}
+
+/**
+ * A story-craft-shaped argument is not an audience source, and passing one as
+ * if it were would silently resolve the shipped bands instead of the admin's.
+ */
+function audienceSourceFrom(
+  ctx?: Pick<PromptContext, "storyCraft" | "audience" | "ageWriting"> | StoryCraftConfig | null,
+): AudienceSource | null {
+  if (!ctx) return null;
+  if ("version" in ctx && "bands" in ctx) return { storyCraft: ctx as StoryCraftConfig };
+  return ctx as AudienceSource;
 }
 
 function protagonistSentence(craft: AgeBandStoryCraft): string {
@@ -43,6 +83,8 @@ export interface StoryPromptParts {
   system: string;
   user: string;
   craft: AgeBandStoryCraft;
+  /** The band's full editorial profile — density targets, rubric, plot flag. */
+  profile: AudienceProfile;
 }
 
 /**
@@ -56,6 +98,7 @@ export function buildStoryDraftPrompt(
   repairInstruction?: string,
 ): StoryPromptParts {
   const baseCraft = resolveStoryCraftFor(config.ageRangeId, ctx);
+  const profile = resolveAudienceProfile(config.ageRangeId, ctx);
   const language = getBookLanguage(config.contentLocale);
   const craft: AgeBandStoryCraft = {
     ...baseCraft,
@@ -110,20 +153,28 @@ export function buildStoryDraftPrompt(
       hasWhere: Boolean(brief.where?.trim()),
       hasMustInclude: Boolean(brief.mustInclude?.trim()),
       isRepair: Boolean(repairInstruction),
+      plotRequired: profile.structure.plotRequired,
     },
   });
 
-  return { system, user, craft };
+  return { system, user, craft, profile };
 }
 
-/** Build the advisory age-fit prompt for a story the author wrote themselves. */
+/**
+ * Build the advisory age-fit prompt for a story the author wrote themselves.
+ *
+ * `dimensionIds` is returned alongside the prompt because the caller has to
+ * validate the model's structured answer against exactly the rows it was asked
+ * about — a fit for a dimension nobody asked for is noise.
+ */
 export function buildStoryFitPrompt(
   config: Pick<BookConfig, "ageRangeId" | "readingModeId" | "contentLocale">,
   story: string,
   actualWords: number,
   ctx?: PromptContext | null,
-): StoryPromptParts {
+): StoryPromptParts & { dimensionIds: string[] } {
   const baseCraft = resolveStoryCraftFor(config.ageRangeId, ctx);
+  const profile = resolveAudienceProfile(config.ageRangeId, ctx);
   const language = getBookLanguage(config.contentLocale);
   const craft: AgeBandStoryCraft = {
     ...baseCraft,
@@ -133,10 +184,17 @@ export function buildStoryFitPrompt(
       maxWords: Math.max(1, Math.round(baseCraft.structure.maxWords * language.wordCountFactor)),
     },
   };
+  const overlays = resolveAudienceOverlays(config.ageRangeId, config.readingModeId, ctx);
+  const rubric = evaluationRubric(profile);
   const { system, user } = renderTextPrompt(resolvePromptsConfig(ctx), "storyCheck/ageFit", {
     vars: {
-      age: ageBandLabel(config.ageRangeId),
-      ageGuidance: resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, ctx),
+      age: profile.label,
+      // The evaluation channel, not the writing one: the check wants to know
+      // what this age USUALLY reads like, not the instructions a drafting model
+      // would have been given.
+      ageGuidance: overlays.evaluation || overlays.story,
+      dimensionRubric: rubric.instruction,
+      dimensionIds: rubric.ids.join(", "),
       languageName: language.englishName,
       story,
       actualWords: String(actualWords),
@@ -144,8 +202,9 @@ export function buildStoryFitPrompt(
       maxWords: String(craft.structure.maxWords),
       safetyList: craft.safety.avoid.join("; "),
     },
+    flags: { hasRubric: rubric.ids.length > 0 },
   });
-  return { system, user, craft };
+  return { system, user, craft, profile, dimensionIds: rubric.ids };
 }
 
 /** Build the translation and cultural adaptation prompt for an existing story. */
@@ -184,7 +243,12 @@ export function buildStoryTranslatePrompt(
     },
   });
 
-  return { system, user, craft: baseCraft };
+  return {
+    system,
+    user,
+    craft: baseCraft,
+    profile: resolveAudienceProfile(config.ageRangeId, ctx),
+  };
 }
 
 /** Build a surgical edit prompt whose output names every exact text replacement. */
@@ -221,5 +285,5 @@ export function buildStoryRevisionPrompt(
     },
   });
 
-  return { system, user, craft };
+  return { system, user, craft, profile: resolveAudienceProfile(config.ageRangeId, ctx) };
 }

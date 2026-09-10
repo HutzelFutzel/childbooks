@@ -4,6 +4,8 @@
  * and (later) the generation pipeline.
  */
 
+import { DEFAULT_AUDIENCE_PROFILES } from "./audienceCatalog";
+
 export type ProviderId = "openai" | "google";
 export type Modality = "text" | "image";
 export type ModelTier = "economy" | "premium";
@@ -17,18 +19,35 @@ export type TextPlacement = "separate" | "embedded";
 export interface AgeRange {
   id: string;
   label: string;
+  /** Lower bound in whole years, derived from the profile's month range. */
   min: number;
+  /** Upper bound in whole years, derived from the profile's month range. */
   max: number;
-  /** Short card blurb in the setup wizard (superseded by ageWriting catalog when configured). */
   description: string;
 }
 
-export const AGE_RANGES: AgeRange[] = [
-  { id: "0-2", label: "0–2 years", min: 0, max: 2, description: "Board-book simplicity: a few words per page, bold shapes." },
-  { id: "3-5", label: "3–5 years", min: 3, max: 5, description: "Short sentences, playful rhythm, lots of imagery." },
-  { id: "6-8", label: "6–8 years", min: 6, max: 8, description: "Early readers: richer plot, longer paragraphs." },
-  { id: "9-12", label: "9–12 years", min: 9, max: 12, description: "Chapter-style storytelling with detailed scenes." },
-];
+/**
+ * The SHIPPED age bands, projected from the audience catalog.
+ *
+ * Age bands are configuration now (`appConfig/audience`), so this is only the
+ * built-in starting point: anything that should honour an admin's bands — the
+ * wizard, the pipelines, the admin tabs — must resolve them through
+ * `resolveAudienceProfiles` instead of reading this array.
+ *
+ * It stays exported because a handful of callers legitimately need a
+ * synchronous, config-free list (analytics filters, static fallbacks), and
+ * because deriving it here is what keeps `AgeBandId` a plain string rather than
+ * a closed union that a new band could not be added to.
+ */
+export const AGE_RANGES: AgeRange[] = DEFAULT_AUDIENCE_PROFILES.filter((p) => p.enabled).map(
+  (p) => ({
+    id: p.id,
+    label: p.label,
+    min: Math.floor(p.minMonths / 12),
+    max: Math.floor(p.maxMonths / 12),
+    description: p.description,
+  }),
+);
 
 export interface ArtStylePreset {
   id: string;

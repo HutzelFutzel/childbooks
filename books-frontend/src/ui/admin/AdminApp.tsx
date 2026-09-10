@@ -51,7 +51,7 @@ import { CommandPalette } from "./CommandPalette";
 import { ModelConfigTab } from "./tabs/ModelConfigTab";
 import { ArtStylesTab } from "./tabs/ArtStylesTab";
 import { LayoutsTab } from "./tabs/LayoutsTab";
-import { AgeWritingTab } from "./tabs/AgeWritingTab";
+import { AudienceTab } from "./tabs/AudienceTab";
 import { StoryCraftTab } from "./tabs/StoryCraftTab";
 import { BookLanguagesTab } from "./tabs/BookLanguagesTab";
 import { TypographyTab } from "./tabs/TypographyTab";
@@ -106,8 +106,8 @@ function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
       return <ArtStylesTab />;
     case "layouts":
       return <LayoutsTab />;
-    case "ageWriting":
-      return <AgeWritingTab />;
+    case "audience":
+      return <AudienceTab />;
     case "storyCraft":
       return <StoryCraftTab />;
     case "bookLanguages":

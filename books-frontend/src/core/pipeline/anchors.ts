@@ -11,6 +11,7 @@ import type {
   ReferenceImage,
 } from "../providers/types";
 import { resolveArtStyleText } from "../prompts/style";
+import { resolveAudienceOverlays } from "../prompts/audience";
 import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderSinglePrompt } from "../prompts/render";
 import type { Anchor, AnchorSheetLayout, ArtStyleSelection } from "../types";
@@ -86,7 +87,14 @@ export interface BuildAnchorPromptInput {
    * design. False means keep identity/outfit but redraw in the book style.
    */
   preserveRendering?: boolean;
-  /** Admin prompt overlays (art-style descriptions). */
+  /**
+   * The book's audience. Character sheets are where a cast's design is fixed
+   * for the whole book, so how readable a silhouette has to be and how broad an
+   * expression should read are decided here or not at all.
+   */
+  ageRangeId?: string;
+  readingModeId?: string | null;
+  /** Admin prompt overlays (art-style descriptions, audience profiles). */
   prompts?: PromptContext;
 }
 
@@ -106,10 +114,17 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
     actualPanelCount,
     fromSourceArt = false,
     preserveRendering = false,
+    ageRangeId,
+    readingModeId,
     prompts,
   } = input;
   const config = resolvePromptsConfig(prompts);
   const isEdit = Boolean(edit?.trim());
+  // Only the character-design section reaches here; the prose rules would just
+  // be tokens an image model ignores.
+  const ageVisualGuidance = ageRangeId
+    ? resolveAudienceOverlays(ageRangeId, readingModeId, prompts).characterArt
+    : "";
 
   if (restyle) {
     const spec = sheetSpecFor(anchor);
@@ -190,6 +205,7 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
       gridShape: gridShapeText(spec),
       viewList: viewListText(spec),
       description: anchor.description.trim(),
+      ageVisualGuidance,
       age: anchor.ageYears !== undefined ? `${anchor.ageYears} years old` : "",
       userGuidance: anchor.userGuidance?.trim() ?? "",
       containedList: listOf(contained),
@@ -204,6 +220,7 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
       isPlace: anchor.type === "place",
       isObject: anchor.type === "object",
       hasUserGuidance: Boolean(anchor.userGuidance?.trim()),
+      hasAgeVisual: Boolean(ageVisualGuidance),
       hasAge: anchor.type === "character" && anchor.ageYears !== undefined,
       hasContained: contained.length > 0,
       hasMentioned: mentioned.length > 0,

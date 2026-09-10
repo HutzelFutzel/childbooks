@@ -35,7 +35,7 @@ export type ConfigTabId =
   // Creative defaults group.
   | "artStyles"
   | "layouts"
-  | "ageWriting"
+  | "audience"
   | "storyCraft"
   | "bookLanguages"
   | "typography"
@@ -185,7 +185,7 @@ export const CONFIG_GROUPS: {
     label: "Creative defaults",
     description:
       "Defaults for the creative pipeline — art direction, page layout, age-appropriate writing and story structure.",
-    tabs: ["artStyles", "layouts", "ageWriting", "storyCraft", "bookLanguages", "typography"],
+    tabs: ["artStyles", "layouts", "audience", "storyCraft", "bookLanguages", "typography"],
   },
   {
     id: "operations",
@@ -306,6 +306,11 @@ export function canonicalAdminPath(pathname: string): string {
   // keeping two navigation destinations for one task.
   if (section === "configuration" && tab === "modelCosts") {
     return adminHref("configuration", "models");
+  }
+  // Age writing grew into the whole audience profile — bands, rubric, pacing
+  // and safety in one place. Keep old bookmarks working.
+  if (section === "configuration" && tab === "ageWriting") {
+    return adminHref("configuration", "audience");
   }
   if (section === "analysis" && ANALYSIS_TABS.has(tab as AnalysisTabId)) {
     return adminHref("analysis", tab as AnalysisTabId);

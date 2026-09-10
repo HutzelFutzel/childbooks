@@ -323,6 +323,8 @@ export async function renderAnchor(
   let prompt = buildAnchorPrompt({
     anchor,
     artStyle: project.config.artStyle,
+    ageRangeId: project.config.ageRangeId,
+    readingModeId: project.config.readingModeId,
     containedAnchors,
     mentionedAnchors,
     edit: options.edit,
@@ -392,6 +394,8 @@ export async function renderAnchor(
         prompt = buildAnchorPrompt({
           anchor,
           artStyle: project.config.artStyle,
+          ageRangeId: project.config.ageRangeId,
+          readingModeId: project.config.readingModeId,
           containedAnchors,
           mentionedAnchors,
           edit: options.edit,

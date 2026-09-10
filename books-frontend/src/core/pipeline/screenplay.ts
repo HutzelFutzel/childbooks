@@ -3,13 +3,7 @@
  * page-by-page plan (text, illustration brief, layout note, anchors used).
  */
 import { z } from "zod";
-import {
-  AGE_RANGES,
-  GRAPHICS_DENSITY,
-  SPREAD_USAGE,
-  TEXT_HANDLING,
-  TEXT_PLACEMENT,
-} from "../config/options";
+import { GRAPHICS_DENSITY, SPREAD_USAGE, TEXT_HANDLING, TEXT_PLACEMENT } from "../config/options";
 import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import type { Anchor, BookConfig, ScreenplayDoc, ScreenplaySpread } from "../types";
@@ -18,8 +12,8 @@ import { getBookLayout } from "../book/layouts";
 import { getBookLanguage } from "../config/bookLanguages";
 import { fixPagination } from "./pagination";
 import { withRetry } from "./retry";
-import { resolveAgeLlmGuidance } from "../prompts/age";
-import { ageBandHasReadingModes, readingModeLabel } from "../config/ageWritingCatalog";
+import { resolveAudienceOverlays, type AudienceOverlays } from "../prompts/audience";
+import { readingModeLabel } from "../config/readingModes";
 import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderTextPrompt } from "../prompts/render";
 
@@ -59,11 +53,12 @@ function label<T extends { id: string; label: string }>(
   return list.find((x) => x.id === id)?.label ?? id;
 }
 
-function describeConfig(config: BookConfig): string {
+function describeConfig(config: BookConfig, overlays: AudienceOverlays): string {
   const layout = getBookLayout(config.layoutId).label;
+  const hasModes = overlays.profile.readingModes.length > 0;
   return [
-    `Age range: ${label(AGE_RANGES, config.ageRangeId)}.`,
-    ...(ageBandHasReadingModes(config.ageRangeId) && config.readingModeId
+    `Age range: ${overlays.profile.label}.`,
+    ...(hasModes && config.readingModeId
       ? [`Reading mode: ${readingModeLabel(config.readingModeId)}.`]
       : []),
     // Book size is intentionally omitted: the physical trim is chosen later, in
@@ -126,7 +121,11 @@ export async function generateScreenplay(
 
   const placementGuidance = getBookLayout(config.layoutId).screenplayGuidance;
 
-  const ageTextPrompt = resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, prompts);
+  // The SCREENPLAY channel, not the story one: page structure, visual
+  // storytelling and pacing, without the prose rules the drafting model already
+  // applied. Pagination is also the only stage where per-page density can be
+  // stated at all, which is why the numbers ride along here.
+  const overlays = resolveAudienceOverlays(config.ageRangeId, config.readingModeId, prompts);
 
   const isRevision = Boolean(edit && previous);
   const previousJson =
@@ -156,16 +155,17 @@ export async function generateScreenplay(
     vars: {
       spreadGuidance,
       textGuidance,
-      ageGuidance: ageTextPrompt,
+      ageGuidance: overlays.screenplay,
+      densityGuidance: overlays.density,
       languageInstruction: language.promptInstruction,
       placementGuidance,
-      configDescription: describeConfig(config),
+      configDescription: describeConfig(config, overlays),
       anchorsList: describeAnchors(included),
       story: config.storyText.trim(),
       previousJson,
       edit: edit?.trim() ?? "",
     },
-    flags: { isRevision },
+    flags: { isRevision, hasDensity: Boolean(overlays.density) },
   });
 
   const raw = await withRetry(

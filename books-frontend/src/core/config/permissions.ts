@@ -80,7 +80,7 @@ const CONFIG_TAB_EXHAUSTIVE: Record<ConfigTabId, true> = {
   prompts: true,
   artStyles: true,
   layouts: true,
-  ageWriting: true,
+  audience: true,
   storyCraft: true,
   bookLanguages: true,
   typography: true,
@@ -215,11 +215,19 @@ export interface AdminRecord {
 /** Whether `record` can act at `level` on `key` — the one check every route asks. */
 export function hasPermission(
   record: AdminRecord,
-  key: PermissionKey,
+  key: PermissionKey | string,
   level: PermissionLevel,
 ): boolean {
   if (isOwner(record.role)) return true;
-  const granted = record.grants[key];
+  const granted =
+    record.grants[key as PermissionKey] ??
+    (key === "configuration.audience" || key === "configuration.ageWriting" || key === "ageWriting"
+      ? record.grants["configuration.audience"] ??
+        (record.grants as Record<string, PermissionLevel | undefined>)["configuration.ageWriting"]
+      : key === "configuration.models" || key === "configuration.modelCosts" || key === "modelCosts"
+        ? record.grants["configuration.models"] ??
+          (record.grants as Record<string, PermissionLevel | undefined>)["configuration.modelCosts"]
+        : undefined);
   if (!granted) return false;
   return level === "read" ? true : granted === "write"; // write implies read
 }
@@ -240,8 +248,41 @@ export function normalizeGrants(
   const record = input as Record<string, unknown>;
   for (const key of ALL_PERMISSION_KEYS) {
     const v = record[key];
-    if (v === "read" || v === "write") out[key] = v;
+    if (v === "read" || v === "write") {
+      out[key] = v;
+      continue;
+    }
+    // Also check for unprefixed key (e.g. "audience" instead of "configuration.audience")
+    const bareKey = key.slice(key.indexOf(".") + 1);
+    const bareVal = record[bareKey];
+    if (bareVal === "read" || bareVal === "write") {
+      out[key] = bareVal;
+    }
   }
+
+  // Legacy aliases migration:
+  // configuration.ageWriting / ageWriting -> configuration.audience
+  if (!out["configuration.audience"]) {
+    const legacyAge =
+      record["configuration.ageWriting"] ??
+      record["ageWriting"] ??
+      record["configuration.age-writing"];
+    if (legacyAge === "read" || legacyAge === "write") {
+      out["configuration.audience"] = legacyAge;
+    }
+  }
+
+  // configuration.modelCosts / modelCosts -> configuration.models
+  if (!out["configuration.models"]) {
+    const legacyModels =
+      record["configuration.modelCosts"] ??
+      record["modelCosts"] ??
+      record["configuration.model-costs"];
+    if (legacyModels === "read" || legacyModels === "write") {
+      out["configuration.models"] = legacyModels;
+    }
+  }
+
   return out;
 }
 

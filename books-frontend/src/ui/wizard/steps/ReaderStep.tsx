@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo } from "react";
 import { motion } from "framer-motion";
-import { AGE_RANGES } from "../../../core/config/options";
 import {
   detectDefaultBookLanguage,
   enabledBookLanguages,
@@ -10,13 +9,14 @@ import {
   type BookLanguageDefinition,
   type BookLanguageId,
 } from "../../../core/config/bookLanguages";
+import type { ReadingModeId } from "../../../core/config/readingModes";
 import {
-  ageBandHasReadingModes,
-  type ReadingModeId,
-} from "../../../core/config/ageWritingCatalog";
+  enabledAudienceProfiles,
+  resolveAudienceProfile,
+  resolveModeGuidance,
+} from "../../../core/config/audience";
 import { ageBandLabel } from "../../../core/config/storyCraftCatalog";
 import { resolveStoryCraft } from "../../../core/config/storyCraft";
-import { resolveAgeHumanGuidance } from "../../../core/prompts/age";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { resolveShipCountry, useShipCountryStore } from "../../../state/shipCountryStore";
 import { fadeRise } from "../../lib/motion";
@@ -31,14 +31,6 @@ import {
 import { ReadingModePicker } from "../ReadingModePicker";
 import { AgeFitCheck } from "../../studio/story/AgeFitCheck";
 import type { StepProps } from "./types";
-
-/** Publishing-floor labels — one beat of context, not a mood line. */
-const AGE_CAPTION: Record<string, string> = {
-  "0-2": "First books",
-  "3-5": "Picture books",
-  "6-8": "Early readers",
-  "9-12": "Chapter books",
-};
 
 interface LanguageGroup {
   key: string;
@@ -81,11 +73,21 @@ function groupLanguages(choices: BookLanguageDefinition[]): LanguageGroup[] {
 
 export function ReaderStep({ config, update }: StepProps) {
   const policy = useAppConfigStore((state) => state.bookLanguages);
+  const audience = useAppConfigStore((s) => s.audience);
   const ageWriting = useAppConfigStore((s) => s.ageWriting);
   const storyCraft = useAppConfigStore((s) => s.storyCraft);
   const craft = useMemo(
     () => resolveStoryCraft(config.ageRangeId, storyCraft),
     [config.ageRangeId, storyCraft],
+  );
+  const audienceSource = useMemo(
+    () => ({ audience, ageWriting, storyCraft }),
+    [audience, ageWriting, storyCraft],
+  );
+  const ageBands = useMemo(() => enabledAudienceProfiles(audienceSource), [audienceSource]);
+  const profile = useMemo(
+    () => resolveAudienceProfile(config.ageRangeId, audienceSource),
+    [config.ageRangeId, audienceSource],
   );
 
   const current = getBookLanguage(config.contentLocale);
@@ -106,13 +108,11 @@ export function ReaderStep({ config, update }: StepProps) {
   const originAge = config.storyBrief?.generatedForAge;
   const ageChanged = hasStory && Boolean(originAge) && originAge !== config.ageRangeId;
 
-  const showReadingModes = ageBandHasReadingModes(config.ageRangeId);
-  const readingMode = (config.readingModeId ?? "read-aloud") as ReadingModeId;
-  const guidance = resolveAgeHumanGuidance(
-    config.ageRangeId,
-    showReadingModes ? readingMode : null,
-    ageWriting,
-  );
+  const showReadingModes = profile.readingModes.length > 0;
+  const readingMode = (config.readingModeId ?? profile.readingModes[0] ?? null) as ReadingModeId;
+  const guidance =
+    resolveModeGuidance(profile, showReadingModes ? readingMode : null).humanGuidance ||
+    profile.description;
 
   const geoCountry = useShipCountryStore((s) => s.detected);
   useEffect(() => {
@@ -142,14 +142,15 @@ export function ReaderStep({ config, update }: StepProps) {
   };
 
   const selectAge = (ageId: string) => {
-    if (ageBandHasReadingModes(ageId)) {
-      update({
-        ageRangeId: ageId,
-        readingModeId: config.readingModeId ?? "read-aloud",
-      });
-    } else {
-      update({ ageRangeId: ageId, readingModeId: null });
-    }
+    // Whether a band asks the reading-mode question — and which answers it
+    // offers — is part of the band, so a mode that band doesn't offer is
+    // dropped rather than carried across.
+    const next = resolveAudienceProfile(ageId, audienceSource);
+    const carried =
+      config.readingModeId && next.readingModes.includes(config.readingModeId as ReadingModeId)
+        ? (config.readingModeId as ReadingModeId)
+        : next.readingModes[0] ?? null;
+    update({ ageRangeId: ageId, readingModeId: carried });
   };
 
   const adaptNote = adaptCopy({
@@ -166,13 +167,13 @@ export function ReaderStep({ config, update }: StepProps) {
       <div className="grid items-start gap-8 md:grid-cols-2">
         <ChoiceSection label="Age">
           <ChoiceGrid aria-label="Reader age" columns={2}>
-            {AGE_RANGES.map((age) => (
+            {ageBands.map((age) => (
               <ChoiceTile
                 key={age.id}
                 selected={config.ageRangeId === age.id}
                 onSelect={() => selectAge(age.id)}
                 title={age.label}
-                caption={AGE_CAPTION[age.id]}
+                caption={age.caption || undefined}
               />
             ))}
           </ChoiceGrid>
@@ -184,10 +185,9 @@ export function ReaderStep({ config, update }: StepProps) {
               transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
             >
               <ReadingModePicker
-                ageRangeId={config.ageRangeId}
+                profile={profile}
                 value={readingMode}
                 onChange={(mode) => update({ readingModeId: mode })}
-                ageWriting={ageWriting}
               />
             </motion.div>
           ) : (

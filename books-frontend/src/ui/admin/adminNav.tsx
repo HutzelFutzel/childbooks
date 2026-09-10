@@ -95,7 +95,7 @@ export const CONFIG_TAB_META: Record<ConfigTabId, { label: string; icon: ReactNo
   // Creative defaults
   artStyles: { label: "Art styles", icon: <ImageIcon className="size-4" /> },
   layouts: { label: "Page layouts", icon: <LayoutTemplate className="size-4" /> },
-  ageWriting: { label: "Age writing", icon: <BookOpen className="size-4" /> },
+  audience: { label: "Age bands", icon: <BookOpen className="size-4" /> },
   storyCraft: { label: "Story craft", icon: <Wand2 className="size-4" /> },
   bookLanguages: { label: "Book languages", icon: <Languages className="size-4" /> },
   typography: { label: "Typography", icon: <Type className="size-4" /> },

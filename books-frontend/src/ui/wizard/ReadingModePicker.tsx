@@ -1,24 +1,24 @@
-import {
-  READING_MODES,
-  type ReadingModeId,
-} from "../../core/config/ageWritingCatalog";
-import type { AgeWritingConfig } from "../../core/config/ageWriting";
-import { resolveAgeHumanGuidance } from "../../core/prompts/age";
+import { READING_MODES, type ReadingModeId } from "../../core/config/readingModes";
+import type { AudienceProfile } from "../../core/config/audienceCatalog";
+import { resolveModeGuidance } from "../../core/config/audience";
 import { ChoiceHint, SubChoice } from "./ChoiceSet";
 
-/** Segmented control + one-line preview for 6–8 / 9–12 reading modes. */
+/**
+ * Segmented control plus a one-line preview, for bands that ask how the book
+ * will be read. Which modes appear comes from the band, not from a hardcoded
+ * pair of ids.
+ */
 export function ReadingModePicker({
-  ageRangeId,
+  profile,
   value,
   onChange,
-  ageWriting,
 }: {
-  ageRangeId: string;
+  profile: AudienceProfile;
   value: ReadingModeId;
   onChange: (mode: ReadingModeId) => void;
-  ageWriting: AgeWritingConfig;
 }) {
-  const human = resolveAgeHumanGuidance(ageRangeId, value, ageWriting);
+  const options = READING_MODES.filter((m) => profile.readingModes.includes(m.id));
+  if (options.length === 0) return null;
 
   return (
     <div className="space-y-3">
@@ -26,12 +26,9 @@ export function ReadingModePicker({
         label="How will they read?"
         value={value}
         onChange={(id) => onChange(id as ReadingModeId)}
-        options={READING_MODES.map((mode) => ({
-          id: mode.id,
-          label: mode.shortLabel,
-        }))}
+        options={options.map((mode) => ({ id: mode.id, label: mode.shortLabel }))}
       />
-      <ChoiceHint>{human}</ChoiceHint>
+      <ChoiceHint>{resolveModeGuidance(profile, value).humanGuidance}</ChoiceHint>
     </div>
   );
 }

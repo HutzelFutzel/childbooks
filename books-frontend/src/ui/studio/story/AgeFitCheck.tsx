@@ -5,7 +5,9 @@ import { AnimatePresence, motion } from "framer-motion";
 import { CheckCircle2, Feather, Lightbulb, Loader2, SearchCheck, X } from "lucide-react";
 import { storyFitRemote, type StoryFitResult } from "../../../platform/aiClient";
 import { useProjectsStore } from "../../../state/projectsStore";
-import { ageBandLabel } from "../../../core/config/storyCraftCatalog";
+import { useAppConfigStore } from "../../../state/appConfigStore";
+import { dimensionDef } from "../../../core/config/audienceCatalog";
+import { resolveAudienceProfile } from "../../../core/config/audience";
 import type { AgeBandStoryCraft } from "../../../core/config/storyCraftCatalog";
 import { wordCount } from "../../../core/story/brief";
 import { Button } from "../../components/Button";
@@ -60,9 +62,31 @@ export function AgeFitCheck({
   /** The text the current read describes, so an edit visibly outdates it. */
   const checkedText = useRef<string>("");
 
+  const audience = useAppConfigStore((s) => s.audience);
+  const ageWriting = useAppConfigStore((s) => s.ageWriting);
+  const storyCraftConfig = useAppConfigStore((s) => s.storyCraft);
+  const profile = resolveAudienceProfile(ageRangeId, {
+    audience,
+    ageWriting,
+    storyCraft: storyCraftConfig,
+  });
+  const bandLabel = profile.label;
+
   const words = wordCount(storyText);
   const ready = words > 0 && storyText.trim().length >= 20;
-  const stale = result !== null && checkedText.current !== storyText;
+  // Two ways a read goes out of date: the author edited the story, or an admin
+  // changed what this age band means. Both are shown the same gentle way.
+  const textStale = result !== null && checkedText.current !== storyText;
+  const bandStale =
+    result !== null &&
+    result.profileRevision !== undefined &&
+    result.profileRevision !== (audience.revision ?? 0);
+  const stale = textStale || bandStale;
+
+  /** Qualities the read found notably lighter or heavier than usual. */
+  const offTarget = (result?.dimensions ?? [])
+    .filter((d) => d.fit !== "typical")
+    .map((d) => ({ label: dimensionDef(d.id)?.label ?? d.id, fit: d.fit }));
 
   // A read about a different age band is meaningless; drop it on a change.
   useEffect(() => {
@@ -74,9 +98,9 @@ export function AgeFitCheck({
     words === 0
       ? null
       : words < craft.structure.minWords
-        ? `Most ${ageBandLabel(ageRangeId)} books run ${craft.structure.minWords}–${craft.structure.maxWords} words — yours is a little shorter, which just means a shorter book. Totally fine either way.`
+        ? `Most ${bandLabel} books run ${craft.structure.minWords}–${craft.structure.maxWords} words — yours is a little shorter, which just means a shorter book. Totally fine either way.`
         : words > craft.structure.maxWords
-          ? `Most ${ageBandLabel(ageRangeId)} books run ${craft.structure.minWords}–${craft.structure.maxWords} words — yours is a little longer, so expect more pages. Nothing wrong with that.`
+          ? `Most ${bandLabel} books run ${craft.structure.minWords}–${craft.structure.maxWords} words — yours is a little longer, so expect more pages. Nothing wrong with that.`
           : null;
 
   async function check() {
@@ -136,10 +160,24 @@ export function AgeFitCheck({
                     ))}
                   </ul>
                 )}
+                {offTarget.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                    {offTarget.map((d) => (
+                      <span
+                        key={d.label}
+                        className="rounded-full bg-white/70 px-2 py-0.5 text-[11px] font-medium"
+                      >
+                        {d.label}: {d.fit === "lighter" ? "lighter than usual" : "richer than usual"}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 <p className="pt-0.5 text-[11px] font-medium opacity-70">
-                  {stale
+                  {textStale
                     ? "You've since edited the story — this note is about the earlier version."
-                    : "Just a friendly take — your story is exactly as you wrote it, and that's not changing."}
+                    : bandStale
+                      ? `What we look for at ${bandLabel} has been updated since this read.`
+                      : "Just a friendly take — your story is exactly as you wrote it, and that's not changing."}
                 </p>
               </div>
             </div>
@@ -155,7 +193,7 @@ export function AgeFitCheck({
           leftIcon={!checking ? <SearchCheck className="size-4" /> : undefined}
           onClick={() => void check()}
         >
-          {result && !stale ? "Get a fresh take" : `See how this reads for ${ageBandLabel(ageRangeId)}`}
+          {result && !stale ? "Get a fresh take" : `See how this reads for ${bandLabel}`}
         </Button>
         <span className="flex items-center gap-1.5 text-xs text-ink-400">
           {checking ? (

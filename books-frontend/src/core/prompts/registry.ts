@@ -24,7 +24,21 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     system: [
       blk(
         "role",
-        "You are a beloved children's picture-book author. Write a complete, original short story for a picture book starring the given hero. The story must have a clear beginning, a gentle adventure or problem in the middle, and a warm, satisfying ending. Give the hero one or two memorable companions and a vivid setting. Use concrete, visual scenes an illustrator can paint — avoid abstract narration.",
+        "You are a beloved children's picture-book author. Write a complete, original short story for a picture book starring the given hero. Give the hero one or two memorable companions and a vivid setting. Use concrete, visual scenes an illustrator can paint — avoid abstract narration.",
+      ),
+      // Split out of `role` and gated, because for the youngest bands a
+      // three-act structure is the wrong book: a naming, counting or routine
+      // book has no problem to resolve, and demanding one produces a plot
+      // pasted onto a board book.
+      blk(
+        "plot",
+        "The story must have a clear beginning, a gentle adventure or problem in the middle, and a warm, satisfying ending.",
+        "plotRequired",
+      ),
+      blk(
+        "noPlot",
+        "A conventional beginning–middle–end plot is NOT required at this age. A repeating pattern, a naming or counting sequence, a familiar routine, a search or a short journey is a correct and often better answer. Do not force a problem and a resolution onto a book that does not need one — but the book must still build, vary and arrive somewhere satisfying.",
+        "!plotRequired",
       ),
       blk(
         "language",
@@ -62,7 +76,17 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     system: [
       blk(
         "role",
-        "You are a beloved children's picture-book author writing a personalised book for a real family. The author has given you the real people, the real occasion and the real place — treat every detail they supplied as fact and build the story around it. Use every named person; give each one something to do that fits who they are. Invent freely around those facts to make a proper story with a clear beginning, a problem or adventure in the middle, and a warm, satisfying ending. Use concrete, visual scenes an illustrator can paint.",
+        "You are a beloved children's picture-book author writing a personalised book for a real family. The author has given you the real people, the real occasion and the real place — treat every detail they supplied as fact and build the story around it. Use every named person; give each one something to do that fits who they are. Invent freely around those facts. Use concrete, visual scenes an illustrator can paint.",
+      ),
+      blk(
+        "plot",
+        "Make it a proper story: a clear beginning, a problem or adventure in the middle, and a warm, satisfying ending.",
+        "plotRequired",
+      ),
+      blk(
+        "noPlot",
+        "A conventional beginning–middle–end plot is NOT required at this age. Build the book around the real people and the real occasion as a repeating pattern, a familiar routine, a short journey or a naming sequence rather than forcing a problem and a resolution onto it.",
+        "!plotRequired",
       ),
       blk(
         "language",
@@ -189,6 +213,11 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk("ageGuidance", "For reference, this age band usually reads like: {{ageGuidance}}"),
       blk(
+        "rubric",
+        "These are the qualities books at this age usually have. They are reference points for forming an impression, NOT a scorecard — plenty of beloved books sit well outside several of them:\n{{dimensionRubric}}",
+        "hasRubric",
+      ),
+      blk(
         "structure",
         "Books at this age are typically {{minWords}}–{{maxWords}} words, but there's real range in practice — length alone is never a problem worth dwelling on.",
       ),
@@ -199,6 +228,11 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk(
         "output",
         'Return a verdict of "good" (feels like a comfortable fit as-is), "minor" (a good fit, with a couple of small friendly thoughts) or "mismatch" (reads like it leans toward quite a different age — which may be exactly what the author intended, so say this warmly and with curiosity, never as a correction). Write one warm, short headline first. Then give at most three short notes, each phrased as a gentle observation or something the author might enjoy considering — never as an instruction, a requirement, or a fix. If the story already feels lovely for this age, say so warmly and return no notes.',
+      ),
+      blk(
+        "dimensionOutput",
+        'Also fill in `dimensions`, one entry per id in this list: {{dimensionIds}}. Set `fit` to "typical", "lighter" (this manuscript does less of it than books at this age usually do) or "heavier" (it does more). This is internal calibration data, so answer plainly and do not soften it — it is never shown to the author, and it does not have to agree with how many notes you wrote.',
+        "hasRubric",
       ),
     ],
     user: [
@@ -281,10 +315,45 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
   // core/pipeline/screenplay.ts → generateScreenplay
   screenplay: {
     system: [
+      // This used to be one block carrying the role, the anchor contract, four
+      // interpolated guidance strings, the cover spec, the pacing rule and the
+      // printability maths. Split apart so each concern can be edited — or
+      // switched off — without touching the ones around it, and so the
+      // audience overlay has somewhere of its own to land.
       blk(
         "role",
-        "You are an award-winning children's picture-book author and art director. Produce a complete page-by-page screenplay for the book. For each page/spread provide: the narrative text, a vivid illustration brief, a layout note, and which named anchors appear. Illustration briefs must be concrete and reference the named anchors so the art stays consistent. Match each anchor's visual description — species, body, clothing, and the actual shape of objects. An anchor's NAME is a label only: do not turn an animal into a human child, or a round balloon into a star, because of its name. {{spreadGuidance}} {{textGuidance}} {{ageGuidance}} {{placementGuidance}} Also design the book's covers: a frontCover (catchy title + short subtitle + illustration brief), a backCover (a short blurb as 'title', optional subtitle, illustration brief), and a short spineText (usually the title). Only reference anchors from the provided list, by their exact names. Use an empty array if none appear. Revision requests may mention anchors by name (e.g. 'put Amanda on page 3'); use the ANCHORS list for who/what each name is, and update each spread's anchors accordingly. Pace the story well; keep text age-appropriate in length and complexity per page. PRINTABILITY: page 1 is a single right-hand page. A double-page spread occupies a facing pair, so the number of single pages BEFORE any spread must be even (insert a single page if needed). Never let a spread start on a right-hand page. Write a short overall 'notes' field with art-direction guidance.",
+        "You are an award-winning children's picture-book author and art director. Produce a complete page-by-page screenplay for the book. For each page/spread provide: the narrative text, a vivid illustration brief, a layout note, and which named anchors appear.",
       ),
+      blk(
+        "anchorContract",
+        "Illustration briefs must be concrete and reference the named anchors so the art stays consistent. Match each anchor's visual description — species, body, clothing, and the actual shape of objects. An anchor's NAME is a label only: do not turn an animal into a human child, or a round balloon into a star, because of its name.",
+      ),
+      blk("spread", "{{spreadGuidance}}"),
+      blk("text", "{{textGuidance}}"),
+      blk("placement", "{{placementGuidance}}"),
+      blk("ageGuidance", "WRITING FOR THIS READER:\n{{ageGuidance}}"),
+      blk("density", "{{densityGuidance}}", "hasDensity"),
+      blk(
+        "pacing",
+        "Pace the story well across the pages. Where the text does not fit the pacing above, split a long passage across two pages or merge two thin ones — do not overload a single page.",
+      ),
+      blk(
+        "covers",
+        "Also design the book's covers: a frontCover (catchy title + short subtitle + illustration brief), a backCover (a short blurb as 'title', optional subtitle, illustration brief), and a short spineText (usually the title).",
+      ),
+      blk(
+        "anchorScope",
+        "Only reference anchors from the provided list, by their exact names. Use an empty array if none appear.",
+      ),
+      blk(
+        "revisionNames",
+        "Revision requests may mention anchors by name (e.g. 'put Amanda on page 3'); use the ANCHORS list for who/what each name is, and update each spread's anchors accordingly.",
+      ),
+      blk(
+        "printability",
+        "PRINTABILITY: page 1 is a single right-hand page. A double-page spread occupies a facing pair, so the number of single pages BEFORE any spread must be even (insert a single page if needed). Never let a spread start on a right-hand page.",
+      ),
+      blk("notes", "Write a short overall 'notes' field with art-direction guidance."),
       blk(
         "language",
         "BOOK LANGUAGE: {{languageInstruction}} Keep all reader-facing text in that language: narrative text, front-cover title and subtitle, back-cover blurb, and spine text. Keep illustration briefs, layout notes and overall art-direction notes in English. Preserve every supplied proper name exactly.",
@@ -503,6 +572,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         "hasGridRepair",
       ),
       blk("description", "{{description}}"),
+      blk("ageVisual", "{{ageVisualGuidance}}", "hasAgeVisual"),
       blk(
         "characterAge",
         "{{anchorName}} is {{age}}. Keep face, body proportions and apparent life stage believable for this age and species.",
@@ -696,6 +766,10 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk("kindSingle", "Single-page illustration.", "!isSpread"),
       blk("brief", "{{illustrationBrief}}"),
+      // The image models had no age signal at all before this. Composition
+      // legibility, how many figures a scene can hold and how much the picture
+      // has to carry are all age-dependent, and none of it was reaching here.
+      blk("ageVisual", "{{ageVisualGuidance}}", "hasAgeVisual"),
       blk(
         "styleRef",
         "The FIRST reference image is an ART-STYLE reference: match ONLY its visual style — medium, rendering technique, linework, shading, color palette, texture and finish. Do NOT copy its subjects, characters, objects, composition or layout.",
@@ -1039,7 +1113,21 @@ const V = (name: string, description: string, sample: string): PromptVariableMet
   sample,
 });
 
-const AGE_SAMPLE = "Keep sentences short and the vocabulary simple.";
+// The `age*` samples stand in for what the audience compiler produces. They're
+// short on purpose: the real overlays run to hundreds of words, and a preview
+// pane that's 90% sample text stops showing the admin their own edits.
+const AGE_SAMPLE =
+  "WRITING FOR: 3–5 years.\n\nLANGUAGE\nOne or two short sentences per page…\n\nHOW THIS AGE READS — hold every one of these:\n- Text density: Low — one or two short sentences per page.\n- Repetition: High — a refrain the child can join.";
+const SCREENPLAY_AGE_SAMPLE =
+  "PAGE STRUCTURE\nOne story beat per page. End most pages on a small hook…\n\nPAGE-LEVEL TARGETS:\n- Text density: Low — one or two short sentences per page.\n- Illustration dependency: High — the picture carries setting and emotion.";
+const DENSITY_SAMPLE =
+  "PAGE PACING: Aim for about 22 words on a typical page, and never more than 45; roughly 2 sentences per page; no sentence longer than 16 words; at most 3 characters sharing any one illustration. Plan the book to land between 16 and 32 pages.";
+const VISUAL_AGE_SAMPLE =
+  "This book is for 3–5 years.\n\nVISUAL STORYTELLING\nThe picture should carry the setting, the expressions and the jokes…\n\nWhat this reader needs from a picture:\n- Illustration dependency: High.\n- Characters: Up to about four characters.";
+const CHARACTER_ART_AGE_SAMPLE =
+  "These characters appear in a book for 3–5 years.\n\nCHARACTER DESIGN FOR THIS AGE\nExpressive, rounded, friendly designs with clear silhouettes and strong colour identity per character.";
+const RUBRIC_SAMPLE =
+  '- textDensity (Text density) — books at this age usually sit at "Low": one or two short sentences per page.\n- plotComplexity (Plot complexity) — books at this age usually sit at "Simple": a single clear problem and its resolution.';
 const STYLE_SAMPLE = "soft watercolor children's book illustration";
 const THEME_SAMPLE =
   "A bedtime adventure that starts in a real bedroom, drifts into imagination, and lands safely back in bed.";
@@ -1048,7 +1136,7 @@ const DEVICE_SAMPLE =
 const SETTING_SAMPLE = "Set it in a friendly wood full of animals and dappled light.";
 const PROTAGONIST_SAMPLE =
   "The hero should be about 4–6 years old — a touch older than the reader, which is who a preschooler wants to be.";
-const SAFETY_SAMPLE = "graphic violence or injury, sexual content of any kind, unresolved fear at the end";
+const SAFETY_SAMPLE = "graphic violence, gore, brutality, or severe injury, sexual content of any kind, unresolved fear at the end";
 
 export const PROMPT_ACTIONS: PromptActionMeta[] = [
   {
@@ -1088,7 +1176,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("safetyNote", "Closing safety sentence from Story craft.", "Tension must resolve warmly."),
           V("repairInstruction", "Why the previous attempt was rejected (retry only).", "it was 512 words, which is over the 320-word limit."),
         ],
-        sampleFlags: { hasTheme: true, hasSetting: false, hasDevice: true, hasSentenceLimit: true, isRepair: false },
+        sampleFlags: { hasTheme: true, hasSetting: false, hasDevice: true, hasSentenceLimit: true, isRepair: false, plotRequired: true },
       },
       {
         key: "storyDraft/coWrite",
@@ -1129,6 +1217,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           hasWhere: true,
           hasMustInclude: true,
           isRepair: false,
+          plotRequired: true,
         },
       },
       {
@@ -1210,8 +1299,14 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("minWords", "Lower bound for story length.", "150"),
           V("maxWords", "Upper bound for story length.", "320"),
           V("safetyList", "Comma-joined 'avoid' list from Story craft.", SAFETY_SAMPLE),
+          V("dimensionRubric", "The age band's rubric rows, one per line.", RUBRIC_SAMPLE),
+          V(
+            "dimensionIds",
+            "The rubric ids the model must return a fit for.",
+            "textDensity, sentenceComplexity, plotComplexity, conflict",
+          ),
         ],
-        sampleFlags: {},
+        sampleFlags: { hasRubric: true },
       },
     ],
   },
@@ -1286,7 +1381,12 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
         variables: [
           V("spreadGuidance", "Chosen spread-usage instruction.", "Mix single pages and double-page spreads for good pacing."),
           V("textGuidance", "Chosen text-handling instruction.", "You may adapt and tighten the wording to suit the age range and reading rhythm."),
-          V("ageGuidance", "Age-band writing guidance overlay.", AGE_SAMPLE),
+          V(
+            "ageGuidance",
+            "The age band's PAGE-PLAN guidance — the page-structure, visual-storytelling and pacing sections, not the prose rules.",
+            SCREENPLAY_AGE_SAMPLE,
+          ),
+          V("densityGuidance", "Hard page-pacing numbers from the age band.", DENSITY_SAMPLE),
           V(
             "languageInstruction",
             "Regional language instruction for reader-facing screenplay fields.",
@@ -1299,7 +1399,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("previousJson", "Prior screenplay JSON (revisions only).", "{ …previous screenplay… }"),
           V("edit", "The revision request (revisions only).", "Put Amanda on page 3."),
         ],
-        sampleFlags: { isRevision: false },
+        sampleFlags: { isRevision: false, hasDensity: true },
       },
     ],
   },
@@ -1482,12 +1582,18 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("artStyle", "Resolved art-style overlay.", STYLE_SAMPLE),
           V("edit", "Optional revision instruction.", "make her smile"),
           V("actualPanelCount", "Panels actually drawn last attempt (repair retry only).", "8"),
+          V(
+            "ageVisualGuidance",
+            "How the cast should be drawn for this age band (Character design section).",
+            CHARACTER_ART_AGE_SAMPLE,
+          ),
         ],
         sampleFlags: {
           isCharacter: true,
           isPlace: false,
           isObject: false,
           hasUserGuidance: false,
+          hasAgeVisual: true,
           hasAge: true,
           hasContained: false,
           hasMentioned: false,
@@ -1567,6 +1673,11 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           "Whole-page generation plus the mutually-exclusive tail branches (edit, refresh, mask inpaint).",
         variables: [
           V("illustrationBrief", "The page's illustration brief.", "Amanda peeks under the bed."),
+          V(
+            "ageVisualGuidance",
+            "What this age band needs from a picture — composition legibility, how many figures a scene can hold, emotional register.",
+            VISUAL_AGE_SAMPLE,
+          ),
           V("charactersList", "Referenced characters with descriptions.", "Amanda (a curious girl)"),
           V("settingsList", "Referenced places/objects.", "the bedroom (a cozy attic room)"),
           V(
@@ -1607,6 +1718,7 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
         sampleFlags: {
           isSpread: false,
           hasStyleRef: false,
+          hasAgeVisual: true,
           hasCharacters: true,
           hasSettings: false,
           hasHeights: true,

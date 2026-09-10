@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { GripVertical, Plus, RotateCcw, Trash2 } from "lucide-react";
-import { AGE_RANGES } from "../../../core/config/options";
 import type { AgeBandId } from "../../../core/config/ageWritingCatalog";
+import { enabledAudienceProfiles } from "../../../core/config/audience";
 import {
   defaultStoryCraft,
   type AgeBandStoryCraft,
@@ -17,7 +17,7 @@ import {
 } from "../../../core/config/storyCraft";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { Button } from "../../components/Button";
-import { Field, Input, Textarea } from "../../components/Input";
+import { Input, Textarea } from "../../components/Input";
 import { Section, TabIntro } from "./products/parts";
 import { cn } from "../../lib/cn";
 
@@ -153,143 +153,13 @@ function OptionListEditor({
   );
 }
 
-function RulesEditor({
-  craft,
-  onChange,
-}: {
-  craft: AgeBandStoryCraft;
-  onChange: (patch: Partial<AgeBandStoryCraft>) => void;
-}) {
-  const { structure, protagonist, safety } = craft;
-  return (
-    <>
-      <Section
-        title="Structure"
-        hint="Checked after every draft. A miss triggers exactly one repair retry, then the closer attempt wins."
-      >
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <Field label="Min words">
-            <Input
-              type="number"
-              min={10}
-              value={structure.minWords}
-              onChange={(e) =>
-                onChange({ structure: { ...structure, minWords: Number(e.target.value) } })
-              }
-              className="h-9 text-sm"
-            />
-          </Field>
-          <Field label="Max words">
-            <Input
-              type="number"
-              min={10}
-              value={structure.maxWords}
-              onChange={(e) =>
-                onChange({ structure: { ...structure, maxWords: Number(e.target.value) } })
-              }
-              className="h-9 text-sm"
-            />
-          </Field>
-          <Field label="Story beats">
-            <Input
-              type="number"
-              min={1}
-              value={structure.beats}
-              onChange={(e) =>
-                onChange({ structure: { ...structure, beats: Number(e.target.value) } })
-              }
-              className="h-9 text-sm"
-            />
-          </Field>
-          <Field label="Max sentence" hint="words; 0 = no limit">
-            <Input
-              type="number"
-              min={0}
-              value={structure.maxSentenceWords}
-              onChange={(e) =>
-                onChange({
-                  structure: { ...structure, maxSentenceWords: Number(e.target.value) },
-                })
-              }
-              className="h-9 text-sm"
-            />
-          </Field>
-        </div>
-      </Section>
-
-      <Section
-        title="Hero's age"
-        hint="Children identify upward, so the hero is usually a little older than the reader."
-      >
-        <div className="grid grid-cols-2 gap-3">
-          <Field label="Youngest">
-            <Input
-              type="number"
-              min={0}
-              value={protagonist.minAge}
-              onChange={(e) =>
-                onChange({ protagonist: { ...protagonist, minAge: Number(e.target.value) } })
-              }
-              className="h-9 text-sm"
-            />
-          </Field>
-          <Field label="Oldest">
-            <Input
-              type="number"
-              min={0}
-              value={protagonist.maxAge}
-              onChange={(e) =>
-                onChange({ protagonist: { ...protagonist, maxAge: Number(e.target.value) } })
-              }
-              className="h-9 text-sm"
-            />
-          </Field>
-        </div>
-        <Field label="Prompt sentence" hint="{{min}} and {{max}} are replaced with the ages above.">
-          <Textarea
-            rows={2}
-            value={protagonist.guidance}
-            onChange={(e) =>
-              onChange({ protagonist: { ...protagonist, guidance: e.target.value } })
-            }
-            className="font-mono text-xs leading-relaxed"
-          />
-        </Field>
-      </Section>
-
-      <Section title="Safety" hint="Injected into every draft prompt for this band as a hard 'never include' list.">
-        <Field label="Never include" hint="One per line.">
-          <Textarea
-            rows={5}
-            value={safety.avoid.join("\n")}
-            onChange={(e) =>
-              onChange({
-                safety: {
-                  ...safety,
-                  avoid: e.target.value.split("\n").map((s) => s.trim()).filter(Boolean),
-                },
-              })
-            }
-            className="font-mono text-xs leading-relaxed"
-          />
-        </Field>
-        <Field label="Closing note">
-          <Textarea
-            rows={2}
-            value={safety.note}
-            onChange={(e) => onChange({ safety: { ...safety, note: e.target.value } })}
-            className="font-mono text-xs leading-relaxed"
-          />
-        </Field>
-      </Section>
-    </>
-  );
-}
-
 /**
- * Per-age-band story catalogs and rules. Curated lists (themes, devices,
- * settings) are stored as the exact list you leave here; the rule blocks merge
- * onto the shipped defaults, so an untouched band always tracks code.
+ * Per-age-band story catalogs: what a reader can pick from in the Story step.
+ *
+ * Only the LISTS live here. Length, hero age, pacing and the safety list are
+ * editorial guardrails and live with the age band, next to the rubric and the
+ * page pacing they have to agree with — see the Age bands tab. Anything already
+ * stored here under those headings is still honoured, underneath that editor.
  */
 export function StoryCraftTab() {
   const stored = useAppConfigStore((s) => s.storyCraft);
@@ -298,7 +168,12 @@ export function StoryCraftTab() {
   const [draft, setDraft] = useState<StoryCraftConfig>(stored);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [bandId, setBandId] = useState<AgeBandId>(AGE_RANGES[0].id as AgeBandId);
+  const bands = enabledAudienceProfiles({
+    audience: useAppConfigStore.getState().audience,
+    ageWriting: useAppConfigStore.getState().ageWriting,
+    storyCraft: stored,
+  });
+  const [bandId, setBandId] = useState<AgeBandId>(bands[0]?.id ?? "3-5");
 
   useEffect(() => {
     if (!dirty) setDraft(stored);
@@ -346,15 +221,15 @@ export function StoryCraftTab() {
 
   return (
     <div className="space-y-4">
-      <TabIntro elsewhere="Reading level and per-reading-mode wording live in Age writing. The prompt wording itself lives in Prompts.">
-        What readers can choose from when writing a story, and the rules every draft is held to —
-        per age band. Themes and devices appear as chips in the Story step; the structure, hero age
-        and safety rules go into the prompt and are checked against the draft that comes back.
+      <TabIntro elsewhere="Story length, hero age, page pacing and the safety list live in Age bands. The prompt wording itself lives in Prompts.">
+        What a reader can choose from when writing a story, per age band. Themes and settings appear
+        as chips in the Story step; the guidance under each one is what the writer is told when it
+        is picked.
       </TabIntro>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-1.5">
-          {AGE_RANGES.map((age) => (
+          {bands.map((age) => (
             <button
               key={age.id}
               type="button"
@@ -422,12 +297,11 @@ export function StoryCraftTab() {
           />
         ))}
 
-        <RulesEditor craft={effective} onChange={patchBand} />
       </div>
 
       <details className="rounded-lg ring-1 ring-inset ring-ink-100">
         <summary className="cursor-pointer list-none px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-ink-500">
-          Built-in defaults for {AGE_RANGES.find((a) => a.id === bandId)?.label}
+          Built-in defaults for {bands.find((a) => a.id === bandId)?.label ?? bandId}
         </summary>
         <div className="space-y-1 border-t border-ink-100 p-3 text-[11px] leading-relaxed text-ink-500">
           <p>
@@ -439,10 +313,8 @@ export function StoryCraftTab() {
             {defaults.devices.map((d) => d.label).join(", ")}
           </p>
           <p>
-            <span className="font-semibold text-ink-700">Length:</span>{" "}
-            {defaults.structure.minWords}–{defaults.structure.maxWords} words over{" "}
-            {defaults.structure.beats} beats; hero {defaults.protagonist.minAge}–
-            {defaults.protagonist.maxAge}.
+            <span className="font-semibold text-ink-700">Settings:</span>{" "}
+            {defaults.settings.map((t) => t.label).join(", ")}
           </p>
         </div>
       </details>

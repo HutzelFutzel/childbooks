@@ -9,7 +9,7 @@
  * *curated choice*. Voice, plot and imagery stay the model's job.
  */
 import type { AgeBandId } from "./ageWritingCatalog";
-import { AGE_RANGES } from "./options";
+import { defaultAudienceProfile } from "./audienceCatalog";
 
 /** One selectable option in a per-band catalog (theme, device, setting). */
 export interface StoryOption {
@@ -66,11 +66,10 @@ const opt = (id: string, label: string, description: string, llmGuidance: string
 // ---- Shared safety baseline ------------------------------------------------
 
 const UNIVERSAL_AVOID = [
-  "graphic violence or injury",
+  "graphic violence, gore, brutality, or severe injury",
   "death of a parent or caregiver",
   "sexual content of any kind",
   "slurs, bullying framed approvingly, or cruelty played for laughs",
-  "brand names, real politics, or religious instruction",
   "unresolved fear at the end of the story",
 ];
 
@@ -277,7 +276,14 @@ export function storyModeInfo(mode: StoryMode): StoryModeInfo {
   return STORY_MODES.find((m) => m.id === mode) ?? STORY_MODES[0];
 }
 
-/** Human label for an age band, for prompts and summaries. */
+/**
+ * Human label for an age band, for prompts and summaries.
+ *
+ * Reads the shipped profiles rather than the enabled-only `AGE_RANGES`, so a
+ * band that has since been switched off still names itself in an old book's
+ * summary. Callers with the live config should prefer `audienceLabel`, which
+ * honours admin renames.
+ */
 export function ageBandLabel(ageRangeId: string): string {
-  return AGE_RANGES.find((a) => a.id === ageRangeId)?.label ?? ageRangeId;
+  return defaultAudienceProfile(ageRangeId)?.label ?? ageRangeId;
 }

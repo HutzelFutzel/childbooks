@@ -1,4 +1,5 @@
-import { AGE_RANGES } from "../config/options";
+import { activeAudienceSource } from "../config/activeAudience";
+import { resolveAudienceProfile } from "../config/audience";
 import type { BodyPlan } from "../types";
 
 type CharacterAgeClues = {
@@ -35,6 +36,9 @@ export function defaultCharacterAge(
   // book's human reading age and avoids distorting human height comparisons.
   if (character.bodyPlan && character.bodyPlan !== "bipedal") return 4;
 
-  const range = AGE_RANGES.find((item) => item.id === ageRangeId);
-  return range ? Math.round((range.min + range.max) / 2) : 6;
+  // An explicit per-band number rather than the band's midpoint. A 0–12 month
+  // band's midpoint is six MONTHS, and half a year as a character age would put
+  // an infant's height on every grown-up the story forgot to date — which then
+  // propagates into the relative-height maths on every illustration.
+  return resolveAudienceProfile(ageRangeId, activeAudienceSource()).defaultCharacterAgeYears;
 }

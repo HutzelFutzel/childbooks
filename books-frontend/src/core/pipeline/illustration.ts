@@ -18,6 +18,7 @@ import type {
   ReferenceImage,
 } from "../providers/types";
 import { resolveArtStyleText } from "../prompts/style";
+import { resolveAudienceOverlays } from "../prompts/audience";
 import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderSinglePrompt } from "../prompts/render";
 import type { Anchor, BookConfig, ScreenplaySpread } from "../types";
@@ -303,9 +304,15 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
     .join("; ");
   const keptList = keptAnchors.map((a) => a.name).join(", ");
 
+  // How legible a composition has to be, how many figures a scene can hold and
+  // what emotional register is appropriate are all age-dependent, and none of
+  // it used to reach the image model at all.
+  const audience = resolveAudienceOverlays(config.ageRangeId, config.readingModeId, prompts);
+
   return renderSinglePrompt(resolvePromptsConfig(prompts), "pageIllustration/default", {
     vars: {
       illustrationBrief: spread.illustration.trim(),
+      ageVisualGuidance: audience.illustration,
       charactersList: listOf(characters, false),
       settingsList: listOf(settings, false),
       heightsList,
@@ -330,6 +337,7 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
     flags: {
       isSpread: spread.kind === "spread",
       hasStyleRef,
+      hasAgeVisual: Boolean(audience.illustration.trim()),
       hasCharacters: characters.length > 0,
       hasSettings: settings.length > 0,
       hasHeights: Boolean(heightsList),

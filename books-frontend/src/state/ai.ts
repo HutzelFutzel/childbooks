@@ -593,7 +593,10 @@ export function buildIllustrationTask(
     capabilities: capabilitiesFor(imageModel, modelCapabilities),
     prompts: {
       artStyles,
-      templates: useAppConfigStore.getState().prompts,
+      audience: appConfig.audience,
+      ageWriting: appConfig.ageWriting,
+      storyCraft: appConfig.storyCraft,
+      templates: appConfig.prompts,
     },
   });
 

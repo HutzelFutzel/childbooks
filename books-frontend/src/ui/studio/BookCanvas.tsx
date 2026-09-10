@@ -59,6 +59,7 @@ import { useStudioPanelStore } from "./studioPanelStore";
 import { refreshSpread, updateAnchorsThenSpread } from "./studioGen";
 import { useBookGeneration } from "./useBookGeneration";
 import { BookPreview } from "./BookPreview";
+import { PagePacingNote } from "./PagePacingNote";
 import { changedAnchorsForSpread, staleAnchorIds } from "../../state/ai";
 import {
   buildDisplaySpreads,
@@ -311,6 +312,8 @@ export function BookCanvas() {
           )}
         </div>
       </div>
+
+      <PagePacingNote screenplay={doc} ageRangeId={project.config.ageRangeId} />
 
       {/* Body: book navigation + focused editing stage. */}
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">

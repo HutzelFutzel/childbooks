@@ -16,8 +16,7 @@ import {
   createDefaultStoryBrief,
   isDraftStale,
 } from "../../../core/story/brief";
-import { AGE_RANGES } from "../../../core/config/options";
-import { ageBandHasReadingModes } from "../../../core/config/ageWritingCatalog";
+import { audienceProfileForMonths } from "../../../core/config/audience";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { GuidedComposer } from "../../studio/story/GuidedComposer";
 import { CoWriteComposer } from "../../studio/story/CoWriteComposer";
@@ -44,9 +43,15 @@ export function StoryStep({
   onStoryToolsOpenChange,
 }: StepProps) {
   const storyCraft = useAppConfigStore((s) => s.storyCraft);
+  const audience = useAppConfigStore((s) => s.audience);
+  const ageWriting = useAppConfigStore((s) => s.ageWriting);
   const craft = useMemo(
     () => resolveStoryCraft(config.ageRangeId, storyCraft),
     [config.ageRangeId, storyCraft],
+  );
+  const audienceSource = useMemo(
+    () => ({ audience, ageWriting, storyCraft }),
+    [audience, ageWriting, storyCraft],
   );
 
   const storyDraft = useStoryDraft();
@@ -95,15 +100,17 @@ export function StoryStep({
     // exceptions, such as an older child who prefers simpler text.
     if (!hasStory && brief.mode === "guided" && patch.cast) {
       const heroAge = patch.cast.find((person) => person.name.trim())?.age;
-      const ageRange = AGE_RANGES.find(
-        (candidate) =>
-          heroAge !== undefined && heroAge >= candidate.min && heroAge <= candidate.max,
-      );
-      if (ageRange) {
-        configPatch.ageRangeId = ageRange.id;
-        configPatch.readingModeId = ageBandHasReadingModes(ageRange.id)
-          ? (config.readingModeId ?? "read-aloud")
-          : null;
+      // Bands are bounded in months, so a three-year-old resolves against the
+      // same numbers an admin typed rather than a separate years-based table.
+      const band =
+        heroAge !== undefined ? audienceProfileForMonths(heroAge * 12, audienceSource) : undefined;
+      if (band) {
+        configPatch.ageRangeId = band.id;
+        configPatch.readingModeId = band.readingModes.includes(
+          config.readingModeId as never,
+        )
+          ? config.readingModeId
+          : band.readingModes[0] ?? null;
       }
     }
     update(configPatch, options);

@@ -504,7 +504,7 @@ const ROUTE_RULES: RouteRule[] = [
   // Configuration → AI.
   { test: /^\/admin\/config\/model-setup$/, gate: key("configuration.models") },
   { test: /^\/admin\/config\/models$/, gate: key("configuration.models") },
-  { test: /^\/admin\/config\/model-costs$/, gate: key("configuration.modelCosts") },
+  { test: /^\/admin\/config\/model-costs$/, gate: key("configuration.models") },
   { test: /^\/admin\/resolve-model$/, gate: key("configuration.models", "read") },
   { test: /^\/admin\/suggest-costs?$/, gate: key("configuration.models", "read") },
   { test: /^\/admin\/config\/prompts$/, gate: key("configuration.prompts") },
@@ -516,7 +516,8 @@ const ROUTE_RULES: RouteRule[] = [
   { test: /^\/admin\/config\/layouts$/, gate: key("configuration.layouts") },
   { test: /^\/admin\/layouts\/[^/]+\/image$/, gate: key("configuration.layouts", "write") },
   { test: /^\/admin\/image-masks(\/[^/]+)?$/, gate: key("configuration.layouts", "write") },
-  { test: /^\/admin\/config\/age-writing$/, gate: key("configuration.ageWriting") },
+  { test: /^\/admin\/config\/age-writing$/, gate: key("configuration.audience") },
+  { test: /^\/admin\/config\/audience$/, gate: key("configuration.audience") },
   { test: /^\/admin\/config\/story-craft$/, gate: key("configuration.storyCraft") },
   { test: /^\/admin\/config\/typography$/, gate: key("configuration.typography") },
   { test: /^\/admin\/config\/book-languages$/, gate: key("configuration.bookLanguages") },

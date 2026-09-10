@@ -16,6 +16,9 @@
  */
 import { z } from "zod";
 import type { AgeBandId, ReadingModeId } from "./ageWritingCatalog";
+import { DEFAULT_AUDIENCE_PROFILES } from "./audienceCatalog";
+import { activeAudienceSource } from "./activeAudience";
+import { resolveAudienceProfile } from "./audience";
 
 /** Recommended point band + line-length targets for one age band. */
 export interface FontBand {
@@ -87,9 +90,33 @@ export const DEFAULT_BODY_FONT_SEED_CAP_PT: Record<AgeBandId, number> = {
   "9-12": 18,
 };
 
-/** Fallback band for unknown age ids (mirrors the 3–5 picture-book range). */
 const FALLBACK_BAND: FontBand = DEFAULT_TYPOGRAPHY.bands["3-5"];
 const FALLBACK_SEED_CAP_PT = DEFAULT_BODY_FONT_SEED_CAP_PT["3-5"];
+
+/**
+ * The shipped band whose readers are closest in age to `ageRangeId`.
+ *
+ * Age bands are admin-editable, and type sizes for one an admin invented are
+ * not. Reaching for the picture-book range every time would set 22pt type for
+ * a 0–12 month board book, so a band without its own numbers borrows from the
+ * shipped band that overlaps it in months.
+ */
+function nearestShippedBandId(ageRangeId: string): AgeBandId {
+  const profile = resolveAudienceProfile(ageRangeId, activeAudienceSource());
+  const midpoint = (profile.minMonths + profile.maxMonths) / 2;
+  let best: AgeBandId = "3-5";
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of DEFAULT_AUDIENCE_PROFILES) {
+    if (!(candidate.id in DEFAULT_TYPOGRAPHY.bands)) continue;
+    const centre = (candidate.minMonths + candidate.maxMonths) / 2;
+    const distance = Math.abs(centre - midpoint);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = candidate.id;
+    }
+  }
+  return best;
+}
 
 const fontBandSchema = z
   .object({
@@ -125,8 +152,15 @@ export function normalizeTypographyConfig(input: unknown): TypographyConfig {
 export function resolveTypography(config?: TypographyConfig | null): ResolvedTypography {
   if (!config) return DEFAULT_TYPOGRAPHY;
   const bands = {} as Record<AgeBandId, FontBand>;
-  for (const key of Object.keys(DEFAULT_TYPOGRAPHY.bands) as AgeBandId[]) {
-    bands[key] = { ...DEFAULT_TYPOGRAPHY.bands[key], ...(config.bands?.[key] ?? {}) };
+  // Union of both key sets, not just the shipped ones: an admin who adds an
+  // age band and gives it type sizes must not have them silently dropped.
+  const ids = new Set([
+    ...Object.keys(DEFAULT_TYPOGRAPHY.bands),
+    ...Object.keys(config.bands ?? {}),
+  ]);
+  for (const key of ids) {
+    const base = DEFAULT_TYPOGRAPHY.bands[key] ?? DEFAULT_TYPOGRAPHY.bands[nearestShippedBandId(key)];
+    bands[key] = { ...base, ...(config.bands?.[key] ?? {}) };
   }
   return {
     floorPt: config.floorPt ?? DEFAULT_TYPOGRAPHY.floorPt,
@@ -170,7 +204,10 @@ export function recommendFontSize(input: {
   config?: TypographyConfig | null;
 }): FontSizeRec {
   const t = resolveTypography(input.config);
-  const band = t.bands[input.ageRangeId as AgeBandId] ?? FALLBACK_BAND;
+  const band =
+    t.bands[input.ageRangeId as AgeBandId] ??
+    t.bands[nearestShippedBandId(input.ageRangeId)] ??
+    FALLBACK_BAND;
   const scale = input.readingModeId ? t.readingModeScale[input.readingModeId] ?? 1 : 1;
 
   const minPt = Math.max(band.minPt * scale, t.floorPt);
@@ -210,6 +247,7 @@ export function defaultBodyFontSeedPt(input: {
   const recommendation = recommendFontSize(input);
   const cap =
     DEFAULT_BODY_FONT_SEED_CAP_PT[input.ageRangeId as AgeBandId] ??
+    DEFAULT_BODY_FONT_SEED_CAP_PT[nearestShippedBandId(input.ageRangeId)] ??
     FALLBACK_SEED_CAP_PT;
   return Math.min(recommendation.idealPt, cap);
 }
