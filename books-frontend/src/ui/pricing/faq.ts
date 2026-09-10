@@ -1,5 +1,5 @@
 /**
- * The print-pricing FAQ, generated from the live catalog.
+ * The pricing FAQ, generated from the live catalog and active plans.
  *
  * Generated rather than written down for two reasons. It stays true — the answers
  * quote the page ranges, markets and delivery speeds actually on sale, so
@@ -8,6 +8,7 @@
  * but a requirement: markup whose answers differ from the page is a
  * rich-result violation.
  */
+import type { PublicPlan } from "../../core/config/plans";
 import type { PricingSettings, PublicProduct } from "../../core/config/products";
 import { publicMarketsFor, publicUnitPrice } from "../../core/config/productMath";
 import { countryLabel } from "../../core/analytics/markets";
@@ -25,20 +26,19 @@ function list(items: string[]): string {
 }
 
 /**
- * Build the FAQ for a set of formats. Pass one product for a format page, the
+ * Build the FAQ for a set of formats and optional membership plans. Pass one product for a format page, the
  * whole offerable catalog for the index.
  */
 export function pricingFaq(
   products: PublicProduct[],
   settings: PricingSettings,
   currency: string,
+  plans?: PublicPlan[],
 ): PricingFaqItem[] {
   if (products.length === 0) return [];
 
   // The entry price: the shortest book each format can print, in the currency
-  // being displayed. Deliberately not the minimum of `prices`, which holds one
-  // amount per currency — taking the smallest of those picks whichever currency
-  // happens to have the weakest number and then labels it with the wrong symbol.
+  // being displayed.
   const cheapest = Math.min(
     ...products.map((p) =>
       publicUnitPrice(p, settings, { currency, pages: p.conditions.pages.min }),
@@ -52,7 +52,28 @@ export function pricingFaq(
   const allDiscounts = products.flatMap((p) => Object.values(p.planPrintDiscountPct)).filter((v) => v > 0);
   const maxDiscount = allDiscounts.length > 0 ? Math.max(...allDiscounts) : 0;
 
-  const faq: PricingFaqItem[] = [
+  const faq: PricingFaqItem[] = [];
+
+  const paidPlans = plans?.filter((p) => !p.isFree && p.status === "active") ?? [];
+  if (paidPlans.length > 0) {
+    faq.push({
+      question: "How do the membership plans work?",
+      answer:
+        "Memberships provide a recurring monthly allowance of Sparks to write, illustrate, and revise stories, plus exclusive discounts on all physical printed books. Memberships are optional, can be cancelled anytime with one click in your account, and never automatically ship books.",
+    });
+    faq.push({
+      question: "What are Sparks and do they roll over?",
+      answer:
+        "Sparks are the creative credits used in the studio to generate stories and custom illustrations. On active membership plans, unused Sparks roll over every billing cycle (up to your plan's rollover cap) so you never lose them.",
+    });
+    faq.push({
+      question: "Do I need a membership to order printed books?",
+      answer:
+        "No. You can create books and preview them completely free. When you are ready to order, you can purchase individual paperback or hardcover copies on demand at standard pricing without any subscription.",
+    });
+  }
+
+  faq.push(
     {
       question: "How much does it cost to print a children's book?",
       answer:
@@ -92,9 +113,9 @@ export function pricingFaq(
         bindings.length === 1 ? `A ${bindings[0]}` : "Depending on the binding, a book"
       } can be between ${minPages} and ${maxPages} pages. Each binding has its own limits and its own page increment — a bindery that works in fours can't make a book with an odd number of pages — and the calculator only lets you pick lengths that can actually be made.`,
     },
-  ];
+  );
 
-  if (maxDiscount > 0) {
+  if (maxDiscount > 0 && paidPlans.length === 0) {
     faq.push({
       question: "Do members get a discount on printing?",
       answer:

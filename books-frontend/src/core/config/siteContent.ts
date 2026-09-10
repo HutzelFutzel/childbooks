@@ -55,6 +55,12 @@ export const SITE_TEXT_SLOTS = [
   "founder.quote",
   "founder.name",
   "founder.role",
+  // Pricing
+  "pricing.heading",
+  "pricing.subhead",
+  "pricing.note",
+  "pricing.ctaPrimary",
+  "pricing.ctaSecondary",
   // Closing CTA band
   "cta.heading",
   "cta.subhead",

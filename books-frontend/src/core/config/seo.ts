@@ -37,7 +37,7 @@ export interface SeoFaqItem {
  * Marketing → SEO → Pages. The landing page (`/`) stays in the General fields
  * (`titleDefault` / `description`) so site identity isn't duplicated.
  */
-export const SEO_PAGE_IDS = ["/contact", "/affiliates", "/blog", "/print-pricing"] as const;
+export const SEO_PAGE_IDS = ["/contact", "/affiliates", "/blog", "/pricing", "/print-pricing"] as const;
 export type SeoPageId = (typeof SEO_PAGE_IDS)[number];
 
 export function isSeoPageId(v: unknown): v is SeoPageId {
@@ -91,7 +91,8 @@ export const SEO_PAGE_LABELS: Record<SeoPageId, string> = {
   "/contact": "Contact",
   "/affiliates": "Affiliate program",
   "/blog": "Blog",
-  "/print-pricing": "Print pricing",
+  "/pricing": "Plans & pricing",
+  "/print-pricing": "Print pricing (legacy)",
 };
 
 /** Code defaults when an admin override is empty. */
@@ -111,6 +112,12 @@ export function defaultSeoPageMeta(path: SeoPageId, siteName = "Childbook Studio
       return {
         title: "Blog",
         description: `Guides, ideas and inspiration for making personalized children's books with ${siteName}.`,
+      };
+    case "/pricing":
+      return {
+        title: "Plans, memberships & print pricing",
+        description:
+          `Explore flexible story memberships and on-demand print pricing for custom children's books with ${siteName}. Create for free, subscribe for monthly sparks, or order keepsakes anytime.`,
       };
     case "/print-pricing":
       return {

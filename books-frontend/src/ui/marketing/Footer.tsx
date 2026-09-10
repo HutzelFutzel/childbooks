@@ -10,8 +10,8 @@ const COLUMNS = [
     links: [
       { href: "/#how-it-works", label: "How it works" },
       { href: "/#features", label: "Features" },
-      { href: "/#pricing", label: "Plans & pricing" },
-      { href: "/print-pricing", label: "Print cost calculator" },
+      { href: "/#pricing", label: "Pricing summary" },
+      { href: "/pricing", label: "Plans & print pricing" },
       { href: "/studio", label: "Open the Studio" },
     ],
   },

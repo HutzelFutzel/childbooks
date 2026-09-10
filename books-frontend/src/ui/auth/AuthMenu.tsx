@@ -122,8 +122,8 @@ export function AuthMenu() {
             */}
             <MenuItem
               icon={<Calculator className="size-4" />}
-              label="Print pricing calculator"
-              href="/print-pricing"
+              label="Plans & pricing calculator"
+              href="/pricing"
               openInNewTab
               trailingIcon={<ExternalLink className="size-3.5" />}
               onClick={close}

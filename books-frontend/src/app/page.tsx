@@ -112,7 +112,7 @@ export default async function Home() {
         <HowItWorks images={images} text={text} />
         <Features text={text} />
         <FounderStory images={images} text={text} />
-        <Pricing initial={plans} print={print} />
+        <Pricing initial={plans} print={print} text={text} />
         <Faq items={seo.faq} />
         <CtaBand text={text} />
       </main>

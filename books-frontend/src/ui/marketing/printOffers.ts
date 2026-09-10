@@ -63,14 +63,14 @@ const FAMILY: Record<
     preferred: ["saddle-stitch"],
     bindings: ["saddle-stitch", "perfect-bound", "coil-bound"],
     label: "Paperback",
-    blurb: "A flexible printed cover. Light to hold at bedtime.",
+    blurb: "Light to hold at bedtime.",
     featured: false,
   },
   hardcover: {
     preferred: ["casewrap"],
     bindings: ["casewrap", "linen-wrap"],
     label: "Hardcover",
-    blurb: "Artwork printed on a sturdy board cover. The keepsake.",
+    blurb: "The keepsake for the shelf.",
     featured: true,
   },
 };

@@ -137,7 +137,7 @@ export default async function FormatPricingPage({
       <BreadcrumbJsonLd
         items={[
           { name: "Home", url: `${seo.siteUrl}/` },
-          { name: "Print pricing", url: `${seo.siteUrl}/print-pricing` },
+          { name: "Pricing", url: `${seo.siteUrl}/pricing` },
           { name, url: `${seo.siteUrl}/print-pricing/${slug}` },
         ]}
       />
@@ -150,8 +150,8 @@ export default async function FormatPricingPage({
       <Nav siteName={branding.brandName} logoUrl={logoUrl} />
       <main className="mx-auto max-w-5xl px-6 pb-20 pt-28 sm:pt-32">
         <nav aria-label="Breadcrumb" className="mb-6 text-xs text-ink-500">
-          <Link href="/print-pricing" className="underline decoration-ink-300 underline-offset-2 hover:text-ink-700">
-            Print pricing
+          <Link href="/pricing" className="underline decoration-ink-300 underline-offset-2 hover:text-ink-700">
+            Pricing
           </Link>
           <span className="mx-1.5 text-ink-300">/</span>
           <span className="capitalize text-ink-700">{name}</span>
