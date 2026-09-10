@@ -110,7 +110,6 @@ const models: ResolvedModels = {
   intentModel: { provider: "google", id: "gemini-intent" },
 };
 
-let styleImageEnabled = true;
 const saved: string[] = [];
 
 const env: PipelineEnv = {
@@ -122,7 +121,6 @@ const env: PipelineEnv = {
     saved.push(id);
     return id;
   },
-  loadStyleImage: async () => (styleImageEnabled ? { base64: TINY_PNG, mimeType: "image/png" } : null),
   composite: {
     compositeMaskedRegion: async () => ({ base64: TINY_PNG, mimeType: "image/png" }),
     buildHoleMask: async () => ({ base64: TINY_PNG, mimeType: "image/png" }),
@@ -190,7 +188,6 @@ function callCount(kind: string): number {
 async function scenarioFreshPage() {
   console.log("\n== Scenario A: fresh page render (style + binding) ==");
   resetCalls();
-  styleImageEnabled = true;
   const a1 = anchorWithImage("a1", "Amanda", "character");
   const project = baseProject([a1]);
   fake.binding = [{ id: "a1", found: true, x: 0.1, y: 0.1, width: 0.3, height: 0.5 }];
@@ -298,25 +295,12 @@ async function scenarioEmbeddedAnchorSheet() {
   check("obsolete removal image call fired", callCount("image") >= 2, `image calls=${callCount("image")}`);
 }
 
-async function scenarioStyleDisabled() {
-  console.log("\n== Scenario F: style image unavailable (fallback) ==");
-  resetCalls();
-  styleImageEnabled = false;
-  const a1 = anchorWithImage("a1", "Amanda", "character");
-  const project = baseProject([a1]);
-  fake.binding = [{ id: "a1", found: true, x: 0.1, y: 0.1, width: 0.3, height: 0.5 }];
-  const render = await renderIllustration(project, spread(["a1"]), {}, env);
-  check("render returned even without style image", !!render);
-  styleImageEnabled = true;
-}
-
 async function main() {
   await scenarioFreshPage();
   await scenarioDuplicateRepair();
   await scenarioStructuredEdit();
   await scenarioToggleOffRemoval();
   await scenarioEmbeddedAnchorSheet();
-  await scenarioStyleDisabled();
   console.log(`\n${failures === 0 ? "ALL PASS" : `${failures} CHECK(S) FAILED`}`);
   process.exit(failures === 0 ? 0 : 1);
 }

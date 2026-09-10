@@ -95,12 +95,6 @@ export interface ImageRenderRequest {
   /** Surface-level preference; the worker intersects it with its resolved model. */
   generation?: ImageGenerationHints;
   references?: BlobRef[];
-  /**
-   * Art-style preset whose example image should be prepended as a leading
-   * "style" reference at render time (resolved server-side from the art-styles
-   * config, so the huge exemplar isn't embedded in every task).
-   */
-  stylePresetId?: string;
   /** Optional inpainting mask, stored as a blob (transparent = region to change). */
   maskBlobId?: string;
   /**

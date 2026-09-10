@@ -1,7 +1,7 @@
 /* eslint-disable no-console */
 /**
  * Backend harness: exercises the FUNCTIONS glue against the live emulator.
- *  - loadStyleImage("watercolor") -> does downloadPublicBase64 / imageUrl work?
+ *  - confirms the admin style catalog reaches prompt resolution
  *  - renderAnchor end-to-end via backendPipelineEnv with a FAKE image provider.
  */
 import { ensureAdmin } from "../../functions/src/storage";
@@ -54,31 +54,16 @@ const models: ResolvedModels = {
 async function main() {
   ensureAdmin();
   const prompts = await loadPromptContext();
-  console.log("artStyles.examples keys:", Object.keys(prompts.artStyles?.examples ?? {}));
-  console.log("watercolor example:", JSON.stringify(prompts.artStyles?.examples?.watercolor));
+  console.log(
+    "art style ids:",
+    prompts.artStyles?.styles.map((style) => style.id).join(", ") ?? "none",
+  );
 
   const base = backendPipelineEnv("test-uid", models, prompts);
 
-  // --- Test 1: style image loading against live emulator storage ---
-  console.log("\n== Test 1: loadStyleImage('watercolor') ==");
-  const t0 = Date.now();
-  let styleData: { base64: string; mimeType: string } | null = null;
-  try {
-    styleData = await base.loadStyleImage("watercolor");
-  } catch (err) {
-    console.log("  loadStyleImage THREW:", (err as Error).message);
-  }
-  const ms = Date.now() - t0;
-  if (styleData) {
-    const bytes = Buffer.from(styleData.base64, "base64").length;
-    console.log(`  [PASS] style image loaded: ${bytes} bytes, ${styleData.mimeType}, in ${ms}ms`);
-    if (bytes > 1_000_000) console.log(`  [WARN] style image is ${(bytes / 1e6).toFixed(1)}MB — sent as reference on EVERY generation (latency).`);
-  } else {
-    console.log(`  [FAIL] loadStyleImage returned null in ${ms}ms — style silently disabled.`);
-  }
-
-  // --- Test 2: renderAnchor (character) — does style ref get included? ---
-  console.log("\n== Test 2: renderAnchor(character) with fake image provider ==");
+  // Preview images are deliberately absent from the pipeline environment:
+  // only the configured textual drawing prompt reaches image generation.
+  console.log("\n== renderAnchor(character) with fake image provider ==");
   // Patch apiKeyFor so we don't need real server secrets.
   const env = { ...base, apiKeyFor: () => "test-key", loadBlob: async () => ({ base64: TINY_PNG, mimeType: "image/png" }) };
   const anchor: Anchor = {
@@ -104,7 +89,7 @@ async function main() {
     const render = await renderAnchor(project, anchor, {}, env as any);
     console.log(`  [${render ? "PASS" : "FAIL"}] renderAnchor returned; image calls=${calls.filter((c) => c.kind === "image").length}`);
     console.log(`  prompt head: ${render?.prompt?.slice(0, 120)}`);
-    console.log(`  prompt mentions style ref: ${/style/i.test(render?.prompt ?? "")}`);
+    console.log(`  prompt contains textual style direction: ${/watercolor/i.test(render?.prompt ?? "")}`);
   } catch (err) {
     console.log("  [FAIL] renderAnchor THREW:", (err as Error).message);
     console.log((err as Error).stack?.split("\n").slice(0, 4).join("\n"));

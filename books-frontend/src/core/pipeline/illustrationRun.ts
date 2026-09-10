@@ -59,6 +59,7 @@ import {
   resolveImageGenerationOptions,
   type ResolvedImageGenerationOptions,
 } from "../config/imageGeneration";
+import { resolveArtStyle } from "../config/artStyles";
 import {
   canonicalEditText,
   IntentAmbiguousError,
@@ -167,13 +168,6 @@ export interface PipelineEnv {
   ): Promise<{ base64: string; mimeType: string; createdAt: number } | null>;
   /** Persist a base64 image and return its new blob id. */
   saveImage(base64: string, mimeType: string): Promise<string>;
-  /**
-   * Resolve the admin-managed example image for an art-style preset (fetched
-   * from the art-styles config), or null when none is configured/fetchable.
-   * Used to steer generation toward the selected style with a real exemplar
-   * rather than only a textual description.
-   */
-  loadStyleImage(presetId: string): Promise<{ base64: string; mimeType: string } | null>;
   /**
    * Shrink an image that is about to be sent to a model as a REFERENCE (not as
    * a compositing base): resize + re-encode so multi-megabyte stored blobs don't
@@ -348,7 +342,7 @@ function generationHintsFor(
   const presetId = project.config.artStyle.presetId;
   return mergeImageGenerationHints(
     presetId
-      ? env.prompts?.artStyles?.generationHints?.[presetId]
+      ? resolveArtStyle(presetId, env.prompts?.artStyles)?.generationHints
       : undefined,
     layoutPlan
       ? env.layoutsConfig?.overrides[layoutPlan.layoutId]?.imageGeneration

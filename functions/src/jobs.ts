@@ -702,7 +702,6 @@ async function runImageTask(args: {
   tier: ImageTier;
   action: "pageIllustration" | "coverIllustration";
   projectId: string | undefined;
-  loadStyle: (presetId?: string) => Promise<{ base64: string; mimeType: string } | null>;
   signal: AbortSignal;
   jobId: string;
   taskId: string;
@@ -714,7 +713,7 @@ async function runImageTask(args: {
   stats: CallStats;
   generation: ReturnType<typeof resolveImageGenerationOptions>;
 }> {
-  const { uid, req, model, tier, action, projectId, loadStyle, signal, jobId, taskId, startedAt } =
+  const { uid, req, model, tier, action, projectId, signal, jobId, taskId, startedAt } =
     args;
   const canShrink = !req.maskBlobId;
   const references: ReferenceImage[] = await Promise.all(
@@ -729,18 +728,6 @@ async function runImageTask(args: {
       };
     }),
   );
-
-  if (req.stylePresetId && !req.maskBlobId) {
-    const style = await loadStyle(req.stylePresetId);
-    if (style) {
-      references.unshift({
-        base64: style.base64,
-        mimeType: style.mimeType,
-        role: "style",
-        label: "art style reference",
-      });
-    }
-  }
 
   let mask: ReferenceImage | undefined;
   if (req.maskBlobId) {
@@ -902,16 +889,6 @@ async function renderTask(
     const req = task.request;
     if (!req) throw new Error("Image task is missing its render request.");
     const action = illustrationActionFor(task.id);
-    const styleCache = new Map<string, Promise<{ base64: string; mimeType: string } | null>>();
-    const loadStyle = (presetId?: string) => {
-      if (!presetId) return Promise.resolve(null);
-      let hit = styleCache.get(presetId);
-      if (!hit) {
-        hit = env.loadStyleImage(presetId).catch(() => null);
-        styleCache.set(presetId, hit);
-      }
-      return hit;
-    };
     const { blobId, mimeType, stats, generation } = await runImageTask({
       uid,
       req,
@@ -920,7 +897,6 @@ async function renderTask(
       tier,
       action,
       projectId,
-      loadStyle,
       signal,
       jobId,
       taskId: task.id,

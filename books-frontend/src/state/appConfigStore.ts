@@ -18,6 +18,7 @@ import {
 import {
   createDefaultArtStylesConfig,
   normalizeArtStylesConfig,
+  type ArtStyleExample,
   type ArtStylesConfig,
 } from "../core/config/artStyles";
 import {
@@ -591,7 +592,7 @@ interface AppConfigState {
   saveModelConfig: (config: ModelConfig) => Promise<void>;
   /** Atomically publish model routing and the matching private/public costs. */
   saveModelSetup: (config: ModelConfig, costs: ModelCostTable) => Promise<void>;
-  saveArtStyles: (config: ArtStylesConfig) => Promise<void>;
+  saveArtStyles: (config: ArtStylesConfig) => Promise<ArtStylesConfig>;
   saveLayouts: (config: LayoutsConfig) => Promise<void>;
   /** Upload a showcase image for a layout; returns the stored example. */
   uploadLayoutImage: (
@@ -773,7 +774,12 @@ interface AppConfigState {
   saveAnnouncementsConfig: (config: AnnouncementsConfig) => Promise<void>;
   /** Send a sample contact-form message to the configured contact inbox. */
   sendTestContact: () => Promise<void>;
-  uploadArtStyleImage: (styleId: string, base64: string, mimeType: string) => Promise<void>;
+  uploadArtStyleImage: (
+    styleId: string,
+    base64: string,
+    mimeType: string,
+  ) => Promise<ArtStyleExample>;
+  removeArtStyleImage: (styleId: string, storagePath: string) => Promise<void>;
 
   // Landing-page inline editing (admin, gated in the UI; enforced server-side).
   uploadSiteImage: (slot: SiteImageSlot, base64: string, mimeType: string, alt?: string) => Promise<void>;
@@ -1187,7 +1193,11 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   },
 
   async saveArtStyles(config) {
-    await putJson("/admin/config/art-styles", config);
+    const saved = normalizeArtStylesConfig(
+      await putJson("/admin/config/art-styles", config),
+    );
+    set({ artStyles: saved });
+    return saved;
   },
 
   async saveLayouts(config) {
@@ -1806,6 +1816,29 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       body: JSON.stringify({ base64, mimeType }),
     });
     if (!res.ok) throw new Error((await safeError(res)) ?? "Upload failed.");
+    const result = (await res.json()) as {
+      config: ArtStylesConfig;
+      example?: ArtStyleExample;
+    };
+    const config = normalizeArtStylesConfig(result.config);
+    set({ artStyles: config });
+    const example =
+      result.example ??
+      config.styles
+        .find((style) => style.id === styleId)
+        ?.examples.at(-1);
+    if (!example) throw new Error("The preview uploaded but could not be read back.");
+    return example;
+  },
+
+  async removeArtStyleImage(styleId, storagePath) {
+    const res = await backendFetch(`/admin/art-styles/${encodeURIComponent(styleId)}/image`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ storagePath }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not remove preview.");
+    set({ artStyles: normalizeArtStylesConfig(await res.json()) });
   },
 
   async uploadLayoutImage(layoutId, base64, mimeType, meta) {

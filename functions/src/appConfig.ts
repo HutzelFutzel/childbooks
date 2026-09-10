@@ -1625,16 +1625,51 @@ export function isKnownTextSlot(slot: unknown): slot is SiteTextSlot {
   return isSiteTextSlot(slot);
 }
 
-/** Patch a single art-style example (used by the image-upload route). */
-export async function setArtStyleExample(
+/** Append a customer-facing preview to one configured art style. */
+export async function addArtStyleExample(
   styleId: string,
-  example: ArtStylesConfig["examples"][string],
+  example: Omit<ArtStylesConfig["styles"][number]["examples"][number], "order">,
 ): Promise<ArtStylesConfig> {
   const current = await getArtStylesConfig();
+  const styleIndex = current.styles.findIndex((style) => style.id === styleId);
+  if (styleIndex < 0) throw new Error(`Unknown art style "${styleId}".`);
+  const style = current.styles[styleIndex];
+  const order = style.examples.reduce(
+    (highest, item) => Math.max(highest, item.order),
+    -1,
+  ) + 1;
+  const styles = current.styles.slice();
+  styles[styleIndex] = {
+    ...style,
+    examples: [...style.examples, { ...example, order }],
+    updatedAt: Date.now(),
+  };
   const next = normalizeArtStylesConfig({
     ...current,
-    examples: { ...current.examples, [styleId]: example },
+    styles,
   });
+  await writeDoc(ART_STYLES_DOC, next);
+  return next;
+}
+
+/** Remove one customer preview while leaving the style itself intact. */
+export async function removeArtStyleExample(
+  styleId: string,
+  storagePath: string,
+): Promise<ArtStylesConfig> {
+  const current = await getArtStylesConfig();
+  const styleIndex = current.styles.findIndex((style) => style.id === styleId);
+  if (styleIndex < 0) throw new Error(`Unknown art style "${styleId}".`);
+  const style = current.styles[styleIndex];
+  const styles = current.styles.slice();
+  styles[styleIndex] = {
+    ...style,
+    examples: style.examples
+      .filter((example) => example.storagePath !== storagePath)
+      .map((example, order) => ({ ...example, order })),
+    updatedAt: Date.now(),
+  };
+  const next = normalizeArtStylesConfig({ ...current, styles });
   await writeDoc(ART_STYLES_DOC, next);
   return next;
 }

@@ -40,6 +40,8 @@ import {
   restoreBrandingAsset,
   restoreWatermark,
   saveArtStylesConfig,
+  addArtStyleExample,
+  removeArtStyleExample,
   saveLayoutsConfig,
   addLayoutExample,
   removeLayoutExample,
@@ -58,7 +60,6 @@ import {
   saveSeoConfig,
   saveSparksConfig,
   savePromptsConfig,
-  setArtStyleExample,
   setBrandingAsset,
   setBrandingWatermark,
   getQrCodesConfig,
@@ -690,8 +691,9 @@ export function registerAdminRoutes(app: Express): void {
     }
   });
 
-  // Upload (replace) an art-style example image. Body: { base64, mimeType }.
+  // Add a customer-facing art-style preview. It is never sent to image models.
   app.post("/admin/art-styles/:styleId/image", json, async (req: Request, res: Response) => {
+    let uploadedPath: string | undefined;
     try {
       const styleId = String(req.params.styleId);
       const { base64, mimeType } = (req.body ?? {}) as { base64?: string; mimeType?: string };
@@ -699,19 +701,57 @@ export function registerAdminRoutes(app: Express): void {
         res.status(400).json({ error: { message: "base64 and mimeType are required." } });
         return;
       }
-      // Remove the previous image for this style, if any.
       const current = await getArtStylesConfig();
-      const prev = current.examples[styleId];
-      if (prev?.storagePath) await deletePublicObject(prev.storagePath);
+      const style = current.styles.find((item) => item.id === styleId);
+      if (!style) {
+        res.status(404).json({ error: { message: `Unknown art style "${styleId}".` } });
+        return;
+      }
+      if (style.examples.length >= 12) {
+        res.status(400).json({ error: { message: "A style can have up to 12 preview images." } });
+        return;
+      }
 
-      const buf = Buffer.from(base64, "base64");
-      const { storagePath, publicUrl } = await uploadArtStyleImage(styleId, buf, mimeType);
-      const config = await setArtStyleExample(styleId, {
+      const buf = await sharp(Buffer.from(base64, "base64"))
+        .rotate()
+        .resize(1200, 900, { fit: "cover", position: "centre", withoutEnlargement: false })
+        .webp({ quality: 86, alphaQuality: 90 })
+        .toBuffer();
+      const { storagePath, publicUrl } = await uploadArtStyleImage(styleId, buf, "image/webp");
+      uploadedPath = storagePath;
+      const config = await addArtStyleExample(styleId, {
         imageUrl: publicUrl,
         storagePath,
         updatedAt: Date.now(),
       });
-      res.json(config);
+      const example = config.styles
+        .find((item) => item.id === styleId)
+        ?.examples.find((item) => item.storagePath === storagePath);
+      res.json({ config, example });
+    } catch (err) {
+      if (uploadedPath) await deletePublicObject(uploadedPath).catch(() => undefined);
+      handleError(res, err);
+    }
+  });
+
+  app.delete("/admin/art-styles/:styleId/image", json, async (req: Request, res: Response) => {
+    try {
+      const styleId = String(req.params.styleId);
+      const storagePath = String((req.body ?? {}).storagePath ?? "");
+      if (!storagePath) {
+        res.status(400).json({ error: { message: "storagePath is required." } });
+        return;
+      }
+      const current = await getArtStylesConfig();
+      const exists = current.styles
+        .find((style) => style.id === styleId)
+        ?.examples.some((example) => example.storagePath === storagePath);
+      if (!exists) {
+        res.status(404).json({ error: { message: "Preview image not found." } });
+        return;
+      }
+      await deletePublicObject(storagePath);
+      res.json(await removeArtStyleExample(styleId, storagePath));
     } catch (err) {
       handleError(res, err);
     }

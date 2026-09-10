@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, ArrowRight, Clock, Sparkles } from "lucide-react";
 import type { ArtStyleSelection, BookConfig } from "../../core/types";
 import { resolveArtStyleDisplayName } from "../../core/prompts/style";
+import { resolveArtStyles } from "../../core/config/artStyles";
 import { hasSourceArt } from "../../core/book/sourceArt";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useProjectsStore } from "../../state/projectsStore";
@@ -54,8 +55,23 @@ export function StyleSetup() {
 
   // Re-sync draft when reopening Style (or when committed changes externally).
   useEffect(() => {
+    const available = resolveArtStyles(artStyles);
+    if (
+      config?.styleReady === false &&
+      !available.some((style) => style.id === committed.presetId)
+    ) {
+      const first = available[0];
+      setDraft(first ? { presetId: first.id, origin: "preset" } : committed);
+      return;
+    }
     setDraft(committed);
-  }, [committed.presetId, committed.customDescription, committed.origin]);
+  }, [
+    artStyles,
+    committed.presetId,
+    committed.customDescription,
+    committed.origin,
+    config?.styleReady,
+  ]);
 
   if (!config) return null;
 
@@ -82,7 +98,10 @@ export function StyleSetup() {
     );
   }
   const draftConfig: BookConfig = { ...config, artStyle: draft };
-  const chosen = isArtStyleChosen(draftConfig);
+  const availableStyles = resolveArtStyles(artStyles);
+  const chosen =
+    isArtStyleChosen(draftConfig) &&
+    (!firstTime || availableStyles.some((style) => style.id === draft.presetId));
   const dirty = !artStylesEqual(draft, committed);
   const renew = styleRenewCounts(project);
   const hasArt = renew.cast > 0 || renew.pages > 0;
@@ -189,15 +208,15 @@ export function StyleSetup() {
   }
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col bg-ink-50/30">
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-ink-100 bg-white px-4 py-3 sm:px-6">
+    <div className="relative flex h-full min-h-0 flex-col bg-ink-50/60">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-ink-100 bg-white/95 px-4 py-3 backdrop-blur sm:px-6 lg:px-8">
         <div className="min-w-0">
           <h1 className="text-base font-semibold text-ink-900">
-            {firstTime ? "Choose your book’s look" : "Art style"}
+            {firstTime ? "Choose how your book looks" : "Art style"}
           </h1>
           <p className="mt-0.5 hidden text-sm text-ink-500 sm:block">
             {firstTime
-              ? "Choose a style once. We’ll create the characters in it next."
+              ? "Every page will be drawn in this style. You can change it later."
               : "Choose a new look and we’ll update the existing artwork for you."}
           </p>
         </div>
@@ -210,16 +229,30 @@ export function StyleSetup() {
           <Button
             size="sm"
             disabled={!chosen || busy}
+            aria-label={
+              firstTime
+                ? `Use ${draftLabel}`
+                : dirty
+                  ? `Apply ${draftLabel}`
+                  : "Done"
+            }
+            className="max-w-60 whitespace-nowrap"
             rightIcon={<ArrowRight className="size-4" />}
             onClick={onPrimary}
           >
-            {firstTime ? "Use this style" : dirty ? "Apply style" : "Done"}
+            <span className="truncate">
+              {firstTime
+                ? `Use ${draftLabel}`
+                : dirty
+                  ? `Apply ${draftLabel}`
+                  : "Done"}
+            </span>
           </Button>
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6">
-        <div className="mx-auto w-full max-w-3xl space-y-6">
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
+        <div className="mx-auto w-full max-w-[1600px] space-y-6">
           {artworkFailed && (
             <p className="text-sm leading-relaxed text-ink-500">
               Choose an art style. We couldn’t reliably identify the style of the uploaded artwork.

@@ -57,6 +57,7 @@ import { deleteLikenessPhoto } from "../platform/likeness";
 import { CUSTOMER_IMAGE_TIER, type ImageTier } from "../core/config/modelConfig";
 import { capabilitiesFor } from "../core/config/modelCapabilities";
 import { mergeImageGenerationHints } from "../core/config/imageGeneration";
+import { resolveArtStyle } from "../core/config/artStyles";
 import { useProjectsStore } from "./projectsStore";
 import { useSettingsStore } from "./settingsStore";
 import { useAppConfigStore } from "./appConfigStore";
@@ -618,9 +619,10 @@ export function buildIllustrationTask(
       layoutPlan?.mode === "inset-art"
         ? mergeImageGenerationHints(
             project.config.artStyle.presetId
-              ? artStyles.generationHints[
-                  project.config.artStyle.presetId
-                ]
+              ? resolveArtStyle(
+                  project.config.artStyle.presetId,
+                  artStyles,
+                )?.generationHints
               : undefined,
             layoutsConfig.overrides[layoutPlan.layoutId]?.imageGeneration,
           )

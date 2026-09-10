@@ -150,6 +150,8 @@ function publicMediaUrl(path: string): string {
 /**
  * Upload an admin-managed art-style example image to the world-readable
  * `public/artStyles/{styleId}/...` space and return its path + public URL.
+ * Styles keep an ordered gallery, so uploads accumulate until explicitly
+ * removed. These assets are customer previews and never model references.
  */
 export async function uploadArtStyleImage(
   styleId: string,

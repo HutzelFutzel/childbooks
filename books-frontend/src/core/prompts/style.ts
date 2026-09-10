@@ -1,6 +1,8 @@
 /** Resolves the user's art-style selection into a prompt fragment. */
-import { ART_STYLE_PRESETS } from "../config/options";
-import type { ArtStylesConfig } from "../config/artStyles";
+import {
+  resolveArtStyle,
+  type ArtStylesConfig,
+} from "../config/artStyles";
 import type { ArtStyleSelection } from "../types";
 import type { PromptContext } from "./context";
 
@@ -11,18 +13,12 @@ export function resolveArtStyleText(
   const artStyles =
     ctx && "artStyles" in ctx ? ctx.artStyles : (ctx as ArtStylesConfig | null | undefined);
   const preset = style.presetId
-    ? ART_STYLE_PRESETS.find((p) => p.id === style.presetId)
+    ? resolveArtStyle(style.presetId, artStyles)
     : undefined;
   const parts: string[] = [];
 
-  const adminDesc =
-    style.presetId && artStyles?.promptDescriptions[style.presetId]?.text?.trim();
-  if (adminDesc) {
-    parts.push(adminDesc);
-  } else if (preset?.promptDescription?.trim()) {
+  if (preset?.promptDescription?.trim()) {
     parts.push(preset.promptDescription.trim());
-  } else if (preset?.promptHint) {
-    parts.push(preset.promptHint);
   }
 
   if (style.customDescription?.trim()) parts.push(style.customDescription.trim());
@@ -51,15 +47,13 @@ export function artStyleKey(style: ArtStyleSelection | undefined): string {
   return custom ? `${preset}|${custom}` : preset;
 }
 
-/** Resolve the display title for a preset, honoring the admin label override. */
+/** Resolve the display title for a configured or legacy preset. */
 export function resolveArtStyleLabel(
   presetId: string,
   ctx?: Pick<PromptContext, "artStyles"> | ArtStylesConfig | null,
 ): string {
   const artStyles =
     ctx && "artStyles" in ctx ? ctx.artStyles : (ctx as ArtStylesConfig | null | undefined);
-  const override = artStyles?.labels?.[presetId]?.text?.trim();
-  if (override) return override;
-  const preset = ART_STYLE_PRESETS.find((p) => p.id === presetId);
+  const preset = resolveArtStyle(presetId, artStyles);
   return preset?.label ?? presetId;
 }

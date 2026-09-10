@@ -6,7 +6,9 @@ import { Button } from "../../components/Button";
 import { Input } from "../../components/Input";
 import { Select } from "../../components/Select";
 import { useAdminProjects } from "../../../state/adminProjectsStore";
-import { AGE_RANGES, ART_STYLE_PRESETS } from "../../../core/config/options";
+import { AGE_RANGES } from "../../../core/config/options";
+import { resolveArtStyles } from "../../../core/config/artStyles";
+import { useAppConfigStore } from "../../../state/appConfigStore";
 import { DEFAULT_IMAGE_TIER_LABELS } from "../../../core/config/modelConfig";
 import { BOOK_PRODUCTS } from "../../../core/fulfillment";
 import { MILESTONES } from "./milestones";
@@ -23,6 +25,7 @@ export function ProjectFilterBar() {
   const setFilters = useAdminProjects((s) => s.setFilters);
   const clearFilters = useAdminProjects((s) => s.clearFilters);
   const stats = useAdminProjects((s) => s.stats);
+  const artStyles = useAppConfigStore((s) => s.artStyles);
   const [open, setOpen] = useState(false);
 
   const active = useMemo(
@@ -120,7 +123,10 @@ export function ProjectFilterBar() {
               className="h-9"
               options={[
                 { value: "", label: "Any style" },
-                ...ART_STYLE_PRESETS.map((p) => ({ value: p.id, label: p.label })),
+                ...resolveArtStyles(artStyles, { includeDisabled: true }).map((style) => ({
+                  value: style.id,
+                  label: style.label,
+                })),
               ]}
             />
           </Field>

@@ -49,7 +49,7 @@ export interface ModelSelection {
 }
 
 export interface ArtStyleSelection {
-  /** Preset id from ART_STYLE_PRESETS, or null when fully custom. */
+  /** Stable id from the admin-managed art-style catalog, or null when custom. */
   presetId: string | null;
   /** Optional free-text creative additions / overrides. */
   customDescription?: string;
