@@ -196,6 +196,7 @@ export function PageStage({
   illustrationFocus,
   selectedId,
   onSelectElement,
+  onSelectSurface,
   onChangeElement,
   onReframeImage,
   onAdjustArt,
@@ -243,6 +244,8 @@ export function PageStage({
   illustrationFocus?: { x: number; y: number };
   selectedId: string | null;
   onSelectElement: (ref: ElementRef | null) => void;
+  /** Select the physical leaf clicked on an otherwise empty stage. */
+  onSelectSurface?: (side: "left" | "right") => void;
   onChangeElement: (id: string, kind: ElementKind, patch: GeomPatch) => void;
   /**
    * Commit crop/reframe for an image: zoom + focal point and/or the frame rect.
@@ -783,8 +786,9 @@ export function PageStage({
       )
     : undefined;
 
-  function clearSelection() {
-    onSelectElement(null);
+  function clearSelection(side?: "left" | "right") {
+    if (side && onSelectSurface) onSelectSurface(side);
+    else onSelectElement(null);
     onSelectSpan?.(null);
   }
 
@@ -1193,7 +1197,7 @@ export function PageStage({
                 requestSelectArt(xFrac);
                 return;
               }
-              clearSelection();
+              clearSelection(side);
             }}
             onTouchStart={(e: KonvaEventObject<TouchEvent>) => {
               if (e.target !== e.target.getStage()) return;
@@ -1205,7 +1209,7 @@ export function PageStage({
                 requestSelectArt(xFrac);
                 return;
               }
-              clearSelection();
+              clearSelection(side);
             }}
             onDblClick={(e: KonvaEventObject<MouseEvent>) => {
               const stage = e.target.getStage();

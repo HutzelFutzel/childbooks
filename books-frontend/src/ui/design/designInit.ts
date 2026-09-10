@@ -276,11 +276,7 @@ function hugTextInRect(box: TextBox, container: NormRect, pageAspect: number): T
  * occupies exactly the rectangle the image was generated for, leaving the page
  * background visible where the text sits.
  */
-function insetIllustration(
-  plan: LayoutPlan,
-  z: number,
-  imageMaskId?: string,
-): ImageElement | null {
+function insetIllustration(plan: LayoutPlan, z: number): ImageElement | null {
   if (plan.mode !== "inset-art") return null;
   return {
     id: uid("im"),
@@ -289,7 +285,6 @@ function insetIllustration(
     z,
     fit: "cover",
     name: "Illustration",
-    ...(imageMaskId ? { imageMaskId } : {}),
   };
 }
 
@@ -439,7 +434,7 @@ export function seedPageDesign(design: BookDesign, page: DesignPage): PageDesign
   }
   const art = page.isCover
     ? null
-    : insetIllustration(page.plan, 0, design.defaultImageMaskId);
+    : insetIllustration(page.plan, 0);
   return {
     textBoxes: boxes,
     layoutId: page.plan.layoutId,
@@ -532,11 +527,7 @@ export function relayoutPageDesign(
   if (page.plan.mode === "inset-art") {
     const art = existingArt
       ? { ...existingArt, rect: page.plan.artRect }
-      : insetIllustration(
-          page.plan,
-          Math.min(0, ...images.map((im) => im.z)) - 1,
-          design.defaultImageMaskId,
-        );
+      : insetIllustration(page.plan, Math.min(0, ...images.map((im) => im.z)) - 1);
     nextImages = art ? [...others, art] : others;
   } else if (existingArt) {
     nextImages = [...others, { ...existingArt, rect: { x: 0, y: 0, w: 1, h: 1 } }];

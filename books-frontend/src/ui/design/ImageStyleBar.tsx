@@ -165,7 +165,11 @@ function ShapePicker({ chrome }: { chrome: ImageToolbarChrome }) {
 
   const choose = (patch: Partial<ImageElement>) => {
     chrome.onPreviewShape(null);
-    chrome.onPatch(patch);
+    const framed = Boolean(patch.imageMaskId || (patch.corner ?? 0) > 0);
+    chrome.onPatch({
+      ...patch,
+      frameSource: framed ? "user" : "none",
+    });
     setOpen(false);
   };
   const close = () => {

@@ -119,12 +119,22 @@ export function CastWorkspace({
   const batchRange = useImageBatchRange([{ action: "anchorImage", count: remaining }]);
 
   // Keep age in its dedicated field. Old projects may have a numeric age baked
-  // into the description or no age field at all, so normalize both once. The
-  // fallback considers role/species before using the child audience range.
+  // into the description or no age field at all, so normalize both before the
+  // first render. The fallback considers role/species before using the child
+  // audience range.
+  // Do not silently rewrite an already-rendered cast member: description and
+  // age are illustration provenance, so doing that on mount immediately marks
+  // a sheet (and every page using it) stale without an author edit.
   useEffect(() => {
     let changed = false;
     const next = allAnchors.map((anchor) => {
-      if (anchor.type !== "character" || anchor.ageYears !== undefined) return anchor;
+      if (
+        anchor.type !== "character" ||
+        anchor.ageYears !== undefined ||
+        currentAnchorImage(anchor)
+      ) {
+        return anchor;
+      }
       changed = true;
       const description = anchor.descriptionUserEdited
         ? anchor.description

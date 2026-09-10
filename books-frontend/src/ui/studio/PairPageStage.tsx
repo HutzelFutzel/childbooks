@@ -163,6 +163,12 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
         trimHeightIn: trim.heightIn,
       }}
       selectedId={selectedElementId}
+      onSelectSurface={(side) =>
+        select({
+          kind: "page",
+          pageId: side === "right" ? right.page.id : left.page.id,
+        })
+      }
       onSelectElement={(ref) => {
         if (!ref) {
           select({ kind: "page", pageId: left.page.id });

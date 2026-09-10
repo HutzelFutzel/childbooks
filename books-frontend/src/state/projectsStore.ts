@@ -29,7 +29,12 @@ import {
   renameDerivedStyleNames,
   setSourceArtOnNamedCharacters,
 } from "../core/book/sourceArt";
-import { textFromParagraphs, withIllustrationFrame, wordParagraphs } from "../core/design";
+import {
+  textFromParagraphs,
+  withIllustrationFrame,
+  withoutAutomaticIllustrationFrame,
+  wordParagraphs,
+} from "../core/design";
 import {
   COVER_BACK_ID,
   COVER_FRONT_ID,
@@ -674,16 +679,24 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       // only paint AI art through an illustration ImageElement — without this,
       // filmstrip thumbs (non-editable full-bleed) update while the stage stays
       // blank until the user clicks the page to materialize a frame.
-      const blobId = getCursor(tree).content.blobId;
+      const art = getCursor(tree).content;
+      const blobId = art.blobId;
       if (blobId && next.design) {
         const isCover = spreadId === COVER_FRONT_ID || spreadId === COVER_BACK_ID;
         const focus = isCover ? { x: 0.5, y: 0 } : undefined;
+        const transparent = art.generation?.applied.background === "transparent";
+        const design = transparent
+          ? withoutAutomaticIllustrationFrame(next.design, spreadId)
+          : next.design;
         next = {
           ...next,
-          design: withIllustrationFrame(next.design, spreadId, {
+          design: withIllustrationFrame(design, spreadId, {
             focus,
-            ...(!isCover && next.design.defaultImageMaskId
-              ? { imageMaskId: next.design.defaultImageMaskId }
+            ...(!transparent && !isCover && design.defaultImageMaskId
+              ? {
+                  imageMaskId: design.defaultImageMaskId,
+                  frameSource: "auto" as const,
+                }
               : {}),
           }),
         };

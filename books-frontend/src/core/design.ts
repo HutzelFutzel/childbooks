@@ -385,6 +385,12 @@ export interface ImageElement {
    * exclusive with `corner` in the UI; legacy documents may omit it.
    */
   imageMaskId?: string;
+  /**
+   * Whether framing came from the book default, an explicit frame, or an
+   * explicit "Original" choice. Transparent renders discard only automatic
+   * framing, while `"none"` prevents the default from being reapplied.
+   */
+  frameSource?: "auto" | "user" | "none";
   effects?: ElementEffects;
   locked?: boolean;
   name?: string;
@@ -585,7 +591,12 @@ function newIllustrationElementId(): string {
 export function withIllustrationFrame(
   design: BookDesign,
   pageId: string,
-  opts?: { focus?: { x: number; y: number }; rect?: NormRect; imageMaskId?: string },
+  opts?: {
+    focus?: { x: number; y: number };
+    rect?: NormRect;
+    imageMaskId?: string;
+    frameSource?: ImageElement["frameSource"];
+  },
 ): BookDesign {
   const pd = design.pages[pageId] ?? { textBoxes: [] };
   if ((pd.images ?? []).some((im) => im.kind === "illustration")) return design;
@@ -606,12 +617,58 @@ export function withIllustrationFrame(
     name: "Illustration",
     ...(opts?.focus ? { focus: opts.focus } : {}),
     ...(opts?.imageMaskId ? { imageMaskId: opts.imageMaskId } : {}),
+    ...(opts?.frameSource ? { frameSource: opts.frameSource } : {}),
   };
   return {
     ...design,
     pages: {
       ...design.pages,
       [pageId]: { ...pd, images: [...(pd.images ?? []), img] },
+    },
+  };
+}
+
+/**
+ * Remove only book-default framing from one illustration. Legacy elements did
+ * not record `frameSource`, so a mask matching the book default is treated as
+ * automatic; explicit modern choices are preserved.
+ */
+export function withoutAutomaticIllustrationFrame(
+  design: BookDesign,
+  pageId: string,
+): BookDesign {
+  const pd = design.pages[pageId];
+  if (!pd?.images?.length) return design;
+  let changed = false;
+  const images = pd.images.map((image) => {
+    const legacyAutomaticMask =
+      !image.frameSource &&
+      Boolean(image.imageMaskId) &&
+      image.imageMaskId === design.defaultImageMaskId;
+    if (
+      image.kind !== "illustration" ||
+      (image.frameSource !== "auto" && !legacyAutomaticMask)
+    ) {
+      return image;
+    }
+    const {
+      imageMaskId: _imageMaskId,
+      corner: _corner,
+      frameSource: _frameSource,
+      ...plain
+    } = image;
+    void _imageMaskId;
+    void _corner;
+    void _frameSource;
+    changed = true;
+    return plain;
+  });
+  if (!changed) return design;
+  return {
+    ...design,
+    pages: {
+      ...design.pages,
+      [pageId]: { ...pd, images },
     },
   };
 }

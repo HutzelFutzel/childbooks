@@ -801,32 +801,64 @@ export function StudioProvider({
     void setDesign({ ...design, version: DESIGN_VERSION, pages: nextPages });
   }, [bookLanguages, design, measureFontFamily, pages, project, setDesign, typography]);
 
-  // One book-level frame, chosen the first time Pages opens if the catalog
-  // has any. Applied to existing story illustrations that have no shape yet;
-  // later creates read `design.defaultImageMaskId`. Covers stay unframed.
+  // One book-level frame, chosen the first time Pages opens if the catalog has
+  // any. Opaque story art gets that frame by default; native-alpha artwork
+  // stays unframed unless the author explicitly chooses one. Covers stay plain.
   const imageMasks = useAppConfigStore((s) => s.imageMasks);
   const designChapter = designChapterOf(step, project.config.styleReady, styleSetupOpen);
   useEffect(() => {
-    if (designChapter !== "pages" || !design || design.defaultImageMaskId) return;
-    const maskId = pickRandomActiveMaskId(imageMasks);
+    if (designChapter !== "pages" || !design) return;
+    const maskId = design.defaultImageMaskId ?? pickRandomActiveMaskId(imageMasks);
     if (!maskId) return;
     const nextPages = { ...design.pages };
+    let designChanged = design.defaultImageMaskId !== maskId;
     for (const page of pages) {
       if (page.isCover) continue;
       const pd = nextPages[page.id];
       if (!pd?.images?.length) continue;
-      let changed = false;
+      const tree = project.illustrations?.[page.id];
+      const art = tree ? getCursor(tree).content : null;
+      if (!art?.blobId) continue;
+      const transparent = art.generation?.applied.background === "transparent";
+      let pageChanged = false;
       const images = pd.images.map((im) => {
-        if (im.kind !== "illustration" || im.imageMaskId || (im.corner ?? 0) > 0) {
+        if (im.kind !== "illustration") return im;
+        const legacyAutomaticMask =
+          !im.frameSource &&
+          Boolean(im.imageMaskId) &&
+          im.imageMaskId === design.defaultImageMaskId;
+        if (transparent) {
+          if (im.frameSource !== "auto" && !legacyAutomaticMask) return im;
+          const {
+            imageMaskId: _imageMaskId,
+            frameSource: _frameSource,
+            ...plain
+          } = im;
+          void _imageMaskId;
+          void _frameSource;
+          pageChanged = true;
+          return plain;
+        }
+        if (
+          im.imageMaskId ||
+          (im.corner ?? 0) > 0 ||
+          im.frameSource === "user" ||
+          im.frameSource === "none"
+        ) {
           return im;
         }
-        changed = true;
-        return { ...im, imageMaskId: maskId };
+        pageChanged = true;
+        return { ...im, imageMaskId: maskId, frameSource: "auto" as const };
       });
-      if (changed) nextPages[page.id] = { ...pd, images };
+      if (pageChanged) {
+        designChanged = true;
+        nextPages[page.id] = { ...pd, images };
+      }
     }
-    void setDesign({ ...design, defaultImageMaskId: maskId, pages: nextPages });
-  }, [design, designChapter, imageMasks, pages, setDesign]);
+    if (designChanged) {
+      void setDesign({ ...design, defaultImageMaskId: maskId, pages: nextPages });
+    }
+  }, [design, designChapter, imageMasks, pages, project.illustrations, setDesign]);
 
   // Guarded route navigation: every workflow affordance goes through one gate.
   // A blocked jump explains what's still missing instead of changing history.
@@ -1858,8 +1890,12 @@ export function StudioProvider({
       const page = pages.find((p) => p.id === pageId);
       const focus = page ? defaultIllustrationFocus(page) : undefined;
       const bookDesign = useProjectsStore.getState().current()?.design;
+      const artTree = projectNow?.illustrations?.[pageId];
+      const transparent =
+        artTree &&
+        getCursor(artTree).content.generation?.applied.background === "transparent";
       const defaultMaskId =
-        pageId !== COVER_FRONT_ID && pageId !== COVER_BACK_ID
+        !transparent && pageId !== COVER_FRONT_ID && pageId !== COVER_BACK_ID
           ? bookDesign?.defaultImageMaskId
           : undefined;
       const img: ImageElement = {
@@ -1871,7 +1907,9 @@ export function StudioProvider({
         z: bottomZ(latest) - 1,
         fit: "cover",
         ...(focus ? { focus } : {}),
-        ...(defaultMaskId ? { imageMaskId: defaultMaskId } : {}),
+        ...(defaultMaskId
+          ? { imageMaskId: defaultMaskId, frameSource: "auto" as const }
+          : {}),
         name: "Illustration",
       };
       // Lock with the new id before the async store write lands.

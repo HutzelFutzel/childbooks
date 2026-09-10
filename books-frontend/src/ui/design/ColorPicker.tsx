@@ -69,6 +69,8 @@ export function ColorField({
   onChange,
   allowAlpha = true,
   compact = false,
+  compactSide = "single",
+  compactActive = false,
   live = compact,
   look = "swatch",
   footer,
@@ -80,6 +82,10 @@ export function ColorField({
   allowAlpha?: boolean;
   /** Swatch-only trigger for dense floating toolbars. */
   compact?: boolean;
+  /** Join two compact swatches into one split control. */
+  compactSide?: "single" | "left" | "right";
+  /** Quietly marks which side/page is currently selected. */
+  compactActive?: boolean;
   /**
    * Push color to the parent while dragging (toolbar). Inspector pickers
    * stay commit-on-close so a dock click doesn't flood undo.
@@ -180,7 +186,7 @@ export function ColorField({
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
-  }, [open, hasFooter, allowAlpha, compact, label]);
+  }, [open, hasFooter, allowAlpha, compact, compactSide, label]);
 
   useEffect(() => {
     if (!open) return;
@@ -270,7 +276,15 @@ export function ColorField({
         aria-label={label ?? "Choose color"}
         className={cn(
           "flex items-center rounded-lg border border-ink-200 bg-white text-xs transition hover:border-brand-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
-          compact ? "size-7 justify-center p-0" : "gap-2 px-2 py-1.5",
+          compact && compactSide === "single" && "size-7 justify-center p-0",
+          compact &&
+            compactSide === "left" &&
+            "h-7 w-5 justify-center rounded-l-lg rounded-r-none border-r-0 p-0",
+          compact &&
+            compactSide === "right" &&
+            "h-7 w-5 justify-center rounded-l-none rounded-r-lg p-0",
+          compact && compactActive && "border-brand-300 bg-brand-50",
+          !compact && "gap-2 px-2 py-1.5",
         )}
       >
         {compact && look === "glyph" ? (
@@ -296,7 +310,9 @@ export function ColorField({
           <span
             className={cn(
               "rounded ring-1 ring-inset ring-black/10",
-              compact ? "size-4" : "size-5",
+              compact && compactSide === "single" && "size-4",
+              compact && compactSide !== "single" && "h-4 w-2.5",
+              !compact && "size-5",
             )}
             style={{
               backgroundImage:

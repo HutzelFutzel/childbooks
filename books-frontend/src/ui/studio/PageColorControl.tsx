@@ -16,9 +16,17 @@ import {
 export function PageColorControl({
   pageId,
   compact = false,
+  compactSide = "single",
+  active = false,
+  label = "Page color",
+  onActivate,
 }: {
   pageId: string;
   compact?: boolean;
+  compactSide?: "single" | "left" | "right";
+  active?: boolean;
+  label?: string;
+  onActivate?: () => void;
 }) {
   const { design, setPageBackground, applyPageBackgroundToAll, endHistoryGesture } = useStudio();
   const page = design.pages[pageId];
@@ -58,19 +66,53 @@ export function PageColorControl({
 
   return (
     <ColorField
-      label="Page color"
+      label={label}
       value={color}
       allowAlpha={false}
       compact={compact}
+      compactSide={compactSide}
+      compactActive={active}
       live
       look="swatch"
       onChange={(next) =>
         setPageBackground(pageId, { color: next }, { coalesce: `page-bg-${pageId}` })
       }
       onOpenChange={(open) => {
-        if (!open) endHistoryGesture();
+        if (open) onActivate?.();
+        else endHistoryGesture();
       }}
       footer={footer}
     />
+  );
+}
+
+/** Two independently editable facing-page colors in one split toolbar swatch. */
+export function FacingPageColorControl({
+  pages,
+  activePageId,
+  onSelectPage,
+}: {
+  pages: ReadonlyArray<{ id: string; label: string }>;
+  activePageId?: string;
+  onSelectPage: (pageId: string) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Facing page colors"
+      className="inline-flex rounded-lg shadow-[0_0_0_1px_rgba(15,23,42,0.03)]"
+    >
+      {pages.map((page, index) => (
+        <PageColorControl
+          key={page.id}
+          pageId={page.id}
+          compact
+          compactSide={index === 0 ? "left" : "right"}
+          active={activePageId === page.id}
+          label={`${page.label} color`}
+          onActivate={() => onSelectPage(page.id)}
+        />
+      ))}
+    </div>
   );
 }

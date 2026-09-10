@@ -183,6 +183,7 @@ export function PageStagePanel({
         },
       }}
       selectedId={selectedElementId}
+      onSelectSurface={() => select({ kind: "page", pageId: page.id })}
       onSelectElement={(ref) => {
         if (!ref) {
           select({ kind: "page", pageId: page.id });

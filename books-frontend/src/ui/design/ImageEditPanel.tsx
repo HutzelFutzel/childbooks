@@ -224,7 +224,15 @@ function FrameSection({
             max={0.5}
             step={0.02}
             value={image.corner ?? 0}
-            onChange={(corner) => onPatch({ corner: corner || undefined }, coalesce("corner"))}
+            onChange={(corner) =>
+              onPatch(
+                {
+                  corner: corner || undefined,
+                  frameSource: corner > 0 ? "user" : "none",
+                },
+                coalesce("corner"),
+              )
+            }
             onGestureEnd={onGestureEnd}
           />
         )}

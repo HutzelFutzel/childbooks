@@ -51,7 +51,7 @@ import { useDialogFocus } from "../lib/dialogFocus";
 import { AssetsLibrary } from "./AssetsLibrary";
 import { ElementPanel, elementPanelHasContent } from "./ElementPanel";
 import { PageFilmstrip } from "./PageFilmstrip";
-import { PageColorControl } from "./PageColorControl";
+import { FacingPageColorControl, PageColorControl } from "./PageColorControl";
 import { PageStagePanel } from "./PageEditorCard";
 import { PairPageStagePanel } from "./PairPageStage";
 import { useStudio } from "./StudioContext";
@@ -180,8 +180,16 @@ export function BookCanvas() {
   }, [displays, activeId, setEditingDisp]);
 
   const activePageId = useMemo(() => {
-    if (selection.kind !== "none" && "pageId" in selection) return selection.pageId;
-    return activeDisp ? displayEntries(activeDisp)[0]?.entry.page.id : undefined;
+    if (!activeDisp) return undefined;
+    const pageIds = displayEntries(activeDisp).map(({ entry }) => entry.page.id);
+    if (
+      selection.kind !== "none" &&
+      "pageId" in selection &&
+      pageIds.includes(selection.pageId)
+    ) {
+      return selection.pageId;
+    }
+    return pageIds[0];
   }, [selection, activeDisp]);
   const activePageLabel = useMemo(
     () =>
@@ -254,9 +262,22 @@ export function BookCanvas() {
             disabled={!activePageId}
             onClick={() => toggleToolPanel("layers")}
           />
-          {activePageId && (
-            <div className="flex size-9 items-center justify-center">
-              <PageColorControl pageId={activePageId} compact />
+          {activePageId && arrangePages.length > 0 && (
+            <div className="flex h-9 items-center justify-center">
+              {arrangePages.length === 2 ? (
+                <FacingPageColorControl
+                  pages={arrangePages}
+                  activePageId={activePageId}
+                  onSelectPage={(pageId) => select({ kind: "page", pageId })}
+                />
+              ) : (
+                <PageColorControl
+                  pageId={activePageId}
+                  compact
+                  active
+                  label={`${activePageLabel ?? "Page"} color`}
+                />
+              )}
             </div>
           )}
         </div>
@@ -1121,6 +1142,14 @@ function NextActionChip() {
   }
 
   if (gen.staleCount > 0) {
+    const pageLabel = `${gen.stalePageCount} ${gen.stalePageCount === 1 ? "page" : "pages"}`;
+    const castLabel = `${gen.staleAnchorCount} cast ${gen.staleAnchorCount === 1 ? "look" : "looks"}`;
+    const label =
+      gen.stalePageCount > 0 && gen.staleAnchorCount > 0
+        ? `Update ${pageLabel} & ${castLabel}`
+        : gen.stalePageCount > 0
+          ? `Update ${pageLabel}`
+          : `Update ${castLabel}`;
     return (
       <Button
         size="sm"
@@ -1130,7 +1159,7 @@ function NextActionChip() {
         onClick={() => void gen.refreshStale()}
       >
         <span className="hidden sm:inline">
-          {gen.refreshing ? "Updating…" : `Update ${gen.staleCount} stale ${gen.staleCount === 1 ? "item" : "items"}`}
+          {gen.refreshing ? "Updating…" : label}
         </span>
         <span className="sm:hidden">{gen.refreshing ? "Updating…" : `Update ${gen.staleCount}`}</span>
       </Button>
