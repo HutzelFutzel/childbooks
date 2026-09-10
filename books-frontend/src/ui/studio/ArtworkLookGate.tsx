@@ -6,28 +6,38 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import type { ArtStyleSelection } from "../../core/types";
-import { collectSourceArtGroups, derivedStyleSelection } from "../../core/book/sourceArt";
-import { extractArtStyleRemote } from "../../platform/aiClient";
+import { derivedStyleSelection } from "../../core/book/sourceArt";
 import { Button } from "../components/Button";
 import { useBlobUrlState } from "../hooks/useBlobUrl";
 import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
 import { useStudio } from "./StudioContext";
+import {
+  clearArtworkLook,
+  decideArtworkLook,
+  type ArtworkLookDecision,
+  type ArtworkLookOption,
+} from "./artworkLook";
 
 export function ArtworkLookGate({
+  seed,
   onResolved,
   onFailed,
 }: {
+  seed?: ArtworkLookDecision;
   onResolved: (style: ArtStyleSelection) => void | Promise<void>;
   onFailed: () => void;
 }) {
   const { project } = useStudio();
-  const groups = collectSourceArtGroups(project);
-  const [phase, setPhase] = useState<"extracting" | "conflict">("extracting");
-  const [options, setOptions] = useState<
-    { id: string; name: string; stylePrompt: string; thumbBlobId?: string }[]
-  >([]);
-  const [pickedId, setPickedId] = useState<string | null>(null);
+  const [phase, setPhase] = useState<"extracting" | "conflict">(() =>
+    seed?.status === "conflict" ? "conflict" : "extracting",
+  );
+  const [options, setOptions] = useState<ArtworkLookOption[]>(() =>
+    seed?.status === "conflict" ? seed.options : [],
+  );
+  const [pickedId, setPickedId] = useState<string | null>(() =>
+    seed?.status === "conflict" ? (seed.options[0]?.id ?? null) : null,
+  );
   const [busy, setBusy] = useState(false);
   const cancelledRef = useRef(false);
 
@@ -35,54 +45,24 @@ export function ArtworkLookGate({
     cancelledRef.current = false;
     let cancelled = false;
     void (async () => {
-      try {
-        const result = await extractArtStyleRemote(project);
-        if (cancelled || cancelledRef.current) return;
-        const extractedNames = result.characters.map((character) => character.name).filter(Boolean);
-        if (result.compatible && result.stylePrompt.trim()) {
-          await onResolved(
-            derivedStyleSelection({
-              stylePrompt: result.stylePrompt,
-              derivedFromNames: extractedNames.length > 0 ? extractedNames : groups.map((group) => group.name),
-            }),
-          );
-          return;
-        }
-        const thumbs = new Map(
-          groups.map((group) => [group.id, group.images[0]?.blobId] as const),
-        );
-        const next = result.characters.map((character) => ({
-          ...character,
-          thumbBlobId: thumbs.get(character.id),
-        }));
-        if (cancelled || cancelledRef.current) return;
-        if (next.length < 2) {
-          const prompt = next[0]?.stylePrompt || result.stylePrompt;
-          if (!prompt.trim()) {
-            onFailed();
-            return;
-          }
-          await onResolved(
-            derivedStyleSelection({
-              stylePrompt: prompt,
-              derivedFromNames: extractedNames.length > 0 ? extractedNames : groups.map((group) => group.name),
-            }),
-          );
-          return;
-        }
-        setOptions(next);
-        setPickedId(next[0]?.id ?? null);
-        setPhase("conflict");
-      } catch (err) {
-        if (cancelled || cancelledRef.current) return;
-        notify.info(
-          "Choose an art style",
-          err instanceof Error
-            ? err.message
-            : "We couldn’t read a look from the uploaded artwork.",
-        );
-        onFailed();
+      const decision =
+        seed && seed.status !== "failed"
+          ? seed
+          : await decideArtworkLook(project);
+      if (cancelled || cancelledRef.current) return;
+      if (decision.status === "resolved") {
+        clearArtworkLook(project.id);
+        await onResolved(decision.style);
+        return;
       }
+      if (decision.status === "conflict") {
+        setOptions(decision.options);
+        setPickedId(decision.options[0]?.id ?? null);
+        setPhase("conflict");
+        return;
+      }
+      notify.info("Choose an art style", decision.message);
+      onFailed();
     })();
     return () => {
       cancelled = true;
@@ -113,6 +93,7 @@ export function ArtworkLookGate({
     setBusy(true);
     try {
       if (cancelledRef.current) return;
+      clearArtworkLook(project.id);
       await onResolved(
         derivedStyleSelection({
           stylePrompt: picked.stylePrompt,

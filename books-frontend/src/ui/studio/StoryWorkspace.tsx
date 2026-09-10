@@ -1,8 +1,9 @@
 /**
  * Focused Story workspace. First-run walks Reader → Story in one compact
- * wayfinder; art style is the next blocking decision.
+ * wayfinder; art style is the next blocking decision unless character artwork
+ * already supplies the book’s look.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
   Check,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react";
 import type { BookConfig } from "../../core/types";
 import type { BookLanguageId } from "../../core/config/bookLanguages";
+import { hasSourceArt } from "../../core/book/sourceArt";
 import { useProjectsStore } from "../../state/projectsStore";
 import { Button } from "../components/Button";
 import { notify } from "../lib/notify";
@@ -23,6 +25,7 @@ import { STORY_QUESTIONS } from "../wizard/storyQuestions";
 import type { GuidedQuestion } from "../wizard/GuidedQuestions";
 import type { StoryHistoryOptions, StorySnapshotPatch } from "./story/storyUndo";
 import { useStudio } from "./StudioContext";
+import { decideArtworkLook, stashArtworkLook } from "./artworkLook";
 
 type TopicId = string;
 
@@ -70,6 +73,14 @@ export function StoryWorkspace() {
   const [storyToolsOpen, setStoryToolsOpen] = useState(false);
   // Furthest guided index reached — review mode unlocks everything.
   const [furthest, setFurthest] = useState(0);
+  const [finishing, setFinishing] = useState(false);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
 
   if (!config) return null;
   const cfg = config;
@@ -102,6 +113,7 @@ export function StoryWorkspace() {
   }
 
   function selectTopic(id: TopicId) {
+    if (finishing) return;
     const i = topics.findIndex((t) => t.id === id);
     if (i < 0 || !topicReachable(i)) return;
     if (id !== "story") setStoryToolsOpen(false);
@@ -116,6 +128,38 @@ export function StoryWorkspace() {
       return;
     }
     if (firstRun) {
+      const live = useProjectsStore.getState().current() ?? project;
+      if (hasSourceArt(live)) {
+        setFinishing(true);
+        try {
+          const decision = await decideArtworkLook(live);
+          if (!alive.current) return;
+          if (decision.status === "resolved") {
+            await updateConfig({
+              artStyle: decision.style,
+              styleReady: true,
+              castReady: false,
+            });
+            if (!alive.current) return;
+            await advanceStage("studio");
+            if (!alive.current) return;
+            setStep("anchors");
+            return;
+          }
+          stashArtworkLook(live.id, decision);
+          if (decision.status === "failed") {
+            notify.info("Choose an art style", decision.message);
+          }
+          await updateConfig({ styleReady: false, castReady: false });
+          if (!alive.current) return;
+          await advanceStage("studio");
+          if (!alive.current) return;
+          setStep("anchors");
+        } finally {
+          if (alive.current) setFinishing(false);
+        }
+        return;
+      }
       // Style is the only remaining blocking decision. Analysis and screenplay
       // drafting continue in the background while the reader chooses it.
       await updateConfig({ styleReady: false, castReady: false });
@@ -127,6 +171,7 @@ export function StoryWorkspace() {
   }
 
   function onPrimary() {
+    if (finishing) return;
     if (!answered) {
       notify.info("Almost there", "Finish this section before continuing.");
       return;
@@ -196,6 +241,7 @@ export function StoryWorkspace() {
                 leftIcon={<RefreshCw className="size-4" />}
                 aria-expanded={storyToolsOpen}
                 onClick={() => setStoryToolsOpen((open) => !open)}
+                disabled={finishing}
               >
                 New version
               </Button>
@@ -211,6 +257,7 @@ export function StoryWorkspace() {
               leftIcon={<RefreshCw className="size-4" />}
               aria-expanded={storyToolsOpen}
               onClick={() => setStoryToolsOpen((open) => !open)}
+              disabled={finishing}
             >
               New version
             </Button>
@@ -242,10 +289,11 @@ export function StoryWorkspace() {
           {firstRun && (topic.id !== "story" || answered) && (
             <Button
               size="sm"
+              loading={finishing}
               rightIcon={<ArrowRight className="size-4" />}
               onClick={onPrimary}
             >
-              {primaryLabel}
+              {finishing ? "Matching your artwork" : primaryLabel}
             </Button>
           )}
         </div>

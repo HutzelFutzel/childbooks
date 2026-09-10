@@ -25,13 +25,17 @@ export interface AnchorSheetSpec extends Omit<AnchorSheetLayout, "width" | "heig
 /** Every Cast reference uses one provider-safe landscape canvas. */
 export const ANCHOR_SHEET_SIZE = "1536x1024";
 
-const HEAD_FRONT = "a head-and-shoulders close-up from the front, neutral expression";
+const HEAD_SMILE =
+  "a head-and-shoulders close-up from the front, a warm closed-mouth smile";
+const HEAD_LAUGH =
+  "a head-and-shoulders close-up from the front, laughing happily with a big open-mouthed grin";
 
 /**
  * Six cells for anything that stands upright. Two are spent on close-ups
  * rather than mirrored ±30°/±90° views: a mirrored side adds almost nothing for
  * a near-symmetric character, while the head close-ups both carry the identity
  * detail that matters most downstream and give the thumbnail crop a known home.
+ * A smile (not a laugh) is the crop so the Cast card stays friendly.
  */
 const BIPEDAL: AnchorSheetSpec = {
   columns: 3,
@@ -44,8 +48,8 @@ const BIPEDAL: AnchorSheetSpec = {
     "the full body from a three-quarter front angle (turned about 45 degrees)",
     "the full body from the side, in profile",
     "the full body from directly behind",
-    HEAD_FRONT,
-    "a head-and-shoulders close-up from the front, smiling warmly",
+    HEAD_SMILE,
+    HEAD_LAUGH,
   ],
 };
 

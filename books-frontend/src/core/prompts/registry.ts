@@ -484,7 +484,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     single: [
       blk(
         "angleCharacter",
-        'A character reference sheet of "{{anchorName}}", laid out as a strict grid of exactly {{cellCount}} equal cells ({{gridShape}}), read left to right then top to bottom, evenly spaced with generous white gutters between them. Draw exactly one view per cell — no more, no fewer — in exactly this order: {{viewList}}. It is the SAME character in every cell: identical face, hair, body, proportions, colors and outfit, with only the camera angle or framing changing. Draw every whole-body cell at the same scale, as if photographed from the same distance, with the feet on a common baseline and the top of the head at the same height.',
+        'A character reference sheet of "{{anchorName}}", laid out as a strict grid of exactly {{cellCount}} equal cells ({{gridShape}}), read left to right then top to bottom, evenly spaced with generous white gutters between them. Draw exactly one view per cell — no more, no fewer — in exactly this order: {{viewList}}. It is the SAME character in every cell: identical face, hair, body, proportions, colors and outfit, with only the camera angle, framing, or the expression named for that cell changing. Draw every whole-body cell at the same scale, as if photographed from the same distance, with the feet on a common baseline and the top of the head at the same height.',
         "isCharacter",
       ),
       blk(
@@ -597,7 +597,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     single: [
       blk(
         "angleCharacter",
-        'A character reference sheet of "{{anchorName}}", laid out as a strict grid of exactly {{cellCount}} equal cells ({{gridShape}}), read left to right then top to bottom, evenly spaced with generous white gutters between them. Draw exactly one view per cell — no more, no fewer — in exactly this order: {{viewList}}. It is the SAME character in every cell: identical face, hair, body, proportions, colors and outfit, with only the camera angle or framing changing. Draw every whole-body cell at the same scale, as if photographed from the same distance, with the feet on a common baseline and the top of the head at the same height.',
+        'A character reference sheet of "{{anchorName}}", laid out as a strict grid of exactly {{cellCount}} equal cells ({{gridShape}}), read left to right then top to bottom, evenly spaced with generous white gutters between them. Draw exactly one view per cell — no more, no fewer — in exactly this order: {{viewList}}. It is the SAME character in every cell: identical face, hair, body, proportions, colors and outfit, with only the camera angle, framing, or the expression named for that cell changing. Draw every whole-body cell at the same scale, as if photographed from the same distance, with the feet on a common baseline and the top of the head at the same height.',
       ),
       blk(
         "gridRepair",

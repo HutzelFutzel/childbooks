@@ -28,12 +28,16 @@ import {
   styleRenewTargets,
 } from "./styleRenew";
 import { ArtworkLookGate } from "./ArtworkLookGate";
+import { peekArtworkLook } from "./artworkLook";
 
 export function StyleSetup() {
   const { project, navigate, setStep, closeStyleSetup } = useStudio();
-  const config = useProjectsStore((s) => s.current()?.config);
+  const storeProject = useProjectsStore((s) => s.current());
+  const config = storeProject?.config;
   const updateConfig = useProjectsStore((s) => s.updateConfig);
   const artStyles = useAppConfigStore((s) => s.artStyles);
+  const sourceProject = storeProject ?? project;
+  const [seed] = useState(() => peekArtworkLook(project.id));
 
   const committed = config?.artStyle ?? { presetId: "watercolor" };
   const [draft, setDraft] = useState<ArtStyleSelection>(committed);
@@ -58,12 +62,14 @@ export function StyleSetup() {
   const firstTime = config.styleReady === false;
   if (
     firstTime &&
-    hasSourceArt(project) &&
+    hasSourceArt(sourceProject) &&
     config.artStyle.origin !== "derived" &&
-    !artworkFailed
+    !artworkFailed &&
+    seed?.status !== "failed"
   ) {
     return (
       <ArtworkLookGate
+        seed={seed ?? undefined}
         onResolved={async (style) => {
           if (!alive.current) return;
           await updateConfig({ artStyle: style, styleReady: true, castReady: false });
