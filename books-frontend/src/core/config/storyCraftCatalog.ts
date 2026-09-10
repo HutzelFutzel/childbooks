@@ -67,7 +67,6 @@ const opt = (id: string, label: string, description: string, llmGuidance: string
 
 const UNIVERSAL_AVOID = [
   "graphic violence, gore, brutality, or severe injury",
-  "death of a parent or caregiver",
   "sexual content of any kind",
   "slurs, bullying framed approvingly, or cruelty played for laughs",
   "unresolved fear at the end of the story",
