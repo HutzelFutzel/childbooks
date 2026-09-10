@@ -24,8 +24,8 @@ export function HeroOnRamp({ text }: { text: SiteTextMap }) {
     if (isSubmitting) return;
     setIsSubmitting(true);
     const targetName = (customName !== undefined ? customName : name).trim().slice(0, MAX_NAME_LENGTH);
-    const effectiveHero = targetName || "My";
-    router.push(`/studio?hero=${encodeURIComponent(effectiveHero)}`);
+    const target = targetName ? `/studio?hero=${encodeURIComponent(targetName)}` : "/studio";
+    router.push(target);
   };
 
   const trimmed = name.trim();
