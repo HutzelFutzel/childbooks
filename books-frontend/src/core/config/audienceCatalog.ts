@@ -464,12 +464,925 @@ const d = (level: number, guidance: string): AudienceDimension => ({ level, guid
 /**
  * The bands the app ships with.
  *
- * The four original ids are unchanged and enabled, so every existing book keeps
- * resolving exactly what it resolved before. The two month-level bands ship
- * disabled: they extend `0-2`, override only what genuinely differs, and become
- * available the moment an admin switches them on.
+ * The eight offered bands follow the research-backed calibration in
+ * `docs/childbook_studio_age_band_calibration.md`. Its central correction is
+ * that AGE constrains cognitive, narrative and emotional complexity, while
+ * READING MODE constrains decoding demand — so a two-year-old read-aloud may
+ * carry far more language than "toddler book" word limits suggest, and an
+ * eight-year-old reading with help gets easier prose rather than a younger
+ * story. That is why `2y` allows up to 750 words and why the bands from four
+ * upwards all offer all three reading modes.
+ *
+ * The four original ids (`0-2`, `3-5`, `6-8`, `9-12`) and the two month-level
+ * bands remain here, hidden. Every book already stamped with one keeps
+ * resolving exactly the contract it was written under; they are simply no
+ * longer offered. Nothing is aliased onto a new band, because the old ranges
+ * split — `0-2` alone covers what is now three separate editorial contracts.
  */
 export const DEFAULT_AUDIENCE_PROFILES: AudienceProfile[] = [
+  {
+    id: "0-11m",
+    label: "0–11 months",
+    caption: "Baby books",
+    description:
+      "The book is an interaction object: voice, faces, rhythm and naming matter more than plot.",
+    minMonths: 0,
+    maxMonths: 11,
+    order: 10,
+    enabled: true,
+    aliases: [],
+    readingModes: [],
+    modes: {
+      default: {
+        humanGuidance:
+          "Sounds, faces and naming — rhythm, touch and shared attention rather than a story.",
+        storyGuidance: "",
+      },
+    },
+    sections: {
+      language:
+        "Use names, sounds, single concrete words and very short phrases. Prioritise words that can be seen, touched, heard or acted out: mama, dog, moon, cup, toes, splash, up.\n" +
+        "Do not require pronoun tracking, abstraction, tense changes or syntactic memory. Nothing on a page should depend on remembering a word from an earlier page.",
+      readAloud:
+        "Optimise for the adult's voice before prose sophistication: elongated sounds, rhythm, alliteration, rhyme fragments, pauses and musical repetition. The adult's performance is part of the book, so give them something pleasurable to say.",
+      repetition:
+        "Make predictable repetition the primary structural mechanism. Prefer an identical frame with one obvious changing element — the animal, the sound, the body part, the colour.",
+      pageStructure:
+        "Give each page one dominant perceptual target: a face, an object, a movement, a contrast or a sound. Never carry two events on one page.",
+      storyStructure:
+        "Plot is unnecessary. Naming sequences, greetings, body parts, sensory cycles, animals, routines, opposites and hello/goodbye structures are complete books at this age.\n" +
+        "If something does happen, it must be a single physical cause and effect visible in the picture.",
+      interaction:
+        "Invite the adult to point, touch, bounce, mimic, vocalise or follow the baby's attention. Never require a correct verbal answer from the infant, and never ask a question the baby is expected to answer.",
+      visualStorytelling:
+        "Pictures carry almost all the meaning. Use one dominant subject, clear figure-ground separation, a readable face or body pose, and very little irrelevant clutter.",
+      recognition:
+        "Faces, bodies, caregivers, animals, food, bath, sleep, clothing, toys and ordinary household objects.",
+      sensory:
+        "Make sound, touch and movement central. Onomatopoeia and physical words do more work here than description.",
+      emotion:
+        "Warmth, security, curiosity, delight, calm and tiny surprise. Recovery from any uncertainty must be immediate — within the same page, not the same chapter.",
+      humor:
+        "Peekaboo, silly expressions, funny sounds and visually obvious incongruity. Nothing that depends on knowing what is normal.",
+      characterArt:
+        "Immediately readable faces and silhouettes, large expressions, and minimal visually competing detail. Do not mandate one cute or cartoon style.",
+      calibration:
+        "This is the youngest band. Unlike 12–23 months, comprehension must not depend on remembering a pattern across several pages, or on the child supplying a name or an answer.\n" +
+        "Plot may be entirely absent, and that is a correct outcome rather than a shortfall.",
+      qualityTest:
+        "Does each page work through shared attention even if the infant understands none of the printed words? Is the adult given something pleasurable to say or do? Is there one clear perceptual focus per page?",
+    },
+    dimensions: {
+      textDensity: d(0, "A few words per page — often a single sound or name."),
+      sentenceComplexity: d(0, "Words and fragments rather than sentences."),
+      illustrationDependency: d(4, "The picture carries essentially all the meaning."),
+      repetition: d(4, "An identical frame with one element changing."),
+      plotComplexity: d(0, "No plot required at all."),
+      castSize: d(0, "One or two subjects in the whole book."),
+      dialogue: d(0, "Single words or greetings at most."),
+      conflict: d(0, "Essentially none."),
+      emotionalComplexity: d(0, "One plain, secure feeling at a time."),
+      readerInference: d(0, "Nothing is implied."),
+      figurativeLanguage: d(0, "Everything literal."),
+      subplots: d(0, "A single thread only."),
+      interaction: d(5, "Almost every page offers the adult something to do or say."),
+      sensoryLanguage: d(2, "Sound, touch and movement throughout."),
+    },
+    structure: {
+      minWords: 15,
+      maxWords: 90,
+      beats: 2,
+      maxSentenceWords: 8,
+      plotRequired: false,
+    },
+    density: {
+      targetWordsPerPage: 5,
+      maxWordsPerPage: 12,
+      targetSentencesPerPage: 1,
+      maxFocalCharactersPerScene: 1,
+      minPages: 8,
+      maxPages: 20,
+    },
+    protagonist: {
+      minAge: 0,
+      maxAge: 2,
+      guidance:
+        "The main subject should read as roughly {{min}}–{{max}} years old, or a friendly animal of that emotional age. When the customer supplies a real child's age, keep it.",
+    },
+    defaultCharacterAgeYears: 1,
+    safety: {
+      avoid: [
+        "separation from a caregiver that is not resolved immediately",
+        "loud or frightening surprises",
+        "sudden darkness or characters disappearing without returning",
+        "sustained threat of any kind",
+      ],
+      note: "Security dominates at this age. Every page ends safe, and nothing is left unresolved across a page turn except a friendly, immediately answered question.",
+    },
+    evaluatedDimensionIds: [
+      "textDensity",
+      "illustrationDependency",
+      "repetition",
+      "interaction",
+      "sensoryLanguage",
+      "conflict",
+    ],
+  },
+
+  {
+    id: "12-23m",
+    label: "12–23 months",
+    caption: "Toddler board books",
+    description:
+      "Recognition becomes participation: pointing, naming, noises, predictable patterns and simple reveals.",
+    minMonths: 12,
+    maxMonths: 23,
+    order: 20,
+    enabled: true,
+    aliases: [],
+    readingModes: [],
+    modes: {
+      default: {
+        humanGuidance: "Routines, tiny problems and lots to point at, name and copy.",
+        storyGuidance: "",
+      },
+    },
+    sections: {
+      language:
+        "Use short concrete sentences and phrases. Name the important noun explicitly rather than overusing pronouns. Location, possession and simple actions are all useful: in the box, Mia's shoe, the dog jumps.\n" +
+        "Favour familiar words over artificially short ones — banana and elephant are easier than an unfamiliar short word.",
+      readAloud:
+        "Write lines the child can begin anticipating and joining. Sound effects and strongly patterned phrasing are especially effective, and the pattern should be obvious after one or two iterations.",
+      repetition:
+        "Repetition is still foundational. A stable phrase with a changing animal, object or action is excellent, and lets the child eventually complete the line themselves.",
+      pageStructure:
+        "One action, search or reveal per page. Page-turn questions now work, provided the answer arrives immediately on the next page.",
+      storyStructure:
+        "Use routines, search-and-find, getting ready, movement, animal sequences, simple accumulation, or very short physical cause-and-effect chains.\n" +
+        "A conventional plot is optional. Keep causality physical and visible; motivation should never need explaining.",
+      interaction:
+        "Ask the child to point, name, find, copy an action or make a sound. A repeated question the child can answer from the picture is one of the strongest devices at this age. Treat prompts as invitations rather than tests.",
+      visualStorytelling:
+        "The picture should make the referent unmistakable and reward searching without requiring subtle visual deduction. Give more environmental context than an infant book, but keep clutter low.",
+      recognition:
+        "Body parts, foods, animals, vehicles, clothes, bed and bath routines, in and out, up and down, open and closed, and familiar places.",
+      sensory:
+        "Maintain high physicality and onomatopoeia: splash, crunch, beep, whoosh, uh-oh, pop.",
+      emotion:
+        "Wanting, waiting, delight, frustration, affection and surprise all belong here. Keep emotional transitions immediate and visible in the picture.",
+      humor:
+        "Wrong-object reveals, noises, physical incongruity and predictable patterns breaking in an obvious way.",
+      characterArt:
+        "Clear action silhouettes and strong expressions. More environmental context than the infant profile, but still little competing detail.",
+      calibration:
+        "Unlike 0–11 months, a toddler can participate in a repeated pattern, anticipate a familiar response, and enjoy a small amount of suspense across a page turn.\n" +
+        "Unlike 2 years, sustained narrative goals should remain optional and very short. Do not require the child to hold a goal across many pages.",
+      qualityTest:
+        "Can the child participate with a point, gesture, sound or single word? Is the pattern obvious after one or two iterations? Does every page turn pay off quickly?",
+    },
+    dimensions: {
+      textDensity: d(1, "One short sentence or phrase per page."),
+      sentenceComplexity: d(1, "Simple subject-verb sentences. No clauses."),
+      illustrationDependency: d(4, "The picture carries most of the meaning."),
+      repetition: d(4, "A learnable pattern with one element changing."),
+      plotComplexity: d(1, "A tiny problem with an immediate resolution."),
+      castSize: d(1, "Up to three, one clearly dominant."),
+      dialogue: d(1, "Single words and greetings."),
+      conflict: d(1, "A momentary wobble at most."),
+      emotionalComplexity: d(0, "One plain feeling at a time."),
+      readerInference: d(1, "Almost nothing is left unstated."),
+      figurativeLanguage: d(0, "Everything literal."),
+      subplots: d(0, "A single thread only."),
+      interaction: d(5, "Frequent naming, finding and copying."),
+      sensoryLanguage: d(2, "Sound, texture and movement throughout."),
+    },
+    structure: {
+      minWords: 35,
+      maxWords: 180,
+      beats: 3,
+      maxSentenceWords: 12,
+      plotRequired: false,
+    },
+    density: {
+      targetWordsPerPage: 9,
+      maxWordsPerPage: 22,
+      targetSentencesPerPage: 1,
+      maxFocalCharactersPerScene: 2,
+      minPages: 8,
+      maxPages: 24,
+    },
+    protagonist: {
+      minAge: 1,
+      maxAge: 3,
+      guidance:
+        "The main character should read as roughly {{min}}–{{max}} years old so the toddler recognises themselves. When the customer supplies a real child's age, keep it.",
+    },
+    defaultCharacterAgeYears: 2,
+    safety: {
+      avoid: [
+        "separation from a caregiver that is not resolved immediately",
+        "loud or frightening surprises",
+      ],
+      note: "Brief lost-and-search moments and frustration are fine, but reassurance follows rapidly — any wobble is resolved on the very next page and the book ends calm.",
+    },
+    evaluatedDimensionIds: [
+      "textDensity",
+      "sentenceComplexity",
+      "illustrationDependency",
+      "repetition",
+      "interaction",
+      "readerInference",
+    ],
+  },
+
+  {
+    id: "2y",
+    label: "2 years",
+    caption: "Toddler picture books",
+    description:
+      "Narrative memory starts to pay off. Read-aloud capacity is much larger than toddler-language rules suggest.",
+    minMonths: 24,
+    maxMonths: 35,
+    order: 30,
+    enabled: true,
+    aliases: [],
+    readingModes: [],
+    modes: {
+      default: {
+        humanGuidance:
+          "A proper read-aloud story: rhythm, repeated lines and one clear thread to follow.",
+        storyGuidance: "",
+      },
+    },
+    sections: {
+      language:
+        "Write concrete, highly comprehensible read-aloud language, but do NOT restrict vocabulary to words a two-year-old can produce. Stretch vocabulary is welcome when meaning is made apparent through action, illustration, sound, repetition or immediate context.\n" +
+        "Prefer linear syntax, explicit referents and concrete verbs. Longer rhythmic sentences are allowed when they stay syntactically easy — a linear rhythmic sentence is easier to process than a shorter one carrying pronoun ambiguity, nested clauses or several motives at once.",
+      readAloud:
+        "Treat oral performance as fundamental. Cadence, recurring lines, sound play, character voices and well-shaped breath units may carry a substantially longer text than raw sentence length would suggest.\n" +
+        "Rhyme is optional. If it is used, metre and meaning must both stay natural.",
+      repetition:
+        "Use strong predictability without making every book formulaic. Repeated encounters, refrains, cumulative structures and same-pattern-new-variable sequences are particularly effective.",
+      pageStructure:
+        "One dominant event or exchange per page or spread. Maintain strong visual continuity. Page turns may create anticipation, but the child should quickly understand the payoff.",
+      storyStructure:
+        "A plot is optional. Strong nonplot forms include routines, cumulative sequences and sensory journeys.\n" +
+        "When using a plot, keep one clearly trackable goal or thread and favour recurring encounters or two to three progressive attempts. The child should never have to hold several hidden motives at once.",
+      interaction:
+        "Invite naming, sound-making, joining a refrain, prediction, very small counting tasks, movement and spotting. Do not interrupt a flowing read-aloud with a question on every page.",
+      visualStorytelling:
+        "Art carries setting, expression, humour and much of the comprehension scaffolding. The text may carry a surprisingly substantial narrative as long as the image keeps the current situation clear.",
+      recognition:
+        "Independence, food, dressing, sleep, pets, siblings, playgrounds, vehicles, nature, routines, helping, familiar outings and imaginative animal adventures.",
+      sensory:
+        "Keep kinetic and sensory language prominent: splash, crunch, squish, cold, fuzzy, windy, tiptoe, boom.",
+      emotion:
+        "One clear emotional state or transition at a time — frustrated to helped, worried to secure, shy to comfortable, proud to delighted. Feelings need not be named constantly if the picture makes them obvious.",
+      humor:
+        "Repetition with a twist, physical comedy, silly substitutions, sounds, exaggerated reactions, and familiar expectations being gently violated.",
+      characterArt:
+        "Expressions and body language must read instantly. Scenes may be richer than toddler board-book art, but each one preserves a single obvious focal action.",
+      calibration:
+        "Compared with 12–23 months, a two-year-old can follow a repeated goal and several connected events.\n" +
+        "Compared with 3 years, motives, inference and complex social conflict should stay limited. Longer read-aloud language is allowed here; greater conceptual complexity is not automatically allowed with it.",
+      qualityTest:
+        "Can the listener tell what is happening from text plus illustration at every spread? Is there one main narrative thread? Does repetition or causality help memory? Does every difficult word have usable context? Would an adult enjoy rereading it?",
+    },
+    dimensions: {
+      textDensity: d(2, "A substantial read-aloud line or two per page."),
+      sentenceComplexity: d(1, "Linear syntax, explicit referents; length may still be generous."),
+      illustrationDependency: d(3, "The picture keeps the current situation clear."),
+      repetition: d(3, "Refrains, cumulative structures and recurring encounters."),
+      plotComplexity: d(2, "One trackable goal, or a strong nonplot form."),
+      castSize: d(2, "Up to about four, one clearly central."),
+      dialogue: d(1, "Short exchanges and repeated calls."),
+      conflict: d(2, "Mild, strongly stylised, securely resolved."),
+      emotionalComplexity: d(1, "One clear state or one visible transition."),
+      readerInference: d(1, "Almost everything is stated or shown."),
+      figurativeLanguage: d(1, "The occasional obvious comparison or sound image."),
+      subplots: d(0, "One thread only."),
+      interaction: d(4, "Regular invitations to name, join in and predict."),
+      sensoryLanguage: d(2, "Kinetic and physical throughout."),
+    },
+    structure: {
+      minWords: 90,
+      maxWords: 750,
+      beats: 5,
+      maxSentenceWords: 22,
+      plotRequired: false,
+    },
+    density: {
+      targetWordsPerPage: 22,
+      maxWordsPerPage: 50,
+      targetSentencesPerPage: 2,
+      maxFocalCharactersPerScene: 3,
+      minPages: 12,
+      maxPages: 32,
+    },
+    protagonist: {
+      minAge: 2,
+      maxAge: 4,
+      guidance:
+        "The main character should read as roughly {{min}}–{{max}} years old, or an animal of that emotional age. When the customer supplies a real child's age, preserve it and calibrate the situations around that child.",
+    },
+    defaultCharacterAgeYears: 3,
+    safety: {
+      avoid: ["threat that is not securely resolved by the ending"],
+      note: "Mild fear, hungry animals, storms, things breaking and getting briefly lost can all work when strongly stylised and securely resolved. Two-year-old accessible does not mean nothing scary may happen.",
+    },
+    evaluatedDimensionIds: [
+      "textDensity",
+      "sentenceComplexity",
+      "repetition",
+      "plotComplexity",
+      "readerInference",
+      "conflict",
+      "illustrationDependency",
+    ],
+  },
+
+  {
+    id: "3y",
+    label: "3 years",
+    caption: "Preschool picture books",
+    description:
+      "Story becomes a real structure: wants, problems, attempts, anticipation and resolution.",
+    minMonths: 36,
+    maxMonths: 47,
+    order: 40,
+    enabled: true,
+    aliases: [],
+    readingModes: [],
+    modes: {
+      default: {
+        humanGuidance:
+          "A first proper story: someone wants something, tries, and gets there — with rhythm and repetition still doing real work.",
+        storyGuidance: "",
+      },
+    },
+    sections: {
+      language:
+        "Use short and medium read-aloud sentences, including easy compounds and the occasional transparent subordinate clause. Introduce interesting concrete vocabulary rather than flattening the prose to toddler speech.",
+      readAloud:
+        "Cadence remains extremely important. Dialogue, refrains, repeated encounters and controlled rhyme all work well. Never bend sense to reach a rhyme.",
+      repetition:
+        "Repetition is strong but no longer has to carry the whole book. It should increasingly produce escalation, prediction or comedy rather than only familiarity.",
+      pageStructure:
+        "One major beat per spread, usually with a reason to turn: a response, a discovery, a new attempt, a reveal or a comic payoff.",
+      storyStructure:
+        "A recognisable plot is now the default: the protagonist wants something or has a problem, makes several attempts or meets several encounters, reaches a climax or choice, and lives with a satisfying consequence.\n" +
+        "Keep every causal link visible. The protagonist should meaningfully affect the outcome.",
+      interaction:
+        "Prediction, joining refrains, spotting, answering simple questions and anticipating repeated encounters.",
+      visualStorytelling:
+        "Pictures carry setting, body language, secondary humour and easy visual clues, while the text carries the core causal sequence.",
+      recognition:
+        "Preschool, friendship, family routines, animals, imaginative play, fears, competence, curiosity, new experiences and helping.",
+      sensory:
+        "Still prominent, but subordinate to the narrative when the two compete.",
+      emotion:
+        "Anger, fear, jealousy, pride, disappointment and excitement are all appropriate when they are easy to track.",
+      humor:
+        "Absurdity, failed attempts, exaggerated emotion, visual jokes and pattern violation.",
+      characterArt:
+        "High expressive range and clear poses. Environments may now hold secondary visual information without stealing the focal action.",
+      calibration:
+        "Unlike 2 years, most stories should have an actual narrative problem or desire rather than a pattern alone.\n" +
+        "Unlike 4–5, avoid depending heavily on implicit motivation, sustained ambiguity or secondary plot lines.",
+      qualityTest:
+        "Can the child identify what the protagonist wants? Do the attempts escalate? Does the protagonist meaningfully affect the outcome? Would the story support enjoyable repeated reading?",
+    },
+    dimensions: {
+      textDensity: d(2, "Two or three read-aloud sentences per page."),
+      sentenceComplexity: d(2, "Easy compounds and transparent subordinate clauses."),
+      illustrationDependency: d(3, "The picture carries setting, mood and secondary humour."),
+      repetition: d(3, "Refrains and rule-of-three structures that escalate."),
+      plotComplexity: d(3, "A full but simple want, attempts and resolution."),
+      castSize: d(2, "Up to about four characters."),
+      dialogue: d(2, "Short, clearly attributed lines."),
+      conflict: d(2, "Real but small, with visible recovery."),
+      emotionalComplexity: d(1, "One named feeling, honestly handled."),
+      readerInference: d(2, "A little is shown rather than told."),
+      figurativeLanguage: d(2, "Light, concrete comparisons."),
+      subplots: d(1, "Usually none; at most a running visual thread."),
+      interaction: d(4, "Regular prediction and joining in."),
+      sensoryLanguage: d(2, "Rich and physical."),
+    },
+    structure: {
+      minWords: 180,
+      maxWords: 850,
+      beats: 6,
+      maxSentenceWords: 24,
+      plotRequired: true,
+    },
+    density: {
+      targetWordsPerPage: 28,
+      maxWordsPerPage: 60,
+      targetSentencesPerPage: 2,
+      maxFocalCharactersPerScene: 3,
+      minPages: 16,
+      maxPages: 32,
+    },
+    protagonist: {
+      minAge: 3,
+      maxAge: 5,
+      guidance:
+        "The hero should be about {{min}}–{{max}} years old — a touch older than the listener, which is who a three-year-old wants to be. When the customer supplies a real child's age, preserve it.",
+    },
+    defaultCharacterAgeYears: 4,
+    safety: {
+      avoid: ["danger or distress that is left without visible recovery"],
+      note: "Several beats of danger or social and emotional tension are acceptable, provided the recovery is visible and the ending is secure.",
+    },
+    evaluatedDimensionIds: [
+      "textDensity",
+      "sentenceComplexity",
+      "plotComplexity",
+      "repetition",
+      "conflict",
+      "readerInference",
+      "interaction",
+    ],
+  },
+
+  {
+    id: "4-5",
+    label: "4–5 years",
+    caption: "Picture books",
+    description:
+      "Full picture-book territory: clever plots, mixed feelings, rich listening vocabulary and an active protagonist.",
+    minMonths: 48,
+    maxMonths: 71,
+    order: 50,
+    enabled: true,
+    aliases: [],
+    readingModes: ["read-aloud", "with-help", "independent"],
+    modes: {
+      "read-aloud": {
+        humanGuidance:
+          "An adult reads aloud. The richest vocabulary and syntax of the three — proper picture-book language.",
+        storyGuidance:
+          "The adult does all the decoding, so listening language may run well ahead of what the child could read alone. Use meaningful stretch vocabulary, accessible metaphor and wordplay, and polish every line for performance: rhythm, voices, breath and memorable phrases.",
+      },
+      "with-help": {
+        humanGuidance:
+          "The child reads along with help. Familiar words, repeated patterns and strong picture support.",
+        storyGuidance:
+          "The child reads with an adult beside them. Favour familiar vocabulary and repeated patterns, and let the picture support meaning on every page. An occasional stretch word is welcome when an adult can bridge it and the context makes it guessable.",
+      },
+      independent: {
+        humanGuidance:
+          "An emergent reader goes it alone. Short lines, high-frequency words and a picture on every page.",
+        storyGuidance:
+          "This is emergent reading. Use explicit syntax, high-frequency and decodable vocabulary, short lines and strong picture context. Simplify the DECODING, not the story: keep the plot, humour and feeling of a full picture book.",
+      },
+    },
+    sections: {
+      language:
+        "Use natural picture-book prose: simple and compound sentences with the occasional subordinate clause, meaningful stretch vocabulary, and accessible metaphor or wordplay.\n" +
+        "Listening language may significantly exceed independent decoding vocabulary — the active reading mode, not the age, decides how much the child must decode personally.",
+      readAloud:
+        "Optimise the read-aloud experience for performance and rereading: rhythm, character voices, breath, dramatic pauses, memorable lines and verbal surprises.",
+      repetition:
+        "Use refrains, rule-of-three structures, callbacks and running patterns where they strengthen plot or humour. Do not repeat automatically on every page.",
+      pageStructure:
+        "One dominant beat per page or spread. Use the page turn deliberately, for anticipation, revelation, reversal or visual comedy.",
+      storyStructure:
+        "A full but focused picture-book arc: setup, desire or problem, escalating attempts and obstacles, a meaningful climax or choice, and an earned resolution.\n" +
+        "Let the child protagonist's own decision matter to the outcome.",
+      interaction:
+        "Prediction and discussion replace constant pointing. Direct address can still work very well when it is built into the concept rather than sprinkled on.",
+      visualStorytelling:
+        "Text and illustration should each add information. Do not narrate clothing, scenery, facial expressions or jokes that are already obvious in the picture.",
+      recognition:
+        "Friendship, kindergarten and preschool, imagination, fairness, independence, rules, competence, family experiences, animals and discovery.",
+      sensory:
+        "Selective rather than constant. One precise physical detail does more than three general ones.",
+      emotion:
+        "Mixed states become useful: excited but nervous, jealous yet affectionate, frightened but curious. Name feelings when it helps and show them when the picture can carry it.",
+      humor:
+        "Reversal, escalating absurdity, early wordplay, dramatic irony, character behaviour and comic timing.",
+      characterArt:
+        "Still highly expressive, but increase costume, prop and environmental identity. Avoid generic cute-children's-illustration constraints.",
+      calibration:
+        "Nearer four, retain visible causality and some repetition.\n" +
+        "Nearer six, tolerate stronger inference, richer dialogue, longer causal chains and a fair twist.",
+      qualityTest:
+        "Does every spread advance plot, character, anticipation or comedy? Does the art do meaningful narrative work? Is the resolution caused by the protagonist? Would both child and adult enjoy a twentieth reread?",
+    },
+    dimensions: {
+      textDensity: d(3, "Three or four sentences per page."),
+      sentenceComplexity: d(2, "Simple and compound, with occasional subordination."),
+      illustrationDependency: d(3, "Text and picture each carry real information."),
+      repetition: d(2, "Refrains and rule-of-three where they earn their place."),
+      plotComplexity: d(3, "A full but focused arc with escalating attempts."),
+      castSize: d(3, "A small cast, clearly differentiated."),
+      dialogue: d(3, "Frequent, with distinct voices."),
+      conflict: d(2, "Genuine, including anger, jealousy, fear and failure."),
+      emotionalComplexity: d(2, "Mixed feelings the child can recognise."),
+      readerInference: d(3, "Some motivation is shown rather than stated."),
+      figurativeLanguage: d(2, "Accessible metaphor and early wordplay."),
+      subplots: d(1, "At most one light secondary thread."),
+      interaction: d(3, "Prediction and discussion rather than pointing."),
+      sensoryLanguage: d(1, "Selective and purposeful."),
+    },
+    structure: {
+      minWords: 250,
+      maxWords: 1000,
+      beats: 7,
+      maxSentenceWords: 28,
+      plotRequired: true,
+    },
+    density: {
+      targetWordsPerPage: 32,
+      maxWordsPerPage: 70,
+      targetSentencesPerPage: 3,
+      maxFocalCharactersPerScene: 4,
+      minPages: 16,
+      maxPages: 40,
+    },
+    protagonist: {
+      minAge: 4,
+      maxAge: 7,
+      guidance:
+        "The hero should be about {{min}}–{{max}} years old, with a decision that changes the outcome. When the customer supplies a real child's age or identity, preserve it and calibrate agency around that child.",
+    },
+    defaultCharacterAgeYears: 5,
+    safety: {
+      avoid: ["sustained terror", "cruelty presented as normal"],
+      note: "Genuine conflict, jealousy, anger, fear and failure are healthy story material at this age. Avoid sustained terror and cruelty — not uncomfortable emotions.",
+    },
+    evaluatedDimensionIds: [
+      "textDensity",
+      "sentenceComplexity",
+      "plotComplexity",
+      "conflict",
+      "emotionalComplexity",
+      "readerInference",
+      "illustrationDependency",
+    ],
+  },
+
+  {
+    id: "6-7",
+    label: "6–7 years",
+    caption: "Early stories",
+    description:
+      "Decoding is the bottleneck, not comprehension. Reading mode matters more here than anywhere else.",
+    minMonths: 72,
+    maxMonths: 95,
+    order: 60,
+    enabled: true,
+    aliases: [],
+    // With-help first: at this age the child usually reads most of the words
+    // with an adult nearby, so that is the honest default rather than either
+    // extreme. The picker still lists all three in the usual order.
+    readingModes: ["with-help", "read-aloud", "independent"],
+    modes: {
+      "with-help": {
+        humanGuidance:
+          "The child reads most of it, and an adult bridges the occasional hard word or long sentence.",
+        storyGuidance:
+          "The child reads most of this with an adult nearby. Keep sentences mostly short and medium, and when a rare word is worth using, make its meaning clear from context. Keep dialogue simple and clearly attributed.",
+      },
+      "read-aloud": {
+        humanGuidance:
+          "An adult reads aloud, so the language can run well ahead of what the child could decode alone.",
+        storyGuidance:
+          "Write for listening. Vocabulary and sentence complexity may comfortably exceed independent decoding level: use vivid description, real dialogue and richer syntax, and polish the rhythm for reading aloud.",
+      },
+      independent: {
+        humanGuidance:
+          "A confident early reader goes solo. Short and medium sentences, controlled vocabulary, nothing that stalls them.",
+        storyGuidance:
+          "The child reads this alone, so nothing may stall them. Use short and medium sentences, explicit referents, controlled vocabulary and short paragraphs. Keep the story content undiminished — this must be fluent and confidence-building without being infantilised.",
+      },
+    },
+    sections: {
+      language:
+        "The band's base language may use mixed sentence lengths, subordinate clauses, richer vocabulary and real dialogue. The active reading mode then decides how much of that vocabulary the child must personally decode.",
+      readAloud:
+        "Read-aloud mode may comfortably exceed solo decoding level. Independent mode must stay fluent and confidence-building without infantilising the story content.",
+      repetition:
+        "Use callbacks, running gags and recurring phrases as literary texture rather than as structural necessity.",
+      pageStructure:
+        "One meaningful scene beat or short sequence per page or spread. Use discoveries, decisions and unanswered questions as propulsion.",
+      storyStructure:
+        "A strong goal, multiple obstacles, meaningful attempts, real consequence and a protagonist-driven resolution. Mysteries, quests and friendship problems work particularly well.\n" +
+        "Adults may help but must not solve it for the child.",
+      interaction:
+        "Involvement now comes from suspense, clues, prediction and empathy rather than explicit can-you-count prompts.",
+      visualStorytelling:
+        "Pictures aid comprehension, mood, humour and clues, but no longer need to carry every essential action. Choose the most dramatic or funniest beat on each page to illustrate.",
+      recognition:
+        "School, peer friendship, fairness, competence, hobbies, rules, embarrassment, mistakes, responsibility, animals and adventure.",
+      sensory:
+        "Ground scenes in physical detail without decorating every sentence.",
+      emotion:
+        "Embarrassment, disappointment, unfairness, jealousy, pride, worry and failure can all carry genuine story stakes.",
+      humor:
+        "Wordplay, banter, misunderstandings, running jokes and exaggeration.",
+      characterArt:
+        "Distinct identities and readable expressions. Scenes may be somewhat busier, with more character interaction.",
+      calibration:
+        "Nearer six, goals and motives should stay obvious and the plot single-stranded.\n" +
+        "Nearer eight, allow stronger clues, a genuine twist and one light secondary thread.",
+      qualityTest:
+        "Does the protagonist make decisions? Does each obstacle alter what happens next? Can the reader infer something meaningful? Is the decoding difficulty appropriate to the SELECTED MODE rather than merely to the age?",
+    },
+    dimensions: {
+      textDensity: d(4, "Four or five sentences per page at the base level."),
+      sentenceComplexity: d(2, "Mixed lengths with real subordinate clauses."),
+      illustrationDependency: d(2, "Pictures support and clue rather than carry."),
+      repetition: d(1, "Texture only — callbacks and running gags."),
+      plotComplexity: d(4, "A goal, several obstacles and an earned resolution."),
+      castSize: d(3, "A small cast, clearly differentiated."),
+      dialogue: d(3, "Frequent, with distinct voices."),
+      conflict: d(3, "Real failure, embarrassment and injustice."),
+      emotionalComplexity: d(2, "Mixed feelings the reader can name."),
+      readerInference: d(3, "Clues and motives are often shown, not told."),
+      figurativeLanguage: d(2, "Comparisons, idiom and light imagery."),
+      subplots: d(2, "One light secondary thread."),
+      interaction: d(1, "Suspense rather than direct address."),
+      sensoryLanguage: d(1, "Used to ground scenes."),
+    },
+    structure: {
+      minWords: 450,
+      maxWords: 1500,
+      beats: 8,
+      maxSentenceWords: 30,
+      plotRequired: true,
+    },
+    density: {
+      targetWordsPerPage: 55,
+      maxWordsPerPage: 105,
+      targetSentencesPerPage: 4,
+      maxFocalCharactersPerScene: 4,
+      minPages: 12,
+      maxPages: 32,
+    },
+    protagonist: {
+      minAge: 6,
+      maxAge: 9,
+      guidance:
+        "The hero should be about {{min}}–{{max}} years old and solve the final problem themselves; adults may help but must not fix it for them. When the customer supplies a real child's age, preserve it.",
+    },
+    defaultCharacterAgeYears: 7,
+    safety: {
+      avoid: ["genuine horror or body horror", "humiliation as a punchline"],
+      note: "Real failure, embarrassment, injustice and suspense are fine. The resolution should restore hope rather than erase every consequence.",
+    },
+    evaluatedDimensionIds: [
+      "textDensity",
+      "sentenceComplexity",
+      "plotComplexity",
+      "dialogue",
+      "conflict",
+      "readerInference",
+      "illustrationDependency",
+    ],
+  },
+
+  {
+    id: "8-9",
+    label: "8–9 years",
+    caption: "Fluent readers",
+    description:
+      "Fluency releases bandwidth: motive, clues, inference, twists, voice and a secondary thread.",
+    minMonths: 96,
+    maxMonths: 119,
+    order: 70,
+    enabled: true,
+    aliases: [],
+    // Independent first: most readers here are fluent, and the other two modes
+    // exist to reduce decoding load without reducing the story.
+    readingModes: ["independent", "read-aloud", "with-help"],
+    modes: {
+      independent: {
+        humanGuidance:
+          "Reads alone. Real prose with varied syntax and unfamiliar words the context explains.",
+        storyGuidance:
+          "Write real prose: varied syntax, genuine vocabulary and idiom, with unfamiliar words supported by context rather than removed. Give the narration a distinctive voice.",
+      },
+      "read-aloud": {
+        humanGuidance:
+          "A family read-aloud. Rich language, description and syntax, with no decoding ceiling at all.",
+        storyGuidance:
+          "Write for listening by an adult. Rich language, description and syntax are welcome and should not be restricted to decoding level. Give dialogue personality and subtext, and pace it for the voice.",
+      },
+      "with-help": {
+        humanGuidance:
+          "Accessible language with the same story — useful for developing, dyslexic and multilingual readers.",
+        storyGuidance:
+          "Reduce the linguistic load while preserving exactly the same plot, humour and emotional complexity. Shorter sentences and plainer vocabulary, never a younger story.",
+      },
+    },
+    sections: {
+      language:
+        "Varied syntax, real vocabulary, idiom and an increasingly distinctive narrative voice. Context should support unfamiliar words rather than eliminating them.",
+      readAloud:
+        "Preserve strong prose rhythm even when independent reading is the primary mode. Read the last line of every section aloud.",
+      repetition:
+        "Literary callbacks, motifs and running jokes rather than scaffolding.",
+      pageStructure:
+        "A page may carry a scene rather than one atomic action. Use scene endings to create forward momentum.",
+      storyStructure:
+        "A multi-stage adventure, mystery, competition or social problem, with reversals and one meaningful secondary thread that feeds the main arc.",
+      interaction:
+        "Cognitive participation: interpreting clues, anticipating consequences, judging choices and understanding unstated feelings.",
+      visualStorytelling:
+        "Highly format-dependent. Illustrations may simply enrich the prose, or may carry the narrative grammar themselves — pick the moments with the strongest visual charge.",
+      recognition:
+        "Peer groups, loyalty, autonomy, school dynamics, competence, hobbies, teams, rules, belonging and early identity concerns.",
+      sensory:
+        "Specific, purposeful details that establish place or action.",
+      emotion:
+        "Guilt, resentment, loyalty, self-doubt, disappointment and genuinely conflicting feelings.",
+      humor:
+        "Banter, irony, embarrassment, callbacks, exaggeration and a distinctive narrator voice.",
+      characterArt:
+        "Age-respectful proportions and expressions. Visual design can become significantly more sophisticated.",
+      calibration:
+        "Nearer eight, reveal the important causal information clearly.\n" +
+        "Nearer ten, allow stronger subtext, delayed revelation and some ambiguity.",
+      qualityTest:
+        "Do decisions have consequences? Are the clues fair? Does the secondary thread contribute to the main arc? Is some information intentionally left for the reader to infer?",
+    },
+    dimensions: {
+      textDensity: d(5, "Five or six sentences per page; a page may hold a scene."),
+      sentenceComplexity: d(3, "Varied and deliberately shaped."),
+      illustrationDependency: d(2, "Illustrations enrich; prose carries the plot."),
+      repetition: d(1, "Motifs and callbacks only."),
+      plotComplexity: d(4, "Multi-stage, with reversals."),
+      castSize: d(4, "Several characters with their own wants."),
+      dialogue: d(3, "Frequent, with subtext beginning to appear."),
+      conflict: d(3, "Grief, exclusion and serious mistakes may appear."),
+      emotionalComplexity: d(2, "Conflicting feelings held at once."),
+      readerInference: d(4, "Much is implied; clues must stay fair."),
+      figurativeLanguage: d(3, "Idiom and imagery used purposefully."),
+      subplots: d(2, "One meaningful secondary thread."),
+      interaction: d(1, "Entirely cognitive — clues and consequences."),
+      sensoryLanguage: d(1, "Specific and purposeful."),
+    },
+    structure: {
+      minWords: 700,
+      maxWords: 2200,
+      beats: 9,
+      maxSentenceWords: 34,
+      plotRequired: true,
+    },
+    density: {
+      targetWordsPerPage: 75,
+      maxWordsPerPage: 145,
+      targetSentencesPerPage: 5,
+      maxFocalCharactersPerScene: 5,
+      minPages: 16,
+      maxPages: 36,
+    },
+    protagonist: {
+      minAge: 8,
+      maxAge: 11,
+      guidance:
+        "The hero should be about {{min}}–{{max}} years old, with real agency and consequences they have to live with. When the customer supplies a real child's age, preserve it.",
+    },
+    defaultCharacterAgeYears: 9,
+    safety: {
+      avoid: ["self-harm or suicide", "substance use", "humiliation as a punchline"],
+      note: "Grief, exclusion, family change, serious mistakes and meaningful consequences can all appear, and the ending may leave some issues open.",
+    },
+    evaluatedDimensionIds: [
+      "textDensity",
+      "sentenceComplexity",
+      "plotComplexity",
+      "dialogue",
+      "emotionalComplexity",
+      "readerInference",
+      "subplots",
+    ],
+  },
+
+  {
+    id: "10-12",
+    label: "10–12 years",
+    caption: "Middle-grade stories",
+    description:
+      "An interpretive reader: identity, perspective, moral ambiguity, consequence and subtext can carry the story.",
+    minMonths: 120,
+    maxMonths: 155,
+    order: 80,
+    enabled: true,
+    aliases: [],
+    readingModes: ["independent", "read-aloud", "with-help"],
+    modes: {
+      independent: {
+        humanGuidance:
+          "Reads alone. Full middle-grade syntax, figurative language, inference and voice.",
+        storyGuidance:
+          "Write full middle-grade prose: varied sentence architecture, precise vocabulary, idiom, metaphor and inference. Trust the reader to interpret.",
+      },
+      "read-aloud": {
+        humanGuidance:
+          "A family read-aloud at full age-level literary complexity.",
+        storyGuidance:
+          "Write at full age-level literary complexity, optimised for the voice. Cadence still matters, especially in dialogue and at section ends, but there is no nursery-like linguistic requirement.",
+      },
+      "with-help": {
+        humanGuidance:
+          "Accessible language without any age regression — for developing, dyslexic and multilingual readers.",
+        storyGuidance:
+          "Make the language accessible without regressing the age of the story: plainer syntax and vocabulary carrying exactly the same themes, moral complexity and voice. Never write down to this reader.",
+      },
+    },
+    sections: {
+      language:
+        "Use full middle-grade language: varied sentence architecture, precise vocabulary, idiom, metaphor and distinctive voices. Complexity should serve voice or meaning rather than showing off vocabulary.",
+      readAloud:
+        "Still optimise for cadence, particularly in dialogue and at the end of sections, but impose no nursery-like linguistic requirement.",
+      repetition:
+        "Optional thematic motifs and deliberate callbacks only.",
+      pageStructure:
+        "In long-form formats, think in scenes rather than page beats. End sections on a revelation, a threat or a question.",
+      storyStructure:
+        "Multi-stage goals, reversals, real consequences, changing relationships and secondary threads. Internal character change may matter as much as external success.\n" +
+        "Foreshadow properly and pay off what you plant.",
+      interaction:
+        "Entirely cognitive unless the format deliberately breaks the fourth wall: theories, motives, empathy, moral judgement, irony and anticipation.",
+      visualStorytelling:
+        "Fully format-dependent. Illustrations are punctuation here — choose the moments with the strongest visual charge and let the prose carry everything else.",
+      recognition:
+        "Identity, loyalty, independence, changing friendships, status, responsibility, family tension, injustice, belonging and competence.",
+      sensory:
+        "Precise physical detail serving scene, atmosphere or character. One exact detail beats three general ones.",
+      emotion:
+        "Nuanced and contradictory. Characters may remain angry, grieving, guilty, jealous or uncertain across substantial parts of the book.",
+      humor:
+        "Wit, irony, character banter, awkwardness, social observation and sophisticated running jokes. Never explain the joke.",
+      characterArt:
+        "Never infantilise. Match the selected visual style while preserving believable age, subtle expressions and visual identity.",
+      calibration:
+        "Nearer ten, major emotional and causal transitions may remain explicit and the timeline linear.\n" +
+        "Nearer twelve, trust subtext, competing perspectives, thematic ambiguity and delayed explanation.",
+      qualityTest:
+        "Does the protagonist genuinely choose? Do choices carry consequences? Do subplots converge meaningfully? Does theme emerge through events rather than being announced as a moral? Does the book respect the reader's intelligence?",
+    },
+    dimensions: {
+      textDensity: d(5, "Six or more sentences per page; think in scenes."),
+      sentenceComplexity: d(3, "Varied architecture serving voice and meaning."),
+      illustrationDependency: d(1, "The prose carries the story; art is punctuation."),
+      repetition: d(0, "Only as a deliberate thematic motif."),
+      plotComplexity: d(4, "Multi-stage, with reversals and convergence."),
+      castSize: d(4, "As many as the story earns."),
+      dialogue: d(4, "Rich, with real subtext."),
+      conflict: d(3, "Moral ambiguity and bittersweet outcomes allowed."),
+      emotionalComplexity: d(3, "Nuanced and contradictory, sustained over time."),
+      readerInference: d(4, "Much is implied and deliberately delayed."),
+      figurativeLanguage: d(3, "Metaphor and idiom used precisely."),
+      subplots: d(2, "Secondary threads that converge on the main arc."),
+      interaction: d(0, "None — engagement is entirely interpretive."),
+      sensoryLanguage: d(1, "Precise and atmospheric."),
+    },
+    structure: {
+      minWords: 1000,
+      maxWords: 3000,
+      beats: 10,
+      maxSentenceWords: 40,
+      plotRequired: true,
+    },
+    density: {
+      targetWordsPerPage: 100,
+      maxWordsPerPage: 190,
+      targetSentencesPerPage: 6,
+      maxFocalCharactersPerScene: 6,
+      minPages: 16,
+      maxPages: 40,
+    },
+    protagonist: {
+      minAge: 10,
+      maxAge: 13,
+      guidance:
+        "The hero should be about {{min}}–{{max}} years old, with agency over the plot and an inner life the reader can inhabit. When the customer supplies a real child's age, preserve it.",
+    },
+    defaultCharacterAgeYears: 11,
+    safety: {
+      avoid: ["self-harm or suicide", "substance use"],
+      note: "Difficult emotions, grief, moral ambiguity, injustice and bittersweet outcomes are all allowed. Do not force an artificially happy ending beyond the mandatory safety floor.",
+    },
+    evaluatedDimensionIds: [
+      "sentenceComplexity",
+      "plotComplexity",
+      "dialogue",
+      "conflict",
+      "emotionalComplexity",
+      "readerInference",
+      "figurativeLanguage",
+      "subplots",
+    ],
+  },
+
+  // Retired bands, kept resolvable and hidden. A book stamped with one of these
+  // still generates against the exact contract it was written under, which is
+  // why none of them is aliased onto a new band: `0-2` alone spans what is now
+  // three separate editorial contracts, so any mapping would be a guess.
   {
     id: "0-2",
     label: "0–2 years",
@@ -477,8 +1390,8 @@ export const DEFAULT_AUDIENCE_PROFILES: AudienceProfile[] = [
     description: "Board-book simplicity: a few words per page, bold shapes, warm and reassuring.",
     minMonths: 0,
     maxMonths: 35,
-    order: 10,
-    enabled: true,
+    order: 900,
+    enabled: false,
     aliases: [],
     readingModes: [],
     modes: {
@@ -600,8 +1513,8 @@ export const DEFAULT_AUDIENCE_PROFILES: AudienceProfile[] = [
     description: "Picture-book read-aloud: short sentences, playful rhythm, lots of imagery.",
     minMonths: 36,
     maxMonths: 71,
-    order: 20,
-    enabled: true,
+    order: 910,
+    enabled: false,
     aliases: [],
     readingModes: [],
     modes: {
@@ -707,8 +1620,8 @@ export const DEFAULT_AUDIENCE_PROFILES: AudienceProfile[] = [
     description: "Early readers: richer plot, longer paragraphs, real feelings.",
     minMonths: 72,
     maxMonths: 107,
-    order: 30,
-    enabled: true,
+    order: 920,
+    enabled: false,
     aliases: [],
     readingModes: ["read-aloud", "with-help", "independent"],
     modes: {
@@ -822,8 +1735,8 @@ export const DEFAULT_AUDIENCE_PROFILES: AudienceProfile[] = [
     description: "Chapter-style storytelling with detailed scenes and real stakes.",
     minMonths: 108,
     maxMonths: 155,
-    order: 40,
-    enabled: true,
+    order: 930,
+    enabled: false,
     aliases: [],
     readingModes: ["read-aloud", "with-help", "independent"],
     modes: {
@@ -940,7 +1853,7 @@ export const DEFAULT_AUDIENCE_PROFILES: AudienceProfile[] = [
     description: "Sounds, faces and naming. Rhythm matters far more than plot.",
     minMonths: 0,
     maxMonths: 12,
-    order: 5,
+    order: 940,
     enabled: false,
     aliases: [],
     extendsId: "0-2",
@@ -1018,7 +1931,7 @@ export const DEFAULT_AUDIENCE_PROFILES: AudienceProfile[] = [
     description: "Routines, tiny problems and things to find, name and copy.",
     minMonths: 13,
     maxMonths: 24,
-    order: 6,
+    order: 950,
     enabled: false,
     aliases: [],
     extendsId: "0-2",
@@ -1089,8 +2002,12 @@ export const DEFAULT_AUDIENCE_PROFILES: AudienceProfile[] = [
   },
 ];
 
-/** The band used when an id resolves to nothing at all. */
-export const FALLBACK_PROFILE_ID = "3-5";
+/**
+ * The band used when an id resolves to nothing at all. The picture-book centre
+ * of the range: the safest wrong answer for an unknown id, because it is the
+ * one band whose contract is neither a board book nor a chapter book.
+ */
+export const FALLBACK_PROFILE_ID = "4-5";
 
 export function defaultAudienceProfile(id: string): AudienceProfile | undefined {
   return DEFAULT_AUDIENCE_PROFILES.find((p) => p.id === id);

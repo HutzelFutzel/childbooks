@@ -15,8 +15,14 @@ import { resolveStoryCraft } from "../../../core/config/storyCraft";
 import {
   createDefaultStoryBrief,
   isDraftStale,
+  normalizeStoryBriefForCraft,
 } from "../../../core/story/brief";
-import { audienceProfileForMonths } from "../../../core/config/audience";
+import {
+  audienceProfileForMonths,
+  carryReadingMode,
+  isAudienceLinkedToCast,
+} from "../../../core/config/audience";
+import { audienceSourceCharacter, characterAgeMonths } from "../../../core/story/brief";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { GuidedComposer } from "../../studio/story/GuidedComposer";
 import { CoWriteComposer } from "../../studio/story/CoWriteComposer";
@@ -69,8 +75,9 @@ export function StoryStep({
 
   const hasStory = config.storyText.trim().length > 0;
   const canRefine = config.storyText.trim().length >= 20;
-  const brief: StoryBrief =
+  const storedBrief: StoryBrief =
     config.storyBrief ?? createDefaultStoryBrief(hasStory ? "own" : "guided");
+  const brief = normalizeStoryBriefForCraft(storedBrief, craft);
 
   useEffect(() => {
     if (reviewReady) setReviewOpen(true);
@@ -95,25 +102,31 @@ export function StoryStep({
     const configPatch: Parameters<StepProps["update"]>[0] = {
       storyBrief: { ...brief, ...patch },
     };
-    // On the fastest guided path, the hero's exact age is the best default for
-    // reading level too. Reader settings remain available for intentional
-    // exceptions, such as an older child who prefers simpler text.
-    if (!hasStory && brief.mode === "guided" && patch.cast) {
-      const heroAge = patch.cast.find((person) => person.name.trim())?.age;
-      // Bands are bounded in months, so a three-year-old resolves against the
-      // same numbers an admin typed rather than a separate years-based table.
+    // Linked audience follows the first named child's age against the live
+    // admin bands. Custom picks (Written for → Change, or Audience settings)
+    // stay until the author rematches.
+    if (patch.cast && isAudienceLinkedToCast(config.audienceFromCast, hasStory)) {
+      const hero = audienceSourceCharacter(patch.cast);
+      const months = hero ? characterAgeMonths(hero) : undefined;
       const band =
-        heroAge !== undefined ? audienceProfileForMonths(heroAge * 12, audienceSource) : undefined;
+        months !== undefined ? audienceProfileForMonths(months, audienceSource) : undefined;
       if (band) {
         configPatch.ageRangeId = band.id;
-        configPatch.readingModeId = band.readingModes.includes(
-          config.readingModeId as never,
-        )
-          ? config.readingModeId
-          : band.readingModes[0] ?? null;
+        configPatch.readingModeId = carryReadingMode(band, config.readingModeId);
+        configPatch.audienceFromCast = "linked";
+      } else if (hero) {
+        configPatch.audienceFromCast = "linked";
       }
     }
     update(configPatch, options);
+  };
+
+  const audienceProps = {
+    ageRangeId: config.ageRangeId,
+    readingModeId: config.readingModeId,
+    linked: isAudienceLinkedToCast(config.audienceFromCast, hasStory),
+    onChange: (patch: Parameters<StepProps["update"]>[0], options?: Parameters<StepProps["update"]>[1]) =>
+      update(patch, options),
   };
 
   const setMode = (mode: StoryMode) => {
@@ -289,7 +302,8 @@ export function StoryStep({
                       onChange={patchBrief}
                       draft={storyDraft}
                       contentLocale={currentLocale}
-                      onLocaleChange={(locale) => update({ contentLocale: locale })}
+                      audience={audienceProps}
+            onLocaleChange={(locale) => update({ contentLocale: locale })}
                     />
                   )}
                   {brief.mode === "co-write" && (
@@ -300,7 +314,8 @@ export function StoryStep({
                       onChange={patchBrief}
                       draft={storyDraft}
                       contentLocale={currentLocale}
-                      onLocaleChange={(locale) => update({ contentLocale: locale })}
+                      audience={audienceProps}
+            onLocaleChange={(locale) => update({ contentLocale: locale })}
                     />
                   )}
                 </div>
@@ -326,6 +341,7 @@ export function StoryStep({
             onChange={patchBrief}
             draft={storyDraft}
             contentLocale={currentLocale}
+            audience={audienceProps}
             onLocaleChange={(locale) => update({ contentLocale: locale })}
           />
         ) : (
@@ -336,6 +352,7 @@ export function StoryStep({
             onChange={patchBrief}
             draft={storyDraft}
             contentLocale={currentLocale}
+            audience={audienceProps}
             onLocaleChange={(locale) => update({ contentLocale: locale })}
           />
         )}

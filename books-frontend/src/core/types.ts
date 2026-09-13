@@ -108,6 +108,11 @@ export interface StoryCastMember {
   role?: string;
   /** Age in years, when the author knows it — keeps the cast believable. */
   age?: number;
+  /**
+   * Age in months when the author entered months (infant bands). Preferred for
+   * audience matching; `age` stays the whole-year value for character art.
+   */
+  ageMonths?: number;
   /** Anything else worth knowing: "loves dinosaurs", "always loses a shoe". */
   note?: string;
   /** Optional one-use photo for carrying this person's likeness into Cast. */
@@ -193,6 +198,13 @@ export interface BookConfig {
   anchorImageModel?: ModelSelection | null;
   artStyle: ArtStyleSelection;
   ageRangeId: string;
+  /**
+   * How `ageRangeId` was chosen. `linked` follows the first named character's
+   * age against the live admin bands. `custom` is an explicit audience pick and
+   * is not overwritten when that character's age changes. Absent on older
+   * projects (treated as custom once a story exists).
+   */
+  audienceFromCast?: "linked" | "custom";
   /** How the book is read — required for 6–8 and 9–12 age bands. */
   readingModeId?: ReadingModeId | null;
   /**
@@ -267,7 +279,8 @@ export function createDefaultConfig(initialLocale?: BookLanguageId): BookConfig 
     textModel: null,
     imageModel: null,
     artStyle: { presetId: "watercolor" },
-    ageRangeId: "3-5",
+    ageRangeId: "4-5",
+    audienceFromCast: "linked",
     readingModeId: null,
     // Default to the square hardcover product (see BOOK_PRODUCTS / Lulu catalog).
     productSku: "0850X0850FCPRECW080CW444GXX",

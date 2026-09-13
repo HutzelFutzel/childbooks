@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Copy, Plus, RotateCcw, Trash2 } from "lucide-react";
 import {
   CHANNEL_LABELS,
+  DEFAULT_AUDIENCE_PROFILES,
   EDITORIAL_DIMENSIONS,
   GUARDRAIL_SECTIONS,
   MANDATORY_AVOID,
@@ -15,6 +16,7 @@ import {
 } from "../../../core/config/audienceCatalog";
 import {
   audienceProfiles,
+  deletedAudienceProfiles,
   inspectAudienceConfig,
   monthRangeLabel,
   type AudienceConfig,
@@ -27,10 +29,19 @@ import { Button } from "../../components/Button";
 import { Field, Input, Textarea } from "../../components/Input";
 import { Select } from "../../components/Select";
 import { Toggle } from "../../components/Toggle";
+import { SectionGate } from "../AccessGate";
 import { Section, TabIntro } from "./products/parts";
+import { StoryCraftTab } from "./StoryCraftTab";
 import { cn } from "../../lib/cn";
 
-type PaneId = "basics" | "guidance" | "rubric" | "pacing" | "safety" | "preview";
+type PaneId =
+  | "basics"
+  | "guidance"
+  | "rubric"
+  | "pacing"
+  | "safety"
+  | "storyCraft"
+  | "preview";
 
 const PANES: { id: PaneId; label: string }[] = [
   { id: "basics", label: "Basics" },
@@ -38,6 +49,7 @@ const PANES: { id: PaneId; label: string }[] = [
   { id: "rubric", label: "Reading level" },
   { id: "pacing", label: "Length & pacing" },
   { id: "safety", label: "Safety" },
+  { id: "storyCraft", label: "Story Craft" },
   { id: "preview", label: "Preview" },
 ];
 
@@ -792,6 +804,7 @@ export function AudienceTab() {
     [draft, legacyWriting, legacyCraft],
   );
   const profiles = useMemo(() => audienceProfiles(source), [source]);
+  const deletedProfiles = useMemo(() => deletedAudienceProfiles(source), [source]);
   const issues = useMemo(() => inspectAudienceConfig(source), [source]);
 
   const profile = profiles.find((p) => p.id === selectedId) ?? profiles[0];
@@ -817,7 +830,10 @@ export function AudienceTab() {
   };
 
   const addBand = (from?: AudienceProfile) => {
-    const ids = new Set(profiles.map((p) => p.id));
+    const ids = new Set([
+      ...profiles.map((p) => p.id),
+      ...(draft.deletedProfileIds ?? []),
+    ]);
     const id = newProfileId(ids, from ? `${from.id}-copy` : "new-band");
     const base: AudienceProfileOverride = from
       ? ({ ...from, id, label: `${from.label} (copy)`, aliases: [], enabled: false } as AudienceProfileOverride)
@@ -840,8 +856,36 @@ export function AudienceTab() {
 
   const deleteBand = () => {
     if (!profile) return;
-    setDraft((d) => ({ ...d, profiles: d.profiles.filter((p) => p.id !== profile.id) }));
+    if (profiles.length <= 1) {
+      toast.error("At least one age band must remain.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Delete "${profile.label}"? It will disappear from setup and this editor. Existing books keep a compatibility snapshot, and the ID cannot be reused.`,
+      )
+    ) {
+      return;
+    }
+    setDraft((d) => {
+      const rest = d.profiles.filter((candidate) => candidate.id !== profile.id);
+      const snapshot = { ...profile, enabled: false } as AudienceProfileOverride;
+      return {
+        ...d,
+        profiles: [...rest, snapshot],
+        deletedProfileIds: [...new Set([...(d.deletedProfileIds ?? []), profile.id])],
+      };
+    });
     setSelectedId(null);
+    setDirty(true);
+  };
+
+  const restoreBand = (id: string) => {
+    setDraft((d) => ({
+      ...d,
+      deletedProfileIds: (d.deletedProfileIds ?? []).filter((deletedId) => deletedId !== id),
+    }));
+    setSelectedId(id);
     setDirty(true);
   };
 
@@ -865,33 +909,32 @@ export function AudienceTab() {
 
   return (
     <div className="space-y-4">
-      <TabIntro elsewhere="Themes, devices and settings a reader picks from live in Story craft. The wording around this guidance lives in Prompts.">
+      <TabIntro elsewhere="The exact wording around generated prompts lives in Prompts.">
         Who each book is for, and every editorial rule that follows. One band holds the writing
-        guidance, the reading-level rubric, the length and page pacing, and the safety list — and
+        guidance, reading-level rubric, length, page pacing, safety, and Story Craft choices — and
         each piece is sent only to the steps it belongs to. Add a band here rather than in code.
       </TabIntro>
 
       <div className="flex flex-wrap items-center justify-end gap-2">
-        {hasOverride && (
+        {hasOverride && !isAdminOnly(profile, draft) && (
           <Button
             variant="ghost"
             size="sm"
             leftIcon={<RotateCcw className="size-3.5" />}
             onClick={resetBand}
           >
-            {isAdminOnly(profile, draft) ? "Discard changes" : "Reset to built-in"}
+            Reset to built-in
           </Button>
         )}
-        {isAdminOnly(profile, draft) && (
-          <Button
-            variant="ghost"
-            size="sm"
-            leftIcon={<Trash2 className="size-3.5" />}
-            onClick={deleteBand}
-          >
-            Delete band
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          leftIcon={<Trash2 className="size-3.5" />}
+          disabled={profiles.length <= 1}
+          onClick={deleteBand}
+        >
+          Delete band
+        </Button>
         <Button
           variant="ghost"
           size="sm"
@@ -932,6 +975,32 @@ export function AudienceTab() {
                 draft={draft}
                 onSelect={setSelectedId}
               />
+            </>
+          )}
+          {deletedProfiles.length > 0 && (
+            <>
+              <div className="px-2 pt-3 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+                Deleted
+              </div>
+              <div className="space-y-1">
+                {deletedProfiles.map((deleted) => (
+                  <div
+                    key={deleted.id}
+                    className="flex items-center gap-2 rounded-lg bg-ink-50 px-2.5 py-2"
+                  >
+                    <span className="min-w-0 flex-1 truncate text-xs text-ink-500">
+                      {deleted.label}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => restoreBand(deleted.id)}
+                      className="text-[10px] font-semibold text-brand-700 hover:text-brand-900"
+                    >
+                      Restore
+                    </button>
+                  </div>
+                ))}
+              </div>
             </>
           )}
         </nav>
@@ -1004,6 +1073,20 @@ export function AudienceTab() {
             {pane === "rubric" && <RubricPane profile={profile} patch={patch} />}
             {pane === "pacing" && <PacingPane profile={profile} patch={patch} />}
             {pane === "safety" && <SafetyPane profile={profile} patch={patch} />}
+            {pane === "storyCraft" &&
+              (SHIPPED_IDS.has(profile.id) ||
+              stored.profiles.some((storedProfile) => storedProfile.id === profile.id) ? (
+                <SectionGate permissionKey="configuration.storyCraft">
+                  <StoryCraftTab
+                    embeddedBandId={profile.id}
+                    embeddedBandLabel={profile.label}
+                  />
+                </SectionGate>
+              ) : (
+                <p className="rounded-lg border border-amber-200/80 bg-amber-50/70 px-3 py-2 text-xs leading-relaxed text-amber-800">
+                  Save this new age band first, then configure its Story Craft choices here.
+                </p>
+              ))}
             {pane === "preview" && <PreviewPane profile={profile} config={draft} />}
           </div>
         </div>
@@ -1020,7 +1103,12 @@ function isAdminOnly(profile: AudienceProfile, draft: AudienceConfig): boolean {
   );
 }
 
-const SHIPPED_IDS = new Set(["0-2", "3-5", "6-8", "9-12", "0-12m", "13-24m"]);
+/**
+ * Derived rather than listed: a band that ships with the app must never be
+ * labelled "added by you", and hardcoding the ids meant every new shipped band
+ * silently landed in the wrong list with its Story Craft pane locked.
+ */
+const SHIPPED_IDS = new Set(DEFAULT_AUDIENCE_PROFILES.map((profile) => profile.id));
 
 function BandList({
   profiles,

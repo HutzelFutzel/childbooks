@@ -4,7 +4,9 @@
  * book. These become "anchors" the user can refine and generate images for.
  */
 import { z } from "zod";
-import { AGE_RANGES } from "../config/options";
+// Reads every shipped band rather than only the offered ones, so a book on a
+// retired band still names its age in the prompt instead of leaking a raw id.
+import { ageBandLabel } from "../config/storyCraftCatalog";
 import { getBookLanguage } from "../config/bookLanguages";
 import { stripNumericAgeFromDescription } from "../book/anchorDescription";
 import { defaultCharacterAge } from "../book/characterAge";
@@ -131,7 +133,7 @@ export async function analyzeStory(
 ): Promise<{ summary: string; anchors: Anchor[]; embeddings: AnalyzedEmbedding[] }> {
   const { story, config, creds, model, signal, prompts, artworkLooks } = input;
   const provider = getTextProvider(config.textModel!.provider);
-  const age = AGE_RANGES.find((a) => a.id === config.ageRangeId)?.label ?? config.ageRangeId;
+  const age = ageBandLabel(config.ageRangeId);
   const language = getBookLanguage(config.contentLocale);
   const ageTextPrompt = resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, prompts);
   // Guided and co-written stories may carry facts about real people. Handing
@@ -182,8 +184,13 @@ export async function analyzeStory(
 
   const knownAges = new Map(
     namedCast(briefOf(config))
-      .filter((member) => member.age !== undefined)
-      .map((member) => [member.name.trim().toLowerCase(), member.age!]),
+      .filter((member) => member.age !== undefined || member.ageMonths !== undefined)
+      .map((member) => [
+        member.name.trim().toLowerCase(),
+        member.age !== undefined
+          ? member.age
+          : Math.floor((member.ageMonths ?? 0) / 12),
+      ]),
   );
   const anchors: Anchor[] = result.anchors.map((a) => {
     const isCharacter = a.type === "character";
@@ -355,7 +362,7 @@ export async function generateAnchorDescription(
 ): Promise<string> {
   const { story, config, creds, model, name, type, existingAnchors, signal, prompts } = input;
   const provider = getTextProvider(config.textModel!.provider);
-  const age = AGE_RANGES.find((a) => a.id === config.ageRangeId)?.label ?? config.ageRangeId;
+  const age = ageBandLabel(config.ageRangeId);
   const language = getBookLanguage(config.contentLocale);
   const ageTextPrompt = resolveAgeLlmGuidance(config.ageRangeId, config.readingModeId, prompts);
 

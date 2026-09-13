@@ -14,7 +14,7 @@ import {
   Wand2,
 } from "lucide-react";
 import type { AgeBandStoryCraft } from "../../../core/config/storyCraftCatalog";
-import type { StoryBrief } from "../../../core/types";
+import type { BookConfig, StoryBrief } from "../../../core/types";
 import type { BookLanguageId } from "../../../core/config/bookLanguages";
 import { briefBlockers, isBriefReady } from "../../../core/story/brief";
 import { Button } from "../../components/Button";
@@ -27,6 +27,7 @@ import { LanguageSelector } from "./LanguageSelector";
 import { OptionChips } from "./OptionChips";
 import type { UseStoryDraft } from "./useStoryDraft";
 import type { StoryHistoryOptions } from "./storyUndo";
+import type { AudiencePatch } from "./WrittenForPicker";
 
 const CO_WRITE_STEPS = [
   { id: "cast", label: "The Cast", subtitle: "Heroes & family", icon: Users },
@@ -47,6 +48,7 @@ export function CoWriteComposer({
   draft,
   contentLocale,
   onLocaleChange,
+  audience,
 }: {
   brief: StoryBrief;
   craft: AgeBandStoryCraft;
@@ -55,6 +57,12 @@ export function CoWriteComposer({
   draft: Pick<UseStoryDraft, "writing" | "write">;
   contentLocale?: BookLanguageId;
   onLocaleChange?: (locale: BookLanguageId) => void;
+  audience?: {
+    ageRangeId: string;
+    readingModeId?: BookConfig["readingModeId"];
+    linked: boolean;
+    onChange: (patch: AudiencePatch, options?: StoryHistoryOptions) => void;
+  };
 }) {
   const [currentStepIndex, setCurrentStepIndex] = useState(0);
   const models = useResolvedModels();
@@ -158,6 +166,7 @@ export function CoWriteComposer({
               <CastEditor
                 cast={brief.cast ?? []}
                 onChange={(cast, options) => onChange({ cast }, options)}
+                audience={audience}
               />
             </motion.div>
           )}
@@ -239,6 +248,24 @@ export function CoWriteComposer({
                     />
                   </label>
                 </div>
+
+                <OptionChips
+                  label="Setting idea"
+                  optional
+                  options={craft.settings}
+                  selectedId={brief.settingId}
+                  custom={brief.customSetting}
+                  onChange={({ id, custom }, options) =>
+                    onChange(
+                      {
+                        settingId: id,
+                        ...(custom !== undefined ? { customSetting: custom } : {}),
+                      },
+                      options,
+                    )
+                  }
+                  customPlaceholder="e.g. an old treehouse above Grandad's garden"
+                />
 
                 <label className="block">
                   <span className="mb-1.5 block text-sm font-medium text-ink-700">

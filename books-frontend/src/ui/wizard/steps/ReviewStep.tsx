@@ -1,13 +1,13 @@
 import { useMemo } from "react";
 import { Sparkles } from "lucide-react";
 import {
-  AGE_RANGES,
   GRAPHICS_DENSITY,
   SPREAD_USAGE,
   TEXT_HANDLING,
   TEXT_PLACEMENT,
 } from "../../../core/config/options";
 import { ageBandHasReadingModes, readingModeLabel } from "../../../core/config/ageWritingCatalog";
+import { ageBandLabel } from "../../../core/config/storyCraftCatalog";
 import { bookProductForConfig } from "../../../core/book";
 import { resolveLayoutById } from "../../../core/book/layoutCatalog";
 import { selectModels } from "../../../core/models/registry";
@@ -65,7 +65,7 @@ export function ReviewStep({ config }: StepProps) {
             value={models ? "Chosen automatically" : "Being set up on the server"}
           />
           <Row label="Art style" value={styleExtra ? `${style} + custom` : style} />
-          <Row label="Age range" value={find(AGE_RANGES, config.ageRangeId)} />
+          <Row label="Written for" value={ageBandLabel(config.ageRangeId)} />
           {ageBandHasReadingModes(config.ageRangeId) && config.readingModeId && (
             <Row label="Reading mode" value={readingModeLabel(config.readingModeId)} />
           )}

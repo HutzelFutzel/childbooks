@@ -1,5 +1,6 @@
 import { BookText, Users } from "lucide-react";
-import { AGE_RANGES } from "../../core/config/options";
+import { audienceLabel } from "../../core/config/audience";
+import { activeAudienceSource } from "../../core/config/activeAudience";
 import { getBookLanguage, isBookLanguageId } from "../../core/config/bookLanguages";
 import { wordCount } from "../../core/story/brief";
 import { ageBandHasReadingModes, readingModeLabel } from "../../core/config/ageWritingCatalog";
@@ -9,7 +10,7 @@ import { ReaderStep } from "./steps/ReaderStep";
 import { StoryStep } from "./steps/StoryStep";
 
 function ageLabel(id: string): string {
-  return AGE_RANGES.find((a) => a.id === id)?.label ?? id;
+  return audienceLabel(id, activeAudienceSource());
 }
 
 /**
@@ -19,8 +20,8 @@ function ageLabel(id: string): string {
 export const STORY_QUESTIONS: GuidedQuestion[] = [
   {
     id: "reader",
-    title: "Language & reading level",
-    subtitle: "Choose the language and reading level for this book.",
+    title: "Language & audience",
+    subtitle: "The language and who the book is written for.",
     icon: Users,
     isAnswered: (config) =>
       isBookLanguageId(config.contentLocale ?? "en-US") &&

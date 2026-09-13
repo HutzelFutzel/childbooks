@@ -14,9 +14,9 @@
  * second copy of the same brief.
  *
  * Resolution is deliberately total: {@link resolveAudienceProfile} always
- * returns a usable profile. An unknown id resolves through aliases, then
- * month-range containment, then the fallback band — a book made before a band
- * was renamed must never fail to generate.
+ * returns a usable profile. An unknown id resolves through aliases, then the
+ * fallback band — a book made before a band was renamed must never fail to
+ * generate. Month-range containment is only {@link audienceProfileForMonths}.
  */
 import { z } from "zod";
 import {
@@ -86,12 +86,14 @@ const safetySchema = z.object({
  * Every field is optional so a stored profile can carry a single overridden
  * value; `id` is the only thing that must be there, because it's the join key.
  */
+const profileIdSchema = z
+  .string()
+  .min(1)
+  .max(40)
+  .regex(/^[a-z0-9][a-z0-9-]*$/, "Use lowercase letters, numbers and hyphens.");
+
 const profileSchema = z.object({
-  id: z
-    .string()
-    .min(1)
-    .max(40)
-    .regex(/^[a-z0-9][a-z0-9-]*$/, "Use lowercase letters, numbers and hyphens."),
+  id: profileIdSchema,
   label: z.string().max(80).optional(),
   caption: z.string().max(60).optional(),
   description: z.string().max(400).optional(),
@@ -118,20 +120,36 @@ export type AudienceProfileOverride = z.infer<typeof profileSchema>;
 export const audienceConfigSchema = z.object({
   version: z.literal(1),
   profiles: z.array(profileSchema).max(40),
+  /** Tombstoned IDs disappear from admin/customer lists but still resolve for old books. */
+  deletedProfileIds: z.array(profileIdSchema).max(40).optional(),
   updatedAt: z.number().optional(),
   /** Bumped on every save, so generated content can record what it was made under. */
   revision: z.number().int().min(0).optional(),
+}).superRefine((config, ctx) => {
+  const availableIds = new Set([
+    ...DEFAULT_AUDIENCE_PROFILES.map((profile) => profile.id),
+    ...config.profiles.map((profile) => profile.id),
+  ]);
+  for (const id of config.deletedProfileIds ?? []) availableIds.delete(id);
+  if (availableIds.size === 0) {
+    ctx.addIssue({
+      code: "custom",
+      message: "At least one age band must remain.",
+      path: ["deletedProfileIds"],
+    });
+  }
 });
 
 export interface AudienceConfig {
   version: 1;
   profiles: AudienceProfileOverride[];
+  deletedProfileIds?: string[];
   updatedAt?: number;
   revision?: number;
 }
 
 export function createDefaultAudienceConfig(): AudienceConfig {
-  return { version: 1, profiles: [], revision: 0 };
+  return { version: 1, profiles: [], deletedProfileIds: [], revision: 0 };
 }
 
 export function normalizeAudienceConfig(input: unknown): AudienceConfig {
@@ -147,9 +165,18 @@ export function normalizeAudienceConfig(input: unknown): AudienceConfig {
     seen.add(parsed.data.id);
     profiles.push(parsed.data);
   }
+  const deletedProfileIds = Array.isArray(stored.deletedProfileIds)
+    ? [...new Set(
+        stored.deletedProfileIds.flatMap((id) => {
+          const parsed = profileIdSchema.safeParse(id);
+          return parsed.success ? [parsed.data] : [];
+        }),
+      )].slice(0, 40)
+    : [];
   return {
     version: 1,
     profiles,
+    deletedProfileIds,
     ...(typeof stored.updatedAt === "number" ? { updatedAt: stored.updatedAt } : {}),
     revision: typeof stored.revision === "number" ? stored.revision : 0,
   };
@@ -387,10 +414,29 @@ function unpack(src?: AudienceSource | AudienceConfig | null): AudienceSource {
   return src as AudienceSource;
 }
 
-/** Every profile, resolved from any source shape. */
-export function audienceProfiles(src?: AudienceSource | AudienceConfig | null): AudienceProfile[] {
+function resolvedProfiles(src?: AudienceSource | AudienceConfig | null): {
+  profiles: AudienceProfile[];
+  deletedIds: Set<string>;
+} {
   const bag = unpack(src);
-  return resolveAudienceProfiles(bag.audience, bag.ageWriting, bag.storyCraft);
+  return {
+    profiles: resolveAudienceProfiles(bag.audience, bag.ageWriting, bag.storyCraft),
+    deletedIds: new Set(bag.audience?.deletedProfileIds ?? []),
+  };
+}
+
+/** Every current (not deleted) profile, resolved from any source shape. */
+export function audienceProfiles(src?: AudienceSource | AudienceConfig | null): AudienceProfile[] {
+  const resolved = resolvedProfiles(src);
+  return resolved.profiles.filter((profile) => !resolved.deletedIds.has(profile.id));
+}
+
+/** Tombstoned profiles retained only so existing books can still resolve them. */
+export function deletedAudienceProfiles(
+  src?: AudienceSource | AudienceConfig | null,
+): AudienceProfile[] {
+  const resolved = resolvedProfiles(src);
+  return resolved.profiles.filter((profile) => resolved.deletedIds.has(profile.id));
 }
 
 /** Only the bands a customer may choose, in picker order. */
@@ -413,16 +459,27 @@ export function resolveAudienceProfile(
   ageRangeId: string | null | undefined,
   src?: AudienceSource | AudienceConfig | null,
 ): AudienceProfile {
-  const all = audienceProfiles(src);
+  // Exact and alias lookup includes tombstones: deletion removes a band from
+  // new choices, not from the meaning of books already stamped with its ID.
+  const all = resolvedProfiles(src).profiles;
+  const current = audienceProfiles(src);
   const id = (ageRangeId ?? "").trim();
   return (
     all.find((p) => p.id === id) ??
     all.find((p) => p.aliases.includes(id)) ??
+    current.find((p) => p.id === FALLBACK_PROFILE_ID) ??
+    current[0] ??
     all.find((p) => p.id === FALLBACK_PROFILE_ID) ??
     all[0] ??
     blankProfile(FALLBACK_PROFILE_ID)
   );
 }
+
+/**
+ * Ages above every enabled band still count as a child reader up to this,
+ * so a 14-year-old can land on 9–12 while a parent typed as 35 does not.
+ */
+const CHILD_READER_MAX_MONTHS = 18 * 12;
 
 /** The enabled band whose month range contains `months`, for the age shortcut. */
 export function audienceProfileForMonths(
@@ -430,11 +487,71 @@ export function audienceProfileForMonths(
   src?: AudienceSource | AudienceConfig | null,
 ): AudienceProfile | undefined {
   const enabled = enabledAudienceProfiles(src);
-  return (
-    enabled.find((p) => months >= p.minMonths && months <= p.maxMonths) ??
-    // Past the top of the oldest band, the oldest band is still the best answer.
-    [...enabled].reverse().find((p) => months > p.maxMonths)
-  );
+  if (enabled.length === 0) return undefined;
+
+  const contained = enabled.find((p) => months >= p.minMonths && months <= p.maxMonths);
+  if (contained) return contained;
+
+  const youngest = enabled.reduce((a, b) => (a.minMonths <= b.minMonths ? a : b));
+  const oldest = enabled.reduce((a, b) => (a.maxMonths >= b.maxMonths ? a : b));
+
+  if (months < youngest.minMonths) return youngest;
+
+  if (months > oldest.maxMonths) {
+    const protagonistCap = Math.max(0, ...enabled.map((p) => p.protagonist.maxAge * 12));
+    const childCap = Math.max(oldest.maxMonths, protagonistCap, CHILD_READER_MAX_MONTHS);
+    if (months <= childCap) return oldest;
+    return undefined;
+  }
+
+  // A gap between enabled bands: do not guess the previous one.
+  return undefined;
+}
+
+/**
+ * Whole years cannot tell 12 months from 18 months. Show a months unit when
+ * two enabled bands share a calendar year, or any enabled band is narrower
+ * than a year.
+ */
+export function audienceNeedsMonthPrecision(
+  src?: AudienceSource | AudienceConfig | null,
+): boolean {
+  const enabled = enabledAudienceProfiles(src);
+  if (enabled.some((p) => p.maxMonths - p.minMonths + 1 <= 12)) return true;
+  for (let year = 0; year <= 3; year++) {
+    const start = year * 12;
+    const end = start + 11;
+    const hits = enabled.filter((p) => p.minMonths <= end && p.maxMonths >= start);
+    if (hits.length > 1) return true;
+  }
+  return false;
+}
+
+/** Keep the current reading mode when the new band still offers it. */
+export function carryReadingMode(
+  profile: AudienceProfile,
+  current?: ReadingModeId | string | null,
+): ReadingModeId | null {
+  if (current && profile.readingModes.includes(current as ReadingModeId)) {
+    return current as ReadingModeId;
+  }
+  return defaultReadingMode(profile);
+}
+
+/**
+ * Whether character age should keep driving `ageRangeId`.
+ *
+ * `linked` follows the first named character. `custom` is an explicit pick.
+ * Older books never recorded this: keep their stored band once a story exists,
+ * and only auto-match before the first draft (the previous behaviour).
+ */
+export function isAudienceLinkedToCast(
+  selection: "linked" | "custom" | undefined,
+  hasStory: boolean,
+): boolean {
+  if (selection === "custom") return false;
+  if (selection === "linked") return true;
+  return !hasStory;
 }
 
 // ---------------------------------------------------------------------------

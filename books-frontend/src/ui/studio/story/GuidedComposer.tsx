@@ -3,13 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, ChevronDown, Loader2, RotateCcw, Sparkles, Wand2 } from "lucide-react";
 import type { AgeBandStoryCraft } from "../../../core/config/storyCraftCatalog";
-import type { StoryBrief } from "../../../core/types";
+import type { BookConfig, StoryBrief } from "../../../core/types";
 import type { BookLanguageId } from "../../../core/config/bookLanguages";
 import {
   namedCast,
   namedHeroes,
   newCastMember,
   splitHeroNames,
+  hasCharacterAge,
 } from "../../../core/story/brief";
 import { Button } from "../../components/Button";
 import { Input } from "../../components/Input";
@@ -20,6 +21,7 @@ import { LanguageSelector } from "./LanguageSelector";
 import { OptionChips } from "./OptionChips";
 import { HERO_NAME_KEY, type UseStoryDraft } from "./useStoryDraft";
 import type { StoryHistoryOptions } from "./storyUndo";
+import type { AudiencePatch } from "./WrittenForPicker";
 
 /**
  * "Create with AI": a name, an optional theme, an optional device — then a
@@ -33,6 +35,7 @@ export function GuidedComposer({
   draft,
   contentLocale,
   onLocaleChange,
+  audience,
 }: {
   brief: StoryBrief;
   craft: AgeBandStoryCraft;
@@ -41,15 +44,23 @@ export function GuidedComposer({
   draft: Pick<UseStoryDraft, "writing" | "write">;
   contentLocale?: BookLanguageId;
   onLocaleChange?: (locale: BookLanguageId) => void;
+  audience?: {
+    ageRangeId: string;
+    readingModeId?: BookConfig["readingModeId"];
+    linked: boolean;
+    onChange: (patch: AudiencePatch, options?: StoryHistoryOptions) => void;
+  };
 }) {
   const models = useResolvedModels();
   const { writing, write } = draft;
   const prefilled = useRef(false);
   const people = brief.cast ?? [];
   const heroes = namedCast(brief);
-  const missingAgeHeroes = heroes.filter((hero) => hero.age === undefined);
+  const missingAgeHeroes = heroes.filter((hero) => !hasCharacterAge(hero));
   const hasAdvancedPreferences = Boolean(
     brief.themeId ||
+      brief.settingId ||
+      brief.customSetting?.trim() ||
       brief.deviceId ||
       brief.deviceIds?.length ||
       brief.customDevice?.trim(),
@@ -116,7 +127,7 @@ export function GuidedComposer({
           </p>
         </div>
 
-        <CastEditor cast={people} onChange={setPeople} variant="heroes" />
+        <CastEditor cast={people} onChange={setPeople} variant="heroes" audience={audience} />
 
         <label className="block">
           <span className="mb-1.5 block text-sm font-medium text-ink-700">
@@ -163,6 +174,24 @@ export function GuidedComposer({
                 )
               }
               customPlaceholder="e.g. losing a first tooth on holiday"
+            />
+
+            <OptionChips
+              label="Where should it happen?"
+              optional
+              options={craft.settings}
+              selectedId={brief.settingId}
+              custom={brief.customSetting}
+              onChange={({ id, custom }, options) =>
+                onChange(
+                  {
+                    settingId: id,
+                    ...(custom !== undefined ? { customSetting: custom } : {}),
+                  },
+                  options,
+                )
+              }
+              customPlaceholder="e.g. a lighthouse during a summer storm"
             />
 
             <OptionChips

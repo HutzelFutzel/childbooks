@@ -2,8 +2,12 @@
 
 import { useRef, useState } from "react";
 import { ChevronDown, Plus, Sparkles, Trash2, UserRound } from "lucide-react";
-import type { SourceArtRef, StoryCastMember } from "../../../core/types";
-import { newCastMember } from "../../../core/story/brief";
+import type { BookConfig, SourceArtRef, StoryCastMember } from "../../../core/types";
+import {
+  characterAgeMonths,
+  hasCharacterAge,
+  newCastMember,
+} from "../../../core/story/brief";
 import { Button } from "../../components/Button";
 import { Input } from "../../components/Input";
 import { LikenessPhotoField } from "../../components/LikenessPhotoField";
@@ -21,8 +25,12 @@ import {
   renameDerivedStyleNames,
   setSourceArtOnNamedCharacters,
 } from "../../../core/book/sourceArt";
-import { AGE_RANGES } from "../../../core/config/options";
+import { activeAudienceSource } from "../../../core/config/activeAudience";
+import {
+  resolveAudienceProfile,
+} from "../../../core/config/audience";
 import { refreshArtworkLooks } from "../../../platform/artLook";
+import { WrittenForPicker, type AudiencePatch } from "./WrittenForPicker";
 
 /**
  * The real people in the book.
@@ -32,10 +40,17 @@ export function CastEditor({
   cast,
   onChange,
   variant = "cast",
+  audience,
 }: {
   cast: StoryCastMember[];
   onChange: (cast: StoryCastMember[], options?: StoryHistoryOptions) => void;
   variant?: "cast" | "heroes";
+  audience?: {
+    ageRangeId: string;
+    readingModeId?: BookConfig["readingModeId"];
+    linked: boolean;
+    onChange: (patch: AudiencePatch, options?: StoryHistoryOptions) => void;
+  };
 }) {
   const emptyMember = useRef<StoryCastMember | null>(null);
   if (!emptyMember.current) emptyMember.current = newCastMember();
@@ -45,15 +60,16 @@ export function CastEditor({
   const nameAtFocus = useRef<Record<string, string>>({});
   const [openAppearance, setOpenAppearance] = useState<Set<string>>(new Set());
   const [pictureKind, setPictureKind] = useState<Record<string, "photo" | "artwork">>({});
+  const [ageUnit, setAgeUnit] = useState<Record<string, "years" | "months">>({});
   const allHeroes = variant === "heroes";
   const projectId = useProjectsStore((state) => state.current()?.id);
   const styleLocked = useProjectsStore((state) => state.current()?.config.styleReady === true);
   const projectAgeRangeId = useProjectsStore((state) => state.current()?.config.ageRangeId);
-  const defaultAge = (() => {
-    if (!projectAgeRangeId) return 6;
-    const range = AGE_RANGES.find((r) => r.id === projectAgeRangeId);
-    return range ? Math.round((range.min + range.max) / 2) : 6;
-  })();
+  const audienceSource = activeAudienceSource();
+  const defaultAge = resolveAudienceProfile(
+    projectAgeRangeId,
+    audienceSource,
+  ).defaultCharacterAgeYears;
 
   const patch = (
     id: string,
@@ -152,6 +168,72 @@ export function CastEditor({
     });
   };
 
+  const unitFor = (member: StoryCastMember): "years" | "months" => {
+    if (ageUnit[member.id]) return ageUnit[member.id]!;
+    if (member.ageMonths !== undefined) return "months";
+    if (
+      projectAgeRangeId === "0-11m" ||
+      projectAgeRangeId === "12-23m" ||
+      projectAgeRangeId === "0-12m" ||
+      projectAgeRangeId === "13-24m"
+    ) {
+      if (member.age === undefined) return "months";
+    }
+    return "years";
+  };
+
+  const handleUnitChange = (
+    member: StoryCastMember,
+    nextUnit: "years" | "months",
+  ) => {
+    setAgeUnit((current) => ({ ...current, [member.id]: nextUnit }));
+    const currentMonths = characterAgeMonths(member);
+    if (currentMonths === undefined) return;
+    if (nextUnit === "years") {
+      patch(member.id, {
+        age: Math.floor(currentMonths / 12),
+        ageMonths: undefined,
+      });
+    } else {
+      const months =
+        member.ageMonths !== undefined
+          ? member.ageMonths
+          : member.age !== undefined
+            ? member.age === 0
+              ? 6
+              : member.age * 12
+            : defaultAge <= 1
+              ? (defaultAge === 0 ? 6 : 12)
+              : 18;
+      patch(member.id, {
+        ageMonths: months,
+        age: Math.floor(months / 12),
+      });
+    }
+  };
+
+  const setAgeValue = (
+    member: StoryCastMember,
+    raw: string,
+    unit: "years" | "months",
+  ) => {
+    if (raw === "") {
+      patch(member.id, { age: undefined, ageMonths: undefined });
+      return;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    if (unit === "months") {
+      const months = Math.min(1200, Math.max(0, Math.round(n)));
+      patch(member.id, { ageMonths: months, age: Math.floor(months / 12) });
+    } else {
+      patch(member.id, {
+        age: Math.min(120, Math.max(0, Math.round(n))),
+        ageMonths: undefined,
+      });
+    }
+  };
+
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-baseline justify-between gap-1 px-0.5">
@@ -166,8 +248,17 @@ export function CastEditor({
       <div className="space-y-2">
         {rows.map((member, i) => {
           const hasName = Boolean(member.name.trim());
-          const hasAge = member.age !== undefined;
+          const hasAge = hasCharacterAge(member);
           const needsAge = hasName && !hasAge;
+          const unit = unitFor(member);
+          const ageDisplay =
+            unit === "months"
+              ? (member.ageMonths !== undefined
+                  ? member.ageMonths
+                  : member.age !== undefined
+                    ? member.age * 12
+                    : "")
+              : (member.age !== undefined ? member.age : "");
           const appearanceVisible =
             Boolean(member.note?.trim()) ||
             Boolean(member.likenessPhoto) ||
@@ -183,8 +274,8 @@ export function CastEditor({
             ? "Keep this character’s design and match it to the book’s style."
             : "Keep this character’s design and use its art style for the book.";
           return (
+            <div key={member.id} className="space-y-2">
             <div
-              key={member.id}
               className={cn(
                 "rounded-xl bg-white p-3 ring-1 ring-ink-200 shadow-2xs transition focus-within:ring-brand-300",
                 needsAge && "ring-amber-200/80",
@@ -237,31 +328,75 @@ export function CastEditor({
                   />
                 </label>
 
-                <label className="w-20 shrink-0">
-                  <span className="mb-1 flex items-center justify-between text-xs font-medium text-ink-500">
+                <div className="shrink-0 w-32 sm:w-36">
+                  <div className="mb-1 flex items-center justify-between text-xs font-medium text-ink-500">
                     <span>Age</span>
                     {needsAge && (
                       <span className="text-[10px] font-semibold text-amber-600">Needed</span>
                     )}
-                  </span>
-                  <Input
-                    type="number"
-                    min={0}
-                    max={120}
-                    value={member.age ?? ""}
-                    onChange={(e) =>
-                      patch(member.id, {
-                        age: e.target.value === "" ? undefined : Number(e.target.value),
-                      })
-                    }
-                    placeholder={needsAge ? String(defaultAge) : "Age"}
-                    aria-label={`Age of ${member.name || `person ${i + 1}`}`}
+                  </div>
+                  <div
                     className={cn(
-                      "h-9 px-2 text-center text-sm tabular-nums [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none",
-                      needsAge && "border-amber-300 bg-amber-50/25 ring-1 ring-amber-200/60 placeholder:text-amber-400 focus:border-brand-400 focus:ring-brand-400",
+                      "flex h-9 items-center rounded-lg border border-ink-200 bg-white p-0.5 shadow-2xs transition focus-within:border-brand-400 focus-within:ring-2 focus-within:ring-brand-400/20",
+                      needsAge &&
+                        "border-amber-300 bg-amber-50/25 ring-1 ring-amber-200/60 focus-within:border-brand-400 focus-within:ring-brand-400",
                     )}
-                  />
-                </label>
+                  >
+                    <input
+                      type="number"
+                      min={0}
+                      max={unit === "months" ? 1200 : 120}
+                      value={ageDisplay}
+                      onChange={(e) => setAgeValue(member, e.target.value, unit)}
+                      placeholder={
+                        needsAge
+                          ? unit === "months"
+                            ? String(defaultAge <= 1 ? (defaultAge === 0 ? 6 : 12) : defaultAge * 12)
+                            : String(defaultAge)
+                          : unit === "months"
+                            ? "18"
+                            : "Age"
+                      }
+                      aria-label={`Age of ${member.name || `person ${i + 1}`} in ${unit}`}
+                      className={cn(
+                        "h-full w-full min-w-0 bg-transparent px-1.5 text-center text-sm font-medium tabular-nums text-ink-900 placeholder:text-ink-400 focus:outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none",
+                        needsAge && "placeholder:text-amber-400",
+                      )}
+                    />
+                    <div
+                      className="flex shrink-0 items-center rounded-md bg-ink-100/80 p-0.5"
+                      role="group"
+                      aria-label="Age unit"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => handleUnitChange(member, "years")}
+                        className={cn(
+                          "rounded px-1.5 py-0.5 text-[11px] font-medium transition-all",
+                          unit === "years"
+                            ? "bg-white font-semibold text-ink-900 shadow-2xs"
+                            : "text-ink-500 hover:text-ink-800",
+                        )}
+                        title="Age in years"
+                      >
+                        yr
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleUnitChange(member, "months")}
+                        className={cn(
+                          "rounded px-1.5 py-0.5 text-[11px] font-medium transition-all",
+                          unit === "months"
+                            ? "bg-white font-semibold text-ink-900 shadow-2xs"
+                            : "text-ink-500 hover:text-ink-800",
+                        )}
+                        title="Age in months (for under 2-year-olds)"
+                      >
+                        mo
+                      </button>
+                    </div>
+                  </div>
+                </div>
 
                 {rows.length > 1 && (
                   <button
@@ -300,14 +435,30 @@ export function CastEditor({
               {needsAge && (
                 <div className="mt-2 flex items-center justify-between gap-2 pl-11 text-xs">
                   <span className="text-[11px] font-medium text-amber-700">
-                    Add {member.name.trim()}’s age for story reading level
+                    {member.name.trim()}’s age helps us write the book at the right level
                   </span>
                   <button
                     type="button"
-                    onClick={() => patch(member.id, { age: defaultAge })}
+                    onClick={() => {
+                      if (unit === "months") {
+                        const defaultMonths =
+                          defaultAge <= 1 ? (defaultAge === 0 ? 6 : 12) : defaultAge * 12;
+                        patch(member.id, {
+                          ageMonths: defaultMonths,
+                          age: Math.floor(defaultMonths / 12),
+                        });
+                      } else {
+                        patch(member.id, { age: defaultAge, ageMonths: undefined });
+                      }
+                    }}
                     className="inline-flex shrink-0 items-center gap-1 rounded-md bg-brand-50 px-2 py-0.5 text-[11px] font-semibold text-brand-700 transition hover:bg-brand-100 hover:text-brand-800"
                   >
-                    <span>Use age {defaultAge}</span>
+                    <span>
+                      Use{" "}
+                      {unit === "months"
+                        ? `${defaultAge <= 1 ? (defaultAge === 0 ? 6 : 12) : defaultAge * 12} mo`
+                        : `age ${defaultAge}`}
+                    </span>
                   </button>
                 </div>
               )}
@@ -459,6 +610,17 @@ export function CastEditor({
                   </button>
                 )}
               </div>
+            </div>
+            {i === 0 && audience && hasName && hasAge && (
+              <WrittenForPicker
+                ageRangeId={audience.ageRangeId}
+                readingModeId={audience.readingModeId}
+                linked={audience.linked}
+                sourceName={member.name}
+                sourceMonths={characterAgeMonths(member)}
+                onChange={audience.onChange}
+              />
+            )}
             </div>
           );
         })}

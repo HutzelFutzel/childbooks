@@ -40,8 +40,10 @@ import { checkStoryFit } from "../../books-frontend/src/core/pipeline/storyFit";
 import {
   briefBlockers,
   isBriefReady,
+  normalizeStoryBriefForCraft,
   storyBriefSchema,
 } from "../../books-frontend/src/core/story/brief";
+import { resolveStoryCraftFor } from "../../books-frontend/src/core/prompts/story";
 import { generateScreenplay } from "../../books-frontend/src/core/pipeline/screenplay";
 import { renderAnchor, type AnchorRunOptions } from "../../books-frontend/src/core/pipeline/anchorRun";
 import {
@@ -198,18 +200,22 @@ export function registerAiRoutes(app: Express): void {
         res.status(400).json({ error: { message: "That story brief isn't valid." } });
         return;
       }
-      const brief = parsed.data as StoryBrief;
-      if (brief.mode === "own") {
+      const parsedBrief = parsed.data as StoryBrief;
+      if (parsedBrief.mode === "own") {
         res.status(400).json({ error: { message: "This mode writes its own story." } });
         return;
       }
-      if (!isBriefReady(brief)) {
+      if (!isBriefReady(parsedBrief)) {
         res.status(400).json({
-          error: { message: briefBlockers(brief)[0] ?? "The story brief is incomplete." },
+          error: { message: briefBlockers(parsedBrief)[0] ?? "The story brief is incomplete." },
         });
         return;
       }
       const [model, prompts] = await Promise.all([resolveText("storyDraft"), loadPromptContext()]);
+      const brief = normalizeStoryBriefForCraft(
+        parsedBrief,
+        resolveStoryCraftFor(project.config.ageRangeId, prompts),
+      );
       const startedAt = Date.now();
       const { value, events, stats } = await withUsage(() =>
         generateStoryDraft({

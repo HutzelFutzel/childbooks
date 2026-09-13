@@ -9,6 +9,7 @@ export interface StorySnapshot {
   contentLocale: BookLanguageId | undefined;
   ageRangeId: string;
   readingModeId: BookConfig["readingModeId"];
+  audienceFromCast: BookConfig["audienceFromCast"];
 }
 
 export type StorySnapshotPatch = Partial<StorySnapshot>;
@@ -30,6 +31,7 @@ export function takeStorySnapshot(project: Project): StorySnapshot {
     contentLocale: project.config.contentLocale,
     ageRangeId: project.config.ageRangeId,
     readingModeId: project.config.readingModeId,
+    audienceFromCast: project.config.audienceFromCast,
   };
 }
 
@@ -56,6 +58,7 @@ export function storySnapshotsEqual(a: StorySnapshot, b: StorySnapshot): boolean
     a.contentLocale === b.contentLocale &&
     a.ageRangeId === b.ageRangeId &&
     a.readingModeId === b.readingModeId &&
+    a.audienceFromCast === b.audienceFromCast &&
     JSON.stringify(a.storyBrief) === JSON.stringify(b.storyBrief)
   );
 }

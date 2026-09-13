@@ -20,11 +20,27 @@ import {
   type StoryStructureRules,
 } from "./storyCraftCatalog";
 
+const STORY_CRAFT_ID_RE = /^[a-z0-9][a-z0-9-]*$/;
+
 const storyOptionSchema = z.object({
-  id: z.string().min(1).max(60),
+  id: z.string().min(1).max(60).regex(STORY_CRAFT_ID_RE),
   label: z.string().min(1).max(120),
   description: z.string().max(400),
   llmGuidance: z.string().max(2000),
+});
+
+const storyOptionListSchema = z.array(storyOptionSchema).max(40).superRefine((options, ctx) => {
+  const ids = new Set<string>();
+  options.forEach((option, index) => {
+    if (ids.has(option.id)) {
+      ctx.addIssue({
+        code: "custom",
+        message: `Duplicate story option id "${option.id}".`,
+        path: [index, "id"],
+      });
+    }
+    ids.add(option.id);
+  });
 });
 
 const structureSchema = z.object({
@@ -46,9 +62,9 @@ const safetySchema = z.object({
 });
 
 const bandSchema = z.object({
-  themes: z.array(storyOptionSchema).max(40).optional(),
-  devices: z.array(storyOptionSchema).max(40).optional(),
-  settings: z.array(storyOptionSchema).max(40).optional(),
+  themes: storyOptionListSchema.optional(),
+  devices: storyOptionListSchema.optional(),
+  settings: storyOptionListSchema.optional(),
   structure: structureSchema.optional(),
   protagonist: protagonistSchema.optional(),
   safety: safetySchema.optional(),
@@ -65,7 +81,10 @@ export interface StoryCraftConfig {
 
 export const storyCraftConfigSchema = z.object({
   version: z.literal(1),
-  bands: z.record(z.string(), bandSchema),
+  bands: z.record(
+    z.string().min(1).max(40).regex(STORY_CRAFT_ID_RE),
+    bandSchema,
+  ),
   updatedAt: z.number().optional(),
 });
 
@@ -80,6 +99,7 @@ export function normalizeStoryCraftConfig(input: unknown): StoryCraftConfig {
   // Any band id, not just the shipped ones: age bands are configuration now, so
   // a themes list curated for an admin-created band has to survive a round trip.
   for (const id of Object.keys(rawBands)) {
+    if (id.length > 40 || !STORY_CRAFT_ID_RE.test(id)) continue;
     const parsed = bandSchema.safeParse(rawBands[id]);
     // Drop an unparseable band rather than letting a bad doc break the studio —
     // the shipped catalog is always a working fallback.
@@ -123,7 +143,10 @@ function mergeSafety(base: StorySafetyRules, over?: StorySafetyRules): StorySafe
 }
 
 function mergeList(base: StoryOption[], over?: StoryOption[]): StoryOption[] {
-  return over && over.length > 0 ? over : base;
+  // An explicit empty array means "offer no curated choices". This matters for
+  // a custom band: admins must be able to remove every inherited/default item
+  // without the resolver silently putting the shipped list back.
+  return over ?? base;
 }
 
 /** Merge catalog defaults with optional Firestore overrides. */

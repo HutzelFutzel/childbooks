@@ -69,10 +69,22 @@ export const DEFAULT_TYPOGRAPHY: ResolvedTypography = {
     independent: 1.08,
   },
   bands: {
+    "0-11m": { minPt: 28, idealPt: 36, maxPt: 48, cplMin: 6, cplMax: 18 },
+    "12-23m": { minPt: 24, idealPt: 32, maxPt: 44, cplMin: 8, cplMax: 24 },
+    "2y": { minPt: 22, idealPt: 28, maxPt: 38, cplMin: 10, cplMax: 28 },
+    "3y": { minPt: 20, idealPt: 24, maxPt: 32, cplMin: 11, cplMax: 30 },
+    "4-5": { minPt: 18, idealPt: 22, maxPt: 30, cplMin: 12, cplMax: 34 },
+    "6-7": { minPt: 15, idealPt: 18, maxPt: 24, cplMin: 18, cplMax: 42 },
+    "8-9": { minPt: 13, idealPt: 16, maxPt: 20, cplMin: 24, cplMax: 50 },
+    "10-12": { minPt: 11, idealPt: 13, maxPt: 16, cplMin: 30, cplMax: 60 },
+    // Retired bands. Kept because a book stamped with one still lays itself out,
+    // and `nearestShippedBandId` only considers ids that have a row here.
     "0-2": { minPt: 24, idealPt: 32, maxPt: 44, cplMin: 8, cplMax: 24 },
     "3-5": { minPt: 18, idealPt: 22, maxPt: 30, cplMin: 12, cplMax: 34 },
     "6-8": { minPt: 14, idealPt: 17, maxPt: 22, cplMin: 20, cplMax: 45 },
     "9-12": { minPt: 11, idealPt: 13, maxPt: 16, cplMin: 30, cplMax: 60 },
+    "0-12m": { minPt: 28, idealPt: 36, maxPt: 48, cplMin: 6, cplMax: 18 },
+    "13-24m": { minPt: 24, idealPt: 32, maxPt: 44, cplMin: 8, cplMax: 24 },
   },
 };
 
@@ -84,14 +96,24 @@ export const DEFAULT_TYPOGRAPHY: ResolvedTypography = {
  * starting with oversized type when an age band's configured ideal is larger.
  */
 export const DEFAULT_BODY_FONT_SEED_CAP_PT: Record<AgeBandId, number> = {
+  "0-11m": 28,
+  "12-23m": 25,
+  "2y": 22,
+  "3y": 21,
+  "4-5": 20,
+  "6-7": 18,
+  "8-9": 18,
+  "10-12": 18,
   "0-2": 25,
   "3-5": 20,
   "6-8": 18,
   "9-12": 18,
+  "0-12m": 28,
+  "13-24m": 25,
 };
 
-const FALLBACK_BAND: FontBand = DEFAULT_TYPOGRAPHY.bands["3-5"];
-const FALLBACK_SEED_CAP_PT = DEFAULT_BODY_FONT_SEED_CAP_PT["3-5"];
+const FALLBACK_BAND: FontBand = DEFAULT_TYPOGRAPHY.bands["4-5"];
+const FALLBACK_SEED_CAP_PT = DEFAULT_BODY_FONT_SEED_CAP_PT["4-5"];
 
 /**
  * The shipped band whose readers are closest in age to `ageRangeId`.
@@ -104,7 +126,7 @@ const FALLBACK_SEED_CAP_PT = DEFAULT_BODY_FONT_SEED_CAP_PT["3-5"];
 function nearestShippedBandId(ageRangeId: string): AgeBandId {
   const profile = resolveAudienceProfile(ageRangeId, activeAudienceSource());
   const midpoint = (profile.minMonths + profile.maxMonths) / 2;
-  let best: AgeBandId = "3-5";
+  let best: AgeBandId = "4-5";
   let bestDistance = Number.POSITIVE_INFINITY;
   for (const candidate of DEFAULT_AUDIENCE_PROFILES) {
     if (!(candidate.id in DEFAULT_TYPOGRAPHY.bands)) continue;

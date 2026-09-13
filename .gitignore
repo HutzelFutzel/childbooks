@@ -34,4 +34,8 @@ pubsub-debug.log
 
 lulu-guides/
 
+# Seed documents emitted by `yarn check:audience --emit`. Generated from the
+# shipped catalogs, so committing them would create a second copy to drift.
+config/staging/
+
 .DS_Store

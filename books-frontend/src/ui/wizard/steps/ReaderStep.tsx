@@ -150,7 +150,7 @@ export function ReaderStep({ config, update }: StepProps) {
       config.readingModeId && next.readingModes.includes(config.readingModeId as ReadingModeId)
         ? (config.readingModeId as ReadingModeId)
         : next.readingModes[0] ?? null;
-    update({ ageRangeId: ageId, readingModeId: carried });
+    update({ ageRangeId: ageId, readingModeId: carried, audienceFromCast: "custom" });
   };
 
   const adaptNote = adaptCopy({
@@ -165,8 +165,8 @@ export function ReaderStep({ config, update }: StepProps) {
       {adaptNote && <StepNote>{adaptNote}</StepNote>}
 
       <div className="grid items-start gap-8 md:grid-cols-2">
-        <ChoiceSection label="Age">
-          <ChoiceGrid aria-label="Reader age" columns={2}>
+        <ChoiceSection label="Who is this book for">
+          <ChoiceGrid aria-label="Who is this book for" columns={2}>
             {ageBands.map((age) => (
               <ChoiceTile
                 key={age.id}

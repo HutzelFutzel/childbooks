@@ -1,7 +1,6 @@
 /**
- * Focused Story workspace. First-run walks Reader → Story in one compact
- * wayfinder; art style is the next blocking decision unless character artwork
- * already supplies the book’s look.
+ * Focused Story workspace. First-run opens on the story so the first child's
+ * age can preselect who the book is for; Audience stays one tap away.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -56,6 +55,7 @@ export function StoryWorkspace() {
       storyPatch.ageRangeId = patch.ageRangeId;
     }
     if ("readingModeId" in patch) storyPatch.readingModeId = patch.readingModeId;
+    if ("audienceFromCast" in patch) storyPatch.audienceFromCast = patch.audienceFromCast;
     void updateStory(storyPatch, options);
   };
   const ready = config ? storyConfigSchema.safeParse(config).success : false;
@@ -65,14 +65,10 @@ export function StoryWorkspace() {
     [config],
   );
 
-  const [topicId, setTopicId] = useState<TopicId>(() => {
-    if (!firstRun || !config) return "story";
-    const reader = topics.find((candidate) => candidate.id === "reader");
-    return reader?.isAnswered(config) ? "story" : (reader?.id ?? "reader");
-  });
+  const [topicId, setTopicId] = useState<TopicId>("story");
   const [storyToolsOpen, setStoryToolsOpen] = useState(false);
   // Furthest guided index reached — review mode unlocks everything.
-  const [furthest, setFurthest] = useState(0);
+  const [furthest, setFurthest] = useState(1);
   const [finishing, setFinishing] = useState(false);
   const alive = useRef(true);
   useEffect(() => {
@@ -395,7 +391,7 @@ function StoryTopicNav({
 function stripTitle(q: GuidedQuestion): string {
   switch (q.id) {
     case "reader":
-      return "Reader";
+      return "Audience";
     case "story":
       return "Story";
     default:

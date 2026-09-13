@@ -457,6 +457,7 @@ function applyStorySnapshot(project: Project, snapshot: StorySnapshot): Project 
       contentLocale: snapshot.contentLocale,
       ageRangeId: snapshot.ageRangeId,
       readingModeId: snapshot.readingModeId,
+      audienceFromCast: snapshot.audienceFromCast,
     },
   };
 }

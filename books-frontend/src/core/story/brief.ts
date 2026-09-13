@@ -32,6 +32,7 @@ const storyCastMemberSchema = z.object({
   name: z.string().max(80),
   role: z.string().max(200).optional(),
   age: z.number().int().min(0).max(120).optional(),
+  ageMonths: z.number().int().min(0).max(1200).optional(),
   note: z.string().max(500).optional(),
   lookFromArt: z.string().max(500).optional(),
   likenessPhoto: likenessPhotoSchema.optional(),
@@ -49,7 +50,7 @@ export const storyBriefSchema = z.object({
   themeId: z.string().max(60).nullable().optional(),
   customTheme: z.string().max(500).optional(),
   deviceId: z.string().max(60).nullable().optional(),
-  deviceIds: z.array(z.string().max(60)).max(10).optional(),
+  deviceIds: z.array(z.string().max(60)).max(2).optional(),
   customDevice: z.string().max(500).optional(),
   settingId: z.string().max(60).nullable().optional(),
   customSetting: z.string().max(500).optional(),
@@ -69,6 +70,40 @@ export function createDefaultStoryBrief(mode: StoryMode): StoryBrief {
   return { mode, themeId: null, deviceId: null, settingId: null };
 }
 
+/**
+ * Keep catalog selections valid for the book's current age band.
+ *
+ * A band change, option deletion, or forged request may leave ids from another
+ * catalog in a persisted brief. Unknown ids are removed rather than reaching a
+ * prompt, duplicate devices collapse, and the product's two-device limit is
+ * enforced independently of the UI.
+ */
+export function normalizeStoryBriefForCraft(
+  brief: StoryBrief,
+  craft: Pick<AgeBandStoryCraft, "themes" | "devices" | "settings">,
+): StoryBrief {
+  const themeIds = new Set(craft.themes.map((option) => option.id));
+  const deviceIds = new Set(craft.devices.map((option) => option.id));
+  const settingIds = new Set(craft.settings.map((option) => option.id));
+  const requestedDevices =
+    brief.deviceIds && brief.deviceIds.length > 0
+      ? brief.deviceIds
+      : brief.deviceId
+        ? [brief.deviceId]
+        : [];
+  const validDevices = requestedDevices
+    .filter((id, index, all) => deviceIds.has(id) && all.indexOf(id) === index)
+    .slice(0, 2);
+
+  return {
+    ...brief,
+    themeId: brief.themeId && themeIds.has(brief.themeId) ? brief.themeId : null,
+    deviceId: validDevices[0] ?? null,
+    deviceIds: validDevices,
+    settingId: brief.settingId && settingIds.has(brief.settingId) ? brief.settingId : null,
+  };
+}
+
 /** The brief for a config, defaulting to guided mode for older projects. */
 export function briefOf(config: { storyBrief?: StoryBrief }): StoryBrief {
   return config.storyBrief ?? createDefaultStoryBrief("guided");
@@ -84,6 +119,33 @@ export function newCastMember(): StoryCastMember {
 /** Cast members with an actual name, in order. */
 export function namedCast(brief: StoryBrief): StoryCastMember[] {
   return (brief.cast ?? []).filter((c) => c.name.trim().length > 0);
+}
+
+export function hasCharacterAge(
+  member: Pick<StoryCastMember, "age" | "ageMonths">,
+): boolean {
+  return member.age !== undefined || member.ageMonths !== undefined;
+}
+
+/** Months for audience matching: explicit months, otherwise years × 12. */
+export function characterAgeMonths(
+  member: Pick<StoryCastMember, "age" | "ageMonths">,
+): number | undefined {
+  if (member.ageMonths !== undefined) return member.ageMonths;
+  if (member.age !== undefined) return member.age * 12;
+  return undefined;
+}
+
+/**
+ * The first named person is the hero the book is for. Their age, when set,
+ * is the only character that may preselect the audience band.
+ */
+export function audienceSourceCharacter(
+  cast: StoryCastMember[] | undefined,
+): StoryCastMember | undefined {
+  const first = (cast ?? []).find((person) => person.name.trim().length > 0);
+  if (!first || !hasCharacterAge(first)) return undefined;
+  return first;
 }
 
 /**
@@ -125,11 +187,11 @@ export function isBriefReady(brief: StoryBrief): boolean {
   switch (brief.mode) {
     case "guided": {
       const heroes = namedCast(brief);
-      return heroes.length > 0 && heroes.every((hero) => hero.age !== undefined);
+      return heroes.length > 0 && heroes.every((hero) => hasCharacterAge(hero));
     }
     case "co-write": {
       const cast = namedCast(brief);
-      return cast.length > 0 && cast[0]?.age !== undefined && Boolean(brief.occasion?.trim());
+      return cast.length > 0 && hasCharacterAge(cast[0]!) && Boolean(brief.occasion?.trim());
     }
     case "own":
       return false;
@@ -144,7 +206,7 @@ export function briefBlockers(brief: StoryBrief): string[] {
     if (heroes.length === 0) {
       out.push("Add the name of at least one child this book is for.");
     } else {
-      const missingAge = heroes.filter((hero) => hero.age === undefined);
+      const missingAge = heroes.filter((hero) => !hasCharacterAge(hero));
       if (missingAge.length === 1) {
         out.push(`Add ${missingAge[0]?.name}’s age to create the story.`);
       } else if (missingAge.length > 1) {
@@ -157,7 +219,7 @@ export function briefBlockers(brief: StoryBrief): string[] {
     if (cast.length === 0) {
       out.push("Add at least one person the story is about.");
     } else {
-      const missingAge = cast.filter((hero) => hero.age === undefined);
+      const missingAge = cast.filter((hero) => !hasCharacterAge(hero));
       if (missingAge.length > 0) {
         out.push(`Add ${missingAge[0]?.name ?? "the main character"}’s age to create the story.`);
       }
@@ -183,7 +245,11 @@ export function heroesLine(brief: StoryBrief): string {
     people.map((person) => [
       person.name.trim().toLowerCase(),
       [
-        person.age !== undefined ? `${person.age} years old` : "",
+        person.ageMonths !== undefined && (person.ageMonths < 24 || person.ageMonths % 12 !== 0)
+          ? `${person.ageMonths} months old`
+          : person.age !== undefined
+            ? `${person.age} ${person.age === 1 ? "year" : "years"} old`
+            : "",
         person.note?.trim() ?? "",
       ].filter(Boolean),
     ]),
@@ -236,7 +302,8 @@ export function storyBriefSignature(
     brief.where?.trim() ?? "",
     brief.mustInclude?.trim() ?? "",
     ...namedCast(brief).map(
-      (c) => `${c.name.trim()}|${c.role?.trim() ?? ""}|${c.age ?? ""}|${c.note?.trim() ?? ""}`,
+      (c) =>
+        `${c.name.trim()}|${c.role?.trim() ?? ""}|${c.age ?? ""}|${c.ageMonths ?? ""}|${c.note?.trim() ?? ""}`,
     ),
   ];
   return parts.join("\u0001");
@@ -287,9 +354,16 @@ export function briefSummary(brief: StoryBrief, craft: AgeBandStoryCraft): strin
 export function castPromptLines(brief: StoryBrief): string {
   return namedCast(brief)
     .map((c) => {
+      const isMonth =
+        c.ageMonths !== undefined && (c.ageMonths < 24 || c.ageMonths % 12 !== 0);
+      const ageStr = isMonth
+        ? `${c.ageMonths} months old`
+        : c.age != null
+          ? `${c.age} ${c.age === 1 ? "year" : "years"} old`
+          : "";
       const bits = [
         c.role?.trim(),
-        c.age != null ? `${c.age} years old` : "",
+        ageStr,
         c.lookFromArt?.trim(),
         c.note?.trim(),
       ].filter(Boolean);
