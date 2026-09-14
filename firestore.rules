@@ -58,6 +58,23 @@ service cloud.firestore {
     match /users/{uid}/jobs/{jobId} {
       allow write: if signedInAs(uid);
     }
+    // The guided studio's transcript (one doc per turn, `projectId`-tagged).
+    // Readable by its owner through the `users/{uid}/**` rule above; writes are
+    // backend-only, like the story-revision records next to it.
+    //
+    // The transcript is EVIDENCE of what the guide asked and what the reader
+    // answered, and every turn carries the structured facts an interpretation
+    // produced. A client that could write here could therefore state a fact the
+    // guide never derived — so turns are appended by the route that ran the
+    // interpretation, and the book itself remains the only source of truth a
+    // client can affect (through the normal project write, which is validated).
+    // The top-level deny-all already covers this; spelled out so nobody adds a
+    // permissive rule here by reflex when the client wants to render faster.
+    match /users/{uid}/guideTurns/{turnId} {
+      allow read: if signedInAs(uid);
+      allow write: if false;
+    }
+
     // Per-task docs are read by the owner (also via the project-scoped
     // collection-group query, which needs a rule that authorizes by the doc's
     // own `uid` field — the path wildcard can't be correlated to a field filter

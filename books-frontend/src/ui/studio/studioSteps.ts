@@ -7,8 +7,11 @@
  * character and place has a consistent look before page art is created.
  */
 import type { Project } from "../../core/types";
-import { currentAnchorImage } from "../../state/ai";
-import { illustrationUnits } from "../../state/bookUnits";
+// Imported from core rather than through the `state/` re-exports these used to
+// come from: both are pure functions, and routing on them from core only lets
+// the offline checker bundle this module without dragging in Firebase.
+import { currentAnchorImage } from "../../core/pipeline/provenance";
+import { illustrationUnits } from "../../core/book/units";
 import { unitIsDone } from "../../core/book/pageCompletion";
 
 /** Concrete stage shown in the workspace. */
@@ -138,9 +141,9 @@ export function computeProgress(project: Project): StudioProgress {
     edit: pages,
     design,
     order: {
-      // Reveal Review only after the reader has completed the first Pages
-      // setup and reached the canvas. Purchasing performs the stricter per-page
-      // readiness check inside the order stage.
+      // Reveal Review only once the reader has actually reached their pages
+      // (`designReady`). Purchasing performs the stricter per-page readiness
+      // check inside the order stage.
       unlocked: pages.unlocked && project.config.designReady === true,
       done: false,
       ratio: 0,

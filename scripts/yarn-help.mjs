@@ -28,6 +28,7 @@ const ROOT_DESCRIPTIONS = {
   "check:geo": "Assert country inference does not stamp English-UI visitors as US (offline)",
   "check:coupons": "Assert the coupon restriction/cap/stacking invariants hold (offline)",
   "check:story-analysis": "Assert story-analysis merge/scope invariants hold (offline)",
+  "check:guide": "Assert the guided-studio rollout cannot leak + legacy manifest is honest (offline)",
   deploy: "Build + deploy backend, rules, indexes, storage (+ optional --web)",
   "deploy:functions": "Build functions only, then firebase deploy --only functions",
   "deploy:rules": "Deploy Firestore rules/indexes and Storage rules only",

@@ -35,6 +35,7 @@
     "check:book-fonts": "node scripts/check-book-fonts.mjs",
     "check:generation": "node scripts/check-generation-tuning.mjs",
     "check:story-analysis": "node scripts/check-story-analysis.mjs",
+    "check:guide": "node scripts/check-guide.mjs",
     "deploy": "node scripts/deploy.mjs",
     "setSecrets": "node scripts/set-secrets.mjs",
     "setSecrets:status": "node scripts/set-secrets.mjs status",

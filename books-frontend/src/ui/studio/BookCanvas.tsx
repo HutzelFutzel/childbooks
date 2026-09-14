@@ -76,6 +76,14 @@ import {
 } from "./SpreadEditor";
 import { activeSurfaceFor } from "./surfaceCapabilities";
 
+/**
+ * Books whose flip-through has already been offered on arrival this session.
+ * Module-scoped rather than component state on purpose: leaving Pages unmounts
+ * the canvas, and the offer is meant to happen once per book per session, not
+ * once per mount.
+ */
+const autoPreviewedBookIds = new Set<string>();
+
 const SCREENPLAY_PHASES: PipelinePhase[] = [
   { id: "cast", label: "Casting characters & places", icon: Users },
   { id: "write", label: "Writing the page-by-page screenplay", icon: BookText },
@@ -166,6 +174,25 @@ export function BookCanvas() {
     () => (doc ? buildDisplaySpreads(doc, entries) : []),
     [doc, entries],
   );
+
+  // Preview-first: a finished book opens AS a book. The editor is still one tap
+  // away — closing the preview lands on it — but it is no longer what the reader
+  // arrives in.
+  //
+  // Decided once, the first time this book has spreads to show, and only when
+  // every illustration is already there: a book that is still rendering belongs
+  // on the canvas, where the progress and the next action are, and a page that
+  // finishes while the reader is editing must never throw a full-screen preview
+  // over their work.
+  const gen = useBookGeneration();
+  const autoPreviewDecided = useRef(false);
+  useEffect(() => {
+    if (autoPreviewDecided.current || displays.length === 0) return;
+    autoPreviewDecided.current = true;
+    if (autoPreviewedBookIds.has(project.id)) return;
+    autoPreviewedBookIds.add(project.id);
+    if (gen.everythingDone) setPreviewing(true);
+  }, [displays.length, gen.everythingDone, project.id]);
 
   // `editingDispId` doubles as "the spread currently open in the main stage" —
   // there's no separate review mode any more, so this is just page navigation.

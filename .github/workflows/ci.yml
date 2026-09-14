@@ -70,6 +70,13 @@ jobs:
       - name: Check coupon invariants
         run: yarn check:coupons
 
+      # Two things typechecking can't see while the chat-guided studio is being
+      # built beside the wizard: a rollout document whose absence or corruption
+      # would put a paying customer in an unfinished flow, and a legacy manifest
+      # that has drifted from the code it is supposed to be the delete-list for.
+      - name: Check guide rollout invariants
+        run: yarn check:guide
+
       # App Hosting applies apphosting.yaml's env when it builds; a bare
       # `yarn build:web` here would not, and NEXT_PUBLIC_* are inlined at build
       # time. Load them so this really is the same build production gets.

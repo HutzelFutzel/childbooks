@@ -53,6 +53,7 @@ import {
   studioPath,
   type StudioDestination,
 } from "@/ui/studio/studioRoutes";
+import { useGuidePlaylist } from "@/ui/guide/useGuideMode";
 
 export default function StudioApp() {
   const router = useRouter();
@@ -101,6 +102,10 @@ export default function StudioApp() {
   const openConfirmation = useCheckoutUiStore((s) => s.openConfirmation);
   const [projectsOwnerUid, setProjectsOwnerUid] = useState<string | null>(null);
   const rejectedBookRef = useRef<string | null>(null);
+  // Null for everyone on the wizard, which is everyone until an admin opts in.
+  // When set, the guide engine picks the default landing destination instead of
+  // the wizard's own precedence — see ui/studio/guideRouting.ts.
+  const guidePlaylist = useGuidePlaylist(route.kind === "project" ? route.bookId : null);
 
   useEffect(() => {
     initAuth();
@@ -166,8 +171,8 @@ export default function StudioApp() {
     rejectedBookRef.current = null;
     if (currentId !== project.id) openProject(project.id);
 
-    const requested = route.destination ?? defaultDestination(project);
-    const allowed = fallbackDestination(project, requested);
+    const requested = route.destination ?? defaultDestination(project, guidePlaylist);
+    const allowed = fallbackDestination(project, requested, guidePlaylist);
     if (route.destination !== allowed) {
       // Keep the query: a Stripe return can land on a destination this book
       // isn't eligible for, and rewriting the path bare would throw away the
@@ -179,6 +184,7 @@ export default function StudioApp() {
     accessLevel,
     closeProject,
     currentId,
+    guidePlaylist,
     openProject,
     projects,
     projectsLoaded,
@@ -437,7 +443,8 @@ export default function StudioApp() {
     route.kind === "project" && routedProject
       ? fallbackDestination(
           routedProject,
-          route.destination ?? defaultDestination(routedProject),
+          route.destination ?? defaultDestination(routedProject, guidePlaylist),
+          guidePlaylist,
         )
       : null;
   const inProject =

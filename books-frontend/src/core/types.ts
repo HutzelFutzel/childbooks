@@ -230,11 +230,15 @@ export interface BookConfig {
    */
   compositionMode?: CompositionMode;
   /**
-   * Whether the reader has confirmed the physical book setup (size / format /
-   * layout) in the Design step at least once. Until then, entering Design shows
-   * the guided setup intro; afterwards it opens straight to the canvas and the
-   * setup is reachable as a summary. Optional so older projects default to the
-   * intro on their next Design visit.
+   * Whether the reader has reached the Pages step. Set on arrival, because the
+   * physical setup (size, layout) now ships with working defaults and no longer
+   * has to be answered before the pages can be seen; it is edited from the Setup
+   * panel instead, whenever the reader wants to.
+   *
+   * Kept as a flag rather than dropped: Review & Order still opens only after the
+   * pages exist, and this is what records that. Optional so older projects — the
+   * ones that stopped at the old setup gate — are simply marked on their next
+   * visit.
    */
   designReady?: boolean;
   /**

@@ -50,6 +50,10 @@ import {
   type StoryCraftConfig,
 } from "../../books-frontend/src/core/config/storyCraft";
 import {
+  normalizeGuideConfig,
+  type GuideConfig,
+} from "../../books-frontend/src/core/config/guide";
+import {
   normalizeTypographyConfig,
   typographyConfigSchema,
   type TypographyConfig,
@@ -253,6 +257,7 @@ const IMAGE_MASKS_DOC = "appConfig/imageMasks";
 const AGE_WRITING_DOC = "appConfig/ageWriting";
 const AUDIENCE_DOC = "appConfig/audience";
 const STORY_CRAFT_DOC = "appConfig/storyCraft";
+const GUIDE_DOC = "appConfig/guide";
 const TYPOGRAPHY_DOC = "appConfig/typography";
 const BOOK_LANGUAGES_DOC = "appConfig/bookLanguages";
 const MODEL_COSTS_DOC = "appConfig/modelCosts";
@@ -369,6 +374,15 @@ export function getStoryCraftConfig(): Promise<StoryCraftConfig> {
 }
 export function getBookLanguagesConfig(): Promise<BookLanguagesConfig> {
   return readDoc(BOOK_LANGUAGES_DOC, normalizeBookLanguagesConfig);
+}
+/**
+ * The guide rollout. Read on the SERVER as well as the client because a route
+ * that does guide-only work must decide from the rollout itself, not from a
+ * flag the caller sent: `resolveGuideMode` is shared for exactly that reason.
+ * Absent document ⇒ the shipped `adminOnly` default.
+ */
+export function getGuideConfig(): Promise<GuideConfig> {
+  return readDoc(GUIDE_DOC, normalizeGuideConfig);
 }
 /** Once-per-instance guard for the projection backfill below. */
 let modelCostsProjectionEnsured = false;

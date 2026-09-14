@@ -425,8 +425,9 @@ interface StudioContextValue {
   openSetup: () => void;
 
   /**
-   * Whether the Design step is showing its first-time book-setup gate rather
-   * than the canvas. After designReady, Setup reopens as a docked side panel.
+   * @legacy guide-v2 — the full-page book-setup gate. Nothing opens it any more:
+   * Pages opens on the book, and size/layout are edited in the docked Setup
+   * panel. Kept until the legacy studio is removed; see docs/LEGACY-GUIDE.md.
    */
   designSetupOpen: boolean;
   openDesignSetup: () => void;
@@ -889,7 +890,7 @@ export function StudioProvider({
           if (progress.edit.unlocked && live.config.designReady !== true) {
             notify.info(
               "Open Pages first",
-              "Confirm the page setup and open the book before reviewing it.",
+              "Open your book's pages before reviewing it.",
             );
           } else {
             notify.info(
@@ -934,19 +935,14 @@ export function StudioProvider({
   }, []);
 
   /**
-   * First-time gate uses the full-page flow; later visits toggle the docked
-   * Setup panel (same control opens and closes).
+   * Book setup is one control that opens and closes the docked Setup panel.
+   * There is no first-visit variant anymore: size and layout ship with working
+   * defaults, so Pages opens on the book and this is simply where either gets
+   * changed.
    */
   const openDesignSetup = useCallback(() => {
-    const ready =
-      useProjectsStore.getState().projects.find((p) => p.id === project.id)?.config.designReady ??
-      project.config.designReady;
-    if (!ready) {
-      setDesignSetupOpen(true);
-      return;
-    }
     useStudioPanelStore.getState().toggleToolPanel("setup");
-  }, [project.id, project.config.designReady]);
+  }, []);
 
   // Entering/leaving focused edit clears element selection so the inspector
   // never shows controls for an element whose editor is no longer on screen.

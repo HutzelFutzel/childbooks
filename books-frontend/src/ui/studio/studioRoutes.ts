@@ -1,6 +1,8 @@
 import type { Project } from "../../core/types";
+import type { ResolvedGuideComponent } from "../../core/guide/playlist";
 import type { StudioStep } from "./studioSteps";
 import { computeProgress, initialStep } from "./studioSteps";
+import { guideDestination } from "./guideRouting";
 
 export const STUDIO_DESTINATIONS = ["story", "style", "cast", "pages", "order"] as const;
 
@@ -39,7 +41,26 @@ export function studioPath(bookId: string, destination: StudioDestination): stri
   return `/studio/${encodeURIComponent(bookId)}/${destination}`;
 }
 
-export function defaultDestination(project: Project): StudioDestination {
+/**
+ * Where a book opens when the route doesn't say.
+ *
+ * `guidePlaylist` is the flag: pass the resolved playlist and the guide engine
+ * chooses; pass nothing (every caller on the legacy flow) and the wizard's own
+ * precedence decides, byte for byte as before.
+ *
+ * The engine's answer is only taken if the reader has already unlocked it. That
+ * check belongs here rather than at the call site because this function is also
+ * the last resort of {@link fallbackDestination} — if it could name a locked
+ * screen, the clamp would have nothing left to clamp to.
+ */
+export function defaultDestination(
+  project: Project,
+  guidePlaylist?: readonly ResolvedGuideComponent[] | null,
+): StudioDestination {
+  if (guidePlaylist && guidePlaylist.length > 0) {
+    const chosen = guideDestination(project, guidePlaylist);
+    if (chosen && destinationUnlocked(project, chosen)) return chosen;
+  }
   const step = initialStep(project);
   if (step === "story") return "story";
   if (step === "anchors") {
@@ -74,9 +95,10 @@ export function destinationUnlocked(project: Project, destination: StudioDestina
 export function fallbackDestination(
   project: Project,
   requested: StudioDestination,
+  guidePlaylist?: readonly ResolvedGuideComponent[] | null,
 ): StudioDestination {
   if (destinationUnlocked(project, requested)) return requested;
   if (project.stage === "setup") return "story";
   if (project.config.styleReady === false) return "style";
-  return defaultDestination(project);
+  return defaultDestination(project, guidePlaylist);
 }

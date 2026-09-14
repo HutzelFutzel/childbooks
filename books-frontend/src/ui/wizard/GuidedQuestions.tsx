@@ -58,12 +58,17 @@ export interface GuidedQuestionsProps {
 }
 
 /**
- * A beautiful step-by-step question flow with a hub/summary mode.
+ * A step-by-step question flow with a hub/summary mode.
  *
  * - Guided mode presents one question after another with a live progress rail
  *   you can use to jump back to any answered question.
  * - Review mode presents a summary hub (answers + jump-to-edit), the
  *   "hub and spoke" pattern: land on the hub, edit one spoke, return.
+ *
+ * @legacy guide-v2 — this COMPONENT is superseded: in the guided studio the chat
+ * asks the questions and the answer lands on the same `BookConfig`. The
+ * {@link GuidedQuestion} type above is NOT legacy — it stays as the description
+ * of a topic and its summary, which both flows need. See docs/LEGACY-GUIDE.md.
  */
 export function GuidedQuestions({
   questions,

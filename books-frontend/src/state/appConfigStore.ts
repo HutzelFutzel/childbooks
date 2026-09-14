@@ -63,6 +63,11 @@ import {
   type BookLanguagesConfig,
 } from "../core/config/bookLanguages";
 import {
+  createDefaultGuideConfig,
+  normalizeGuideConfig,
+  type GuideConfig,
+} from "../core/config/guide";
+import {
   createDefaultModelCostTable,
   normalizeModelCostTable,
   type ModelCostTable,
@@ -567,6 +572,13 @@ interface AppConfigState {
   /** Admin-editable LLM prompt templates. */
   prompts: PromptsConfig;
   /**
+   * Which studio flow readers get (the wizard, or the chat-guided studio). The
+   * document is absent until an admin changes the rollout, so this is the shipped
+   * `adminOnly` default for as long as the new flow is being built —
+   * see `core/config/guide.ts` and `core/guide/mode.ts`.
+   */
+  guide: GuideConfig;
+  /**
    * System + marketing email config (senders, toggles, footer). Admin-only —
    * it holds the support inbox and contact recipient, so it is NOT part of the
    * public snapshot set; call {@link loadEmailConfig} to populate it.
@@ -1004,6 +1016,7 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   siteContent: createDefaultSiteContentConfig(),
   catalogMedia: createDefaultCatalogMediaConfig(),
   prompts: createDefaultPromptsConfig(),
+  guide: createDefaultGuideConfig(),
   emailConfig: createDefaultEmailConfig(),
   emailStats: createDefaultEmailStats(),
   slackConfig: createDefaultSlackConfig(),
@@ -1150,6 +1163,11 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       }),
       onSnapshot(doc(db, "appConfig", "prompts"), (snap) => {
         set({ prompts: normalizePromptsConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      // Subscribed rather than fetched once: reverting the rollout has to reach
+      // an open studio without waiting for a reload.
+      onSnapshot(doc(db, "appConfig", "guide"), (snap) => {
+        set({ guide: normalizeGuideConfig(snap.exists() ? snap.data() : undefined) });
       }),
       // NOTE: `emailConfig` is deliberately NOT subscribed here. It holds the
       // support inbox, the contact recipient and every sender identity, so it

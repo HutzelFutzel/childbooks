@@ -6,14 +6,13 @@ import { DESIGN_QUESTIONS } from "../wizard/designQuestions";
 import { useStudio } from "./StudioContext";
 
 /**
- * The book-setup gate for the Design step: the physical choices the page layout
- * has to be built on, asked before the page canvas opens, and a summary hub on return.
- * Confirming sets `designReady`, so subsequent visits open straight to the
- * canvas and this becomes reachable as a summary from the toolbar.
+ * @legacy guide-v2 — the full-page book-setup gate that used to stand between
+ * the reader and their pages. Superseded: size and layout ship with working
+ * defaults, Pages opens on the book, and the same two pickers are in the docked
+ * Setup panel (`DockSetupPanel`) for whenever the reader wants them.
  *
- * Today that's the page size and the structural layout. Everything else about
- * the printed object — binding, print tier, paper, cover finish — leaves the
- * pages untouched and is asked at checkout instead.
+ * Nothing routes here anymore. Kept until the legacy studio is removed so the
+ * change is one reversible commit; listed in docs/LEGACY-GUIDE.md.
  */
 export function DesignSetup() {
   const { closeDesignSetup } = useStudio();
