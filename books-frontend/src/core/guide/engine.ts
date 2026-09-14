@@ -17,6 +17,7 @@
  */
 import { isComponentSatisfied, type GuideComponentId } from "./components";
 import type { ResolvedGuideComponent } from "./playlist";
+import type { GuideSlotId } from "./slots";
 import type { Project } from "../types";
 
 export type GuideCursorStatus = "ask" | "blocked" | "done";
@@ -117,6 +118,38 @@ export function guideProgress(
     skipped: skippedCount,
     ratio: total === 0 ? 0 : satisfied / total,
   };
+}
+
+/**
+ * The facts the conversation has actually got to, in the order it got to them.
+ *
+ * The facts strip needs this rather than "every slot with a value", because most of
+ * the book's configuration ships with a working default — that is what makes the
+ * pages open as a book at all. A strip built from whatever is non-empty therefore
+ * announces "Layout: text on the outer edge" to a reader who has not been asked a
+ * single question yet, which is not a summary of what they told us; it is a summary
+ * of our defaults wearing their voice. Two questions in, it is also most of the pane.
+ *
+ * So coverage is positional: a slot counts once the guide has reached the component
+ * that owns it. Every slot is owned by exactly one component (proven in
+ * `scripts/guide-engine-invariants.ts`), so this is total, and it reads in playlist
+ * order because that is the order the reader discussed them in.
+ */
+export function coveredGuideSlots(
+  playlist: readonly ResolvedGuideComponent[],
+  project: Project,
+  skipped: Iterable<GuideComponentId> = [],
+): GuideSlotId[] {
+  const active = nextGuideStep(playlist, project, skipped).component?.id ?? null;
+  const covered: GuideSlotId[] = [];
+  for (const component of playlist) {
+    for (const slot of component.slots) {
+      if (!covered.includes(slot)) covered.push(slot);
+    }
+    // Inclusive: the active component's own facts are the ones being discussed.
+    if (component.id === active) break;
+  }
+  return covered;
 }
 
 /**

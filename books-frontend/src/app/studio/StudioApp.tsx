@@ -54,6 +54,8 @@ import {
   type StudioDestination,
 } from "@/ui/studio/studioRoutes";
 import { useGuidePlaylist } from "@/ui/guide/useGuideMode";
+import { GuideModeToggle } from "@/ui/guide/GuideModeToggle";
+import { useGuideStore } from "@/state/guideStore";
 
 export default function StudioApp() {
   const router = useRouter();
@@ -100,6 +102,7 @@ export default function StudioApp() {
   const closeInvite = useAccountUiStore((s) => s.closeInvite);
   const openInvite = useAccountUiStore((s) => s.openInvite);
   const openConfirmation = useCheckoutUiStore((s) => s.openConfirmation);
+  const closeGuide = useGuideStore((s) => s.close);
   const [projectsOwnerUid, setProjectsOwnerUid] = useState<string | null>(null);
   const rejectedBookRef = useRef<string | null>(null);
   // Null for everyone on the wizard, which is everyone until an admin opts in.
@@ -193,6 +196,14 @@ export default function StudioApp() {
     router,
     uid,
   ]);
+
+  // Drop the guided studio's conversation whenever no book is open. Changing
+  // identity closes the project first, so this covers a guest→account switch too:
+  // a transcript is one reader's own words and must never survive into another's
+  // session, even for the moment before the new one loads.
+  useEffect(() => {
+    if (!currentId) closeGuide();
+  }, [currentId, closeGuide]);
 
   // Track (and reconcile) the open project's generation jobs. This surfaces
   // background progress and applies results that finished while away.
@@ -494,6 +505,7 @@ export default function StudioApp() {
         contextLabel={inProject ? currentTitle : undefined}
         right={
           <>
+            {inProject && <GuideModeToggle bookId={route.kind === "project" ? route.bookId : null} />}
             {accessLevel !== "loading" && sparksEnabled && <SparksBadge />}
             <HelpButton />
             <AuthMenu />
@@ -527,6 +539,7 @@ export default function StudioApp() {
           <ProjectWorkspace
             destination={activeDestination}
             onNavigate={navigateStudio}
+            guidePlaylist={guidePlaylist}
           />
         ) : (
           <Dashboard />

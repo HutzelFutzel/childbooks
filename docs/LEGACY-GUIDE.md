@@ -47,11 +47,19 @@ one instead.
 | --- | --- | --- | --- |
 | Full-page book-setup gate | `books-frontend/src/ui/studio/DesignSetup.tsx` | Shipped size/layout defaults + the docked Setup panel (`books-frontend/src/ui/studio/DockSetupPanel.tsx`). Nothing routes here as of phase 1. | Now unreachable; delete together with the `designSetupOpen` state in `books-frontend/src/ui/studio/StudioContext.tsx`. Safe once no project can still be mid-gate — i.e. after one release, since `designReady` is set on arrival at Pages. |
 | The guided-question flow | `books-frontend/src/ui/wizard/GuidedQuestions.tsx` | The chat itself asks the questions. Note: only the *component* is superseded — the `GuidedQuestion` type still describes the story and design topic lists and stays. | The guide owns every question the studio asks (phase 6). |
-| Engine → wizard destination bridge | `books-frontend/src/ui/studio/guideRouting.ts` | Nothing — it is scaffolding. It translates the engine's chosen component into a wizard destination so the engine can be exercised against real books before the chat surface exists. | The wizard's destinations are gone (phase 9). The `legacyDestination` field on every component in `books-frontend/src/core/guide/components.ts` goes with it. |
+| Engine → wizard destination bridge | `books-frontend/src/ui/studio/guideRouting.ts` | Nothing — it is scaffolding. It translates the engine's chosen component into a wizard destination so the engine can be exercised against real books before the chat surface exists. | The wizard's destinations are gone (phase 9). The `legacyDestination` field on every component in `books-frontend/src/core/guide/components.ts` goes with it, as does the `chrome` prop on `books-frontend/src/ui/studio/StudioWorkspace.tsx` — the guide passes `"bare"` to suppress the wizard's step rail, and with one flow left there is nothing to choose between. (Not marked: the workspace itself stays. Only the prop goes.) |
 
 ## Phases
 
 Phase 0 (foundations), phase 1 (preview-first Pages), phase 2 (the state model:
-catalog, playlist, engine, patch) and phase 3 (the interpreter: free text in, facts
-out) have landed. Phases 4–9 build the guide itself; nothing in the Retire table can
-be deleted before phase 9, and phase 9 is not done until this table is empty.
+catalog, playlist, engine, patch), phase 3 (the interpreter: free text in, facts
+out) and phase 4 (the surface: chat beside the book) have landed. Phases 5–9
+finish the guide; nothing in the Retire table can be deleted before phase 9, and
+phase 9 is not done until this table is empty.
+
+Phase 4 is where the two flows become visible at once, so it is worth being explicit
+about what it did *not* do: it did not reimplement a single panel. The artifact pane
+is `StudioWorkspace` with its step rail suppressed, which is why a book can still be
+moved between the flows mid-way. Replacing those panels with conversational
+equivalents is phases 5–8, one at a time, and each one is a chance to get this wrong
+by forking something in the Keep table above.

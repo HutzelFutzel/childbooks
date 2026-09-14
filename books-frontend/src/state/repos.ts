@@ -1,5 +1,6 @@
 /** Lazily-constructed repository singletons bound to the active storage backend. */
 import {
+  GuideSessionRepository,
   ModelCacheRepository,
   ProjectRepository,
   SettingsRepository,
@@ -10,6 +11,7 @@ let reposPromise: Promise<{
   settings: SettingsRepository;
   projects: ProjectRepository;
   models: ModelCacheRepository;
+  guide: GuideSessionRepository;
 }> | null = null;
 
 export function getRepos() {
@@ -20,6 +22,7 @@ export function getRepos() {
         settings: new SettingsRepository(backend),
         projects: new ProjectRepository(backend),
         models: new ModelCacheRepository(backend),
+        guide: new GuideSessionRepository(backend),
       };
     })();
   }

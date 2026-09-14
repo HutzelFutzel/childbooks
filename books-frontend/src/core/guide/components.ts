@@ -265,8 +265,9 @@ const CATALOG: GuideComponent[] = [
       const anchors = requiredAnchors(p);
       const missing = anchors.filter((anchor) => !currentAnchorImage(anchor)).length;
       if (missing > 0) {
+        const one = missing === 1;
         return [
-          `${missing} character${missing === 1 ? "" : "s"} or place${missing === 1 ? "" : "s"} still needs a picture.`,
+          `${missing} character${one ? "" : "s"} or place${one ? "" : "s"} still ${one ? "needs" : "need"} a picture.`,
         ];
       }
       return ["Confirm the cast looks right."];
@@ -305,7 +306,8 @@ const CATALOG: GuideComponent[] = [
       const units = illustrationUnits(p);
       if (units.length === 0) return ["There are no pages to illustrate yet."];
       const missing = units.filter((unit) => !unitIsDone(p, unit)).length;
-      return missing > 0 ? [`${missing} page${missing === 1 ? "" : "s"} still needs a picture.`] : [];
+      if (missing === 0) return [];
+      return [`${missing} page${missing === 1 ? " still needs" : "s still need"} a picture.`];
     },
     legacyDestination: "pages",
   },

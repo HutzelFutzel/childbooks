@@ -16,16 +16,29 @@ import { primaryOf } from "./studioSteps";
 import type { StudioDestination } from "./studioRoutes";
 import { useStudioHotkeys } from "./useStudioHotkeys";
 
+/**
+ * How much of the workspace's own navigation to draw.
+ *
+ * `bare` exists for the guided studio, where the chat decides what to work on next
+ * and a step rail beside it would be a second, disagreeing answer to the same
+ * question. Only the navigation is dropped — every stage, and the background effects
+ * that produce the artifacts, are identical, because a book has to remain
+ * finishable in either flow.
+ */
+export type StudioChrome = "full" | "bare";
+
 /** The single unified workspace. Keyed by project id in the parent so all local
  * state (selection, auto-run guards) resets cleanly when switching books. */
 export function StudioWorkspace({
   project,
   destination,
   onNavigate,
+  chrome = "full",
 }: {
   project: Project;
   destination: StudioDestination;
   onNavigate: (destination: StudioDestination) => void;
+  chrome?: StudioChrome;
 }) {
   return (
     <StudioProvider
@@ -33,12 +46,12 @@ export function StudioWorkspace({
       destination={destination}
       onNavigate={onNavigate}
     >
-      <StudioInner project={project} />
+      <StudioInner project={project} chrome={chrome} />
     </StudioProvider>
   );
 }
 
-function StudioInner({ project }: { project: Project }) {
+function StudioInner({ project, chrome }: { project: Project; chrome: StudioChrome }) {
   const { step, closeDesignSetup, closeStyleSetup } = useStudio();
   const closeToolPanel = useStudioPanelStore((s) => s.closeToolPanel);
   const models = useResolvedModels();
@@ -127,7 +140,7 @@ function StudioInner({ project }: { project: Project }) {
   return (
     <StudioDndProvider>
       <div className="flex min-h-0 flex-1 flex-col">
-        {inStudio && <StudioNavigator />}
+        {inStudio && chrome === "full" && <StudioNavigator />}
         {/* Mounted once here (not inside Design) so a running style transfer
             keeps advancing cast → pages wherever the reader navigates. */}
         <StyleRenewBanner />

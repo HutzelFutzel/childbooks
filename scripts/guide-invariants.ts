@@ -46,6 +46,7 @@ import {
 } from "../books-frontend/src/core/guide/mode";
 import { checkGuideEngine } from "./guide-engine-invariants";
 import { checkGuideInterpreter } from "./guide-interpreter-invariants";
+import { checkGuideSession } from "./guide-session-invariants";
 
 /**
  * The repository root, found by walking up from the working directory. Not
@@ -429,6 +430,11 @@ failures.push(...interpreter.failures);
 notes.push(...interpreter.notes);
 cases += interpreter.cases;
 
+const session = checkGuideSession();
+failures.push(...session.failures);
+notes.push(...session.notes);
+cases += session.cases;
+
 // --- Report ---------------------------------------------------------------
 
 console.log("Guide rollout");
@@ -447,6 +453,9 @@ for (const line of engine.report) console.log(line);
 
 console.log();
 for (const line of interpreter.report) console.log(line);
+
+console.log();
+for (const line of session.report) console.log(line);
 
 console.log(`\nLegacy manifest (${MANIFEST})`);
 if (marked.length === 0) {

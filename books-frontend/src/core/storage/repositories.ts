@@ -3,6 +3,7 @@
  * Pure orchestration over the KeyValueStore — no React.
  */
 import { createDefaultSettings, type AppSettings } from "../settings";
+import { normalizeGuideSession, type GuideSession } from "../guide/session";
 import type { ProviderId } from "../config/options";
 import type { RawModel } from "../providers/types";
 import type { Project } from "../types";
@@ -14,9 +15,12 @@ const LEGACY_PROJECTS_KEY = "projects";
 /** Per-project key prefix — each project is now its own KV document. */
 const PROJECT_KEY_PREFIX = "project:";
 const MODELS_KEY = (provider: ProviderId) => `models:${provider}`;
+/** Per-project guide conversation. Sits beside the project, never inside it. */
+const GUIDE_KEY_PREFIX = "guide:";
 
 const projectKey = (id: string) => `${PROJECT_KEY_PREFIX}${id}`;
 const isProjectKey = (key: string) => key.startsWith(PROJECT_KEY_PREFIX);
+const guideKey = (projectId: string) => `${GUIDE_KEY_PREFIX}${projectId}`;
 
 export interface CachedDiscovery {
   models: RawModel[];
@@ -151,6 +155,40 @@ export class ProjectRepository {
 
   async remove(id: string): Promise<void> {
     await this.backend.kv.remove(projectKey(id));
+  }
+}
+
+/**
+ * Persistence for the guided studio's conversation, one document per book.
+ *
+ * A sibling of the project rather than a field on it, for the reasons in
+ * `core/guide/session.ts`: a remark is not an edit, so it must not consume the
+ * project's `rev`, enter its undo history, or contend with its compare-and-set.
+ *
+ * Every read normalizes, and normalization drops anything it doesn't recognise.
+ * That is safe *because* this is not a source of truth — the book holds every fact
+ * and the engine derives the next step from the book alone, so the worst case for a
+ * document written by an older build is a reader who lost their scrollback.
+ *
+ * No optimistic concurrency, deliberately. Two tabs open on one book will overwrite
+ * each other's transcript, and that is the right trade: the alternative is a
+ * conflict dialog about chat history, which is a worse thing to show someone than a
+ * slightly-lost conversation. The book itself stays protected by `ProjectRepository`.
+ */
+export class GuideSessionRepository {
+  constructor(private backend: StorageBackend) {}
+
+  async load(projectId: string): Promise<GuideSession> {
+    return normalizeGuideSession(await this.backend.kv.get(guideKey(projectId)));
+  }
+
+  async save(projectId: string, session: GuideSession): Promise<void> {
+    await this.backend.kv.set(guideKey(projectId), session);
+  }
+
+  /** Forget the conversation. The book is untouched. */
+  async remove(projectId: string): Promise<void> {
+    await this.backend.kv.remove(guideKey(projectId));
   }
 }
 
