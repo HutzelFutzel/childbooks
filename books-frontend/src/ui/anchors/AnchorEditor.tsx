@@ -70,7 +70,8 @@ export function AnchorEditor({
   const fallbackLayout = layoutOf(sheetSpecFor(anchor));
   const cursorAspect = sheetAspect(cursorNode?.content.layout ?? fallbackLayout);
   const versions = anchor.versions ? allVersions(anchor.versions) : [];
-  const sparkRange = useImageActionRange("anchorImage");
+  const freshSparkRange = useImageActionRange("anchorImage", "fresh");
+  const editSparkRange = useImageActionRange("anchorImage", "edit");
   const TypeIcon = ANCHOR_TYPE_ICON[anchor.type];
 
   const isStale = Boolean(project && anchor.versions && staleAnchorIds(project).includes(anchor.id));
@@ -237,7 +238,7 @@ export function AnchorEditor({
               onClick={() => void generate({ edit, useReference: true })}
             >
               Apply change
-              <SparkEstimateCost range={sparkRange} action="anchorImage" />
+              <SparkEstimateCost range={editSparkRange} action="anchorImage" />
             </Button>
           </div>
         )}
@@ -358,7 +359,7 @@ export function AnchorEditor({
                   onClick={() => void generate({ useReference: false })}
                 >
                   Redesign
-                  <SparkEstimateCost range={sparkRange} action="anchorImage" />
+                  <SparkEstimateCost range={freshSparkRange} action="anchorImage" />
                 </Button>
               </div>
             )}

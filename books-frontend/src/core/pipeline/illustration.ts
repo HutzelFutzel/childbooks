@@ -24,7 +24,7 @@ import { renderSinglePrompt } from "../prompts/render";
 import type { Anchor, BookConfig, ScreenplaySpread } from "../types";
 import { layoutPromptFacts, type LayoutPlan } from "../book/layouts";
 import { relativeHeightsText } from "../book/anchorScale";
-import { withRetry } from "./retry";
+import { withRetry, type RetryOptions } from "./retry";
 
 /**
  * The aspect the generated artwork should have: the page surface for full-bleed
@@ -499,6 +499,10 @@ export async function generateIllustrationImage(input: {
   resolution?: string;
   inputFidelity?: ImageRequest["inputFidelity"];
   output?: ImageRequest["output"];
+  /** Number of retries after the first provider request fails. */
+  retries?: number;
+  /** Optional shared cap checked before every provider attempt. */
+  beforeAttempt?: RetryOptions["beforeAttempt"];
   /** Cover typography is being rendered into the art — keep text allowed. */
   allowText?: boolean;
   signal?: AbortSignal;
@@ -515,6 +519,8 @@ export async function generateIllustrationImage(input: {
     resolution,
     inputFidelity,
     output,
+    retries,
+    beforeAttempt,
     allowText,
     signal,
   } = input;
@@ -537,6 +543,6 @@ export async function generateIllustrationImage(input: {
         allowText,
         signal,
       }),
-    { retries: 1, signal },
+    { retries: retries ?? 1, beforeAttempt, signal },
   );
 }

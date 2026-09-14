@@ -47,6 +47,7 @@ const KIND_COUNTER: Record<RunKind, "fresh" | "edits" | "variations" | "restyles
   edit: "edits",
   variation: "variations",
   restyle: "restyles",
+  continuation: "fresh",
 };
 
 /**

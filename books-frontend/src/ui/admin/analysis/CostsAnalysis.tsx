@@ -141,6 +141,7 @@ function RunLog() {
             { value: "edit", label: "Edit" },
             { value: "variation", label: "Regenerate" },
             { value: "restyle", label: "Restyle" },
+            { value: "continuation", label: "Cover continuation" },
           ]}
         />
         <Select

@@ -16,7 +16,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { getModelCostTable, recordImageCostSample } from "./appConfig";
-import type { CostSampleKind } from "../../books-frontend/src/core/config/imageCostStats";
+import type { GenerationEstimateProfile } from "../../books-frontend/src/core/config/generationEstimateProfile";
 import { recordFinanceEvent } from "./finance";
 import {
   costForUsage,
@@ -416,12 +416,8 @@ export async function meteredFetch(url: string, init?: RequestInit): Promise<Res
 export interface RecordUsageOptions {
   /** The project the action ran for (per-project cost attribution). */
   projectId?: string;
-  /**
-   * True for edit re-rolls. Edits bundle extra sub-calls (intent, localize,
-   * inpainting, dupe repairs), so their totals are excluded from the estimate
-   * window — the window should reflect what a FRESH render of this action costs.
-   */
-  isEdit?: boolean;
+  /** Exact model/quality/render policy used for apples-to-apples estimates. */
+  estimateProfile?: GenerationEstimateProfile;
   /** Provider call/failure counters from the same `withUsage` scope. */
   stats?: CallStats;
   /** The action run these calls belong to (see `actionRun.ts`). */
@@ -622,17 +618,15 @@ export async function recordUsage(
     // Feed the rolling window that powers Spark estimate ranges. Only a fully
     // priced render qualifies — a partial cost would skew the range.
     //
-    // Edits keep their OWN window rather than being dropped: they fan out into a
-    // localization call plus one image call per subject, so pooling them with
-    // fresh renders skewed the fresh range upward, and dropping them left every
-    // edit quoted at a fresh render's price and charged several times that.
+    // Every model/quality/render/reference/call-count profile keeps its own
+    // window. There is no fallback from a sparse high-quality profile to low
+    // quality (or from a multi-call edit to a one-call fresh render).
     //
     // The sample is the BILLABLE total, not the full one: this window drives
     // both the quoted price and the pre-flight reserve, so feeding it repair
     // costs we never charge would quote users a price they'll never pay — and
     // `ensureAfford` would block them at it.
     if (tier && knownCost && totals.billableUsd > 0 && isImageAction(action)) {
-      const kind: CostSampleKind = opts.isEdit ? "edit" : "fresh";
       // Sanity clamp: a sample wildly above the model's nominal per-image rate
       // is a misconfigured cost entry or an outlier batch — don't poison the
       // window (and with it the pre-flight reserve) for the next 10 calls. An
@@ -644,13 +638,12 @@ export async function recordUsage(
       const imageCalls = Math.max(1, billable.filter((e) => e.modality === "image").length);
       const ceiling = nominal != null && nominal > 0 ? nominal * 10 * imageCalls : null;
       const outlier = ceiling != null && totals.billableUsd > ceiling;
-      if (!outlier) {
+      if (!outlier && opts.estimateProfile) {
         await recordImageCostSample(
           action,
           tier,
           totals.billableUsd,
-          imageModelKey ?? undefined,
-          kind,
+          opts.estimateProfile,
         );
       }
     }

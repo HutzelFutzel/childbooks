@@ -24,8 +24,10 @@ import {
 } from "../../core/book/pairSurface";
 import { lastTextPaintFor, patchedShapeText, shapeTextForNew } from "../design/lastPaint";
 import { bookProductForConfig, formatCapabilitiesForProject } from "../../core/book";
+import { effectiveAnchorIds } from "../../core/book/anchorRefs";
 import { computePageGuides } from "../../core/book/format";
 import { getCursor } from "../../core/versioning";
+import { currentAnchorImage } from "../../core/pipeline/provenance";
 import { defaultIllustrationFocus } from "../design/designInit";
 import { useBlobUrl } from "../hooks/useBlobUrl";
 import { useJobsStore } from "../../state/jobsStore";
@@ -111,12 +113,31 @@ export function PairPageStagePanel({ left, right }: { left: Entry; right: Entry 
   const rightJobActive = useJobsStore((s) => s.activeUnitIds.has(right.page.id));
   const leftGenerating = (generatingPages.has(left.page.id) || leftJobActive) && !leftBlank;
   const rightGenerating = (generatingPages.has(right.page.id) || rightJobActive) && !rightBlank;
-  const leftRefCount =
-    (left.subject.kind === "spread" ? left.subject.spread.anchorIds : left.subject.cover.anchorIds)
-      ?.length ?? 0;
-  const rightRefCount =
-    (right.subject.kind === "spread" ? right.subject.spread.anchorIds : right.subject.cover.anchorIds)
-      ?.length ?? 0;
+  const referenceCount = (ref: {
+    anchorIds?: string[];
+    anchorNames?: string[];
+  }): number => {
+    const effectiveIds = effectiveAnchorIds(project.anchors, {
+      anchorIds: ref.anchorIds ?? [],
+      anchorNames: ref.anchorNames,
+    });
+    const anchorsById = new Map((project.anchors ?? []).map((anchor) => [anchor.id, anchor]));
+    const sheets = effectiveIds.filter((id) => {
+      const anchor = anchorsById.get(id);
+      return anchor ? Boolean(currentAnchorImage(anchor)) : false;
+    }).length;
+    return sheets + (sheets >= 2 ? 1 : 0);
+  };
+  const leftRefCount = referenceCount(
+    left.subject.kind === "spread"
+      ? left.subject.spread
+      : left.subject.cover,
+  );
+  const rightRefCount = referenceCount(
+    right.subject.kind === "spread"
+      ? right.subject.spread
+      : right.subject.cover,
+  );
 
   const onEitherPage =
     (selection.kind === "box" || selection.kind === "shape" || selection.kind === "image") &&

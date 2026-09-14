@@ -6,6 +6,7 @@
 import type { ProviderId } from "../config/options";
 import { getImageProvider } from "../providers";
 import type {
+  ImageRequest,
   ImageResult,
   ProviderCredentials,
   ReferenceImage,
@@ -21,7 +22,7 @@ import {
   sheetSpecFor,
   viewListText,
 } from "./anchorLayout";
-import { withRetry } from "./retry";
+import { withRetry, type RetryOptions } from "./retry";
 
 export interface BuildAnchorPromptInput {
   anchor: Anchor;
@@ -245,13 +246,31 @@ export interface GenerateAnchorImageInput {
    * the canvas follows the grid rather than being fixed at 1024x1024.
    */
   size?: string;
+  quality?: ImageRequest["quality"];
+  inputFidelity?: ImageRequest["inputFidelity"];
+  output?: ImageRequest["output"];
+  retries?: number;
+  beforeAttempt?: RetryOptions["beforeAttempt"];
 }
 
 /** Generate one anchor image with retry. */
 export async function generateAnchorImage(
   input: GenerateAnchorImageInput,
 ): Promise<ImageResult> {
-  const { prompt, creds, model, references, signal, providerId, size } = input;
+  const {
+    prompt,
+    creds,
+    model,
+    references,
+    signal,
+    providerId,
+    size,
+    quality,
+    inputFidelity,
+    output,
+    retries,
+    beforeAttempt,
+  } = input;
   const provider = getImageProvider(providerId);
   // One retry only — see generateIllustrationImage for the rationale.
   return withRetry(
@@ -261,8 +280,11 @@ export async function generateAnchorImage(
         prompt,
         size: size ?? ANCHOR_SHEET_SIZE,
         references,
+        quality,
+        inputFidelity,
+        output,
         signal,
       }),
-    { retries: 1, signal },
+    { retries: retries ?? 1, beforeAttempt, signal },
   );
 }

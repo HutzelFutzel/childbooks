@@ -114,6 +114,7 @@ const saved: string[] = [];
 
 const env: PipelineEnv = {
   models,
+  imageAction: "pageIllustration",
   apiKeyFor: () => "test-key",
   loadBlob: async () => ({ base64: TINY_PNG, mimeType: "image/png" }),
   saveImage: async () => {

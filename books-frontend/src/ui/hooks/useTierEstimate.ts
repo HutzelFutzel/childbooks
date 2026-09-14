@@ -19,6 +19,11 @@ import {
   type CostSampleKind,
   type ImageCostStats,
 } from "../../core/config/imageCostStats";
+import { estimateProfileForAction } from "../../core/config/generationEstimateProfile";
+import {
+  generationTuningFor,
+  type GenerationTuningConfig,
+} from "../../core/config/generationTuning";
 import {
   estimateSparkRange,
   type SparkEstimateRange,
@@ -39,6 +44,7 @@ export function tierSparkRange(
   sparks: SparksConfig,
   modelCosts: ModelCostTable,
   stats: ImageCostStats,
+  generationTuning: GenerationTuningConfig,
   action: ImageActionId,
   tier: ImageTier,
   planMultiplier = 1,
@@ -59,9 +65,18 @@ export function tierSparkRange(
   const rateCostUsd = sel
     ? costForUsage(modelCosts.models[costKey(sel.provider, sel.id)], PUBLIC_IMAGE_ESTIMATE_USAGE)
     : null;
+  const profile = sel
+    ? estimateProfileForAction({
+        action,
+        tier,
+        model: sel,
+        tuning: generationTuningFor(generationTuning, action),
+        kind,
+      })
+    : null;
   return applyM(
     estimateSparkRange(sparks, {
-      samples: recentCostSamples(stats, action, tier, kind),
+      samples: profile ? recentCostSamples(stats, action, tier, profile) : [],
       rateCostUsd,
       fallbackSparks: rule?.estimatedSparks ?? 0,
     }),
@@ -99,6 +114,7 @@ export function useTierSparkEstimate(
   const sparks = useAppConfigStore((s) => s.sparks);
   const modelCosts = useAppConfigStore((s) => s.modelCosts);
   const stats = useAppConfigStore((s) => s.imageCostStats);
+  const generationTuning = useAppConfigStore((s) => s.generationTuning);
   const modelConfig = useAppConfigStore((s) => s.modelConfig);
   const planMultiplier = usePlanActionMultiplier(action);
   // The campaign override multiplies the plan's, exactly as `estimateForUser`
@@ -108,9 +124,29 @@ export function useTierSparkEstimate(
   const multiplier = planMultiplier * campaignMultiplier;
 
   return useMemo(
-    () => tierSparkRange(sparks, modelCosts, stats, action, tier, multiplier, kind),
+    () =>
+      tierSparkRange(
+        sparks,
+        modelCosts,
+        stats,
+        generationTuning,
+        action,
+        tier,
+        multiplier,
+        kind,
+      ),
     // modelConfig participates via resolveImageModelClient (reads live config).
-    [sparks, modelCosts, stats, modelConfig, action, tier, multiplier, kind],
+    [
+      sparks,
+      modelCosts,
+      stats,
+      generationTuning,
+      modelConfig,
+      action,
+      tier,
+      multiplier,
+      kind,
+    ],
   );
 }
 

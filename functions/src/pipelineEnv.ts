@@ -19,9 +19,14 @@ import { withStep } from "./usage";
 import type { PipelineEnv } from "../../books-frontend/src/core/pipeline/illustrationRun";
 import type { ResolvedModels } from "../../books-frontend/src/core/models/registry";
 import type { ProviderId } from "../../books-frontend/src/core/config/options";
+import type { ImageActionId } from "../../books-frontend/src/core/ai/actions";
 import type { PromptContext } from "../../books-frontend/src/core/prompts/context";
 import type { CapabilityOverrides } from "../../books-frontend/src/core/config/modelCapabilities";
 import type { LayoutsConfig } from "../../books-frontend/src/core/config/layouts";
+import {
+  generationTuningFor,
+  type GenerationTuningConfig,
+} from "../../books-frontend/src/core/config/generationTuning";
 import { loadLikenessPhotoForSubject } from "./likeness";
 
 function apiKeyFor(provider: ProviderId): string {
@@ -41,12 +46,17 @@ export function backendPipelineEnv(
   prompts?: PromptContext,
   modelCapabilities?: CapabilityOverrides,
   layoutsConfig?: LayoutsConfig,
+  generationTuning?: GenerationTuningConfig,
+  imageAction: ImageActionId = "pageIllustration",
 ): PipelineEnv {
+  const actionTuning = generationTuningFor(generationTuning, imageAction);
   return {
     models,
+    imageAction,
     apiKeyFor,
     modelCapabilities,
     layoutsConfig,
+    generationTuning,
     loadBlob: (id) => downloadBlobBase64(uid, id),
     loadLikenessPhotoForSubject: (projectId, subjectId) =>
       loadLikenessPhotoForSubject(uid, projectId, subjectId),
@@ -56,7 +66,11 @@ export function backendPipelineEnv(
     // exceed 10 MB base64). The pipeline only applies this to reference/vision
     // copies, never to mask-aligned images or compositing bases.
     async downscaleRef(image) {
-      const small = await downscaleReference(b64ToBuf(image.base64));
+      const small = await downscaleReference(
+        b64ToBuf(image.base64),
+        actionTuning.references.maxDimension,
+        actionTuning.references.encodingQuality,
+      );
       return small ? { base64: bufToB64(small.buf), mimeType: small.mimeType } : image;
     },
     runStep: (step, fn) => withStep(step, fn),

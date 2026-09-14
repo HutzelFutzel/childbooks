@@ -9,12 +9,14 @@ import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { wordParagraphs } from "../../core/design";
 import { lastTextPaintFor, patchedShapeText, shapeTextForNew } from "../design/lastPaint";
 import { bookProductForConfig, formatCapabilitiesForProject } from "../../core/book";
+import { effectiveAnchorIds } from "../../core/book/anchorRefs";
 import {
   computeBackCoverLogoZone,
   computePageGuides,
   type BindingSide,
 } from "../../core/book/format";
 import { getCursor } from "../../core/versioning";
+import { currentAnchorImage } from "../../core/pipeline/provenance";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useJobsStore } from "../../state/jobsStore";
 import { Button } from "../components/Button";
@@ -108,8 +110,25 @@ export function PageStagePanel({
   // shows the rich, time-estimated progress overlay while it's rendering.
   const jobActive = useJobsStore((s) => s.activeUnitIds.has(genSpread.id));
   const generating = generatingPages.has(page.id) || jobActive;
-  const subjectRefCount =
-    (subject.kind === "spread" ? subject.spread.anchorIds : subject.cover.anchorIds)?.length ?? 0;
+  const subjectRefCount = useMemo(() => {
+    const requestedRef =
+      subject.kind === "spread" ? subject.spread.anchorIds : subject.cover.anchorIds;
+    const effectiveIds = effectiveAnchorIds(project.anchors, {
+      anchorIds: requestedRef ?? [],
+      anchorNames:
+        subject.kind === "spread"
+          ? subject.spread.anchorNames
+          : subject.cover.anchorNames,
+    });
+    const anchorsById = new Map((project.anchors ?? []).map((anchor) => [anchor.id, anchor]));
+    const sheets = effectiveIds.filter((id) => {
+      const anchor = anchorsById.get(id);
+      return anchor ? Boolean(currentAnchorImage(anchor)) : false;
+    }).length;
+    // Fresh page renders prepend a relative-size chart when at least two
+    // referenced subjects have compatible sheets.
+    return sheets + (sheets >= 2 ? 1 : 0);
+  }, [project.anchors, subject]);
 
   const caps = useMemo(() => formatCapabilitiesForProject(project), [project]);
   const isBackCover =

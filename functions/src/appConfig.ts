@@ -71,9 +71,9 @@ import {
 import {
   appendCostSample,
   normalizeImageCostStats,
-  type CostSampleKind,
   type ImageCostStats,
 } from "../../books-frontend/src/core/config/imageCostStats";
+import type { GenerationEstimateProfile } from "../../books-frontend/src/core/config/generationEstimateProfile";
 import {
   appendLatencySample,
   normalizeLatencyStats,
@@ -233,6 +233,11 @@ import {
   type LayoutsConfig,
 } from "../../books-frontend/src/core/config/layouts";
 import {
+  generationTuningConfigSchema,
+  normalizeGenerationTuningConfig,
+  type GenerationTuningConfig,
+} from "../../books-frontend/src/core/config/generationTuning";
+import {
   normalizeImageMasksConfig,
   type ImageMaskAsset,
   type ImageMasksConfig,
@@ -242,6 +247,8 @@ import type { CapabilityOverrides } from "../../books-frontend/src/core/config/m
 const MODELS_DOC = "appConfig/models";
 const ART_STYLES_DOC = "appConfig/artStyles";
 const LAYOUTS_DOC = "appConfig/layouts";
+const GENERATION_TUNING_DOC = "adminSettings/generationTuning";
+const GENERATION_TUNING_PUBLIC_DOC = "appConfig/generationTuning";
 const IMAGE_MASKS_DOC = "appConfig/imageMasks";
 const AGE_WRITING_DOC = "appConfig/ageWriting";
 const AUDIENCE_DOC = "appConfig/audience";
@@ -336,6 +343,20 @@ export function getArtStylesConfig(): Promise<ArtStylesConfig> {
 }
 export function getLayoutsConfig(): Promise<LayoutsConfig> {
   return readDoc(LAYOUTS_DOC, normalizeLayoutsConfig);
+}
+let generationTuningProjectionEnsured = false;
+
+export async function getGenerationTuningConfig(): Promise<GenerationTuningConfig> {
+  const config = await readDoc(GENERATION_TUNING_DOC, normalizeGenerationTuningConfig);
+  if (!generationTuningProjectionEnsured) {
+    generationTuningProjectionEnsured = true;
+    try {
+      await writeDoc(GENERATION_TUNING_PUBLIC_DOC, config);
+    } catch {
+      // Public estimate projection is best-effort; server pricing remains authoritative.
+    }
+  }
+  return config;
 }
 export function getImageMasksConfig(): Promise<ImageMasksConfig> {
   return readDoc(IMAGE_MASKS_DOC, normalizeImageMasksConfig);
@@ -449,8 +470,7 @@ export async function recordImageCostSample(
   action: ImageActionId,
   tier: ImageTier,
   costUsd: number,
-  modelKey?: string,
-  kind: CostSampleKind = "fresh",
+  profile: GenerationEstimateProfile,
 ): Promise<void> {
   ensureAdmin();
   const db = getFirestore();
@@ -458,7 +478,7 @@ export async function recordImageCostSample(
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const current = normalizeImageCostStats(snap.exists ? snap.data() : undefined);
-    tx.set(ref, appendCostSample(current, action, tier, costUsd, modelKey, kind), { merge: false });
+    tx.set(ref, appendCostSample(current, action, tier, costUsd, profile), { merge: false });
   });
   cache.delete(IMAGE_COST_STATS_DOC);
 }
@@ -940,6 +960,19 @@ export async function saveLayoutsConfig(input: unknown): Promise<LayoutsConfig> 
   const parsed = layoutsConfigSchema.parse(input);
   const normalized = normalizeLayoutsConfig(parsed);
   await writeDoc(LAYOUTS_DOC, normalized);
+  return normalized;
+}
+
+export async function saveGenerationTuningConfig(
+  input: unknown,
+): Promise<GenerationTuningConfig> {
+  const parsed = generationTuningConfigSchema.parse(input);
+  const normalized = normalizeGenerationTuningConfig(parsed);
+  await Promise.all([
+    writeDoc(GENERATION_TUNING_DOC, normalized),
+    writeDoc(GENERATION_TUNING_PUBLIC_DOC, normalized),
+  ]);
+  generationTuningProjectionEnsured = true;
   return normalized;
 }
 

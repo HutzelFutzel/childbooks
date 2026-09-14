@@ -44,13 +44,14 @@ import { compositeMaskedRegion, downscaleReference } from "./imaging";
 import { backendPipelineEnv } from "./pipelineEnv";
 import {
   getLayoutsConfig,
+  getGenerationTuningConfig,
   loadModelCapabilities,
   loadPromptContext,
   recordLatencySamples,
 } from "./appConfig";
 import { requireTier, resolveImageModels, resolveTextAction } from "./modelResolve";
 import { withUsage, type CallStats } from "./usage";
-import { meterAndSettle, runKindOf } from "./actionRun";
+import { meterAndSettle } from "./actionRun";
 import { featureAllowedForUser } from "./plans";
 import { ensureAfford, estimateForUser } from "./sparks";
 import { normalizeImageTier, type ImageTier } from "../../books-frontend/src/core/config/modelConfig";
@@ -60,6 +61,11 @@ import {
   type CapabilityOverrides,
 } from "../../books-frontend/src/core/config/modelCapabilities";
 import { resolveImageGenerationOptions } from "../../books-frontend/src/core/config/imageGeneration";
+import {
+  generationIntentFor,
+  generationTuningFor,
+  type GenerationTuningConfig,
+} from "../../books-frontend/src/core/config/generationTuning";
 import { ALL_SECRETS } from "./secrets";
 import { downloadBlob, ensureAdmin, uploadBlob } from "./storage";
 import { deleteLikenessPhotoForSubject } from "./likeness";
@@ -76,6 +82,10 @@ import { spreadsById } from "../../books-frontend/src/core/book/units";
 import { DISPATCH_KEY } from "../../books-frontend/src/core/config/latencyStats";
 import type { ImageActionId } from "../../books-frontend/src/core/ai/actions";
 import type { CostSampleKind } from "../../books-frontend/src/core/config/imageCostStats";
+import {
+  estimateProfileForAction,
+  generationRenderKindOf,
+} from "../../books-frontend/src/core/config/generationEstimateProfile";
 import { latencyKindOf as kindOf } from "./latency";
 import {
   applyAnchorRender,
@@ -235,15 +245,13 @@ function taskAction(kind: JobKind, taskId: string): ImageActionId {
 }
 
 /**
- * Which cost window one task is priced from. Mirrors the `isEdit` each worker
- * derives at settle time: an image task from its render request, a pipeline task
- * from its run options.
+ * Which exact render shape one task is priced from.
  */
 function taskQuoteKind(spec: AnyJob["tasks"][number] | TaskDoc): CostSampleKind {
   const req = "request" in spec ? spec.request : undefined;
   if (req) return req.composite || req.maskBlobId ? "edit" : "fresh";
-  const edit = "options" in spec ? spec.options?.edit : undefined;
-  return typeof edit === "string" && edit.trim().length > 0 ? "edit" : "fresh";
+  const options = "options" in spec ? spec.options : undefined;
+  return generationRenderKindOf(options);
 }
 
 /**
@@ -273,11 +281,6 @@ function quotedFor(
 
 function isTerminal(status: JobStatus): boolean {
   return status === "done" || status === "error";
-}
-
-/** Model role a job kind resolves against (covers reuse the page model). */
-function modelRoleFor(kind: Exclude<JobKind, "screenplay">): "pageIllustration" | "anchorImage" {
-  return kind === "anchors" ? "anchorImage" : "pageIllustration";
 }
 
 /**
@@ -699,6 +702,7 @@ async function runImageTask(args: {
   model: ResolvedModels["imageModel"];
   /** Admin capability overlay, so the canvas is checked against this model. */
   caps: CapabilityOverrides;
+  generationTuning: GenerationTuningConfig;
   tier: ImageTier;
   action: "pageIllustration" | "coverIllustration";
   projectId: string | undefined;
@@ -713,13 +717,42 @@ async function runImageTask(args: {
   stats: CallStats;
   generation: ReturnType<typeof resolveImageGenerationOptions>;
 }> {
-  const { uid, req, model, tier, action, projectId, signal, jobId, taskId, startedAt } =
+  const {
+    uid,
+    req,
+    model,
+    tier,
+    action,
+    projectId,
+    signal,
+    jobId,
+    taskId,
+    startedAt,
+    generationTuning,
+  } =
     args;
+  const actionTuning = generationTuningFor(generationTuning, action);
+  const capabilities = capabilitiesFor(model, args.caps);
+  const configuredReferenceLimit = Math.min(
+    capabilities.inputs.maxReferenceImages,
+    actionTuning.references.maxImages,
+  );
+  const submittedReferenceLimit = req.maskBlobId
+    ? Math.max(1, configuredReferenceLimit)
+    : configuredReferenceLimit;
   const canShrink = !req.maskBlobId;
   const references: ReferenceImage[] = await Promise.all(
-    (req.references ?? []).map(async (r): Promise<ReferenceImage> => {
+    (req.references ?? [])
+      .slice(0, submittedReferenceLimit)
+      .map(async (r): Promise<ReferenceImage> => {
       const buf = await downloadBlob(uid, r.blobId);
-      const small = canShrink ? await downscaleReference(buf) : null;
+      const small = canShrink
+        ? await downscaleReference(
+            buf,
+            actionTuning.references.maxDimension,
+            actionTuning.references.encodingQuality,
+          )
+        : null;
       return {
         base64: bufToBase64(small?.buf ?? buf),
         mimeType: small?.mimeType ?? r.mimeType ?? "image/png",
@@ -735,10 +768,10 @@ async function runImageTask(args: {
     mask = { base64: bufToBase64(buf), mimeType: "image/png" };
   }
 
-  const capabilities = capabilitiesFor(model, args.caps);
   const generation = resolveImageGenerationOptions(capabilities, {
     ...(req.generation ?? {}),
     ...(req.quality ? { quality: req.quality } : {}),
+    ...generationIntentFor(actionTuning),
   });
   const imageReq: ImageRequest = {
     model: model.id,
@@ -750,16 +783,20 @@ async function runImageTask(args: {
     // pipeline would have chosen itself.
     size: sanitizeImageSize(capabilities, req.size),
     quality: generation.applied.quality,
+    inputFidelity: generation.applied.inputFidelity,
     output:
-      generation.applied.background || generation.applied.format
+      generation.applied.background ||
+      generation.applied.format ||
+      generation.applied.outputCompression !== undefined
         ? {
             background: generation.applied.background,
             format: generation.applied.format,
+            compression: generation.applied.outputCompression,
           }
         : undefined,
     references:
       capabilities.operations.referenceEditing && references.length
-        ? references.slice(0, capabilities.inputs.maxReferenceImages)
+        ? references
         : undefined,
     mask: capabilities.operations.maskEditing ? mask : undefined,
     signal,
@@ -772,10 +809,18 @@ async function runImageTask(args: {
           { apiKey: apiKeyFor(model.provider) },
           imageReq,
         ),
-      { retries: 1, signal },
+      { retries: actionTuning.retries, signal },
     ),
   );
   const isEdit = Boolean(req.composite || req.maskBlobId);
+  const renderKind = isEdit ? "edit" : "fresh";
+  const estimateProfile = estimateProfileForAction({
+    action,
+    tier,
+    model,
+    tuning: actionTuning,
+    kind: renderKind,
+  });
   await meterAndSettle({
     uid,
     action,
@@ -783,7 +828,7 @@ async function runImageTask(args: {
     events,
     stats,
     projectId,
-    kind: isEdit ? "edit" : "fresh",
+    kind: renderKind,
     jobId,
     targetId: taskId,
     source: "worker",
@@ -791,7 +836,14 @@ async function runImageTask(args: {
     settleKey: taskSettleKey(jobId, taskId),
     startedAt,
     models: { image: model },
-    latency: { kind: isEdit ? "edit" : "fresh", refs: req.references?.length ?? 0 },
+    generation,
+    estimateProfile,
+    inputReferenceCount: imageReq.references?.length ?? 0,
+    outputSize: imageReq.size,
+    latency: {
+      profile: estimateProfile,
+      refs: imageReq.references?.length ?? 0,
+    },
   });
 
   let finalBuf: Buffer = Buffer.from(result.base64, "base64");
@@ -875,13 +927,14 @@ async function renderTask(
     };
   }
 
-  const [models, prompts, layouts, capabilities] = await Promise.all([
-    resolveImageModels(modelRoleFor(job.kind), tier),
+  const imageAction = taskAction(job.kind, task.id);
+  const [models, prompts, layouts, capabilities, generationTuning] = await Promise.all([
+    resolveImageModels(imageAction, tier),
     loadPromptContext(),
     getLayoutsConfig(),
     loadModelCapabilities(),
+    getGenerationTuningConfig(),
   ]);
-  const env = backendPipelineEnv(uid, models, prompts, capabilities, layouts);
   const startedAt = Date.now();
 
   if (job.kind === "image") {
@@ -894,6 +947,7 @@ async function renderTask(
       req,
       model: models.imageModel,
       caps: capabilities,
+      generationTuning,
       tier,
       action,
       projectId,
@@ -915,15 +969,30 @@ async function renderTask(
 
   const project = (job as PipelineRefreshJob | AnchorsJob).project;
   const projectId = job.projectId ?? project?.id;
-  const isEdit = typeof task.options?.edit === "string" && task.options.edit.trim().length > 0;
-
   if (job.kind === "refresh") {
     const spread = spreadsById(project).get(task.id);
     if (!spread) throw new Error("Spread not found in the project snapshot.");
     const action = illustrationActionFor(task.id);
+    const env = backendPipelineEnv(
+      uid,
+      models,
+      prompts,
+      capabilities,
+      layouts,
+      generationTuning,
+      action,
+    );
     const { value: render, events, stats } = await withUsage(() =>
       renderIllustration(project, spread, { ...(task.options ?? {}), signal }, env),
     );
+    const renderKind = kindOf(task.options);
+    const estimateProfile = estimateProfileForAction({
+      action,
+      tier,
+      model: models.imageModel,
+      tuning: generationTuningFor(generationTuning, action),
+      kind: renderKind,
+    });
     await meterAndSettle({
       uid,
       action,
@@ -932,17 +1001,23 @@ async function renderTask(
       stats,
       projectId,
       project,
-      kind: runKindOf(task.options, isEdit),
+      kind: renderKind,
       jobId,
       targetId: task.id,
       source: "worker",
-      quotedSparks: quotedFor(job, action, isEdit ? "edit" : "fresh"),
+      quotedSparks: quotedFor(job, action, renderKind),
       settleKey: taskSettleKey(jobId, task.id),
       startedAt,
       models: { image: models.imageModel, text: models.textModel },
+      generation: render?.generation,
+      estimateProfile,
+      inputReferenceCount: render?.inputReferenceCount,
+      outputSize: render?.outputSize,
       latency: {
-        kind: kindOf(task.options),
-        refs: effectiveAnchorIds(project.anchors, spread).length,
+        profile: estimateProfile,
+        refs:
+          render?.inputReferenceCount ??
+          effectiveAnchorIds(project.anchors, spread).length,
       },
       ...(render ? {} : { outcome: "failed" as const, errorCode: "emptyRender" }),
     });
@@ -956,10 +1031,27 @@ async function renderTask(
   // anchors
   const anchor = (project.anchors ?? []).find((a) => a.id === task.id);
   if (!anchor) throw new Error("Anchor not found in the project snapshot.");
+  const env = backendPipelineEnv(
+    uid,
+    models,
+    prompts,
+    capabilities,
+    layouts,
+    generationTuning,
+    "anchorImage",
+  );
   await hydrateAnchorDeps(uid, task.jobId, task, project);
   const { value: render, events, stats } = await withUsage(() =>
     renderAnchor(project, anchor, { ...(task.options ?? {}), signal }, env),
   );
+  const renderKind = kindOf(task.options);
+  const estimateProfile = estimateProfileForAction({
+    action: "anchorImage",
+    tier,
+    model: models.anchorImageModel,
+    tuning: generationTuningFor(generationTuning, "anchorImage"),
+    kind: renderKind,
+  });
   await meterAndSettle({
     uid,
     action: "anchorImage",
@@ -968,17 +1060,23 @@ async function renderTask(
     stats,
     projectId,
     project,
-    kind: runKindOf(task.options, isEdit),
+    kind: renderKind,
     jobId,
     targetId: task.id,
     source: "worker",
-    quotedSparks: quotedFor(job, "anchorImage", isEdit ? "edit" : "fresh"),
+    quotedSparks: quotedFor(job, "anchorImage", renderKind),
     settleKey: taskSettleKey(jobId, task.id),
     startedAt,
     models: { image: models.anchorImageModel, text: models.textModel },
+    generation: render.generation,
+    estimateProfile,
+    inputReferenceCount: render.inputReferenceCount,
+    outputSize: render.outputSize,
     latency: {
-      kind: kindOf(task.options),
-      refs: containedAnchorsFor(anchor, project.anchors ?? []).length,
+      profile: estimateProfile,
+      refs:
+        render.inputReferenceCount ??
+        containedAnchorsFor(anchor, project.anchors ?? []).length,
     },
   });
   return {

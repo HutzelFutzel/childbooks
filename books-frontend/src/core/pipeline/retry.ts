@@ -10,6 +10,8 @@ export interface RetryOptions {
   minTimeoutMs?: number;
   maxTimeoutMs?: number;
   onAttempt?: (info: { attempt: number; error: unknown }) => void;
+  /** Claim permission immediately before every provider attempt. */
+  beforeAttempt?: (attempt: number) => boolean;
   signal?: AbortSignal;
 }
 
@@ -17,11 +19,20 @@ export async function withRetry<T>(
   fn: () => Promise<T>,
   options: RetryOptions = {},
 ): Promise<T> {
-  const { retries = 3, minTimeoutMs = 600, maxTimeoutMs = 8000, onAttempt, signal } =
-    options;
+  const {
+    retries = 3,
+    minTimeoutMs = 600,
+    maxTimeoutMs = 8000,
+    onAttempt,
+    beforeAttempt,
+    signal,
+  } = options;
 
   return pRetry(
-    async () => {
+    async (attemptNumber) => {
+      if (beforeAttempt && !beforeAttempt(attemptNumber)) {
+        throw new AbortError("Provider attempt budget exhausted");
+      }
       try {
         return await fn();
       } catch (err) {

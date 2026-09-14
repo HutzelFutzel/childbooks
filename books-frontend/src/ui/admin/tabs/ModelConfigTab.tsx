@@ -55,6 +55,7 @@ import {
   summarizeCost,
 } from "./ModelCostsTab";
 import { ImageCapabilitiesPanel } from "./ImageGeometryPanel";
+import { GenerationTuningPanel } from "./GenerationTuningPanel";
 import type { CapabilityOverrides } from "../../../core/config/modelCapabilities";
 
 const PROVIDER_LABELS: Record<ProviderId, string> = {
@@ -926,6 +927,8 @@ export function ModelConfigTab() {
         config={draft}
         onChange={setCapabilities}
       />
+
+      <GenerationTuningPanel />
 
       <section className="space-y-3">
         <div>

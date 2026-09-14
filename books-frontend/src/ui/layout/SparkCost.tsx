@@ -35,6 +35,7 @@ export function useImageActionRange(
   const sparks = useAppConfigStore((s) => s.sparks);
   const modelCosts = useAppConfigStore((s) => s.modelCosts);
   const stats = useAppConfigStore((s) => s.imageCostStats);
+  const generationTuning = useAppConfigStore((s) => s.generationTuning);
   // modelConfig read inside tierSparkRange via resolveImageModelClient.
   useAppConfigStore((s) => s.modelConfig);
   const multiplier = usePlanActionMultiplier(action);
@@ -46,6 +47,7 @@ export function useImageActionRange(
         sparks,
         modelCosts,
         stats,
+        generationTuning,
         action,
         t,
         multiplier * campaignMultiplierFor(overrides, action, t),
@@ -63,6 +65,7 @@ export function useImageBatchRange(
   const sparks = useAppConfigStore((s) => s.sparks);
   const modelCosts = useAppConfigStore((s) => s.modelCosts);
   const stats = useAppConfigStore((s) => s.imageCostStats);
+  const generationTuning = useAppConfigStore((s) => s.generationTuning);
   useAppConfigStore((s) => s.modelConfig);
   // Subscribe to the plan/subscription slices so per-action multipliers stay
   // reactive without calling a hook per item.
@@ -81,6 +84,7 @@ export function useImageBatchRange(
             sparks,
             modelCosts,
             stats,
+            generationTuning,
             it.action,
             t,
             m * campaignMultiplierFor(overrides, it.action, t),
@@ -96,7 +100,8 @@ export function useImageBatchRange(
 /**
  * An estimated-cost chip for image generation. Shows "~N ✦" (or "~N–M ✦" when
  * the recent costs vary), with a leading "~" and a tooltip to make clear this is
- * an ESTIMATE — the actual charge is the measured cost and can differ a little.
+ * an ESTIMATE. Settlement may charge less, but never more than the shown upper
+ * bound.
  * Renders nothing when Sparks are off or the estimate is free/zero.
  *
  * When a campaign is discounting the action, the chip names it: a price that
@@ -119,8 +124,8 @@ export function SparkEstimateCost({
       ? `${range.maxSparks.toLocaleString()}`
       : `${range.minSparks.toLocaleString()}–${range.maxSparks.toLocaleString()}`;
   const title = note
-    ? `${note.label} — estimated cost with your discount applied. You're charged the actual amount when it finishes.`
-    : "Estimated cost — you're charged the actual amount when it finishes, which can vary a little.";
+    ? `${note.label} — estimated maximum with your discount applied. The final charge may be lower, never higher.`
+    : "Estimated maximum — the final charge may be lower, never higher.";
   return (
     <span
       className={`ml-1.5 inline-flex items-center gap-0.5 rounded-full bg-magic-100 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-magic-700 ring-1 ring-inset ring-magic-300/50 ${className}`}

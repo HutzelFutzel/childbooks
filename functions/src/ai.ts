@@ -56,10 +56,15 @@ import { IntentAmbiguousError } from "../../books-frontend/src/core/pipeline/int
 import { downloadBlobBase64 } from "./storage";
 import {
   getLayoutsConfig,
+  getGenerationTuningConfig,
   loadModelCapabilities,
   loadPromptContext,
 } from "./appConfig";
-import { latencyKindOf } from "./latency";
+import {
+  estimateProfileForAction,
+  generationRenderKindOf,
+} from "../../books-frontend/src/core/config/generationEstimateProfile";
+import { generationTuningFor } from "../../books-frontend/src/core/config/generationTuning";
 import { containedAnchorsFor } from "../../books-frontend/src/core/book/anchorGraph";
 import { effectiveAnchorIds } from "../../books-frontend/src/core/book/anchorRefs";
 import {
@@ -605,21 +610,38 @@ export function registerAiRoutes(app: Express): void {
       const guest = isAnonymousToken(req.authToken);
       const tier = requireTier(rawTier, guest);
       const anchorIsEdit = typeof options?.edit === "string" && options.edit.trim().length > 0;
+      const renderKind = runKindOf(options, anchorIsEdit);
       const quotedSparks = await ensureAffordAction(req.uid!, "anchorImage", tier, {
         noNegativeBuffer: guest,
-        kind: anchorIsEdit ? "edit" : "fresh",
+        kind: renderKind,
       });
-      const [models, prompts, layouts, capabilities] = await Promise.all([
+      const [models, prompts, layouts, capabilities, generationTuning] = await Promise.all([
         resolveImageModels("anchorImage", tier),
         loadPromptContext(),
         getLayoutsConfig(),
         loadModelCapabilities(),
+        getGenerationTuningConfig(),
       ]);
-      const env = backendPipelineEnv(req.uid!, models, prompts, capabilities, layouts);
+      const env = backendPipelineEnv(
+        req.uid!,
+        models,
+        prompts,
+        capabilities,
+        layouts,
+        generationTuning,
+        "anchorImage",
+      );
       const startedAt = Date.now();
       const { value, events, stats } = await withUsage(() =>
         renderAnchor(project, anchor, { ...(options ?? {}), signal: requestDeadline() }, env),
       );
+      const estimateProfile = estimateProfileForAction({
+        action: "anchorImage",
+        tier,
+        model: models.anchorImageModel,
+        tuning: generationTuningFor(generationTuning, "anchorImage"),
+        kind: renderKind,
+      });
       await meterAndSettle({
         uid: req.uid!,
         action: "anchorImage",
@@ -628,15 +650,21 @@ export function registerAiRoutes(app: Express): void {
         stats,
         projectId: project.id,
         project,
-        kind: runKindOf(options, anchorIsEdit),
+        kind: renderKind,
         targetId: anchorId,
         source: "sync",
         quotedSparks,
         startedAt,
         models: { image: models.anchorImageModel, text: models.textModel },
+        generation: value.generation,
+        estimateProfile,
+        inputReferenceCount: value.inputReferenceCount,
+        outputSize: value.outputSize,
         latency: {
-          kind: latencyKindOf(options),
-          refs: containedAnchorsFor(anchor, project.anchors ?? []).length,
+          profile: estimateProfile,
+          refs:
+            value.inputReferenceCount ??
+            containedAnchorsFor(anchor, project.anchors ?? []).length,
         },
       });
       res.json(stampImageProvenance(value, tier, models.anchorImageModel));
@@ -681,18 +709,30 @@ export function registerAiRoutes(app: Express): void {
       if (isEdit) await ensureWithinQuota(req.uid!, "editsPerBook", project.id);
       // A manual mask is an edit for pricing too — it takes the same surgical
       // path, and `meterAndSettle` below already classifies it that way.
-      const editKind = isEdit || Boolean(options?.mask) ? "edit" : "fresh";
+      const renderKind = generationRenderKindOf({
+        ...options,
+        continuation: Boolean(coverContinuationBlobId),
+      });
       const quotedSparks = await ensureAffordAction(req.uid!, action, tier, {
         noNegativeBuffer: guest,
-        kind: editKind,
+        kind: renderKind,
       });
-      const [models, prompts, layouts, capabilities] = await Promise.all([
+      const [models, prompts, layouts, capabilities, generationTuning] = await Promise.all([
         resolveImageModels(cover ? "coverIllustration" : "pageIllustration", tier),
         loadPromptContext(),
         getLayoutsConfig(),
         loadModelCapabilities(),
+        getGenerationTuningConfig(),
       ]);
-      const env = backendPipelineEnv(req.uid!, models, prompts, capabilities, layouts);
+      const env = backendPipelineEnv(
+        req.uid!,
+        models,
+        prompts,
+        capabilities,
+        layouts,
+        generationTuning,
+        action,
+      );
       const startedAt = Date.now();
       const { value, events, stats } = await withUsage(async () => {
         const signal = requestDeadline();
@@ -703,6 +743,13 @@ export function registerAiRoutes(app: Express): void {
         }
         return renderIllustration(project, spread, { ...(options ?? {}), signal }, env);
       });
+      const estimateProfile = estimateProfileForAction({
+        action,
+        tier,
+        model: models.imageModel,
+        tuning: generationTuningFor(generationTuning, action),
+        kind: renderKind,
+      });
       await meterAndSettle({
         uid: req.uid!,
         action,
@@ -712,17 +759,23 @@ export function registerAiRoutes(app: Express): void {
         projectId: project.id,
         project,
         // A manual mask is an edit for both pricing history and bucketing.
-        kind: runKindOf(options, isEdit || Boolean(options?.mask)),
+        kind: renderKind,
         targetId: spreadId,
         source: "sync",
         quotedSparks,
         startedAt,
         models: { image: models.imageModel, text: models.textModel },
+        generation: value?.generation,
+        estimateProfile,
+        inputReferenceCount: value?.inputReferenceCount,
+        outputSize: value?.outputSize,
         ...(value
           ? {
               latency: {
-                kind: options?.mask ? ("edit" as const) : latencyKindOf(options),
-                refs: effectiveAnchorIds(project.anchors, spread).length,
+                profile: estimateProfile,
+                refs:
+                  value.inputReferenceCount ??
+                  effectiveAnchorIds(project.anchors, spread).length,
               },
             }
           : {}),

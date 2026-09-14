@@ -36,6 +36,17 @@ function scaleRange(r: SparkEstimateRange | null, n: number): SparkEstimateRange
   return { minSparks: r.minSparks * n, maxSparks: r.maxSparks * n };
 }
 
+function addRanges(
+  a: SparkEstimateRange | null,
+  b: SparkEstimateRange | null,
+): SparkEstimateRange | null {
+  if (!a || !b) return null;
+  return {
+    minSparks: a.minSparks + b.minSparks,
+    maxSparks: a.maxSparks + b.maxSparks,
+  };
+}
+
 /**
  * Cover text, bake, wrap, and generate controls.
  * - `full` (default): first-generate sheet (also used when the cover has no art).
@@ -72,7 +83,16 @@ export function CoverToolsPanel({
     return !hasArt(COVER_FRONT_ID) && !hasArt(COVER_BACK_ID);
   });
   const [customizingFirstCover, setCustomizingFirstCover] = useState(false);
-  const productionRange = useTierSparkEstimate("coverIllustration", CUSTOMER_IMAGE_TIER);
+  const productionRange = useTierSparkEstimate(
+    "coverIllustration",
+    CUSTOMER_IMAGE_TIER,
+    "fresh",
+  );
+  const continuationRange = useTierSparkEstimate(
+    "coverIllustration",
+    CUSTOMER_IMAGE_TIER,
+    "continuation",
+  );
 
   const doc = project.screenplay ? getCursor(project.screenplay).content : null;
   const front = doc?.frontCover;
@@ -83,8 +103,9 @@ export function CoverToolsPanel({
 
   const frontCostRange = productionRange;
   const backCostRange = productionRange;
-  // A cover pair is two full production-quality renders under the hood.
-  const setCostRange = scaleRange(productionRange, 2);
+  const setCostRange = wrap
+    ? addRanges(productionRange, continuationRange)
+    : scaleRange(productionRange, 2);
 
   async function patchCover(coverId: string, patch: Partial<CoverSpec>) {
     const tree = project.screenplay;

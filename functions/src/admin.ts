@@ -42,7 +42,9 @@ import {
   saveArtStylesConfig,
   addArtStyleExample,
   removeArtStyleExample,
+  getGenerationTuningConfig,
   saveLayoutsConfig,
+  saveGenerationTuningConfig,
   addLayoutExample,
   removeLayoutExample,
   addImageMask,
@@ -535,6 +537,22 @@ export function registerAdminRoutes(app: Express): void {
   app.put("/admin/config/layouts", json, async (req: Request, res: Response) => {
     try {
       res.json(await saveLayoutsConfig(req.body));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.get("/admin/config/generation-tuning", async (_req, res) => {
+    try {
+      res.json(await getGenerationTuningConfig());
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  app.put("/admin/config/generation-tuning", json, async (req: Request, res: Response) => {
+    try {
+      res.json(await saveGenerationTuningConfig(req.body));
     } catch (err) {
       handleError(res, err);
     }

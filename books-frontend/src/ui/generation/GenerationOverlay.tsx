@@ -3,14 +3,17 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { Clock, Sparkles } from "lucide-react";
 import type { ImageActionId } from "../../core/ai/actions";
+import type { GenerationRenderKind } from "../../core/config/generationEstimateProfile";
 import { Progress } from "../components/Progress";
 import { cn } from "../lib/cn";
 import { useGenerationProgress } from "./useGenerationProgress";
 
 export interface GenerationOverlayProps {
   action: ImageActionId;
-  /** Number of reference images involved — sharpens the time estimate. */
+  /** Number of reference images involved; used with `kind` for a fine estimate. */
   refCount?: number;
+  /** Omit when the active render kind is unknown; the estimate then uses honest coarse data. */
+  kind?: GenerationRenderKind;
   /** Compact mode for small thumbnails (hides captions/progress text). */
   compact?: boolean;
   /** Optional plain-language status shown by compact thumbnail overlays. */
@@ -27,12 +30,13 @@ export interface GenerationOverlayProps {
 export function GenerationOverlay({
   action,
   refCount = 0,
+  kind,
   compact = false,
   compactLabel,
   className,
 }: GenerationOverlayProps) {
   const { estimateLabel, elapsedLabel, overdue, progress, phase, phaseIdx } =
-    useGenerationProgress(action, refCount);
+    useGenerationProgress(action, refCount, kind);
 
   return (
     <div

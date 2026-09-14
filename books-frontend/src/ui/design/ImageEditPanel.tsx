@@ -398,7 +398,9 @@ function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustrati
     coverMode,
     cursor,
     generating,
-    sparkRange,
+    freshSparkRange,
+    editSparkRange,
+    variationSparkRange,
     edit,
     setEdit,
     applyEdit,
@@ -441,7 +443,7 @@ function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustrati
             }}
           >
             {coverMode ? "Generate cover" : "Generate illustration"}
-            <SparkEstimateCost range={sparkRange} action={coverMode ? "coverIllustration" : "pageIllustration"} />
+            <SparkEstimateCost range={freshSparkRange} action={coverMode ? "coverIllustration" : "pageIllustration"} />
           </Button>
         </>
       ) : (
@@ -515,7 +517,7 @@ function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustrati
               onClick={() => void applyEdit()}
             >
               Apply change
-              <SparkEstimateCost range={sparkRange} action={coverMode ? "coverIllustration" : "pageIllustration"} />
+              <SparkEstimateCost range={editSparkRange} action={coverMode ? "coverIllustration" : "pageIllustration"} />
             </Button>
           ) : (
             <Button
@@ -526,7 +528,7 @@ function PictureRefineBody({ illo }: { illo: ReturnType<typeof usePageIllustrati
               onClick={() => void tryAgain()}
             >
               New version
-              <SparkEstimateCost range={sparkRange} action={coverMode ? "coverIllustration" : "pageIllustration"} />
+              <SparkEstimateCost range={variationSparkRange} action={coverMode ? "coverIllustration" : "pageIllustration"} />
             </Button>
           )}
 
@@ -563,7 +565,7 @@ function SceneSection({ illo }: { illo: ReturnType<typeof usePageIllustration> }
     anchors,
     activeIds,
     generating,
-    sparkRange,
+    variationSparkRange,
     tryAgain,
     cursor,
   } = illo;
@@ -599,7 +601,7 @@ function SceneSection({ illo }: { illo: ReturnType<typeof usePageIllustration> }
           onClick={() => void tryAgain()}
         >
           New version
-          <SparkEstimateCost range={sparkRange} action={coverMode ? "coverIllustration" : "pageIllustration"} />
+          <SparkEstimateCost range={variationSparkRange} action={coverMode ? "coverIllustration" : "pageIllustration"} />
         </Button>
       ) : null}
 

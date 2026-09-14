@@ -10,6 +10,12 @@ import {
   formatDurationRange,
   type DurationRange,
 } from "../../core/config/latencyStats";
+import {
+  estimateProfileForAction,
+  type GenerationRenderKind,
+} from "../../core/config/generationEstimateProfile";
+import { generationTuningFor } from "../../core/config/generationTuning";
+import { resolveImageModelClient } from "../../platform/aiResolve";
 import { useAppConfigStore } from "../../state/appConfigStore";
 
 const PHASES: Partial<Record<ImageActionId, string[]>> = {
@@ -39,12 +45,32 @@ export function formatElapsed(ms: number): string {
 export function useGenerationProgress(
   action: ImageActionId,
   refCount = 0,
+  kind?: GenerationRenderKind,
 ) {
   const latencyStats = useAppConfigStore((s) => s.latencyStats);
+  const generationTuning = useAppConfigStore((s) => s.generationTuning);
+  const modelConfig = useAppConfigStore((s) => s.modelConfig);
 
   const estimate: DurationRange = useMemo(() => {
-    return estimateTaskRange(latencyStats, action, CUSTOMER_IMAGE_TIER, "fresh", refCount);
-  }, [latencyStats, action, refCount]);
+    const model = resolveImageModelClient(action, CUSTOMER_IMAGE_TIER);
+    const profile =
+      kind && model
+        ? estimateProfileForAction({
+            action,
+            tier: CUSTOMER_IMAGE_TIER,
+            model,
+            tuning: generationTuningFor(generationTuning, action),
+            kind,
+          })
+        : undefined;
+    return estimateTaskRange(
+      latencyStats,
+      action,
+      CUSTOMER_IMAGE_TIER,
+      profile,
+      profile ? refCount : undefined,
+    );
+  }, [latencyStats, generationTuning, modelConfig, action, refCount, kind]);
 
   const [start] = useState(() => Date.now());
   const [now, setNow] = useState(() => Date.now());

@@ -27,6 +27,11 @@ import {
   type LayoutsConfig,
 } from "../core/config/layouts";
 import {
+  createDefaultGenerationTuningConfig,
+  normalizeGenerationTuningConfig,
+  type GenerationTuningConfig,
+} from "../core/config/generationTuning";
+import {
   createDefaultImageMasksConfig,
   normalizeImageMasksConfig,
   type ImageMasksConfig,
@@ -425,6 +430,8 @@ interface AppConfigState {
   artStyles: ArtStylesConfig;
   /** Admin overlay for the structural page layouts (titles, sizes, showcase). */
   layouts: LayoutsConfig;
+  /** Public estimate projection of the operational image controls. */
+  generationTuning: GenerationTuningConfig;
   /** Reusable, immutable SVG shapes applied non-destructively to images. */
   imageMasks: ImageMasksConfig;
   /**
@@ -594,6 +601,8 @@ interface AppConfigState {
   saveModelSetup: (config: ModelConfig, costs: ModelCostTable) => Promise<void>;
   saveArtStyles: (config: ArtStylesConfig) => Promise<ArtStylesConfig>;
   saveLayouts: (config: LayoutsConfig) => Promise<void>;
+  loadGenerationTuning: () => Promise<GenerationTuningConfig>;
+  saveGenerationTuning: (config: GenerationTuningConfig) => Promise<void>;
   /** Upload a showcase image for a layout; returns the stored example. */
   uploadLayoutImage: (
     layoutId: string,
@@ -962,6 +971,7 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
   modelConfig: createDefaultModelConfig(),
   artStyles: createDefaultArtStylesConfig(),
   layouts: createDefaultLayoutsConfig(),
+  generationTuning: createDefaultGenerationTuningConfig(),
   imageMasks: createDefaultImageMasksConfig(),
   ageWriting: createDefaultAgeWritingConfig(),
   audience: createDefaultAudienceConfig(),
@@ -1015,6 +1025,13 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       }),
       onSnapshot(doc(db, "appConfig", "layouts"), (snap) => {
         set({ layouts: normalizeLayoutsConfig(snap.exists() ? snap.data() : undefined) });
+      }),
+      onSnapshot(doc(db, "appConfig", "generationTuning"), (snap) => {
+        set({
+          generationTuning: normalizeGenerationTuningConfig(
+            snap.exists() ? snap.data() : undefined,
+          ),
+        });
       }),
       onSnapshot(doc(db, "appConfig", "imageMasks"), (snap) => {
         set({ imageMasks: normalizeImageMasksConfig(snap.exists() ? snap.data() : undefined) });
@@ -1202,6 +1219,23 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
 
   async saveLayouts(config) {
     await putJson("/admin/config/layouts", config);
+  },
+
+  async loadGenerationTuning() {
+    const res = await backendFetch("/admin/config/generation-tuning");
+    if (!res.ok) {
+      throw new Error((await safeError(res)) ?? "Could not load image generation settings.");
+    }
+    const config = normalizeGenerationTuningConfig(await res.json());
+    set({ generationTuning: config });
+    return config;
+  },
+
+  async saveGenerationTuning(config) {
+    const saved = normalizeGenerationTuningConfig(
+      await putJson("/admin/config/generation-tuning", config),
+    );
+    set({ generationTuning: saved });
   },
 
   async saveAgeWriting(config) {

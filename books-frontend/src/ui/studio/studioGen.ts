@@ -33,6 +33,7 @@ import { warnBatchShortfall } from "../../state/sparksShortfallPrompt";
 import { estimateForAction } from "../../core/config/sparks";
 import type { ImageActionId } from "../../core/ai/actions";
 import type { CostSampleKind } from "../../core/config/imageCostStats";
+import { generationRenderKindOf } from "../../core/config/generationEstimateProfile";
 import { currentActionMultiplier } from "../../state/subscriptionStore";
 import {
   campaignMultiplierFor,
@@ -88,7 +89,8 @@ function illustrationActionForId(id: string): ImageActionId {
  * page rendered.
  */
 function ensureBatchAffordable(units: BatchUnit[], tier: ImageTier): boolean {
-  const { sparks, modelCosts, imageCostStats } = useAppConfigStore.getState();
+  const { sparks, modelCosts, imageCostStats, generationTuning } =
+    useAppConfigStore.getState();
   if (!sparks.enabled || units.length === 0) return true;
 
   const overrides = usePriceOverridesStore.getState().actions;
@@ -103,6 +105,7 @@ function ensureBatchAffordable(units: BatchUnit[], tier: ImageTier): boolean {
       sparks,
       modelCosts,
       imageCostStats,
+      generationTuning,
       action,
       tier,
       multiplier,
@@ -422,7 +425,7 @@ export async function refreshSpread(
   const tier = CUSTOMER_IMAGE_TIER;
   const refreshUnit: BatchUnit = {
     action: illustrationActionForId(spreadId),
-    kind: options.edit?.trim() ? "edit" : "fresh",
+    kind: generationRenderKindOf(options),
   };
   if (!ensureBatchAffordable([refreshUnit], tier)) return;
 
@@ -483,7 +486,7 @@ export async function generateAnchorViaJob(
   );
   const anchorUnits: BatchUnit[] = [
     ...missingChildren.map<BatchUnit>(() => ({ action: "anchorImage" })),
-    { action: "anchorImage", kind: options.edit?.trim() ? "edit" : "fresh" },
+    { action: "anchorImage", kind: generationRenderKindOf(options) },
   ];
   if (!ensureBatchAffordable(anchorUnits, tier)) return false;
 
@@ -535,7 +538,12 @@ export async function updateStaleAnchors(
   });
   if (stale.length === 0) return 0;
   const tier = CUSTOMER_IMAGE_TIER;
-  if (!ensureBatchAffordable(stale.map(() => ({ action: "anchorImage" })), tier)) return 0;
+  if (
+    !ensureBatchAffordable(
+      stale.map(() => ({ action: "anchorImage", kind: "variation" })),
+      tier,
+    )
+  ) return 0;
 
   try {
     const models = getResolvedModels(tier);
@@ -578,7 +586,12 @@ export async function updateAnchorsThenSpread(
   });
   if (ids.length > 0) {
     const tier = CUSTOMER_IMAGE_TIER;
-    if (!ensureBatchAffordable(ids.map(() => ({ action: "anchorImage" })), tier)) return;
+    if (
+      !ensureBatchAffordable(
+        ids.map(() => ({ action: "anchorImage", kind: "variation" })),
+        tier,
+      )
+    ) return;
     try {
       const models = getResolvedModels(tier);
       const tasks: AnchorTask[] = ids.map((id) => ({
@@ -634,7 +647,7 @@ export async function refreshIllustrationsForPrint(
   const tier = CUSTOMER_IMAGE_TIER;
   if (
     !ensureBatchAffordable(
-      unique.map((id) => ({ action: illustrationActionForId(id) })),
+      unique.map((id) => ({ action: illustrationActionForId(id), kind: "variation" })),
       tier,
     )
   ) {

@@ -505,6 +505,7 @@ const ROUTE_RULES: RouteRule[] = [
   { test: /^\/admin\/config\/model-setup$/, gate: key("configuration.models") },
   { test: /^\/admin\/config\/models$/, gate: key("configuration.models") },
   { test: /^\/admin\/config\/model-costs$/, gate: key("configuration.models") },
+  { test: /^\/admin\/config\/generation-tuning$/, gate: key("configuration.models") },
   { test: /^\/admin\/resolve-model$/, gate: key("configuration.models", "read") },
   { test: /^\/admin\/suggest-costs?$/, gate: key("configuration.models", "read") },
   { test: /^\/admin\/config\/prompts$/, gate: key("configuration.prompts") },

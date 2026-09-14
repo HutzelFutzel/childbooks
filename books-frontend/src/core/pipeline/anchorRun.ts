@@ -27,11 +27,20 @@ import { anchorSignature, currentAnchorImage } from "./provenance";
 import {
   asRefPayload,
   removeRegionsInPlace,
+  signalUntil,
   type PipelineEnv,
 } from "./illustrationRun";
 import { resolveMentionedAnchors } from "./intentResolve";
 import { countSheetPanels, locateEmbeddedObsolete, type SubjectBox } from "./localize";
 import { capabilitiesFor } from "../config/modelCapabilities";
+import {
+  generationIntentFor,
+  generationTuningFor,
+} from "../config/generationTuning";
+import {
+  resolveImageGenerationOptions,
+  type ResolvedImageGenerationOptions,
+} from "../config/imageGeneration";
 
 export interface AnchorRunOptions {
   /** Extra revision instruction, e.g. "make her smile". */
@@ -69,6 +78,12 @@ export interface AnchorRender {
   imageModel?: AnchorImage["imageModel"];
   /** Timestamp receipt for the one-use source; never contains its private object id. */
   consumedLikenessCreatedAt?: number;
+  /** Actual number of image references submitted with the primary render. */
+  inputReferenceCount?: number;
+  /** Provider canvas requested for the primary render. */
+  outputSize?: string;
+  /** Best-effort output preferences and what the selected model applied. */
+  generation?: ResolvedImageGenerationOptions;
 }
 
 /** Wrap an anchor render into a (new or extended) version tree. Pure. */
@@ -163,6 +178,15 @@ export async function renderAnchor(
       ? env.models.imageModel
       : env.models.anchorImageModel;
   const imageCapabilities = capabilitiesFor(imageModel, env.modelCapabilities);
+  const actionTuning = generationTuningFor(env.generationTuning, "anchorImage");
+  const generation = resolveImageGenerationOptions(
+    imageCapabilities,
+    generationIntentFor(actionTuning),
+  );
+  const maxReferences = Math.min(
+    imageCapabilities.inputs.maxReferenceImages,
+    actionTuning.references.maxImages,
+  );
   const key = env.apiKeyFor(imageModel.provider);
 
   // Contained children are drawn INTO this sheet and must match their own
@@ -296,6 +320,28 @@ export async function renderAnchor(
     ];
   }
 
+  // A base image, likeness, or source-art image is correctness-critical.
+  // `maxImages = 0` disables optional references, but must not turn an edit,
+  // restyle, or reader-supplied design into an unseeded redraw.
+  const hasRequiredReference = Boolean(
+    subjectRef || likenessRef || sourceArtRefs.length > 0,
+  );
+  const submittedReferences = imageCapabilities.operations.referenceEditing
+    ? references.slice(
+        0,
+        Math.min(
+          imageCapabilities.inputs.maxReferenceImages,
+          Math.max(maxReferences, hasRequiredReference ? 1 : 0),
+        ),
+      )
+    : [];
+  const submittedFromSourceArt = submittedReferences.some(
+    (reference) => reference.role === "sourceArt",
+  );
+  const submittedLikeness = submittedReferences.some(
+    (reference) => reference.role === "likeness",
+  );
+
   // Art style is text-only here. Content-bearing example images are selection
   // thumbnails, not generation references: image models can copy their
   // characters, clothes, and props even when instructed to use only the style.
@@ -303,7 +349,7 @@ export async function renderAnchor(
   // Ordered reference legend so the model can bind each image to the right
   // subject (essential for OpenAI, whose images carry no labels). MUST mirror
   // the final `references` order above.
-  const legendNames = references.map((r) => {
+  const legendNames = submittedReferences.map((r) => {
     if (r.role === "style") return "an art-style reference (match its style only, not its content)";
     if (r.role === "restyleBase") return `the sheet of ${anchor.name} being re-rendered`;
     if (r.role === "likeness") {
@@ -331,9 +377,9 @@ export async function renderAnchor(
     editFromImage,
     restyle,
     baseLayout,
-    legend: references.length > 0 ? legend : undefined,
-    fromSourceArt,
-    preserveRendering,
+    legend: submittedReferences.length > 0 ? legend : undefined,
+    fromSourceArt: submittedFromSourceArt,
+    preserveRendering: submittedFromSourceArt && preserveRendering,
     prompts: env.prompts,
   });
 
@@ -344,19 +390,31 @@ export async function renderAnchor(
       creds: { apiKey: key },
       model: imageModel.id,
       providerId: imageModel.provider,
-      references:
-        imageCapabilities.operations.referenceEditing && references.length
-          ? references.slice(
-              0,
-              imageCapabilities.inputs.maxReferenceImages,
-            )
+      references: submittedReferences.length ? submittedReferences : undefined,
+      quality: generation.applied.quality,
+      inputFidelity: generation.applied.inputFidelity,
+      output:
+        generation.applied.format || generation.applied.outputCompression !== undefined
+          ? {
+              format: generation.applied.format,
+              compression: generation.applied.outputCompression,
+            }
           : undefined,
+      retries: actionTuning.retries,
       signal: options.signal,
       // Cast references have one landscape output contract, including restyles
       // of legacy square/portrait sheets.
       size: spec.size,
     }),
   );
+  const qc = actionTuning.qualityControl;
+  const qcDeadlineAt = Date.now() + qc.budgetMs;
+  let qcAttemptsRemaining = qc.maxImageCalls;
+  const claimQcAttempt = () => {
+    if (qcAttemptsRemaining <= 0) return false;
+    qcAttemptsRemaining -= 1;
+    return true;
+  };
 
   // Grid-count repair: the prompt above already demands an exact cell count,
   // but text instructions baked into an image-generation call aren't reliably
@@ -373,24 +431,40 @@ export async function renderAnchor(
   // sheet as-is rather than blocking the render on a check that can't answer.
   // A restyle is also skipped: the base sheet already fixes the grid, and the
   // restyle prompt has no corrective slot to retry into.
-  if (spec.views.length > 1 && !editFromImage && !restyle) {
+  if (
+    qc.gridCheck &&
+    qc.budgetMs > 0 &&
+    qc.maxImageCalls > 0 &&
+    spec.views.length > 1 &&
+    !editFromImage &&
+    !restyle
+  ) {
     try {
       const checkModel = env.models.bindingModel ?? env.models.textModel;
       const checkKey = env.apiKeyFor(checkModel.provider);
+      const gridVision = await asRefPayload(env, {
+        base64: result.base64,
+        mimeType: result.mimeType,
+      });
       const actualCount = await runStep("gridCheck", () =>
         countSheetPanels({
-          sheetBase64: result.base64,
-          sheetMime: result.mimeType,
+          sheetBase64: gridVision.base64,
+          sheetMime: gridVision.mimeType,
           subjectName: anchor.name,
           expectedCount: spec.views.length,
           creds: { apiKey: checkKey },
           model: checkModel.id,
           providerId: checkModel.provider,
           prompts: env.prompts,
-          signal: options.signal,
+          signal: signalUntil(options.signal, qcDeadlineAt),
         }),
       );
-      if (actualCount !== null && actualCount !== spec.views.length) {
+      if (
+        actualCount !== null &&
+        actualCount !== spec.views.length &&
+        qcAttemptsRemaining > 0 &&
+        Date.now() < qcDeadlineAt
+      ) {
         prompt = buildAnchorPrompt({
           anchor,
           artStyle: project.config.artStyle,
@@ -401,10 +475,10 @@ export async function renderAnchor(
           edit: options.edit,
           editFromImage,
           restyle,
-          legend: references.length > 0 ? legend : undefined,
+          legend: submittedReferences.length > 0 ? legend : undefined,
           actualPanelCount: actualCount,
-          fromSourceArt,
-          preserveRendering,
+          fromSourceArt: submittedFromSourceArt,
+          preserveRendering: submittedFromSourceArt && preserveRendering,
           prompts: env.prompts,
         });
         // Labelled apart from the first render: this one exists because the
@@ -415,20 +489,26 @@ export async function renderAnchor(
             creds: { apiKey: key },
             model: imageModel.id,
             providerId: imageModel.provider,
-            references:
-              imageCapabilities.operations.referenceEditing &&
-              references.length
-                ? references.slice(
-                    0,
-                    imageCapabilities.inputs.maxReferenceImages,
-                  )
+            references: submittedReferences.length ? submittedReferences : undefined,
+            quality: generation.applied.quality,
+            inputFidelity: generation.applied.inputFidelity,
+            output:
+              generation.applied.format ||
+              generation.applied.outputCompression !== undefined
+                ? {
+                    format: generation.applied.format,
+                    compression: generation.applied.outputCompression,
+                  }
                 : undefined,
-            signal: options.signal,
+            retries: actionTuning.retries,
+            beforeAttempt: claimQcAttempt,
+            signal: signalUntil(options.signal, qcDeadlineAt),
             size: spec.size,
           }),
         );
       }
-    } catch {
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
       // Best-effort — keep the unchecked sheet rather than failing the render.
     }
   }
@@ -441,15 +521,23 @@ export async function renderAnchor(
   if (
     hasEmbedded &&
     containedAnchors.length > 0 &&
-    imageCapabilities.operations.maskEditing
+    imageCapabilities.operations.maskEditing &&
+    qc.embeddedRepairLimit > 0 &&
+    qcAttemptsRemaining > 0 &&
+    qc.budgetMs > 0 &&
+    Date.now() < qcDeadlineAt
   ) {
     const bindModel = env.models.bindingModel ?? env.models.textModel;
     try {
       const bindKey = env.apiKeyFor(bindModel.provider);
+      const embeddedVision = await asRefPayload(env, {
+        base64: result.base64,
+        mimeType: result.mimeType,
+      });
       const obsolete = await runStep("embedded", () =>
         locateEmbeddedObsolete({
-          pageBase64: result.base64,
-          pageMime: result.mimeType,
+          pageBase64: embeddedVision.base64,
+          pageMime: embeddedVision.mimeType,
           parent: { name: anchor.name, description: anchor.description },
           children: containedAnchors.map((c) => ({
             id: c.id,
@@ -461,7 +549,7 @@ export async function renderAnchor(
           model: bindModel.id,
           providerId: bindModel.provider,
           prompts: env.prompts,
-          signal: options.signal,
+          signal: signalUntil(options.signal, qcDeadlineAt),
         }),
       );
       const removals: { name: string; box: SubjectBox }[] = [];
@@ -471,6 +559,10 @@ export async function renderAnchor(
         for (const box of b.obsolete) removals.push({ name: child.name, box });
       }
       if (removals.length > 0) {
+        const repairLimit = Math.min(
+          qc.embeddedRepairLimit,
+          qcAttemptsRemaining,
+        );
         const repaired = await removeRegionsInPlace({
           removals,
           page: { base64: result.base64, mimeType: result.mimeType },
@@ -482,10 +574,17 @@ export async function renderAnchor(
           signal: options.signal,
           step: "embedded",
           strict: false,
+          maxRemovals: repairLimit,
+          deadlineAt: qcDeadlineAt,
+          quality: qc.repairQuality,
+          inputFidelity: generation.applied.inputFidelity,
+          retries: actionTuning.retries,
+          beforeAttempt: claimQcAttempt,
         });
         if (repaired) result = { ...result, base64: repaired.base64, mimeType: repaired.mimeType };
       }
-    } catch {
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
       // Best-effort; keep the un-repaired sheet rather than failing the render.
     }
   }
@@ -498,14 +597,21 @@ export async function renderAnchor(
   //
   // Places are exempt: their cells are full scenes that legitimately run to the
   // cell edge, and flood-filling inward from the border would eat the artwork.
-  if (anchor.type !== "place" && env.composite.flattenSheetBackground) {
+  if (
+    qc.flattenBackground &&
+    qc.budgetMs > 0 &&
+    Date.now() < qcDeadlineAt &&
+    anchor.type !== "place" &&
+    env.composite.flattenSheetBackground
+  ) {
     try {
       const flattened = await env.composite.flattenSheetBackground({
         base64: result.base64,
         mimeType: result.mimeType,
       });
       result = { ...result, base64: flattened.base64, mimeType: flattened.mimeType };
-    } catch {
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
       // Best-effort: an un-flattened sheet still works everywhere.
     }
   }
@@ -542,6 +648,9 @@ export async function renderAnchor(
     mimeType: result.mimeType,
     thumbBlobId,
     layout,
+    inputReferenceCount: submittedReferences.length,
+    outputSize: spec.size,
+    generation,
     // Provenance: contained anchors were used as IMAGES (track their version).
     // Plus a self-entry:
     // without recording the anchor's OWN signature at generation time, editing
@@ -562,7 +671,7 @@ export async function renderAnchor(
     label: restyle ? "New style" : options.edit?.trim() || (isIteration ? "Variation" : "Initial"),
     parentId: sourceNodeId,
     artStyleKey: artStyleKey(project.config.artStyle),
-    ...(likenessRef && likenessCreatedAt !== undefined
+    ...(submittedLikeness && likenessCreatedAt !== undefined
       ? { consumedLikenessCreatedAt: likenessCreatedAt }
       : {}),
   };

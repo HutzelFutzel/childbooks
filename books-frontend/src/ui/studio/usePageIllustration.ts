@@ -87,10 +87,11 @@ export function usePageIllustration(pageId: string) {
   // An edit is priced from the edit window: it re-renders one region per subject
   // rather than one image for the page, so quoting it as a fresh render
   // undershot the charge by however many subjects the instruction touches.
-  const sparkRange = useImageActionRange(
-    coverMode ? "coverIllustration" : "pageIllustration",
-    edit.trim() ? "edit" : "fresh",
-  );
+  const imageAction = coverMode ? "coverIllustration" : "pageIllustration";
+  const freshSparkRange = useImageActionRange(imageAction, "fresh");
+  const editSparkRange = useImageActionRange(imageAction, "edit");
+  const variationSparkRange = useImageActionRange(imageAction, "variation");
+  const sparkRange = edit.trim() ? editSparkRange : freshSparkRange;
 
   const subjectRef = subject
     ? subject.kind === "spread"
@@ -307,6 +308,9 @@ export function usePageIllustration(pageId: string) {
     tree,
     generating,
     sparkRange,
+    freshSparkRange,
+    editSparkRange,
+    variationSparkRange,
     anchorIds,
     activeIds,
     drawnAnchorIds,

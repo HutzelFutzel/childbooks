@@ -6,11 +6,10 @@
  *      estimate plus the admin's negative buffer ({@link ensureAfford}). If the
  *      user can't even start within the buffer, we throw {@link InsufficientSparks}
  *      and the caller surfaces a top-up prompt.
- *   2. We only DEDUCT at settle time ({@link settleActionCost}), pricing the real
- *      metered usage. Because nothing is held up front, a failed/aborted call
- *      costs nothing — no refund bookkeeping needed. The negative buffer means a
- *      render that lands above its estimate still completes (never fail mid-book);
- *      the user simply goes slightly negative and tops up before the next action.
+ *   2. We only DEDUCT at settle time ({@link settleActionCost}), pricing real
+ *      metered usage but capping it at the pre-flight quote. Failed/aborted calls
+ *      cost nothing, and an unexpectedly expensive render is absorbed rather
+ *      than charging more than the user was shown.
  *
  * Balance is cached on `users/{uid}.sparkBalance`; the immutable audit trail is
  * `users/{uid}/sparksLedger/{id}`. All writes are transactional. The whole path
@@ -25,7 +24,12 @@
 import { createHash, randomUUID } from "node:crypto";
 import { getFirestore, FieldValue, type Transaction } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
-import { getImageCostStats, getModelCostTable, getSparksConfig } from "./appConfig";
+import {
+  getGenerationTuningConfig,
+  getImageCostStats,
+  getModelCostTable,
+  getSparksConfig,
+} from "./appConfig";
 import { resolveImageModels } from "./modelResolve";
 import { actionMultiplier } from "./plans";
 // Only the pricing half of the campaign engine — it imports config and nothing
@@ -50,6 +54,10 @@ import {
   recentCostSamples,
   type CostSampleKind,
 } from "../../books-frontend/src/core/config/imageCostStats";
+import {
+  estimateProfileForAction,
+} from "../../books-frontend/src/core/config/generationEstimateProfile";
+import { generationTuningFor } from "../../books-frontend/src/core/config/generationTuning";
 import { ALL_IMAGE_ACTION_IDS, type ImageActionId } from "../../books-frontend/src/core/ai/actions";
 import { type ImageTier } from "../../books-frontend/src/core/config/modelConfig";
 import { splitBillable, type UsageEvent } from "./usage";
@@ -59,9 +67,10 @@ function isImageAction(action: string): action is ImageActionId {
 }
 
 /** A nominal per-call USD cost for an action+tier's bound model (window fallback). */
-async function nominalRateCostUsd(action: ImageActionId, tier: ImageTier): Promise<number | null> {
+async function nominalRateCostUsd(
+  imageModel: { provider: string; id: string },
+): Promise<number | null> {
   try {
-    const { imageModel } = await resolveImageModels(action, tier);
     const costs = await getModelCostTable();
     return costForUsage(
       costs.models[costKey(imageModel.provider, imageModel.id)],
@@ -584,6 +593,8 @@ export interface SettleOptions {
    * refunded retroactively.
    */
   tier?: ImageTier;
+  /** Never charge more than the pre-flight price shown to the user. */
+  maxSparks?: number;
 }
 
 /** What one settlement actually charged, for the run record. */
@@ -623,7 +634,11 @@ export async function settleActionCost(
     // reaches settlement would quote 5 ✦ and charge 0, and one that only reached
     // the quote would promise "free" and then bill for it.
     const multiplier = planMultiplier * campaignMultiplier;
-    const price = priceForAction(config, action, costUsd, multiplier);
+    const measuredPrice = priceForAction(config, action, costUsd, multiplier);
+    const price =
+      typeof opts.maxSparks === "number"
+        ? Math.min(measuredPrice, Math.max(0, Math.round(opts.maxSparks)))
+        : measuredPrice;
     if (price <= 0) {
       await reportUnpricedIfNeeded(uid, action, config, billable, costUsd, opts);
       return { sparks: 0, costUsd, breakdown: null };
@@ -1003,12 +1018,21 @@ export async function estimateForUser(
   const multiplier = planMultiplier * campaignMultiplier;
   const rule = config.actions[action];
   if (rule?.mode === "derived" && isImageAction(action)) {
-    const [stats, rateCostUsd] = await Promise.all([
+    const [stats, models, generationTuning] = await Promise.all([
       getImageCostStats(),
-      nominalRateCostUsd(action, tier),
+      resolveImageModels(action, tier),
+      getGenerationTuningConfig(),
     ]);
+    const profile = estimateProfileForAction({
+      action,
+      tier,
+      model: models.imageModel,
+      tuning: generationTuningFor(generationTuning, action),
+      kind,
+    });
+    const rateCostUsd = await nominalRateCostUsd(models.imageModel);
     const range = estimateSparkRange(config, {
-      samples: recentCostSamples(stats, action, tier, kind),
+      samples: recentCostSamples(stats, action, tier, profile),
       rateCostUsd,
       fallbackSparks: rule.estimatedSparks,
     });

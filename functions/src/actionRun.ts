@@ -27,17 +27,23 @@ import { recordUsage, splitBillable, type CallStats, type UsageEvent } from "./u
 import { settleActionCost } from "./sparks";
 import { ensureProjectMirror, recordProjectRun } from "./projects";
 import { recordTaskLatency } from "./latency";
-import type { LatencyKind } from "../../books-frontend/src/core/config/latencyStats";
+import {
+  completeGenerationEstimateProfile,
+  generationRenderKindOf,
+  type GenerationEstimateProfile,
+  type GenerationRenderKind,
+} from "../../books-frontend/src/core/config/generationEstimateProfile";
 import { ALL_IMAGE_ACTION_IDS, type ImageActionId } from "../../books-frontend/src/core/ai/actions";
 import type { ImageTier } from "../../books-frontend/src/core/config/modelConfig";
 import type { ModelSelection, Project } from "../../books-frontend/src/core/types";
+import type { ResolvedImageGenerationOptions } from "../../books-frontend/src/core/config/imageGeneration";
 
 function isImageAction(action: string): action is ImageActionId {
   return (ALL_IMAGE_ACTION_IDS as string[]).includes(action);
 }
 
 /** What kind of request produced this run (drives the edit/fresh split). */
-export type RunKind = "fresh" | "edit" | "variation" | "restyle";
+export type RunKind = GenerationRenderKind;
 
 /**
  * Classify a render request. A restyle re-renders existing artwork in a new
@@ -48,10 +54,8 @@ export function runKindOf(
   options: { restyle?: boolean; useReference?: boolean; edit?: string } | undefined,
   isEdit: boolean,
 ): RunKind {
-  if (options?.restyle) return "restyle";
   if (isEdit) return "edit";
-  if (options?.useReference) return "variation";
-  return "fresh";
+  return generationRenderKindOf(options);
 }
 
 export type RunOutcome = "ok" | "failed" | "aborted";
@@ -69,7 +73,12 @@ export interface ActionRunDoc {
   jobId?: string;
   source: "sync" | "worker";
   models: Record<string, string>;
-  calls: { total: number; failures: number; byStep: Record<string, number> };
+  calls: {
+    total: number;
+    failures: number;
+    byStep: Record<string, number>;
+    durationMsByStep: Record<string, number>;
+  };
   costUsd: {
     total: number;
     billable: number;
@@ -91,6 +100,13 @@ export interface ActionRunDoc {
   outcome: RunOutcome;
   errorCode?: string;
   tokens: number;
+  generation?: {
+    requested: Record<string, unknown>;
+    applied: Record<string, unknown>;
+    skipped: string[];
+    inputReferenceCount: number;
+  };
+  estimateProfile?: GenerationEstimateProfile;
 }
 
 export interface MeterAndSettleArgs {
@@ -121,7 +137,13 @@ export interface MeterAndSettleArgs {
   /** Models resolved for this run, keyed by role ("image", "text", …). */
   models?: Record<string, ModelSelection | undefined>;
   /** Latency bucket for the rolling window; skipped when absent. */
-  latency?: { kind: LatencyKind; refs: number };
+  latency?: { profile: GenerationEstimateProfile; refs: number };
+  /** Exact profile shared by the cost window, quote, and completed run. */
+  estimateProfile?: GenerationEstimateProfile;
+  /** Resolved image options and the actual reference payload sent. */
+  generation?: ResolvedImageGenerationOptions;
+  inputReferenceCount?: number;
+  outputSize?: string;
 }
 
 export interface MeterAndSettleResult {
@@ -144,9 +166,30 @@ function modelMap(models: MeterAndSettleArgs["models"]): Record<string, string> 
   return out;
 }
 
+function compactGeneration(
+  generation: ResolvedImageGenerationOptions,
+  inputReferenceCount: number,
+): NonNullable<ActionRunDoc["generation"]> {
+  return {
+    requested: JSON.parse(JSON.stringify(generation.requested)) as Record<string, unknown>,
+    applied: JSON.parse(JSON.stringify(generation.applied)) as Record<string, unknown>,
+    skipped: generation.skipped,
+    inputReferenceCount,
+  };
+}
+
 /** Provider calls that produced a delivered image (excludes repair passes). */
 function countImages(events: UsageEvent[]): number {
   return events.filter((e) => e.modality === "image").length;
+}
+
+function durationByStep(events: UsageEvent[]): Record<string, number> {
+  const durations: Record<string, number> = {};
+  for (const event of events) {
+    const step = event.step ?? "unscoped";
+    durations[step] = (durations[step] ?? 0) + (event.durationMs ?? 0);
+  }
+  return durations;
 }
 
 /**
@@ -162,8 +205,14 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
   const at = Date.now();
   const durationMs = Math.max(0, at - args.startedAt);
   const outcome: RunOutcome = args.outcome ?? "ok";
-  const isEdit = args.kind === "edit";
-
+  const eventSplit = splitBillable(args.events);
+  const completedEstimateProfile = args.estimateProfile
+    ? completeGenerationEstimateProfile(args.estimateProfile, {
+        outputSize: args.outputSize,
+        referenceCount: args.inputReferenceCount ?? args.latency?.refs,
+        billableImages: countImages(eventSplit.billable),
+      })
+    : undefined;
   try {
     // The mirror must exist before the line items so they can carry `projectSeq`.
     const projectSeq = args.projectId
@@ -172,7 +221,7 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
 
     const totals = await recordUsage(args.uid, args.action, args.events, args.tier, {
       projectId: args.projectId,
-      isEdit,
+      estimateProfile: completedEstimateProfile,
       stats: args.stats,
       runId,
       projectSeq,
@@ -185,9 +234,10 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
       // you spent on fast renders" with a query rather than a join through here.
       tier: args.tier,
       settleKey: args.settleKey,
+      maxSparks: args.quotedSparks,
     });
 
-    const { billable, unbilled } = splitBillable(args.events);
+    const { billable, unbilled } = eventSplit;
     const sparksConfig = await getSparksConfig();
     const chargedValueUsd = settled.sparks * sparksConfig.sparkValueUsd;
     const breakdown = settled.breakdown;
@@ -209,6 +259,7 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
         total: args.events.length,
         failures: args.stats?.failures ?? 0,
         byStep: totals.callsByStep,
+        durationMsByStep: durationByStep(args.events),
       },
       costUsd: {
         total: totals.totalUsd,
@@ -230,6 +281,15 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
       outcome,
       ...(args.errorCode ? { errorCode: args.errorCode } : {}),
       tokens: totals.tokens,
+      ...(args.generation
+        ? {
+            generation: compactGeneration(
+              args.generation,
+              args.inputReferenceCount ?? args.latency?.refs ?? 0,
+            ),
+          }
+        : {}),
+      ...(completedEstimateProfile ? { estimateProfile: completedEstimateProfile } : {}),
     };
     await db().collection("actionRuns").doc(runId).set(run);
 
@@ -272,7 +332,7 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
       await recordTaskLatency(
         args.action,
         args.tier,
-        args.latency.kind,
+        completedEstimateProfile ?? args.latency.profile,
         args.latency.refs,
         durationMs,
       );

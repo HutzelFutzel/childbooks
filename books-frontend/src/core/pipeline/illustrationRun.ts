@@ -14,6 +14,7 @@
  * the caller to persist.
  */
 import type { ProviderId } from "../config/options";
+import type { ImageActionId } from "../ai/actions";
 import type { ResolvedModels } from "../models/registry";
 import type { ReferenceImage } from "../providers/types";
 import type {
@@ -54,6 +55,11 @@ import { paginate } from "./pagination";
 import type { CompositionMode, LayoutPlan, PageSide } from "../book/layouts";
 import { planPageLayout } from "../book/pageLayout";
 import { capabilitiesFor, type CapabilityOverrides } from "../config/modelCapabilities";
+import {
+  generationIntentFor,
+  generationTuningFor,
+  type GenerationTuningConfig,
+} from "../config/generationTuning";
 import {
   mergeImageGenerationHints,
   resolveImageGenerationOptions,
@@ -150,6 +156,8 @@ export interface CompositeOps {
 export interface PipelineEnv {
   /** Auto-resolved models for every role. */
   models: ResolvedModels;
+  /** Image action currently being rendered by this isolated environment. */
+  imageAction: ImageActionId;
   /**
    * Resolve the API key for a provider. Implementations may return "" when the
    * key is injected downstream (e.g. the client talks through an authed proxy),
@@ -184,6 +192,8 @@ export interface PipelineEnv {
    * behaviour changes faster than deploys, so what a model can do is data.
    */
   modelCapabilities?: CapabilityOverrides;
+  /** Admin-managed latency and quality policy for image generation. */
+  generationTuning?: GenerationTuningConfig;
   /** Admin overlay for layouts (slot treatments, allowed composition modes). */
   layoutsConfig?: LayoutsConfig;
   /**
@@ -244,6 +254,10 @@ export interface IllustrationRender {
   imageModel?: IllustrationImage["imageModel"];
   /** Best-effort output preferences and what the selected model applied. */
   generation?: ResolvedImageGenerationOptions;
+  /** Actual number of image references submitted with the primary render. */
+  inputReferenceCount?: number;
+  /** Provider canvas requested for the primary render. */
+  outputSize?: string;
 }
 
 /** Wrap a render into a (new or extended) version tree. Pure. */
@@ -368,6 +382,39 @@ export async function asRefPayload(
   }
 }
 
+/** Combine a caller abort with a shorter optional-QC deadline. */
+export function signalUntil(
+  parent: AbortSignal | undefined,
+  deadlineAt: number,
+): AbortSignal {
+  const remaining = deadlineAt - Date.now();
+  if (remaining <= 0) return AbortSignal.abort("Quality-control budget expired");
+  const timeout = AbortSignal.timeout(remaining);
+  return parent ? AbortSignal.any([parent, timeout]) : timeout;
+}
+
+function tunedInputFidelity(
+  env: PipelineEnv,
+  imageModel: ResolvedModels["imageModel"],
+): "low" | "high" | undefined {
+  const tuning = generationTuningFor(env.generationTuning, env.imageAction);
+  return resolveImageGenerationOptions(
+    capabilitiesFor(imageModel, env.modelCapabilities),
+    generationIntentFor(tuning),
+  ).applied.inputFidelity;
+}
+
+function tunedReferenceLimit(
+  env: PipelineEnv,
+  imageModel: ResolvedModels["imageModel"],
+): number {
+  const tuning = generationTuningFor(env.generationTuning, env.imageAction);
+  return Math.min(
+    capabilitiesFor(imageModel, env.modelCapabilities).inputs.maxReferenceImages,
+    tuning.references.maxImages,
+  );
+}
+
 /**
  * Mask each listed region, regenerate it as matching background (subject erased),
  * and composite back so pixels outside stay identical. Best-effort when
@@ -385,8 +432,31 @@ export async function removeRegionsInPlace(args: {
   signal?: AbortSignal;
   step: string;
   strict?: boolean;
+  maxRemovals?: number;
+  deadlineAt?: number;
+  quality?: Parameters<typeof generateIllustrationImage>[0]["quality"];
+  inputFidelity?: Parameters<typeof generateIllustrationImage>[0]["inputFidelity"];
+  retries?: number;
+  beforeAttempt?: Parameters<typeof generateIllustrationImage>[0]["beforeAttempt"];
 }): Promise<{ base64: string; mimeType: string } | null> {
-  const { removals, page, config, imageModel, imageKey, size, env, signal, step, strict } = args;
+  const {
+    removals,
+    page,
+    config,
+    imageModel,
+    imageKey,
+    size,
+    env,
+    signal,
+    step,
+    strict,
+    maxRemovals = removals.length,
+    deadlineAt,
+    quality = "low",
+    inputFidelity,
+    retries,
+    beforeAttempt,
+  } = args;
   if (removals.length === 0) return null;
   const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
   const supportsMask = capabilitiesFor(
@@ -396,7 +466,10 @@ export async function removeRegionsInPlace(args: {
 
   let current = page;
   let removed = 0;
-  for (const r of removals) {
+  for (const r of removals.slice(0, maxRemovals)) {
+    if (deadlineAt !== undefined && Date.now() >= deadlineAt) break;
+    const operationSignal =
+      deadlineAt === undefined ? signal : signalUntil(signal, deadlineAt);
     try {
       const mask = await env.composite.buildHoleMask({
         pageBase64: current.base64,
@@ -422,8 +495,11 @@ export async function removeRegionsInPlace(args: {
           mask: supportsMask ? mask : undefined,
           // Small masked region, composited back — low quality is visually
           // equivalent here and roughly halves the per-edit latency.
-          quality: "low",
-          signal,
+          quality,
+          inputFidelity,
+          retries,
+          beforeAttempt,
+          signal: operationSignal,
         }),
       );
       const composited = await env.composite.compositeMaskedRegion({
@@ -437,7 +513,8 @@ export async function removeRegionsInPlace(args: {
         current = { base64: composited.base64, mimeType: composited.mimeType };
         removed += 1;
       } else if (strict) return null;
-    } catch {
+    } catch (error) {
+      if (signal?.aborted) throw error;
       if (strict) return null;
     }
   }
@@ -469,8 +546,6 @@ export async function removeRegionsInPlace(args: {
  * the (single, cheap) binding vision call and skips all repair image calls,
  * which also removes the main latency tail from "fast" generations.
  */
-const MAX_DUPE_REPAIRS = 2;
-
 async function bindAndRepairPage(args: {
   anchors: Anchor[];
   embeddedPairs?: { parent: Anchor; child: Anchor }[];
@@ -485,6 +560,18 @@ async function bindAndRepairPage(args: {
   const { anchors, embeddedPairs = [], image, config, imageModel, imageKey, size, env, signal } =
     args;
   if (anchors.length === 0) return { image, depicted: [] };
+  const actionTuning = generationTuningFor(env.generationTuning, env.imageAction);
+  const qc = actionTuning.qualityControl;
+  if (!qc.bindingPass || qc.budgetMs === 0) {
+    return { image, depicted: [] };
+  }
+  const deadlineAt = Date.now() + qc.budgetMs;
+  let repairAttemptsRemaining = qc.maxImageCalls;
+  const claimRepairAttempt = () => {
+    if (repairAttemptsRemaining <= 0) return false;
+    repairAttemptsRemaining -= 1;
+    return true;
+  };
 
   const model = env.models.bindingModel ?? env.models.textModel;
   let bindKey: string;
@@ -504,18 +591,24 @@ async function bindAndRepairPage(args: {
   // Vision models only need to LOCATE subjects (normalized boxes), so a
   // downscaled copy keeps the payload small without affecting the result.
   const visionPage = await asRefPayload(env, image);
-  const bindings = await runStep("binding", () =>
-    locateAndCountSubjects({
-      pageBase64: visionPage.base64,
-      pageMime: visionPage.mimeType,
-      subjects: anchors.map((a) => ({ id: a.id, name: a.name, description: a.description })),
-      creds: { apiKey: bindKey },
-      model: model.id,
-      providerId: model.provider,
-      prompts: env.prompts,
-      signal,
-    }),
-  );
+  let bindings: Awaited<ReturnType<typeof locateAndCountSubjects>>;
+  try {
+    bindings = await runStep("binding", () =>
+      locateAndCountSubjects({
+        pageBase64: visionPage.base64,
+        pageMime: visionPage.mimeType,
+        subjects: anchors.map((a) => ({ id: a.id, name: a.name, description: a.description })),
+        creds: { apiKey: bindKey },
+        model: model.id,
+        providerId: model.provider,
+        prompts: env.prompts,
+        signal: signalUntil(signal, deadlineAt),
+      }),
+    );
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return { image, depicted: [] };
+  }
 
   const dupes: { name: string; box: SubjectBox }[] = [];
   for (const a of anchors) {
@@ -525,9 +618,16 @@ async function bindAndRepairPage(args: {
   }
 
   let current = image;
-  if (dupes.length > 0 && canRepair) {
+  if (
+    dupes.length > 0 &&
+    canRepair &&
+    qc.duplicateRepairLimit > 0 &&
+    repairAttemptsRemaining > 0 &&
+    Date.now() < deadlineAt
+  ) {
+    const repairLimit = Math.min(qc.duplicateRepairLimit, repairAttemptsRemaining);
     const repaired = await removeRegionsInPlace({
-      removals: dupes.slice(0, MAX_DUPE_REPAIRS),
+      removals: dupes,
       page: current,
       config,
       imageModel,
@@ -537,6 +637,12 @@ async function bindAndRepairPage(args: {
       signal,
       step: "dedupe",
       strict: false,
+      maxRemovals: repairLimit,
+      deadlineAt,
+      quality: qc.repairQuality,
+      inputFidelity: tunedInputFidelity(env, imageModel),
+      retries: actionTuning.retries,
+      beforeAttempt: claimRepairAttempt,
     });
     if (repaired) current = repaired;
   }
@@ -545,7 +651,13 @@ async function bindAndRepairPage(args: {
   // parent place/object, erase generic default instances (e.g. a default bed
   // when a specific bed anchor is present). Repair-capable providers only —
   // the detection vision calls are skipped too when we can't act on them.
-  if (embeddedPairs.length > 0 && canRepair) {
+  if (
+    embeddedPairs.length > 0 &&
+    canRepair &&
+    qc.embeddedRepairLimit > 0 &&
+    repairAttemptsRemaining > 0 &&
+    Date.now() < deadlineAt
+  ) {
     const byParent = new Map<string, { parent: Anchor; children: Anchor[] }>();
     for (const { parent, child } of embeddedPairs) {
       const g = byParent.get(parent.id) ?? { parent, children: [] };
@@ -556,20 +668,27 @@ async function bindAndRepairPage(args: {
     const embeddedPrimary = new Map<string, SubjectBox>();
     const visionCurrent = await asRefPayload(env, current);
     for (const { parent, children } of byParent.values()) {
-      const found = await runStep("embedded", () =>
-        locateEmbeddedObsolete({
-          pageBase64: visionCurrent.base64,
-          pageMime: visionCurrent.mimeType,
-          parent: { name: parent.name, description: parent.description },
-          children: children.map((c) => ({ id: c.id, name: c.name, description: c.description })),
-          mode: "scene",
-          creds: { apiKey: bindKey },
-          model: model.id,
-          providerId: model.provider,
-          prompts: env.prompts,
-          signal,
-        }),
-      );
+      if (Date.now() >= deadlineAt) break;
+      let found: Awaited<ReturnType<typeof locateEmbeddedObsolete>>;
+      try {
+        found = await runStep("embedded", () =>
+          locateEmbeddedObsolete({
+            pageBase64: visionCurrent.base64,
+            pageMime: visionCurrent.mimeType,
+            parent: { name: parent.name, description: parent.description },
+            children: children.map((c) => ({ id: c.id, name: c.name, description: c.description })),
+            mode: "scene",
+            creds: { apiKey: bindKey },
+            model: model.id,
+            providerId: model.provider,
+            prompts: env.prompts,
+            signal: signalUntil(signal, deadlineAt),
+          }),
+        );
+      } catch (error) {
+        if (signal?.aborted) throw error;
+        break;
+      }
       for (const child of children) {
         const b = found.get(child.id);
         if (!b) continue;
@@ -577,7 +696,8 @@ async function bindAndRepairPage(args: {
         for (const box of b.obsolete) embeddedObsolete.push({ name: child.name, box });
       }
     }
-    if (embeddedObsolete.length > 0) {
+    if (embeddedObsolete.length > 0 && Date.now() < deadlineAt) {
+      const repairLimit = Math.min(qc.embeddedRepairLimit, repairAttemptsRemaining);
       const repaired = await removeRegionsInPlace({
         removals: embeddedObsolete,
         page: current,
@@ -589,6 +709,12 @@ async function bindAndRepairPage(args: {
         signal,
         step: "embedded",
         strict: false,
+        maxRemovals: repairLimit,
+        deadlineAt,
+        quality: qc.repairQuality,
+        inputFidelity: tunedInputFidelity(env, imageModel),
+        retries: actionTuning.retries,
+        beforeAttempt: claimRepairAttempt,
       });
       if (repaired) current = repaired;
     }
@@ -643,6 +769,10 @@ async function trySurgicalRemoval(args: {
     signal: args.signal,
     step: "removal",
     strict: true,
+    quality: generationTuningFor(args.env.generationTuning, args.env.imageAction)
+      .qualityControl.repairQuality,
+    inputFidelity: tunedInputFidelity(args.env, args.imageModel),
+    retries: generationTuningFor(args.env.generationTuning, args.env.imageAction).retries,
   });
 }
 
@@ -668,7 +798,9 @@ async function trySurgicalReplaceOne(args: {
     imageModel,
     env.modelCapabilities,
   ).operations.maskEditing;
+  if (tunedReferenceLimit(env, imageModel) < 2) return null;
   try {
+    const sourcePayload = await asRefPayload(env, sourceRef);
     const mask = await env.composite.buildHoleMask({
       pageBase64: page.base64,
       pageMime: page.mimeType,
@@ -689,11 +821,13 @@ async function trySurgicalReplaceOne(args: {
         providerId: imageModel.provider,
         references: [
           { base64: page.base64, mimeType: page.mimeType, role: "composition" },
-          { base64: sourceRef.base64, mimeType: sourceRef.mimeType, role: "subject", label: sourceAnchor.name },
+          { base64: sourcePayload.base64, mimeType: sourcePayload.mimeType, role: "subject", label: sourceAnchor.name },
         ],
         mask: supportsMask ? mask : undefined,
-        // Small masked region, composited back — low quality suffices.
-        quality: "low",
+        quality: generationTuningFor(env.generationTuning, env.imageAction)
+          .qualityControl.repairQuality,
+        inputFidelity: tunedInputFidelity(env, imageModel),
+        retries: generationTuningFor(env.generationTuning, env.imageAction).retries,
         signal,
       }),
     );
@@ -705,7 +839,8 @@ async function trySurgicalReplaceOne(args: {
       maskBase64: mask.base64,
     });
     return composited.base64 ? { base64: composited.base64, mimeType: composited.mimeType } : null;
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw error;
     return null;
   }
 }
@@ -737,6 +872,11 @@ async function trySurgicalModifyOne(args: {
     env.modelCapabilities,
   ).operations.maskEditing;
   try {
+    const useSheetRef = Boolean(
+      sheetRef && tunedReferenceLimit(env, imageModel) >= 2,
+    );
+    const sheetPayload =
+      useSheetRef && sheetRef ? await asRefPayload(env, sheetRef) : null;
     const mask = await env.composite.buildHoleMask({
       pageBase64: page.base64,
       pageMime: page.mimeType,
@@ -745,10 +885,10 @@ async function trySurgicalModifyOne(args: {
     });
     const references: ReferenceImage[] = [
       { base64: page.base64, mimeType: page.mimeType, role: "composition" },
-      ...(sheetRef
+      ...(sheetPayload
         ? [{
-            base64: sheetRef.base64,
-            mimeType: sheetRef.mimeType,
+            base64: sheetPayload.base64,
+            mimeType: sheetPayload.mimeType,
             role: "subject" as const,
             label: targetAnchor.name,
           }]
@@ -761,7 +901,7 @@ async function trySurgicalModifyOne(args: {
           instruction,
           config,
           maskMode: supportsMask,
-          hasSheetRef: Boolean(sheetRef),
+          hasSheetRef: Boolean(sheetPayload),
           prompts: env.prompts,
         }),
         size,
@@ -770,8 +910,10 @@ async function trySurgicalModifyOne(args: {
         providerId: imageModel.provider,
         references,
         mask: supportsMask ? mask : undefined,
-        // Small masked region, composited back — low quality suffices.
-        quality: "low",
+        quality: generationTuningFor(env.generationTuning, env.imageAction)
+          .qualityControl.repairQuality,
+        inputFidelity: tunedInputFidelity(env, imageModel),
+        retries: generationTuningFor(env.generationTuning, env.imageAction).retries,
         signal,
       }),
     );
@@ -783,13 +925,11 @@ async function trySurgicalModifyOne(args: {
       maskBase64: mask.base64,
     });
     return composited.base64 ? { base64: composited.base64, mimeType: composited.mimeType } : null;
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw error;
     return null;
   }
 }
-
-/** Max subjects edited in parallel within one page (keeps under rate limits). */
-const SURGICAL_CONCURRENCY = 3;
 
 /**
  * Update each changed subject IN PLACE on an existing page: locate the subject
@@ -827,6 +967,7 @@ async function trySurgicalAnchorUpdate(args: {
     imageModel,
     env.modelCapabilities,
   ).operations.maskEditing;
+  if (tunedReferenceLimit(env, imageModel) < 2) return null;
 
   // Load the NEW reference image for each changed subject (in parallel).
   type Subject = {
@@ -837,7 +978,8 @@ async function trySurgicalAnchorUpdate(args: {
     await Promise.all(
       refreshAnchors.map(async (anchor): Promise<Subject | null> => {
         const img = currentAnchorImage(anchor);
-        const ref = img ? await env.loadBlob(img.blobId) : null;
+        const raw = img ? await env.loadBlob(img.blobId) : null;
+        const ref = raw ? await asRefPayload(env, raw) : null;
         return ref ? { anchor, ref } : null;
       }),
     )
@@ -900,14 +1042,19 @@ async function trySurgicalAnchorUpdate(args: {
           // OpenAI constrains the edit to the masked region; Gemini regenerates the
           // full frame and we rely on the composite below to keep the rest intact.
           mask: supportsMask ? mask : undefined,
-          // Small masked region, composited back — low quality suffices.
-          quality: "low",
+          quality: generationTuningFor(env.generationTuning, env.imageAction)
+            .qualityControl.repairQuality,
+          inputFidelity: tunedInputFidelity(env, imageModel),
+          retries: generationTuningFor(env.generationTuning, env.imageAction).retries,
           signal,
         }),
       );
       return { anchorId: s.anchor.id, edited: result, mask };
     },
-    { concurrency: SURGICAL_CONCURRENCY },
+    {
+      concurrency:
+        env.generationTuning?.execution.surgicalConcurrency ?? 3,
+    },
   );
 
   // Composite each successful region back onto the original (cheap, sequential)
@@ -1129,6 +1276,7 @@ export async function renderIllustration(
   // Resolved once: every canvas this render asks for, and every in-place path
   // it may take, has to agree about what this model can do.
   const caps = capabilitiesFor(imageModel, env.modelCapabilities);
+  const actionTuning = generationTuningFor(env.generationTuning, env.imageAction);
   // In-place rectangle surgery needs a real inpainting mask. Which models offer
   // one is model knowledge, not a provider assumption, so it comes from the
   // capability table; models without it fall through to a whole-page,
@@ -1308,6 +1456,19 @@ export async function renderIllustration(
   const hasStyleRef = false;
   let hasScaleChart = false;
   if (!inpaint) {
+    const availableReferenceSlots = caps.operations.referenceEditing
+      ? Math.min(
+          caps.inputs.maxReferenceImages,
+          Math.max(
+            actionTuning.references.maxImages,
+            hasCompositionRef ? 1 : 0,
+          ),
+        )
+      : 0;
+    const subjectSlotLimit = Math.max(
+      0,
+      availableReferenceSlots - (hasCompositionRef ? 1 : 0),
+    );
     const needsSheet = (a: Anchor): boolean => {
       if (!hasCompositionRef) return true; // fresh render: send everything
       // A restyle redraws the whole picture, so every subject needs its (newly
@@ -1327,6 +1488,8 @@ export async function renderIllustration(
       else if (needsSheet(a)) sheetAnchors.push(a);
       else keptAnchors.push(a);
     }
+    const omittedSheetAnchors = sheetAnchors.splice(subjectSlotLimit);
+    describedAnchors.push(...omittedSheetAnchors);
     const anchorData = await Promise.all(
       sheetAnchors.map(async (a) => {
         const img = currentAnchorImage(a);
@@ -1346,7 +1509,11 @@ export async function renderIllustration(
     // means anything within one scene's cast, and inserted before the subject
     // sheets so the legend order stays easy to state.
     const fractions = heightFractions(anchors);
-    if (fractions.size >= 2 && env.composite.buildScaleChart) {
+    if (
+      fractions.size >= 2 &&
+      sheetAnchors.length < subjectSlotLimit &&
+      env.composite.buildScaleChart
+    ) {
       const figures = sheetAnchors
         .map((a, i) => {
           const fraction = fractions.get(a.id);
@@ -1581,10 +1748,76 @@ export async function renderIllustration(
     if (structured) return structured;
   }
 
+  const configuredReferenceLimit = Math.min(
+    caps.inputs.maxReferenceImages,
+    actionTuning.references.maxImages,
+  );
+  const compositionCandidate = references.find(
+    (reference) =>
+      reference.role === "composition" || reference.role === "restyleBase",
+  );
+  const effectiveReferenceLimit = caps.operations.referenceEditing
+    ? Math.min(
+        caps.inputs.maxReferenceImages,
+        Math.max(configuredReferenceLimit, compositionCandidate ? 1 : 0),
+      )
+    : 0;
+  const compositionReference =
+    effectiveReferenceLimit > 0 ? compositionCandidate : undefined;
+  const subjectCapacity = Math.max(
+    0,
+    effectiveReferenceLimit - (compositionReference ? 1 : 0),
+  );
+  const subjectReferences = references.filter(
+    (reference) => reference.role === "subject",
+  );
+  const selectedSubjectReferences = subjectReferences.slice(0, subjectCapacity);
+  const selectedReferencedAnchors = referencedAnchors.slice(
+    0,
+    selectedSubjectReferences.length,
+  );
+  const droppedReferencedAnchors = referencedAnchors.slice(
+    selectedReferencedAnchors.length,
+  );
+  for (const anchor of droppedReferencedAnchors) {
+    if (!describedAnchors.some((described) => described.id === anchor.id)) {
+      describedAnchors.push(anchor);
+    }
+  }
+  referencedAnchors.splice(0, referencedAnchors.length, ...selectedReferencedAnchors);
+  const selectedAnchorIds = new Set(selectedReferencedAnchors.map((anchor) => anchor.id));
+  refreshAnchors = refreshAnchors.filter((anchor) => selectedAnchorIds.has(anchor.id));
+
+  const remainingAfterSubjects =
+    subjectCapacity - selectedSubjectReferences.length;
+  const scaleReference = references.find((reference) => reference.role === "scale");
+  const selectedScaleReference =
+    scaleReference && remainingAfterSubjects > 0 ? scaleReference : undefined;
+  hasScaleChart = Boolean(selectedScaleReference);
+  const finalReferences: ReferenceImage[] = [
+    ...(selectedScaleReference ? [selectedScaleReference] : []),
+    ...selectedSubjectReferences,
+    ...(compositionReference ? [compositionReference] : []),
+  ];
+  references.splice(0, references.length, ...finalReferences);
+  const hasSubmittedComposition = Boolean(compositionReference);
+  const submittedMaskMode = maskMode && hasSubmittedComposition;
+  if (!hasSubmittedComposition && keptAnchors.length > 0) {
+    for (const anchor of keptAnchors) {
+      if (!describedAnchors.some((described) => described.id === anchor.id)) {
+        describedAnchors.push(anchor);
+      }
+    }
+    keptAnchors.splice(0, keptAnchors.length);
+  }
+
   const layoutPlan = resolveLayoutPlan(project, spread, env.layoutsConfig);
   const generation = resolveImageGenerationOptions(
     caps,
-    generationHintsFor(project, layoutPlan, env),
+    mergeImageGenerationHints(
+      generationHintsFor(project, layoutPlan, env),
+      generationIntentFor(actionTuning),
+    ),
   );
 
   const prompt = buildIllustrationPrompt({
@@ -1601,8 +1834,8 @@ export async function renderIllustration(
     removedAnchors,
     hasStyleRef,
     hasScaleChart,
-    hasCompositionRef,
-    maskMode,
+    hasCompositionRef: hasSubmittedComposition,
+    maskMode: submittedMaskMode,
     restyle,
     // Cover-only: bake the title/subtitle/author typography into the artwork.
     bakeText: spread.bakeText,
@@ -1623,25 +1856,31 @@ export async function renderIllustration(
   });
 
   const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
+  const submittedReferences =
+    caps.operations.referenceEditing && references.length ? references : undefined;
+  const outputSize = chooseImageSize(spread.kind, project.config, layoutPlan, caps);
   const result = await runStep("image", () =>
     generateIllustrationImage({
       prompt,
-      size: chooseImageSize(spread.kind, project.config, layoutPlan, caps),
+      size: outputSize,
       creds: { apiKey: key },
       model: imageModel.id,
       providerId: imageModel.provider,
-      references:
-        caps.operations.referenceEditing && references.length
-          ? references.slice(0, caps.inputs.maxReferenceImages)
-          : undefined,
-      mask: maskMode ? options.mask : undefined,
+      references: submittedReferences,
+      mask: submittedMaskMode ? options.mask : undefined,
+      quality: generation.applied.quality,
+      inputFidelity: generation.applied.inputFidelity,
       output:
-        generation.applied.background || generation.applied.format
+        generation.applied.background ||
+        generation.applied.format ||
+        generation.applied.outputCompression !== undefined
           ? {
               background: generation.applied.background,
               format: generation.applied.format,
+              compression: generation.applied.outputCompression,
             }
           : undefined,
+      retries: actionTuning.retries,
       allowText: Boolean(spread.bakeText),
       signal: options.signal,
     }),
@@ -1679,7 +1918,7 @@ export async function renderIllustration(
     config: project.config,
     imageModel,
     imageKey: key,
-    size: chooseImageSize(spread.kind, project.config, layoutPlan, caps),
+    size: outputSize,
     env,
     signal: options.signal,
   });
@@ -1700,6 +1939,8 @@ export async function renderIllustration(
     // most pixels in whatever style they were already drawn in.
     artStyleKey: artStyleKey(project.config.artStyle),
     generation,
+    inputReferenceCount: submittedReferences?.length ?? 0,
+    outputSize,
   };
 }
 
@@ -1780,6 +2021,11 @@ export async function renderCoverContinuation(
   if (!seedResult) throw new Error("Could not prepare the front cover's edge for continuation.");
 
   const prompt = buildCoverContinuationPrompt({ config: project.config, prompts: env.prompts });
+  const actionTuning = generationTuningFor(env.generationTuning, env.imageAction);
+  const generation = resolveImageGenerationOptions(
+    capabilitiesFor(imageModel, env.modelCapabilities),
+    generationIntentFor(actionTuning),
+  );
   const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
   const result = await runStep("image", () =>
     generateIllustrationImage({
@@ -1792,6 +2038,16 @@ export async function renderCoverContinuation(
         { base64: seedResult.seedBase64, mimeType: seedResult.seedMime, role: "composition" },
       ],
       mask: { base64: seedResult.maskBase64, mimeType: seedResult.maskMime },
+      quality: generation.applied.quality,
+      inputFidelity: generation.applied.inputFidelity,
+      output:
+        generation.applied.format || generation.applied.outputCompression !== undefined
+          ? {
+              format: generation.applied.format,
+              compression: generation.applied.outputCompression,
+            }
+          : undefined,
+      retries: actionTuning.retries,
       signal: options.signal,
     }),
   );
@@ -1817,5 +2073,8 @@ export async function renderCoverContinuation(
     prompt,
     label: "Initial",
     textMode: backSpread.textMode,
+    generation,
+    inputReferenceCount: 1,
+    outputSize: size,
   };
 }

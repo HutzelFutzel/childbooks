@@ -4,14 +4,17 @@
  * live time estimate ("usually 20–45s") before and during a generation.
  *
  * Mirrors `imageCostStats`: the worker (and the sync `/ai/*` endpoints) append
- * a measured duration per finished render, bucketed by the parameters that
- * actually move the needle — action, tier, kind of render, and how many
- * reference images were involved. Each sample is ALSO appended to the coarse
- * `action:tier` bucket so sparse fine buckets can fall back gracefully.
+ * a measured duration per finished render, bucketed by an exact generation
+ * profile plus the number of submitted references. Sparse profiles use a seed
+ * rather than borrowing another quality, model, or render policy.
  *
  * Only aggregate durations are stored (never per-user data).
  */
 import type { ImageActionId } from "../ai/actions";
+import {
+  latencyProfileKey,
+  type GenerationEstimateProfile,
+} from "./generationEstimateProfile";
 import type { ImageTier } from "./modelConfig";
 
 /** How many recent durations to keep per bucket. */
@@ -23,16 +26,13 @@ export const LATENCY_MIN_SAMPLES = 4;
 /** Queue-dispatch delay bucket (job created → worker picks it up). */
 export const DISPATCH_KEY = "dispatch";
 
-/** How a render came about — fresh, composition-preserving refresh, or edit. */
-export type LatencyKind = "fresh" | "refresh" | "edit";
-
 export interface LatencySamples {
   samples: number[];
 }
 
 export interface LatencyStats {
-  version: 1;
-  /** Keyed by `${action}:${tier}:${kind}:rN` (fine) or `${action}:${tier}` (coarse). */
+  version: 2;
+  /** Exact generation-profile keys only; legacy mixed buckets are discarded. */
   stats: Record<string, LatencySamples>;
   updatedAt: number;
 }
@@ -48,24 +48,21 @@ export function refBucket(refCount: number): string {
 export function latencyKey(
   action: ImageActionId,
   tier: ImageTier,
-  kind: LatencyKind,
+  profile: GenerationEstimateProfile,
   refCount: number,
 ): string {
-  return `${action}:${tier}:${kind}:r${refBucket(refCount)}`;
-}
-
-export function latencyCoarseKey(action: ImageActionId, tier: ImageTier): string {
-  return `${action}:${tier}`;
+  return `v3:${action}:${tier}:${latencyProfileKey(profile)}:r${refBucket(refCount)}`;
 }
 
 export function createDefaultLatencyStats(): LatencyStats {
-  return { version: 1, stats: {}, updatedAt: 0 };
+  return { version: 2, stats: {}, updatedAt: 0 };
 }
 
 /** Coerce an arbitrary Firestore payload into a valid stats doc. */
 export function normalizeLatencyStats(input: unknown): LatencyStats {
   const raw = (input ?? {}) as Partial<LatencyStats>;
   const out: Record<string, LatencySamples> = {};
+  if (raw.version !== 2) return createDefaultLatencyStats();
   const stats = (raw.stats ?? {}) as Record<string, unknown>;
   for (const [key, value] of Object.entries(stats)) {
     const arr = (value as LatencySamples | undefined)?.samples;
@@ -77,7 +74,7 @@ export function normalizeLatencyStats(input: unknown): LatencyStats {
     }
   }
   return {
-    version: 1,
+    version: 2,
     stats: out,
     updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : 0,
   };
@@ -92,7 +89,7 @@ export function appendLatencySample(
   const prev = stats.stats[key]?.samples ?? [];
   const next = [...prev, Math.round(ms)].slice(-LATENCY_WINDOW_SIZE);
   return {
-    version: 1,
+    version: 2,
     stats: { ...stats.stats, [key]: { samples: next } },
     updatedAt: Date.now(),
   };
@@ -136,25 +133,21 @@ const SEED_TASK_RANGE: Record<ImageTier, DurationRange> = {
 const SEED_DISPATCH: DurationRange = { minMs: 2_000, maxMs: 15_000 };
 
 /**
- * Estimate the duration of ONE render task: fine bucket → coarse bucket →
- * hardcoded per-tier seed.
+ * Estimate one render from its exact profile. Sparse or unknown profiles use a
+ * seed, never samples collected under another quality/model/render policy.
  */
 export function estimateTaskRange(
   stats: LatencyStats,
   action: ImageActionId,
   tier: ImageTier,
-  kind?: LatencyKind,
+  profile?: GenerationEstimateProfile,
   refCount?: number,
 ): DurationRange {
   const fine =
-    kind !== undefined && refCount !== undefined
-      ? latencyRange(stats, latencyKey(action, tier, kind, refCount))
+    profile !== undefined && refCount !== undefined
+      ? latencyRange(stats, latencyKey(action, tier, profile, refCount))
       : null;
-  return (
-    fine ??
-    latencyRange(stats, latencyCoarseKey(action, tier)) ??
-    SEED_TASK_RANGE[tier]
-  );
+  return fine ?? SEED_TASK_RANGE[tier];
 }
 
 /**
@@ -167,10 +160,10 @@ export function estimateJobRange(
   tier: ImageTier,
   taskCount: number,
   concurrency: number,
-  kind?: LatencyKind,
+  profile?: GenerationEstimateProfile,
   refCount?: number,
 ): DurationRange {
-  const task = estimateTaskRange(stats, action, tier, kind, refCount);
+  const task = estimateTaskRange(stats, action, tier, profile, refCount);
   const dispatch = latencyRange(stats, DISPATCH_KEY) ?? SEED_DISPATCH;
   const waves = Math.max(1, Math.ceil(taskCount / Math.max(1, concurrency)));
   return {
