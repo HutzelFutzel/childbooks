@@ -26,9 +26,12 @@
  * conflict handling stay with the projects store, which already does all three.
  */
 import { z } from "zod";
-import { isKnownLayoutId } from "../book/layouts";
-import { isReadingModeId } from "../config/readingModes";
-import { isBookLanguageId } from "../config/bookLanguages";
+import { BOOK_LAYOUTS, isKnownLayoutId } from "../book/layouts";
+import { READING_MODE_IDS, isReadingModeId } from "../config/readingModes";
+import { BOOK_LANGUAGES, isBookLanguageId } from "../config/bookLanguages";
+import { enabledAudienceProfiles, type AudienceConfig } from "../config/audience";
+import { resolveArtStyles, type ArtStylesConfig } from "../config/artStyles";
+import { BOOK_PRODUCTS } from "../fulfillment";
 import { briefOf, newCastMember } from "../story/brief";
 import type { BookConfig, Project, StoryBrief, StoryCastMember } from "../types";
 import { GUIDE_SLOT_IDS, GUIDE_SLOTS, type GuideSlotId } from "./slots";
@@ -45,6 +48,28 @@ export interface GuidePatchContext {
   artStylePresetIds: readonly string[];
   /** Product SKUs the catalog sells. */
   productSkus: readonly string[];
+}
+
+/**
+ * Build the context from the live configs.
+ *
+ * One builder for both sides on purpose. The server uses it to tell the model which
+ * ids exist; the client uses it to decide which ids may be written. If those two
+ * lists were assembled separately they would eventually disagree, and the symptom
+ * is the worst kind: the guide offers the parent a choice, they take it, and the
+ * write is silently refused.
+ */
+export function guidePatchContext(sources: {
+  audience?: AudienceConfig | null;
+  artStyles?: ArtStylesConfig | null;
+}): GuidePatchContext {
+  return {
+    ageBandIds: enabledAudienceProfiles(sources.audience ?? null).map((profile) => profile.id),
+    artStylePresetIds: resolveArtStyles(sources.artStyles ?? null).map((style) => style.id),
+    // Static catalog: the SKUs we can actually print are a property of the print
+    // partner, not something an admin sets.
+    productSkus: BOOK_PRODUCTS.map((product) => product.sku),
+  };
 }
 
 export interface GuidePatchRejection {
@@ -82,6 +107,13 @@ const ageSchema = z
  * schema at the definition site, and only `unknown` crosses the table boundary.
  */
 interface SlotWriter {
+  /**
+   * The JSON shape this slot accepts, in one line, for the interpreter's prompt.
+   * Required at the definition site so the description the model is given cannot
+   * drift from the schema that rejects it — the alternative is a shape list in the
+   * prompt that quietly describes last month's validator.
+   */
+  shape: (context: GuidePatchContext) => string;
   apply: (
     project: Project,
     input: unknown,
@@ -90,11 +122,13 @@ interface SlotWriter {
 }
 
 function writer<T>(
+  shape: string | ((context: GuidePatchContext) => string),
   schema: z.ZodType<T>,
   /** Returns the updated project, or null when the value changes nothing. */
   write: (project: Project, value: T, context: GuidePatchContext) => Project | null,
 ): SlotWriter {
   return {
+    shape: typeof shape === "function" ? shape : () => shape,
     apply(project, input, context) {
       const parsed = schema.safeParse(input);
       if (!parsed.success) {
@@ -103,6 +137,12 @@ function writer<T>(
       return { ok: true, project: write(project, parsed.data, context) };
     },
   };
+}
+
+/** A short list for a prompt, truncated so one huge catalog can't swamp it. */
+function idList(ids: readonly string[], limit = 40): string {
+  const shown = ids.slice(0, limit).map((id) => `"${id}"`).join(" | ");
+  return ids.length > limit ? `${shown} | …` : shown;
 }
 
 function withConfig(project: Project, patch: Partial<BookConfig>): Project {
@@ -120,10 +160,14 @@ function findByName(cast: StoryCastMember[], name: string): StoryCastMember | un
 }
 
 const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
-  storyMode: writer(z.enum(["guided", "co-write", "own"]), (project, mode) => {
-    const brief = briefOf(project.config);
-    return brief.mode === mode ? null : withBrief(project, { ...brief, mode });
-  }),
+  storyMode: writer(
+    '"guided" (we write it) | "co-write" (their details, our words) | "own" (they write it)',
+    z.enum(["guided", "co-write", "own"]),
+    (project, mode) => {
+      const brief = briefOf(project.config);
+      return brief.mode === mode ? null : withBrief(project, { ...brief, mode });
+    },
+  ),
 
   /**
    * The FULL cast list, not an addition. "It's for Maya and Leo" replaces
@@ -131,21 +175,27 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
    * Ages and notes survive for names that stay, matched case-insensitively, so
    * re-stating the list never silently drops the ages already given.
    */
-  heroes: writer(z.array(nameSchema).min(1).max(12), (project, names) => {
-    const brief = briefOf(project.config);
-    const existing = brief.cast ?? [];
-    const seen = new Set<string>();
-    const cast: StoryCastMember[] = [];
-    for (const name of names) {
-      const key = name.trim().toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      const kept = findByName(existing, name);
-      cast.push(kept ? { ...kept, name: name.trim() } : { ...newCastMember(), name: name.trim() });
-    }
-    if (sameCast(existing, cast)) return null;
-    return withBrief(project, { ...brief, cast, heroNames: cast.map((member) => member.name) });
-  }),
+  heroes: writer(
+    '["Maya", "Leo"] — the COMPLETE list of who the book is about, not an addition',
+    z.array(nameSchema).min(1).max(12),
+    (project, names) => {
+      const brief = briefOf(project.config);
+      const existing = brief.cast ?? [];
+      const seen = new Set<string>();
+      const cast: StoryCastMember[] = [];
+      for (const name of names) {
+        const key = name.trim().toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const kept = findByName(existing, name);
+        cast.push(
+          kept ? { ...kept, name: name.trim() } : { ...newCastMember(), name: name.trim() },
+        );
+      }
+      if (sameCast(existing, cast)) return null;
+      return withBrief(project, { ...brief, cast, heroNames: cast.map((member) => member.name) });
+    },
+  ),
 
   /**
    * Ages for people who are already in the cast. Deliberately cannot introduce
@@ -153,32 +203,38 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
    * a new character, and inventing a nameless-until-now hero from it is the kind
    * of thing a reader has to notice to undo.
    */
-  heroAges: writer(z.array(ageSchema).min(1).max(12), (project, ages) => {
-    const brief = briefOf(project.config);
-    const existing = brief.cast ?? [];
-    let changed = false;
-    const cast = existing.map((member) => {
-      const update = ages.find(
-        (candidate) => candidate.name.trim().toLowerCase() === member.name.trim().toLowerCase(),
-      );
-      if (!update) return member;
-      const next: StoryCastMember = { ...member };
-      // One unit at a time: months and years for the same person disagree the
-      // moment either is edited, and `characterAgeMonths` prefers months.
-      if (update.ageMonths !== undefined) {
-        next.ageMonths = update.ageMonths;
-        delete next.age;
-      } else {
-        next.age = update.age;
-        delete next.ageMonths;
-      }
-      if (next.age !== member.age || next.ageMonths !== member.ageMonths) changed = true;
-      return next;
-    });
-    return changed ? withBrief(project, { ...brief, cast }) : null;
-  }),
+  heroAges: writer(
+    '[{"name": "Maya", "age": 5}, {"name": "Leo", "ageMonths": 30}] — only for names already in the cast; use ageMonths for under-twos',
+    z.array(ageSchema).min(1).max(12),
+    (project, ages) => {
+      const brief = briefOf(project.config);
+      const existing = brief.cast ?? [];
+      let changed = false;
+      const cast = existing.map((member) => {
+        const update = ages.find(
+          (candidate) => candidate.name.trim().toLowerCase() === member.name.trim().toLowerCase(),
+        );
+        if (!update) return member;
+        const next: StoryCastMember = { ...member };
+        // One unit at a time: months and years for the same person disagree the
+        // moment either is edited, and `characterAgeMonths` prefers months.
+        if (update.ageMonths !== undefined) {
+          next.ageMonths = update.ageMonths;
+          delete next.age;
+        } else {
+          next.age = update.age;
+          delete next.ageMonths;
+        }
+        if (next.age !== member.age || next.ageMonths !== member.ageMonths) changed = true;
+        return next;
+      });
+      return changed ? withBrief(project, { ...brief, cast }) : null;
+    },
+  ),
 
   audience: writer(
+    (context) =>
+      `{"ageRangeId": ${idList(context.ageBandIds)}, "readingModeId"?: ${idList(READING_MODE_IDS)} | null}`,
     z.object({
       ageRangeId: z.string().min(1).max(40),
       readingModeId: z.string().max(40).nullable().optional(),
@@ -211,12 +267,17 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
     },
   ),
 
-  language: writer(z.string().min(2).max(35), (project, locale) => {
-    if (!isBookLanguageId(locale) || project.config.contentLocale === locale) return null;
-    return withConfig(project, { contentLocale: locale });
-  }),
+  language: writer(
+    () => `${idList(BOOK_LANGUAGES.map((language) => language.id))} — the language the BOOK is written in`,
+    z.string().min(2).max(35),
+    (project, locale) => {
+      if (!isBookLanguageId(locale) || project.config.contentLocale === locale) return null;
+      return withConfig(project, { contentLocale: locale });
+    },
+  ),
 
   storyIdea: writer(
+    '{"customTheme"?, "occasion"?, "customSetting"?, "when"?, "where"?, "mustInclude"? } — free text, the reader\'s own words',
     z.object({
       themeId: z.string().max(60).nullable().optional(),
       customTheme: proseSchema.optional(),
@@ -255,11 +316,16 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
     },
   ),
 
-  storyText: writer(z.string().max(40_000), (project, text) =>
-    project.config.storyText === text ? null : withConfig(project, { storyText: text }),
+  storyText: writer(
+    "the complete story text — only when the reader is writing it themselves or dictating it verbatim, never a summary",
+    z.string().max(40_000),
+    (project, text) =>
+      project.config.storyText === text ? null : withConfig(project, { storyText: text }),
   ),
 
   artStyle: writer(
+    (context) =>
+      `{"presetId": ${idList(context.artStylePresetIds)} | null, "customDescription"?: free text (required when presetId is null)}`,
     z.object({
       presetId: z.string().min(1).max(60).nullable(),
       customDescription: proseSchema.optional(),
@@ -289,15 +355,23 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
     },
   ),
 
-  trim: writer(z.string().min(1).max(60), (project, sku, context) => {
-    if (!context.productSkus.includes(sku) || project.config.productSku === sku) return null;
-    return withConfig(project, { productSku: sku });
-  }),
+  trim: writer(
+    (context) => `${idList(context.productSkus, 8)} — a printed product SKU`,
+    z.string().min(1).max(60),
+    (project, sku, context) => {
+      if (!context.productSkus.includes(sku) || project.config.productSku === sku) return null;
+      return withConfig(project, { productSku: sku });
+    },
+  ),
 
-  layout: writer(z.string().min(1).max(60), (project, layoutId) => {
-    if (!isKnownLayoutId(layoutId) || project.config.layoutId === layoutId) return null;
-    return withConfig(project, { layoutId });
-  }),
+  layout: writer(
+    () => `${idList(Object.keys(BOOK_LAYOUTS), 12)} — how words sit with the picture`,
+    z.string().min(1).max(60),
+    (project, layoutId) => {
+      if (!isKnownLayoutId(layoutId) || project.config.layoutId === layoutId) return null;
+      return withConfig(project, { layoutId });
+    },
+  ),
 };
 
 function sameCast(a: StoryCastMember[], b: StoryCastMember[]): boolean {
@@ -324,6 +398,24 @@ export function isGuidePatchableSlot(id: string): id is GuideSlotId {
  */
 export const GUIDE_PATCHABLE_SLOT_IDS: GuideSlotId[] =
   GUIDE_SLOT_IDS.filter(isGuidePatchableSlot);
+
+/**
+ * The writable slots and their accepted shapes, for the interpreter's prompt.
+ *
+ * Generated from the writers rather than written out in the prompt template, so
+ * the world the model is told about is the same world {@link applyGuidePatch}
+ * enforces. A hand-maintained list would describe the validator as it was on the
+ * day someone wrote it down; this one cannot.
+ *
+ * The context is threaded through because half these shapes are admin-configurable
+ * id lists — an age band an admin adds this morning is offered this afternoon,
+ * with no prompt edit and no deploy.
+ */
+export function guidePatchShapeLines(context: GuidePatchContext): string {
+  return GUIDE_PATCHABLE_SLOT_IDS.map(
+    (id) => `- ${id}: ${WRITERS[id]!.shape(context)}`,
+  ).join("\n");
+}
 
 /**
  * Apply an untrusted patch, one slot at a time.

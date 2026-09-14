@@ -13,7 +13,7 @@
  * negative-balance buffer, so a guest can never spend past granted Sparks.
  */
 import express, { type Express, type Response } from "express";
-import { isAnonymousToken, type AuthedRequest } from "./auth";
+import { isAdminUid, isAnonymousToken, type AuthedRequest } from "./auth";
 import { backendPipelineEnv } from "./pipelineEnv";
 import { withUsage } from "./usage";
 import { meterAndSettle, runKindOf } from "./actionRun";
@@ -53,8 +53,21 @@ import {
 } from "../../books-frontend/src/core/pipeline/illustrationRun";
 import { stampImageProvenance } from "../../books-frontend/src/core/pipeline/imageProvenance";
 import { IntentAmbiguousError } from "../../books-frontend/src/core/pipeline/intentResolve";
+import {
+  activeComponentId,
+  interpretGuideTurn,
+  patchedSlotIds,
+  type GuideTurn,
+} from "../../books-frontend/src/core/pipeline/guideInterpret";
+import { guidePatchContext } from "../../books-frontend/src/core/guide/patch";
+import { resolveGuidePlaylist } from "../../books-frontend/src/core/guide/playlist";
+import { resolveGuideMode } from "../../books-frontend/src/core/guide/mode";
+import { recordGuideTurn } from "./guideTurns";
 import { downloadBlobBase64 } from "./storage";
 import {
+  getArtStylesConfig,
+  getAudienceConfig,
+  getGuideConfig,
   getLayoutsConfig,
   getGenerationTuningConfig,
   loadModelCapabilities,
@@ -106,6 +119,34 @@ const REQUEST_BUDGET_MS = 280_000;
 
 function requestDeadline(): AbortSignal {
   return AbortSignal.timeout(REQUEST_BUDGET_MS);
+}
+
+/** Longest chat message the guide will interpret. See the route for why. */
+const MAX_GUIDE_MESSAGE = 2000;
+
+/** Turns of history the guide sends along, capped so the prompt stays bounded. */
+const MAX_GUIDE_TRANSCRIPT = 12;
+
+/**
+ * Accept a transcript from the client, dropping anything malformed.
+ *
+ * The history is the client's to keep — it is what the reader can see on screen,
+ * and reconstructing it here from the turn log would let a stale server view
+ * disagree with the conversation in front of them. It only ever resolves
+ * references like "yes" and "the second one", so a dropped entry costs precision,
+ * never correctness.
+ */
+function parseGuideTranscript(raw: unknown): GuideTurn[] {
+  if (!Array.isArray(raw)) return [];
+  const turns: GuideTurn[] = [];
+  for (const entry of raw.slice(-MAX_GUIDE_TRANSCRIPT)) {
+    if (!entry || typeof entry !== "object") continue;
+    const { role, text } = entry as { role?: unknown; text?: unknown };
+    if (role !== "reader" && role !== "guide") continue;
+    if (typeof text !== "string" || !text.trim()) continue;
+    turns.push({ role, text: text.trim().slice(0, MAX_GUIDE_MESSAGE) });
+  }
+  return turns;
 }
 
 async function loadSourceArtCharacters(
@@ -586,6 +627,122 @@ export function registerAiRoutes(app: Express): void {
         models: { text: model },
       });
       res.json(value);
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  /**
+   * Read one chat message from the guided studio and return the facts it states.
+   *
+   * Server-side for the same reasons as every other AI call — the model comes from
+   * the admin config, the key never leaves here, and usage is metered — plus one
+   * specific to this route: the world the model is offered (age bands, art styles,
+   * printable sizes) is read from the live config here, so a client cannot widen it
+   * by claiming a band that no longer exists.
+   *
+   * It returns a PROPOSAL. The patch is applied on the client, through
+   * `applyGuidePatch`, into the project the client already owns — this route never
+   * writes a book. That keeps the single-writer rule intact (the client owns the
+   * project document and its undo history) and means a bad interpretation costs a
+   * rejected patch rather than a corrupted book.
+   */
+  app.post("/ai/guide/interpret", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const { project, message: rawMessage, transcript: rawTranscript, guidePreference } =
+        req.body as {
+          project: Project;
+          message?: unknown;
+          transcript?: unknown;
+          guidePreference?: unknown;
+        };
+      const message = typeof rawMessage === "string" ? rawMessage.trim() : "";
+      if (!message) {
+        res.status(400).json({ error: { message: "There's no message to read." } });
+        return;
+      }
+      // Bounded before it reaches a prompt: an unbounded paste is a cost we'd pay
+      // per turn, and nothing a person types conversationally needs more room.
+      if (message.length > MAX_GUIDE_MESSAGE) {
+        res.status(400).json({ error: { message: "That message is too long to read at once." } });
+        return;
+      }
+
+      // The rollout decides, not the caller. The client's saved toggle is passed
+      // as a PREFERENCE, which `resolveGuideMode` only honours for admins — so a
+      // customer sending `guidePreference: "guide"` gets the same refusal as one
+      // sending nothing.
+      const [guide, isAdmin] = await Promise.all([getGuideConfig(), isAdminUid(req.uid!)]);
+      const mode = resolveGuideMode({
+        rollout: guide.rollout,
+        isAdmin,
+        preference: guidePreference === "guide" || guidePreference === "legacy"
+          ? guidePreference
+          : null,
+        bucketKey: project.id,
+      });
+      if (mode !== "guide") {
+        res.status(403).json({ error: { message: "This isn't available yet." } });
+        return;
+      }
+
+      // Free by default (every text action ships free), so there is no Spark gate
+      // to hold the line here. This counter is the one that can, if an admin ever
+      // needs it to — checked before the call so a refusal costs us nothing.
+      await ensureWithinQuota(req.uid!, "guideTurnsPerBook", project.id);
+
+      const [model, prompts, audience, artStyles] = await Promise.all([
+        resolveText("guideInterpret"),
+        loadPromptContext(),
+        getAudienceConfig(),
+        getArtStylesConfig(),
+      ]);
+      const playlist = resolveGuidePlaylist(guide.playlist);
+      const patchContext = guidePatchContext({ audience, artStyles });
+      const startedAt = Date.now();
+      const { value, events, stats } = await withUsage(() =>
+        interpretGuideTurn({
+          project,
+          message,
+          playlist,
+          transcript: parseGuideTranscript(rawTranscript),
+          patchContext,
+          creds: { apiKey: apiKeyFor(model.provider) },
+          model: model.id,
+          providerId: model.provider,
+          prompts,
+          signal: requestDeadline(),
+        }),
+      );
+      await meterAndSettle({
+        uid: req.uid!,
+        action: "guideInterpret",
+        events,
+        stats,
+        projectId: project.id,
+        project,
+        kind: "fresh",
+        source: "sync",
+        startedAt,
+        models: { text: model },
+      });
+      await incrementQuota(req.uid!, "guideTurnsPerBook", project.id);
+
+      // Logged whatever came back, including the turns we failed to read — those
+      // are the rows worth reading later. Best-effort: a log write must never cost
+      // the reader their answer.
+      const turnId = await recordGuideTurn({
+        uid: req.uid!,
+        projectId: project.id,
+        message,
+        componentId: activeComponentId(playlist, project),
+        result: value,
+        proposedSlots: patchedSlotIds(value.patch),
+        model,
+        latencyMs: Date.now() - startedAt,
+      }).catch(() => null);
+
+      res.json({ ...value, turnId });
     } catch (err) {
       sendError(res, err);
     }

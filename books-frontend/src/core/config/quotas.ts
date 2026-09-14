@@ -38,6 +38,17 @@ export const QUOTAS = [
     scope: "perBook",
     defaultLimit: null,
   },
+  {
+    // The guide's interpreter is metered but charged nothing, so Sparks can't be
+    // the thing that limits it. This counter is the backstop instead: a cap here
+    // bounds what a single book can cost us if someone treats the chat as a free
+    // LLM, without putting a price on ordinary conversation.
+    id: "guideTurnsPerBook",
+    label: "Guide messages per book",
+    help: "Maximum messages the guided studio's chat will interpret for a single book. Each one is a short, free AI call — this only exists to bound abuse, so leave it unlimited unless you see a reason not to.",
+    scope: "perBook",
+    defaultLimit: null,
+  },
 ] as const satisfies readonly QuotaDef[];
 
 /** Union of known quota ids, derived from the registry. */

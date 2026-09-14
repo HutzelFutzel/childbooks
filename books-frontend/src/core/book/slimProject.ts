@@ -42,6 +42,16 @@ export interface SlimOptions {
    * dropped. Omit to drop every illustration tree.
    */
   illustrationTargets?: RenderTarget[];
+  /**
+   * Keep the story analysis, minus the story copy it was derived from.
+   *
+   * Render endpoints have no use for it, but anything reasoning about *where a book
+   * is* does: the cast is only "settled" once the story has been read, so an absent
+   * analysis is what distinguishes a book with no characters from one whose
+   * characters were never looked for. `sourceStoryText` is dropped because it is a
+   * second copy of the story and exists only to detect edits.
+   */
+  keepAnalysis?: boolean;
 }
 
 /**
@@ -98,6 +108,15 @@ export function slimProjectForRender(project: Project, opts: SlimOptions): Proje
       }
     : project.config;
 
+  const analysis =
+    opts.keepAnalysis && project.analysis
+      ? (() => {
+          const { sourceStoryText: _drop, ...rest } = project.analysis;
+          void _drop;
+          return rest;
+        })()
+      : undefined;
+
   return {
     id: project.id,
     title: project.title,
@@ -109,5 +128,6 @@ export function slimProjectForRender(project: Project, opts: SlimOptions): Proje
     ...(anchors ? { anchors } : {}),
     ...(screenplay ? { screenplay } : {}),
     ...(illustrations ? { illustrations } : {}),
+    ...(analysis ? { analysis } : {}),
   };
 }

@@ -284,6 +284,15 @@ const variants: { name: string; project: Project }[] = [
 
 const allStates = [...ladder, ...variants];
 
+/**
+ * The state ladder, for other checkers.
+ *
+ * Exported rather than rebuilt because these are the states the engine is proven
+ * against: anything else checking "the guide sees this book correctly" should be
+ * checking it over the same population, not over a second ladder that drifts.
+ */
+export const GUIDE_BOOK_STATES: readonly { name: string; project: Project }[] = allStates;
+
 // --- Catalog ---------------------------------------------------------------
 
 if (GUIDE_CATALOG.length !== GUIDE_COMPONENT_IDS.length) {

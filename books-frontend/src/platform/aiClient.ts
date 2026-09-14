@@ -18,6 +18,7 @@ import type { ExtractArtStyleResult } from "../core/pipeline/styleExtract";
 import type { ExtractArtLookResult } from "../core/pipeline/lookExtract";
 import type { IllustrationRender, IllustrationRunOptions } from "../core/pipeline/illustrationRun";
 import { IntentAmbiguousError } from "../core/pipeline/intentResolve";
+import type { GuideTurn, GuideTurnResult } from "../core/pipeline/guideInterpret";
 import { ProviderError, type ProviderErrorKind } from "../core/errors";
 import type { ImageTier } from "../core/config/modelConfig";
 
@@ -187,6 +188,55 @@ export function storyFitRemote(
 export function analyzeStoryRemote(project: Project, signal?: AbortSignal): Promise<AnalyzeResult> {
   // Text-only: needs config.storyText; drop all version history/design.
   return postAi<AnalyzeResult>("/ai/analyze", { project: slimProjectForRender(project, {}) }, signal);
+}
+
+/**
+ * Ask the backend to read one chat message from the guided studio.
+ *
+ * The reply is a PROPOSAL: `patch` is untrusted and must go through
+ * `applyGuidePatch` (see `state/guideTurn.ts`, the only caller that should exist).
+ *
+ * Slimmed differently from every other text call, and it matters. The others send
+ * the artifact they are about to work on; this one asks "where is this book, and
+ * what does it still need", so it reads the *presence* of every artifact — the
+ * story analysis, the character sheets, the page plan, the finished pages. Sending
+ * the usual text-only snapshot would show it a book with no artwork and no pages
+ * however far along the reader actually is, and it would answer accordingly:
+ * offering to draw characters that have been drawn for days.
+ *
+ * Cheap despite that, because presence is all it needs: version trees reduce to
+ * their cursor lineage and the nodes hold blob references rather than image bytes,
+ * so the payload grows with the page count and not with the edit history.
+ * `guide-interpreter-invariants.ts` holds this to the letter — it compares the
+ * guide's view of a book before and after slimming, over every state in the ladder,
+ * because getting this wrong produces no error at all, just a guide that is
+ * confidently wrong about the book in front of it.
+ */
+export function interpretGuideTurnRemote(
+  project: Project,
+  message: string,
+  args: {
+    transcript?: GuideTurn[];
+    /** The admin's saved flow toggle; honoured server-side for admins only. */
+    guidePreference?: "guide" | "legacy" | null;
+  } = {},
+  signal?: AbortSignal,
+): Promise<GuideTurnResult & { turnId: string | null }> {
+  return postAi<GuideTurnResult & { turnId: string | null }>(
+    "/ai/guide/interpret",
+    {
+      project: slimProjectForRender(project, {
+        keepScreenplay: true,
+        keepAnchorVersions: true,
+        keepAnalysis: true,
+        illustrationTargets: Object.keys(project.illustrations ?? {}).map((id) => ({ id })),
+      }),
+      message,
+      transcript: args.transcript ?? [],
+      guidePreference: args.guidePreference ?? null,
+    },
+    signal,
+  );
 }
 
 export function extractArtStyleRemote(

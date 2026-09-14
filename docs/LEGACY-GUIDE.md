@@ -51,7 +51,7 @@ one instead.
 
 ## Phases
 
-Phase 0 (foundations), phase 1 (preview-first Pages) and phase 2 (the state
-model: catalog, playlist, engine, patch) have landed. Phases 3–9 build the guide
-itself; nothing in the Retire table can be deleted before phase 9, and phase 9 is
-not done until this table is empty.
+Phase 0 (foundations), phase 1 (preview-first Pages), phase 2 (the state model:
+catalog, playlist, engine, patch) and phase 3 (the interpreter: free text in, facts
+out) have landed. Phases 4–9 build the guide itself; nothing in the Retire table can
+be deleted before phase 9, and phase 9 is not done until this table is empty.

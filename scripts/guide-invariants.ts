@@ -2,8 +2,9 @@
  * Invariants for the guided-studio rollout, plus the legacy-manifest check.
  *
  * The guide's state model — catalog, playlist, engine, patch — is checked by
- * `guide-engine-invariants.ts`, whose results are merged into this report so one
- * command covers the whole feature.
+ * `guide-engine-invariants.ts`, and its interpreter's prompt and output contract by
+ * `guide-interpreter-invariants.ts`. Both merge their results into this report so
+ * one command covers the whole feature.
  *
  * Two things are asserted here, and both are the kind of mistake that is silent
  * until it is expensive.
@@ -44,6 +45,7 @@ import {
   type GuideModeOverride,
 } from "../books-frontend/src/core/guide/mode";
 import { checkGuideEngine } from "./guide-engine-invariants";
+import { checkGuideInterpreter } from "./guide-interpreter-invariants";
 
 /**
  * The repository root, found by walking up from the working directory. Not
@@ -415,12 +417,17 @@ if (![...retirePaths].some((rel) => markedSet.has(rel))) {
   fail(`No file named in the Retire table of ${MANIFEST} carries a "${MARKER}" marker.`);
 }
 
-// --- The state model ------------------------------------------------------
+// --- The state model and the interpreter ----------------------------------
 
 const engine = checkGuideEngine();
 failures.push(...engine.failures);
 notes.push(...engine.notes);
 cases += engine.cases;
+
+const interpreter = checkGuideInterpreter();
+failures.push(...interpreter.failures);
+notes.push(...interpreter.notes);
+cases += interpreter.cases;
 
 // --- Report ---------------------------------------------------------------
 
@@ -437,6 +444,9 @@ for (const mode of GUIDE_ROLLOUT_MODES) {
 
 console.log();
 for (const line of engine.report) console.log(line);
+
+console.log();
+for (const line of interpreter.report) console.log(line);
 
 console.log(`\nLegacy manifest (${MANIFEST})`);
 if (marked.length === 0) {

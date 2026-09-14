@@ -507,6 +507,55 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     ],
   },
 
+  // core/pipeline/guideInterpret.ts → interpretGuideTurn
+  "guideInterpret/turn": {
+    system: [
+      blk(
+        "role",
+        "You are the interpreter behind a warm, brisk guide that helps a parent make a personalised children's picture book by chatting. Your job is to read ONE message from them and return two things: the facts it states about the book, and a short reply. You never write the book, never generate a story, and never make a picture — other steps do that. Output JSON only.",
+      ),
+      blk(
+        "closedWorld",
+        'Write ONLY the fields listed under "Fields you may set". Never invent a field name. Never set a field the message does not actually state — an empty patch is always better than a guess, because a wrong fact is something the parent has to notice and undo. If they mention something you have no field for, leave the patch out and mention it in your reply instead.',
+      ),
+      blk(
+        "intents",
+        'Set "intent" to: "answer" when they are responding to what the guide asked; "revise" when they are correcting or changing something already decided (including "actually…", "no, make it…", "change her age"); "skip" when they are declining or deferring ("skip that", "you choose", "doesn\'t matter"); "question" when they are asking YOU something; "other" for chat, greetings and anything off-topic. Only "answer" and "revise" may carry a patch.',
+      ),
+      blk(
+        "extraction",
+        'Read the whole message, not just the part that answers the question. "It\'s for Maya, she\'s turning 6 next week" states both the name and the age. Ages: whole years in "age"; use "ageMonths" only for babies and toddlers, or when they say months. A relative age ("a year older") must be resolved against the current facts into an absolute number. Names: keep their spelling and capitalisation; split "Maya and Leo" into two people. When they re-state who the book is for, send the COMPLETE list of names, not just the new one.',
+      ),
+      blk(
+        "skips",
+        'For "skip", list the component ids they are declining in "skip" — only ids from the optional list. If they are declining something required, use intent "answer" with an empty patch and gently explain in the reply why you still need it.',
+      ),
+      blk(
+        "reply",
+        'The reply is spoken to the parent. One or two sentences, warm and plain, no bullet points, no markdown, no emoji. Confirm briefly what you understood, then ask for exactly ONE missing thing — the first item under "Still missing" — phrased as a real question a person would ask. If nothing is missing, say what happens next instead of asking anything. Never mention field names, ids, JSON, components or the word "slot". Never apologise unless you actually failed.',
+      ),
+      blk(
+        "confidence",
+        'Set "confidence" to how sure you are that the patch reflects what they meant: above 0.8 when they stated it plainly, below 0.5 when you are reading between the lines. Prefer a low confidence and an empty patch over a confident guess.',
+      ),
+    ],
+    user: [
+      blk(
+        "state",
+        "What the guide is asking about right now: {{asking}}\nThe facts it wants from this step: {{askingSlots}}\n\nStill missing (ask for the FIRST one):\n{{blockers}}\n\nWhat the book already knows:\n{{facts}}",
+      ),
+      blk(
+        "world",
+        'Fields you may set (anything else is discarded):\n{{writable}}\n\nOptional components the parent may decline: {{skippable}}',
+      ),
+      blk("history", "Recent conversation:\n{{transcript}}"),
+      blk(
+        "ask",
+        'The parent just said: "{{message}}"\n\nReturn {"intent": "answer"|"revise"|"skip"|"question"|"other", "patch": {field: value, …}, "skip": ["componentId", …], "reply": "…", "confidence": 0..1}. Omit "patch" and "skip" when they are empty.',
+      ),
+    ],
+  },
+
   // core/pipeline/styleExtract.ts → extractArtStyleFromImages
   extractArtStyle: {
     system: [
@@ -1518,6 +1567,32 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
         variables: [
           V("text", "The instruction to scan.", "make him the same age as Amanda"),
           V("anchors", "Candidate anchors.", '- id "a1": "Amanda" (character) — a curious girl'),
+        ],
+        sampleFlags: {},
+      },
+    ],
+  },
+  {
+    actionId: "guideInterpret",
+    label: "Guide turn interpretation",
+    description:
+      "Reads one message from the chat in the guided studio and returns the facts it states about the book plus the reply. Runs on nearly every message. The fields it may write are generated from the patch validator, so they are not editable here — this wording controls how it reads people and how it talks back.",
+    kind: "text",
+    templates: [
+      {
+        key: "guideInterpret/turn",
+        label: "Interpret a message",
+        description:
+          "Free text in, facts + reply out. The riskiest edit here is anything that encourages guessing: a wrong fact costs the parent a correction, an empty patch costs one more question.",
+        variables: [
+          V("asking", "The component the guide is on.", "story-cast — Who it's for: The children the book is about, and how old they are."),
+          V("askingSlots", "Slots that component wants.", "heroes, heroAges"),
+          V("blockers", "What's still missing, in the reader's words.", "- Add Maya’s age to create the story."),
+          V("facts", "Every slot's current value.", '- heroes (Who it\'s for): Maya\n- heroAges (Ages): not set'),
+          V("writable", "Writable fields and shapes, generated from the validator.", '- heroes: ["Maya", "Leo"] — the COMPLETE list of who the book is about'),
+          V("skippable", "Component ids the reader may decline.", '"audience" | "story-idea"'),
+          V("transcript", "Recent turns, oldest first.", "Guide: Who is this book for?\nReader: Maya"),
+          V("message", "What the reader just typed.", "she's turning 6 next week"),
         ],
         sampleFlags: {},
       },

@@ -16,6 +16,7 @@ export type TextActionId =
   | "localize" // locateSubject(s) — vision call placing subjects on a page
   | "bindingPass" // bindDepictedSubjects — vision call binding anchors to regions in a freshly rendered page
   | "editIntent" // resolveEditIntent — classify user edits into structured operations
+  | "guideInterpret" // interpretGuideTurn — turn a reader's message into a slot patch
   | "extractArtStyle" // extractArtStyleFromImages — vision call: style-only prompt from character artwork
   | "extractArtLook" // extractArtLookFromImages — vision call: who is in the uploaded character artwork
   | "releaseNotes"; // summarizeRelease — turn a deploy's code diff into plain-language release notes
@@ -42,6 +43,7 @@ export const TEXT_ACTIONS: ActionInfo<TextActionId>[] = [
   { id: "localize", label: "Subject localization (vision)", modality: "text", help: "Finds where a subject sits inside a rendered page (used for in-place edits)." },
   { id: "bindingPass", label: "Anchor binding (vision)", modality: "text", help: "After a page is rendered, binds each anchor to its region in the image (records what's depicted where)." },
   { id: "editIntent", label: "Edit intent resolution", modality: "text", help: "Classifies a user's free-text illustration edit into structured remove/replace/refresh operations over known anchors." },
+  { id: "guideInterpret", label: "Guide turn interpretation", modality: "text", help: "Reads what the reader typed in the guided studio's chat and turns it into facts about the book (names, ages, theme, reading age…) plus the reply. Runs on nearly every message, so latency matters more here than depth." },
   { id: "extractArtStyle", label: "Art-style extraction (vision)", modality: "text", help: "Reads uploaded character artwork and writes a style-only prompt (no characters, clothes or scenes) for the rest of the book." },
   { id: "extractArtLook", label: "Character-look extraction (vision)", modality: "text", help: "Reads uploaded character artwork and writes who is in the drawing (species, body, clothes actually shown) so later steps do not invent a different character." },
   { id: "releaseNotes", label: "Release notes (CI/CD)", modality: "text", help: "Reads the code diff between the last shipped commit and the new one, and writes what changed in plain language for the sales/marketing team. Runs once per deploy, not per user — pick a model with a large context window." },
