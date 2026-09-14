@@ -246,7 +246,15 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
     system: [
       blk(
         "role",
-        "You are a children's-book art director. Analyze the story and identify every subject that must look IDENTICAL each time it appears so the illustrations stay consistent. Include recurring CHARACTERS (people, animals, creatures), important PLACES/settings, and significant recurring OBJECTS. Skip one-off background details that never need to match. For each, write a concise but vivid, self-contained visual description (appearance, colors, distinguishing features) grounded in the story; infer sensible details where the story is silent. Describe only the subject itself — do NOT mention the art style, medium, rendering technique, family tree, or relationship graph. Rank importance: high = central/appears often, medium = recurring, low = minor but still needs consistency. For CHARACTERS ONLY, also set three fields. \"ageYears\" is the character's age in years when stated or strongly implied; omit it rather than guessing when the story gives no reliable basis. \"bodyPlan\" is the character's gross body layout: \"bipedal\" for anyone who stands upright on two legs (people, robots, a bear in a waistcoat, a standing toy), \"quadruped\" for four-legged animals that walk on all fours, \"avian\" for birds, \"aquatic\" for fish and other swimming or serpentine bodies, \"amorphous\" for everything without a clear limbed body (a cloud, a teapot with a face, a blob). \"heightCm\" is a private approximate real-world scale hint based on age and species (a 5-year-old child is about 110, an adult about 170, a house cat about 25 at the shoulder); omit it rather than guessing. Leave all three fields out for places and objects. Separately list only EMBEDDINGS needed for rendering: a named place or object that physically contains another extracted subject which must appear inside its reference sheet (for example a specific lamp on a specific desk). Return each as {container, subject}, never nest more than one level, and use an empty list when none are essential. Also write a 1-2 sentence summary of the story's visual world. A subject's NAME is a label only — do not infer species, clothing or an object's shape from the name.",
+        "You are a children's-book art director. Extract ONLY the subjects that must look IDENTICAL across multiple illustrations so the book stays visually consistent. Prefer a small cast. If you are unsure a subject needs its own reference sheet, omit it. Include recurring CHARACTERS (people, animals, creatures, and named toys that act, speak, or travel with the cast), PLACES the story returns to, and OBJECTS that recur as themselves across scenes and cannot live in a character's description. For each kept subject, write a concise but vivid, self-contained visual description (appearance, colors, distinguishing features) grounded in the story; infer sensible details where the story is silent. Describe only the subject itself — do NOT mention the art style, medium, rendering technique, family tree, or relationship graph. Rank importance: high = central and appears throughout; medium = recurs across scenes and still needs a matching look. Do not emit low-importance subjects. For CHARACTERS ONLY, also set three fields. \"ageYears\" is the character's age in years when stated or strongly implied; omit it rather than guessing when the story gives no reliable basis. \"bodyPlan\" is the character's gross body layout: \"bipedal\" for anyone who stands upright on two legs (people, robots, a bear in a waistcoat, a standing toy), \"quadruped\" for four-legged animals that walk on all fours, \"avian\" for birds, \"aquatic\" for fish and other swimming or serpentine bodies, \"amorphous\" for everything without a clear limbed body (a cloud, a teapot with a face, a blob). \"heightCm\" is a private approximate real-world scale hint based on age and species (a 5-year-old child is about 110, an adult about 170, a house cat about 25 at the shoulder); omit it rather than guessing. Leave all three fields out for places and objects. Separately list only EMBEDDINGS needed for rendering: a named place or object that physically contains another extracted subject which must appear inside its reference sheet (for example a specific lamp on a specific desk). Return each as {container, subject}, never nest more than one level, and use an empty list when none are essential. Also write a 1-2 sentence summary of the story's visual world.",
+      ),
+      blk(
+        "identity",
+        'ONE IDENTITY PER SUBJECT. An appositive like "Bluey the blue toy elephant" or "Pip the puppy" is one row — never a named character plus a separate object of that kind. Use the proper name as "name". Put the other story phrases in "aliasNames" (for example ["the blue toy elephant", "toy elephant"]). Named toys with actions or speech are characters; their toy-ness belongs in the description, not a second object. A name does not invent a species, clothing, or an object\'s shape. If the story itself defines the name ("Bluey the blue toy elephant"), that definition is the same subject.',
+      ),
+      blk(
+        "scope",
+        "Do not extract clothing or carried signature items (fold yellow boots into Mila's description), one-scene props (a picnic blanket, a snack), generic scenery, or sequential locations that each appear once (a mud patch, then grass, then an oak tree, then a shady picnic spot). Those details belong in page briefs, not reference sheets.",
       ),
       blk(
         "ageSeparation",
@@ -1313,13 +1321,13 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
   {
     actionId: "storyAnalysis",
     label: "Story analysis",
-    description: "Extracts the characters, places and objects that must stay consistent.",
+    description: "Extracts only the characters, places and objects that must stay visually consistent.",
     kind: "text",
     templates: [
       {
         key: "storyAnalysis",
         label: "Analysis",
-        description: "System + user prompt for extracting anchors from the story.",
+        description: "System + user prompt for extracting only the consistency-critical anchors from the story.",
         variables: [
           V("age", "Target age-range label.", "6–8"),
           V("ageGuidance", "Age-band writing guidance overlay.", AGE_SAMPLE),

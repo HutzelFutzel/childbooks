@@ -7,7 +7,7 @@ import { GRAPHICS_DENSITY, SPREAD_USAGE, TEXT_HANDLING, TEXT_PLACEMENT } from ".
 import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import type { Anchor, BookConfig, ScreenplayDoc, ScreenplaySpread } from "../types";
-import { effectiveAnchorIds, normalizeAnchorName } from "../book/anchorRefs";
+import { anchorNameKeys, effectiveAnchorIds, normalizeAnchorName } from "../book/anchorRefs";
 import { getBookLayout } from "../book/layouts";
 import { getBookLanguage } from "../config/bookLanguages";
 import { fixPagination } from "./pagination";
@@ -200,10 +200,19 @@ export function matchAnchorNames(
   anchors: Anchor[],
 ): { ids: string[]; unmatched: string[]; ambiguous: string[] } {
   const byNorm = new Map<string, string[]>();
+  const canonicalKeys: { key: string; ids: string[] }[] = [];
+  const push = (key: string, id: string, canonical: boolean) => {
+    const ids = byNorm.get(key) ?? [];
+    if (!ids.includes(id)) ids.push(id);
+    byNorm.set(key, ids);
+    if (canonical) canonicalKeys.push({ key, ids });
+  };
   for (const a of anchors) {
     const key = normalizeAnchorName(a.name);
-    if (!key) continue;
-    (byNorm.get(key) ?? byNorm.set(key, []).get(key)!).push(a.id);
+    if (key) push(key, a.id, true);
+    for (const aliasKey of anchorNameKeys(a)) {
+      if (aliasKey !== key) push(aliasKey, a.id, false);
+    }
   }
 
   const ids: string[] = [];
@@ -215,9 +224,10 @@ export function matchAnchorNames(
     const norm = normalizeAnchorName(raw);
     if (!norm) continue;
     let hit = byNorm.get(norm);
-    // Fuzzy fallback: a normalized name contained in (or containing) a known one.
+    // Fuzzy fallback on canonical names only, so an alias like
+    // "blue toy elephant" does not swallow a lone color word.
     if (!hit) {
-      for (const [key, candidateIds] of byNorm) {
+      for (const { key, ids: candidateIds } of canonicalKeys) {
         if (key.includes(norm) || norm.includes(key)) {
           hit = candidateIds;
           break;

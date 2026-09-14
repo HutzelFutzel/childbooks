@@ -20,7 +20,7 @@ import {
   updateNodeContent,
   type VersionTree,
 } from "../core/versioning";
-import { normalizeAnchorName, reconcileAnchorIds } from "../core/book/anchorRefs";
+import { anchorNameKeys, normalizeAnchorName, reconcileAnchorIds } from "../core/book/anchorRefs";
 import { collectProjectImageBlobIds } from "../core/book/blobRefs";
 import {
   applyArtworkLooks,
@@ -470,7 +470,12 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       // Private embedding dependencies arrive keyed by name because the server
       // never sees the final reconciled ids. Resolve them here and replace the
       // old inferred set; there is intentionally no user-facing graph.
-      const byName = new Map(reconciled.map((a) => [normalizeAnchorName(a.name), a]));
+      const byName = new Map<string, (typeof reconciled)[number]>();
+      for (const a of reconciled) {
+        for (const key of anchorNameKeys(a)) {
+          if (!byName.has(key)) byName.set(key, a);
+        }
+      }
       const embeddedByContainer = new Map<string, Set<string>>();
       for (const embedding of embeddings ?? []) {
         const container = byName.get(normalizeAnchorName(embedding.container));

@@ -10,7 +10,8 @@ import { ageBandLabel } from "../config/storyCraftCatalog";
 import { getBookLanguage } from "../config/bookLanguages";
 import { stripNumericAgeFromDescription } from "../book/anchorDescription";
 import { defaultCharacterAge } from "../book/characterAge";
-import { normalizeAnchorName } from "../book/anchorRefs";
+import { refineAnalyzedAnchors } from "../book/anchorMerge";
+import { anchorNameKeys, mergeAliasNames, normalizeAnchorName } from "../book/anchorRefs";
 import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import type { Anchor, AnchorImportance, AnchorType, BodyPlan, BookConfig } from "../types";
@@ -43,6 +44,16 @@ const anchorItemSchema = z.object({
     .max(120)
     .nullish()
     .describe("Character age in years. This is the only numeric age field."),
+  /**
+   * Other story phrases for this same subject. "Bluey the blue toy elephant"
+   * must not become a second row — those words belong here.
+   */
+  aliasNames: z
+    .array(z.string())
+    .nullish()
+    .describe(
+      "Other phrases in the story that refer to this same subject, such as 'the blue toy elephant' for Bluey. Empty when the name is the only label.",
+    ),
 });
 
 const embeddingItemSchema = z.object({
@@ -95,7 +106,11 @@ function validateEmbeddings(
   anchors: Anchor[],
 ): AnalyzedEmbedding[] {
   const byName = new Map<string, Anchor>();
-  for (const a of anchors) byName.set(a.name.trim().toLowerCase(), a);
+  for (const a of anchors) {
+    for (const key of anchorNameKeys(a)) {
+      if (!byName.has(key)) byName.set(key, a);
+    }
+  }
 
   const out: AnalyzedEmbedding[] = [];
   const seen = new Set<string>();
@@ -104,8 +119,8 @@ function validateEmbeddings(
   const isContainer = new Set<string>();
 
   for (const r of raw) {
-    const from = byName.get(r.container?.trim().toLowerCase() ?? "");
-    const to = byName.get(r.subject?.trim().toLowerCase() ?? "");
+    const from = byName.get(normalizeAnchorName(r.container ?? ""));
+    const to = byName.get(normalizeAnchorName(r.subject ?? ""));
     if (!from || !to || from.id === to.id) continue;
 
     // One edge per unordered pair, whichever direction arrives first.
@@ -186,7 +201,7 @@ export async function analyzeStory(
     namedCast(briefOf(config))
       .filter((member) => member.age !== undefined || member.ageMonths !== undefined)
       .map((member) => [
-        member.name.trim().toLowerCase(),
+        normalizeAnchorName(member.name),
         member.age !== undefined
           ? member.age
           : Math.floor((member.ageMonths ?? 0) / 12),
@@ -198,7 +213,11 @@ export async function analyzeStory(
     // fills them in for a place or object is answering a question we didn't
     // ask, so drop them rather than letting them reach the sheet prompt.
     const height = isCharacter && typeof a.heightCm === "number" ? a.heightCm : undefined;
-    const briefAge = knownAges.get(a.name.trim().toLowerCase());
+    const briefAge =
+      knownAges.get(normalizeAnchorName(a.name)) ??
+      (a.aliasNames ?? [])
+        .map((alias) => knownAges.get(normalizeAnchorName(alias)))
+        .find((age): age is number => typeof age === "number");
     const reportedAge =
       isCharacter && typeof briefAge === "number"
         ? briefAge
@@ -214,6 +233,7 @@ export async function analyzeStory(
         : typeof a.ageYears === "number"
           ? "story"
           : "suggested";
+    const aliasNames = mergeAliasNames(a.name, a.aliasNames ?? undefined);
     return {
       id: uid(),
       name: a.name,
@@ -225,6 +245,7 @@ export async function analyzeStory(
       importance: a.importance as AnchorImportance,
       mode: "creative",
       include: true,
+      ...(aliasNames ? { aliasNames } : {}),
       ...(characterAge !== undefined ? { ageYears: characterAge, ageSource } : {}),
       ...(isCharacter && a.bodyPlan ? { bodyPlan: a.bodyPlan } : {}),
       ...(height && height > 0 ? { heightCm: Math.round(height) } : {}),
@@ -239,7 +260,10 @@ export async function analyzeStory(
     }));
   const looks = artworkLooks?.length ? artworkLooks : fromCast;
   const withCast = applyArtworkLooksToAnchors(
-    attachCastArtToAnchors(injectNamedCastAnchors(anchors, config), config),
+    attachCastArtToAnchors(
+      injectNamedCastAnchors(refineAnalyzedAnchors(anchors), config),
+      config,
+    ),
     looks,
   );
 
@@ -259,7 +283,9 @@ function attachCastArtToAnchors(anchors: Anchor[], config: BookConfig): Anchor[]
   if (byName.size === 0) return anchors;
   return anchors.map((anchor) => {
     if (anchor.type !== "character") return anchor;
-    const member = byName.get(normalizeAnchorName(anchor.name));
+    const member = anchorNameKeys(anchor)
+      .map((key) => byName.get(key))
+      .find((entry) => entry?.sourceArt?.length);
     if (!member?.sourceArt?.length) return anchor;
     return {
       ...anchor,
@@ -282,7 +308,9 @@ function applyArtworkLooksToAnchors(
   if (byName.size === 0) return anchors;
   return anchors.map((anchor) => {
     if (anchor.type !== "character") return anchor;
-    const look = byName.get(normalizeAnchorName(anchor.name));
+    const look = anchorNameKeys(anchor)
+      .map((key) => byName.get(key))
+      .find(Boolean);
     if (!look) return anchor;
     return {
       ...anchor,
@@ -308,8 +336,7 @@ function injectNamedCastAnchors(anchors: Anchor[], config: BookConfig): Anchor[]
   const existing = new Set(
     anchors
       .filter((anchor) => anchor.type === "character")
-      .map((anchor) => normalizeAnchorName(anchor.name))
-      .filter(Boolean),
+      .flatMap((anchor) => anchorNameKeys(anchor)),
   );
   const extra: Anchor[] = [];
   for (const member of people) {

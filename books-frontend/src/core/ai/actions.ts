@@ -36,7 +36,7 @@ export const TEXT_ACTIONS: ActionInfo<TextActionId>[] = [
   { id: "storyDraft", label: "Story draft", modality: "text", help: "Writes the story — either from a name + theme (guided) or from the real cast, occasion and place (co-write)." },
   { id: "storyEdit", label: "Story refinement", modality: "text", help: "Makes a precise requested change while preserving the rest of the manuscript and its voice." },
   { id: "storyCheck", label: "Story age-fit check", modality: "text", help: "Advisory read of a story the author wrote themselves: does it suit the age band they picked?" },
-  { id: "storyAnalysis", label: "Story analysis", modality: "text", help: "Extracts the characters, places and objects that must stay consistent." },
+  { id: "storyAnalysis", label: "Story analysis", modality: "text", help: "Extracts only the characters, places and objects that must stay visually consistent." },
   { id: "anchorDescription", label: "Anchor description", modality: "text", help: "Suggests a single character/place/object's visual description." },
   { id: "screenplay", label: "Screenplay", modality: "text", help: "Turns the story into a page-by-page plan with covers." },
   { id: "localize", label: "Subject localization (vision)", modality: "text", help: "Finds where a subject sits inside a rendered page (used for in-place edits)." },

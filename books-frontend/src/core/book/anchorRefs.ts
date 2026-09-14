@@ -25,6 +25,42 @@ export function normalizeAnchorName(name: string): string {
     .replace(/^(the|a|an)\s+/, "");
 }
 
+/** Unique normalized keys for an anchor's current name and any aliases. */
+export function anchorNameKeys(anchor: Pick<Anchor, "name" | "aliasNames">): string[] {
+  const keys: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of [anchor.name, ...(anchor.aliasNames ?? [])]) {
+    const key = normalizeAnchorName(raw);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    keys.push(key);
+  }
+  return keys;
+}
+
+/**
+ * Union of alias labels, dropping blanks and anything that normalizes to the
+ * canonical name. Returns `undefined` when nothing remains so stored anchors
+ * stay free of empty arrays.
+ */
+export function mergeAliasNames(
+  canonicalName: string,
+  ...lists: Array<readonly string[] | undefined>
+): string[] | undefined {
+  const seen = new Set<string>([normalizeAnchorName(canonicalName)].filter(Boolean));
+  const out: string[] = [];
+  for (const list of lists) {
+    for (const raw of list ?? []) {
+      const trimmed = raw.trim();
+      const key = normalizeAnchorName(trimmed);
+      if (!trimmed || !key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(trimmed);
+    }
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 /** Index current anchors by normalized name, including any past names from
  * renames (first occurrence wins). */
 function anchorsByName(anchors: Anchor[]): Map<string, Anchor> {
@@ -67,8 +103,11 @@ export function reconcileAnchorIds(next: Anchor[], prev: Anchor[]): Anchor[] {
   }
   const used = new Set<string>();
   const reconciled = next.map((a) => {
-    const candidates = prevByName.get(normalizeAnchorName(a.name)) ?? [];
-    const match = candidates.find((c) => !used.has(c.id));
+    let match: Anchor | undefined;
+    for (const key of anchorNameKeys(a)) {
+      match = (prevByName.get(key) ?? []).find((c) => !used.has(c.id));
+      if (match) break;
+    }
     if (!match) return a;
     used.add(match.id);
     const keepAuthorAge =
@@ -78,7 +117,7 @@ export function reconcileAnchorIds(next: Anchor[], prev: Anchor[]): Anchor[] {
       ...a,
       id: match.id,
       name: match.name,
-      aliasNames: match.aliasNames,
+      aliasNames: mergeAliasNames(match.name, match.aliasNames, [a.name], a.aliasNames),
       source: match.source ?? a.source,
       mode: match.mode,
       include: match.include,
