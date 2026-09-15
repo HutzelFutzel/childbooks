@@ -22,7 +22,7 @@ import { useAdminHealth } from "@/state/adminHealthStore";
 import { useAccountUiStore } from "@/state/accountUiStore";
 import { useAppConfigStore } from "@/state/appConfigStore";
 import { useAdminAccess } from "@/state/adminAccessStore";
-import { filterReadableTabs, SectionGate } from "./AccessGate";
+import { AccessLoadState, filterReadableTabs, SectionGate } from "./AccessGate";
 import type { PermissionKey } from "@/core/config/permissions";
 import {
   useAdminTab,
@@ -198,7 +198,9 @@ export default function AdminApp() {
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   const initAccess = useAdminAccess((s) => s.init);
+  const reloadAccess = useAdminAccess((s) => s.reload);
   const accessLoaded = useAdminAccess((s) => s.loaded);
+  const accessError = useAdminAccess((s) => s.error);
   const canRead = useAdminAccess((s) => s.canRead);
   // `canRead` is a stable function reference for the whole session (it's a
   // zustand action, never reassigned), so memoizing on it alone would freeze
@@ -247,13 +249,18 @@ export default function AdminApp() {
     entry.ownerOnly ? isOwnerAccess : !entry.key || canRead(entry.key);
   // Hide sections with no readable destination and point each remaining
   // section at its first permitted page, not necessarily its global default.
+  //
+  // Reached only once access has loaded — the shell above renders the load state
+  // until then. This used to carry a `!accessLoaded ||` escape hatch that showed
+  // every section while the fetch was in flight, which is precisely what made a
+  // failed fetch survivable enough to be confusing: the sections stayed, so the
+  // dashboard looked functional while every tab inside it claimed no access.
   const visibleSections = SECTIONS.filter(
     (candidate) =>
       (candidate.id !== "permissions" || isOwnerAccess) &&
-      (!accessLoaded ||
-        NAV_INDEX.some(
-          (entry) => entry.id.startsWith(`${candidate.id}:`) && canReachEntry(entry),
-        )),
+      NAV_INDEX.some(
+        (entry) => entry.id.startsWith(`${candidate.id}:`) && canReachEntry(entry),
+      ),
   );
   const hrefForSection = (target: AdminSection) =>
     NAV_INDEX.find(
@@ -397,6 +404,8 @@ export default function AdminApp() {
           </div>
         ) : !isAdmin ? (
           <AccessDenied onLeave={() => router.push("/studio")} />
+        ) : !accessLoaded ? (
+          <AccessLoadState error={accessError} onRetry={() => void reloadAccess()} />
         ) : (
           <>
             <aside className="hidden w-56 shrink-0 border-r border-ink-100 bg-white/60 px-3 py-5 sm:block">
@@ -616,7 +625,7 @@ export default function AdminApp() {
       <SettingsDialog />
       <PlansDialog />
       <OrdersDialog open={ordersOpen} onClose={closeOrders} />
-      {isAdmin && <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />}
+      {isAdmin && accessLoaded && <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />}
       <Toaster />
     </div>
   );

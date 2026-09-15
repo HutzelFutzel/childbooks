@@ -54,6 +54,8 @@ interface AdminAccessState {
   viewAsUid: string | null;
 
   init: () => Promise<void>;
+  /** Re-fetch access after a failed load. No-ops while a fetch is already in flight. */
+  reload: () => Promise<void>;
   loadAdmins: () => Promise<void>;
   loadAuditLog: (limit?: number) => Promise<void>;
   invite: (email: string) => Promise<AdminRecord>;
@@ -127,12 +129,27 @@ export const useAdminAccess = create<AdminAccessState>((set, get) => ({
         admin: AdminRecord;
         capabilities: Record<Capability, boolean>;
       }>("/admin/permissions/me");
-      set({ me: data.admin, capabilities: data.capabilities, loaded: true });
+      // A 200 without a role would otherwise mark the session "loaded" with
+      // `me === undefined`, and every `canRead` would then return false — the
+      // dashboard looking exactly like a grantless admin, including hiding the
+      // Permissions section that could explain it.
+      if (!data.admin?.role) {
+        throw new Error("The server did not return an admin record.");
+      }
+      set({ me: data.admin, capabilities: data.capabilities ?? NO_CAPABILITIES, loaded: true, error: null });
     } catch (err) {
-      set({ error: err instanceof Error ? err.message : "Could not load your admin access." });
+      const message = err instanceof Error ? err.message : "Could not load your admin access.";
+      console.error("[adminAccess] failed to load /admin/permissions/me", err);
+      set({ error: message, me: null, capabilities: NO_CAPABILITIES });
     } finally {
       set({ loading: false });
     }
+  },
+
+  async reload() {
+    if (get().loading) return;
+    set({ loaded: false, me: null, capabilities: NO_CAPABILITIES, error: null });
+    await get().init();
   },
 
   async loadAdmins() {
