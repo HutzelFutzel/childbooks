@@ -55,7 +55,8 @@ Phase 0 (foundations), phase 1 (preview-first Pages), phase 2 (the state model:
 catalog, playlist, engine, patch), phase 3 (the interpreter: free text in, facts
 out) and phase 4 (the surface: chat beside the book, tap-to-answer widgets, and the
 artifact pane driven by `component.canvas`) and phase 5 (generation the reader can
-watch, start and retry) have landed. Phases 6–9
+watch, start and retry) and phase 6 (checkpoints, jump-back and staleness) have
+landed. Phases 7–9
 finish the guide; nothing in the Retire table can be deleted before phase 9, and
 phase 9 is not done until this table is empty.
 

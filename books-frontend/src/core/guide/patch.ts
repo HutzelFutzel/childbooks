@@ -114,6 +114,21 @@ interface SlotWriter {
    * prompt that quietly describes last month's validator.
    */
   shape: (context: GuidePatchContext) => string;
+  /**
+   * This slot's current value, in the shape {@link apply} accepts — the inverse of
+   * the writer, used to take checkpoints the reader can jump back to.
+   *
+   * Returns `undefined` when the fact isn't established, which is not the same as
+   * "empty". `briefOf` reports a story mode for a book that has never had one, and
+   * an age band can be inherited from the hero rather than chosen; capturing those
+   * would turn a default into a decision, so that a jump-back writes a fact the
+   * reader never stated. The rule is: capture only what someone actually settled.
+   *
+   * Defined at the definition site next to `apply` because the pair has to agree —
+   * `scripts/guide-memory-invariants.ts` requires capture-then-apply to change
+   * nothing, which is the only way a restore is guaranteed to be faithful.
+   */
+  capture: (project: Project) => unknown;
   apply: (
     project: Project,
     input: unknown,
@@ -126,9 +141,12 @@ function writer<T>(
   schema: z.ZodType<T>,
   /** Returns the updated project, or null when the value changes nothing. */
   write: (project: Project, value: T, context: GuidePatchContext) => Project | null,
+  /** This slot's settled value, or undefined when nobody has settled it. */
+  capture: (project: Project) => T | undefined,
 ): SlotWriter {
   return {
     shape: typeof shape === "function" ? shape : () => shape,
+    capture,
     apply(project, input, context) {
       const parsed = schema.safeParse(input);
       if (!parsed.success) {
@@ -173,6 +191,8 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       if (project.config.storyBrief && brief.mode === mode) return null;
       return withBrief(project, { ...brief, mode });
     },
+    // Only once a brief exists: see the note on `capture` about defaults.
+    (project) => (project.config.storyBrief ? briefOf(project.config).mode : undefined),
   ),
 
   /**
@@ -200,6 +220,10 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       }
       if (sameCast(existing, cast)) return null;
       return withBrief(project, { ...brief, cast, heroNames: cast.map((member) => member.name) });
+    },
+    (project) => {
+      const cast = briefOf(project.config).cast ?? [];
+      return cast.length > 0 ? cast.map((member) => member.name) : undefined;
     },
   ),
 
@@ -236,6 +260,19 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       });
       return changed ? withBrief(project, { ...brief, cast }) : null;
     },
+    (project) => {
+      const aged = (briefOf(project.config).cast ?? [])
+        .filter((member) => member.age !== undefined || member.ageMonths !== undefined)
+        .map((member) => ({
+          name: member.name,
+          // One unit only, matching the writer: sending both would make the pair
+          // disagree the moment either is edited.
+          ...(member.ageMonths !== undefined
+            ? { ageMonths: member.ageMonths }
+            : { age: member.age }),
+        }));
+      return aged.length > 0 ? aged : undefined;
+    },
   ),
 
   audience: writer(
@@ -271,6 +308,15 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       }
       return withConfig(project, patch);
     },
+    (project) =>
+      // An inherited band is not a stated fact — the writer stamps
+      // `audienceFromCast: "custom"`, so anything else would not round-trip.
+      project.config.audienceFromCast === "custom" && project.config.ageRangeId
+        ? {
+            ageRangeId: project.config.ageRangeId,
+            readingModeId: project.config.readingModeId ?? null,
+          }
+        : undefined,
   ),
 
   language: writer(
@@ -280,19 +326,25 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       if (!isBookLanguageId(locale) || project.config.contentLocale === locale) return null;
       return withConfig(project, { contentLocale: locale });
     },
+    (project) =>
+      isBookLanguageId(project.config.contentLocale) ? project.config.contentLocale : undefined,
   ),
 
   storyIdea: writer(
     '{"customTheme"?, "occasion"?, "customSetting"?, "when"?, "where"?, "mustInclude"? } — free text, the reader\'s own words',
     z.object({
       themeId: z.string().max(60).nullable().optional(),
-      customTheme: proseSchema.optional(),
+      // Prose fields take null for the same reason the id fields do: it means "clear
+      // this". They previously did not, which made the slot un-restorable — a
+      // checkpoint is a merge, so a value the reader has since added can only be
+      // removed by naming it explicitly.
+      customTheme: proseSchema.nullable().optional(),
       settingId: z.string().max(60).nullable().optional(),
-      customSetting: proseSchema.optional(),
-      occasion: proseSchema.optional(),
-      when: proseSchema.optional(),
-      where: proseSchema.optional(),
-      mustInclude: proseSchema.optional(),
+      customSetting: proseSchema.nullable().optional(),
+      occasion: proseSchema.nullable().optional(),
+      when: proseSchema.nullable().optional(),
+      where: proseSchema.nullable().optional(),
+      mustInclude: proseSchema.nullable().optional(),
     }),
     (project, value) => {
       const brief = briefOf(project.config);
@@ -307,18 +359,49 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         next[key] = incoming;
         changed = true;
       };
+      // The prose fields are typed as absent-or-string, so an explicit clear has to
+      // land as `undefined` rather than as the `null` on the wire.
+      const clear = (incoming: string | null | undefined): string | undefined =>
+        incoming === null ? undefined : incoming;
+      const assignProse = <K extends keyof StoryBrief>(
+        key: K,
+        incoming: string | null | undefined,
+      ) => {
+        if (incoming === undefined) return; // not mentioned this turn
+        const next_ = clear(incoming) as StoryBrief[K];
+        if (next[key] === next_) return;
+        next[key] = next_;
+        changed = true;
+      };
       assign("themeId", value.themeId);
-      assign("customTheme", value.customTheme);
+      assignProse("customTheme", value.customTheme);
       assign("settingId", value.settingId);
-      assign("customSetting", value.customSetting);
-      assign("occasion", value.occasion);
-      assign("when", value.when);
-      assign("where", value.where);
-      assign("mustInclude", value.mustInclude);
+      assignProse("customSetting", value.customSetting);
+      assignProse("occasion", value.occasion);
+      assignProse("when", value.when);
+      assignProse("where", value.where);
+      assignProse("mustInclude", value.mustInclude);
       // Catalog ids are scoped to the book's age band by
       // `normalizeStoryBriefForCraft`, which the story pipeline already applies —
       // an id from another band is dropped there rather than validated twice.
       return changed ? withBrief(project, next) : null;
+    },
+    (project) => {
+      const brief = briefOf(project.config);
+      // Every field, every time — an explicit null where there is nothing. A partial
+      // capture cannot undo an ADDITION: the writer merges, so a field the reader set
+      // after the checkpoint would survive a restore that simply didn't mention it.
+      const idea = {
+        themeId: brief.themeId ?? null,
+        customTheme: brief.customTheme ?? null,
+        settingId: brief.settingId ?? null,
+        customSetting: brief.customSetting ?? null,
+        occasion: brief.occasion ?? null,
+        when: brief.when ?? null,
+        where: brief.where ?? null,
+        mustInclude: brief.mustInclude ?? null,
+      };
+      return Object.values(idea).some((value) => value !== null) ? idea : undefined;
     },
   ),
 
@@ -327,6 +410,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
     z.string().max(40_000),
     (project, text) =>
       project.config.storyText === text ? null : withConfig(project, { storyText: text }),
+    (project) => (project.config.storyText?.trim() ? project.config.storyText : undefined),
   ),
 
   artStyle: writer(
@@ -359,6 +443,17 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         styleReady: true,
       });
     },
+    (project) =>
+      // Only a confirmed style: the writer sets `styleReady`, so capturing an
+      // unconfirmed one would not round-trip.
+      project.config.styleReady === true
+        ? {
+            presetId: project.config.artStyle.presetId,
+            ...(project.config.artStyle.customDescription
+              ? { customDescription: project.config.artStyle.customDescription }
+              : {}),
+          }
+        : undefined,
   ),
 
   trim: writer(
@@ -368,6 +463,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       if (!context.productSkus.includes(sku) || project.config.productSku === sku) return null;
       return withConfig(project, { productSku: sku });
     },
+    (project) => project.config.productSku ?? undefined,
   ),
 
   layout: writer(
@@ -377,6 +473,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       if (!isKnownLayoutId(layoutId) || project.config.layoutId === layoutId) return null;
       return withConfig(project, { layoutId });
     },
+    (project) => (isKnownLayoutId(project.config.layoutId) ? project.config.layoutId : undefined),
   ),
 };
 
@@ -421,6 +518,28 @@ export function guidePatchShapeLines(context: GuidePatchContext): string {
   return GUIDE_PATCHABLE_SLOT_IDS.map(
     (id) => `- ${id}: ${WRITERS[id]!.shape(context)}`,
   ).join("\n");
+}
+
+/**
+ * The facts as they stand, in patch shape — a checkpoint the reader can return to.
+ *
+ * This is the whole of what a jump-back restores, and what it leaves alone is the
+ * point. Artifacts are not captured: a book whose hero was five and is now six should
+ * not silently get its old pictures back, because those pictures are of a five-year-old
+ * either way. Restoring the facts and letting the staleness check notice that the art
+ * no longer matches is the honest outcome — the reader is told what is out of date and
+ * offered one tap to redraw it (see `core/guide/staleness.ts`).
+ *
+ * Slots nobody has settled are absent rather than null, so restoring an early
+ * checkpoint does not write a pile of defaults over decisions made since.
+ */
+export function captureGuideFacts(project: Project): Record<string, unknown> {
+  const facts: Record<string, unknown> = {};
+  for (const id of GUIDE_PATCHABLE_SLOT_IDS) {
+    const value = WRITERS[id]!.capture(project);
+    if (value !== undefined) facts[id] = value;
+  }
+  return facts;
 }
 
 /**

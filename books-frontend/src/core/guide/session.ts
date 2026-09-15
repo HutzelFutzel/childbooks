@@ -51,6 +51,18 @@ export interface GuideMessage {
    * which is the case where a re-derived flag would ask everything twice.
    */
   about?: GuideComponentId;
+  /**
+   * The facts as they stood BEFORE this turn changed them, in patch shape (see
+   * `captureGuideFacts`). Present only on turns that changed something, which is
+   * exactly the set of points worth returning to.
+   *
+   * This is what makes "take me back to before I said that" possible without
+   * snapshotting whole books into the transcript: the guide's writable facts are a
+   * small, closed set, and restoring them is the same operation as applying any other
+   * patch. Artifacts are deliberately not here — see the note on `captureGuideFacts`
+   * for why getting the old pictures back would be the wrong answer.
+   */
+  before?: Record<string, unknown>;
 }
 
 export interface GuideSession {
@@ -145,7 +157,23 @@ function normalizeMessage(input: unknown): GuideMessage | null {
     ...(skipped.length > 0 ? { skipped } : {}),
     ...(raw.failed === true ? { failed: true as const } : {}),
     ...(isGuideComponentId(raw.about) ? { about: raw.about } : {}),
+    ...(normalizeBefore(raw.before) ?? {}),
   };
+}
+
+/**
+ * A stored checkpoint, kept only if it is still a plausible patch.
+ *
+ * Not validated slot by slot here, deliberately: `applyGuidePatch` is the closed world
+ * and it will reject anything unrecognised when the reader actually jumps back — so a
+ * second validator would only be a second thing to keep in step. This just refuses
+ * shapes that could not be a patch at all, and drops the key entirely when empty so a
+ * restore point with nothing in it does not offer a button that would do nothing.
+ */
+function normalizeBefore(input: unknown): { before: Record<string, unknown> } | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return null;
+  const before = input as Record<string, unknown>;
+  return Object.keys(before).length > 0 ? { before } : null;
 }
 
 /**
@@ -182,6 +210,37 @@ export function appendGuideMessage(
  * component anyway, but storing one would leave a permanent instruction that reads
  * as if it were honoured.
  */
+/**
+ * The turns a reader can return to, newest first.
+ *
+ * A turn is a restore point only if it changed a fact — a message that asked a
+ * question or answered one without landing anything has nothing to go back to. Read
+ * from the transcript rather than tracked separately so it survives a reload.
+ */
+export function guideRestorePoints(session: GuideSession): GuideMessage[] {
+  return session.messages.filter((message) => message.before).reverse();
+}
+
+/**
+ * Rewind the transcript to just before a turn.
+ *
+ * Drops that turn and everything after it, because the alternative — leaving the
+ * conversation on screen while the book goes back — puts the reader in front of a
+ * transcript that describes a book that no longer exists. Skips are kept: declining a
+ * question is not a fact this restores, and silently re-asking something they already
+ * turned down would be its own annoyance.
+ *
+ * Returns the session unchanged when the id isn't a restore point, so a stale button
+ * from an older transcript is inert rather than destructive.
+ */
+export function rewoundGuideSession(session: GuideSession, messageId: string): GuideSession {
+  const index = session.messages.findIndex(
+    (message) => message.id === messageId && message.before,
+  );
+  if (index < 0) return session;
+  return { ...session, messages: session.messages.slice(0, index) };
+}
+
 export function withGuideSkips(
   session: GuideSession,
   ids: readonly GuideComponentId[],

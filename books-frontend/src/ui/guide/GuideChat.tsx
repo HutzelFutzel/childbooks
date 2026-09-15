@@ -23,10 +23,11 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUp, Check, Loader2, RotateCw, Sparkles, TriangleAlert } from "lucide-react";
+import { ArrowUp, Check, History, Loader2, RotateCw, Sparkles, TriangleAlert } from "lucide-react";
 import { GUIDE_SLOTS } from "../../core/guide/slots";
 import type { GuideEffectId } from "../../core/guide/components";
 import { guideEffectFraction, type GuideEffectState } from "../../core/guide/effects";
+import type { GuideStaleItem } from "../../core/guide/staleness";
 import type { GuideCursor } from "../../core/guide/engine";
 import type { GuideMessage } from "../../core/guide/session";
 import type {
@@ -49,6 +50,8 @@ export function GuideChat({
   onChoose,
   onConfirm,
   onStart,
+  stale,
+  onJumpBack,
   onRetry,
   onSkip,
 }: {
@@ -64,6 +67,10 @@ export function GuideChat({
   onConfirm: (action: GuideConfirmAction) => void;
   /** Start (or retry) the generation a reveal is showing. */
   onStart: (effect: GuideEffectId) => void;
+  /** Work that no longer matches the facts — see `core/guide/staleness.ts`. */
+  stale: readonly GuideStaleItem[];
+  /** Restore the facts as they were before a turn. */
+  onJumpBack: (messageId: string) => void;
   onRetry: () => void;
   onSkip: () => void;
 }) {
@@ -102,7 +109,7 @@ export function GuideChat({
             message.role === "guide" ? (
               <GuideLine key={message.id} message={message} project={project} />
             ) : (
-              <ReaderLine key={message.id} message={message} />
+              <ReaderLine key={message.id} message={message} onJumpBack={onJumpBack} />
             ),
           )}
 
@@ -170,6 +177,10 @@ export function GuideChat({
               </Button>
             </div>
           )}
+
+          {/* Above the widget, and independent of it: the book can be finished — the
+              guide asking nothing at all — and still be out of date. */}
+          {stale.length > 0 && <GuideStaleNotice items={stale} onFix={onStart} />}
 
           {widget.kind === "reveal" && (
             <GuideReveal state={widget.state} onStart={() => onStart(widget.effect)} />
@@ -260,13 +271,19 @@ function GuideLine({ message, project }: { message: GuideMessage; project: Proje
   );
 }
 
-function ReaderLine({ message }: { message: GuideMessage }) {
+function ReaderLine({
+  message,
+  onJumpBack,
+}: {
+  message: GuideMessage;
+  onJumpBack: (messageId: string) => void;
+}) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25 }}
-      className="flex justify-end"
+      className="group flex flex-col items-end gap-0.5"
     >
       <p
         className={cn(
@@ -281,7 +298,66 @@ function ReaderLine({ message }: { message: GuideMessage }) {
       >
         {message.text}
       </p>
+
+      {/* Only on turns that changed a fact, and quiet until hovered or focused: this
+          is an escape hatch, and one visible under every message would read as an
+          invitation to distrust each one. */}
+      {message.before && (
+        <button
+          type="button"
+          onClick={() => onJumpBack(message.id)}
+          className="rounded text-[11px] text-ink-400 opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400 hover:text-ink-600"
+        >
+          Undo this
+        </button>
+      )}
     </motion.div>
+  );
+}
+
+/**
+ * Work that no longer matches the facts, and one tap to bring it up to date.
+ *
+ * Only the FIRST item gets a button, even when three things are stale. `guideStaleness`
+ * returns them upstream-first, and re-drawing the pages before the cast sheet they
+ * reference produces pages that are stale again the moment they land — so offering all
+ * three at once would be offering the reader a way to pay twice. Fix the top one, and
+ * the next appears.
+ */
+function GuideStaleNotice({
+  items,
+  onFix,
+}: {
+  items: readonly GuideStaleItem[];
+  onFix: (effect: GuideEffectId) => void;
+}) {
+  const first = items[0]!;
+  return (
+    <div className="mb-2.5 flex flex-col gap-1.5 rounded-xl bg-amber-50 p-2.5 ring-1 ring-inset ring-amber-200">
+      <div className="flex items-start gap-2">
+        <History className="mt-px size-3.5 shrink-0 text-amber-600" />
+        <div className="flex flex-col gap-0.5">
+          {items.map((item) => (
+            <p key={item.component} className="text-xs text-amber-900">
+              {item.reason}
+            </p>
+          ))}
+        </div>
+      </div>
+      <Button
+        size="sm"
+        variant="secondary"
+        leftIcon={<RotateCw className="size-4" />}
+        onClick={() => onFix(first.effect)}
+        className="self-start"
+      >
+        {first.effect === "storyDraft"
+          ? "Rewrite the story"
+          : first.count === 1
+            ? "Update it"
+            : `Update ${first.count}`}
+      </Button>
+    </div>
   );
 }
 

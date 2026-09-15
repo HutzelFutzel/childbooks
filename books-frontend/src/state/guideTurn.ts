@@ -14,7 +14,12 @@
  */
 "use client";
 
-import { applyGuidePatch, guidePatchContext, type GuidePatchRejection } from "../core/guide/patch";
+import {
+  applyGuidePatch,
+  captureGuideFacts,
+  guidePatchContext,
+  type GuidePatchRejection,
+} from "../core/guide/patch";
 import type { GuideSlotId } from "../core/guide/slots";
 import type { GuideComponentId } from "../core/guide/components";
 import type { GuideTurn, GuideTurnIntent } from "../core/pipeline/guideInterpret";
@@ -36,6 +41,13 @@ export interface GuideTurnOutcome {
   confidence: number;
   /** The server's turn-log id, for quoting in a bug report. */
   turnId: string | null;
+  /**
+   * The facts as they stood before this turn, when it changed any — the restore point
+   * for a jump-back. Captured inside the same `patchCurrent` callback as the write, so
+   * it is the state the patch was actually applied to rather than whatever the store
+   * happened to hold by the time the caller looked.
+   */
+  before: Record<string, unknown>;
 }
 
 /**
@@ -71,8 +83,10 @@ export async function sendGuideTurn(
   // rolled back by a patch computed before it landed.
   let applied: GuideSlotId[] = [];
   let rejected: GuidePatchRejection[] = [];
+  let before: Record<string, unknown> = {};
   if (Object.keys(result.patch).length > 0) {
     await useProjectsStore.getState().patchCurrent((live) => {
+      before = captureGuideFacts(live);
       const outcome = applyGuidePatch(live, result.patch, context);
       applied = outcome.applied;
       rejected = outcome.rejected;
@@ -88,5 +102,6 @@ export async function sendGuideTurn(
     skip: result.skip,
     confidence: result.confidence,
     turnId: result.turnId,
+    before,
   };
 }

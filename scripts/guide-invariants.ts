@@ -49,6 +49,7 @@ import { checkGuideInterpreter } from "./guide-interpreter-invariants";
 import { checkGuideSession } from "./guide-session-invariants";
 import { checkGuideWidgets } from "./guide-widget-invariants";
 import { checkGuideEffects } from "./guide-effect-invariants";
+import { checkGuideMemory } from "./guide-memory-invariants";
 
 /**
  * The repository root, found by walking up from the working directory. Not
@@ -447,6 +448,11 @@ failures.push(...effects.failures);
 notes.push(...effects.notes);
 cases += effects.cases;
 
+const memory = checkGuideMemory();
+failures.push(...memory.failures);
+notes.push(...memory.notes);
+cases += memory.cases;
+
 // --- Report ---------------------------------------------------------------
 
 console.log("Guide rollout");
@@ -474,6 +480,9 @@ for (const line of widgets.report) console.log(line);
 
 console.log();
 for (const line of effects.report) console.log(line);
+
+console.log();
+for (const line of memory.report) console.log(line);
 
 console.log(`\nLegacy manifest (${MANIFEST})`);
 if (marked.length === 0) {

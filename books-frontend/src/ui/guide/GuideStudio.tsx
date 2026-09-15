@@ -28,7 +28,9 @@ import type { GuideCanvasKind } from "../../core/guide/components";
 import type { ResolvedGuideComponent } from "../../core/guide/playlist";
 import type { GuideEffectId } from "../../core/guide/components";
 import type { GuideSlotId } from "../../core/guide/slots";
+import { guideStaleness } from "../../core/guide/staleness";
 import { guideWidget } from "../../core/guide/widgets";
+import { staleAnchorIds, staleIllustrationSpreadIds } from "../../state/ai";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { startGuideEffect } from "../../state/guideEffects";
 import { useGuideStore } from "../../state/guideStore";
@@ -63,6 +65,7 @@ export function GuideStudio({
   const catchUp = useGuideStore((s) => s.catchUp);
   const choose = useGuideStore((s) => s.choose);
   const confirm = useGuideStore((s) => s.confirm);
+  const jumpBack = useGuideStore((s) => s.jumpBack);
   const audience = useAppConfigStore((s) => s.audience);
   const artStyles = useAppConfigStore((s) => s.artStyles);
   const activeUnitIds = useJobsStore((s) => s.activeUnitIds);
@@ -113,6 +116,22 @@ export function GuideStudio({
         : ({ kind: "text", placeholder: "" } as const),
     [cursor, project, audience, artStyles, signals],
   );
+
+  /**
+   * What no longer matches the facts.
+   *
+   * The two detectors are the ones the wizard's own "update stale" toolbar reads, so
+   * both flows agree about what is out of date — see the note in
+   * `core/guide/staleness.ts` on why the verdicts are passed in rather than re-derived.
+   * Memoized on the project because each one walks every version tree in the book.
+   */
+  const stale = useMemo(() => {
+    if (!project) return [];
+    return guideStaleness(project, {
+      anchors: staleAnchorIds(project),
+      pages: staleIllustrationSpreadIds(project),
+    });
+  }, [project]);
 
   /**
    * Run the effect the reader asked for, then re-render the reveal from live state.
@@ -221,6 +240,8 @@ export function GuideStudio({
           onChoose={(option) => void choose(playlist, option)}
           onConfirm={(action) => void confirm(playlist, action)}
           onStart={(effect) => void start(effect)}
+          stale={stale}
+          onJumpBack={(messageId) => void jumpBack(playlist, messageId)}
           onRetry={() => void retry(playlist)}
           onSkip={() => cursor?.component && skip(playlist, cursor.component.id)}
         />

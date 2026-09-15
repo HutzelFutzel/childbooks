@@ -26,12 +26,13 @@ import {
   createGuideSession,
   guideMessage,
   guideTranscriptWindow,
+  rewoundGuideSession,
   withGuideSkips,
   type GuideSession,
 } from "../core/guide/session";
 import { guideAsk, guideSkipAck, nextGuideSay } from "../core/guide/voice";
 import type { GuideChoiceOption, GuideConfirmAction } from "../core/guide/widgets";
-import { applyGuidePatch, guidePatchContext } from "../core/guide/patch";
+import { applyGuidePatch, captureGuideFacts, guidePatchContext } from "../core/guide/patch";
 import type { GuideSlotId } from "../core/guide/slots";
 import { sendGuideTurn } from "./guideTurn";
 import { useAppConfigStore } from "./appConfigStore";
@@ -65,6 +66,8 @@ interface GuideStoreState {
   choose: (playlist: Playlist, option: GuideChoiceOption) => Promise<void>;
   /** Give the go-ahead a component is waiting on. */
   confirm: (playlist: Playlist, action: GuideConfirmAction) => Promise<void>;
+  /** Restore the facts as they were before a turn, and cut the transcript there. */
+  jumpBack: (playlist: Playlist, messageId: string) => Promise<void>;
   /** Re-send the last message that failed. */
   retry: (playlist: Playlist) => Promise<void>;
   /** Decline an optional component and move on. */
@@ -119,6 +122,25 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
     void getRepos()
       .then((repos) => repos.guide.save(projectId, session))
       .catch(() => {});
+  };
+
+  /**
+   * Mark the reader's most recent turn as a point they can return to.
+   *
+   * Applied after the write rather than before, because only a turn that actually
+   * changed something is worth going back to — a restated fact lands nothing, and
+   * offering to undo it would be a button that does nothing. The facts are captured
+   * before the write and stamped afterwards for the same reason.
+   */
+  const checkpoint = (before: Record<string, unknown>): void => {
+    set((state) => {
+      const index = state.session.messages.findLastIndex((entry) => entry.role === "reader");
+      if (index < 0) return state;
+      const messages = [...state.session.messages];
+      messages[index] = { ...messages[index]!, before };
+      return { session: { ...state.session, messages } };
+    });
+    persist();
   };
 
   /** Append something the guide says, stamped with the question it addresses. */
@@ -197,6 +219,7 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
           (id) => GUIDE_COMPONENTS[id].skippable,
         );
         set({ session, sending: false });
+        if (outcome.applied.length > 0) checkpoint(outcome.before);
         const at = cursorAt(playlist, session.skipped);
         speak(outcome.reply || (at ? guideAsk(at.cursor, at.project) : ""), at?.cursor ?? null, {
           ...(outcome.applied.length > 0 ? { applied: outcome.applied } : {}),
@@ -242,8 +265,10 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
       const { audience, artStyles } = useAppConfigStore.getState();
       const context = guidePatchContext({ audience, artStyles });
       let applied: GuideSlotId[] = [];
+      let before: Record<string, unknown> = {};
       try {
         await useProjectsStore.getState().patchCurrent((live) => {
+          before = captureGuideFacts(live);
           const outcome = applyGuidePatch(live, option.patch, context);
           applied = outcome.applied;
           return outcome.project;
@@ -253,6 +278,7 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
         notify.error(err);
         return;
       }
+      if (applied.length > 0) checkpoint(before);
 
       const at = cursorAt(playlist, get().session.skipped);
       speak(at ? guideAsk(at.cursor, at.project) : "", at?.cursor ?? null, {
@@ -289,6 +315,56 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
 
       const at = cursorAt(playlist, get().session.skipped);
       speak(at ? guideAsk(at.cursor, at.project) : "", at?.cursor ?? null);
+    },
+
+    /**
+     * Take the reader back to how things were before one of their turns.
+     *
+     * Two things happen together and neither works alone: the facts go back to the
+     * captured checkpoint, and the transcript is cut at that turn. Restoring the book
+     * while leaving the conversation would show them a history describing a book that
+     * no longer exists; cutting the conversation without restoring would lose the
+     * record of a change that is still in effect.
+     *
+     * Artifacts are not restored — that is the design, not a shortcut. The story and
+     * pictures made from the newer facts stay exactly where they are, and the staleness
+     * notice then reports that they no longer match and offers to redo them. Handing
+     * back the old pictures would be guessing that the reader wants a different book
+     * rather than a corrected one.
+     */
+    jumpBack: async (playlist, messageId) => {
+      const { projectId, sending, session } = get();
+      if (!projectId || sending) return;
+
+      const target = session.messages.find((entry) => entry.id === messageId);
+      if (!target?.before) return;
+
+      const { audience, artStyles } = useAppConfigStore.getState();
+      const context = guidePatchContext({ audience, artStyles });
+      let applied: GuideSlotId[] = [];
+      try {
+        await useProjectsStore.getState().patchCurrent((live) => {
+          const outcome = applyGuidePatch(live, target.before!, context);
+          applied = outcome.applied;
+          return outcome.project;
+        });
+      } catch (err) {
+        set({ error: describeError(err) });
+        notify.error(err);
+        return;
+      }
+
+      const rewound = rewoundGuideSession(get().session, messageId);
+      set({ session: rewound, error: null });
+      persist();
+
+      const at = cursorAt(playlist, rewound.skipped);
+      // Speaks unconditionally rather than through `nextGuideSay`: the transcript was
+      // just cut, so whatever the guide last said about this question is gone and the
+      // reader would otherwise be left with a composer and no prompt.
+      speak(at ? guideAsk(at.cursor, at.project) : "", at?.cursor ?? null, {
+        ...(applied.length > 0 ? { applied } : {}),
+      });
     },
 
     retry: async (playlist) => {
