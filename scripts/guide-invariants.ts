@@ -51,6 +51,7 @@ import { checkGuideWidgets } from "./guide-widget-invariants";
 import { checkGuideEffects } from "./guide-effect-invariants";
 import { checkGuideMemory } from "./guide-memory-invariants";
 import { checkGuideAdmin } from "./guide-admin-invariants";
+import { checkGuideFlow } from "./guide-flow-invariants";
 
 /**
  * The repository root, found by walking up from the working directory. Not
@@ -459,6 +460,11 @@ failures.push(...admin.failures);
 notes.push(...admin.notes);
 cases += admin.cases;
 
+const flow = checkGuideFlow();
+failures.push(...flow.failures);
+notes.push(...flow.notes);
+cases += flow.cases;
+
 // --- Report ---------------------------------------------------------------
 
 console.log("Guide rollout");
@@ -492,6 +498,9 @@ for (const line of memory.report) console.log(line);
 
 console.log();
 for (const line of admin.report) console.log(line);
+
+console.log();
+for (const line of flow.report) console.log(line);
 
 console.log(`\nLegacy manifest (${MANIFEST})`);
 if (marked.length === 0) {

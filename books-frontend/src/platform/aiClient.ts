@@ -108,6 +108,10 @@ export function touchProjectRemote(args: {
   projectId: string;
   stage?: string;
   title?: string;
+  /** Which studio the reader is looking at. Retired with the comparison. */
+  flow?: "guide" | "legacy";
+  /** True when the reader has reached the finished-book preview. */
+  previewed?: boolean;
 }): void {
   void postAi<{ ok: boolean }>("/ai/project-touch", args).catch(() => {});
 }

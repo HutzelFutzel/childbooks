@@ -18,6 +18,7 @@ import { backendPipelineEnv } from "./pipelineEnv";
 import { withUsage } from "./usage";
 import { meterAndSettle, runKindOf } from "./actionRun";
 import { touchProject } from "./projects";
+import { isStudioFlow } from "../../books-frontend/src/core/guide/flow";
 import { ensureAffordAction, InsufficientSparks } from "./sparks";
 import { standingPriceOverrides } from "./campaigns/pricing";
 import { ensureWithinQuota, incrementQuota, QuotaExceeded } from "./quotas";
@@ -988,16 +989,27 @@ export function registerAiRoutes(app: Express): void {
    */
   app.post("/ai/project-touch", json, async (req: AuthedRequest, res: Response) => {
     try {
-      const { projectId, stage, title } = req.body as {
+      const { projectId, stage, title, flow, previewed } = req.body as {
         projectId?: string;
         stage?: string;
         title?: string;
+        flow?: unknown;
+        previewed?: unknown;
       };
       if (!projectId) {
         res.status(400).json({ error: { message: "projectId is required." } });
         return;
       }
-      await touchProject({ uid: req.uid!, projectId, stage, title });
+      await touchProject({
+        uid: req.uid!,
+        projectId,
+        stage,
+        title,
+        // Validated rather than trusted: an unknown value is dropped instead of
+        // creating a third arm in the comparison out of a typo.
+        ...(isStudioFlow(flow) ? { flow } : {}),
+        ...(previewed === true ? { previewed: true } : {}),
+      });
       res.json({ ok: true });
     } catch (err) {
       sendError(res, err);

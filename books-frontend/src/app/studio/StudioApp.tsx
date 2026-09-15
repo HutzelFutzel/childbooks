@@ -54,6 +54,7 @@ import {
   type StudioDestination,
 } from "@/ui/studio/studioRoutes";
 import { useGuidePlaylist } from "@/ui/guide/useGuideMode";
+import { useFlowAttribution, usePreviewReached } from "@/ui/studio/useFlowAttribution";
 import { GuideModeToggle } from "@/ui/guide/GuideModeToggle";
 import { useGuideStore } from "@/state/guideStore";
 
@@ -470,6 +471,15 @@ export default function StudioApp() {
     route.kind === "invalid" ||
     (route.kind === "project" && !inProject) ||
     (uid !== null && (!projectsLoaded || projectsOwnerUid !== uid));
+
+  // Which studio built this book, and whether the reader got to the end. Recorded
+  // rather than derived: neither is recoverable once the rollout moves on. Only
+  // reported once the book is actually open, so a route still resolving doesn't
+  // attribute a visit to whichever flow rendered the spinner. Goes with the flow
+  // comparison — see docs/LEGACY-GUIDE.md.
+  const attributedProjectId = inProject ? route.bookId : null;
+  useFlowAttribution(attributedProjectId, inProject ? (guidePlaylist ? "guide" : "legacy") : null);
+  usePreviewReached(attributedProjectId, activeDestination === "order");
 
   const navigateStudio = useCallback(
     (destination: StudioDestination) => {

@@ -18,9 +18,20 @@
  * separation is deliberate — a conversation log that the flow depended on would be
  * a second source of truth, and the one that drifts.
  *
- * Retention: `expiresAt` drives Firestore TTL. The reader's own words are personal
+ * Retention: `expiresAt` drives a Firestore TTL policy, declared as a `ttl`
+ * fieldOverride in `firestore.indexes.json` and applied by
+ * `firebase deploy --only firestore:indexes`. The reader's own words are personal
  * data, and there is no reason to hold them past the window in which they could
  * explain a complaint.
+ *
+ * The policy is the reason this is a `Timestamp` rather than the epoch number the
+ * other expiring collections here use: TTL only reads a timestamp field, and the
+ * sibling collections (`likenessPhotos`, `sparkLots`) are swept by scheduled
+ * functions instead, which need arithmetic. Do not "make it consistent" by
+ * switching to a number — that silently disables the policy, and nothing fails.
+ *
+ * Erasure on request is separate and already covered: `eraseUser` does a
+ * `recursiveDelete` on `users/{uid}`, which takes this subcollection with it.
  */
 import { randomUUID } from "node:crypto";
 import { getFirestore } from "firebase-admin/firestore";
