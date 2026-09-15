@@ -21,8 +21,10 @@
  * register from a parent halfway through making a book.
  */
 import type { GuideCursor } from "./engine";
-import type { GuideComponent } from "./components";
+import type { GuideComponent, GuideEffectId } from "./components";
+import { guideEffectState } from "./effects";
 import { lastSpokenAbout, type GuideSession } from "./session";
+import type { Project } from "../types";
 
 /**
  * The question to put to the reader for the cursor's current position.
@@ -31,17 +33,51 @@ import { lastSpokenAbout, type GuideSession } from "./session";
  * already shows for the same missing fact — a reader who switches flows mid-book
  * should not be told two different things about the same gap.
  */
-export function guideAsk(cursor: GuideCursor): string {
+export function guideAsk(cursor: GuideCursor, project: Project): string {
   if (!cursor.component) return "Your book has everything it needs. Shall we look it over?";
+  const component = cursor.component;
 
-  // A component that is waiting on generation rather than on the reader. Saying
-  // "we're working on it" is the honest line; asking a question they can't answer
-  // is how a guide starts to feel like it isn't listening.
-  if (cursor.status === "blocked") {
-    return cursor.blockers[0] ?? `We're getting ${lower(cursor.component.title)} ready.`;
+  /**
+   * Generation outstanding: say what is about to happen, not how much is left.
+   *
+   * The count belongs to the reveal beside the composer, which re-reads it from the
+   * book on every render. Putting it here instead would write a number into the
+   * transcript — a permanent record that is wrong five minutes later and stays
+   * wrong, sitting above a live counter that disagrees with it. So the durable line
+   * explains the intent, and the live one carries the status.
+   */
+  if (component.effect && guideEffectState(component.effect, project).status !== "done") {
+    return effectIntent(component.effect);
   }
 
-  return cursor.blockers[0] ?? openingFor(cursor.component);
+  // Waiting on generation rather than on the reader, with no effect of its own to
+  // explain it. Saying "we're working on it" is the honest line; asking a question
+  // they can't answer is how a guide starts to feel like it isn't listening.
+  if (cursor.status === "blocked") {
+    return cursor.blockers[0] ?? `We're getting ${lower(component.title)} ready.`;
+  }
+
+  return cursor.blockers[0] ?? openingFor(component);
+}
+
+/**
+ * What the guide says while a piece of generation runs.
+ *
+ * Each one answers "why is this happening" rather than "what is happening" — the
+ * reader can see what is happening. The cast line earns its keep: readers who are not
+ * told why the characters are drawn before the pages assume the wait is wasted.
+ */
+function effectIntent(effect: GuideEffectId): string {
+  switch (effect) {
+    case "storyDraft":
+      return "I'll write the story now, from everything you've told me.";
+    case "castArt":
+      return "First I'll draw everyone and everywhere, so they look the same on every page.";
+    case "screenplay":
+      return "Now I'll turn the story into pages.";
+    case "pageArt":
+      return "Now the pictures — one for every page.";
+  }
 }
 
 /**
@@ -60,8 +96,12 @@ function openingFor(component: GuideComponent): string {
 }
 
 /** Acknowledge a declined component without making a thing of it. */
-export function guideSkipAck(component: GuideComponent, next: GuideCursor): string {
-  return `No problem — I'll pick that. ${guideAsk(next)}`;
+export function guideSkipAck(
+  component: GuideComponent,
+  next: GuideCursor,
+  project: Project,
+): string {
+  return `No problem — I'll pick that. ${guideAsk(next, project)}`;
 }
 
 /**
@@ -71,9 +111,9 @@ export function guideSkipAck(component: GuideComponent, next: GuideCursor): stri
  * the previous question is answered, but not by anything they said, so there is no
  * interpreter reply to carry the next one.
  */
-export function guideAdvance(cursor: GuideCursor): string {
+export function guideAdvance(cursor: GuideCursor, project: Project): string {
   if (!cursor.component) return "That's everything — your book is ready to read through.";
-  return guideAsk(cursor);
+  return guideAsk(cursor, project);
 }
 
 /**
@@ -90,10 +130,14 @@ export function guideAdvance(cursor: GuideCursor): string {
  *
  * Returns null when the last thing the guide said was already about this question.
  */
-export function nextGuideSay(session: GuideSession, cursor: GuideCursor): string | null {
-  if (session.messages.length === 0) return guideAsk(cursor);
+export function nextGuideSay(
+  session: GuideSession,
+  cursor: GuideCursor,
+  project: Project,
+): string | null {
+  if (session.messages.length === 0) return guideAsk(cursor, project);
   if (lastSpokenAbout(session) === (cursor.component?.id ?? null)) return null;
-  return guideAdvance(cursor);
+  return guideAdvance(cursor, project);
 }
 
 function sentence(text: string): string {

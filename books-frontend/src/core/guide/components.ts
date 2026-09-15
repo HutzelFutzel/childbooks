@@ -107,7 +107,7 @@ export interface GuideComponent {
  * confirmed it and moved on, or there is text on the page. Every story-side
  * question stops asking at this point.
  */
-function storySettled(project: Project): boolean {
+export function storySettled(project: Project): boolean {
   return project.stage === "studio" || project.config.storyText.trim().length > 0;
 }
 

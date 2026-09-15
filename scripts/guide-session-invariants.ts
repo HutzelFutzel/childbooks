@@ -95,8 +95,8 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
   for (const skipped of [[], GUIDE_COMPONENT_IDS.filter(declinable)] as GuideComponentId[][]) {
     const cursor = nextGuideStep(playlist, project, skipped);
     for (const [label, line] of [
-      ["ask", guideAsk(cursor)],
-      ["advance", guideAdvance(cursor)],
+      ["ask", guideAsk(cursor, project)],
+      ["advance", guideAdvance(cursor, project)],
     ] as const) {
       cases += 1;
       const trimmed = line.trim();
@@ -120,7 +120,7 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
     // the reader looking at a dead end.
     if (cursor.component?.skippable) {
       const after = nextGuideStep(playlist, project, [...skipped, cursor.component.id]);
-      const ack = guideSkipAck(cursor.component, after);
+      const ack = guideSkipAck(cursor.component, after, project);
       cases += 1;
       if (ack.trim().length < 20) {
         fail(`Declining "${cursor.component.id}" on a "${name}" book said almost nothing: "${ack}".`);
@@ -142,6 +142,11 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
  * makes them reachable.
  */
 {
+  // A concrete book to narrate against. These cursors are synthetic, but `guideAsk`
+  // reads the project to decide whether a component's generation has finished, so it
+  // still needs one — the fresh book keeps every effect outstanding, which is the
+  // branch these defensive states are most likely to hit.
+  const sample = GUIDE_BOOK_STATES[0]!.project;
   const blockedCases: GuideCursor[] = [];
   for (const component of playlist) {
     for (const required of component.requires) {
@@ -149,7 +154,7 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
         component,
         status: "blocked",
         blockedBy: required,
-        blockers: component.blockers(GUIDE_BOOK_STATES[0]!.project),
+        blockers: component.blockers(sample),
       });
     }
     // The harder shape: blocked with nothing to report, which is what falls through
@@ -161,8 +166,8 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
   for (const cursor of [...blockedCases, done]) {
     const where = cursor.component?.id ?? "done";
     for (const [label, line] of [
-      ["ask", guideAsk(cursor)],
-      ["advance", guideAdvance(cursor)],
+      ["ask", guideAsk(cursor, sample)],
+      ["advance", guideAdvance(cursor, sample)],
     ] as const) {
       cases += 1;
       const trimmed = line.trim();
@@ -179,9 +184,9 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
   }
 
   // Reaching the end has to be said once and then dropped, same as any question.
-  const ended = speak(createGuideSession(), guideAdvance(done), done);
+  const ended = speak(createGuideSession(), guideAdvance(done, sample), done);
   cases += 1;
-  if (nextGuideSay(ended, done) !== null) {
+  if (nextGuideSay(ended, done, sample) !== null) {
     fail("The guide announced a finished book more than once.");
   }
   notes.push(`${blockedCases.length} unreachable cursor states exercised directly`);
@@ -200,7 +205,7 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
   const cursor = nextGuideStep(playlist, project, []);
   let session = createGuideSession();
 
-  const opening = nextGuideSay(session, cursor);
+  const opening = nextGuideSay(session, cursor, project);
   cases += 1;
   if (!opening) {
     fail(`A "${name}" book opened with the guide saying nothing at all.`);
@@ -211,7 +216,7 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
   // Ten more passes with the book unchanged. Every one has to be silent.
   for (let i = 0; i < 10; i += 1) {
     cases += 1;
-    const again = nextGuideSay(session, cursor);
+    const again = nextGuideSay(session, cursor, project);
     if (again !== null) {
       fail(`A "${name}" book had the guide repeat itself: "${again}".`);
       break;
@@ -238,9 +243,9 @@ for (let i = 1; i < GUIDE_BOOK_STATES.length; i += 1) {
   const nowAt = nextGuideStep(playlist, after.project, []);
   if ((wasAt.component?.id ?? null) === (nowAt.component?.id ?? null)) continue;
 
-  const session = speak(createGuideSession(), guideAsk(wasAt), wasAt);
+  const session = speak(createGuideSession(), guideAsk(wasAt, before), wasAt);
   cases += 1;
-  if (!nextGuideSay(session, nowAt)) {
+  if (!nextGuideSay(session, nowAt, after)) {
     fail(
       `Going from a "${before.name}" to a "${after.name}" book moved the guide to ` +
         `"${nowAt.component?.id ?? "done"}" and it said nothing.`,
@@ -450,7 +455,7 @@ for (const input of junk) {
 report.push("What the guide says, as a book is made");
 for (const { name, project } of GUIDE_BOOK_STATES.slice(0, 15)) {
   const cursor = nextGuideStep(playlist, project, []);
-  report.push(`  ${name.padEnd(17)} ${guideAsk(cursor)}`);
+  report.push(`  ${name.padEnd(17)} ${guideAsk(cursor, project)}`);
 }
 
 notes.push(

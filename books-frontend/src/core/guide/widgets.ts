@@ -36,7 +36,13 @@ import type { Project } from "../types";
 import {
   castAwaitingConfirmation,
   type GuideComponentId,
+  type GuideEffectId,
 } from "./components";
+import {
+  guideEffectState,
+  type GuideEffectSignals,
+  type GuideEffectState,
+} from "./effects";
 import type { GuideCursor } from "./engine";
 import type { GuideSlotId } from "./slots";
 
@@ -59,13 +65,22 @@ export type GuideWidget =
   | { kind: "text"; placeholder: string }
   | { kind: "choice"; slot: GuideSlotId; options: GuideChoiceOption[]; placeholder: string }
   | { kind: "confirm"; action: GuideConfirmAction; affirm: string; placeholder: string }
-  /** Waiting on generation. Nothing to answer, but the reader may still talk. */
+  /**
+   * Generation, with its progress. Nothing to answer, but the reader may still talk —
+   * and when `state.resumable` they can start or retry it. Carries the whole
+   * {@link GuideEffectState} rather than a copy of its fields so the pane cannot
+   * disagree with the count.
+   */
+  | { kind: "reveal"; effect: GuideEffectId; state: GuideEffectState; placeholder: string }
+  /** Waiting on something the reader cannot start and no effect explains. */
   | { kind: "wait"; message: string; placeholder: string };
 
 /** The live worlds an option list is drawn from. Same sources as the patch context. */
 export interface GuideWidgetSources {
   audience?: AudienceConfig | null;
   artStyles?: ArtStylesConfig | null;
+  /** Live job state, so a reveal can tell "running" from "not started". */
+  signals?: GuideEffectSignals;
 }
 
 /**
@@ -141,8 +156,32 @@ export function guideWidget(
     return { kind: "text", placeholder: "Anything you'd like to change?" };
   }
 
-  // Blocked means the guide is waiting on something the reader cannot supply.
-  // Offering them a choice here would be a control that does nothing.
+  /**
+   * Generation takes precedence over every other affordance.
+   *
+   * A component with an effect that hasn't finished is a component whose question is
+   * "shall I get on with it" — offering a picker or a confirm button there would ask
+   * the reader about something the guide is in the middle of. The effect's own state
+   * decides whether that reads as progress or as an offer to start.
+   */
+  if (component.effect) {
+    const state = guideEffectState(component.effect, project, sources.signals);
+    if (state.status !== "done") {
+      return {
+        kind: "reveal",
+        effect: component.effect,
+        state,
+        placeholder:
+          state.status === "running"
+            ? "Ask me anything while this finishes…"
+            : placeholderFor(component.id),
+      };
+    }
+  }
+
+  // Blocked with no effect to explain it: waiting on something the reader cannot
+  // supply and cannot start. Offering a choice here would be a control that does
+  // nothing.
   if (cursor.status === "blocked") {
     return {
       kind: "wait",
@@ -169,26 +208,12 @@ export function guideWidget(
     };
   }
 
-  // An effect-bearing component with a blocker is mid-generation: the story is
-  // being written, the sheets are being drawn. Same reasoning as `blocked`.
-  if (component.effect && cursor.blockers.length > 0 && !hasChoice(component.id)) {
-    return {
-      kind: "wait",
-      message: cursor.blockers[0]!,
-      placeholder: "Ask me anything while this finishes…",
-    };
-  }
-
   const choice = optionsFor(component.id, sources);
   if (choice && choice.options.length > 0) {
     return { ...choice, kind: "choice", placeholder: placeholderFor(component.id) };
   }
 
   return { kind: "text", placeholder: placeholderFor(component.id) };
-}
-
-function hasChoice(id: GuideComponentId): boolean {
-  return id === "story-mode" || id === "audience" || id === "art-style";
 }
 
 /**

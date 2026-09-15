@@ -23,8 +23,10 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUp, Check, Loader2, RotateCw } from "lucide-react";
+import { ArrowUp, Check, Loader2, RotateCw, Sparkles, TriangleAlert } from "lucide-react";
 import { GUIDE_SLOTS } from "../../core/guide/slots";
+import type { GuideEffectId } from "../../core/guide/components";
+import { guideEffectFraction, type GuideEffectState } from "../../core/guide/effects";
 import type { GuideCursor } from "../../core/guide/engine";
 import type { GuideMessage } from "../../core/guide/session";
 import type {
@@ -46,6 +48,7 @@ export function GuideChat({
   onSend,
   onChoose,
   onConfirm,
+  onStart,
   onRetry,
   onSkip,
 }: {
@@ -59,6 +62,8 @@ export function GuideChat({
   onSend: (text: string) => void;
   onChoose: (option: GuideChoiceOption) => void;
   onConfirm: (action: GuideConfirmAction) => void;
+  /** Start (or retry) the generation a reveal is showing. */
+  onStart: (effect: GuideEffectId) => void;
   onRetry: () => void;
   onSkip: () => void;
 }) {
@@ -164,6 +169,10 @@ export function GuideChat({
                 {widget.affirm}
               </Button>
             </div>
+          )}
+
+          {widget.kind === "reveal" && (
+            <GuideReveal state={widget.state} onStart={() => onStart(widget.effect)} />
           )}
 
           {!sending && widget.kind === "wait" && (
@@ -273,6 +282,68 @@ function ReaderLine({ message }: { message: GuideMessage }) {
         {message.text}
       </p>
     </motion.div>
+  );
+}
+
+/**
+ * Generation, as one line the reader can watch.
+ *
+ * Deliberately not a spinner in the transcript: the work outlives any one message —
+ * it survives a reload and can finish with the tab closed — so it belongs beside the
+ * composer, where it stays put and stays current, rather than scrolling away up the
+ * conversation as a stale "working on it…".
+ *
+ * The bar only appears for effects with more than one unit, since a two-state bar is
+ * a worse spinner than a spinner. `resumable` (not the status) decides whether a
+ * button shows, because that is the flag that knows whether a second job would be a
+ * duplicate the reader pays for.
+ */
+function GuideReveal({ state, onStart }: { state: GuideEffectState; onStart: () => void }) {
+  const fraction = guideEffectFraction(state);
+  const failed = state.status === "failed";
+
+  return (
+    <div className="mb-2.5 flex flex-col gap-1.5">
+      <div className="flex items-center gap-2">
+        {state.status === "running" && (
+          <Loader2 className="size-3.5 shrink-0 animate-spin text-brand-400" />
+        )}
+        {failed && <TriangleAlert className="size-3.5 shrink-0 text-red-500" />}
+        <span className={cn("text-xs", failed ? "text-red-700" : "text-ink-500")}>
+          {state.label}
+        </span>
+        {state.total > 1 && (
+          <span className="ml-auto shrink-0 text-[11px] tabular-nums text-ink-400">
+            {state.done}/{state.total}
+          </span>
+        )}
+      </div>
+
+      {fraction !== null && (
+        <div className="h-1 overflow-hidden rounded-full bg-ink-100">
+          <motion.div
+            className="h-full rounded-full bg-brand-400"
+            initial={false}
+            animate={{ width: `${Math.round(fraction * 100)}%` }}
+            transition={{ duration: 0.4 }}
+          />
+        </div>
+      )}
+
+      {state.error && <p className="text-[11px] text-red-600">{state.error}</p>}
+
+      {state.resumable && (
+        <Button
+          size="sm"
+          variant={failed ? "secondary" : "primary"}
+          leftIcon={failed ? <RotateCw className="size-4" /> : <Sparkles className="size-4" />}
+          onClick={onStart}
+          className="self-start"
+        >
+          {failed ? "Try again" : state.done > 0 ? "Carry on" : "Start"}
+        </Button>
+      )}
+    </div>
   );
 }
 

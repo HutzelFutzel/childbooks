@@ -26,10 +26,13 @@ import { BookOpen, MessageCircle } from "lucide-react";
 import { coveredGuideSlots, guideProgress, nextGuideStep } from "../../core/guide/engine";
 import type { GuideCanvasKind } from "../../core/guide/components";
 import type { ResolvedGuideComponent } from "../../core/guide/playlist";
+import type { GuideEffectId } from "../../core/guide/components";
 import type { GuideSlotId } from "../../core/guide/slots";
 import { guideWidget } from "../../core/guide/widgets";
 import { useAppConfigStore } from "../../state/appConfigStore";
+import { startGuideEffect } from "../../state/guideEffects";
 import { useGuideStore } from "../../state/guideStore";
+import { useJobsStore } from "../../state/jobsStore";
 import { useProjectsStore } from "../../state/projectsStore";
 import { StudioWorkspace } from "../studio/StudioWorkspace";
 import type { StudioDestination } from "../studio/studioRoutes";
@@ -62,6 +65,9 @@ export function GuideStudio({
   const confirm = useGuideStore((s) => s.confirm);
   const audience = useAppConfigStore((s) => s.audience);
   const artStyles = useAppConfigStore((s) => s.artStyles);
+  const activeUnitIds = useJobsStore((s) => s.activeUnitIds);
+  const screenplayJob = useJobsStore((s) => s.screenplayJob);
+  const [drafting, setDrafting] = useState(false);
   const [pane, setPane] = useState<Pane>("chat");
 
   const projectId = project?.id ?? null;
@@ -84,13 +90,45 @@ export function GuideStudio({
     () => (project ? coveredGuideSlots(playlist, project, session.skipped) : []),
     [playlist, project, session.skipped],
   );
+  /**
+   * Live job state, so a reveal can tell "nobody is working on this" from "it's
+   * running". The counts themselves come from the book inside `guideEffectState` —
+   * see the note there on why progress is never read from a job.
+   */
+  const signals = useMemo(
+    () => ({
+      activeUnitIds,
+      screenplay: screenplayJob
+        ? { status: screenplayJob.status, ...(screenplayJob.error ? { error: screenplayJob.error } : {}) }
+        : null,
+      drafting,
+    }),
+    [activeUnitIds, screenplayJob, drafting],
+  );
+
   const widget = useMemo(
     () =>
       cursor && project
-        ? guideWidget(cursor, project, { audience, artStyles })
+        ? guideWidget(cursor, project, { audience, artStyles, signals })
         : ({ kind: "text", placeholder: "" } as const),
-    [cursor, project, audience, artStyles],
+    [cursor, project, audience, artStyles, signals],
   );
+
+  /**
+   * Run the effect the reader asked for, then re-render the reveal from live state.
+   *
+   * `drafting` is local because the story draft is the one effect with no job
+   * document to read a "running" flag out of — the other three are recovered from
+   * Firestore and so survive the reload this cannot.
+   */
+  const start = useCallback(async (effect: GuideEffectId) => {
+    if (effect === "storyDraft") setDrafting(true);
+    try {
+      await startGuideEffect(effect);
+    } finally {
+      if (effect === "storyDraft") setDrafting(false);
+    }
+  }, []);
 
   /**
    * A surface the reader asked to see, which overrides the one the cursor implies.
@@ -182,6 +220,7 @@ export function GuideStudio({
           onSend={(text) => void send(playlist, text)}
           onChoose={(option) => void choose(playlist, option)}
           onConfirm={(action) => void confirm(playlist, action)}
+          onStart={(effect) => void start(effect)}
           onRetry={() => void retry(playlist)}
           onSkip={() => cursor?.component && skip(playlist, cursor.component.id)}
         />

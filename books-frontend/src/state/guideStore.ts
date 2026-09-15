@@ -36,6 +36,7 @@ import type { GuideSlotId } from "../core/guide/slots";
 import { sendGuideTurn } from "./guideTurn";
 import { useAppConfigStore } from "./appConfigStore";
 import { useProjectsStore } from "./projectsStore";
+import type { Project } from "../core/types";
 import { getRepos } from "./repos";
 import { describeError } from "../core/errors";
 import { notify } from "../ui/lib/notify";
@@ -90,10 +91,20 @@ type Playlist = readonly ResolvedGuideComponent[];
  * whenever an admin saves a reorder mid-sentence. The reply the reader gets should be
  * about the question they were actually asked.
  */
-function cursorAt(playlist: Playlist, skipped: readonly GuideComponentId[]): GuideCursor | null {
+/**
+ * Returns the project alongside the cursor because the narration needs both, and
+ * both have to come from the same snapshot. `guideAsk` asks whether the active
+ * component's generation has finished; resolving the project a second time at the
+ * call site would let a render landing in between produce a line about a state the
+ * cursor was never computed from.
+ */
+function cursorAt(
+  playlist: Playlist,
+  skipped: readonly GuideComponentId[],
+): { cursor: GuideCursor; project: Project } | null {
   const project = useProjectsStore.getState().current();
   if (!project) return null;
-  return nextGuideStep(playlist, project, skipped);
+  return { cursor: nextGuideStep(playlist, project, skipped), project };
 }
 
 export const useGuideStore = create<GuideStoreState>((set, get) => {
@@ -153,12 +164,12 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
     catchUp: (playlist) => {
       const { loaded, sending, session } = get();
       if (!loaded || sending) return;
-      const cursor = cursorAt(playlist, session.skipped);
-      if (!cursor) return;
+      const at = cursorAt(playlist, session.skipped);
+      if (!at) return;
       // Whether there's anything new to say is `nextGuideSay`'s decision, not this
       // store's — see the note there on why that logic is pure.
-      const line = nextGuideSay(session, cursor);
-      if (line) speak(line, cursor);
+      const line = nextGuideSay(session, at.cursor, at.project);
+      if (line) speak(line, at.cursor);
     },
 
     send: async (playlist, text) => {
@@ -186,8 +197,8 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
           (id) => GUIDE_COMPONENTS[id].skippable,
         );
         set({ session, sending: false });
-        const cursor = cursorAt(playlist, session.skipped);
-        speak(outcome.reply || guideAsk(cursor ?? { component: null, status: "done", blockers: [] }), cursor, {
+        const at = cursorAt(playlist, session.skipped);
+        speak(outcome.reply || (at ? guideAsk(at.cursor, at.project) : ""), at?.cursor ?? null, {
           ...(outcome.applied.length > 0 ? { applied: outcome.applied } : {}),
           ...(outcome.skip.length > 0 ? { skipped: outcome.skip } : {}),
         });
@@ -243,8 +254,8 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
         return;
       }
 
-      const cursor = cursorAt(playlist, get().session.skipped);
-      speak(cursor ? guideAsk(cursor) : "", cursor, {
+      const at = cursorAt(playlist, get().session.skipped);
+      speak(at ? guideAsk(at.cursor, at.project) : "", at?.cursor ?? null, {
         ...(applied.length > 0 ? { applied } : {}),
       });
     },
@@ -276,8 +287,8 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
         return;
       }
 
-      const cursor = cursorAt(playlist, get().session.skipped);
-      speak(cursor ? guideAsk(cursor) : "", cursor);
+      const at = cursorAt(playlist, get().session.skipped);
+      speak(at ? guideAsk(at.cursor, at.project) : "", at?.cursor ?? null);
     },
 
     retry: async (playlist) => {
@@ -296,12 +307,9 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
       const session = withGuideSkips(get().session, [id], (candidate) => GUIDE_COMPONENTS[candidate].skippable);
       if (session === get().session) return;
       set({ session });
-      const cursor = cursorAt(playlist, session.skipped);
-      speak(
-        guideSkipAck(GUIDE_COMPONENTS[id], cursor ?? { component: null, status: "done", blockers: [] }),
-        cursor,
-        { skipped: [id] },
-      );
+      const at = cursorAt(playlist, session.skipped);
+      if (!at) return;
+      speak(guideSkipAck(GUIDE_COMPONENTS[id], at.cursor, at.project), at.cursor, { skipped: [id] });
     },
 
     clear: async () => {
