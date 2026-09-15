@@ -17,17 +17,15 @@ export function percentile(sorted: number[], p: number): number {
   return sorted[idx];
 }
 
-/** One metric's shape across a set of things. */
-export interface StatSummary {
-  /** How many samples contributed (rows that had the metric at all). */
-  count: number;
-  total: number;
-  avg: number;
-  median: number;
-  p90: number;
-  min: number;
-  max: number;
-}
+/**
+ * One metric's shape across a set of things.
+ *
+ * Defined in `core/analytics/types.ts` because it crosses the wire: the client
+ * renders these verbatim, and a second declaration is a second thing to forget to
+ * update when a field is added.
+ */
+export type { StatSummary } from "../../books-frontend/src/core/analytics/types";
+import type { StatSummary } from "../../books-frontend/src/core/analytics/types";
 
 export function emptyStat(): StatSummary {
   return { count: 0, total: 0, avg: 0, median: 0, p90: 0, min: 0, max: 0 };

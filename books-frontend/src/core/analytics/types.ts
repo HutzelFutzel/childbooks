@@ -8,6 +8,7 @@
  * just renders the result.
  */
 import type { BuyerFacts } from "../config/surveys";
+import type { FlowArm } from "../guide/flow";
 
 /** Preset windows for the time-frame toggle (plus a custom range). */
 export type Timeframe = "today" | "7d" | "30d" | "custom";
@@ -666,4 +667,109 @@ export function previousRange(range: AnalyticsRange): AnalyticsRange {
 export function deltaPct(after: number, before: number): number | null {
   if (!Number.isFinite(before) || before <= 0) return after > 0 ? null : 0;
   return Math.round(((after - before) / before) * 1000) / 10;
+}
+
+// ---- Books, and the studio that made them ------------------------------------
+
+/**
+ * One metric's shape across a set of things.
+ *
+ * Every behavioural number in the project reports is a distribution rather than a
+ * single figure, because the averages are dragged around by a handful of power
+ * users — "the average book has 8 pages" is useless when half have 2 and one has
+ * 60. `count` is how many things had the metric at all, which for a timing is also
+ * how many got that far.
+ */
+export interface StatSummary {
+  count: number;
+  total: number;
+  avg: number;
+  median: number;
+  p90: number;
+  min: number;
+  max: number;
+}
+
+/** How a set of books was actually made. */
+export interface ProjectBehaviourStats {
+  projects: number;
+  users: number;
+  pages: StatSummary;
+  cast: StatSummary;
+  illustratedPages: StatSummary;
+  illustrationVersions: StatSummary;
+  screenplayVersions: StatSummary;
+  runs: StatSummary;
+  images: StatSummary;
+  fresh: StatSummary;
+  edits: StatSummary;
+  variations: StatSummary;
+  restyles: StatSummary;
+  failures: StatSummary;
+  qcCalls: StatSummary;
+  attemptsPerPage: StatSummary;
+  costUsd: StatSummary;
+  sparksCharged: StatSummary;
+  netUsd: StatSummary;
+  timeToFirstImageMs: StatSummary;
+  timeToOrderMs: StatSummary;
+  /** Creation to the first written story, and to reaching the finished book. */
+  timeToFirstDraftMs: StatSummary;
+  timeToPreviewMs: StatSummary;
+  rates: {
+    editRate: number;
+    variationRate: number;
+    restyleRate: number;
+    failureRate: number;
+    qcPerImage: number;
+  };
+  imagesByModel: Record<string, number>;
+  imagesByAction: Record<string, number>;
+  runsByAction: Record<string, number>;
+  runsByTier: Record<string, number>;
+  artStyles: Record<string, number>;
+  milestones: Record<string, number>;
+}
+
+/**
+ * The guide's conversation, in aggregate. Guide-only by nature: the wizard has no
+ * turns to count. @see functions/src/flowComparison.ts
+ */
+export interface FlowTurnStats {
+  turns: number;
+  books: number;
+  perBook: StatSummary;
+  latencyMs: StatSummary;
+  /** Share of turns the interpreter was unsure about. */
+  ambiguityRate: number;
+  skipRate: number;
+  byIntent: Record<string, number>;
+  /** Books whose conversation was last heard from on each component. */
+  lastComponent: Record<string, number>;
+  byComponent: Record<string, number>;
+  truncated: boolean;
+}
+
+export interface FlowArmReport {
+  arm: FlowArm;
+  /** Whether this arm is one of the two things being compared. */
+  comparable: boolean;
+  books: number;
+  stats: ProjectBehaviourStats;
+  previewRate: number;
+  orderRate: number;
+}
+
+/**
+ * The wizard against the guide. @see functions/src/flowComparison.ts for what is
+ * deliberately excluded from each arm and why.
+ */
+export interface FlowComparison {
+  window: { fromMs: number; toMs: number };
+  arms: FlowArmReport[];
+  turns: FlowTurnStats;
+  /** What would make a reader of this page draw the wrong conclusion. */
+  caveats: string[];
+  excluded: { mixed: number; unknown: number };
+  truncated: boolean;
 }

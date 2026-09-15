@@ -26,6 +26,8 @@
  *
  * Offline and deterministic: pure functions and arithmetic.
  */
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   describeFlowArm,
   flowArm,
@@ -37,6 +39,24 @@ import {
   type ProjectAuthoring,
   type StudioFlow,
 } from "../books-frontend/src/core/guide/flow";
+import { ALL_PERMISSION_KEYS } from "../books-frontend/src/core/config/permissions";
+
+/** Repo root, found by walking up — the checker runs as a bundle in a cache dir. */
+const ROOT = (() => {
+  let dir = process.cwd();
+  for (let i = 0; i < 8; i += 1) {
+    try {
+      const pkg = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { name?: string };
+      if (pkg.name === "childbooks") return dir;
+    } catch {
+      // keep walking
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return process.cwd();
+})();
 
 export interface CheckResult {
   failures: string[];
@@ -278,17 +298,23 @@ const MILESTONE_FOR_ACTION: Record<string, string> = {
   coverIllustration: "coverDone",
 };
 
-/** The order a book passes them, which the report renders as a funnel. */
-const FUNNEL = [
-  "created",
-  "storyDrafted",
-  "pagesPlanned",
-  "castStarted",
-  "pagesStarted",
-  "coverDone",
-  "previewed",
-  "ordered",
-];
+/**
+ * The funnel, read out of the tab that renders it.
+ *
+ * Parsed from the source rather than restated, because the mistake worth catching
+ * is a rename: the UI keys into `stats.milestones` by string, so a milestone
+ * renamed on the backend makes its row show a confident zero. A stage reading zero
+ * looks exactly like total drop-off at that stage, which is the most alarming thing
+ * this page can say and would be entirely false.
+ */
+const FUNNEL = (() => {
+  const source = readFileSync(
+    join(ROOT, "books-frontend", "src", "ui", "admin", "analysis", "FlowsAnalysis.tsx"),
+    "utf8",
+  );
+  const block = source.split("const FUNNEL")[1]?.split("];")[0] ?? "";
+  return [...block.matchAll(/key:\s*"([^"]+)"/g)].map((m) => m[1]!);
+})();
 
 cases += 1;
 {
@@ -317,6 +343,89 @@ cases += 1;
   cases += 1;
   if (FUNNEL.indexOf("previewed") >= FUNNEL.indexOf("ordered")) {
     fail("The funnel puts ordering before the preview, which no reader does.");
+  }
+}
+
+// --- The tab's funnel and the backend's milestones are the same list ---------
+
+/**
+ * Read from both sources and compared in both directions. A stage the UI names but
+ * the backend never stamps renders as a confident zero — indistinguishable from
+ * every book dying there — and a milestone the backend stamps but the UI omits is
+ * a stage nobody can see.
+ */
+{
+  const backend = readFileSync(join(ROOT, "functions", "src", "projects.ts"), "utf8");
+  const declared = backend.split("export type ProjectMilestone =")[1]?.split(";")[0] ?? "";
+  const milestones = [...declared.matchAll(/"([a-zA-Z]+)"/g)].map((m) => m[1]!);
+
+  cases += 1;
+  if (milestones.length < 5 || FUNNEL.length < 5) {
+    fail(
+      `Could not read the milestone lists (${milestones.length} declared, ${FUNNEL.length} in ` +
+        `the tab) — this check is not actually running.`,
+    );
+  }
+  for (const stage of FUNNEL) {
+    cases += 1;
+    if (!milestones.includes(stage)) {
+      fail(
+        `The Studio flows tab shows a "${stage}" stage, but no such milestone is stamped. It ` +
+          `would render as zero, which reads as every book dying there.`,
+      );
+    }
+  }
+  for (const milestone of milestones) {
+    cases += 1;
+    if (!FUNNEL.includes(milestone)) {
+      fail(`"${milestone}" is stamped on books but the Studio flows funnel never shows it.`);
+    }
+  }
+}
+
+// --- The comparison route is gated -----------------------------------------
+
+/**
+ * `permissionGate` fails closed, so a route with no `ROUTE_RULES` entry 403s for
+ * everyone including a T1 owner, with a permissions error no grant can fix. Read as
+ * text because `functions/src/permissions.ts` reaches Firebase on load.
+ */
+{
+  const analyticsSource = readFileSync(join(ROOT, "functions", "src", "analytics.ts"), "utf8");
+  const permissionsSource = readFileSync(join(ROOT, "functions", "src", "permissions.ts"), "utf8");
+  const rules = [...permissionsSource.matchAll(/test:\s*(\/\^[^,]+?\/)\s*,/g)].map(
+    (match) => new RegExp(match[1]!.slice(1, -1)),
+  );
+
+  cases += 1;
+  if (!analyticsSource.includes('app.get("/admin/analytics/flows"')) {
+    fail("There is no GET /admin/analytics/flows, so the Studio flows tab has nothing to read.");
+  }
+  cases += 1;
+  if (rules.length === 0) {
+    fail("Could not read the route table — the gating check is not actually running.");
+  }
+  cases += 1;
+  if (!rules.some((rule) => rule.test("/admin/analytics/flows"))) {
+    fail(
+      "/admin/analytics/flows has no ROUTE_RULES entry. permissionGate fails closed, so the tab " +
+        "would 403 for every admin including an owner.",
+    );
+  }
+
+  // The rule has to name a grant an owner can actually hand out, or the tab is
+  // visible and permanently empty.
+  cases += 1;
+  const rule = /\/\^\\\/admin\\\/analytics\\\/flows\$\/,\s*gate:\s*key\("([^"]+)"/.exec(
+    permissionsSource,
+  );
+  if (!rule) {
+    fail("The /admin/analytics/flows rule does not gate on a permission key.");
+  } else if (!ALL_PERMISSION_KEYS.includes(rule[1] as never)) {
+    fail(
+      `/admin/analytics/flows is gated on "${rule[1]}", which is not a grantable permission key, ` +
+        `so no owner can grant access to the tab.`,
+    );
   }
 }
 

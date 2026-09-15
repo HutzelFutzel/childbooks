@@ -103,6 +103,7 @@ const ANALYSIS_TAB_EXHAUSTIVE: Record<AnalysisTabId, true> = {
   users: true,
   projects: true,
   devices: true,
+  flows: true,
   costs: true,
   finance: true,
   payments: true,

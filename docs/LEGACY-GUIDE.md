@@ -58,9 +58,21 @@ out) and phase 4 (the surface: chat beside the book, tap-to-answer widgets, and 
 artifact pane driven by `component.canvas`) and phase 5 (generation the reader can
 watch, start and retry) and phase 6 (checkpoints, jump-back and staleness) and
 phase 7 (admin control: the rollout switch and the playlist editor, at
-Configuration → Creative defaults → Guided studio) have landed. Phases 8–9
-finish the guide; nothing in the Retire table can be deleted before phase 9, and
-phase 9 is not done until this table is empty.
+Configuration → Creative defaults → Guided studio) and phase 8's instrument
+(flow attribution, the two missing milestones, and the comparison at Analysis →
+People & books → Studio flows) have landed. Phase 8's *judgement* is not code
+and is not done: the report needs a real evaluation window to fill. Phase 9 is
+the flip and the deletion, and is not done until this table is empty.
+
+Phase 8 had an ordering constraint the plan missed, which is worth recording
+because it applies to any future comparison. Which flow built a book is **not
+derivable after the fact** — `resolveGuideMode` reads the live rollout, the
+reader's admin status, a `localStorage` preference and a URL override, so once
+the rollout moves on the answer is gone. Attribution therefore had to ship
+*before* the evaluation window opened rather than with the report, and books
+made before it will forever read as `unknown`. The other half of that rule:
+`mixed` books (worked on in both flows) are excluded from both arms, because
+each carries one flow's writing and the other's pictures.
 
 Phase 7 is the point at which the flow stops needing a deploy to change, so the
 split it relies on is worth restating: the CATALOG in code owns what a component

@@ -31,6 +31,7 @@ import { CostsAnalysis } from "./CostsAnalysis";
 import { ProjectsAnalysis } from "./ProjectsAnalysis";
 import { ProductsAnalysis } from "./ProductsAnalysis";
 import { DevicesAnalysis } from "./DevicesAnalysis";
+import { FlowsAnalysis } from "./FlowsAnalysis";
 import { DevicePicker } from "./DevicePicker";
 import { ReferralsAnalysis } from "./ReferralsAnalysis";
 import { AffiliatesAnalysis } from "./AffiliatesAnalysis";
@@ -246,6 +247,7 @@ export function AnalysisTab() {
       {section === "qrCodes" && <QrCodesAnalysis />}
       {section === "surveys" && <SurveysAnalysis />}
       {section === "devices" && <DevicesAnalysis />}
+      {section === "flows" && <FlowsAnalysis />}
 
       {section === "users" && (
         <div className="space-y-5">

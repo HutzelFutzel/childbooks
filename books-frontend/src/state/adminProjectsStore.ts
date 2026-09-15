@@ -112,53 +112,14 @@ export interface ActionRunRow {
   tokens: number;
 }
 
-/** One metric's shape across the loaded set of books. */
-export interface StatSummary {
-  count: number;
-  total: number;
-  avg: number;
-  median: number;
-  p90: number;
-  min: number;
-  max: number;
-}
+/**
+ * The wire shapes for a set of books. Declared in `core/analytics/types.ts`, which
+ * both this store and the backend aggregation read, and re-exported here because
+ * every caller already imports them from the store.
+ */
+import type { ProjectBehaviourStats, StatSummary } from "../core/analytics/types";
 
-export interface ProjectBehaviourStats {
-  projects: number;
-  users: number;
-  pages: StatSummary;
-  cast: StatSummary;
-  illustratedPages: StatSummary;
-  illustrationVersions: StatSummary;
-  screenplayVersions: StatSummary;
-  runs: StatSummary;
-  images: StatSummary;
-  fresh: StatSummary;
-  edits: StatSummary;
-  variations: StatSummary;
-  restyles: StatSummary;
-  failures: StatSummary;
-  qcCalls: StatSummary;
-  attemptsPerPage: StatSummary;
-  costUsd: StatSummary;
-  sparksCharged: StatSummary;
-  netUsd: StatSummary;
-  timeToFirstImageMs: StatSummary;
-  timeToOrderMs: StatSummary;
-  rates: {
-    editRate: number;
-    variationRate: number;
-    restyleRate: number;
-    failureRate: number;
-    qcPerImage: number;
-  };
-  imagesByModel: Record<string, number>;
-  imagesByAction: Record<string, number>;
-  runsByAction: Record<string, number>;
-  runsByTier: Record<string, number>;
-  artStyles: Record<string, number>;
-  milestones: Record<string, number>;
-}
+export type { ProjectBehaviourStats, StatSummary };
 
 /** One row of the per-user behaviour table. */
 export interface UserBehaviourRow {

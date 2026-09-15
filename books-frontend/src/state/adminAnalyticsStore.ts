@@ -19,6 +19,7 @@ import {
   type CadenceFilter,
   type DeviceFilter,
   type DeviceReport,
+  type FlowComparison,
   type FunnelReport,
   type PlanFilter,
   type ProductsReport,
@@ -55,6 +56,8 @@ interface AdminAnalyticsState {
   products: ProductsReport | null;
   funnel: FunnelReport | null;
   devices: DeviceReport | null;
+  /** The wizard against the guide. @see FlowComparison */
+  flows: FlowComparison | null;
   settings: AdminSettings;
 
   sort: UserSort;
@@ -85,6 +88,7 @@ interface AdminAnalyticsState {
   usersLoading: boolean;
   productsLoading: boolean;
   devicesLoading: boolean;
+  flowsLoading: boolean;
   savingSettings: boolean;
   error: string | null;
   lastUpdated: number | null;
@@ -102,6 +106,7 @@ interface AdminAnalyticsState {
   refreshAll: () => Promise<void>;
   refreshProducts: () => Promise<void>;
   refreshDevices: () => Promise<void>;
+  refreshFlows: () => Promise<void>;
   setUserQuery: (
     patch: Partial<
       Pick<
@@ -168,6 +173,8 @@ export const useAdminAnalytics = create<AdminAnalyticsState>((set, get) => ({
   usersLoading: false,
   productsLoading: false,
   devicesLoading: false,
+  flows: null,
+  flowsLoading: false,
   savingSettings: false,
   error: null,
   lastUpdated: null,
@@ -273,6 +280,7 @@ export const useAdminAnalytics = create<AdminAnalyticsState>((set, get) => ({
     const tasks = [get().refresh()];
     if (get().products) tasks.push(get().refreshProducts());
     if (get().devices) tasks.push(get().refreshDevices());
+    if (get().flows) tasks.push(get().refreshFlows());
     await Promise.all(tasks);
   },
 
@@ -287,6 +295,18 @@ export const useAdminAnalytics = create<AdminAnalyticsState>((set, get) => ({
       set({ error: (err as Error)?.message ?? "Failed to load device analytics." });
     } finally {
       set({ devicesLoading: false });
+    }
+  },
+
+  async refreshFlows() {
+    set({ flowsLoading: true, error: null });
+    try {
+      const flows = await getJson<FlowComparison>(`/admin/analytics/flows?${rangeParams(get)}`);
+      set({ flows, lastUpdated: Date.now() });
+    } catch (err) {
+      set({ error: (err as Error)?.message ?? "Failed to load the flow comparison." });
+    } finally {
+      set({ flowsLoading: false });
     }
   },
 

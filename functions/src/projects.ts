@@ -26,6 +26,7 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { getSparksConfig } from "./appConfig";
 import { spreadsById } from "../../books-frontend/src/core/book/units";
+import type { ProjectBehaviourStats } from "../../books-frontend/src/core/analytics/types";
 import {
   isStudioFlow,
   nextAuthoring,
@@ -89,7 +90,7 @@ export type ProjectMilestone =
   | "previewed"
   | "ordered";
 
-export type { ProjectAuthoring, StudioFlow };
+export type { ProjectAuthoring, ProjectBehaviourStats, StudioFlow };
 
 /** Structure the backend derived from a project snapshot it rendered against. */
 export interface ProjectDerived {
@@ -828,57 +829,27 @@ export async function getProjectMirror(key: string): Promise<ProjectMirror | nul
 // ---- Behavioural aggregation -------------------------------------------------
 
 /**
- * How a set of books was actually made. Every metric is a distribution because
- * the averages here are dragged around by a handful of power users — the median
- * book and the p90 book need very different things from us.
+ * How long books took to reach a milestone, for the books that reached it.
+ *
+ * Books that never got there are omitted rather than counted as slow: including
+ * them would need a duration they do not have, and substituting "now" would make
+ * every metric grow as the report ages. Whether they got there at all is a
+ * separate question, answered by `milestones` and by this summary's own `count`.
+ *
+ * Non-positive elapsed times are dropped too. A milestone stamped before
+ * `createdAt` means the two came from different clocks, and a zero-length draft is
+ * noise either way.
  */
-export interface ProjectBehaviourStats {
-  projects: number;
-  users: number;
-  /** Structure. */
-  pages: StatSummary;
-  cast: StatSummary;
-  illustratedPages: StatSummary;
-  illustrationVersions: StatSummary;
-  screenplayVersions: StatSummary;
-  /** Effort. */
-  runs: StatSummary;
-  images: StatSummary;
-  fresh: StatSummary;
-  edits: StatSummary;
-  variations: StatSummary;
-  restyles: StatSummary;
-  failures: StatSummary;
-  qcCalls: StatSummary;
-  /** Renders spent per page the user kept — the rework signal. */
-  attemptsPerPage: StatSummary;
-  /** Money. */
-  costUsd: StatSummary;
-  sparksCharged: StatSummary;
-  netUsd: StatSummary;
-  /** Timing (ms). Only books that reached the event contribute. */
-  timeToFirstImageMs: StatSummary;
-  timeToOrderMs: StatSummary;
-  /**
-   * Share of all runs in the set, not an average of per-book shares — so one
-   * book with 3 runs can't swing it as hard as one with 300.
-   */
-  rates: {
-    editRate: number;
-    variationRate: number;
-    restyleRate: number;
-    failureRate: number;
-    /** QC calls per image kept: what quality control costs us per output. */
-    qcPerImage: number;
-  };
-  /** Mix. */
-  imagesByModel: Record<string, number>;
-  imagesByAction: Record<string, number>;
-  runsByAction: Record<string, number>;
-  runsByTier: Record<string, number>;
-  artStyles: Record<string, number>;
-  /** How many books reached each milestone (the funnel). */
-  milestones: Record<string, number>;
+function elapsedToMilestone(rows: ProjectMirror[], milestone: ProjectMilestone): number[] {
+  const out: number[] = [];
+  for (const m of rows) {
+    const at = m.milestones?.[milestone];
+    const created = m.createdAt;
+    if (typeof at !== "number" || typeof created !== "number") continue;
+    const elapsed = at - created;
+    if (elapsed > 0) out.push(elapsed);
+  }
+  return out;
 }
 
 /** Roll a set of mirrors up into distributions. Pure. */
@@ -963,6 +934,8 @@ export function summarizeProjects(
     timeToOrderMs: summarize(
       rows.map((m) => m.timing?.timeToOrderMs).filter((v): v is number => typeof v === "number"),
     ),
+    timeToFirstDraftMs: summarize(elapsedToMilestone(rows, "storyDrafted")),
+    timeToPreviewMs: summarize(elapsedToMilestone(rows, "previewed")),
     rates: {
       editRate: rate(totalEdits, totalRuns),
       variationRate: rate(totalVariations, totalRuns),

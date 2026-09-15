@@ -49,6 +49,7 @@ import {
   type RunKind,
   type RunOutcome,
 } from "./actionRun";
+import { flowComparison } from "./flowComparison";
 import { mergeTally, percentile } from "./stats";
 import { toUsd } from "./finance";
 import type { ImageTier } from "../../books-frontend/src/core/config/modelConfig";
@@ -2252,6 +2253,27 @@ export function registerAnalyticsRoutes(app: Express): void {
       const { from, to } = parseRange(req);
       const settings = await getAdminSettings();
       res.json(await computeDevices({ from, to, settings, country: parseCountry(req) }));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // The wizard against the guide, on real books. Groups the project mirrors by
+  // the flow they were authored in and reuses the same behavioural rollup the
+  // Books tab shows, so the two cannot disagree about what a book cost or how
+  // long it took. See functions/src/flowComparison.ts for what is deliberately
+  // excluded and why.
+  app.get("/admin/analytics/flows", async (req: Request, res: Response) => {
+    try {
+      const { from, to } = parseRange(req);
+      res.json(
+        await flowComparison({
+          fromMs: from,
+          toMs: to,
+          limit: Number(req.query.limit) || 1000,
+          allocateSubscriptions: req.query.allocateSubscriptions === "true",
+        }),
+      );
     } catch (err) {
       handleError(res, err);
     }
