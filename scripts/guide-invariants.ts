@@ -47,6 +47,7 @@ import {
 import { checkGuideEngine } from "./guide-engine-invariants";
 import { checkGuideInterpreter } from "./guide-interpreter-invariants";
 import { checkGuideSession } from "./guide-session-invariants";
+import { checkGuideWidgets } from "./guide-widget-invariants";
 
 /**
  * The repository root, found by walking up from the working directory. Not
@@ -435,6 +436,11 @@ failures.push(...session.failures);
 notes.push(...session.notes);
 cases += session.cases;
 
+const widgets = checkGuideWidgets();
+failures.push(...widgets.failures);
+notes.push(...widgets.notes);
+cases += widgets.cases;
+
 // --- Report ---------------------------------------------------------------
 
 console.log("Guide rollout");
@@ -456,6 +462,9 @@ for (const line of interpreter.report) console.log(line);
 
 console.log();
 for (const line of session.report) console.log(line);
+
+console.log();
+for (const line of widgets.report) console.log(line);
 
 console.log(`\nLegacy manifest (${MANIFEST})`);
 if (marked.length === 0) {

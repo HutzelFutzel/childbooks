@@ -30,10 +30,15 @@ import {
   type GuideSession,
 } from "../core/guide/session";
 import { guideAsk, guideSkipAck, nextGuideSay } from "../core/guide/voice";
+import type { GuideChoiceOption, GuideConfirmAction } from "../core/guide/widgets";
+import { applyGuidePatch, guidePatchContext } from "../core/guide/patch";
+import type { GuideSlotId } from "../core/guide/slots";
 import { sendGuideTurn } from "./guideTurn";
+import { useAppConfigStore } from "./appConfigStore";
 import { useProjectsStore } from "./projectsStore";
 import { getRepos } from "./repos";
 import { describeError } from "../core/errors";
+import { notify } from "../ui/lib/notify";
 
 /** Turns of history handed to the interpreter. Enough for "yes"; not enough to drift. */
 const TRANSCRIPT_WINDOW = 8;
@@ -52,6 +57,13 @@ interface GuideStoreState {
   close: () => void;
   /** Send what the reader typed and fold the result into the book. */
   send: (playlist: Playlist, text: string) => Promise<void>;
+  /**
+   * Take a tapped option. No model call: the option carries its own patch, so this
+   * is a local write and the reply comes from `voice.ts`.
+   */
+  choose: (playlist: Playlist, option: GuideChoiceOption) => Promise<void>;
+  /** Give the go-ahead a component is waiting on. */
+  confirm: (playlist: Playlist, action: GuideConfirmAction) => Promise<void>;
   /** Re-send the last message that failed. */
   retry: (playlist: Playlist) => Promise<void>;
   /** Decline an optional component and move on. */
@@ -99,7 +111,11 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
   };
 
   /** Append something the guide says, stamped with the question it addresses. */
-  const speak = (text: string, cursor: GuideCursor | null, extra: { skipped?: GuideComponentId[] } = {}): void => {
+  const speak = (
+    text: string,
+    cursor: GuideCursor | null,
+    extra: { skipped?: GuideComponentId[]; applied?: GuideSlotId[] } = {},
+  ): void => {
     if (!text.trim()) return;
     set((state) => ({
       session: appendGuideMessage(
@@ -192,6 +208,76 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
         }));
         persist();
       }
+    },
+
+    /**
+     * A tapped option, applied locally.
+     *
+     * The whole reason widgets are worth having: the option was built from the same
+     * context the validator uses, so there is nothing to interpret. The reader's
+     * choice goes into the transcript as if they had said it, the patch goes through
+     * `applyGuidePatch` for its no-op detection and receipt, and the next question
+     * comes from the catalog. No round trip, no cost, no ambiguity.
+     */
+    choose: async (playlist, option) => {
+      const { projectId, sending } = get();
+      if (!projectId || sending) return;
+
+      set((state) => ({
+        session: appendGuideMessage(state.session, guideMessage("reader", option.said)),
+        error: null,
+      }));
+
+      const { audience, artStyles } = useAppConfigStore.getState();
+      const context = guidePatchContext({ audience, artStyles });
+      let applied: GuideSlotId[] = [];
+      try {
+        await useProjectsStore.getState().patchCurrent((live) => {
+          const outcome = applyGuidePatch(live, option.patch, context);
+          applied = outcome.applied;
+          return outcome.project;
+        });
+      } catch (err) {
+        set({ error: describeError(err) });
+        notify.error(err);
+        return;
+      }
+
+      const cursor = cursorAt(playlist, get().session.skipped);
+      speak(cursor ? guideAsk(cursor) : "", cursor, {
+        ...(applied.length > 0 ? { applied } : {}),
+      });
+    },
+
+    /**
+     * The reader's go-ahead. Writes through the same store action the wizard's own
+     * button uses, so approving in one flow means exactly what it means in the other
+     * — see the note in `core/guide/widgets.ts` on why this is not a patch.
+     */
+    confirm: async (playlist, action) => {
+      const { projectId, sending } = get();
+      if (!projectId || sending) return;
+
+      const said = action === "approveStory" ? "The story's good — let's illustrate it" : "The cast looks right";
+      set((state) => ({
+        session: appendGuideMessage(state.session, guideMessage("reader", said)),
+        error: null,
+      }));
+
+      try {
+        if (action === "approveStory") {
+          await useProjectsStore.getState().advanceStage("studio");
+        } else {
+          await useProjectsStore.getState().updateConfig({ castReady: true });
+        }
+      } catch (err) {
+        set({ error: describeError(err) });
+        notify.error(err);
+        return;
+      }
+
+      const cursor = cursorAt(playlist, get().session.skipped);
+      speak(cursor ? guideAsk(cursor) : "", cursor);
     },
 
     retry: async (playlist) => {

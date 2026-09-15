@@ -165,7 +165,13 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
     z.enum(["guided", "co-write", "own"]),
     (project, mode) => {
       const brief = briefOf(project.config);
-      return brief.mode === mode ? null : withBrief(project, { ...brief, mode });
+      // "No change" cannot be decided from the mode alone. `briefOf` DEFAULTS to
+      // "guided" when nothing is persisted, while `story-mode` is only satisfied once
+      // a brief actually exists — so on a fresh book, choosing the default mode looks
+      // like a no-op, writes nothing, and the guide asks the same question forever.
+      // The absence of a persisted brief is itself the change worth writing.
+      if (project.config.storyBrief && brief.mode === mode) return null;
+      return withBrief(project, { ...brief, mode });
     },
   ),
 

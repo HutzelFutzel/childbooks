@@ -23,10 +23,15 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowUp, RotateCw } from "lucide-react";
+import { ArrowUp, Check, Loader2, RotateCw } from "lucide-react";
 import { GUIDE_SLOTS } from "../../core/guide/slots";
 import type { GuideCursor } from "../../core/guide/engine";
 import type { GuideMessage } from "../../core/guide/session";
+import type {
+  GuideChoiceOption,
+  GuideConfirmAction,
+  GuideWidget,
+} from "../../core/guide/widgets";
 import type { Project } from "../../core/types";
 import { Button } from "../components/Button";
 import { cn } from "../lib/cn";
@@ -35,18 +40,25 @@ export function GuideChat({
   project,
   messages,
   cursor,
+  widget,
   sending,
   error,
   onSend,
+  onChoose,
+  onConfirm,
   onRetry,
   onSkip,
 }: {
   project: Project;
   messages: GuideMessage[];
   cursor: GuideCursor | null;
+  /** What the reader can do about the live question — see `core/guide/widgets.ts`. */
+  widget: GuideWidget;
   sending: boolean;
   error: string | null;
   onSend: (text: string) => void;
+  onChoose: (option: GuideChoiceOption) => void;
+  onConfirm: (action: GuideConfirmAction) => void;
   onRetry: () => void;
   onSkip: () => void;
 }) {
@@ -116,6 +128,51 @@ export function GuideChat({
 
       <div className="shrink-0 border-t border-ink-100 bg-white px-4 py-3">
         <div className="mx-auto max-w-xl">
+          {/* The affordance for the live question, above the box rather than inside
+              it: these are the answer, and the box is the way round them. */}
+          {/* Height-capped and scrollable: an admin can configure a dozen art styles
+              with a sentence of description each, and an uncapped option list would
+              push the conversation off its own screen. */}
+          {!sending && widget.kind === "choice" && (
+            <div className="mb-2.5 flex max-h-44 flex-wrap gap-1.5 overflow-y-auto">
+              {widget.options.map((option) => (
+                <button
+                  key={option.id}
+                  type="button"
+                  title={option.hint}
+                  onClick={() => onChoose(option)}
+                  className="max-w-full rounded-xl bg-brand-50 px-3 py-1.5 text-left ring-1 ring-inset ring-brand-200 transition-colors hover:bg-brand-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
+                >
+                  <span className="block text-sm font-semibold text-brand-800">{option.label}</span>
+                  {option.hint && (
+                    <span className="block max-w-[14rem] truncate text-[11px] text-brand-700/70">
+                      {option.hint}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {!sending && widget.kind === "confirm" && (
+            <div className="mb-2.5">
+              <Button
+                size="sm"
+                leftIcon={<Check className="size-4" />}
+                onClick={() => onConfirm(widget.action)}
+              >
+                {widget.affirm}
+              </Button>
+            </div>
+          )}
+
+          {!sending && widget.kind === "wait" && (
+            <div className="mb-2.5 flex items-center gap-2 text-xs text-ink-500">
+              <Loader2 className="size-3.5 animate-spin text-brand-400" />
+              {widget.message}
+            </div>
+          )}
+
           {/* Errors state what happened and offer the one action that helps. The
               reader's words are still in the transcript, so this is a re-send and
               never a retype. */}
@@ -148,7 +205,7 @@ export function GuideChat({
                   submit();
                 }
               }}
-              placeholder={placeholderFor(cursor)}
+              placeholder={widget.placeholder}
               className="max-h-40 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm text-ink-800 placeholder:text-ink-400 focus:outline-none"
             />
             <Button
@@ -252,28 +309,3 @@ function FactReceipt({ message, project }: { message: GuideMessage; project: Pro
   );
 }
 
-/**
- * Prompt for the box, matched to the question on screen.
- *
- * A placeholder is the cheapest possible hint about what a good answer looks like,
- * and "Message…" wastes it. Kept generic where the guide is waiting on generation
- * rather than on the reader, since anything they type then is a change of subject.
- */
-function placeholderFor(cursor: GuideCursor | null): string {
-  if (!cursor?.component) return "Anything you'd like to change?";
-  if (cursor.status === "blocked") return "Ask me anything while this finishes…";
-  switch (cursor.component.id) {
-    case "story-mode":
-      return "Write it for me — or I'll write it myself";
-    case "story-cast":
-      return "It's for Maya, she's 5";
-    case "audience":
-      return "She's just starting to read";
-    case "story-idea":
-      return "A birthday trip to the sea";
-    case "art-style":
-      return "Soft watercolour";
-    default:
-      return "Tell me, or ask me anything";
-  }
-}

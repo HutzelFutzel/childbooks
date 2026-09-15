@@ -35,15 +35,10 @@ export function ProjectWorkspace({
   const project = useProjectsStore((s) => s.current());
   if (!project) return null;
 
+  // The guide picks its own surface from `component.canvas` and keeps the route in
+  // step, rather than being told a destination — see `ui/guide/guideCanvas.ts`.
   if (guidePlaylist) {
-    return (
-      <GuideStudio
-        key={project.id}
-        playlist={guidePlaylist}
-        destination={destination}
-        onNavigate={onNavigate}
-      />
-    );
+    return <GuideStudio key={project.id} playlist={guidePlaylist} onNavigate={onNavigate} />;
   }
 
   // Keyed by id so the studio's local state resets when switching books.

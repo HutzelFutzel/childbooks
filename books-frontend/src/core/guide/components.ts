@@ -66,8 +66,14 @@ export type GuideComponentId = (typeof GUIDE_COMPONENT_IDS)[number];
  * What the artifact pane shows while a component is active. Each value maps to a
  * component that already exists — the guide opens the manuscript, the cast shelf,
  * the page canvas and the flip-through, it does not reimplement them.
+ *
+ * This is the guide's own vocabulary for "what the reader is looking at", and it is
+ * what drives the pane (see `ui/guide/guideCanvas.ts`). `legacyDestination` below
+ * describes the same thing in the *wizard's* vocabulary and is deleted with the
+ * wizard; the two are pinned against each other by invariant so this one can take
+ * over without a behavioural change.
  */
-export type GuideCanvasKind = "none" | "manuscript" | "cast" | "pages" | "preview";
+export type GuideCanvasKind = "none" | "manuscript" | "style" | "cast" | "pages" | "preview";
 
 /** Durable generation a component kicks off. Wired to jobs in a later phase. */
 export type GuideEffectId = "storyDraft" | "castArt" | "screenplay" | "pageArt";
@@ -127,6 +133,20 @@ function castReady(project: Project): boolean {
   // Mirrors the progress rail: an explicit confirmation, with the inference for
   // books made before that flag existed.
   return project.config.castReady ?? (anchors.length > 0 && drawn === anchors.length);
+}
+
+/**
+ * Whether the cast is drawn and the only thing left is the reader saying so.
+ *
+ * Exported because the guide offers a button for exactly this moment, and the
+ * condition has to be the same one that produces the "Confirm the cast looks right"
+ * blocker below — a button that appears when the guide isn't asking for it, or fails
+ * to appear when it is, are the two ways this goes wrong. Reads through `castReady`
+ * for the same reason that function exists at all.
+ */
+export function castAwaitingConfirmation(project: Project): boolean {
+  if (castReady(project) || !project.analysis) return false;
+  return requiredAnchors(project).every((anchor) => currentAnchorImage(anchor));
 }
 
 const CATALOG: GuideComponent[] = [
@@ -241,7 +261,9 @@ const CATALOG: GuideComponent[] = [
     purpose: "The look every picture in the book is drawn in.",
     slots: ["artStyle"],
     requires: ["story-approve"],
-    canvas: "cast",
+    // Its own canvas rather than the cast shelf: this is where the looks are
+    // chosen, and on arrival there is not yet a cast to show.
+    canvas: "style",
     skippable: false,
     // `styleReady === false` is the explicit gate the story step sets on the way
     // out; `undefined` means a project from before the gate existed.

@@ -21,10 +21,14 @@
  */
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { BookOpen, MessageCircle } from "lucide-react";
 import { coveredGuideSlots, guideProgress, nextGuideStep } from "../../core/guide/engine";
+import type { GuideCanvasKind } from "../../core/guide/components";
 import type { ResolvedGuideComponent } from "../../core/guide/playlist";
+import type { GuideSlotId } from "../../core/guide/slots";
+import { guideWidget } from "../../core/guide/widgets";
+import { useAppConfigStore } from "../../state/appConfigStore";
 import { useGuideStore } from "../../state/guideStore";
 import { useProjectsStore } from "../../state/projectsStore";
 import { StudioWorkspace } from "../studio/StudioWorkspace";
@@ -32,17 +36,16 @@ import type { StudioDestination } from "../studio/studioRoutes";
 import { cn } from "../lib/cn";
 import { GuideChat } from "./GuideChat";
 import { GuideFacts } from "./GuideFacts";
+import { canvasDestination } from "./guideCanvas";
 
 /** Which pane a narrow screen is showing. Both are on screen from `lg` up. */
 type Pane = "chat" | "book";
 
 export function GuideStudio({
   playlist,
-  destination,
   onNavigate,
 }: {
   playlist: readonly ResolvedGuideComponent[];
-  destination: StudioDestination;
   onNavigate: (destination: StudioDestination) => void;
 }) {
   const project = useProjectsStore((s) => s.current());
@@ -55,6 +58,10 @@ export function GuideStudio({
   const retry = useGuideStore((s) => s.retry);
   const skip = useGuideStore((s) => s.skip);
   const catchUp = useGuideStore((s) => s.catchUp);
+  const choose = useGuideStore((s) => s.choose);
+  const confirm = useGuideStore((s) => s.confirm);
+  const audience = useAppConfigStore((s) => s.audience);
+  const artStyles = useAppConfigStore((s) => s.artStyles);
   const [pane, setPane] = useState<Pane>("chat");
 
   const projectId = project?.id ?? null;
@@ -76,6 +83,44 @@ export function GuideStudio({
   const covered = useMemo(
     () => (project ? coveredGuideSlots(playlist, project, session.skipped) : []),
     [playlist, project, session.skipped],
+  );
+  const widget = useMemo(
+    () =>
+      cursor && project
+        ? guideWidget(cursor, project, { audience, artStyles })
+        : ({ kind: "text", placeholder: "" } as const),
+    [cursor, project, audience, artStyles],
+  );
+
+  /**
+   * A surface the reader asked to see, which overrides the one the cursor implies.
+   *
+   * Cleared whenever the conversation moves on: a pin is "show me that again", not a
+   * mode, and leaving it set would mean answering the next question while looking at
+   * the answer to the last one. This is also the seed of phase 6's jump-back.
+   */
+  const [pinned, setPinned] = useState<GuideCanvasKind | null>(null);
+  const activeId = cursor?.component?.id ?? null;
+  useEffect(() => {
+    setPinned(null);
+  }, [activeId]);
+
+  const canvas = pinned ?? cursor?.component?.canvas ?? "none";
+  const destination = canvasDestination(canvas);
+
+  // Keep the address bar on the surface being shown, so a refresh or a shared link
+  // comes back to it. The route is not the source of truth here — the cursor is —
+  // which is why this is an effect rather than the pane reading the route.
+  useEffect(() => {
+    onNavigate(destination);
+  }, [destination, onNavigate]);
+
+  const openSlot = useCallback(
+    (slot: GuideSlotId) => {
+      const owner = playlist.find((component) => component.slots.includes(slot));
+      if (owner) setPinned(owner.canvas);
+    },
+    [playlist],
   );
 
   // Say the next thing whenever there is a next thing to say. Deliberately keyed on
@@ -120,15 +165,23 @@ export function GuideStudio({
           </div>
         )}
 
-        <GuideFacts project={project} slots={covered} className="shrink-0 px-4 pt-3" />
+        <GuideFacts
+          project={project}
+          slots={covered}
+          onOpen={openSlot}
+          className="shrink-0 px-4 pt-3"
+        />
 
         <GuideChat
           project={project}
           messages={session.messages}
           cursor={cursor}
+          widget={widget}
           sending={sending}
           error={error}
           onSend={(text) => void send(playlist, text)}
+          onChoose={(option) => void choose(playlist, option)}
+          onConfirm={(action) => void confirm(playlist, action)}
           onRetry={() => void retry(playlist)}
           onSkip={() => cursor?.component && skip(playlist, cursor.component.id)}
         />

@@ -26,11 +26,14 @@ import { cn } from "../lib/cn";
 export function GuideFacts({
   project,
   slots,
+  onOpen,
   className,
 }: {
   project: Project;
   /** The facts the conversation has reached — see `coveredGuideSlots`. */
   slots: readonly GuideSlotId[];
+  /** Open the surface that owns a fact, so a chip is a way back to it. */
+  onOpen?: (slot: GuideSlotId) => void;
   className?: string;
 }) {
   const known = slots
@@ -47,15 +50,25 @@ export function GuideFacts({
       aria-label="What we know about your book"
     >
       {known.map((fact) => (
-        <span
+        <button
           key={fact.id}
-          className="inline-flex max-w-full items-baseline gap-1.5 rounded-lg bg-white px-2 py-1 ring-1 ring-inset ring-ink-200"
+          type="button"
+          disabled={!onOpen}
+          onClick={() => onOpen?.(fact.id)}
+          // Still a summary, not a field: the chip opens the surface that owns the
+          // fact rather than editing it in place. Changing it is something you say.
+          title={onOpen ? `Show ${fact.label.toLowerCase()}` : undefined}
+          className={cn(
+            "inline-flex max-w-full items-baseline gap-1.5 rounded-lg bg-white px-2 py-1 text-left ring-1 ring-inset ring-ink-200",
+            onOpen &&
+              "transition-colors hover:ring-brand-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
+          )}
         >
           <span className="shrink-0 text-[10px] font-semibold tracking-wide text-ink-400 uppercase">
             {fact.label}
           </span>
           <span className="truncate text-xs font-medium text-ink-800">{fact.value}</span>
-        </span>
+        </button>
       ))}
     </div>
   );
