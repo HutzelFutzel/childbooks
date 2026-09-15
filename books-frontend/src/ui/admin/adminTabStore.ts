@@ -39,6 +39,10 @@ export type ConfigTabId =
   | "storyCraft"
   | "bookLanguages"
   | "typography"
+  // The guided studio: how wide the chat flow is open, and which questions it
+  // asks in what order. Grouped with the creative defaults because it is the
+  // flow that collects them, not a separate kind of setting.
+  | "guide"
   // Operations group.
   | "system";
 
@@ -184,8 +188,8 @@ export const CONFIG_GROUPS: {
     id: "creative",
     label: "Creative defaults",
     description:
-      "Defaults for the creative pipeline — art direction, page layout, age-appropriate writing and story structure.",
-    tabs: ["artStyles", "layouts", "audience", "storyCraft", "bookLanguages", "typography"],
+      "Defaults for the creative pipeline — art direction, page layout, age-appropriate writing and story structure — and the guided flow that asks readers for them.",
+    tabs: ["artStyles", "layouts", "audience", "storyCraft", "bookLanguages", "typography", "guide"],
   },
   {
     id: "operations",

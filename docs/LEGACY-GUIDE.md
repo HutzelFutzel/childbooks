@@ -55,10 +55,21 @@ Phase 0 (foundations), phase 1 (preview-first Pages), phase 2 (the state model:
 catalog, playlist, engine, patch), phase 3 (the interpreter: free text in, facts
 out) and phase 4 (the surface: chat beside the book, tap-to-answer widgets, and the
 artifact pane driven by `component.canvas`) and phase 5 (generation the reader can
-watch, start and retry) and phase 6 (checkpoints, jump-back and staleness) have
-landed. Phases 7–9
+watch, start and retry) and phase 6 (checkpoints, jump-back and staleness) and
+phase 7 (admin control: the rollout switch and the playlist editor, at
+Configuration → Creative defaults → Guided studio) have landed. Phases 8–9
 finish the guide; nothing in the Retire table can be deleted before phase 9, and
 phase 9 is not done until this table is empty.
+
+Phase 7 is the point at which the flow stops needing a deploy to change, so the
+split it relies on is worth restating: the CATALOG in code owns what a component
+means, when it is finished and what it depends on; the PLAYLIST in
+`appConfig/guide` owns the order, the wording and whether a question is asked at
+all. `normalizeGuidePlaylist` repairs whatever is stored rather than trusting it,
+which is what makes the editor safe to hand over — the worst a careless edit can
+do is ask in an odd order, and `scripts/guide-admin-invariants.ts` walks every
+order and on/off set the editor can express against every synthesized book to
+keep that true.
 
 Phase 4 is where the two flows become visible at once, so it is worth being explicit
 about what it did *not* do: it did not reimplement a single panel. The artifact pane

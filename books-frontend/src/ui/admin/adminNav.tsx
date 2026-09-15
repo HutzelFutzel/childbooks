@@ -18,6 +18,7 @@ import {
   BookOpen,
   ClipboardList,
   Coins,
+  Compass,
   Cookie,
   Cpu,
   CreditCard,
@@ -99,6 +100,7 @@ export const CONFIG_TAB_META: Record<ConfigTabId, { label: string; icon: ReactNo
   storyCraft: { label: "Story craft", icon: <Wand2 className="size-4" /> },
   bookLanguages: { label: "Book languages", icon: <Languages className="size-4" /> },
   typography: { label: "Typography", icon: <Type className="size-4" /> },
+  guide: { label: "Guided studio", icon: <Compass className="size-4" /> },
   // Operations
   system: { label: "System health", icon: <HeartPulse className="size-4" /> },
 };

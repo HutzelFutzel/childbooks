@@ -50,6 +50,7 @@ import {
   type StoryCraftConfig,
 } from "../../books-frontend/src/core/config/storyCraft";
 import {
+  guideConfigSchema,
   normalizeGuideConfig,
   type GuideConfig,
 } from "../../books-frontend/src/core/config/guide";
@@ -1040,6 +1041,29 @@ export async function saveTypographyConfig(input: unknown): Promise<TypographyCo
   const parsed = typographyConfigSchema.parse(input);
   const normalized = normalizeTypographyConfig(parsed);
   await writeDoc(TYPOGRAPHY_DOC, normalized);
+  return normalized;
+}
+
+/**
+ * Publish the guide rollout and playlist.
+ *
+ * The one config document whose value decides which studio a customer gets, so
+ * it is normalized on the way in as well as on the way out. `normalizeGuideConfig`
+ * fails closed — an unreadable percent becomes 0%, an unknown mode becomes
+ * `adminOnly` — and running it here means a hand-crafted PUT that satisfies the
+ * schema but names a component the catalog no longer has cannot land a playlist
+ * the engine would then have to survive.
+ *
+ * Playlist lint problems are deliberately NOT rejected. They are editorial
+ * ("you turned off something another component needs"), the tab shows them
+ * before saving, and `normalizeGuidePlaylist` already guarantees the stored
+ * order is runnable. Refusing the write would mean an admin could reach a state
+ * the dashboard cannot save its way out of.
+ */
+export async function saveGuideConfig(input: unknown): Promise<GuideConfig> {
+  const parsed = guideConfigSchema.parse(input);
+  const normalized = normalizeGuideConfig({ ...parsed, updatedAt: Date.now() });
+  await writeDoc(GUIDE_DOC, normalized);
   return normalized;
 }
 

@@ -629,6 +629,11 @@ interface AppConfigState {
   saveStoryCraft: (config: StoryCraftConfig) => Promise<void>;
   saveTypography: (config: TypographyConfig) => Promise<void>;
   saveBookLanguages: (config: BookLanguagesConfig) => Promise<void>;
+  /**
+   * Publish the guide rollout and playlist. The server re-normalizes, so the
+   * response — not the draft that was sent — is what lands in the store.
+   */
+  saveGuide: (config: GuideConfig) => Promise<void>;
   saveModelCosts: (table: ModelCostTable) => Promise<void>;
   savePricingSettings: (settings: PricingSettings) => Promise<void>;
   saveSparksConfig: (config: SparksConfig) => Promise<void>;
@@ -1279,6 +1284,10 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
         await putJson("/admin/config/book-languages", config),
       ),
     });
+  },
+
+  async saveGuide(config) {
+    set({ guide: normalizeGuideConfig(await putJson("/admin/config/guide", config)) });
   },
 
   async saveModelCosts(table) {

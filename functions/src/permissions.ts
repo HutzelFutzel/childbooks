@@ -522,6 +522,11 @@ const ROUTE_RULES: RouteRule[] = [
   { test: /^\/admin\/config\/story-craft$/, gate: key("configuration.storyCraft") },
   { test: /^\/admin\/config\/typography$/, gate: key("configuration.typography") },
   { test: /^\/admin\/config\/book-languages$/, gate: key("configuration.bookLanguages") },
+  // The rollout switch lives behind the same grant as the playlist it ships:
+  // someone trusted to reorder the guide's questions is the person who decides
+  // whether readers see them, and splitting the two would let an admin build a
+  // flow they cannot turn on.
+  { test: /^\/admin\/config\/guide$/, gate: key("configuration.guide") },
 
   // Configuration → Business.
   { test: /^\/admin\/config\/pricing-settings$/, gate: key("configuration.financial") },

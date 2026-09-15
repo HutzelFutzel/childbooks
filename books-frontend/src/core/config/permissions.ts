@@ -84,6 +84,7 @@ const CONFIG_TAB_EXHAUSTIVE: Record<ConfigTabId, true> = {
   storyCraft: true,
   bookLanguages: true,
   typography: true,
+  guide: true,
   system: true,
 };
 const MARKETING_TAB_EXHAUSTIVE: Record<MarketingTabId, true> = {

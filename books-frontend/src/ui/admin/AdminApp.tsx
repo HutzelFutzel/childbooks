@@ -55,6 +55,7 @@ import { AudienceTab } from "./tabs/AudienceTab";
 import { StoryCraftTab } from "./tabs/StoryCraftTab";
 import { BookLanguagesTab } from "./tabs/BookLanguagesTab";
 import { TypographyTab } from "./tabs/TypographyTab";
+import { GuideTab } from "./tabs/GuideTab";
 import { PromptsTab } from "./tabs/PromptsTab";
 import { ModelCostsTab } from "./tabs/ModelCostsTab";
 import { BusinessOverviewTab } from "./tabs/BusinessOverviewTab";
@@ -114,6 +115,8 @@ function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
       return <BookLanguagesTab />;
     case "typography":
       return <TypographyTab />;
+    case "guide":
+      return <GuideTab />;
     case "prompts":
       return <PromptsTab />;
     case "modelCosts":
