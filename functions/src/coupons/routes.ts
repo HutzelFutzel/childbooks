@@ -254,10 +254,12 @@ export async function grantAndAnnounce(
  * arrival token attached.
  *
  * Registered before the auth middleware because a poster on a wall has no
- * session. A code that can't be resolved is sent to the homepage rather than
- * 404'd: a dead QR that lands somewhere sensible is a bad scan, while a dead QR
- * that shows an error page is a bad brand — and the code may be printed inside a
- * book that will outlive several site redesigns.
+ * session. Public scanners hit `{site}/q/{id}` (Next.js proxies to this
+ * handler); they never call the Functions origin. A code that can't be resolved
+ * is sent to the homepage rather than 404'd: a dead QR that lands somewhere
+ * sensible is a bad scan, while a dead QR that shows an error page is a bad
+ * brand — and the code may be printed inside a book that will outlive several
+ * site redesigns.
  */
 export function registerQrRedirectRoute(app: Express): void {
   app.get("/q/:id", async (req: Request, res: Response) => {

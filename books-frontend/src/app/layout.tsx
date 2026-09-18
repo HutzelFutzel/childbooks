@@ -12,7 +12,9 @@ import "@fontsource/fredoka/700.css";
 import { AffiliateTracking } from "../ui/affiliates/AffiliateTracking";
 import { ConsentManager } from "../ui/consent/ConsentManager";
 import { AnnouncementBanner } from "../ui/marketing/AnnouncementBanner";
+import { ArrivalInit } from "../ui/acquisition/ArrivalInit";
 import { AuthInit } from "../ui/auth/AuthInit";
+import { Toaster } from "../ui/components/Toaster";
 import { NumberInputWheelGuard } from "../ui/forms/NumberInputWheelGuard";
 import { DevEnvironmentBanner } from "../ui/layout/DevEnvironmentBanner";
 import { getBrandingConfig } from "../server/branding";
@@ -90,6 +92,8 @@ export default async function RootLayout({
       <body>
         <DevEnvironmentBanner />
         <AuthInit />
+        <ArrivalInit />
+        <Toaster />
         <NumberInputWheelGuard />
         {children}
         {/* Cookie consent gates Google Analytics — no analytics cookies fire

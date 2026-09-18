@@ -23,6 +23,8 @@
  * lives in the Next workspace as TypeScript, and re-implementing its rules in a
  * plain .mjs check would let the check pass while the shipped code was wrong.
  */
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import {
   COUPON_ISSUANCE_KINDS,
   COUPON_ITEM_TYPES,
@@ -1599,6 +1601,10 @@ rejects("a 0% coupon", {
     normalizeQrCodesConfig({
       codes: [{ id: "x", data: "https://childbooks.test", tracked: true }],
     }).codes[0]?.tracked === true,
+  );
+  check(
+    "the site serves /q/[id] so a tracked scan is not a Next 404",
+    existsSync(join(process.cwd(), "books-frontend/src/app/q/[id]/route.ts")),
   );
 }
 

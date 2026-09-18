@@ -137,7 +137,9 @@ export function createApp(): Express {
   // printed code by someone who has never visited the site, so it must be
   // registered before every auth guard below. It counts the scan, resolves the
   // current destination, and redirects — see `acquisition.ts` for why the
-  // indirection exists at all.
+  // indirection exists at all. The URL encoded in the image is `{site}/q/{id}`
+  // (Next.js `app/q/[id]/route.ts` proxies here); scanners never hit this
+  // Functions origin directly.
   registerQrRedirectRoute(app);
 
   // Coarse "which country is this visitor in", to preselect the destination in

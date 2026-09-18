@@ -9,6 +9,8 @@
  *
  *   - `/api/*` — route handlers, called by Stripe and Lulu webhooks against a
  *     fixed URL. A locale rewrite would move the endpoint out from under them.
+ *   - `/q/*` — tracked QR scan hop. Printed codes encode this exact path; a
+ *     locale prefix would 404 every poster already on a wall.
  *   - `/_next/*`, `/_vercel/*` — build output.
  *   - Anything with a file extension — `favicon.ico`, `robots.txt`,
  *     `sitemap.xml`, images. `sitemap.xml` in particular must stay at the root:
@@ -36,5 +38,5 @@ export default function middleware(_req: NextRequest) {
  * shareable — and checked in the form Next actually uses.
  */
 export const config = {
-  matcher: ["/((?!api(?:/|$)|_next|_vercel|.*\\..*).*)"],
+  matcher: ["/((?!api(?:/|$)|q(?:/|$)|_next|_vercel|.*\\..*).*)"],
 };

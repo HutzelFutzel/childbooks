@@ -5,7 +5,6 @@ import { usePathname, useRouter } from "next/navigation";
 import { MotionConfig } from "framer-motion";
 import { ArrowLeft, Loader2 } from "lucide-react";
 import { Button } from "@/ui/components/Button";
-import { Toaster } from "@/ui/components/Toaster";
 import { cn } from "@/ui/lib/cn";
 import { isDev } from "@/platform/runtime";
 import { AuthMenu } from "@/ui/auth/AuthMenu";
@@ -42,7 +41,7 @@ import { useAccountUiStore } from "@/state/accountUiStore";
 import { useCheckoutUiStore, type PurchaseKind } from "@/state/checkoutUiStore";
 import { PurchaseConfirmation } from "@/ui/checkout/PurchaseConfirmation";
 import { claimPendingReferral, rememberReferralCode } from "@/platform/referrals";
-import { captureArrival, claimPendingArrival } from "@/platform/acquisition";
+import { ARRIVAL_QUERY_KEYS, captureArrival } from "@/platform/acquisition";
 import { SessionTracker } from "@/ui/analytics/SessionTracker";
 import { InviteFriendsDialog } from "@/ui/referrals/InviteFriendsDialog";
 import { notify } from "@/ui/lib/notify";
@@ -296,9 +295,12 @@ export default function StudioApp() {
     // attach it to (see the claim effect below).
     if (ref) rememberReferralCode(ref);
     // A QR scan or campaign link (`?qr=`, `?lt=`, `?utm_*`) is parked the same
-    // way and for the same reason — see `platform/acquisition`. Separate from
-    // `?ref=`: that says who invited them, this says where they came from, and
-    // an auto-applied coupon keys on the second.
+    // way and for the same reason — see `platform/acquisition`. Must happen
+    // HERE, not only in root `ArrivalInit`: this effect strips those params,
+    // and child effects run first, so waiting for the layout would lose the
+    // token on a `/studio?qr=` landing. Separate from `?ref=`: that says who
+    // invited them, this says where they came from, and an auto-applied coupon
+    // keys on the second.
     const capturedArrival = captureArrival();
     // `?invite=1` — where the "invite someone else" button in our own emails lands.
     if (invite) openInvite();
@@ -363,7 +365,7 @@ export default function StudioApp() {
     // Stripped once parked. A tracking parameter left in the address bar rides
     // along into any link this person shares, which would attribute the
     // recipient to a poster they never saw.
-    for (const key of ["qr", "lt", "utm_source", "utm_medium", "utm_campaign"]) {
+    for (const key of ARRIVAL_QUERY_KEYS) {
       params.delete(key);
     }
     const qs = params.toString();
@@ -405,19 +407,6 @@ export default function StudioApp() {
       if (outcome === "attributed") {
         notify.success("Invite accepted", "Your friend's invitation is linked to your account.");
       }
-    });
-  }, [uid, accessLevel]);
-
-  // Offer the parked arrival to the backend, and say so if it earned them
-  // something. Only for a FULL account: a coupon handed to a guest session is a
-  // coupon handed to anyone who opens an incognito window, and the server
-  // refuses those anyway — announcing it here would promise what it won't give.
-  useEffect(() => {
-    if (!uid || accessLevel !== "full") return;
-    void claimPendingArrival().then((granted) => {
-      const first = granted[0];
-      if (!first) return;
-      notify.success("A discount was added to your account", first.summary);
     });
   }, [uid, accessLevel]);
 
@@ -570,7 +559,6 @@ export default function StudioApp() {
       <SettingsDialog />
       <SparksShortfallDialog />
       <PurchaseConfirmation />
-      <Toaster />
     </div>
     </MotionConfig>
   );

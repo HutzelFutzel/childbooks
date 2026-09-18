@@ -484,6 +484,10 @@ for (const locale of LOCALES) {
     // from under Stripe and Lulu.
     ["/api/revalidate", false],
     ["/api", false],
+    // Tracked QR hop. Printed in the image; a locale prefix would 404 posters.
+    ["/q/abc-123", false],
+    ["/q", false],
+    ["/questions", true],
     // Metadata routes must stay at the root — a crawler asks for
     // `/sitemap.xml`, never `/en/sitemap.xml`.
     ["/sitemap.xml", false],

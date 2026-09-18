@@ -6,7 +6,6 @@ import { usePathname, useRouter } from "next/navigation";
 import { ArrowLeft, ChevronRight, Eye, FlaskConical, Loader2, Rocket, Search, ShieldAlert } from "lucide-react";
 import { Button } from "@/ui/components/Button";
 import { Tabs } from "@/ui/components/Tabs";
-import { Toaster } from "@/ui/components/Toaster";
 import { TopBar } from "@/ui/layout/TopBar";
 import { AuthMenu } from "@/ui/auth/AuthMenu";
 import { AuthDialog } from "@/ui/auth/AuthDialog";
@@ -629,7 +628,6 @@ export default function AdminApp() {
       <PlansDialog />
       <OrdersDialog open={ordersOpen} onClose={closeOrders} />
       {isAdmin && accessLoaded && <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />}
-      <Toaster />
     </div>
   );
 }

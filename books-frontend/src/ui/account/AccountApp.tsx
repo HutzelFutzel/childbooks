@@ -25,7 +25,6 @@ import { AuthDialog } from "../auth/AuthDialog";
 import { AuthMenu } from "../auth/AuthMenu";
 import { PlansContent } from "../billing/PlansDialog";
 import { Button } from "../components/Button";
-import { Toaster } from "../components/Toaster";
 import { PurchaseConfirmation } from "../checkout/PurchaseConfirmation";
 import { DownloadsContent } from "../checkout/DownloadsDialog";
 import { OrdersContent } from "../checkout/OrdersDialog";
@@ -281,7 +280,6 @@ export default function AccountApp() {
 
       <AuthDialog />
       <PurchaseConfirmation />
-      <Toaster />
     </div>
   );
 }

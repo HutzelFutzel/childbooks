@@ -20,6 +20,20 @@ import type { ArrivalKind, ArrivalProposal } from "../core/profile/acquisition";
 const PENDING_KEY = "pendingArrival";
 const REPLAYED_KEY = "arrivalReplayed";
 
+/** Query keys `/q/{id}` and campaign links attach; stripped once parked. */
+export const ARRIVAL_QUERY_KEYS = ["qr", "lt", "utm_source", "utm_medium", "utm_campaign"] as const;
+
+/** Drop arrival params from a query string. Returns true when anything was removed. */
+export function stripArrivalSearchParams(params: URLSearchParams): boolean {
+  let changed = false;
+  for (const key of ARRIVAL_QUERY_KEYS) {
+    if (!params.has(key)) continue;
+    params.delete(key);
+    changed = true;
+  }
+  return changed;
+}
+
 /**
  * Read an arrival out of a landing URL.
  *
