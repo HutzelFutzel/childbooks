@@ -58,6 +58,7 @@ import {
   GUIDE_PATCHABLE_SLOT_IDS,
   type GuidePatchContext,
 } from "../books-frontend/src/core/guide/patch";
+import { peopleListPatch } from "../books-frontend/src/core/guide/parsePeople";
 import {
   createDefaultConfig,
   type Anchor,
@@ -855,6 +856,62 @@ for (const input of [null, undefined, 42, "heroes", [], true]) {
   const before = JSON.stringify(fresh);
   applyGuidePatch(fresh, { heroes: ["Maya"], storyText: "Once." }, patchContext);
   if (JSON.stringify(fresh) !== before) fail("applyGuidePatch mutated the project it was given.");
+}
+
+// Compressed name+age lists, and the object-shaped `heroes` a model often
+// returns instead of string[]. Both have to land without the interpreter —
+// otherwise the guide says it didn't catch a perfectly clear answer.
+{
+  const typed = peopleListPatch("maya 3, thorsten 1, nils 2");
+  cases += 1;
+  if (!typed) fail('peopleListPatch did not claim "maya 3, thorsten 1, nils 2".');
+  else {
+    const result = applyGuidePatch(fresh, typed, patchContext);
+    const members = result.project.config.storyBrief?.cast ?? [];
+    if (members.map((member) => member.name).join(",") !== "Maya,Thorsten,Nils") {
+      fail(`A typed name+age list stored ${JSON.stringify(members.map((m) => m.name))} instead of Maya, Thorsten, Nils.`);
+    }
+    if (members[0]?.age !== 3 || members[1]?.age !== 1 || members[2]?.age !== 2) {
+      fail(`A typed name+age list stored ages ${JSON.stringify(members.map((m) => m.age))}.`);
+    }
+    if (!isComponentSatisfied("story-cast", result.project)) {
+      fail("A typed name+age list didn't satisfy the cast component.");
+    }
+  }
+
+  cases += 1;
+  if (peopleListPatch("It's for Maya, she's 5")) {
+    fail("peopleListPatch claimed a sentence the interpreter should handle.");
+  }
+
+  const objects = applyGuidePatch(
+    fresh,
+    {
+      heroes: [
+        { name: "Maya", age: 3 },
+        { name: "Thorsten", age: 1 },
+        { name: "Nils", age: 2 },
+      ],
+    },
+    patchContext,
+  );
+  cases += 1;
+  if (!objects.applied.includes("heroes") || !objects.applied.includes("heroAges")) {
+    fail(`Object-shaped heroes applied ${objects.applied.join(", ") || "nothing"}.`);
+  }
+  if ((objects.project.config.storyBrief?.cast ?? [])[2]?.age !== 2) {
+    fail("Object-shaped heroes didn't copy ages onto the cast.");
+  }
+
+  const strings = applyGuidePatch(
+    fresh,
+    { heroes: ["maya 3", "thorsten 1", "nils 2"] },
+    patchContext,
+  );
+  cases += 1;
+  if ((strings.project.config.storyBrief?.cast ?? []).map((m) => `${m.name}:${m.age}`).join(",") !== "Maya:3,Thorsten:1,Nils:2") {
+    fail("String-shaped 'maya 3' heroes weren't coerced into names and ages.");
+  }
 }
 
 // --- Report ---------------------------------------------------------------

@@ -44,6 +44,7 @@ export function GuideChat({
   messages,
   cursor,
   widget,
+  ready,
   sending,
   error,
   onSend,
@@ -60,6 +61,8 @@ export function GuideChat({
   cursor: GuideCursor | null;
   /** What the reader can do about the live question — see `core/guide/widgets.ts`. */
   widget: GuideWidget;
+  /** False until the transcript is loaded and the opening question can be asked. */
+  ready: boolean;
   sending: boolean;
   error: string | null;
   onSend: (text: string) => void;
@@ -96,10 +99,12 @@ export function GuideChat({
 
   const submit = () => {
     const text = draft.trim();
-    if (!text || sending) return;
+    if (!text || sending || !ready) return;
     setDraft("");
     onSend(text);
   };
+
+  const composerLocked = sending || !ready;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -145,7 +150,7 @@ export function GuideChat({
           {/* Height-capped and scrollable: an admin can configure a dozen art styles
               with a sentence of description each, and an uncapped option list would
               push the conversation off its own screen. */}
-          {!sending && widget.kind === "choice" && (
+          {ready && !sending && widget.kind === "choice" && (
             <div className="mb-2.5 flex max-h-44 flex-wrap gap-1.5 overflow-y-auto">
               {widget.options.map((option) => (
                 <button
@@ -166,7 +171,7 @@ export function GuideChat({
             </div>
           )}
 
-          {!sending && widget.kind === "confirm" && (
+          {ready && !sending && widget.kind === "confirm" && (
             <div className="mb-2.5">
               <Button
                 size="sm"
@@ -216,6 +221,7 @@ export function GuideChat({
               ref={inputRef}
               value={draft}
               rows={1}
+              disabled={composerLocked}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
                 // Enter sends, Shift+Enter breaks the line. The composer is for
@@ -225,14 +231,14 @@ export function GuideChat({
                   submit();
                 }
               }}
-              placeholder={widget.placeholder}
-              className="max-h-40 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm text-ink-800 placeholder:text-ink-400 focus:outline-none"
+              placeholder={ready ? widget.placeholder : ""}
+              className="max-h-40 flex-1 resize-none bg-transparent px-2 py-1.5 text-sm text-ink-800 placeholder:text-ink-400 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
             />
             <Button
               size="sm"
               aria-label="Send"
               className="size-9 shrink-0 !px-0"
-              disabled={!draft.trim()}
+              disabled={composerLocked || !draft.trim()}
               loading={sending}
               onClick={submit}
             >
@@ -242,7 +248,7 @@ export function GuideChat({
 
           {/* Only offered where declining is real. A skip control on a question the
               book cannot be made without would be a button that argues back. */}
-          {cursor?.component?.skippable && !sending && (
+          {ready && cursor?.component?.skippable && !sending && (
             <button
               type="button"
               onClick={onSkip}

@@ -30,7 +30,7 @@ import {
   withGuideSkips,
   type GuideSession,
 } from "../core/guide/session";
-import { guideAsk, guideSkipAck, nextGuideSay } from "../core/guide/voice";
+import { guideAsk, guideSkipAck, nextGuideSay, composeGuideReply } from "../core/guide/voice";
 import type { GuideChoiceOption, GuideConfirmAction } from "../core/guide/widgets";
 import { applyGuidePatch, captureGuideFacts, guidePatchContext } from "../core/guide/patch";
 import type { GuideSlotId } from "../core/guide/slots";
@@ -38,6 +38,7 @@ import { sendGuideTurn } from "./guideTurn";
 import { useAppConfigStore } from "./appConfigStore";
 import { useProjectsStore } from "./projectsStore";
 import type { Project } from "../core/types";
+import { withGuidedBriefIfMissing } from "../core/story/brief";
 import { getRepos } from "./repos";
 import { describeError } from "../core/errors";
 import { notify } from "../ui/lib/notify";
@@ -176,6 +177,18 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
       const session = await repos.guide.load(projectId);
       // Another book may have been opened while this read was in flight.
       if (get().projectId !== projectId) return;
+      // Guided AI is the default. Persist a brief before the first catch-up so
+      // story-mode is already satisfied and the picker never appears. Do not
+      // overwrite a brief the wizard (or an earlier visit) already wrote.
+      const current = useProjectsStore.getState().current();
+      if (current?.id === projectId && !current.config.storyBrief) {
+        try {
+          await useProjectsStore.getState().patchCurrent((live) => withGuidedBriefIfMissing(live));
+        } catch (err) {
+          notify.error(err);
+        }
+      }
+      if (get().projectId !== projectId) return;
       set({ session, loaded: true });
     },
 
@@ -186,6 +199,10 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
     catchUp: (playlist) => {
       const { loaded, sending, session } = get();
       if (!loaded || sending) return;
+      // An empty playlist is "the flow hasn't arrived", not "the book is
+      // finished". Speaking the done line here would greet a new book with
+      // "that's everything" and then go quiet, which is the empty chat.
+      if (playlist.length === 0) return;
       const at = cursorAt(playlist, session.skipped);
       if (!at) return;
       // Whether there's anything new to say is `nextGuideSay`'s decision, not this
@@ -196,8 +213,8 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
 
     send: async (playlist, text) => {
       const message = text.trim();
-      const { projectId, sending } = get();
-      if (!projectId || !message || sending) return;
+      const { projectId, sending, loaded } = get();
+      if (!projectId || !loaded || !message || sending) return;
 
       // Captured before the reader's message is appended: the interpreter takes
       // the new message separately from the history it is read against.
@@ -211,20 +228,32 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
 
       try {
         const outcome = await sendGuideTurn(message, history);
-        // The book has been patched by now, so the cursor is asked again rather
-        // than reused — the reply is about wherever the conversation has got to.
+        // The book has been patched by now. Keep `sending` true until the line is
+        // in the transcript: dropping it first lets `catchUp` speak the engine's
+        // next question, and then this speaks too.
         const session = withGuideSkips(
           get().session,
           outcome.skip,
           (id) => GUIDE_COMPONENTS[id].skippable,
         );
-        set({ session, sending: false });
+        set({ session });
         if (outcome.applied.length > 0) checkpoint(outcome.before);
         const at = cursorAt(playlist, session.skipped);
-        speak(outcome.reply || (at ? guideAsk(at.cursor, at.project) : ""), at?.cursor ?? null, {
+        const statingFacts = outcome.intent === "answer" || outcome.intent === "revise";
+        const line = at
+          ? composeGuideReply({
+              acknowledgement: outcome.reply,
+              statingFacts,
+              landed: outcome.applied.length > 0 || outcome.skip.length > 0,
+              cursor: at.cursor,
+              project: at.project,
+            })
+          : outcome.reply;
+        speak(line, at?.cursor ?? null, {
           ...(outcome.applied.length > 0 ? { applied: outcome.applied } : {}),
           ...(outcome.skip.length > 0 ? { skipped: outcome.skip } : {}),
         });
+        set({ sending: false });
       } catch (err) {
         // The reader's words stay on screen and are marked, so the composer can
         // offer to send them again rather than making them retype.
@@ -254,11 +283,12 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
      * comes from the catalog. No round trip, no cost, no ambiguity.
      */
     choose: async (playlist, option) => {
-      const { projectId, sending } = get();
-      if (!projectId || sending) return;
+      const { projectId, sending, loaded } = get();
+      if (!projectId || !loaded || sending) return;
 
       set((state) => ({
         session: appendGuideMessage(state.session, guideMessage("reader", option.said)),
+        sending: true,
         error: null,
       }));
 
@@ -274,7 +304,7 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
           return outcome.project;
         });
       } catch (err) {
-        set({ error: describeError(err) });
+        set({ sending: false, error: describeError(err) });
         notify.error(err);
         return;
       }
@@ -284,6 +314,7 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
       speak(at ? guideAsk(at.cursor, at.project) : "", at?.cursor ?? null, {
         ...(applied.length > 0 ? { applied } : {}),
       });
+      set({ sending: false });
     },
 
     /**
@@ -292,12 +323,13 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
      * — see the note in `core/guide/widgets.ts` on why this is not a patch.
      */
     confirm: async (playlist, action) => {
-      const { projectId, sending } = get();
-      if (!projectId || sending) return;
+      const { projectId, sending, loaded } = get();
+      if (!projectId || !loaded || sending) return;
 
       const said = action === "approveStory" ? "The story's good — let's illustrate it" : "The cast looks right";
       set((state) => ({
         session: appendGuideMessage(state.session, guideMessage("reader", said)),
+        sending: true,
         error: null,
       }));
 
@@ -308,13 +340,14 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
           await useProjectsStore.getState().updateConfig({ castReady: true });
         }
       } catch (err) {
-        set({ error: describeError(err) });
+        set({ sending: false, error: describeError(err) });
         notify.error(err);
         return;
       }
 
       const at = cursorAt(playlist, get().session.skipped);
       speak(at ? guideAsk(at.cursor, at.project) : "", at?.cursor ?? null);
+      set({ sending: false });
     },
 
     /**
@@ -339,6 +372,8 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
       const target = session.messages.find((entry) => entry.id === messageId);
       if (!target?.before) return;
 
+      set({ sending: true });
+
       const { audience, artStyles } = useAppConfigStore.getState();
       const context = guidePatchContext({ audience, artStyles });
       let applied: GuideSlotId[] = [];
@@ -349,7 +384,7 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
           return outcome.project;
         });
       } catch (err) {
-        set({ error: describeError(err) });
+        set({ sending: false, error: describeError(err) });
         notify.error(err);
         return;
       }
@@ -365,6 +400,7 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
       speak(at ? guideAsk(at.cursor, at.project) : "", at?.cursor ?? null, {
         ...(applied.length > 0 ? { applied } : {}),
       });
+      set({ sending: false });
     },
 
     retry: async (playlist) => {

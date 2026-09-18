@@ -21,7 +21,7 @@
  */
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from "react";
 import { BookOpen, MessageCircle } from "lucide-react";
 import { coveredGuideSlots, guideProgress, nextGuideStep } from "../../core/guide/engine";
 import type { GuideCanvasKind } from "../../core/guide/components";
@@ -180,12 +180,11 @@ export function GuideStudio({
     [playlist],
   );
 
-  // Say the next thing whenever there is a next thing to say. Deliberately keyed on
-  // the cursor rather than on any event: the book moves on its own — a render
-  // finishes, a page plan arrives, the reader edits a fact in the pane on the right
-  // — and all of those should advance the conversation. `catchUp` is idempotent, so
-  // running it on every change is the simplest correct thing.
-  useEffect(() => {
+  // Say the next thing whenever there is a next thing to say. Layout rather than
+  // a plain effect so the opening question is in the transcript before the first
+  // paint — a post-paint catch-up leaves an empty chat the reader can type into
+  // before anything has been asked.
+  useLayoutEffect(() => {
     if (loaded) catchUp(playlist);
   }, [loaded, catchUp, playlist, cursor?.component?.id, cursor?.status]);
 
@@ -234,6 +233,7 @@ export function GuideStudio({
           messages={session.messages}
           cursor={cursor}
           widget={widget}
+          ready={loaded && playlist.length > 0}
           sending={sending}
           error={error}
           onSend={(text) => void send(playlist, text)}

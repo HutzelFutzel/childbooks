@@ -33,6 +33,7 @@ import { enabledAudienceProfiles, type AudienceConfig } from "../config/audience
 import { resolveArtStyles, type ArtStylesConfig } from "../config/artStyles";
 import { BOOK_PRODUCTS } from "../fulfillment";
 import { briefOf, newCastMember } from "../story/brief";
+import { parseNamedPeople, type ParsedPerson } from "./parsePeople";
 import type { BookConfig, Project, StoryBrief, StoryCastMember } from "../types";
 import { GUIDE_SLOT_IDS, GUIDE_SLOTS, type GuideSlotId } from "./slots";
 
@@ -169,6 +170,80 @@ function withConfig(project: Project, patch: Partial<BookConfig>): Project {
 
 function withBrief(project: Project, next: StoryBrief): Project {
   return withConfig(project, { storyBrief: next });
+}
+
+/**
+ * Rescue shapes the interpreter commonly emits that the writers refuse.
+ *
+ * `heroes` is declared as string[], but models return objects with ages attached,
+ * or strings like `"maya 3"`. Without this, Zod rejects the slot, `heroAges`
+ * cannot introduce the names, nothing lands, and the guide says it didn't catch
+ * that — which is the loop in the screenshot.
+ */
+function coerceGuidePatch(input: Record<string, unknown>): Record<string, unknown> {
+  if (!("heroes" in input)) return input;
+  const people = peopleFromHeroes(input.heroes);
+  if (!people) return input;
+
+  const next: Record<string, unknown> = {
+    ...input,
+    heroes: people.map((person) => person.name),
+  };
+  const ages = people
+    .filter((person) => person.age !== undefined || person.ageMonths !== undefined)
+    .map((person) => ({
+      name: person.name,
+      ...(person.ageMonths !== undefined ? { ageMonths: person.ageMonths } : { age: person.age }),
+    }));
+  if (ages.length > 0 && !Array.isArray(next.heroAges)) {
+    next.heroAges = ages;
+  }
+  return next;
+}
+
+function peopleFromHeroes(heroes: unknown): ParsedPerson[] | null {
+  if (typeof heroes === "string") {
+    const people = parseNamedPeople(heroes);
+    return people.length > 0 ? people : null;
+  }
+  if (!Array.isArray(heroes) || heroes.length === 0) return null;
+
+  const people: ParsedPerson[] = [];
+  for (const item of heroes) {
+    if (typeof item === "string") {
+      const parsed = parseNamedPeople(item);
+      if (parsed.length === 0) return null;
+      people.push(...parsed);
+      continue;
+    }
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const raw = item as Record<string, unknown>;
+    if (typeof raw.name !== "string") return null;
+    const ageMonths = coerceNumber(raw.ageMonths);
+    const age = coerceNumber(raw.age);
+    if (ageMonths !== undefined) {
+      const name = raw.name.trim();
+      if (!name) return null;
+      people.push({ name, ageMonths });
+      continue;
+    }
+    if (age !== undefined) {
+      const name = raw.name.trim();
+      if (!name) return null;
+      people.push({ name, age });
+      continue;
+    }
+    const parsed = parseNamedPeople(raw.name);
+    if (parsed.length === 0) return null;
+    people.push(...parsed);
+  }
+  return people.length > 0 ? people : null;
+}
+
+function coerceNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && /^\d{1,4}$/.test(value.trim())) return Number(value.trim());
+  return undefined;
 }
 
 /** Cast members keyed for name matching, so "leo" patches "Leo". */
@@ -562,7 +637,7 @@ export function applyGuidePatch(
     return { project, applied, rejected: [{ key: "*", reason: "not an object" }] };
   }
 
-  const input = patch as Record<string, unknown>;
+  const input = coerceGuidePatch(patch as Record<string, unknown>);
 
   for (const key of Object.keys(input)) {
     if (isGuidePatchableSlot(key)) continue;

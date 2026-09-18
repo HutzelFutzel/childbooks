@@ -49,11 +49,14 @@ import {
   type GuideSession,
 } from "../books-frontend/src/core/guide/session";
 import {
+  composeGuideReply,
   guideAdvance,
   guideAsk,
   guideSkipAck,
   nextGuideSay,
+  stripQuestions,
 } from "../books-frontend/src/core/guide/voice";
+import { withGuidedBriefIfMissing } from "../books-frontend/src/core/story/brief";
 import { GUIDE_BOOK_STATES } from "./guide-engine-invariants";
 
 export interface CheckResult {
@@ -448,6 +451,109 @@ for (const input of junk) {
   if (guideTranscriptWindow(long, 8).length !== 8) fail("The transcript window ignored its size.");
   cases += 1;
   if (guideTranscriptWindow(long, 8)[7]?.text !== "m49") fail("The transcript window kept the wrong end.");
+}
+
+// --- The model confirms; the engine asks -----------------------------------
+
+/**
+ * The typed-turn line is composed here rather than taken from the model, because
+ * a confirmation that names three children while the book still has none is how
+ * the conversation in the screenshot looped. Three properties:
+ *
+ *   1. An answer that wrote nothing is not confirmed. The model's "I have added
+ *      aren, miles, and mika" is dropped, and the engine's blocker is asked.
+ *   2. A confirmation is kept, but any question the model asked next is stripped
+ *      — it was composed before the patch landed, so it is the wrong question.
+ *   3. Opening the guide without a brief defaults to guided AI, so the first
+ *      question is who the book is for, not which of three writing modes.
+ */
+{
+  const fresh = GUIDE_BOOK_STATES.find(({ name }) => name === "fresh book")!.project;
+  const named = GUIDE_BOOK_STATES.find(({ name }) => name === "hero named")!.project;
+  const freshCursor = nextGuideStep(playlist, fresh, []);
+  const namedCursor = nextGuideStep(playlist, named, []);
+
+  cases += 1;
+  {
+    const line = composeGuideReply({
+      acknowledgement: "I have added aren, miles, and mika to the story. What kind of adventure would you like?",
+      statingFacts: true,
+      landed: false,
+      cursor: freshCursor,
+      project: fresh,
+    });
+    if (/added aren/i.test(line)) {
+      fail(`A turn that wrote nothing still confirmed names: "${line}".`);
+    }
+    if (!/I didn't quite catch that/i.test(line)) {
+      fail(`A missed answer wasn't admitted: "${line}".`);
+    }
+    if (!line.includes(guideAsk(freshCursor, fresh))) {
+      fail(`A missed answer didn't re-ask what the book still needs: "${line}".`);
+    }
+  }
+
+  cases += 1;
+  {
+    const line = composeGuideReply({
+      acknowledgement: "Got Maya down. What theme shall we pick?",
+      statingFacts: true,
+      landed: true,
+      cursor: namedCursor,
+      project: named,
+    });
+    if (/\?/.test(line.split(guideAsk(namedCursor, named))[0] ?? line)) {
+      fail(`The model's next question survived into the spoken line: "${line}".`);
+    }
+    if (!/Got Maya down/i.test(line)) {
+      fail(`A real confirmation was dropped: "${line}".`);
+    }
+    if (!line.includes(guideAsk(namedCursor, named))) {
+      fail(`A successful turn didn't ask what the book still needs: "${line}".`);
+    }
+  }
+
+  cases += 1;
+  if (stripQuestions("Hello?") !== "") {
+    fail(`A reply that was only a question was kept: "${stripQuestions("Hello?")}".`);
+  }
+  cases += 1;
+  if (stripQuestions("Got it. How old is she?") !== "Got it.") {
+    fail(`stripQuestions left a question in "Got it. How old is she?"`);
+  }
+
+  cases += 1;
+  const guided = withGuidedBriefIfMissing(fresh);
+  const afterDefault = nextGuideStep(playlist, guided, []);
+  if (afterDefault.component?.id === "story-mode") {
+    fail("A book with the default guided brief still asked how the story should be written.");
+  }
+  if (afterDefault.component?.id !== "story-cast") {
+    fail(
+      `Defaulting to guided AI opened on "${afterDefault.component?.id}", not story-cast.`,
+    );
+  }
+  cases += 1;
+  const already = GUIDE_BOOK_STATES.find(({ name }) => name === "mode chosen")!.project;
+  if (withGuidedBriefIfMissing(already).config.storyBrief !== already.config.storyBrief) {
+    fail("Defaulting to guided overwrote a brief that was already there.");
+  }
+
+  // The reader typed before the guide spoke. Still ask — an empty opening is
+  // how the screenshot started.
+  cases += 1;
+  {
+    const typedFirst = appendGuideMessage(
+      createGuideSession(),
+      guideMessage("reader", "maya 3, thorsten 1, nils 2"),
+    );
+    const opening = nextGuideSay(typedFirst, afterDefault, guided);
+    if (!opening) {
+      fail("A transcript with only the reader's words opened with the guide saying nothing.");
+    } else if (!opening.includes(guideAsk(afterDefault, guided))) {
+      fail(`A reader-first transcript asked the wrong thing: "${opening}".`);
+    }
+  }
 }
 
 // --- Report -----------------------------------------------------------------

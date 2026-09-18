@@ -12,8 +12,10 @@
  * So these are pure functions over the cursor. They cover every moment the guide
  * speaks without having been spoken to: opening a book, and picking back up after
  * something finished on its own (a render landing, a job completing, the reader
- * editing a fact in the artifact pane). Between those, the interpreter's `reply`
- * carries the conversation.
+ * editing a fact in the artifact pane). After a typed turn they also own the next
+ * question: the interpreter may confirm what it understood, but it must not decide
+ * what to ask — that is how a model that "added three children" in prose asks for
+ * a theme while the book still has no cast.
  *
  * The wording lives here rather than in the components because it is *narration*,
  * not a description of the work — a component's `purpose` explains a step to an
@@ -135,9 +137,64 @@ export function nextGuideSay(
   cursor: GuideCursor,
   project: Project,
 ): string | null {
-  if (session.messages.length === 0) return guideAsk(cursor, project);
+  // A transcript that only has the reader's words still needs the opening
+  // question — they typed before the guide spoke, which is exactly the empty
+  // chat in the screenshot. Counting any message would skip the ask.
+  if (!session.messages.some((message) => message.role === "guide")) {
+    return guideAsk(cursor, project);
+  }
   if (lastSpokenAbout(session) === (cursor.component?.id ?? null)) return null;
   return guideAdvance(cursor, project);
+}
+
+/**
+ * One spoken line after a typed turn: confirm what actually landed, then ask
+ * whatever the book still needs.
+ *
+ * The interpreter proposes facts and a confirmation. The engine, looking at the
+ * patched book, decides the next question. Combining them here is what stops the
+ * two from disagreeing — a model that confirms names it did not store, or that
+ * asks for a theme while the cast is still empty, is a transcript that loops.
+ *
+ * `landed` is whether the turn did something to the book — a patch that applied,
+ * or a skip — not whether the model *claimed* to understand. An answer that writes
+ * nothing must not be confirmed; a greeting or a question that writes nothing still
+ * deserves its reply, then the same ask.
+ */
+export function composeGuideReply(args: {
+  acknowledgement: string;
+  /** True when this turn was trying to state a fact (answer or revise). */
+  statingFacts: boolean;
+  /** True when a patch applied or a skip was recorded. */
+  landed: boolean;
+  cursor: GuideCursor;
+  project: Project;
+}): string {
+  const ask = guideAsk(args.cursor, args.project);
+
+  if (args.statingFacts && !args.landed) {
+    return `I didn't quite catch that. ${ask}`;
+  }
+
+  const ack = stripQuestions(args.acknowledgement);
+  if (!ack) return ask;
+  if (includesIgnoreCase(ack, ask)) return ack;
+  return `${ack} ${ask}`;
+}
+
+/**
+ * Keep the confirmation, drop any question the model asked next.
+ *
+ * The engine will ask the real next thing from the patched book. Leaving the
+ * model's question in would put two questions in one bubble, and the wrong one
+ * is almost always the model's — it was composed before the patch landed.
+ */
+export function stripQuestions(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  const parts = trimmed.split(/(?<=[.!])\s+/u);
+  const kept = parts.map((part) => part.trim()).filter((part) => part.length > 0 && !part.endsWith("?"));
+  return kept.join(" ").trim();
 }
 
 function sentence(text: string): string {
@@ -146,4 +203,8 @@ function sentence(text: string): string {
 
 function lower(text: string): string {
   return text.charAt(0).toLowerCase() + text.slice(1);
+}
+
+function includesIgnoreCase(haystack: string, needle: string): boolean {
+  return haystack.toLowerCase().includes(needle.toLowerCase());
 }

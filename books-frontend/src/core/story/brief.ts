@@ -5,7 +5,7 @@
  * the same way everywhere.
  */
 import { z } from "zod";
-import { SOURCE_ART_MAX, type StoryBrief, type StoryCastMember } from "../types";
+import { SOURCE_ART_MAX, type Project, type StoryBrief, type StoryCastMember } from "../types";
 import type { AgeBandStoryCraft } from "../config/storyCraftCatalog";
 import { optionLabel, optionsLabels } from "../config/storyCraft";
 import type { StoryMode } from "../config/storyCraftCatalog";
@@ -68,6 +68,21 @@ export const storyBriefSchema = z.object({
 
 export function createDefaultStoryBrief(mode: StoryMode): StoryBrief {
   return { mode, themeId: null, deviceId: null, settingId: null };
+}
+
+/**
+ * The guide's default: we write the story. Used when a book has no brief yet so
+ * the chat never has to ask "Create with AI / Guided by details / My own words".
+ *
+ * No-op when a brief already exists — a book that came from the wizard, or one
+ * whose reader already chose, must not be rewritten into guided.
+ */
+export function withGuidedBriefIfMissing(project: Project): Project {
+  if (project.config.storyBrief) return project;
+  return {
+    ...project,
+    config: { ...project.config, storyBrief: createDefaultStoryBrief("guided") },
+  };
 }
 
 /**
