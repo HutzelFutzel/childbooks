@@ -12,11 +12,12 @@
  * checkout failure nobody would otherwise see until a customer hit it.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Globe, Loader2, RefreshCw, Search, Upload } from "lucide-react";
+import { Loader2, RefreshCw, Search, Upload } from "lucide-react";
 import { Button } from "../../components/Button";
 import { Input } from "../../components/Input";
+import { InfoHint } from "../../components/InfoHint";
 import { useReadOnly } from "../../components/ReadOnlyContext";
 import { cn } from "../../lib/cn";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
@@ -39,15 +40,23 @@ import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useAdminTab } from "../adminTabStore";
 import { FormatCoverageSection } from "./markets/FormatCoverageSection";
 import { ShippingPolicySection } from "./markets/ShippingPolicySection";
-import { Section, TabIntro } from "./products/parts";
+import { EditorTabs, OverflowItem, OverflowMenu, Section, TabIntro } from "./products/parts";
+import { AdminSaveBar } from "../AdminPageHeader";
 
 type Filter = "all" | "enabled" | "available" | "mismatch";
+type Panel = "countries" | "shipping" | "formats";
 
 const FILTERS: { id: Filter; label: string }[] = [
-  { id: "all", label: "All countries" },
+  { id: "mismatch", label: "Needs attention" },
   { id: "enabled", label: "Selling" },
   { id: "available", label: "Printer reaches" },
-  { id: "mismatch", label: "Needs attention" },
+  { id: "all", label: "All" },
+];
+
+const MARKET_PANELS = [
+  { id: "countries", label: "Countries" },
+  { id: "shipping", label: "Shipping" },
+  { id: "formats", label: "Formats" },
 ];
 
 /**
@@ -83,11 +92,13 @@ export function MarketsTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sweeping, setSweeping] = useState(false);
-  const [filter, setFilter] = useState<Filter>("all");
+  const [filter, setFilter] = useState<Filter>("enabled");
+  const [panel, setPanel] = useState<Panel>("countries");
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  const seededFilter = useRef(false);
 
   // Both documents, together. They're edited on the same screen — the country
   // rows toggle speeds, which lives in the shipping policy — so having one
@@ -259,6 +270,12 @@ export function MarketsTab() {
     return newest > 0 && projectedAt < newest;
   }, [capability.sweptAt, projectedAt, shipping.updatedAt, stored.updatedAt]);
 
+  useEffect(() => {
+    if (loading || seededFilter.current) return;
+    seededFilter.current = true;
+    if (attention > 0) setFilter("mismatch");
+  }, [loading, attention]);
+
   if (loadError) {
     return (
       <Section title="Markets unavailable">
@@ -272,164 +289,200 @@ export function MarketsTab() {
     );
   }
 
-  return (
-    <div className="space-y-4">
-      <TabIntro
-        elsewhere="What shipping COSTS is measured per book, because it's priced by weight — see the rate table under Catalog → Print books → Shipping. That table is evidence, not a setting: everything configurable about shipping is on this tab."
-        links={[{ label: "Catalog", onClick: () => setConfigTab("catalog") }]}
-      >
-        The countries we sell to, and how shipping is sold to them. A country switched off here
-        can&apos;t be ordered to by anyone, whatever a product claims — the server enforces this list
-        as a ceiling. Switching one on is safe to do gradually: it only makes the country selectable,
-        and orders to it still have to price successfully before they can be placed.
-      </TabIntro>
+  const toolsBusy = readOnly || loading || sweeping || busy != null;
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Stat icon={<Globe className="size-4" />} label="Selling to" value={`${enabledCount} countries`} />
-        <Stat label="Printer reaches" value={`${reachable} probed`} />
-        {attention > 0 && (
-          <Stat tone="warn" label="Needs attention" value={`${attention} countries`} />
-        )}
-        <div className="ml-auto flex gap-2">
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-500">
+          <TabIntro
+            links={[{ label: "Print shipping rates", onClick: () => setConfigTab("catalog") }]}
+          />
+          <p>
+            Selling {enabledCount}
+            <span className="text-ink-300"> · </span>
+            Printer {reachable}
+            {attention > 0 ? (
+              <>
+                <span className="text-ink-300"> · </span>
+                <span className="text-amber-800">{attention} need attention</span>
+              </>
+            ) : null}
+          </p>
+          <InfoHint title="What this page does not cover" align="start">
+            Countries under comprehensive sanctions are omitted — the payment processor declines them.
+            Opening a market here is a fulfillment decision only: tax registration and consumer-law
+            obligations in a new country are separate work.
+          </InfoHint>
+        </div>
+        <div className="flex items-center gap-2">
           <Button
-            variant="ghost"
+            variant="secondary"
             size="sm"
-            leftIcon={sweeping ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-            disabled={readOnly || loading || sweeping || busy != null}
+            leftIcon={
+              sweeping ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />
+            }
+            disabled={toolsBusy}
             onClick={() => runSweep(false)}
           >
             {capability.sweptAt ? "Re-check coverage" : "Discover coverage"}
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            leftIcon={busy ? <Loader2 className="size-4 animate-spin" /> : undefined}
-            disabled={readOnly || loading || sweeping || busy != null}
-            onClick={runRemeasure}
-            title="Coverage, then every product's rates, then republish — in that order, which is the order they depend on each other."
-          >
-            Re-measure everything
-          </Button>
-          <Button size="sm" disabled={readOnly || loading || !dirty || saving} onClick={save}>
-            {saving ? "Saving…" : "Save markets"}
-          </Button>
+          <OverflowMenu>
+            {(close) => (
+              <>
+                <OverflowItem
+                  label="Re-measure everything"
+                  busy={busy != null}
+                  disabledReason={
+                    readOnly
+                      ? "Read only"
+                      : sweeping
+                        ? "Coverage check is running…"
+                        : loading
+                          ? "Loading…"
+                          : null
+                  }
+                  onSelect={() => {
+                    close();
+                    void runRemeasure();
+                  }}
+                />
+                <OverflowItem
+                  label="Republish catalog"
+                  busy={busy != null}
+                  disabledReason={readOnly ? "Read only" : null}
+                  onSelect={() => {
+                    close();
+                    void republish();
+                  }}
+                />
+              </>
+            )}
+          </OverflowMenu>
         </div>
       </div>
 
       {busy && (
-        <p className="flex items-center gap-2 rounded-lg bg-ink-50 px-3 py-2 text-[11px] text-ink-600 ring-1 ring-inset ring-ink-100">
-          <Loader2 className="size-3.5 animate-spin" /> {busy} Leave this tab open — it runs one
-          request per product and stops if you navigate away.
+        <p className="flex items-center gap-2 text-sm text-ink-600">
+          <Loader2 className="size-4 animate-spin" /> {busy} Leave this tab open — it stops if you
+          navigate away.
         </p>
       )}
 
-      {capability.sweptAt === 0 && (
-        <p className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800 ring-1 ring-inset ring-amber-100">
-          Coverage has never been discovered. Run it once to find out which of these countries the
-          printer actually ships to — it asks about every country in turn, so it takes a couple of
-          minutes. Until then a country can still be switched on; you just won&apos;t know in advance
-          whether an order to it can be fulfilled.
-        </p>
-      )}
-
-      {stale && (
-        <p className="rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800 ring-1 ring-inset ring-amber-100">
-          Coverage was last checked {daysSince(capability.sweptAt)} days ago. The printer drops and
-          adds countries without telling us, so re-check before treating any of this as current.
-        </p>
-      )}
-
-      {staleProjection && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-[11px] leading-relaxed text-amber-800 ring-1 ring-inset ring-amber-100">
+      {staleProjection ? (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-800">
           <span className="flex-1">
             The storefront is serving a catalog published before the latest market, coverage or
-            shipping change. It reads only the published copy, so customers are still being offered
-            the previous countries, speeds and prices.
+            shipping change.
           </span>
           <Button
             variant="ghost"
             size="sm"
             leftIcon={<Upload className="size-4" />}
             disabled={busy != null}
-            onClick={republish}
+            onClick={() => void republish()}
           >
             Republish now
           </Button>
         </div>
+      ) : capability.sweptAt === 0 ? (
+        <p className="text-sm text-amber-800">
+          Coverage has never been checked. Discover it to see which of these countries the printer
+          actually ships to.
+        </p>
+      ) : stale ? (
+        <p className="text-sm text-amber-800">
+          Coverage was last checked {daysSince(capability.sweptAt)} days ago. Re-check before
+          treating it as current.
+        </p>
+      ) : null}
+
+      <EditorTabs
+        items={MARKET_PANELS}
+        value={panel}
+        onChange={(id) => setPanel(id as Panel)}
+      />
+
+      {panel === "countries" && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative min-w-48 flex-1">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-300" />
+              <Input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search countries"
+                className="pl-8"
+              />
+            </div>
+            <div className="flex flex-wrap gap-x-3 text-sm">
+              {FILTERS.map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setFilter(f.id)}
+                  className={cn(
+                    filter === f.id ? "font-medium text-ink-900" : "text-ink-500 hover:text-ink-800",
+                  )}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {loading ? (
+            <p className="flex items-center gap-2 py-6 text-sm text-ink-400">
+              <Loader2 className="size-4 animate-spin" /> Loading markets…
+            </p>
+          ) : rows.length === 0 ? (
+            <p className="py-6 text-center text-sm text-ink-400">No countries match.</p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-ink-400">
+                    <th className="pb-2 pr-3 font-medium">Country</th>
+                    <th className="pb-2 pr-3 font-medium">Selling</th>
+                    <th className="pb-2 pr-3 font-medium">Printer</th>
+                    <th className="pb-2 pr-3 font-medium">Speeds</th>
+                    <th className="pb-2 font-medium">Notes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((country) => (
+                    <CountryRow
+                      key={country}
+                      country={country}
+                      enabled={enabled.has(country)}
+                      notes={notes.get(country) ?? ""}
+                      capability={coverage.get(country)}
+                      shipping={shipping}
+                      readOnly={readOnly}
+                      onToggle={(on) => setMarket(country, { enabled: on })}
+                      onNotes={(value) => setMarket(country, { notes: value })}
+                      onToggleMethod={(method, sell) => void toggleCountryMethod(country, method, sell)}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       )}
 
-      <ShippingPolicySection loading={loading} />
+      {panel === "shipping" && <ShippingPolicySection loading={loading} />}
 
-      {/* Placed between the policy and the country table because it depends on
-          both: which speeds we sell comes from above, and which countries are
-          columns comes from below. */}
-      <FormatCoverageSection markets={[...enabled].sort()} />
+      {panel === "formats" && <FormatCoverageSection markets={[...enabled].sort()} />}
 
-      <Section
-        title="Countries"
-        hint="Enabled means orderable. Coverage is what the printer answered when it was last asked — evidence, not a setting."
-        action={
-          <div className="flex flex-wrap items-center gap-1.5">
-            {FILTERS.map((f) => (
-              <button
-                key={f.id}
-                type="button"
-                onClick={() => setFilter(f.id)}
-                className={cn(
-                  "rounded-full px-2.5 py-1 text-[11px] font-medium transition",
-                  filter === f.id
-                    ? "bg-brand-600 text-white"
-                    : "bg-white text-ink-500 ring-1 ring-inset ring-ink-200 hover:bg-ink-50",
-                )}
-              >
-                {f.label}
-              </button>
-            ))}
-          </div>
-        }
-      >
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-300" />
-          <Input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search countries"
-            className="pl-8"
-          />
-        </div>
-
-        {loading ? (
-          <div className="flex items-center gap-2 py-6 text-sm text-ink-400">
-            <Loader2 className="size-4 animate-spin" /> Loading markets…
-          </div>
-        ) : rows.length === 0 ? (
-          <div className="py-6 text-center text-sm text-ink-400">No countries match.</div>
-        ) : (
-          <ul className="divide-y divide-ink-100 rounded-lg bg-white ring-1 ring-inset ring-ink-100">
-            {rows.map((country) => (
-              <CountryRow
-                key={country}
-                country={country}
-                enabled={enabled.has(country)}
-                notes={notes.get(country) ?? ""}
-                capability={coverage.get(country)}
-                shipping={shipping}
-                readOnly={readOnly}
-                onToggle={(on) => setMarket(country, { enabled: on })}
-                onNotes={(value) => setMarket(country, { notes: value })}
-                onToggleMethod={(method, sell) => void toggleCountryMethod(country, method, sell)}
-              />
-            ))}
-          </ul>
-        )}
-      </Section>
-
-      <p className="text-[10px] leading-relaxed text-ink-400">
-        Countries under comprehensive sanctions are omitted entirely — the payment processor declines
-        them and serving them breaches its terms, so they aren&apos;t ours to switch on. Opening a
-        market here is a fulfillment decision only: tax registration and consumer-law obligations in
-        a new country are separate work and are not tracked on this screen.
-      </p>
+      <AdminSaveBar
+        dirty={dirty}
+        saving={saving}
+        saveLabel="Save markets"
+        saveDisabled={readOnly || loading}
+        onSave={() => void save()}
+        onDiscard={() => setDraft(stored)}
+      />
     </div>
   );
 }
@@ -472,31 +525,47 @@ function CountryRow({
   const methods = availableMethodsFor(capability);
   const attention = needsAttention(enabled, capability);
   const vetoed = new Set(shipping.countryOverrides[country]?.disabled ?? []);
+  const reason = attention
+    ? capability == null
+      ? "Selling here, but coverage has never been checked."
+      : capability.status === "unknown"
+        ? "Selling here, but the last probe failed — re-run the sweep to settle it."
+        : `Selling here, but the printer ships nothing to this country.${capability.message ? ` ${capability.message}` : ""}`
+    : null;
 
   return (
-    <li className={cn("px-3 py-2", attention && "bg-amber-50/60")}>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-        <label className="flex w-64 min-w-0 items-center gap-2 text-sm text-ink-700">
-          <input
-            type="checkbox"
-            checked={enabled}
-            disabled={readOnly}
-            onChange={(e) => onToggle(e.target.checked)}
-            className="size-4 shrink-0 rounded border-ink-300 text-brand-600 focus:ring-brand-400"
-          />
-          <span className="truncate">
-            {countryFlag(country)} {countryLabel(country)}
-          </span>
-          <span className="shrink-0 text-[10px] text-ink-300">{country}</span>
-        </label>
-
+    <tr className={cn("border-t border-ink-100 align-top", attention && "bg-amber-50/60")}>
+      <td className="py-2 pr-3">
+        <div className="font-medium text-ink-800">
+          {countryFlag(country)} {countryLabel(country)}{" "}
+          <span className="font-normal text-ink-400">{country}</span>
+        </div>
+        {reason ? <p className="mt-0.5 text-xs text-amber-800">{reason}</p> : null}
+        {(STATE_CODE_REQUIRED.has(country) || TAX_ID_REQUIRED.has(country)) && (
+          <p className="mt-0.5 text-xs text-ink-400">
+            {STATE_CODE_REQUIRED.has(country) ? "State required" : null}
+            {STATE_CODE_REQUIRED.has(country) && TAX_ID_REQUIRED.has(country) ? " · " : null}
+            {TAX_ID_REQUIRED.has(country) ? `${TAX_ID_LABEL[country]} required` : null}
+          </p>
+        )}
+      </td>
+      <td className="py-2 pr-3">
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={readOnly}
+          onChange={(e) => onToggle(e.target.checked)}
+          aria-label={`Sell to ${countryLabel(country)}`}
+          className="size-4 rounded border-ink-300 text-brand-600 focus:ring-brand-400"
+        />
+      </td>
+      <td className="py-2 pr-3">
         <CoverageBadge capability={capability} />
-
-        {/* The speeds the printer was observed to run here, each a toggle for
-            whether we sell it. Rendered from coverage rather than from the
-            policy so the list can only ever contain speeds that actually
-            exist — there is nothing to switch off that was never offered. */}
-        {methods.length > 0 && (
+      </td>
+      <td className="py-2 pr-3">
+        {methods.length === 0 ? (
+          <span className="text-ink-300">—</span>
+        ) : (
           <span className="flex flex-wrap items-center gap-1">
             {methods.map((method) => {
               const selling = shipping.methods[method]?.offered && !vetoed.has(method);
@@ -509,13 +578,13 @@ function CountryRow({
                   onClick={() => onToggleMethod(method, !selling)}
                   title={
                     globallyOff
-                      ? `${methodLabel(shipping, method)} is switched off for the whole catalog in the shipping policy above.`
+                      ? `${methodLabel(shipping, method)} is switched off for the whole catalog in Shipping.`
                       : selling
                         ? `Selling ${methodLabel(shipping, method)} here. Click to stop offering it in this country only.`
                         : `Not selling ${methodLabel(shipping, method)} here, though the printer runs it. Click to offer it again.`
                   }
                   className={cn(
-                    "rounded px-1.5 py-0.5 text-[10px] font-medium transition",
+                    "rounded px-1.5 py-0.5 text-xs font-medium transition",
                     globallyOff
                       ? "cursor-not-allowed bg-ink-50 text-ink-300 line-through"
                       : selling
@@ -529,49 +598,25 @@ function CountryRow({
             })}
           </span>
         )}
-
-        {STATE_CODE_REQUIRED.has(country) && (
-          <Tag title="The carrier rejects an address here without a state or province code.">
-            state required
-          </Tag>
-        )}
-        {TAX_ID_REQUIRED.has(country) && (
-          <Tag title={`Customs here needs the recipient's ${TAX_ID_LABEL[country]}. Checkout asks for it.`}>
-            {TAX_ID_LABEL[country]} required
-          </Tag>
-        )}
-        <button
-          type="button"
-          onClick={() => setEditingNotes((v) => !v)}
-          className="ml-auto shrink-0 text-[11px] text-ink-400 underline-offset-2 hover:text-ink-600 hover:underline"
-        >
-          {notes ? "Note" : "Add note"}
-        </button>
-      </div>
-
-      {attention && (
-        <p className="mt-1 pl-6 text-[11px] text-amber-800">
-          {capability == null
-            ? "Selling here, but coverage has never been checked."
-            : capability.status === "unknown"
-              ? "Selling here, but the last probe failed — re-run the sweep to settle it."
-              : `Selling here, but the printer ships nothing to this country.${capability.message ? ` ${capability.message}` : ""}`}
-        </p>
-      )}
-
-      {editingNotes && (
-        <div className="mt-1.5 pl-6">
+      </td>
+      <td className="py-2">
+        {editingNotes ? (
           <Input
             value={notes}
             onChange={(e) => onNotes(e.target.value)}
-            placeholder="Why this market is open, what to watch"
+            placeholder="Why this market is open"
           />
-        </div>
-      )}
-      {!editingNotes && notes && (
-        <p className="mt-1 pl-6 text-[11px] italic text-ink-400">{notes}</p>
-      )}
-    </li>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setEditingNotes(true)}
+            className="text-xs text-ink-400 hover:text-ink-700 hover:underline"
+          >
+            {notes || "Add"}
+          </button>
+        )}
+      </td>
+    </tr>
   );
 }
 
@@ -605,7 +650,7 @@ function Tag({
     <span
       title={title}
       className={cn(
-        "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium",
+        "shrink-0 rounded px-1.5 py-0.5 text-xs font-medium",
         tone === "ok" && "bg-emerald-50 text-emerald-700",
         tone === "bad" && "bg-red-50 text-red-600",
         tone === "muted" && "bg-ink-100 text-ink-500",
@@ -613,33 +658,6 @@ function Tag({
     >
       {children}
     </span>
-  );
-}
-
-function Stat({
-  icon,
-  label,
-  value,
-  tone,
-}: {
-  icon?: React.ReactNode;
-  label: string;
-  value: string;
-  tone?: "warn";
-}) {
-  return (
-    <div
-      className={cn(
-        "flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs ring-1 ring-inset",
-        tone === "warn"
-          ? "bg-amber-50 text-amber-800 ring-amber-100"
-          : "bg-white text-ink-600 ring-ink-100",
-      )}
-    >
-      {icon}
-      <span className="text-ink-400">{label}</span>
-      <span className="font-semibold">{value}</span>
-    </div>
   );
 }
 

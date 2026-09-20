@@ -51,6 +51,7 @@ import {
 } from "../../books-frontend/src/core/config/storyCraft";
 import {
   guideConfigSchema,
+  guideExtractionSchema,
   normalizeGuideConfig,
   type GuideConfig,
 } from "../../books-frontend/src/core/config/guide";
@@ -1061,7 +1062,18 @@ export async function saveTypographyConfig(input: unknown): Promise<TypographyCo
  * the dashboard cannot save its way out of.
  */
 export async function saveGuideConfig(input: unknown): Promise<GuideConfig> {
-  const parsed = guideConfigSchema.parse(input);
+  /**
+   * `extraction` is optional on the way IN, required on the way out.
+   *
+   * Not for hand-crafted requests — for the dashboard tab an admin left open
+   * across a deploy. Its bundle predates the field, so the document it sends is
+   * complete as far as it knows and would be rejected by the strict schema, on a
+   * save that has nothing to do with extraction. `normalizeGuideConfig` fills the
+   * gap from the shipped defaults, which is what it would have stored anyway.
+   */
+  const parsed = guideConfigSchema
+    .extend({ extraction: guideExtractionSchema.optional() })
+    .parse(input);
   const normalized = normalizeGuideConfig({ ...parsed, updatedAt: Date.now() });
   await writeDoc(GUIDE_DOC, normalized);
   return normalized;

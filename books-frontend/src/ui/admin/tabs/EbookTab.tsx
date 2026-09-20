@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Button } from "../../components/Button";
 import { Field, Input } from "../../components/Input";
 import { Toggle } from "../../components/Toggle";
 import type { PricingSettings } from "../../../core/config/products";
@@ -15,8 +14,9 @@ import {
 } from "../../../core/config/discountImpact";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useAdminTab } from "../adminTabStore";
-import { Grid, ImpactNote, NumberField, Section, TabIntro, fmtMoney } from "./products/parts";
+import { Disclosure, Grid, ImpactNote, NumberField, TabIntro, fmtMoney } from "./products/parts";
 import { EbookPicturesSection } from "./products/PicturesSection";
+import { AdminSaveBar } from "../AdminPageHeader";
 
 /**
  * Digital-edition (ebook) product editor. The ebook is a real product — a
@@ -61,65 +61,31 @@ export function EbookTab() {
   const ebook = draft.ebook;
 
   return (
-    <div className="space-y-4">
-      <TabIntro
-        elsewhere={
-          <>
-            Special pricing for subscribers (cheaper, or included free) is set per plan under{" "}
-            <span className="font-medium">Memberships</span>. Currencies, the Stripe fee and tax
-            behaviour that drive the margin come from <span className="font-medium">Financial settings</span>.
-          </>
-        }
-        links={[
-          { label: "Member pricing (Memberships)", onClick: () => setConfigTab("memberships") },
-          { label: "Financial settings", onClick: () => setConfigTab("financial") },
-        ]}
-      >
-        The <span className="font-medium">digital edition</span> is your customer&apos;s finished book
-        sold as a downloadable PDF. It has almost no marginal cost, so nearly the whole price (minus
-        the Stripe fee) is profit — a high-margin add-on to every print sale.
-      </TabIntro>
-
-      <div className="flex items-center justify-end gap-2">
-        {dirty && (
-          <Button variant="ghost" size="sm" onClick={() => { setDraft(stored); setDirty(false); }}>
-            Discard
-          </Button>
-        )}
-        <Button size="sm" onClick={onSave} loading={saving} disabled={!dirty}>
-          Save digital edition
-        </Button>
-      </div>
-
-      <Section
-        title="Availability"
-        hint="The master switch. When off, the ebook option disappears everywhere — the storefront, the order step and checkout — with no other change to the app."
-        action={
+    <div className="space-y-8">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <TabIntro
+          links={[
+            { label: "Member pricing", onClick: () => setConfigTab("memberships") },
+            { label: "Currencies & tax", onClick: () => setConfigTab("financial") },
+          ]}
+        />
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-ink-500">{ebook.enabled ? "On sale" : "Hidden"}</span>
           <Toggle
             checked={ebook.enabled}
             onChange={(v) => setEbook({ enabled: v })}
             label="Sell the digital edition"
           />
-        }
-      >
-        <p className="text-[11px] text-ink-500">
-          {ebook.enabled
-            ? "Customers can buy the digital edition of any finished book."
-            : "The digital edition is hidden from customers."}
-        </p>
-      </Section>
+        </div>
+      </div>
 
-      <EbookPicturesSection />
-
-      <Section
-        title="Price"
-        hint="The regular (non-subscriber) sticker price per currency. This is what a customer with no membership pays."
-      >
+      <section className="space-y-4">
+        <h2 className="text-sm font-semibold text-ink-900">Price</h2>
         <Grid cols={4}>
           {draft.currencies.map((c) => (
             <NumberField
               key={c}
-              label={`Price (${c})`}
+              label={c}
               value={ebook.prices[c] ?? 0}
               step="0.5"
               suffix={c}
@@ -127,49 +93,89 @@ export function EbookTab() {
             />
           ))}
         </Grid>
-        <ImpactNote>
-          A price of <span className="font-semibold">0</span> in a currency disables the ebook for
-          everyone paying in that currency — including subscribers, no matter their member price.
-          Set a real price in every currency you want to sell in.
-        </ImpactNote>
-      </Section>
-
-      <Section
-        title="Bundle discount"
-        hint="An automatic discount when the buyer already ordered a printed copy of the same book — a gentle nudge to add the digital edition after a print purchase."
-      >
+        <p className="text-sm text-ink-500">A price of 0 hides the ebook in that currency.</p>
         <NumberField
-          label="Discount for print owners"
+          label="Print owners get"
           value={ebook.printBundleDiscountPct}
           step="5"
           suffix="%"
           className="w-56"
+          hint="Automatic at checkout when they already bought a print copy of this book."
           onChange={(n) => setEbook({ printBundleDiscountPct: n })}
         />
-        <p className="text-[11px] text-ink-400">
-          Applied automatically at checkout when the buyer has a paid print order for this book.
-          {ebook.printBundleDiscountPct > 0
-            ? ` Print owners pay ${ebook.printBundleDiscountPct}% less.`
-            : " Set above 0 to offer it."}
-        </p>
+        <MemberPriceLine
+          settings={draft}
+          plans={plans}
+          onEdit={() => setConfigTab("memberships")}
+        />
         <BundleDiscountWarning settings={draft} plans={plans} />
-      </Section>
+      </section>
+
+      <EbookPicturesSection />
 
       <EbookImpact settings={draft} plans={plans} />
 
-      <Section
-        title="Tax"
-        hint="Stripe Tax computes and collects the real amount per destination. Downloadable books are taxed differently from physical ones in many regions, so they get their own product tax code."
-      >
-        <Field label="Stripe product tax code (digital books)" className="w-full sm:w-80">
+      <Disclosure label="Advanced">
+        <Field
+          label="Stripe product tax code"
+          hint="Downloadable books are taxed differently from print in many regions."
+          className="w-full sm:w-80"
+        >
           <Input
             value={ebook.taxCode ?? ""}
             placeholder="txcd_10302000"
             onChange={(e) => setEbook({ taxCode: e.target.value || undefined })}
           />
         </Field>
-      </Section>
+      </Disclosure>
+
+      <AdminSaveBar
+        dirty={dirty}
+        saving={saving}
+        onSave={() => void onSave()}
+        onDiscard={() => {
+          setDraft(stored);
+          setDirty(false);
+        }}
+        saveLabel="Save digital edition"
+      />
     </div>
+  );
+}
+
+function MemberPriceLine({
+  settings,
+  plans,
+  onEdit,
+}: {
+  settings: PricingSettings;
+  plans: PublicPlan[];
+  onEdit: () => void;
+}) {
+  const active = plans
+    .filter((p) => p.status === "active")
+    .sort((a, b) => a.sortOrder - b.sortOrder);
+  if (active.length === 0) return null;
+  const currency = settings.currencies[0];
+  return (
+    <p className="text-sm text-ink-500">
+      {active.map((p, i) => {
+        const prices = settings.ebook.planPrices[p.id];
+        const amount = prices?.[currency] ?? 0;
+        const value =
+          prices == null ? "regular price" : amount === 0 ? "included" : fmtMoney(amount, currency);
+        return (
+          <span key={p.id}>
+            {i > 0 ? " · " : null}
+            {p.name}: {value}
+          </span>
+        );
+      })}
+      {" · "}
+      <button type="button" onClick={onEdit} className="hover:text-ink-800 hover:underline">
+        Edit on Memberships
+      </button>
+    </p>
   );
 }
 
@@ -212,10 +218,8 @@ function BundleDiscountWarning({
 }
 
 /**
- * "What this means for the business" — the ebook's fee-aware economics per
- * currency, twice: at the sticker price, and for the WORST-CASE buyer (the
- * lowest member price of any active plan, with the print-bundle discount
- * stacked on top — exactly the price checkout can produce).
+ * Fee-aware economics per currency at list, plus the cheapest reachable sale
+ * when that sale actually differs from sticker.
  */
 function EbookImpact({ settings, plans }: { settings: PricingSettings; plans: PublicPlan[] }) {
   const buyers = buyerContextsFromPublicPlans(plans, settings);
@@ -227,32 +231,33 @@ function EbookImpact({ settings, plans }: { settings: PricingSettings; plans: Pu
     }))
     .filter((x) => x.sticker != null || x.worst != null);
   if (rows.length === 0) return null;
-  // Only show the worst-case columns when some buyer actually pays less than sticker.
   const hasWorse = rows.some(
     (x) => x.worst != null && x.sticker != null && x.worst.listPrice < x.sticker.listPrice,
   );
   return (
-    <Section
-      title="Business impact"
-      hint={`Per currency: what one ebook sale earns after the Stripe fee and (where prices are tax-inclusive) tax — plus the deepest discount that keeps your margin floor, and the break-even.${
-        hasWorse
-          ? " The worst-case columns price the cheapest reachable sale: the lowest member price with the print-bundle discount stacked on top."
-          : ""
-      }`}
-    >
-      <div className="overflow-x-auto rounded-lg ring-1 ring-inset ring-ink-100">
-        <table className="w-full text-xs">
+    <section className="space-y-3">
+      <div>
+        <h2 className="text-sm font-semibold text-ink-900">Margin at list</h2>
+        {hasWorse ? (
+          <p className="mt-0.5 text-sm text-ink-500">
+            Worst-case columns are the lowest member price with the print-owner discount stacked on
+            top.
+          </p>
+        ) : null}
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
           <thead>
-            <tr className="bg-ink-50/70 text-left text-[11px] uppercase tracking-wide text-ink-400">
-              <th className="px-3 py-2 font-semibold">Currency</th>
-              <th className="px-3 py-2 font-semibold">Price</th>
-              <th className="px-3 py-2 font-semibold">Payment fee</th>
-              <th className="px-3 py-2 font-semibold">You keep</th>
-              <th className="px-3 py-2 font-semibold">Margin</th>
-              <th className="px-3 py-2 font-semibold">Safe max discount</th>
-              <th className="px-3 py-2 font-semibold">Break-even</th>
-              {hasWorse && <th className="px-3 py-2 font-semibold">Worst-case buyer</th>}
-              {hasWorse && <th className="px-3 py-2 font-semibold">They pay → you keep</th>}
+            <tr className="text-left text-xs text-ink-400">
+              <th className="pb-2 font-medium">Currency</th>
+              <th className="pb-2 font-medium">Price</th>
+              <th className="pb-2 font-medium">Fee</th>
+              <th className="pb-2 font-medium">You keep</th>
+              <th className="pb-2 font-medium">Margin</th>
+              <th className="pb-2 font-medium">Safe max off</th>
+              <th className="pb-2 font-medium">Break-even</th>
+              {hasWorse && <th className="pb-2 font-medium">Worst-case buyer</th>}
+              {hasWorse && <th className="pb-2 font-medium">They pay → you keep</th>}
             </tr>
           </thead>
           <tbody>
@@ -262,25 +267,24 @@ function EbookImpact({ settings, plans }: { settings: PricingSettings; plans: Pu
               const worstWf = worst?.atDiscount(0);
               const worstDiffers =
                 worst != null && sticker != null && worst.listPrice < sticker.listPrice;
+              const underwater = wf.netProfit < 0;
               return (
-                <tr key={c} className="border-t border-ink-50">
-                  <td className="px-3 py-2 font-medium text-ink-800">{c}</td>
-                  <td className="px-3 py-2 text-ink-600">{fmtMoney(impact.listPrice, c)}</td>
-                  <td className="px-3 py-2 text-ink-600">{fmtMoney(wf.paymentFee, c)}</td>
-                  <td className={`px-3 py-2 font-semibold ${wf.netProfit < 0 ? "text-rose-600" : "text-ink-800"}`}>
+                <tr key={c} className="border-t border-ink-100">
+                  <td className="py-2 pr-3 font-medium text-ink-800">{c}</td>
+                  <td className="py-2 pr-3 text-ink-600">{fmtMoney(impact.listPrice, c)}</td>
+                  <td className="py-2 pr-3 text-ink-600">{fmtMoney(wf.paymentFee, c)}</td>
+                  <td className={`py-2 pr-3 font-medium ${underwater ? "text-rose-600" : "text-ink-800"}`}>
                     {fmtMoney(wf.netProfit, c)}
                   </td>
-                  <td className="px-3 py-2 text-ink-600">{wf.marginPct}%</td>
-                  <td className="px-3 py-2 font-semibold text-ink-800">{impact.safeMaxDiscountPct}%</td>
-                  <td className="px-3 py-2 text-ink-600">{impact.breakEvenDiscountPct}%</td>
+                  <td className="py-2 pr-3 text-ink-600">{wf.marginPct}%</td>
+                  <td className="py-2 pr-3 font-medium text-ink-800">{impact.safeMaxDiscountPct}%</td>
+                  <td className="py-2 pr-3 text-ink-600">{impact.breakEvenDiscountPct}%</td>
                   {hasWorse && (
-                    <td className="px-3 py-2 text-ink-600">
-                      {worstDiffers ? worst.buyerLabel : "—"}
-                    </td>
+                    <td className="py-2 pr-3 text-ink-600">{worstDiffers ? worst.buyerLabel : "—"}</td>
                   )}
                   {hasWorse && (
                     <td
-                      className={`px-3 py-2 font-semibold ${
+                      className={`py-2 font-medium ${
                         worstDiffers && worstWf && worstWf.netProfit < 0
                           ? "text-rose-600"
                           : "text-ink-800"
@@ -297,6 +301,6 @@ function EbookImpact({ settings, plans }: { settings: PricingSettings; plans: Pu
           </tbody>
         </table>
       </div>
-    </Section>
+    </section>
   );
 }

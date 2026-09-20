@@ -2,8 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Button } from "../../components/Button";
-import { Field } from "../../components/Input";
 import { Select } from "../../components/Select";
 import { Toggle } from "../../components/Toggle";
 import { useAppConfigStore } from "../../../state/appConfigStore";
@@ -26,6 +24,7 @@ import { grantLiabilityUsd, sparkUnitEconomics } from "../../../core/config/econ
 import { TEXT_ACTIONS, IMAGE_ACTIONS, type ImageActionId } from "../../../core/ai/actions";
 import { Grid, NumberField, Section, TabIntro, fmtMoney } from "./products/parts";
 import { useReadOnly } from "../../components/ReadOnlyContext";
+import { AdminSaveBar } from "../AdminPageHeader";
 
 const MODES: { value: ActionPricingMode; label: string }[] = [
   { value: "free", label: "Free" },
@@ -47,7 +46,6 @@ export function SparksTab() {
   const baseCurrency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);
   const save = useAppConfigStore((s) => s.saveSparksConfig);
   const openCatalog = useAdminTab((s) => s.openCatalog);
-  const openMarketingTab = useAdminTab((s) => s.openMarketingTab);
 
   const [draft, setDraft] = useState<SparksConfig>(stored);
   const [dirty, setDirty] = useState(false);
@@ -99,38 +97,14 @@ export function SparksTab() {
   ];
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-8">
       <TabIntro
-        elsewhere={
-          <>
-            The <span className="font-medium">packs</span> customers buy to top up live in the
-            Catalog. Per-plan Spark grants and discounts live under Memberships.
-          </>
-        }
-        links={[{ label: "Spark packs (Catalog)", onClick: () => openCatalog("packs") }]}
-      >
-        Sparks meter the variable backend cost of AI generation. The honest principle: the book is
-        the product, Sparks just pay for the kitchen — so text/thinking steps stay free and image
-        generation is priced from its real cost. While <span className="font-medium">disabled</span>,
-        everything is free and the app behaves exactly as before.
-      </TabIntro>
-
-      {!readOnly && (
-        <div className="flex items-center justify-end gap-2">
-          {dirty && (
-            <Button variant="ghost" size="sm" onClick={() => { setDraft(stored); setDirty(false); }}>
-              Discard
-            </Button>
-          )}
-          <Button size="sm" onClick={onSave} loading={saving} disabled={!dirty}>
-            Save Sparks config
-          </Button>
-        </div>
-      )}
+        links={[{ label: "Spark packs", onClick: () => openCatalog("packs") }]}
+      />
 
       <Section
         title="Economy"
-        hint="The master switch and the peg. One Spark is worth the value below; derived prices are the measured provider cost × the markup, divided by that value."
+        hint="One Spark is worth the value below. Derived prices are provider cost × markup, divided by that value."
         action={<Toggle checked={draft.enabled} onChange={(v) => set({ enabled: v })} label="Enable Sparks" />}
       >
         <Grid cols={3}>
@@ -173,69 +147,72 @@ export function SparksTab() {
         <EconomyImpact draft={draft} baseCurrency={baseCurrency} />
       </Section>
 
-      <Section
-        title="Referral rewards"
-        hint="Invite-a-friend now lives under its own tab — rules, discounts, free months, impact math and funnel stats."
-      >
-        <p className="text-[11px] text-ink-500">
-          The legacy Sparks-only knobs here are kept for backwards compatibility with older config docs; the live
-          program is configured under Marketing →{" "}
-          <button
-            type="button"
-            className="font-semibold text-brand-700 underline"
-            onClick={() => openMarketingTab("referrals")}
-          >
-            Referrals
-          </button>
-          .
-        </p>
-      </Section>
-
-      <Section title="Action pricing" hint="What each AI action costs in Sparks. Text steps are free by default; image actions are cost-derived. Use Fixed to pin a flat price. The estimate is what's reserved before a render whose exact cost isn't known yet.">
-        <div className="space-y-2">
-          {allActions.map((a) => {
-            const rule = draft.actions[a.id] ?? { mode: "free" as const, fixedSparks: 0, estimatedSparks: 0 };
-            const preview = rule.mode === "derived" ? derivedPreview(a.id, a.isImage) : null;
-            return (
-              <div key={a.id} className="space-y-2 rounded-lg bg-white p-2.5 ring-1 ring-inset ring-ink-100">
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <span className="text-sm font-semibold text-ink-800">{a.label}</span>
-                    <p className="text-[11px] text-ink-400">{a.help}</p>
-                  </div>
-                  {preview != null && (
-                    <span className="shrink-0 rounded bg-brand-50 px-1.5 py-0.5 text-[10px] font-medium text-brand-700">
-                      ≈ {preview} ✦
-                    </span>
-                  )}
-                </div>
-                <Grid cols={3}>
-                  <Field label="Mode">
-                    <Select
-                      value={rule.mode}
-                      options={MODES}
-                      onChange={(e) => setAction(a.id, { mode: e.target.value as ActionPricingMode })}
-                    />
-                  </Field>
-                  {rule.mode === "fixed" && (
-                    <NumberField label="Fixed price" value={rule.fixedSparks} step="1" suffix="✦" onChange={(n) => setAction(a.id, { fixedSparks: n })} />
-                  )}
-                  {rule.mode !== "free" && (
-                    <NumberField label="Reserve estimate" value={rule.estimatedSparks} step="1" suffix="✦" onChange={(n) => setAction(a.id, { estimatedSparks: n })} />
-                  )}
-                </Grid>
-              </div>
-            );
-          })}
+      <Section title="Action pricing" hint="Text steps are free by default; image actions are cost-derived. The estimate is reserved before a render whose exact cost isn't known yet.">
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs text-ink-400">
+                <th className="pb-2 font-medium">Action</th>
+                <th className="pb-2 font-medium">Mode</th>
+                <th className="pb-2 font-medium">Price / estimate</th>
+              </tr>
+            </thead>
+            <tbody>
+              {allActions.map((a) => {
+                const rule = draft.actions[a.id] ?? { mode: "free" as const, fixedSparks: 0, estimatedSparks: 0 };
+                const preview = rule.mode === "derived" ? derivedPreview(a.id, a.isImage) : null;
+                return (
+                  <tr key={a.id} className="border-t border-ink-100 align-top">
+                    <td className="py-2 pr-3">
+                      <div className="font-medium text-ink-800">{a.label}</div>
+                      <p className="text-xs text-ink-400">{a.help}</p>
+                    </td>
+                    <td className="py-2 pr-3 w-40">
+                      <Select
+                        value={rule.mode}
+                        options={MODES}
+                        onChange={(e) => setAction(a.id, { mode: e.target.value as ActionPricingMode })}
+                      />
+                    </td>
+                    <td className="py-2">
+                      <div className="flex flex-wrap items-end gap-2">
+                        {rule.mode === "fixed" && (
+                          <NumberField label="Fixed" value={rule.fixedSparks} step="1" suffix="✦" className="w-28" onChange={(n) => setAction(a.id, { fixedSparks: n })} />
+                        )}
+                        {rule.mode !== "free" && (
+                          <NumberField label="Reserve" value={rule.estimatedSparks} step="1" suffix="✦" className="w-28" onChange={(n) => setAction(a.id, { estimatedSparks: n })} />
+                        )}
+                        {preview != null && (
+                          <span className="pb-2 text-xs text-ink-500">≈ {preview} ✦</span>
+                        )}
+                        {rule.mode === "free" && <span className="pb-2 text-xs text-ink-400">Free</span>}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       </Section>
 
-      {/* A tiny live sanity check that the peg + markup produce sane prices. */}
-      <p className="text-[11px] text-ink-400">
+      <p className="text-xs text-ink-400">
         Sanity check: a {fmtMoney(0.04, baseCurrency)} image would cost{" "}
         <span className="font-medium text-ink-600">{priceForAction({ ...draft, enabled: true }, "pageIllustration", 0.04)} ✦</span>{" "}
         at the current peg + markup.
       </p>
+      {!readOnly && (
+        <AdminSaveBar
+          dirty={dirty}
+          saving={saving}
+          onSave={() => void onSave()}
+          onDiscard={() => {
+            setDraft(stored);
+            setDirty(false);
+          }}
+          saveLabel="Save Sparks config"
+        />
+      )}
     </div>
   );
 }

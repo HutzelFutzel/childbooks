@@ -2,9 +2,8 @@
 
 /**
  * Shared access-gating helpers for the admin dashboard — used by `AdminApp.tsx`
- * (Configuration/Marketing/Communication/Legal) and `analysis/AnalysisTab.tsx`
- * (which owns its own tab-strip rendering, so it needs the same two pieces
- * rather than importing the page shell).
+ * and `analysis/AnalysisTab.tsx`. Nav lives in the sidebar; these helpers only
+ * gate what a given page is allowed to render.
  */
 import { Loader2, Lock, RotateCw, ShieldAlert } from "lucide-react";
 import type { ReactNode } from "react";

@@ -1,8 +1,11 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { ChevronRight, Info } from "lucide-react";
+import { ChevronRight, Loader2, MoreHorizontal } from "lucide-react";
 import { Field, Input } from "../../../components/Input";
+import { InfoHint } from "../../../components/InfoHint";
+import { Popover } from "../../../components/Popover";
+import { cn } from "../../../lib/cn";
 
 /** Read a picked file as bare base64 (no data-URL prefix), for upload bodies. */
 export function fileToBase64(file: File): Promise<string> {
@@ -18,68 +21,95 @@ export function fileToBase64(file: File): Promise<string> {
   });
 }
 
-/** A labeled group of related fields, matching the Model-costs editor styling. */
+/** A labeled group of related fields. Spacing and a heading, not a nested card. */
 export function Section({
   title,
   hint,
+  help,
   action,
   children,
 }: {
   title: string;
   hint?: string;
+  help?: ReactNode;
   action?: ReactNode;
   children: ReactNode;
 }) {
   return (
-    <div className="space-y-2.5 rounded-lg bg-ink-50/50 p-3 ring-1 ring-inset ring-ink-100">
+    <section className="space-y-3">
       <div className="flex items-start justify-between gap-2">
         <div className="space-y-0.5">
-          <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-500">{title}</div>
-          {hint && <p className="text-[11px] leading-relaxed text-ink-400">{hint}</p>}
+          <div className="flex items-center gap-1.5">
+            <h3 className="text-sm font-semibold text-ink-900">{title}</h3>
+            {help ? (
+              <InfoHint title={title}>{help}</InfoHint>
+            ) : null}
+          </div>
+          {hint && <p className="text-sm text-ink-500">{hint}</p>}
         </div>
         {action}
       </div>
       {children}
+    </section>
+  );
+}
+
+export function EditorTabs({
+  items,
+  value,
+  onChange,
+}: {
+  items: { id: string; label: string }[];
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-x-4 border-b border-ink-100">
+      {items.map((item) => (
+        <button
+          key={item.id}
+          type="button"
+          onClick={() => onChange(item.id)}
+          className={cn(
+            "-mb-px border-b-2 pb-2 text-sm transition-colors",
+            value === item.id
+              ? "border-ink-900 font-medium text-ink-900"
+              : "border-transparent text-ink-500 hover:text-ink-800",
+          )}
+        >
+          {item.label}
+        </button>
+      ))}
     </div>
   );
 }
 
 /**
- * A consistent, plain-language header for a whole admin tab. Explains in one or
- * two sentences WHAT lives here, and — crucially for reducing "where is that
- * setting?" confusion — what deliberately lives ELSEWHERE (`elsewhere`), with
- * optional cross-link buttons the caller wires to the nav store.
+ * Cross-links to related pages. The page header already states what this
+ * screen is; this only answers "where else?".
  */
 export function TabIntro({
-  children,
-  elsewhere,
+  children: _children,
+  elsewhere: _elsewhere,
   links,
 }: {
-  children: ReactNode;
+  children?: ReactNode;
   elsewhere?: ReactNode;
   links?: { label: string; onClick: () => void }[];
 }) {
+  if (!links?.length) return null;
   return (
-    <div className="flex gap-2.5 rounded-xl border border-brand-100 bg-brand-50/50 px-3.5 py-3">
-      <Info className="mt-0.5 size-4 shrink-0 text-brand-500" />
-      <div className="space-y-1.5 text-xs leading-relaxed text-ink-600">
-        <p>{children}</p>
-        {elsewhere && <p className="text-ink-400">{elsewhere}</p>}
-        {links && links.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 pt-0.5">
-            {links.map((l) => (
-              <button
-                key={l.label}
-                type="button"
-                onClick={l.onClick}
-                className="rounded-full bg-white px-2.5 py-1 text-[11px] font-semibold text-brand-700 ring-1 ring-inset ring-brand-200 transition hover:bg-brand-50"
-              >
-                {l.label} →
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+    <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-ink-500">
+      {links.map((l) => (
+        <button
+          key={l.label}
+          type="button"
+          onClick={l.onClick}
+          className="hover:text-ink-800 hover:underline"
+        >
+          {l.label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -201,4 +231,56 @@ export function fmtMoney(amount: number, currency: string): string {
   } catch {
     return `${amount.toFixed(2)} ${currency}`;
   }
+}
+
+/** Overflow (`⋯`) for rare catalog / market jobs. Confirm dialogs carry the risk copy. */
+export function OverflowMenu({
+  children,
+}: {
+  children: ReactNode | ((close: () => void) => ReactNode);
+}) {
+  return (
+    <Popover
+      align="end"
+      panelClassName="w-72 rounded-xl p-1"
+      trigger={
+        <span className="inline-flex size-9 items-center justify-center rounded-xl text-ink-600 hover:bg-ink-100">
+          <MoreHorizontal className="size-4" />
+          <span className="sr-only">More actions</span>
+        </span>
+      }
+    >
+      {(close) => (
+        <div className="flex flex-col py-0.5">
+          {typeof children === "function" ? children(close) : children}
+        </div>
+      )}
+    </Popover>
+  );
+}
+
+export function OverflowItem({
+  label,
+  disabledReason,
+  busy,
+  onSelect,
+}: {
+  label: string;
+  disabledReason?: string | null;
+  busy?: boolean;
+  onSelect: () => void;
+}) {
+  const disabled = Boolean(disabledReason) || busy;
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      title={disabledReason ?? undefined}
+      onClick={onSelect}
+      className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-ink-700 hover:bg-ink-50 disabled:cursor-not-allowed disabled:text-ink-400"
+    >
+      {busy ? <Loader2 className="size-3.5 shrink-0 animate-spin" /> : null}
+      <span>{label}</span>
+    </button>
+  );
 }

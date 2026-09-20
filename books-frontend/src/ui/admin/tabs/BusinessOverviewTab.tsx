@@ -13,7 +13,7 @@ import { freezeTerms, inviteTeaser } from "../../../core/config/referral";
 import type { ProductDefinition } from "../../../core/config/products";
 import { useAdminTab } from "../adminTabStore";
 import { ConfigHealthPanel } from "./ConfigHealthPanel";
-import { TabIntro, fmtMoney } from "./products/parts";
+import { fmtMoney } from "./products/parts";
 
 /**
  * A read-only, at-a-glance picture of the whole business model — every plan,
@@ -83,16 +83,7 @@ export function BusinessOverviewTab() {
   };
 
   return (
-    <div className="space-y-5">
-      <TabIntro>
-        This is the whole business model on one screen — how customers pay you, and what each choice
-        gives them. Everything here is read-only; use the links to jump to the editor for any piece.
-        All amounts are shown in your base currency ({base}).
-      </TabIntro>
-
-      {/* Live cross-config health check: single edits can combine into
-          money-losing setups, so this re-validates the WHOLE economy on every
-          config change and points at the tab to fix. */}
+    <div className="space-y-8">
       <ConfigHealthPanel settings={pricing} sparks={sparks} products={adminProducts} plans={plans} />
 
       {/* Memberships */}
@@ -331,21 +322,21 @@ function OverviewCard({
   children: React.ReactNode;
 }) {
   return (
-    <div className="space-y-3 rounded-xl bg-white p-4 ring-1 ring-inset ring-ink-100">
+    <div className="space-y-3">
       <div className="flex items-start justify-between gap-2">
         <div className="flex items-center gap-2.5">
-          <span className="flex size-8 items-center justify-center rounded-lg bg-brand-50 text-brand-600">
+          <span className="flex size-8 items-center justify-center rounded-md bg-ink-50 text-ink-600">
             {icon}
           </span>
           <div>
             <h3 className="text-sm font-semibold text-ink-900">{title}</h3>
-            <p className="text-[11px] text-ink-400">{subtitle}</p>
+            <p className="text-sm text-ink-500">{subtitle}</p>
           </div>
         </div>
         <button
           type="button"
           onClick={onEdit}
-          className="inline-flex shrink-0 items-center gap-1 rounded-full bg-ink-50 px-2.5 py-1 text-[11px] font-semibold text-ink-600 transition hover:bg-ink-100"
+          className="inline-flex shrink-0 items-center gap-1 text-sm font-medium text-ink-600 transition hover:text-ink-900"
         >
           {editLabel} <ArrowRight className="size-3" />
         </button>

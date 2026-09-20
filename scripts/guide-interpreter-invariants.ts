@@ -45,6 +45,7 @@ import {
 } from "../books-frontend/src/core/guide/playlist";
 import {
   GUIDE_PATCHABLE_SLOT_IDS,
+  guidePatchExampleLines,
   guidePatchShapeLines,
   isGuidePatchableSlot,
   type GuidePatchContext,
@@ -52,9 +53,12 @@ import {
 import {
   activeComponentId,
   buildGuideTurnVars,
+  describeClaimProblems,
   describeGuideFacts,
   sanitizeGuideTurn,
+  type SanitizeGuideTurnOptions,
 } from "../books-frontend/src/core/pipeline/guideInterpret";
+import { claimEvidenceHolds } from "../books-frontend/src/core/guide/claims";
 import { slimProjectForRender } from "../books-frontend/src/core/book/slimProject";
 import { GUIDE_BOOK_STATES } from "./guide-engine-invariants";
 import {
@@ -251,6 +255,119 @@ for (const book of books) {
   }
 }
 
+/**
+ * The repair template, checked the same way but with a different shape of claim.
+ *
+ * It uses a SUBSET of the turn's variables plus two of its own, so the turn's
+ * "everything supplied is used" rule does not apply — the useful version here is
+ * that nothing it references is missing, and nothing it declares goes unsupplied.
+ * A repair prompt with an empty `{{problems}}` would ask the model to correct
+ * mistakes it cannot see, and would look completely normal doing it.
+ */
+{
+  const REPAIR_KEY = "guideInterpret/repair";
+  const repairMeta = action?.templates.find((template) => template.key === REPAIR_KEY);
+  cases += 1;
+  if (!repairMeta) fail(`No admin metadata for the "${REPAIR_KEY}" template.`);
+
+  const turnVars = buildGuideTurnVars({
+    project: books[1]!.project,
+    message: "and Sam is 9",
+    playlist,
+    transcript: [{ role: "guide", text: "Who is this book for?" }],
+    patchContext,
+  });
+  // The two the repair adds, as the pipeline builds them.
+  const repairVars = {
+    ...turnVars,
+    problems: '- heroAges = [{"name":"Sam","age":9}] was refused: no cast member named Sam',
+    kept: '{"heroes":["Maya"]}',
+  };
+
+  const repairReferenced = new Set<string>();
+  const template = defaultTemplate(REPAIR_KEY);
+  const blocks = [...(template.system ?? []), ...(template.user ?? [])];
+  cases += 1;
+  if (blocks.length === 0) fail(`The "${REPAIR_KEY}" template has no blocks.`);
+  for (const block of blocks) {
+    for (const [, isPartial, name] of block.text.matchAll(/\{\{\s*(>?)\s*([\w.-]+)\s*\}\}/g)) {
+      if (!isPartial) repairReferenced.add(name!);
+    }
+  }
+
+  for (const name of repairReferenced) {
+    cases += 1;
+    if (!(name in repairVars)) {
+      fail(`The repair prompt references "{{${name}}}" but the pipeline never supplies it.`);
+    }
+  }
+  if (repairMeta) {
+    const declared = new Set(repairMeta.variables.map((variable) => variable.name));
+    for (const name of repairReferenced) {
+      cases += 1;
+      if (!declared.has(name)) {
+        fail(`The repair prompt uses "${name}" but doesn't declare it for the admin preview.`);
+      }
+    }
+    for (const variable of repairMeta.variables) {
+      cases += 1;
+      if (!(variable.name in repairVars)) {
+        fail(`"${variable.name}" is declared for the repair preview but never supplied.`);
+      }
+    }
+  }
+
+  // The objections have to actually reach it, or the second pass is just a
+  // re-roll of the first with extra latency.
+  const { system, user } = renderTextPrompt(prompts, REPAIR_KEY, { vars: repairVars });
+  cases += 1;
+  if (!user.includes("no cast member named Sam")) {
+    fail("The validator's objection doesn't reach the repair prompt.");
+  }
+  cases += 1;
+  if (system.trim().length < 200) {
+    fail(`The repair system prompt is only ${system.trim().length} chars.`);
+  }
+}
+
+/**
+ * The worked examples reach the prompt, and they are the validator's own.
+ *
+ * They are generated from the writers so they cannot describe a shape the
+ * validator refuses (`guide-engine-invariants.ts` parses each one against its
+ * slot's schema). What is checked here is the other half: that they actually
+ * arrive, because an examples block that renders empty leaves a prompt that reads
+ * perfectly and teaches the model nothing.
+ */
+{
+  const examples = guidePatchExampleLines();
+  cases += 1;
+  if (examples.split("\n").filter(Boolean).length < 5) {
+    fail(`Only ${examples.split("\n").filter(Boolean).length} worked examples reach the prompt.`);
+  }
+  cases += 1;
+  if (!examples.includes("Micah and Neil, both 5 years old")) {
+    fail(
+      "The message that started this work is not among the worked examples. It is the " +
+        "canonical shared-age sentence; if anything regresses, it should be this.",
+    );
+  }
+  for (const book of books) {
+    const vars = buildGuideTurnVars({
+      project: book.project,
+      message: "Micah and Neil, both 5",
+      playlist,
+      transcript: [],
+      patchContext,
+    });
+    const { system } = renderTextPrompt(prompts, TEMPLATE_KEY, { vars });
+    cases += 1;
+    if (!system.includes("Micah and Neil")) {
+      fail(`The worked examples don't reach the assembled prompt for a ${book.name} book.`);
+    }
+  }
+}
+
 // Facts are described for every slot, always — a slot missing from the rundown is
 // one the interpreter can't see, so it re-asks a question already answered.
 for (const book of books) {
@@ -351,13 +468,31 @@ for (const { name, project: full } of GUIDE_BOOK_STATES) {
 const optional = GUIDE_COMPONENT_IDS.filter((id) => GUIDE_COMPONENTS[id].skippable);
 const required = GUIDE_COMPONENT_IDS.filter((id) => !GUIDE_COMPONENTS[id].skippable);
 
+const fresh = books[0]!.project;
+const known = books[1]!.project; // has Maya, age 5
+
+/** The sanitizer's non-model arguments, for a book and the message being read. */
+function reading(message: string, on: Project = fresh): SanitizeGuideTurnOptions {
+  return { playlist, message, project: on, patchContext };
+}
+
+/** One claim, with its evidence defaulting to something the message contains. */
+function claim(
+  slot: string,
+  value: unknown,
+  evidence: string,
+  confidence = 0.95,
+): { slot: string; value: unknown; evidence: string; confidence: number } {
+  return { slot, value, evidence, confidence };
+}
+
 // A skip may only name a real, optional component. Everything else is dropped
 // silently — the engine then asks the question again, which is the right outcome.
 {
   const junk = ["", "story-cast ", "STORY-IDEA", "__proto__", "constructor", "nope"];
   const result = sanitizeGuideTurn(
     { intent: "skip", skip: [...junk, ...required], reply: "Sure.", confidence: 0.9 },
-    playlist,
+    reading("skip that"),
   );
   cases += 1;
   if (result.skip.length > 0) {
@@ -367,7 +502,7 @@ const required = GUIDE_COMPONENT_IDS.filter((id) => !GUIDE_COMPONENTS[id].skippa
 for (const id of optional) {
   const result = sanitizeGuideTurn(
     { intent: "skip", skip: [id], reply: "No problem.", confidence: 0.9 },
-    playlist,
+    reading("skip that"),
   );
   cases += 1;
   if (!result.skip.includes(id)) fail(`A skip of the optional component "${id}" was dropped.`);
@@ -379,52 +514,11 @@ for (const id of optional) {
   if (twice) {
     const result = sanitizeGuideTurn(
       { intent: "skip", skip: [twice, twice], reply: "Ok.", confidence: 0.9 },
-      playlist,
+      reading("skip that"),
     );
     cases += 1;
     if (result.skip.length !== 1) fail("A repeated skip wasn't collapsed.");
   }
-}
-
-// Only a turn claiming to state a fact may carry one. A greeting or a question
-// that arrives with a patch is a model filling in blanks it was never given.
-{
-  const patch = { heroes: ["Maya"], heroAges: [{ name: "Maya", age: 5 }] };
-  for (const intent of ["question", "other", "skip"] as const) {
-    const result = sanitizeGuideTurn(
-      { intent, patch, reply: "Hello!", confidence: 0.9 },
-      playlist,
-    );
-    cases += 1;
-    if (Object.keys(result.patch).length > 0) {
-      fail(`A "${intent}" turn carried a patch, so a guess reached the book.`);
-    }
-  }
-  for (const intent of ["answer", "revise"] as const) {
-    const result = sanitizeGuideTurn(
-      { intent, patch, reply: "Got it.", confidence: 0.9 },
-      playlist,
-    );
-    cases += 1;
-    if (Object.keys(result.patch).length !== 2) {
-      fail(`A "${intent}" turn lost the facts it stated.`);
-    }
-  }
-}
-
-// An absent patch is an empty one, never undefined — every caller passes this
-// straight to `applyGuidePatch`.
-{
-  const result = sanitizeGuideTurn(
-    { intent: "answer", reply: "Ok.", confidence: 0.5 },
-    playlist,
-  );
-  cases += 1;
-  if (typeof result.patch !== "object" || result.patch === null) {
-    fail("A turn with no patch didn't produce an empty object.");
-  }
-  cases += 1;
-  if (result.skip.length !== 0) fail("A turn with no skips didn't produce an empty list.");
 }
 
 // A playlist that switched a component off can't be skipped past — there is
@@ -434,11 +528,355 @@ for (const id of optional) {
   const trimmed = playlist.filter((component) => component.id !== optional[0]);
   const result = sanitizeGuideTurn(
     { intent: "skip", skip: [optional[0]!], reply: "Ok.", confidence: 0.9 },
-    trimmed,
+    { ...reading("skip that"), playlist: trimmed },
   );
   cases += 1;
   if (result.skip.length > 0) {
     fail("A skip named a component that isn't in this reader's playlist.");
+  }
+}
+
+// --- Claims: the one the whole rewrite is for -------------------------------
+
+/**
+ * THE regression test.
+ *
+ * "Micah and Neil, both 5 years old" is the message that produced "I didn't quite
+ * catch that" in the screenshot this work started from. Nothing about it is
+ * ambiguous; it failed because the extraction was all-or-nothing, so one slot
+ * failing to validate discarded the other.
+ *
+ * Checked as claims rather than as a patch, and with a deliberately broken third
+ * claim in the same turn, because the property that matters is not "this sentence
+ * works now" — it is that a bad claim can no longer take a good one down with it.
+ */
+{
+  const message = "Micah and Neil, both 5 years old";
+  const result = sanitizeGuideTurn(
+    {
+      intent: "answer",
+      claims: [
+        claim("heroes", ["Micah", "Neil"], "Micah and Neil"),
+        claim(
+          "heroAges",
+          [
+            { name: "Micah", age: 5 },
+            { name: "Neil", age: 5 },
+          ],
+          "both 5 years old",
+        ),
+        claim("audience", { ageRangeId: "no-such-band" }, "Micah and Neil", 0.9),
+      ],
+      reply: "Micah and Neil, both five.",
+      confidence: 0.95,
+    },
+    reading(message),
+  );
+
+  cases += 1;
+  if (!("heroes" in result.patch) || !("heroAges" in result.patch)) {
+    fail(
+      `"${message}" produced ${JSON.stringify(Object.keys(result.patch))}; both the names ` +
+        `and the ages have to survive a third claim being wrong.`,
+    );
+  }
+  cases += 1;
+  if (result.patch.audience !== undefined) {
+    fail("An age band that does not exist reached the patch.");
+  }
+  cases += 1;
+  if (!result.refused.some((r) => r.slot === "audience" && r.refusal === "rejected")) {
+    fail("A claim the validator would refuse was dropped without being recorded.");
+  }
+}
+
+/**
+ * Evidence is the hallucination guard, and it is the only one that does not
+ * depend on the model cooperating.
+ *
+ * A claim quoting words the reader never typed is thrown away whatever its
+ * confidence says — a confidently invented age is worse than an unsure one, not
+ * better, because nothing downstream will question it.
+ */
+{
+  const result = sanitizeGuideTurn(
+    {
+      intent: "answer",
+      claims: [
+        claim("heroes", ["Maya"], "Maya"),
+        claim("heroAges", [{ name: "Maya", age: 5 }], "she is five years old", 1),
+      ],
+      reply: "Maya, five.",
+      confidence: 0.9,
+    },
+    reading("it's for Maya"),
+  );
+  cases += 1;
+  if ("heroAges" in result.patch) {
+    fail("An age the reader never stated was applied because the model sounded sure.");
+  }
+  cases += 1;
+  if (!result.refused.some((r) => r.slot === "heroAges" && r.refusal === "unsupported")) {
+    fail("An unsupported claim wasn't recorded as unsupported.");
+  }
+  cases += 1;
+  if (!("heroes" in result.patch)) {
+    fail("The supported claim in the same turn was lost along with the invented one.");
+  }
+}
+
+// Quoting loosely is fine; quoting something else is not. Punctuation, case and
+// spacing are not evidence, so a model copying the words correctly must not be
+// punished for dropping a comma.
+{
+  const message = "Micah and Neil, both 5 years old!";
+  for (const [quote, holds] of [
+    ["Micah and Neil", true],
+    ["micah and neil,", true],
+    ["both  5 years   old", true],
+    ["Micah and Neil, both 5 years old!", true],
+    ["Neil and Micah", false],
+    ["both 6 years old", false],
+    ["", false],
+    ["Mic", false],
+  ] as [string, boolean][]) {
+    cases += 1;
+    if (claimEvidenceHolds(message, quote) !== holds) {
+      fail(`Evidence "${quote}" against "${message}" should ${holds ? "hold" : "not hold"}.`);
+    }
+  }
+}
+
+/**
+ * Only a turn claiming to state a fact may carry one.
+ *
+ * Evidence verification catches most invention but not this: "what ages do you
+ * support?" really does contain the word "ages", so a claim about the audience
+ * quoting it passes the evidence check while being the opposite of what was meant.
+ *
+ * What is new is the second half — the loss has to be RECORDED. Dropping these
+ * silently made a misclassified intent indistinguishable in the log from a model
+ * that extracted nothing, and those have completely different fixes.
+ */
+{
+  const claims = [claim("heroes", ["Maya"], "Maya")];
+  for (const intent of ["question", "other", "skip"] as const) {
+    const result = sanitizeGuideTurn(
+      { intent, claims, reply: "Hello!", confidence: 0.9 },
+      reading("is Maya a good name?"),
+    );
+    cases += 1;
+    if (Object.keys(result.patch).length > 0) {
+      fail(`A "${intent}" turn carried a fact, so a guess reached the book.`);
+    }
+    cases += 1;
+    if (!result.refused.some((r) => r.refusal === "not-a-statement")) {
+      fail(`A "${intent}" turn dropped its claims without recording why.`);
+    }
+  }
+  for (const intent of ["answer", "revise"] as const) {
+    const result = sanitizeGuideTurn(
+      { intent, claims, reply: "Got it.", confidence: 0.9 },
+      reading("it's for Maya"),
+    );
+    cases += 1;
+    if (!("heroes" in result.patch)) fail(`A "${intent}" turn lost the fact it stated.`);
+  }
+}
+
+// An absent claim list is an empty patch, never undefined — every caller passes
+// this straight to `applyGuidePatch`.
+{
+  const result = sanitizeGuideTurn(
+    { intent: "answer", reply: "Ok.", confidence: 0.5 },
+    reading("hello"),
+  );
+  cases += 1;
+  if (typeof result.patch !== "object" || result.patch === null) {
+    fail("A turn with no claims didn't produce an empty object.");
+  }
+  cases += 1;
+  if (result.skip.length !== 0) fail("A turn with no skips didn't produce an empty list.");
+  cases += 1;
+  if (result.refused.length !== 0) fail("A turn with no claims invented a refusal.");
+}
+
+// A field that isn't a writable fact dies on its own, and says so.
+for (const slot of ["price", "isAdmin", "__proto__", "storyDraft", "nonsense"]) {
+  const result = sanitizeGuideTurn(
+    {
+      intent: "answer",
+      claims: [claim(slot, "x", "Maya"), claim("heroes", ["Maya"], "Maya")],
+      reply: "Ok.",
+      confidence: 0.9,
+    },
+    reading("it's for Maya"),
+  );
+  cases += 1;
+  // `Object.hasOwn`, not `in`: `"__proto__" in {}` is true for every object, so
+  // `in` cannot tell "the patch carries this key" from "every object inherits it".
+  // That is the same confusion `isGuidePatchableSlot` used to make.
+  if (Object.hasOwn(result.patch, slot)) fail(`A claim on "${slot}" reached the patch.`);
+  cases += 1;
+  if (!result.refused.some((r) => r.slot === slot && r.refusal === "unknown-slot")) {
+    fail(`A claim on "${slot}" wasn't recorded as an unknown slot.`);
+  }
+  cases += 1;
+  if (!("heroes" in result.patch)) {
+    fail(`A claim on "${slot}" took a good claim down with it.`);
+  }
+}
+
+// Below the floor is not worth acting on, however plainly it is quoted.
+{
+  const result = sanitizeGuideTurn(
+    {
+      intent: "answer",
+      claims: [claim("heroes", ["Maya"], "Maya", 0.1)],
+      reply: "Maya?",
+      confidence: 0.4,
+    },
+    reading("maybe Maya, I'm not sure"),
+  );
+  cases += 1;
+  if ("heroes" in result.patch) fail("A claim below the confidence floor was applied.");
+  cases += 1;
+  if (!result.refused.some((r) => r.refusal === "low-confidence")) {
+    fail("A claim below the floor wasn't recorded as low-confidence.");
+  }
+}
+
+// Two claims for one slot resolve to the more confident one, rather than merging
+// into a third value that neither the reader nor the model proposed.
+{
+  const result = sanitizeGuideTurn(
+    {
+      intent: "answer",
+      claims: [
+        claim("heroes", ["Maya"], "Maya", 0.6),
+        claim("heroes", ["Maya", "Leo"], "Maya and Leo", 0.95),
+      ],
+      reply: "Maya and Leo.",
+      confidence: 0.9,
+    },
+    reading("Maya and Leo"),
+  );
+  cases += 1;
+  if (JSON.stringify(result.patch.heroes) !== JSON.stringify(["Maya", "Leo"])) {
+    fail(`Duplicate claims resolved to ${JSON.stringify(result.patch.heroes)}.`);
+  }
+  cases += 1;
+  if (!result.refused.some((r) => r.refusal === "superseded")) {
+    fail("The losing duplicate wasn't recorded.");
+  }
+}
+
+/**
+ * Blast radius, not confidence alone.
+ *
+ * The same 0.6 means two different things depending on what it would do. Filling
+ * an empty slot at 0.6 is a cheap mistake the reader corrects in the next breath.
+ * Overwriting a name they settled earlier at 0.6 is expensive — by the time
+ * anyone notices, the cast sheets have been drawn from it — so it is asked about
+ * first, and the question is a real sentence rather than a silent hold.
+ */
+{
+  const overwrite = sanitizeGuideTurn(
+    {
+      intent: "revise",
+      claims: [claim("heroes", ["Mya"], "Mya", 0.6)],
+      reply: "Mya?",
+      confidence: 0.7,
+    },
+    reading("actually it's Mya", known),
+  );
+  cases += 1;
+  if ("heroes" in overwrite.patch) {
+    fail("A middling-confidence claim overwrote a settled fact without asking.");
+  }
+  cases += 1;
+  if (!overwrite.confirm) {
+    fail("A held-back overwrite produced no question, so the reader can never approve it.");
+  }
+  cases += 1;
+  if (overwrite.confirm && !/\?$/.test(overwrite.confirm)) {
+    fail(`A confirmation isn't phrased as a question: "${overwrite.confirm}".`);
+  }
+
+  // The same claim, stated plainly, goes straight through.
+  const sure = sanitizeGuideTurn(
+    {
+      intent: "revise",
+      claims: [claim("heroes", ["Mya"], "Mya", 0.97)],
+      reply: "Mya it is.",
+      confidence: 0.95,
+    },
+    reading("actually it's Mya", known),
+  );
+  cases += 1;
+  if (!("heroes" in sure.patch)) fail("A confident correction was held back anyway.");
+
+  // And the same middling confidence FILLING a slot is applied — read back, not
+  // held. Nothing is being taken away from the reader, so asking would be noise.
+  const fill = sanitizeGuideTurn(
+    {
+      intent: "answer",
+      claims: [claim("heroes", ["Mya"], "Mya", 0.6)],
+      reply: "Mya?",
+      confidence: 0.7,
+    },
+    reading("it's for Mya", fresh),
+  );
+  cases += 1;
+  if (!("heroes" in fill.patch)) fail("A middling claim filling an empty slot was held back.");
+  cases += 1;
+  if (!fill.readBack.includes("heroes")) {
+    fail("A middling claim was applied without being read back to the reader.");
+  }
+}
+
+// --- The repair loop reads back a usable objection ---------------------------
+
+/**
+ * The repair prompt is only worth a round trip if it says something specific. A
+ * model told "some claims were invalid" produces a second guess; one told
+ * `heroAges: no cast member named Sam` produces a correction.
+ */
+{
+  const result = sanitizeGuideTurn(
+    {
+      intent: "answer",
+      claims: [claim("heroAges", [{ name: "Sam", age: 9 }], "Sam is 9")],
+      reply: "Sam, nine.",
+      confidence: 0.9,
+    },
+    reading("and Sam is 9", known),
+  );
+  const problems = describeClaimProblems(result.refused);
+  cases += 1;
+  if (!problems.includes("heroAges")) {
+    fail(`The repair prompt doesn't name the slot that failed: "${problems}".`);
+  }
+  cases += 1;
+  if (!problems.includes("Sam")) {
+    fail(`The repair prompt doesn't quote what was refused: "${problems}".`);
+  }
+
+  // Refusals a second attempt cannot fix must NOT be sent back. Asking a model to
+  // try again at something it already said it was unsure about is how an unsure
+  // guess becomes a confident one with no new information behind it.
+  const unsure = sanitizeGuideTurn(
+    {
+      intent: "answer",
+      claims: [claim("heroes", ["Maya"], "Maya", 0.05)],
+      reply: "Maya?",
+      confidence: 0.3,
+    },
+    reading("maybe Maya"),
+  );
+  cases += 1;
+  if (describeClaimProblems(unsure.refused) !== "") {
+    fail("A low-confidence claim was sent back for repair.");
   }
 }
 

@@ -44,7 +44,7 @@ import {
   isBriefReady,
 } from "../story/brief";
 import type { Project } from "../types";
-import type { GuideSlotId } from "./slots";
+import { GUIDE_SLOTS, type GuideSlotId } from "./slots";
 
 export const GUIDE_COMPONENT_IDS = [
   "story-mode",
@@ -365,6 +365,20 @@ export function guideComponent(id: GuideComponentId): GuideComponent {
 
 export function isGuideComponentId(value: unknown): value is GuideComponentId {
   return typeof value === "string" && value in GUIDE_COMPONENTS;
+}
+
+/**
+ * Whether this component is answered by the reader typing something.
+ *
+ * True when it owns at least one fact slot. The rest — `cast-looks`,
+ * `page-plan`, `page-art`, `story-approve` — own artifacts or nothing: the guide
+ * narrates them while they run and then asks for a yes, and neither of those
+ * lines is a question about the book. Anywhere that lets an admin word a
+ * question should ask this first, so the field is offered only where it can be
+ * spoken.
+ */
+export function componentTakesAnswers(component: GuideComponent): boolean {
+  return component.slots.some((slot) => GUIDE_SLOTS[slot].kind === "fact");
 }
 
 /**

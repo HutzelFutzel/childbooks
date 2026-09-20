@@ -20,7 +20,6 @@ import {
   guidePatchContext,
   type GuidePatchRejection,
 } from "../core/guide/patch";
-import { peopleListPatch } from "../core/guide/parsePeople";
 import type { GuideSlotId } from "../core/guide/slots";
 import type { GuideComponentId } from "../core/guide/components";
 import type { GuideTurn, GuideTurnIntent } from "../core/pipeline/guideInterpret";
@@ -33,12 +32,24 @@ export interface GuideTurnOutcome {
   intent: GuideTurnIntent;
   /** What to say back to the reader. */
   reply: string;
-  /** Slots that actually changed the book. A restated fact reports nothing. */
+  /** Slots that actually changed the book. */
   applied: GuideSlotId[];
-  /** Proposals refused by the validator. Worth logging, rarely worth showing. */
+  /**
+   * Slots the reader restated correctly — the book already held this value.
+   *
+   * Reported separately from `applied` so the conversation can confirm rather than
+   * deny. Lumping the two together as "didn't land" is what made the guide answer
+   * a correct restatement with "I didn't quite catch that".
+   */
+  unchanged: GuideSlotId[];
+  /** Proposals refused by the validator. Worth logging; sometimes worth saying. */
   rejected: GuidePatchRejection[];
   /** Components the reader declined. The caller owns the skip set. */
   skip: GuideComponentId[];
+  /** A question to ask before changing a settled fact, when one is pending. */
+  confirm: string | null;
+  /** Slots to name out loud because the model was only moderately sure. */
+  readBack: GuideSlotId[];
   confidence: number;
   /** The server's turn-log id, for quoting in a bug report. */
   turnId: string | null;
@@ -66,25 +77,24 @@ export async function sendGuideTurn(
   const project = useProjectsStore.getState().current();
   if (!project) throw new Error("No book is open.");
 
-  const { audience, artStyles } = useAppConfigStore.getState();
-  const context = guidePatchContext({ audience, artStyles });
+  const { audience, artStyles, storyCraft } = useAppConfigStore.getState();
+  const context = guidePatchContext({ audience, artStyles, storyCraft });
 
-  // A typed name+age list is too regular to wait on the interpreter. The model
-  // often classifies "maya 3, thorsten 1, nils 2" as chat, returns no patch, and
-  // the guide says it didn't catch that. When the shape is already a list, write
-  // it here and skip the round trip.
-  const parsed = peopleListPatch(message);
-  if (parsed) {
-    return applyTurnPatch(parsed, {
-      intent: "answer",
-      reply: "",
-      skip: [],
-      confidence: 1,
-      turnId: null,
-      context,
-    });
-  }
-
+  /**
+   * There is no fast path any more.
+   *
+   * There used to be a regex here that recognised "maya 3, thorsten 1, nils 2"
+   * and wrote it without a round trip. It was added because the interpreter
+   * classified that shape as chat — a real problem, fixed in the prompt and the
+   * examples rather than routed around. What the regex cost was worse than the
+   * latency it saved: "Micah and Neil, both 5 years old" does not match it, so
+   * the message fell through to an interpreter whose prompt had been tuned
+   * assuming the regex would catch lists, and the reader was told they had not
+   * been understood. Two parsers, each assuming the other handled the case.
+   *
+   * One path now. Slower by a round trip on a handful of messages, and it reads
+   * every message the same way.
+   */
   const result = await interpretGuideTurnRemote(
     project,
     message,
@@ -99,6 +109,8 @@ export async function sendGuideTurn(
     intent: result.intent,
     reply: result.reply,
     skip: result.skip,
+    confirm: result.confirm ?? null,
+    readBack: result.readBack ?? [],
     confidence: result.confidence,
     turnId: result.turnId,
     context,
@@ -111,12 +123,15 @@ async function applyTurnPatch(
     intent: GuideTurnIntent;
     reply: string;
     skip: GuideComponentId[];
+    confirm: string | null;
+    readBack: GuideSlotId[];
     confidence: number;
     turnId: string | null;
     context: ReturnType<typeof guidePatchContext>;
   },
 ): Promise<GuideTurnOutcome> {
   let applied: GuideSlotId[] = [];
+  let unchanged: GuideSlotId[] = [];
   let rejected: GuidePatchRejection[] = [];
   let before: Record<string, unknown> = {};
   // Applied inside the mutator, against the project as it is at write time rather
@@ -127,6 +142,7 @@ async function applyTurnPatch(
       before = captureGuideFacts(live);
       const outcome = applyGuidePatch(live, patch, meta.context);
       applied = outcome.applied;
+      unchanged = outcome.unchanged;
       rejected = outcome.rejected;
       return outcome.project;
     });
@@ -136,8 +152,11 @@ async function applyTurnPatch(
     intent: meta.intent,
     reply: meta.reply,
     applied,
+    unchanged,
     rejected,
     skip: meta.skip,
+    confirm: meta.confirm,
+    readBack: meta.readBack,
     confidence: meta.confidence,
     turnId: meta.turnId,
     before,

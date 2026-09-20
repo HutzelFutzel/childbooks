@@ -55,10 +55,11 @@ import {
 } from "../books-frontend/src/core/guide/engine";
 import {
   applyGuidePatch,
+  captureGuideFacts,
+  guideSlotExamples,
   GUIDE_PATCHABLE_SLOT_IDS,
   type GuidePatchContext,
 } from "../books-frontend/src/core/guide/patch";
-import { peopleListPatch } from "../books-frontend/src/core/guide/parsePeople";
 import {
   createDefaultConfig,
   type Anchor,
@@ -68,7 +69,12 @@ import {
   type ScreenplaySpread,
   type StoryCastMember,
 } from "../books-frontend/src/core/types";
-import { createDefaultStoryBrief } from "../books-frontend/src/core/story/brief";
+import {
+  briefBlockers,
+  castPromptLines,
+  createDefaultStoryBrief,
+  isBriefReady,
+} from "../books-frontend/src/core/story/brief";
 import { createVersionTree } from "../books-frontend/src/core/versioning";
 import { AGE_RANGES, ART_STYLE_PRESETS } from "../books-frontend/src/core/config/options";
 import { BOOK_PRODUCTS } from "../books-frontend/src/core/fulfillment";
@@ -787,6 +793,75 @@ for (const input of [null, undefined, 42, "heroes", [], true]) {
     if (result.applied.length > 0) {
       fail(`A patch set "${slot}" to ${JSON.stringify(value)}, which is outside the declared world.`);
     }
+    /**
+     * And it has to say so. Refusing silently is how an out-of-world id became
+     * invisible: not applied, not rejected, absent from the turn log, and reported
+     * to the reader as "I didn't quite catch that" — which is a lie about a value
+     * we understood perfectly and simply do not allow.
+     */
+    if (!result.rejected.some((rejection) => rejection.key === slot)) {
+      fail(
+        `"${slot}" = ${JSON.stringify(value)} was dropped without a rejection. ` +
+          `A refused write must be reported, or nothing downstream can see it.`,
+      );
+    }
+    if (result.unchanged.includes(slot)) {
+      fail(`"${slot}" = ${JSON.stringify(value)} was reported as an unchanged value.`);
+    }
+  }
+}
+
+/**
+ * Restating a fact the book already holds is `unchanged`, never a rejection and
+ * never a silent nothing.
+ *
+ * The distinction the whole three-valued outcome exists for. Every writable slot
+ * is set, then set again to the same value, and the second write has to report
+ * itself as unchanged — that is what lets the conversation confirm instead of
+ * denying comprehension.
+ */
+{
+  const settled: [GuideSlotId, unknown][] = [
+    ["storyMode", "guided"],
+    ["heroes", ["Maya", "Leo"]],
+    ["storyIdea", { customTheme: "a lost balloon" }],
+    ["storyText", "Once upon a time."],
+    ["layout", fresh.config.layoutId],
+  ];
+  for (const [slot, value] of settled) {
+    const first = applyGuidePatch(fresh, { [slot]: value }, patchContext);
+    const again = applyGuidePatch(first.project, { [slot]: value }, patchContext);
+    cases += 1;
+    if (again.applied.includes(slot)) {
+      fail(`Restating "${slot}" reported a change that did not happen.`);
+    }
+    if (again.rejected.some((rejection) => rejection.key === slot)) {
+      fail(`Restating "${slot}" — the book's own value — was refused.`);
+    }
+    if (!again.unchanged.includes(slot)) {
+      fail(
+        `Restating "${slot}" reported neither a change nor "unchanged", so the guide ` +
+          `cannot tell a correct restatement from a misunderstanding.`,
+      );
+    }
+  }
+}
+
+/**
+ * Every worked example in the prompt has to satisfy the schema that will judge it.
+ *
+ * The examples are the model's instructions. One that would be rejected teaches the
+ * model to produce rejected patches, and the failure is invisible — the prompt reads
+ * fine and the extraction quietly gets worse.
+ */
+for (const { slot, example, schema } of guideSlotExamples()) {
+  cases += 1;
+  const parsed = schema.safeParse(example.value);
+  if (!parsed.success) {
+    fail(
+      `The "${slot}" example for "${example.said}" does not satisfy its own schema: ` +
+        `${parsed.error.issues[0]?.message ?? "invalid"}.`,
+    );
   }
 }
 
@@ -822,9 +897,30 @@ for (const input of [null, undefined, 42, "heroes", [], true]) {
   if (members.length !== 2) fail(`Re-stating the cast produced ${members.length} members.`);
   if (members[0]?.age !== 5) fail("Re-stating the cast lost an age already given.");
   if (members[1]?.name !== "Ada") fail("Re-stating the cast didn't add the new name.");
-  // And an age for someone who isn't there does nothing.
+  // And an age for someone who isn't there does nothing — but says so, because a
+  // misheard name is the likeliest cause and only the reader can correct it.
   const ghost = applyGuidePatch(restated, { heroAges: [{ name: "Sam", age: 9 }] }, patchContext);
+  cases += 1;
   if (ghost.applied.length > 0) fail("An age for a name not in the cast was applied.");
+  if (!ghost.rejected.some((rejection) => rejection.key === "heroAges" && rejection.speak)) {
+    fail("An age for a name not in the cast was dropped without anything to tell the reader.");
+  }
+
+  // A turn naming one person the book knows and one it does not keeps the good half
+  // and reports the rest, rather than losing both or accepting a stranger.
+  const mixed = applyGuidePatch(
+    restated,
+    { heroAges: [{ name: "Maya", age: 6 }, { name: "Sam", age: 9 }] },
+    patchContext,
+  );
+  cases += 1;
+  if (!mixed.applied.includes("heroAges")) fail("A partly-resolvable age list applied nothing.");
+  if ((mixed.project.config.storyBrief?.cast ?? [])[0]?.age !== 6) {
+    fail("A partly-resolvable age list didn't store the age it could resolve.");
+  }
+  if (!mixed.rejected.some((rejection) => rejection.key === "heroAges")) {
+    fail("A partly-resolvable age list swallowed the name it could not resolve.");
+  }
 }
 
 // A no-op write is not an edit. Undo history and staleness both key off changes,
@@ -858,32 +954,16 @@ for (const input of [null, undefined, 42, "heroes", [], true]) {
   if (JSON.stringify(fresh) !== before) fail("applyGuidePatch mutated the project it was given.");
 }
 
-// Compressed name+age lists, and the object-shaped `heroes` a model often
-// returns instead of string[]. Both have to land without the interpreter —
-// otherwise the guide says it didn't catch a perfectly clear answer.
+/**
+ * `heroes` takes people, not just names.
+ *
+ * Asked who the book is about, a model answers with people, and a person has an
+ * age. That answer used to fail the schema and be rescued by a coercion layer in
+ * front of the validator — one that also ran a regex over `"maya 3"`. The schema
+ * accepts the shape directly now, so what is checked here is that the widened
+ * form really lands, ages and all, rather than being quietly half-applied.
+ */
 {
-  const typed = peopleListPatch("maya 3, thorsten 1, nils 2");
-  cases += 1;
-  if (!typed) fail('peopleListPatch did not claim "maya 3, thorsten 1, nils 2".');
-  else {
-    const result = applyGuidePatch(fresh, typed, patchContext);
-    const members = result.project.config.storyBrief?.cast ?? [];
-    if (members.map((member) => member.name).join(",") !== "Maya,Thorsten,Nils") {
-      fail(`A typed name+age list stored ${JSON.stringify(members.map((m) => m.name))} instead of Maya, Thorsten, Nils.`);
-    }
-    if (members[0]?.age !== 3 || members[1]?.age !== 1 || members[2]?.age !== 2) {
-      fail(`A typed name+age list stored ages ${JSON.stringify(members.map((m) => m.age))}.`);
-    }
-    if (!isComponentSatisfied("story-cast", result.project)) {
-      fail("A typed name+age list didn't satisfy the cast component.");
-    }
-  }
-
-  cases += 1;
-  if (peopleListPatch("It's for Maya, she's 5")) {
-    fail("peopleListPatch claimed a sentence the interpreter should handle.");
-  }
-
   const objects = applyGuidePatch(
     fresh,
     {
@@ -896,21 +976,172 @@ for (const input of [null, undefined, 42, "heroes", [], true]) {
     patchContext,
   );
   cases += 1;
-  if (!objects.applied.includes("heroes") || !objects.applied.includes("heroAges")) {
-    fail(`Object-shaped heroes applied ${objects.applied.join(", ") || "nothing"}.`);
+  if (!objects.applied.includes("heroes")) {
+    fail(`Heroes given as people applied ${objects.applied.join(", ") || "nothing"}.`);
   }
-  if ((objects.project.config.storyBrief?.cast ?? [])[2]?.age !== 2) {
-    fail("Object-shaped heroes didn't copy ages onto the cast.");
+  const cast = objects.project.config.storyBrief?.cast ?? [];
+  if (cast.map((member) => `${member.name}:${member.age}`).join(",") !== "Maya:3,Thorsten:1,Nils:2") {
+    fail(`Heroes given as people stored ${JSON.stringify(cast.map((m) => `${m.name}:${m.age}`))}.`);
+  }
+  cases += 1;
+  if (!isComponentSatisfied("story-cast", objects.project)) {
+    fail("Heroes given with their ages didn't satisfy the cast component.");
   }
 
-  const strings = applyGuidePatch(
+  // Plain names still work, and the two forms mix — a model that knows one age
+  // and not another should not have to choose between telling us both or neither.
+  const mixed = applyGuidePatch(fresh, { heroes: ["Ada", { name: "Leo", ageMonths: 30 }] }, patchContext);
+  cases += 1;
+  const mixedCast = mixed.project.config.storyBrief?.cast ?? [];
+  if (mixedCast.length !== 2 || mixedCast[0]?.age !== undefined || mixedCast[1]?.ageMonths !== 30) {
+    fail(`A mixed name/person list stored ${JSON.stringify(mixedCast)}.`);
+  }
+
+  /**
+   * And re-stating the cast to ADD someone must not blank the ages already given.
+   *
+   * The regression the widened schema makes possible: `heroes` now carries ages,
+   * so a turn sending the complete list without them could plausibly be read as
+   * "these people, ages unknown". An age is only written when this turn supplies
+   * one, and this is the case that says so.
+   */
+  const withAges = applyGuidePatch(fresh, { heroes: [{ name: "Maya", age: 5 }] }, patchContext);
+  const plusSibling = applyGuidePatch(withAges.project, { heroes: ["Maya", "Leo"] }, patchContext);
+  cases += 1;
+  if ((plusSibling.project.config.storyBrief?.cast ?? [])[0]?.age !== 5) {
+    fail("Adding a sibling by name blanked the age already given for the first child.");
+  }
+}
+
+/**
+ * How the children are related is kept, and never gets in the way.
+ *
+ * The chat asks for it in one breath with the names, so it has to land somewhere
+ * the story prompt reads — `role`, the field the wizard's cast editor has always
+ * written. The risk of adding it is the opposite of losing it: a relationship the
+ * reader mentioned in passing must not become a fifth thing the book is waiting
+ * for, and must not be invented on a re-statement that didn't mention it.
+ */
+{
+  const related = applyGuidePatch(
     fresh,
-    { heroes: ["maya 3", "thorsten 1", "nils 2"] },
+    {
+      heroes: [
+        { name: "Maya", age: 6 },
+        { name: "Leo", age: 3, role: "Maya's little brother" },
+      ],
+    },
     patchContext,
   );
   cases += 1;
-  if ((strings.project.config.storyBrief?.cast ?? []).map((m) => `${m.name}:${m.age}`).join(",") !== "Maya:3,Thorsten:1,Nils:2") {
-    fail("String-shaped 'maya 3' heroes weren't coerced into names and ages.");
+  const cast = related.project.config.storyBrief?.cast ?? [];
+  if (cast[1]?.role !== "Maya's little brother") {
+    fail(`A relationship given with the names stored ${JSON.stringify(cast[1]?.role)}.`);
+  }
+  if (cast[0]?.role !== undefined) {
+    fail(`A child nobody described got the role ${JSON.stringify(cast[0]?.role)}.`);
+  }
+
+  // The story prompt is the whole point of keeping it, so it has to be in there.
+  cases += 1;
+  const brief = related.project.config.storyBrief!;
+  if (!castPromptLines(brief).includes("Maya's little brother")) {
+    fail("A relationship the reader gave never reached the story prompt.");
+  }
+
+  // Non-blocking, on both sides: a cast with roles is no more ready than the same
+  // cast without them, and a cast without roles is no less.
+  cases += 1;
+  const unrelated = applyGuidePatch(
+    fresh,
+    {
+      heroes: [
+        { name: "Maya", age: 6 },
+        { name: "Leo", age: 3 },
+      ],
+    },
+    patchContext,
+  );
+  if (isBriefReady(brief) !== isBriefReady(unrelated.project.config.storyBrief!)) {
+    fail("Mentioning how the children are related changed whether the book was ready to make.");
+  }
+  const blockersWith = briefBlockers(brief).join("|");
+  const blockersWithout = briefBlockers(unrelated.project.config.storyBrief!).join("|");
+  if (blockersWith !== blockersWithout) {
+    fail(
+      `A relationship changed what the book is waiting for: "${blockersWith}" vs ` +
+        `"${blockersWithout}".`,
+    );
+  }
+  if (/brother/i.test(blockersWith)) {
+    fail(`A relationship leaked into what the reader is asked for: "${blockersWith}".`);
+  }
+
+  // A turn whose only news is the relationship is a write, not a shrug. Reporting
+  // it unchanged would drop it while the reply claimed the book already knew.
+  cases += 1;
+  const roleOnly = applyGuidePatch(
+    unrelated.project,
+    { heroes: [{ name: "Maya" }, { name: "Leo", role: "Maya's little brother" }] },
+    patchContext,
+  );
+  if (!roleOnly.applied.includes("heroes")) {
+    fail(
+      `Adding only a relationship reported ${roleOnly.unchanged.includes("heroes") ? "unchanged" : "nothing"}, ` +
+        `so it was never stored.`,
+    );
+  }
+  if ((roleOnly.project.config.storyBrief?.cast ?? [])[1]?.role !== "Maya's little brother") {
+    fail("A turn that only gave a relationship didn't store it.");
+  }
+  if ((roleOnly.project.config.storyBrief?.cast ?? [])[0]?.age !== 6) {
+    fail("A turn that only gave a relationship blanked an age.");
+  }
+
+  // And re-listing the cast without it keeps it, the same way ages are kept.
+  cases += 1;
+  const restated = applyGuidePatch(roleOnly.project, { heroes: ["Maya", "Leo"] }, patchContext);
+  if ((restated.project.config.storyBrief?.cast ?? [])[1]?.role !== "Maya's little brother") {
+    fail("Re-stating the cast by name forgot how the children are related.");
+  }
+
+  // An empty role is a model artefact, not an erasure.
+  cases += 1;
+  const blanked = applyGuidePatch(
+    roleOnly.project,
+    { heroes: [{ name: "Maya" }, { name: "Leo", role: "  " }] },
+    patchContext,
+  );
+  if ((blanked.project.config.storyBrief?.cast ?? [])[1]?.role !== "Maya's little brother") {
+    fail("An empty role wiped a relationship the reader had given.");
+  }
+
+  // "Leo, Maya's little brother, is 3" is one sentence, and a model that answers
+  // it with an age claim must not have the relationship stripped on the way in.
+  cases += 1;
+  const alongsideAge = applyGuidePatch(
+    unrelated.project,
+    { heroAges: [{ name: "Leo", age: 4, role: "Maya's little brother" }] },
+    patchContext,
+  );
+  const alongsideCast = alongsideAge.project.config.storyBrief?.cast ?? [];
+  if (alongsideCast[1]?.role !== "Maya's little brother") {
+    fail("A relationship stated alongside an age was dropped instead of stored.");
+  }
+  if (alongsideCast[1]?.age !== 4) {
+    fail("An age stated alongside a relationship didn't land.");
+  }
+
+  // The checkpoint has to carry it, or a jump-back silently rewrites the family.
+  cases += 1;
+  const captured = captureGuideFacts(roleOnly.project);
+  const restoredFrom = applyGuidePatch(fresh, captured, patchContext).project;
+  const restoredCast = restoredFrom.config.storyBrief?.cast ?? [];
+  if (restoredCast[1]?.role !== "Maya's little brother") {
+    fail(
+      `A checkpoint restored ${JSON.stringify(restoredCast.map((m) => m.role))} for the ` +
+        `relationships it captured.`,
+    );
   }
 }
 

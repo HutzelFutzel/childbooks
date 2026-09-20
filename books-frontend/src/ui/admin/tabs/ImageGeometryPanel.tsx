@@ -26,7 +26,6 @@ import { Field, Input } from "../../components/Input";
 import { useReadOnly } from "../../components/ReadOnlyContext";
 import { Select } from "../../components/Select";
 import { cn } from "../../lib/cn";
-import { Section } from "./products/parts";
 
 const NO_OVERRIDES: CapabilityOverrides = {};
 const BOOLEAN_OPTIONS = [
@@ -430,12 +429,9 @@ export function ImageCapabilitiesPanel({
   };
 
   return (
-    <Section
-      title="Image capabilities"
-      hint="Loaded automatically from each validated model profile. Expand a model only when you need details."
-    >
+    <>
       {models.length === 0 ? (
-        <p className="text-xs text-ink-400">Add an image model above to see its capabilities.</p>
+        <p className="text-sm text-ink-400">Add an image model to see its capabilities.</p>
       ) : (
         <div className="space-y-2">
           {models.map((model) => (
@@ -451,6 +447,6 @@ export function ImageCapabilitiesPanel({
           ))}
         </div>
       )}
-    </Section>
+    </>
   );
 }

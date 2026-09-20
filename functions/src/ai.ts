@@ -63,10 +63,11 @@ import {
 import { guidePatchContext } from "../../books-frontend/src/core/guide/patch";
 import { resolveGuidePlaylist } from "../../books-frontend/src/core/guide/playlist";
 import { resolveGuideMode } from "../../books-frontend/src/core/guide/mode";
-import { recordGuideTurn } from "./guideTurns";
+import { recordGuideTurn, recordGuideTurnOutcome } from "./guideTurns";
 import { downloadBlobBase64 } from "./storage";
 import {
   getArtStylesConfig,
+  getStoryCraftConfig,
   getAudienceConfig,
   getGuideConfig,
   getLayoutsConfig,
@@ -122,8 +123,16 @@ function requestDeadline(): AbortSignal {
   return AbortSignal.timeout(REQUEST_BUDGET_MS);
 }
 
-/** Longest chat message the guide will interpret. See the route for why. */
-const MAX_GUIDE_MESSAGE = 2000;
+/**
+ * Longest a single PAST turn may be when replayed as history.
+ *
+ * Not the limit on the message being read — that one is admin-set, because a
+ * parent pasting their own story needs room. History is different: a 40,000
+ * character turn three messages ago is prompt weight we pay for on every
+ * subsequent turn, and its first 2,000 characters say the same thing about what
+ * the conversation is doing.
+ */
+const MAX_GUIDE_TRANSCRIPT_TEXT = 2000;
 
 /** Turns of history the guide sends along, capped so the prompt stays bounded. */
 const MAX_GUIDE_TRANSCRIPT = 12;
@@ -145,7 +154,7 @@ function parseGuideTranscript(raw: unknown): GuideTurn[] {
     const { role, text } = entry as { role?: unknown; text?: unknown };
     if (role !== "reader" && role !== "guide") continue;
     if (typeof text !== "string" || !text.trim()) continue;
-    turns.push({ role, text: text.trim().slice(0, MAX_GUIDE_MESSAGE) });
+    turns.push({ role, text: text.trim().slice(0, MAX_GUIDE_TRANSCRIPT_TEXT) });
   }
   return turns;
 }
@@ -662,18 +671,21 @@ export function registerAiRoutes(app: Express): void {
         res.status(400).json({ error: { message: "There's no message to read." } });
         return;
       }
-      // Bounded before it reaches a prompt: an unbounded paste is a cost we'd pay
-      // per turn, and nothing a person types conversationally needs more room.
-      if (message.length > MAX_GUIDE_MESSAGE) {
-        res.status(400).json({ error: { message: "That message is too long to read at once." } });
-        return;
-      }
-
       // The rollout decides, not the caller. The client's saved toggle is passed
       // as a PREFERENCE, which `resolveGuideMode` only honours for admins — so a
       // customer sending `guidePreference: "guide"` gets the same refusal as one
       // sending nothing.
       const [guide, isAdmin] = await Promise.all([getGuideConfig(), isAdminUid(req.uid!)]);
+
+      // Bounded before it reaches a prompt: an unbounded paste is a cost we'd pay
+      // per turn. The ceiling is admin-set rather than a constant because the one
+      // message we actively ask for — the parent's own story text, pasted — is
+      // 40,000 characters, and a 2,000-character wall built for conversational
+      // turns was rejecting it.
+      if (message.length > guide.extraction.maxMessageChars) {
+        res.status(400).json({ error: { message: "That message is too long to read at once." } });
+        return;
+      }
       const mode = resolveGuideMode({
         rollout: guide.rollout,
         isAdmin,
@@ -692,14 +704,18 @@ export function registerAiRoutes(app: Express): void {
       // needs it to — checked before the call so a refusal costs us nothing.
       await ensureWithinQuota(req.uid!, "guideTurnsPerBook", project.id);
 
-      const [model, prompts, audience, artStyles] = await Promise.all([
+      const [model, prompts, audience, artStyles, storyCraft] = await Promise.all([
         resolveText("guideInterpret"),
         loadPromptContext(),
         getAudienceConfig(),
         getArtStylesConfig(),
+        getStoryCraftConfig(),
       ]);
       const playlist = resolveGuidePlaylist(guide.playlist);
-      const patchContext = guidePatchContext({ audience, artStyles });
+      // The same context the browser will build when it applies the result. It has
+      // to be, or the server's dry run clears a claim the client then refuses —
+      // and the repair loop would be correcting against the wrong rules.
+      const patchContext = guidePatchContext({ audience, artStyles, storyCraft });
       const startedAt = Date.now();
       const { value, events, stats } = await withUsage(() =>
         interpretGuideTurn({
@@ -712,6 +728,9 @@ export function registerAiRoutes(app: Express): void {
           model: model.id,
           providerId: model.provider,
           prompts,
+          thresholds: guide.extraction.thresholds,
+          repairAttempts: guide.extraction.repairAttempts,
+          temperature: guide.extraction.temperature,
           signal: requestDeadline(),
         }),
       );
@@ -744,6 +763,62 @@ export function registerAiRoutes(app: Express): void {
       }).catch(() => null);
 
       res.json({ ...value, turnId });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  /**
+   * What the browser did with the proposal it was given.
+   *
+   * Its own route because the answer is not known when the turn is answered: the
+   * patch is applied client-side, against the live project. Without this, the log
+   * holds only what the model suggested, and the question anyone actually has
+   * — "did the parent's message end up in their book?" — cannot be asked of it.
+   *
+   * Cheap and unmetered. It writes four short arrays onto a row this user already
+   * owns, keyed by an id the server minted for them, so there is nothing here to
+   * ration and no other user's row to reach.
+   */
+  app.post("/ai/guide/outcome", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const { turnId, applied, unchanged, rejected, admittedFailure } = req.body as {
+        turnId?: unknown;
+        applied?: unknown;
+        unchanged?: unknown;
+        rejected?: unknown;
+        admittedFailure?: unknown;
+      };
+      if (typeof turnId !== "string" || !turnId) {
+        res.status(400).json({ error: { message: "No turn to report on." } });
+        return;
+      }
+      const slots = (value: unknown): string[] =>
+        Array.isArray(value)
+          ? value.filter((id): id is string => typeof id === "string").slice(0, 24)
+          : [];
+
+      await recordGuideTurnOutcome({
+        uid: req.uid!,
+        turnId,
+        outcome: {
+          applied: slots(applied),
+          unchanged: slots(unchanged),
+          rejected: Array.isArray(rejected)
+            ? rejected
+                .filter(
+                  (entry): entry is { key: string; reason: string } =>
+                    !!entry &&
+                    typeof entry === "object" &&
+                    typeof (entry as { key?: unknown }).key === "string",
+                )
+                .map((entry) => ({ key: entry.key, reason: String(entry.reason ?? "") }))
+                .slice(0, 24)
+            : [],
+          admittedFailure: admittedFailure === true,
+        },
+      });
+      res.json({ ok: true });
     } catch (err) {
       sendError(res, err);
     }

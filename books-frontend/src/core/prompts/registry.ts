@@ -523,9 +523,18 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
         'Set "intent" to: "answer" when they are responding to what the guide asked; "revise" when they are correcting or changing something already decided (including "actually…", "no, make it…", "change her age"); "skip" when they are declining or deferring ("skip that", "you choose", "doesn\'t matter"); "question" when they are asking YOU something; "other" for chat, greetings and anything off-topic. Only "answer" and "revise" may carry a patch.',
       ),
       blk(
-        "extraction",
-        'Read the whole message, not just the part that answers the question. "It\'s for Maya, she\'s turning 6 next week" states both the name and the age. So does a compressed list like "aren 2 miles 1 and mika 3" — that is three people (Aren, Miles, Mika) with ages 2, 1 and 3. Ages: whole years in "age"; use "ageMonths" only for babies and toddlers, or when they say months. A relative age ("a year older") must be resolved against the current facts into an absolute number. Names: keep their spelling and capitalisation; split "Maya and Leo" into two people. When they name who the book is for, send BOTH "heroes" (the COMPLETE list of names) and "heroAges" (an age for each name you were given). When they re-state who the book is for, send the COMPLETE list of names, not just the new one.',
+        "claims",
+        'Return the facts as a LIST of separate claims, one per field, in "claims". Each claim is {"slot": field name, "value": the value in that field\'s shape, "evidence": the parent\'s own words, "confidence": 0..1}. Keep them separate: a message stating three things is three claims, and one you get wrong must not cost the other two.',
       ),
+      blk(
+        "evidence",
+        'The "evidence" of every claim must be copied VERBATIM from the parent\'s message — the exact words, in their order, in their language. Do not paraphrase it, translate it, correct its spelling, or expand a number into a word. A claim whose evidence is not found in their message is thrown away, so quoting loosely loses the fact. If you cannot point at the words that state something, you are guessing: leave the claim out.',
+      ),
+      blk(
+        "extraction",
+        'Read the whole message, not just the part that answers the question. Ages: whole years in "age"; use "ageMonths" only for babies and toddlers, or when they say months. A relative age ("a year older") must be resolved against the current facts into an absolute number. An age shared between people ("both", "each", "all 4") applies to every person named. Names: keep their spelling and capitalisation; split "Maya and Leo" into two people. When they name who the book is for, claim BOTH "heroes" (the COMPLETE list of names) and "heroAges" (an age for each name you were given). When they re-state who the book is for, send the COMPLETE list of names, not just the new one.',
+      ),
+      blk("examples", "Worked examples:\n{{examples}}"),
       blk(
         "skips",
         'For "skip", list the component ids they are declining in "skip" — only ids from the optional list. If they are declining something required, use intent "answer" with an empty patch and gently explain in the reply why you still need it.',
@@ -536,22 +545,50 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "confidence",
-        'Set "confidence" to how sure you are that the patch reflects what they meant: above 0.8 when they stated it plainly, below 0.5 when you are reading between the lines. Prefer a low confidence and an empty patch over a confident guess.',
+        'Each claim carries its own "confidence": above 0.8 when they stated it plainly, below 0.5 when you are reading between the lines. Rate each fact on its own — "Maya, she\'s probably about six" is a certain name and an uncertain age. A low confidence on a fact that changes something already decided means we ask before changing it, so an honest low number costs the parent one question and a dishonest high one costs them a rewritten book. The separate top-level "confidence" is about the intent only.',
       ),
     ],
     user: [
       blk(
         "state",
-        "What the guide is asking about right now: {{asking}}\nThe facts it wants from this step: {{askingSlots}}\n\nStill missing (fill these in the patch when the message states them; do not ask for them in the reply):\n{{blockers}}\n\nWhat the book already knows:\n{{facts}}",
+        "What the guide is asking about right now: {{asking}}\nThe facts it wants from this step: {{askingSlots}}\n\nStill missing (claim these when the message states them; do not ask for them in the reply):\n{{blockers}}\n\nWhat the book already knows:\n{{facts}}",
       ),
       blk(
         "world",
-        'Fields you may set (anything else is discarded):\n{{writable}}\n\nOptional components the parent may decline: {{skippable}}',
+        'Fields you may claim (anything else is discarded):\n{{writable}}\n\nOptional components the parent may decline: {{skippable}}',
       ),
       blk("history", "Recent conversation:\n{{transcript}}"),
       blk(
         "ask",
-        'The parent just said: "{{message}}"\n\nReturn {"intent": "answer"|"revise"|"skip"|"question"|"other", "patch": {field: value, …}, "skip": ["componentId", …], "reply": "…", "confidence": 0..1}. Omit "patch" and "skip" when they are empty.',
+        'The parent just said: "{{message}}"\n\nReturn {"intent": "answer"|"revise"|"skip"|"question"|"other", "claims": [{"slot": "…", "value": …, "evidence": "…", "confidence": 0..1}, …], "skip": ["componentId", …], "reply": "…", "confidence": 0..1}. Omit "claims" and "skip" when they are empty.',
+      ),
+    ],
+  },
+
+  // core/pipeline/guideInterpret.ts → interpretGuideTurn (second pass)
+  "guideInterpret/repair": {
+    system: [
+      blk(
+        "role",
+        "You are correcting your own reading of one message from a parent describing their children's book. Your first attempt proposed some facts that the book's validator refused. You are seeing the exact objection to each one. Fix what can be fixed and return only the corrected claims. Output JSON only.",
+      ),
+      blk(
+        "how",
+        'Most refusals are a shape problem, not a comprehension problem: a field name that does not exist, an id that is not on the allowed list, a name the book has never heard. Re-read the message and the book\'s current facts, and re-express what the parent actually said in a form the validator takes. If a name was refused because the book does not have that person, check whether you misheard a name it DOES have — and if the parent really is introducing someone new, claim "heroes" with the complete list first.',
+      ),
+      blk(
+        "honesty",
+        "If a refused claim cannot be expressed legally, leave it out. An omitted fact costs one more question; an invented one costs the parent a book they have to notice is wrong. Never repeat a claim unchanged, never lower the bar by claiming something vaguer than they said, and never re-quote evidence that is not in their message word for word.",
+      ),
+    ],
+    user: [
+      blk("facts", "What the book already knows:\n{{facts}}"),
+      blk("world", "Fields you may claim (anything else is discarded):\n{{writable}}"),
+      blk("examples", "Worked examples:\n{{examples}}"),
+      blk("history", "Recent conversation:\n{{transcript}}"),
+      blk(
+        "ask",
+        'The parent said: "{{message}}"\n\nThese claims were accepted and are already applied — do not repeat them:\n{{kept}}\n\nThese were refused:\n{{problems}}\n\nReturn {"claims": [{"slot": "…", "value": …, "evidence": "…", "confidence": 0..1}, …]} containing ONLY corrected replacements for the refused claims. Return an empty list if none can be corrected.',
       ),
     ],
   },
@@ -1583,16 +1620,33 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
         key: "guideInterpret/turn",
         label: "Interpret a message",
         description:
-          "Free text in, facts + reply out. The riskiest edit here is anything that encourages guessing: a wrong fact costs the parent a correction, an empty patch costs one more question.",
+          "Free text in, claims + reply out. The riskiest edit here is anything that encourages guessing: a wrong fact costs the parent a correction, a missing one costs one more question. Weakening the evidence rule is the single most damaging change available on this page — it is the only defence against invented facts that does not rely on the model behaving.",
         variables: [
           V("asking", "The component the guide is on.", "story-cast — Who it's for: The children the book is about, and how old they are."),
           V("askingSlots", "Slots that component wants.", "heroes, heroAges"),
           V("blockers", "What's still missing, in the reader's words.", "- Add Maya’s age to create the story."),
           V("facts", "Every slot's current value.", '- heroes (Who it\'s for): Maya\n- heroAges (Ages): not set'),
           V("writable", "Writable fields and shapes, generated from the validator.", '- heroes: ["Maya", "Leo"] — the COMPLETE list of who the book is about'),
+          V("examples", "Worked examples, generated from the validator.", '- "Micah and Neil, both 5 years old" ⇒ {"heroes": ["Micah","Neil"]}'),
           V("skippable", "Component ids the reader may decline.", '"audience" | "story-idea"'),
           V("transcript", "Recent turns, oldest first.", "Guide: Who is this book for?\nReader: Maya"),
           V("message", "What the reader just typed.", "she's turning 6 next week"),
+        ],
+        sampleFlags: {},
+      },
+      {
+        key: "guideInterpret/repair",
+        label: "Correct a refused reading",
+        description:
+          "Runs only when the first pass proposed something the validator refused, which is a minority of turns. It is shown the objections verbatim and asked to re-express the same facts legally. Encouraging it to try harder here is how a refused guess becomes an applied one — the wording leans on omitting over inventing, deliberately.",
+        variables: [
+          V("facts", "Every slot's current value.", '- heroes (Who it\'s for): Maya\n- heroAges (Ages): not set'),
+          V("writable", "Writable fields and shapes, generated from the validator.", '- heroes: ["Maya", "Leo"] — the COMPLETE list of who the book is about'),
+          V("examples", "Worked examples, generated from the validator.", '- "Micah and Neil, both 5 years old" ⇒ {"heroes": ["Micah","Neil"]}'),
+          V("transcript", "Recent turns, oldest first.", "Guide: Who is this book for?\nReader: Maya"),
+          V("message", "What the reader just typed.", "and Sam is 9"),
+          V("kept", "Claims that were accepted, as JSON.", '{"heroes":["Maya"]}'),
+          V("problems", "The validator's objection to each refused claim.", '- heroAges = [{"name":"Sam","age":9}] (you quoted "Sam is 9") was refused: no cast member named Sam'),
         ],
         sampleFlags: {},
       },

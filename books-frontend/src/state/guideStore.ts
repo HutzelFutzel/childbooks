@@ -35,6 +35,7 @@ import type { GuideChoiceOption, GuideConfirmAction } from "../core/guide/widget
 import { applyGuidePatch, captureGuideFacts, guidePatchContext } from "../core/guide/patch";
 import type { GuideSlotId } from "../core/guide/slots";
 import { sendGuideTurn } from "./guideTurn";
+import { reportGuideTurnOutcomeRemote } from "../platform/aiClient";
 import { useAppConfigStore } from "./appConfigStore";
 import { useProjectsStore } from "./projectsStore";
 import type { Project } from "../core/types";
@@ -244,7 +245,12 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
           ? composeGuideReply({
               acknowledgement: outcome.reply,
               statingFacts,
-              landed: outcome.applied.length > 0 || outcome.skip.length > 0,
+              applied: outcome.applied,
+              unchanged: outcome.unchanged,
+              rejected: outcome.rejected,
+              skipped: outcome.skip.length > 0,
+              confirm: outcome.confirm,
+              readBack: outcome.readBack,
               cursor: at.cursor,
               project: at.project,
             })
@@ -254,6 +260,24 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
           ...(outcome.skip.length > 0 ? { skipped: outcome.skip } : {}),
         });
         set({ sending: false });
+
+        /**
+         * Close the loop on the turn log.
+         *
+         * Sent from here rather than from `sendGuideTurn` because the thing worth
+         * recording is not only what was written but whether we ended up telling
+         * the reader we hadn't understood — and that sentence is composed here.
+         * Those rows are the ones to read first when extraction regresses.
+         */
+        if (outcome.turnId) {
+          reportGuideTurnOutcomeRemote({
+            turnId: outcome.turnId,
+            applied: outcome.applied,
+            unchanged: outcome.unchanged,
+            rejected: outcome.rejected.map((r) => ({ key: r.key, reason: r.reason })),
+            admittedFailure: line.startsWith("I didn't quite catch that"),
+          });
+        }
       } catch (err) {
         // The reader's words stay on screen and are marked, so the composer can
         // offer to send them again rather than making them retype.
@@ -292,8 +316,8 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
         error: null,
       }));
 
-      const { audience, artStyles } = useAppConfigStore.getState();
-      const context = guidePatchContext({ audience, artStyles });
+      const { audience, artStyles, storyCraft } = useAppConfigStore.getState();
+      const context = guidePatchContext({ audience, artStyles, storyCraft });
       let applied: GuideSlotId[] = [];
       let before: Record<string, unknown> = {};
       try {
@@ -374,8 +398,8 @@ export const useGuideStore = create<GuideStoreState>((set, get) => {
 
       set({ sending: true });
 
-      const { audience, artStyles } = useAppConfigStore.getState();
-      const context = guidePatchContext({ audience, artStyles });
+      const { audience, artStyles, storyCraft } = useAppConfigStore.getState();
+      const context = guidePatchContext({ audience, artStyles, storyCraft });
       let applied: GuideSlotId[] = [];
       try {
         await useProjectsStore.getState().patchCurrent((live) => {

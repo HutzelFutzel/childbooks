@@ -31,9 +31,9 @@ import { READING_MODE_IDS, isReadingModeId } from "../config/readingModes";
 import { BOOK_LANGUAGES, isBookLanguageId } from "../config/bookLanguages";
 import { enabledAudienceProfiles, type AudienceConfig } from "../config/audience";
 import { resolveArtStyles, type ArtStylesConfig } from "../config/artStyles";
+import { resolveStoryCraft, type StoryCraftConfig } from "../config/storyCraft";
 import { BOOK_PRODUCTS } from "../fulfillment";
 import { briefOf, newCastMember } from "../story/brief";
-import { parseNamedPeople, type ParsedPerson } from "./parsePeople";
 import type { BookConfig, Project, StoryBrief, StoryCastMember } from "../types";
 import { GUIDE_SLOT_IDS, GUIDE_SLOTS, type GuideSlotId } from "./slots";
 
@@ -49,6 +49,17 @@ export interface GuidePatchContext {
   artStylePresetIds: readonly string[];
   /** Product SKUs the catalog sells. */
   productSkus: readonly string[];
+  /**
+   * Per-band themes and settings (`appConfig/storyCraft`), for validating the
+   * catalog ids a story idea may name.
+   *
+   * Carried as the config rather than as a flat id list because the valid ids
+   * depend on the book's own age band, which is not known when the context is
+   * built. The writer resolves it per project. Absent is not "skip validation" —
+   * `resolveStoryCraft` falls back to the shipped catalog, which is itself a
+   * closed list.
+   */
+  storyCraft?: StoryCraftConfig | null;
 }
 
 /**
@@ -63,6 +74,7 @@ export interface GuidePatchContext {
 export function guidePatchContext(sources: {
   audience?: AudienceConfig | null;
   artStyles?: ArtStylesConfig | null;
+  storyCraft?: StoryCraftConfig | null;
 }): GuidePatchContext {
   return {
     ageBandIds: enabledAudienceProfiles(sources.audience ?? null).map((profile) => profile.id),
@@ -70,33 +82,120 @@ export function guidePatchContext(sources: {
     // Static catalog: the SKUs we can actually print are a property of the print
     // partner, not something an admin sets.
     productSkus: BOOK_PRODUCTS.map((product) => product.sku),
+    storyCraft: sources.storyCraft ?? null,
   };
 }
 
 export interface GuidePatchRejection {
   key: string;
+  /** Why the write was refused, for the turn log. May be technical. */
   reason: string;
+  /**
+   * The same refusal in the reader's words, when there is a useful thing to say.
+   *
+   * Separate from `reason` because most refusals are not worth speaking — a Zod
+   * issue reads like a stack trace — while a few are exactly what the reader needs
+   * to hear ("I don't have a Sam in the story"). Only this field is ever spoken.
+   */
+  speak?: string;
+  /** The values this slot would have accepted, when it is a closed list. */
+  allowed?: readonly string[];
+}
+
+/**
+ * One slot's write, as three outcomes rather than two.
+ *
+ * The distinction between `unchanged` and `rejected` is the whole point. Both used
+ * to be `null`, which meant a reader restating a fact the book already held was
+ * indistinguishable from a model naming an age band that does not exist — and the
+ * conversation told them "I didn't quite catch that" for both. One of those is a
+ * confirmation and the other is a failure, and only the book knows which.
+ */
+export type SlotWrite =
+  | {
+      status: "applied";
+      project: Project;
+      /**
+       * Part of this slot's value that could not be taken, when the rest could.
+       *
+       * A turn naming two children the book knows and one it does not should store
+       * the two and say so about the third — dropping the whole write would lose
+       * good information, and applying it silently would lose the reader's third
+       * child with no trace anywhere.
+       */
+      refusedPart?: Omit<GuidePatchRejection, "key">;
+    }
+  | { status: "unchanged" }
+  | { status: "rejected"; reason: string; speak?: string; allowed?: readonly string[] };
+
+const UNCHANGED: SlotWrite = { status: "unchanged" };
+
+function wrote(project: Project, refusedPart?: Omit<GuidePatchRejection, "key">): SlotWrite {
+  return { status: "applied", project, ...(refusedPart ? { refusedPart } : {}) };
+}
+
+function refused(
+  reason: string,
+  extra: { speak?: string; allowed?: readonly string[] } = {},
+): SlotWrite {
+  return { status: "rejected", reason, ...extra };
 }
 
 export interface GuidePatchResult {
   project: Project;
   /** Slots that changed the book. A no-op write is not reported as applied. */
   applied: GuideSlotId[];
+  /**
+   * Slots whose stated value was already the book's value.
+   *
+   * Reported rather than dropped so the conversation can confirm ("that's what I
+   * have already") instead of denying comprehension. This is the single commonest
+   * way the guide used to call a perfectly understood answer a misunderstanding.
+   */
+  unchanged: GuideSlotId[];
   rejected: GuidePatchRejection[];
 }
 
 const nameSchema = z.string().trim().min(1).max(80);
 const proseSchema = z.string().trim().max(1000);
 
-const ageSchema = z
-  .object({
-    name: nameSchema,
-    age: z.number().int().min(0).max(120).optional(),
-    ageMonths: z.number().int().min(0).max(1200).optional(),
-  })
-  .refine((value) => value.age !== undefined || value.ageMonths !== undefined, {
-    message: "an age in years or months is required",
-  });
+/** Somebody the book is about. The age is optional here; `ageSchema` requires it. */
+const personSchema = z.object({
+  name: nameSchema,
+  age: z.number().int().min(0).max(120).optional(),
+  ageMonths: z.number().int().min(0).max(1200).optional(),
+});
+
+/**
+ * A person plus how they fit in — "big sister", "their dog", "Maya's grandma".
+ *
+ * Accepted on `heroes` and nowhere else. Asked who a book is about, a parent
+ * answers with a family rather than a list of names, and the relationship is
+ * half of what they said: two five-year-olds who are brothers make a different
+ * story from two five-year-olds who just met. `role` already reaches the story
+ * prompt from the wizard's cast editor, so this is the chat catching up with a
+ * field the generator has always used — not a new fact to thread through.
+ *
+ * Free text on purpose. There is no useful closed set for "the new baby" and
+ * "Mum's oldest friend", and it is never read as data: nothing branches on it,
+ * so an odd value is a slightly odd sentence in one prompt.
+ */
+const castMemberSchema = personSchema.extend({
+  role: z.string().trim().max(200).optional(),
+});
+
+/**
+ * An age for a named person. Carries `role` for the same reason `heroes` does —
+ * not because this slot is about relationships, but because "Leo, Maya's little
+ * brother, is 3" is one sentence, and a model that puts the age here will put the
+ * relationship here with it. Zod strips unknown keys, so refusing to name the
+ * field would not reject that claim: it would apply the age and drop the
+ * relationship without anyone being told.
+ */
+const ageSchema = castMemberSchema.refine(
+  (value) => value.age !== undefined || value.ageMonths !== undefined,
+  { message: "an age in years or months is required" },
+);
 
 /**
  * One slot's validate-then-write step, with its value type sealed inside.
@@ -107,6 +206,30 @@ const ageSchema = z
  * closes over the value type instead: each entry is checked against its own
  * schema at the definition site, and only `unknown` crosses the table boundary.
  */
+/**
+ * One worked example of this slot being stated in a real sentence.
+ *
+ * Few-shot material, kept beside the schema for the same reason `shape` is: the
+ * model is shown what to emit and the validator decides what is acceptable, and
+ * those two descriptions have to be the same description. A worked example that
+ * would be rejected is worse than no example at all, which is why
+ * `scripts/guide-engine-invariants.ts` parses every one of these against its own
+ * slot's schema.
+ *
+ * These also replace the single hand-written paragraph the prompt used to carry.
+ * That paragraph enumerated specific phrasings ("aren 2 miles 1 and mika 3") in
+ * English, which is a regex with extra steps: it grew with every slot and nobody
+ * could tell which sentence was holding up which behaviour.
+ */
+export interface SlotExample {
+  /** What the reader typed. */
+  said: string;
+  /** The value this slot should receive, in the shape the schema accepts. */
+  value: unknown;
+  /** Optional note for the model about why, when the mapping isn't obvious. */
+  note?: string;
+}
+
 interface SlotWriter {
   /**
    * The JSON shape this slot accepts, in one line, for the interpreter's prompt.
@@ -115,6 +238,10 @@ interface SlotWriter {
    * prompt that quietly describes last month's validator.
    */
   shape: (context: GuidePatchContext) => string;
+  /** Worked examples for the prompt. Checked against this slot's own schema. */
+  examples: SlotExample[];
+  /** This slot's schema, exposed so the example check can run offline. */
+  schema: z.ZodTypeAny;
   /**
    * This slot's current value, in the shape {@link apply} accepts — the inverse of
    * the writer, used to take checkpoints the reader can jump back to.
@@ -130,30 +257,33 @@ interface SlotWriter {
    * nothing, which is the only way a restore is guaranteed to be faithful.
    */
   capture: (project: Project) => unknown;
-  apply: (
-    project: Project,
-    input: unknown,
-    context: GuidePatchContext,
-  ) => { ok: true; project: Project | null } | { ok: false; reason: string };
+  apply: (project: Project, input: unknown, context: GuidePatchContext) => SlotWrite;
 }
 
 function writer<T>(
   shape: string | ((context: GuidePatchContext) => string),
   schema: z.ZodType<T>,
-  /** Returns the updated project, or null when the value changes nothing. */
-  write: (project: Project, value: T, context: GuidePatchContext) => Project | null,
+  /** Applies the value, or reports that it changed nothing / was refused. */
+  write: (project: Project, value: T, context: GuidePatchContext) => SlotWrite,
   /** This slot's settled value, or undefined when nobody has settled it. */
   capture: (project: Project) => T | undefined,
+  /** Worked examples for the prompt. Validated against `schema` offline. */
+  examples: SlotExample[] = [],
 ): SlotWriter {
   return {
     shape: typeof shape === "function" ? shape : () => shape,
+    examples,
+    schema,
     capture,
     apply(project, input, context) {
       const parsed = schema.safeParse(input);
       if (!parsed.success) {
-        return { ok: false, reason: parsed.error.issues[0]?.message ?? "invalid value" };
+        const issue = parsed.error.issues[0];
+        return refused(
+          issue ? `${issue.path.join(".") || "value"}: ${issue.message}` : "invalid value",
+        );
       }
-      return { ok: true, project: write(project, parsed.data, context) };
+      return write(project, parsed.data, context);
     },
   };
 }
@@ -170,80 +300,6 @@ function withConfig(project: Project, patch: Partial<BookConfig>): Project {
 
 function withBrief(project: Project, next: StoryBrief): Project {
   return withConfig(project, { storyBrief: next });
-}
-
-/**
- * Rescue shapes the interpreter commonly emits that the writers refuse.
- *
- * `heroes` is declared as string[], but models return objects with ages attached,
- * or strings like `"maya 3"`. Without this, Zod rejects the slot, `heroAges`
- * cannot introduce the names, nothing lands, and the guide says it didn't catch
- * that — which is the loop in the screenshot.
- */
-function coerceGuidePatch(input: Record<string, unknown>): Record<string, unknown> {
-  if (!("heroes" in input)) return input;
-  const people = peopleFromHeroes(input.heroes);
-  if (!people) return input;
-
-  const next: Record<string, unknown> = {
-    ...input,
-    heroes: people.map((person) => person.name),
-  };
-  const ages = people
-    .filter((person) => person.age !== undefined || person.ageMonths !== undefined)
-    .map((person) => ({
-      name: person.name,
-      ...(person.ageMonths !== undefined ? { ageMonths: person.ageMonths } : { age: person.age }),
-    }));
-  if (ages.length > 0 && !Array.isArray(next.heroAges)) {
-    next.heroAges = ages;
-  }
-  return next;
-}
-
-function peopleFromHeroes(heroes: unknown): ParsedPerson[] | null {
-  if (typeof heroes === "string") {
-    const people = parseNamedPeople(heroes);
-    return people.length > 0 ? people : null;
-  }
-  if (!Array.isArray(heroes) || heroes.length === 0) return null;
-
-  const people: ParsedPerson[] = [];
-  for (const item of heroes) {
-    if (typeof item === "string") {
-      const parsed = parseNamedPeople(item);
-      if (parsed.length === 0) return null;
-      people.push(...parsed);
-      continue;
-    }
-    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
-    const raw = item as Record<string, unknown>;
-    if (typeof raw.name !== "string") return null;
-    const ageMonths = coerceNumber(raw.ageMonths);
-    const age = coerceNumber(raw.age);
-    if (ageMonths !== undefined) {
-      const name = raw.name.trim();
-      if (!name) return null;
-      people.push({ name, ageMonths });
-      continue;
-    }
-    if (age !== undefined) {
-      const name = raw.name.trim();
-      if (!name) return null;
-      people.push({ name, age });
-      continue;
-    }
-    const parsed = parseNamedPeople(raw.name);
-    if (parsed.length === 0) return null;
-    people.push(...parsed);
-  }
-  return people.length > 0 ? people : null;
-}
-
-function coerceNumber(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && /^\d{1,4}$/.test(value.trim())) return Number(value.trim());
-  return undefined;
 }
 
 /** Cast members keyed for name matching, so "leo" patches "Leo". */
@@ -263,11 +319,16 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       // a brief actually exists — so on a fresh book, choosing the default mode looks
       // like a no-op, writes nothing, and the guide asks the same question forever.
       // The absence of a persisted brief is itself the change worth writing.
-      if (project.config.storyBrief && brief.mode === mode) return null;
-      return withBrief(project, { ...brief, mode });
+      if (project.config.storyBrief && brief.mode === mode) return UNCHANGED;
+      return wrote(withBrief(project, { ...brief, mode }));
     },
     // Only once a brief exists: see the note on `capture` about defaults.
     (project) => (project.config.storyBrief ? briefOf(project.config).mode : undefined),
+    [
+      { said: "you write it", value: "guided" },
+      { said: "I'll write it myself", value: "own" },
+      { said: "I'll give you the details and you do the words", value: "co-write" },
+    ],
   ),
 
   /**
@@ -277,29 +338,87 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
    * re-stating the list never silently drops the ages already given.
    */
   heroes: writer(
-    '["Maya", "Leo"] — the COMPLETE list of who the book is about, not an addition',
-    z.array(nameSchema).min(1).max(12),
-    (project, names) => {
+    '["Maya", "Leo"] or [{"name": "Maya", "age": 5, "role": "big sister"}] — the COMPLETE list of who the book is about, not an addition',
+    /**
+     * Names, or names with their ages attached.
+     *
+     * The second form is here because it is what models produce. Asked for "who
+     * the book is about" they answer with people, and a person has an age. The
+     * schema used to accept only `string[]`, so that answer was refused, and a
+     * coercion layer sat in front of the validator rescuing the shapes it saw
+     * most — including by running a regex over `"maya 3"`. Widening the schema
+     * does the same job declaratively: the description the model is given, the
+     * shape it may send and the shape that validates are one thing again.
+     */
+    z.array(z.union([nameSchema, castMemberSchema])).min(1).max(12),
+    (project, people) => {
       const brief = briefOf(project.config);
       const existing = brief.cast ?? [];
       const seen = new Set<string>();
       const cast: StoryCastMember[] = [];
-      for (const name of names) {
-        const key = name.trim().toLowerCase();
+      for (const person of people) {
+        const named = typeof person === "string" ? { name: person } : person;
+        const name = named.name.trim();
+        const key = name.toLowerCase();
         if (seen.has(key)) continue;
         seen.add(key);
         const kept = findByName(existing, name);
-        cast.push(
-          kept ? { ...kept, name: name.trim() } : { ...newCastMember(), name: name.trim() },
-        );
+        const member: StoryCastMember = kept
+          ? { ...kept, name }
+          : { ...newCastMember(), name };
+        // An age only when this turn gave one. Re-stating the cast to add a
+        // sibling must not blank the ages of the children already in it.
+        if ("ageMonths" in named && named.ageMonths !== undefined) {
+          member.ageMonths = named.ageMonths;
+          delete member.age;
+        } else if ("age" in named && named.age !== undefined) {
+          member.age = named.age;
+          delete member.ageMonths;
+        }
+        // Same rule for the relationship, and for the same reason: a turn that
+        // re-lists the cast to add a sibling has not withdrawn what it said last
+        // time about everyone else. An empty string is a model artefact rather
+        // than an instruction to forget, so it also leaves the role alone.
+        const role = typeof person === "string" ? undefined : person.role?.trim();
+        if (role) member.role = role;
+        cast.push(member);
       }
-      if (sameCast(existing, cast)) return null;
-      return withBrief(project, { ...brief, cast, heroNames: cast.map((member) => member.name) });
+      if (sameCast(existing, cast)) return UNCHANGED;
+      return wrote(
+        withBrief(project, { ...brief, cast, heroNames: cast.map((member) => member.name) }),
+      );
     },
     (project) => {
       const cast = briefOf(project.config).cast ?? [];
-      return cast.length > 0 ? cast.map((member) => member.name) : undefined;
+      if (cast.length === 0) return undefined;
+      // Plain names while that is the whole truth, so the commonest checkpoint
+      // stays the simplest shape to read in a log. Objects once a relationship
+      // exists, because a jump-back that restored the names and lost "big
+      // sister" would quietly rewrite the story it restores.
+      return cast.some((member) => member.role?.trim())
+        ? cast.map((member) => ({
+            name: member.name,
+            ...(member.role?.trim() ? { role: member.role.trim() } : {}),
+          }))
+        : cast.map((member) => member.name);
     },
+    [
+      { said: "Micah and Neil, both 5 years old", value: ["Micah", "Neil"] },
+      { said: "it's for my daughter Maya", value: ["Maya"] },
+      {
+        said: "add her brother Leo",
+        value: ["Maya", "Leo"],
+        note: "The complete list, including whoever was already there.",
+      },
+      {
+        said: "Maya is 6 and her little brother Leo is 3",
+        value: [
+          { name: "Maya", age: 6 },
+          { name: "Leo", age: 3, role: "Maya's little brother" },
+        ],
+        note: "Include a relationship only when it was actually said. Never guess one from names or ages.",
+      },
+    ],
   ),
 
   /**
@@ -314,6 +433,22 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
     (project, ages) => {
       const brief = briefOf(project.config);
       const existing = brief.cast ?? [];
+      const known = new Set(existing.map((member) => member.name.trim().toLowerCase()));
+      const strangers = ages.filter((age) => !known.has(age.name.trim().toLowerCase()));
+
+      // Nothing to attach these to. Refused rather than ignored: an age for a name
+      // the book has never heard is the signal that a name was misheard, and the
+      // reader is the only one who can say which.
+      if (strangers.length === ages.length) {
+        const names = strangers.map((age) => age.name.trim()).join(" and ");
+        return refused(`no cast member named ${names}`, {
+          speak:
+            existing.length === 0
+              ? `I don't have anyone in the story yet — tell me their name and I'll add the age to it.`
+              : `I don't have ${names} in the story yet.`,
+        });
+      }
+
       let changed = false;
       const cast = existing.map((member) => {
         const update = ages.find(
@@ -330,10 +465,35 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
           next.age = update.age;
           delete next.ageMonths;
         }
-        if (next.age !== member.age || next.ageMonths !== member.ageMonths) changed = true;
+        const role = update.role?.trim();
+        if (role) next.role = role;
+        if (
+          next.age !== member.age ||
+          next.ageMonths !== member.ageMonths ||
+          next.role !== member.role
+        ) {
+          changed = true;
+        }
         return next;
       });
-      return changed ? withBrief(project, { ...brief, cast }) : null;
+
+      const refusedPart =
+        strangers.length > 0
+          ? {
+              reason: `no cast member named ${strangers.map((a) => a.name.trim()).join(", ")}`,
+              speak: `I don't have ${strangers
+                .map((a) => a.name.trim())
+                .join(" or ")} in the story yet.`,
+            }
+          : undefined;
+
+      if (!changed) {
+        // The ages that resolved were already right. A stranger in the same turn is
+        // still worth refusing, so that case reports as a partial write of nothing
+        // rather than as a silent success.
+        return refusedPart ? refused(refusedPart.reason, refusedPart) : UNCHANGED;
+      }
+      return wrote(withBrief(project, { ...brief, cast }), refusedPart);
     },
     (project) => {
       const aged = (briefOf(project.config).cast ?? [])
@@ -348,6 +508,22 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         }));
       return aged.length > 0 ? aged : undefined;
     },
+    [
+      {
+        said: "Micah and Neil, both 5 years old",
+        value: [
+          { name: "Micah", age: 5 },
+          { name: "Neil", age: 5 },
+        ],
+        note: 'A shared age applies to everyone named — "both", "each", "all of them".',
+      },
+      {
+        said: "she's 18 months",
+        value: [{ name: "Maya", ageMonths: 18 }],
+        note: "Months for under-twos; the name comes from who is already in the story.",
+      },
+      { said: "Leo just turned 7", value: [{ name: "Leo", age: 7 }] },
+    ],
   ),
 
   audience: writer(
@@ -358,13 +534,38 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       readingModeId: z.string().max(40).nullable().optional(),
     }),
     (project, value, context) => {
-      if (!context.ageBandIds.includes(value.ageRangeId)) return null;
+      /**
+       * "Is this a change?" is answered before "is this allowed?", and the order
+       * matters in one specific case: a book holding a band an admin has since
+       * deleted. Restating its own value has to be a no-op, not a refusal —
+       * otherwise restoring a checkpoint taken before the deletion would fail, and
+       * the reader would be told they cannot have the thing they already have.
+       * Validation exists to police CHANGES.
+       */
+      if (
+        project.config.ageRangeId === value.ageRangeId &&
+        project.config.audienceFromCast === "custom" &&
+        (value.readingModeId === undefined ||
+          (project.config.readingModeId ?? null) === (value.readingModeId ?? null))
+      ) {
+        return UNCHANGED;
+      }
+      // Refused, not ignored. These used to return `null`, which the caller read as
+      // "nothing changed" — so a band an admin had deleted produced no write, no
+      // rejection, no log line, and a reader being told their answer wasn't understood.
+      if (!context.ageBandIds.includes(value.ageRangeId)) {
+        return refused(`unknown age band "${value.ageRangeId}"`, {
+          allowed: context.ageBandIds,
+        });
+      }
       if (
         value.readingModeId !== undefined &&
         value.readingModeId !== null &&
         !isReadingModeId(value.readingModeId)
       ) {
-        return null;
+        return refused(`unknown reading mode "${value.readingModeId}"`, {
+          allowed: READING_MODE_IDS,
+        });
       }
       const patch: Partial<BookConfig> = {
         ageRangeId: value.ageRangeId,
@@ -374,14 +575,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         audienceFromCast: "custom",
       };
       if (value.readingModeId !== undefined) patch.readingModeId = value.readingModeId ?? null;
-      if (
-        project.config.ageRangeId === patch.ageRangeId &&
-        project.config.audienceFromCast === "custom" &&
-        (patch.readingModeId === undefined || project.config.readingModeId === patch.readingModeId)
-      ) {
-        return null;
-      }
-      return withConfig(project, patch);
+      return wrote(withConfig(project, patch));
     },
     (project) =>
       // An inherited band is not a stated fact — the writer stamps
@@ -398,11 +592,22 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
     () => `${idList(BOOK_LANGUAGES.map((language) => language.id))} — the language the BOOK is written in`,
     z.string().min(2).max(35),
     (project, locale) => {
-      if (!isBookLanguageId(locale) || project.config.contentLocale === locale) return null;
-      return withConfig(project, { contentLocale: locale });
+      // Restating the book's own value is always a no-op — see the note on `audience`.
+      if (project.config.contentLocale === locale) return UNCHANGED;
+      if (!isBookLanguageId(locale)) {
+        return refused(`unknown book language "${locale}"`, {
+          speak: "I can't write the book in that language yet.",
+          allowed: BOOK_LANGUAGES.map((language) => language.id),
+        });
+      }
+      return wrote(withConfig(project, { contentLocale: locale }));
     },
     (project) =>
       isBookLanguageId(project.config.contentLocale) ? project.config.contentLocale : undefined,
+    [
+      { said: "write it in German", value: "de-DE" },
+      { said: "auf Deutsch bitte", value: "de-DE", note: "The language they ask for, not the language they asked in." },
+    ],
   ),
 
   storyIdea: writer(
@@ -421,7 +626,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       where: proseSchema.nullable().optional(),
       mustInclude: proseSchema.nullable().optional(),
     }),
-    (project, value) => {
+    (project, value, context) => {
       const brief = briefOf(project.config);
       const next: StoryBrief = { ...brief };
       let changed = false;
@@ -448,6 +653,38 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         next[key] = next_;
         changed = true;
       };
+      /**
+       * Catalog ids are checked HERE, against the book's own band.
+       *
+       * `normalizeStoryBriefForCraft` drops an unknown id later, on the way to the
+       * prompt. Relying on that alone meant the write was reported as applied, the
+       * guide confirmed the theme to the reader, and the book then quietly did not
+       * have one — the opposite failure to a refused write, and a harder one to
+       * notice. An id already stored is left alone: it changes nothing, and a
+       * band change should not make an old checkpoint un-restorable.
+       */
+      const craft = resolveStoryCraft(project.config.ageRangeId, context.storyCraft ?? null);
+      const badId = (
+        incoming: string | null | undefined,
+        current: string | null | undefined,
+        options: { id: string }[],
+      ): string | null => {
+        if (typeof incoming !== "string" || incoming === current) return null;
+        return options.some((option) => option.id === incoming) ? null : incoming;
+      };
+      const badTheme = badId(value.themeId, brief.themeId, craft.themes);
+      if (badTheme) {
+        return refused(`unknown theme "${badTheme}" for this age band`, {
+          allowed: craft.themes.map((theme) => theme.id),
+        });
+      }
+      const badSetting = badId(value.settingId, brief.settingId, craft.settings);
+      if (badSetting) {
+        return refused(`unknown setting "${badSetting}" for this age band`, {
+          allowed: craft.settings.map((setting) => setting.id),
+        });
+      }
+
       assign("themeId", value.themeId);
       assignProse("customTheme", value.customTheme);
       assign("settingId", value.settingId);
@@ -456,10 +693,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       assignProse("when", value.when);
       assignProse("where", value.where);
       assignProse("mustInclude", value.mustInclude);
-      // Catalog ids are scoped to the book's age band by
-      // `normalizeStoryBriefForCraft`, which the story pipeline already applies —
-      // an id from another band is dropped there rather than validated twice.
-      return changed ? withBrief(project, next) : null;
+      return changed ? wrote(withBrief(project, next)) : UNCHANGED;
     },
     (project) => {
       const brief = briefOf(project.config);
@@ -478,13 +712,24 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       };
       return Object.values(idea).some((value) => value !== null) ? idea : undefined;
     },
+    [
+      {
+        said: "a birthday trip to the sea, and it has to have their dog Rex in it",
+        value: { occasion: "a birthday trip to the sea", mustInclude: "their dog Rex" },
+      },
+      {
+        said: "something about starting school",
+        value: { customTheme: "starting school" },
+        note: "Free text when no catalog id obviously fits. Never invent an id.",
+      },
+    ],
   ),
 
   storyText: writer(
     "the complete story text — only when the reader is writing it themselves or dictating it verbatim, never a summary",
     z.string().max(40_000),
     (project, text) =>
-      project.config.storyText === text ? null : withConfig(project, { storyText: text }),
+      project.config.storyText === text ? UNCHANGED : wrote(withConfig(project, { storyText: text })),
     (project) => (project.config.storyText?.trim() ? project.config.storyText : undefined),
   ),
 
@@ -496,17 +741,26 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       customDescription: proseSchema.optional(),
     }),
     (project, value, context) => {
-      if (value.presetId !== null && !context.artStylePresetIds.includes(value.presetId)) return null;
-      if (value.presetId === null && !value.customDescription?.trim()) return null;
+      // Restating the book's own value is always a no-op — see the note on `audience`.
       const current = project.config.artStyle;
       if (
         current.presetId === value.presetId &&
         (current.customDescription ?? "") === (value.customDescription ?? "") &&
         project.config.styleReady === true
       ) {
-        return null;
+        return UNCHANGED;
       }
-      return withConfig(project, {
+      if (value.presetId !== null && !context.artStylePresetIds.includes(value.presetId)) {
+        return refused(`unknown art style "${value.presetId}"`, {
+          allowed: context.artStylePresetIds,
+        });
+      }
+      if (value.presetId === null && !value.customDescription?.trim()) {
+        return refused("a custom art style needs a description", {
+          speak: "Tell me a bit more about the look you want and I'll use that.",
+        });
+      }
+      return wrote(withConfig(project, {
         artStyle: {
           presetId: value.presetId,
           ...(value.customDescription?.trim()
@@ -516,7 +770,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         // Naming a style IS confirming it; the gate exists to stop the book
         // continuing without one, not to demand a second click.
         styleReady: true,
-      });
+      }));
     },
     (project) =>
       // Only a confirmed style: the writer sets `styleReady`, so capturing an
@@ -535,8 +789,15 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
     (context) => `${idList(context.productSkus, 8)} — a printed product SKU`,
     z.string().min(1).max(60),
     (project, sku, context) => {
-      if (!context.productSkus.includes(sku) || project.config.productSku === sku) return null;
-      return withConfig(project, { productSku: sku });
+      // Restating the book's own value is always a no-op — see the note on `audience`.
+      if (project.config.productSku === sku) return UNCHANGED;
+      if (!context.productSkus.includes(sku)) {
+        return refused(`unknown product "${sku}"`, {
+          speak: "We don't print that size.",
+          allowed: context.productSkus,
+        });
+      }
+      return wrote(withConfig(project, { productSku: sku }));
     },
     (project) => project.config.productSku ?? undefined,
   ),
@@ -545,8 +806,12 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
     () => `${idList(Object.keys(BOOK_LAYOUTS), 12)} — how words sit with the picture`,
     z.string().min(1).max(60),
     (project, layoutId) => {
-      if (!isKnownLayoutId(layoutId) || project.config.layoutId === layoutId) return null;
-      return withConfig(project, { layoutId });
+      // Restating the book's own value is always a no-op — see the note on `audience`.
+      if (project.config.layoutId === layoutId) return UNCHANGED;
+      if (!isKnownLayoutId(layoutId)) {
+        return refused(`unknown layout "${layoutId}"`, { allowed: Object.keys(BOOK_LAYOUTS) });
+      }
+      return wrote(withConfig(project, { layoutId }));
     },
     (project) => (isKnownLayoutId(project.config.layoutId) ? project.config.layoutId : undefined),
   ),
@@ -559,13 +824,28 @@ function sameCast(a: StoryCastMember[], b: StoryCastMember[]): boolean {
     return (
       member.name.trim() === other.name.trim() &&
       member.age === other.age &&
-      member.ageMonths === other.ageMonths
+      member.ageMonths === other.ageMonths &&
+      // Compared even though nothing branches on it: a turn whose only news is
+      // "Leo is her little brother" has to count as a write, or the writer
+      // reports nothing changed and the relationship is dropped while the reply
+      // says the book already knew it.
+      (member.role?.trim() ?? "") === (other.role?.trim() ?? "")
     );
   });
 }
 
+/**
+ * Own properties only.
+ *
+ * `"__proto__" in WRITERS` is true — every object inherits it — so the `in` form
+ * answered yes for a name that has no writer. `applyGuidePatch` iterates a fixed
+ * list and was never at risk, but anything else treating this as "is this a real
+ * slot?" was told yes, and a claim on `__proto__` was waved through as legitimate
+ * and then quietly did nothing. Same class of answer for `constructor`, `toString`
+ * and the rest of the chain.
+ */
 export function isGuidePatchableSlot(id: string): id is GuideSlotId {
-  return id in WRITERS;
+  return Object.hasOwn(WRITERS, id);
 }
 
 /**
@@ -593,6 +873,31 @@ export function guidePatchShapeLines(context: GuidePatchContext): string {
   return GUIDE_PATCHABLE_SLOT_IDS.map(
     (id) => `- ${id}: ${WRITERS[id]!.shape(context)}`,
   ).join("\n");
+}
+
+/**
+ * Worked examples for the interpreter's prompt, generated from the writers.
+ *
+ * Same argument as {@link guidePatchShapeLines}: the model is shown what to emit
+ * by the code that decides what is acceptable, so the two cannot drift. Slots with
+ * no examples contribute nothing rather than an empty heading.
+ */
+export function guidePatchExampleLines(): string {
+  const lines: string[] = [];
+  for (const id of GUIDE_PATCHABLE_SLOT_IDS) {
+    for (const example of WRITERS[id]!.examples) {
+      const note = example.note ? `  // ${example.note}` : "";
+      lines.push(`- "${example.said}" ⇒ {"${id}": ${JSON.stringify(example.value)}}${note}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+/** Every slot's examples, for the offline check that they satisfy their schema. */
+export function guideSlotExamples(): { slot: GuideSlotId; example: SlotExample; schema: z.ZodTypeAny }[] {
+  return GUIDE_PATCHABLE_SLOT_IDS.flatMap((id) =>
+    WRITERS[id]!.examples.map((example) => ({ slot: id, example, schema: WRITERS[id]!.schema })),
+  );
 }
 
 /**
@@ -631,13 +936,14 @@ export function applyGuidePatch(
   context: GuidePatchContext,
 ): GuidePatchResult {
   const applied: GuideSlotId[] = [];
+  const unchanged: GuideSlotId[] = [];
   const rejected: GuidePatchRejection[] = [];
 
   if (!patch || typeof patch !== "object" || Array.isArray(patch)) {
-    return { project, applied, rejected: [{ key: "*", reason: "not an object" }] };
+    return { project, applied, unchanged, rejected: [{ key: "*", reason: "not an object" }] };
   }
 
-  const input = coerceGuidePatch(patch as Record<string, unknown>);
+  const input = patch as Record<string, unknown>;
 
   for (const key of Object.keys(input)) {
     if (isGuidePatchableSlot(key)) continue;
@@ -654,15 +960,26 @@ export function applyGuidePatch(
   for (const id of GUIDE_PATCHABLE_SLOT_IDS) {
     if (!(id in input)) continue;
     const outcome = WRITERS[id]!.apply(next, input[id], context);
-    if (!outcome.ok) {
-      rejected.push({ key: id, reason: outcome.reason });
-      continue;
-    }
-    if (outcome.project) {
-      next = outcome.project;
-      applied.push(id);
+    switch (outcome.status) {
+      case "applied":
+        next = outcome.project;
+        applied.push(id);
+        // A write can succeed and still have refused part of what it was given.
+        if (outcome.refusedPart) rejected.push({ key: id, ...outcome.refusedPart });
+        break;
+      case "unchanged":
+        unchanged.push(id);
+        break;
+      case "rejected":
+        rejected.push({
+          key: id,
+          reason: outcome.reason,
+          ...(outcome.speak ? { speak: outcome.speak } : {}),
+          ...(outcome.allowed ? { allowed: outcome.allowed } : {}),
+        });
+        break;
     }
   }
 
-  return { project: next, applied, rejected };
+  return { project: next, applied, unchanged, rejected };
 }

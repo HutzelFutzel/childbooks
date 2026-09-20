@@ -243,6 +243,23 @@ export function interpretGuideTurnRemote(
   );
 }
 
+/**
+ * Tell the server what the browser did with a proposal.
+ *
+ * Fire-and-forget by design: this is the audit trail, and the reader's turn must
+ * not wait on it or fail with it. A dropped report costs one row's outcome field;
+ * a report that could block the conversation would cost the conversation.
+ */
+export function reportGuideTurnOutcomeRemote(report: {
+  turnId: string;
+  applied: string[];
+  unchanged: string[];
+  rejected: { key: string; reason: string }[];
+  admittedFailure: boolean;
+}): void {
+  void postAi<{ ok: boolean }>("/ai/guide/outcome", report).catch(() => {});
+}
+
 export function extractArtStyleRemote(
   project: Project,
   signal?: AbortSignal,

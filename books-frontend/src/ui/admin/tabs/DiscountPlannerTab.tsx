@@ -75,21 +75,8 @@ export function DiscountPlannerTab() {
   return (
     <div className="space-y-4">
       <TabIntro
-        elsewhere={
-          <>
-            The margin floor and the assumed Spark spend rate behind these numbers are set under{" "}
-            <span className="font-medium">Financial settings</span>; prices themselves are edited in
-            the <span className="font-medium">Catalog</span> and <span className="font-medium">Memberships</span>.
-          </>
-        }
-        links={[{ label: "Financial settings", onClick: () => setConfigTab("financial") }]}
-      >
-        Planning a sale? Move the slider to see exactly what a discount does to every product&apos;s
-        profit — after production cost, Spark backing, processor fees and tax. Each item also shows
-        its <span className="font-medium">break-even</span> (discount where profit hits zero) and its{" "}
-        <span className="font-medium">safe max</span> (deepest discount that still keeps a{" "}
-        {settings.minMarginPct}% margin).
-      </TabIntro>
+        links={[{ label: "Currencies & tax", onClick: () => setConfigTab("financial") }]}
+      />
 
       <ConfigHealthPanel settings={settings} sparks={sparks} products={products} plans={plans} />
 

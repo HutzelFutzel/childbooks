@@ -49,6 +49,7 @@ import {
   type GuidePlaylistEntry,
 } from "../books-frontend/src/core/guide/playlist";
 import {
+  componentTakesAnswers,
   GUIDE_CATALOG,
   GUIDE_COMPONENTS,
   type GuideComponentId,
@@ -411,6 +412,55 @@ for (const component of GUIDE_CATALOG) {
   }
   if (resolveGuidePlaylist(blank.playlist).find((c) => c.id === component.id)!.title !== component.title) {
     fail(`"${component.id}" with a blank override lost the catalog's title.`);
+  }
+
+  // An admin's opening question has to survive the save on the components that
+  // can speak it, and be refused outright on the ones that cannot — a question
+  // stored against `page-art` would sit in the editor looking live while no
+  // reader is ever asked it.
+  cases += 1;
+  const asked = saveAndReload({
+    ...base,
+    playlist: {
+      version: 1,
+      entries: base.playlist.entries.map((entry) =>
+        entry.id === component.id ? { ...entry, ask: "  Who is in the book?  " } : entry,
+      ),
+    },
+  });
+  const askedEntry = asked.playlist.entries.find((e) => e.id === component.id)!;
+  const askedLive = resolveGuidePlaylist(asked.playlist).find((c) => c.id === component.id)!;
+  if (componentTakesAnswers(component)) {
+    if (askedEntry.ask !== "Who is in the book?") {
+      fail(
+        `An opening question on "${component.id}" came back as ${JSON.stringify(askedEntry.ask)} ` +
+          `— it must be stored trimmed, since the guide says it verbatim.`,
+      );
+    }
+    if (askedLive.ask !== "Who is in the book?") {
+      fail(`An opening question on "${component.id}" did not reach the resolved component.`);
+    }
+  } else if (askedEntry.ask !== undefined || askedLive.ask !== undefined) {
+    fail(
+      `"${component.id}" stored an opening question, but it answers no facts, so nothing ` +
+        `will ever say it.`,
+    );
+  }
+
+  // Whitespace clears rather than storing a question the guide would speak as an
+  // empty line.
+  cases += 1;
+  const blankAsk = saveAndReload({
+    ...base,
+    playlist: {
+      version: 1,
+      entries: base.playlist.entries.map((entry) =>
+        entry.id === component.id ? { ...entry, ask: "   " } : entry,
+      ),
+    },
+  });
+  if (blankAsk.playlist.entries.find((e) => e.id === component.id)!.ask !== undefined) {
+    fail(`A blank opening question on "${component.id}" was stored instead of cleared.`);
   }
 }
 

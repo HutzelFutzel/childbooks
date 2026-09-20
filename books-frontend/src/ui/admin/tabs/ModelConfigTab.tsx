@@ -8,9 +8,8 @@ import {
   ChevronDown,
   FileText,
   Image as ImageIcon,
+  Plus,
   RefreshCw,
-  ShieldCheck,
-  Sparkles,
 } from "lucide-react";
 import { ALL_PROVIDERS } from "../../../core/providers";
 import type { ProviderId } from "../../../core/config/options";
@@ -57,6 +56,8 @@ import {
 import { ImageCapabilitiesPanel } from "./ImageGeometryPanel";
 import { GenerationTuningPanel } from "./GenerationTuningPanel";
 import type { CapabilityOverrides } from "../../../core/config/modelCapabilities";
+import { AdminSaveBar } from "../AdminPageHeader";
+import { Disclosure, EditorTabs } from "./products/parts";
 
 const PROVIDER_LABELS: Record<ProviderId, string> = {
   openai: "OpenAI",
@@ -64,6 +65,7 @@ const PROVIDER_LABELS: Record<ProviderId, string> = {
 };
 
 type Modality = "text" | "image";
+type Panel = "slots" | "assignments" | "quality";
 type SlotTarget =
   | { provider: ProviderId; modality: "text"; speed: TextSpeed }
   | { provider: ProviderId; modality: "image"; speed: ImageSpeed };
@@ -224,26 +226,6 @@ function bindingOptions(
   return options;
 }
 
-function StatusPill({
-  tone,
-  children,
-}: {
-  tone: "ok" | "warning" | "neutral";
-  children: React.ReactNode;
-}) {
-  const cls =
-    tone === "ok"
-      ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-      : tone === "warning"
-        ? "bg-amber-50 text-amber-700 ring-amber-200"
-        : "bg-ink-50 text-ink-600 ring-ink-100";
-  return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium ring-1 ring-inset ${cls}`}>
-      {children}
-    </span>
-  );
-}
-
 export function ModelConfigTab() {
   const storedConfig = useAppConfigStore((state) => state.modelConfig);
   const storedCosts = useAppConfigStore((state) => state.adminModelCosts);
@@ -272,6 +254,8 @@ export function ModelConfigTab() {
   const [openCostTarget, setOpenCostTarget] = useState("");
   const [pendingRates, setPendingRates] = useState<Record<string, PendingRate>>({});
   const [editorSeed, setEditorSeed] = useState(0);
+  const [panel, setPanel] = useState<Panel>("slots");
+  const [adding, setAdding] = useState(false);
 
   useEffect(() => {
     if (dirty) return;
@@ -348,6 +332,7 @@ export function ModelConfigTab() {
   const busy = resolving || bulkRunning || saving;
 
   const resetAddPanel = () => {
+    setAdding(false);
     setModelId("");
     setResolution(null);
     setResolutionError("");
@@ -356,6 +341,8 @@ export function ModelConfigTab() {
   };
 
   const beginReplace = (nextTarget: SlotTarget, currentId = "") => {
+    setPanel("slots");
+    setAdding(true);
     setForcedTarget(nextTarget);
     setTarget(nextTarget);
     setModelId(currentId);
@@ -370,6 +357,8 @@ export function ModelConfigTab() {
       setResolutionError("Enter a model id.");
       return;
     }
+    setPanel("slots");
+    setAdding(true);
     setResolving(true);
     setResolution(null);
     setResolutionError("");
@@ -723,320 +712,321 @@ export function ModelConfigTab() {
     costEquals(candidateExistingCost!, resolution!.modelCost!);
   const candidateAlreadyInTarget =
     Boolean(target && resolution) && modelAt(draft, target!) === resolution!.modelId;
+  const showAdd = adding || Boolean(forcedTarget || resolution || resolutionError);
+  const exceptions = [
+    disconnectedProviders.length
+      ? `${disconnectedProviders.map((provider) => PROVIDER_LABELS[provider]).join(", ")} unavailable`
+      : null,
+    unavailableModels.length ? `${unavailableModels.length} not live` : null,
+    missingPrice.length ? `${missingPrice.length} need pricing` : null,
+    invalidBindings ? `${invalidBindings} steps unassigned` : null,
+    Object.keys(pendingRates).length
+      ? `${Object.keys(pendingRates).length} prices to review`
+      : null,
+  ].filter((part): part is string => Boolean(part));
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white px-4 py-3 ring-1 ring-inset ring-ink-100">
-        <div className="flex flex-wrap gap-2">
-          <StatusPill tone={ready ? "ok" : "neutral"}>
-            {ready ? <ShieldCheck className="size-3.5" /> : null}
-            {selectedModels.length} active model{selectedModels.length === 1 ? "" : "s"}
-          </StatusPill>
-          {(unavailableModels.length > 0 || disconnectedProviders.length > 0) && (
-            <StatusPill tone="warning">
-              {unavailableModels.length > 0
-                ? `${unavailableModels.length} not live`
-                : `${disconnectedProviders.length} provider${disconnectedProviders.length === 1 ? "" : "s"} unavailable`}
-            </StatusPill>
-          )}
-          <StatusPill tone={missingPrice.length === 0 ? "ok" : "warning"}>
-            {missingPrice.length === 0
-              ? "All priced"
-              : `${missingPrice.length} need pricing`}
-          </StatusPill>
-          <StatusPill tone={invalidBindings === 0 ? "ok" : "warning"}>
-            {invalidBindings === 0
-              ? "All steps assigned"
-              : `${invalidBindings} steps need attention`}
-          </StatusPill>
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className={`text-sm ${exceptions.length ? "text-amber-800" : "text-ink-500"}`}>
+          {exceptions.length ? exceptions.join(" · ") : `${selectedModels.length} models in slots`}
+        </p>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="secondary"
+            size="sm"
+            leftIcon={<RefreshCw className="size-4" />}
+            onClick={() => void fetchAllPrices()}
+            loading={bulkRunning}
+            disabled={busy || selectedModels.length === 0}
+          >
+            Fetch prices
+          </Button>
+          <Button
+            size="sm"
+            leftIcon={<Plus className="size-3.5" />}
+            onClick={() => {
+              setPanel("slots");
+              setAdding(true);
+            }}
+            disabled={busy}
+          >
+            Add
+          </Button>
         </div>
-        <Button
-          variant="secondary"
-          size="sm"
-          leftIcon={<RefreshCw className="size-4" />}
-          onClick={fetchAllPrices}
-          loading={bulkRunning}
-          disabled={busy || selectedModels.length === 0}
-        >
-          Fetch all prices
-        </Button>
       </div>
 
-      <section ref={addPanelRef} className="rounded-2xl bg-brand-50/60 p-4 ring-1 ring-inset ring-brand-100">
-        <div className="mb-3">
-          <h2 className="text-sm font-semibold text-ink-900">
-            {forcedTarget ? `Replace ${slotTargetLabel(forcedTarget)}` : "Add or replace a model"}
-          </h2>
-          <p className="text-xs text-ink-500">
-            Enter an exact model id. We confirm it is live, load its capability profile, and
-            fetch its official price.
-          </p>
-        </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-          <Field label="Model id" className="min-w-0 flex-1">
-            <Input
-              list={listId}
-              value={modelId}
-              placeholder="e.g. gpt-image-2 or gemini-2.5-flash"
-              onChange={(event) => {
-                setModelId(event.target.value);
-                setResolution(null);
-                setResolutionError("");
-              }}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault();
-                  void validate();
-                }
-              }}
-            />
-            <datalist id={listId}>
-              {suggestions.map((suggestion) => (
-                <option key={suggestion} value={suggestion} />
-              ))}
-            </datalist>
-          </Field>
-          <Button
-            leftIcon={<Sparkles className="size-4" />}
-            onClick={() => void validate()}
-            loading={resolving}
-            disabled={busy || !modelId.trim()}
-          >
-            Validate &amp; fetch
-          </Button>
-          {(forcedTarget || resolution || resolutionError) && (
-            <Button variant="ghost" onClick={resetAddPanel} disabled={busy}>
-              Cancel
-            </Button>
-          )}
-        </div>
-
-        {resolutionError && (
-          <div className="mt-3 flex items-start gap-2 rounded-lg bg-white px-3 py-2.5 text-xs text-red-700 ring-1 ring-inset ring-red-200">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-            <span>{resolutionError}</span>
-          </div>
-        )}
-
-        {resolution?.found && resolution.modelCost && target && (
-          <div className="mt-3 rounded-xl bg-white p-3 ring-1 ring-inset ring-ink-100">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-2">
-                  <CheckCircle2 className="size-4 text-emerald-600" />
-                  <span className="font-mono text-sm font-semibold text-ink-900">
-                    {resolution.modelId}
-                  </span>
-                  <ModalityBadge modality={resolution.modality} />
-                  <span className="text-xs text-ink-500">
-                    Live on {PROVIDER_LABELS[resolution.provider]}
-                  </span>
-                </div>
-                <p className="mt-1 text-xs font-medium text-ink-700">
-                  {summarizeCost(resolution.modelCost)}
-                </p>
-                {resolution.imageCapabilities && (
-                  <div className="mt-2 flex flex-wrap gap-1">
-                    <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-medium text-sky-700">
-                      {resolution.imageCapabilities.profile}
-                    </span>
-                    <span className="rounded-full bg-ink-50 px-2 py-0.5 text-[10px] text-ink-600">
-                      {resolution.imageCapabilities.operations.maskEditing
-                        ? "Masked edits"
-                        : "Reference edits"}
-                    </span>
-                    <span className="rounded-full bg-ink-50 px-2 py-0.5 text-[10px] text-ink-600">
-                      {resolution.imageCapabilities.inputs.maxReferenceImages} references
-                    </span>
-                    <span className="rounded-full bg-ink-50 px-2 py-0.5 text-[10px] text-ink-600">
-                      {resolution.imageCapabilities.outputs.backgrounds.includes(
-                        "transparent",
-                      )
-                        ? "Native transparency"
-                        : "Opaque output"}
-                    </span>
-                    <span className="rounded-full bg-ink-50 px-2 py-0.5 text-[10px] text-ink-600">
-                      {resolution.imageCapabilities.outputs.formats
-                        .map((format) => format.toUpperCase())
-                        .join(", ")}
-                    </span>
-                    {resolution.imageCapabilities.outputs.qualityLevels.length >
-                      0 && (
-                      <span className="rounded-full bg-ink-50 px-2 py-0.5 text-[10px] text-ink-600">
-                        {resolution.imageCapabilities.outputs.qualityLevels.join(
-                          ", ",
-                        )}
-                      </span>
-                    )}
-                  </div>
-                )}
-                {resolution.approximate && (
-                  <p className="mt-1 text-xs text-amber-700">
-                    Pricing is from the closest documented variant{" "}
-                    <span className="font-mono">{resolution.canonicalModelId}</span>. Review it
-                    before use.
-                  </p>
-                )}
-                {resolution.sourceQuote && (
-                  <p className="mt-1 line-clamp-2 text-[11px] text-ink-500">
-                    Source: “{resolution.sourceQuote}”
-                  </p>
-                )}
-                {resolution.reportedCapabilities?.length ? (
-                  <p className="mt-1 text-[11px] text-ink-500">
-                    Provider reports: {resolution.reportedCapabilities.join(", ")}
-                  </p>
-                ) : null}
-              </div>
-              <div className="w-full space-y-2 sm:w-72">
-                <Field label="Use for">
-                  <Select
-                    value={slotTargetValue(target)}
-                    options={targetOptions(resolution).map((option) => ({
-                      value: slotTargetValue(option),
-                      label: slotTargetLabel(option),
-                    }))}
-                    onChange={(event) => {
-                      const next = targetOptions(resolution).find(
-                        (option) => slotTargetValue(option) === event.target.value,
-                      );
-                      if (next) setTarget(next);
-                    }}
-                  />
-                </Field>
-                <Button
-                  className="w-full"
-                  onClick={applyResolution}
-                  disabled={candidateAlreadyInTarget && candidateUnchanged}
-                >
-                  {candidateAlreadyInTarget && candidateUnchanged
-                    ? "Already up to date"
-                    : resolution.approximate
-                      ? "Use reviewed price"
-                      : candidateAlreadyInTarget
-                        ? "Update price"
-                        : `Use in ${target.modality === "text" ? TEXT_SPEED_LABELS[target.speed] : IMAGE_SPEED_LABELS[target.speed]}`}
-                </Button>
-              </div>
-            </div>
-          </div>
-        )}
-      </section>
-
-      <ImageCapabilitiesPanel
-        config={draft}
-        onChange={setCapabilities}
+      <EditorTabs
+        items={[
+          { id: "slots", label: "Slots" },
+          { id: "assignments", label: "Assignments" },
+          { id: "quality", label: "Image quality" },
+        ]}
+        value={panel}
+        onChange={(id) => setPanel(id as Panel)}
       />
 
-      <GenerationTuningPanel />
-
-      <section className="space-y-3">
-        <div>
-          <h2 className="text-sm font-semibold text-ink-900">Models in use</h2>
-          <p className="text-xs text-ink-500">
-            Each speed is a reusable slot. Replacing one updates every pipeline step assigned to
-            it.
-          </p>
-        </div>
-        <div className="grid gap-4 lg:grid-cols-2">
-          {ALL_PROVIDERS.map((provider) => (
-            <div key={provider} className="rounded-xl bg-white p-3 ring-1 ring-inset ring-ink-100">
-              <div className="flex items-center justify-between gap-2 px-1 pb-2">
-                <h3 className="text-sm font-semibold text-ink-800">
-                  {PROVIDER_LABELS[provider]}
-                </h3>
-                <span
-                  className={`text-xs font-medium ${
-                    !settingsLoaded
-                      ? "text-ink-500"
-                      : providerAvailable[provider]
-                        ? "text-emerald-700"
-                        : "text-amber-700"
-                  }`}
-                >
-                  {!settingsLoaded
-                    ? "Checking connection…"
-                    : providerAvailable[provider]
-                      ? "Connected"
-                      : "Provider key unavailable"}
-                </span>
+      {panel === "slots" && (
+        <div className="space-y-6">
+          {showAdd ? (
+            <section ref={addPanelRef} className="space-y-3">
+              <div>
+                <h2 className="text-sm font-semibold text-ink-900">
+                  {forcedTarget ? `Replace ${slotTargetLabel(forcedTarget)}` : "Add or replace a model"}
+                </h2>
+                <p className="text-sm text-ink-500">
+                  Enter an exact model id. We confirm it is live and fetch its official price.
+                </p>
               </div>
-              <div className="flex items-center gap-2 px-1 py-1">
-                <ModalityBadge modality="text" />
-              </div>
-              {TEXT_SPEEDS.map((speed) =>
-                renderSlot({ provider, modality: "text", speed }),
-              )}
-              <div className="mt-2 flex items-center gap-2 px-1 py-1">
-                <ModalityBadge modality="image" />
-              </div>
-              {IMAGE_SPEEDS.map((speed) =>
-                renderSlot({ provider, modality: "image", speed }),
-              )}
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="space-y-3">
-        <div>
-          <h2 className="text-sm font-semibold text-ink-900">Pipeline assignments</h2>
-          <p className="text-xs text-ink-500">
-            Choose which validated, priced model each generation step uses.
-          </p>
-        </div>
-        <div className="overflow-hidden rounded-xl bg-white ring-1 ring-inset ring-ink-100">
-          <div className="border-b border-ink-100 bg-ink-50/60 px-4 py-2 text-xs font-semibold text-ink-600">
-            Text and vision steps
-          </div>
-          <div className="divide-y divide-ink-100">
-            {TEXT_ACTIONS.map((action) => {
-              const binding = draft.textBindings[action.id];
-              const value = `${binding.provider}:${binding.speed}`;
-              const valid = textValues.has(value);
-              return (
-                <div
-                  key={action.id}
-                  className="grid gap-2 px-4 py-2.5 sm:grid-cols-[minmax(0,1fr)_20rem] sm:items-center"
-                  title={action.help}
-                >
-                  <span className="text-sm text-ink-700">{action.label}</span>
-                  <Select
-                    value={valid ? value : ""}
-                    options={[
-                      ...(valid
-                        ? []
-                        : [{ value: "", label: "Select a priced model", disabled: true }]),
-                      ...textOptions,
-                    ]}
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                <Field label="Model id" className="min-w-0 flex-1">
+                  <Input
+                    list={listId}
+                    value={modelId}
+                    placeholder="e.g. gpt-image-2 or gemini-2.5-flash"
                     onChange={(event) => {
-                      const [provider, speed] = event.target.value.split(":");
-                      setTextBinding(
-                        action.id,
-                        provider as ProviderId,
-                        speed as TextSpeed,
-                      );
+                      setModelId(event.target.value);
+                      setResolution(null);
+                      setResolutionError("");
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void validate();
+                      }
                     }}
                   />
+                  <datalist id={listId}>
+                    {suggestions.map((suggestion) => (
+                      <option key={suggestion} value={suggestion} />
+                    ))}
+                  </datalist>
+                </Field>
+                <Button
+                  size="sm"
+                  onClick={() => void validate()}
+                  loading={resolving}
+                  disabled={busy || !modelId.trim()}
+                >
+                  Validate &amp; fetch
+                </Button>
+                <Button variant="ghost" size="sm" onClick={resetAddPanel} disabled={busy}>
+                  Cancel
+                </Button>
+              </div>
+              {resolutionError && (
+                <p className="flex items-start gap-2 text-sm text-red-700">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                  {resolutionError}
+                </p>
+              )}
+              {resolution?.found && resolution.modelCost && target && (
+                <div className="flex flex-wrap items-start justify-between gap-3 border-t border-ink-100 pt-3">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <CheckCircle2 className="size-4 text-emerald-600" />
+                      <span className="font-mono text-sm font-semibold text-ink-900">
+                        {resolution.modelId}
+                      </span>
+                      <ModalityBadge modality={resolution.modality} />
+                      <span className="text-sm text-ink-500">
+                        Live on {PROVIDER_LABELS[resolution.provider]}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-sm text-ink-700">{summarizeCost(resolution.modelCost)}</p>
+                    {resolution.approximate && (
+                      <p className="mt-1 text-sm text-amber-700">
+                        Pricing is from the closest documented variant{" "}
+                        <span className="font-mono">{resolution.canonicalModelId}</span>. Review it
+                        before use.
+                      </p>
+                    )}
+                    {resolution.sourceQuote && (
+                      <p className="mt-1 line-clamp-2 text-sm text-ink-500">
+                        Source: “{resolution.sourceQuote}”
+                      </p>
+                    )}
+                    {resolution.reportedCapabilities?.length ? (
+                      <p className="mt-1 text-sm text-ink-500">
+                        Provider reports: {resolution.reportedCapabilities.join(", ")}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="w-full space-y-2 sm:w-72">
+                    <Field label="Use for">
+                      <Select
+                        value={slotTargetValue(target)}
+                        options={targetOptions(resolution).map((option) => ({
+                          value: slotTargetValue(option),
+                          label: slotTargetLabel(option),
+                        }))}
+                        onChange={(event) => {
+                          const next = targetOptions(resolution).find(
+                            (option) => slotTargetValue(option) === event.target.value,
+                          );
+                          if (next) setTarget(next);
+                        }}
+                      />
+                    </Field>
+                    <Button
+                      className="w-full"
+                      onClick={applyResolution}
+                      disabled={candidateAlreadyInTarget && candidateUnchanged}
+                    >
+                      {candidateAlreadyInTarget && candidateUnchanged
+                        ? "Already up to date"
+                        : resolution.approximate
+                          ? "Use reviewed price"
+                          : candidateAlreadyInTarget
+                            ? "Update price"
+                            : `Use in ${target.modality === "text" ? TEXT_SPEED_LABELS[target.speed] : IMAGE_SPEED_LABELS[target.speed]}`}
+                    </Button>
+                  </div>
                 </div>
-              );
-            })}
-          </div>
-          <div className="border-y border-ink-100 bg-ink-50/60 px-4 py-2 text-xs font-semibold text-ink-600">
-            Artwork steps
-          </div>
-          <div className="divide-y divide-ink-100">
+              )}
+            </section>
+          ) : (
+            <div ref={addPanelRef} />
+          )}
+
+          <section className="space-y-3">
+            <p className="text-sm text-ink-500">
+              Each speed is a reusable slot. Replacing one updates every pipeline step assigned to
+              it.
+            </p>
+            <div className="grid gap-6 lg:grid-cols-2">
+              {ALL_PROVIDERS.map((provider) => (
+                <div key={provider}>
+                  <div className="flex items-center justify-between gap-2 pb-2">
+                    <h3 className="text-sm font-semibold text-ink-900">
+                      {PROVIDER_LABELS[provider]}
+                    </h3>
+                    <span
+                      className={`text-sm ${
+                        !settingsLoaded
+                          ? "text-ink-500"
+                          : providerAvailable[provider]
+                            ? "text-emerald-700"
+                            : "text-amber-800"
+                      }`}
+                    >
+                      {!settingsLoaded
+                        ? "Checking connection…"
+                        : providerAvailable[provider]
+                          ? "Connected"
+                          : "Key unavailable"}
+                    </span>
+                  </div>
+                  <p className="pb-1 text-xs font-medium text-ink-400">Text</p>
+                  {TEXT_SPEEDS.map((speed) =>
+                    renderSlot({ provider, modality: "text", speed }),
+                  )}
+                  <p className="mt-3 pb-1 text-xs font-medium text-ink-400">Image</p>
+                  {IMAGE_SPEEDS.map((speed) =>
+                    renderSlot({ provider, modality: "image", speed }),
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <Disclosure label="Image capabilities">
+            <ImageCapabilitiesPanel config={draft} onChange={setCapabilities} />
+          </Disclosure>
+        </div>
+      )}
+
+      {panel === "assignments" && (
+        <div className="space-y-6">
+          <section className="space-y-3">
+            <p className="text-sm text-ink-500">
+              Which priced slot each generation step uses.
+            </p>
+            <div>
+              <p className="pb-2 text-xs font-medium text-ink-400">Text and vision</p>
+              {TEXT_ACTIONS.map((action) => {
+                const binding = draft.textBindings[action.id];
+                const value = `${binding.provider}:${binding.speed}`;
+                const valid = textValues.has(value);
+                return (
+                  <div
+                    key={action.id}
+                    className="grid gap-2 border-t border-ink-100 py-2.5 sm:grid-cols-[minmax(0,1fr)_20rem] sm:items-center"
+                    title={action.help}
+                  >
+                    <span className="text-sm text-ink-700">{action.label}</span>
+                    <Select
+                      value={valid ? value : ""}
+                      options={[
+                        ...(valid
+                          ? []
+                          : [{ value: "", label: "Select a priced model", disabled: true }]),
+                        ...textOptions,
+                      ]}
+                      onChange={(event) => {
+                        const [provider, speed] = event.target.value.split(":");
+                        setTextBinding(
+                          action.id,
+                          provider as ProviderId,
+                          speed as TextSpeed,
+                        );
+                      }}
+                    />
+                  </div>
+                );
+              })}
+              <p className="pb-2 pt-4 text-xs font-medium text-ink-400">Artwork</p>
+              {IMAGE_ACTIONS.map((action) => {
+                const binding = draft.imageBindings[action.id]?.[CUSTOMER_IMAGE_TIER];
+                const value = binding ? `${binding.provider}:${binding.speed}` : "";
+                const valid = imageValues.has(value);
+                return (
+                  <div
+                    key={action.id}
+                    className="grid gap-2 border-t border-ink-100 py-2.5 sm:grid-cols-[minmax(0,1fr)_20rem] sm:items-center"
+                    title={action.help}
+                  >
+                    <span className="text-sm text-ink-700">{action.label}</span>
+                    <Select
+                      value={valid ? value : ""}
+                      options={[
+                        ...(valid
+                          ? []
+                          : [{ value: "", label: "Select a priced model", disabled: true }]),
+                        ...imageOptions,
+                      ]}
+                      onChange={(event) => {
+                        const [provider, speed] = event.target.value.split(":");
+                        setImageBinding(
+                          action.id,
+                          CUSTOMER_IMAGE_TIER,
+                          provider as ProviderId,
+                          speed as ImageSpeed,
+                        );
+                      }}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+
+          <Disclosure label="Historical economy bindings">
+            <p className="text-sm text-ink-500">
+              Retained for historical jobs and internal tools. Customers always use the artwork
+              assignments above.
+            </p>
             {IMAGE_ACTIONS.map((action) => {
-              const binding = draft.imageBindings[action.id]?.[CUSTOMER_IMAGE_TIER];
+              const tier: ImageTier = "quick";
+              const binding = draft.imageBindings[action.id]?.[tier];
               const value = binding ? `${binding.provider}:${binding.speed}` : "";
               const valid = imageValues.has(value);
               return (
                 <div
                   key={action.id}
-                  className="grid gap-2 px-4 py-2.5 sm:grid-cols-[minmax(0,1fr)_20rem] sm:items-center"
-                  title={action.help}
+                  className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_20rem] sm:items-center"
                 >
-                  <span className="text-sm text-ink-700">{action.label}</span>
+                  <span className="text-sm text-ink-600">{action.label}</span>
                   <Select
                     value={valid ? value : ""}
                     options={[
@@ -1049,7 +1039,7 @@ export function ModelConfigTab() {
                       const [provider, speed] = event.target.value.split(":");
                       setImageBinding(
                         action.id,
-                        CUSTOMER_IMAGE_TIER,
+                        tier,
                         provider as ProviderId,
                         speed as ImageSpeed,
                       );
@@ -1058,84 +1048,25 @@ export function ModelConfigTab() {
                 </div>
               );
             })}
-          </div>
+          </Disclosure>
         </div>
-      </section>
+      )}
 
-      <details className="rounded-xl bg-ink-50/60 ring-1 ring-inset ring-ink-100">
-        <summary className="cursor-pointer px-4 py-3 text-xs font-semibold text-ink-700">
-          Historical economy bindings
-        </summary>
-        <div className="space-y-2 border-t border-ink-100 px-4 py-3">
-          <p className="text-xs text-ink-500">
-            Retained for historical jobs and internal tools. Customers always use the artwork
-            assignments above.
-          </p>
-          {IMAGE_ACTIONS.map((action) => {
-            const tier: ImageTier = "quick";
-            const binding = draft.imageBindings[action.id]?.[tier];
-            const value = binding ? `${binding.provider}:${binding.speed}` : "";
-            const valid = imageValues.has(value);
-            return (
-              <div
-                key={action.id}
-                className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_20rem] sm:items-center"
-              >
-                <span className="text-sm text-ink-600">{action.label}</span>
-                <Select
-                  value={valid ? value : ""}
-                  options={[
-                    ...(valid
-                      ? []
-                      : [{ value: "", label: "Select a priced model", disabled: true }]),
-                    ...imageOptions,
-                  ]}
-                  onChange={(event) => {
-                    const [provider, speed] = event.target.value.split(":");
-                    setImageBinding(
-                      action.id,
-                      tier,
-                      provider as ProviderId,
-                      speed as ImageSpeed,
-                    );
-                  }}
-                />
-              </div>
-            );
-          })}
-        </div>
-      </details>
+      {panel === "quality" && <GenerationTuningPanel />}
 
-      <div className="sticky bottom-0 flex flex-wrap items-center justify-between gap-3 border-t border-ink-100 bg-canvas/95 py-3 backdrop-blur">
-        <div className="text-xs text-ink-500">
-          {!ready ? (
-            <span className="flex items-center gap-1.5 text-amber-700">
-              <AlertTriangle className="size-3.5" />
-              Resolve pricing, assignments, and pending rate reviews before saving.
-            </span>
-          ) : (
-            <span className="flex items-center gap-1.5 text-emerald-700">
-              <ShieldCheck className="size-3.5" />
-              Ready to publish safely.
-            </span>
-          )}
-        </div>
-        <div className="flex gap-2">
-          {dirty && (
-            <Button variant="ghost" size="sm" onClick={discard} disabled={busy}>
-              Discard
-            </Button>
-          )}
-          <Button
-            size="sm"
-            onClick={onSave}
-            loading={saving}
-            disabled={!dirty || !ready || busy}
-          >
-            Save models &amp; costs
-          </Button>
-        </div>
-      </div>
+      <AdminSaveBar
+        dirty={dirty}
+        saving={saving}
+        saveDisabled={!ready || busy}
+        saveTitle={
+          !ready
+            ? "Resolve pricing, assignments, and pending rate reviews before saving."
+            : undefined
+        }
+        saveLabel="Save models & costs"
+        onSave={() => void onSave()}
+        onDiscard={discard}
+      />
     </div>
   );
 }

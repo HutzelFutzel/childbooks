@@ -1,11 +1,10 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
+import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { ArrowLeft, ChevronRight, Eye, FlaskConical, Loader2, Rocket, Search, ShieldAlert } from "lucide-react";
+import { ArrowLeft, Eye, FlaskConical, Loader2, Menu, Rocket, Search, ShieldAlert } from "lucide-react";
 import { Button } from "@/ui/components/Button";
-import { Tabs } from "@/ui/components/Tabs";
+import { Drawer } from "@/ui/components/Drawer";
 import { TopBar } from "@/ui/layout/TopBar";
 import { AuthMenu } from "@/ui/auth/AuthMenu";
 import { AuthDialog } from "@/ui/auth/AuthDialog";
@@ -21,31 +20,16 @@ import { useAdminHealth } from "@/state/adminHealthStore";
 import { useAccountUiStore } from "@/state/accountUiStore";
 import { useAppConfigStore } from "@/state/appConfigStore";
 import { useAdminAccess } from "@/state/adminAccessStore";
-import { AccessLoadState, filterReadableTabs, SectionGate } from "./AccessGate";
-import type { PermissionKey } from "@/core/config/permissions";
+import { AccessLoadState, SectionGate } from "./AccessGate";
 import {
   useAdminTab,
-  adminHref,
-  adminSectionHref,
   canonicalAdminPath,
-  ANALYSIS_GROUPS,
-  CONFIG_GROUPS,
-  MARKETING_GROUPS,
-  type AdminSection,
+  type CatalogSegment,
   type ConfigTabId,
-  type CommunicationTabId,
-  type LegalTabId,
-  type MarketingTabId,
 } from "./adminTabStore";
-import {
-  SECTIONS,
-  CONFIG_TAB_META,
-  ANALYSIS_TAB_META,
-  MARKETING_TAB_META,
-  COMMUNICATION_TABS,
-  LEGAL_TABS,
-  NAV_INDEX,
-} from "./adminNav";
+import { NAV_INDEX, NAV_TREE, resolveAdminPage, type NavLeaf } from "./adminNav";
+import { AdminSidebarNav } from "./AdminSidebarNav";
+import { AdminPageHeader } from "./AdminPageHeader";
 import { CommandPalette } from "./CommandPalette";
 import { ModelConfigTab } from "./tabs/ModelConfigTab";
 import { ArtStylesTab } from "./tabs/ArtStylesTab";
@@ -165,6 +149,43 @@ function BillingEnvBadge({ onOpenSystemHealth }: { onOpenSystemHealth: () => voi
   );
 }
 
+function SidebarChrome({
+  pathname,
+  catalogSegment,
+  canReach,
+  onSearch,
+  onNavigate,
+}: {
+  pathname: string;
+  catalogSegment: CatalogSegment;
+  canReach: (leaf: NavLeaf) => boolean;
+  onSearch: () => void;
+  onNavigate?: () => void;
+}) {
+  return (
+    <>
+      <button
+        type="button"
+        onClick={onSearch}
+        className="mb-4 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-ink-400 transition hover:bg-ink-50 hover:text-ink-600"
+      >
+        <Search className="size-3.5" />
+        Search
+        <kbd className="ml-auto rounded border border-ink-200 bg-white px-1 py-0.5 text-[10px] font-medium text-ink-400">
+          ⌘K
+        </kbd>
+      </button>
+      <AdminSidebarNav
+        tree={NAV_TREE}
+        pathname={pathname}
+        catalogSegment={catalogSegment}
+        canReach={canReach}
+        onNavigate={onNavigate}
+      />
+    </>
+  );
+}
+
 /**
  * Admin-only dashboard, served at `/admin`. The `isAdmin` check below is a
  * cosmetic gate — every write goes through the backend `/admin/*` routes which
@@ -180,36 +201,22 @@ export default function AdminApp() {
   const subscribeConfig = useAppConfigStore((s) => s.subscribe);
   const subscribeAdminModelCosts = useAppConfigStore((s) => s.subscribeAdminModelCosts);
   const section = useAdminTab((s) => s.section);
-  const setSection = useAdminTab((s) => s.setSection);
-  const configGroup = useAdminTab((s) => s.configGroup);
   const configTab = useAdminTab((s) => s.configTab);
+  const catalogSegment = useAdminTab((s) => s.catalogSegment);
   const setConfigTab = useAdminTab((s) => s.setConfigTab);
-  const marketingGroup = useAdminTab((s) => s.marketingGroup);
   const marketingTab = useAdminTab((s) => s.marketingTab);
-  const setMarketingTab = useAdminTab((s) => s.setMarketingTab);
   const communicationTab = useAdminTab((s) => s.communicationTab);
-  const setCommunicationTab = useAdminTab((s) => s.setCommunicationTab);
   const legalTab = useAdminTab((s) => s.legalTab);
-  const setLegalTab = useAdminTab((s) => s.setLegalTab);
-  // Only needed here for the breadcrumb — AnalysisTab owns its own copies for
-  // rendering its group pills.
-  const analysisGroup = useAdminTab((s) => s.analysisGroup);
-  const analysisTab = useAdminTab((s) => s.analysisTab);
   const ordersOpen = useAccountUiStore((s) => s.ordersOpen);
   const closeOrders = useAccountUiStore((s) => s.closeOrders);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
 
   const initAccess = useAdminAccess((s) => s.init);
   const reloadAccess = useAdminAccess((s) => s.reload);
   const accessLoaded = useAdminAccess((s) => s.loaded);
   const accessError = useAdminAccess((s) => s.error);
   const canRead = useAdminAccess((s) => s.canRead);
-  // `canRead` is a stable function reference for the whole session (it's a
-  // zustand action, never reassigned), so memoizing on it alone would freeze
-  // the nav-filtering results at whatever `canRead` returned during the very
-  // first render — before `initAccess()` (kicked off in a `useEffect` below)
-  // has had a chance to populate `me`. Depending on the actual state that
-  // `canRead` reads keeps these memos correctly reactive once access loads.
   const me = useAdminAccess((s) => s.me);
   const isOwnerAccess = useAdminAccess((s) => s.isOwner());
   const viewAsUid = useAdminAccess((s) => s.viewAsUid);
@@ -223,7 +230,6 @@ export default function AdminApp() {
   useEffect(() => {
     if (!isAdmin) return;
     subscribeConfig();
-    // The full rate table is an admin-only doc, so it has its own subscription.
     subscribeAdminModelCosts();
     void initAccess();
   }, [isAdmin, subscribeConfig, subscribeAdminModelCosts, initAccess]);
@@ -233,169 +239,65 @@ export default function AdminApp() {
     if (canonical !== pathname) router.replace(canonical);
   }, [pathname, router]);
 
-  useEffect(() => {
-    if (!isAdmin || !accessLoaded) return;
-    const current = NAV_INDEX.find((entry) => entry.href === canonicalAdminPath(pathname));
-    const currentIsReachable =
-      current && (current.ownerOnly ? isOwnerAccess : !current.key || canRead(current.key));
-    if (currentIsReachable) return;
-
-    const fallback = NAV_INDEX.find((entry) =>
-      entry.ownerOnly ? isOwnerAccess : !entry.key || canRead(entry.key),
-    );
-    if (fallback && fallback.href !== pathname) router.replace(fallback.href);
-  }, [accessLoaded, canRead, isAdmin, isOwnerAccess, me, pathname, router, viewAsUid]);
-
-  const active = SECTIONS.find((s) => s.id === section) ?? SECTIONS[0];
   const canReachEntry = (entry: (typeof NAV_INDEX)[number]) =>
     entry.ownerOnly ? isOwnerAccess : !entry.key || canRead(entry.key);
-  // Hide sections with no readable destination and point each remaining
-  // section at its first permitted page, not necessarily its global default.
-  //
-  // Reached only once access has loaded — the shell above renders the load state
-  // until then. This used to carry a `!accessLoaded ||` escape hatch that showed
-  // every section while the fetch was in flight, which is precisely what made a
-  // failed fetch survivable enough to be confusing: the sections stayed, so the
-  // dashboard looked functional while every tab inside it claimed no access.
-  const visibleSections = SECTIONS.filter(
-    (candidate) =>
-      (candidate.id !== "permissions" || isOwnerAccess) &&
-      NAV_INDEX.some(
-        (entry) => entry.id.startsWith(`${candidate.id}:`) && canReachEntry(entry),
-      ),
-  );
-  const hrefForSection = (target: AdminSection) =>
-    NAV_INDEX.find(
-      (entry) => entry.id.startsWith(`${target}:`) && canReachEntry(entry),
-    )?.href ?? adminSectionHref(target);
+  const canReachLeaf = (leaf: NavLeaf) =>
+    leaf.ownerOnly ? isOwnerAccess : !leaf.key || canRead(leaf.key);
 
-  const visibleConfigGroups = useMemo(
-    () =>
-      CONFIG_GROUPS.map((g) => ({ ...g, tabs: filterReadableTabs("configuration", g.tabs, canRead) })).filter(
-        (g) => g.tabs.length > 0,
-      ),
-    [canRead, me, previewAdmins, viewAsUid],
-  );
-  const activeGroup =
-    visibleConfigGroups.find((g) => g.id === configGroup) ?? visibleConfigGroups[0] ?? CONFIG_GROUPS[0];
-  const groupTabs = activeGroup.tabs.map((id) => ({
-    id,
-    label: CONFIG_TAB_META[id].label,
-    icon: CONFIG_TAB_META[id].icon,
-    href: adminHref("configuration", id),
-  }));
+  useEffect(() => {
+    if (!isAdmin || !accessLoaded) return;
+    const current = NAV_INDEX.find((entry) => {
+      const [path] = entry.href.split("?");
+      return path === canonicalAdminPath(pathname) && !entry.id.includes(":catalog:");
+    });
+    const currentIsReachable = current && canReachEntry(current);
+    if (currentIsReachable) return;
 
-  const visibleMarketingGroups = useMemo(
-    () =>
-      MARKETING_GROUPS.map((g) => ({ ...g, tabs: filterReadableTabs("marketing", g.tabs, canRead) })).filter(
-        (g) => g.tabs.length > 0,
-      ),
-    [canRead, me, previewAdmins, viewAsUid],
-  );
-  const activeMarketingGroup =
-    visibleMarketingGroups.find((g) => g.id === marketingGroup) ??
-    visibleMarketingGroups[0] ??
-    MARKETING_GROUPS[0];
-  const marketingGroupTabs = activeMarketingGroup.tabs.map((id) => ({
-    id,
-    label: MARKETING_TAB_META[id].label,
-    icon: MARKETING_TAB_META[id].icon,
-    href: adminHref("marketing", id),
-  }));
+    const fallback = NAV_INDEX.find(canReachEntry);
+    if (fallback && fallback.href.split("?")[0] !== pathname) router.replace(fallback.href.split("?")[0]!);
+  }, [accessLoaded, canRead, isAdmin, isOwnerAccess, me, pathname, router, viewAsUid]);
 
-  const visibleCommunicationTabs = useMemo(
-    () =>
-      COMMUNICATION_TABS.filter((t) => canRead(`communication.${t.id}` as PermissionKey)),
-    [canRead, me, previewAdmins, viewAsUid],
-  );
-  const visibleLegalTabs = useMemo(
-    () => LEGAL_TABS.filter((t) => canRead(`legal.${t.id}` as PermissionKey)),
-    [canRead, me, previewAdmins, viewAsUid],
-  );
-
-  // A persistent "you are here" trail — the deep nav (section → group → tab)
-  // is otherwise only visible in the pill row you clicked to get there, which
-  // scrolls out of the way once you're reading a tab's content. Segments with
-  // an `onClick` jump back up a level (e.g. clicking the group name resets to
-  // that group's first tab); the leaf segment is inert.
-  const breadcrumb: { label: string; href?: string }[] = (() => {
-    switch (section) {
-      case "configuration":
-        return [
-          { label: "Configuration", href: adminHref("configuration") },
-          {
-            label: activeGroup.label,
-            href: adminHref("configuration", activeGroup.tabs[0] ?? "overview"),
-          },
-          { label: CONFIG_TAB_META[configTab].label },
-        ];
-      case "analysis": {
-        const group = ANALYSIS_GROUPS.find((g) => g.id === analysisGroup) ?? ANALYSIS_GROUPS[0];
-        return [
-          { label: "Analysis", href: adminHref("analysis") },
-          {
-            label: group.label,
-            href: adminHref("analysis", group.tabs[0] ?? "users"),
-          },
-          { label: ANALYSIS_TAB_META[analysisTab].label },
-        ];
-      }
-      case "marketing":
-        return [
-          { label: "Marketing", href: adminHref("marketing") },
-          {
-            label: activeMarketingGroup.label,
-            href: adminHref("marketing", activeMarketingGroup.tabs[0] ?? "referrals"),
-          },
-          { label: MARKETING_TAB_META[marketingTab].label },
-        ];
-      case "communication":
-        return [
-          { label: "Communication", href: adminHref("communication") },
-          { label: COMMUNICATION_TABS.find((t) => t.id === communicationTab)?.label ?? "" },
-        ];
-      case "legal":
-        return [
-          { label: "Legal & Privacy", href: adminHref("legal") },
-          { label: LEGAL_TABS.find((t) => t.id === legalTab)?.label ?? "" },
-        ];
-      default:
-        return [{ label: active.label }];
-    }
-  })();
+  const page = resolveAdminPage(pathname, catalogSegment);
 
   return (
     <div
       className={cn(
         "flex flex-col overflow-hidden bg-canvas",
-        // Leaves room for the dev-environment banner (`h-6`) above it instead
-        // of overflowing past the viewport — see ui/layout/DevEnvironmentBanner.
         isDev() ? "h-[calc(100vh-1.5rem)]" : "h-screen",
       )}
     >
       <TopBar
+        contextLabel="Admin"
         right={
           <>
             {isAdmin && (
-              <BillingEnvBadge
-                onOpenSystemHealth={() => setConfigTab("system")}
-              />
+              <BillingEnvBadge onOpenSystemHealth={() => setConfigTab("system")} />
             )}
             <HelpButton />
             <AuthMenu />
           </>
         }
         left={
-          <Button
-            variant="ghost"
-            size="sm"
-            leftIcon={<ArrowLeft className="size-4" />}
-            onClick={() => router.push("/studio")}
-            aria-label="Back to Studio"
-            className="px-2 sm:px-3"
-          >
-            <span className="hidden sm:inline">Studio</span>
-          </Button>
+          <>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="sm:hidden"
+              leftIcon={<Menu className="size-4" />}
+              onClick={() => setNavOpen(true)}
+              aria-label="Open admin navigation"
+            />
+            <Button
+              variant="ghost"
+              size="sm"
+              leftIcon={<ArrowLeft className="size-4" />}
+              onClick={() => router.push("/studio")}
+              aria-label="Back to Studio"
+              className="px-2 sm:px-3"
+            >
+              <span className="hidden sm:inline">Studio</span>
+            </Button>
+          </>
         }
       />
 
@@ -410,86 +312,42 @@ export default function AdminApp() {
           <AccessLoadState error={accessError} onRetry={() => void reloadAccess()} />
         ) : (
           <>
-            <aside className="hidden w-56 shrink-0 border-r border-ink-100 bg-white/60 px-3 py-5 sm:block">
-              <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-                Admin
-              </p>
-              <button
-                type="button"
-                onClick={() => setPaletteOpen(true)}
-                className="mb-3 flex w-full items-center gap-2 rounded-lg bg-ink-50 px-3 py-2 text-xs font-medium text-ink-400 ring-1 ring-inset ring-ink-100 transition hover:bg-ink-100 hover:text-ink-600"
-              >
-                <Search className="size-3.5" />
-                Search
-                <kbd className="ml-auto rounded border border-ink-200 bg-white px-1 py-0.5 text-[10px] font-semibold text-ink-400">
-                  ⌘K
-                </kbd>
-              </button>
-              <nav className="space-y-1">
-                {visibleSections.map((s) => (
-                  <Link
-                    key={s.id}
-                    href={section === s.id ? canonicalAdminPath(pathname) : hrefForSection(s.id)}
-                    aria-current={section === s.id ? "page" : undefined}
-                    className={cn(
-                      "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                      section === s.id
-                        ? "bg-brand-50 text-brand-700"
-                        : "text-ink-600 hover:bg-ink-100",
-                    )}
-                  >
-                    {s.icon}
-                    {s.label}
-                  </Link>
-                ))}
-              </nav>
+            <aside className="hidden w-56 shrink-0 overflow-y-auto border-r border-ink-100 bg-white px-3 py-4 lg:block">
+              <SidebarChrome
+                pathname={pathname}
+                catalogSegment={catalogSegment}
+                canReach={canReachLeaf}
+                onSearch={() => setPaletteOpen(true)}
+              />
             </aside>
 
-            <div className="min-w-0 flex-1 overflow-y-auto">
-              {/* Mobile section switcher */}
-              <div className="sticky top-0 z-10 border-b border-ink-100 bg-canvas/80 px-5 py-2 backdrop-blur sm:hidden">
-                <Tabs
-                  items={visibleSections.map((s) => ({
-                    id: s.id,
-                    label: s.label,
-                    icon: s.icon,
-                    href:
-                      section === s.id
-                        ? canonicalAdminPath(pathname)
-                        : hrefForSection(s.id),
-                  }))}
-                  value={section}
-                  onChange={(id) => setSection(id as AdminSection)}
+            <Drawer
+              open={navOpen}
+              onClose={() => setNavOpen(false)}
+              side="left"
+              title="Admin"
+              widthClass="max-w-[18rem]"
+            >
+              <div className="px-3 py-3">
+                <SidebarChrome
+                  pathname={pathname}
+                  catalogSegment={catalogSegment}
+                  canReach={canReachLeaf}
+                  onSearch={() => {
+                    setNavOpen(false);
+                    setPaletteOpen(true);
+                  }}
+                  onNavigate={() => setNavOpen(false)}
                 />
               </div>
+            </Drawer>
 
-              <div className="mx-auto w-full max-w-5xl px-5 py-8">
-                <nav className="mb-2 flex flex-wrap items-center gap-1 text-xs font-medium text-ink-400">
-                  {breadcrumb.map((crumb, i) => (
-                    <span key={i} className="flex items-center gap-1">
-                      {i > 0 && <ChevronRight className="size-3 shrink-0" />}
-                      {crumb.href && i !== breadcrumb.length - 1 ? (
-                        <Link
-                          href={crumb.href}
-                          className="rounded px-0.5 transition-colors hover:text-ink-600 hover:underline"
-                        >
-                          {crumb.label}
-                        </Link>
-                      ) : (
-                        <span className={i === breadcrumb.length - 1 ? "text-ink-600" : undefined}>
-                          {crumb.label}
-                        </span>
-                      )}
-                    </span>
-                  ))}
-                </nav>
-                <header className="mb-6">
-                  <h1 className="text-xl font-bold text-ink-900">{active.label}</h1>
-                  <p className="text-sm text-ink-500">{active.description}</p>
-                </header>
+            <div className="min-w-0 flex-1 overflow-y-auto">
+              <div className="mx-auto w-full max-w-7xl px-5 py-6 sm:px-8">
+                <AdminPageHeader title={page.title} description={page.description} />
 
                 {viewAsUid && (
-                  <div className="mb-5 flex items-center justify-between gap-3 rounded-xl bg-amber-50 px-4 py-2.5 text-sm text-amber-800 ring-1 ring-amber-100">
+                  <div className="mb-5 flex items-center justify-between gap-3 rounded-lg bg-amber-50 px-4 py-2.5 text-sm text-amber-800 ring-1 ring-amber-100">
                     <span className="flex items-center gap-2">
                       <Eye className="size-4" />
                       Previewing as{" "}
@@ -505,116 +363,39 @@ export default function AdminApp() {
                 )}
 
                 {section === "configuration" && (
-                  <div className="space-y-5">
-                    <div className="flex flex-wrap gap-2">
-                      {visibleConfigGroups.map((group) => (
-                        <Link
-                          key={group.id}
-                          href={adminHref(
-                            "configuration",
-                            group.tabs[0] as ConfigTabId,
-                          )}
-                          aria-current={configGroup === group.id ? "location" : undefined}
-                          className={cn(
-                            "rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
-                            configGroup === group.id
-                              ? "bg-brand-600 text-white shadow-sm"
-                              : "bg-white text-ink-600 ring-1 ring-inset ring-ink-100 hover:bg-ink-50",
-                          )}
-                        >
-                          {group.label}
-                        </Link>
-                      ))}
-                    </div>
-                    <p className="text-xs text-ink-400">{activeGroup.description}</p>
-                    <Tabs
-                      items={groupTabs}
-                      value={configTab}
-                      onChange={(id) => setConfigTab(id as ConfigTabId)}
-                    />
-                    <SectionGate permissionKey={`configuration.${configTab}`}>
-                      <ConfigTabPanel tab={configTab} />
-                    </SectionGate>
-                  </div>
+                  <SectionGate permissionKey={`configuration.${configTab}`}>
+                    <ConfigTabPanel tab={configTab} />
+                  </SectionGate>
                 )}
-
                 {section === "analysis" && <AnalysisTab />}
                 {section === "permissions" && isOwnerAccess && <PermissionsTab />}
                 {section === "marketing" && (
-                  <div className="space-y-5">
-                    <div className="flex flex-wrap gap-2">
-                      {visibleMarketingGroups.map((group) => (
-                        <Link
-                          key={group.id}
-                          href={adminHref(
-                            "marketing",
-                            group.tabs[0] as MarketingTabId,
-                          )}
-                          aria-current={marketingGroup === group.id ? "location" : undefined}
-                          className={cn(
-                            "rounded-full px-3 py-1.5 text-xs font-semibold transition-colors",
-                            marketingGroup === group.id
-                              ? "bg-brand-600 text-white shadow-sm"
-                              : "bg-white text-ink-600 ring-1 ring-inset ring-ink-100 hover:bg-ink-50",
-                          )}
-                        >
-                          {group.label}
-                        </Link>
-                      ))}
-                    </div>
-                    <p className="text-xs text-ink-400">{activeMarketingGroup.description}</p>
-                    <Tabs
-                      items={marketingGroupTabs}
-                      value={marketingTab}
-                      onChange={(id) => setMarketingTab(id as MarketingTabId)}
-                    />
-                    <SectionGate permissionKey={`marketing.${marketingTab}`}>
-                      {marketingTab === "referrals" && <ReferralsTab />}
-                      {marketingTab === "affiliates" && <AffiliatesTab />}
-                      {marketingTab === "campaigns" && <CampaignsTab />}
-                      {marketingTab === "coupons" && <CouponsTab />}
-                      {marketingTab === "surveys" && <SurveysTab />}
-                      {marketingTab === "announcements" && <AnnouncementsTab />}
-                      {marketingTab === "seo" && <SeoTab />}
-                      {marketingTab === "blog" && <BlogTab />}
-                      {marketingTab === "branding" && <BrandingTab />}
-                      {marketingTab === "qrCodes" && <QrCodesTab />}
-                    </SectionGate>
-                  </div>
+                  <SectionGate permissionKey={`marketing.${marketingTab}`}>
+                    {marketingTab === "referrals" && <ReferralsTab />}
+                    {marketingTab === "affiliates" && <AffiliatesTab />}
+                    {marketingTab === "campaigns" && <CampaignsTab />}
+                    {marketingTab === "coupons" && <CouponsTab />}
+                    {marketingTab === "surveys" && <SurveysTab />}
+                    {marketingTab === "announcements" && <AnnouncementsTab />}
+                    {marketingTab === "seo" && <SeoTab />}
+                    {marketingTab === "blog" && <BlogTab />}
+                    {marketingTab === "branding" && <BrandingTab />}
+                    {marketingTab === "qrCodes" && <QrCodesTab />}
+                  </SectionGate>
                 )}
                 {section === "communication" && (
-                  <div className="space-y-6">
-                    <Tabs
-                      items={visibleCommunicationTabs.map((tab) => ({
-                        ...tab,
-                        href: adminHref("communication", tab.id),
-                      }))}
-                      value={communicationTab}
-                      onChange={(id) => setCommunicationTab(id as CommunicationTabId)}
-                    />
-                    <SectionGate permissionKey={`communication.${communicationTab}`}>
-                      {communicationTab === "contact" && <ContactInboxTab />}
-                      {communicationTab === "transactional-emails" && <EmailTab />}
-                      {communicationTab === "admin-slack" && <SlackTab />}
-                    </SectionGate>
-                  </div>
+                  <SectionGate permissionKey={`communication.${communicationTab}`}>
+                    {communicationTab === "contact" && <ContactInboxTab />}
+                    {communicationTab === "transactional-emails" && <EmailTab />}
+                    {communicationTab === "admin-slack" && <SlackTab />}
+                  </SectionGate>
                 )}
                 {section === "legal" && (
-                  <div className="space-y-6">
-                    <Tabs
-                      items={visibleLegalTabs.map((tab) => ({
-                        ...tab,
-                        href: adminHref("legal", tab.id),
-                      }))}
-                      value={legalTab}
-                      onChange={(id) => setLegalTab(id as LegalTabId)}
-                    />
-                    <SectionGate permissionKey={`legal.${legalTab}`}>
-                      {legalTab === "documents" && <LegalDocsTab />}
-                      {legalTab === "cookies" && <CookieConsentTab />}
-                      {legalTab === "gdpr" && <GdprTab />}
-                    </SectionGate>
-                  </div>
+                  <SectionGate permissionKey={`legal.${legalTab}`}>
+                    {legalTab === "documents" && <LegalDocsTab />}
+                    {legalTab === "cookies" && <CookieConsentTab />}
+                    {legalTab === "gdpr" && <GdprTab />}
+                  </SectionGate>
                 )}
               </div>
             </div>

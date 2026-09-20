@@ -30,6 +30,7 @@ import {
 } from "../books-frontend/src/core/guide/components";
 import {
   createDefaultGuidePlaylist,
+  normalizeGuidePlaylist,
   resolveGuidePlaylist,
 } from "../books-frontend/src/core/guide/playlist";
 import {
@@ -478,7 +479,10 @@ for (const input of junk) {
     const line = composeGuideReply({
       acknowledgement: "I have added aren, miles, and mika to the story. What kind of adventure would you like?",
       statingFacts: true,
-      landed: false,
+      applied: [],
+      unchanged: [],
+      rejected: [],
+      skipped: false,
       cursor: freshCursor,
       project: fresh,
     });
@@ -493,12 +497,74 @@ for (const input of junk) {
     }
   }
 
+  /**
+   * A fact the book ALREADY holds is a confirmation, not a misunderstanding.
+   *
+   * This is the screenshot bug: "Micah and Neil, both 5 years old" typed twice.
+   * The second turn changes nothing, and the old reply treated "changed nothing"
+   * as "understood nothing" — so a reader who repeated themselves got told, twice,
+   * that they had not been understood.
+   */
+  cases += 1;
+  {
+    const line = composeGuideReply({
+      acknowledgement: "",
+      statingFacts: true,
+      applied: [],
+      unchanged: ["heroes"],
+      rejected: [],
+      skipped: false,
+      cursor: namedCursor,
+      project: named,
+    });
+    if (/didn't quite catch/i.test(line)) {
+      fail(`Restating a fact the book already holds was called a misunderstanding: "${line}".`);
+    }
+    if (!line.includes(guideAsk(namedCursor, named))) {
+      fail(`A restated fact didn't move the conversation on: "${line}".`);
+    }
+  }
+
+  // A refusal the reader can act on is spoken; a bare Zod issue is not.
+  cases += 1;
+  {
+    const spoken = composeGuideReply({
+      acknowledgement: "",
+      statingFacts: true,
+      applied: [],
+      unchanged: [],
+      rejected: [{ key: "heroAges", reason: "no cast member named Sam", speak: "I don't have Sam in the story yet." }],
+      skipped: false,
+      cursor: freshCursor,
+      project: fresh,
+    });
+    if (!/don't have Sam/i.test(spoken)) {
+      fail(`A refusal worth hearing wasn't spoken: "${spoken}".`);
+    }
+    const silent = composeGuideReply({
+      acknowledgement: "",
+      statingFacts: true,
+      applied: [],
+      unchanged: [],
+      rejected: [{ key: "audience", reason: "ageRangeId: Required" }],
+      skipped: false,
+      cursor: freshCursor,
+      project: fresh,
+    });
+    if (/ageRangeId/.test(silent)) {
+      fail(`A technical rejection reason leaked into the transcript: "${silent}".`);
+    }
+  }
+
   cases += 1;
   {
     const line = composeGuideReply({
       acknowledgement: "Got Maya down. What theme shall we pick?",
       statingFacts: true,
-      landed: true,
+      applied: ["heroes"],
+      unchanged: [],
+      rejected: [],
+      skipped: false,
       cursor: namedCursor,
       project: named,
     });
@@ -552,6 +618,101 @@ for (const input of junk) {
       fail("A transcript with only the reader's words opened with the guide saying nothing.");
     } else if (!opening.includes(guideAsk(afterDefault, guided))) {
       fail(`A reader-first transcript asked the wrong thing: "${opening}".`);
+    }
+  }
+}
+
+// --- An admin's opening question opens, and then gets out of the way --------
+
+/**
+ * The override exists so the first question can ask for more than the catalog
+ * does — names, how they know each other, and ages in one sentence, instead of
+ * names now and ages after. That only works if it stops being said the moment
+ * there is something to chase: a reader who typed "Micah and Neil" and is missing
+ * two ages needs to hear which fact is missing, and hearing the opening question
+ * again instead is indistinguishable from not having been read.
+ *
+ * So: spoken on an empty component, silent on a half-filled one, and never the
+ * reason a book state ends up with no question at all.
+ */
+{
+  const OPENING = "Tell us who's in the book, how they know each other, and their ages.";
+  const overridden = resolveGuidePlaylist(
+    normalizeGuidePlaylist({
+      version: 1,
+      entries: createDefaultGuidePlaylist().entries.map((entry) =>
+        entry.id === "story-cast" ? { ...entry, ask: OPENING } : entry,
+      ),
+    }),
+  );
+
+  cases += 1;
+  if (!overridden.some((component) => component.ask === OPENING)) {
+    fail("An opening question set on story-cast never reached the resolved playlist.");
+  }
+
+  const empty = withGuidedBriefIfMissing(
+    GUIDE_BOOK_STATES.find(({ name }) => name === "fresh book")!.project,
+  );
+  const partial = GUIDE_BOOK_STATES.find(({ name }) => name === "hero named")!.project;
+
+  cases += 1;
+  const emptyCursor = nextGuideStep(overridden, empty, []);
+  if (emptyCursor.component?.id !== "story-cast") {
+    fail(`The override check expected story-cast on an empty book, got "${emptyCursor.component?.id}".`);
+  } else if (guideAsk(emptyCursor, empty) !== OPENING) {
+    fail(
+      `An empty book was asked "${guideAsk(emptyCursor, empty)}" instead of the admin's ` +
+        `opening question.`,
+    );
+  }
+
+  cases += 1;
+  const partialCursor = nextGuideStep(overridden, partial, []);
+  if (partialCursor.component?.id !== "story-cast") {
+    fail(`The override check expected story-cast on a part-named book, got "${partialCursor.component?.id}".`);
+  } else {
+    const line = guideAsk(partialCursor, partial);
+    if (line === OPENING) {
+      fail(
+        "A book that already has a hero was asked the opening question again, instead of what " +
+          "it is still missing.",
+      );
+    }
+    if (line !== partialCursor.blockers[0]) {
+      fail(`A part-filled component asked "${line}" rather than its blocker.`);
+    }
+  }
+
+  // Nothing about the override may leave a state speechless, including the ones
+  // where it is not the line that gets said.
+  for (const { name, project } of GUIDE_BOOK_STATES) {
+    cases += 1;
+    const line = guideAsk(nextGuideStep(overridden, project, []), project);
+    if (!line.trim()) {
+      fail(`With an opening question configured, a "${name}" book was asked nothing.`);
+    }
+  }
+
+  // And an override on a component nobody answers in prose cannot change a line:
+  // normalization drops it, so every state says exactly what it said before.
+  cases += 1;
+  const onArtifact = resolveGuidePlaylist(
+    normalizeGuidePlaylist({
+      version: 1,
+      entries: createDefaultGuidePlaylist().entries.map((entry) =>
+        entry.id === "page-art" ? { ...entry, ask: OPENING } : entry,
+      ),
+    }),
+  );
+  for (const { name, project } of GUIDE_BOOK_STATES) {
+    const before = guideAsk(nextGuideStep(playlist, project, []), project);
+    const after = guideAsk(nextGuideStep(onArtifact, project, []), project);
+    if (before !== after) {
+      fail(
+        `An opening question on page-art, which answers no facts, changed what a "${name}" book ` +
+          `is asked: "${before}" became "${after}".`,
+      );
     }
   }
 }

@@ -61,13 +61,11 @@ export interface RecordGuideTurnArgs {
 }
 
 /**
- * Append one turn. Returns the id so the route can hand it back and the client can
- * quote it in a bug report.
+ * Append one turn. Returns the id so the route can hand it back, the client can
+ * report what actually happened, and a parent can quote it in a bug report.
  *
- * Records the proposal, not the outcome: the patch is applied on the client
- * against the live config, so what finally landed is visible in the project's own
- * history. Recording a guess at the result here would produce a log that disagrees
- * with the book, which is worse than one that admits its scope.
+ * This half is the proposal. The outcome arrives separately, from the browser
+ * that applied it — see {@link recordGuideTurnOutcome}.
  */
 export async function recordGuideTurn(args: RecordGuideTurnArgs): Promise<string> {
   ensureAdmin();
@@ -86,9 +84,89 @@ export async function recordGuideTurn(args: RecordGuideTurnArgs): Promise<string
       reply: args.result.reply.slice(0, MAX_TEXT),
       confidence: args.result.confidence,
       proposedSlots: args.proposedSlots,
+      /**
+       * The claims, with the words each one rests on.
+       *
+       * This is what turns the log from an anecdote into a corpus. A row saying
+       * "proposed heroes, confidence 0.6" cannot be replayed or argued with; a row
+       * holding the message, the claim and the quoted evidence can be re-run
+       * against a new prompt and scored. Evidence is capped per claim rather than
+       * dropped, because the quotation is the part worth keeping.
+       */
+      claims: args.result.claims.slice(0, 24).map((claim) => ({
+        slot: claim.slot,
+        evidence: claim.evidence.slice(0, 400),
+        confidence: claim.confidence,
+      })),
+      /**
+       * And everything that did NOT make it, with the reason.
+       *
+       * The rows anyone improving extraction wants first. A turn where the model
+       * quoted words the parent never typed, or named a field that does not exist,
+       * used to leave no trace at all — the log recorded an empty patch, which
+       * reads identically to a greeting.
+       */
+      refused: args.result.refused.slice(0, 24).map((claim) => ({
+        slot: claim.slot,
+        refusal: claim.refusal,
+        reason: claim.reason.slice(0, 400),
+        confidence: claim.confidence,
+      })),
+      repairs: args.result.repairs,
       skipped: args.result.skip,
       model: { provider: args.model.provider, id: args.model.id },
       latencyMs: args.latencyMs,
     });
   return turnId;
+}
+
+export interface GuideTurnOutcomeReport {
+  /** Slots that changed the book. */
+  applied: string[];
+  /** Slots the reader restated — already true. */
+  unchanged: string[];
+  /** Slots the client's validator refused, with its reason. */
+  rejected: { key: string; reason: string }[];
+  /** True when the reply told the reader we hadn't understood. */
+  admittedFailure: boolean;
+}
+
+/**
+ * What the browser actually did with the proposal.
+ *
+ * Split from the write above because only the client knows. The patch is applied
+ * against the live project inside `patchCurrent`, which may have moved on since
+ * the request was sent, and against the reader's own config — so the server's dry
+ * run is a good prediction and not a record. Writing a prediction into the log as
+ * though it were a result would give us a corpus that agrees with itself and
+ * disagrees with the book, which is the one failure mode a log must not have.
+ *
+ * Merged into the existing row rather than appended as a second one, so a turn
+ * stays a turn. Best-effort on both sides: a reader who closes the tab leaves a
+ * row with no outcome, and a row with no outcome is honest about that rather than
+ * claiming the turn did nothing.
+ */
+export async function recordGuideTurnOutcome(args: {
+  uid: string;
+  turnId: string;
+  outcome: GuideTurnOutcomeReport;
+}): Promise<void> {
+  ensureAdmin();
+  await getFirestore()
+    .doc(`users/${args.uid}/guideTurns/${args.turnId}`)
+    .set(
+      {
+        outcome: {
+          applied: args.outcome.applied.slice(0, 24),
+          unchanged: args.outcome.unchanged.slice(0, 24),
+          rejected: args.outcome.rejected.slice(0, 24).map((rejection) => ({
+            key: rejection.key,
+            reason: rejection.reason.slice(0, 400),
+          })),
+          admittedFailure: args.outcome.admittedFailure,
+          at: Date.now(),
+        },
+      },
+      { merge: true },
+    );
 }

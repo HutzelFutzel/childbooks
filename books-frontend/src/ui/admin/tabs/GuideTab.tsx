@@ -14,17 +14,25 @@
  *
  * **Which questions the guide asks** is editorial, and deliberately hard to get
  * badly wrong. The catalog in code owns what a component means, when it counts as
- * finished and what it depends on; this tab only reorders, retitles, and switches
- * off. `normalizeGuidePlaylist` repairs whatever is saved, so the failure mode of
+ * finished and what it depends on; this tab only reorders, retitles, rewords the
+ * opening question, and switches off. `normalizeGuidePlaylist` repairs whatever
+ * is saved, so the failure mode of
  * a careless edit is an odd order, not a book the pipeline refuses to make. The
  * lint warnings below are shown for the mistakes normalization cannot fix by
  * itself — turning off something another component needs — and they do not block
  * saving, because a playlist you cannot save is a state the dashboard cannot get
  * out of.
  *
+ * **How sure the chat has to be** before it writes a fact is the third, and the
+ * one whose failures are quietest. Every value in that section was a constant in
+ * the pipeline until now, which meant any experiment was a deploy — so in
+ * practice none were run, and the numbers that shipped were the numbers nobody
+ * had measured. They are clamped on the way in, so the worst a careless edit does
+ * is make the guide cautious or chatty; it cannot make it stop reading.
+ *
  * What is NOT here: the model that reads the reader's answers, and the prompt it
  * runs. Those are one row in Configuration → Models (the `guideInterpret` slot)
- * and one entry in Prompts, and moving them here would mean two places to look
+ * and two entries in Prompts, and moving them here would mean two places to look
  * for the same kind of setting.
  */
 import { useEffect, useMemo, useState } from "react";
@@ -32,9 +40,11 @@ import { toast } from "sonner";
 import { ArrowDown, ArrowUp, RotateCcw, TriangleAlert } from "lucide-react";
 import {
   createDefaultGuideConfig,
+  createDefaultGuideExtraction,
   describeGuideRollout,
   GUIDE_ROLLOUT_MODES,
   type GuideConfig,
+  type GuideExtractionConfig,
   type GuideRolloutMode,
 } from "../../../core/config/guide";
 import {
@@ -44,10 +54,14 @@ import {
   resolveGuidePlaylist,
   type GuidePlaylistEntry,
 } from "../../../core/guide/playlist";
-import { GUIDE_COMPONENTS, type GuideComponentId } from "../../../core/guide/components";
+import {
+  componentTakesAnswers,
+  GUIDE_COMPONENTS,
+  type GuideComponentId,
+} from "../../../core/guide/components";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { Button } from "../../components/Button";
-import { Field, Input } from "../../components/Input";
+import { Field, Input, Textarea } from "../../components/Input";
 import { useReadOnly } from "../../components/ReadOnlyContext";
 import { Select } from "../../components/Select";
 import { Toggle } from "../../components/Toggle";
@@ -76,6 +90,98 @@ const MODE_COPY: Record<GuideRolloutMode, { label: string; detail: string }> = {
     detail: "Every customer gets the guided studio unless they explicitly ask for the wizard.",
   },
 };
+
+/** A 0–1 confidence as the percentage an admin is actually thinking in. */
+function percent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+/**
+ * The extraction knobs, described by what going wrong looks like.
+ *
+ * Each detail line names the failure rather than the mechanism, because the
+ * mechanism ("confidence floor") is the part that is already in the label and the
+ * failure is the part nobody can guess. All five were constants in the pipeline
+ * until now, so the shipped numbers are the ones that were never measured — this
+ * page exists so the next set can be.
+ */
+const EXTRACTION_FIELDS: {
+  key: string;
+  label: string;
+  detail: string;
+  min: number;
+  max: number;
+  step: number;
+  read: (config: GuideExtractionConfig) => number;
+  write: (config: GuideExtractionConfig, value: number) => GuideExtractionConfig;
+}[] = [
+  {
+    key: "floor",
+    label: "Ignore facts less sure than",
+    detail:
+      "Below this, a fact is not written at all. Raise it and the guide asks more questions; lower it and it starts acting on things the parent only implied.",
+    min: 0,
+    max: 0.9,
+    step: 0.05,
+    read: (c) => c.thresholds.floor,
+    write: (c, floor) => ({ ...c, thresholds: { ...c.thresholds, floor } }),
+  },
+  {
+    key: "readBack",
+    label: "Say it back when less sure than",
+    detail:
+      "The guide names the value out loud so a mishearing is corrected in the next breath rather than found after the pictures are drawn. Costs a clause in the reply.",
+    min: 0,
+    max: 1,
+    step: 0.05,
+    read: (c) => c.thresholds.readBack,
+    write: (c, readBack) => ({ ...c, thresholds: { ...c.thresholds, readBack } }),
+  },
+  {
+    key: "overwrite",
+    label: "Ask before changing, unless surer than",
+    detail:
+      "Only applies to facts already decided. Filling an empty answer wrongly is cheap; overwriting a name the cast sheets were drawn from is not, so this should sit high.",
+    min: 0,
+    max: 1,
+    step: 0.05,
+    read: (c) => c.thresholds.overwrite,
+    write: (c, overwrite) => ({ ...c, thresholds: { ...c.thresholds, overwrite } }),
+  },
+  {
+    key: "repairAttempts",
+    label: "Second attempts when the book refuses a fact",
+    detail:
+      "Most failures are a shape the validator won't take, not a misunderstanding — showing the model the objection usually fixes it. Each attempt costs a round trip the parent waits through. 0 disables.",
+    min: 0,
+    max: 3,
+    step: 1,
+    read: (c) => c.repairAttempts,
+    write: (c, repairAttempts) => ({ ...c, repairAttempts }),
+  },
+  {
+    key: "temperature",
+    label: "Interpreter temperature",
+    detail:
+      "Leave at 0 unless you are measuring something. This step is reading, not writing; variety here means the same sentence is read differently on different days.",
+    min: 0,
+    max: 1,
+    step: 0.1,
+    read: (c) => c.temperature,
+    write: (c, temperature) => ({ ...c, temperature }),
+  },
+  {
+    key: "maxMessageChars",
+    label: "Longest message the guide will read",
+    detail:
+      "Must stay above 40,000 if parents are invited to paste their own story — that is what the story slot accepts, and a shorter cap rejects the message before it is read.",
+    min: 500,
+    max: 50_000,
+    step: 500,
+    read: (c) => c.maxMessageChars,
+    write: (c, maxMessageChars) => ({ ...c, maxMessageChars }),
+  },
+];
 
 /** The three states of a playlist entry's skippability, including "inherit". */
 const SKIP_OPTIONS = [
@@ -121,6 +227,16 @@ export function GuideTab() {
     setDirty(true);
   };
 
+  const setExtraction = (next: GuideExtractionConfig) => {
+    setDraft((d) => ({ ...d, extraction: next }));
+    setDirty(true);
+  };
+
+  const extractionIsDefault =
+    JSON.stringify(draft.extraction) === JSON.stringify(createDefaultGuideExtraction());
+
+  const resetExtraction = () => setExtraction(createDefaultGuideExtraction());
+
   const setEntries = (next: GuidePlaylistEntry[]) => {
     setDraft((d) => ({ ...d, playlist: { ...d.playlist, entries: next } }));
     setDirty(true);
@@ -159,6 +275,15 @@ export function GuideTab() {
     const next = { ...entry };
     if (value.trim()) next.title = value;
     else delete next.title;
+    setEntries(entries.map((e) => (e.id === id ? next : e)));
+  };
+
+  const setAsk = (id: GuideComponentId, value: string) => {
+    const entry = entries.find((e) => e.id === id);
+    if (!entry) return;
+    const next = { ...entry };
+    if (value.trim()) next.ask = value;
+    else delete next.ask;
     setEntries(entries.map((e) => (e.id === id ? next : e)));
   };
 
@@ -297,8 +422,72 @@ export function GuideTab() {
       </Section>
 
       <Section
+        title="How the chat reads what a parent types"
+        hint="The interpreter turns a sentence into facts about the book. These settings decide how sure it has to be before acting, and how hard it tries when the book refuses what it proposed."
+        action={
+          !readOnly && !extractionIsDefault ? (
+            <Button variant="ghost" onClick={resetExtraction}>
+              <RotateCcw className="size-3.5" />
+              Reset to defaults
+            </Button>
+          ) : undefined
+        }
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          {EXTRACTION_FIELDS.map((field) => (
+            <Field key={field.key} label={field.label}>
+              <Input
+                type="number"
+                min={field.min}
+                max={field.max}
+                step={field.step}
+                disabled={readOnly}
+                value={field.read(draft.extraction)}
+                onChange={(e) => {
+                  const parsed = Number.parseFloat(e.target.value);
+                  setExtraction(
+                    field.write(
+                      draft.extraction,
+                      Number.isFinite(parsed)
+                        ? Math.min(field.max, Math.max(field.min, parsed))
+                        : field.read(createDefaultGuideExtraction()),
+                    ),
+                  );
+                }}
+              />
+              <p className="mt-1 text-[11px] leading-relaxed text-ink-400">{field.detail}</p>
+            </Field>
+          ))}
+        </div>
+
+        {/*
+          Stated as a sentence rather than left implicit in three numbers. The
+          thresholds only make sense in relation to each other, and an admin who
+          sets "ask before changing" below "say it back" has built a guide that
+          reads a fact aloud and then changes it without asking — legal, saved,
+          and nothing on the page would otherwise say it was odd.
+        */}
+        <p className="rounded-lg bg-ink-50 px-3 py-2 text-[11px] leading-relaxed text-ink-500">
+          As set: the guide ignores anything it is less than{" "}
+          <strong>{percent(draft.extraction.thresholds.floor)}</strong> sure of, says a fact back
+          to the parent when it is under <strong>{percent(draft.extraction.thresholds.readBack)}</strong>{" "}
+          sure, and asks before <em>changing</em> something already decided unless it is at least{" "}
+          <strong>{percent(draft.extraction.thresholds.overwrite)}</strong> sure.
+          {draft.extraction.thresholds.overwrite < draft.extraction.thresholds.readBack && (
+            <>
+              {" "}
+              <span className="font-semibold text-amber-700">
+                That ordering is unusual — it will change settled facts more readily than it
+                mentions new ones.
+              </span>
+            </>
+          )}
+        </p>
+      </Section>
+
+      <Section
         title="What the guide asks, and in what order"
-        hint="Drag-free reordering: move a question up or down, retitle it, make it optional, or switch it off entirely. Questions that depend on another are moved below it when you save."
+        hint="Drag-free reordering: move a question up or down, retitle it, word its opening yourself, make it optional, or switch it off entirely. Questions that depend on another are moved below it when you save."
         action={
           !readOnly && !playlistIsDefault ? (
             <Button
@@ -429,6 +618,23 @@ export function GuideTab() {
                       onChange={(e) => setSkippable(entry.id, e.target.value)}
                       className="h-9 text-xs"
                     />
+                    {componentTakesAnswers(component) && (
+                      <div className="space-y-1 sm:col-span-2">
+                        <Textarea
+                          value={entry.ask ?? ""}
+                          placeholder="Opening question — leave blank for the guide's own wording"
+                          maxLength={400}
+                          rows={2}
+                          onChange={(e) => setAsk(entry.id, e.target.value)}
+                          className="text-xs"
+                        />
+                        <p className="text-[10px] leading-relaxed text-ink-400">
+                          Asked only the first time, while this is still empty. After that the
+                          guide names exactly what it&rsquo;s still missing, so it can ask for one
+                          child&rsquo;s age rather than repeating the question.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

@@ -37,7 +37,23 @@ import {
 } from "../guide/slots";
 import { GUIDE_COMPONENTS, isGuideComponentId, type GuideComponentId } from "../guide/components";
 import type { ResolvedGuideComponent } from "../guide/playlist";
-import { guidePatchShapeLines, type GuidePatchContext } from "../guide/patch";
+import {
+  applyGuidePatch,
+  guidePatchExampleLines,
+  guidePatchShapeLines,
+  type GuidePatchContext,
+} from "../guide/patch";
+import {
+  claimsToPatch,
+  disposeGuideClaims,
+  guideClaimSchema,
+  guideConfirmationQuestion,
+  screenGuideClaims,
+  REPAIRABLE_CLAIM_REFUSALS,
+  type GuideClaim,
+  type GuideClaimThresholds,
+  type RefusedGuideClaim,
+} from "../guide/claims";
 import { nextGuideStep } from "../guide/engine";
 
 /**
@@ -59,12 +75,34 @@ export interface GuideTurnResult {
    * Proposed slot writes. **Untrusted** — pass to `applyGuidePatch`, never merge.
    * Typed as `unknown` on purpose: there is no shape here worth believing, and a
    * type that claimed otherwise would invite exactly the merge this must prevent.
+   *
+   * Derived from `claims`, one key per claim. Kept as the wire shape because the
+   * client's only job is to hand it to the validator, and that has not changed.
    */
   patch: Record<string, unknown>;
+  /** The facts behind the patch, each with the words that support it. */
+  claims: GuideClaim[];
+  /**
+   * Everything the reader may have meant that did NOT reach the patch, and why.
+   *
+   * The most important field here for anyone debugging the guide. A turn that
+   * writes nothing used to be indistinguishable from a turn the model never
+   * understood; now the difference between "it proposed nothing", "it proposed a
+   * field that does not exist" and "it quoted words the reader never typed" is
+   * recorded rather than inferred.
+   */
+  refused: RefusedGuideClaim[];
+  /** Slots to name explicitly in the reply because confidence was middling. */
+  readBack: GuideSlotId[];
+  /** A question to ask before overwriting a settled fact, when one is pending. */
+  confirm: string | null;
+  /** How many repair round-trips this turn cost. Zero on the happy path. */
+  repairs: number;
   /** Components the reader declined, already filtered to skippable ones. */
   skip: GuideComponentId[];
   /** What to say back. Empty when the model gave nothing usable. */
   reply: string;
+  /** How sure the model is about the INTENT. Per-fact certainty is on the claims. */
   confidence: number;
 }
 
@@ -82,23 +120,34 @@ export interface InterpretGuideTurnInput {
   model: string;
   providerId: ProviderId;
   prompts?: PromptContext;
+  /** Confidence gates. Admin-configurable; see `core/config/guide.ts`. */
+  thresholds?: Partial<GuideClaimThresholds>;
+  /** How many times a refused claim may be sent back for correction. */
+  repairAttempts?: number;
+  /** Sampling temperature. Zero unless an admin has a reason. */
+  temperature?: number;
   signal?: AbortSignal;
 }
 
 /**
- * The envelope is strict; the patch is not.
+ * The envelope is strict; the values inside the claims are not.
  *
- * `patch` is a bare record because its real schema lives in the writers, and a
- * second description of it here would be a second thing to keep in sync — the
+ * A claim's `value` is `unknown` because its real schema lives in the writers, and
+ * a second description of it here would be a second thing to keep in sync — the
  * failure mode being a slot that validates here, is dropped there, and looks to
  * the reader like the guide ignoring them.
  */
 const turnSchema = z.object({
   intent: z.enum(["answer", "revise", "skip", "question", "other"]),
-  patch: z.record(z.string(), z.unknown()).optional(),
+  claims: z.array(guideClaimSchema).max(24).optional(),
   skip: z.array(z.string()).max(20).optional(),
   reply: z.string().max(1200),
   confidence: z.number().min(0).max(1),
+});
+
+/** A repair returns corrected claims and nothing else; the turn is already read. */
+const repairSchema = z.object({
+  claims: z.array(guideClaimSchema).max(24),
 });
 
 /** How many turns of history to send. Enough for "yes"; not enough to drift. */
@@ -149,10 +198,31 @@ export function buildGuideTurnVars(
       cursor.blockers.length > 0 ? cursor.blockers.map((b) => `- ${b}`).join("\n") : "(nothing)",
     facts: describeGuideFacts(input.project),
     writable: guidePatchShapeLines(input.patchContext),
+    examples: guidePatchExampleLines(),
     skippable: optional || "(none)",
     transcript: describeTranscript(input.transcript ?? []),
     message: input.message.trim(),
   };
+}
+
+/**
+ * The refusals worth going back to the model about, written as instructions.
+ *
+ * Deliberately concrete: the slot, what it proposed, and the validator's own
+ * words for why that was refused. A repair prompt that says "some claims were
+ * invalid" produces a second guess; one that says `heroAges: no cast member named
+ * Sam` produces a correction, because the model can see that it misheard a name
+ * it has already written down.
+ */
+export function describeClaimProblems(refused: readonly RefusedGuideClaim[]): string {
+  return refused
+    .filter((claim) => REPAIRABLE_CLAIM_REFUSALS.includes(claim.refusal))
+    .map(
+      (claim) =>
+        `- ${claim.slot} = ${JSON.stringify(claim.value)} (you quoted "${claim.evidence}") ` +
+        `was refused: ${claim.reason}`,
+    )
+    .join("\n");
 }
 
 /**
@@ -163,11 +233,22 @@ export function buildGuideTurnVars(
  * model that decides the reader doesn't want to name the child would skip the
  * question the book cannot be made without.
  */
+export interface SanitizeGuideTurnOptions {
+  playlist: readonly ResolvedGuideComponent[];
+  /** The reader's message, verbatim. Claims are checked against it. */
+  message: string;
+  /** The live book, for deciding what a claim would overwrite. */
+  project: Project;
+  /** The worlds a claim may name, for the dry run. */
+  patchContext: GuidePatchContext;
+  thresholds?: Partial<GuideClaimThresholds>;
+}
+
 export function sanitizeGuideTurn(
   raw: z.infer<typeof turnSchema>,
-  playlist: readonly ResolvedGuideComponent[],
+  options: SanitizeGuideTurnOptions,
 ): GuideTurnResult {
-  const optional = new Map(playlist.map((component) => [component.id, component.skippable]));
+  const optional = new Map(options.playlist.map((c) => [c.id, c.skippable]));
   const skip: GuideComponentId[] = [];
   for (const id of raw.skip ?? []) {
     if (!isGuideComponentId(id)) continue;
@@ -175,14 +256,105 @@ export function sanitizeGuideTurn(
     if (!skip.includes(id)) skip.push(id);
   }
 
-  // A patch is only forwarded for turns that claim to state a fact. A "question"
-  // or "other" turn carrying writes is a model filling in blanks it was not given
-  // — the commonest way an interpreter invents a child's age from thin air.
-  const statesFacts = raw.intent === "answer" || raw.intent === "revise";
+  const proposed = (raw.claims ?? []) as GuideClaim[];
+  const refused: RefusedGuideClaim[] = [];
 
+  /**
+   * Claims only count for turns that claim to state a fact.
+   *
+   * Evidence verification catches most invention, but not all of it: "what ages
+   * do you support?" genuinely contains the word "ages", so a claim about the
+   * audience quoting it would pass the evidence check while being the exact
+   * opposite of what the reader meant. Asking a question is not stating a fact,
+   * and the intent is the only thing that knows the difference.
+   *
+   * What HAS changed is that the loss is now recorded. This gate used to replace
+   * the patch with `{}` and leave nothing behind, so a misclassified intent was
+   * indistinguishable from a model that extracted nothing — the two have very
+   * different fixes and looked identical in the logs.
+   */
+  const statesFacts = raw.intent === "answer" || raw.intent === "revise";
+  if (!statesFacts) {
+    for (const claim of proposed) {
+      refused.push({
+        slot: claim.slot,
+        value: claim.value,
+        evidence: claim.evidence,
+        confidence: claim.confidence,
+        refusal: "not-a-statement",
+        reason: `a "${raw.intent}" turn may not state facts`,
+      });
+    }
+    return {
+      intent: raw.intent,
+      patch: {},
+      claims: [],
+      refused,
+      readBack: [],
+      confirm: null,
+      repairs: 0,
+      skip,
+      reply: raw.reply.trim(),
+      confidence: raw.confidence,
+    };
+  }
+
+  const screened = screenGuideClaims({
+    message: options.message,
+    claims: proposed,
+    thresholds:
+      options.thresholds?.floor !== undefined ? { floor: options.thresholds.floor } : undefined,
+  });
+  refused.push(...screened.refused);
+
+  /**
+   * The dry run. `applyGuidePatch` is pure and returns a new project, so asking it
+   * what would happen costs nothing and is exact — no second copy of the
+   * validation rules that could disagree with the real write.
+   *
+   * This is what makes repair possible. Without it the first time anyone learns a
+   * claim is unacceptable is in the browser, after the model has gone.
+   */
+  const dry = applyGuidePatch(
+    options.project,
+    claimsToPatch(screened.kept),
+    options.patchContext,
+  );
+  const rejectedSlots = new Map(dry.rejected.map((rejection) => [rejection.key, rejection]));
+  const survived = screened.kept.filter((claim) => {
+    const rejection = rejectedSlots.get(claim.slot);
+    // A partial refusal still applied something, so the claim survives; the part
+    // that did not stick is reported by the real write, in the reader's words.
+    if (!rejection || dry.applied.includes(claim.slot)) return true;
+    refused.push({
+      slot: claim.slot,
+      value: claim.value,
+      evidence: claim.evidence,
+      confidence: claim.confidence,
+      refusal: "rejected",
+      reason: rejection.reason,
+    });
+    return false;
+  });
+
+  const disposed = disposeGuideClaims({
+    project: options.project,
+    claims: survived,
+    thresholds: options.thresholds,
+  });
+  refused.push(...disposed.refused);
+
+  const taken = disposed.taken.map((entry) => entry.claim);
   return {
     intent: raw.intent,
-    patch: statesFacts ? raw.patch ?? {} : {},
+    patch: claimsToPatch(taken),
+    claims: taken,
+    refused,
+    readBack: disposed.taken
+      .filter((entry) => entry.disposition === "readBack")
+      .map((entry) => entry.claim.slot),
+    confirm: guideConfirmationQuestion(options.project, refused),
+    repairs: 0,
     skip,
     reply: raw.reply.trim(),
     confidence: raw.confidence,
@@ -191,7 +363,18 @@ export function sanitizeGuideTurn(
 
 /** Nothing usable came back. The engine still knows what's missing. */
 function emptyTurn(reply: string): GuideTurnResult {
-  return { intent: "other", patch: {}, skip: [], reply, confidence: 0 };
+  return {
+    intent: "other",
+    patch: {},
+    claims: [],
+    refused: [],
+    readBack: [],
+    confirm: null,
+    repairs: 0,
+    skip: [],
+    reply,
+    confidence: 0,
+  };
 }
 
 /**
@@ -206,11 +389,16 @@ export async function interpretGuideTurn(
   if (!message) return emptyTurn("");
 
   const provider = getTextProvider(input.providerId);
-  const { system, user } = renderTextPrompt(
-    resolvePromptsConfig(input.prompts),
-    "guideInterpret/turn",
-    { vars: buildGuideTurnVars({ ...input, message }) },
-  );
+  const prompts = resolvePromptsConfig(input.prompts);
+  const vars = buildGuideTurnVars({ ...input, message });
+  const { system, user } = renderTextPrompt(prompts, "guideInterpret/turn", { vars });
+  const options: SanitizeGuideTurnOptions = {
+    playlist: input.playlist,
+    message,
+    project: input.project,
+    patchContext: input.patchContext,
+    thresholds: input.thresholds,
+  };
 
   let raw: z.infer<typeof turnSchema>;
   try {
@@ -223,7 +411,7 @@ export async function interpretGuideTurn(
             { role: "user", content: user },
           ],
           schema: turnSchema,
-          temperature: 0,
+          temperature: input.temperature ?? 0,
           signal: input.signal,
         }),
       { signal: input.signal, retries: 1 },
@@ -235,7 +423,58 @@ export async function interpretGuideTurn(
     return emptyTurn("Sorry — I didn't catch that. Could you say it another way?");
   }
 
-  return sanitizeGuideTurn(raw, input.playlist);
+  let result = sanitizeGuideTurn(raw, options);
+
+  /**
+   * One more try, with the validator's objections in hand.
+   *
+   * The repair exists because the commonest extraction failure is not a model that
+   * misunderstood the reader — it is a model that understood perfectly and
+   * expressed it in a shape the validator does not take. Those are recoverable and
+   * used to be thrown away: the whole patch was dropped, the turn reported nothing
+   * applied, and the reader was told they had not been understood.
+   *
+   * Bounded at `repairAttempts` (default one) and only ever for refusals a
+   * correction could fix, so a model that is simply wrong cannot spend the
+   * reader's latency budget arguing with the schema. Claims that already landed
+   * are kept — a repair may only add to what worked, never undo it.
+   */
+  const budget = input.repairAttempts ?? 1;
+  for (let attempt = 0; attempt < budget; attempt += 1) {
+    const problems = describeClaimProblems(result.refused);
+    if (!problems) break;
+
+    let repaired: z.infer<typeof repairSchema>;
+    try {
+      const repairPrompt = renderTextPrompt(prompts, "guideInterpret/repair", {
+        vars: { ...vars, problems, kept: JSON.stringify(result.patch) },
+      });
+      repaired = await provider.generateStructured(input.creds, {
+        model: input.model,
+        messages: [
+          { role: "system", content: repairPrompt.system },
+          { role: "user", content: repairPrompt.user },
+        ],
+        schema: repairSchema,
+        temperature: input.temperature ?? 0,
+        signal: input.signal,
+      });
+    } catch {
+      break; // A failed repair leaves the first reading intact, which is the point.
+    }
+
+    const merged = sanitizeGuideTurn(
+      { ...raw, claims: [...result.claims, ...repaired.claims] },
+      options,
+    );
+    // Only accept a repair that actually recovered something. A model that
+    // re-proposes the same refused claim would otherwise loop, and a model that
+    // drops a good claim while fixing a bad one would make the turn worse.
+    if (merged.claims.length <= result.claims.length) break;
+    result = { ...merged, repairs: attempt + 1 };
+  }
+
+  return result;
 }
 
 /** Slot ids named by a patch, for the turn log. Order follows the catalog. */

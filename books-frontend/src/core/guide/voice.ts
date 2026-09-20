@@ -25,7 +25,9 @@
 import type { GuideCursor } from "./engine";
 import type { GuideComponent, GuideEffectId } from "./components";
 import { guideEffectState } from "./effects";
+import { captureGuideFacts, type GuidePatchRejection } from "./patch";
 import { lastSpokenAbout, type GuideSession } from "./session";
+import { GUIDE_SLOTS, type GuideSlotId } from "./slots";
 import type { Project } from "../types";
 
 /**
@@ -33,7 +35,8 @@ import type { Project } from "../types";
  *
  * Prefers the catalog's own blocker text, because that is the sentence the wizard
  * already shows for the same missing fact — a reader who switches flows mid-book
- * should not be told two different things about the same gap.
+ * should not be told two different things about the same gap. The one exception
+ * is an admin's opening question on a component nobody has answered yet.
  */
 export function guideAsk(cursor: GuideCursor, project: Project): string {
   if (!cursor.component) return "Your book has everything it needs. Shall we look it over?";
@@ -59,7 +62,30 @@ export function guideAsk(cursor: GuideCursor, project: Project): string {
     return cursor.blockers[0] ?? `We're getting ${lower(component.title)} ready.`;
   }
 
+  // The admin's wording opens the topic; the catalog chases what's left of it.
+  //
+  // An override can cover more ground than the component's own opening — "who is
+  // in the book, how they know each other, and how old they are" asks for three
+  // things in one breath, which is a better first question than asking for names
+  // and then coming back for ages. But it is the wrong second question: once a
+  // name has landed, "Add Neil's age to create the story" is the only line that
+  // shows the guide read what was typed. So the override speaks first and the
+  // blockers take over the moment the component has anything in it.
+  if (component.ask && untouched(component, project)) return component.ask;
+
   return cursor.blockers[0] ?? openingFor(component);
+}
+
+/**
+ * Whether the reader has put nothing into this component yet.
+ *
+ * Measured against the facts as the patch layer captures them, not against
+ * `isSatisfied` — a component is unsatisfied both when it is empty and when it
+ * is half-answered, and those two want different questions.
+ */
+function untouched(component: GuideComponent, project: Project): boolean {
+  const facts = captureGuideFacts(project);
+  return component.slots.every((slot) => !Object.hasOwn(facts, slot));
 }
 
 /**
@@ -165,21 +191,108 @@ export function composeGuideReply(args: {
   acknowledgement: string;
   /** True when this turn was trying to state a fact (answer or revise). */
   statingFacts: boolean;
-  /** True when a patch applied or a skip was recorded. */
-  landed: boolean;
+  /** Slots this turn changed. */
+  applied: readonly GuideSlotId[];
+  /** Slots the reader restated correctly — the book already said this. */
+  unchanged: readonly GuideSlotId[];
+  /** Proposals the validator refused. Only `speak` is ever said out loud. */
+  rejected: readonly GuidePatchRejection[];
+  /** True when the reader declined something this turn. */
+  skipped: boolean;
+  /**
+   * A question to ask instead of moving on, when a change was held back.
+   *
+   * Takes precedence over the next question in the flow. Asking "shall I change
+   * that?" and then immediately asking about something else would leave the
+   * reader's yes ambiguous, which is the one thing a confirmation cannot be.
+   */
+  confirm?: string | null;
+  /**
+   * Slots to name explicitly because the model was only moderately sure.
+   *
+   * The cheapest correction in the product: a fact said out loud is one the
+   * reader fixes in the next breath, whereas the same fact applied quietly is one
+   * they find after the cast sheets are drawn.
+   */
+  readBack?: readonly GuideSlotId[];
   cursor: GuideCursor;
   project: Project;
 }): string {
   const ask = guideAsk(args.cursor, args.project);
+  const ack = stripQuestions(args.acknowledgement);
+  const withAsk = (line: string) =>
+    !line ? ask : includesIgnoreCase(line, ask) ? line : `${line} ${ask}`;
 
-  if (args.statingFacts && !args.landed) {
+  if (args.confirm) {
+    return ack && !includesIgnoreCase(ack, args.confirm)
+      ? `${ack} ${args.confirm}`
+      : args.confirm;
+  }
+
+  const landed = args.applied.length > 0 || args.skipped;
+
+  if (args.statingFacts && !landed) {
+    /**
+     * Nothing changed, which is not the same as nothing understood. Three cases,
+     * and only the last of them is a failure to comprehend:
+     *
+     *   1. They restated something the book already has. That is a confirmation.
+     *      The model's own acknowledgement is accurate here — the facts really are
+     *      in the book — so it is kept rather than replaced with a denial.
+     *   2. A write was refused for a reason worth hearing ("I don't have a Sam in
+     *      the story"). Saying that is the only way the reader can correct it.
+     *   3. Genuinely nothing usable came back.
+     */
+    if (args.unchanged.length > 0) {
+      return withAsk(ack || alreadyKnown(args.unchanged, args.project));
+    }
+    const spoken = args.rejected.find((rejection) => rejection.speak)?.speak;
+    if (spoken) return withAsk(spoken);
     return `I didn't quite catch that. ${ask}`;
   }
 
-  const ack = stripQuestions(args.acknowledgement);
-  if (!ack) return ask;
-  if (includesIgnoreCase(ack, ask)) return ack;
-  return `${ack} ${ask}`;
+  // A turn that landed can still have refused part of what it was given, and the
+  // reader has to hear about the part that did not stick.
+  const partial = args.rejected.find((rejection) => rejection.speak)?.speak;
+  const spelledOut = readBackLine(args.readBack ?? [], args.applied, args.project, ack);
+  return withAsk([ack, spelledOut, partial].filter(Boolean).join(" "));
+}
+
+/**
+ * Say the value back, for facts we are only moderately sure we heard right.
+ *
+ * Skipped when the model's own acknowledgement already contains the value — it
+ * usually does, and saying "Maya and Leo" twice in one breath reads like a
+ * machine. Only the slots that actually changed are named: reading back a fact
+ * that was refused would tell the reader something untrue about their book.
+ */
+function readBackLine(
+  readBack: readonly GuideSlotId[],
+  applied: readonly GuideSlotId[],
+  project: Project,
+  acknowledgement: string,
+): string {
+  const values = readBack
+    .filter((id) => applied.includes(id))
+    .map((id) => GUIDE_SLOTS[id].describe(project))
+    .filter((value): value is string => !!value && !includesIgnoreCase(acknowledgement, value));
+  if (values.length === 0) return "";
+  return `I've put that down as ${values.join(", ")} — tell me if that's not right.`;
+}
+
+/**
+ * Confirm a fact the book already held, naming it.
+ *
+ * Reads through the slot's own `describe`, so the wording cannot claim something
+ * the facts strip beside it disagrees with. Falls back to the label alone when a
+ * slot has no short description — better a vaguer sentence than a wrong one.
+ */
+function alreadyKnown(slots: readonly GuideSlotId[], project: Project): string {
+  for (const id of slots) {
+    const value = GUIDE_SLOTS[id].describe(project);
+    if (value) return `That's what I have already — ${value}.`;
+  }
+  return "That's what I have already.";
 }
 
 /**

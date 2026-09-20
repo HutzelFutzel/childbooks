@@ -119,60 +119,77 @@ function specSummary(product: ProductDefinition): string {
 
 const DEFAULT_HINT = "Stands in wherever nothing more specific has been uploaded.";
 
-export function PrintPicturesSection({ products }: { products: ProductDefinition[] }) {
-  const books = [...products].sort((a, b) => a.sortOrder - b.sortOrder);
+/** Photos tab for one print book: this product first, then shared defaults and options. */
+export function ProductPhotosPanel({
+  product,
+  products,
+}: {
+  product: ProductDefinition;
+  products: ProductDefinition[];
+}) {
+  const others = products
+    .filter((p) => p.id !== product.id)
+    .sort((a, b) => a.sortOrder - b.sortOrder);
   return (
-    <Section
-      title="Product pictures"
-      hint="Photographs shown to customers. They live outside the product records, so a picture of a binding serves every book that uses it, and a book with none of its own falls back to the default set. Uploads take effect immediately — no Save needed."
-    >
-      <Disclosure label={`Books (${books.length})`} defaultOpen>
-        <div className="space-y-1.5">
-          <PictureRow
-            mediaKey={bookMediaKey(FALLBACK_ID)}
-            label="Default pictures"
-            hint={DEFAULT_HINT}
-          />
-          {books.map((p) => (
-            <PictureRow
-              key={p.id}
-              mediaKey={bookMediaKey(p.id)}
-              label={p.presentation.name || "(unnamed product)"}
-              hint={specSummary(p)}
-              badge={<StatusChip status={p.status} />}
-            />
-          ))}
-          {books.length === 0 && (
-            <p className="text-[11px] text-ink-400">
-              No books configured yet. The default set above will cover the first one you add.
-            </p>
-          )}
-        </div>
+    <div className="space-y-5">
+      <p className="text-sm text-ink-500">
+        Photographs shown to customers. Uploads take effect immediately — no Save needed.
+      </p>
+      <PictureRow
+        mediaKey={bookMediaKey(product.id)}
+        label={product.presentation.name || "(unnamed product)"}
+        hint={specSummary(product)}
+        badge={<StatusChip status={product.status} />}
+      />
+      <Disclosure label="Default pictures">
+        <PictureRow
+          mediaKey={bookMediaKey(FALLBACK_ID)}
+          label="Default pictures"
+          hint={DEFAULT_HINT}
+        />
       </Disclosure>
+      {others.length > 0 && (
+        <Disclosure label={`Other books (${others.length})`}>
+          <div className="space-y-1.5">
+            {others.map((p) => (
+              <PictureRow
+                key={p.id}
+                mediaKey={bookMediaKey(p.id)}
+                label={p.presentation.name || "(unnamed product)"}
+                hint={specSummary(p)}
+                badge={<StatusChip status={p.status} />}
+              />
+            ))}
+          </div>
+        </Disclosure>
+      )}
+      <Disclosure label="Print options">
+        <PrintOptionPictures />
+      </Disclosure>
+    </div>
+  );
+}
 
-      <Disclosure label="Print options" defaultOpen>
-        <div className="space-y-3">
-          {PRINT_OPTION_FEATURES.map((feature) => (
-            <div key={feature} className="space-y-1.5">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
-                {FEATURE_LABELS[feature]}
-              </p>
-              {optionEntries(feature).map((o) => (
-                <PictureRow key={o.key} mediaKey={o.key} label={o.label} hint={o.hint} />
-              ))}
-            </div>
+function PrintOptionPictures() {
+  return (
+    <div className="space-y-3">
+      {PRINT_OPTION_FEATURES.map((feature) => (
+        <div key={feature} className="space-y-1.5">
+          <p className="text-xs font-medium text-ink-400">{FEATURE_LABELS[feature]}</p>
+          {optionEntries(feature).map((o) => (
+            <PictureRow key={o.key} mediaKey={o.key} label={o.label} hint={o.hint} />
           ))}
         </div>
-      </Disclosure>
-    </Section>
+      ))}
+    </div>
   );
 }
 
 export function EbookPicturesSection() {
   return (
     <Section
-      title="Product pictures"
-      hint="What the digital edition looks like — a tablet mock-up, a sample spread on screen. Every customer's ebook holds a different story, so these picture the format rather than the contents. Uploads take effect immediately — no Save needed."
+      title="Photos"
+      hint="The format, not the contents — every customer's ebook is a different book. Uploads take effect immediately."
     >
       <PictureRow
         mediaKey={EBOOK_MEDIA_KEY}

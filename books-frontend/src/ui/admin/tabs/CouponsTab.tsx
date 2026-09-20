@@ -5,9 +5,9 @@
  * is published).
  *
  * A coupon is one mechanic, one issuance channel, and a pile of restrictions.
- * The screen is arranged in that order because that's the order the decisions
- * actually depend on each other: what it takes off, how it reaches someone, and
- * then who's allowed to use it.
+ * The editor is Offer (what it is and how people get it), Limits (who/where/
+ * how often), then Codes or Grants for the issuance channel that actually
+ * needs a list.
  *
  * Four deliberate choices:
  *
@@ -33,13 +33,17 @@
  * metrics view rather than a setting, so they live in Analysis → Coupons.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Copy, KeyRound, Plus, ShieldOff, Trash2, UserPlus } from "lucide-react";
+import { Copy, KeyRound, Plus, Search, ShieldOff, Trash2, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "../../components/Button";
 import { Field, Input, Textarea } from "../../components/Input";
+import { InfoHint } from "../../components/InfoHint";
 import { Select } from "../../components/Select";
+import { Toggle } from "../../components/Toggle";
+import { cn } from "../../lib/cn";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useAdminTab } from "../adminTabStore";
+import { AdminSaveBar } from "../AdminPageHeader";
 import {
   COUPON_ISSUANCE_DESCRIPTIONS,
   COUPON_ISSUANCE_KINDS,
@@ -62,7 +66,15 @@ import {
   type CouponsConfig,
 } from "../../../core/config/coupons";
 import { DISCOUNT_ITEM_LABELS } from "../../../core/config/discountImpact";
-import { Grid, ImpactNote, NumberField, Section, TabIntro } from "./products/parts";
+import {
+  EditorTabs,
+  Grid,
+  ImpactNote,
+  NumberField,
+  OverflowItem,
+  OverflowMenu,
+  TabIntro,
+} from "./products/parts";
 import { Chips, DateField, SwitchField } from "./campaigns/parts";
 import { useReadOnly } from "../../components/ReadOnlyContext";
 
@@ -93,6 +105,37 @@ const REFUND_OPTIONS = [
   { value: "consume", label: "Keep it spent" },
 ];
 
+const STATUS_CLASS: Record<CouponStatus, string> = {
+  draft: "text-ink-400",
+  active: "text-emerald-700",
+  paused: "text-amber-700",
+  ended: "text-ink-400",
+};
+
+function couponListLine(coupon: Coupon): string {
+  const pct = `${coupon.mechanic.percentOff}% off`;
+  if (coupon.issuance === "sharedCode") {
+    return coupon.sharedCode ? `${formatCouponCode(coupon.sharedCode)} · ${pct}` : pct;
+  }
+  const kind =
+    coupon.issuance === "autoGrant"
+      ? "Auto"
+      : coupon.issuance === "adminGrant"
+        ? "Granted"
+        : "Single-use";
+  return `${kind} · ${pct}`;
+}
+
+function editorTabsFor(coupon: Coupon): { id: string; label: string }[] {
+  const tabs = [
+    { id: "offer", label: "Offer" },
+    { id: "limits", label: "Limits" },
+  ];
+  if (coupon.issuance === "generatedCodes") tabs.push({ id: "codes", label: "Codes" });
+  else if (!issuanceUsesCodes(coupon.issuance)) tabs.push({ id: "grants", label: "Grants" });
+  return tabs;
+}
+
 export function CouponsTab() {
   const readOnly = useReadOnly();
   const load = useAppConfigStore((s) => s.loadCouponsConfig);
@@ -104,9 +147,12 @@ export function CouponsTab() {
   const openMarketingTab = useAdminTab((s) => s.openMarketingTab);
 
   const [draft, setDraft] = useState<CouponsConfig | null>(null);
+  const [saved, setSaved] = useState<CouponsConfig | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [query, setQuery] = useState("");
+  const [pane, setPane] = useState("offer");
 
   useEffect(() => {
     let live = true;
@@ -114,6 +160,7 @@ export function CouponsTab() {
       .then((cfg) => {
         if (!live) return;
         setDraft(cfg);
+        setSaved(cfg);
         setSelectedId((id) => id ?? cfg.coupons[0]?.id ?? null);
       })
       .catch((err) => toast.error(err instanceof Error ? err.message : "Could not load coupons."));
@@ -122,7 +169,31 @@ export function CouponsTab() {
     };
   }, [load]);
 
+  useEffect(() => {
+    setPane("offer");
+  }, [selectedId]);
+
   const selected = draft?.coupons.find((c) => c.id === selectedId) ?? null;
+  const tabs = selected ? editorTabsFor(selected) : [];
+  const currentPane = tabs.some((t) => t.id === pane) ? pane : "offer";
+
+  const visibleCoupons = useMemo(() => {
+    if (!draft) return [];
+    const q = query.trim().toLowerCase();
+    if (!q) return draft.coupons;
+    return draft.coupons.filter((c) => {
+      const hay = [
+        c.name,
+        c.sharedCode,
+        couponListLine(c),
+        COUPON_ISSUANCE_LABELS[c.issuance],
+        COUPON_STATUS_LABELS[c.status],
+      ]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [draft, query]);
 
   if (!draft) return <p className="text-sm text-ink-400">Loading coupons…</p>;
 
@@ -142,6 +213,7 @@ export function CouponsTab() {
     const coupon = createCoupon({ name: `Coupon ${draft.coupons.length + 1}` });
     setConfig({ coupons: [...draft.coupons, coupon] });
     setSelectedId(coupon.id);
+    setPane("offer");
   };
 
   const duplicateCoupon = (source: Coupon) => {
@@ -157,6 +229,7 @@ export function CouponsTab() {
     });
     setConfig({ coupons: [...draft.coupons, copy] });
     setSelectedId(copy.id);
+    setPane("offer");
     toast.success("Copied as a new draft. Give it its own code.");
   };
 
@@ -182,8 +255,9 @@ export function CouponsTab() {
     try {
       // Normalized once, here: the editor lets a draft be temporarily incoherent
       // while it's being typed, and this is the moment that has to stop.
-      const saved = await save(normalizeCouponsConfig(draft));
-      setDraft(saved);
+      const next = await save(normalizeCouponsConfig(draft));
+      setDraft(next);
+      setSaved(next);
       setDirty(false);
       toast.success("Coupons saved.");
     } catch (err) {
@@ -193,179 +267,221 @@ export function CouponsTab() {
     }
   };
 
-  const activeAutoGrants = draft.coupons.filter(
-    (c) => c.status === "active" && c.issuance === "autoGrant",
-  );
+  const onDiscard = () => {
+    if (!saved) return;
+    setDraft(saved);
+    setDirty(false);
+    setSelectedId((id) =>
+      id && saved.coupons.some((c) => c.id === id) ? id : (saved.coupons[0]?.id ?? null),
+    );
+  };
+
+  const engineOffWithActives = !draft.enabled && draft.coupons.some((c) => c.status === "active");
 
   return (
     <div className="space-y-4">
-      <TabIntro
-        elsewhere={
-          <>
-            The ceiling on any single discount comes from the catalog&apos;s pricing settings, and live results
-            (redemptions, discount given, why codes bounce) are a metrics view rather than a setting.
-          </>
-        }
-        links={[
-          { label: "Discount planner", onClick: () => openConfigTab("discounts") },
-          { label: "QR codes", onClick: () => openMarketingTab("qrCodes") },
-          { label: "Analysis → Coupons", onClick: () => openAnalysis("coupons") },
-        ]}
-      >
-        Codes a customer types, and codes that apply themselves. A coupon is one mechanic (a percentage off), one way of
-        reaching people (a shared code, a batch of one-time codes, or an automatic grant to everyone who arrived from a
-        particular QR poster), and the restrictions that keep it bounded. Every code is validated on the server when
-        it&apos;s entered, and every refusal comes back with a reason the customer can act on — a code that silently
-        does nothing is the failure this whole screen exists to prevent.
-      </TabIntro>
-
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <SwitchField
-          checked={draft.enabled}
-          onChange={(v) => setConfig({ enabled: v })}
-          label="Coupon engine enabled"
-          hint="The master switch. Off means no code validates and nothing auto-grants, whatever each coupon says."
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <TabIntro
+          links={[
+            { label: "Discount planner", onClick: () => openConfigTab("discounts") },
+            { label: "QR codes", onClick: () => openMarketingTab("qrCodes") },
+            { label: "Analysis → Coupons", onClick: () => openAnalysis("coupons") },
+          ]}
         />
-        {!readOnly && (
-          <div className="flex flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-sm text-ink-500">{draft.enabled ? "On" : "Off"}</span>
+          <Toggle
+            checked={draft.enabled}
+            onChange={(v) => setConfig({ enabled: v })}
+            label="Coupon engine"
+          />
+          {!readOnly && (
             <Button
               type="button"
               size="sm"
-              variant="secondary"
+              leftIcon={<Plus className="size-3.5" />}
               disabled={draft.coupons.length >= MAX_COUPONS}
               onClick={addCoupon}
             >
-              <Plus className="size-3.5" /> New coupon
+              New
             </Button>
-            <Button type="button" size="sm" loading={saving} disabled={!dirty} onClick={() => void onSave()}>
-              Save
-            </Button>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
-      {!draft.enabled && draft.coupons.some((c) => c.status === "active") && (
+      {engineOffWithActives && (
         <ImpactNote>
-          The engine is <span className="font-semibold">off</span>, so the active coupons below aren&apos;t running. No
-          code validates and nothing auto-grants until it&apos;s switched on.
-        </ImpactNote>
-      )}
-
-      {activeAutoGrants.length > 0 && (
-        <ImpactNote>
-          {activeAutoGrants.length === 1 ? "One coupon applies" : `${activeAutoGrants.length} coupons apply`} itself
-          with nothing to type. Those discount orders for everyone matching their audience, without the customer doing
-          anything — worth re-reading the audience on each before a campaign goes out.
+          The engine is <span className="font-semibold">off</span>, so the active coupons below
+          aren&apos;t running. No code validates and nothing auto-grants until it&apos;s switched on.
         </ImpactNote>
       )}
 
       {draft.coupons.length === 0 ? (
-        <Section title="Coupons" hint="Nothing configured yet.">
-          <p className="text-xs text-ink-400">
-            No coupons. Add one to start — it opens as a draft, which never validates and never discounts anything, so
-            there&apos;s no risk in building it out first.
-          </p>
-        </Section>
+        <p className="px-2.5 py-8 text-sm text-ink-400">
+          No coupons yet. Add one — it opens as a draft, so nothing validates until you publish it.
+        </p>
       ) : (
-        <div className="grid gap-3 lg:grid-cols-[260px_minmax(0,1fr)]">
-          <CouponList coupons={draft.coupons} selectedId={selectedId} onSelect={setSelectedId} />
+        <div className="grid gap-6 lg:grid-cols-[240px_1fr]">
+          <CouponList
+            coupons={visibleCoupons}
+            selectedId={selectedId}
+            query={query}
+            showSearch={draft.coupons.length > 5}
+            onQuery={setQuery}
+            onSelect={setSelectedId}
+          />
           {selected ? (
-            <div className="min-w-0 space-y-3">
-              <CouponEditor
-                coupon={selected}
-                currency={settings.baseCurrency}
-                maxDiscountPct={settings.maxDiscountPct}
-                planIds={plans.map((p) => p.id)}
-                onChange={(patch) => setCoupon(selected.id, patch)}
-                onDuplicate={() => duplicateCoupon(selected)}
-                onRemove={() => removeCoupon(selected)}
-              />
-              <CodesPanel coupon={selected} saved={!dirty} />
-              <GrantsPanel coupon={selected} saved={!dirty} />
+            <div className="min-w-0 space-y-5">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h2 className="truncate text-base font-semibold text-ink-900">
+                      {selected.name || "Untitled"}
+                    </h2>
+                    <span className={cn("shrink-0 text-xs", STATUS_CLASS[selected.status])}>
+                      {COUPON_STATUS_LABELS[selected.status]}
+                    </span>
+                  </div>
+                  <p className="mt-0.5 truncate text-sm text-ink-500">{couponListLine(selected)}</p>
+                </div>
+                {!readOnly && (
+                  <div className="flex items-center gap-1">
+                    <OverflowMenu>
+                      {(close) => (
+                        <OverflowItem
+                          label="Duplicate"
+                          onSelect={() => {
+                            close();
+                            duplicateCoupon(selected);
+                          }}
+                        />
+                      )}
+                    </OverflowMenu>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      leftIcon={<Trash2 className="size-3.5" />}
+                      onClick={() => removeCoupon(selected)}
+                    >
+                      Delete
+                    </Button>
+                  </div>
+                )}
+              </div>
+
+              <EditorTabs items={tabs} value={currentPane} onChange={setPane} />
+
+              {currentPane === "offer" && (
+                <OfferFields
+                  coupon={selected}
+                  currency={settings.baseCurrency}
+                  maxDiscountPct={settings.maxDiscountPct}
+                  onChange={(patch) => setCoupon(selected.id, patch)}
+                />
+              )}
+              {currentPane === "limits" && (
+                <LimitsFields
+                  coupon={selected}
+                  currency={settings.baseCurrency}
+                  planIds={plans.map((p) => p.id)}
+                  onChange={(patch) => setCoupon(selected.id, patch)}
+                />
+              )}
+              {currentPane === "codes" && <CodesPanel coupon={selected} saved={!dirty} />}
+              {currentPane === "grants" && <GrantsPanel coupon={selected} saved={!dirty} />}
             </div>
           ) : (
-            <p className="text-sm text-ink-400">Pick a coupon to edit.</p>
+            <p className="py-16 text-center text-sm text-ink-400">Pick a coupon to edit.</p>
           )}
         </div>
       )}
+
+      <AdminSaveBar
+        dirty={dirty}
+        saving={saving}
+        saveLabel="Save coupons"
+        onSave={() => void onSave()}
+        onDiscard={onDiscard}
+      />
     </div>
   );
 }
 
 // ---- List -------------------------------------------------------------------
 
-const STATUS_DOT: Record<CouponStatus, string> = {
-  draft: "bg-ink-300",
-  active: "bg-emerald-500",
-  paused: "bg-amber-500",
-  ended: "bg-ink-200",
-};
-
 function CouponList({
   coupons,
   selectedId,
+  query,
+  showSearch,
+  onQuery,
   onSelect,
 }: {
   coupons: Coupon[];
   selectedId: string | null;
+  query: string;
+  showSearch: boolean;
+  onQuery: (q: string) => void;
   onSelect: (id: string) => void;
 }) {
   return (
-    <div className="space-y-1.5">
-      {coupons.map((coupon) => {
-        const on = coupon.id === selectedId;
-        return (
-          <button
-            key={coupon.id}
-            type="button"
-            onClick={() => onSelect(coupon.id)}
-            className={
-              on
-                ? "w-full rounded-lg bg-white px-3 py-2 text-left ring-2 ring-inset ring-brand-400"
-                : "w-full rounded-lg bg-white px-3 py-2 text-left ring-1 ring-inset ring-ink-100 transition hover:ring-ink-200"
-            }
-          >
-            <div className="flex items-center gap-1.5">
-              <span className={`size-1.5 shrink-0 rounded-full ${STATUS_DOT[coupon.status]}`} />
-              <span className="truncate text-sm font-medium text-ink-800">{coupon.name}</span>
-            </div>
-            <p className="mt-0.5 line-clamp-2 text-[11px] leading-relaxed text-ink-400">
-              {coupon.issuance === "sharedCode" && coupon.sharedCode
-                ? `${formatCouponCode(coupon.sharedCode)} · ${couponSummary(coupon)}`
-                : `${COUPON_ISSUANCE_LABELS[coupon.issuance]} · ${couponSummary(coupon)}`}
-            </p>
-          </button>
-        );
-      })}
+    <div className="space-y-2">
+      {showSearch && (
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-ink-300" />
+          <Input
+            value={query}
+            onChange={(e) => onQuery(e.target.value)}
+            placeholder="Search"
+            className="pl-8"
+          />
+        </div>
+      )}
+      {coupons.length === 0 ? (
+        <p className="px-2.5 py-6 text-sm text-ink-400">No coupons match.</p>
+      ) : (
+        <ul className="space-y-0.5">
+          {coupons.map((coupon) => (
+            <li key={coupon.id}>
+              <button
+                type="button"
+                onClick={() => onSelect(coupon.id)}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition",
+                  coupon.id === selectedId ? "bg-ink-100 text-ink-900" : "text-ink-600 hover:bg-ink-50",
+                )}
+              >
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate font-medium">{coupon.name || "Untitled"}</span>
+                  <span className="block truncate text-xs text-ink-400">{couponListLine(coupon)}</span>
+                </span>
+                <span className={cn("shrink-0 text-xs", STATUS_CLASS[coupon.status])}>
+                  {COUPON_STATUS_LABELS[coupon.status]}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
 
-// ---- Editor -----------------------------------------------------------------
+// ---- Offer ------------------------------------------------------------------
 
-function CouponEditor({
+function OfferFields({
   coupon,
   currency,
   maxDiscountPct,
-  planIds,
   onChange,
-  onDuplicate,
-  onRemove,
 }: {
   coupon: Coupon;
   currency: string;
   maxDiscountPct: number;
-  planIds: string[];
   onChange: (patch: Partial<Coupon>) => void;
-  onDuplicate: () => void;
-  onRemove: () => void;
 }) {
-  const readOnly = useReadOnly();
-  const r = coupon.restrictions;
-  const notes = useMemo(() => describeRestrictions(r), [r]);
-  const setRestrictions = (patch: Partial<Coupon["restrictions"]>) =>
-    onChange({ restrictions: { ...r, ...patch } });
-
+  const notes = useMemo(() => describeRestrictions(coupon.restrictions), [coupon.restrictions]);
   const percentOff = coupon.mechanic.percentOff;
   // Advisory, not enforced here: the real clamp happens at checkout against the
   // catalog maximum AND the order's break-even headroom, so a coupon can be
@@ -374,172 +490,224 @@ function CouponEditor({
   const overCeiling = coupon.status === "active" && percentOff > maxDiscountPct;
 
   return (
-    <div className="space-y-3">
-      <Section
-        title="This coupon"
-        action={
-          readOnly ? undefined : (
-            <div className="flex gap-1.5">
-              <Button type="button" size="sm" variant="secondary" onClick={onDuplicate}>
-                <Copy className="size-3.5" /> Duplicate
-              </Button>
-              <Button type="button" size="sm" variant="secondary" onClick={onRemove}>
-                <Trash2 className="size-3.5" /> Delete
-              </Button>
-            </div>
-          )
-        }
-      >
-        <Grid cols={2}>
-          <Field label="Name" hint="Admin-facing only. Customers never see it.">
-            <Input value={coupon.name} maxLength={120} onChange={(e) => onChange({ name: e.target.value })} />
-          </Field>
-          <Field
-            label="Status"
-            hint="Draft never validates. Paused refuses new redemptions but keeps existing grants readable."
-          >
-            <Select
-              value={coupon.status}
-              options={STATUS_OPTIONS}
-              onChange={(e) => onChange({ status: e.target.value as CouponStatus })}
-            />
-          </Field>
-        </Grid>
-        <Field label="Notes" hint="Why this exists, where it's printed, who asked for it.">
-          <Textarea
-            value={coupon.notes}
-            rows={2}
-            maxLength={2000}
-            onChange={(e) => onChange({ notes: e.target.value })}
-          />
+    <div className="space-y-6">
+      <Grid cols={2}>
+        <Field label="Name" hint="Admin-facing only. Customers never see it.">
+          <Input value={coupon.name} maxLength={120} onChange={(e) => onChange({ name: e.target.value })} />
         </Field>
-      </Section>
-
-      <Section title="What it takes off" hint="Percentages only — see the note below.">
-        <Grid cols={2}>
-          <NumberField
-            label="Percentage off"
-            value={percentOff}
-            step="1"
-            suffix="%"
-            onChange={(v) =>
-              onChange({
-                mechanic: { ...coupon.mechanic, percentOff: Math.max(0, Math.min(100, Math.round(v))) },
-              })
-            }
-          />
-          <NumberField
-            label="Cap the amount taken off"
-            value={coupon.mechanic.maxDiscountAmount}
-            step="1"
-            suffix={currency}
-            hint="0 = no cap. This is what makes a public percentage safe to print without knowing what people will buy."
-            onChange={(v) =>
-              onChange({ mechanic: { ...coupon.mechanic, maxDiscountAmount: Math.max(0, v) } })
-            }
-          />
-        </Grid>
-        {overCeiling && (
-          <ImpactNote>
-            {percentOff}% is above the catalog ceiling of {maxDiscountPct}%, so checkout will clamp it — and clamp it
-            further on any order that&apos;s close to break-even. Nobody will receive more than the ceiling however
-            this is set.
-          </ImpactNote>
-        )}
-        <p className="text-[11px] leading-relaxed text-ink-400">
-          Fixed-amount coupons and free shipping aren&apos;t available yet, and that&apos;s deliberate rather than
-          missing: every guardrail in the pricing engine is a percentage, a fixed amount can exceed the item price and
-          has to respect the price floor per currency, and free shipping isn&apos;t a price discount at all — shipping
-          revenue offsets shipping cost in the margin model. Both need their own cost model first.
-        </p>
-      </Section>
-
-      <Section title="How people get it">
-        <Field label="Issuance" hint={COUPON_ISSUANCE_DESCRIPTIONS[coupon.issuance]}>
+        <Field
+          label="Status"
+          hint="Draft never validates. Paused refuses new redemptions but keeps existing grants readable."
+        >
           <Select
-            value={coupon.issuance}
-            options={ISSUANCE_OPTIONS}
-            onChange={(e) => onChange({ issuance: e.target.value as CouponIssuanceKind })}
+            value={coupon.status}
+            options={STATUS_OPTIONS}
+            onChange={(e) => onChange({ status: e.target.value as CouponStatus })}
           />
         </Field>
+      </Grid>
+      <Field label="Notes" hint="Why this exists, where it's printed, who asked for it.">
+        <Textarea
+          value={coupon.notes}
+          rows={2}
+          maxLength={2000}
+          onChange={(e) => onChange({ notes: e.target.value })}
+        />
+      </Field>
 
-        {coupon.issuance === "sharedCode" && (
+      <Grid cols={2}>
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1">
+            <span className="text-sm font-medium text-ink-700">Percentage off</span>
+            <InfoHint title="Percentages only">
+              Fixed-amount coupons and free shipping aren&apos;t available yet. Every guardrail in
+              the pricing engine is a percentage; a fixed amount can exceed the item price, and free
+              shipping isn&apos;t a price discount — both need their own cost model first.
+            </InfoHint>
+          </div>
+          <div className="relative">
+            <Input
+              type="number"
+              min={0}
+              step="1"
+              value={String(percentOff)}
+              onChange={(e) =>
+                onChange({
+                  mechanic: {
+                    ...coupon.mechanic,
+                    percentOff: Math.max(0, Math.min(100, Math.round(Number(e.target.value) || 0))),
+                  },
+                })
+              }
+              className="pr-10"
+            />
+            <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-xs text-ink-400">
+              %
+            </span>
+          </div>
+        </div>
+        <NumberField
+          label="Cap the amount taken off"
+          value={coupon.mechanic.maxDiscountAmount}
+          step="1"
+          suffix={currency}
+          hint="0 = no cap. This is what makes a public percentage safe to print without knowing what people will buy."
+          onChange={(v) =>
+            onChange({ mechanic: { ...coupon.mechanic, maxDiscountAmount: Math.max(0, v) } })
+          }
+        />
+      </Grid>
+      {overCeiling && (
+        <ImpactNote>
+          {percentOff}% is above the catalog ceiling of {maxDiscountPct}%, so checkout will clamp it
+          — and clamp it further on any order that&apos;s close to break-even. Nobody will receive
+          more than the ceiling however this is set.
+        </ImpactNote>
+      )}
+
+      <Field label="Issuance" hint={COUPON_ISSUANCE_DESCRIPTIONS[coupon.issuance]}>
+        <Select
+          value={coupon.issuance}
+          options={ISSUANCE_OPTIONS}
+          onChange={(e) => onChange({ issuance: e.target.value as CouponIssuanceKind })}
+        />
+      </Field>
+
+      {coupon.issuance === "sharedCode" && (
+        <Field
+          label="The code"
+          hint="Upper-cased and stripped of punctuation, so WELCOME20, welcome-20 and 'welcome 20' are all the same code."
+        >
+          <Input
+            value={coupon.sharedCode}
+            maxLength={32}
+            placeholder="WELCOME20"
+            onChange={(e) => onChange({ sharedCode: normalizeCouponCode(e.target.value) })}
+          />
+        </Field>
+      )}
+
+      {!issuanceUsesCodes(coupon.issuance) && (
+        <div className="space-y-4">
           <Field
-            label="The code"
-            hint="Upper-cased and stripped of punctuation, so WELCOME20, welcome-20 and 'welcome 20' are all the same code."
+            label="Arrived via"
+            hint="Arrival tokens, comma-separated: a QR id as qr:berlin-window, a whole channel as just qr, or a campaign link as utm:newsletter. Empty means any arrival — which for an automatic coupon means everyone."
           >
             <Input
-              value={coupon.sharedCode}
-              maxLength={32}
-              placeholder="WELCOME20"
-              onChange={(e) => onChange({ sharedCode: normalizeCouponCode(e.target.value) })}
+              value={coupon.audience.arrivedVia.join(", ")}
+              placeholder="qr:berlin-window, utm:spring-mailer"
+              onChange={(e) =>
+                onChange({
+                  audience: {
+                    ...coupon.audience,
+                    arrivedVia: e.target.value
+                      .split(",")
+                      .map((t) => t.trim().toLowerCase())
+                      .filter(Boolean)
+                      .slice(0, 100),
+                  },
+                })
+              }
             />
           </Field>
-        )}
+          <Grid cols={2}>
+            <DateField
+              label="Signed up after"
+              value={coupon.audience.signedUpFrom}
+              hint="Empty means any account age."
+              onChange={(signedUpFrom) => onChange({ audience: { ...coupon.audience, signedUpFrom } })}
+            />
+            <DateField
+              label="Signed up before"
+              value={coupon.audience.signedUpTo}
+              hint="Empty means no upper bound."
+              onChange={(signedUpTo) => onChange({ audience: { ...coupon.audience, signedUpTo } })}
+            />
+          </Grid>
+          <Field
+            label="Only these accounts"
+            hint="User ids, comma-separated. A second gate on top of the grant, for a pilot you want held to a named list — leave it empty unless you mean it, because anyone granted this coupon who isn't listed here is refused at checkout."
+          >
+            <Textarea
+              value={coupon.audience.allowlistUids.join(", ")}
+              rows={2}
+              onChange={(e) =>
+                onChange({
+                  audience: {
+                    ...coupon.audience,
+                    allowlistUids: e.target.value
+                      .split(",")
+                      .map((t) => t.trim())
+                      .filter(Boolean)
+                      .slice(0, 500),
+                  },
+                })
+              }
+            />
+          </Field>
+        </div>
+      )}
 
-        {!issuanceUsesCodes(coupon.issuance) && (
-          <div className="space-y-3">
-            <Field
-              label="Arrived via"
-              hint="Arrival tokens, comma-separated: a QR id as qr:berlin-window, a whole channel as just qr, or a campaign link as utm:newsletter. Empty means any arrival — which for an automatic coupon means everyone."
-            >
-              <Input
-                value={coupon.audience.arrivedVia.join(", ")}
-                placeholder="qr:berlin-window, utm:spring-mailer"
-                onChange={(e) =>
-                  onChange({
-                    audience: {
-                      ...coupon.audience,
-                      arrivedVia: e.target.value
-                        .split(",")
-                        .map((t) => t.trim().toLowerCase())
-                        .filter(Boolean)
-                        .slice(0, 100),
-                    },
-                  })
-                }
-              />
-            </Field>
-            <Grid cols={2}>
-              <DateField
-                label="Signed up after"
-                value={coupon.audience.signedUpFrom}
-                hint="Empty means any account age."
-                onChange={(signedUpFrom) => onChange({ audience: { ...coupon.audience, signedUpFrom } })}
-              />
-              <DateField
-                label="Signed up before"
-                value={coupon.audience.signedUpTo}
-                hint="Empty means no upper bound."
-                onChange={(signedUpTo) => onChange({ audience: { ...coupon.audience, signedUpTo } })}
-              />
-            </Grid>
-            <Field
-              label="Only these accounts"
-              hint="User ids, comma-separated. A second gate on top of the grant, for a pilot you want held to a named list — leave it empty unless you mean it, because anyone granted this coupon who isn't listed here is refused at checkout."
-            >
-              <Textarea
-                value={coupon.audience.allowlistUids.join(", ")}
-                rows={2}
-                onChange={(e) =>
-                  onChange({
-                    audience: {
-                      ...coupon.audience,
-                      allowlistUids: e.target.value
-                        .split(",")
-                        .map((t) => t.trim())
-                        .filter(Boolean)
-                        .slice(0, 500),
-                    },
-                  })
-                }
-              />
-            </Field>
-          </div>
-        )}
-      </Section>
+      <div className="space-y-4">
+        <h3 className="text-sm font-semibold text-ink-900">What the customer reads</h3>
+        <Grid cols={2}>
+          <Field label="Headline override" hint="Leave empty to use the generated sentence.">
+            <Input
+              value={coupon.presentation.headline}
+              maxLength={160}
+              placeholder={couponSummary({ ...coupon, presentation: { headline: "", subline: "" } })}
+              onChange={(e) =>
+                onChange({ presentation: { ...coupon.presentation, headline: e.target.value } })
+              }
+            />
+          </Field>
+          <Field label="Supporting line" hint="Optional. One extra sentence of context.">
+            <Input
+              value={coupon.presentation.subline}
+              maxLength={400}
+              onChange={(e) =>
+                onChange({ presentation: { ...coupon.presentation, subline: e.target.value } })
+              }
+            />
+          </Field>
+        </Grid>
+        <div className="rounded-lg bg-ink-50 px-3 py-2">
+          <div className="text-xs text-ink-400">Preview</div>
+          <div className="text-sm font-semibold text-ink-800">{couponSummary(coupon)}</div>
+          {coupon.presentation.subline && (
+            <p className="text-sm text-ink-500">{coupon.presentation.subline}</p>
+          )}
+          {notes.length > 0 && (
+            <p className="mt-1 text-xs leading-relaxed text-ink-400">{notes.join(" · ")}</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
 
-      <Section title="Where it applies">
+// ---- Limits -----------------------------------------------------------------
+
+function LimitsFields({
+  coupon,
+  currency,
+  planIds,
+  onChange,
+}: {
+  coupon: Coupon;
+  currency: string;
+  planIds: string[];
+  onChange: (patch: Partial<Coupon>) => void;
+}) {
+  const r = coupon.restrictions;
+  const setRestrictions = (patch: Partial<Coupon["restrictions"]>) =>
+    onChange({ restrictions: { ...r, ...patch } });
+  const percentOff = coupon.mechanic.percentOff;
+
+  return (
+    <div className="space-y-8">
+      <div className="space-y-4">
+        <h3 className="text-sm font-semibold text-ink-900">Where it applies</h3>
         <Field label="Item types" hint="Nothing selected means it applies to everything you sell.">
           <Chips
             options={ITEM_OPTIONS}
@@ -552,11 +720,9 @@ function CouponEditor({
             memberships — the case an earlier version of this note missed. */}
         {(r.itemTypes.length === 0 || r.itemTypes.includes("plan")) && (
           <ImpactNote>
-            On a membership this comes off the <span className="font-semibold">first invoice only</span>.
-            Stripe raises those invoices, so the discount reaches it as a one-off coupon attached at
-            checkout, and the renewal a month or a year later bills the full price. Nothing to
-            configure — but it&apos;s the difference between &ldquo;{percentOff}% off membership&rdquo; and
-            &ldquo;{percentOff}% off your first month&rdquo;, and only one of those is true.
+            On a membership this comes off the <span className="font-semibold">first invoice only</span>{" "}
+            — {percentOff}% off the first month, not {percentOff}% off membership. Renewals bill full
+            price.
           </ImpactNote>
         )}
         <Grid cols={2}>
@@ -568,15 +734,14 @@ function CouponEditor({
             hint="0 = no minimum."
             onChange={(minSubtotal) => setRestrictions({ minSubtotal: Math.max(0, minSubtotal) })}
           />
-          <Field label="Countries" hint="ISO-2 codes, comma-separated. Empty means anywhere. An unknown country FAILS a country-gated coupon.">
+          <Field
+            label="Countries"
+            hint="ISO-2 codes, comma-separated. Empty means anywhere. An unknown country FAILS a country-gated coupon."
+          >
             <Input
               value={r.countries.join(", ")}
               placeholder="DE, AT, CH"
-              onChange={(e) =>
-                setRestrictions({
-                  countries: splitCodes(e.target.value, 2),
-                })
-              }
+              onChange={(e) => setRestrictions({ countries: splitCodes(e.target.value, 2) })}
             />
           </Field>
         </Grid>
@@ -620,19 +785,25 @@ function CouponEditor({
             onChange={(endsAt) => setRestrictions({ endsAt })}
           />
         </Grid>
-      </Section>
+      </div>
 
-      <Section
-        title="Who can use it, and how often"
-        hint="An active coupon needs at least one cap and at least one budget — the server refuses to save one without."
-      >
+      <div className="space-y-4">
+        <div>
+          <h3 className="text-sm font-semibold text-ink-900">Who can use it, and how often</h3>
+          <p className="mt-0.5 text-sm text-ink-500">
+            An active coupon needs at least one cap and at least one budget — the server refuses to
+            save one without.
+          </p>
+        </div>
         <Grid cols={3}>
           <NumberField
             label="Uses per account"
             value={r.maxPerAccount}
             step="1"
             hint="0 = unlimited."
-            onChange={(maxPerAccount) => setRestrictions({ maxPerAccount: Math.max(0, Math.round(maxPerAccount)) })}
+            onChange={(maxPerAccount) =>
+              setRestrictions({ maxPerAccount: Math.max(0, Math.round(maxPerAccount)) })
+            }
           />
           <NumberField
             label="Uses in total"
@@ -687,7 +858,7 @@ function CouponEditor({
               options={planIds.map((id) => ({ value: id, label: id }))}
               selected={r.planIds}
               allowEmpty
-              onChange={(planIds) => setRestrictions({ planIds })}
+              onChange={(ids) => setRestrictions({ planIds: ids })}
             />
           </Field>
         </Grid>
@@ -758,44 +929,7 @@ function CouponEditor({
             />
           </Field>
         </Grid>
-      </Section>
-
-      <Section
-        title="What the customer reads"
-        hint="Generated from the mechanic unless you override it, so the promise can't drift from what comes off the price."
-      >
-        <Grid cols={2}>
-          <Field label="Headline override" hint="Leave empty to use the generated sentence.">
-            <Input
-              value={coupon.presentation.headline}
-              maxLength={160}
-              placeholder={couponSummary({ ...coupon, presentation: { headline: "", subline: "" } })}
-              onChange={(e) =>
-                onChange({ presentation: { ...coupon.presentation, headline: e.target.value } })
-              }
-            />
-          </Field>
-          <Field label="Supporting line" hint="Optional. One extra sentence of context.">
-            <Input
-              value={coupon.presentation.subline}
-              maxLength={400}
-              onChange={(e) =>
-                onChange({ presentation: { ...coupon.presentation, subline: e.target.value } })
-              }
-            />
-          </Field>
-        </Grid>
-        <div className="rounded-lg bg-ink-50 px-3 py-2">
-          <div className="text-[11px] uppercase tracking-wide text-ink-400">Preview</div>
-          <div className="text-sm font-semibold text-ink-800">{couponSummary(coupon)}</div>
-          {coupon.presentation.subline && (
-            <p className="text-xs text-ink-500">{coupon.presentation.subline}</p>
-          )}
-          {notes.length > 0 && (
-            <p className="mt-1 text-[11px] leading-relaxed text-ink-400">{notes.join(" · ")}</p>
-          )}
-        </div>
-      </Section>
+      </div>
     </div>
   );
 }
@@ -895,20 +1029,23 @@ function CodesPanel({ coupon, saved }: { coupon: Coupon; saved: boolean }) {
   };
 
   return (
-    <Section
-      title="Codes"
-      hint="Unguessable one-time strings. Shown in full once, when they're minted — after that only the last four."
-    >
+    <div className="space-y-4">
       {!saved ? (
-        <p className="text-xs text-ink-400">
-          Save this coupon before minting codes. A code attached to a draft that&apos;s still being edited is a real
-          string on someone&apos;s voucher pointing at terms that are about to change.
+        <p className="text-sm text-ink-400">
+          Save this coupon before minting codes. A code attached to a draft that&apos;s still being
+          edited is a real string on someone&apos;s voucher pointing at terms that are about to
+          change.
         </p>
       ) : (
         <>
           {!readOnly && (
             <Grid cols={3}>
-              <NumberField label="How many" value={count} step="10" onChange={(v) => setCount(Math.max(1, Math.min(5000, Math.round(v))))} />
+              <NumberField
+                label="How many"
+                value={count}
+                step="10"
+                onChange={(v) => setCount(Math.max(1, Math.min(5000, Math.round(v))))}
+              />
               <NumberField
                 label="Length"
                 value={length}
@@ -939,7 +1076,7 @@ function CodesPanel({ coupon, saved }: { coupon: Coupon; saved: boolean }) {
 
           {minted && (
             <div className="space-y-1.5 rounded-lg bg-amber-50 px-3 py-2 ring-1 ring-inset ring-amber-200">
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-amber-800">
+              <div className="text-xs font-semibold uppercase tracking-wide text-amber-800">
                 Batch {minted.batchId} — copy these now
               </div>
               <Textarea value={minted.codes.join("\n")} rows={6} readOnly />
@@ -959,34 +1096,34 @@ function CodesPanel({ coupon, saved }: { coupon: Coupon; saved: boolean }) {
                   <ShieldOff className="size-3.5" /> Revoke this batch
                 </Button>
               </div>
-              <p className="text-[11px] leading-relaxed text-amber-800">
-                This is the only time these are shown in full. They go into a print run or a mail merge from here;
-                afterwards the list below shows only the last four of each, because a screen full of live codes is one
-                screenshot from being a leak.
+              <p className="text-xs leading-relaxed text-amber-800">
+                This is the only time these are shown in full. They go into a print run or a mail
+                merge from here; afterwards the list below shows only the last four of each, because
+                a screen full of live codes is one screenshot from being a leak.
               </p>
             </div>
           )}
 
           {codes && (
             <div className="overflow-x-auto">
-              <table className="w-full text-xs">
+              <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-ink-400">
-                    <th className="py-1 pr-3 font-medium">Code</th>
-                    <th className="py-1 pr-3 font-medium">Batch</th>
-                    <th className="py-1 pr-3 font-medium">Used</th>
-                    <th className="py-1 pr-3 font-medium">Held</th>
-                    <th className="py-1 font-medium">State</th>
+                    <th className="py-1.5 pr-3 font-medium">Code</th>
+                    <th className="py-1.5 pr-3 font-medium">Batch</th>
+                    <th className="py-1.5 pr-3 font-medium">Used</th>
+                    <th className="py-1.5 pr-3 font-medium">Held</th>
+                    <th className="py-1.5 font-medium">State</th>
                   </tr>
                 </thead>
                 <tbody>
                   {codes.map((row) => (
                     <tr key={`${row.batchId}-${row.code}-${row.createdAt}`} className="border-t border-ink-100">
-                      <td className="py-1 pr-3 font-mono text-ink-700">{row.code}</td>
-                      <td className="py-1 pr-3 text-ink-400">{row.batchId ?? "—"}</td>
-                      <td className="py-1 pr-3 text-ink-700">{row.redeemedCount}</td>
-                      <td className="py-1 pr-3 text-ink-700">{row.reservedCount}</td>
-                      <td className="py-1 text-ink-500">
+                      <td className="py-1.5 pr-3 font-mono text-ink-700">{row.code}</td>
+                      <td className="py-1.5 pr-3 text-ink-400">{row.batchId ?? "—"}</td>
+                      <td className="py-1.5 pr-3 text-ink-700">{row.redeemedCount}</td>
+                      <td className="py-1.5 pr-3 text-ink-700">{row.reservedCount}</td>
+                      <td className="py-1.5 text-ink-500">
                         {row.revoked ? "Revoked" : row.redeemedCount > 0 ? "Used" : "Live"}
                       </td>
                     </tr>
@@ -1004,7 +1141,7 @@ function CodesPanel({ coupon, saved }: { coupon: Coupon; saved: boolean }) {
           )}
         </>
       )}
-    </Section>
+    </div>
   );
 }
 
@@ -1101,28 +1238,22 @@ function GrantsPanel({ coupon, saved }: { coupon: Coupon; saved: boolean }) {
   };
 
   return (
-    <Section
-      title="Who holds this"
-      hint={
-        coupon.issuance === "adminGrant"
+    <div className="space-y-4">
+      <p className="text-sm text-ink-500">
+        {coupon.issuance === "adminGrant"
           ? "This coupon reaches people only by being granted here — there's no code to type and nothing grants it automatically."
-          : "Granted automatically to everyone matching the audience above. Add somebody by hand when they should have had it and didn't."
-      }
-    >
+          : "Granted automatically to everyone matching the audience on Offer. Add somebody by hand when they should have had it and didn't."}
+      </p>
       {!saved ? (
-        <p className="text-xs text-ink-400">
-          Save this coupon first. A grant freezes the terms it was made under, so granting from a draft that&apos;s
-          still being edited promises somebody something you&apos;re about to change.
+        <p className="text-sm text-ink-400">
+          Save this coupon first. A grant freezes the terms it was made under, so granting from a
+          draft that&apos;s still being edited promises somebody something you&apos;re about to change.
         </p>
       ) : (
         <>
           {!readOnly && (
             <div className="flex flex-wrap items-end gap-2">
-              <Field
-                label="Account"
-                hint="An email address or a user id."
-                className="min-w-[16rem] flex-1"
-              >
+              <Field label="Account" hint="An email address or a user id." className="min-w-[16rem] flex-1">
                 <Input
                   value={account}
                   maxLength={320}
@@ -1142,16 +1273,18 @@ function GrantsPanel({ coupon, saved }: { coupon: Coupon; saved: boolean }) {
           {coupon.status !== "active" && (
             <ImpactNote>
               This coupon is <span className="font-semibold">{COUPON_STATUS_LABELS[coupon.status].toLowerCase()}</span>,
-              so anything granted now is refused at checkout — and the grant email promises a discount that
-              doesn&apos;t work yet. Set it to active first, or warn whoever you&apos;re granting it to.
+              so anything granted now is refused at checkout — and the grant email promises a discount
+              that doesn&apos;t work yet. Set it to active first, or warn whoever you&apos;re granting
+              it to.
             </ImpactNote>
           )}
 
           {coupon.audience.allowlistUids.length > 0 && (
             <ImpactNote>
-              This coupon also has an <span className="font-semibold">Only these accounts</span> list, which is checked
-              on top of the grant. Anyone granted it who isn&apos;t on that list is refused at checkout — either add
-              them there too, or clear the list and let the grant decide.
+              This coupon also has an <span className="font-semibold">Only these accounts</span> list
+              on Offer, which is checked on top of the grant. Anyone granted it who isn&apos;t on
+              that list is refused at checkout — either add them there too, or clear the list and let
+              the grant decide.
             </ImpactNote>
           )}
 
@@ -1163,34 +1296,36 @@ function GrantsPanel({ coupon, saved }: { coupon: Coupon; saved: boolean }) {
 
           {grants && (
             <div className="overflow-x-auto">
-              <table className="w-full text-xs">
+              <table className="w-full text-sm">
                 <thead>
                   <tr className="text-left text-ink-400">
-                    <th className="py-1 pr-3 font-medium">Account</th>
-                    <th className="py-1 pr-3 font-medium">Granted</th>
-                    <th className="py-1 pr-3 font-medium">How</th>
-                    <th className="py-1 pr-3 font-medium">Used</th>
-                    <th className="py-1 font-medium">State</th>
-                    {!readOnly && <th className="py-1" />}
+                    <th className="py-1.5 pr-3 font-medium">Account</th>
+                    <th className="py-1.5 pr-3 font-medium">Granted</th>
+                    <th className="py-1.5 pr-3 font-medium">How</th>
+                    <th className="py-1.5 pr-3 font-medium">Used</th>
+                    <th className="py-1.5 font-medium">State</th>
+                    {!readOnly && <th className="py-1.5" />}
                   </tr>
                 </thead>
                 <tbody>
                   {grants.map((row) => (
                     <tr key={row.id} className="border-t border-ink-100">
-                      <td className="py-1 pr-3 text-ink-700">
+                      <td className="py-1.5 pr-3 text-ink-700">
                         <span className="block max-w-[18rem] truncate">{row.email ?? row.uid}</span>
-                        {row.email && <span className="block truncate font-mono text-[10px] text-ink-400">{row.uid}</span>}
+                        {row.email && (
+                          <span className="block truncate font-mono text-xs text-ink-400">{row.uid}</span>
+                        )}
                       </td>
-                      <td className="py-1 pr-3 text-ink-500">
+                      <td className="py-1.5 pr-3 text-ink-500">
                         {row.grantedAt > 0 ? new Date(row.grantedAt).toLocaleDateString() : "—"}
                       </td>
-                      <td className="py-1 pr-3 text-ink-400">
+                      <td className="py-1.5 pr-3 text-ink-400">
                         <span className="block max-w-48 truncate">{row.source || "—"}</span>
                       </td>
-                      <td className="py-1 pr-3 text-ink-700">{row.redeemedCount}</td>
-                      <td className="py-1 text-ink-500">{row.revoked ? "Revoked" : "Live"}</td>
+                      <td className="py-1.5 pr-3 text-ink-700">{row.redeemedCount}</td>
+                      <td className="py-1.5 text-ink-500">{row.revoked ? "Revoked" : "Live"}</td>
                       {!readOnly && (
-                        <td className="py-1 text-right">
+                        <td className="py-1.5 text-right">
                           {!row.revoked && (
                             <Button
                               type="button"
@@ -1221,6 +1356,6 @@ function GrantsPanel({ coupon, saved }: { coupon: Coupon; saved: boolean }) {
           )}
         </>
       )}
-    </Section>
+    </div>
   );
 }

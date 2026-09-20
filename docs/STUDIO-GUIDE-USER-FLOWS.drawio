@@ -1,0 +1,1553 @@
+<mxfile host="65bd71144e" compressed="false">
+    <diagram id="system-model" name="0. System model">
+        <mxGraphModel grid="1" page="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="m-title" value="Studio Guide: the smart interaction model" style="text;html=1;fontSize=26;fontStyle=1;align=left;verticalAlign=middle;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="25" width="760" height="45" as="geometry"/>
+                </mxCell>
+                <mxCell id="m-sub" value="One visible involvement control writes ownership and cadence together. Chat persists; results appear inline; the panel is for sustained work." style="text;html=1;fontSize=14;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="70" width="920" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="m-start" value="New or returning book" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="170" width="155" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="m-entry" value="How do you want to begin the words?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="285" y="155" width="190" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="m-guided" value="Guide me&#xa;Collect a rich brief in one conversational turn" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0FDFA;strokeColor=#0F766E;" parent="1" vertex="1">
+                    <mxGeometry x="550" y="120" width="210" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="m-own" value="I already have words&#xa;Paste/open manuscript; derive stable facts and keep AI help available" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;" parent="1" vertex="1">
+                    <mxGeometry x="550" y="220" width="210" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="m-look" value="Visuals first, staggered&#xa;Cast card → one-tap style on real artwork → informed generation action with configured cost → queue job → story opens" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="840" y="160" width="245" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="m-approve" value="Before page art: cast summary&#xa;Review only unresolved/stale/unreviewed subjects; separately authorize configured reference-sheet charge if sheets are missing" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1160" y="155" width="230" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="m-default" value="Involvement — one control, never a cadence question&#xa;Make it for me / Make it with me (default) / I’ll do it myself" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEF2FF;strokeColor=#4F46E5;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="565" y="390" width="260" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="m-story" value="STORY OWNERSHIP&#xa;Create for me | Help me | I’ll provide/edit" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#059669;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="175" y="555" width="240" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="m-chars" value="CHARACTER OWNERSHIP&#xa;Create for me | Help me | I’ll provide/direct" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="520" y="555" width="240" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="m-pages" value="PAGE OWNERSHIP&#xa;Create for me | Help design | I’ll edit" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="865" y="555" width="240" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="m-finish" value="Flip-through + print preflight + checkout" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1205" y="555" width="250" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="m-note1" value="Ownership defaults are explicit: Story follows the entry choice, Characters and Pages are created for you. Editing an artifact promotes it to “Help me create it”." style="shape=note;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontSize=13;" parent="1" vertex="1">
+                    <mxGeometry x="85" y="735" width="390" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="m-note2" value="Always stop for missing book style, likeness consent, conflicting uploaded styles, a never-reviewed subject, informed confirmation of every configured generation charge, insufficient balance, and print checkout. Ask for an account only when its capability is needed." style="shape=note;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#DC2626;fontSize=13;" parent="1" vertex="1">
+                    <mxGeometry x="560" y="735" width="420" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="m-note3" value="Results appear inline in the chat on every screen size. The panel opens for sustained work — manuscript, full gallery, reference sheet, page canvas, flip-through." style="shape=note;whiteSpace=wrap;html=1;fillColor=#F0F9FF;strokeColor=#0284C7;fontSize=13;" parent="1" vertex="1">
+                    <mxGeometry x="1065" y="735" width="390" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="me1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" parent="1" source="m-start" target="m-entry" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="me2" value="Guide me" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" parent="1" source="m-entry" target="m-guided" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="me3" value="I have words" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" parent="1" source="m-entry" target="m-own" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="me4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" parent="1" source="m-guided" target="m-look" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="me5" value="as soon as one stable visual subject is derivable" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" parent="1" source="m-own" target="m-look" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="me6" value="job queued → story opens → first look revealed inline" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" parent="1" source="m-look" target="m-default" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="me7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" parent="1" source="m-approve" target="m-pages" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1275" y="435"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="me8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" parent="1" source="m-default" target="m-story" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="me9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" parent="1" source="m-default" target="m-chars" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="me10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" parent="1" source="m-default" target="m-pages" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="me11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" parent="1" source="m-story" target="m-chars" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="me12" value="before dependent page art" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" parent="1" source="m-chars" target="m-approve" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="me13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;" parent="1" source="m-pages" target="m-finish" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="master-journey" name="1. Master journey">
+        <mxGraphModel dx="819" dy="596" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1000" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="j-title" value="Master conversational journey" style="text;html=1;fontSize=26;fontStyle=1;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="25" width="700" height="45" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-start" value="Open Studio Guide" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="65" y="120" width="160" height="65" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-return" value="Existing project?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;" parent="1" vertex="1">
+                    <mxGeometry x="285" y="105" width="155" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-resume" value="Resume from project + durable jobs&#xa;Explain newest result or outstanding decision" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;" parent="1" vertex="1">
+                    <mxGeometry x="515" y="70" width="250" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-writechoice" value="Guide me or I already have words?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="515" y="185" width="200" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-brief" value="One broad brief question&#xa;Names + ages + relationships + story wishes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0FDFA;strokeColor=#0F766E;" parent="1" vertex="1">
+                    <mxGeometry x="805" y="165" width="250" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-missing" value="Required fact missing?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;" parent="1" vertex="1">
+                    <mxGeometry x="1130" y="155" width="180" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-chase" value="Ask one targeted follow-up&#xa;Example: “How old is Leo?”" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;" parent="1" vertex="1">
+                    <mxGeometry x="1360" y="165" width="195" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-editor" value="Paste/open manuscript immediately&#xa;Derive cast/audience; confirm or correct extracted details inline; guide can assist later" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;" parent="1" vertex="1">
+                    <mxGeometry x="805" y="285" width="250" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-readytext" value="Story text ready enough?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;" parent="1" vertex="1">
+                    <mxGeometry x="1130" y="285" width="180" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-primary" value="One cast card for everyone named&#xa;Photo (one or several) / artwork / describe / invent / non-character sample" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="180" y="445" width="250" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-style" value="Book style known?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;" parent="1" vertex="1">
+                    <mxGeometry x="505" y="440" width="170" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-stylepick" value="One tap on real artwork&#xa;Derive + confirm, or recommended tile + alternates + Choose for me&#xa;First visuals on screen before any generation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;" parent="1" vertex="1">
+                    <mxGeometry x="735" y="455" width="215" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-portrait" value="Show quantity + configured Spark cost, then queue the job and open story conversation&#xa;Never narrate drawing before it starts; Keep approves only; reference sheets are a separate priced batch" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1015" y="450" width="250" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-like" value="First look, inline: keep (= that character’s approval), tweak, re-source, restyle, or recreate later?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1330" y="440" width="220" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-tweak" value="Targeted tweak, replace source, or choose another style" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#DC2626;" parent="1" vertex="1">
+                    <mxGeometry x="1260" y="600" width="250" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-work" value="Involvement — default applies silently, never asked as a questionnaire" style="rhombus;whiteSpace=wrap;html=1;fillColor=#EEF2FF;strokeColor=#4F46E5;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="650" y="620" width="200" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-auto" value="Make it for me&#xa;Pause only at hard stops" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#059669;" parent="1" vertex="1">
+                    <mxGeometry x="195" y="780" width="230" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-review" value="Make it with me&#xa;Invisible default; checkpoints ask in context" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="535" y="780" width="230" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-custom" value="I’ll do it myself&#xa;Pause before progressing artifacts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;" parent="1" vertex="1">
+                    <mxGeometry x="875" y="780" width="250" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-run" value="One control writes ownership + cadence&#xa;Editing an artifact promotes it; both stay adjustable" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#475569;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1215" y="775" width="220" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="j-print" value="Ready-to-print review" style="ellipse;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1295" y="900" width="190" height="65" as="geometry"/>
+                </mxCell>
+                <mxCell id="je1" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-start" target="j-return" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je2" value="Yes" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-return" target="j-resume" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je3" value="No" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-return" target="j-writechoice" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je4" value="Guide me" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-writechoice" target="j-brief" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je5" value="Write it" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-writechoice" target="j-editor" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je6" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-brief" target="j-missing" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je7" value="Yes" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-missing" target="j-chase" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je8" value="answer" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-chase" target="j-missing" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1455" y="300"/>
+                            <mxPoint x="1220" y="300"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="je9" value="No" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-missing" target="j-primary" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1220" y="410"/>
+                            <mxPoint x="305" y="410"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="je10" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-editor" target="j-readytext" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je11" value="Yes" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-readytext" target="j-primary" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1220" y="410"/>
+                            <mxPoint x="305" y="410"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="je12" value="No: keep writing or ask guide" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-readytext" target="j-editor" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je13" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-primary" target="j-style" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je14" value="No" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-style" target="j-stylepick" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je15" value="Yes" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-style" target="j-portrait" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="590" y="580"/>
+                            <mxPoint x="1140" y="580"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="je16" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-stylepick" target="j-portrait" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je17" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-portrait" target="j-like" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je18" value="Tweak / new source / new style" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-like" target="j-tweak" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je19" value="retry" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-tweak" target="j-portrait" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je20" value="Keep / recreate later" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-like" target="j-work" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1440" y="700"/>
+                            <mxPoint x="750" y="700"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="je21" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-work" target="j-auto" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je22" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-work" target="j-review" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je23" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-work" target="j-custom" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je24" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-auto" target="j-run" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je25" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-review" target="j-run" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je26" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-custom" target="j-run" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="je27" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="j-run" target="j-print" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="parallel-first-look" name="1A. Early visual, staggered then parallel">
+        <mxGraphModel dx="1800" dy="1050" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1050" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="pv-title" value="Earliest possible visual, staggered then parallel" style="text;html=1;fontSize=26;fontStyle=1;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="25" width="900" height="45" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-sub" value="Style examples are real artwork and cost nothing, so illustration is on screen first. The story track opens only once a visual job is queued — never before." style="text;html=1;fontSize=14;fontColor=#475569;whiteSpace=wrap;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="70" width="1050" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-start" value="Minimum stable facts arrive&#xa;Name + age, pasted-story subject, or explicit non-character visual" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="70" y="135" width="255" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-subject" value="What is the earliest honest visual subject?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="405" y="120" width="225" height="115" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-character" value="Named cast&#xa;Intake covers everyone at once; render queue may be sequential and is named out loud" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;" parent="1" vertex="1">
+                    <mxGeometry x="720" y="105" width="250" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-other" value="No character&#xa;Use setting, important object, or style sample" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;" parent="1" vertex="1">
+                    <mxGeometry x="720" y="215" width="250" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-launch" value="Cast card → one-tap style → show configured generation charge + balance after → confirm → queue visual job&#xa;(story track opens after this, not before)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEF2FF;strokeColor=#4F46E5;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1060" y="145" width="245" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-storylane" value="STORY TRACK" style="swimlane;html=1;startSize=42;fillColor=#ECFDF5;strokeColor=#059669;fontStyle=1;fontSize=16;" parent="1" vertex="1">
+                    <mxGeometry x="70" y="350" width="735" height="360" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-story1" value="Continue conversation or manuscript&#xa;Do not wait for image generation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;" parent="pv-storylane" vertex="1">
+                    <mxGeometry x="40" y="85" width="200" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-story2" value="Draft / co-create / reader writes&#xa;Show stated facts and inferred assumptions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;" parent="pv-storylane" vertex="1">
+                    <mxGeometry x="275" y="85" width="210" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-story3" value="Story ready under selected ownership + cadence" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;fontStyle=1;" parent="pv-storylane" vertex="1">
+                    <mxGeometry x="520" y="85" width="180" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-storynote" value="If the visual fails, the story track continues. If the story changes visual facts, the visual result is provenance-checked before reveal." style="shape=note;whiteSpace=wrap;html=1;fillColor=#F0FDF4;strokeColor=#16A34A;" parent="pv-storylane" vertex="1">
+                    <mxGeometry x="145" y="225" width="450" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-visuallane" value="FIRST-LOOK TRACK" style="swimlane;html=1;startSize=42;fillColor=#FDF2F8;strokeColor=#DB2777;fontStyle=1;fontSize=16;" parent="1" vertex="1">
+                    <mxGeometry x="880" y="350" width="850" height="360" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-source" value="Unified cast intake&#xa;One card, everyone named: photo + consent (incl. a shared photo with face-to-name) / artwork / describe / invent / sample" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DB2777;" parent="pv-visuallane" vertex="1">
+                    <mxGeometry x="25" y="75" width="225" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-immediate" value="Book style as the first visual reward&#xa;Catalog example artwork: derived-style confirmation, or recommended tile + alternates — zero cost, no generation, no wait" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DB2777;" parent="pv-visuallane" vertex="1">
+                    <mxGeometry x="275" y="75" width="225" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-render" value="Style saved → show configured cost + resulting balance → confirm → job queued → render&#xa;Story track opens here; composer stays active; honest stages only" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DB2777;fontStyle=1;" parent="pv-visuallane" vertex="1">
+                    <mxGeometry x="525" y="75" width="205" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-current" value="Succeeded + inputs still current?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;" parent="pv-visuallane" vertex="1">
+                    <mxGeometry x="745" y="75" width="85" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-stale" value="Failed: retry/change source/describe/invent/sample.&#xa;Stale: keep older version; regenerate latest without flashing it as current." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#DC2626;" parent="pv-visuallane" vertex="1">
+                    <mxGeometry x="510" y="220" width="260" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-result" value="Reveal “First look” inline in chat&#xa;Keep (= approval only, never another charge) • Tweak • New source • Another style • Recreate later" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF1F2;strokeColor=#DB2777;fontStyle=1;" parent="pv-visuallane" vertex="1">
+                    <mxGeometry x="185" y="215" width="285" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-join" value="Story ready + first-look track resolved enough to continue" style="rhombus;whiteSpace=wrap;html=1;fillColor=#EEF2FF;strokeColor=#4F46E5;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="690" y="760" width="260" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-cast" value="Complete the required cast&#xa;Your people vs. everything else; Keep approves only; create reference sheets with one separately priced batch action" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;" parent="1" vertex="1">
+                    <mxGeometry x="1040" y="770" width="285" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-lock" value="Cast summary before page art&#xa;Review only unresolved/stale/unreviewed looks; if sheets are missing, separately authorize the configured reference-sheet batch charge" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1410" y="755" width="250" height="125" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-pages" value="Page plan + dependent illustrations" style="ellipse;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="710" y="940" width="245" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="pv-later" value="Later recreation stays available; first explain affected sheets/pages and cost, then update only dependants. “Recreate later” leaves a visible pending item, and the page cost gate names the look the pages will use." style="shape=note;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;" parent="1" vertex="1">
+                    <mxGeometry x="1060" y="935" width="500" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve1" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-start" target="pv-subject" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve2" value="Character" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-subject" target="pv-character" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve3" value="No character" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-subject" target="pv-other" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve4" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-character" target="pv-launch" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve5" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-other" target="pv-launch" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve6" value="only once the job is queued" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-launch" target="pv-story1" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve7" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-launch" target="pv-source" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve8" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-story1" target="pv-story2" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve9" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-story2" target="pv-story3" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve10" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-source" target="pv-immediate" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve11" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-immediate" target="pv-render" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve12" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-render" target="pv-current" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve13" value="Yes" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-current" target="pv-result" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve14" value="No" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-current" target="pv-stale" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve15" value="latest inputs" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-stale" target="pv-render" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve16" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-story3" target="pv-join" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve17" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-result" target="pv-join" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve18" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-join" target="pv-cast" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve19" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-cast" target="pv-lock" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pve20" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="pv-lock" target="pv-pages" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="story-flow" name="2. Story paths">
+        <mxGraphModel grid="1" page="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="s-title" value="Story paths: source/ownership, then review cadence" style="text;html=1;fontSize=26;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="25" width="760" height="45" as="geometry"/>
+                </mxCell>
+                <mxCell id="s-entry" value="Story input" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="65" y="125" width="145" height="65" as="geometry"/>
+                </mxCell>
+                <mxCell id="s-mode" value="How begin?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;" parent="1" vertex="1">
+                    <mxGeometry x="275" y="110" width="150" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="s-guided" value="GUIDE ME&#xa;One broad brief question; infer audience, theme, setting, language" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0FDFA;strokeColor=#0F766E;" parent="1" vertex="1">
+                    <mxGeometry x="500" y="85" width="275" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="s-own" value="I ALREADY HAVE WORDS&#xa;Paste/open manuscript; derive facts; offer optional assistance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;" parent="1" vertex="1">
+                    <mxGeometry x="500" y="215" width="275" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="s-enough" value="Brief settled? Explicit instruction, or visible Create the story action after a ready summary — never inactivity, timeout, or names+ages alone" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;" parent="1" vertex="1">
+                    <mxGeometry x="855" y="145" width="200" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="s-follow" value="Ask only the named missing fact or keep editor open" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;" parent="1" vertex="1">
+                    <mxGeometry x="1140" y="90" width="225" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="s-policy" value="Who creates the story?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#EEF2FF;strokeColor=#4F46E5;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1145" y="220" width="180" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="s-auto" value="CREATE IT FOR ME&#xa;Generate story → quality + age checks → cadence decides pause" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#059669;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="165" y="415" width="300" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="s-review" value="HELP ME CREATE IT&#xa;Concept/outline choices → draft → revisions in manuscript panel" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="650" y="415" width="300" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="s-hands" value="I’LL PROVIDE OR EDIT IT&#xa;Editor first → reader writes/uses optional AI actions → Mark ready" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1135" y="415" width="300" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="s-interrupt" value="Reader interrupts with a change?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;" parent="1" vertex="1">
+                    <mxGeometry x="655" y="600" width="230" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="s-apply" value="Apply fact or text edit; show receipt; mark only dependent artifacts stale" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#DC2626;" parent="1" vertex="1">
+                    <mxGeometry x="1000" y="615" width="290" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="s-ready" value="Story ready for cast analysis and/or page planning" style="ellipse;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="365" y="765" width="300" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="s-switch" value="Ownership is independent of cadence: system-created stories can still pause for review; user-provided stories can continue automatically after Mark ready." style="shape=note;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontSize=13;" parent="1" vertex="1">
+                    <mxGeometry x="945" y="760" width="430" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="se1" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="s-entry" target="s-mode" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="se2" value="Guide me" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="s-mode" target="s-guided" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="se3" value="Write it" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="s-mode" target="s-own" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="se4" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="s-guided" target="s-enough" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="se5" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="s-own" target="s-enough" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="se6" value="No" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="s-enough" target="s-follow" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="se7" value="answer/write" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="s-follow" target="s-enough" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="se8" value="Yes" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="s-enough" target="s-policy" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="se9" value="Create for me" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="s-policy" target="s-auto" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="se10" value="Help me" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="s-policy" target="s-review" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="se11" value="I provide/edit" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="s-policy" target="s-hands" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="se12" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="s-auto" target="s-interrupt" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="se13" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="s-review" target="s-interrupt" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="se14" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="s-hands" target="s-interrupt" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="se15" value="Yes" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="s-interrupt" target="s-apply" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="se16" value="No / approved / marked ready" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="s-interrupt" target="s-ready" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="se17" value="continue under current policy" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="s-apply" target="s-interrupt" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="character-flow" name="3. Character and style paths">
+        <mxGraphModel grid="1" page="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" pageScale="1" pageWidth="1800" pageHeight="1100" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="c-title" value="Character source, art style, approval, and autonomy" style="text;html=1;fontSize=26;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="25" width="900" height="45" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-start" value="Named primary character" style="ellipse;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="125" width="180" height="65" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-source" value="One cast card: how should they look?&#xa;Asked once for everyone named" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="315" y="105" width="210" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-photo" value="PHOTO&#xa;Camera/upload + likeness consent → private source deleted when no longer needed, hard-expiry within 24h" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#DC2626;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="70" width="245" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-art" value="EXISTING ARTWORK&#xa;Upload now or choose reusable character later" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="185" width="245" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-desc" value="DESCRIBE&#xa;Free text + optional appearance chips" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="290" width="245" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-invent" value="INVENT&#xa;Use age, role, story, and safe defaults" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#059669;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="390" width="245" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-quality" value="Photo usable?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;" parent="1" vertex="1">
+                    <mxGeometry x="955" y="65" width="155" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-photoerr" value="Retry / replace / describe / invent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#DC2626;" parent="1" vertex="1">
+                    <mxGeometry x="1175" y="65" width="215" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-extract" value="Extract identity + book art style from artwork" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;" parent="1" vertex="1">
+                    <mxGeometry x="950" y="200" width="260" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-conflict" value="Uploaded styles conflict?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;" parent="1" vertex="1">
+                    <mxGeometry x="1285" y="190" width="190" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-pickwinner" value="Choose whose rendering style defines the book; keep every identity/design" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;" parent="1" vertex="1">
+                    <mxGeometry x="1530" y="195" width="230" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-styleknown" value="Book style saved?&#xa;Confirm a derived style here if needed" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="990" y="355" width="205" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-stylegallery" value="One-tap style on real catalog artwork&#xa;Recommended tile pre-selected + alternates + Choose for me + See all&#xa;Zero cost, no generation, instant first visual reward" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;" parent="1" vertex="1">
+                    <mxGeometry x="1280" y="370" width="230" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-portrait" value="Show configured charge + resulting balance, confirm, queue job, then open story&#xa;Reveal first look inline; Keep approves only and never charges for another generation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="840" y="565" width="250" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-right" value="Keep, tweak, replace source/style, or recreate later?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1180" y="555" width="190" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-tweak" value="Describe targeted change / replace source / change style" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#DC2626;" parent="1" vertex="1">
+                    <mxGeometry x="1450" y="570" width="250" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-fullsheet" value="When stable enough: Create N reference sheets · X Sparks&#xa;Separately priced batch; never triggered by Keep; required before dependent page art" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;" parent="1" vertex="1">
+                    <mxGeometry x="480" y="710" width="255" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-policy" value="Who creates the remaining cast?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#EEF2FF;strokeColor=#4F46E5;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="835" y="700" width="180" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-auto" value="CREATE THEM FOR ME&#xa;Complete recurring people, pets, places; cadence decides pauses" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#059669;" parent="1" vertex="1">
+                    <mxGeometry x="170" y="890" width="300" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-review" value="HELP ME CREATE THEM&#xa;Generate cast shelf; accept direction and individual revisions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;" parent="1" vertex="1">
+                    <mxGeometry x="630" y="890" width="300" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-hands" value="I’LL PROVIDE OR DIRECT THEM&#xa;Open each subject editor; choose source and approve individually" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;" parent="1" vertex="1">
+                    <mxGeometry x="1090" y="890" width="300" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="c-ready" value="Required cast ready for pages" style="ellipse;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="1490" y="905" width="235" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce1" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-start" target="c-source" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce2" value="Photo" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-source" target="c-photo" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce3" value="Artwork" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-source" target="c-art" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce4" value="Describe" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-source" target="c-desc" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce5" value="Invent" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-source" target="c-invent" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce6" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-photo" target="c-quality" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce7" value="No" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-quality" target="c-photoerr" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce8" value="new source" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-photoerr" target="c-source" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1280" y="30"/>
+                            <mxPoint x="420" y="30"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="ce9" value="Yes" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-quality" target="c-styleknown" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce10" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-art" target="c-extract" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce11" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-extract" target="c-conflict" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce12" value="Yes" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-conflict" target="c-pickwinner" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce13" value="resolved" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-pickwinner" target="c-styleknown" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce14" value="No" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-conflict" target="c-styleknown" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce15" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-desc" target="c-styleknown" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce16" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-invent" target="c-styleknown" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce17" value="No" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-styleknown" target="c-stylegallery" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce18" value="Yes" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-styleknown" target="c-portrait" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce19" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-stylegallery" target="c-portrait" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce20" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-portrait" target="c-right" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce21" value="No" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-right" target="c-tweak" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce22" value="retry" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-tweak" target="c-portrait" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce23" value="Yes" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-right" target="c-fullsheet" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce24" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-fullsheet" target="c-policy" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce25" value="Create for me" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-policy" target="c-auto" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce26" value="Help me" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-policy" target="c-review" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce27" value="I provide/direct" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-policy" target="c-hands" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce28" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-auto" target="c-ready" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce29" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-review" target="c-ready" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ce30" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="c-hands" target="c-ready" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="page-flow" name="4. Page paths">
+        <mxGraphModel grid="1" page="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="p-title" value="Page planning, illustration, and editing paths" style="text;html=1;fontSize=26;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="25" width="780" height="45" as="geometry"/>
+                </mxCell>
+                <mxCell id="p-ready" value="Story + required cast ready" style="ellipse;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="130" width="215" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="p-policy" value="Who creates the pages?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#EEF2FF;strokeColor=#4F46E5;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="350" y="110" width="175" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="p-auto" value="CREATE PAGES FOR ME" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#059669;fontStyle=1;fontSize=15;" parent="1" vertex="1">
+                    <mxGeometry x="125" y="315" width="220" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="p-review" value="HELP ME DESIGN PAGES" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;fontSize=15;" parent="1" vertex="1">
+                    <mxGeometry x="680" y="315" width="220" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="p-hands" value="I’LL EDIT THE PAGES" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontStyle=1;fontSize=15;" parent="1" vertex="1">
+                    <mxGeometry x="1235" y="315" width="220" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="p-plan-auto" value="Generate page plan silently&#xa;Validate pacing, text density, and required subjects" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0FDF4;strokeColor=#16A34A;" parent="1" vertex="1">
+                    <mxGeometry x="85" y="415" width="300" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="p-render-auto" value="Affordability gate → enqueue all missing pages&#xa;Show live progress without blocking chat" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0FDF4;strokeColor=#16A34A;" parent="1" vertex="1">
+                    <mxGeometry x="85" y="550" width="300" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="p-plan-review" value="Generate page plan → open page-plan panel" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;" parent="1" vertex="1">
+                    <mxGeometry x="640" y="415" width="300" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="p-plan-ok" value="Approve plan?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;" parent="1" vertex="1">
+                    <mxGeometry x="710" y="525" width="160" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="p-plan-edit" value="Edit split, page text, or scene brief" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;" parent="1" vertex="1">
+                    <mxGeometry x="930" y="535" width="220" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="p-render-review" value="Render all pages → open flip-through review" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;" parent="1" vertex="1">
+                    <mxGeometry x="640" y="670" width="300" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="p-workspace" value="Open page workspace before completion" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;" parent="1" vertex="1">
+                    <mxGeometry x="1195" y="415" width="300" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="p-actions" value="Per spread: edit text/layout/scene prompt, upload assets, generate, regenerate, or keep existing art" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#9333EA;" parent="1" vertex="1">
+                    <mxGeometry x="1195" y="535" width="300" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="p-done" value="Reader marks pages ready" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#9333EA;" parent="1" vertex="1">
+                    <mxGeometry x="1235" y="685" width="220" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="p-final" value="Flip-through: change one page or continue to print" style="ellipse;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="620" y="810" width="330" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="p-fail" value="Any failed unit: retry only failures, edit its input, upload replacement, or leave current version" style="shape=note;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#DC2626;fontSize=13;" parent="1" vertex="1">
+                    <mxGeometry x="1050" y="805" width="430" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="pe1" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="p-ready" target="p-policy" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pe2" value="Create for me" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="p-policy" target="p-auto" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pe3" value="Help me design" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="p-policy" target="p-review" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pe4" value="I edit" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="p-policy" target="p-hands" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pe5" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="p-auto" target="p-plan-auto" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pe6" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="p-plan-auto" target="p-render-auto" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pe7" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="p-render-auto" target="p-final" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pe8" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="p-review" target="p-plan-review" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pe9" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="p-plan-review" target="p-plan-ok" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pe10" value="No" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="p-plan-ok" target="p-plan-edit" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pe11" value="recheck" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="p-plan-edit" target="p-plan-ok" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pe12" value="Yes" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="p-plan-ok" target="p-render-review" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pe13" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="p-render-review" target="p-final" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pe14" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="p-hands" target="p-workspace" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pe15" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="p-workspace" target="p-actions" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pe16" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="p-actions" target="p-done" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="pe17" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;" parent="1" source="p-done" target="p-final" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="autonomy-matrix" name="5. Involvement: ownership × cadence">
+        <mxGraphModel grid="1" page="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" pageScale="1" pageWidth="1800" pageHeight="1100" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="a-title" value="27 artifact-ownership combinations × 3 review cadences" style="text;html=1;fontSize=26;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="25" width="800" height="45" as="geometry"/>
+                </mxCell>
+                <mxCell id="a-sub" value="Do not show this matrix, and do not ask the reader to fill it in. One involvement control writes both fields; the defaults are Story = entry choice, Characters and Pages = create for me. Editing an artifact promotes it to “help me create it”. This page is engineering reference only." style="shape=note;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontSize=13;" parent="1" vertex="1">
+                    <mxGeometry x="930" y="25" width="780" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="a-legend" value="Cell notation: 1 = system creates, 2 = help me create, 3 = I provide/edit. Each large group fixes Story ownership." style="text;html=1;fontSize=14;fontColor=#475569;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="80" width="850" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="a-sauto" value="STORY 1: SYSTEM CREATES" style="swimlane;html=1;startSize=45;horizontal=1;fillColor=#ECFDF5;strokeColor=#059669;fontStyle=1;fontSize=16;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="130" width="540" height="800" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa-h1" value="Characters \ Pages" style="text;html=1;fontStyle=1;align=center;" parent="a-sauto" vertex="1">
+                    <mxGeometry x="20" y="65" width="150" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa-p1" value="Pages 1" style="text;html=1;fontStyle=1;align=center;" parent="a-sauto" vertex="1">
+                    <mxGeometry x="180" y="65" width="100" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa-p2" value="Pages 2" style="text;html=1;fontStyle=1;align=center;" parent="a-sauto" vertex="1">
+                    <mxGeometry x="290" y="65" width="100" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa-p3" value="Pages 3" style="text;html=1;fontStyle=1;align=center;" parent="a-sauto" vertex="1">
+                    <mxGeometry x="400" y="65" width="110" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa-r1" value="Characters 1" style="text;html=1;fontStyle=1;align=right;" parent="a-sauto" vertex="1">
+                    <mxGeometry x="20" y="135" width="145" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa-r2" value="Characters 2" style="text;html=1;fontStyle=1;align=right;" parent="a-sauto" vertex="1">
+                    <mxGeometry x="20" y="300" width="145" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa-r3" value="Characters 3" style="text;html=1;fontStyle=1;align=right;" parent="a-sauto" vertex="1">
+                    <mxGeometry x="20" y="465" width="145" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa11" value="S1 / C1 / P1&#xa;Fastest gift" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;fontStyle=1;" parent="a-sauto" vertex="1">
+                    <mxGeometry x="180" y="135" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa12" value="S1 / C1 / P2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;" parent="a-sauto" vertex="1">
+                    <mxGeometry x="290" y="135" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa13" value="S1 / C1 / P3&#xa;Page designer" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;" parent="a-sauto" vertex="1">
+                    <mxGeometry x="400" y="135" width="110" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa21" value="S1 / C2 / P1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;" parent="a-sauto" vertex="1">
+                    <mxGeometry x="180" y="300" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa22" value="S1 / C2 / P2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;" parent="a-sauto" vertex="1">
+                    <mxGeometry x="290" y="300" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa23" value="S1 / C2 / P3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;" parent="a-sauto" vertex="1">
+                    <mxGeometry x="400" y="300" width="110" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa31" value="S1 / C3 / P1&#xa;Art-directed cast" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;" parent="a-sauto" vertex="1">
+                    <mxGeometry x="180" y="465" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa32" value="S1 / C3 / P2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;" parent="a-sauto" vertex="1">
+                    <mxGeometry x="290" y="465" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa33" value="S1 / C3 / P3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;" parent="a-sauto" vertex="1">
+                    <mxGeometry x="400" y="465" width="110" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="aa-note" value="System creates the story. Review cadence independently decides whether the story pauses for approval." style="shape=note;whiteSpace=wrap;html=1;fillColor=#F0FDF4;strokeColor=#16A34A;" parent="a-sauto" vertex="1">
+                    <mxGeometry x="55" y="625" width="430" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="a-sreview" value="STORY 2: HELP ME CREATE" style="swimlane;html=1;startSize=45;horizontal=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;fontSize=16;" parent="1" vertex="1">
+                    <mxGeometry x="630" y="130" width="540" height="800" as="geometry"/>
+                </mxCell>
+                <mxCell id="ar-h1" value="Characters \ Pages" style="text;html=1;fontStyle=1;align=center;" parent="a-sreview" vertex="1">
+                    <mxGeometry x="20" y="65" width="150" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="ar-p1" value="Pages 1" style="text;html=1;fontStyle=1;align=center;" parent="a-sreview" vertex="1">
+                    <mxGeometry x="180" y="65" width="100" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="ar-p2" value="Pages 2" style="text;html=1;fontStyle=1;align=center;" parent="a-sreview" vertex="1">
+                    <mxGeometry x="290" y="65" width="100" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="ar-p3" value="Pages 3" style="text;html=1;fontStyle=1;align=center;" parent="a-sreview" vertex="1">
+                    <mxGeometry x="400" y="65" width="110" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="ar-r1" value="Characters 1" style="text;html=1;fontStyle=1;align=right;" parent="a-sreview" vertex="1">
+                    <mxGeometry x="20" y="135" width="145" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ar-r2" value="Characters 2" style="text;html=1;fontStyle=1;align=right;" parent="a-sreview" vertex="1">
+                    <mxGeometry x="20" y="300" width="145" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ar-r3" value="Characters 3" style="text;html=1;fontStyle=1;align=right;" parent="a-sreview" vertex="1">
+                    <mxGeometry x="20" y="465" width="145" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ar11" value="S2 / C1 / P1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;fontStyle=1;" parent="a-sreview" vertex="1">
+                    <mxGeometry x="180" y="135" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ar12" value="S2 / C1 / P2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;" parent="a-sreview" vertex="1">
+                    <mxGeometry x="290" y="135" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ar13" value="S2 / C1 / P3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;" parent="a-sreview" vertex="1">
+                    <mxGeometry x="400" y="135" width="110" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ar21" value="S2 / C2 / P1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;" parent="a-sreview" vertex="1">
+                    <mxGeometry x="180" y="300" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ar22" value="S2 / C2 / P2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;fontStyle=1;" parent="a-sreview" vertex="1">
+                    <mxGeometry x="290" y="300" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ar23" value="S2 / C2 / P3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;" parent="a-sreview" vertex="1">
+                    <mxGeometry x="400" y="300" width="110" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ar31" value="S2 / C3 / P1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;" parent="a-sreview" vertex="1">
+                    <mxGeometry x="180" y="465" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ar32" value="S2 / C3 / P2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;" parent="a-sreview" vertex="1">
+                    <mxGeometry x="290" y="465" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ar33" value="S2 / C3 / P3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;" parent="a-sreview" vertex="1">
+                    <mxGeometry x="400" y="465" width="110" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ar-note" value="Guide and reader co-create the story. Cadence still decides whether every intermediate choice blocks progress." style="shape=note;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;" parent="a-sreview" vertex="1">
+                    <mxGeometry x="55" y="625" width="430" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="a-shands" value="STORY 3: I PROVIDE / EDIT" style="swimlane;html=1;startSize=45;horizontal=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontStyle=1;fontSize=16;" parent="1" vertex="1">
+                    <mxGeometry x="1220" y="130" width="540" height="800" as="geometry"/>
+                </mxCell>
+                <mxCell id="ah-h1" value="Characters \ Pages" style="text;html=1;fontStyle=1;align=center;" parent="a-shands" vertex="1">
+                    <mxGeometry x="20" y="65" width="150" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="ah-p1" value="Pages 1" style="text;html=1;fontStyle=1;align=center;" parent="a-shands" vertex="1">
+                    <mxGeometry x="180" y="65" width="100" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="ah-p2" value="Pages 2" style="text;html=1;fontStyle=1;align=center;" parent="a-shands" vertex="1">
+                    <mxGeometry x="290" y="65" width="100" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="ah-p3" value="Pages 3" style="text;html=1;fontStyle=1;align=center;" parent="a-shands" vertex="1">
+                    <mxGeometry x="400" y="65" width="110" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="ah-r1" value="Characters 1" style="text;html=1;fontStyle=1;align=right;" parent="a-shands" vertex="1">
+                    <mxGeometry x="20" y="135" width="145" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ah-r2" value="Characters 2" style="text;html=1;fontStyle=1;align=right;" parent="a-shands" vertex="1">
+                    <mxGeometry x="20" y="300" width="145" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ah-r3" value="Characters 3" style="text;html=1;fontStyle=1;align=right;" parent="a-shands" vertex="1">
+                    <mxGeometry x="20" y="465" width="145" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ah11" value="S3 / C1 / P1&#xa;Writer, system art" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;fontStyle=1;" parent="a-shands" vertex="1">
+                    <mxGeometry x="180" y="135" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ah12" value="S3 / C1 / P2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;" parent="a-shands" vertex="1">
+                    <mxGeometry x="290" y="135" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ah13" value="S3 / C1 / P3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;" parent="a-shands" vertex="1">
+                    <mxGeometry x="400" y="135" width="110" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ah21" value="S3 / C2 / P1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;" parent="a-shands" vertex="1">
+                    <mxGeometry x="180" y="300" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ah22" value="S3 / C2 / P2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;" parent="a-shands" vertex="1">
+                    <mxGeometry x="290" y="300" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ah23" value="S3 / C2 / P3" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;" parent="a-shands" vertex="1">
+                    <mxGeometry x="400" y="300" width="110" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ah31" value="S3 / C3 / P1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;" parent="a-shands" vertex="1">
+                    <mxGeometry x="180" y="465" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ah32" value="S3 / C3 / P2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;" parent="a-shands" vertex="1">
+                    <mxGeometry x="290" y="465" width="100" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ah33" value="S3 / C3 / P3&#xa;Full authoring control" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;fontStyle=1;" parent="a-shands" vertex="1">
+                    <mxGeometry x="400" y="465" width="110" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="ah-note" value="Reader supplies/edits the manuscript. Character and page ownership remain independent; cadence controls pauses." style="shape=note;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#9333EA;" parent="a-shands" vertex="1">
+                    <mxGeometry x="55" y="625" width="430" height="90" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="panel-behavior" name="6. Surfaces: chat and panel">
+        <mxGraphModel grid="1" page="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" pageScale="1" pageWidth="1600" pageHeight="950" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="d-title" value="Surfaces: decisions and results in chat, sustained work in the panel" style="text;html=1;fontSize=26;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="25" width="980" height="45" as="geometry"/>
+                </mxCell>
+                <mxCell id="d-chat" value="CHAT&#xa;Always mounted&#xa;Questions, free text, receipts, progress narration, interruption" style="swimlane;html=1;startSize=42;fillColor=#FFF7ED;strokeColor=#EA580C;fontStyle=1;fontSize=16;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="110" width="410" height="720" as="geometry"/>
+                </mxCell>
+                <mxCell id="d-strip" value="Persistent compact strip&#xa;Known facts + defaults • progress • involvement • “style previews cost nothing; generation uses Sparks” + balance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#EA580C;" parent="d-chat" vertex="1">
+                    <mxGeometry x="35" y="75" width="340" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="d-transcript" value="Transcript&#xa;Guide lines + reader bubbles + applied-value receipts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#EA580C;" parent="d-chat" vertex="1">
+                    <mxGeometry x="35" y="195" width="340" height="200" as="geometry"/>
+                </mxCell>
+                <mxCell id="d-widgets" value="Inline answer widgets&#xa;Choice cards • uploads • confirmations • retry • skip when honest" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#EA580C;" parent="d-chat" vertex="1">
+                    <mxGeometry x="35" y="440" width="340" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="d-composer" value="Composer never disappears during generation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#EA580C;fontStyle=1;" parent="d-chat" vertex="1">
+                    <mxGeometry x="35" y="590" width="340" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="d-trigger" value="Panel selection trigger" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="540" y="370" width="190" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="d-panel" value="CONTEXT PANEL&#xa;One active surface, replaceable without changing the conversation" style="swimlane;html=1;startSize=42;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;fontSize=16;" parent="1" vertex="1">
+                    <mxGeometry x="810" y="110" width="730" height="720" as="geometry"/>
+                </mxCell>
+                <mxCell id="d-hidden" value="Hidden / facts summary&#xa;Pure conversation; reader closed panel" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;" parent="d-panel" vertex="1">
+                    <mxGeometry x="35" y="70" width="200" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="d-manuscript" value="Manuscript&#xa;Writing, draft review, revisions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#059669;" parent="d-panel" vertex="1">
+                    <mxGeometry x="265" y="70" width="200" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="d-style" value="Full style gallery&#xa;Only on “See all styles”; the one-tap confirmation lives in chat" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;" parent="d-panel" vertex="1">
+                    <mxGeometry x="495" y="70" width="200" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="d-portrait" value="Reference sheet, close up&#xa;Inspection only — first looks are revealed and approved inline in chat" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;" parent="d-panel" vertex="1">
+                    <mxGeometry x="35" y="200" width="200" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="d-plan" value="Page plan&#xa;Co-design/edit, or cadence checkpoint before rendering" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;" parent="d-panel" vertex="1">
+                    <mxGeometry x="265" y="200" width="200" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="d-pages" value="Page canvas&#xa;Progress, text/layout edits, assets, selective regeneration" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;" parent="d-panel" vertex="1">
+                    <mxGeometry x="495" y="200" width="200" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="d-preview" value="Flip-through + preflight&#xa;Final review, format, print, ebook" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#9333EA;" parent="d-panel" vertex="1">
+                    <mxGeometry x="150" y="350" width="220" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="d-error" value="Local error/recovery&#xa;Failed unit, upload issue, affordability gate" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#DC2626;" parent="d-panel" vertex="1">
+                    <mxGeometry x="430" y="350" width="220" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="d-rules" value="Auto-open: required action, error, explicit request — never for a result already shown in chat.&#xa;Peek: ordinary background progress.&#xa;Respect close: do not reopen for routine progress.&#xa;Targeting: a quiet composer tag (“Replying to: Maya’s look”), never a warning banner or a blocked send.&#xa;Mobile: Book tab is for reading and inspection; results and actions stay in the conversation." style="shape=note;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;fontSize=13;" parent="d-panel" vertex="1">
+                    <mxGeometry x="105" y="500" width="520" height="125" as="geometry"/>
+                </mxCell>
+                <mxCell id="de1" value="current decision, newest result, error, or user request" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="d-chat" target="d-trigger" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="de2" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="d-trigger" target="d-panel" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="de3" value="panel actions update the same book and appear as receipts" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;dashed=1;" parent="1" source="d-panel" target="d-chat" edge="1">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1175" y="880"/>
+                            <mxPoint x="255" y="880"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="recovery-flow" name="7. Change and recovery">
+        <mxGraphModel dx="1700" dy="980" grid="1" gridSize="10" guides="1" page="1" pageScale="1" pageWidth="1700" pageHeight="980" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="r-title" value="Changes, staleness, failures, and resume" style="text;html=1;fontSize=26;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="40" y="25" width="800" height="45" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-input" value="Reader changes something&#xa;in chat or panel" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="60" y="125" width="205" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-kind" value="What changed?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="345" y="110" width="170" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-story" value="Story fact/text&#xa;Potentially stale: story → analysis/cast → plan → pages" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#059669;" vertex="1" parent="1">
+                    <mxGeometry x="610" y="70" width="260" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-char" value="Character look/source&#xa;Stale: that reference + dependent pages" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;" vertex="1" parent="1">
+                    <mxGeometry x="610" y="180" width="260" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-page" value="One page instruction&#xa;Stale: only that page" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;" vertex="1" parent="1">
+                    <mxGeometry x="610" y="280" width="260" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-style" value="Book art style&#xa;Stale: all generated character + page art" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;" vertex="1" parent="1">
+                    <mxGeometry x="610" y="375" width="260" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-receipt" value="Apply change + show exact receipt" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#475569;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="985" y="190" width="250" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-summary" value="One impact summary&#xa;Never one warning per downstream artifact" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;" vertex="1" parent="1">
+                    <mxGeometry x="985" y="300" width="250" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-update" value="Update affected work?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="1325" y="275" width="190" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-regen" value="Regenerate upstream-first&#xa;Only affected units; preserve versions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#059669;" vertex="1" parent="1">
+                    <mxGeometry x="1325" y="445" width="260" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-keep" value="Keep current work&#xa;Visible stale status remains until resolved" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;" vertex="1" parent="1">
+                    <mxGeometry x="985" y="450" width="250" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-failtitle" value="Local failure router" style="text;html=1;fontSize=20;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="60" y="565" width="300" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-fail" value="Failure type?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="80" y="650" width="165" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-interpret" value="Interpretation&#xa;Ask one targeted clarification; never discard other landed facts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;" vertex="1" parent="1">
+                    <mxGeometry x="335" y="590" width="250" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-upload" value="Upload/photo&#xa;Retry, replace, describe, or invent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;" vertex="1" parent="1">
+                    <mxGeometry x="335" y="700" width="250" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-generation" value="Generation unit&#xa;Retry only failures, edit its input, or retain prior version" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;" vertex="1" parent="1">
+                    <mxGeometry x="680" y="590" width="270" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-afford" value="Affordability/payment&#xa;Explain before enqueueing; offer smaller scope or top-up path" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;" vertex="1" parent="1">
+                    <mxGeometry x="680" y="700" width="270" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-resume" value="Tab closed / reload / second device&#xa;Derive next step from project and durable job state; transcript is not truth" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="1060" y="620" width="330" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="r-back" value="Jump back restores prior facts + rewinds transcript; artifact versions remain available." style="shape=note;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#9333EA;" vertex="1" parent="1">
+                    <mxGeometry x="1060" y="760" width="330" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="re1" edge="1" parent="1" source="r-input" target="r-kind" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="re2" edge="1" parent="1" source="r-kind" target="r-story" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="re3" edge="1" parent="1" source="r-kind" target="r-char" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="re4" edge="1" parent="1" source="r-kind" target="r-page" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="re5" edge="1" parent="1" source="r-kind" target="r-style" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="re6" edge="1" parent="1" source="r-story" target="r-receipt" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="re7" edge="1" parent="1" source="r-char" target="r-receipt" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="re8" edge="1" parent="1" source="r-page" target="r-receipt" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="re9" edge="1" parent="1" source="r-style" target="r-receipt" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="re10" edge="1" parent="1" source="r-receipt" target="r-summary" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="re11" edge="1" parent="1" source="r-summary" target="r-update" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="re12" value="Yes" edge="1" parent="1" source="r-update" target="r-regen" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="re13" value="Not now" edge="1" parent="1" source="r-update" target="r-keep" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="re14" edge="1" parent="1" source="r-fail" target="r-interpret" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="re15" edge="1" parent="1" source="r-fail" target="r-upload" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="re16" edge="1" parent="1" source="r-fail" target="r-generation" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="re17" edge="1" parent="1" source="r-fail" target="r-afford" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="print-finish" name="8. Ready-to-print finish">
+        <mxGraphModel dx="1600" dy="900" grid="1" gridSize="10" guides="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="f-title" value="The finish line: a manufacturable book" style="text;html=1;fontSize=26;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="40" y="25" width="750" height="45" as="geometry"/>
+                </mxCell>
+                <mxCell id="f-enter" value="Story, cast, and pages appear complete" style="ellipse;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="60" y="135" width="255" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="f-preflight" value="Print preflight" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="390" y="120" width="180" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="f-checks" value="Check automatically&#xa;• required text present&#xa;• title/cover set&#xa;• current illustrations&#xa;• no overflow&#xa;• image quality&#xa;• valid page count + format" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;align=left;spacingLeft=15;" vertex="1" parent="1">
+                    <mxGeometry x="655" y="85" width="280" height="180" as="geometry"/>
+                </mxCell>
+                <mxCell id="f-pass" value="Passes?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="1020" y="120" width="160" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="f-fix" value="Open exact failing artifact&#xa;Fix one issue at a time, then rerun preflight" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#DC2626;" vertex="1" parent="1">
+                    <mxGeometry x="1265" y="125" width="255" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="f-preview" value="Open final flip-through&#xa;Show physical format + visible price" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#9333EA;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="585" y="365" width="300" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="f-change" value="Anything to change?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="960" y="360" width="190" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="f-edit" value="Jump to story, character, or page&#xa;Show impact before updating dependencies" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;" vertex="1" parent="1">
+                    <mxGeometry x="1250" y="365" width="270" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="f-dedication" value="Optional dedication / gift message&#xa;(recommended product addition)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;" vertex="1" parent="1">
+                    <mxGeometry x="110" y="365" width="280" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="f-outcome" value="Choose outcome" style="rhombus;whiteSpace=wrap;html=1;fillColor=#EEF2FF;strokeColor=#4F46E5;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="665" y="570" width="180" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="f-print" value="Order printed book&#xa;Checkout remains an explicit gate" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="180" y="740" width="285" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="f-ebook" value="Get ebook&#xa;When enabled / already owned" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="660" y="740" width="230" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="f-later" value="Keep editing / come back later&#xa;Book + jobs resume durably" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="1085" y="740" width="285" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="fe1" edge="1" parent="1" source="f-enter" target="f-preflight" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="fe2" edge="1" parent="1" source="f-preflight" target="f-checks" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="fe3" edge="1" parent="1" source="f-checks" target="f-pass" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="fe4" value="No" edge="1" parent="1" source="f-pass" target="f-fix" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="fe5" value="recheck" edge="1" parent="1" source="f-fix" target="f-preflight" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1390" y="300"/>
+                            <mxPoint x="480" y="300"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="fe6" value="Yes" edge="1" parent="1" source="f-pass" target="f-preview" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="fe7" edge="1" parent="1" source="f-dedication" target="f-preview" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;dashed=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="fe8" edge="1" parent="1" source="f-preview" target="f-change" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="fe9" value="Yes" edge="1" parent="1" source="f-change" target="f-edit" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="fe10" value="after update" edge="1" parent="1" source="f-edit" target="f-preflight" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="1390" y="530"/>
+                            <mxPoint x="480" y="530"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="fe11" value="No" edge="1" parent="1" source="f-change" target="f-outcome" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="fe12" edge="1" parent="1" source="f-outcome" target="f-print" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="fe13" edge="1" parent="1" source="f-outcome" target="f-ebook" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="fe14" edge="1" parent="1" source="f-outcome" target="f-later" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="common-journeys" name="9. Common end-to-end journeys">
+        <mxGraphModel grid="1" page="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" pageScale="1" pageWidth="1800" pageHeight="1050" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="q-title" value="Common end-to-end journeys (examples, not separate products)" style="text;html=1;fontSize=26;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="25" width="1000" height="45" as="geometry"/>
+                </mxCell>
+                <mxCell id="q-note" value="Every journey uses the same project, generators, editors, version trees, and chat. Only the per-artifact policy differs." style="shape=note;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;" parent="1" vertex="1">
+                    <mxGeometry x="1120" y="20" width="590" height="65" as="geometry"/>
+                </mxCell>
+                <mxCell id="q1" value="FASTEST GIFT" style="swimlane;html=1;startSize=38;fillColor=#ECFDF5;strokeColor=#059669;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="45" y="120" width="810" height="175" as="geometry"/>
+                </mxCell>
+                <mxCell id="q1a" value="Guide me" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;" parent="q1" vertex="1">
+                    <mxGeometry x="25" y="65" width="105" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q1b" value="Brief" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;" parent="q1" vertex="1">
+                    <mxGeometry x="155" y="65" width="105" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q1c" value="Photo + style" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;" parent="q1" vertex="1">
+                    <mxGeometry x="285" y="65" width="120" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q1d" value="Approve portrait" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;" parent="q1" vertex="1">
+                    <mxGeometry x="430" y="65" width="125" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q1e" value="System owns all + Take it from here" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;fontStyle=1;" parent="q1" vertex="1">
+                    <mxGeometry x="580" y="65" width="150" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q1f" value="Print" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#059669;" parent="q1" vertex="1">
+                    <mxGeometry x="755" y="65" width="70" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q2" value="WRITER, AUTOMATIC ART" style="swimlane;html=1;startSize=38;fillColor=#F3E8FF;strokeColor=#9333EA;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="945" y="120" width="810" height="175" as="geometry"/>
+                </mxCell>
+                <mxCell id="q2a" value="I have words" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;" parent="q2" vertex="1">
+                    <mxGeometry x="25" y="65" width="120" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q2b" value="Reader owns story" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;fontStyle=1;" parent="q2" vertex="1">
+                    <mxGeometry x="170" y="65" width="135" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q2c" value="Character source" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;" parent="q2" vertex="1">
+                    <mxGeometry x="330" y="65" width="135" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q2d" value="System creates cast" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;" parent="q2" vertex="1">
+                    <mxGeometry x="490" y="65" width="125" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q2e" value="System creates pages" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;" parent="q2" vertex="1">
+                    <mxGeometry x="640" y="65" width="100" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q2f" value="Print" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;" parent="q2" vertex="1">
+                    <mxGeometry x="765" y="65" width="65" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q3" value="AI STORY, ART-DIRECTED CAST" style="swimlane;html=1;startSize=38;fillColor=#FDF2F8;strokeColor=#DB2777;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="45" y="340" width="810" height="175" as="geometry"/>
+                </mxCell>
+                <mxCell id="q3a" value="Guide me + brief" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DB2777;" parent="q3" vertex="1">
+                    <mxGeometry x="25" y="65" width="135" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q3b" value="System creates story" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DB2777;" parent="q3" vertex="1">
+                    <mxGeometry x="185" y="65" width="110" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q3c" value="Reader directs characters" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DB2777;fontStyle=1;" parent="q3" vertex="1">
+                    <mxGeometry x="320" y="65" width="165" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q3d" value="Approve cast" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DB2777;" parent="q3" vertex="1">
+                    <mxGeometry x="510" y="65" width="120" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q3e" value="System creates pages" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DB2777;" parent="q3" vertex="1">
+                    <mxGeometry x="655" y="65" width="100" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q3f" value="Print" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DB2777;" parent="q3" vertex="1">
+                    <mxGeometry x="775" y="65" width="55" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q4" value="PAGE DESIGNER" style="swimlane;html=1;startSize=38;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="945" y="340" width="810" height="175" as="geometry"/>
+                </mxCell>
+                <mxCell id="q4a" value="Guide me + brief" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;" parent="q4" vertex="1">
+                    <mxGeometry x="25" y="65" width="135" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q4b" value="System creates story" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;" parent="q4" vertex="1">
+                    <mxGeometry x="185" y="65" width="105" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q4c" value="System creates cast" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;" parent="q4" vertex="1">
+                    <mxGeometry x="315" y="65" width="130" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q4d" value="Reader edits pages" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;fontStyle=1;" parent="q4" vertex="1">
+                    <mxGeometry x="470" y="65" width="140" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q4e" value="Mark ready" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;" parent="q4" vertex="1">
+                    <mxGeometry x="635" y="65" width="100" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q4f" value="Print" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;" parent="q4" vertex="1">
+                    <mxGeometry x="760" y="65" width="65" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q5" value="REVIEW EVERYTHING" style="swimlane;html=1;startSize=38;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="45" y="560" width="810" height="175" as="geometry"/>
+                </mxCell>
+                <mxCell id="q5a" value="Ask me each step" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;fontStyle=1;" parent="q5" vertex="1">
+                    <mxGeometry x="25" y="65" width="130" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q5b" value="Review story" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;" parent="q5" vertex="1">
+                    <mxGeometry x="180" y="65" width="115" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q5c" value="Review cast" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;" parent="q5" vertex="1">
+                    <mxGeometry x="320" y="65" width="110" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q5d" value="Review plan" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;" parent="q5" vertex="1">
+                    <mxGeometry x="455" y="65" width="110" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q5e" value="Review flip-through" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;" parent="q5" vertex="1">
+                    <mxGeometry x="590" y="65" width="145" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q5f" value="Print" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;" parent="q5" vertex="1">
+                    <mxGeometry x="760" y="65" width="65" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q6" value="EXISTING CHARACTER UNIVERSE / MIXED SOURCES" style="swimlane;html=1;startSize=38;fillColor=#F3E8FF;strokeColor=#9333EA;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="945" y="560" width="810" height="175" as="geometry"/>
+                </mxCell>
+                <mxCell id="q6a" value="Reuse/upload art" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;" parent="q6" vertex="1">
+                    <mxGeometry x="25" y="65" width="130" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q6b" value="Derive style" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;" parent="q6" vertex="1">
+                    <mxGeometry x="180" y="65" width="110" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q6c" value="Add photo / described pet" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;" parent="q6" vertex="1">
+                    <mxGeometry x="315" y="65" width="165" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q6d" value="Resolve conflict if needed" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;" parent="q6" vertex="1">
+                    <mxGeometry x="505" y="65" width="160" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q6e" value="Choose page policy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;" parent="q6" vertex="1">
+                    <mxGeometry x="690" y="65" width="135" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q7" value="MID-FLOW CHANGE" style="swimlane;html=1;startSize=38;fillColor=#FEF2F2;strokeColor=#DC2626;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="45" y="780" width="810" height="175" as="geometry"/>
+                </mxCell>
+                <mxCell id="q7a" value="“Leo is 4, not 3”" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DC2626;" parent="q7" vertex="1">
+                    <mxGeometry x="25" y="65" width="130" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q7b" value="Receipt + impact" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DC2626;" parent="q7" vertex="1">
+                    <mxGeometry x="180" y="65" width="125" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q7c" value="Update affected work" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DC2626;" parent="q7" vertex="1">
+                    <mxGeometry x="330" y="65" width="150" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q7d" value="Story → cast → pages" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DC2626;" parent="q7" vertex="1">
+                    <mxGeometry x="505" y="65" width="150" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q7e" value="Return to current policy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DC2626;" parent="q7" vertex="1">
+                    <mxGeometry x="680" y="65" width="145" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q8" value="RETURNING READER" style="swimlane;html=1;startSize=38;fillColor=#F8FAFC;strokeColor=#64748B;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="945" y="780" width="810" height="175" as="geometry"/>
+                </mxCell>
+                <mxCell id="q8a" value="Open book" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;" parent="q8" vertex="1">
+                    <mxGeometry x="25" y="65" width="100" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q8b" value="Derive next step" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;" parent="q8" vertex="1">
+                    <mxGeometry x="150" y="65" width="125" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q8c" value="Reconcile durable jobs" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;" parent="q8" vertex="1">
+                    <mxGeometry x="300" y="65" width="150" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q8d" value="Show newest result / decision" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;" parent="q8" vertex="1">
+                    <mxGeometry x="475" y="65" width="175" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="q8e" value="Continue current policy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;" parent="q8" vertex="1">
+                    <mxGeometry x="675" y="65" width="150" height="55" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="checkpoint-policy" name="10. Checkpoint policy">
+        <mxGraphModel dx="1600" dy="900" grid="1" gridSize="10" guides="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="k-title" value="Checkpoint policy: risk first, involvement second, and never ask twice" style="text;html=1;fontSize=26;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="40" y="25" width="850" height="45" as="geometry"/>
+                </mxCell>
+                <mxCell id="k-start" value="Next operation is ready" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="60" y="135" width="185" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="k-hardq" value="Hard-stop condition?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="325" y="115" width="190" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="k-hard" value="HARD STOP&#xa;Always require explicit action" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#DC2626;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="605" y="85" width="250" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="k-hardlist" value="• likeness consent&#xa;• missing book style&#xa;• never-reviewed or ambiguous identity&#xa;• destructive overwrite of user work&#xa;• artwork rights/safety concern&#xa;• informed confirmation of every configured generation charge&#xa;• insufficient balance / payment&#xa;• print/order approval" style="shape=note;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#DC2626;align=left;spacingLeft=12;" vertex="1" parent="1">
+                    <mxGeometry x="930" y="70" width="300" height="150" as="geometry"/>
+                </mxCell>
+                <mxCell id="k-keyq" value="High-impact or low-confidence decision?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="325" y="310" width="210" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="k-key" value="KEY CHECKPOINT&#xa;Story ready • cast summary • page-plan approval • final page set&#xa;Skip any subject already approved by “Keep this look”" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="620" y="325" width="300" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="k-soft" value="SOFT / RECOVERABLE&#xa;Optional idea • first look • defaults • background work" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;" vertex="1" parent="1">
+                    <mxGeometry x="620" y="500" width="300" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="k-cadence" value="Stored cadence (written by the involvement control)" style="rhombus;whiteSpace=wrap;html=1;fillColor=#EEF2FF;strokeColor=#4F46E5;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="1030" y="360" width="180" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="k-take" value="MAKE IT FOR ME&#xa;Pause only at hard stops; key checkpoint becomes visible non-blocking review when confidence is high" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#059669;" vertex="1" parent="1">
+                    <mxGeometry x="1255" y="260" width="285" height="105" as="geometry"/>
+                </mxCell>
+                <mxCell id="k-check" value="MAKE IT WITH ME (default)&#xa;Pause at hard + key checkpoints; soft work continues" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="1255" y="405" width="285" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="k-each" value="I’LL DO IT MYSELF&#xa;Pause at hard, key, and soft artifact transitions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;" vertex="1" parent="1">
+                    <mxGeometry x="1255" y="535" width="285" height="90" as="geometry"/>
+                </mxCell>
+                <mxCell id="k-proceed" value="Proceed, version the result, keep it editable" style="ellipse;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontStyle=1;" vertex="1" parent="1">
+                    <mxGeometry x="650" y="735" width="300" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="k-note" value="Changing involvement is prospective: it does not cancel completed work or rewrite prior approvals. A checkpoint already answered for a specific subject must not fire again for that subject." style="shape=note;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#9333EA;" vertex="1" parent="1">
+                    <mxGeometry x="1050" y="730" width="430" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="ke1" edge="1" parent="1" source="k-start" target="k-hardq" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ke2" value="Yes" edge="1" parent="1" source="k-hardq" target="k-hard" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ke3" edge="1" parent="1" source="k-hard" target="k-hardlist" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ke4" value="approved/resolved" edge="1" parent="1" source="k-hard" target="k-proceed" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry">
+                        <Array as="points">
+                            <mxPoint x="730" y="680"/>
+                            <mxPoint x="800" y="680"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="ke5" value="No" edge="1" parent="1" source="k-hardq" target="k-keyq" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ke6" value="Yes" edge="1" parent="1" source="k-keyq" target="k-key" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ke7" value="No" edge="1" parent="1" source="k-keyq" target="k-soft" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ke8" edge="1" parent="1" source="k-key" target="k-cadence" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ke9" edge="1" parent="1" source="k-soft" target="k-cadence" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ke10" edge="1" parent="1" source="k-cadence" target="k-take" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ke11" edge="1" parent="1" source="k-cadence" target="k-check" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ke12" edge="1" parent="1" source="k-cadence" target="k-each" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ke13" edge="1" parent="1" source="k-take" target="k-proceed" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ke14" edge="1" parent="1" source="k-check" target="k-proceed" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="ke15" edge="1" parent="1" source="k-each" target="k-proceed" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

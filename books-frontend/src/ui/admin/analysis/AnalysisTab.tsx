@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Download, Loader2, RefreshCw } from "lucide-react";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
 import type {
@@ -14,10 +13,8 @@ import { useAdminAnalytics } from "../../../state/adminAnalyticsStore";
 import { useAdminFinance } from "../../../state/adminFinanceStore";
 import { useAdminMarket } from "../../../state/adminMarketStore";
 import { useAdminPayments } from "../../../state/adminPaymentsStore";
-import { ANALYSIS_GROUPS, adminHref, useAdminTab, type AnalysisTabId } from "../adminTabStore";
-import { ANALYSIS_TAB_META } from "../adminNav";
-import { filterReadableTabs, SectionGate } from "../AccessGate";
-import { useAdminAccess } from "../../../state/adminAccessStore";
+import { useAdminTab, type AnalysisTabId } from "../adminTabStore";
+import { SectionGate } from "../AccessGate";
 import { Button } from "../../components/Button";
 import { Tabs } from "../../components/Tabs";
 import { Kpis } from "./Kpis";
@@ -108,27 +105,6 @@ export function AnalysisTab() {
   // straight to a specific Analysis section, e.g. Marketing → Referrals'
   // "see the funnel" cross-link.
   const section = useAdminTab((s) => s.analysisTab);
-  const setSection = useAdminTab((s) => s.setAnalysisTab);
-  const group = useAdminTab((s) => s.analysisGroup);
-  const canRead = useAdminAccess((s) => s.canRead);
-  // `canRead` is a stable zustand action reference for the whole session, so
-  // memoizing on it alone would freeze this list at whatever it returned on
-  // the very first render — before access has loaded. Depend on the actual
-  // state `canRead` reads so this recomputes once `me`/`admins` arrive. (This
-  // tab still "worked" despite the same bug elsewhere in the dashboard only
-  // because it unmounts/remounts on every section switch, giving it a second,
-  // later chance to compute correctly — see `AdminApp.tsx`'s equivalents.)
-  const me = useAdminAccess((s) => s.me);
-  const admins = useAdminAccess((s) => s.admins);
-  const viewAsUid = useAdminAccess((s) => s.viewAsUid);
-  const visibleGroups = useMemo(
-    () =>
-      ANALYSIS_GROUPS.map((g) => ({ ...g, tabs: filterReadableTabs("analysis", g.tabs, canRead) })).filter(
-        (g) => g.tabs.length > 0,
-      ),
-    [canRead, me, admins, viewAsUid],
-  );
-  const activeGroup = visibleGroups.find((g) => g.id === group) ?? visibleGroups[0] ?? ANALYSIS_GROUPS[0];
 
   useEffect(() => {
     void init();
@@ -175,48 +151,16 @@ export function AnalysisTab() {
 
   return (
     <div className="space-y-5">
-      {/* Group pills, then the tabs within that group, then the dashboard-wide
-          market filter that every section honours. */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap gap-2">
-          {visibleGroups.map((g) => (
-            <Link
-              key={g.id}
-              href={adminHref("analysis", g.tabs[0] ?? "users")}
-              aria-current={group === g.id ? "location" : undefined}
-              className={
-                "rounded-full px-3 py-1.5 text-xs font-semibold transition-colors " +
-                (group === g.id
-                  ? "bg-brand-600 text-white shadow-sm"
-                  : "bg-white text-ink-600 ring-1 ring-inset ring-ink-100 hover:bg-ink-50")
-              }
-            >
-              {g.label}
-            </Link>
-          ))}
-        </div>
-        {section !== "qrCodes" && (
+      {section !== "qrCodes" && (
+        <div className="flex justify-end">
           <MarketPicker
             value={country}
             markets={knownMarkets}
             onChange={setCountry}
             disabled={loading}
           />
-        )}
-      </div>
-
-      <p className="text-xs text-ink-400">{activeGroup.description}</p>
-
-      <Tabs
-        items={activeGroup.tabs.map((id) => ({
-          id,
-          label: ANALYSIS_TAB_META[id].label,
-          icon: ANALYSIS_TAB_META[id].icon,
-          href: adminHref("analysis", id),
-        }))}
-        value={section}
-        onChange={(id) => setSection(id as Section)}
-      />
+        </div>
+      )}
 
       {country && section !== "qrCodes" && (
         <div className="flex items-center gap-2 rounded-xl bg-brand-50 px-3.5 py-2 text-sm text-brand-800 ring-1 ring-brand-100">

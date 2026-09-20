@@ -10,6 +10,7 @@ import type { CurrencyCode, PricingSettings } from "../../../core/config/product
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useAdminTab } from "../adminTabStore";
 import { Grid, NumberField, Section, TabIntro } from "./products/parts";
+import { AdminSaveBar } from "../AdminPageHeader";
 
 /**
  * Financial settings — the money plumbing shared by EVERY product and plan:
@@ -81,32 +82,14 @@ export function FinancialTab() {
   };
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-8">
       <TabIntro
-        elsewhere={
-          <>
-            Actual prices for what you sell are set on their own tabs —{" "}
-            <span className="font-medium">Catalog</span> (print, ebook, packs) and{" "}
-            <span className="font-medium">Memberships</span> (plans). This tab only defines the
-            economics those prices are measured against.
-          </>
-        }
-      >
-        These settings apply to <span className="font-medium">every</span> product and plan and power
-        the margin read-outs across the dashboard. Changing them never edits an entered price — they
-        control how cost, fees and tax are calculated. Most stores set these once at launch.
-      </TabIntro>
-
-      <div className="flex items-center justify-end gap-2">
-        {dirty && (
-          <Button variant="ghost" size="sm" onClick={() => { setDraft(stored); setDirty(false); }}>
-            Discard
-          </Button>
-        )}
-        <Button size="sm" onClick={onSave} loading={saving} disabled={!dirty}>
-          Save settings
-        </Button>
-      </div>
+        links={[
+          { label: "Catalog", onClick: () => setConfigTab("catalog") },
+          { label: "Memberships", onClick: () => setConfigTab("memberships") },
+          { label: "Sale planner", onClick: () => setConfigTab("discounts") },
+        ]}
+      />
 
       <Section
         title="Currencies"
@@ -178,10 +161,10 @@ export function FinancialTab() {
             const rounding = draft.rounding[c] ?? { mode: "charm" as const, to: 0.99 };
             const tax = draft.tax.perCurrency[c] ?? { behavior: "exclusive" as const, assumedRatePct: 0 };
             return (
-              <div key={c} className="space-y-2 rounded-lg bg-white p-2.5 ring-1 ring-inset ring-ink-100">
+              <div key={c} className="space-y-2 border-t border-ink-100 py-3 first:border-t-0 first:pt-0">
                 <div className="flex items-center justify-between">
                   <span className="text-sm font-semibold text-ink-800">
-                    {c} {isBase && <span className="ml-1 rounded bg-brand-50 px-1.5 py-0.5 text-[10px] text-brand-700">BASE</span>}
+                    {c} {isBase && <span className="ml-1 text-xs font-medium text-ink-400">base</span>}
                   </span>
                   {!isBase && <Button variant="ghost" size="sm" leftIcon={<Trash2 className="size-3.5" />} onClick={() => removeCurrency(c)} />}
                 </div>
@@ -212,6 +195,16 @@ export function FinancialTab() {
           })}
         </div>
       </Section>
+      <AdminSaveBar
+        dirty={dirty}
+        saving={saving}
+        onSave={() => void onSave()}
+        onDiscard={() => {
+          setDraft(stored);
+          setDirty(false);
+        }}
+        saveLabel="Save settings"
+      />
     </div>
   );
 }

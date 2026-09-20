@@ -1,25 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import {
-  AlertTriangle,
-  BadgeCheck,
-  CheckCircle2,
-  Layers,
-  Loader2,
-  Package,
-  Plus,
-  Ruler,
-  Sparkles,
-  Tag,
-  Trash2,
-  Truck,
-} from "lucide-react";
+import { AlertTriangle, Loader2, Plus, Trash2 } from "lucide-react";
 import { Button } from "../../components/Button";
 import { Field, Input, Textarea } from "../../components/Input";
 import { Select } from "../../components/Select";
-import { Tabs } from "../../components/Tabs";
 import { cn } from "../../lib/cn";
 import {
   FULFILLMENT_PROVIDERS,
@@ -77,28 +63,32 @@ import { useAdminTab } from "../adminTabStore";
 import {
   Disclosure,
   Grid,
-  ImpactNote,
   NumberField,
+  OverflowItem,
+  OverflowMenu,
   Section,
   TabIntro,
   TextField,
+  EditorTabs,
 } from "./products/parts";
 import { CostSection, PricingSection } from "./products/ProductPricing";
 import { PictureButton } from "./products/Pictures";
-import { PrintPicturesSection } from "./products/PicturesSection";
+import { ProductPhotosPanel } from "./products/PicturesSection";
 import { VariantsSection } from "./products/VariantsSection";
+import { AdminSaveBar } from "../AdminPageHeader";
 
 type Update = (fn: (p: ProductDefinition) => ProductDefinition) => void;
 
 const ORIENTATIONS = ["square", "landscape", "portrait"] as const;
 
 const EDITOR_TABS = [
-  { id: "details", label: "Details", icon: <Tag className="size-4" /> },
-  { id: "format", label: "Format", icon: <Ruler className="size-4" /> },
-  { id: "variants", label: "Variants", icon: <Layers className="size-4" /> },
-  { id: "pricing", label: "Pricing", icon: <Sparkles className="size-4" /> },
-  { id: "costs", label: "Costs", icon: <Package className="size-4" /> },
-  { id: "shipping", label: "Shipping", icon: <Truck className="size-4" /> },
+  { id: "details", label: "Details" },
+  { id: "format", label: "Format" },
+  { id: "variants", label: "Variants" },
+  { id: "pricing", label: "Pricing" },
+  { id: "costs", label: "Costs" },
+  { id: "shipping", label: "Shipping" },
+  { id: "photos", label: "Photos" },
 ];
 
 export function ProductsTab() {
@@ -307,6 +297,15 @@ export function ProductsTab() {
     }
   };
 
+  const onDiscard = () => {
+    if (!draft) return;
+    const saved = products.find((p) => p.id === draft.id);
+    if (saved) {
+      setDraft(structuredClone(saved));
+      setDirty(false);
+    }
+  };
+
   const onDelete = async (p: ProductDefinition) => {
     if (!window.confirm(`Delete "${p.presentation.name}"? This can't be undone.`)) return;
     const existsRemotely = !dirty || selectedId !== p.id || products.some((x) => x.id === p.id);
@@ -377,114 +376,120 @@ export function ProductsTab() {
     );
   }
 
+  const catalogBusy = dirty
+    ? "Save your changes first — this runs against the saved catalog."
+    : null;
+  const draftStatus = draft
+    ? productStatus(draft.status, isOfferable(draft, settings, validateOpts))
+    : null;
+
   return (
     <div className="space-y-4">
-      <TabIntro
-        elsewhere={
-          <>
-            Sandbox and live are separate print catalogues, so <span className="font-medium">Verify</span>{" "}
-            always lets you target either one — including live, before you switch over — but{" "}
-            <span className="font-medium">Measure costs</span> only runs against the{" "}
-            <span className="font-medium">{runtime?.env ?? "active"}</span> one. The sandbox/live switch
-            itself lives under <span className="font-medium">System health</span>. Currencies, payment
-            fees and tax that turn these prices into margins are set once under{" "}
-            <span className="font-medium">Financial settings</span>.
-          </>
-        }
-        links={[
-          { label: `Environment: ${runtime?.env ?? "…"}`, onClick: () => setConfigTab("system") },
-          { label: "Financial settings", onClick: () => setConfigTab("financial") },
-        ]}
-      >
-        <span className="font-medium">Print books</span> are the physical products customers order —
-        each one binds a print spec to per-page-range prices. Only{" "}
-        <span className="font-medium">active</span>, valid products are offered at checkout; the badge
-        on each product tells you if it&apos;s ready.
-      </TabIntro>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <TabIntro
+          links={[
+            { label: `Environment: ${runtime?.env ?? "…"}`, onClick: () => setConfigTab("system") },
+            { label: "Currencies & tax", onClick: () => setConfigTab("financial") },
+          ]}
+        />
+        <div className="flex items-center gap-2">
+          <Button size="sm" leftIcon={<Plus className="size-3.5" />} onClick={addProduct}>
+            New
+          </Button>
+          <OverflowMenu>
+            {(close) => (
+              <>
+                <OverflowItem
+                  label="Seed from print catalog"
+                  busy={seeding}
+                  onSelect={() => {
+                    close();
+                    void onSeed();
+                  }}
+                />
+                {products.length > 0 &&
+                  PROVIDER_ENVS.map((env) => (
+                    <OverflowItem
+                      key={env}
+                      label={`Verify ${env}${runtime?.env === env ? " (active)" : ""}`}
+                      busy={verifyingEnv === env}
+                      disabledReason={
+                        catalogBusy ??
+                        (verifyingEnv != null && verifyingEnv !== env
+                          ? `Already verifying ${verifyingEnv}…`
+                          : null)
+                      }
+                      onSelect={() => {
+                        close();
+                        void onVerifyAll(env);
+                      }}
+                    />
+                  ))}
+                {products.length > 0 && (
+                  <OverflowItem
+                    label="Measure all costs"
+                    busy={measuring}
+                    disabledReason={catalogBusy}
+                    onSelect={() => {
+                      close();
+                      void onMeasureAll();
+                    }}
+                  />
+                )}
+              </>
+            )}
+          </OverflowMenu>
+        </div>
+      </div>
 
-      <div className="grid gap-4 lg:grid-cols-[260px_1fr]">
-        {/* Master list */}
-        <div className="space-y-2">
-          <div className="flex gap-2">
-            <Button variant="primary" size="sm" leftIcon={<Plus className="size-4" />} onClick={addProduct} className="flex-1">
-              New product
-            </Button>
-            <Button
-              variant="secondary"
-              size="sm"
-              leftIcon={<Sparkles className="size-4" />}
-              loading={seeding}
-              onClick={onSeed}
-              title="Create one draft product per trim size and binding the printer sells, with measured page limits, costs and variant options already filled in. Existing products are left alone."
-            >
-              Seed
-            </Button>
-          </div>
-          {PROVIDER_ENVS.map((env) => (
-            <ActionButton
-              key={env}
-              show={products.length > 0}
-              icon={<BadgeCheck className="size-4" />}
-              label={`Verify all against ${env}${runtime?.env === env ? " (active)" : ""}`}
-              explainer={`Asks the printer to price every SKU, which is the only way to find out whether it really exists. A rejected SKU fails at print time — after the customer has paid — so nothing is offered for sale until it passes here. Sandbox and live are separate catalogues verified independently — this always probes ${env}, regardless of which one is currently active.`}
-              busy={verifyingEnv === env}
-              disabledReason={
-                dirty
-                  ? "Save your changes first — verification runs against the saved catalog."
-                  : verifyingEnv != null && verifyingEnv !== env
-                    ? `Already verifying against ${verifyingEnv}…`
-                    : null
-              }
-              onClick={() => onVerifyAll(env)}
-            />
-          ))}
-          <ActionButton
-            show={products.length > 0}
-            icon={<Ruler className="size-4" />}
-            label="Measure all costs"
-            explainer="Prices each book at both ends of its page range to work out what the printer charges: a fixed amount per copy plus an amount per page, measured separately for every paper and print quality you offer. Then measures shipping to five countries. About a minute per book, saved as it goes. Replaces cost tables you typed in yourself."
-            busy={measuring}
-            progress={
-              measureProgress
-                ? `${measureProgress.done + 1}/${measureProgress.total} · ${measureProgress.name}`
-                : null
-            }
-            disabledReason={dirty ? "Save your changes first — this runs against the saved catalog." : null}
-            onClick={onMeasureAll}
-          />
-          {costRuns && costRuns.length > 0 && (
-            <CalibrationRuns runs={costRuns} onDismiss={() => setCostRuns(null)} />
-          )}
+      {(verifyingEnv || measuring) && (
+        <p className="text-sm text-ink-500">
+          {verifyingEnv
+            ? `Verifying ${verifyingEnv}…`
+            : measureProgress
+              ? `Measuring ${measureProgress.done + 1}/${measureProgress.total} · ${measureProgress.name}`
+              : "Measuring…"}
+        </p>
+      )}
+      {costRuns && costRuns.length > 0 && (
+        <CalibrationRuns runs={costRuns} onDismiss={() => setCostRuns(null)} />
+      )}
 
+      <div className="grid gap-6 lg:grid-cols-[240px_1fr]">
+        <div>
           {products.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-ink-200 p-5 text-center text-xs text-ink-400">
-              No products yet. Click <span className="font-medium text-ink-500">Seed</span> to import the print catalog,
-              or add one.
-            </div>
+            <p className="px-2.5 py-8 text-sm text-ink-400">
+              No products yet. Add one, or seed from catalog tools.
+            </p>
           ) : (
-            <ul className="space-y-1.5">
+            <ul className="space-y-0.5">
               {products.map((p) => {
-                // Must match the `env` passed below for `issues` (and what the
-                // server projects publicly) — otherwise this dot can show green
-                // for a product whose SKU was never verified in the live
-                // catalog, because an env-less check only warns about that.
                 const offerable = isOfferable(p, settings, validateOpts);
                 const errCount = productErrors(p, settings, validateOpts).length;
+                const status = productStatus(p.status, offerable);
                 return (
                   <li key={p.id}>
                     <button
+                      type="button"
                       onClick={() => select(p)}
                       className={cn(
-                        "flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-sm transition",
-                        selectedId === p.id ? "bg-brand-50 ring-1 ring-inset ring-brand-200" : "hover:bg-ink-50",
+                        "flex w-full items-center gap-2 rounded-md px-2.5 py-2 text-left text-sm transition",
+                        selectedId === p.id ? "bg-ink-100 text-ink-900" : "text-ink-600 hover:bg-ink-50",
                       )}
                     >
-                      <StatusDot status={p.status} offerable={offerable} />
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate font-medium text-ink-800">{p.presentation.name || "Untitled"}</span>
-                        <span className="block truncate text-[11px] text-ink-400">{p.provider.sku || "no SKU"}</span>
+                        <span className="block truncate font-medium">
+                          {p.presentation.name || "Untitled"}
+                        </span>
+                        <span className="block truncate text-xs text-ink-400">
+                          {p.provider.sku || "no SKU"}
+                        </span>
                       </span>
-                      {errCount > 0 && <span className="shrink-0 rounded bg-red-50 px-1.5 py-0.5 text-[10px] font-medium text-red-600">{errCount}</span>}
+                      {errCount > 0 ? (
+                        <span className="shrink-0 text-xs font-medium text-red-600">{errCount}</span>
+                      ) : (
+                        <span className={cn("shrink-0 text-xs", status.className)}>{status.label}</span>
+                      )}
                     </button>
                   </li>
                 );
@@ -493,86 +498,95 @@ export function ProductsTab() {
           )}
         </div>
 
-        {/* Editor */}
         <div className="min-w-0">
           {!draft ? (
-            <div className="flex h-full min-h-48 items-center justify-center rounded-xl border border-dashed border-ink-200 text-sm text-ink-400">
+            <p className="py-16 text-center text-sm text-ink-400">
               Select a product to edit, or create a new one.
-            </div>
+            </p>
           ) : (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <StatusDot
-                    status={draft.status}
-                    offerable={isOfferable(draft, settings, validateOpts)}
-                  />
-                  <h2 className="text-base font-semibold text-ink-900">{draft.presentation.name || "Untitled"}</h2>
+            <div className="space-y-5">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0 space-y-1">
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-base font-semibold text-ink-900">
+                      {draft.presentation.name || "Untitled"}
+                    </h2>
+                    {draftStatus ? (
+                      <span className={cn("text-xs", draftStatus.className)}>
+                        {draftStatus.label}
+                      </span>
+                    ) : null}
+                  </div>
+                  <SetupRail product={draft} onGoTo={setEditorTab} />
                 </div>
-                <div className="flex gap-2">
-                  <Button variant="ghost" size="sm" leftIcon={<Trash2 className="size-4" />} onClick={() => onDelete(draft)}>
-                    Delete
-                  </Button>
-                  {dirty && (
-                    <Button variant="ghost" size="sm" onClick={() => select(products.find((p) => p.id === draft.id) ?? draft)}>
-                      Discard
-                    </Button>
-                  )}
-                  <Button size="sm" onClick={onSave} loading={saving} disabled={!dirty || saveBlockers.length > 0} title={saveBlockers.length ? "Fix errors before saving" : undefined}>
-                    Save product
-                  </Button>
-                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  leftIcon={<Trash2 className="size-3.5" />}
+                  onClick={() => onDelete(draft)}
+                >
+                  Delete
+                </Button>
               </div>
 
               <ValidationBanner issues={issues} />
-              <SetupChecklist product={draft} issues={issues} onGoTo={setEditorTab} />
 
-              <Tabs items={EDITOR_TABS} value={editorTab} onChange={setEditorTab} />
+              <EditorTabs items={EDITOR_TABS} value={editorTab} onChange={setEditorTab} />
 
-              <div className="rounded-xl ring-1 ring-inset ring-ink-100 p-3">
+              <div>
                 {editorTab === "details" && <DetailsSection product={draft} update={update} />}
                 {editorTab === "format" && (
                   <FormatSection product={draft} update={update} dirty={dirty} onVerified={applyCatalog} />
                 )}
                 {editorTab === "variants" && <VariantsSection product={draft} update={update} />}
-                {editorTab === "pricing" && <PricingSection product={draft} update={update} settings={settings} />}
+                {editorTab === "pricing" && (
+                  <PricingSection product={draft} update={update} settings={settings} />
+                )}
                 {editorTab === "costs" && (
                   <CostSection product={draft} update={update} dirty={dirty} onCalibrated={applyCatalog} />
                 )}
                 {editorTab === "shipping" && <ShippingSection product={draft} update={update} />}
+                {editorTab === "photos" && (
+                  <ProductPhotosPanel product={draft} products={products} />
+                )}
               </div>
             </div>
           )}
         </div>
       </div>
 
-      <PrintPicturesSection products={products} />
+      <AdminSaveBar
+        dirty={dirty}
+        saving={saving}
+        saveLabel="Save product"
+        saveDisabled={saveBlockers.length > 0}
+        saveTitle={saveBlockers.length ? "Fix errors before saving" : undefined}
+        onSave={() => void onSave()}
+        onDiscard={onDiscard}
+      />
     </div>
   );
 }
 
-function StatusDot({ status, offerable }: { status: ProductDefinition["status"]; offerable: boolean }) {
-  if (status === "active" && offerable) return <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />;
-  if (status === "active") return <AlertTriangle className="size-4 shrink-0 text-amber-500" />;
-  if (status === "retired") return <span className="size-2.5 shrink-0 rounded-full bg-ink-300" />;
-  return <span className="size-2.5 shrink-0 rounded-full bg-amber-300" />;
+function productStatus(
+  status: ProductDefinition["status"],
+  offerable: boolean,
+): { label: string; className: string } {
+  if (status === "active" && offerable) return { label: "Live", className: "text-emerald-700" };
+  if (status === "active") return { label: "Blocked", className: "text-amber-700" };
+  if (status === "retired") return { label: "Retired", className: "text-ink-400" };
+  return { label: "Draft", className: "text-ink-400" };
 }
 
 /**
- * The route from a fresh product to a sellable one, in order.
- *
- * The error banner says what's wrong; this says what to do next. They're
- * different questions, and the second one is the hard one when six tabs each
- * hold part of the answer and two of the steps have to happen in a particular
- * order (you can't price a variant before you know what it costs).
+ * The route from a fresh product to a sellable one. Hidden once every step
+ * is done — the error banner covers anything that later breaks.
  */
-function SetupChecklist({
+function SetupRail({
   product,
-  issues,
   onGoTo,
 }: {
   product: ProductDefinition;
-  issues: ProductIssue[];
   onGoTo: (tab: string) => void;
 }) {
   const verified = Object.values(product.provider.verifiedIn ?? {}).some((v) => v?.ok);
@@ -580,39 +594,31 @@ function SetupChecklist({
   const shippingMeasured = (product.shipping.fallback ?? []).length > 0;
   const priced = product.pricing.tiers.some((t) => Object.values(t.prices).some((v) => v > 0));
   const steps = [
-    { tab: "format", done: verified, label: "Verify the SKU", why: "proves the printer will accept it" },
-    { tab: "costs", done: measured, label: "Measure costs", why: "everything below needs to know what it costs you" },
-    { tab: "shipping", done: shippingMeasured, label: "Measure shipping", why: "sets the fallback rate and which speeds reach where" },
-    { tab: "pricing", done: priced, label: "Set prices", why: "per page range, per currency" },
-    { tab: "variants", done: true, label: "Price the variants", why: "derive them from cost with Suggest" },
+    { tab: "format", done: verified, label: "SKU" },
+    { tab: "costs", done: measured, label: "Cost" },
+    { tab: "shipping", done: shippingMeasured, label: "Shipping" },
+    { tab: "pricing", done: priced, label: "Price" },
   ];
-  const remaining = steps.filter((s) => !s.done);
-  // Nothing to guide once it's set up and clean; the banner covers the rest.
-  if (remaining.length === 0 && issues.length === 0) return null;
-  if (remaining.length === 0) return null;
+  if (steps.every((s) => s.done)) return null;
 
   return (
-    <div className="space-y-1 rounded-lg bg-ink-50 px-3 py-2.5 text-xs">
-      <p className="font-semibold text-ink-700">Getting this product ready</p>
-      <ol className="space-y-0.5">
-        {steps.map((s) => (
-          <li key={s.tab} className="flex items-baseline gap-2">
-            <span className={s.done ? "text-emerald-600" : "text-ink-300"}>{s.done ? "✓" : "○"}</span>
-            <button
-              type="button"
-              onClick={() => onGoTo(s.tab)}
-              className={cn(
-                "text-left underline-offset-2 hover:underline",
-                s.done ? "text-ink-400" : "font-medium text-ink-700",
-              )}
-            >
-              {s.label}
-            </button>
-            <span className="text-ink-400">— {s.why}</span>
-          </li>
-        ))}
-      </ol>
-    </div>
+    <p className="flex flex-wrap items-center gap-x-2 text-sm text-ink-500">
+      {steps.map((s, i) => (
+        <span key={s.tab} className="inline-flex items-center gap-x-2">
+          {i > 0 ? <span className="text-ink-200">·</span> : null}
+          <button
+            type="button"
+            onClick={() => onGoTo(s.tab)}
+            className={cn(
+              "hover:underline",
+              s.done ? "text-ink-400" : "font-medium text-ink-800",
+            )}
+          >
+            {s.done ? `${s.label} ✓` : s.label}
+          </button>
+        </span>
+      ))}
+    </p>
   );
 }
 
@@ -621,18 +627,12 @@ function SetupChecklist({
  * of leaving you to guess which tab it lives on.
  */
 const FIX_HINTS: Record<NonNullable<ProductIssue["fix"]>, string> = {
-  verify: "Fixed by: Verify (Details tab, or “Verify all” in the list)",
+  verify: "Fixed by: Verify on the Format tab, or Catalog tools",
   measure: "Fixed by: Measure cost from the provider (Costs tab)",
 };
 
 function ValidationBanner({ issues }: { issues: ProductIssue[] }) {
-  if (issues.length === 0) {
-    return (
-      <div className="flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-200">
-        <BadgeCheck className="size-4" /> Valid configuration — ready to be offered when active.
-      </div>
-    );
-  }
+  if (issues.length === 0) return null;
   const errors = issues.filter((i) => i.level === "error");
   const warnings = issues.filter((i) => i.level === "warning");
   // Actionable errors are cleared by running a tool, not by typing, so they
@@ -689,7 +689,7 @@ function DetailsSection({ product, update }: { product: ProductDefinition; updat
             <TextField label="Tagline" value={p.tagline ?? ""} placeholder="Optional one-liner" onChange={(v) => setP({ tagline: v })} />
           </div>
           {/* Pictures live in the catalog-wide store, not on this record — this is
-              a shortcut into the same manager as the Product pictures section. */}
+              a shortcut into the same manager as the Photos tab. */}
           <div className="space-y-1">
             <p className="text-[11px] font-medium text-ink-500">Pictures</p>
             <PictureButton mediaKey={bookMediaKey(product.id)} label={p.name || "this book"} />
@@ -1160,55 +1160,6 @@ function transitLabel(row: {
   return `${min ?? max} days`;
 }
 
-/**
- * A catalog-wide action with its explanation attached.
- *
- * These buttons each fire off dozens of provider calls and rewrite saved data,
- * and their names ("Verify", "Measure") say what they're called rather than
- * what they do. A tooltip isn't enough for something you can't undo, so the
- * sentence is always on screen.
- */
-function ActionButton({
-  show,
-  icon,
-  label,
-  explainer,
-  busy,
-  progress,
-  disabledReason,
-  onClick,
-}: {
-  show: boolean;
-  icon: React.ReactNode;
-  label: string;
-  explainer: string;
-  busy: boolean;
-  progress?: string | null;
-  disabledReason: string | null;
-  onClick: () => void;
-}) {
-  if (!show) return null;
-  return (
-    <div className="space-y-1">
-      <Button
-        variant="secondary"
-        size="sm"
-        className="w-full"
-        leftIcon={icon}
-        loading={busy}
-        disabled={disabledReason != null}
-        onClick={onClick}
-        title={disabledReason ?? explainer}
-      >
-        {label}
-      </Button>
-      <p className="px-0.5 text-[10px] leading-snug text-ink-400">
-        {busy && progress ? progress : (disabledReason ?? explainer)}
-      </p>
-    </div>
-  );
-}
-
 function CalibrationRuns({
   runs,
   onDismiss,
@@ -1217,10 +1168,10 @@ function CalibrationRuns({
   onDismiss: () => void;
 }) {
   return (
-    <div className="space-y-1 rounded-lg p-2 ring-1 ring-inset ring-ink-100">
+    <div className="space-y-1 rounded-lg p-3 ring-1 ring-inset ring-ink-100">
       <div className="flex items-center justify-between gap-2">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-ink-400">Cost measurement</span>
-        <button type="button" onClick={onDismiss} className="text-[10px] text-ink-400 hover:text-ink-600">
+        <span className="text-xs font-medium text-ink-500">Cost measurement</span>
+        <button type="button" onClick={onDismiss} className="text-xs text-ink-400 hover:text-ink-600">
           Dismiss
         </button>
       </div>

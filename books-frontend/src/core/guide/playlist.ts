@@ -20,6 +20,7 @@
  */
 import { z } from "zod";
 import {
+  componentTakesAnswers,
   GUIDE_CATALOG,
   GUIDE_COMPONENTS,
   isGuideComponentId,
@@ -39,6 +40,23 @@ export interface GuidePlaylistEntry {
   skippable?: boolean;
   /** Admin override for the component's title. Absent ⇒ the catalog's. */
   title?: string;
+  /**
+   * Admin override for the question that OPENS this component.
+   *
+   * Only the opening. Once the reader has given part of an answer, the catalog's
+   * blocker takes over — "Add Neil's age to create the story" is worth more than
+   * re-reading the question they just half-answered, and that specificity is what
+   * makes the follow-up feel like it was listening. So this is the broad ask, and
+   * the chasing stays with the code that knows what is missing.
+   *
+   * Longer than `title` because it is a sentence rather than a label, and short
+   * enough that it cannot become a paragraph of instructions — the reader is
+   * looking at a chat line, not a form.
+   *
+   * Only kept on components the reader answers in prose; see
+   * {@link componentTakesAnswers}.
+   */
+  ask?: string;
 }
 
 export interface GuidePlaylist {
@@ -51,6 +69,7 @@ export const guidePlaylistEntrySchema = z.object({
   enabled: z.boolean(),
   skippable: z.boolean().optional(),
   title: z.string().max(120).optional(),
+  ask: z.string().max(400).optional(),
 });
 
 export const guidePlaylistSchema = z.object({
@@ -85,14 +104,21 @@ export function normalizeGuidePlaylist(input: unknown): GuidePlaylist {
   for (const raw of rawEntries) {
     const parsed = guidePlaylistEntrySchema.safeParse(raw);
     if (!parsed.success) continue;
-    const { id, enabled, skippable, title } = parsed.data;
+    const { id, enabled, skippable, title, ask } = parsed.data;
     if (!isGuideComponentId(id) || seen.has(id)) continue;
     seen.add(id);
     entries.push({
       id,
       enabled,
       ...(typeof skippable === "boolean" ? { skippable } : {}),
+      // Trimmed, and absent when it trims to nothing. An override stored as a
+      // blank string would be spoken as a blank question — the reader would see
+      // the guide say nothing and wait, with no way to tell it had been asked.
       ...(title?.trim() ? { title: title.trim() } : {}),
+      // Dropped outright on a component that never asks the reader anything, so
+      // that what is stored is what gets said. Keeping it would leave an admin
+      // looking at a question in the editor that no reader will ever be asked.
+      ...(ask?.trim() && componentTakesAnswers(GUIDE_COMPONENTS[id]) ? { ask: ask.trim() } : {}),
     });
   }
 
@@ -180,6 +206,15 @@ export function lintGuidePlaylist(playlist: GuidePlaylist): string[] {
 export interface ResolvedGuideComponent extends GuideComponent {
   /** True when the playlist overrode the catalog's skippability. */
   skippableOverridden: boolean;
+  /**
+   * The admin's opening question, when they wrote one.
+   *
+   * Lives on the RESOLVED component rather than on `GuideComponent` because it is
+   * editorial: the catalog describes what a component is and when it is finished,
+   * which the pipeline depends on, and nothing downstream of the catalog should
+   * be able to read a sentence an admin typed.
+   */
+  ask?: string;
 }
 
 /**
@@ -198,6 +233,7 @@ export function resolveGuidePlaylist(playlist: GuidePlaylist): ResolvedGuideComp
         skippable: entry.skippable ?? component.skippable,
         skippableOverridden:
           typeof entry.skippable === "boolean" && entry.skippable !== component.skippable,
+        ...(entry.ask ? { ask: entry.ask } : {}),
       };
     });
 }

@@ -1,14 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import {
-  AlertTriangle,
-  Gauge,
-  RefreshCw,
-  RotateCcw,
-  ShieldCheck,
-  SlidersHorizontal,
-} from "lucide-react";
+import { AlertTriangle, Gauge, RefreshCw, RotateCcw, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import {
   createDefaultGenerationTuningConfig,
@@ -28,6 +21,7 @@ import { Field, Input } from "../../components/Input";
 import { useReadOnly } from "../../components/ReadOnlyContext";
 import { Select } from "../../components/Select";
 import { cn } from "../../lib/cn";
+import { EditorTabs } from "./products/parts";
 
 const ACTION_COPY: Record<ImageActionId, { short: string; description: string }> = {
   anchorImage: {
@@ -234,85 +228,33 @@ export function GenerationTuningPanel() {
   ];
 
   return (
-    <section className="overflow-hidden rounded-2xl bg-white ring-1 ring-inset ring-ink-100">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-ink-100 px-4 py-4">
-        <div className="flex min-w-0 items-start gap-3">
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-700">
-            <SlidersHorizontal className="size-4.5" />
-          </div>
-          <div>
-            <h2 className="text-sm font-semibold text-ink-900">
-              Image speed &amp; quality
-            </h2>
-            <p className="mt-0.5 max-w-2xl text-xs leading-relaxed text-ink-500">
-              Set the generation payload and cap optional quality checks. Changes apply to newly
-              started renders within about 30 seconds.
-            </p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          {dirty && (
-            <span className="rounded-full bg-amber-50 px-2 py-1 text-[11px] font-medium text-amber-700">
-              Unsaved
-            </span>
-          )}
-          <Button
-            variant="ghost"
-            size="sm"
-            leftIcon={<RotateCcw className="size-3.5" />}
-            onClick={resetAction}
-            disabled={loading || saving || readOnly}
-          >
-            Reset {ACTION_COPY[action].short.toLowerCase()}
-          </Button>
-        </div>
+    <div className="space-y-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-ink-500">
+          Generation payload and quality checks. Applies to newly started renders within about 30
+          seconds. Saves separately from models and costs.
+        </p>
+        <Button
+          variant="ghost"
+          size="sm"
+          leftIcon={<RotateCcw className="size-3.5" />}
+          onClick={resetAction}
+          disabled={loading || saving || readOnly}
+        >
+          Reset {ACTION_COPY[action].short.toLowerCase()}
+        </Button>
       </div>
 
-      <div className="border-b border-ink-100 bg-ink-50/50 px-4 pt-3">
-        <div className="flex gap-1" role="tablist" aria-label="Artwork type">
-          {IMAGE_ACTIONS.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              role="tab"
-              id={`generation-tab-${item.id}`}
-              aria-controls={`generation-panel-${item.id}`}
-              aria-selected={action === item.id}
-              tabIndex={action === item.id ? 0 : -1}
-              className={cn(
-                "-mb-px min-h-10 border-b-2 px-3 text-sm font-medium transition-colors",
-                "focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
-                action === item.id
-                  ? "border-brand-500 text-brand-700"
-                  : "border-transparent text-ink-500 hover:text-ink-800",
-              )}
-              onClick={() => setAction(item.id)}
-              onKeyDown={(event) => {
-                if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-                event.preventDefault();
-                const index = IMAGE_ACTIONS.findIndex((candidate) => candidate.id === item.id);
-                const offset = event.key === "ArrowRight" ? 1 : -1;
-                const next = IMAGE_ACTIONS[
-                  (index + offset + IMAGE_ACTIONS.length) % IMAGE_ACTIONS.length
-                ];
-                setAction(next.id);
-                requestAnimationFrame(() =>
-                  document.getElementById(`generation-tab-${next.id}`)?.focus(),
-                );
-              }}
-            >
-              {ACTION_COPY[item.id].short}
-            </button>
-          ))}
-        </div>
-      </div>
+      <EditorTabs
+        items={IMAGE_ACTIONS.map((item) => ({
+          id: item.id,
+          label: ACTION_COPY[item.id].short,
+        }))}
+        value={action}
+        onChange={(id) => setAction(id as ImageActionId)}
+      />
 
-      <div
-        id={`generation-panel-${action}`}
-        role="tabpanel"
-        aria-labelledby={`generation-tab-${action}`}
-        className="space-y-6 p-4"
-      >
+      <div className="space-y-6">
         {loadError && (
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-red-50 px-3 py-2.5 text-xs text-red-700 ring-1 ring-inset ring-red-200">
             <span className="flex items-center gap-2">
@@ -745,33 +687,22 @@ export function GenerationTuningPanel() {
         </details>
       </div>
 
-      {!readOnly && (
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-ink-100 bg-ink-50/50 px-4 py-3">
-          <p className="text-xs text-ink-500">
-            Settings are validated server-side before publishing.
-          </p>
-          <div className="flex gap-2">
-            {dirty && (
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={saving}
-                onClick={() => setDraft(generationTuning)}
-              >
-                Discard
-              </Button>
-            )}
-            <Button
-              size="sm"
-              loading={saving}
-              disabled={!dirty || loading || Boolean(loadError)}
-              onClick={() => void save()}
-            >
-              Save image settings
-            </Button>
-          </div>
+      {!readOnly && dirty && (
+        <div className="flex items-center justify-end gap-2">
+          <span className="mr-auto text-sm text-ink-500">Unsaved image settings</span>
+          <Button variant="ghost" size="sm" disabled={saving} onClick={() => setDraft(generationTuning)}>
+            Discard
+          </Button>
+          <Button
+            size="sm"
+            loading={saving}
+            disabled={loading || Boolean(loadError)}
+            onClick={() => void save()}
+          >
+            Save image settings
+          </Button>
         </div>
       )}
-    </section>
+    </div>
   );
 }
