@@ -1,9 +1,8 @@
 /**
- * Live Spark estimate RANGE for an image action at a given quality tier, derived
- * the same way the server reserve is: recent measured call costs → the model's
- * rate-table cost → the flat configured estimate. Reactive to the public config
- * (Sparks peg/markup, cost table, recent-cost window). Returns null when the
- * economy is disabled (nothing to charge).
+ * Live Spark PRICE for an image action at a given quality tier, computed by the
+ * same estimator the server charges with (`core/billing/priceEstimation`).
+ * Reactive to the public config (Sparks peg/markup and estimation rules, cost
+ * table, recent-cost window). Returns null when the economy is disabled.
  */
 import { useMemo } from "react";
 import type { ImageActionId } from "../../core/ai/actions";
@@ -14,21 +13,14 @@ import {
   PUBLIC_IMAGE_ESTIMATE_USAGE,
   type ModelCostTable,
 } from "../../core/config/modelCosts";
-import {
-  recentCostSamples,
-  type CostSampleKind,
-  type ImageCostStats,
-} from "../../core/config/imageCostStats";
+import type { CostSampleKind, ImageCostStats } from "../../core/config/imageCostStats";
 import { estimateProfileForAction } from "../../core/config/generationEstimateProfile";
 import {
   generationTuningFor,
   type GenerationTuningConfig,
 } from "../../core/config/generationTuning";
-import {
-  estimateSparkRange,
-  type SparkEstimateRange,
-  type SparksConfig,
-} from "../../core/config/sparks";
+import type { SparkEstimateRange, SparksConfig } from "../../core/config/sparks";
+import { derivedUnitPrice } from "../../core/billing/priceEstimation";
 import { resolveImageModelClient } from "../../platform/aiResolve";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { useCampaignMultiplier } from "../../state/priceOverridesStore";
@@ -37,8 +29,7 @@ import { usePlanActionMultiplier } from "../../state/subscriptionStore";
 /**
  * Pure Spark estimate RANGE for one image action+tier from the given config
  * slices. Kept hook-free so batch estimates can sum several actions without
- * calling hooks in a loop. Mirrors the server reserve: recent measured costs →
- * the model's rate-table cost → the flat configured estimate.
+ * calling hooks in a loop. Mirrors the server quote exactly.
  */
 export function tierSparkRange(
   sparks: SparksConfig,
@@ -62,25 +53,20 @@ export function tierSparkRange(
     return applyM({ minSparks: rule.fixedSparks, maxSparks: rule.fixedSparks });
   }
   const sel = resolveImageModelClient(action, tier);
-  const rateCostUsd = sel
-    ? costForUsage(modelCosts.models[costKey(sel.provider, sel.id)], PUBLIC_IMAGE_ESTIMATE_USAGE)
-    : null;
-  const profile = sel
-    ? estimateProfileForAction({
-        action,
-        tier,
-        model: sel,
-        tuning: generationTuningFor(generationTuning, action),
-        kind,
-      })
-    : null;
-  return applyM(
-    estimateSparkRange(sparks, {
-      samples: profile ? recentCostSamples(stats, action, tier, profile) : [],
-      rateCostUsd,
-      fallbackSparks: rule?.estimatedSparks ?? 0,
-    }),
-  );
+  if (!sel) {
+    const flat = rule?.estimatedSparks ?? 0;
+    return applyM({ minSparks: flat, maxSparks: flat });
+  }
+  const rateUsd = costForUsage(modelCosts.models[costKey(sel.provider, sel.id)], PUBLIC_IMAGE_ESTIMATE_USAGE);
+  const profile = estimateProfileForAction({
+    action,
+    tier,
+    model: sel,
+    tuning: generationTuningFor(generationTuning, action),
+    kind,
+  });
+  const { sparks: price } = derivedUnitPrice({ stats, sparks, action, tier, profile, rateUsd }, planMultiplier);
+  return { minSparks: price, maxSparks: price };
 }
 
 /**

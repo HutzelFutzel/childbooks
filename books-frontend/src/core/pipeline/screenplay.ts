@@ -164,8 +164,22 @@ export async function generateScreenplay(
       story: config.storyText.trim(),
       previousJson,
       edit: edit?.trim() ?? "",
+      targetPages: config.pageTarget?.pages ?? "",
+      wordsPerPage: config.pageTarget?.wordsPerPage ?? "",
+      pageCase:
+        config.pageTarget?.case === "thin"
+          ? "thin stretch"
+          : config.pageTarget?.case === "spread"
+            ? "spread"
+            : "natural length",
     },
-    flags: { isRevision, hasDensity: Boolean(overlays.density) },
+    flags: {
+      isRevision,
+      hasDensity: Boolean(overlays.density),
+      hasPageTarget: Boolean(config.pageTarget),
+      isSpread: config.pageTarget?.case === "spread",
+      isThin: config.pageTarget?.case === "thin",
+    },
   });
 
   const raw = await withRetry(

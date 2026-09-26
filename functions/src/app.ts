@@ -31,6 +31,8 @@ import { registerProviderRoutes } from "./providers";
 import { registerLuluRoutes, registerPrintWebhookRoute } from "./lulu";
 import { registerPrintSyncAdminRoutes, registerPrintSyncDevRoute } from "./printSync";
 import { registerAiRoutes } from "./ai";
+import { registerGenerationQuoteRoutes } from "./generationQuotes";
+import { registerGuideAnalysisRoutes } from "./guideAnalysis";
 import { registerMigrationRoutes } from "./migration";
 import { registerAuthRoutes } from "./authRoutes";
 import { registerAdminRoutes } from "./admin";
@@ -186,6 +188,7 @@ export function createApp(): Express {
   registerLuluRoutes(app);
   registerPrintSyncAdminRoutes(app);
   registerAiRoutes(app);
+  registerGenerationQuoteRoutes(app);
   registerLikenessRoutes(app);
   registerStoryRevisionRoutes(app);
   registerMigrationRoutes(app);
@@ -205,6 +208,7 @@ export function createApp(): Express {
   registerRenderJobRoutes(app);
   registerRuntimeRoutes(app);
   registerAnalyticsRoutes(app);
+  registerGuideAnalysisRoutes(app);
   registerStripeUserRoutes(app);
   registerStripeAdminRoutes(app);
   registerReferralUserRoutes(app);

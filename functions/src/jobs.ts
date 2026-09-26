@@ -54,6 +54,8 @@ import { withUsage, type CallStats } from "./usage";
 import { meterAndSettle } from "./actionRun";
 import { featureAllowedForUser } from "./plans";
 import { ensureAfford, estimateForUser } from "./sparks";
+import { consumeQuote } from "./generationQuotes";
+import { sendBookDrawnEmail } from "./email/triggers";
 import { normalizeImageTier, type ImageTier } from "../../books-frontend/src/core/config/modelConfig";
 import {
   capabilitiesFor,
@@ -64,13 +66,17 @@ import { resolveImageGenerationOptions } from "../../books-frontend/src/core/con
 import {
   generationIntentFor,
   generationTuningFor,
+  normalizeGenerationTuningConfig,
   type GenerationTuningConfig,
 } from "../../books-frontend/src/core/config/generationTuning";
 import { ALL_SECRETS } from "./secrets";
 import { downloadBlob, ensureAdmin, uploadBlob } from "./storage";
-import { deleteLikenessPhotoForSubject } from "./likeness";
+import { deleteLikenessPhotoForSubject, loadLikenessPhotoForSubject } from "./likeness";
+import { portraitPrompt, lookSourceOf } from "../../books-frontend/src/core/guide/portrait";
+import { briefOf } from "../../books-frontend/src/core/story/brief";
+import { resolvePromptsConfig } from "../../books-frontend/src/core/prompts/context";
 import type { ResolvedModels } from "../../books-frontend/src/core/models/registry";
-import { ProviderError } from "../../books-frontend/src/core/errors";
+import { isAbortError, ProviderError } from "../../books-frontend/src/core/errors";
 import { containedAnchorsFor } from "../../books-frontend/src/core/book/anchorGraph";
 import { effectiveAnchorIds } from "../../books-frontend/src/core/book/anchorRefs";
 import {
@@ -112,12 +118,16 @@ import {
   type AnchorsJob,
   type AnchorTask,
   type AnyJob,
+  type BookJob,
+  type BookTask,
   type ImageRenderRequest,
   type JobKind,
   type JobProgress,
   type JobStatus,
   type JobTask,
   type PipelineRefreshJob,
+  type PortraitJob,
+  type PortraitTask,
   type RefreshTask,
   type ScreenplayJob,
   type ScreenplayTask,
@@ -239,8 +249,18 @@ function illustrationActionFor(taskId: string): "pageIllustration" | "coverIllus
   return isCoverId(taskId) ? "coverIllustration" : "pageIllustration";
 }
 
+/**
+ * The pipeline one task runs. A book job mixes sheets and pages, so its tasks
+ * carry their own kind; every other job's tasks share the job's.
+ */
+function taskKindOf(job: AnyJob, spec: AnyJob["tasks"][number] | TaskDoc): JobKind {
+  if (job.kind !== "book") return job.kind;
+  return (spec as BookTask | TaskDoc).kind === "anchors" ? "anchors" : "refresh";
+}
+
 /** The Spark action one task will SETTLE as — the same one it must be quoted at. */
 function taskAction(kind: JobKind, taskId: string): ImageActionId {
+  if (kind === "portrait") return "portrait";
   return kind === "anchors" ? "anchorImage" : illustrationActionFor(taskId);
 }
 
@@ -334,14 +354,26 @@ async function enqueueTasks(
 function buildDependsOn(job: AnyJob): Map<string, string[]> {
   const out = new Map<string, string[]>();
   const specs = job.tasks ?? [];
-  if (job.kind !== "anchors") {
+  if (job.kind !== "anchors" && job.kind !== "book") {
     for (const t of specs) out.set(t.id, []);
     return out;
   }
   const anchors = job.project.anchors ?? [];
   const byId = new Map(anchors.map((a) => [a.id, a]));
-  const inJob = new Set(specs.map((t) => t.id));
+  const inJob = new Set(
+    specs.filter((t) => taskKindOf(job, t) === "anchors").map((t) => t.id),
+  );
+  const spreads = job.kind === "book" ? spreadsById(job.project) : null;
   for (const t of specs) {
+    if (spreads && taskKindOf(job, t) === "refresh") {
+      // A page waits for the sheets of everyone on it that this job redraws.
+      const spread = spreads.get(t.id);
+      const deps = spread
+        ? effectiveAnchorIds(anchors, spread).filter((id) => inJob.has(id))
+        : [];
+      out.set(t.id, Array.from(new Set(deps)));
+      continue;
+    }
     const anchor = byId.get(t.id);
     if (!anchor) {
       out.set(t.id, []);
@@ -377,7 +409,10 @@ async function jobCallerStanding(uid: string): Promise<{ allowed: boolean; guest
  */
 async function applyFeatureGate(uid: string, job: AnyJob): Promise<AnyJob> {
   if (
-    (job.kind === "refresh" || job.kind === "anchors") &&
+    (job.kind === "refresh" ||
+      job.kind === "anchors" ||
+      job.kind === "portrait" ||
+      job.kind === "book") &&
     job.project?.config?.artStyle?.customDescription?.trim()
   ) {
     const allowed = await featureAllowedForUser(uid, "customArtStyle").catch(() => true);
@@ -398,8 +433,9 @@ async function applyFeatureGate(uid: string, job: AnyJob): Promise<AnyJob> {
 /** Build the per-kind payload fields for a task doc (omitting undefined). */
 function taskPayload(
   kind: JobKind,
-  spec: JobTask | RefreshTask | AnchorTask | ScreenplayTask,
+  spec: JobTask | RefreshTask | AnchorTask | ScreenplayTask | PortraitTask | BookTask,
 ): Partial<TaskDoc> {
+  if (kind === "portrait") return { inputs: (spec as PortraitTask).inputs };
   if (kind === "image") {
     const s = spec as JobTask;
     const out: Partial<TaskDoc> = { request: s.request };
@@ -456,11 +492,24 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
     // under-reserved every book with a cover or an edit in it, and recorded a
     // quote the charge was guaranteed to beat.
     const keys = specs.map((spec) =>
-      quoteKey(taskAction(job.kind, spec.id), taskQuoteKind(spec)),
+      quoteKey(taskAction(taskKindOf(job, spec), spec.id), taskQuoteKind(spec)),
     );
-    const quotes: Record<string, number> = {};
+    let quotes: Record<string, number> = {};
+    if (job.quoteId) {
+      // The reader confirmed a stored estimate: its numbers are the cap, and each
+      // unit may be consumed by one job only.
+      quotes = await consumeQuote(
+        uid,
+        job.quoteId,
+        ref.id,
+        job.projectId,
+        specs.map((spec) => spec.id),
+      );
+    } else if (job.kind === "portrait") {
+      throw new Error("Portraits start from a confirmed estimate.");
+    }
     for (const spec of specs) {
-      const action = taskAction(job.kind, spec.id);
+      const action = taskAction(taskKindOf(job, spec), spec.id);
       const kind = taskQuoteKind(spec);
       const key = quoteKey(action, kind);
       if (key in quotes) continue;
@@ -472,6 +521,7 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
   }
 
   await applyFeatureGate(uid, job);
+  const frozen = tier ? { generationTuning: await getGenerationTuningConfig() } : undefined;
 
   const dependsMap = buildDependsOn(job);
   const col = tasksCol(uid, ref.id);
@@ -483,10 +533,10 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
       jobId: ref.id,
       uid,
       ...(job.projectId ? { projectId: job.projectId } : {}),
-      kind: job.kind,
+      kind: taskKindOf(job, spec),
       status: "pending",
       dependsOn: dependsMap.get(spec.id) ?? [],
-      ...taskPayload(job.kind, spec),
+      ...taskPayload(taskKindOf(job, spec), spec),
       reconciliationVersion: 1,
       updatedAt: now,
     };
@@ -502,9 +552,10 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
     // Persist image billing/model choices only for image-bearing jobs.
     ...(tier ? { tier } : {}),
     ...(quotedByAction ? { quotedByAction } : {}),
+    ...(frozen ? { frozen } : {}),
     // Persist the feature-gated snapshot so workers render against it.
     ...(job.kind !== "image"
-      ? { project: (job as PipelineRefreshJob | AnchorsJob | ScreenplayJob).project }
+      ? { project: (job as PipelineRefreshJob | AnchorsJob | ScreenplayJob | PortraitJob | BookJob).project }
       : {}),
   });
   await batch.commit();
@@ -648,23 +699,150 @@ async function finalizeIfComplete(
   ref: DocumentReference,
   outcome: "success" | "fail",
 ): Promise<void> {
-  await db().runTransaction(async (tx) => {
+  const next = await db().runTransaction(async (tx) => {
     const snap = await tx.get(ref);
-    if (!snap.exists) return;
+    if (!snap.exists) return null;
     const job = snap.data() as AnyJob;
-    if (isTerminal(job.status)) return;
+    if (isTerminal(job.status)) return null;
     const prog = job.progress ?? { total: 0, completed: 0, failed: 0 };
     const completed = prog.completed + (outcome === "success" ? 1 : 0);
     const failed = prog.failed + (outcome === "fail" ? 1 : 0);
-    const patch: { progress: JobProgress; updatedAt: number; status?: JobStatus } = {
+    const patch: {
+      progress: JobProgress;
+      updatedAt: number;
+      status?: JobStatus;
+      secondPass?: boolean;
+    } = {
       progress: { total: prog.total, completed, failed },
       updatedAt: Date.now(),
     };
+    let step: "retry" | "finished" | null = null;
     if (completed + failed >= prog.total) {
-      patch.status = failed > 0 && completed === 0 ? "error" : "done";
+      if (failed > 0 && secondPassApplies(job)) {
+        patch.secondPass = true;
+        step = "retry";
+      } else {
+        patch.status = failed > 0 && completed === 0 ? "error" : "done";
+        step = "finished";
+      }
     }
     tx.update(ref, patch);
+    return step ? { step, kind: job.kind } : null;
   });
+  const uid = ref.parent.parent?.id;
+  if (!next || !uid) return;
+  if (next.step === "retry") await retryFailedTasks(ref, uid, next.kind);
+  else await afterJobFinished(ref, uid);
+}
+
+/**
+ * Tell the reader a book they walked away from is done. Claimed on the job doc
+ * first, so the two finalize paths can't both send; the template's dedupe key
+ * is the second lock.
+ */
+async function afterJobFinished(ref: DocumentReference, uid: string): Promise<void> {
+  try {
+    const claimed = await db().runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const job = snap.data() as AnyJob | undefined;
+      if (!job || job.kind !== "book" || !job.notify || job.notifiedAt) return null;
+      if (!isTerminal(job.status)) return null;
+      tx.update(ref, { notifiedAt: Date.now() });
+      return job;
+    });
+    if (!claimed) return;
+    const tasks = (await tasksCol(uid, ref.id).get()).docs.map((d) => d.data() as TaskDoc);
+    await sendBookDrawnEmail({
+      uid,
+      jobId: ref.id,
+      projectId: claimed.projectId ?? claimed.project.id,
+      bookTitle: claimed.project.title ?? "",
+      drawn: tasks.filter((t) => t.status === "done").length,
+      missing: tasks.filter((t) => t.status === "error").length,
+    });
+  } catch (err) {
+    logger.warn("[fan] book-drawn email failed", { jobId: ref.id, err: String(err) });
+  }
+}
+
+/**
+ * Whether a finished job's failures get one more go before it reports. The
+ * reader asked for a whole book; a page lost to a bad minute at the provider
+ * shouldn't become their problem. Failed renders are never charged, so the
+ * second pass costs them nothing.
+ */
+function secondPassApplies(job: AnyJob): boolean {
+  return !job.secondPass && job.kind !== "screenplay";
+}
+
+/**
+ * Put every failed task (and the ones skipped behind it) back in the queue.
+ * If this dies halfway, the reaper finds the job with nothing left to run and
+ * finalizes it as it stands.
+ */
+async function retryFailedTasks(ref: DocumentReference, uid: string, kind: JobKind): Promise<void> {
+  const all = (await tasksCol(uid, ref.id).get()).docs.map((d) => d.data() as TaskDoc);
+  const failed = all.filter((t) => t.status === "error");
+  if (failed.length === 0) {
+    await afterJobFinished(ref, uid);
+    return;
+  }
+  const now = Date.now();
+  const batch = db().batch();
+  for (const t of failed) {
+    batch.update(tasksCol(uid, ref.id).doc(t.id), {
+      status: "pending",
+      error: null,
+      errorKind: null,
+      claimedBy: null,
+      claimToken: null,
+      claimedUntil: 0,
+      updatedAt: now,
+    });
+  }
+  const completed = all.filter((t) => t.status === "done").length;
+  batch.update(ref, {
+    progress: { total: all.length, completed, failed: 0 },
+    updatedAt: now,
+  });
+  await batch.commit();
+  logger.info("[fan] second pass for failed tasks", { jobId: ref.id, count: failed.length });
+
+  const statusById = new Map(all.map((t) => [t.id, t.status]));
+  const retrying = new Set(failed.map((t) => t.id));
+  const ready = failed
+    .filter((t) => t.dependsOn.every((id) => !retrying.has(id) && statusById.get(id) === "done"))
+    .map((t) => t.id);
+  await enqueueTasks(uid, ref.id, ready, kind);
+}
+
+/**
+ * A failed task blocks everything drawn from it. Mark those dependents skipped
+ * right away (deepest first, so the job's last count lands after every skip)
+ * instead of leaving the job to wait for the reaper.
+ */
+async function skipDependents(
+  ref: DocumentReference,
+  uid: string,
+  failedId: string,
+): Promise<void> {
+  const q = await tasksCol(uid, ref.id).where("dependsOn", "array-contains", failedId).get();
+  for (const d of q.docs) {
+    const skipped = await db().runTransaction(async (tx) => {
+      const snap = await tx.get(d.ref);
+      const t = snap.data() as TaskDoc | undefined;
+      if (!t || t.status !== "pending") return false;
+      tx.update(d.ref, {
+        status: "error",
+        error: "Skipped: a dependency failed to generate.",
+        updatedAt: Date.now(),
+      });
+      return true;
+    });
+    if (!skipped) continue;
+    await skipDependents(ref, uid, d.id);
+    await finalizeIfComplete(ref, "fail");
+  }
 }
 
 /**
@@ -704,13 +882,15 @@ async function runImageTask(args: {
   caps: CapabilityOverrides;
   generationTuning: GenerationTuningConfig;
   tier: ImageTier;
-  action: "pageIllustration" | "coverIllustration";
+  action: ImageActionId;
   projectId: string | undefined;
   signal: AbortSignal;
   jobId: string;
   taskId: string;
   startedAt: number;
   quotedSparks?: number;
+  /** References that are not blobs (a private likeness photo). Sent first. */
+  inlineReferences?: ReferenceImage[];
 }): Promise<{
   blobId: string;
   mimeType: string;
@@ -741,9 +921,10 @@ async function runImageTask(args: {
     ? Math.max(1, configuredReferenceLimit)
     : configuredReferenceLimit;
   const canShrink = !req.maskBlobId;
-  const references: ReferenceImage[] = await Promise.all(
+  const inline = (args.inlineReferences ?? []).slice(0, submittedReferenceLimit);
+  const blobReferences: ReferenceImage[] = await Promise.all(
     (req.references ?? [])
-      .slice(0, submittedReferenceLimit)
+      .slice(0, Math.max(0, submittedReferenceLimit - inline.length))
       .map(async (r): Promise<ReferenceImage> => {
       const buf = await downloadBlob(uid, r.blobId);
       const small = canShrink
@@ -761,6 +942,7 @@ async function runImageTask(args: {
       };
     }),
   );
+  const references = [...inline, ...blobReferences];
 
   let mask: ReferenceImage | undefined;
   if (req.maskBlobId) {
@@ -888,6 +1070,14 @@ async function renderTask(
   tier: ImageTier,
   signal: AbortSignal,
 ): Promise<{ result: TaskResult; stats: TaskStats }> {
+  if (job.kind === "book") {
+    const kind = taskKindOf(job, task);
+    const project = structuredClone(job.project);
+    // Sheets drawn earlier in this job aren't in the snapshot yet.
+    if (kind === "refresh") await hydrateAnchorDeps(uid, jobId, task, project);
+    const view = { ...job, kind, project } as PipelineRefreshJob | AnchorsJob;
+    return renderTask(uid, jobId, view as AnyJob, task, tier, signal);
+  }
   if (job.kind === "screenplay") {
     const [model, prompts] = await Promise.all([
       resolveTextAction("screenplay"),
@@ -933,9 +1123,106 @@ async function renderTask(
     loadPromptContext(),
     getLayoutsConfig(),
     loadModelCapabilities(),
-    getGenerationTuningConfig(),
+    job.frozen?.generationTuning
+      ? normalizeGenerationTuningConfig(job.frozen.generationTuning)
+      : getGenerationTuningConfig(),
   ]);
   const startedAt = Date.now();
+
+  if (job.kind === "portrait") {
+    const project = job.project;
+    const member = (briefOf(project.config).cast ?? []).find((m) => m.id === task.id);
+    if (!member) throw new Error("This person is no longer in the book.");
+    const source = lookSourceOf(member);
+    const inlineReferences: ReferenceImage[] = [];
+    if (source === "photo") {
+      const photo = await loadLikenessPhotoForSubject(uid, project.id, member.id);
+      if (!photo) throw new Error("The photo has expired. Add it again, or describe them instead.");
+      inlineReferences.push({ base64: photo.base64, mimeType: photo.mimeType, label: `${member.name} (photo)`, role: "likeness" });
+    }
+    const subjectReferences =
+      source === "drawing" ? (member.sourceArt ?? []).slice(0, 1) : [];
+    const subjectBlobIds = new Set(subjectReferences.map((art) => art.blobId));
+    const allStyleReferences = project.config.artStyle.referenceArt ?? [];
+    const styleReferences = allStyleReferences
+      .filter((art) => !subjectBlobIds.has(art.blobId))
+      .slice(0, 1);
+    const hasStyleReference = allStyleReferences.length > 0;
+    const sharesStyleReference = allStyleReferences.some((art) =>
+      subjectBlobIds.has(art.blobId),
+    );
+    const prompt = portraitPrompt(
+      project,
+      member,
+      resolvePromptsConfig(prompts),
+      prompts.artStyles,
+    );
+    const referenceGuide = (() => {
+      if (sharesStyleReference) {
+        return "Reference image 1 is both this character’s exact design and the rendering style to carry through the book.";
+      }
+      if (source === "photo" && styleReferences.length > 0) {
+        return "Reference image 1 is likeness only. Reference image 2 is style only; do not borrow its subject or composition.";
+      }
+      if (subjectReferences.length > 0 && styleReferences.length > 0) {
+        return "Reference image 1 is this character’s exact design. Reference image 2 is style only; do not borrow its subject or composition.";
+      }
+      if (styleReferences.length > 0) {
+        return "Reference image 1 is style only; do not borrow its subject or composition.";
+      }
+      return "";
+    })();
+    const req: ImageRenderRequest = {
+      provider: models.imageModel.provider,
+      model: models.imageModel.id,
+      prompt: [
+        prompt,
+        hasStyleReference
+          ? sharesStyleReference
+            ? "The supplied character drawing also defines the book’s ART STYLE. Keep this character’s identity and design, and use its rendering technique, linework, palette, texture and finish for the portrait."
+            : "Use the supplied ART-STYLE reference for the rendering technique, linework, palette, texture and finish. Never copy its subject, clothing, pose, background, layout or composition."
+          : "",
+        referenceGuide,
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
+      size: "1024x1536",
+      references: [
+        ...subjectReferences.map((art) => ({
+          blobId: art.blobId,
+          mimeType: art.mimeType,
+          label: `${member.name} (drawing)`,
+          role: "subject" as const,
+        })),
+        ...styleReferences.map((art) => ({
+          blobId: art.blobId,
+          mimeType: art.mimeType,
+          label: "the reader’s book-wide style reference",
+          role: "style" as const,
+        })),
+      ],
+    };
+    const { blobId, mimeType, stats } = await runImageTask({
+      uid,
+      req,
+      model: models.imageModel,
+      caps: capabilities,
+      generationTuning,
+      tier,
+      action: "portrait",
+      projectId: job.projectId ?? project.id,
+      signal,
+      jobId,
+      taskId: task.id,
+      startedAt,
+      quotedSparks: quotedFor(job, "portrait"),
+      inlineReferences,
+    });
+    return {
+      result: stampImageProvenance({ blobId, mimeType }, tier, models.imageModel),
+      stats: { ms: Date.now() - startedAt, ...stats },
+    };
+  }
 
   if (job.kind === "image") {
     const projectId = job.projectId;
@@ -1080,7 +1367,7 @@ async function renderTask(
     },
   });
   return {
-    result: stampImageProvenance(render, tier, models.anchorImageModel),
+    result: { ...stampImageProvenance(render, tier, models.anchorImageModel), versionId: randomUUID() },
     stats: { ms: Date.now() - startedAt, ...stats },
   };
 }
@@ -1146,7 +1433,12 @@ export const onGenerationJob = onDocumentCreated(
  * simply given up.
  */
 function isRetryableRenderError(err: unknown): boolean {
-  return err instanceof ProviderError && err.retryable;
+  if (err instanceof ProviderError) {
+    // A render that ran past the task budget (ours or the provider's) says
+    // nothing about the request; a fresh attempt usually lands.
+    return err.retryable || err.kind === "timeout" || err.kind === "aborted";
+  }
+  return isAbortError(err);
 }
 
 /** What a dispatched task carries — enough to find the job and the task doc. */
@@ -1185,7 +1477,10 @@ async function handleTask(data: TaskPayload, owner: string, attempt: number): Pr
         claimToken,
         "Skipped: a dependency failed to generate.",
       );
-      if (marked) await finalizeIfComplete(ref, "fail");
+      if (marked) {
+        await skipDependents(ref, uid, taskId);
+        await finalizeIfComplete(ref, "fail");
+      }
       return;
     }
     const allDone = task.dependsOn.every((id) => deps.find((d) => d.id === id)?.status === "done");
@@ -1223,7 +1518,10 @@ async function handleTask(data: TaskPayload, owner: string, attempt: number): Pr
       (err as Error)?.message ?? "Generation failed.",
       err,
     );
-    if (marked) await finalizeIfComplete(ref, "fail");
+    if (marked) {
+      await skipDependents(ref, uid, taskId);
+      await finalizeIfComplete(ref, "fail");
+    }
     return;
   } finally {
     timeout.done();
@@ -1235,7 +1533,7 @@ async function handleTask(data: TaskPayload, owner: string, attempt: number): Pr
   // A likeness source has completed its only job once the first character
   // sheet is durably recorded. Deletion is best-effort here; the 24-hour
   // scheduled expiry is the backstop if Storage is temporarily unavailable.
-  if (job.kind === "anchors") {
+  if ((job.kind === "anchors" || job.kind === "book") && taskKindOf(job, task) === "anchors") {
     const createdAt = (result as AnchorRender).consumedLikenessCreatedAt;
     if (createdAt !== undefined) {
       await deleteLikenessPhotoForSubject(
@@ -1339,6 +1637,18 @@ async function forceFinalize(ref: DocumentReference, uid: string): Promise<void>
     progress: { total: all.length, completed, failed },
     updatedAt: Date.now(),
   });
+  await afterJobFinished(ref, uid);
+}
+
+/** Finish a job with nothing left to run, giving its failures their second pass first. */
+async function finishOrRetry(ref: DocumentReference, uid: string, job: AnyJob): Promise<void> {
+  const all = (await tasksCol(uid, ref.id).get()).docs.map((d) => d.data() as TaskDoc);
+  if (all.some((t) => t.status === "error") && secondPassApplies(job)) {
+    await ref.update({ secondPass: true, updatedAt: Date.now() });
+    await retryFailedTasks(ref, uid, job.kind);
+    return;
+  }
+  await forceFinalize(ref, uid);
 }
 
 /** Give up on whatever's left of a job that has been re-driven too many times. */
@@ -1367,8 +1677,11 @@ async function failRemaining(ref: DocumentReference, uid: string): Promise<void>
  * so a job doesn't get re-picked every tick while its re-queued tasks run.
  */
 async function resumeJob(ref: DocumentReference, uid: string, job: AnyJob): Promise<void> {
-  const runCount = (job.runCount ?? 0) + 1;
-  await ref.update({ runCount, updatedAt: Date.now() });
+  // The run budget is for a job that's stuck, not one that's slow: any task
+  // finishing since the last re-drive starts the count over.
+  const mark = (job.progress?.completed ?? 0) + (job.progress?.failed ?? 0);
+  const runCount = job.reapMark === mark ? (job.runCount ?? 0) + 1 : 1;
+  await ref.update({ runCount, reapMark: mark, updatedAt: Date.now() });
 
   if (runCount > MAX_JOB_RUNS) {
     await failRemaining(ref, uid);
@@ -1383,7 +1696,7 @@ async function resumeJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
   const all = (await tasksCol(uid, ref.id).get()).docs.map((d) => d.data() as TaskDoc);
   const nonTerminal = all.filter((t) => !isTerminal(t.status));
   if (nonTerminal.length === 0) {
-    await forceFinalize(ref, uid);
+    await finishOrRetry(ref, uid, job);
     return;
   }
 
@@ -1415,7 +1728,7 @@ async function resumeJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
       });
     }
     await batch.commit();
-    await forceFinalize(ref, uid);
+    await finishOrRetry(ref, uid, job);
   }
   // Otherwise tasks are legitimately in flight (claim not lapsed) — wait.
 }

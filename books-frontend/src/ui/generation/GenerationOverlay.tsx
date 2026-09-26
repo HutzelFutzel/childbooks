@@ -1,5 +1,7 @@
 "use client";
 
+/** @legacy guide-v2 L2 — deleted with the Steps cast stage. See docs/LEGACY-GUIDE.md. */
+
 import { AnimatePresence, motion } from "framer-motion";
 import { Clock, Sparkles } from "lucide-react";
 import type { ImageActionId } from "../../core/ai/actions";

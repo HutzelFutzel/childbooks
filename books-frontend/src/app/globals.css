@@ -216,6 +216,16 @@
     }
   }
 
+  /* A picture being drawn in the Chat studio: one soft pass across it. */
+  @keyframes guide-sheen {
+    0% {
+      transform: translateX(0);
+    }
+    100% {
+      transform: translateX(300%);
+    }
+  }
+
   /* Gentle float for playful decorative marks. */
   @keyframes float-slow {
     0%,

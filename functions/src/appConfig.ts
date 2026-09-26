@@ -6,7 +6,7 @@
  * and change rarely). Writes are validated and performed here, used only by the
  * admin routes (which are already gated by `requireAdmin`).
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { getFirestore } from "firebase-admin/firestore";
 import {
   ensureAdmin,
@@ -487,14 +487,22 @@ export async function recordImageCostSample(
   tier: ImageTier,
   costUsd: number,
   profile: GenerationEstimateProfile,
+  meta: { projectId?: string; rate?: number | null } = {},
 ): Promise<void> {
   ensureAdmin();
   const db = getFirestore();
   const ref = db.doc(IMAGE_COST_STATS_DOC);
+  // The document is world-readable, so the book is stored only as a short
+  // one-way tag — enough to cap one book's share of a window.
+  const project = meta.projectId
+    ? createHash("sha256").update(meta.projectId).digest("base64url").slice(0, 10)
+    : undefined;
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const current = normalizeImageCostStats(snap.exists ? snap.data() : undefined);
-    tx.set(ref, appendCostSample(current, action, tier, costUsd, profile), { merge: false });
+    tx.set(ref, appendCostSample(current, action, tier, costUsd, profile, { project, rate: meta.rate }), {
+      merge: false,
+    });
   });
   cache.delete(IMAGE_COST_STATS_DOC);
 }
@@ -1072,7 +1080,11 @@ export async function saveGuideConfig(input: unknown): Promise<GuideConfig> {
    * gap from the shipped defaults, which is what it would have stored anyway.
    */
   const parsed = guideConfigSchema
-    .extend({ extraction: guideExtractionSchema.optional() })
+    .extend({
+      extraction: guideExtractionSchema.optional(),
+      facts: guideConfigSchema.shape.facts.optional(),
+      wording: guideConfigSchema.shape.wording.optional(),
+    })
     .parse(input);
   const normalized = normalizeGuideConfig({ ...parsed, updatedAt: Date.now() });
   await writeDoc(GUIDE_DOC, normalized);

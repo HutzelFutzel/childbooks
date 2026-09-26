@@ -1,5 +1,7 @@
 "use client";
 
+/** @legacy guide-v2 L0 — unreachable today; nothing renders it. See docs/LEGACY-GUIDE.md. */
+
 import { useRef, useState } from "react";
 import { Plus, X } from "lucide-react";
 import { cn } from "../../lib/cn";

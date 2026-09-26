@@ -43,7 +43,15 @@ const anchorItemSchema = z.object({
     .min(0)
     .max(120)
     .nullish()
-    .describe("Character age in years. This is the only numeric age field."),
+    .describe(
+      "Best visual age in years. Preserve a stated age; otherwise estimate from role, relationships and life-stage clues, or make a sensible target-audience guess.",
+    ),
+  ageBasis: z
+    .enum(["stated", "inferred", "suggested"])
+    .nullish()
+    .describe(
+      "Why ageYears was chosen: stated verbatim, inferred from story clues, or suggested because the story was silent.",
+    ),
   /**
    * Other story phrases for this same subject. "Bluey the blue toy elephant"
    * must not become a second row — those words belong here.
@@ -63,6 +71,8 @@ const embeddingItemSchema = z.object({
 
 const analysisSchema = z.object({
   summary: z.string(),
+  /** A short book title in the story's language. Empty when the model omits it. */
+  title: z.string().max(120).nullish(),
   anchors: z.array(anchorItemSchema),
   embeddings: z.array(embeddingItemSchema).nullish(),
 });
@@ -145,7 +155,7 @@ function validateEmbeddings(
 /** Run the story analysis and return editable anchors + a short summary. */
 export async function analyzeStory(
   input: AnalyzeStoryInput,
-): Promise<{ summary: string; anchors: Anchor[]; embeddings: AnalyzedEmbedding[] }> {
+): Promise<{ summary: string; title: string; anchors: Anchor[]; embeddings: AnalyzedEmbedding[] }> {
   const { story, config, creds, model, signal, prompts, artworkLooks } = input;
   const provider = getTextProvider(config.textModel!.provider);
   const age = ageBandLabel(config.ageRangeId);
@@ -230,7 +240,7 @@ export async function analyzeStory(
     const ageSource =
       typeof briefAge === "number"
         ? "author"
-        : typeof a.ageYears === "number"
+        : typeof a.ageYears === "number" && a.ageBasis === "stated"
           ? "story"
           : "suggested";
     const aliasNames = mergeAliasNames(a.name, a.aliasNames ?? undefined);
@@ -269,6 +279,7 @@ export async function analyzeStory(
 
   return {
     summary: result.summary,
+    title: (result.title ?? "").replace(/^["“”']+|["“”']+$/g, "").replace(/\s+/g, " ").trim(),
     anchors: withCast,
     embeddings: validateEmbeddings(result.embeddings ?? [], withCast),
   };

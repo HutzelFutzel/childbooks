@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L0 — unreachable today; nothing renders it. See docs/LEGACY-GUIDE.md. */
 import type { ReactNode } from "react";
 import { motion } from "framer-motion";
 import { Sparkles, type LucideIcon } from "lucide-react";

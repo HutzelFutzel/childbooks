@@ -7,7 +7,7 @@
                 <mxCell id="m-title" value="Studio Guide: the smart interaction model" style="text;html=1;fontSize=26;fontStyle=1;align=left;verticalAlign=middle;" parent="1" vertex="1">
                     <mxGeometry x="40" y="25" width="760" height="45" as="geometry"/>
                 </mxCell>
-                <mxCell id="m-sub" value="One visible involvement control writes ownership and cadence together. Chat persists; results appear inline; the panel is for sustained work." style="text;html=1;fontSize=14;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" parent="1" vertex="1">
+                <mxCell id="m-sub" value="One visible involvement control writes ownership and cadence together. Chat is on the left. The book pane is on the right. Choices sit in the composer well." style="text;html=1;fontSize=14;fontColor=#475569;align=left;verticalAlign=top;whiteSpace=wrap;" parent="1" vertex="1">
                     <mxGeometry x="40" y="70" width="920" height="40" as="geometry"/>
                 </mxCell>
                 <mxCell id="m-start" value="New or returning book" style="ellipse;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontStyle=1;" parent="1" vertex="1">
@@ -19,13 +19,13 @@
                 <mxCell id="m-guided" value="Guide me&#xa;Collect a rich brief in one conversational turn" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0FDFA;strokeColor=#0F766E;" parent="1" vertex="1">
                     <mxGeometry x="550" y="120" width="210" height="75" as="geometry"/>
                 </mxCell>
-                <mxCell id="m-own" value="I already have words&#xa;Paste/open manuscript; derive stable facts and keep AI help available" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;" parent="1" vertex="1">
+                <mxCell id="m-own" value="I'll use my own words&#xa;Paste/open manuscript; derive stable facts and keep AI help available" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;" parent="1" vertex="1">
                     <mxGeometry x="550" y="220" width="210" height="85" as="geometry"/>
                 </mxCell>
-                <mxCell id="m-look" value="Visuals first, staggered&#xa;Cast card → one-tap style on real artwork → informed generation action with configured cost → queue job → story opens" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;fontStyle=1;" parent="1" vertex="1">
+                <mxCell id="m-look" value="Brief + style together&#xa;Names create cast plates → one-tap style → scoped portrait estimate → queue portraits while missing facts continue" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="840" y="160" width="245" height="90" as="geometry"/>
                 </mxCell>
-                <mxCell id="m-approve" value="Before page art: cast summary&#xa;Review only unresolved/stale/unreviewed subjects; separately authorize configured reference-sheet charge if sheets are missing" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontStyle=1;" parent="1" vertex="1">
+                <mxCell id="m-approve" value="Before page art: visible book plan&#xa;Resolve only ambiguous identity or stale work; Draw the book includes internal references, cover and pages" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="1160" y="155" width="230" height="105" as="geometry"/>
                 </mxCell>
                 <mxCell id="m-default" value="Involvement — one control, never a cadence question&#xa;Make it for me / Make it with me (default) / I’ll do it myself" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEF2FF;strokeColor=#4F46E5;fontStyle=1;" parent="1" vertex="1">
@@ -49,7 +49,7 @@
                 <mxCell id="m-note2" value="Always stop for missing book style, likeness consent, conflicting uploaded styles, a never-reviewed subject, informed confirmation of every configured generation charge, insufficient balance, and print checkout. Ask for an account only when its capability is needed." style="shape=note;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#DC2626;fontSize=13;" parent="1" vertex="1">
                     <mxGeometry x="560" y="735" width="420" height="90" as="geometry"/>
                 </mxCell>
-                <mxCell id="m-note3" value="Results appear inline in the chat on every screen size. The panel opens for sustained work — manuscript, full gallery, reference sheet, page canvas, flip-through." style="shape=note;whiteSpace=wrap;html=1;fillColor=#F0F9FF;strokeColor=#0284C7;fontSize=13;" parent="1" vertex="1">
+                <mxCell id="m-note3" value="The book pane always shows the book. Live choices sit in the composer well. The transcript keeps receipts. See all styles, the manuscript, and the page canvas are views of the book." style="shape=note;whiteSpace=wrap;html=1;fillColor=#F0F9FF;strokeColor=#0284C7;fontSize=13;" parent="1" vertex="1">
                     <mxGeometry x="1065" y="735" width="390" height="90" as="geometry"/>
                 </mxCell>
                 <mxCell id="me1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;endArrow=block;endFill=1;" parent="1" source="m-start" target="m-entry" edge="1">
@@ -115,7 +115,7 @@
                 <mxCell id="j-resume" value="Resume from project + durable jobs&#xa;Explain newest result or outstanding decision" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;" parent="1" vertex="1">
                     <mxGeometry x="515" y="70" width="250" height="80" as="geometry"/>
                 </mxCell>
-                <mxCell id="j-writechoice" value="Guide me or I already have words?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontStyle=1;" parent="1" vertex="1">
+                <mxCell id="j-writechoice" value="Guide me or I'll use my own words?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="515" y="185" width="200" height="105" as="geometry"/>
                 </mxCell>
                 <mxCell id="j-brief" value="One broad brief question&#xa;Names + ages + relationships + story wishes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0FDFA;strokeColor=#0F766E;" parent="1" vertex="1">
@@ -142,7 +142,7 @@
                 <mxCell id="j-stylepick" value="One tap on real artwork&#xa;Derive + confirm, or recommended tile + alternates + Choose for me&#xa;First visuals on screen before any generation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;" parent="1" vertex="1">
                     <mxGeometry x="735" y="455" width="215" height="80" as="geometry"/>
                 </mxCell>
-                <mxCell id="j-portrait" value="Show quantity + configured Spark cost, then queue the job and open story conversation&#xa;Never narrate drawing before it starts; Keep approves only; reference sheets are a separate priced batch" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;fontStyle=1;" parent="1" vertex="1">
+                <mxCell id="j-portrait" value="Draw the named cast · capped Spark estimate&#xa;One portrait per stable cast unit; queue first, then narrate; later internal references belong to Draw the book" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="1015" y="450" width="250" height="90" as="geometry"/>
                 </mxCell>
                 <mxCell id="j-like" value="First look, inline: keep (= that character’s approval), tweak, re-source, restyle, or recreate later?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontStyle=1;" parent="1" vertex="1">
@@ -301,7 +301,7 @@
                 <mxCell id="pv-other" value="No character&#xa;Use setting, important object, or style sample" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;" parent="1" vertex="1">
                     <mxGeometry x="720" y="215" width="250" height="80" as="geometry"/>
                 </mxCell>
-                <mxCell id="pv-launch" value="Cast card → one-tap style → show configured generation charge + balance after → confirm → queue visual job&#xa;(story track opens after this, not before)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEF2FF;strokeColor=#4F46E5;fontStyle=1;" parent="1" vertex="1">
+                <mxCell id="pv-launch" value="Cast card + one-tap style → name portrait units + capped estimate → confirm → queue visual job&#xa;(remaining facts continue while portraits render)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EEF2FF;strokeColor=#4F46E5;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="1060" y="145" width="245" height="80" as="geometry"/>
                 </mxCell>
                 <mxCell id="pv-storylane" value="STORY TRACK" style="swimlane;html=1;startSize=42;fillColor=#ECFDF5;strokeColor=#059669;fontStyle=1;fontSize=16;" parent="1" vertex="1">
@@ -337,16 +337,16 @@
                 <mxCell id="pv-stale" value="Failed: retry/change source/describe/invent/sample.&#xa;Stale: keep older version; regenerate latest without flashing it as current." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#DC2626;" parent="pv-visuallane" vertex="1">
                     <mxGeometry x="510" y="220" width="260" height="80" as="geometry"/>
                 </mxCell>
-                <mxCell id="pv-result" value="Reveal “First look” inline in chat&#xa;Keep (= approval only, never another charge) • Tweak • New source • Another style • Recreate later" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF1F2;strokeColor=#DB2777;fontStyle=1;" parent="pv-visuallane" vertex="1">
+                <mxCell id="pv-result" value="First look on the book pane&#xa;Keep (= approval only, never another charge) • Tweak • New source • Another style • Recreate later — actions in the composer well" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF1F2;strokeColor=#DB2777;fontStyle=1;" parent="pv-visuallane" vertex="1">
                     <mxGeometry x="185" y="215" width="285" height="90" as="geometry"/>
                 </mxCell>
                 <mxCell id="pv-join" value="Story ready + first-look track resolved enough to continue" style="rhombus;whiteSpace=wrap;html=1;fillColor=#EEF2FF;strokeColor=#4F46E5;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="690" y="760" width="260" height="120" as="geometry"/>
                 </mxCell>
-                <mxCell id="pv-cast" value="Complete the required cast&#xa;Your people vs. everything else; Keep approves only; create reference sheets with one separately priced batch action" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;" parent="1" vertex="1">
+                <mxCell id="pv-cast" value="Complete the required cast&#xa;Your people vs. everything else; Keep approves only; internal references are included in Draw the book" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;" parent="1" vertex="1">
                     <mxGeometry x="1040" y="770" width="285" height="95" as="geometry"/>
                 </mxCell>
-                <mxCell id="pv-lock" value="Cast summary before page art&#xa;Review only unresolved/stale/unreviewed looks; if sheets are missing, separately authorize the configured reference-sheet batch charge" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontStyle=1;" parent="1" vertex="1">
+                <mxCell id="pv-lock" value="Visible book plan before page art&#xa;Resolve ambiguous identity or stale work; Draw the book authorizes references, cover and pages together" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="1410" y="755" width="250" height="125" as="geometry"/>
                 </mxCell>
                 <mxCell id="pv-pages" value="Page plan + dependent illustrations" style="ellipse;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;" parent="1" vertex="1">
@@ -435,10 +435,10 @@
                 <mxCell id="s-guided" value="GUIDE ME&#xa;One broad brief question; infer audience, theme, setting, language" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0FDFA;strokeColor=#0F766E;" parent="1" vertex="1">
                     <mxGeometry x="500" y="85" width="275" height="95" as="geometry"/>
                 </mxCell>
-                <mxCell id="s-own" value="I ALREADY HAVE WORDS&#xa;Paste/open manuscript; derive facts; offer optional assistance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;" parent="1" vertex="1">
+                <mxCell id="s-own" value="I'LL USE MY OWN WORDS&#xa;Paste/open manuscript; derive facts; offer optional assistance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;" parent="1" vertex="1">
                     <mxGeometry x="500" y="215" width="275" height="95" as="geometry"/>
                 </mxCell>
-                <mxCell id="s-enough" value="Brief settled? Explicit instruction, or visible Create the story action after a ready summary — never inactivity, timeout, or names+ages alone" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;" parent="1" vertex="1">
+                <mxCell id="s-enough" value="Facts resolved? Explicit instruction, or final patch resolves every required and asked optional fact — never inactivity or timeout" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;" parent="1" vertex="1">
                     <mxGeometry x="855" y="145" width="200" height="110" as="geometry"/>
                 </mxCell>
                 <mxCell id="s-follow" value="Ask only the named missing fact or keep editor open" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;" parent="1" vertex="1">
@@ -450,7 +450,7 @@
                 <mxCell id="s-auto" value="CREATE IT FOR ME&#xa;Generate story → quality + age checks → cadence decides pause" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#059669;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="165" y="415" width="300" height="100" as="geometry"/>
                 </mxCell>
-                <mxCell id="s-review" value="HELP ME CREATE IT&#xa;Concept/outline choices → draft → revisions in manuscript panel" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;" parent="1" vertex="1">
+                <mxCell id="s-review" value="HELP ME CREATE IT&#xa;Concept/outline choices → draft → revisions on the story in the book pane" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="650" y="415" width="300" height="100" as="geometry"/>
                 </mxCell>
                 <mxCell id="s-hands" value="I’LL PROVIDE OR EDIT IT&#xa;Editor first → reader writes/uses optional AI actions → Mark ready" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontStyle=1;" parent="1" vertex="1">
@@ -569,7 +569,7 @@
                 <mxCell id="c-stylegallery" value="One-tap style on real catalog artwork&#xa;Recommended tile pre-selected + alternates + Choose for me + See all&#xa;Zero cost, no generation, instant first visual reward" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;" parent="1" vertex="1">
                     <mxGeometry x="1280" y="370" width="230" height="80" as="geometry"/>
                 </mxCell>
-                <mxCell id="c-portrait" value="Show configured charge + resulting balance, confirm, queue job, then open story&#xa;Reveal first look inline; Keep approves only and never charges for another generation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;fontStyle=1;" parent="1" vertex="1">
+                <mxCell id="c-portrait" value="Name portrait units + capped estimate, confirm, then queue&#xa;Reveal first look inline; Keep approves only and never starts another generation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="840" y="565" width="250" height="90" as="geometry"/>
                 </mxCell>
                 <mxCell id="c-right" value="Keep, tweak, replace source/style, or recreate later?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontStyle=1;" parent="1" vertex="1">
@@ -578,7 +578,7 @@
                 <mxCell id="c-tweak" value="Describe targeted change / replace source / change style" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#DC2626;" parent="1" vertex="1">
                     <mxGeometry x="1450" y="570" width="250" height="80" as="geometry"/>
                 </mxCell>
-                <mxCell id="c-fullsheet" value="When stable enough: Create N reference sheets · X Sparks&#xa;Separately priced batch; never triggered by Keep; required before dependent page art" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;" parent="1" vertex="1">
+                <mxCell id="c-fullsheet" value="When stable enough: prepare Draw-the-book quote&#xa;Internal references, cover and pages are one user-authorized batch with per-unit settlement" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;" parent="1" vertex="1">
                     <mxGeometry x="480" y="710" width="255" height="80" as="geometry"/>
                 </mxCell>
                 <mxCell id="c-policy" value="Who creates the remaining cast?" style="rhombus;whiteSpace=wrap;html=1;fillColor=#EEF2FF;strokeColor=#4F46E5;fontStyle=1;" parent="1" vertex="1">
@@ -983,15 +983,15 @@
             </root>
         </mxGraphModel>
     </diagram>
-    <diagram id="panel-behavior" name="6. Surfaces: chat and panel">
+    <diagram id="panel-behavior" name="6. Surfaces: chat and book pane">
         <mxGraphModel grid="1" page="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" pageScale="1" pageWidth="1600" pageHeight="950" math="0" shadow="0">
             <root>
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
-                <mxCell id="d-title" value="Surfaces: decisions and results in chat, sustained work in the panel" style="text;html=1;fontSize=26;fontStyle=1;" parent="1" vertex="1">
+                <mxCell id="d-title" value="Surfaces: chat on the left, the book pane on the right" style="text;html=1;fontSize=26;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="40" y="25" width="980" height="45" as="geometry"/>
                 </mxCell>
-                <mxCell id="d-chat" value="CHAT&#xa;Always mounted&#xa;Questions, free text, receipts, progress narration, interruption" style="swimlane;html=1;startSize=42;fillColor=#FFF7ED;strokeColor=#EA580C;fontStyle=1;fontSize=16;" parent="1" vertex="1">
+                <mxCell id="d-chat" value="CHAT, LEFT&#xa;Always mounted&#xa;Short guide lines, receipts, the composer well" style="swimlane;html=1;startSize=42;fillColor=#FFF7ED;strokeColor=#EA580C;fontStyle=1;fontSize=16;" parent="1" vertex="1">
                     <mxGeometry x="50" y="110" width="410" height="720" as="geometry"/>
                 </mxCell>
                 <mxCell id="d-strip" value="Persistent compact strip&#xa;Known facts + defaults • progress • involvement • “style previews cost nothing; generation uses Sparks” + balance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#EA580C;" parent="d-chat" vertex="1">
@@ -1000,34 +1000,34 @@
                 <mxCell id="d-transcript" value="Transcript&#xa;Guide lines + reader bubbles + applied-value receipts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#EA580C;" parent="d-chat" vertex="1">
                     <mxGeometry x="35" y="195" width="340" height="200" as="geometry"/>
                 </mxCell>
-                <mxCell id="d-widgets" value="Inline answer widgets&#xa;Choice cards • uploads • confirmations • retry • skip when honest" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#EA580C;" parent="d-chat" vertex="1">
+                <mxCell id="d-widgets" value="Composer well&#xa;Style tiles • cast sources • Keep / Tweak • the charge on the button that spends Sparks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#EA580C;" parent="d-chat" vertex="1">
                     <mxGeometry x="35" y="440" width="340" height="105" as="geometry"/>
                 </mxCell>
                 <mxCell id="d-composer" value="Composer never disappears during generation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#EA580C;fontStyle=1;" parent="d-chat" vertex="1">
                     <mxGeometry x="35" y="590" width="340" height="70" as="geometry"/>
                 </mxCell>
-                <mxCell id="d-trigger" value="Panel selection trigger" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontStyle=1;" parent="1" vertex="1">
+                <mxCell id="d-trigger" value="Book view follows the question" style="rhombus;whiteSpace=wrap;html=1;fillColor=#FEF3C7;strokeColor=#D97706;fontStyle=1;" parent="1" vertex="1">
                     <mxGeometry x="540" y="370" width="190" height="110" as="geometry"/>
                 </mxCell>
-                <mxCell id="d-panel" value="CONTEXT PANEL&#xa;One active surface, replaceable without changing the conversation" style="swimlane;html=1;startSize=42;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;fontSize=16;" parent="1" vertex="1">
+                <mxCell id="d-panel" value="BOOK PANE, RIGHT&#xa;One book. Cover, Story, Cast, Pages. A view appears only once that part exists." style="swimlane;html=1;startSize=42;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;fontSize=16;" parent="1" vertex="1">
                     <mxGeometry x="810" y="110" width="730" height="720" as="geometry"/>
                 </mxCell>
-                <mxCell id="d-hidden" value="Hidden / facts summary&#xa;Pure conversation; reader closed panel" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;" parent="d-panel" vertex="1">
+                <mxCell id="d-hidden" value="Cover&#xa;Blank until there is a title. The pane is not closed." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;" parent="d-panel" vertex="1">
                     <mxGeometry x="35" y="70" width="200" height="80" as="geometry"/>
                 </mxCell>
-                <mxCell id="d-manuscript" value="Manuscript&#xa;Writing, draft review, revisions" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#059669;" parent="d-panel" vertex="1">
+                <mxCell id="d-manuscript" value="Story&#xa;The page itself. Click a paragraph and type." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFDF5;strokeColor=#059669;" parent="d-panel" vertex="1">
                     <mxGeometry x="265" y="70" width="200" height="80" as="geometry"/>
                 </mxCell>
-                <mxCell id="d-style" value="Full style gallery&#xa;Only on “See all styles”; the one-tap confirmation lives in chat" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;" parent="d-panel" vertex="1">
+                <mxCell id="d-style" value="Style&#xa;Chosen artwork full bleed. See all is a horizontal row. The one-tap row stays in the well." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;" parent="d-panel" vertex="1">
                     <mxGeometry x="495" y="70" width="200" height="80" as="geometry"/>
                 </mxCell>
-                <mxCell id="d-portrait" value="Reference sheet, close up&#xa;Inspection only — first looks are revealed and approved inline in chat" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;" parent="d-panel" vertex="1">
+                <mxCell id="d-portrait" value="Cast plate, large&#xa;The portrait is judged here. Keep and Tweak sit in the composer well." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FDF2F8;strokeColor=#DB2777;" parent="d-panel" vertex="1">
                     <mxGeometry x="35" y="200" width="200" height="90" as="geometry"/>
                 </mxCell>
                 <mxCell id="d-plan" value="Page plan&#xa;Co-design/edit, or cadence checkpoint before rendering" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;" parent="d-panel" vertex="1">
                     <mxGeometry x="265" y="200" width="200" height="90" as="geometry"/>
                 </mxCell>
-                <mxCell id="d-pages" value="Page canvas&#xa;Progress, text/layout edits, assets, selective regeneration" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;" parent="d-panel" vertex="1">
+                <mxCell id="d-pages" value="Pages&#xa;One spread. Page focus adds a short filmstrip and docks the composer." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;" parent="d-panel" vertex="1">
                     <mxGeometry x="495" y="200" width="200" height="90" as="geometry"/>
                 </mxCell>
                 <mxCell id="d-preview" value="Flip-through + preflight&#xa;Final review, format, print, ebook" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAF5FF;strokeColor=#9333EA;" parent="d-panel" vertex="1">
@@ -1036,7 +1036,7 @@
                 <mxCell id="d-error" value="Local error/recovery&#xa;Failed unit, upload issue, affordability gate" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#DC2626;" parent="d-panel" vertex="1">
                     <mxGeometry x="430" y="350" width="220" height="90" as="geometry"/>
                 </mxCell>
-                <mxCell id="d-rules" value="Auto-open: required action, error, explicit request — never for a result already shown in chat.&#xa;Peek: ordinary background progress.&#xa;Respect close: do not reopen for routine progress.&#xa;Targeting: a quiet composer tag (“Replying to: Maya’s look”), never a warning banner or a blocked send.&#xa;Mobile: Book tab is for reading and inspection; results and actions stay in the conversation." style="shape=note;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;fontSize=13;" parent="d-panel" vertex="1">
+                <mxCell id="d-rules" value="The book pane stays up. The guide may move it. The reader may look elsewhere.&#xa;Page focus hides the transcript only under about 960px, and docks the composer.&#xa;Context chip inside the field. Send is never blocked.&#xa;Mobile: the screen is the book. The live choice is a sheet. No Chat / Book tabs." style="shape=note;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#2563EB;fontSize=13;" parent="d-panel" vertex="1">
                     <mxGeometry x="105" y="500" width="520" height="125" as="geometry"/>
                 </mxCell>
                 <mxCell id="de1" value="current decision, newest result, error, or user request" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="d-chat" target="d-trigger" edge="1">
@@ -1045,7 +1045,7 @@
                 <mxCell id="de2" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;strokeWidth=2;" parent="1" source="d-trigger" target="d-panel" edge="1">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
-                <mxCell id="de3" value="panel actions update the same book and appear as receipts" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;dashed=1;" parent="1" source="d-panel" target="d-chat" edge="1">
+                <mxCell id="de3" value="edits on the book update the same project and appear as receipts" style="edgeStyle=orthogonalEdgeStyle;html=1;endArrow=block;endFill=1;dashed=1;" parent="1" source="d-panel" target="d-chat" edge="1">
                     <mxGeometry relative="1" as="geometry">
                         <Array as="points">
                             <mxPoint x="1175" y="880"/>
@@ -1213,10 +1213,10 @@
                 <mxCell id="f-outcome" value="Choose outcome" style="rhombus;whiteSpace=wrap;html=1;fillColor=#EEF2FF;strokeColor=#4F46E5;fontStyle=1;" vertex="1" parent="1">
                     <mxGeometry x="665" y="570" width="180" height="105" as="geometry"/>
                 </mxCell>
-                <mxCell id="f-print" value="Order printed book&#xa;Checkout remains an explicit gate" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontStyle=1;" vertex="1" parent="1">
+                <mxCell id="f-print" value="Order the book · from [price]&#xa;Checkout remains an explicit gate" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontStyle=1;" vertex="1" parent="1">
                     <mxGeometry x="180" y="740" width="285" height="90" as="geometry"/>
                 </mxCell>
-                <mxCell id="f-ebook" value="Get ebook&#xa;When enabled / already owned" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;" vertex="1" parent="1">
+                <mxCell id="f-ebook" value="Optional ebook&#xa;Separate product action when enabled" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontStyle=1;" vertex="1" parent="1">
                     <mxGeometry x="660" y="740" width="230" height="90" as="geometry"/>
                 </mxCell>
                 <mxCell id="f-later" value="Keep editing / come back later&#xa;Book + jobs resume durably" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#64748B;fontStyle=1;" vertex="1" parent="1">

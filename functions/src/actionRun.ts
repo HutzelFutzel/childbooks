@@ -24,7 +24,7 @@ import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { getSparksConfig } from "./appConfig";
 import { recordUsage, splitBillable, type CallStats, type UsageEvent } from "./usage";
-import { settleActionCost } from "./sparks";
+import { estimateForUser, settleActionCost } from "./sparks";
 import { ensureProjectMirror, recordProjectRun } from "./projects";
 import { recordTaskLatency } from "./latency";
 import {
@@ -34,7 +34,7 @@ import {
   type GenerationRenderKind,
 } from "../../books-frontend/src/core/config/generationEstimateProfile";
 import { ALL_IMAGE_ACTION_IDS, type ImageActionId } from "../../books-frontend/src/core/ai/actions";
-import type { ImageTier } from "../../books-frontend/src/core/config/modelConfig";
+import { normalizeImageTier, type ImageTier } from "../../books-frontend/src/core/config/modelConfig";
 import type { ModelSelection, Project } from "../../books-frontend/src/core/types";
 import type { ResolvedImageGenerationOptions } from "../../books-frontend/src/core/config/imageGeneration";
 
@@ -221,11 +221,23 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
 
     const totals = await recordUsage(args.uid, args.action, args.events, args.tier, {
       projectId: args.projectId,
-      estimateProfile: completedEstimateProfile,
+      // Only a delivered render may shape the next price.
+      estimateProfile: outcome === "ok" ? completedEstimateProfile : undefined,
       stats: args.stats,
       runId,
       projectSeq,
     });
+
+    // The price shown is the price charged. A caller that quoted passes its
+    // quote; an unquoted action is priced here by the same function the studio
+    // shows it with. Nothing is charged for work that didn't deliver.
+    const quoted =
+      outcome === "ok"
+        ? (args.quotedSparks ??
+          (await estimateForUser(args.uid, args.action, args.tier ?? normalizeImageTier(undefined), args.kind).catch(
+            () => undefined,
+          )))
+        : 0;
 
     const settled = await settleActionCost(args.uid, args.action, args.events, {
       projectId: args.projectId,
@@ -234,7 +246,7 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
       // you spent on fast renders" with a query rather than a join through here.
       tier: args.tier,
       settleKey: args.settleKey,
-      maxSparks: args.quotedSparks,
+      exactSparks: quoted,
     });
 
     const { billable, unbilled } = eventSplit;
@@ -268,7 +280,7 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
         byStep: totals.costByStep,
       },
       sparks: {
-        quoted: typeof args.quotedSparks === "number" ? args.quotedSparks : null,
+        quoted: quoted ?? null,
         charged: settled.sparks,
         paid: breakdown?.paidSparks ?? 0,
         free: breakdown?.freeSparks ?? 0,

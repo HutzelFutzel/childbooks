@@ -99,6 +99,7 @@ export interface GuideComponent {
   isSatisfied: (project: Project) => boolean;
   /** Why it isn't satisfied yet, in the reader's words. Empty when satisfied. */
   blockers: (project: Project) => string[];
+  /** @legacy guide-v2 L5 — only `guideRouting` reads it. */
   legacyDestination: GuideLegacyDestination;
 }
 
@@ -169,7 +170,7 @@ const CATALOG: GuideComponent[] = [
     id: "story-cast",
     title: "Who it's for",
     purpose: "The children the book is about, and how old they are.",
-    slots: ["heroes", "heroAges"],
+    slots: ["heroes", "heroAges", "sameAge"],
     requires: ["story-mode"],
     canvas: "none",
     skippable: false,

@@ -373,6 +373,27 @@ async function studioUrl(): Promise<string> {
 }
 
 /**
+ * Draw the book finished. One email per job: the worker can finalize the same
+ * job from two paths (last task, reaper), and the dedupe key absorbs that.
+ */
+export async function sendBookDrawnEmail(args: {
+  uid: string;
+  jobId: string;
+  projectId: string;
+  bookTitle: string;
+  drawn: number;
+  missing: number;
+}): Promise<void> {
+  const bookUrl = `${await studioUrl()}/${encodeURIComponent(args.projectId)}/pages`;
+  await sendTemplatedEmail({
+    templateId: "book_drawn",
+    uid: args.uid,
+    vars: { bookTitle: args.bookTitle, bookUrl, drawn: args.drawn, missing: args.missing },
+    dedupeKey: `book_drawn_${args.jobId}`,
+  });
+}
+
+/**
  * A brand-new admin invite: generates a Firebase password-RESET action link
  * (the account was created with no password, so "reset" is really "set for
  * the first time") and sends it. Not deduped — an owner may re-send the

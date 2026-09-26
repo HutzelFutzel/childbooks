@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L1 — deleted with the Steps shell. See docs/LEGACY-GUIDE.md. */
 /**
  * First-run style gate when the story cast already has character drawings.
  * Extracts a book look in the background. Compatible drawings skip the preset
@@ -99,6 +100,7 @@ export function ArtworkLookGate({
           stylePrompt: picked.stylePrompt,
           derivedFromName: picked.name,
           derivedFromNames: [picked.name],
+          referenceArt: picked.referenceArt,
         }),
       );
     } finally {

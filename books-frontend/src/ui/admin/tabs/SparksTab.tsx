@@ -25,6 +25,7 @@ import { TEXT_ACTIONS, IMAGE_ACTIONS, type ImageActionId } from "../../../core/a
 import { Grid, NumberField, Section, TabIntro, fmtMoney } from "./products/parts";
 import { useReadOnly } from "../../components/ReadOnlyContext";
 import { AdminSaveBar } from "../AdminPageHeader";
+import { PriceEstimationSection } from "./sparks/PriceEstimationSection";
 
 const MODES: { value: ActionPricingMode; label: string }[] = [
   { value: "free", label: "Free" },
@@ -147,14 +148,14 @@ export function SparksTab() {
         <EconomyImpact draft={draft} baseCurrency={baseCurrency} />
       </Section>
 
-      <Section title="Action pricing" hint="Text steps are free by default; image actions are cost-derived. The estimate is reserved before a render whose exact cost isn't known yet.">
+      <Section title="Action pricing" hint="Text steps are free by default; image actions are priced from measured costs (see Price estimation). The fallback is used only before any cost is known.">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-left text-xs text-ink-400">
                 <th className="pb-2 font-medium">Action</th>
                 <th className="pb-2 font-medium">Mode</th>
-                <th className="pb-2 font-medium">Price / estimate</th>
+                <th className="pb-2 font-medium">Price</th>
               </tr>
             </thead>
             <tbody>
@@ -179,8 +180,8 @@ export function SparksTab() {
                         {rule.mode === "fixed" && (
                           <NumberField label="Fixed" value={rule.fixedSparks} step="1" suffix="✦" className="w-28" onChange={(n) => setAction(a.id, { fixedSparks: n })} />
                         )}
-                        {rule.mode !== "free" && (
-                          <NumberField label="Reserve" value={rule.estimatedSparks} step="1" suffix="✦" className="w-28" onChange={(n) => setAction(a.id, { estimatedSparks: n })} />
+                        {rule.mode === "derived" && (
+                          <NumberField label="Fallback" value={rule.estimatedSparks} step="1" suffix="✦" className="w-28" onChange={(n) => setAction(a.id, { estimatedSparks: n })} />
                         )}
                         {preview != null && (
                           <span className="pb-2 text-xs text-ink-500">≈ {preview} ✦</span>
@@ -195,6 +196,8 @@ export function SparksTab() {
           </table>
         </div>
       </Section>
+
+      <PriceEstimationSection draft={draft} onChange={set} baseCurrency={baseCurrency} />
 
       <p className="text-xs text-ink-400">
         Sanity check: a {fmtMoney(0.04, baseCurrency)} image would cost{" "}

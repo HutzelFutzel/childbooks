@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L5 — deleted with the Steps routing and flow scaffolding. See docs/LEGACY-GUIDE.md. */
 /**
  * The resolved flow for the reader in front of us.
  *
@@ -13,6 +14,7 @@
 import { useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { parseGuideOverride, resolveGuideMode, type GuideMode } from "../../core/guide/mode";
+import { studioPath } from "../studio/studioRoutes";
 import {
   resolveGuidePlaylist,
   type ResolvedGuideComponent,
@@ -75,4 +77,15 @@ export function guideModeNow(bookId?: string | null): GuideMode {
     preference: useGuidePreference.getState().preference,
     bucketKey: bookId ?? null,
   });
+}
+
+/**
+ * Where a brand-new book opens. The chat studio owns its own view, so it gets
+ * the book URL with no wizard destination. Everyone else lands on the story step.
+ */
+export function studioEntryPath(projectId: string): string {
+  if (guideModeNow(projectId) === "guide") {
+    return `/studio/${encodeURIComponent(projectId)}`;
+  }
+  return studioPath(projectId, "story");
 }

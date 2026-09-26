@@ -25,6 +25,7 @@ const sourceArtSchema = z.object({
   blobId: z.string().min(1),
   mimeType: z.string().min(1).max(80),
   createdAt: z.number(),
+  origin: z.literal("portrait").optional(),
 });
 
 const storyCastMemberSchema = z.object({
@@ -33,6 +34,12 @@ const storyCastMemberSchema = z.object({
   role: z.string().max(200).optional(),
   age: z.number().int().min(0).max(120).optional(),
   ageMonths: z.number().int().min(0).max(1200).optional(),
+  visualAge: z
+    .object({
+      years: z.number().int().min(0).max(120),
+      source: z.enum(["story", "suggested"]),
+    })
+    .optional(),
   note: z.string().max(500).optional(),
   lookFromArt: z.string().max(500).optional(),
   likenessPhoto: likenessPhotoSchema.optional(),

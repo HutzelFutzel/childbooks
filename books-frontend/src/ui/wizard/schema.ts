@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L4 — deleted with the wizard. See docs/LEGACY-GUIDE.md. */
 import { z } from "zod";
 import type { BookConfig } from "../../core/types";
 import { ageBandHasReadingModes } from "../../core/config/ageWritingCatalog";
@@ -23,6 +24,16 @@ const artStyleSchema = z
     origin: z.enum(["preset", "derived"]).optional(),
     derivedFromName: z.string().optional(),
     derivedFromNames: z.array(z.string()).optional(),
+    referenceArt: z
+      .array(
+        z.object({
+          blobId: z.string().min(1),
+          mimeType: z.string().min(1),
+          createdAt: z.number(),
+        }),
+      )
+      .max(3)
+      .optional(),
   })
   .refine(
     (v) => v.presetId !== null || Boolean(v.customDescription?.trim()),

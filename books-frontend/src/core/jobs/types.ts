@@ -13,17 +13,18 @@ import type { ImageTier } from "../config/modelConfig";
 import type { ResolvedModels } from "../models/registry";
 import type { AnchorRender } from "../pipeline/anchorRun";
 import type { IllustrationRender } from "../pipeline/illustrationRun";
-import type { ModelSelection, Project, ReferenceUse, ScreenplayDoc } from "../types";
+import type { ModelSelection, PortraitInputs, Project, ReferenceUse, ScreenplayDoc } from "../types";
 import type { ImageQuality } from "../config/modelCapabilities";
 import type {
   ImageGenerationHints,
   ResolvedImageGenerationOptions,
 } from "../config/imageGeneration";
+import type { ReferenceImage } from "../providers/types";
 
 export type JobStatus = "pending" | "running" | "done" | "error";
 
 /** The generation pipelines a job/task can run. */
-export type JobKind = "image" | "refresh" | "anchors" | "screenplay";
+export type JobKind = "image" | "refresh" | "anchors" | "screenplay" | "portrait" | "book";
 
 /**
  * Legacy time-estimate constant. With the Cloud Tasks fan-out each task runs on
@@ -76,6 +77,12 @@ export interface JobLease {
    * every book with a cover or an edit in it below what it always cost.
    */
   quotedByAction?: Record<string, number>;
+  /**
+   * A stored generation quote (`users/{uid}/generationQuotes/{id}`) this job was
+   * confirmed against. When present, the quote's per-unit numbers are the
+   * settlement cap instead of a fresh estimate, and the quote is consumed once.
+   */
+  quoteId?: string;
 }
 
 /** A reference image, addressed by its blob id in `users/{uid}/blobs/{id}`. */
@@ -83,7 +90,7 @@ export interface BlobRef {
   blobId: string;
   mimeType?: string;
   label?: string;
-  role?: "subject" | "composition" | "relation";
+  role?: ReferenceImage["role"];
 }
 
 export interface ImageRenderRequest {
@@ -252,8 +259,91 @@ export interface ScreenplayJob extends JobLease {
   progress: JobProgress;
 }
 
+/**
+ * One Chat-studio portrait. The id is the story cast member's id, and `inputs`
+ * pins the person, their likeness source and the saved style the portrait was
+ * quoted for, so a result drawn from an older version of any of them is dropped.
+ */
+export interface PortraitTask {
+  id: string;
+  status: JobStatus;
+  error?: string;
+  inputs: PortraitInputs;
+  result?: { blobId: string; mimeType: string; imageTier?: ImageTier; imageModel?: ModelSelection };
+  stats?: TaskStats;
+}
+
+/**
+ * A scoped portrait batch. Its only authorization is the stored quote it names:
+ * the worker charges each portrait at most what that quote said, and refuses a
+ * quote that is expired, already consumed, or names different people.
+ */
+export interface PortraitJob extends JobLease {
+  kind: "portrait";
+  status: JobStatus;
+  projectId?: string;
+  tier?: ImageTier;
+  createdAt: number;
+  updatedAt: number;
+  error?: string;
+  project: Project;
+  tasks: PortraitTask[];
+  progress: JobProgress;
+}
+
+/**
+ * One unit of Draw the book: a reference sheet (`anchors`) or a page/cover
+ * (`refresh`). The task doc carries this kind, so the studio folds a book
+ * job's results in exactly like a sheet or page job's.
+ */
+export type BookTask = (AnchorTask & { kind: "anchors" }) | (RefreshTask & { kind: "refresh" });
+
+/**
+ * The whole book as one server-run job: every stale sheet, then every page and
+ * cover that draws the people on it. Pages depend on their sheets inside the
+ * job, so nothing waits on the studio tab being open.
+ */
+export interface BookJob extends JobLease {
+  kind: "book";
+  status: JobStatus;
+  projectId?: string;
+  tier?: ImageTier;
+  createdAt: number;
+  updatedAt: number;
+  error?: string;
+  project: Project;
+  models: ResolvedModels;
+  tasks: BookTask[];
+  progress: JobProgress;
+  /** Send the "your book is ready" email when the job finishes. */
+  notify?: boolean;
+  /** Server-written when the finish email was queued. */
+  notifiedAt?: number;
+}
+
+/**
+ * Settings frozen when a job starts, so an admin change mid-run can't draw half
+ * a book one way and half another.
+ */
+export interface JobFrozenSettings {
+  generationTuning?: unknown;
+}
+
 /** Any job document stored under `users/{uid}/jobs/{id}`. */
-export type AnyJob = GenerationJob | PipelineRefreshJob | AnchorsJob | ScreenplayJob;
+export type AnyJob = (
+  | GenerationJob
+  | PipelineRefreshJob
+  | AnchorsJob
+  | ScreenplayJob
+  | PortraitJob
+  | BookJob
+) & {
+  /** Server-written: failed tasks already given their one free second pass. */
+  secondPass?: boolean;
+  /** Server-written: finished-task count at the reaper's last re-drive. */
+  reapMark?: number;
+  frozen?: JobFrozenSettings;
+};
 
 /** Kind-specific render output stored on a finished {@link TaskDoc}. */
 export type TaskResult =
@@ -300,6 +390,8 @@ export interface TaskDoc {
   options?: { useReference?: boolean; edit?: string; fromNodeId?: string; restyle?: boolean };
   /** image-kind provenance, stamped onto the version on reconcile. */
   referenceUses?: ReferenceUse[];
+  /** portrait-kind payload: what the portrait was quoted for. */
+  inputs?: PortraitInputs;
   /** kind-specific render output (present when `status === "done"`). */
   result?: TaskResult;
   /**

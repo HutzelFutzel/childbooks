@@ -17,10 +17,12 @@
  * checked directly: no combination of override, preference or bucket puts a
  * non-admin on the new flow unless the rollout itself says so.
  *
- * **2. The legacy manifest stays honest.** Superseded code is marked
- * `@legacy guide-v2` in its own doc comment and listed in docs/LEGACY-GUIDE.md.
- * A marker without a row is code nobody will remember to delete; a row without a
- * marker is a list that has drifted from the source. Both fail here.
+ * **2. The legacy ledger stays honest.** Superseded code is marked
+ * `@legacy guide-v2 L<n>` in its own doc comment and listed under batch L<n> in
+ * docs/LEGACY-GUIDE.md. A marker without a row is code nobody will remember to
+ * delete; a row without a marker is a list that has drifted from the source; a
+ * batch whose files are still imported from outside its Cut list is a batch that
+ * can't be deleted as written. All three fail here.
  *
  * Offline and deterministic: arithmetic, string hashing and file reads. No
  * network, no emulator, no model call.
@@ -54,6 +56,8 @@ import { checkGuideEffects } from "./guide-effect-invariants";
 import { checkGuideMemory } from "./guide-memory-invariants";
 import { checkGuideAdmin } from "./guide-admin-invariants";
 import { checkGuideFlow } from "./guide-flow-invariants";
+import { checkGuideDualFlow } from "./guide-dual-flow-invariants";
+import { checkGuideJourney } from "./guide-journey-invariants";
 
 /**
  * The repository root, found by walking up from the working directory. Not
@@ -488,21 +492,28 @@ function sourceFiles(dir: string): string[] {
   return out;
 }
 
-const marked = SOURCE_ROOTS.flatMap(sourceFiles)
-  .map((rel) => rel.split(sep).join("/"))
-  .filter((rel) => rel !== SELF && readFileSync(join(ROOT, rel), "utf8").includes(MARKER));
+const sources = new Map(
+  SOURCE_ROOTS.flatMap(sourceFiles).map((rel) => {
+    const posix = rel.split(sep).join("/");
+    return [posix, readFileSync(join(ROOT, rel), "utf8")] as const;
+  }),
+);
 
-const mentioned = new Set(manifest.match(PATH_RE) ?? []);
-
-for (const rel of marked) {
-  if (!mentioned.has(rel)) {
-    fail(`${rel} is marked "${MARKER}" but is not listed in ${MANIFEST}.`);
+/** Each marked file and the batches its markers name. */
+const markerBatches = new Map<string, Set<string>>();
+for (const [rel, body] of sources) {
+  if (rel === SELF || !body.includes(MARKER)) continue;
+  const tagged = [...body.matchAll(/@legacy guide-v2 (L\d)\b/g)].map((m) => m[1]);
+  if (tagged.length !== body.split(MARKER).length - 1) {
+    fail(`${rel} has a "${MARKER}" marker without a batch; write "${MARKER} L<n>".`);
   }
+  markerBatches.set(rel, new Set(tagged));
 }
+const marked = [...markerBatches.keys()];
 
-// The other direction: a manifest that names files which no longer exist is a
-// list nobody has read in a while.
-for (const rel of mentioned) {
+// A ledger that names files which no longer exist is a list nobody has read in
+// a while.
+for (const rel of new Set(manifest.match(PATH_RE) ?? [])) {
   try {
     statSync(join(ROOT, rel));
   } catch {
@@ -510,16 +521,99 @@ for (const rel of mentioned) {
   }
 }
 
-// Every row in the Retire table has to point at marked code, so the table can't
-// grow entries that no longer correspond to anything.
-const retireSection = manifest.split("## Retire")[1]?.split("\n## ")[0] ?? "";
-const retirePaths = new Set(retireSection.match(PATH_RE) ?? []);
-if (manifest && retirePaths.size === 0) {
-  fail(`${MANIFEST} has no files in its Retire table; the marker convention is unenforced.`);
+interface LedgerBatch {
+  id: string;
+  remove: string[];
+  cut: string[];
 }
-const markedSet = new Set(marked);
-if (![...retirePaths].some((rel) => markedSet.has(rel))) {
-  fail(`No file named in the Retire table of ${MANIFEST} carries a "${MARKER}" marker.`);
+
+/** The text between `**label**` and the next bold label in one batch. */
+function ledgerPart(chunk: string, label: string): string {
+  return chunk.split(`**${label}**`)[1]?.split(/\n\*\*[A-Z]/)[0] ?? "";
+}
+
+const retireSection = manifest.split("\n## Retire")[1]?.split("\n## ")[0] ?? "";
+const batches: LedgerBatch[] = retireSection
+  .split("\n### ")
+  .slice(1)
+  .map((chunk) => ({
+    id: chunk.match(/^(L\d)\b/)?.[1] ?? chunk.split("\n")[0],
+    remove: [...new Set(ledgerPart(chunk, "Delete").match(PATH_RE) ?? [])],
+    cut: [...new Set(ledgerPart(chunk, "Cut").match(PATH_RE) ?? [])],
+  }));
+
+if (manifest && batches.every((batch) => batch.remove.length === 0)) {
+  fail(`${MANIFEST} has no files under any batch's Delete list; the marker convention is unenforced.`);
+}
+batches.forEach((batch, index) => {
+  if (batch.id !== `L${index}`) {
+    fail(`${MANIFEST} batch "${batch.id}" is out of order; batches run L0, L1, … in sequence.`);
+  }
+});
+
+const deletedIn = new Map<string, string>();
+for (const batch of batches) {
+  for (const rel of batch.remove) {
+    const earlier = deletedIn.get(rel);
+    if (earlier) fail(`${rel} is listed for deletion in both ${earlier} and ${batch.id}.`);
+    deletedIn.set(rel, batch.id);
+    if (!markerBatches.get(rel)?.has(batch.id)) {
+      fail(`${rel} is listed for deletion in ${batch.id} but carries no "${MARKER} ${batch.id}" marker.`);
+    }
+  }
+}
+
+for (const [rel, tags] of markerBatches) {
+  for (const id of tags) {
+    const batch = batches.find((candidate) => candidate.id === id);
+    if (!batch) {
+      fail(`${rel} is marked "${MARKER} ${id}", but ${MANIFEST} has no batch ${id}.`);
+    } else if (!batch.remove.includes(rel) && !batch.cut.includes(rel)) {
+      fail(`${rel} is marked "${MARKER} ${id}" but is not listed under ${id} in ${MANIFEST}.`);
+    }
+  }
+}
+
+// Each batch has to be deletable as written: once it and every earlier batch is
+// gone and their Cut edits are made, nothing left may still import its files.
+const FRONTEND_SRC = "books-frontend/src";
+function resolveImport(from: string, specifier: string): string | null {
+  let base: string;
+  if (specifier.startsWith("@/") && from.startsWith(`${FRONTEND_SRC}/`)) {
+    base = `${FRONTEND_SRC}/${specifier.slice(2)}`;
+  } else if (specifier.startsWith(".")) {
+    base = join(dirname(from), specifier).split(sep).join("/");
+  } else {
+    return null;
+  }
+  for (const candidate of [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`]) {
+    if (sources.has(candidate)) return candidate;
+  }
+  return null;
+}
+
+const importersOf = new Map<string, string[]>();
+for (const [rel, body] of sources) {
+  for (const match of body.matchAll(/(?:from\s+|import\s*\(\s*|import\s+)["']([^"']+)["']/g)) {
+    const target = resolveImport(rel, match[1]);
+    if (!target || target === rel) continue;
+    importersOf.set(target, [...(importersOf.get(target) ?? []), rel]);
+  }
+}
+
+const settled = new Set<string>();
+for (const batch of batches) {
+  for (const rel of [...batch.remove, ...batch.cut]) settled.add(rel);
+  for (const rel of batch.remove) {
+    for (const importer of new Set(importersOf.get(rel) ?? [])) {
+      if (!settled.has(importer)) {
+        fail(
+          `${rel} (${batch.id}) is imported by ${importer}, which is neither deleted by ` +
+            `${batch.id} or earlier nor in a Cut list up to ${batch.id}.`,
+        );
+      }
+    }
+  }
 }
 
 // --- The state model and the interpreter ----------------------------------
@@ -564,6 +658,16 @@ failures.push(...flow.failures);
 notes.push(...flow.notes);
 cases += flow.cases;
 
+const dualFlow = checkGuideDualFlow();
+failures.push(...dualFlow.failures);
+notes.push(...dualFlow.notes);
+cases += dualFlow.cases;
+
+const journey = checkGuideJourney();
+failures.push(...journey.failures);
+notes.push(...journey.notes);
+cases += journey.cases;
+
 // --- Report ---------------------------------------------------------------
 
 console.log("Guide rollout");
@@ -601,11 +705,19 @@ for (const line of admin.report) console.log(line);
 console.log();
 for (const line of flow.report) console.log(line);
 
-console.log(`\nLegacy manifest (${MANIFEST})`);
+console.log();
+for (const line of dualFlow.report) console.log(line);
+
+console.log();
+for (const line of journey.report) console.log(line);
+
+console.log(`\nLegacy ledger (${MANIFEST})`);
 if (marked.length === 0) {
   console.log("  no files marked for retirement");
 }
-for (const rel of marked) console.log(`  · ${rel}`);
+for (const batch of batches) {
+  console.log(`  ${batch.id}  delete ${String(batch.remove.length).padStart(2)}  cut ${batch.cut.length}`);
+}
 
 if (notes.length > 0) {
   console.log("\nNotes");

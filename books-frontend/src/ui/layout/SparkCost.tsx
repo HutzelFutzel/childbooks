@@ -98,11 +98,9 @@ export function useImageBatchRange(
 }
 
 /**
- * An estimated-cost chip for image generation. Shows "~N ✦" (or "~N–M ✦" when
- * the recent costs vary), with a leading "~" and a tooltip to make clear this is
- * an ESTIMATE. Settlement may charge less, but never more than the shown upper
- * bound.
- * Renders nothing when Sparks are off or the estimate is free/zero.
+ * The price chip for image generation: "N ✦", charged exactly as shown (a
+ * range only appears when a batch mixes tiers). Renders nothing when
+ * Sparks are off or the price is zero.
  *
  * When a campaign is discounting the action, the chip names it: a price that
  * dropped for no visible reason reads as a bug rather than as a gift.
@@ -124,14 +122,14 @@ export function SparkEstimateCost({
       ? `${range.maxSparks.toLocaleString()}`
       : `${range.minSparks.toLocaleString()}–${range.maxSparks.toLocaleString()}`;
   const title = note
-    ? `${note.label} — estimated maximum with your discount applied. The final charge may be lower, never higher.`
-    : "Estimated maximum — the final charge may be lower, never higher.";
+    ? `${note.label} — price with your discount applied. Images that fail to draw are free.`
+    : "The price you pay. Images that fail to draw are free.";
   return (
     <span
       className={`ml-1.5 inline-flex items-center gap-0.5 rounded-full bg-magic-100 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-magic-700 ring-1 ring-inset ring-magic-300/50 ${className}`}
       title={title}
     >
-      <Sparkles className="size-3" />~{text}
+      <Sparkles className="size-3" />{text}
     </span>
   );
 }

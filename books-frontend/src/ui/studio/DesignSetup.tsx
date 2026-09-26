@@ -6,7 +6,7 @@ import { DESIGN_QUESTIONS } from "../wizard/designQuestions";
 import { useStudio } from "./StudioContext";
 
 /**
- * @legacy guide-v2 — the full-page book-setup gate that used to stand between
+ * @legacy guide-v2 L0 — the full-page book-setup gate that used to stand between
  * the reader and their pages. Superseded: size and layout ship with working
  * defaults, Pages opens on the book, and the same two pickers are in the docked
  * Setup panel (`DockSetupPanel`) for whenever the reader wants them.

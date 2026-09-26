@@ -44,7 +44,10 @@ export function resolveArtStyleDisplayName(
 export function artStyleKey(style: ArtStyleSelection | undefined): string {
   const preset = style?.presetId ?? "custom";
   const custom = (style?.customDescription ?? "").trim();
-  return custom ? `${preset}|${custom}` : preset;
+  const references = (style?.referenceArt ?? [])
+    .map((image) => image.blobId)
+    .join(",");
+  return [preset, custom, references].filter(Boolean).join("|");
 }
 
 /** Resolve the display title for a configured or legacy preset. */

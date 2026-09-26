@@ -1,5 +1,7 @@
 "use client";
 
+/** @legacy guide-v2 L3 — deleted with the Steps story intake. See docs/LEGACY-GUIDE.md. */
+
 import { useEffect, useMemo, useState } from "react";
 import { BookOpen, ChevronDown } from "lucide-react";
 import type { ReadingModeId } from "../../../core/config/readingModes";

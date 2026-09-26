@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L1 — deleted with the Steps shell. See docs/LEGACY-GUIDE.md. */
 /**
  * Global keyboard shortcuts for the Studio. Mounted once inside the provider.
  * Operates on the current selection: delete, duplicate, copy/cut/paste

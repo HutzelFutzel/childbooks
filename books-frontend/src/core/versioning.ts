@@ -82,9 +82,9 @@ function genId(): string {
 
 export function createVersionTree<T>(
   initial: T,
-  meta?: { prompt?: string; label?: string },
+  meta?: { prompt?: string; label?: string; id?: string },
 ): VersionTree<T> {
-  const id = genId();
+  const id = meta?.id ?? genId();
   const node: VersionNode<T> = {
     id,
     parentId: null,
@@ -109,10 +109,10 @@ export function getCursor<T>(tree: VersionTree<T>): VersionNode<T> {
 export function addVersion<T>(
   tree: VersionTree<T>,
   content: T,
-  options?: { parentId?: string; prompt?: string; label?: string },
+  options?: { parentId?: string; prompt?: string; label?: string; id?: string },
 ): VersionTree<T> {
   const parentId = options?.parentId ?? tree.cursorId;
-  const id = genId();
+  const id = options?.id && !tree.nodes[options.id] ? options.id : genId();
   const seq = nextSeqOf(tree);
   const node: VersionNode<T> = {
     id,

@@ -210,6 +210,23 @@ export function screenGuideClaims(args: {
       );
       continue;
     }
+    // A manuscript can be much longer than the bounded evidence quotation. Its
+    // value therefore has one stronger rule: the exact proposed words must occur
+    // in the reader's message. This makes paste-to-editor lossless and prevents a
+    // model from "helpfully" polishing text while still quoting its first line.
+    if (
+      claim.slot === "storyText" &&
+      (typeof claim.value !== "string" ||
+        !claim.value.trim() ||
+        !args.message.includes(claim.value))
+    ) {
+      refuse(
+        claim,
+        "unsupported",
+        "the proposed manuscript is not an exact passage from the message",
+      );
+      continue;
+    }
     if (claim.confidence < floor) {
       refuse(claim, "low-confidence", `confidence ${claim.confidence.toFixed(2)} is below ${floor}`);
       continue;

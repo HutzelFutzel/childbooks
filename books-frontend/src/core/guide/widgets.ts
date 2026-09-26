@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L0 — unreachable today; nothing renders it. See docs/LEGACY-GUIDE.md. */
 /**
  * How the reader answers — the input affordance for whichever question is live.
  *

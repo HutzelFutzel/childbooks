@@ -270,7 +270,8 @@ function PreviewCover({ disp }: { disp: DisplaySpread }) {
   );
 }
 
-function PreviewSpread({ disp }: { disp: DisplaySpread }) {
+/** One spread exactly as it prints, non-interactive. */
+export function PreviewSpread({ disp }: { disp: DisplaySpread }) {
   if (disp.cover) {
     return <PreviewCover disp={disp} />;
   }

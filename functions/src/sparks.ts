@@ -6,10 +6,10 @@
  *      estimate plus the admin's negative buffer ({@link ensureAfford}). If the
  *      user can't even start within the buffer, we throw {@link InsufficientSparks}
  *      and the caller surfaces a top-up prompt.
- *   2. We only DEDUCT at settle time ({@link settleActionCost}), pricing real
- *      metered usage but capping it at the pre-flight quote. Failed/aborted calls
- *      cost nothing, and an unexpectedly expensive render is absorbed rather
- *      than charging more than the user was shown.
+ *   2. We only DEDUCT at settle time ({@link settleActionCost}), charging exactly
+ *      the price the user was shown ({@link estimateForUser}). Failed/aborted
+ *      calls cost nothing; the measured cost is recorded for margin reporting
+ *      and feeds the window the next price is estimated from.
  *
  * Balance is cached on `users/{uid}.sparkBalance`; the immutable audit trail is
  * `users/{uid}/sparksLedger/{id}`. All writes are transactional. The whole path
@@ -39,8 +39,6 @@ import { campaignActionMultiplier } from "./campaigns/pricing";
 import { recordFinanceEvent } from "./finance";
 import {
   estimateForAction,
-  estimateSparkRange,
-  maxEstimateSparks,
   priceForAction,
   type LedgerEntryType,
   type SparksConfig,
@@ -50,10 +48,8 @@ import {
   costKey,
   PUBLIC_IMAGE_ESTIMATE_USAGE,
 } from "../../books-frontend/src/core/config/modelCosts";
-import {
-  recentCostSamples,
-  type CostSampleKind,
-} from "../../books-frontend/src/core/config/imageCostStats";
+import type { CostSampleKind } from "../../books-frontend/src/core/config/imageCostStats";
+import { derivedUnitPrice } from "../../books-frontend/src/core/billing/priceEstimation";
 import {
   estimateProfileForAction,
 } from "../../books-frontend/src/core/config/generationEstimateProfile";
@@ -67,7 +63,7 @@ function isImageAction(action: string): action is ImageActionId {
 }
 
 /** A nominal per-call USD cost for an action+tier's bound model (window fallback). */
-async function nominalRateCostUsd(
+export async function nominalRateCostUsd(
   imageModel: { provider: string; id: string },
 ): Promise<number | null> {
   try {
@@ -593,8 +589,11 @@ export interface SettleOptions {
    * refunded retroactively.
    */
   tier?: ImageTier;
-  /** Never charge more than the pre-flight price shown to the user. */
-  maxSparks?: number;
+  /**
+   * The price the user was shown. When given it is charged exactly — the
+   * measured cost is still recorded, but it no longer moves the charge.
+   */
+  exactSparks?: number;
 }
 
 /** What one settlement actually charged, for the run record. */
@@ -606,9 +605,10 @@ export interface SettleResult {
 }
 
 /**
- * Deduct the real Spark price of a completed action from the user's metered
- * usage, applying any per-plan multiplier. Returns the Sparks spent (0 when the
- * economy is off or the action is free). Best-effort: a failure here never
+ * Deduct the Spark price of a completed action: the quoted price when the
+ * caller passes one ({@link SettleOptions.exactSparks}), otherwise the price
+ * derived from metered usage. Returns the Sparks spent (0 when the economy is
+ * off or the action is free). Best-effort: a failure here never
  * breaks generation — but it is LOGGED and recorded to the finance stream so
  * uncharged work can't leak silently.
  */
@@ -634,11 +634,10 @@ export async function settleActionCost(
     // reaches settlement would quote 5 ✦ and charge 0, and one that only reached
     // the quote would promise "free" and then bill for it.
     const multiplier = planMultiplier * campaignMultiplier;
-    const measuredPrice = priceForAction(config, action, costUsd, multiplier);
     const price =
-      typeof opts.maxSparks === "number"
-        ? Math.min(measuredPrice, Math.max(0, Math.round(opts.maxSparks)))
-        : measuredPrice;
+      typeof opts.exactSparks === "number"
+        ? Math.max(0, Math.round(opts.exactSparks))
+        : priceForAction(config, action, costUsd, multiplier);
     if (price <= 0) {
       await reportUnpricedIfNeeded(uid, action, config, billable, costUsd, opts);
       return { sparks: 0, costUsd, breakdown: null };
@@ -993,12 +992,11 @@ async function deductSparks(
 }
 
 /**
- * The Spark estimate to pre-check (reserve) for one action (config + plan
- * aware). For image actions priced as "derived", the reserve uses the UPPER
- * bound of the recent-cost window for the chosen tier and render kind (falling
- * back to the model's rate-table cost, then the flat configured estimate) so we
- * never start a render the user can't afford. Settlement still charges the
- * exact cost.
+ * The Spark PRICE of one action for this user (config + plan + campaign aware).
+ * It is what the studio shows and exactly what {@link settleActionCost} charges
+ * on success. Derived image actions are priced from the recent cost window by
+ * the shared estimator (`core/billing/priceEstimation`), so the server and the
+ * studio compute the same number.
  */
 export async function estimateForUser(
   uid: string,
@@ -1030,14 +1028,8 @@ export async function estimateForUser(
       tuning: generationTuningFor(generationTuning, action),
       kind,
     });
-    const rateCostUsd = await nominalRateCostUsd(models.imageModel);
-    const range = estimateSparkRange(config, {
-      samples: recentCostSamples(stats, action, tier, profile),
-      rateCostUsd,
-      fallbackSparks: rule.estimatedSparks,
-    });
-    const m = multiplier > 0 ? multiplier : 1;
-    return Math.max(0, Math.round(maxEstimateSparks(range) * m));
+    const rateUsd = await nominalRateCostUsd(models.imageModel);
+    return derivedUnitPrice({ stats, sparks: config, action, tier, profile, rateUsd }, multiplier).sparks;
   }
   return estimateForAction(config, action, multiplier);
 }

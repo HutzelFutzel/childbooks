@@ -99,6 +99,7 @@ export const generationTuningConfigSchema = z.object({
     anchorImage: actionGenerationTuningSchema,
     pageIllustration: actionGenerationTuningSchema,
     coverIllustration: actionGenerationTuningSchema,
+    portrait: actionGenerationTuningSchema,
   }),
   execution: z.object({
     surgicalConcurrency: z.number().int().min(1).max(6),
@@ -121,6 +122,7 @@ function actionDefaults(
 ): ActionGenerationTuning {
   const anchor = action === "anchorImage";
   const cover = action === "coverIllustration";
+  const portrait = action === "portrait";
   return {
     quality: PROVIDER_DEFAULT,
     inputFidelity: PROVIDER_DEFAULT,
@@ -137,9 +139,9 @@ function actionDefaults(
       // four-minute request budget after the primary image already exists.
       budgetMs: anchor ? 60_000 : 45_000,
       maxImageCalls: 2,
-      bindingPass: !anchor,
-      duplicateRepairLimit: anchor ? 0 : cover ? 1 : 2,
-      embeddedRepairLimit: 1,
+      bindingPass: !anchor && !portrait,
+      duplicateRepairLimit: anchor || portrait ? 0 : cover ? 1 : 2,
+      embeddedRepairLimit: portrait ? 0 : 1,
       gridCheck: anchor,
       flattenBackground: anchor,
       repairQuality: "low",
@@ -154,6 +156,7 @@ export function createDefaultGenerationTuningConfig(): GenerationTuningConfig {
       anchorImage: actionDefaults("anchorImage"),
       pageIllustration: actionDefaults("pageIllustration"),
       coverIllustration: actionDefaults("coverIllustration"),
+      portrait: actionDefaults("portrait"),
     },
     execution: { surgicalConcurrency: 3 },
   };

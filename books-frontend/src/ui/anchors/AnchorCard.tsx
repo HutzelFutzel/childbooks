@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L2 — deleted with the Steps cast stage. See docs/LEGACY-GUIDE.md. */
 import { motion } from "framer-motion";
 import { Box, Check, MapPin, User } from "lucide-react";
 import type { Anchor, AnchorType } from "../../core/types";

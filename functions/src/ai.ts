@@ -62,6 +62,8 @@ import {
 } from "../../books-frontend/src/core/pipeline/guideInterpret";
 import { guidePatchContext } from "../../books-frontend/src/core/guide/patch";
 import { resolveGuidePlaylist } from "../../books-frontend/src/core/guide/playlist";
+import { askGuideNext, speakGuideLines } from "../../books-frontend/src/core/guide/speech";
+import { extractManuscriptCast, OWN_WORDS_MAX_CHARS } from "../../books-frontend/src/core/guide/ownWords";
 import { resolveGuideMode } from "../../books-frontend/src/core/guide/mode";
 import { recordGuideTurn, recordGuideTurnOutcome } from "./guideTurns";
 import { downloadBlobBase64 } from "./storage";
@@ -239,6 +241,19 @@ function sendError(res: Response, err: unknown): void {
 
 function isCoverId(id: string): boolean {
   return id === COVER_FRONT_ID || id === COVER_BACK_ID || id === SPINE_ID;
+}
+
+/** Whether the Chat studio is on for this caller and book (same gate as the interpreter). */
+async function guideAllowed(uid: string, preference: unknown, bucketKey: string): Promise<boolean> {
+  const [guide, isAdmin] = await Promise.all([getGuideConfig(), isAdminUid(uid)]);
+  return (
+    resolveGuideMode({
+      rollout: guide.rollout,
+      isAdmin,
+      preference: preference === "guide" || preference === "legacy" ? preference : null,
+      bucketKey,
+    }) === "guide"
+  );
 }
 
 export function registerAiRoutes(app: Express): void {
@@ -819,6 +834,167 @@ export function registerAiRoutes(app: Express): void {
         },
       });
       res.json({ ok: true });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  /**
+   * Phrase the guide's configured lines in the reader's chat language.
+   *
+   * The configured sentence is the meaning; this only decides the words. Names
+   * are passed separately and a phrasing that loses one falls back to the
+   * meaning (`speakGuideLines`). Same rollout gate as the interpreter.
+   */
+  app.post("/ai/guide/speak", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const body = (req.body ?? {}) as {
+        projectId?: unknown;
+        language?: unknown;
+        names?: unknown;
+        lines?: unknown;
+        guidePreference?: unknown;
+        mode?: unknown;
+        open?: unknown;
+        learned?: unknown;
+        transcript?: unknown;
+      };
+      if (body.mode === "next") {
+        const open = typeof body.open === "string" ? body.open.slice(0, 2000) : "";
+        const learned = typeof body.learned === "string" ? body.learned.slice(0, 1000) : "";
+        const transcript = typeof body.transcript === "string" ? body.transcript.slice(0, 4000) : "";
+        if (typeof body.language !== "string" || !body.language.trim()) {
+          res.status(400).json({ error: { message: "Nothing to say." } });
+          return;
+        }
+        if (!(await guideAllowed(req.uid!, body.guidePreference, String(body.projectId ?? "")))) {
+          res.status(403).json({ error: { message: "This isn't available yet." } });
+          return;
+        }
+        const [model, prompts] = await Promise.all([resolveText("guideSpeak"), loadPromptContext()]);
+        const startedAt = Date.now();
+        const { value, events, stats } = await withUsage(() =>
+          askGuideNext({
+            language: String(body.language).slice(0, 80),
+            names: Array.isArray(body.names)
+              ? body.names.filter((n): n is string => typeof n === "string").slice(0, 24)
+              : [],
+            learned,
+            open,
+            transcript,
+            creds: { apiKey: apiKeyFor(model.provider) },
+            model: model.id,
+            providerId: model.provider,
+            prompts,
+            signal: requestDeadline(),
+          }),
+        );
+        await meterAndSettle({
+          uid: req.uid!,
+          action: "guideSpeak",
+          events,
+          stats,
+          ...(typeof body.projectId === "string" && body.projectId ? { projectId: body.projectId } : {}),
+          kind: "fresh",
+          source: "sync",
+          startedAt,
+          models: { text: model },
+        });
+        res.json(value);
+        return;
+      }
+      const lines = Array.isArray(body.lines)
+        ? body.lines
+            .filter(
+              (line): line is { id: string; meaning: string } =>
+                !!line &&
+                typeof (line as { id?: unknown }).id === "string" &&
+                typeof (line as { meaning?: unknown }).meaning === "string",
+            )
+            .slice(0, 12)
+            .map((line) => ({ id: line.id.slice(0, 60), meaning: line.meaning.slice(0, 1200) }))
+        : [];
+      if (typeof body.language !== "string" || !body.language.trim() || lines.length === 0) {
+        res.status(400).json({ error: { message: "Nothing to say." } });
+        return;
+      }
+      if (!(await guideAllowed(req.uid!, body.guidePreference, String(body.projectId ?? "")))) {
+        res.status(403).json({ error: { message: "This isn't available yet." } });
+        return;
+      }
+      const [model, prompts] = await Promise.all([resolveText("guideSpeak"), loadPromptContext()]);
+      const startedAt = Date.now();
+      const { value, events, stats } = await withUsage(() =>
+        speakGuideLines({
+          language: String(body.language).slice(0, 80),
+          names: Array.isArray(body.names)
+            ? body.names.filter((n): n is string => typeof n === "string").slice(0, 24)
+            : [],
+          lines,
+          creds: { apiKey: apiKeyFor(model.provider) },
+          model: model.id,
+          providerId: model.provider,
+          prompts,
+          signal: requestDeadline(),
+        }),
+      );
+      await meterAndSettle({
+        uid: req.uid!,
+        action: "guideSpeak",
+        events,
+        stats,
+        ...(typeof body.projectId === "string" && body.projectId ? { projectId: body.projectId } : {}),
+        kind: "fresh",
+        source: "sync",
+        startedAt,
+        models: { text: model },
+      });
+      res.json({ lines: value });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  /**
+   * Read who is in a manuscript the reader wrote or pasted. Returns names and
+   * stated ages only; the story is never rewritten.
+   */
+  app.post("/ai/guide/extract-cast", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const body = (req.body ?? {}) as { projectId?: unknown; story?: unknown; guidePreference?: unknown };
+      const story = typeof body.story === "string" ? body.story.slice(0, OWN_WORDS_MAX_CHARS) : "";
+      if (!story.trim()) {
+        res.status(400).json({ error: { message: "There's no story to read yet." } });
+        return;
+      }
+      if (!(await guideAllowed(req.uid!, body.guidePreference, String(body.projectId ?? "")))) {
+        res.status(403).json({ error: { message: "This isn't available yet." } });
+        return;
+      }
+      const [model, prompts] = await Promise.all([resolveText("guideExtractCast"), loadPromptContext()]);
+      const startedAt = Date.now();
+      const { value, events, stats } = await withUsage(() =>
+        extractManuscriptCast({
+          story,
+          creds: { apiKey: apiKeyFor(model.provider) },
+          model: model.id,
+          providerId: model.provider,
+          prompts,
+          signal: requestDeadline(),
+        }),
+      );
+      await meterAndSettle({
+        uid: req.uid!,
+        action: "guideExtractCast",
+        events,
+        stats,
+        ...(typeof body.projectId === "string" && body.projectId ? { projectId: body.projectId } : {}),
+        kind: "fresh",
+        source: "sync",
+        startedAt,
+        models: { text: model },
+      });
+      res.json(value);
     } catch (err) {
       sendError(res, err);
     }

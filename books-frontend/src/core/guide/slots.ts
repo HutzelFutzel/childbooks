@@ -35,6 +35,7 @@ export const GUIDE_SLOT_IDS = [
   "storyMode",
   "heroes",
   "heroAges",
+  "sameAge",
   "audience",
   "language",
   "storyIdea",
@@ -99,6 +100,16 @@ export const GUIDE_SLOTS: Record<GuideSlotId, GuideSlot> = {
           : `${person.name} ${person.age}`,
       );
       return `${joinNames(parts)}${known.length < cast.length ? " (some missing)" : ""}`;
+    },
+  },
+  sameAge: {
+    id: "sameAge",
+    label: "Same age",
+    kind: "fact",
+    describe: (p) => {
+      const groups = p.authoringState?.sameAge ?? [];
+      if (groups.length === 0) return null;
+      return groups.map((group) => joinNames(group)).join("; ");
     },
   },
   audience: {

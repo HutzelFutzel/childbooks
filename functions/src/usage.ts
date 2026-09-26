@@ -639,12 +639,10 @@ export async function recordUsage(
       const ceiling = nominal != null && nominal > 0 ? nominal * 10 * imageCalls : null;
       const outlier = ceiling != null && totals.billableUsd > ceiling;
       if (!outlier && opts.estimateProfile) {
-        await recordImageCostSample(
-          action,
-          tier,
-          totals.billableUsd,
-          opts.estimateProfile,
-        );
+        await recordImageCostSample(action, tier, totals.billableUsd, opts.estimateProfile, {
+          projectId: opts.projectId,
+          rate: nominal,
+        });
       }
     }
     return totals;

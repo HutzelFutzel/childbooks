@@ -25,6 +25,9 @@ export function anchorSignature(a: Anchor): string {
     a.userGuidance ?? "",
     a.mode ?? "",
     a.bodyPlan ?? "",
+    (a.sourceArt ?? [])
+      .map((image) => `${image.origin ?? "upload"}:${image.blobId}`)
+      .join("|"),
   ].join("\u0000");
 }
 

@@ -86,6 +86,20 @@ export const EMAIL_TEMPLATE_REGISTRY: Registry = {
     defaultSenderKey: "default",
     sample: { name: "Alex", sparks: 300, balance: 420 },
   },
+  book_drawn: {
+    id: "book_drawn",
+    label: "Book drawn",
+    description: "Sent when Draw the book finishes, if the reader asked to be told.",
+    category: "transactional",
+    defaultSenderKey: "default",
+    sample: {
+      name: "Alex",
+      bookTitle: "Mila and the Moon Kite",
+      bookUrl: "https://example.com/studio/abc123/pages",
+      drawn: 16,
+      missing: 0,
+    },
+  },
   gift_purchased: {
     id: "gift_purchased",
     label: "Gift purchased",

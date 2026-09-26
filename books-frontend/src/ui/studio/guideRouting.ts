@@ -19,7 +19,7 @@
  * result through `fallbackDestination`, so the engine can never send a reader
  * somewhere the wizard hasn't unlocked.
  *
- * @legacy guide-v2 — scaffolding, not a destination. Exists only to translate the
+ * @legacy guide-v2 L5 — scaffolding, not a destination. Exists only to translate the
  * engine's answer into the old UI's vocabulary, and is deleted with that UI.
  */
 import type { Project } from "../../core/types";

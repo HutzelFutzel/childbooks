@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L1 — deleted with the Steps shell. See docs/LEGACY-GUIDE.md. */
 import { useCallback, useEffect, useState } from "react";
 import type { Project } from "../../core/types";
 import { analyzeCurrentStory } from "../../state/ai";

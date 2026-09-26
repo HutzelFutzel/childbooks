@@ -33,8 +33,11 @@ import { enabledAudienceProfiles, type AudienceConfig } from "../config/audience
 import { resolveArtStyles, type ArtStylesConfig } from "../config/artStyles";
 import { resolveStoryCraft, type StoryCraftConfig } from "../config/storyCraft";
 import { BOOK_PRODUCTS } from "../fulfillment";
+import { bookSizeFromAspect } from "../config/options";
 import { briefOf, newCastMember } from "../story/brief";
 import type { BookConfig, Project, StoryBrief, StoryCastMember } from "../types";
+import { authoringOf, withAuthoring } from "./projectState";
+import { copySharedAges, linkSameAge } from "./sameAge";
 import { GUIDE_SLOT_IDS, GUIDE_SLOTS, type GuideSlotId } from "./slots";
 
 /**
@@ -385,7 +388,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       }
       if (sameCast(existing, cast)) return UNCHANGED;
       return wrote(
-        withBrief(project, { ...brief, cast, heroNames: cast.map((member) => member.name) }),
+        copySharedAges(withBrief(project, { ...brief, cast, heroNames: cast.map((member) => member.name) })),
       );
     },
     (project) => {
@@ -487,13 +490,15 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
             }
           : undefined;
 
-      if (!changed) {
+      const base = changed ? withBrief(project, { ...brief, cast }) : project;
+      const copied = copySharedAges(base);
+      if (!changed && copied === project) {
         // The ages that resolved were already right. A stranger in the same turn is
         // still worth refusing, so that case reports as a partial write of nothing
         // rather than as a silent success.
         return refusedPart ? refused(refusedPart.reason, refusedPart) : UNCHANGED;
       }
-      return wrote(withBrief(project, { ...brief, cast }), refusedPart);
+      return wrote(copied, refusedPart);
     },
     (project) => {
       const aged = (briefOf(project.config).cast ?? [])
@@ -523,6 +528,38 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         note: "Months for under-twos; the name comes from who is already in the story.",
       },
       { said: "Leo just turned 7", value: [{ name: "Leo", age: 7 }] },
+    ],
+  ),
+
+  /**
+   * People who share an age. Free-text `role` still carries "twin" for the
+   * story prompt; this is the part the conversation can act on. A later age
+   * for one of them is copied to the others, and a disagreeing age leaves the group.
+   */
+  sameAge: writer(
+    '[["Amira", "Aaron"]] — groups of people who share an age. Only when the message says so',
+    z.array(z.array(nameSchema).min(2).max(8)).min(1).max(6),
+    (project, groups) => {
+      const linked = linkSameAge(project, groups);
+      const refusedPart =
+        linked.unknown.length > 0
+          ? {
+              reason: `no cast member named ${linked.unknown.join(", ")}`,
+              speak: `I don't have ${linked.unknown.join(" or ")} in the story yet.`,
+            }
+          : undefined;
+      if (linked.project === project) {
+        return refusedPart ? refused(refusedPart.reason, refusedPart) : UNCHANGED;
+      }
+      return wrote(linked.project, refusedPart);
+    },
+    (project) => authoringOf(project).sameAge,
+    [
+      {
+        said: "Amira and Aaron are twins",
+        value: [["Amira", "Aaron"]],
+        note: "Only when they share an age. Quote the words. Never infer it from the names.",
+      },
     ],
   ),
 
@@ -763,6 +800,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       return wrote(withConfig(project, {
         artStyle: {
           presetId: value.presetId,
+          ...(value.presetId !== null ? { origin: "preset" as const } : {}),
           ...(value.customDescription?.trim()
             ? { customDescription: value.customDescription.trim() }
             : {}),
@@ -797,7 +835,25 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
           allowed: context.productSkus,
         });
       }
-      return wrote(withConfig(project, { productSku: sku }));
+      const product = BOOK_PRODUCTS.find((candidate) => candidate.sku === sku);
+      if (!product) return refused(`unknown product "${sku}"`);
+      const changed = project.config.productSku !== sku;
+      return wrote(
+        withAuthoring(
+          withConfig(project, {
+            productSku: sku,
+            bookSize: bookSizeFromAspect(product.aspect),
+          }),
+          {
+            bookSetup: {
+              formatConfirmedAt: Date.now(),
+              layoutConfirmedAt: changed
+                ? undefined
+                : authoringOf(project).bookSetup?.layoutConfirmedAt,
+            },
+          },
+        ),
+      );
     },
     (project) => project.config.productSku ?? undefined,
   ),
@@ -811,7 +867,29 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       if (!isKnownLayoutId(layoutId)) {
         return refused(`unknown layout "${layoutId}"`, { allowed: Object.keys(BOOK_LAYOUTS) });
       }
-      return wrote(withConfig(project, { layoutId }));
+      const layout = BOOK_LAYOUTS[layoutId]!;
+      const changed =
+        project.config.layoutId !== layoutId ||
+        project.config.compositionMode !== layout.defaultMode;
+      return wrote(
+        withAuthoring(
+          withConfig(project, {
+            layoutId,
+            compositionMode: layout.defaultMode,
+          }),
+          {
+            bookSetup: {
+              ...authoringOf(project).bookSetup,
+              layoutConfirmedAt: Date.now(),
+            },
+            planRequestedFor: undefined,
+            planBasis: changed
+              ? authoringOf(project).planBasis ??
+                (project.screenplay ? "setup-changed" : undefined)
+              : authoringOf(project).planBasis,
+          },
+        ),
+      );
     },
     (project) => (isKnownLayoutId(project.config.layoutId) ? project.config.layoutId : undefined),
   ),

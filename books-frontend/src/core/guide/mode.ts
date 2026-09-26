@@ -52,6 +52,8 @@ export interface GuideModeInput {
  *   4. Everyone else gets what the rollout says, and nothing a client sends can
  *      widen that — a customer passing `?guide=new` is not an admin, so their
  *      request never reaches step 3.
+ *
+ * @legacy guide-v2 L5 — collapses to `"guide"` once Steps is gone.
  */
 export function resolveGuideMode(input: GuideModeInput): GuideMode {
   if (input.override === "legacy") return "legacy";

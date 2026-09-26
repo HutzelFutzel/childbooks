@@ -1,0 +1,296 @@
+/**
+ * The one Spark price for one image unit, from the recent cost window.
+ *
+ * Shared by the server quote (`functions/src/sparks.ts`) and the studio preview
+ * (`useTierEstimate`), so both show the same number, and that number is what the
+ * wallet charges on success.
+ *
+ * A quote knows the model and render settings but not the outcome of the
+ * render: the output size, how many references were sent and how many image
+ * calls were billed are only known afterwards. Those fields match anything when
+ * the quote leaves them "unknown", so the window pools every render of the same
+ * setup and the statistic prices the mix that actually happens.
+ *
+ * When a group has too few samples the estimate borrows from a broader one:
+ *   exact → same model+quality → another quality scaled by `qualityFactors`
+ *   → the cost table's per-image rate → the action's configured fallback price.
+ */
+import type { ImageActionId } from "../ai/actions";
+import type { GenerationEstimateProfile } from "../config/generationEstimateProfile";
+import {
+  parseCostStatsKey,
+  profileKeyFields,
+  type CostKeyField,
+  type CostSample,
+  type ImageCostStats,
+} from "../config/imageCostStats";
+import type { ImageTier } from "../config/modelConfig";
+import {
+  estimationRuleFor,
+  type EstimateLevel,
+  type EstimationConfig,
+  type EstimationRule,
+} from "../config/priceEstimation";
+import type { SparksConfig } from "../config/sparks";
+
+const DAY_MS = 86_400_000;
+
+/** Fields a quote can't know before rendering; "unknown" in a query matches anything. */
+export const OUTCOME_FIELDS: readonly CostKeyField[] = ["outputSize", "referenceCount", "billableImages"];
+
+// ---- Statistics ----------------------------------------------------------------
+
+function quantile(sorted: number[], q: number): number {
+  if (sorted.length === 0) return 0;
+  const pos = (sorted.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+}
+
+/** The configured statistic over values ordered oldest → newest. */
+export function applyStatistic(values: number[], rule: EstimationRule): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  switch (rule.statistic) {
+    case "median":
+      return quantile(sorted, 0.5);
+    case "percentile":
+      return quantile(sorted, rule.percentile / 100);
+    case "trimmedMean": {
+      const cut = Math.floor(sorted.length * (rule.trimPercent / 100));
+      const kept = sorted.length - 2 * cut > 0 ? sorted.slice(cut, sorted.length - cut) : sorted;
+      return kept.reduce((s, v) => s + v, 0) / kept.length;
+    }
+    case "ema": {
+      let acc = values[0];
+      for (let i = 1; i < values.length; i++) acc = rule.emaAlpha * values[i] + (1 - rule.emaAlpha) * acc;
+      return acc;
+    }
+    case "mean":
+    default:
+      return values.reduce((s, v) => s + v, 0) / values.length;
+  }
+}
+
+// ---- Sample selection ----------------------------------------------------------
+
+export interface WeightedSample extends CostSample {
+  /** USD after rate and quality adjustment. */
+  value: number;
+}
+
+/** Age limit, per-book cap and window, applied to samples ordered oldest → newest. */
+export function selectSamples<S extends CostSample>(samples: S[], rule: EstimationRule, now: number): S[] {
+  const fresh =
+    rule.maxAgeDays > 0 ? samples.filter((s) => s.at === 0 || now - s.at <= rule.maxAgeDays * DAY_MS) : samples;
+  let capped = fresh;
+  if (rule.perProjectCap > 0) {
+    const seen = new Map<string, number>();
+    const keep: S[] = [];
+    for (let i = fresh.length - 1; i >= 0; i--) {
+      const s = fresh[i];
+      const tag = s.project;
+      if (tag) {
+        const n = seen.get(tag) ?? 0;
+        if (n >= rule.perProjectCap) continue;
+        seen.set(tag, n + 1);
+      }
+      keep.push(s);
+    }
+    capped = keep.reverse();
+  }
+  return capped.slice(-rule.window);
+}
+
+function qualityFactor(config: EstimationConfig, quality: string): number {
+  return config.qualityFactors[quality] ?? config.qualityFactors["provider-default"] ?? 1;
+}
+
+type Matcher = (fields: Record<CostKeyField, string>) => boolean;
+
+function gather(
+  stats: ImageCostStats,
+  action: string,
+  tier: string,
+  match: Matcher,
+  scale: (fields: Record<CostKeyField, string>) => number,
+  rateNow: number | null,
+): WeightedSample[] {
+  const out: WeightedSample[] = [];
+  for (const [key, entry] of Object.entries(stats.stats)) {
+    const parsed = parseCostStatsKey(key);
+    if (!parsed || parsed.action !== action || parsed.tier !== tier || !match(parsed.fields)) continue;
+    const factor = scale(parsed.fields);
+    for (const s of entry.samples) {
+      const rateAdj = rateNow && s.rate ? rateNow / s.rate : 1;
+      out.push({ ...s, value: s.usd * rateAdj * factor });
+    }
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
+// ---- Estimate -------------------------------------------------------------------
+
+export interface UnitEstimateInput {
+  stats: ImageCostStats;
+  sparks: SparksConfig;
+  action: ImageActionId;
+  tier: ImageTier;
+  /** The render setup; outcome fields left "unknown" pool across all outcomes. */
+  profile: GenerationEstimateProfile;
+  /** The model's current per-image rate from the cost table (USD). */
+  rateUsd: number | null;
+  now?: number;
+}
+
+export interface UnitEstimate {
+  /** Estimated provider cost of one unit, USD (before markup). */
+  usd: number;
+  level: EstimateLevel;
+  /** Samples in the exact group after age/window/per-book filtering. */
+  exactSamples: number;
+  /** Samples behind the level that was used (0 for rate/fallback). */
+  samples: number;
+}
+
+/** Estimate one unit's provider cost from the window, with the fallback chain. */
+export function estimateUnitCost(input: UnitEstimateInput): UnitEstimate {
+  const { stats, sparks, action, tier, profile, rateUsd } = input;
+  const now = input.now ?? Date.now();
+  const config = sparks.estimation;
+  const rule = estimationRuleFor(config, action);
+  const q = profileKeyFields(profile);
+  const same = (f: Record<CostKeyField, string>) => f.modelKey === q.modelKey && f.renderKind === q.renderKind;
+  const rate = rateUsd && rateUsd > 0 ? rateUsd : null;
+
+  const exact = selectSamples(
+    gather(
+      stats,
+      action,
+      tier,
+      (f) =>
+        same(f) &&
+        (Object.keys(q) as CostKeyField[]).every(
+          (k) =>
+            k === "billableImages" ||
+            ((OUTCOME_FIELDS as readonly string[]).includes(k) && q[k] === "unknown") ||
+            f[k] === q[k],
+        ),
+      () => 1,
+      rate,
+    ),
+    rule,
+    now,
+  );
+  if (exact.length >= rule.minSamples) {
+    return {
+      usd: applyStatistic(exact.map((s) => s.value), rule),
+      level: "exact",
+      exactSamples: exact.length,
+      samples: exact.length,
+    };
+  }
+
+  const prior = broaderEstimate(input, rule, q, same, rate, now);
+  if (exact.length > 0 && rule.blend) {
+    const k = rule.minSamples;
+    const n = exact.length;
+    const own = applyStatistic(exact.map((s) => s.value), rule);
+    return {
+      usd: (n * own + k * prior.usd) / (n + k),
+      level: "exact",
+      exactSamples: n,
+      samples: n,
+    };
+  }
+  if (exact.length > 0 && prior.level !== "model" && prior.level !== "scaled") {
+    // No broader measured group: a few real samples beat a rate-table guess.
+    return {
+      usd: applyStatistic(exact.map((s) => s.value), rule),
+      level: "exact",
+      exactSamples: exact.length,
+      samples: exact.length,
+    };
+  }
+  return { ...prior, exactSamples: exact.length };
+}
+
+function broaderEstimate(
+  input: UnitEstimateInput,
+  rule: EstimationRule,
+  q: Record<CostKeyField, string>,
+  same: (f: Record<CostKeyField, string>) => boolean,
+  rate: number | null,
+  now: number,
+): UnitEstimate {
+  const { stats, sparks, action, tier } = input;
+  const config = sparks.estimation;
+
+  const model = selectSamples(
+    gather(stats, action, tier, (f) => same(f) && f.quality === q.quality, () => 1, rate),
+    rule,
+    now,
+  );
+  if (model.length >= rule.minSamples) {
+    return { usd: applyStatistic(model.map((s) => s.value), rule), level: "model", exactSamples: 0, samples: model.length };
+  }
+
+  const target = qualityFactor(config, q.quality);
+  const scaled = selectSamples(
+    gather(
+      stats,
+      action,
+      tier,
+      (f) => same(f) && f.quality !== q.quality,
+      (f) => target / qualityFactor(config, f.quality),
+      rate,
+    ),
+    rule,
+    now,
+  );
+  if (scaled.length >= rule.minSamples) {
+    return {
+      usd: applyStatistic(scaled.map((s) => s.value), rule),
+      level: "scaled",
+      exactSamples: 0,
+      samples: scaled.length,
+    };
+  }
+
+  if (rate) return { usd: rate, level: "rate", exactSamples: 0, samples: 0 };
+
+  const fallbackSparks = sparks.actions[action]?.estimatedSparks ?? 0;
+  const usd =
+    sparks.markupMultiplier > 0 ? (fallbackSparks * sparks.sparkValueUsd) / sparks.markupMultiplier : 0;
+  return { usd, level: "fallback", exactSamples: 0, samples: 0 };
+}
+
+/**
+ * Turn an estimated USD cost into the whole-Spark price of one unit: peg and
+ * markup, the action's floor and ceiling, then the plan/campaign multiplier.
+ */
+export function unitPriceSparks(
+  sparks: SparksConfig,
+  action: string,
+  usd: number,
+  multiplier = 1,
+): number {
+  if (!sparks.enabled || sparks.sparkValueUsd <= 0) return 0;
+  const rule = estimationRuleFor(sparks.estimation, action);
+  let base = usd > 0 ? Math.max(1, Math.round((usd * sparks.markupMultiplier) / sparks.sparkValueUsd)) : 0;
+  if (rule.minSparks > 0) base = Math.max(base, rule.minSparks);
+  if (rule.maxSparks > 0) base = Math.min(base, rule.maxSparks);
+  const m = multiplier > 0 ? multiplier : 1;
+  return Math.max(0, Math.round(base * m));
+}
+
+/**
+ * The full price of one image unit for a derived-mode action. Fixed and free
+ * actions are priced by the caller from their rule; this is only the measured path.
+ */
+export function derivedUnitPrice(input: UnitEstimateInput, multiplier = 1): { sparks: number; estimate: UnitEstimate } {
+  const estimate = estimateUnitCost(input);
+  return { sparks: unitPriceSparks(input.sparks, input.action, estimate.usd, multiplier), estimate };
+}

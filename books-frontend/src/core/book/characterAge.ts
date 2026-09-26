@@ -1,12 +1,23 @@
 import { activeAudienceSource } from "../config/activeAudience";
 import { resolveAudienceProfile } from "../config/audience";
-import type { BodyPlan } from "../types";
+import type { BodyPlan, StoryCastMember } from "../types";
 
 type CharacterAgeClues = {
   name: string;
   description: string;
   bodyPlan?: BodyPlan | string | null;
 };
+
+/** Years used to draw a cast member, without treating an estimate as fact. */
+export function effectiveCharacterAgeYears(
+  member: Pick<StoryCastMember, "age" | "ageMonths" | "visualAge">,
+): number | undefined {
+  if (member.age !== undefined) return member.age;
+  if (member.ageMonths !== undefined) {
+    return Math.max(0, Math.round((member.ageMonths / 12) * 10) / 10);
+  }
+  return member.visualAge?.years;
+}
 
 /**
  * A transparent fallback for characters whose age is absent from both the

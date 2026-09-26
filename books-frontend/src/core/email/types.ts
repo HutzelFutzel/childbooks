@@ -26,6 +26,7 @@ export const EMAIL_TEMPLATE_IDS = [
   "subscription_started",
   "subscription_cancelled",
   "sparks_purchased",
+  "book_drawn",
   "gift_purchased",
   "gift_received",
   "gift_claimed",
@@ -122,6 +123,12 @@ export interface EmailTemplateVarsMap {
   subscription_started: { name?: string; planName: string; sparks?: number; manageUrl?: string };
   subscription_cancelled: { name?: string; planName: string; endDate?: string };
   sparks_purchased: { name?: string; sparks: number; balance?: number };
+  /**
+   * Draw the book finished while the reader was away. `bookUrl` opens exactly
+   * that project; `missing` counts the pictures that still need another go
+   * (0 when every page, cover and sheet was drawn).
+   */
+  book_drawn: { name?: string; bookTitle: string; bookUrl: string; drawn: number; missing: number };
   gift_purchased: { name?: string; sparks: number; code: string; recipientEmail?: string };
   gift_received: { sparks: number; code: string; message?: string; senderName?: string; claimUrl?: string };
   gift_claimed: { name?: string; sparks: number; balance?: number };

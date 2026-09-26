@@ -195,7 +195,7 @@ export function SparksBadge() {
             </p>
             {needed != null ? (
               <p className="mt-2 text-xs font-medium text-amber-700">
-                You need about {needed.toLocaleString()} more Spark{needed === 1 ? "" : "s"} to finish that —
+                You need {needed.toLocaleString()} more Spark{needed === 1 ? "" : "s"} to finish that —
                 top up below.
               </p>
             ) : outOf ? (

@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L4 — deleted with the wizard. See docs/LEGACY-GUIDE.md. */
 import { READING_MODES, type ReadingModeId } from "../../core/config/readingModes";
 import type { AudienceProfile } from "../../core/config/audienceCatalog";
 import { resolveModeGuidance } from "../../core/config/audience";

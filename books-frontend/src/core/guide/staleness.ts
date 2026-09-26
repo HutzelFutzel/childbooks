@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L0 — unreachable today; nothing renders it. See docs/LEGACY-GUIDE.md. */
 /**
  * What in the book no longer matches the facts it was made from.
  *

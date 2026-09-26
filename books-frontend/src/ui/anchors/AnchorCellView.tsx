@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L0 — unreachable today; nothing renders it. See docs/LEGACY-GUIDE.md. */
 import { useMemo } from "react";
 import { ImageOff } from "lucide-react";
 import type { Anchor } from "../../core/types";

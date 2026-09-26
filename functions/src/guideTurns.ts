@@ -81,6 +81,7 @@ export async function recordGuideTurn(args: RecordGuideTurnArgs): Promise<string
       componentId: args.componentId,
       message: args.message.slice(0, MAX_TEXT),
       intent: args.result.intent,
+      route: args.result.route,
       reply: args.result.reply.slice(0, MAX_TEXT),
       confidence: args.result.confidence,
       proposedSlots: args.proposedSlots,

@@ -52,6 +52,8 @@ export interface SlimOptions {
    * second copy of the story and exists only to detect edits.
    */
   keepAnalysis?: boolean;
+  /** Keep only the staged guide drawing used to derive an art style before cast exists. */
+  keepStyleSourceArt?: boolean;
 }
 
 /**
@@ -116,6 +118,14 @@ export function slimProjectForRender(project: Project, opts: SlimOptions): Proje
           return rest;
         })()
       : undefined;
+  const styleAuthoring =
+    opts.keepStyleSourceArt && project.authoringState?.styleSourceArt?.length
+      ? {
+          version: 1 as const,
+          styleSourceArt: project.authoringState.styleSourceArt,
+          ...(project.authoringState.styleSourceOnly ? { styleSourceOnly: true } : {}),
+        }
+      : undefined;
 
   return {
     id: project.id,
@@ -129,5 +139,6 @@ export function slimProjectForRender(project: Project, opts: SlimOptions): Proje
     ...(screenplay ? { screenplay } : {}),
     ...(illustrations ? { illustrations } : {}),
     ...(analysis ? { analysis } : {}),
+    ...(styleAuthoring ? { authoringState: styleAuthoring } : {}),
   };
 }

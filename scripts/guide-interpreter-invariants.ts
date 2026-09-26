@@ -17,8 +17,9 @@
  *      catalog before anything acts on it. The properties worth stating: a skip can
  *      only name a component that exists AND is optional, and a turn that isn't
  *      claiming to state a fact carries no patch at all. Both are guesses the model
- *      is otherwise free to make, and the second is the one that invents a child's
- *      age out of a greeting.
+ *      is otherwise free to make. A one-word quotation on a question is not a
+ *      fact. A longer quotation beside the question is, because people volunteer
+ *      facts while asking something else.
  *
  *   3. **The wire seam.** The interpreter runs on the server against a payload the
  *      client slims down. Slimming away the page plan and the finished artwork
@@ -648,7 +649,8 @@ for (const id of optional) {
 }
 
 /**
- * Only a turn claiming to state a fact may carry one.
+ * Any conversational act may also carry a fact, but weak incidental quotations
+ * are not enough.
  *
  * Evidence verification catches most invention but not this: "what ages do you
  * support?" really does contain the word "ages", so a claim about the audience
@@ -674,6 +676,15 @@ for (const id of optional) {
       fail(`A "${intent}" turn dropped its claims without recording why.`);
     }
   }
+  const volunteered = sanitizeGuideTurn(
+    { intent: "question", claims: [claim("heroes", ["Amira"], "The book is for Amira")], reply: "Printing takes a couple of weeks.", confidence: 0.9 },
+    reading("How long does printing take? The book is for Amira"),
+  );
+  cases += 1;
+  if (!("heroes" in volunteered.patch)) {
+    fail("A question that also states who the book is for dropped the fact.");
+  }
+
   for (const intent of ["answer", "revise"] as const) {
     const result = sanitizeGuideTurn(
       { intent, claims, reply: "Got it.", confidence: 0.9 },
@@ -681,6 +692,60 @@ for (const id of optional) {
     );
     cases += 1;
     if (!("heroes" in result.patch)) fail(`A "${intent}" turn lost the fact it stated.`);
+  }
+}
+
+// Pasted manuscripts are lossless: a short supporting quote cannot authorise a
+// model to rewrite the rest of the story.
+{
+  const message = "Here is my story:\nOnce there was a fox.\nIt found its way home.";
+  const exact = sanitizeGuideTurn(
+    {
+      intent: "answer",
+      route: "own",
+      claims: [claim("storyText", "Once there was a fox.\nIt found its way home.", "Here is my story")],
+      reply: "I added your story.",
+      confidence: 0.98,
+    },
+    reading(message),
+  );
+  cases += 1;
+  if (exact.patch.storyText !== "Once there was a fox.\nIt found its way home.") {
+    fail("An exact pasted manuscript did not reach the story.");
+  }
+  cases += 1;
+  if (exact.route !== "own") fail("The own-words route was not preserved.");
+
+  const rewritten = sanitizeGuideTurn(
+    {
+      intent: "answer",
+      route: "own",
+      claims: [claim("storyText", "Once there was a clever fox. It went home.", "Here is my story")],
+      reply: "I added your story.",
+      confidence: 0.98,
+    },
+    reading(message),
+  );
+  cases += 1;
+  if ("storyText" in rewritten.patch) fail("A rewritten manuscript was accepted as the reader's exact words.");
+  cases += 1;
+  if (!rewritten.refused.some((r) => r.refusal === "unsupported")) {
+    fail("A rewritten manuscript was dropped without recording why.");
+  }
+
+  const wrongRoute = sanitizeGuideTurn(
+    {
+      intent: "answer",
+      route: "guided",
+      claims: [claim("storyText", "Once there was a fox.\nIt found its way home.", "Here is my story")],
+      reply: "I have the idea.",
+      confidence: 0.9,
+    },
+    reading(message),
+  );
+  cases += 1;
+  if ("storyText" in wrongRoute.patch) {
+    fail("A guided-route message was allowed to become the manuscript.");
   }
 }
 

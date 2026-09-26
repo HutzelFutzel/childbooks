@@ -71,6 +71,12 @@ export interface ArtStyleSelection {
    * in this look. Names, not ids, so re-analysis does not drop the stamp.
    */
   derivedFromNames?: string[];
+  /**
+   * The reader-supplied artwork that defines this look. Unlike the temporary
+   * pre-cast staging field, this survives character assignment and is sent to
+   * image generation as a style-only reference for every character.
+   */
+  referenceArt?: SourceArtRef[];
 }
 
 /** Existing illustrated character art kept as identity (and often style) source. */
@@ -78,6 +84,11 @@ export interface SourceArtRef {
   blobId: string;
   mimeType: string;
   createdAt: number;
+  /**
+   * Absent means reader-supplied artwork. Portrait references are derived
+   * infrastructure and may be replaced automatically when the portrait changes.
+   */
+  origin?: "portrait";
 }
 
 /** Cap on extra pictures per character (canonical design is the first). */
@@ -113,6 +124,15 @@ export interface StoryCastMember {
    * audience matching; `age` stays the whole-year value for character art.
    */
   ageMonths?: number;
+  /**
+   * A transparent drawing-only fallback when the manuscript does not state an
+   * age. It shapes portraits and reference sheets, but never silently changes
+   * the target reading audience or pretends to be a fact supplied by the family.
+   */
+  visualAge?: {
+    years: number;
+    source: "story" | "suggested";
+  };
   /** Anything else worth knowing: "loves dinosaurs", "always loses a shoe". */
   note?: string;
   /** Optional one-use photo for carrying this person's likeness into Cast. */
@@ -127,6 +147,147 @@ export interface StoryCastMember {
    * clothes so analysis cannot replace a drawn animal with a human child.
    */
   lookFromArt?: string;
+  /**
+   * Chat studio: where this person's look comes from. Absent means invent from
+   * the stated story facts and safe defaults.
+   */
+  lookSource?: LookSource;
+  /** Chat studio: the reader's own description, used when `lookSource` is `describe`. */
+  appearance?: string;
+  /** Chat studio: a change asked for on the portrait itself ("make the hair darker"). */
+  portraitNote?: string;
+}
+
+/** Where a person's portrait takes its likeness from. */
+export type LookSource = "photo" | "drawing" | "describe" | "invent";
+
+/**
+ * What a portrait was drawn from. A result commits only while every field still
+ * matches the live book, so a late render cannot flash an outdated face.
+ */
+export interface PortraitInputs {
+  subjectId: string;
+  /** Name, age and description of the person when the job was queued. */
+  subjectSignature: string;
+  /** `artStyleKey` of the saved style. */
+  styleKey: string;
+  /** The photo, drawing or description that was the likeness source. */
+  sourceKey: string;
+}
+
+export interface PortraitImage {
+  blobId: string;
+  mimeType: string;
+  inputs: PortraitInputs;
+  createdAt: number;
+  imageTier?: ImageTier;
+  imageModel?: ModelSelection;
+}
+
+/** How a Chat studio book was started. Switchable until the pages start. */
+export type GuideEntry = "guided" | "own";
+
+/** The reader's answer to the hardcover check. Absent means no decision was needed or asked. */
+export type HardcoverDecision = "spread" | "keep" | "thin";
+
+/**
+ * Chat studio authoring state. Everything here is optional and additive: a book
+ * made in Steps has none of it and still opens in Chat at its current state.
+ */
+export interface StudioAuthoringState {
+  version: 1;
+  entry?: GuideEntry;
+  /** When the one-time Sparks information row was shown for this book. */
+  sparksNoticeAt?: number;
+  /** Portrait version trees, keyed by story cast member id. */
+  portraits?: Record<string, VersionTree<PortraitImage>>;
+  /**
+   * Character artwork uploaded before manuscript extraction knows who it
+   * belongs to. It can define the whole book's style immediately, then be
+   * assigned to a cast plate once names arrive.
+   */
+  styleSourceArt?: SourceArtRef[];
+  /** The reader chose to use the staged drawing only as a whole-book style reference. */
+  styleSourceOnly?: boolean;
+  /**
+   * People the reader said share an age (twins, "both", "the same age").
+   * Each inner list is their names. An age given for one is copied to the others.
+   */
+  sameAge?: string[][];
+  /** Facts whose derived value the guide has said once (confirm-once). */
+  saidFacts?: string[];
+  /** Optional facts the reader skipped. Never asked again. */
+  skippedFacts?: string[];
+  /** Optional facts the guide actually asked. Only these hold the story back. */
+  askedFacts?: string[];
+  /** Asked facts the reader replied to (any reply answers an optional fact). */
+  answeredFacts?: string[];
+  /** The chat language, as a book-language code. Changing it never restarts the book. */
+  chatLocale?: string;
+  /** Own words: the reader asked the guide for something, so the composer shows. */
+  ownComposer?: boolean;
+  /** Page-plan rerun job whose result replaces the current plan when it lands. */
+  planRequestedFor?: string;
+  /** The analysis and page target the current page plan was asked for. */
+  planBasis?: string;
+  /**
+   * Decisions the reader explicitly reviewed in Chat. BookConfig always has
+   * defaults, so these receipts distinguish a real choice from an untouched
+   * default without creating a second source of truth for the value itself.
+   */
+  bookSetup?: {
+    formatConfirmedAt?: number;
+    layoutConfirmedAt?: number;
+  };
+  /** Whether the book-language line ("I'll write the story in English") was said. */
+  languageSaid?: boolean;
+  /** The latest story draft run, so a newer detail supersedes an older run. */
+  storyRun?: {
+    signature: string;
+    startedAt: number;
+    status: "running" | "failed" | "done";
+    error?: string;
+  };
+  hardcover?: HardcoverDecision;
+  /** Cover lines typed on the book. Text only: typing never redraws a picture. */
+  cover?: { subtitle?: string; author?: string; titleEdited?: boolean };
+  /** Own-words extraction, keyed to the manuscript it read. */
+  extraction?: {
+    storyHash: string;
+    at: number;
+    names: string[];
+    /** Names that need a correction before anything is drawn. */
+    unresolved: string[];
+  };
+  /**
+   * Draw the book: one confirmed batch across references, covers and pages.
+   * Persisted so any open client resumes the next phase after a reload.
+   */
+  drawBook?: {
+    quoteId?: string;
+    startedAt: number;
+    phase: "cast" | "pages" | "done";
+    /** The server job drawing the whole book (absent on runs started before it existed). */
+    jobId?: string;
+    /** Why the job was refused before anything was drawn, for the retry well. */
+    error?: string;
+  };
+  /** When the pages started. Locks the look, cast, story, cover text, shape and count. */
+  lockedAt?: number;
+  /**
+   * A paid action waiting on an account or a Sparks top-up. `confirmed` means
+   * the reader already tapped it: an unexpired quote continues on return.
+   */
+  pendingAction?: {
+    purpose: "portraits" | "book" | "redraw";
+    quoteId: string;
+    confirmed: boolean;
+    at: number;
+  };
+  /** When the reader last had this book open in Chat. Drives the reopen summary. */
+  seenAt?: number;
+  /** Values replaced when two devices changed the same thing, newest first. */
+  replaced?: { at: number; fields: Record<string, unknown> }[];
 }
 
 /**
@@ -196,6 +357,12 @@ export interface BookConfig {
    * default here. Falls back to `imageModel` when unset.
    */
   anchorImageModel?: ModelSelection | null;
+  /**
+   * Chat studio: the page count the page plan should aim at, from the
+   * deterministic hardcover check (`core/guide/hardcover.ts`). Absent means the
+   * plan picks its own length, which is what Steps always does.
+   */
+  pageTarget?: { pages: number; wordsPerPage: number; case: "natural" | "spread" | "thin" };
   artStyle: ArtStyleSelection;
   ageRangeId: string;
   /**
@@ -684,6 +851,8 @@ export interface Project {
   illustrations?: Record<string, VersionTree<IllustrationImage>>;
   /** Final Design: app-owned overlay/typography/pattern layer. */
   design?: BookDesign;
+  /** Chat studio authoring state (see `core/guide/projectState.ts`). */
+  authoringState?: StudioAuthoringState;
 }
 
 export interface ProjectSummary {

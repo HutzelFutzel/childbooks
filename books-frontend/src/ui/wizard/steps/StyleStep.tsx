@@ -1,5 +1,7 @@
 "use client";
 
+/** @legacy guide-v2 L4 — deleted with the wizard. See docs/LEGACY-GUIDE.md. */
+
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronLeft, ChevronRight } from "lucide-react";
 import type { ArtStyleSelection } from "../../../core/types";

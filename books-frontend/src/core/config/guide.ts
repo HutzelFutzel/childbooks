@@ -27,6 +27,13 @@ import {
   normalizeGuidePlaylist,
   type GuidePlaylist,
 } from "../guide/playlist";
+import {
+  createDefaultGuideFactPolicies,
+  guideFactPoliciesSchema,
+  normalizeGuideFactPolicies,
+  type GuideFactPolicies,
+} from "../guide/factPolicy";
+import { normalizeGuideCopy, type GuideCopyOverrides } from "../guide/copy";
 
 /**
  * How wide the new flow is open:
@@ -99,6 +106,14 @@ export interface GuideConfig {
    */
   playlist: GuidePlaylist;
   extraction: GuideExtractionConfig;
+  /**
+   * Chat studio: for each fact the guide may collect, whether it is required,
+   * whether the broad question may ask it, and what happens when it is unsaid.
+   * Code owns the order of the look, the plates and the story.
+   */
+  facts: GuideFactPolicies;
+  /** Chat studio: admin overrides of the configured wording (see `core/guide/copy.ts`). */
+  wording: GuideCopyOverrides;
   updatedAt?: number;
 }
 
@@ -129,6 +144,8 @@ export const guideConfigSchema = z.object({
   }),
   playlist: guidePlaylistSchema,
   extraction: guideExtractionSchema,
+  facts: guideFactPoliciesSchema,
+  wording: z.record(z.string(), z.string().max(400)),
   updatedAt: z.number().optional(),
 });
 
@@ -151,6 +168,8 @@ export function createDefaultGuideConfig(): GuideConfig {
     rollout: { mode: DEFAULT_GUIDE_ROLLOUT_MODE, percent: 0 },
     playlist: createDefaultGuidePlaylist(),
     extraction: createDefaultGuideExtraction(),
+    facts: createDefaultGuideFactPolicies(),
+    wording: {},
   };
 }
 
@@ -184,6 +203,8 @@ export function normalizeGuideConfig(input: unknown): GuideConfig {
     // name a component that no longer exists, or be missing one that now does.
     playlist: normalizeGuidePlaylist(stored.playlist),
     extraction: normalizeGuideExtraction(stored.extraction),
+    facts: normalizeGuideFactPolicies(stored.facts),
+    wording: normalizeGuideCopy(stored.wording),
     ...(typeof stored.updatedAt === "number" ? { updatedAt: stored.updatedAt } : {}),
   };
 }

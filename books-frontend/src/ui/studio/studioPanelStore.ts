@@ -14,6 +14,12 @@ type StudioPanelState = {
   imageEditSection: ImageEditSection | null;
   toolPanel: StudioToolPanel | null;
   imageEditCloseGuard: ImageEditCloseGuard;
+  /**
+   * Set while the Chat studio mounts the page canvas. The composer is then the
+   * only natural-language input, so the canvas's own instruction field stays shut.
+   */
+  instructionsOff: boolean;
+  setInstructionsOff: (off: boolean) => void;
 
   openImageEdit: (section: ImageEditSection) => void;
   toggleImageEdit: (section: ImageEditSection) => void;
@@ -44,14 +50,18 @@ export const useStudioPanelStore = create<StudioPanelState>((set, get) => ({
   imageEditSection: null,
   toolPanel: null,
   imageEditCloseGuard: null,
+  instructionsOff: false,
+  setInstructionsOff: (off) => set({ instructionsOff: off }),
 
   openImageEdit: (section) => {
+    if (get().instructionsOff && section === "refine") return;
     if (get().imageEditSection === section) return;
     runGuard(get().imageEditCloseGuard, () =>
       set({ imageEditSection: section, toolPanel: null }),
     );
   },
   toggleImageEdit: (section) => {
+    if (get().instructionsOff && section === "refine") return;
     if (get().imageEditSection === section) {
       get().closeImageEdit();
       return;

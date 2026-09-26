@@ -1,5 +1,7 @@
 "use client";
 
+/** @legacy guide-v2 L4 — deleted with the wizard. See docs/LEGACY-GUIDE.md. */
+
 import { cn } from "../lib/cn";
 
 /**

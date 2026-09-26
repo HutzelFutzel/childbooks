@@ -43,6 +43,7 @@ import {
 } from "../core/types";
 import { detectDefaultBookLanguage } from "../core/config/bookLanguages";
 import { ProjectConflictError } from "../core/storage/repositories";
+import { resolveBookConflict } from "../core/guide/merge";
 import { getRepos } from "./repos";
 import { touchProjectRemote } from "../platform/aiClient";
 import { copyBlob, removeBlob } from "./blobs";
@@ -120,8 +121,23 @@ async function copySourceArtBlobs(project: Project): Promise<Project> {
   const storyBrief = project.config.storyBrief;
   return {
     ...project,
+    ...(project.authoringState?.styleSourceArt?.length
+      ? {
+          authoringState: {
+            ...project.authoringState,
+            styleSourceArt: remapSourceArt(
+              project.authoringState.styleSourceArt,
+              remap,
+            ),
+          },
+        }
+      : {}),
     config: {
       ...project.config,
+      artStyle: {
+        ...project.config.artStyle,
+        referenceArt: remapSourceArt(project.config.artStyle.referenceArt, remap),
+      },
       ...(storyBrief?.cast
         ? {
             storyBrief: {
@@ -180,12 +196,23 @@ interface ProjectsState {
    * it until {@link ProjectsState.reloadProject} pulls the latest and clears this.
    */
   staleProjectId: string | null;
+  /** Two devices changed the same thing; saving waits for the reader's choice. */
+  bookConflict: PendingBookConflict | null;
+  settleBookConflict: (keep: "mine" | "theirs") => Promise<void>;
   /**
    * Id of a project whose last save FAILED for a transient reason (offline,
    * storage error). Edits stay in memory; saving is retried automatically and
    * a banner tells the user their latest changes aren't stored yet.
    */
   saveFailedProjectId: string | null;
+  /**
+   * A book that was just created and should already be open, before the URL
+   * has caught up. While this is set, the library route must not close the
+   * book or present it as a card that still needs a click.
+   */
+  pendingEntryId: string | null;
+  /** Drop {@link pendingEntryId} once the route has caught up, or on leaving. */
+  clearPendingEntry: () => void;
   /** Manually retry persisting a project whose save failed. */
   retrySave: (id: string) => Promise<void>;
 
@@ -277,10 +304,16 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   currentId: null,
   loaded: false,
   staleProjectId: null,
+  bookConflict: null,
   saveFailedProjectId: null,
+  pendingEntryId: null,
 
   async retrySave(id) {
     await persistLatest(get, set, id);
+  },
+
+  clearPendingEntry() {
+    if (get().pendingEntryId) set({ pendingEntryId: null });
   },
 
   async load() {
@@ -291,22 +324,37 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
       loaded: false,
       staleProjectId: null,
       saveFailedProjectId: null,
+      pendingEntryId: null,
     });
     const { projects } = await getRepos();
     const list = await projects.list();
+    for (const project of list) savedBase.set(project.id, project);
     if (generation !== projectLoadGeneration) return;
     set({ projects: list, loaded: true });
+  },
+
+  async settleBookConflict(keep) {
+    const pending = get().bookConflict;
+    if (!pending) return;
+    const settled = resolveBookConflict(pending.merged, pending.mine, pending.theirs, pending.conflicts, keep, Date.now());
+    set((state) => ({
+      bookConflict: null,
+      projects: state.projects.map((p) => (p.id === pending.projectId ? { ...settled, rev: pending.theirs.rev } : p)),
+    }));
+    await persistLatest(get, set, pending.projectId);
   },
 
   async reloadProject(id) {
     const { projects } = await getRepos();
     const fresh = await projects.get(id);
+    if (fresh) savedBase.set(id, fresh);
     set((state) => {
       if (!fresh) {
         // Deleted elsewhere — drop it locally and close it if it was open.
         return {
           projects: state.projects.filter((p) => p.id !== id),
           currentId: state.currentId === id ? null : state.currentId,
+          pendingEntryId: state.pendingEntryId === id ? null : state.pendingEntryId,
           staleProjectId: state.staleProjectId === id ? null : state.staleProjectId,
         };
       }
@@ -340,7 +388,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     touchProjectRemote({ projectId: saved.id, stage: saved.stage, title: saved.title });
     set((state) => ({
       projects: [saved, ...state.projects],
-      ...(open ? { currentId: saved.id } : {}),
+      ...(open ? { currentId: saved.id, pendingEntryId: saved.id } : {}),
     }));
     return saved.id;
   },
@@ -377,7 +425,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   closeProject() {
-    set({ currentId: null });
+    set({ currentId: null, pendingEntryId: null });
   },
 
   async deleteProject(id) {
@@ -398,6 +446,7 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     set((state) => ({
       projects: state.projects.filter((p) => p.id !== id),
       currentId: state.currentId === id ? null : state.currentId,
+      pendingEntryId: state.pendingEntryId === id ? null : state.pendingEntryId,
       staleProjectId: state.staleProjectId === id ? null : state.staleProjectId,
     }));
   },
@@ -947,6 +996,55 @@ async function gcBlobsIfUnreferenced(
  * on every pointer sample; {@link flushProjectSaves} forces any pending write.
  */
 let saveChain: Promise<void> = Promise.resolve();
+
+/** The copy each book was last loaded or saved as: the base of a two-device merge. */
+const savedBase = new Map<string, Project>();
+
+/**
+ * A presentation may take over two-device conflicts (the Chat studio merges
+ * them). Returns the book to store, or a pending choice; null keeps the
+ * default freeze-and-reload.
+ */
+export type ConflictResolver = (args: { base: Project; mine: Project; theirs: Project }) =>
+  | { kind: "merged"; project: Project }
+  | { kind: "choose"; conflicts: string[]; merged: Project }
+  | null;
+
+let conflictResolver: ConflictResolver | null = null;
+
+export function setProjectConflictResolver(resolver: ConflictResolver | null): void {
+  conflictResolver = resolver;
+}
+
+/** A conflict the reader has to settle, held until they choose. */
+export interface PendingBookConflict {
+  projectId: string;
+  conflicts: string[];
+  merged: Project;
+  mine: Project;
+  theirs: Project;
+}
+
+async function resolveConflict(get: ProjectsGet, set: ProjectsSet, id: string, mine: Project): Promise<boolean> {
+  const base = savedBase.get(id);
+  if (!base || !conflictResolver) return false;
+  const { projects } = await getRepos();
+  const theirs = await projects.get(id);
+  if (!theirs) return false;
+  const outcome = conflictResolver({ base, mine, theirs });
+  if (!outcome) return false;
+  savedBase.set(id, theirs);
+  if (outcome.kind === "merged") {
+    set((state) => ({ projects: state.projects.map((p) => (p.id === id ? outcome.project : p)) }));
+    void persistLatest(get, set, id);
+    return true;
+  }
+  set(() => ({
+    bookConflict: { projectId: id, conflicts: outcome.conflicts, merged: outcome.merged, mine, theirs },
+    projects: get().projects.map((p) => (p.id === id ? { ...outcome.merged, rev: theirs.rev } : p)),
+  }));
+  return true;
+}
 let saveRetryTimer: ReturnType<typeof setTimeout> | null = null;
 const SAVE_RETRY_MS = 10_000;
 const SAVE_DEBOUNCE_MS = 350;
@@ -958,12 +1056,13 @@ function persistLatest(get: ProjectsGet, set: ProjectsSet, id: string): Promise<
   const next = saveChain.then(async () => {
     // A conflicted project is frozen from auto-save until the user reloads it,
     // so we don't keep re-attempting a write that can only be rejected.
-    if (get().staleProjectId === id) return;
+    if (get().staleProjectId === id || get().bookConflict?.projectId === id) return;
     const latest = get().projects.find((p) => p.id === id);
     if (!latest) return;
     const { projects } = await getRepos();
     try {
       const saved = await projects.save(latest);
+      savedBase.set(id, { ...latest, rev: saved.rev });
       // Fold the incremented generation back into the in-memory copy so the next
       // save uses it as its base (otherwise the tab would conflict with itself).
       set((state) => ({
@@ -978,6 +1077,7 @@ function persistLatest(get: ProjectsGet, set: ProjectsSet, id: string): Promise<
       }
     } catch (err) {
       if (err instanceof ProjectConflictError) {
+        if (conflictResolver && (await resolveConflict(get, set, id, latest))) return;
         // Another writer advanced the stored copy — flag it so the UI can prompt
         // a reload; the local edits stay in memory until then.
         set(() => ({ staleProjectId: id }));

@@ -22,7 +22,7 @@ import {
   currentReferenceUses,
 } from "../core/pipeline/provenance";
 import { effectiveAnchorIds } from "../core/book/anchorRefs";
-import { containedAnchorsFor } from "../core/book/anchorGraph";
+import { staleAnchorIds as staleAnchorIdsForProject } from "../core/book/anchorFreshness";
 import { spreadsById } from "../core/book/units";
 import { reconcileScreenplaySpreadIds } from "../core/book/screenplayReconcile";
 import { ProviderError } from "../core/errors";
@@ -59,6 +59,7 @@ import { capabilitiesFor } from "../core/config/modelCapabilities";
 import { mergeImageGenerationHints } from "../core/config/imageGeneration";
 import { resolveArtStyle } from "../core/config/artStyles";
 import { useProjectsStore } from "./projectsStore";
+import { withInventedTitle } from "../ui/guide/bookTitle";
 import { useSettingsStore } from "./settingsStore";
 import { useAppConfigStore } from "./appConfigStore";
 
@@ -105,7 +106,7 @@ export async function analyzeCurrentStory(signal?: AbortSignal): Promise<void> {
   const project = useProjectsStore.getState().current();
   if (!project) throw new Error("No active project.");
 
-  const { summary, anchors, model, embeddings } = await analyzeStoryRemote(project, signal);
+  const { summary, title, anchors, model, embeddings } = await analyzeStoryRemote(project, signal);
 
   await useProjectsStore.getState().setAnalysis(
     {
@@ -118,6 +119,9 @@ export async function analyzeCurrentStory(signal?: AbortSignal): Promise<void> {
     anchors,
     embeddings,
   );
+  if (title?.trim()) {
+    await useProjectsStore.getState().patchCurrent((live) => withInventedTitle(live, title));
+  }
 }
 
 /**
@@ -270,33 +274,7 @@ export function currentIllustration(
  * changed, so the user can regenerate them.
  */
 export function staleAnchorIds(project: Project): string[] {
-  const anchors = project.anchors ?? [];
-  const byId = new Map(anchors.map((a) => [a.id, a]));
-  const stale: string[] = [];
-  for (const a of anchors) {
-    if (!a.versions) continue;
-    const used = getCursor(a.versions).content.references ?? [];
-    let isStale = used.some((u) => {
-      const r = byId.get(u.anchorId);
-      if (!r) return true;
-      // The anchor's own self-entry is text-only and has no image version.
-      if (!u.textOnly && (r.versions?.cursorId ?? undefined) !== u.versionId) return true;
-      if (u.signature !== undefined && u.signature !== anchorSignature(r)) return true;
-      return false;
-    });
-    // The embedded-subject set itself changed since the render.
-    if (!isStale) {
-      const currentLinks = new Set(containedAnchorsFor(a, anchors).map((r) => r.id));
-      const recorded = new Set(
-        used.map((u) => u.anchorId).filter((id) => id !== a.id && byId.has(id)),
-      );
-      isStale =
-        currentLinks.size !== recorded.size ||
-        [...currentLinks].some((id) => !recorded.has(id));
-    }
-    if (isStale) stale.push(a.id);
-  }
-  return stale;
+  return staleAnchorIdsForProject(project);
 }
 
 /** Compare recorded reference uses to current anchors; return the changed ones. */

@@ -195,7 +195,7 @@ export const ANALYSIS_TAB_META: Record<AnalysisTabId, TabMeta> = {
   flows: {
     label: "Studio flows",
     icon: <GitCompare className="size-4" />,
-    description: "Wizard vs guided studio, side by side.",
+    description: "Steps vs Chat side by side, and what the Chat misread.",
   },
   costs: {
     label: "Costs",

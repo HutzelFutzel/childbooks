@@ -63,6 +63,7 @@ import { nextGuideStep } from "../guide/engine";
  * it as an answer is how a conversational flow starts feeling stupid.
  */
 export type GuideTurnIntent = "answer" | "revise" | "skip" | "question" | "other";
+export type GuideEntryRoute = "guided" | "own" | "uncertain";
 
 export interface GuideTurn {
   role: "reader" | "guide";
@@ -71,6 +72,11 @@ export interface GuideTurn {
 
 export interface GuideTurnResult {
   intent: GuideTurnIntent;
+  /**
+   * How this message suggests starting a fresh book. Used only while the book has
+   * no entry yet; later turns cannot silently switch how the story is authored.
+   */
+  route: GuideEntryRoute;
   /**
    * Proposed slot writes. **Untrusted** — pass to `applyGuidePatch`, never merge.
    * Typed as `unknown` on purpose: there is no shape here worth believing, and a
@@ -139,6 +145,7 @@ export interface InterpretGuideTurnInput {
  */
 const turnSchema = z.object({
   intent: z.enum(["answer", "revise", "skip", "question", "other"]),
+  route: z.enum(["guided", "own", "uncertain"]),
   claims: z.array(guideClaimSchema).max(24).optional(),
   skip: z.array(z.string()).max(20).optional(),
   reply: z.string().max(1200),
@@ -149,6 +156,11 @@ const turnSchema = z.object({
 const repairSchema = z.object({
   claims: z.array(guideClaimSchema).max(24),
 });
+
+/** Test and migration callers may omit the new route; production model output may not. */
+type SanitizableGuideTurn = Omit<z.infer<typeof turnSchema>, "route"> & {
+  route?: GuideEntryRoute;
+};
 
 /** How many turns of history to send. Enough for "yes"; not enough to drift. */
 const TRANSCRIPT_WINDOW = 8;
@@ -245,7 +257,7 @@ export interface SanitizeGuideTurnOptions {
 }
 
 export function sanitizeGuideTurn(
-  raw: z.infer<typeof turnSchema>,
+  raw: SanitizableGuideTurn,
   options: SanitizeGuideTurnOptions,
 ): GuideTurnResult {
   const optional = new Map(options.playlist.map((c) => [c.id, c.skippable]));
@@ -260,21 +272,18 @@ export function sanitizeGuideTurn(
   const refused: RefusedGuideClaim[] = [];
 
   /**
-   * Claims only count for turns that claim to state a fact.
+   * A question or an aside can still carry a fact. "How long does printing
+   * take? Amira is 4" states an age. A one-word quotation does not: "what ages
+   * do you support?" contains the word "ages", and "is Maya a good name?"
+   * contains a name, and neither is the reader telling us who the book is for.
+   * Skipping still states nothing.
    *
-   * Evidence verification catches most invention, but not all of it: "what ages
-   * do you support?" genuinely contains the word "ages", so a claim about the
-   * audience quoting it would pass the evidence check while being the exact
-   * opposite of what the reader meant. Asking a question is not stating a fact,
-   * and the intent is the only thing that knows the difference.
-   *
-   * What HAS changed is that the loss is now recorded. This gate used to replace
-   * the patch with `{}` and leave nothing behind, so a misclassified intent was
-   * indistinguishable from a model that extracted nothing — the two have very
-   * different fixes and looked identical in the logs.
+   * A dropped claim is recorded. This gate used to replace the patch with `{}`
+   * and leave nothing behind, so a misclassified intent was indistinguishable
+   * from a model that extracted nothing.
    */
   const statesFacts = raw.intent === "answer" || raw.intent === "revise";
-  if (!statesFacts) {
+  if (raw.intent === "skip") {
     for (const claim of proposed) {
       refused.push({
         slot: claim.slot,
@@ -282,11 +291,12 @@ export function sanitizeGuideTurn(
         evidence: claim.evidence,
         confidence: claim.confidence,
         refusal: "not-a-statement",
-        reason: `a "${raw.intent}" turn may not state facts`,
+        reason: `a "skip" turn may not state facts`,
       });
     }
     return {
       intent: raw.intent,
+      route: raw.route ?? "uncertain",
       patch: {},
       claims: [],
       refused,
@@ -299,13 +309,68 @@ export function sanitizeGuideTurn(
     };
   }
 
+  // A story idea and a manuscript can contain the same words. The independent
+  // route decision is therefore required before any exact text may become the
+  // manuscript; otherwise one mistaken claim can silently turn a vivid brief
+  // into the finished story and suppress drafting.
+  const candidates =
+    raw.route === "own"
+      ? proposed
+      : proposed.filter((claim) => {
+          if (claim.slot !== "storyText") return true;
+          refused.push({
+            slot: claim.slot,
+            value: claim.value,
+            evidence: claim.evidence,
+            confidence: claim.confidence,
+            refusal: "not-a-statement",
+            reason: `story text requires an own-words route`,
+          });
+          return false;
+        });
+
   const screened = screenGuideClaims({
     message: options.message,
-    claims: proposed,
+    claims: candidates,
     thresholds:
       options.thresholds?.floor !== undefined ? { floor: options.thresholds.floor } : undefined,
   });
   refused.push(...screened.refused);
+  let keptClaims = screened.kept;
+  if (!statesFacts) {
+    const substantial = [];
+    for (const claim of screened.kept) {
+      const words = claim.evidence.trim().split(/\s+/).filter(Boolean);
+      if (words.length < 2) {
+        refused.push({
+          slot: claim.slot,
+          value: claim.value,
+          evidence: claim.evidence,
+          confidence: claim.confidence,
+          refusal: "not-a-statement",
+          reason: `a "${raw.intent}" turn needs more than one word of evidence to state a fact`,
+        });
+      } else {
+        substantial.push(claim);
+      }
+    }
+    if (substantial.length === 0) {
+      return {
+        intent: raw.intent,
+        route: raw.route ?? "uncertain",
+        patch: {},
+        claims: [],
+        refused,
+        readBack: [],
+        confirm: null,
+        repairs: 0,
+        skip,
+        reply: raw.reply.trim(),
+        confidence: raw.confidence,
+      };
+    }
+    keptClaims = substantial;
+  }
 
   /**
    * The dry run. `applyGuidePatch` is pure and returns a new project, so asking it
@@ -317,11 +382,11 @@ export function sanitizeGuideTurn(
    */
   const dry = applyGuidePatch(
     options.project,
-    claimsToPatch(screened.kept),
+    claimsToPatch(keptClaims),
     options.patchContext,
   );
   const rejectedSlots = new Map(dry.rejected.map((rejection) => [rejection.key, rejection]));
-  const survived = screened.kept.filter((claim) => {
+  const survived = keptClaims.filter((claim) => {
     const rejection = rejectedSlots.get(claim.slot);
     // A partial refusal still applied something, so the claim survives; the part
     // that did not stick is reported by the real write, in the reader's words.
@@ -347,6 +412,7 @@ export function sanitizeGuideTurn(
   const taken = disposed.taken.map((entry) => entry.claim);
   return {
     intent: raw.intent,
+    route: raw.route ?? "uncertain",
     patch: claimsToPatch(taken),
     claims: taken,
     refused,
@@ -365,6 +431,7 @@ export function sanitizeGuideTurn(
 function emptyTurn(reply: string): GuideTurnResult {
   return {
     intent: "other",
+    route: "uncertain",
     patch: {},
     claims: [],
     refused: [],

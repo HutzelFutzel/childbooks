@@ -211,6 +211,9 @@ export function useStoryRevision() {
     },
     [endStoryHistoryGesture, project, revision, updateStory],
   );
+  const keepAll = useCallback(() => finish("all"), [finish]);
+  const keepSelected = useCallback(() => finish("selected"), [finish]);
+  const discardAll = useCallback(() => finish("discard"), [finish]);
 
   return {
     revision,
@@ -218,8 +221,8 @@ export function useStoryRevision() {
     saving,
     start,
     decide,
-    keepAll: () => finish("all"),
-    keepSelected: () => finish("selected"),
-    discardAll: () => finish("discard"),
+    keepAll,
+    keepSelected,
+    discardAll,
   };
 }

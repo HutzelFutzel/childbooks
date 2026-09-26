@@ -21,6 +21,12 @@ import { IntentAmbiguousError } from "../core/pipeline/intentResolve";
 import type { GuideTurn, GuideTurnResult } from "../core/pipeline/guideInterpret";
 import { ProviderError, type ProviderErrorKind } from "../core/errors";
 import type { ImageTier } from "../core/config/modelConfig";
+import type {
+  GenerationQuote,
+  GenerationQuotePurpose,
+  GenerationQuoteUnit,
+} from "../core/billing/generationQuote";
+import type { ManuscriptCast } from "../core/guide/ownWords";
 
 export { IntentAmbiguousError };
 
@@ -124,6 +130,8 @@ function serializableOptions<T extends { signal?: AbortSignal }>(options: T): Om
 
 export interface AnalyzeResult {
   summary: string;
+  /** A short title in the book's language, when the analysis invented one. */
+  title?: string;
   anchors: Anchor[];
   model: string;
   /** Private contained-subject dependencies, keyed by name until reconciliation. */
@@ -266,7 +274,12 @@ export function extractArtStyleRemote(
 ): Promise<ExtractArtStyleResult> {
   return postAi<ExtractArtStyleResult>(
     "/ai/extract-art-style",
-    { project: slimProjectForRender(project, { keepAnchorVersions: false }) },
+    {
+      project: slimProjectForRender(project, {
+        keepAnchorVersions: false,
+        keepStyleSourceArt: true,
+      }),
+    },
     signal,
   );
 }
@@ -361,4 +374,47 @@ export function illustrationRemote(
     },
     options.signal,
   );
+}
+
+/** Ask the backend for a stored estimate covering exactly these units. */
+export function requestGenerationQuoteRemote(args: {
+  projectId: string;
+  purpose: GenerationQuotePurpose;
+  tier: ImageTier;
+  units: GenerationQuoteUnit[];
+}): Promise<GenerationQuote> {
+  return postAi<GenerationQuote>("/ai/generation-quote", args);
+}
+
+/** The next thing the guide says, after a turn is saved. The caller checks the asks. */
+export function guideAskNextRemote(args: {
+  projectId: string;
+  language: string;
+  names: string[];
+  learned: string;
+  open: string;
+  transcript: string;
+  guidePreference?: string | null;
+}): Promise<{ text: string; asks: string[] }> {
+  return postAi("/ai/guide/speak", { ...args, mode: "next" });
+}
+
+/** Phrase configured guide lines in the chat language. Names come back unchanged. */
+export function guideSpeakRemote(args: {
+  projectId: string;
+  language: string;
+  names: string[];
+  lines: { id: string; meaning: string }[];
+  guidePreference?: string | null;
+}): Promise<{ lines: Record<string, string> }> {
+  return postAi("/ai/guide/speak", args);
+}
+
+/** Read the names and stated ages in a manuscript, without rewriting it. */
+export function guideExtractCastRemote(args: {
+  projectId: string;
+  story: string;
+  guidePreference?: string | null;
+}): Promise<ManuscriptCast> {
+  return postAi("/ai/guide/extract-cast", args);
 }

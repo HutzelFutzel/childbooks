@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L2 — deleted with the Steps cast stage. See docs/LEGACY-GUIDE.md. */
 /**
  * Shared live estimate + phase progress for in-flight image generation.
  * Used by GenerationOverlay (HTML) and KonvaArtBusyVeil (in-canvas).

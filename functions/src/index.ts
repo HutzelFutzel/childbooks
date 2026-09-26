@@ -33,6 +33,8 @@ export { onGenerationJob, runFanTask, runTextTask, reapStuckJobs } from "./jobs"
 export { cleanupAnonymousUsers } from "./cleanup";
 // One-use character photos: hard-delete abandoned sources after 24 hours.
 export { cleanupExpiredLikenessPhotos } from "./likeness";
+// Daily replay of the reviewed guide-extraction corpus.
+export { evaluateGuideExtractionDaily } from "./guideEvaluation";
 
 // Scheduled retry of paid orders whose print placement failed.
 export { retryFulfillments } from "./fulfillmentRetry";

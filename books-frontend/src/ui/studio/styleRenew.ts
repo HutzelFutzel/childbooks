@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L1 — deleted with the Steps shell. See docs/LEGACY-GUIDE.md. */
 /**
  * Art-style transfer: move every existing piece of artwork to the book's newly
  * chosen style.

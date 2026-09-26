@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L1 — deleted with the Steps shell. See docs/LEGACY-GUIDE.md. */
 /**
  * Progress strip for a running art-style transfer. Sits above the Design stage
  * so the reader can keep working while cast sheets and pages are re-rendered —

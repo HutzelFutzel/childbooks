@@ -26,6 +26,17 @@ import { allVersions } from "../versioning";
  */
 export function collectProjectImageBlobIds(project: Project): Set<string> {
   const ids = new Set<string>();
+  for (const image of project.config.artStyle.referenceArt ?? []) {
+    ids.add(image.blobId);
+  }
+  for (const image of project.authoringState?.styleSourceArt ?? []) {
+    ids.add(image.blobId);
+  }
+  for (const tree of Object.values(project.authoringState?.portraits ?? {})) {
+    for (const node of allVersions(tree)) {
+      if (node.content.blobId) ids.add(node.content.blobId);
+    }
+  }
   for (const anchor of project.anchors ?? []) {
     for (const image of anchor.sourceArt ?? []) ids.add(image.blobId);
     if (!anchor.versions) continue;

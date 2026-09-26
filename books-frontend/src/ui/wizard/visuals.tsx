@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L4 — deleted with the wizard. See docs/LEGACY-GUIDE.md. */
 import { Image as ImageIcon, Type } from "lucide-react";
 import type { GraphicsDensity, SpreadUsage } from "../../core/config/options";
 import { cn } from "../lib/cn";

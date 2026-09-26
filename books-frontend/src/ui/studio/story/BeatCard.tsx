@@ -96,7 +96,7 @@ export function BeatCard({
             placeholder ?? `${language.storyGreeting} ${language.samplePhrase}`
           }
           className={cn(
-            "h-full w-full resize-none border-0 bg-transparent px-5 py-4 font-serif text-[15px] leading-[1.8] text-ink-800",
+            "h-full min-h-0 w-full flex-1 resize-none border-0 bg-transparent px-5 py-4 font-serif text-[15px] leading-[1.8] text-ink-800",
             "focus:outline-none focus:ring-0 placeholder:text-ink-300",
             "sm:px-8 sm:py-5 sm:text-[16px]",
           )}

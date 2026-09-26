@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L3 — deleted with the Steps story intake. See docs/LEGACY-GUIDE.md. */
 import { BookText, Users } from "lucide-react";
 import { audienceLabel } from "../../core/config/audience";
 import { activeAudienceSource } from "../../core/config/activeAudience";
@@ -5,6 +6,7 @@ import { getBookLanguage, isBookLanguageId } from "../../core/config/bookLanguag
 import { wordCount } from "../../core/story/brief";
 import { ageBandHasReadingModes, readingModeLabel } from "../../core/config/ageWritingCatalog";
 import { storyModeInfo } from "../../core/config/storyCraftCatalog";
+import { GuideIntl } from "../guide/intl";
 import type { GuidedQuestion } from "./GuidedQuestions";
 import { ReaderStep } from "./steps/ReaderStep";
 import { StoryStep } from "./steps/StoryStep";
@@ -34,7 +36,11 @@ export const STORY_QUESTIONS: GuidedQuestion[] = [
         : ageLabel(config.ageRangeId);
       return `${lang.endonym} · ${age}`;
     },
-    render: (props) => <ReaderStep {...props} />,
+    render: (props) => (
+      <GuideIntl>
+        <ReaderStep {...props} />
+      </GuideIntl>
+    ),
   },
   {
     id: "story",
@@ -47,6 +53,10 @@ export const STORY_QUESTIONS: GuidedQuestion[] = [
       if (words > 0) return `${words} word${words === 1 ? "" : "s"} written`;
       return c.storyBrief ? storyModeInfo(c.storyBrief.mode).label : "No story yet";
     },
-    render: (props) => <StoryStep {...props} />,
+    render: (props) => (
+      <GuideIntl>
+        <StoryStep {...props} />
+      </GuideIntl>
+    ),
   },
 ];

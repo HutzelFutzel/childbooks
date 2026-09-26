@@ -11,6 +11,7 @@ import { resolveAudienceProfile } from "../../../core/config/audience";
 import type { AgeBandStoryCraft } from "../../../core/config/storyCraftCatalog";
 import { wordCount } from "../../../core/story/brief";
 import { Button } from "../../components/Button";
+import { useGuideT } from "../../guide/intl";
 import { cn } from "../../lib/cn";
 import { fadeRise } from "../../lib/motion";
 import { notify } from "../../lib/notify";
@@ -23,19 +24,16 @@ import { notify } from "../../lib/notify";
 const VERDICTS = {
   good: {
     icon: CheckCircle2,
-    label: "Feels right at home for this age",
     tone: "bg-emerald-50/80 text-emerald-800 ring-emerald-100",
     iconTone: "text-emerald-600",
   },
   minor: {
     icon: Lightbulb,
-    label: "A good fit — with a thought or two",
     tone: "bg-amber-50/80 text-amber-900 ring-amber-100",
     iconTone: "text-amber-600",
   },
   mismatch: {
     icon: Feather,
-    label: "Reads a little differently for this age",
     tone: "bg-sky-50/80 text-sky-900 ring-sky-100",
     iconTone: "text-sky-600",
   },
@@ -56,6 +54,7 @@ export function AgeFitCheck({
   ageRangeId: string;
   craft: AgeBandStoryCraft;
 }) {
+  const t = useGuideT("storyTools");
   const [result, setResult] = useState<StoryFitResult | null>(null);
   const [checking, setChecking] = useState(false);
   const [dismissed, setDismissed] = useState(false);
@@ -98,9 +97,17 @@ export function AgeFitCheck({
     words === 0
       ? null
       : words < craft.structure.minWords
-        ? `Most ${bandLabel} books run ${craft.structure.minWords}–${craft.structure.maxWords} words — yours is a little shorter, which just means a shorter book. Totally fine either way.`
+        ? t("shortLengthHint", {
+            band: bandLabel,
+            min: craft.structure.minWords,
+            max: craft.structure.maxWords,
+          })
         : words > craft.structure.maxWords
-          ? `Most ${bandLabel} books run ${craft.structure.minWords}–${craft.structure.maxWords} words — yours is a little longer, so expect more pages. Nothing wrong with that.`
+          ? t("longLengthHint", {
+              band: bandLabel,
+              min: craft.structure.minWords,
+              max: craft.structure.maxWords,
+            })
           : null;
 
   async function check() {
@@ -108,8 +115,12 @@ export function AgeFitCheck({
     if (!project || checking) return;
     setChecking(true);
     try {
-      const fit = await storyFitRemote(project);
-      checkedText.current = project.config.storyText;
+      const storyProject = {
+        ...project,
+        config: { ...project.config, storyText },
+      };
+      const fit = await storyFitRemote(storyProject);
+      checkedText.current = storyText;
       setResult(fit);
       setDismissed(false);
     } catch (err) {
@@ -122,6 +133,7 @@ export function AgeFitCheck({
   if (!ready) return null;
 
   const verdict = result ? VERDICTS[result.verdict] : null;
+  const verdictLabel = result ? t(`verdict_${result.verdict}`) : "";
   const VerdictIcon = verdict?.icon;
   const showResult = result && verdict && VerdictIcon && !dismissed;
 
@@ -141,7 +153,7 @@ export function AgeFitCheck({
             <button
               type="button"
               onClick={() => setDismissed(true)}
-              aria-label="Dismiss this note"
+              aria-label={t("dismissNote")}
               className="absolute right-2.5 top-2.5 flex size-6 items-center justify-center rounded-full text-current opacity-50 transition hover:opacity-100 hover:bg-black/5"
             >
               <X className="size-3.5" />
@@ -149,7 +161,7 @@ export function AgeFitCheck({
             <div className="flex items-start gap-2.5">
               <VerdictIcon className={cn("mt-0.5 size-4 shrink-0", verdict.iconTone)} />
               <div className="min-w-0 space-y-1">
-                <p className="text-sm font-semibold">{verdict.label}</p>
+                <p className="text-sm font-semibold">{verdictLabel}</p>
                 {result.headline && (
                   <p className="text-xs leading-relaxed opacity-90">{result.headline}</p>
                 )}
@@ -167,17 +179,17 @@ export function AgeFitCheck({
                         key={d.label}
                         className="rounded-full bg-white/70 px-2 py-0.5 text-[11px] font-medium"
                       >
-                        {d.label}: {d.fit === "lighter" ? "lighter than usual" : "richer than usual"}
+                        {d.label}: {d.fit === "lighter" ? t("lighterThanUsual") : t("richerThanUsual")}
                       </span>
                     ))}
                   </div>
                 )}
                 <p className="pt-0.5 text-[11px] font-medium opacity-70">
                   {textStale
-                    ? "You've since edited the story — this note is about the earlier version."
+                    ? t("noteEarlierVersion")
                     : bandStale
-                      ? `What we look for at ${bandLabel} has been updated since this read.`
-                      : "Just a friendly take — your story is exactly as you wrote it, and that's not changing."}
+                      ? t("bandUpdated", { band: bandLabel })
+                      : t("friendlyTake")}
                 </p>
               </div>
             </div>
@@ -193,16 +205,16 @@ export function AgeFitCheck({
           leftIcon={!checking ? <SearchCheck className="size-4" /> : undefined}
           onClick={() => void check()}
         >
-          {result && !stale ? "Get a fresh take" : `See how this reads for ${bandLabel}`}
+          {result && !stale ? t("freshTake") : t("readerFit", { band: bandLabel })}
         </Button>
         <span className="flex items-center gap-1.5 text-xs text-ink-400">
           {checking ? (
             <>
               <Loader2 className="size-3.5 animate-spin" />
-              Having a read…
+              {t("havingRead")}
             </>
           ) : (
-            "Entirely optional — just a perspective, never a requirement."
+            t("optionalPerspective")
           )}
         </span>
       </div>

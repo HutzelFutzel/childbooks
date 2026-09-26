@@ -15,6 +15,7 @@
  * Subscriptions reuse Checkout in `subscription` mode + the Customer Portal.
  */
 import express, { type Express, type Request, type Response } from "express";
+import { holdQuoteForCheckout } from "./generationQuotes";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 import { serverConfig } from "./config";
@@ -2186,6 +2187,13 @@ export function registerStripeUserRoutes(app: Express): void {
         return;
       }
       const chargedPrice = earned ? discountedAmount(price, earned.percentOff) : price;
+      // Buying for a specific action: hold its price, and come back ready to start it.
+      const resumeQuoteId = (req.body as { resumeQuoteId?: unknown })?.resumeQuoteId;
+      const quoteExpiresAt =
+        typeof resumeQuoteId === "string"
+          ? await holdQuoteForCheckout(uid, resumeQuoteId).catch(() => null)
+          : null;
+      const resume = quoteExpiresAt ? `&draw=${encodeURIComponent(resumeQuoteId as string)}` : "";
       const session = await createCheckoutSession({
         mode: "payment",
         customer: customerId,
@@ -2214,8 +2222,10 @@ export function registerStripeUserRoutes(app: Express): void {
             ...(await affiliateChargeMetadata(uid, "sparkPack")),
           },
         },
-        success_url: `${appBaseUrl()}/studio?sparks=success&payment=${paymentId}`,
-        cancel_url: `${appBaseUrl()}/studio?sparks=cancel`,
+        // A purchase started from a book returns to that book, where the action
+        // the reader was about to take is still waiting.
+        success_url: `${appBaseUrl()}${sparkReturnPath(req.body)}?sparks=success&payment=${paymentId}${resume}`,
+        cancel_url: `${appBaseUrl()}${sparkReturnPath(req.body)}?sparks=cancel`,
       });
       await createPendingPayment({
         paymentId,
@@ -2229,7 +2239,7 @@ export function registerStripeUserRoutes(app: Express): void {
         ...checkoutDevice(req),
         items: [{ label: `${totalSparks} Sparks`, amount: chargedPrice, quantity: 1 }],
       });
-      res.json({ url: session.url, paymentId });
+      res.json({ url: session.url, paymentId, ...(quoteExpiresAt ? { quoteExpiresAt } : {}) });
     } catch (err) {
       await checkoutFailed(res, err, "sparks pack");
     }
@@ -3783,4 +3793,12 @@ export async function stripeHealth(): Promise<StripeHealthReport> {
 
   const ok = checks.every((c) => c.status !== "fail");
   return { environment: env, ok, checks };
+}
+
+/** `/studio/{projectId}` when a pack was bought from inside a book, else `/studio`. */
+function sparkReturnPath(body: unknown): string {
+  const projectId = (body as { returnProjectId?: unknown } | undefined)?.returnProjectId;
+  return typeof projectId === "string" && /^[A-Za-z0-9_-]{1,120}$/.test(projectId)
+    ? `/studio/${encodeURIComponent(projectId)}`
+    : "/studio";
 }

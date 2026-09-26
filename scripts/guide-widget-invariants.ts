@@ -1,9 +1,8 @@
+/** @legacy guide-v2 L0 — unreachable today; nothing renders it. See docs/LEGACY-GUIDE.md. */
 /**
- * Invariants for the input affordances and the artifact pane.
+ * Invariants for the step flow's input affordances.
  *
- * Two claims are checked here, and both are the kind that fail silently.
- *
- * **1. An option the reader can see is an option the validator accepts.** A tapped
+ * **An option the reader can see is an option the validator accepts.** A tapped
  * choice carries its own patch and skips the interpreter entirely, which is the
  * reason widgets are worth building — and also the reason a wrong option is nastier
  * than a wrong sentence. There is no model to blame and no rejection to report: the
@@ -11,20 +10,12 @@
  * again. So every option of every widget is actually applied to a real book here, and
  * has to land.
  *
- * **2. Driving the pane from `component.canvas` is not a behaviour change.** The pane
- * used to follow `legacyDestination` (the wizard's vocabulary) and now follows
- * `canvas` (the guide's own). Since `legacyDestination` is deleted with the wizard,
- * the swap had to happen at some point; doing it while both exist means the two can be
- * pinned against each other, so it is provable rather than hoped for. One divergence
- * is intended and listed.
- *
  * Offline and deterministic: the same synthesized books the engine is proven against,
  * the shipped admin config, and pure functions.
  */
 import {
   GUIDE_CATALOG,
   GUIDE_COMPONENTS,
-  type GuideCanvasKind,
   type GuideComponentId,
 } from "../books-frontend/src/core/guide/components";
 import {
@@ -34,7 +25,6 @@ import {
 import { nextGuideStep } from "../books-frontend/src/core/guide/engine";
 import { guideWidget, type GuideWidget } from "../books-frontend/src/core/guide/widgets";
 import { applyGuidePatch, guidePatchContext } from "../books-frontend/src/core/guide/patch";
-import { CANVAS_DESTINATION } from "../books-frontend/src/ui/guide/guideCanvas";
 import { GUIDE_BOOK_STATES } from "./guide-engine-invariants";
 
 export interface CheckResult {
@@ -57,50 +47,6 @@ const playlist = resolveGuidePlaylist(createDefaultGuidePlaylist());
 // The shipped admin config, which is what a reader gets before an admin touches
 // anything — so the offered options are the real ones, not a fixture's.
 const context = guidePatchContext({ audience: null, artStyles: null });
-
-/**
- * The one place the pane and the wizard are allowed to disagree.
- *
- * The wizard has no surface for the wait while the screenplay drafts, so it holds on
- * Cast. The guide would rather show the reader the pages being planned, which is the
- * whole reason it has a vocabulary of its own.
- */
-const EXPECTED_CANVAS_DIVERGENCE: Partial<Record<GuideComponentId, string>> = {
-  "page-plan": "the wizard waits on Cast; the guide shows the pages being planned",
-};
-
-// --- The pane follows the guide's vocabulary, faithfully --------------------
-
-for (const component of GUIDE_CATALOG) {
-  cases += 1;
-  const mapped = CANVAS_DESTINATION[component.canvas];
-  if (!mapped) {
-    fail(`Canvas "${component.canvas}" (on "${component.id}") maps to no destination.`);
-    continue;
-  }
-  const expected = EXPECTED_CANVAS_DIVERGENCE[component.id];
-  if (mapped !== component.legacyDestination && !expected) {
-    fail(
-      `"${component.id}" would open "${mapped}" from its canvas but the wizard opens ` +
-        `"${component.legacyDestination}". Either the canvas is wrong or the divergence is ` +
-        `intended and belongs in EXPECTED_CANVAS_DIVERGENCE.`,
-    );
-  }
-  if (mapped === component.legacyDestination && expected) {
-    fail(`"${component.id}" is listed as diverging but now agrees with the wizard — drop the entry.`);
-  }
-}
-
-// Every canvas kind is reachable, or it is a value nothing can ever show.
-{
-  const used = new Set(GUIDE_CATALOG.map((component) => component.canvas));
-  for (const canvas of Object.keys(CANVAS_DESTINATION) as GuideCanvasKind[]) {
-    cases += 1;
-    if (!used.has(canvas)) {
-      fail(`Canvas "${canvas}" is mapped but no component uses it.`);
-    }
-  }
-}
 
 // --- Every offered option actually lands ------------------------------------
 
@@ -297,9 +243,7 @@ report.push("How the reader answers each question");
 for (const component of GUIDE_CATALOG) {
   const kind = widgetsSeen.get(component.id);
   report.push(
-    `  ${component.id.padEnd(15)} ${(kind ?? "—").padEnd(8)} canvas ${component.canvas.padEnd(11)}` +
-      ` → ${CANVAS_DESTINATION[component.canvas]}` +
-      (EXPECTED_CANVAS_DIVERGENCE[component.id] ? "  (diverges, by design)" : ""),
+    `  ${component.id.padEnd(15)} ${(kind ?? "—").padEnd(8)} canvas ${component.canvas}`,
   );
 }
 

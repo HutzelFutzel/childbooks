@@ -22,7 +22,7 @@ import {
 } from "../core/guide/patch";
 import type { GuideSlotId } from "../core/guide/slots";
 import type { GuideComponentId } from "../core/guide/components";
-import type { GuideTurn, GuideTurnIntent } from "../core/pipeline/guideInterpret";
+import type { GuideEntryRoute, GuideTurn, GuideTurnIntent } from "../core/pipeline/guideInterpret";
 import { interpretGuideTurnRemote } from "../platform/aiClient";
 import { useAppConfigStore } from "./appConfigStore";
 import { useProjectsStore } from "./projectsStore";
@@ -30,6 +30,8 @@ import { useGuidePreference } from "../ui/guide/guidePreference";
 
 export interface GuideTurnOutcome {
   intent: GuideTurnIntent;
+  /** Suggested entry for a book that has not chosen how its story is written. */
+  route: GuideEntryRoute;
   /** What to say back to the reader. */
   reply: string;
   /** Slots that actually changed the book. */
@@ -107,6 +109,7 @@ export async function sendGuideTurn(
 
   return applyTurnPatch(result.patch, {
     intent: result.intent,
+    route: result.route,
     reply: result.reply,
     skip: result.skip,
     confirm: result.confirm ?? null,
@@ -121,6 +124,7 @@ async function applyTurnPatch(
   patch: Record<string, unknown>,
   meta: {
     intent: GuideTurnIntent;
+    route: GuideEntryRoute;
     reply: string;
     skip: GuideComponentId[];
     confirm: string | null;
@@ -150,6 +154,7 @@ async function applyTurnPatch(
 
   return {
     intent: meta.intent,
+    route: meta.route,
     reply: meta.reply,
     applied,
     unchanged,

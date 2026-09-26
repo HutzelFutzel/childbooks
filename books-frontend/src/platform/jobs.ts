@@ -30,9 +30,13 @@ import type {
   AnchorsJob,
   AnchorTask,
   AnyJob,
+  BookJob,
+  BookTask,
   GenerationJob,
   JobTask,
   PipelineRefreshJob,
+  PortraitJob,
+  PortraitTask,
   RefreshTask,
   ScreenplayJob,
   TaskDoc,
@@ -65,6 +69,7 @@ export async function createImageJob(
   projectId: string,
   tasks: JobTask[],
   tier: ImageTier,
+  options: QuotedJobOptions = {},
 ): Promise<string> {
   const now = Date.now();
   const job: GenerationJob = {
@@ -80,9 +85,66 @@ export async function createImageJob(
     runCount: 0,
     tasks,
     progress: { total: tasks.length, completed: 0, failed: 0 },
+    ...(options.quoteId ? { quoteId: options.quoteId } : {}),
   };
+  if (options.idempotencyKey) return createOnce(options.idempotencyKey, job);
   const ref = await addDoc(collection(getFirebaseDb(), `users/${uid()}/jobs`), job);
   return ref.id;
+}
+
+/**
+ * A confirmed estimate and the key that makes its job one-shot.
+ *
+ * The key names the reader's intent (usually `{quoteId}-{phase}`), so a reload,
+ * a double tap or a return URL lands on the job that already exists instead of
+ * creating a second one. The worker's per-unit quote consumption is the second
+ * lock: even a different job naming the same units is refused.
+ */
+export interface QuotedJobOptions {
+  quoteId?: string;
+  idempotencyKey?: string;
+}
+
+async function createOnce(key: string, job: AnyJob): Promise<string> {
+  const db = getFirebaseDb();
+  const ref = doc(collection(db, `users/${uid()}/jobs`), key.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 140));
+  await runTransaction(db, async (tx) => {
+    const existing = await tx.get(ref);
+    if (!existing.exists()) tx.set(ref, job);
+  });
+  return ref.id;
+}
+
+/**
+ * Create a scoped portrait batch: one portrait per named person, charged against
+ * the stored quote the reader confirmed.
+ */
+export async function createPortraitJob(
+  project: Project,
+  tasks: PortraitTask[],
+  tier: ImageTier,
+  options: Required<QuotedJobOptions>,
+): Promise<string> {
+  await bindProjectLikenessPhotos(
+    project,
+    tasks.map((task) => task.id),
+  );
+  const now = Date.now();
+  const job: PortraitJob = {
+    kind: "portrait",
+    status: "pending",
+    projectId: project.id,
+    tier,
+    createdAt: now,
+    updatedAt: now,
+    leaseExpiresAt: 0,
+    runCount: 0,
+    project: slimProjectForRender(project, {}),
+    tasks,
+    progress: { total: tasks.length, completed: 0, failed: 0 },
+    quoteId: options.quoteId,
+  };
+  return createOnce(options.idempotencyKey, job);
 }
 
 /**
@@ -95,6 +157,7 @@ export async function createRefreshJob(
   models: ResolvedModels,
   tasks: RefreshTask[],
   tier: ImageTier,
+  options: QuotedJobOptions = {},
 ): Promise<string> {
   // Persisted in Firestore (1 MB cap): embed only what the worker renders — the
   // screenplay, the anchors' active images, and the targeted spreads' trees.
@@ -118,8 +181,10 @@ export async function createRefreshJob(
       models,
       tasks,
       progress: { total: tasks.length, completed: 0, failed: 0 },
+      ...(options.quoteId ? { quoteId: options.quoteId } : {}),
     };
   };
+  if (options.idempotencyKey) return createOnce(options.idempotencyKey, buildJob());
 
   // The project revision + source cursor identify one user intent. Two tabs (or
   // two rapid handlers) starting from that same state therefore transact on the
@@ -168,6 +233,7 @@ export async function createAnchorsJob(
   models: ResolvedModels,
   tasks: AnchorTask[],
   tier: ImageTier,
+  options: QuotedJobOptions = {},
 ): Promise<string> {
   await bindProjectLikenessPhotos(
     project,
@@ -194,9 +260,54 @@ export async function createAnchorsJob(
     models,
     tasks,
     progress: { total: tasks.length, completed: 0, failed: 0 },
+    ...(options.quoteId ? { quoteId: options.quoteId } : {}),
   };
+  if (options.idempotencyKey) return createOnce(options.idempotencyKey, job);
   const ref = await addDoc(collection(getFirebaseDb(), `users/${uid()}/jobs`), job);
   return ref.id;
+}
+
+/**
+ * Create the Draw-the-book job: every sheet that needs drawing and every page
+ * and cover, in one server-run job. Pages wait on their sheets inside the job,
+ * so the book finishes whether or not this tab stays open.
+ */
+export async function createBookJob(
+  project: Project,
+  models: ResolvedModels,
+  tasks: BookTask[],
+  tier: ImageTier,
+  options: Required<QuotedJobOptions> & { notify: boolean },
+): Promise<string> {
+  const anchorIds = tasks.filter((t) => t.kind === "anchors").map((t) => t.id);
+  if (anchorIds.length > 0) await bindProjectLikenessPhotos(project, anchorIds);
+  const now = Date.now();
+  const job: BookJob = {
+    kind: "book",
+    status: "pending",
+    projectId: project.id,
+    tier,
+    createdAt: now,
+    updatedAt: now,
+    leaseExpiresAt: 0,
+    runCount: 0,
+    project: slimProjectForRender(project, {
+      keepScreenplay: true,
+      keepAnchorVersions: true,
+      illustrationTargets: tasks.filter((t) => t.kind === "refresh").map((t) => ({ id: t.id })),
+    }),
+    models,
+    tasks,
+    progress: { total: tasks.length, completed: 0, failed: 0 },
+    quoteId: options.quoteId,
+    notify: options.notify,
+  };
+  return createOnce(options.idempotencyKey, job);
+}
+
+/** Switch a running book job's "email me when it's done". */
+export async function setBookJobNotify(jobId: string, notify: boolean): Promise<void> {
+  await updateDoc(doc(getFirebaseDb(), `users/${uid()}/jobs`, jobId), { notify });
 }
 
 /**
@@ -206,7 +317,7 @@ export async function createAnchorsJob(
  */
 export async function createScreenplayJob(
   project: Project,
-  options: { retry?: boolean } = {},
+  options: { retry?: boolean; key?: string } = {},
 ): Promise<string> {
   if (!project.analysis) throw new Error("Analyze the story before drafting its pages.");
   const now = Date.now();
@@ -228,7 +339,10 @@ export async function createScreenplayJob(
     return ref.id;
   }
 
-  const jobId = `screenplay-${project.id}-${project.analysis.generatedAt}`;
+  const jobId = `screenplay-${project.id}-${options.key ?? project.analysis.generatedAt}`.replace(
+    /[^a-zA-Z0-9_-]/g,
+    "_",
+  );
   const ref = doc(col, jobId);
   await runTransaction(getFirebaseDb(), async (tx) => {
     const existing = await tx.get(ref);

@@ -1,5 +1,7 @@
 "use client";
 
+/** @legacy guide-v2 L3 — deleted with the Steps story intake. See docs/LEGACY-GUIDE.md. */
+
 import { useEffect, useRef, useState } from "react";
 import { AlertCircle, ChevronDown, Loader2, RotateCcw, Sparkles, Wand2 } from "lucide-react";
 import type { AgeBandStoryCraft } from "../../../core/config/storyCraftCatalog";

@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L3 — deleted with the Steps story intake. See docs/LEGACY-GUIDE.md. */
 /**
  * Best-effort: read uploaded drawings and stamp who is in them onto the
  * matching story person and Cast character.

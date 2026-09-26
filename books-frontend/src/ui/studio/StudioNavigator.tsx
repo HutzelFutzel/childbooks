@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L1 — deleted with the Steps shell. See docs/LEGACY-GUIDE.md. */
 import { Check, ChevronDown } from "lucide-react";
 import { cn } from "../lib/cn";
 import { useStudio } from "./StudioContext";

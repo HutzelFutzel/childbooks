@@ -22,7 +22,8 @@ import { applyAnchorRender, type AnchorRender } from "../core/pipeline/anchorRun
 import { applyIllustrationRender, type IllustrationRender } from "../core/pipeline/illustrationRun";
 import type { TaskDoc } from "../core/jobs/types";
 import type { Project, ScreenplayDoc, ScreenplaySpread } from "../core/types";
-import { allVersions, createVersionTree } from "../core/versioning";
+import { addVersion, allVersions, createVersionTree } from "../core/versioning";
+import { authoringOf, withAuthoring } from "../core/guide/projectState";
 import {
   createScreenplayJob,
   fetchJobTasks,
@@ -33,6 +34,11 @@ import {
 } from "../platform/jobs";
 import { applyIllustrationResult } from "./ai";
 import { spreadsById } from "./bookUnits";
+import {
+  withPortrait,
+  withPortraitAnchorReferences,
+} from "../core/guide/portrait";
+import type { ModelSelection, PortraitInputs } from "../core/types";
 import { useProjectsStore } from "./projectsStore";
 
 /** A compact view of an in-flight job for the progress UI. */
@@ -66,6 +72,16 @@ interface JobsState {
    * the job finishes and its result reconciles.
    */
   activeUnitIds: Set<string>;
+  /**
+   * Units whose latest attempt failed, with the reason. Cleared for a unit as
+   * soon as a newer attempt at it exists. Lets the book show "failed" on the
+   * object itself and the well offer the retry.
+   */
+  failedUnits: Record<string, { error: string; at: number; kind: TaskDoc["kind"] }>;
+  /** Jobs refused before any task ran (an expired price, too few Sparks). */
+  refusedJobs: { id: string; kind: JobWithId["kind"]; error: string; at: number }[];
+  /** Every job of the open project by id, for flows that follow one job to its end. */
+  jobStatus: Record<string, { status: JobWithId["status"]; error?: string; notify?: boolean }>;
   /** Latest durable screenplay attempt for the open project. */
   screenplayJob: ScreenplayJobSummary | null;
   /** Automatic recoveries spent on this project (see MAX_AUTO_SCREENPLAY_RETRIES). */
@@ -187,6 +203,29 @@ async function reconcileTasks(tasks: TaskDoc[], projectId: string): Promise<void
 
       const project = liveProject(projectId);
       if (!project) return;
+      // A rerun the Chat asked for replaces the plan it was requested
+      // against, as a new version, while the pages are still unlocked.
+      const requested = authoringOf(project).planRequestedFor;
+      if (project.screenplay && requested === task.jobId && !authoringOf(project).lockedAt) {
+        inFlight.add(key);
+        try {
+          await useProjectsStore.getState().patchCurrent((live) =>
+            live.id !== project.id || !live.screenplay
+              ? live
+              : withAuthoring(
+                  {
+                    ...live,
+                    screenplay: addVersion(live.screenplay, task.result as ScreenplayDoc, { label: "Story changed" }),
+                  },
+                  { planRequestedFor: undefined },
+                ),
+          );
+          await markTaskApplied(task.jobId, task.id);
+        } finally {
+          inFlight.delete(key);
+        }
+        continue;
+      }
       // Initial screenplay attempts are idempotent: if two tabs managed to
       // finish, the first reconciled document wins instead of creating an
       // unexplained revision.
@@ -259,6 +298,41 @@ async function reconcileTasks(tasks: TaskDoc[], projectId: string): Promise<void
       continue;
     }
 
+    if (task.kind === "portrait") {
+      const key = `${task.jobId}:${task.id}`;
+      if (inFlight.has(key) || !task.inputs) continue;
+      const project = liveProject(projectId);
+      if (!project) return;
+      const result = task.result as {
+        blobId: string;
+        mimeType: string;
+        imageTier?: ImageTier;
+        imageModel?: ModelSelection;
+      };
+      const image = {
+        blobId: result.blobId,
+        mimeType: result.mimeType,
+        inputs: task.inputs as PortraitInputs,
+        createdAt: task.updatedAt,
+        ...(result.imageTier ? { imageTier: result.imageTier } : {}),
+        ...(result.imageModel ? { imageModel: result.imageModel } : {}),
+      };
+      inFlight.add(key);
+      try {
+        // A portrait made for an older version of the person or the style is
+        // dropped here rather than shown: `withPortrait` refuses it.
+        if (withPortrait(project, image).committed) {
+          await useProjectsStore.getState().patchCurrent((current) =>
+            withPortraitAnchorReferences(withPortrait(current, image).project),
+          );
+        }
+        await markTaskApplied(task.jobId, task.id);
+      } finally {
+        inFlight.delete(key);
+      }
+      continue;
+    }
+
     if (task.kind === "refresh") {
       const render = task.result as IllustrationRender;
       const keep = await applyTask(task, render.blobId, projectId, async (project, spread) => {
@@ -295,6 +369,9 @@ export async function reconcileTasksNow(tasks: TaskDoc[], projectId: string): Pr
 export const useJobsStore = create<JobsState>((set, get) => ({
   active: [],
   activeUnitIds: new Set<string>(),
+  failedUnits: {},
+  refusedJobs: [],
+  jobStatus: {},
   screenplayJob: null,
   screenplayAutoRetries: 0,
   jobsLoaded: false,
@@ -307,6 +384,9 @@ export const useJobsStore = create<JobsState>((set, get) => ({
     set({
       active: [],
       activeUnitIds: new Set<string>(),
+      failedUnits: {},
+      refusedJobs: [],
+      jobStatus: {},
       screenplayJob: null,
       screenplayAutoRetries: 0,
       jobsLoaded: false,
@@ -333,11 +413,25 @@ export const useJobsStore = create<JobsState>((set, get) => ({
           tier: normalizeImageTier(j.tier),
           action: j.kind === "anchors" ? "anchorImage" : "pageIllustration",
         }));
+      const refusedJobs = jobs
+        .filter((j) => j.status === "error" && !j.expanded && j.kind !== "screenplay")
+        .sort((a, b) => b.updatedAt - a.updatedAt)
+        .map((j) => ({ id: j.id, kind: j.kind, error: j.error ?? "Generation failed to start.", at: j.updatedAt }));
       const latestScreenplay = jobs
         .filter((j) => j.kind === "screenplay")
         .sort((a, b) => b.createdAt - a.createdAt)[0];
+      const jobStatus: JobsState["jobStatus"] = {};
+      for (const j of jobs) {
+        jobStatus[j.id] = {
+          status: j.status,
+          ...(j.error ? { error: j.error } : {}),
+          ...(j.kind === "book" ? { notify: j.notify !== false } : {}),
+        };
+      }
       set((state) => ({
         active,
+        refusedJobs,
+        jobStatus,
         jobsLoaded: true,
         screenplayJob: latestScreenplay
           ? {
@@ -398,11 +492,24 @@ export const useJobsStore = create<JobsState>((set, get) => ({
           activeUnitIds.add(t.id);
         }
       }
+      const latest = new Map<string, TaskDoc>();
+      for (const t of tasks) {
+        if (t.kind === "screenplay") continue;
+        const seen = latest.get(t.id);
+        if (!seen || t.updatedAt > seen.updatedAt) latest.set(t.id, t);
+      }
+      const failedUnits: JobsState["failedUnits"] = {};
+      for (const t of latest.values()) {
+        if (t.status === "error") {
+          failedUnits[t.id] = { error: t.error ?? "This picture could not be drawn.", at: t.updatedAt, kind: t.kind };
+        }
+      }
       const failedScreenplay = tasks
         .filter((t) => t.kind === "screenplay" && t.status === "error")
         .sort((a, b) => b.updatedAt - a.updatedAt)[0];
       set((state) => ({
         activeUnitIds,
+        failedUnits,
         screenplayJob:
           failedScreenplay && state.screenplayJob?.id === failedScreenplay.jobId
             ? { ...state.screenplayJob, status: "error", error: failedScreenplay.error }
@@ -476,6 +583,9 @@ export const useJobsStore = create<JobsState>((set, get) => ({
     set({
       active: [],
       activeUnitIds: new Set<string>(),
+      failedUnits: {},
+      refusedJobs: [],
+      jobStatus: {},
       screenplayJob: null,
       screenplayAutoRetries: 0,
       jobsLoaded: false,

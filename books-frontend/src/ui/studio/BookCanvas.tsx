@@ -90,7 +90,7 @@ const SCREENPLAY_PHASES: PipelinePhase[] = [
   { id: "pages", label: "Laying out the pages", icon: LayoutGrid },
 ];
 
-export function BookCanvas() {
+export function BookCanvas({ autoPreview = true }: { autoPreview?: boolean } = {}) {
   const {
     project,
     pages,
@@ -187,12 +187,12 @@ export function BookCanvas() {
   const gen = useBookGeneration();
   const autoPreviewDecided = useRef(false);
   useEffect(() => {
-    if (autoPreviewDecided.current || displays.length === 0) return;
+    if (!autoPreview || autoPreviewDecided.current || displays.length === 0) return;
     autoPreviewDecided.current = true;
     if (autoPreviewedBookIds.has(project.id)) return;
     autoPreviewedBookIds.add(project.id);
     if (gen.everythingDone) setPreviewing(true);
-  }, [displays.length, gen.everythingDone, project.id]);
+  }, [autoPreview, displays.length, gen.everythingDone, project.id]);
 
   // `editingDispId` doubles as "the spread currently open in the main stage" —
   // there's no separate review mode any more, so this is just page navigation.

@@ -18,6 +18,7 @@ import type {
 } from "../../../core/story/revision";
 import { buildStoryMergePlan } from "../../../core/story/revision";
 import { Button } from "../../components/Button";
+import { useGuideT } from "../../guide/intl";
 import { cn } from "../../lib/cn";
 
 export function StoryDiffReview({
@@ -29,6 +30,7 @@ export function StoryDiffReview({
   currentStory: string;
   onDecide: (id: string, decision: StoryRevisionDecision) => Promise<void>;
 }) {
+  const t = useGuideT("storyTools");
   const proposal = revision.proposal;
   const plan = useMemo(
     () =>
@@ -44,17 +46,17 @@ export function StoryDiffReview({
       <div className="mx-auto max-w-3xl">
         <div className="mb-4 flex flex-wrap items-center gap-2 text-[10.5px] font-semibold">
           <Legend className="bg-emerald-50 text-emerald-700 ring-emerald-200" icon={<Plus className="size-3" />}>
-            Added
+            {t("added")}
           </Legend>
           <Legend className="bg-sky-50 text-sky-700 ring-sky-200" icon={<FilePenLine className="size-3" />}>
-            Updated
+            {t("updated")}
           </Legend>
           <Legend className="bg-rose-50 text-rose-700 ring-rose-200" icon={<Minus className="size-3" />}>
-            Deleted
+            {t("deleted")}
           </Legend>
           {plan?.hasLocalEdits && (
             <span className="inline-flex items-center gap-1 rounded-full bg-violet-50 px-2.5 py-1 text-violet-700 ring-1 ring-violet-200">
-              Your newer edits are preserved
+              {t("newerEditsPreserved")}
             </span>
           )}
         </div>
@@ -63,8 +65,7 @@ export function StoryDiffReview({
           <div className="mb-4 flex items-start gap-2 rounded-2xl bg-amber-50 px-3 py-2.5 text-xs text-amber-900 ring-1 ring-amber-200">
             <CircleAlert className="mt-0.5 size-3.5 shrink-0 text-amber-600" />
             <p>
-              You and the AI edited {plan.conflictCount === 1 ? "the same passage" : `${plan.conflictCount} of the same passages`}.
-              Choose which version to keep where marked.
+              {t("conflictNotice", { count: plan.conflictCount })}
             </p>
           </div>
         )}
@@ -133,6 +134,7 @@ function InlineChange({
   detached?: boolean;
   onDecide: (id: string, decision: StoryRevisionDecision) => Promise<void>;
 }) {
+  const t = useGuideT("storyTools");
   const [controlsOpen, setControlsOpen] = useState(false);
   const display = splitChangeContext(change.currentText, change.suggestedText);
   const displayKind =
@@ -142,7 +144,7 @@ function InlineChange({
         ? "delete"
         : "update";
   const label =
-    displayKind === "add" ? "Added" : displayKind === "delete" ? "Deleted" : "Updated";
+    displayKind === "add" ? t("added") : displayKind === "delete" ? t("deleted") : t("updated");
   const colors =
     displayKind === "add"
       ? "border-emerald-300 bg-emerald-50/55"
@@ -214,7 +216,7 @@ function InlineChange({
                 className="inline-flex h-7 items-center gap-1 rounded-md px-2 text-xs font-medium text-ink-600 transition-colors hover:bg-rose-50 hover:text-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
               >
                 <X aria-hidden className="size-3" />
-                Discard
+                {t("discard")}
               </button>
               <button
                 type="button"
@@ -222,7 +224,7 @@ function InlineChange({
                 className="inline-flex h-7 items-center gap-1 rounded-md bg-ink-900 px-2 text-xs font-medium text-white transition-colors hover:bg-ink-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400"
               >
                 <Check aria-hidden className="size-3" />
-                Keep
+                {t("keep")}
               </button>
             </span>
           )}
@@ -260,7 +262,7 @@ function InlineChange({
               )}
             >
               <X className="size-3" />
-              {change.conflict ? "Keep mine" : "Discard"}
+              {change.conflict ? t("keepMine") : t("discard")}
             </button>
             <button
               type="button"
@@ -273,24 +275,24 @@ function InlineChange({
               )}
             >
               <Check className="size-3" />
-              {change.conflict ? "Use suggestion" : "Keep"}
+              {change.conflict ? t("useSuggestion") : t("keep")}
             </button>
           </span>
         </span>
 
         {detached && (
           <span className="block bg-amber-50 px-3 py-1.5 text-[10.5px] font-semibold text-amber-700">
-            This suggestion overlaps another marked passage.
+            {t("overlap")}
           </span>
         )}
 
         {change.conflict ? (
           <span className="grid divide-y divide-amber-200 lg:grid-cols-2 lg:divide-x lg:divide-y-0">
-            <DiffPane label="Your latest text" className="bg-violet-50/70 text-violet-950">
-              {display.before || "Passage removed by you"}
+            <DiffPane label={t("yourLatestText")} className="bg-violet-50/70 text-violet-950">
+              {display.before || t("passageRemoved")}
             </DiffPane>
-            <DiffPane label="AI suggestion" className="bg-emerald-50/70 text-ink-800">
-              {display.after || "Remove this passage"}
+            <DiffPane label={t("aiSuggestion")} className="bg-emerald-50/70 text-ink-800">
+              {display.after || t("removePassage")}
             </DiffPane>
           </span>
         ) : displayKind === "add" ? (
@@ -303,10 +305,10 @@ function InlineChange({
           </span>
         ) : (
           <span className="grid divide-y divide-sky-200 lg:grid-cols-2 lg:divide-x lg:divide-y-0">
-            <DiffPane label="Current" className="bg-rose-50/60 text-ink-700 line-through decoration-rose-500/70">
+            <DiffPane label={t("current")} className="bg-rose-50/60 text-ink-700 line-through decoration-rose-500/70">
               {display.before}
             </DiffPane>
-            <DiffPane label="Suggested" className="bg-emerald-50/60 text-ink-800">
+            <DiffPane label={t("suggested")} className="bg-emerald-50/60 text-ink-800">
               {display.after}
             </DiffPane>
           </span>
@@ -414,6 +416,7 @@ export function StoryDiffActions({
   onKeepSelected: () => void;
   onDiscardAll: () => void;
 }) {
+  const t = useGuideT("storyTools");
   const changes = revision.proposal?.changes ?? [];
   const accepted = changes.filter(
     (change) => revision.decisions?.[change.id] === "accepted",
@@ -430,7 +433,7 @@ export function StoryDiffActions({
   return (
     <div className="flex w-full flex-wrap items-center justify-between gap-2">
       <span className="text-xs font-medium text-ink-500">
-        {decided} of {changes.length} reviewed
+        {t("reviewedCount", { decided, total: changes.length })}
       </span>
       <div className="flex flex-wrap items-center justify-end gap-1.5">
         <Button
@@ -441,7 +444,7 @@ export function StoryDiffActions({
           onClick={onDiscardAll}
           className="h-8 text-xs"
         >
-          Discard all
+          {t("discardAll")}
         </Button>
         <Button
           size="sm"
@@ -451,7 +454,7 @@ export function StoryDiffActions({
           onClick={onKeepSelected}
           className="h-8 text-xs"
         >
-          Keep selected ({accepted})
+          {t("keepSelected", { count: accepted })}
         </Button>
         <Button
           size="sm"
@@ -463,8 +466,8 @@ export function StoryDiffActions({
           className="h-8 text-xs"
         >
           {unresolvedConflicts > 0
-            ? `Resolve ${unresolvedConflicts} conflict${unresolvedConflicts === 1 ? "" : "s"}`
-            : "Keep all"}
+            ? t("resolveConflicts", { count: unresolvedConflicts })
+            : t("keepAll")}
         </Button>
       </div>
     </div>

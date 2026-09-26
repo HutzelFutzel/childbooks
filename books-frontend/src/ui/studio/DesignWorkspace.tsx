@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L1 — deleted with the Steps shell. See docs/LEGACY-GUIDE.md. */
 /** The focused design stage. Workflow navigation lives in StudioNavigator. */
 import { useEffect } from "react";
 import { useProjectsStore } from "../../state/projectsStore";

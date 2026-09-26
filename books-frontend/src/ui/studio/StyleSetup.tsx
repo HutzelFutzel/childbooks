@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L1 — deleted with the Steps shell. See docs/LEGACY-GUIDE.md. */
 /**
  * Design · Style chapter: pick the art style before generating cast looks.
  * First visit after Story sets `styleReady: false`; confirming flips it true.
@@ -126,6 +127,9 @@ export function StyleSetup() {
       artStyle.derivedFromNames = next.derivedFromNames
         .map((name) => name.trim())
         .filter(Boolean);
+    }
+    if (derived && next.referenceArt?.length) {
+      artStyle.referenceArt = next.referenceArt;
     }
     const patch: Partial<BookConfig> = { artStyle };
     if (firstTime) patch.styleReady = true;

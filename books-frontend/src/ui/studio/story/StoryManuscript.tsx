@@ -415,7 +415,7 @@ export function StoryManuscript({
               ref={scrollContainerRef}
               onScroll={handleScroll}
               className={cn(
-                "relative h-full w-full overflow-y-auto scroll-smooth",
+                "relative h-full min-h-0 w-full flex-1 overflow-y-auto scroll-smooth",
                 beats.length > 1 ? "space-y-4 px-4 py-4 sm:px-7 sm:py-5" : "flex flex-col p-1 sm:p-2",
               )}
             >

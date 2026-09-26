@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L1 — deleted with the Steps shell. See docs/LEGACY-GUIDE.md. */
 /**
  * Drives a persisted art-style transfer while the studio is open: advances cast
  * → pages once the sheets have landed, clears the plan when everything carries

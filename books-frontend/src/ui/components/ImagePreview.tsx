@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L2 — deleted with the Steps cast stage. See docs/LEGACY-GUIDE.md. */
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { ImageIcon, Loader2, ZoomIn } from "lucide-react";

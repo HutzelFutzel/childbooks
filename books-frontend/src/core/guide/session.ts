@@ -63,6 +63,26 @@ export interface GuideMessage {
    * for why getting the old pictures back would be the wrong answer.
    */
   before?: Record<string, unknown>;
+  /** Chat studio: the configured lines this message said (confirm-once bookkeeping). */
+  keys?: string[];
+  /**
+   * Chat studio: the one-row receipt under a guide line, read from the book
+   * after the patch — never from what the model claimed.
+   */
+  receipt?: GuideReceipt;
+  /** Chat studio: the line phrased in the chat language, once it arrived. */
+  localized?: { locale: string; text: string };
+}
+
+export interface GuideReceipt {
+  /** Short parts; values are shown dark. An inference is named once. */
+  parts: { label?: string; value: string; inferred?: boolean }[];
+  /** A thumbnail that scrolls the book pane to its unit. */
+  thumb?: {
+    blobId: string;
+    unitId: string;
+    view: "pages" | "cast" | "cover" | "style";
+  };
 }
 
 export interface GuideSession {
@@ -158,7 +178,41 @@ function normalizeMessage(input: unknown): GuideMessage | null {
     ...(raw.failed === true ? { failed: true as const } : {}),
     ...(isGuideComponentId(raw.about) ? { about: raw.about } : {}),
     ...(normalizeBefore(raw.before) ?? {}),
+    ...(Array.isArray(raw.keys) && raw.keys.every((k) => typeof k === "string")
+      ? { keys: raw.keys.slice(0, 8) }
+      : {}),
+    ...(normalizeReceipt(raw.receipt) ?? {}),
+    ...(raw.localized &&
+    typeof raw.localized.locale === "string" &&
+    typeof raw.localized.text === "string" &&
+    raw.localized.text.trim()
+      ? { localized: { locale: raw.localized.locale, text: raw.localized.text.slice(0, MAX_TEXT) } }
+      : {}),
   };
+}
+
+function normalizeReceipt(input: unknown): { receipt: GuideReceipt } | null {
+  if (!input || typeof input !== "object") return null;
+  const raw = input as Partial<GuideReceipt>;
+  const parts = Array.isArray(raw.parts)
+    ? raw.parts
+        .filter((part) => part && typeof part.value === "string" && part.value.trim())
+        .slice(0, 8)
+        .map((part) => ({
+          value: part.value.slice(0, 200),
+          ...(typeof part.label === "string" && part.label ? { label: part.label.slice(0, 80) } : {}),
+          ...(part.inferred === true ? { inferred: true } : {}),
+        }))
+    : [];
+  const thumb =
+    raw.thumb &&
+    typeof raw.thumb.blobId === "string" &&
+    typeof raw.thumb.unitId === "string" &&
+    ["pages", "cast", "cover", "style"].includes(raw.thumb.view)
+      ? { blobId: raw.thumb.blobId, unitId: raw.thumb.unitId, view: raw.thumb.view }
+      : undefined;
+  if (parts.length === 0 && !thumb) return null;
+  return { receipt: { parts, ...(thumb ? { thumb } : {}) } };
 }
 
 /**

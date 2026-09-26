@@ -13,9 +13,17 @@ import { BookMockup } from "../components/BookMockup";
 import { Popover } from "../components/Popover";
 import { notify } from "../lib/notify";
 
+const DRAWING_BADGE_MS = 2 * 60 * 60_000;
+
 /** A friendly status derived from how far the book has actually been built. */
 function projectStatus(p: Project): { label: string; tone: "brand" | "accent" | "success" | "neutral" } {
   if (p.stage === "setup") return { label: "Draft", tone: "neutral" };
+  // The run is only marked done when the book is next opened, so an old one
+  // is assumed finished rather than shown as drawing forever.
+  const run = p.authoringState?.drawBook;
+  if (run?.jobId && run.phase !== "done" && Date.now() - run.startedAt < DRAWING_BADGE_MS) {
+    return { label: "Drawing…", tone: "accent" };
+  }
   const illustrated = p.illustrations ? Object.keys(p.illustrations).length : 0;
   if (illustrated > 0) return { label: "Illustrated", tone: "success" };
   if (p.screenplay) return { label: "Screenplay ready", tone: "accent" };

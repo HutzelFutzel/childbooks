@@ -55,8 +55,21 @@ service cloud.firestore {
     // render result there. Scoping the write to the job doc itself (not
     // `{document=**}`) keeps the task subcollection backend-only, so a client
     // can't forge a completed task/result.
+    //
+    // Create only: the prices a job is charged at (`quotedByAction`) and the
+    // settings it was frozen with are written by the enqueuer after checks, so
+    // a client must not be able to supply or rewrite them.
     match /users/{uid}/jobs/{jobId} {
-      allow write: if signedInAs(uid);
+      allow create: if signedInAs(uid)
+        && request.resource.data.status == 'pending'
+        && !request.resource.data.keys().hasAny([
+          'quotedByAction', 'quotedSparks', 'frozen', 'expanded',
+          'secondPass', 'notifiedAt', 'reapMark'
+        ]);
+      // The reader may switch the "email me when it's done" choice.
+      allow update: if signedInAs(uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['notify'])
+        && request.resource.data.notify is bool;
     }
     // The guided studio's transcript (one doc per turn, `projectId`-tagged).
     // Readable by its owner through the `users/{uid}/**` rule above; writes are

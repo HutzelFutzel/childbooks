@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L1 — deleted with the Steps shell. See docs/LEGACY-GUIDE.md. */
 import { useEffect, useMemo, useState } from "react";
 import { AnimatePresence } from "framer-motion";
 import {

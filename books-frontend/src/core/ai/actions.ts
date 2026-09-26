@@ -17,6 +17,8 @@ export type TextActionId =
   | "bindingPass" // bindDepictedSubjects — vision call binding anchors to regions in a freshly rendered page
   | "editIntent" // resolveEditIntent — classify user edits into structured operations
   | "guideInterpret" // interpretGuideTurn — turn a reader's message into a slot patch
+  | "guideSpeak" // speakGuideLine — write a configured guide line in the chat language
+  | "guideExtractCast" // extractManuscriptCast — names and ages from a pasted manuscript, no rewrite
   | "extractArtStyle" // extractArtStyleFromImages — vision call: style-only prompt from character artwork
   | "extractArtLook" // extractArtLookFromImages — vision call: who is in the uploaded character artwork
   | "releaseNotes"; // summarizeRelease — turn a deploy's code diff into plain-language release notes
@@ -24,7 +26,8 @@ export type TextActionId =
 export type ImageActionId =
   | "anchorImage" // renderAnchor — anchor reference sheet
   | "pageIllustration" // runIllustration — a page/spread illustration
-  | "coverIllustration"; // cover illustration
+  | "coverIllustration" // cover illustration
+  | "portrait"; // renderPortrait — one Chat studio portrait of a cast member in the saved style
 
 export interface ActionInfo<Id extends string> {
   id: Id;
@@ -44,6 +47,8 @@ export const TEXT_ACTIONS: ActionInfo<TextActionId>[] = [
   { id: "bindingPass", label: "Anchor binding (vision)", modality: "text", help: "After a page is rendered, binds each anchor to its region in the image (records what's depicted where)." },
   { id: "editIntent", label: "Edit intent resolution", modality: "text", help: "Classifies a user's free-text illustration edit into structured remove/replace/refresh operations over known anchors." },
   { id: "guideInterpret", label: "Guide turn interpretation", modality: "text", help: "Reads what the reader typed in the guided studio's chat and turns it into facts about the book (names, ages, theme, reading age…) plus the reply. Runs on nearly every message, so latency matters more here than depth." },
+  { id: "guideSpeak", label: "Guide speech", modality: "text", help: "Writes each configured guide line in the reader's chat language. The configured sentence is the meaning; the model only phrases it. Runs only when the chat language differs from the configured copy." },
+  { id: "guideExtractCast", label: "Own-words cast extraction", modality: "text", help: "Reads a manuscript the reader typed or pasted and returns the named people and their stated ages, without rewriting the story." },
   { id: "extractArtStyle", label: "Art-style extraction (vision)", modality: "text", help: "Reads uploaded character artwork and writes a style-only prompt (no characters, clothes or scenes) for the rest of the book." },
   { id: "extractArtLook", label: "Character-look extraction (vision)", modality: "text", help: "Reads uploaded character artwork and writes who is in the drawing (species, body, clothes actually shown) so later steps do not invent a different character." },
   { id: "releaseNotes", label: "Release notes (CI/CD)", modality: "text", help: "Reads the code diff between the last shipped commit and the new one, and writes what changed in plain language for the sales/marketing team. Runs once per deploy, not per user — pick a model with a large context window." },
@@ -53,7 +58,12 @@ export const IMAGE_ACTIONS: ActionInfo<ImageActionId>[] = [
   { id: "anchorImage", label: "Anchor reference images", modality: "image", help: "Reference sheets for characters/places/objects." },
   { id: "pageIllustration", label: "Page illustrations", modality: "image", help: "The illustration for each page or spread." },
   { id: "coverIllustration", label: "Cover illustrations", modality: "image", help: "Front/back cover artwork." },
+  { id: "portrait", label: "Portraits (Chat studio)", modality: "image", help: "One picture of a person in the saved style, from a photo, a drawing, a description or the name alone. Quoted and charged only in the scoped portrait batch that names that person." },
 ];
 
 export const ALL_TEXT_ACTION_IDS = TEXT_ACTIONS.map((a) => a.id);
 export const ALL_IMAGE_ACTION_IDS = IMAGE_ACTIONS.map((a) => a.id);
+
+export function isImageAction(action: string): action is ImageActionId {
+  return (ALL_IMAGE_ACTION_IDS as string[]).includes(action);
+}

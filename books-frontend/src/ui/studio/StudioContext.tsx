@@ -221,6 +221,8 @@ function pickCanonicalIllustration(illus: ImageElement[]): ImageElement {
 interface StudioContextValue {
   project: Project;
   pages: DesignPage[];
+  /** The book as facing spreads, covers included, in reading order. */
+  displays: DisplaySpread[];
   design: BookDesign;
   pageDesign: (pageId: string) => PageDesign;
 
@@ -419,13 +421,14 @@ interface StudioContextValue {
   // guided flow (Story → Anchors → Edit → Order)
   destination: StudioDestination;
   navigate: (destination: StudioDestination) => void;
+  /** @legacy guide-v2 L5 — `step`, `setStep` and `openSetup` only drive the Steps rail. */
   step: StudioStep;
   setStep: (step: StudioStep) => void;
   /** Jump to the Story step (used by "Edit story" affordances). */
   openSetup: () => void;
 
   /**
-   * @legacy guide-v2 — the full-page book-setup gate. Nothing opens it any more:
+   * @legacy guide-v2 L0 — the full-page book-setup gate. Nothing opens it any more:
    * Pages opens on the book, and size/layout are edited in the docked Setup
    * panel. Kept until the legacy studio is removed; see docs/LEGACY-GUIDE.md.
    */
@@ -2332,6 +2335,7 @@ export function StudioProvider({
         ? {
             project,
             pages,
+            displays,
             design,
             pageDesign,
             selection,
@@ -2434,6 +2438,7 @@ export function StudioProvider({
     [
       project,
       pages,
+      displays,
       design,
       pageDesign,
       selection,

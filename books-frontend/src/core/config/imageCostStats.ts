@@ -1,18 +1,18 @@
 /**
- * A tiny rolling window of recent per-call image costs, kept in the world-
- * readable `appConfig/imageCostStats` document so the studio can show a live
- * Spark estimate RANGE (e.g. "3–5 ✦") before a generation runs.
+ * A rolling window of recent per-call image costs, kept in the world-readable
+ * `appConfig/imageCostStats` document. It is the input to every Spark price:
+ * the studio and the server run the same estimator over it
+ * (`core/billing/priceEstimation`), so a quote shown in the studio is the
+ * number the wallet charges.
  *
- * Only the last {@link COST_WINDOW_SIZE} measured USD costs are retained per
- * {@link costStatsKey} — enough to derive a stable min/max without exposing any
- * per-user data (these are aggregate call costs, and the peg/markup that turn
- * them into Sparks are already public in `appConfig/sparks`).
+ * Each group keeps the last {@link COST_SAMPLE_CAPACITY} measured USD costs.
+ * A sample carries when it was measured, an opaque tag of the book it came
+ * from (so one book can't fill a window) and the model's per-image rate at the
+ * time (so a rate-table change reprices old samples instead of waiting for them
+ * to age out). No per-user data is stored.
  *
  * Windows are keyed by the exact model, quality, fidelity, format, render kind,
  * output size, reference bucket, and billable image-call bucket.
- *
- * Settlement still charges the EXACT measured cost of each call; this window
- * only feeds the pre-flight reserve and the displayed estimate.
  */
 import type { ImageActionId } from "../ai/actions";
 import {
@@ -21,19 +21,33 @@ import {
   type GenerationRenderKind,
 } from "./generationEstimateProfile";
 import type { ImageTier } from "./modelConfig";
+import { COST_SAMPLE_CAPACITY } from "./priceEstimation";
 
-/** How many recent call costs to keep per action+tier. */
-export const COST_WINDOW_SIZE = 10;
+export { COST_SAMPLE_CAPACITY };
 
-/** One action+tier's recent measured call costs (USD), newest last. */
+/** Most groups the document keeps; the ones idle longest are dropped first. */
+const MAX_GROUPS = 300;
+
+export interface CostSample {
+  /** Billable provider cost of one render, USD. */
+  usd: number;
+  /** When it was measured (ms). 0 for samples migrated from the old format. */
+  at: number;
+  /** Opaque tag of the book it came from. */
+  project?: string;
+  /** The model's nominal per-image rate (USD) when it was measured. */
+  rate?: number;
+}
+
+/** One group's recent measured call costs, oldest first. */
 export interface CostSamples {
-  samples: number[];
+  samples: CostSample[];
   /** Denormalized for diagnostics; the profile key already includes it. */
   modelKey?: string;
 }
 
 export interface ImageCostStats {
-  version: 2;
+  version: 3;
   /** Keyed by {@link costStatsKey}. */
   stats: Record<string, CostSamples>;
   updatedAt: number;
@@ -52,44 +66,114 @@ export function costStatsKey(
   return `v2:${action}:${tier}:${costProfileKey(profile)}`;
 }
 
-export function createDefaultImageCostStats(): ImageCostStats {
-  return { version: 2, stats: {}, updatedAt: 0 };
+/** The profile fields a cost key is made of, in key order. */
+export const COST_KEY_FIELDS = [
+  "modelKey",
+  "renderKind",
+  "quality",
+  "inputFidelity",
+  "outputFormat",
+  "outputCompression",
+  "outputSize",
+  "referenceCount",
+  "billableImages",
+  "referenceEncoding",
+] as const;
+export type CostKeyField = (typeof COST_KEY_FIELDS)[number];
+
+export interface ParsedCostKey {
+  action: string;
+  tier: string;
+  fields: Record<CostKeyField, string>;
 }
 
-/** Coerce an arbitrary Firestore payload into a valid stats doc. */
-export function normalizeImageCostStats(input: unknown): ImageCostStats {
-  const raw = (input ?? {}) as Partial<ImageCostStats>;
-  const out: Record<string, CostSamples> = {};
-  if (raw.version !== 2) return createDefaultImageCostStats();
-  const stats = (raw.stats ?? {}) as Record<string, unknown>;
-  for (const [key, value] of Object.entries(stats)) {
-    const entry = value as CostSamples | undefined;
-    const arr = entry?.samples;
-    if (Array.isArray(arr)) {
-      const nums = arr.filter((n): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0);
-      if (nums.length) {
-        out[key] = {
-          samples: nums.slice(-COST_WINDOW_SIZE),
-          ...(typeof entry?.modelKey === "string" && entry.modelKey ? { modelKey: entry.modelKey } : {}),
-        };
-      }
+/** Split a {@link costStatsKey} back into its parts (null for foreign keys). */
+export function parseCostStatsKey(key: string): ParsedCostKey | null {
+  const m = /^v2:([^:]+):([^:]+):p1-(.*)$/.exec(key);
+  if (!m) return null;
+  const parts = m[3].split("~").map((p) => {
+    try {
+      return decodeURIComponent(p);
+    } catch {
+      return p;
     }
+  });
+  if (parts.length !== COST_KEY_FIELDS.length) return null;
+  const fields = {} as Record<CostKeyField, string>;
+  COST_KEY_FIELDS.forEach((f, i) => {
+    fields[f] = parts[i];
+  });
+  return { action: m[1], tier: m[2], fields };
+}
+
+/** The same parts, read off a profile (for matching a quote against the window). */
+export function profileKeyFields(profile: GenerationEstimateProfile): Record<CostKeyField, string> {
+  return {
+    modelKey: profile.modelKey,
+    renderKind: profile.renderKind,
+    quality: String(profile.quality),
+    inputFidelity: String(profile.inputFidelity),
+    outputFormat: String(profile.outputFormat),
+    outputCompression: String(profile.outputCompression ?? "default"),
+    outputSize: profile.outputSize,
+    referenceCount: profile.referenceCount,
+    billableImages: profile.billableImages,
+    referenceEncoding: profile.referenceEncoding,
+  };
+}
+
+export function createDefaultImageCostStats(): ImageCostStats {
+  return { version: 3, stats: {}, updatedAt: 0 };
+}
+
+function normalizeSample(raw: unknown, legacyAt: number): CostSample | null {
+  if (typeof raw === "number") {
+    return Number.isFinite(raw) && raw >= 0 ? { usd: raw, at: legacyAt } : null;
   }
-  return { version: 2, stats: out, updatedAt: typeof raw.updatedAt === "number" ? raw.updatedAt : 0 };
+  if (!raw || typeof raw !== "object") return null;
+  const s = raw as Partial<CostSample>;
+  if (typeof s.usd !== "number" || !Number.isFinite(s.usd) || s.usd < 0) return null;
+  return {
+    usd: s.usd,
+    at: typeof s.at === "number" && Number.isFinite(s.at) ? s.at : legacyAt,
+    ...(typeof s.project === "string" && s.project ? { project: s.project } : {}),
+    ...(typeof s.rate === "number" && s.rate > 0 ? { rate: s.rate } : {}),
+  };
 }
 
 /**
- * The recent cost samples for one action+tier+kind (empty when none recorded).
- *
- * There is deliberately no cross-profile fallback: sparse profiles fall back
- * to rate/config estimates at the caller.
+ * Coerce an arbitrary Firestore payload into a valid stats doc. Version 2 docs
+ * (bare USD numbers) are carried over with the document's timestamp.
  */
+export function normalizeImageCostStats(input: unknown): ImageCostStats {
+  const raw = (input ?? {}) as { version?: number; stats?: unknown; updatedAt?: unknown };
+  if (raw.version !== 2 && raw.version !== 3) return createDefaultImageCostStats();
+  const updatedAt = typeof raw.updatedAt === "number" ? raw.updatedAt : 0;
+  const out: Record<string, CostSamples> = {};
+  const stats = (raw.stats ?? {}) as Record<string, unknown>;
+  for (const [key, value] of Object.entries(stats)) {
+    const entry = value as { samples?: unknown; modelKey?: unknown } | undefined;
+    if (!Array.isArray(entry?.samples)) continue;
+    const samples = entry.samples
+      .map((s) => normalizeSample(s, updatedAt))
+      .filter((s): s is CostSample => s !== null)
+      .slice(-COST_SAMPLE_CAPACITY);
+    if (samples.length === 0) continue;
+    out[key] = {
+      samples,
+      ...(typeof entry.modelKey === "string" && entry.modelKey ? { modelKey: entry.modelKey } : {}),
+    };
+  }
+  return { version: 3, stats: out, updatedAt };
+}
+
+/** The recent cost samples for one exact action+tier+profile (oldest first). */
 export function recentCostSamples(
   stats: ImageCostStats,
   action: ImageActionId,
   tier: ImageTier,
   profile: GenerationEstimateProfile,
-): number[] {
+): CostSample[] {
   return stats.stats[costStatsKey(action, tier, profile)]?.samples ?? [];
 }
 
@@ -102,17 +186,30 @@ export function appendCostSample(
   tier: ImageTier,
   costUsd: number,
   profile: GenerationEstimateProfile,
+  meta: { at?: number; project?: string; rate?: number | null } = {},
 ): ImageCostStats {
   const key = costStatsKey(action, tier, profile);
-  const entry = stats.stats[key];
-  const prev = entry?.samples ?? [];
-  const next = [...prev, costUsd].slice(-COST_WINDOW_SIZE);
-  return {
-    version: 2,
-    stats: {
-      ...stats.stats,
-      [key]: { samples: next, modelKey: profile.modelKey },
-    },
-    updatedAt: Date.now(),
+  const at = meta.at ?? Date.now();
+  const sample: CostSample = {
+    usd: costUsd,
+    at,
+    ...(meta.project ? { project: meta.project } : {}),
+    ...(typeof meta.rate === "number" && meta.rate > 0 ? { rate: meta.rate } : {}),
   };
+  const prev = stats.stats[key]?.samples ?? [];
+  const next: Record<string, CostSamples> = {
+    ...stats.stats,
+    [key]: { samples: [...prev, sample].slice(-COST_SAMPLE_CAPACITY), modelKey: profile.modelKey },
+  };
+  const keys = Object.keys(next);
+  if (keys.length > MAX_GROUPS) {
+    const newest = (k: string) => next[k].samples[next[k].samples.length - 1]?.at ?? 0;
+    keys
+      .sort((a, b) => newest(a) - newest(b))
+      .slice(0, keys.length - MAX_GROUPS)
+      .forEach((k) => {
+        if (k !== key) delete next[k];
+      });
+  }
+  return { version: 3, stats: next, updatedAt: at };
 }

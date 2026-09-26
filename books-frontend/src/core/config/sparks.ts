@@ -23,6 +23,12 @@ import {
   type ImageActionId,
   type TextActionId,
 } from "../ai/actions";
+import {
+  createDefaultEstimationConfig,
+  estimationConfigSchema,
+  normalizeEstimationConfig,
+  type EstimationConfig,
+} from "./priceEstimation";
 
 /** Any LLM action that can carry a Spark price. */
 export type SparkActionId = TextActionId | ImageActionId;
@@ -30,8 +36,9 @@ export type SparkActionId = TextActionId | ImageActionId;
 /**
  * How an action's Spark price is determined:
  *   - `free`    — always 0 (the recommended default for text/thinking steps).
- *   - `derived` — computed from the measured provider cost × markup ÷ peg
- *                 (the recommended default for image generation).
+ *   - `derived` — estimated from recent measured provider costs × markup ÷ peg
+ *                 (the recommended default for image generation). The estimate
+ *                 is the price: it's what the user is shown and charged.
  *   - `fixed`   — a flat, admin-pinned number of Sparks regardless of cost.
  */
 export type ActionPricingMode = "free" | "derived" | "fixed";
@@ -41,8 +48,8 @@ export interface ActionPricing {
   /** Flat price when `mode === "fixed"`. */
   fixedSparks: number;
   /**
-   * Pre-flight estimate used to RESERVE Sparks before a call whose exact cost
-   * isn't known yet. The real price is settled from measured usage afterwards.
+   * The price of a `derived` action when nothing has been measured yet and the
+   * model has no rate in the cost table (the last rung of the estimate chain).
    */
   estimatedSparks: number;
 }
@@ -111,6 +118,8 @@ export interface SparksConfig {
   packs: SparkPack[];
   /** Referral rewards (paid-gated so they can't be farmed with fake accounts). */
   referral: ReferralSettings;
+  /** How `derived` image prices are estimated from measured costs. */
+  estimation: EstimationConfig;
 }
 
 // ---- Defaults --------------------------------------------------------------
@@ -142,6 +151,7 @@ export function createDefaultSparksConfig(): SparksConfig {
       { id: "large", label: "Large", sparks: 800, bonusSparks: 120, prices: { USD: 17.99, EUR: 17.99, GBP: 15.99 }, active: true, sortOrder: 2 },
     ],
     referral: { enabled: false, referrerSparks: 100, referredSparks: 50 },
+    estimation: createDefaultEstimationConfig(),
   };
 }
 
@@ -229,6 +239,7 @@ export function normalizeSparksConfig(input: unknown): SparksConfig {
           ? p.referral.referredSparks
           : def.referral.referredSparks,
     },
+    estimation: normalizeEstimationConfig(p.estimation),
   };
 }
 
@@ -247,69 +258,13 @@ export function sparksForCostUsd(config: SparksConfig, costUsd: number): number 
   return Math.max(1, Math.ceil(raw));
 }
 
-/** A pre-flight Spark estimate expressed as a range (min == max when uniform). */
+/**
+ * A Spark price as a range. Prices are exact now, so min and max are equal for
+ * one action; a range only appears when several model bindings could serve it.
+ */
 export interface SparkEstimateRange {
   minSparks: number;
   maxSparks: number;
-}
-
-export interface EstimateRangeInputs {
-  /** Recent measured call costs (USD) for this action+tier, if any. */
-  samples?: number[];
-  /**
-   * A nominal per-call cost (USD) from the model cost table, used as a fallback
-   * when there's no recent history yet (e.g. a freshly configured model).
-   */
-  rateCostUsd?: number | null;
-  /** Last-resort flat estimate (the action's configured `estimatedSparks`). */
-  fallbackSparks: number;
-}
-
-/** Linear-interpolated quantile of a SORTED ascending array. */
-function quantile(sorted: number[], q: number): number {
-  if (sorted.length === 0) return 0;
-  const pos = (sorted.length - 1) * q;
-  const lo = Math.floor(pos);
-  const hi = Math.ceil(pos);
-  if (lo === hi) return sorted[lo];
-  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
-}
-
-/**
- * Derive a Spark estimate RANGE for an image action from its recent call costs,
- * falling back to the model's rate-table cost, then a flat estimate. Used for
- * the studio preview ("3–5 ✦") and — via {@link maxEstimateSparks} — the server
- * pre-flight reserve. Settlement still charges the exact measured cost.
- *
- * With 4+ samples the range is the p25–p75 band (a single outlier call must not
- * blow the displayed range or the pre-flight reserve up for the next 10 calls);
- * with fewer samples it's the raw min–max.
- */
-export function estimateSparkRange(
-  config: SparksConfig,
-  { samples, rateCostUsd, fallbackSparks }: EstimateRangeInputs,
-): SparkEstimateRange {
-  const valid = (samples ?? [])
-    .filter((n) => typeof n === "number" && Number.isFinite(n) && n > 0)
-    .sort((a, b) => a - b);
-  if (valid.length > 0) {
-    const loUsd = valid.length >= 4 ? quantile(valid, 0.25) : valid[0];
-    const hiUsd = valid.length >= 4 ? quantile(valid, 0.75) : valid[valid.length - 1];
-    const min = sparksForCostUsd(config, loUsd);
-    const max = sparksForCostUsd(config, hiUsd);
-    return { minSparks: Math.min(min, max), maxSparks: Math.max(min, max) };
-  }
-  if (typeof rateCostUsd === "number" && rateCostUsd > 0) {
-    const s = sparksForCostUsd(config, rateCostUsd);
-    return { minSparks: s, maxSparks: s };
-  }
-  const flat = Math.max(0, Math.round(fallbackSparks));
-  return { minSparks: flat, maxSparks: flat };
-}
-
-/** The upper bound of an estimate range (what the pre-flight reserve should use). */
-export function maxEstimateSparks(range: SparkEstimateRange): number {
-  return range.maxSparks;
 }
 
 /**
@@ -343,9 +298,10 @@ export function priceForAction(
 }
 
 /**
- * Sparks to RESERVE before an action whose cost isn't known yet. Free actions
- * reserve nothing; fixed actions reserve their flat price; derived actions
- * reserve the configured estimate (× plan multiplier).
+ * The price of an action that has no measured cost window (text actions, or an
+ * image action priced before the window exists). Free actions cost nothing;
+ * fixed actions their flat price; derived actions the configured estimate —
+ * each × plan multiplier. Like every quote, this is what gets charged.
  */
 export function estimateForAction(config: SparksConfig, action: string, planMultiplier = 1): number {
   if (!config.enabled) return 0;
@@ -447,4 +403,5 @@ export const sparksConfigSchema = z.object({
       referredSparks: z.number().min(0),
     })
     .optional(),
+  estimation: estimationConfigSchema.optional(),
 });

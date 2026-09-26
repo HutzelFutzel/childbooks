@@ -3,43 +3,28 @@
 /**
  * Configuration → Creative defaults → Guided studio.
  *
- * Two decisions live here, and they are different kinds of decision.
+ * Four decisions, each on its own panel:
  *
- * **Who gets the new flow** is a release decision with a blast radius: `on` moves
- * every customer onto a studio the wizard has been carrying for years, and a
- * mistake is not visible in this tab — it is visible in support mail. So the mode
- * picker states the consequence in customer terms rather than naming the mode,
- * and `off` is presented as what it is: the switch that also revokes an admin's
- * own opt-in, which is the one thing to reach for when something is wrong.
+ * - **Rollout**: who gets the Chat studio. A release decision with a blast
+ *   radius, so each mode is described by its effect on customers, and `off`
+ *   also revokes an admin's own opt-in.
+ * - **Facts**: what the Chat must know before it writes the story, and what it
+ *   does when the reader never said it.
+ * - **Wording**: what the guide says and what its controls are called, with a
+ *   live preview of each line.
+ * - **Confidence**: how sure the interpreter has to be before it writes a fact.
  *
- * **Which questions the guide asks** is editorial, and deliberately hard to get
- * badly wrong. The catalog in code owns what a component means, when it counts as
- * finished and what it depends on; this tab only reorders, retitles, rewords the
- * opening question, and switches off. `normalizeGuidePlaylist` repairs whatever
- * is saved, so the failure mode of
- * a careless edit is an odd order, not a book the pipeline refuses to make. The
- * lint warnings below are shown for the mistakes normalization cannot fix by
- * itself — turning off something another component needs — and they do not block
- * saving, because a playlist you cannot save is a state the dashboard cannot get
- * out of.
+ * The step flow's question playlist is kept on a fifth panel until the step
+ * flow is deleted.
  *
- * **How sure the chat has to be** before it writes a fact is the third, and the
- * one whose failures are quietest. Every value in that section was a constant in
- * the pipeline until now, which meant any experiment was a deploy — so in
- * practice none were run, and the numbers that shipped were the numbers nobody
- * had measured. They are clamped on the way in, so the worst a careless edit does
- * is make the guide cautious or chatty; it cannot make it stop reading.
- *
- * What is NOT here: the model that reads the reader's answers, and the prompt it
- * runs. Those are one row in Configuration → Models (the `guideInterpret` slot)
- * and two entries in Prompts, and moving them here would mean two places to look
- * for the same kind of setting.
+ * What is NOT here: the models and prompts (Configuration → Models, Prompts)
+ * and the price of a portrait (Sparks), so each kind of setting has one home.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { ArrowDown, ArrowUp, RotateCcw, TriangleAlert } from "lucide-react";
+import { RotateCcw } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
 import {
-  createDefaultGuideConfig,
   createDefaultGuideExtraction,
   describeGuideRollout,
   GUIDE_ROLLOUT_MODES,
@@ -47,24 +32,14 @@ import {
   type GuideExtractionConfig,
   type GuideRolloutMode,
 } from "../../../core/config/guide";
-import {
-  createDefaultGuidePlaylist,
-  lintGuidePlaylist,
-  normalizeGuidePlaylist,
-  resolveGuidePlaylist,
-  type GuidePlaylistEntry,
-} from "../../../core/guide/playlist";
-import {
-  componentTakesAnswers,
-  GUIDE_COMPONENTS,
-  type GuideComponentId,
-} from "../../../core/guide/components";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { Button } from "../../components/Button";
-import { Field, Input, Textarea } from "../../components/Input";
+import { Field, Input } from "../../components/Input";
 import { useReadOnly } from "../../components/ReadOnlyContext";
-import { Select } from "../../components/Select";
-import { Toggle } from "../../components/Toggle";
+import { cn } from "../../lib/cn";
+import { GuideFactsPanel } from "./guide/GuideFactsPanel";
+import { GuideStepFlowPanel } from "./guide/GuideStepFlowPanel";
+import { GuideWordingPanel } from "./guide/GuideWordingPanel";
 import { Section, TabIntro } from "./products/parts";
 
 /**
@@ -75,11 +50,11 @@ import { Section, TabIntro } from "./products/parts";
 const MODE_COPY: Record<GuideRolloutMode, { label: string; detail: string }> = {
   off: {
     label: "Off",
-    detail: "Nobody, including admins. Overrides an admin's own opt-in — the switch to reach for if the guided flow is misbehaving.",
+    detail: "Nobody, including admins. Overrides an admin's own opt-in — the switch to reach for if the Chat is misbehaving.",
   },
   adminOnly: {
     label: "Admins only",
-    detail: "Every customer stays on the wizard. Admins choose per session with the toggle in the studio.",
+    detail: "Every customer stays on Steps. Admins switch per session with the toggle in the studio.",
   },
   percentage: {
     label: "A share of customers",
@@ -87,7 +62,7 @@ const MODE_COPY: Record<GuideRolloutMode, { label: string; detail: string }> = {
   },
   on: {
     label: "Everyone",
-    detail: "Every customer gets the guided studio unless they explicitly ask for the wizard.",
+    detail: "Every customer gets the Chat studio unless they explicitly ask for Steps.",
   },
 };
 
@@ -183,12 +158,15 @@ const EXTRACTION_FIELDS: {
   },
 ];
 
-/** The three states of a playlist entry's skippability, including "inherit". */
-const SKIP_OPTIONS = [
-  { value: "inherit", label: "Catalog default" },
-  { value: "required", label: "Required" },
-  { value: "optional", label: "Optional" },
-];
+const PANELS = [
+  { id: "rollout", label: "Rollout" },
+  { id: "facts", label: "Facts" },
+  { id: "wording", label: "Wording" },
+  { id: "confidence", label: "Confidence" },
+  { id: "steps", label: "Step flow" },
+] as const;
+
+type PanelId = (typeof PANELS)[number]["id"];
 
 export function GuideTab() {
   const stored = useAppConfigStore((s) => s.guide);
@@ -198,6 +176,7 @@ export function GuideTab() {
   const [draft, setDraft] = useState<GuideConfig>(stored);
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [panel, setPanel] = useState<PanelId>("rollout");
 
   // Follow the live document while the admin has no unsaved edits, so a change
   // made in another tab or by another owner shows up here instead of being
@@ -206,85 +185,9 @@ export function GuideTab() {
     if (!dirty) setDraft(stored);
   }, [stored, dirty]);
 
-  const entries = draft.playlist.entries;
-
-  /**
-   * The warnings, and the order the guide will actually run.
-   *
-   * Both are computed from the NORMALIZED draft rather than the raw one, because
-   * that is what the server will store: normalization repairs a dependency
-   * violation by moving the entry down, so linting the raw draft would report a
-   * problem that saving fixes on its own. The lint that survives normalization is
-   * the lint worth showing.
-   */
-  const { problems, resolved } = useMemo(() => {
-    const normalized = normalizeGuidePlaylist(draft.playlist);
-    return { problems: lintGuidePlaylist(normalized), resolved: resolveGuidePlaylist(normalized) };
-  }, [draft.playlist]);
-
-  const setRollout = (patch: Partial<GuideConfig["rollout"]>) => {
-    setDraft((d) => ({ ...d, rollout: { ...d.rollout, ...patch } }));
+  const edit = (patch: Partial<GuideConfig>) => {
+    setDraft((d) => ({ ...d, ...patch }));
     setDirty(true);
-  };
-
-  const setExtraction = (next: GuideExtractionConfig) => {
-    setDraft((d) => ({ ...d, extraction: next }));
-    setDirty(true);
-  };
-
-  const extractionIsDefault =
-    JSON.stringify(draft.extraction) === JSON.stringify(createDefaultGuideExtraction());
-
-  const resetExtraction = () => setExtraction(createDefaultGuideExtraction());
-
-  const setEntries = (next: GuidePlaylistEntry[]) => {
-    setDraft((d) => ({ ...d, playlist: { ...d.playlist, entries: next } }));
-    setDirty(true);
-  };
-
-  const patchEntry = (id: GuideComponentId, patch: Partial<GuidePlaylistEntry>) => {
-    setEntries(entries.map((entry) => (entry.id === id ? { ...entry, ...patch } : entry)));
-  };
-
-  const move = (index: number, delta: number) => {
-    const target = index + delta;
-    if (target < 0 || target >= entries.length) return;
-    const next = [...entries];
-    const [lifted] = next.splice(index, 1);
-    next.splice(target, 0, lifted!);
-    setEntries(next);
-  };
-
-  const setSkippable = (id: GuideComponentId, choice: string) => {
-    const entry = entries.find((e) => e.id === id);
-    if (!entry) return;
-    const next = { ...entry };
-    // Absent means "whatever the catalog says", which is a third state rather
-    // than a default value — so clearing it has to delete the key, not write the
-    // catalog's current answer into the document. Writing it would freeze this
-    // component's skippability at today's value and silently ignore a later
-    // change in code.
-    if (choice === "inherit") delete next.skippable;
-    else next.skippable = choice === "optional";
-    setEntries(entries.map((e) => (e.id === id ? next : e)));
-  };
-
-  const setTitle = (id: GuideComponentId, value: string) => {
-    const entry = entries.find((e) => e.id === id);
-    if (!entry) return;
-    const next = { ...entry };
-    if (value.trim()) next.title = value;
-    else delete next.title;
-    setEntries(entries.map((e) => (e.id === id ? next : e)));
-  };
-
-  const setAsk = (id: GuideComponentId, value: string) => {
-    const entry = entries.find((e) => e.id === id);
-    if (!entry) return;
-    const next = { ...entry };
-    if (value.trim()) next.ask = value;
-    else delete next.ask;
-    setEntries(entries.map((e) => (e.id === id ? next : e)));
   };
 
   const onSave = async () => {
@@ -300,36 +203,36 @@ export function GuideTab() {
     }
   };
 
-  const onResetPlaylist = () => {
-    setDraft((d) => ({ ...d, playlist: createDefaultGuidePlaylist() }));
-    setDirty(true);
-  };
-
-  const shipped = createDefaultGuideConfig();
-  const playlistIsDefault =
-    JSON.stringify(draft.playlist) === JSON.stringify(shipped.playlist);
-
   return (
-    <div className="space-y-4">
-      <TabIntro
-        elsewhere={
-          <>
-            The model that reads what a reader types is the <strong>Guide turn
-            interpretation</strong> step in Models &amp; pricing; its wording is{" "}
-            <strong>guideInterpret/turn</strong> in Prompts. What each question means,
-            and what it depends on, is fixed in code — this tab decides who sees the
-            flow and in what order it asks.
-          </>
-        }
-      >
-        The guided studio is the chat-led alternative to the step-by-step wizard: it
-        asks for the story, the cast and the art in conversation, and shows the book
-        beside it. Rollout changes take effect on the reader&apos;s next page load.
-      </TabIntro>
-
-      <div className="flex flex-wrap items-center justify-end gap-2">
+    <div className="space-y-5">
+      <TabIntro />
+      <div className="sticky top-0 z-10 -mx-1 flex flex-wrap items-center justify-between gap-3 bg-canvas/90 px-1 py-2 backdrop-blur">
+        <nav className="flex gap-1 overflow-x-auto rounded-full bg-ink-100/70 p-1 [scrollbar-width:none]" role="tablist">
+          {PANELS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              role="tab"
+              aria-selected={panel === item.id}
+              onClick={() => setPanel(item.id)}
+              className={cn(
+                "relative shrink-0 rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors",
+                panel === item.id ? "text-ink-900" : "text-ink-500 hover:text-ink-800",
+              )}
+            >
+              {panel === item.id && (
+                <motion.span
+                  layoutId="guide-admin-panel"
+                  className="absolute inset-0 rounded-full bg-white shadow-soft"
+                  transition={{ duration: 0.2 }}
+                />
+              )}
+              <span className="relative">{item.label}</span>
+            </button>
+          ))}
+        </nav>
         {!readOnly && (
-          <>
+          <div className="flex items-center gap-2">
             {dirty && (
               <Button
                 variant="ghost"
@@ -345,326 +248,199 @@ export function GuideTab() {
             <Button size="sm" loading={saving} disabled={!dirty} onClick={() => void onSave()}>
               Save changes
             </Button>
-          </>
+          </div>
         )}
       </div>
 
-      <Section
-        title="Who gets the guided studio"
-        hint={describeGuideRollout(draft.rollout)}
-      >
-        <div className="grid gap-2 sm:grid-cols-2">
-          {GUIDE_ROLLOUT_MODES.map((mode) => {
-            const active = draft.rollout.mode === mode;
-            const copy = MODE_COPY[mode];
-            return (
-              <button
-                key={mode}
-                type="button"
-                disabled={readOnly}
-                onClick={() => setRollout({ mode })}
-                className={[
-                  "rounded-xl2 px-3.5 py-3 text-left ring-1 ring-inset transition",
-                  active
-                    ? "bg-brand-50 ring-brand-300"
-                    : "bg-white ring-ink-100 hover:ring-ink-200",
-                  readOnly && "cursor-default",
-                  mode === "off" && active && "bg-amber-50 ring-amber-300",
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-              >
-                <div className="flex items-center gap-2">
-                  <span
-                    className={[
-                      "size-3.5 shrink-0 rounded-full ring-1 ring-inset",
-                      active ? "bg-brand-600 ring-brand-600" : "bg-white ring-ink-300",
-                      mode === "off" && active && "bg-amber-500 ring-amber-500",
-                    ]
-                      .filter(Boolean)
-                      .join(" ")}
-                  />
-                  <span className="text-sm font-semibold text-ink-800">{copy.label}</span>
-                </div>
-                <p className="mt-1 pl-5.5 text-[11px] leading-relaxed text-ink-500">
-                  {copy.detail}
-                </p>
-              </button>
-            );
-          })}
-        </div>
-
-        {draft.rollout.mode === "percentage" && (
-          <div className="grid gap-3 sm:grid-cols-[10rem_1fr] sm:items-start">
-            <Field label="Share of customers">
-              <Input
-                type="number"
-                min={0}
-                max={100}
-                value={draft.rollout.percent}
-                onChange={(e) => {
-                  const parsed = Number.parseInt(e.target.value, 10);
-                  setRollout({
-                    percent: Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : 0,
-                  });
-                }}
-              />
-            </Field>
-            <p className="text-[11px] leading-relaxed text-ink-400 sm:pt-8">
-              Each book is assigned a bucket from its own id, so a reader keeps the same
-              flow on every visit and raising this number only ever adds books — it never
-              moves a half-finished one back to the wizard. Lowering it does not pull a
-              book out of the guided studio either, so a ramp is only reversible with{" "}
-              <strong>Off</strong>.
-            </p>
-          </div>
-        )}
-      </Section>
-
-      <Section
-        title="How the chat reads what a parent types"
-        hint="The interpreter turns a sentence into facts about the book. These settings decide how sure it has to be before acting, and how hard it tries when the book refuses what it proposed."
-        action={
-          !readOnly && !extractionIsDefault ? (
-            <Button variant="ghost" onClick={resetExtraction}>
-              <RotateCcw className="size-3.5" />
-              Reset to defaults
-            </Button>
-          ) : undefined
-        }
-      >
-        <div className="grid gap-4 sm:grid-cols-2">
-          {EXTRACTION_FIELDS.map((field) => (
-            <Field key={field.key} label={field.label}>
-              <Input
-                type="number"
-                min={field.min}
-                max={field.max}
-                step={field.step}
-                disabled={readOnly}
-                value={field.read(draft.extraction)}
-                onChange={(e) => {
-                  const parsed = Number.parseFloat(e.target.value);
-                  setExtraction(
-                    field.write(
-                      draft.extraction,
-                      Number.isFinite(parsed)
-                        ? Math.min(field.max, Math.max(field.min, parsed))
-                        : field.read(createDefaultGuideExtraction()),
-                    ),
-                  );
-                }}
-              />
-              <p className="mt-1 text-[11px] leading-relaxed text-ink-400">{field.detail}</p>
-            </Field>
-          ))}
-        </div>
-
-        {/*
-          Stated as a sentence rather than left implicit in three numbers. The
-          thresholds only make sense in relation to each other, and an admin who
-          sets "ask before changing" below "say it back" has built a guide that
-          reads a fact aloud and then changes it without asking — legal, saved,
-          and nothing on the page would otherwise say it was odd.
-        */}
-        <p className="rounded-lg bg-ink-50 px-3 py-2 text-[11px] leading-relaxed text-ink-500">
-          As set: the guide ignores anything it is less than{" "}
-          <strong>{percent(draft.extraction.thresholds.floor)}</strong> sure of, says a fact back
-          to the parent when it is under <strong>{percent(draft.extraction.thresholds.readBack)}</strong>{" "}
-          sure, and asks before <em>changing</em> something already decided unless it is at least{" "}
-          <strong>{percent(draft.extraction.thresholds.overwrite)}</strong> sure.
-          {draft.extraction.thresholds.overwrite < draft.extraction.thresholds.readBack && (
-            <>
-              {" "}
-              <span className="font-semibold text-amber-700">
-                That ordering is unusual — it will change settled facts more readily than it
-                mentions new ones.
-              </span>
-            </>
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={panel}
+          initial={{ opacity: 0, y: 6 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -4 }}
+          transition={{ duration: 0.16 }}
+        >
+          {panel === "rollout" && (
+            <RolloutPanel
+              rollout={draft.rollout}
+              onChange={(rollout) => edit({ rollout })}
+              readOnly={readOnly}
+            />
           )}
-        </p>
-      </Section>
-
-      <Section
-        title="What the guide asks, and in what order"
-        hint="Drag-free reordering: move a question up or down, retitle it, word its opening yourself, make it optional, or switch it off entirely. Questions that depend on another are moved below it when you save."
-        action={
-          !readOnly && !playlistIsDefault ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              leftIcon={<RotateCcw className="size-3.5" />}
-              onClick={onResetPlaylist}
+          {panel === "facts" && (
+            <Section
+              title="What the Chat needs before the story"
+              hint="Required facts are asked for until they are known. The rest are asked once, in the first question, or derived."
             >
-              Reset order
-            </Button>
-          ) : undefined
-        }
-      >
-        {problems.length > 0 && (
-          <div className="space-y-1 rounded-lg bg-amber-50 px-3 py-2.5 ring-1 ring-inset ring-amber-200">
-            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
-              <TriangleAlert className="size-3.5" />
-              Worth a look before saving
-            </div>
-            {problems.map((problem) => (
-              <p key={problem} className="text-[11px] leading-relaxed text-amber-800">
-                {problem}
-              </p>
-            ))}
-          </div>
-        )}
-
-        <div className="space-y-1.5">
-          {entries.map((entry, index) => {
-            const component = GUIDE_COMPONENTS[entry.id];
-            const skipChoice =
-              entry.skippable === undefined
-                ? "inherit"
-                : entry.skippable
-                  ? "optional"
-                  : "required";
-            return (
-              <div
-                key={entry.id}
-                className={[
-                  "rounded-lg bg-white px-3 py-2.5 ring-1 ring-inset transition",
-                  entry.enabled ? "ring-ink-100" : "bg-ink-50/60 ring-ink-100",
-                ].join(" ")}
-              >
-                <div className="flex items-start gap-2.5">
-                  {!readOnly && (
-                    <div className="flex flex-col">
-                      <button
-                        type="button"
-                        aria-label={`Move ${component.title} earlier`}
-                        disabled={index === 0}
-                        onClick={() => move(index, -1)}
-                        className="rounded p-0.5 text-ink-400 transition hover:bg-ink-50 hover:text-ink-700 disabled:opacity-30 disabled:hover:bg-transparent"
-                      >
-                        <ArrowUp className="size-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Move ${component.title} later`}
-                        disabled={index === entries.length - 1}
-                        onClick={() => move(index, 1)}
-                        className="rounded p-0.5 text-ink-400 transition hover:bg-ink-50 hover:text-ink-700 disabled:opacity-30 disabled:hover:bg-transparent"
-                      >
-                        <ArrowDown className="size-3.5" />
-                      </button>
-                    </div>
-                  )}
-
-                  <div className="min-w-0 flex-1 space-y-1.5">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <span className="text-sm font-semibold text-ink-800">
-                        {entry.title ?? component.title}
-                      </span>
-                      {entry.title && (
-                        <span className="text-[10px] text-ink-400">
-                          renamed from &ldquo;{component.title}&rdquo;
-                        </span>
-                      )}
-                      {component.terminal && (
-                        <span className="rounded-full bg-ink-100 px-1.5 py-0.5 text-[10px] font-semibold text-ink-500">
-                          ends the flow
-                        </span>
-                      )}
-                      {component.effect && (
-                        <span className="rounded-full bg-brand-50 px-1.5 py-0.5 text-[10px] font-semibold text-brand-600">
-                          generates
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-[11px] leading-relaxed text-ink-500">{component.purpose}</p>
-                    {component.requires.length > 0 && (
-                      <p className="text-[10px] text-ink-400">
-                        Needs{" "}
-                        {component.requires
-                          .map((required) => GUIDE_COMPONENTS[required].title)
-                          .join(", ")}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="flex shrink-0 items-center gap-2">
-                    <Toggle
-                      checked={entry.enabled}
-                      onChange={(enabled) => patchEntry(entry.id, { enabled })}
-                      label={`${component.title} enabled`}
-                    />
-                  </div>
-                </div>
-
-                {entry.enabled && (
-                  <div className="mt-2 grid gap-2 border-t border-ink-100 pt-2 sm:grid-cols-[1fr_11rem]">
-                    <Input
-                      value={entry.title ?? ""}
-                      placeholder={component.title}
-                      onChange={(e) => setTitle(entry.id, e.target.value)}
-                      className="h-9 text-xs"
-                    />
-                    <Select
-                      options={SKIP_OPTIONS.map((option) =>
-                        option.value === "inherit"
-                          ? {
-                              ...option,
-                              label: `Catalog default (${component.skippable ? "optional" : "required"})`,
-                            }
-                          : option,
-                      )}
-                      value={skipChoice}
-                      onChange={(e) => setSkippable(entry.id, e.target.value)}
-                      className="h-9 text-xs"
-                    />
-                    {componentTakesAnswers(component) && (
-                      <div className="space-y-1 sm:col-span-2">
-                        <Textarea
-                          value={entry.ask ?? ""}
-                          placeholder="Opening question — leave blank for the guide's own wording"
-                          maxLength={400}
-                          rows={2}
-                          onChange={(e) => setAsk(entry.id, e.target.value)}
-                          className="text-xs"
-                        />
-                        <p className="text-[10px] leading-relaxed text-ink-400">
-                          Asked only the first time, while this is still empty. After that the
-                          guide names exactly what it&rsquo;s still missing, so it can ask for one
-                          child&rsquo;s age rather than repeating the question.
-                        </p>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </Section>
-
-      <Section
-        title="The flow this produces"
-        hint="What a reader will be asked, in order, once these changes are saved. Disabled questions are gone; their facts keep whatever value the book already has."
-      >
-        {resolved.length === 0 ? (
-          <p className="text-[11px] text-ink-400">
-            Every question is switched off, so the guide has nothing to ask.
-          </p>
-        ) : (
-          <ol className="flex flex-wrap items-center gap-1.5 text-[11px]">
-            {resolved.map((component, index) => (
-              <li key={component.id} className="flex items-center gap-1.5">
-                {index > 0 && <span className="text-ink-300">→</span>}
-                <span className="rounded-full bg-white px-2 py-1 font-medium text-ink-600 ring-1 ring-inset ring-ink-100">
-                  {component.title}
-                  {component.skippable && <span className="text-ink-400"> (optional)</span>}
-                </span>
-              </li>
-            ))}
-          </ol>
-        )}
-      </Section>
+              <GuideFactsPanel facts={draft.facts} onChange={(facts) => edit({ facts })} readOnly={readOnly} />
+            </Section>
+          )}
+          {panel === "wording" && (
+            <Section
+              title="What the guide says"
+              hint="Blank uses the shipped wording. In other chat languages the guide phrases the meaning written here and keeps names exactly as typed."
+            >
+              <GuideWordingPanel wording={draft.wording} onChange={(wording) => edit({ wording })} readOnly={readOnly} />
+            </Section>
+          )}
+          {panel === "confidence" && (
+            <ConfidencePanel
+              extraction={draft.extraction}
+              onChange={(extraction) => edit({ extraction })}
+              readOnly={readOnly}
+            />
+          )}
+          {panel === "steps" && (
+            <Section
+              title="Step flow questions"
+              hint="Only the step-based guide reads this. The Chat studio asks from the Facts panel."
+            >
+              <GuideStepFlowPanel
+                playlist={draft.playlist}
+                onChange={(playlist) => edit({ playlist })}
+                readOnly={readOnly}
+              />
+            </Section>
+          )}
+        </motion.div>
+      </AnimatePresence>
     </div>
+  );
+}
+
+function RolloutPanel({
+  rollout,
+  onChange,
+  readOnly,
+}: {
+  rollout: GuideConfig["rollout"];
+  onChange: (rollout: GuideConfig["rollout"]) => void;
+  readOnly: boolean;
+}) {
+  return (
+    <Section title="Who gets the Chat studio" hint={describeGuideRollout(rollout)}>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {GUIDE_ROLLOUT_MODES.map((mode) => {
+          const active = rollout.mode === mode;
+          const copy = MODE_COPY[mode];
+          const off = mode === "off";
+          return (
+            <button
+              key={mode}
+              type="button"
+              disabled={readOnly}
+              onClick={() => onChange({ ...rollout, mode })}
+              className={cn(
+                "rounded-xl2 px-4 py-3.5 text-left ring-1 ring-inset transition",
+                active
+                  ? off
+                    ? "bg-amber-50 ring-amber-300"
+                    : "bg-white shadow-soft ring-ink-900"
+                  : "bg-white ring-ink-100 hover:ring-ink-300",
+                readOnly && "cursor-default",
+              )}
+            >
+              <div className="flex items-center gap-2">
+                <span
+                  className={cn(
+                    "size-3.5 shrink-0 rounded-full ring-1 ring-inset transition",
+                    active ? (off ? "bg-amber-500 ring-amber-500" : "bg-ink-900 ring-ink-900") : "bg-white ring-ink-300",
+                  )}
+                />
+                <span className="text-sm font-semibold text-ink-900">{copy.label}</span>
+              </div>
+              <p className="mt-1 pl-5.5 text-xs leading-relaxed text-ink-500">{copy.detail}</p>
+            </button>
+          );
+        })}
+      </div>
+
+      {rollout.mode === "percentage" && (
+        <div className="grid gap-3 sm:grid-cols-[10rem_1fr] sm:items-start">
+          <Field label="Share of customers">
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              value={rollout.percent}
+              onChange={(e) => {
+                const parsed = Number.parseInt(e.target.value, 10);
+                onChange({ ...rollout, percent: Number.isFinite(parsed) ? Math.min(100, Math.max(0, parsed)) : 0 });
+              }}
+            />
+          </Field>
+          <p className="text-[11px] leading-relaxed text-ink-400 sm:pt-8">
+            Each book is assigned a bucket from its own id, so a reader keeps the same flow on every visit and
+            raising this number only ever adds books. Lowering it does not pull a book out of the Chat studio
+            either, so a ramp is only reversible with <strong>Off</strong>.
+          </p>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function ConfidencePanel({
+  extraction,
+  onChange,
+  readOnly,
+}: {
+  extraction: GuideExtractionConfig;
+  onChange: (next: GuideExtractionConfig) => void;
+  readOnly: boolean;
+}) {
+  const isDefault = JSON.stringify(extraction) === JSON.stringify(createDefaultGuideExtraction());
+  return (
+    <Section
+      title="How the chat reads what a parent types"
+      hint="The interpreter turns a sentence into facts about the book. These settings decide how sure it has to be before acting, and how hard it tries when the book refuses what it proposed."
+      action={
+        !readOnly && !isDefault ? (
+          <Button variant="ghost" onClick={() => onChange(createDefaultGuideExtraction())}>
+            <RotateCcw className="size-3.5" />
+            Reset to defaults
+          </Button>
+        ) : undefined
+      }
+    >
+      <div className="grid gap-4 sm:grid-cols-2">
+        {EXTRACTION_FIELDS.map((field) => (
+          <Field key={field.key} label={field.label}>
+            <Input
+              type="number"
+              min={field.min}
+              max={field.max}
+              step={field.step}
+              disabled={readOnly}
+              value={field.read(extraction)}
+              onChange={(e) => {
+                const parsed = Number.parseFloat(e.target.value);
+                onChange(
+                  field.write(
+                    extraction,
+                    Number.isFinite(parsed)
+                      ? Math.min(field.max, Math.max(field.min, parsed))
+                      : field.read(createDefaultGuideExtraction()),
+                  ),
+                );
+              }}
+            />
+            <p className="mt-1 text-[11px] leading-relaxed text-ink-400">{field.detail}</p>
+          </Field>
+        ))}
+      </div>
+      <p className="rounded-lg bg-ink-50 px-3 py-2 text-xs leading-relaxed text-ink-600">
+        As set: the guide ignores anything it is less than <strong>{percent(extraction.thresholds.floor)}</strong>{" "}
+        sure of, says a fact back when it is under <strong>{percent(extraction.thresholds.readBack)}</strong> sure,
+        and asks before <em>changing</em> something already decided unless it is at least{" "}
+        <strong>{percent(extraction.thresholds.overwrite)}</strong> sure.
+        {extraction.thresholds.overwrite < extraction.thresholds.readBack && (
+          <span className="font-semibold text-amber-700">
+            {" "}
+            That ordering is unusual: it will change settled facts more readily than it mentions new ones.
+          </span>
+        )}
+      </p>
+    </Section>
   );
 }

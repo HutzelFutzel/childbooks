@@ -245,20 +245,20 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
   storyAnalysis: {
     system: [
       blk(
-        "role",
-        "You are a children's-book art director. Extract ONLY the subjects that must look IDENTICAL across multiple illustrations so the book stays visually consistent. Prefer a small cast. If you are unsure a subject needs its own reference sheet, omit it. Include recurring CHARACTERS (people, animals, creatures, and named toys that act, speak, or travel with the cast), PLACES the story returns to, and OBJECTS that recur as themselves across scenes and cannot live in a character's description. For each kept subject, write a concise but vivid, self-contained visual description (appearance, colors, distinguishing features) grounded in the story; infer sensible details where the story is silent. Describe only the subject itself — do NOT mention the art style, medium, rendering technique, family tree, or relationship graph. Rank importance: high = central and appears throughout; medium = recurs across scenes and still needs a matching look. Do not emit low-importance subjects. For CHARACTERS ONLY, also set three fields. \"ageYears\" is the character's age in years when stated or strongly implied; omit it rather than guessing when the story gives no reliable basis. \"bodyPlan\" is the character's gross body layout: \"bipedal\" for anyone who stands upright on two legs (people, robots, a bear in a waistcoat, a standing toy), \"quadruped\" for four-legged animals that walk on all fours, \"avian\" for birds, \"aquatic\" for fish and other swimming or serpentine bodies, \"amorphous\" for everything without a clear limbed body (a cloud, a teapot with a face, a blob). \"heightCm\" is a private approximate real-world scale hint based on age and species (a 5-year-old child is about 110, an adult about 170, a house cat about 25 at the shoulder); omit it rather than guessing. Leave all three fields out for places and objects. Separately list only EMBEDDINGS needed for rendering: a named place or object that physically contains another extracted subject which must appear inside its reference sheet (for example a specific lamp on a specific desk). Return each as {container, subject}, never nest more than one level, and use an empty list when none are essential. Also write a 1-2 sentence summary of the story's visual world.",
+        "recurringSubjects",
+        "You are a children's-book art director. Extract the subjects that must look the same each time they are drawn. Include every CHARACTER who appears in more than one scene: named people, animals, creatures, named toys that act, and unnamed roles such as a parent, a doctor, or a nurse. When several people share one role, keep one recurring figure for that role. Include a PLACE the story returns to, and an OBJECT that recurs as itself and cannot live in a character's description. Omit a subject that appears in only one scene. For each kept subject, write a concise but vivid, self-contained visual description (appearance, colors, distinguishing features) grounded in the story; infer sensible details where the story is silent. Describe only the subject itself — do NOT mention the art style, medium, rendering technique, family tree, or relationship graph. Rank importance: high = central and appears throughout; medium = returns in more than one scene and needs a matching look, including an unnamed role or a place. A returning person or place is at least medium. Do not emit low-importance subjects. For CHARACTERS ONLY, also set three fields. \"ageYears\" is the character's age in years when stated or strongly implied; omit it rather than guessing when the story gives no reliable basis. \"bodyPlan\" is the character's gross body layout: \"bipedal\" for anyone who stands upright on two legs (people, robots, a bear in a waistcoat, a standing toy), \"quadruped\" for four-legged animals that walk on all fours, \"avian\" for birds, \"aquatic\" for fish and other swimming or serpentine bodies, \"amorphous\" for everything without a clear limbed body (a cloud, a teapot with a face, a blob). \"heightCm\" is a private approximate real-world scale hint based on age and species (a 5-year-old child is about 110, an adult about 170, a house cat about 25 at the shoulder); omit it rather than guessing. Leave all three fields out for places and objects. Separately list only EMBEDDINGS needed for rendering: a named place or object that physically contains another extracted subject which must appear inside its reference sheet (for example a specific lamp on a specific desk). Return each as {container, subject}, never nest more than one level, and use an empty list when none are essential. Also write a 1-2 sentence summary of the story's visual world.",
       ),
       blk(
-        "identity",
-        'ONE IDENTITY PER SUBJECT. An appositive like "Bluey the blue toy elephant" or "Pip the puppy" is one row — never a named character plus a separate object of that kind. Use the proper name as "name". Put the other story phrases in "aliasNames" (for example ["the blue toy elephant", "toy elephant"]). Named toys with actions or speech are characters; their toy-ness belongs in the description, not a second object. A name does not invent a species, clothing, or an object\'s shape. If the story itself defines the name ("Bluey the blue toy elephant"), that definition is the same subject.',
+        "oneSubject",
+        'ONE IDENTITY PER SUBJECT. An appositive like "Bluey the blue toy elephant" or "Pip the puppy" is one row — never a named character plus a separate object of that kind. Use the proper name as "name". Put the other story phrases in "aliasNames" (for example ["the blue toy elephant", "toy elephant"]). Named toys with actions or speech are characters; their toy-ness belongs in the description, not a second object. A name does not invent a species, clothing, or an object\'s shape. If the story itself defines the name ("Bluey the blue toy elephant"), that definition is the same subject. Role phrases for one person are also one row: "the doctor" and "the surgeon" are one character when the story treats them as the same person, and the extra phrases go in aliasNames.',
       ),
       blk(
-        "scope",
-        "Do not extract clothing or carried signature items (fold yellow boots into Mila's description), one-scene props (a picnic blanket, a snack), generic scenery, or sequential locations that each appear once (a mud patch, then grass, then an oak tree, then a shady picnic spot). Those details belong in page briefs, not reference sheets.",
+        "oneScene",
+        "Do not extract clothing or carried signature items (fold yellow boots into Mila's description), one-scene props (a picnic blanket, a snack, a bandage, a scar), or a location that appears only once (a mud patch, then grass, then an oak tree). A place the story comes back to, such as a hospital room, is a place and must be kept. Those one-scene details belong in page briefs, not reference sheets.",
       ),
       blk(
         "ageSeparation",
-        'AGE HAS ONE SOURCE OF TRUTH: for characters, put numeric age only in "ageYears". Never include a numeric age, "years old", "year-old", or "aged N" in "description"; that field is for visible appearance such as face, hair, clothing, colors, and distinguishing features.',
+        'AGE HAS ONE VISUAL FIELD: for every character, set "ageYears" to the best age to draw and set "ageBasis" to "stated", "inferred", or "suggested". Preserve an age stated in the story or cast. Otherwise infer from words such as toddler, older sister, parent or grandfather. If the story is silent, make a sensible visual-age suggestion consistent with the character role and target audience. Never put a numeric age, "years old", "year-old", or "aged N" in "description"; that field is only visible appearance.',
       ),
       blk(
         "distinctWardrobe",
@@ -267,6 +267,10 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk(
         "language",
         "The story is written in {{languageName}}. Understand names and details in that language, preserve every proper name exactly, and return visual descriptions and the summary in English for the illustration pipeline.",
+      ),
+      blk(
+        "bookTitle",
+        "Also return title: a short book title in {{languageName}}, the language of the story. Make it specific to this story. It is a name for the book, not a sentence and not a translation of the English summary.",
       ),
     ],
     user: [
@@ -341,6 +345,21 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk("placement", "{{placementGuidance}}"),
       blk("ageGuidance", "WRITING FOR THIS READER:\n{{ageGuidance}}"),
       blk("density", "{{densityGuidance}}", "hasDensity"),
+      blk(
+        "pageTarget",
+        "PAGE COUNT: aim for {{targetPages}} interior pages, about {{wordsPerPage}} words on a page for this reader. This is a {{pageCase}} book.",
+        "hasPageTarget",
+      ),
+      blk(
+        "pageSpread",
+        "Reach that count only by giving the moments the story already has more room — split a moment across pages, let a repetition this reader enjoys carry onto the next page. Never add an event, a character or a place the story does not have.",
+        "isSpread",
+      ),
+      blk(
+        "pageThin",
+        "The reader asked for this stretch knowing the pages will be sparse. Keep pages short rather than inventing anything: never add an event, a character or a place the story does not have.",
+        "isThin",
+      ),
       blk(
         "pacing",
         "Pace the story well across the pages. Where the text does not fit the pacing above, split a long passage across two pages or merge two thin ones — do not overload a single page.",
@@ -520,7 +539,11 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "intents",
-        'Set "intent" to: "answer" when they are responding to what the guide asked; "revise" when they are correcting or changing something already decided (including "actually…", "no, make it…", "change her age"); "skip" when they are declining or deferring ("skip that", "you choose", "doesn\'t matter"); "question" when they are asking YOU something; "other" for chat, greetings and anything off-topic. Only "answer" and "revise" may carry a patch.',
+        'Set "intent" to: "answer" when they are responding to what the guide asked; "revise" when they are correcting or changing something already decided (including "actually…", "no, make it…", "change her age"); "skip" when they are declining or deferring ("skip that", "you choose", "doesn\'t matter"); "question" when they are asking YOU something; "other" for chat, greetings and anything off-topic. Intent describes the conversational act, not whether the message contains facts: a question or aside can also state facts, and those facts must still be claimed.',
+      ),
+      blk(
+        "route",
+        'Set "route" to "own" only when the parent explicitly says they will provide the wording, or the message contains manuscript-like story text they intend to keep verbatim. Set it to "guided" when they ask for help writing or provide people, preferences or an idea for you to turn into a story. Use "uncertain" for greetings, questions and genuinely ambiguous messages. This route is only a reversible suggestion for a fresh book; do not force every message into one.',
       ),
       blk(
         "claims",
@@ -532,7 +555,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
       blk(
         "extraction",
-        'Read the whole message, not just the part that answers the question. Ages: whole years in "age"; use "ageMonths" only for babies and toddlers, or when they say months. A relative age ("a year older") must be resolved against the current facts into an absolute number. An age shared between people ("both", "each", "all 4") applies to every person named. Names: keep their spelling and capitalisation; split "Maya and Leo" into two people. When they name who the book is for, claim BOTH "heroes" (the COMPLETE list of names) and "heroAges" (an age for each name you were given). When they re-state who the book is for, send the COMPLETE list of names, not just the new one.',
+        'Read the whole message, not just the part that answers the question. Ages: whole years in "age"; use "ageMonths" only for babies and toddlers, or when they say months. A relative age ("a year older") must be resolved against the current facts into an absolute number. An age shared between people ("both", "each", "all 4") applies to every person named. Names: keep their spelling and capitalisation; split "Maya and Leo" into two people. When they name who the book is for, claim BOTH "heroes" (the COMPLETE list of names) and "heroAges" (an age for each name you were given). When they re-state who the book is for, send the COMPLETE list of names, not just the new one. When they say people share an age — twins, "both", "the same age", "each" — also claim "sameAge" as the groups of names, quoting those words. Do not claim it because the names look related. An age you were actually given still goes in "heroAges". If the parent pastes or dictates their own story, claim "storyText" with the exact complete manuscript portion, unchanged; never summarise, polish or reconstruct it.',
       ),
       blk("examples", "Worked examples:\n{{examples}}"),
       blk(
@@ -560,7 +583,7 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       blk("history", "Recent conversation:\n{{transcript}}"),
       blk(
         "ask",
-        'The parent just said: "{{message}}"\n\nReturn {"intent": "answer"|"revise"|"skip"|"question"|"other", "claims": [{"slot": "…", "value": …, "evidence": "…", "confidence": 0..1}, …], "skip": ["componentId", …], "reply": "…", "confidence": 0..1}. Omit "claims" and "skip" when they are empty.',
+        'The parent just said: "{{message}}"\n\nReturn {"intent": "answer"|"revise"|"skip"|"question"|"other", "route": "guided"|"own"|"uncertain", "claims": [{"slot": "…", "value": …, "evidence": "…", "confidence": 0..1}, …], "skip": ["componentId", …], "reply": "…", "confidence": 0..1}. Omit "claims" and "skip" when they are empty.',
       ),
     ],
   },
@@ -640,6 +663,107 @@ const DEFAULT_TEMPLATES: Record<string, PromptTemplate> = {
       ),
     ],
     user: [blk("legend", "{{legend}}")],
+  },
+
+  // core/guide/portrait.ts → portraitPrompt (Chat studio)
+  "portrait/default": {
+    single: [
+      blk(
+        "subject",
+        'One picture-book portrait of "{{name}}": a single character, head to mid-body, facing the viewer at a slight three-quarter angle, with a calm, friendly expression. One subject only, centred, on a simple soft background in the book\'s palette. No text, lettering, frame, border or watermark.',
+      ),
+      blk("age", "{{name}} is {{age}}. Keep the face, proportions and apparent life stage believable for that age.", "hasAge"),
+      blk("role", "Who they are in the story: {{role}}.", "hasRole"),
+      blk("appearance", "Appearance, as the family described it: {{appearance}}", "hasAppearance"),
+      blk("note", "The family asked for this change to the portrait: {{note}}. Change only that; keep who they are.", "hasNote"),
+      blk(
+        "photo",
+        "The attached photo shows the real person. Carry over their recognisable likeness — face shape, hair, skin tone, eye colour — translated fully into the art style below. Never reproduce the photo itself, its background or its lighting.",
+        "fromPhoto",
+      ),
+      blk(
+        "drawing",
+        "The attached drawing is this character's existing design. Keep who they are exactly — species, shape, colours, clothes — and redraw them in the art style below.",
+        "fromDrawing",
+      ),
+      blk(
+        "invent",
+        "Nothing else is known about how they look: design a warm, distinctive, age-appropriate children's-book character that fits the name and the story.",
+        "invent",
+      ),
+      blk("style", "Art style: {{artStyle}}"),
+      blk("safety", "Keep everything gentle and suitable for young children."),
+    ],
+  },
+
+  // core/guide/speech.ts → speakGuideLine (Chat studio)
+  "guideSpeak/line": {
+    system: [
+      blk(
+        "role",
+        "You write the lines a warm, brief guide says while helping a parent make a children's picture book. You are given what each line must MEAN, in English. Write each one in the requested chat language: casual, friendly, short, with contractions where the language has them. Output JSON only.",
+      ),
+      blk(
+        "rules",
+        "Keep every name exactly as given — never translate, respell or decline a name. Keep numbers as digits. Never add a question, a claim or a promise the meaning does not contain. Never mention buttons, screens or Sparks unless the meaning does. About 25 words at most per line, unless the meaning is longer.",
+      ),
+    ],
+    user: [
+      blk("language", "Chat language: {{language}}"),
+      blk("names", "Names to keep exactly: {{names}}"),
+      blk("lines", "Lines to write, by id:\n{{lines}}"),
+      blk("ask", 'Return {"lines": {"<id>": "…", …}} with one entry per id above.'),
+    ],
+  },
+
+  // core/guide/speech.ts → askGuideNext
+  "guideSpeak/next": {
+    system: [
+      blk(
+        "role",
+        "You are a warm, brief guide helping a parent make a children's picture book. The facts they just stated are already saved. Write the next thing you would say out loud. Output JSON only.",
+      ),
+      blk(
+        "how",
+        "Talk like a person, not a form. Acknowledge what you just heard, then ask what is still open. Combine things that belong in one breath, such as one age for twins or two children. Ask them separately when putting them in one question would bury one of them. You may ask one thing or more than one. Do not ask for anything that is not listed as still open. If nothing is open, acknowledge and stop, with an empty asks list.",
+      ),
+      blk(
+        "rules",
+        "Keep every name exactly as given — never translate, respell or decline a name. Keep numbers as digits. About 25 words. Contractions. No bullet points, no markdown, no emoji. Never mention buttons, screens, field names or Sparks. People who share an age are one question, and that sentence names every one of them.",
+      ),
+    ],
+    user: [
+      blk("language", "Chat language: {{language}}"),
+      blk("names", "Names to keep exactly: {{names}}"),
+      blk("learned", "Just saved from their last message:\n{{learned}}"),
+      blk("open", "Still open (ask only from this list):\n{{open}}"),
+      blk("history", "Recent conversation:\n{{transcript}}"),
+      blk(
+        "ask",
+        'Return {"text": "…", "asks": ["fact id", …]}. "asks" lists the ids from "Still open" that this sentence is asking about. Use [] when you are not asking.',
+      ),
+    ],
+  },
+
+  // core/guide/ownWords.ts → extractManuscriptCast (Chat studio)
+  "guideExtractCast/default": {
+    system: [
+      blk(
+        "role",
+        "You read a children's story a parent wrote or pasted and list the recurring named people and creatures in it, with any age the text states. You never rewrite, summarise or judge the story. Output JSON only.",
+      ),
+      blk(
+        "rules",
+        'Only list names that are actually in the text, spelled exactly as written. Only give an age the text states ("Maya, who was five", "Leo turned 4"); never estimate one. Put the character the story is mainly about first. If two names might be the same person, or you cannot tell who the story is about, list the names concerned in "unclear".',
+      ),
+    ],
+    user: [
+      blk("story", "The story:\n\"\"\"\n{{story}}\n\"\"\""),
+      blk(
+        "ask",
+        'Return {"people": [{"name": "…", "age": number|null, "ageMonths": number|null, "confidence": 0..1}], "unclear": ["name", …]}.',
+      ),
+    ],
   },
 
   // core/pipeline/anchors.ts → buildAnchorPrompt (from-scratch / iterate)
@@ -1492,8 +1616,11 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("story", "The author's story text.", "Once upon a time…"),
           V("previousJson", "Prior screenplay JSON (revisions only).", "{ …previous screenplay… }"),
           V("edit", "The revision request (revisions only).", "Put Amanda on page 3."),
+          V("targetPages", "Chat studio: the page count to aim at (hardcover check).", "24"),
+          V("wordsPerPage", "Chat studio: the age band's words per page.", "20"),
+          V("pageCase", "Chat studio: natural length, spread, or thin stretch.", "spread"),
         ],
-        sampleFlags: { isRevision: false, hasDensity: true },
+        sampleFlags: { isRevision: false, hasDensity: true, hasPageTarget: true, isSpread: true, isThin: false },
       },
     ],
   },
@@ -1686,6 +1813,79 @@ export const PROMPT_ACTIONS: PromptActionMeta[] = [
           V("legend", "Ordered caption of each attached drawing.", 'Image (1) is existing artwork of "Hugo" (id "c1").'),
           V("characterCount", "How many characters have drawings.", "2"),
         ],
+        sampleFlags: {},
+      },
+    ],
+  },
+  {
+    actionId: "portrait",
+    label: "Portraits (Chat studio)",
+    description:
+      "One picture of a person in the saved style, drawn from a photo, a drawing, a description or the name alone. This is not the internal reference-sheet prompt; page generation still builds its own reference sheets.",
+    kind: "image",
+    templates: [
+      {
+        key: "portrait/default",
+        label: "Portrait",
+        description: "The portrait on a person's plate in the Chat studio.",
+        variables: [
+          V("name", "The person's name, exactly as typed.", "Maya"),
+          V("age", "Stated age.", "5 years old"),
+          V("role", "Who they are in the story.", "the birthday girl"),
+          V("appearance", "The family's own description.", "curly red hair, always in wellies"),
+          V("artStyle", "Resolved art-style overlay.", STYLE_SAMPLE),
+          V("note", "A change the family asked for on this portrait.", "make the hair darker"),
+        ],
+        sampleFlags: { hasAge: true, hasRole: true, hasAppearance: true, invent: false, fromPhoto: true, hasNote: false },
+      },
+    ],
+  },
+  {
+    actionId: "guideSpeak",
+    label: "Guide speech",
+    description:
+      "Writes each configured guide line in the reader's chat language. The configured sentence (Guided studio → Wording) is the meaning; this prompt only controls how it is phrased. Never used when the chat language is the configured one.",
+    kind: "text",
+    templates: [
+      {
+        key: "guideSpeak/line",
+        label: "Phrase a line",
+        description: "Configured meanings in, localized lines out. Names are kept exactly.",
+        variables: [
+          V("language", "The chat language.", "Deutsch (de-DE)"),
+          V("names", "Names that must not change.", "Maya, Leo"),
+          V("lines", "Line ids and their meanings.", "- storyReady: Here it is."),
+        ],
+        sampleFlags: {},
+      },
+      {
+        key: "guideSpeak/next",
+        label: "Ask what is still open",
+        description:
+          "After a turn is saved, writes the next thing the guide says. The open facts are decided in code; this only chooses how to ask.",
+        variables: [
+          V("language", "The chat language.", "English (en-US)"),
+          V("names", "Names that must not change.", "Amira, Aaron"),
+          V("learned", "What the last message saved.", "Who it's for: Amira & Aaron"),
+          V("open", "Facts still missing.", "- ages: Amira and Aaron share an age"),
+          V("transcript", "Recent turns.", "Guide: Who is it for?\nReader: Amira and Aaron are twins"),
+        ],
+        sampleFlags: {},
+      },
+    ],
+  },
+  {
+    actionId: "guideExtractCast",
+    label: "Own-words cast extraction",
+    description:
+      "Reads a manuscript the reader typed or pasted and returns names and stated ages without rewriting the story. Anything it is unsure about is corrected by the reader before anything is drawn.",
+    kind: "text",
+    templates: [
+      {
+        key: "guideExtractCast/default",
+        label: "Extract people",
+        description: "Names and stated ages from the manuscript.",
+        variables: [V("story", "The manuscript.", "Maya was five the summer the sea came to visit...")],
         sampleFlags: {},
       },
     ],

@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L5 — deleted with the Steps routing and flow scaffolding. See docs/LEGACY-GUIDE.md. */
 /**
  * The admin's switch between the two studios.
  *

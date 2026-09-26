@@ -5,6 +5,13 @@ This document defines the conversational flow represented in
 `STUDIO-GUIDE-UI-STATES.drawio`, with implementation contracts in
 `STUDIO-GUIDE-CHAT-WIDGETS.md`.
 
+The authoritative flow from **Create new storybook** through the **Order the book**
+action is in `new studio guide doc.md`. That document owns the opening, portraits,
+story, book plan, Draw-the-book batch, page recovery, print preflight and Order
+surface. This document owns checkout after that action and preserves supporting
+rationale and edge-case requirements. Where an earlier journey below differs,
+`new studio guide doc.md` wins.
+
 ## Decision
 
 The smartest flow does **not** split readers permanently into “automatic” and
@@ -45,7 +52,7 @@ defaults are explicit:
 
 | Artifact | Default | Why |
 | --- | --- | --- |
-| Story | Follows the entry choice: **Create it for me** after “Guide me”, **I’ll provide or edit it** after “I already have words” | The entry question already asked this |
+| Story | Follows the entry choice: **Create it for me** after “Guide me”, **I’ll provide or edit it** after “I’ll use my own words” | The entry question already asked this |
 | Characters | **Create them for me** | The reader supplies sources, not drawings |
 | Pages | **Create pages for me** | Nobody opens a chat to lay out spreads |
 
@@ -54,13 +61,17 @@ it**. A reader who has started editing has told us more than a setting would.
 
 ## Revised flow summary
 
+Follow `new studio guide doc.md` for the current order. The rationale below explains
+why the guide shows real style artwork early and starts honest background work, but
+its older beat numbering is not a second journey contract.
+
 Visuals come first, and the conversation does not fork until something is actually
 rendering. Two rules make that work.
 
 **The earliest visual is not the portrait.** The art catalog already holds
 customer-facing example artwork (`ArtStyleExample.imageUrl`, explicitly never sent
 to an image model), so real illustration can be on screen within one turn of the
-reader giving names — at zero cost, with no generation and no waiting. The style
+reader giving names — without generation or waiting. The style
 step is therefore not a roadblock in front of the reward; it *is* the first reward.
 
 **Nothing is narrated as happening until it is happening.** The guide must never
@@ -69,6 +80,10 @@ once a visual job is queued or running. A guide that claims background progress
 that has not started is the fastest way to lose a reader’s trust in everything else
 it says.
 
+The opening below is the previous four beats. Follow **Until the story** in
+`new studio guide doc.md` instead. The beats are left here so the older diagrams
+can be read against them:
+
 The opening is four beats:
 
 1. **Names and ages.** One prose question, one receipt.
@@ -76,9 +91,9 @@ The opening is four beats:
    photo? *Upload a photo* / *Describe them* / *Let me invent them*, offered once
    for the whole cast rather than once per child.
 3. **Style as a one-tap confirmation, shown as real artwork.** A recommended tile
-   pre-selected beside three to five alternates. “I’ll draw them in this look.” →
-   *Create Maya and Leo’s first looks · X Sparks* / *See other looks*. The action
-   shows the configured charge and resulting balance before it can enqueue
+   pre-selected beside three to five alternates. Once the named cast is known,
+   “I’ll draw them in this look.” → *Draw Maya and Leo · about X Sparks* /
+   *See other looks*. The action shows the capped estimate before it can enqueue
    generation. The screen is full of illustration before anything has been
    generated.
 4. **The visual job starts, and then the story opens.** After that informed action,
@@ -112,49 +127,42 @@ OPEN OR RESUME BOOK
   |
   +-- Existing work?
   |     +-- Yes: summarize current artifact state and resume unresolved/stale work
-  |     +-- No: Guide me / I already have words
+  |     +-- No: Guide me / I'll use my own words
   |
-  +-- 1. NAMES AND AGES                         (receipt, not a form)
+  +-- GUIDE ME
+  |     +-- broad brief in one answer
+  |     +-- recommended style + alternates shown in parallel
+  |     +-- names create equal cast plates
   |
-  +-- 2. ONE CAST CARD FOR EVERYONE NAMED
-  |        photo (of one child or several) / describe / invent
-  |        no-character book: setting, object or style sample
+  +-- I'LL USE MY OWN WORDS
+  |     +-- manuscript opens immediately
+  |     +-- extract visible cast; edit only when wrong or ambiguous
   |
-  +-- 3. BOOK STYLE - ONE TAP, REAL ARTWORK     (skipped when derived or inherited)
-  |        recommended tile + alternates + Choose for me + See all styles
-  |        <-- first visuals on screen here, before any generation
+  +-- STYLE + CURRENT CAST KNOWN
+  |     +-- photo / artwork / describe / invent on each plate
+  |     +-- DRAW NAMED PORTRAITS · CAPPED SPARK ESTIMATE
+  |           one portrait per named unit in the quote
   |
-  +-- 4. CREATE FIRST LOOKS · CONFIGURED SPARK CHARGE
-  |        quantity + charge + balance after on the action itself
-  |        confirmed -> visual job queued -> story conversation opens
-        |
-        +================= PARALLEL =================+
-        |                                            |
-        | STORY TRACK                                | FIRST-LOOK TRACK
-        | - collect the rest of the brief            | - render; reveal inline in chat
-        | - draft, co-create, or the reader writes   | - keep / tweak / re-source / restyle
-        | - receipts separate said from inferred     | - keeping a look approves that
-        | - explicit request, or visible Create the  |   character, likeness included
-        |   story action; never readiness/timeout    | - remaining cast in a named queue
-        +===================+========================+
-                            |
-                     STORY READY + LOOKS KEPT
-                            |
-                     CAST SUMMARY BEFORE PAGE ART
-                     (review required only for unresolved,
-                      stale, or never-reviewed subjects)
-                            |
-                     CREATE REFERENCE SHEETS · CONFIGURED CHARGE
-                            |
-                     PAGE PLAN
-                     - system creates / co-designs / reader edits
-                            |
-                     CREATE N ILLUSTRATIONS · CONFIGURED CHARGE
-                     - stream results; retry only failed/stale units
-                            |
-                     FLIP-THROUGH + PRINT PREFLIGHT
-                            |
-                     PRINT / EBOOK / KEEP EDITING
+  +================= PARALLEL =================+
+  |                                            |
+  | FACT / STORY TRACK                         | PORTRAIT TRACK
+  | - ask only unresolved configured facts     | - stream portraits onto cast plates
+  | - final resolving patch auto-starts draft  | - keep / tweak / re-source / restyle
+  | - never start from inactivity or timeout   | - retry only failed/stale units
+  +===================+========================+
+                      |
+                STORY + BOOK PLAN
+                - title, cast, shape and page count visible on the book
+                      |
+                DRAW THE BOOK · CAPPED SPARK ESTIMATE
+                - internal references + cover + inside illustrations
+                - one user-authorized batch, per-unit settlement
+                      |
+                FLIP-THROUGH + LOCAL PAGE RECOVERY
+                      |
+                CONTINUOUS PRINT PREFLIGHT
+                      |
+                ORDER THE BOOK -> CHECKOUT
 ```
 
 ## Non-negotiable checkpoints
@@ -165,10 +173,9 @@ Involvement does not remove safety or cost checkpoints. Always stop for:
 - a book-style choice, or an explicit **Choose for me**, before generating any
   character, setting or object sample when the book has no style;
 - a conflict between uploaded character art styles;
-- a recurring subject whose look has never been reviewed, before page art depends
-  on it;
+- an unresolved or ambiguous real-person identity before page art depends on it;
 - an informed confirmation before every billable image-generation action or batch;
-- an affordability gate whenever the configured charge exceeds the available
+- an affordability gate whenever the capped estimate exceeds the available
   balance;
 - an account moment only when a durable account is needed to preserve work across
   devices, buy Sparks, or order;
@@ -178,11 +185,11 @@ Everything else follows the stored cadence.
 
 Checkpoint hierarchy:
 
-- **Hard**: consent, missing book style, an unreviewed or ambiguous identity,
+- **Hard**: consent, missing book style, an ambiguous identity,
   destructive replacement, rights and safety concerns, informed confirmation of
-  every configured generation charge, affordability and payment, print and order
+  every generation estimate, affordability and payment, print and order
   approval. Cadence never skips these.
-- **Key**: story ready, cast summary, page-plan approval, final page set. “Check
+- **Key**: story ready, Draw-the-book plan, final page set. “Check
   key moments” pauses here.
 - **Soft**: optional ideas, first looks, defaults, and recoverable background work.
   Only “Ask me each step” normally pauses here.
@@ -198,7 +205,7 @@ silently reinterpret prior approvals.
 
 1. **Ask in prose, answer with the easiest control.** Free text collects names,
    ages, relationships and story wishes together. Closed choices use cards or
-   visual tiles.
+   visual tiles in the composer well, directly above the field.
 2. **Collect once.** Infer reading age from the cast, book language from context,
    and theme or setting from the same sentence.
 3. **Show before you ask for more.** Put real artwork on screen in the first few
@@ -210,9 +217,9 @@ silently reinterpret prior approvals.
    and a working default; checkpoints ask the real question in context.
 6. **Keep automation interruptible.** Chat stays writable during generation. A new
    instruction updates the relevant artifact and marks only its dependants stale.
-7. **Results live in the conversation.** A portrait, a page or a concept appears
-   inline in the stream on every screen size. The panel is for sustained work, not
-   for a second copy of the same card.
+7. **The book pane shows the book. The chat asks, then keeps a receipt.** A choice
+   is answered in the composer well. A portrait or a page is read on the book.
+   The thread does not become a second copy of the page.
 8. **Automation means fewer stops, not fewer rights.** Every system-created
    artifact stays editable in the same studio.
 
@@ -223,24 +230,24 @@ silently reinterpret prior approvals.
 Ask one question with two primary options:
 
 - **Guide me**: collect the brief conversationally.
-- **I already have words**: paste or open the manuscript immediately, derive what
+- **I’ll use my own words**: paste or open the manuscript immediately, derive what
   can be learned from it, and keep guide assistance available.
 
 Extraction from a paste is not the same confidence as a reader answering "Who is
 in the book?" directly, so it must not silently start rendering. Show a short
-receipt instead — "Found Maya, 5, and Leo, 3 in your story" — with **Start their
-first look** and **That's not quite right** rather than assuming the extraction is
-correct and queuing a job unprompted. One tap confirms it; the receipt is not a
-second intake form.
+receipt instead — "Found Maya, 5, and Leo, 3 in your story" — with **Edit people**
+beside the scoped portrait-generation action. For a high-confidence result, that
+one paid action both accepts the visible cast and authorizes exactly those
+portraits. An ambiguous result must be corrected first.
 
 **That's not quite right** turns that same receipt into an inline correction
 state. Each extracted subject can be renamed, have an age corrected, be removed,
 or be supplemented with **Add someone**; the composer remains available for
 natural-language corrections such as “Leo is 4, not 3”. The original manuscript
 is not edited and the entire manuscript is not reparsed after each correction.
-**Use these details** returns to the same point and starts the cast/style steps.
-The full manuscript panel opens only when the reader chooses to change the words
-themselves.
+The story view of the book pane is the manuscript, and it is directly editable.
+Correcting an extracted name does not require opening it. "I’ll use my own words"
+focuses that view.
 
 An optional secondary entry, **Start from a character**, supports returning
 families and character-first books without making the opening question heavier.
@@ -250,7 +257,7 @@ reader-facing third option. The richness of the supplied brief can select the
 appropriate prompt behaviour.
 
 While the reader is still typing, the entry screen can show the style gallery.
-That costs nothing, sets expectations about the product’s quality, and means the
+That invokes no model, sets expectations about the product’s quality, and means the
 very first screen already contains illustration.
 
 ### 2. Names and ages
@@ -362,8 +369,8 @@ The progress card shows immediate evidence — the uploaded source, the chosen s
 tile — then honest staged progress (“Reading the photo”, “Drawing Maya”). The
 composer stays live. Closing the tab is safe.
 
-The first result is revealed **inline in the conversation**, labelled a first look,
-and offers:
+The first result appears **on the book**, large, labelled a first look. While it
+is the live decision, the composer well offers:
 
 - **Keep this look** — the approval for that character, likeness included;
 - **Tweak it**;
@@ -373,10 +380,9 @@ and offers:
 - version history.
 
 **Keep this look approves only the current appearance. It never starts or charges
-for another generation.** Once the required looks are ready, the cast summary
-offers the separately priced action **Create N reference sheets · X Sparks**. The
-configured cast batch starts only after that informed action. The current product
-generates full reference sheets; portrait-first is a proposed latency optimisation.
+for another generation.** Any internal reference views needed for consistent page
+art are included as named units in the later Draw-the-book quote. They are not a
+separate user-facing step or charge gate.
 
 For several equally important children, name the queue (“Maya is ready; Leo is
 next”) so the first result does not imply a ranking, and keep every child visible
@@ -388,9 +394,10 @@ moves on to talk about the story without tapping it is treated as having kept th
 look — the button is there for someone who wants to steer, not a gate everyone
 must clear. Only "Ask me each step" turns it into an explicit pause.
 
-**Recreate later** must not become a silent trap. It creates a visible pending item
-in the artifact outline, and the page-art cost gate must state plainly that the
-pages will use the current look unless it is changed first.
+**Recreate later** must not become a silent trap. It stays visible on the cast
+view, and the page-art cost gate must state plainly that the pages will use the
+current look unless it is changed first. The thread records one receipt, "Maya's
+look kept," once the look settles.
 
 ### 6. Cast summary before page art
 
@@ -399,17 +406,16 @@ Before page illustrations depend on the cast, show the whole required set once.
 This is a summary, not a second approval round. Review action is required only for
 subjects that are unresolved, stale, or have never been reviewed. A reader who kept
 each look as it arrived passes the review straight through, which is what makes
-“Make it for me” honest. A separately priced reference-sheet batch may still need
-an informed generation action; that is purchase authorization, not another visual
-approval.
+“Make it for me” honest. Internal references that page generation still needs are
+named units inside the later Draw-the-book quote, not another visual approval or
+user-facing batch.
 
 Copy is concrete and forward-looking: “Ready to put Maya and Leo into the story
 scenes?” — not “complete visual lock”.
 
-If full reference sheets have not already been generated, the summary contains
-one scoped billable action — **Create N reference sheets · X Sparks** — with the
-balance afterwards. Approval of a look and purchase of its reference sheet remain
-separate decisions.
+If internal reference views are still required, the summary names them as part of
+the later Draw-the-book estimate. Approval of a look remains separate from paid
+generation; the Draw-the-book action is the informed batch authorization.
 
 ### 7. Your people versus everything else in the story
 
@@ -446,25 +452,26 @@ Generate or accept the story, run quality and age checks, then continue. The rea
 may interrupt or open the manuscript at any time. Whether the flow pauses after the
 draft depends on cadence.
 
-Drafting starts on an explicit settled signal, never on `isBriefReady`, inactivity
-or a timeout alone. Names and ages satisfy the brief while the reader may still be
-typing the occasion, so an eager draft is a visible misunderstanding. An explicit
-request such as “write it now” starts immediately. Otherwise, once the minimum
-brief is ready, the guide shows a short receipt with **Create the story** and
-**Add another detail**, while leaving the composer open. It does not ask again
-when the reader already gave an explicit generation instruction.
+Drafting starts on a deterministic settled transition, never on `isBriefReady`,
+inactivity or a timeout alone. An explicit request such as “write it now” starts
+immediately. Otherwise the patch that resolves every required fact and every
+optional fact the guide actually asked auto-starts the draft, provided no
+clarification or identity assignment remains open. The job queues first; the guide
+then says it is drafting and leaves the composer open for another detail.
 
 **Help me create it**
 
-Offer concepts or an outline, create a draft from the reader’s choices, and keep
-revision actions in the manuscript panel.
+Offer concepts or an outline, create a draft from the reader’s choices, and land
+revisions on the story in the book pane. There is no second prompt beside the
+composer.
 
 **I’ll provide or edit it**
 
-Open the editor immediately. Offer optional AI actions: outline, continue, shorten,
+Focus the story view immediately. It is already the editor: click a paragraph and
+type. Offer optional AI actions through the composer: outline, continue, shorten,
 simplify, age-check. The reader marks the manuscript ready.
 
-Readers who chose “I already have words” begin here, and may later ask the guide to
+Readers who chose “I’ll use my own words” begin here, and may later ask the guide to
 finish or rewrite selected text.
 
 ### Characters
@@ -512,34 +519,34 @@ the brief supports a default, show a compact, non-blocking plan:
 
 > Book plan: 24 pages · 8×8 hardcover · Change
 
-The plan remains reachable from the facts strip, informs story length, and is
-repeated at the page-generation cost confirmation. Tapping **Change** opens length
-and format controls; accepting the default needs no separate tap. An untouched
-default is labelled **Default**, not “You said” or “I inferred”. Unsupported
+The plan remains visible on its owning book surface, informs story length, and is
+repeated on the Draw-the-book action. Tapping **Change** opens length and format
+controls; accepting the default needs no separate tap. An untouched default is
+visibly a default, not something the reader said. Unsupported
 format, language, print-region and shipping combinations are surfaced before paid
 page art, not at checkout.
 
-Offer the title at the story checkpoint rather than silently adopting the draft’s
-own title. It is one of the most personal decisions in the book and currently the
-reader is never asked.
+Put the proposed title on the live cover plan. It follows the draft until the
+reader edits it, stays directly editable, and does not add a mandatory title
+checkpoint.
 
 ## Money and account
 
 Both are classic drop-off points, so neither may rely on a surprise modal.
 
-**Charging is configuration-driven.** Every configured image-generation action is
-charged; nothing is called free merely because it is a preview. Catalog style
-examples cost nothing because they do not invoke generation. A generated first
-look is zero-cost only when its configured charge is zero or an explicit allowance
-covers it.
+**Charging is quote-driven.** Catalog style examples invoke no model. Every generated
+image uses Sparks from the reader's ordinary balance, including the Sparks granted
+when an account begins. Do not market a generated portrait as free merely because
+that starting balance covers it.
 
-- The action that causes generation states exactly what will be created, its
-  configured Spark cost, the current balance and the balance afterwards:
-  **Create 2 first looks · 8 Sparks** or **Create 12 illustrations · 48 Sparks**.
-- When an allowance or promotional balance pays, say **Uses 8 included Sparks**,
-  not “free”. Show the monetary top-up path when the balance is insufficient.
+- The action that causes generation states exactly what will be created and its
+  capped estimate: **Draw Maya and Leo · about 8 Sparks** or
+  **Draw the book · 24 pages · about 48 Sparks**. The supporting line says actual
+  token use can settle lower and cannot exceed the cap.
+- When the balance cannot cover the cap, show the smallest sufficient top-up or
+  account action in the same well.
 - Approval, editing, uploading and navigation never imply a second paid action.
-  In particular, **Keep this look** does not generate a reference sheet.
+  In particular, **Keep this look** does not generate an internal reference.
 - One confirmation authorizes one named generation or batch. There is no extra
   cost-gate screen when the scoped action itself contains the required disclosure.
 - Preserve the confirmed quote. If configuration changes before enqueueing, honor
@@ -564,7 +571,7 @@ continue**, preserve the transcript, draft, uploads, scroll position and pending
 action, and prefer one-tap platform providers plus passwordless email; password is
 a fallback. Optional marketing consent is separate and never a condition of
 continuing. Email verification must not block continued studio work. If the
-reader already confirmed an exact charge before authentication, the action may
+reader already confirmed a capped quote before authentication, the action may
 resume automatically after sign-in; otherwise return to the same confirmation.
 Signing into an existing account must merge or transfer the guest project without
 loss or force one clear conflict choice.
@@ -574,7 +581,7 @@ attached to the anonymous account, deleted as soon as the likeness pipeline no
 longer needs them, and hard-expire within 24 hours. Consent copy says this in
 plain language and offers immediate deletion. The first-look implementation must
 define whether the source can be deleted after that successful result or remains
-necessary for the full reference sheet; the shorter safe lifetime wins. If a
+necessary for an internal reference; the shorter safe lifetime wins. If a
 source expires, preserve completed work and ask for a replacement only when a new
 likeness generation genuinely requires it.
 
@@ -584,23 +591,43 @@ likeness generation genuinely requires it.
   photo-derived image is already an exact likeness.
 - Say what is happening and why, and only once it is true: “Maya is being drawn —
   while that happens, what should the day be like?”
-- Distinguish **You said**, **I inferred**, **Default** and **Book choice** in the
-  facts strip.
+- Distinguish **You said**, **I inferred**, **Default** and **Book choice** on the
+  owning book surface or one applied-value receipt; Chat has no facts strip.
 - Replace generic actions (“Start”, “Carry on”, “Update it”) with scoped actions
-  (“Create 12 page illustrations · 48 Sparks”, “Retry 2 pages · X Sparks”,
-  “Update Maya and 6 pages · X Sparks”).
+  (“Draw the book · 24 pages · about 48 Sparks”, “Retry 2 pages · about X Sparks”,
+  “Update Maya and 6 pages · about X Sparks”).
 - Explain mandatory pauses before they happen, especially after “Make it for me”.
 - Never describe a background job as finished until the project contains the result.
 - Use neutral recovery copy. “Try another look” is better than telling a parent that
   their child “looks wrong”.
 - For several heroes, narrate the queue without ranking them.
-- State what a reference sheet guarantees and what it does not, once, in plain
-  language.
-- When recreation affects existing work, state the exact impact and configured charge
+- When recreation affects existing work, state the exact impact and capped estimate
   before enqueueing it.
 - A cost disclosure sits on the action that causes the cost; approval actions never
   hide generation.
-- One voice at a time. See the speech queue below.
+- One voice at a time. See the speech queue and the voice contract below.
+
+## Voice
+
+A guide line is one or two short sentences, casual and friendly, with the child's
+name and contractions. About 25 words, unless the line is a required disclosure:
+consent, a charge, likeness, or blast radius.
+
+The line asks or acknowledges. The control carries the label and the price. The
+sentence does not repeat the button, and it does not narrate the interface.
+
+Known beats use configured copy and appear with the control in the same frame.
+After a typed turn, the receipt renders from the patch immediately. A spoken line
+follows only when something still needs saying, and it does not block the receipt.
+
+Targets:
+
+- "Maya and Leo. Got them. Do you have a photo?"
+- "I'll draw them in this look."
+- "Maya's ready. What should the seaside day be like?"
+
+"Please select an art style from the options below to continue" is the voice this
+contract exists to prevent.
 
 ## One voice: the speech queue
 
@@ -613,43 +640,78 @@ needs a single queue with a defined priority:
 3. a result that has landed;
 4. the next question in the flow.
 
-At most one line is spoken per change. Lower-priority items are collapsed or
-dropped rather than stacked, so a finished portrait, a finished draft and a
-follow-up question never arrive as three bubbles.
+At most one line is spoken per change, and that line is short. Lower-priority
+items are collapsed or dropped rather than stacked, so a finished portrait, a
+finished draft and a follow-up question never arrive as three bubbles.
 
 ## Surfaces: where things appear
 
-The chat is persistent and is where decisions happen. Results appear **inline in
-the stream on every screen size**, desktop included — one portrait card, one
-approval, one place to act.
+The shell, including an empty book, centered choices, and motion, is defined in
+`new studio guide doc.md`. In short: the studio is the full viewport. Once the
+book has something to show, chat is a fixed column on the left, about 26–30rem,
+and the **book pane** fills the rest, on the right. Before that, the pane is
+absent and the chat sits in the middle. The page inside the book pane stays at
+the book's real aspect ratio, centered. The manuscript stays near a 65-character
+measure. The app is not wrapped in a centered max-width card. A control that
+cannot be used is absent. Changes of place, size, and presence animate.
 
-The panel is for sustained work, and opens for:
+The book pane shows the book. Cover, Story, Cast, and Pages are views of that
+book, and a view appears only once that part exists. The guide may move the book
+pane to what it is talking about. The reader may look somewhere else. There is no
+step rail, and the book pane is never a facts dashboard.
 
-- the manuscript, while writing or reviewing the story;
-- the full style gallery, when the reader asks to see all of them;
-- a character’s reference sheet, for close inspection;
-- the page plan and the page canvas, while designing or editing pages;
-- the flip-through and print preflight.
+The book pane is one quiet room. Its ground is the same cream as the chat,
+separated by a 1px hairline. One white object sits in the center, lifted by a
+single soft shadow. A printed page is almost sharp. A portrait may be softer. The
+cover is a still book, large, capped near 360px wide, and it does not tilt on
+hover. While a picture is actually generating, that object takes a 1px violet
+edge, then the edge goes quiet.
 
-Behaviour:
+A view switch sits at the top center: Cover, Story, Cast, Pages, with a label
+only for a part that exists. The active label is darker. Nothing else is chrome.
 
-- Auto-open for a required action, an error, or an explicit request — not for a
-  result that already appeared in the chat.
-- Peek without blocking for background progress.
-- A reader close is respected; do not reopen for ordinary progress.
-- Auto-collapse after approval on narrow screens.
-- Keep a compact persistent strip for facts, progress and involvement.
+- **Cover.** The book, then the title on one line. Before there is a title, the
+  cover is blank.
+- **Style.** The artwork fills the pane, with the style name and one short line
+  beneath. "See all" is a horizontal row: the chosen plate large, the alternates
+  smaller.
+- **Cast.** One large plate for the person in view, name and age beneath, the
+  others in a short row. Choosing one promotes it.
+- **Story.** The same white sheet. Click a paragraph and type. It autosaves.
+  There is no Edit toggle and no second prompt. A draft arrives on the page as it
+  is written.
+- **Pages.** One spread. The right half moves forward, the left half back, and
+  the arrow keys do the same. A page number sits under the spread. Ordering is
+  the paid action on the composer once the book can be printed.
 
-**Targeting, without scolding.** When the panel shows one artifact and the guide
-asked about another, do not warn and do not block the send. Show a quiet tag above
-the composer — `Replying to: Maya’s look · talk about Story instead` — so “change
-this” always has a visible, changeable subject.
+Page focus is the only mode that hides the transcript, and only when the book
+pane would otherwise drop under about 960px. The spread grows. A filmstrip about
+64px tall sits along the bottom. Handles appear on the thing the reader clicks.
+The same composer docks on the book with its context chip. "Conversation" opens
+the thread as an overlay. Leaving focus restores the column and its scroll
+position. Reading, story, and style leave the column up.
 
-**Mobile.** The Book tab is the reading and inspection surface: the flip-through,
-a full reference sheet, a page up close. It is not where portraits get approved.
-Results stay in the conversation, so the reader never has to leave the thread,
-tap a tab, act, and come back. Badge the Book tab only for work that genuinely
-lives there.
+The chat column asks, then keeps a receipt. A choice that is the whole task,
+including how to begin, sits in the center of the chat, and the composer is
+absent. A short live choice sits in the composer well, directly above the field,
+including a few style tiles, cast sources, and Keep or Tweak. A large catalog
+fills the book pane, or the centered stage if the book has not arrived. It is
+not inside the textarea and it does not stay behind in the scroll.
+A cheap, reversible choice commits on the tap. The recommended option is focused,
+so Enter on an empty field accepts it. A choice that spends Sparks only changes
+the selection. The button under it shows the charge and is the commit. Typing
+remains a valid answer while the well is open. After the answer, the well clears
+and one receipt is appended. The portrait or the page is judged on the book. The
+thread may hold a thumbnail that scrolls the book pane to that object.
+
+Facts live on the book. Involvement stays in a quiet menu.
+
+**One field.** The composer is the only natural-language input. A context chip
+inside it names the target ("Page 4"). Clicking the book sets the chip. Send is
+never blocked because the book pane and the question differ.
+
+**Mobile.** The screen is the book. The composer is a dock. The live choice opens
+as a sheet over the book. There are no Chat / Book tabs.
 
 ## Change and recovery
 
@@ -686,7 +748,7 @@ Failure recovery is local:
 
 Completion means a manufacturable book, not merely generated pictures.
 
-The final panel verifies:
+Print preflight, shown on the book, verifies:
 
 - the story and all required page text are present;
 - title and cover are set;
@@ -700,11 +762,10 @@ Anything here that can be checked earlier should be: format, length and
 fulfillment region are known long before the art is rendered, and discovering them
 at preflight means discovering them after the money is spent.
 
-Then offer:
-
-- **Order printed book**
-- **Get ebook** (when enabled)
-- **Change something**
+When these checks pass, the canonical Chat surface in `new studio guide doc.md`
+shows **Order the book · from [price]** and opens checkout. Ebook and dedication
+remain separate product capabilities; they must not add another required checkpoint
+to the printed-book path.
 
 An optional dedication or gift message is a product gap worth adding before print.
 
@@ -713,7 +774,7 @@ An optional dedication or gift message is a product gap worth adding before prin
 1. **Fastest gift**: Guide me → names and ages → cast card with one photo → style
    in one tap → first looks kept as they arrive → Make it for me → flip-through →
    print.
-2. **Writer, automatic art**: I already have words → manuscript ready → cast card →
+2. **Writer, automatic art**: I’ll use my own words → manuscript ready → cast card →
    style → system creates Characters and Pages → review and print.
 3. **AI story, art-directed characters**: system creates the Story → the reader
    directs Characters → system creates Pages.
@@ -748,7 +809,7 @@ These are not widget changes, and they decide the schedule:
   `guideProgress`, `coveredGuideSlots` and `nextGuideSay` all assume it. Either
   extend the cursor to a primary component plus background tracks, or keep the
   first look entirely off-cursor as an effect. The second is cheaper but makes the
-  artifact outline lie about what is happening.
+  cast view lie about what is happening.
 - **The catalog chain contradicts the new order.** `art-style` declares
   `requires: ["story-approve"]` and `cast-looks` requires `art-style`, so
   `repairOrder` will keep pushing any pre-story look component back below the
@@ -779,7 +840,7 @@ These are not widget changes, and they decide the schedule:
 - reusable characters from previous books;
 - “avoid” story constraints;
 - page-plan approval as a distinct checkpoint;
-- scoped configured-charge gates for first looks, the cast batch, pages and
+- scoped capped-estimate gates for named portraits, Draw the book and
   regenerations, with stable quotes and successful-unit settlement;
 - a compact, editable default book plan for format and length, plus title as a
   reader-facing choice;
@@ -822,11 +883,10 @@ These are not widget changes, and they decide the schedule:
   so the product still shows visual progress.
 - **The first render is slow.** Show the source and the chosen style tile
   immediately, then honest staged progress. Never a bare spinner that blocks chat.
-- **The first look follows configured charging.** See "Money and account" above:
-  the generation action shows the configured cost and resulting balance before it
-  queues. The preceding catalog artwork remains the zero-cost early visual reward.
-  Never claim that generated previews are free unless configuration actually makes
-  them zero-cost.
+- **The first look follows quote-driven charging.** See "Money and account" above:
+  the generation action names the portrait units and shows the capped estimate
+  before it queues. The preceding catalog artwork invokes no model. Do not call a
+  generated portrait free merely because the reader's granted Sparks cover it.
 - **Repeated recreation becomes a slot machine.** After a few retries, encourage a
   specific tweak or a different source rather than another blind reroll.
 - **The reader chose “Recreate later” and never returned.** The pending item stays
@@ -898,8 +958,9 @@ These are not widget changes, and they decide the schedule:
   cannot depend on colour or a thumbnail alone.
 - Async arrivals need an accessible announcement and must respect reduced-motion
   preferences.
-- On mobile, results stay in the conversation; badge the Book tab only for work
-  that lives there.
+- On a phone the screen is the book, the composer docks at the bottom, and the
+  live choice opens as a sheet. A new visual is announced without switching the
+  reader away from what they are typing.
 - Large phone photos, HEIC conversion, rotation metadata, slow uploads and
   low-memory devices need visible preprocessing and retry states.
 - Low bandwidth or an offline interruption must preserve the typed message and the

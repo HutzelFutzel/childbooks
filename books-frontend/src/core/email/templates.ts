@@ -188,6 +188,25 @@ export const RENDERERS: { [Id in keyof EmailTemplateVarsMap]: TemplateRenderer<I
     return assemble(ctx, subject, "Your Sparks are ready", body, text);
   },
 
+  book_drawn: (vars, ctx) => {
+    const title = vars.bookTitle.trim() || "Your book";
+    const complete = vars.missing === 0;
+    const subject = complete ? `${title} is drawn` : `${title} is almost done`;
+    const status = complete
+      ? `Every page and both covers are drawn — ${vars.drawn.toLocaleString("en-US")} pictures in all.`
+      : `${vars.drawn.toLocaleString("en-US")} pictures are drawn. ${vars.missing.toLocaleString(
+          "en-US",
+        )} still need another go — open the book to try them again. Nothing was charged for them.`;
+    const body = [
+      heading(complete ? "Your book is ready" : "Your book is nearly ready", ctx.brand),
+      paragraph(`${greeting(vars.name)} <strong>${escapeHtml(title)}</strong> has finished drawing.`),
+      calloutBox(escapeHtml(status), ctx.brand),
+      button("Open your book", vars.bookUrl, ctx.brand),
+    ].join("\n");
+    const text = `${greeting(vars.name)}\n\n${title} has finished drawing.\n${status}\n\nOpen your book: ${vars.bookUrl}`;
+    return assemble(ctx, subject, complete ? "Your book is ready" : "Your book is nearly ready", body, text);
+  },
+
   gift_purchased: (vars, ctx) => {
     const subject = `Your ${ctx.brand.brandName} gift is ready to share`;
     const body = [

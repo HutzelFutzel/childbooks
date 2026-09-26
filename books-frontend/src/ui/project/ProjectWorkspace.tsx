@@ -1,6 +1,5 @@
 import dynamic from "next/dynamic";
 import { Loader2 } from "lucide-react";
-import type { ResolvedGuideComponent } from "../../core/guide/playlist";
 import { useProjectsStore } from "../../state/projectsStore";
 import { StudioWorkspace } from "../studio/StudioWorkspace";
 import type { StudioDestination } from "../studio/studioRoutes";
@@ -25,20 +24,20 @@ const GuideStudio = dynamic(() => import("../guide/GuideStudio").then((m) => m.G
 export function ProjectWorkspace({
   destination,
   onNavigate,
-  guidePlaylist,
+  guided = false,
 }: {
   destination: StudioDestination;
   onNavigate: (destination: StudioDestination) => void;
-  /** Non-null only for a reader the rollout has put on the guided studio. */
-  guidePlaylist?: readonly ResolvedGuideComponent[] | null;
+  /** True only for a reader the rollout has put on the Chat studio. */
+  guided?: boolean;
 }) {
   const project = useProjectsStore((s) => s.current());
   if (!project) return null;
 
-  // The guide picks its own surface from `component.canvas` and keeps the route in
-  // step, rather than being told a destination — see `ui/guide/guideCanvas.ts`.
-  if (guidePlaylist) {
-    return <GuideStudio key={project.id} playlist={guidePlaylist} onNavigate={onNavigate} />;
+  // The Chat studio derives where the book is from the book itself; the route
+  // only follows it.
+  if (guided) {
+    return <GuideStudio key={project.id} onNavigate={onNavigate} />;
   }
 
   // Keyed by id so the studio's local state resets when switching books.

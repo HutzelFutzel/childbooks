@@ -173,13 +173,13 @@ export const heroesSlot = defineSlot({
 
   read:     (project) => /* current value, in claim shape */,
   write:    (project, op, value, world) => WriteOutcome,
-  describe: (project) => /* the facts-strip chip */,
+  describe: (project) => /* the applied-value receipt / owning-surface label */,
   options:  (world) => /* closed list ⇒ tap-to-answer chips, for free */,
 });
 ```
 
 Registering it derives the id union, the prompt's field list, the few-shot block,
-the validator, the facts strip, the widget chips, checkpoint capture and restore,
+the validator, applied-value receipts, widget chips, checkpoint capture and restore,
 and the invariant coverage checks. A new question is then a component naming its
 slots; the playlist picks it up with no migration.
 
@@ -206,7 +206,7 @@ question and a label, it stores into an `extras: Record<string, string>` on the
 brief, and the prompt renders it as a labelled line.
 
 The cost is real and should be stated: nothing downstream can *reason* about an
-extra. It is extracted, stored, shown in the facts strip and injected into a
+extra. It is extracted, stored, shown on its owning surface or receipt and injected into a
 prompt, but no satisfaction predicate, staleness rule or pipeline step can branch
 on it. For most new questions that is fine.
 
@@ -287,15 +287,14 @@ supports this shape; what must follow is one grouped receipt naming both changes
 and one grouped staleness explanation, rather than two independent cascades firing
 as if the reader had said two things.
 
-**A settled signal, separate from readiness.** `isBriefReady` goes true on names
-and ages, which is the earliest possible moment and the wrong one: the reader is
-usually still typing the occasion. Drafting needs a distinct, visible signal. An
-explicit instruction such as “write it now” starts immediately. Otherwise, when
-the minimum brief is ready, the engine emits a receipt with **Create the story**
-and **Add another detail** while leaving the composer available. Inactivity,
-silence and a timeout are never consent to start, and the guide must not repeat
-the confirmation when the reader's current turn already contains the explicit
-instruction.
+**A settled transition, separate from readiness.** `isBriefReady` goes true on names
+and ages, which is the earliest possible moment and the wrong one: the reader may
+still be supplying the occasion. An explicit instruction such as “write it now”
+starts immediately. Otherwise drafting starts from the patch that resolves every
+required fact and every optional fact the guide actually asked, provided no
+clarification or identity assignment remains open. The job queues before the guide
+says it is drafting, and the composer remains available. Inactivity, silence and a
+timeout never trigger it.
 
 **Interrogative turns are not always claims.** “What do you think would work
 better?” must be answered, not extracted from. A turn whose claims are all

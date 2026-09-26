@@ -84,6 +84,12 @@ export interface AnchorRender {
   outputSize?: string;
   /** Best-effort output preferences and what the selected model applied. */
   generation?: ResolvedImageGenerationOptions;
+  /**
+   * Version id for the node this render becomes. Set by the worker when later
+   * tasks draw against the sheet before the studio folds it in, so the page's
+   * recorded reference matches the node the studio creates.
+   */
+  versionId?: string;
 }
 
 /** Wrap an anchor render into a (new or extended) version tree. Pure. */
@@ -106,8 +112,9 @@ export function applyAnchorRender(
         parentId: render.parentId,
         prompt: render.prompt,
         label: render.label,
+        id: render.versionId,
       })
-    : createVersionTree(content, { prompt: render.prompt, label: render.label });
+    : createVersionTree(content, { prompt: render.prompt, label: render.label, id: render.versionId });
   return pruneVersionTree(next, DEFAULT_MAX_VERSIONS);
 }
 

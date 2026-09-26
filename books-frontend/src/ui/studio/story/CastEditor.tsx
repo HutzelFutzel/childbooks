@@ -1,5 +1,7 @@
 "use client";
 
+/** @legacy guide-v2 L3 — deleted with the Steps story intake. See docs/LEGACY-GUIDE.md. */
+
 import { useRef, useState } from "react";
 import { ChevronDown, Plus, Sparkles, Trash2, UserRound } from "lucide-react";
 import type { BookConfig, SourceArtRef, StoryCastMember } from "../../../core/types";

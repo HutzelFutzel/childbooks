@@ -24,7 +24,7 @@ import { fadeRise } from "../lib/motion";
 import { notify } from "../lib/notify";
 import { ProjectCard } from "./ProjectCard";
 import { defaultDestination, studioPath } from "../studio/studioRoutes";
-import { guideModeNow } from "../guide/useGuideMode";
+import { guideModeNow, studioEntryPath } from "../guide/useGuideMode";
 
 type SortOption = "recent" | "title" | "created";
 
@@ -131,10 +131,14 @@ export function Dashboard() {
     if (creating) return;
     setCreating(true);
     try {
-      const projectId = await createProject(title, false);
-      router.push(studioPath(projectId, "story"), { scroll: false });
-    } finally {
+      // Open the book in memory as part of creation. StudioApp treats that
+      // pending entry as a route transition, so the new library card never
+      // flashes before the destination is ready.
+      const projectId = await createProject(title, true);
+      router.push(studioEntryPath(projectId), { scroll: false });
+    } catch {
       setCreating(false);
+      notify.error("Could not create storybook");
     }
   };
 
@@ -186,6 +190,19 @@ export function Dashboard() {
 
     return result;
   }, [projects, searchQuery, sortBy]);
+
+  if (creating) {
+    return (
+      <div
+        className="flex flex-1 flex-col items-center justify-center gap-3"
+        role="status"
+        aria-live="polite"
+      >
+        <Loader2 className="size-7 animate-spin text-brand-400" />
+        <p className="text-sm font-medium text-ink-500">Opening your storybook…</p>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">

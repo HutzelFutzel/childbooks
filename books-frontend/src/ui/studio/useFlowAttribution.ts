@@ -28,7 +28,7 @@
  * Fire-and-forget telemetry throughout. A failed beacon must never reach the
  * person writing a story.
  *
- * @legacy guide-v2
+ * @legacy guide-v2 L5
  */
 "use client";
 

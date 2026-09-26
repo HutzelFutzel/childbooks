@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L4 — deleted with the wizard. See docs/LEGACY-GUIDE.md. */
 import { useEffect, useMemo, useState } from "react";
 import { BookOpen, Check, LayoutTemplate, Ruler, Sparkles, TriangleAlert } from "lucide-react";
 import { bookSizeFromAspect } from "../../core/config/options";

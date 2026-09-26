@@ -33,6 +33,7 @@ import { DownloadsDialog } from "@/ui/checkout/DownloadsDialog";
 import { useProfileStore } from "@/state/profileStore";
 import { useAppConfigStore } from "@/state/appConfigStore";
 import { useSparksStore } from "@/state/sparksStore";
+import { rememberResumeDraw } from "@/state/chatStudio";
 import { usePriceOverridesStore } from "@/state/priceOverridesStore";
 import { useSubscriptionStore } from "@/state/subscriptionStore";
 import { SparksBadge } from "@/ui/layout/SparksBadge";
@@ -52,10 +53,10 @@ import {
   studioPath,
   type StudioDestination,
 } from "@/ui/studio/studioRoutes";
-import { useGuidePlaylist } from "@/ui/guide/useGuideMode";
+import { studioEntryPath, useGuidePlaylist } from "@/ui/guide/useGuideMode";
 import { useFlowAttribution, usePreviewReached } from "@/ui/studio/useFlowAttribution";
 import { GuideModeToggle } from "@/ui/guide/GuideModeToggle";
-import { useGuideStore } from "@/state/guideStore";
+import { useChatStudio } from "@/state/chatStudio";
 
 export default function StudioApp() {
   const router = useRouter();
@@ -66,6 +67,8 @@ export default function StudioApp() {
   const loadSettings = useSettingsStore((s) => s.load);
   const projectsLoaded = useProjectsStore((s) => s.loaded);
   const currentId = useProjectsStore((s) => s.currentId);
+  const pendingEntryId = useProjectsStore((s) => s.pendingEntryId);
+  const clearPendingEntry = useProjectsStore((s) => s.clearPendingEntry);
   const currentTitle = useProjectsStore(
     (s) => s.projects.find((project) => project.id === s.currentId)?.title,
   );
@@ -102,13 +105,15 @@ export default function StudioApp() {
   const closeInvite = useAccountUiStore((s) => s.closeInvite);
   const openInvite = useAccountUiStore((s) => s.openInvite);
   const openConfirmation = useCheckoutUiStore((s) => s.openConfirmation);
-  const closeGuide = useGuideStore((s) => s.close);
+  const closeGuide = useChatStudio((s) => s.close);
   const [projectsOwnerUid, setProjectsOwnerUid] = useState<string | null>(null);
   const rejectedBookRef = useRef<string | null>(null);
   // Null for everyone on the wizard, which is everyone until an admin opts in.
   // When set, the guide engine picks the default landing destination instead of
   // the wizard's own precedence — see ui/studio/guideRouting.ts.
-  const guidePlaylist = useGuidePlaylist(route.kind === "project" ? route.bookId : null);
+  const guidePlaylist = useGuidePlaylist(
+    route.kind === "project" ? route.bookId : pendingEntryId,
+  );
 
   useEffect(() => {
     initAuth();
@@ -156,6 +161,10 @@ export default function StudioApp() {
 
     if (route.kind === "library") {
       rejectedBookRef.current = null;
+      // Creation opens the book before navigation completes. Keep that book
+      // selected and show the route loader instead of briefly rendering its
+      // new card in the library.
+      if (pendingEntryId && currentId === pendingEntryId) return;
       if (currentId) closeProject();
       return;
     }
@@ -172,6 +181,7 @@ export default function StudioApp() {
     }
 
     rejectedBookRef.current = null;
+    if (pendingEntryId === project.id) clearPendingEntry();
     if (currentId !== project.id) openProject(project.id);
 
     const requested = route.destination ?? defaultDestination(project, guidePlaylist);
@@ -185,10 +195,12 @@ export default function StudioApp() {
     }
   }, [
     accessLevel,
+    clearPendingEntry,
     closeProject,
     currentId,
     guidePlaylist,
     openProject,
+    pendingEntryId,
     projects,
     projectsLoaded,
     projectsOwnerUid,
@@ -340,7 +352,13 @@ export default function StudioApp() {
                 ? "subscription"
                 : null;
 
-    if (success) {
+    const draw = params.get("draw");
+    if (success === "sparks" && draw) {
+      // Bought for a specific action: it starts by itself once the Sparks land.
+      rememberResumeDraw(draw);
+      notify.success("Payment received", "Your book starts drawing as soon as the Sparks arrive.");
+      for (const key of ["sparks", "payment", "draw"]) params.delete(key);
+    } else if (success) {
       openConfirmation({ kind: success, paymentId, projectId });
     } else if (
       checkout === "cancel" ||
@@ -355,7 +373,7 @@ export default function StudioApp() {
     // The confirmation screen owns its own params (it needs them to survive a
     // refresh) and clears them on dismiss, so only the rest are cleaned up here.
     if (!success) {
-      for (const key of ["checkout", "subscription", "sparks", "gift", "ebook", "payment", "project", "session_id"]) {
+      for (const key of ["checkout", "subscription", "sparks", "gift", "ebook", "payment", "project", "session_id", "draw"]) {
         params.delete(key);
       }
     }
@@ -391,8 +409,8 @@ export default function StudioApp() {
       return;
     }
     if (!heroName) return;
-    void createProject(`${heroName}'s Storybook`, false).then((projectId) => {
-      router.replace(studioPath(projectId, "story"), { scroll: false });
+    void createProject(`${heroName}'s Storybook`, true).then((projectId) => {
+      router.replace(studioEntryPath(projectId), { scroll: false });
     });
   }, [uid, projectsLoaded, accessLevel, createProject, router]);
 
@@ -455,9 +473,14 @@ export default function StudioApp() {
     activeDestination !== null &&
     projectsOwnerUid === uid &&
     accessLevel !== "loading";
+  const enteringProject =
+    route.kind === "library" &&
+    pendingEntryId !== null &&
+    currentId === pendingEntryId;
   const resolvingRoute =
     accessLevel === "loading" ||
     route.kind === "invalid" ||
+    enteringProject ||
     (route.kind === "project" && !inProject) ||
     (uid !== null && (!projectsLoaded || projectsOwnerUid !== uid));
 
@@ -469,6 +492,9 @@ export default function StudioApp() {
   const attributedProjectId = inProject ? route.bookId : null;
   useFlowAttribution(attributedProjectId, inProject ? (guidePlaylist ? "guide" : "legacy") : null);
   usePreviewReached(attributedProjectId, activeDestination === "order");
+
+  // The Chat studio shows work and Sparks in the conversation itself.
+  const chatStudio = inProject && Boolean(guidePlaylist);
 
   const navigateStudio = useCallback(
     (destination: StudioDestination) => {
@@ -500,12 +526,12 @@ export default function StudioApp() {
           through, and the beacon needs an identity to attribute to. */}
       <SessionTracker />
       <TopBar
-        center={<JobProgress />}
+        center={chatStudio ? undefined : <JobProgress />}
         contextLabel={inProject ? currentTitle : undefined}
         right={
           <>
             {inProject && <GuideModeToggle bookId={route.kind === "project" ? route.bookId : null} />}
-            {accessLevel !== "loading" && sparksEnabled && <SparksBadge />}
+            {accessLevel !== "loading" && sparksEnabled && !chatStudio && <SparksBadge />}
             <HelpButton />
             <AuthMenu />
           </>
@@ -527,18 +553,25 @@ export default function StudioApp() {
       <ProjectConflictBanner />
       <SaveFailureBanner />
       {accessLevel === "unverified" && <VerifyEmailBanner />}
-      <LowSparksBanner />
+      {!chatStudio && <LowSparksBanner />}
 
       <main className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-canvas">
         {resolvingRoute ? (
-          <div className="flex flex-1 items-center justify-center">
+          <div
+            className="flex flex-1 flex-col items-center justify-center gap-3"
+            role="status"
+            aria-live="polite"
+          >
             <Loader2 className="size-7 animate-spin text-brand-400" />
+            {enteringProject && (
+              <p className="text-sm font-medium text-ink-500">Opening your storybook…</p>
+            )}
           </div>
         ) : inProject ? (
           <ProjectWorkspace
             destination={activeDestination}
             onNavigate={navigateStudio}
-            guidePlaylist={guidePlaylist}
+            guided={Boolean(guidePlaylist)}
           />
         ) : (
           <Dashboard />

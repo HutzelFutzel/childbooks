@@ -325,16 +325,19 @@ export async function buySparkPack(
   packId: string,
   currency: string,
   couponCode?: string,
-): Promise<{ url: string }> {
+  returnProjectId?: string,
+  /** The quote this purchase is for: its price is held and it starts on return. */
+  resumeQuoteId?: string,
+): Promise<{ url: string; quoteExpiresAt?: number }> {
   const res = await backendFetch("/checkout/sparks-pack", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ packId, currency, couponCode }),
+    body: JSON.stringify({ packId, currency, couponCode, returnProjectId, resumeQuoteId }),
   });
   if (!res.ok) throw new Error(await errorMessage(res, "We couldn't start checkout."));
-  const json = (await res.json()) as { url?: string };
+  const json = (await res.json()) as { url?: string; quoteExpiresAt?: number };
   if (!json.url) throw new Error("Checkout did not return a URL.");
-  return { url: json.url };
+  return { url: json.url, ...(typeof json.quoteExpiresAt === "number" ? { quoteExpiresAt: json.quoteExpiresAt } : {}) };
 }
 
 /**

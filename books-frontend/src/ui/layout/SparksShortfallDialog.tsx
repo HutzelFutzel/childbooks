@@ -12,6 +12,7 @@ const NOUN: Record<ImageActionId, { one: string; many: string }> = {
   anchorImage: { one: "reference", many: "references" },
   pageIllustration: { one: "page", many: "pages" },
   coverIllustration: { one: "cover", many: "covers" },
+  portrait: { one: "portrait", many: "portraits" },
 };
 
 /**
@@ -61,13 +62,13 @@ export function SparksShortfallDialog() {
       <div className="space-y-3 text-sm text-ink-700">
         <p>
           Drawing {requested === 1 ? "this" : `all ${requested.toLocaleString()}`}{" "}
-          {requested === 1 ? noun.one : noun.many} costs about{" "}
+          {requested === 1 ? noun.one : noun.many} costs{" "}
           <strong className="font-semibold text-ink-900">
             {(pending?.estimate ?? 0).toLocaleString()} Sparks
           </strong>
           . You have {(pending?.balance ?? 0).toLocaleString()}
           {affordable > 0 ? (
-            <> — enough for about {affordable.toLocaleString()} of them.</>
+            <> — enough for {affordable.toLocaleString()} of them.</>
           ) : (
             <>, which doesn&apos;t cover even one.</>
           )}
@@ -78,8 +79,7 @@ export function SparksShortfallDialog() {
           whole set at once.
         </p>
         <p className="text-xs text-ink-500">
-          That&apos;s an estimate — the final charge is the measured cost of each image, so it can
-          differ a little.
+          That&apos;s the exact price. Anything that fails to draw is free.
         </p>
       </div>
     </Modal>

@@ -146,6 +146,8 @@ export function renameDerivedStyleNames(
 /** Blob ids of every source-art image on the project (cast + anchors). */
 export function collectSourceArtBlobIds(project: Project): string[] {
   const ids: string[] = [];
+  for (const image of project.config.artStyle.referenceArt ?? []) ids.push(image.blobId);
+  for (const image of project.authoringState?.styleSourceArt ?? []) ids.push(image.blobId);
   for (const member of project.config.storyBrief?.cast ?? []) {
     for (const image of member.sourceArt ?? []) ids.push(image.blobId);
   }
@@ -193,6 +195,13 @@ export function collectSourceArtGroups(project: Project): SourceArtGroup[] {
     if (anchor.type !== "character") continue;
     add(anchor.id, anchor.name, anchor.sourceArt);
   }
+  for (const [index, image] of (project.authoringState?.styleSourceArt ?? []).entries()) {
+    unnamed.push({
+      id: `guide-style-source-${index}`,
+      name: "Art",
+      images: [image],
+    });
+  }
 
   return [...byName.values(), ...unnamed].slice(0, SOURCE_ART_GROUP_MAX);
 }
@@ -209,6 +218,7 @@ export function derivedStyleSelection(args: {
   stylePrompt: string;
   derivedFromName?: string;
   derivedFromNames?: string[];
+  referenceArt?: SourceArtRef[];
 }): ArtStyleSelection {
   const names = [...new Set((args.derivedFromNames ?? []).map((name) => name.trim()).filter(Boolean))];
   const winner = args.derivedFromName?.trim();
@@ -216,6 +226,9 @@ export function derivedStyleSelection(args: {
     presetId: null,
     customDescription: clampDerivedStylePrompt(args.stylePrompt),
     origin: "derived",
+    ...(args.referenceArt?.length
+      ? { referenceArt: args.referenceArt.slice(0, SOURCE_ART_MAX) }
+      : {}),
     ...(winner ? { derivedFromName: winner } : {}),
     ...(names.length > 0 ? { derivedFromNames: names } : winner ? { derivedFromNames: [winner] } : {}),
   };

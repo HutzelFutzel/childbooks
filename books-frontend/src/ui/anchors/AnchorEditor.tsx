@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L2 — deleted with the Steps cast stage. See docs/LEGACY-GUIDE.md. */
 import { useEffect, useState } from "react";
 import { ChevronDown, RefreshCw, Sparkles, Trash2 } from "lucide-react";
 import type { Anchor, LikenessPhotoRef, SourceArtRef } from "../../core/types";

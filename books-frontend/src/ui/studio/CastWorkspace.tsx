@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L2 — deleted with the Steps cast stage. See docs/LEGACY-GUIDE.md. */
 /**
  * Characters & places is the required consistency checkpoint before Pages.
  *

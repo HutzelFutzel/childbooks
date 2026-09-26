@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L0 — unreachable today; nothing renders it. See docs/LEGACY-GUIDE.md. */
 import { motion } from "framer-motion";
 import type { Anchor } from "../../core/types";
 import { anchorThumbBlobId, currentAnchorImage } from "../../state/ai";

@@ -1,5 +1,7 @@
 "use client";
 
+/** @legacy guide-v2 L3 — deleted with the Steps story intake. See docs/LEGACY-GUIDE.md. */
+
 import { useEffect, useMemo } from "react";
 import { motion } from "framer-motion";
 import {

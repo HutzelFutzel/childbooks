@@ -36,6 +36,10 @@ const ACTION_COPY: Record<ImageActionId, { short: string; description: string }>
     short: "Covers",
     description: "Front and back cover artwork.",
   },
+  portrait: {
+    short: "Portraits",
+    description: "Chat studio portraits of each person, drawn in the saved style.",
+  },
 };
 
 function numberFrom(value: string, fallback: number): number {

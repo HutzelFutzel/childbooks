@@ -197,6 +197,8 @@ export function createDefaultModelConfig(): ModelConfig {
       // The reader is waiting mid-conversation, and the job is extraction rather
       // than writing, so this defaults to the fast slot.
       guideInterpret: { provider: "google", speed: "fast" },
+      guideSpeak: { provider: "google", speed: "fast" },
+      guideExtractCast: { provider: "google", speed: "fast" },
       extractArtStyle: { provider: "google", speed: "fast" },
       extractArtLook: { provider: "google", speed: "fast" },
       // Release notes read a whole diff in one call and are written for humans
@@ -207,6 +209,7 @@ export function createDefaultModelConfig(): ModelConfig {
       anchorImage: defaultImageTiers(),
       pageIllustration: defaultImageTiers(),
       coverIllustration: defaultImageTiers(),
+      portrait: defaultImageTiers(),
     },
     imageTierLabels: { ...DEFAULT_IMAGE_TIER_LABELS },
     imageTierUi: {

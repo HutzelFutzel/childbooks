@@ -1,3 +1,4 @@
+/** @legacy guide-v2 L1 — deleted with the Steps shell. See docs/LEGACY-GUIDE.md. */
 /**
  * Focused Story workspace. First-run opens on the story so the first child's
  * age can preselect who the book is for; Audience stays one tap away.
