@@ -18,6 +18,8 @@ export type TextActionId =
   | "editIntent" // resolveEditIntent — classify user edits into structured operations
   | "guideInterpret" // interpretGuideTurn — turn a reader's message into a slot patch
   | "guideSpeak" // speakGuideLine — write a configured guide line in the chat language
+  | "guideCompose" // composeGuideMessage — one chat message in the persona, from the turn's beats
+  | "guideAnswer" // answerGuideQuestion — answer a how-to question from the help articles and the book
   | "guideExtractCast" // extractManuscriptCast — names and ages from a pasted manuscript, no rewrite
   | "extractArtStyle" // extractArtStyleFromImages — vision call: style-only prompt from character artwork
   | "extractArtLook" // extractArtLookFromImages — vision call: who is in the uploaded character artwork
@@ -46,8 +48,10 @@ export const TEXT_ACTIONS: ActionInfo<TextActionId>[] = [
   { id: "localize", label: "Subject localization (vision)", modality: "text", help: "Finds where a subject sits inside a rendered page (used for in-place edits)." },
   { id: "bindingPass", label: "Anchor binding (vision)", modality: "text", help: "After a page is rendered, binds each anchor to its region in the image (records what's depicted where)." },
   { id: "editIntent", label: "Edit intent resolution", modality: "text", help: "Classifies a user's free-text illustration edit into structured remove/replace/refresh operations over known anchors." },
-  { id: "guideInterpret", label: "Guide turn interpretation", modality: "text", help: "Reads what the reader typed in the guided studio's chat and turns it into facts about the book (names, ages, theme, reading age…) plus the reply. Runs on nearly every message, so latency matters more here than depth." },
-  { id: "guideSpeak", label: "Guide speech", modality: "text", help: "Writes each configured guide line in the reader's chat language. The configured sentence is the meaning; the model only phrases it. Runs only when the chat language differs from the configured copy." },
+  { id: "guideInterpret", label: "Guide turn interpretation", modality: "text", help: "Reads what the reader typed in the Chat studio and turns it into facts about the book (names, ages, theme, reading age…), the skills to run (rename, redraw, add a person…) and the message's language. Runs on every message and decides what changes, so accuracy matters: keep it on a strong fast model with low reasoning." },
+  { id: "guideSpeak", label: "Guide speech (legacy)", modality: "text", help: "Writes a configured guide line in the chat language, and the next question after a turn. Used only when the persona composer is turned off." },
+  { id: "guideCompose", label: "Guide persona composer", modality: "text", help: "Writes each chat message in the guide's persona and the reader's language, from what the app decided to say. Code checks every message (names, numbers, length, casual address) and falls back to the configured wording, so a lite model with no reasoning is right here. Latency is felt on every turn." },
+  { id: "guideAnswer", label: "Guide help answers", modality: "text", help: "Answers how-to questions (\"What are Sparks?\", \"Why can't I draw the pages yet?\") from the help articles and the book's current state, in the language of the question. Never states prices; those come from the app." },
   { id: "guideExtractCast", label: "Own-words cast extraction", modality: "text", help: "Reads a manuscript the reader typed or pasted and returns the named people and their stated ages, without rewriting the story." },
   { id: "extractArtStyle", label: "Art-style extraction (vision)", modality: "text", help: "Reads uploaded character artwork and writes a style-only prompt (no characters, clothes or scenes) for the rest of the book." },
   { id: "extractArtLook", label: "Character-look extraction (vision)", modality: "text", help: "Reads uploaded character artwork and writes who is in the drawing (species, body, clothes actually shown) so later steps do not invent a different character." },

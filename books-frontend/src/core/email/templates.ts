@@ -152,21 +152,21 @@ export const RENDERERS: { [Id in keyof EmailTemplateVarsMap]: TemplateRenderer<I
   },
 
   subscription_cancelled: (vars, ctx) => {
-    const subject = `Your ${vars.planName} subscription was cancelled`;
+    const subject = `Your ${vars.planName} subscription was canceled`;
     const body = [
-      heading("Your subscription was cancelled", ctx.brand),
+      heading("Your subscription was canceled", ctx.brand),
       paragraph(
-        `${greeting(vars.name)} your ${escapeHtml(vars.planName)} subscription has been cancelled${
+        `${greeting(vars.name)} your ${escapeHtml(vars.planName)} subscription has been canceled${
           vars.endDate ? ` and will remain active until <strong>${escapeHtml(vars.endDate)}</strong>` : ""
         }.`,
       ),
       paragraph("You can resubscribe anytime — your books and characters are always saved."),
       button("Manage subscription", `${ctx.brand.siteUrl}/studio`, ctx.brand),
     ].join("\n");
-    const text = `${greeting(vars.name)}\n\nYour ${vars.planName} subscription was cancelled${
+    const text = `${greeting(vars.name)}\n\nYour ${vars.planName} subscription was canceled${
       vars.endDate ? ` and stays active until ${vars.endDate}` : ""
     }. You can resubscribe anytime: ${ctx.brand.siteUrl}/studio`;
-    return assemble(ctx, subject, "Your subscription was cancelled", body, text);
+    return assemble(ctx, subject, "Your subscription was canceled", body, text);
   },
 
   sparks_purchased: (vars, ctx) => {

@@ -428,9 +428,11 @@ export function buildModifySubjectPrompt(input: {
   maskMode: boolean;
   /** Whether the subject's reference sheet is attached as the second image. */
   hasSheetRef: boolean;
+  /** The part of the subject the mask covers ("hair"), when only a part changes. */
+  part?: string;
   prompts?: PromptContext;
 }): string {
-  const { anchor, instruction, config, maskMode, hasSheetRef, prompts } = input;
+  const { anchor, instruction, config, maskMode, hasSheetRef, part, prompts } = input;
   const styleText = resolveArtStyleText(config.artStyle, prompts);
   const region = maskMode
     ? "the transparent (masked) region"
@@ -441,9 +443,10 @@ export function buildModifySubjectPrompt(input: {
       description: anchor.description,
       region,
       instruction,
+      part: part ?? "",
       artStyle: styleText,
     },
-    flags: { hasSheetRef },
+    flags: { hasSheetRef, hasPart: Boolean(part?.trim()) && maskMode },
   });
 }
 
@@ -497,7 +500,6 @@ export async function generateIllustrationImage(input: {
   mask?: ReferenceImage;
   quality?: ImageRequest["quality"];
   resolution?: string;
-  inputFidelity?: ImageRequest["inputFidelity"];
   output?: ImageRequest["output"];
   /** Number of retries after the first provider request fails. */
   retries?: number;
@@ -517,7 +519,6 @@ export async function generateIllustrationImage(input: {
     mask,
     quality,
     resolution,
-    inputFidelity,
     output,
     retries,
     beforeAttempt,
@@ -538,7 +539,6 @@ export async function generateIllustrationImage(input: {
         mask,
         quality,
         resolution,
-        inputFidelity,
         output,
         allowText,
         signal,

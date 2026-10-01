@@ -5,7 +5,7 @@
  * drawer when still open).
  */
 import { useMemo, useState } from "react";
-import type { Anchor, CoverSpec, ScreenplaySpread } from "../../core/types";
+import type { Anchor, CoverSpec, Project, ScreenplaySpread } from "../../core/types";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { effectiveAnchorIds } from "../../core/book/anchorRefs";
 import { allVersions, getCursor, selectVersion, updateNodeContent } from "../../core/versioning";
@@ -19,6 +19,8 @@ import { IntentAmbiguousError } from "../../platform/aiClient";
 import { useProjectsStore } from "../../state/projectsStore";
 import { useJobsStore } from "../../state/jobsStore";
 import { useImageActionRange } from "../layout/SparkCost";
+import { clientReferenceLimits } from "../../state/referenceLimits";
+import { plannedIllustrationReferences } from "../../core/billing/referencePlan";
 import { notify } from "../lib/notify";
 import {
   illustrationMatchesLayout,
@@ -28,10 +30,10 @@ import { coverSpread, refreshSpread, updateAnchorsThenSpread } from "./studioGen
 import { useStudio } from "./StudioContext";
 import type { PageSubject } from "./PageEditorCard";
 
-function genSpreadFor(subject: PageSubject): ScreenplaySpread {
+function genSpreadFor(subject: PageSubject, project: Project): ScreenplaySpread {
   return subject.kind === "spread"
     ? subject.spread
-    : coverSpread(subject.coverId, subject.cover);
+    : coverSpread(subject.coverId, subject.cover, project);
 }
 
 /** Resolve the screenplay subject for a design page id. */
@@ -74,7 +76,7 @@ export function usePageIllustration(pageId: string) {
   const blank =
     subject?.kind === "spread" &&
     (!!subject.spread.blankCanvas || subject.spread.completion === "blank");
-  const genSpread = subject ? genSpreadFor(subject) : null;
+  const genSpread = subject ? genSpreadFor(subject, project) : null;
 
   const tree = project.illustrations?.[pageId];
   const cursor = tree ? getCursor(tree).content : null;
@@ -88,9 +90,23 @@ export function usePageIllustration(pageId: string) {
   // rather than one image for the page, so quoting it as a fresh render
   // undershot the charge by however many subjects the instruction touches.
   const imageAction = coverMode ? "coverIllustration" : "pageIllustration";
-  const freshSparkRange = useImageActionRange(imageAction, "fresh");
-  const editSparkRange = useImageActionRange(imageAction, "edit");
-  const variationSparkRange = useImageActionRange(imageAction, "variation");
+  const unitId = genSpread?.id ?? pageId;
+  const limits = clientReferenceLimits(imageAction);
+  const freshSparkRange = useImageActionRange(
+    imageAction,
+    "fresh",
+    plannedIllustrationReferences(project, unitId, {}, limits),
+  );
+  const editSparkRange = useImageActionRange(
+    imageAction,
+    "edit",
+    plannedIllustrationReferences(project, unitId, { edit: edit.trim(), useReference: true }, limits),
+  );
+  const variationSparkRange = useImageActionRange(
+    imageAction,
+    "variation",
+    plannedIllustrationReferences(project, unitId, { useReference: true }, limits),
+  );
   const sparkRange = edit.trim() ? editSparkRange : freshSparkRange;
 
   const subjectRef = subject
@@ -178,7 +194,7 @@ export function usePageIllustration(pageId: string) {
     // Prefer the live project — scene text may have just flushed from a buffered field.
     const live = useProjectsStore.getState().current() ?? project;
     const liveSubject = subjectForPage(pageId, live);
-    const liveSpread = liveSubject ? genSpreadFor(liveSubject) : genSpread;
+    const liveSpread = liveSubject ? genSpreadFor(liveSubject, live) : genSpread;
     if (!liveSpread) return;
     ensureArtFrame();
     if (!options.edit?.trim() && !options.mask) {

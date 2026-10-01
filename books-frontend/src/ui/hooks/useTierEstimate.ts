@@ -40,6 +40,8 @@ export function tierSparkRange(
   tier: ImageTier,
   planMultiplier = 1,
   kind: CostSampleKind = "fresh",
+  /** Reference images the render plans to send (`referencePlan`); absent prices from every count. */
+  referenceCount?: number,
 ): SparkEstimateRange | null {
   if (!sparks.enabled) return null;
   const m = planMultiplier > 0 ? planMultiplier : 1;
@@ -64,6 +66,7 @@ export function tierSparkRange(
     model: sel,
     tuning: generationTuningFor(generationTuning, action),
     kind,
+    referenceCount,
   });
   const { sparks: price } = derivedUnitPrice({ stats, sparks, action, tier, profile, rateUsd }, planMultiplier);
   return { minSparks: price, maxSparks: price };
@@ -96,6 +99,7 @@ export function useTierSparkEstimate(
   action: ImageActionId,
   tier: ImageTier,
   kind: CostSampleKind = "fresh",
+  referenceCount?: number,
 ): SparkEstimateRange | null {
   const sparks = useAppConfigStore((s) => s.sparks);
   const modelCosts = useAppConfigStore((s) => s.modelCosts);
@@ -120,6 +124,7 @@ export function useTierSparkEstimate(
         tier,
         multiplier,
         kind,
+        referenceCount,
       ),
     // modelConfig participates via resolveImageModelClient (reads live config).
     [
@@ -132,6 +137,7 @@ export function useTierSparkEstimate(
       tier,
       multiplier,
       kind,
+      referenceCount,
     ],
   );
 }

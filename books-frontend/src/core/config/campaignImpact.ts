@@ -300,7 +300,7 @@ export function campaignImpact(args: CampaignImpactArgs): CampaignImpact {
             message:
               "This looks back over an account's entire history, so a long-standing customer qualifies on day one for " +
               "spend that predates the offer. Limiting it to this book, or to spend since the offer started, ties the " +
-              "cost to behaviour the campaign actually caused.",
+              "cost to behavior the campaign actually caused.",
           });
         }
         return;

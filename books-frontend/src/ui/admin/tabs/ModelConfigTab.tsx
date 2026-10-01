@@ -20,6 +20,8 @@ import {
   IMAGE_SPEEDS,
   TEXT_SPEED_LABELS,
   TEXT_SPEEDS,
+  textFallbackFor,
+  textParamsFor,
   type ImageSpeed,
   type ImageTier,
   type ModelConfig,
@@ -58,6 +60,7 @@ import { GenerationTuningPanel } from "./GenerationTuningPanel";
 import type { CapabilityOverrides } from "../../../core/config/modelCapabilities";
 import { AdminSaveBar } from "../AdminPageHeader";
 import { Disclosure, EditorTabs } from "./products/parts";
+import { TextActionParams } from "./models/TextActionParams";
 
 const PROVIDER_LABELS: Record<ProviderId, string> = {
   openai: "OpenAI",
@@ -970,6 +973,19 @@ export function ModelConfigTab() {
                           provider as ProviderId,
                           speed as TextSpeed,
                         );
+                      }}
+                    />
+                    <TextActionParams
+                      action={action.id}
+                      params={textParamsFor(draft, action.id)}
+                      fallback={textFallbackFor(draft, action.id)}
+                      onChange={(params, fallback) => {
+                        setDraft((config) => ({
+                          ...config,
+                          textParams: { ...config.textParams, [action.id]: params },
+                          textFallback: { ...config.textFallback, [action.id]: fallback },
+                        }));
+                        setDirty(true);
                       }}
                     />
                   </div>

@@ -20,6 +20,8 @@ import { useBlobUrlState } from "../hooks/useBlobUrl";
 import { formatList } from "../lib/formatList";
 import { notify } from "../lib/notify";
 import { generateAnchorViaJob } from "../studio/studioGen";
+import { clientReferenceLimits } from "../../state/referenceLimits";
+import { plannedAnchorReferences } from "../../core/billing/referencePlan";
 import { refreshArtworkLooks } from "../../platform/artLook";
 import { ANCHOR_TYPE_ICON } from "./AnchorCard";
 
@@ -71,8 +73,13 @@ export function AnchorEditor({
   const fallbackLayout = layoutOf(sheetSpecFor(anchor));
   const cursorAspect = sheetAspect(cursorNode?.content.layout ?? fallbackLayout);
   const versions = anchor.versions ? allVersions(anchor.versions) : [];
-  const freshSparkRange = useImageActionRange("anchorImage", "fresh");
-  const editSparkRange = useImageActionRange("anchorImage", "edit");
+  const anchorLimits = clientReferenceLimits("anchorImage");
+  const freshRefs = project ? plannedAnchorReferences(project, anchor.id, { useReference: false }, anchorLimits) : undefined;
+  const editRefs = project
+    ? plannedAnchorReferences(project, anchor.id, { edit: edit.trim() || "change", useReference: true }, anchorLimits)
+    : undefined;
+  const freshSparkRange = useImageActionRange("anchorImage", "fresh", freshRefs);
+  const editSparkRange = useImageActionRange("anchorImage", "edit", editRefs);
   const TypeIcon = ANCHOR_TYPE_ICON[anchor.type];
 
   const isStale = Boolean(project && anchor.versions && staleAnchorIds(project).includes(anchor.id));

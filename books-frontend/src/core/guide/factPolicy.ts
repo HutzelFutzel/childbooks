@@ -8,6 +8,7 @@
  */
 import { z } from "zod";
 import { audienceSourceCharacter, briefOf, namedCast, namedHeroes } from "../story/brief";
+import { missingDetails } from "../story/castKinds";
 import type { Project } from "../types";
 import { GUIDE_SLOTS, type GuideSlotId } from "./slots";
 import { authoringOf } from "./projectState";
@@ -18,9 +19,10 @@ export type GuideFactId = (typeof GUIDE_FACT_IDS)[number];
 /**
  * - `use`: save the derived value and move on.
  * - `confirmOnce`: say the derived value once; continuing accepts it.
+ * - `ask`: suggest the derived value as a question; the story waits for a yes or another value.
  * - `never`: leave the fact empty unless the reader said it.
  */
-export const GUIDE_FACT_UNSAID = ["use", "confirmOnce", "never"] as const;
+export const GUIDE_FACT_UNSAID = ["use", "confirmOnce", "ask", "never"] as const;
 export type GuideFactUnsaid = (typeof GUIDE_FACT_UNSAID)[number];
 
 export interface GuideFactPolicy {
@@ -46,8 +48,8 @@ export interface GuideFactInfo {
 export const GUIDE_FACTS: Record<GuideFactId, GuideFactInfo> = {
   names: {
     id: "names",
-    label: "Who it's for",
-    help: "The names of the children the book is about.",
+    label: "Characters",
+    help: "The names of the characters the book is about: children, and any pets, toys or creatures.",
     slot: "heroes",
     has: (p) => namedHeroes(briefOf(p.config)).length > 0,
     derivable: false,
@@ -55,11 +57,11 @@ export const GUIDE_FACTS: Record<GuideFactId, GuideFactInfo> = {
   ages: {
     id: "ages",
     label: "Ages",
-    help: "How old each named child is. The first child's age sets the reading age.",
+    help: "How old each person is, and what each animal, toy or creature is. The first person's age sets the reading age.",
     slot: "heroAges",
     has: (p) => {
       const cast = namedCast(briefOf(p.config));
-      return cast.length > 0 && cast.every((m) => m.age !== undefined || m.ageMonths !== undefined);
+      return cast.length > 0 && cast.every((m) => missingDetails(m).length === 0);
     },
     derivable: false,
   },
@@ -74,7 +76,7 @@ export const GUIDE_FACTS: Record<GuideFactId, GuideFactInfo> = {
   readingAge: {
     id: "readingAge",
     label: "Reading age",
-    help: "Taken from the first child's age.",
+    help: "Taken from the first person's age.",
     slot: "audience",
     has: (p) =>
       p.config.audienceFromCast === "custom" ||
@@ -96,7 +98,7 @@ export function createDefaultGuideFactPolicies(): GuideFactPolicies {
     names: { required: true, askInBroad: true, whenUnsaid: "never" },
     ages: { required: true, askInBroad: true, whenUnsaid: "never" },
     idea: { required: false, askInBroad: true, whenUnsaid: "use" },
-    readingAge: { required: true, askInBroad: false, whenUnsaid: "confirmOnce" },
+    readingAge: { required: true, askInBroad: false, whenUnsaid: "ask" },
     language: { required: true, askInBroad: false, whenUnsaid: "use" },
   };
 }
@@ -141,6 +143,8 @@ export type GuideFactState =
   | "derived"
   /** Derived; the guide still has to say it once (`confirmOnce`, not yet said). */
   | "toConfirm"
+  /** Derived; the reader still has to answer the question about it (`ask`). */
+  | "toAsk"
   /** Required, no value, nothing to derive from: the guide must ask. */
   | "missing"
   /** Optional and unsaid under `never`, or skipped. Holds nothing back. */
@@ -162,6 +166,9 @@ export function guideFactState(
     // A derivable fact always "has" its default. Whether the reader heard it is
     // what confirm-once tracks.
     if (policy.whenUnsaid === "confirmOnce" && !state.saidFacts?.includes(id)) return "toConfirm";
+    if (policy.whenUnsaid === "ask") {
+      return stated(project, id) || state.answeredFacts?.includes(id) ? "filled" : "toAsk";
+    }
     if (policy.whenUnsaid === "never" && !stated(project, id)) return policy.required ? "missing" : "empty";
     return has && stated(project, id) ? "filled" : "derived";
   }
@@ -191,6 +198,11 @@ export function missingGuideFacts(project: Project, policies: GuideFactPolicies)
 /** Facts whose derived value must be said once before the story starts. */
 export function factsToConfirm(project: Project, policies: GuideFactPolicies): GuideFactId[] {
   return GUIDE_FACT_IDS.filter((id) => guideFactState(project, id, policies) === "toConfirm");
+}
+
+/** Facts whose derived value the reader must answer before the story starts. */
+export function factsToAsk(project: Project, policies: GuideFactPolicies): GuideFactId[] {
+  return GUIDE_FACT_IDS.filter((id) => guideFactState(project, id, policies) === "toAsk");
 }
 
 /** The facts the broad opening question covers. */

@@ -128,7 +128,7 @@ const BINDINGS_BY_ID: Record<string, BindingDef> = {
   "coil-bound": {
     id: "coil-bound",
     noun: "coil-bound paperback",
-    blurb: "A spiral through punched holes, so the book lies perfectly flat on a table. Made for reading along and colouring in; it won't look like a trade book.",
+    blurb: "A spiral through punched holes, so the book lies perfectly flat on a table. Made for reading along and coloring in; it won't look like a trade book.",
     pageStep: 2,
   },
   casewrap: {

@@ -27,6 +27,9 @@ try {
     format: "esm",
     target: "node20",
     external: ["zod"],
+    // The cover's text layer is seeded from the studio's design code, which
+    // imports its fonts' stylesheets; Node has no use for them.
+    loader: { ".css": "empty" },
     logLevel: "warning",
   });
   await import(pathToFileURL(outFile).href);

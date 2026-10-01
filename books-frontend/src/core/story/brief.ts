@@ -5,11 +5,14 @@
  * the same way everywhere.
  */
 import { z } from "zod";
-import { SOURCE_ART_MAX, type Project, type StoryBrief, type StoryCastMember } from "../types";
+import { LIKENESS_PHOTOS_MAX, SOURCE_ART_MAX, type Project, type StoryBrief, type StoryCastMember } from "../types";
 import type { AgeBandStoryCraft } from "../config/storyCraftCatalog";
 import { optionLabel, optionsLabels } from "../config/storyCraft";
 import type { StoryMode } from "../config/storyCraftCatalog";
 import { BOOK_LANGUAGES, type BookLanguageId } from "../config/bookLanguages";
+import { storyDetailsSchema } from "../guide/storyDetails";
+import { CAST_KINDS, castKindPhrase, isPerson, missingDetails } from "./castKinds";
+import { CAST_RELATION_TYPES, relationPromptLines, relationsOf } from "./relations";
 
 const bookLanguageIdSchema = z.enum(
   BOOK_LANGUAGES.map((language) => language.id) as [BookLanguageId, ...BookLanguageId[]],
@@ -31,6 +34,8 @@ const sourceArtSchema = z.object({
 const storyCastMemberSchema = z.object({
   id: z.string().min(1),
   name: z.string().max(80),
+  kind: z.enum(CAST_KINDS).optional(),
+  species: z.string().max(80).optional(),
   role: z.string().max(200).optional(),
   age: z.number().int().min(0).max(120).optional(),
   ageMonths: z.number().int().min(0).max(1200).optional(),
@@ -42,8 +47,19 @@ const storyCastMemberSchema = z.object({
     .optional(),
   note: z.string().max(500).optional(),
   lookFromArt: z.string().max(500).optional(),
+  appearance: z.string().max(600).optional(),
+  appearanceFromStory: z.boolean().optional(),
+  bodyPlan: z.enum(["bipedal", "quadruped", "avian", "aquatic", "amorphous"]).optional(),
   likenessPhoto: likenessPhotoSchema.optional(),
+  moreLikenessPhotos: z.array(likenessPhotoSchema).max(LIKENESS_PHOTOS_MAX - 1).optional(),
   sourceArt: z.array(sourceArtSchema).max(SOURCE_ART_MAX).optional(),
+});
+
+const castRelationSchema = z.object({
+  ids: z.array(z.string().min(1)).min(2).max(8),
+  type: z.enum(CAST_RELATION_TYPES),
+  label: z.string().max(120).optional(),
+  lookAlike: z.enum(["identical", "different"]).optional(),
 });
 
 /**
@@ -63,10 +79,12 @@ export const storyBriefSchema = z.object({
   customSetting: z.string().max(500).optional(),
   heroNames: z.array(z.string().max(80)).max(12).optional(),
   cast: z.array(storyCastMemberSchema).max(12).optional(),
+  relations: z.array(castRelationSchema).max(12).optional(),
   occasion: z.string().max(1000).optional(),
   when: z.string().max(500).optional(),
   where: z.string().max(500).optional(),
   mustInclude: z.string().max(1000).optional(),
+  details: storyDetailsSchema.optional(),
   generatedAt: z.number().optional(),
   generatedSignature: z.string().max(4000).optional(),
   generatedForAge: z.string().max(40).optional(),
@@ -126,6 +144,9 @@ export function normalizeStoryBriefForCraft(
   };
 }
 
+/** Longest note for the pictures a reader can give with their own story. */
+export const PICTURE_NOTES_MAX = 600;
+
 /** The brief for a config, defaulting to guided mode for older projects. */
 export function briefOf(config: { storyBrief?: StoryBrief }): StoryBrief {
   return config.storyBrief ?? createDefaultStoryBrief("guided");
@@ -160,12 +181,13 @@ export function characterAgeMonths(
 
 /**
  * The first named person is the hero the book is for. Their age, when set,
- * is the only character that may preselect the audience band.
+ * is the only character that may preselect the audience band. A dog or a
+ * teddy listed first is skipped: their age says nothing about the reader.
  */
 export function audienceSourceCharacter(
   cast: StoryCastMember[] | undefined,
 ): StoryCastMember | undefined {
-  const first = (cast ?? []).find((person) => person.name.trim().length > 0);
+  const first = (cast ?? []).find((member) => member.name.trim().length > 0 && isPerson(member));
   if (!first || !hasCharacterAge(first)) return undefined;
   return first;
 }
@@ -209,11 +231,11 @@ export function isBriefReady(brief: StoryBrief): boolean {
   switch (brief.mode) {
     case "guided": {
       const heroes = namedCast(brief);
-      return heroes.length > 0 && heroes.every((hero) => hasCharacterAge(hero));
+      return heroes.length > 0 && heroes.every((hero) => missingDetails(hero).length === 0);
     }
     case "co-write": {
       const cast = namedCast(brief);
-      return cast.length > 0 && hasCharacterAge(cast[0]!) && Boolean(brief.occasion?.trim());
+      return cast.length > 0 && missingDetails(cast[0]!).length === 0 && Boolean(brief.occasion?.trim());
     }
     case "own":
       return false;
@@ -226,25 +248,28 @@ export function briefBlockers(brief: StoryBrief): string[] {
   if (brief.mode === "guided") {
     const heroes = namedCast(brief);
     if (heroes.length === 0) {
-      out.push("Add the name of at least one child this book is for.");
+      out.push("Add at least one character the story is about.");
     } else {
-      const missingAge = heroes.filter((hero) => !hasCharacterAge(hero));
+      const missingAge = heroes.filter((hero) => missingDetails(hero).includes("age"));
       if (missingAge.length === 1) {
         out.push(`Add ${missingAge[0]?.name}’s age to create the story.`);
       } else if (missingAge.length > 1) {
         out.push(`Add ages for ${missingAge.map((h) => h.name).join(" and ")} to create the story.`);
+      }
+      for (const hero of heroes.filter((member) => missingDetails(member).includes("species"))) {
+        out.push(`Say what ${hero.name} is — which animal, toy or creature.`);
       }
     }
   }
   if (brief.mode === "co-write") {
     const cast = namedCast(brief);
     if (cast.length === 0) {
-      out.push("Add at least one person the story is about.");
+      out.push("Add at least one character the story is about.");
     } else {
-      const missingAge = cast.filter((hero) => !hasCharacterAge(hero));
-      if (missingAge.length > 0) {
-        out.push(`Add ${missingAge[0]?.name ?? "the main character"}’s age to create the story.`);
-      }
+      const first = cast[0]!;
+      const missing = missingDetails(first);
+      if (missing.includes("age")) out.push(`Add ${first.name}’s age to create the story.`);
+      if (missing.includes("species")) out.push(`Say what ${first.name} is — which animal, toy or creature.`);
     }
     if (!brief.occasion?.trim()) {
       out.push("Say what happens — the occasion or the moment.");
@@ -260,35 +285,47 @@ export function briefBlockers(brief: StoryBrief): string[] {
  * when one, two, or a handful of names are given.
  */
 export function heroesLine(brief: StoryBrief): string {
-  const names = namedHeroes(brief);
-  if (names.length === 0) return "";
-  const people = namedCast(brief);
-  const detailsByName = new Map(
-    people.map((person) => [
-      person.name.trim().toLowerCase(),
-      [
-        person.ageMonths !== undefined && (person.ageMonths < 24 || person.ageMonths % 12 !== 0)
-          ? `${person.ageMonths} months old`
-          : person.age !== undefined
-            ? `${person.age} ${person.age === 1 ? "year" : "years"} old`
-            : "",
-        person.note?.trim() ?? "",
-      ].filter(Boolean),
-    ]),
-  );
+  const all = namedHeroes(brief);
+  if (all.length === 0) return "";
+  const byName = new Map(namedCast(brief).map((member) => [member.name.trim().toLowerCase(), member]));
+  const memberOf = (name: string) => byName.get(name.toLowerCase());
   const describe = (name: string) => {
-    const details = detailsByName.get(name.toLowerCase()) ?? [];
+    const member = memberOf(name);
+    const details = member
+      ? [
+          castKindPhrase(member),
+          member.ageMonths !== undefined && (member.ageMonths < 24 || member.ageMonths % 12 !== 0)
+            ? `${member.ageMonths} months old`
+            : member.age !== undefined
+              ? `${member.age} ${member.age === 1 ? "year" : "years"} old`
+              : "",
+          member.note?.trim() ?? "",
+        ].filter(Boolean)
+      : [];
     return `"${name}"${details.length > 0 ? ` (${details.join("; ")})` : ""}`;
   };
-  if (names.length === 1) {
-    return `The book is for a child called ${describe(names[0]!)}, who is the hero of the story.`;
-  }
-  const described = names.map(describe);
-  const joined =
-    described.length === 2
-      ? described.join(" and ")
-      : `${described.slice(0, -1).join(", ")} and ${described[described.length - 1]}`;
-  return `The book is for children called ${joined}, who are the heroes of the story — give each of them a real part to play, not just a mention.`;
+  const join = (items: string[]) =>
+    items.length <= 2 ? items.join(" and ") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+  const people = all.filter((name) => {
+    const member = memberOf(name);
+    return !member || isPerson(member);
+  });
+  const others = all.filter((name) => !people.includes(name));
+  const lead =
+    people.length === 0
+      ? `The heroes of the story are ${join(others.map(describe))} — give each of them a real part to play.`
+      : people.length === 1
+        ? `The book is for a child called ${describe(people[0]!)}, who is the hero of the story.`
+        : `The book is for children called ${join(people.map(describe))}, who are the heroes of the story — give each of them a real part to play, not just a mention.`;
+  const companions =
+    people.length > 0 && others.length > 0
+      ? ` With them in the story: ${join(others.map(describe))} — give ${others.length > 1 ? "each of them" : "them"} a real part too.`
+      : "";
+  const kinds =
+    others.length > 0
+      ? " An animal, toy or creature stays exactly what it is, in the words and in the pictures: never turn it into a person."
+      : "";
+  return `${lead}${companions}${kinds}`;
 }
 
 /**
@@ -323,10 +360,16 @@ export function storyBriefSignature(
     brief.when?.trim() ?? "",
     brief.where?.trim() ?? "",
     brief.mustInclude?.trim() ?? "",
+    ...Object.keys(brief.details ?? {})
+      .sort()
+      .map((id) => `${id}=${JSON.stringify(brief.details![id])}`),
     ...namedCast(brief).map(
       (c) =>
-        `${c.name.trim()}|${c.role?.trim() ?? ""}|${c.age ?? ""}|${c.ageMonths ?? ""}|${c.note?.trim() ?? ""}`,
+        `${c.name.trim()}|${c.role?.trim() ?? ""}|${c.age ?? ""}|${c.ageMonths ?? ""}|${c.note?.trim() ?? ""}${
+          c.kind || c.species?.trim() ? `|${c.kind ?? ""}|${c.species?.trim() ?? ""}` : ""
+        }`,
     ),
+    ...(relationsOf(brief).length > 0 ? [relationPromptLines(brief)] : []),
   ];
   return parts.join("\u0001");
 }
@@ -372,9 +415,18 @@ export function briefSummary(brief: StoryBrief, craft: AgeBandStoryCraft): strin
   }
 }
 
-/** The cast rendered for the prompt, one per line. */
+/** Whether the prompt's cast list says more than the names: roles, kinds or relations. */
+export function castHasDetails(brief: StoryBrief): boolean {
+  return (
+    namedCast(brief).some((member) => Boolean(member.role?.trim()) || !isPerson(member)) ||
+    relationsOf(brief).length > 0
+  );
+}
+
+/** The cast rendered for the prompt, one per line, then how they belong together. */
 export function castPromptLines(brief: StoryBrief): string {
-  return namedCast(brief)
+  const relations = relationPromptLines(brief);
+  const lines = namedCast(brief)
     .map((c) => {
       const isMonth =
         c.ageMonths !== undefined && (c.ageMonths < 24 || c.ageMonths % 12 !== 0);
@@ -383,15 +435,21 @@ export function castPromptLines(brief: StoryBrief): string {
         : c.age != null
           ? `${c.age} ${c.age === 1 ? "year" : "years"} old`
           : "";
+      const look = c.lookFromArt?.trim();
+      const appearance = c.appearance?.trim();
       const bits = [
+        castKindPhrase(c),
         c.role?.trim(),
         ageStr,
-        c.lookFromArt?.trim(),
+        look,
+        appearance && appearance !== look ? appearance : "",
+        c.bodyPlan && c.bodyPlan !== "bipedal" ? c.bodyPlan : "",
         c.note?.trim(),
       ].filter(Boolean);
       return `- ${c.name.trim()}${bits.length > 0 ? ` (${bits.join("; ")})` : ""}`;
     })
     .join("\n");
+  return relations ? `${lines}\nHow they belong together:\n${relations}` : lines;
 }
 
 export function wordCount(text: string): number {

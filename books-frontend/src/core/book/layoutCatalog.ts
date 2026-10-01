@@ -342,7 +342,7 @@ export function layoutFindings(
         severity: "info",
         layoutId: layout.id,
         title: `“${layout.label}” isn't offered on ${missing} of ${trims.length} book sizes`,
-        detail: "Readers on those sizes see it greyed out with the reason.",
+        detail: "Readers on those sizes see it grayed out with the reason.",
       });
     }
 

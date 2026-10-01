@@ -126,8 +126,6 @@ export interface ImageRequest {
   quality?: ImageQuality;
   /** Provider-named output resolution tier, e.g. Gemini's "2K". */
   resolution?: string;
-  /** How strongly an edit should preserve supplied image details. */
-  inputFidelity?: "low" | "high";
   /** Resolved output controls. Unsupported best-effort intent is removed earlier. */
   output?: {
     format?: ImageFormat;

@@ -381,7 +381,7 @@ async function deliver(args: ApplyRewardArgs, id: string): Promise<Delivered> {
   if (!applied) {
     return {
       ok: false,
-      note: "No active membership to apply the free month to (cancelled or never started).",
+      note: "No active membership to apply the free month to (canceled or never started).",
       patch: {},
     };
   }

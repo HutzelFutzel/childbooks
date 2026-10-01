@@ -40,7 +40,7 @@ import { getFunctions } from "firebase-admin/functions";
 import { getAuth } from "firebase-admin/auth";
 import "./providerHttp";
 import { serverConfig } from "./config";
-import { compositeMaskedRegion, downscaleReference } from "./imaging";
+import { buildHoleMask, compositeMaskedRegion, downscaleReference } from "./imaging";
 import { backendPipelineEnv } from "./pipelineEnv";
 import {
   getLayoutsConfig,
@@ -53,7 +53,15 @@ import { requireTier, resolveImageModels, resolveTextAction } from "./modelResol
 import { withUsage, type CallStats } from "./usage";
 import { meterAndSettle } from "./actionRun";
 import { featureAllowedForUser } from "./plans";
-import { ensureAfford, estimateForUser } from "./sparks";
+import { ensureAfford, estimateForUser, referenceGroupFor, referenceLimitsForAction } from "./sparks";
+import { quoteUnitKey } from "../../books-frontend/src/core/billing/generationQuote";
+import {
+  cappedReferenceCount,
+  plannedAnchorReferences,
+  plannedIllustrationReferences,
+  plannedPortraitReferences,
+  type ReferenceLimits,
+} from "../../books-frontend/src/core/billing/referencePlan";
 import { consumeQuote } from "./generationQuotes";
 import { sendBookDrawnEmail } from "./email/triggers";
 import { normalizeImageTier, type ImageTier } from "../../books-frontend/src/core/config/modelConfig";
@@ -71,9 +79,13 @@ import {
 } from "../../books-frontend/src/core/config/generationTuning";
 import { ALL_SECRETS } from "./secrets";
 import { downloadBlob, ensureAdmin, uploadBlob } from "./storage";
-import { deleteLikenessPhotoForSubject, loadLikenessPhotoForSubject } from "./likeness";
-import { portraitPrompt, lookSourceOf } from "../../books-frontend/src/core/guide/portrait";
-import { briefOf } from "../../books-frontend/src/core/story/brief";
+import { deleteLikenessPhotoForSubject, hasLikenessPhotoForSubject, loadLikenessPhotosForSubject } from "./likeness";
+import { locateEditPart, partOnSubject } from "../../books-frontend/src/core/pipeline/localize";
+import { likenessPhotosOf, portraitEditPrompt, portraitPrompt, portraitReferencePlan } from "../../books-frontend/src/core/guide/portrait";
+import { briefOf, namedCast } from "../../books-frontend/src/core/story/brief";
+import { firstUnmet, personNeedsStatedAge } from "../../books-frontend/src/core/guide/agent/requirements";
+import type { RequirementId } from "../../books-frontend/src/core/guide/agent/types";
+import type { Project } from "../../books-frontend/src/core/types";
 import { resolvePromptsConfig } from "../../books-frontend/src/core/prompts/context";
 import type { ResolvedModels } from "../../books-frontend/src/core/models/registry";
 import { isAbortError, ProviderError } from "../../books-frontend/src/core/errors";
@@ -270,6 +282,7 @@ function taskAction(kind: JobKind, taskId: string): ImageActionId {
 function taskQuoteKind(spec: AnyJob["tasks"][number] | TaskDoc): CostSampleKind {
   const req = "request" in spec ? spec.request : undefined;
   if (req) return req.composite || req.maskBlobId ? "edit" : "fresh";
+  if ("edit" in spec && spec.edit) return "edit";
   const options = "options" in spec ? spec.options : undefined;
   return generationRenderKindOf(options);
 }
@@ -278,9 +291,66 @@ function taskQuoteKind(spec: AnyJob["tasks"][number] | TaskDoc): CostSampleKind 
  * Key one task's quote by everything that moves its price: the action it settles
  * as (a cover costs more than a page) and whether it's an edit (which spends one
  * image call per subject). One number per batch under-quoted every mixed batch.
+ * A task planned to send N reference images is priced in N's group.
  */
-function quoteKey(action: ImageActionId, kind: CostSampleKind): string {
-  return kind === "edit" ? `${action}:edit` : action;
+function quoteKey(action: ImageActionId, kind: CostSampleKind, group?: string): string {
+  return quoteUnitKey(action, kind, group);
+}
+
+/**
+ * Reference images each image task will send, planned from the job's book the
+ * way its renderer assembles them. Absent for tasks that can't be planned.
+ */
+async function plannedTaskReferences(
+  uid: string,
+  job: AnyJob,
+  specs: AnyJob["tasks"],
+  tier: ImageTier,
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const limitsByAction = new Map<ImageActionId, ReferenceLimits>();
+  const limits = async (action: ImageActionId) => {
+    const hit = limitsByAction.get(action);
+    if (hit) return hit;
+    const next = await referenceLimitsForAction(action, tier);
+    limitsByAction.set(action, next);
+    return next;
+  };
+  const project = (job as { project?: Project }).project;
+  const sheetsComing = new Set(
+    job.kind === "book"
+      ? (job.tasks as BookTask[]).filter((t) => t.kind === "anchors").map((t) => t.id)
+      : job.kind === "anchors"
+        ? job.tasks.map((t) => t.id)
+        : [],
+  );
+  for (const spec of specs) {
+    const kind = taskKindOf(job, spec);
+    const action = taskAction(kind, spec.id);
+    const lim = await limits(action);
+    if (kind === "image") {
+      const req = (spec as JobTask).request;
+      if (req) out.set(spec.id, cappedReferenceCount(req.references?.length ?? 0, lim, { required: Boolean(req.maskBlobId) }));
+      continue;
+    }
+    if (!project) continue;
+    if (kind === "portrait") {
+      out.set(spec.id, plannedPortraitReferences(project, spec.id, lim, { edit: Boolean((spec as PortraitTask).edit) }));
+    } else if (kind === "anchors") {
+      const anchor = project.anchors?.find((a) => a.id === spec.id);
+      const hasPhoto =
+        anchor?.type === "character" && !anchor.versions
+          ? await hasLikenessPhotoForSubject(uid, project.id, spec.id).catch(() => false)
+          : false;
+      out.set(spec.id, plannedAnchorReferences(project, spec.id, { ...((spec as AnchorTask).options ?? {}), hasPhoto }, lim));
+    } else if (kind === "refresh") {
+      out.set(
+        spec.id,
+        plannedIllustrationReferences(project, spec.id, { ...((spec as RefreshTask).options ?? {}), sheetsComing }, lim),
+      );
+    }
+  }
+  return out;
 }
 
 /**
@@ -292,11 +362,17 @@ function quoteKey(action: ImageActionId, kind: CostSampleKind): string {
  */
 function quotedFor(
   job: AnyJob,
+  task: Pick<TaskDoc, "quoteKey">,
   action: ImageActionId,
   kind: CostSampleKind = "fresh",
 ): number | undefined {
   const quoted = job.quotedByAction;
-  return quoted?.[quoteKey(action, kind)] ?? quoted?.[action] ?? job.quotedSparks;
+  return (
+    (task.quoteKey ? quoted?.[task.quoteKey] : undefined) ??
+    quoted?.[quoteKey(action, kind)] ??
+    quoted?.[action] ??
+    job.quotedSparks
+  );
 }
 
 function isTerminal(status: JobStatus): boolean {
@@ -435,7 +511,10 @@ function taskPayload(
   kind: JobKind,
   spec: JobTask | RefreshTask | AnchorTask | ScreenplayTask | PortraitTask | BookTask,
 ): Partial<TaskDoc> {
-  if (kind === "portrait") return { inputs: (spec as PortraitTask).inputs };
+  if (kind === "portrait") {
+    const portrait = spec as PortraitTask;
+    return { inputs: portrait.inputs, ...(portrait.edit ? { edit: portrait.edit } : {}) };
+  }
   if (kind === "image") {
     const s = spec as JobTask;
     const out: Partial<TaskDoc> = { request: s.request };
@@ -454,6 +533,29 @@ function taskPayload(
  * Runs the account/afford/feature checks ONCE here, so per-task workers can
  * trust every dispatched task is authorized and paid for.
  */
+/**
+ * The chat skills' requirements, held on the server too: a portrait needs a
+ * chosen look and an age for everyone it draws; a quoted book run needs a
+ * story and a look. A client that skips the chat is held to the same rules.
+ */
+function chatJobUnmet(job: AnyJob): string | null {
+  const project = (job as { project?: Project }).project;
+  if (!project?.config) return null;
+  const requires: RequirementId[] =
+    job.kind === "portrait" ? ["styleChosen"] : job.kind === "book" && job.quoteId ? ["hasStory", "styleChosen"] : [];
+  const remedy = firstUnmet(project, requires, { guest: false });
+  if (remedy) return remedy.what;
+  if (job.kind === "portrait") {
+    const ids = new Set((job.tasks ?? []).map((spec) => spec.id));
+    const missing = namedCast(briefOf(project.config))
+      .filter((member) => ids.has(member.id))
+      .filter((member) => personNeedsStatedAge(member))
+      .map((member) => member.name.trim());
+    if (missing.length > 0) return `an age for ${missing.join(", ")}, so the pictures look right.`;
+  }
+  return null;
+}
+
 async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Promise<void> {
   const caller = await jobCallerStanding(uid);
   if (!caller.allowed) {
@@ -476,8 +578,15 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
     return;
   }
 
+  const unmet = chatJobUnmet(job);
+  if (unmet) {
+    await ref.update({ status: "error", error: `This needs ${unmet}`, updatedAt: Date.now() });
+    return;
+  }
+
   let tier: ImageTier | undefined;
   let quotedByAction: Record<string, number> | undefined;
+  const taskQuoteKeys = new Map<string, string>();
   if (job.kind !== "screenplay") {
     // All customer jobs render at production quality. Guests are constrained by
     // their Spark balance and receive no negative buffer, not degraded artwork.
@@ -491,32 +600,48 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
     // image call per subject — so pricing the whole batch as a fresh page
     // under-reserved every book with a cover or an edit in it, and recorded a
     // quote the charge was guaranteed to beat.
-    const keys = specs.map((spec) =>
-      quoteKey(taskAction(taskKindOf(job, spec), spec.id), taskQuoteKind(spec)),
-    );
+    //
+    // The number of reference images moves the price too, so each task is
+    // planned from the job's own book and priced in its reference group.
+    const planned = await plannedTaskReferences(uid, job, specs, tier);
     let quotes: Record<string, number> = {};
     if (job.quoteId) {
       // The reader confirmed a stored estimate: its numbers are the cap, and each
       // unit may be consumed by one job only.
-      quotes = await consumeQuote(
+      const quote = await consumeQuote(
         uid,
         job.quoteId,
         ref.id,
         job.projectId,
         specs.map((spec) => spec.id),
       );
+      quotes = { ...quote.byKey };
+      for (const spec of specs) {
+        const unit = quote.units.find((u) => u.id === spec.id);
+        const key = quote.unitKeys[spec.id];
+        if (key) taskQuoteKeys.set(spec.id, key);
+        const plan = planned.get(spec.id);
+        if (unit?.refs !== undefined && plan !== undefined && plan > unit.refs) {
+          // Charged as quoted either way; a gap here means the button and the
+          // server planned the same book differently.
+          console.warn("[jobs] quoted fewer references than planned", { jobId: ref.id, task: spec.id, quoted: unit.refs, planned: plan });
+        }
+      }
     } else if (job.kind === "portrait") {
       throw new Error("Portraits start from a confirmed estimate.");
     }
     for (const spec of specs) {
+      if (taskQuoteKeys.has(spec.id)) continue;
       const action = taskAction(taskKindOf(job, spec), spec.id);
       const kind = taskQuoteKind(spec);
-      const key = quoteKey(action, kind);
+      const refs = planned.get(spec.id);
+      const key = quoteKey(action, kind, refs === undefined ? undefined : await referenceGroupFor(action, tier, refs));
+      taskQuoteKeys.set(spec.id, key);
       if (key in quotes) continue;
-      quotes[key] = await estimateForUser(uid, action, tier, kind);
+      quotes[key] = await estimateForUser(uid, action, tier, kind, refs);
     }
     quotedByAction = quotes;
-    const total = keys.reduce((sum, key) => sum + (quotes[key] ?? 0), 0);
+    const total = specs.reduce((sum, spec) => sum + (quotes[taskQuoteKeys.get(spec.id)!] ?? 0), 0);
     await ensureAfford(uid, total, { noNegativeBuffer: caller.guest });
   }
 
@@ -537,6 +662,7 @@ async function expandJob(ref: DocumentReference, uid: string, job: AnyJob): Prom
       status: "pending",
       dependsOn: dependsMap.get(spec.id) ?? [],
       ...taskPayload(taskKindOf(job, spec), spec),
+      ...(taskQuoteKeys.has(spec.id) ? { quoteKey: taskQuoteKeys.get(spec.id) } : {}),
       reconciliationVersion: 1,
       updatedAt: now,
     };
@@ -869,6 +995,50 @@ async function enqueueReadyDependents(
   await enqueueTasks(uid, jobId, ready, kind);
 }
 
+
+/**
+ * For a change to a drawn portrait ("make her hair yellow"): find the part it
+ * is about and mask just that, so the rest of the picture stays as it is.
+ * Returns null when the model can't take a mask, the part can't be told, or it
+ * is most of the picture; the caller then edits the whole portrait.
+ */
+async function portraitEditMask(args: {
+  uid: string;
+  name: string;
+  instruction: string;
+  blobId: string;
+  models: ResolvedModels;
+  prompts: Awaited<ReturnType<typeof loadPromptContext>>;
+  signal: AbortSignal;
+}): Promise<{ maskBlobId: string; part: string } | null> {
+  const { uid, name, instruction, blobId, models, prompts, signal } = args;
+  try {
+    const model = models.bindingModel ?? models.textModel;
+    const original = await downloadBlob(uid, blobId);
+    const small = await downscaleReference(original, 1024, 0.85);
+    const found = await locateEditPart({
+      pageBase64: bufToBase64(small?.buf ?? original),
+      pageMime: small?.mimeType ?? "image/png",
+      name,
+      instruction,
+      creds: { apiKey: apiKeyFor(model.provider) },
+      model: model.id,
+      providerId: model.provider,
+      prompts,
+      signal,
+    });
+    if (!found || !found.part) return null;
+    const whole = { x: 0, y: 0, width: 1, height: 1 };
+    if (!partOnSubject(whole, found.box)) return null;
+    if (found.box.width * found.box.height >= 0.6) return null;
+    const mask = await buildHoleMask({ page: original, box: found.box, paddingFrac: 0.1 });
+    return { maskBlobId: await uploadBlob(uid, mask, "image/png"), part: found.part };
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return null;
+  }
+}
+
 /**
  * Run one image-render task and return the stored result. The model/provider
  * are resolved server-side (the client-supplied values on the request are
@@ -965,7 +1135,6 @@ async function runImageTask(args: {
     // pipeline would have chosen itself.
     size: sanitizeImageSize(capabilities, req.size),
     quality: generation.applied.quality,
-    inputFidelity: generation.applied.inputFidelity,
     output:
       generation.applied.background ||
       generation.applied.format ||
@@ -1095,6 +1264,7 @@ async function renderTask(
         prompts,
         signal,
       }),
+      model.params,
     );
     await meterAndSettle({
       uid,
@@ -1133,35 +1303,61 @@ async function renderTask(
     const project = job.project;
     const member = (briefOf(project.config).cast ?? []).find((m) => m.id === task.id);
     if (!member) throw new Error("This person is no longer in the book.");
-    const source = lookSourceOf(member);
+    // A change to a drawn portrait sends that portrait and nothing else: a photo or a
+    // style picture next to it would pull the model toward drawing someone new.
+    const editing = task.edit?.instruction.trim() ? task.edit : undefined;
+    const plan = editing
+      ? { photos: 0, subject: [], style: [], hasStyle: false, sharesStyle: false }
+      : portraitReferencePlan(project, member);
     const inlineReferences: ReferenceImage[] = [];
-    if (source === "photo") {
-      const photo = await loadLikenessPhotoForSubject(uid, project.id, member.id);
-      if (!photo) throw new Error("The photo has expired. Add it again, or describe them instead.");
-      inlineReferences.push({ base64: photo.base64, mimeType: photo.mimeType, label: `${member.name} (photo)`, role: "likeness" });
+    if (plan.photos > 0) {
+      const photos = await loadLikenessPhotosForSubject(uid, project.id, member.id, plan.photos);
+      if (photos.length === 0) throw new Error("The photo has expired. Add it again, or describe them instead.");
+      photos.forEach((photo, i) =>
+        inlineReferences.push({
+          base64: photo.base64,
+          mimeType: photo.mimeType,
+          label: photos.length > 1 ? `${member.name} (photo ${i + 1})` : `${member.name} (photo)`,
+          role: "likeness",
+        }),
+      );
     }
-    const subjectReferences =
-      source === "drawing" ? (member.sourceArt ?? []).slice(0, 1) : [];
-    const subjectBlobIds = new Set(subjectReferences.map((art) => art.blobId));
-    const allStyleReferences = project.config.artStyle.referenceArt ?? [];
-    const styleReferences = allStyleReferences
-      .filter((art) => !subjectBlobIds.has(art.blobId))
-      .slice(0, 1);
-    const hasStyleReference = allStyleReferences.length > 0;
-    const sharesStyleReference = allStyleReferences.some((art) =>
-      subjectBlobIds.has(art.blobId),
-    );
-    const prompt = portraitPrompt(
-      project,
-      member,
-      resolvePromptsConfig(prompts),
-      prompts.artStyles,
-    );
+    const subjectReferences = plan.subject;
+    const styleReferences = plan.style;
+    const hasStyleReference = plan.hasStyle;
+    const sharesStyleReference = plan.sharesStyle;
+    const prompt = editing
+      ? portraitEditPrompt(member, editing.instruction, resolvePromptsConfig(prompts))
+      : portraitPrompt(project, member, resolvePromptsConfig(prompts), prompts.artStyles);
+    const photoCount = inlineReferences.length;
+    const editRegion =
+      editing && capabilitiesFor(models.imageModel, capabilities).operations.maskEditing
+        ? await portraitEditMask({
+            uid,
+            name: member.name,
+            instruction: editing.instruction,
+            blobId: editing.blobId,
+            models,
+            prompts,
+            signal,
+          })
+        : null;
     const referenceGuide = (() => {
+      if (editing) {
+        return editRegion
+          ? `Reference image 1 is the current portrait of this character. Edit that picture; do not redraw the person. Only the transparent area of the mask may change: it covers just the ${editRegion.part}. Repaint that part with the requested change, keep its shape, outline, texture and the art style, and leave everything else exactly as it is.`
+          : "Reference image 1 is the current portrait of this character. Edit that picture; do not redraw the person.";
+      }
       if (sharesStyleReference) {
         return "Reference image 1 is both this character’s exact design and the rendering style to carry through the book.";
       }
-      if (source === "photo" && styleReferences.length > 0) {
+      if (photoCount > 1) {
+        const likeness = `Reference images 1–${photoCount} are photos of the same person, for likeness only; combine them into one consistent face and build.`;
+        return styleReferences.length > 0
+          ? `${likeness} Reference image ${photoCount + 1} is style only; do not borrow its subject or composition.`
+          : likeness;
+      }
+      if (photoCount === 1 && styleReferences.length > 0) {
         return "Reference image 1 is likeness only. Reference image 2 is style only; do not borrow its subject or composition.";
       }
       if (subjectReferences.length > 0 && styleReferences.length > 0) {
@@ -1187,7 +1383,23 @@ async function renderTask(
         .filter(Boolean)
         .join("\n\n"),
       size: "1024x1536",
+      ...(editing && editRegion
+        ? {
+            maskBlobId: editRegion.maskBlobId,
+            composite: { originalBlobId: editing.blobId, maskBlobId: editRegion.maskBlobId },
+          }
+        : {}),
       references: [
+        ...(editing
+          ? [
+              {
+                blobId: editing.blobId,
+                mimeType: editing.mimeType,
+                label: `${member.name} (current portrait)`,
+                role: "subject" as const,
+              },
+            ]
+          : []),
         ...subjectReferences.map((art) => ({
           blobId: art.blobId,
           mimeType: art.mimeType,
@@ -1215,7 +1427,7 @@ async function renderTask(
       jobId,
       taskId: task.id,
       startedAt,
-      quotedSparks: quotedFor(job, "portrait"),
+      quotedSparks: quotedFor(job, task, "portrait"),
       inlineReferences,
     });
     return {
@@ -1242,7 +1454,7 @@ async function renderTask(
       jobId,
       taskId: task.id,
       startedAt,
-      quotedSparks: quotedFor(job, action, taskQuoteKind(task)),
+      quotedSparks: quotedFor(job, task, action, taskQuoteKind(task)),
     });
     return {
       result: stampImageProvenance(
@@ -1292,7 +1504,7 @@ async function renderTask(
       jobId,
       targetId: task.id,
       source: "worker",
-      quotedSparks: quotedFor(job, action, renderKind),
+      quotedSparks: quotedFor(job, task, action, renderKind),
       settleKey: taskSettleKey(jobId, task.id),
       startedAt,
       models: { image: models.imageModel, text: models.textModel },
@@ -1351,7 +1563,7 @@ async function renderTask(
     jobId,
     targetId: task.id,
     source: "worker",
-    quotedSparks: quotedFor(job, "anchorImage", renderKind),
+    quotedSparks: quotedFor(job, task, "anchorImage", renderKind),
     settleKey: taskSettleKey(jobId, task.id),
     startedAt,
     models: { image: models.anchorImageModel, text: models.textModel },
@@ -1533,6 +1745,16 @@ async function handleTask(data: TaskPayload, owner: string, attempt: number): Pr
   // A likeness source has completed its only job once the first character
   // sheet is durably recorded. Deletion is best-effort here; the 24-hour
   // scheduled expiry is the backstop if Storage is temporarily unavailable.
+  if (job.kind === "portrait") {
+    // The consent says the photos go once the portrait is done.
+    const member = (briefOf(job.project.config).cast ?? []).find((m) => m.id === taskId);
+    const used = member && portraitReferencePlan(job.project, member).photos > 0 ? likenessPhotosOf(member) : [];
+    for (const photo of used) {
+      await deleteLikenessPhotoForSubject(uid, job.project.id, taskId, photo.createdAt).catch((err) => {
+        logger.warn("[fan] portrait photo deletion failed; expiry will retry", { jobId, taskId, err: String(err) });
+      });
+    }
+  }
   if ((job.kind === "anchors" || job.kind === "book") && taskKindOf(job, task) === "anchors") {
     const createdAt = (result as AnchorRender).consumedLikenessCreatedAt;
     if (createdAt !== undefined) {

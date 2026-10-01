@@ -9,8 +9,10 @@
  *   3. a result that landed;
  *   4. the next question.
  *
- * At most two candidates are joined into one message, so a finished look, a
- * finished draft and a follow-up never arrive as three bubbles.
+ * At most three candidates are joined into one message, so a finished look, a
+ * finished draft and a follow-up never arrive as three bubbles. When there are
+ * more, the question is kept: the message always ends on what it asks, and
+ * never asks two things at once.
  *
  * **The configured sentence is the meaning.** In a chat language other than the
  * configured one (English), the model phrases each meaning (`guideSpeak`),
@@ -52,6 +54,8 @@ export interface GuideUtterance {
   names: string[];
 }
 
+const MAX_LINES = 3;
+
 const RANK: Record<GuideSpeechPriority, number> = {
   blocking: 0,
   confirm: 1,
@@ -79,14 +83,19 @@ export function arbitrateGuideLines(
   const picked: GuideLineCandidate[] = [];
   for (const candidate of ordered) {
     if (picked.some((p) => p.key === candidate.key && !p.text && !candidate.text)) continue;
+    if (candidate.priority === "question" && picked.some((p) => p.priority === "question")) continue;
     picked.push(candidate);
     if (candidate.priority === "blocking") break;
-    if (picked.length === 2) break;
   }
-  // A blocking line or confirmation stands alone, unless it is itself the
-  // confirmation said together with the start of the work it confirms.
+  // A blocking line stands alone.
   const first = picked[0]!;
-  const lines = first.priority === "blocking" ? [first] : picked;
+  const question = picked.find((line) => line.priority === "question");
+  const lines =
+    first.priority === "blocking"
+      ? [first]
+      : picked.length > MAX_LINES
+        ? [...picked.filter((line) => line !== question).slice(0, question ? MAX_LINES - 1 : MAX_LINES), ...(question ? [question] : [])]
+        : picked;
 
   const texts = lines.map((line) => line.text?.trim() || guideCopy(overrides, line.key, line.vars));
   const names = new Set<string>();

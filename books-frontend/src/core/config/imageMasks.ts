@@ -1,9 +1,10 @@
 /**
  * Reusable, admin-managed image shapes.
  *
- * Each upload is immutable: its id identifies one exact SVG forever. Renaming
- * or archiving only changes catalog presentation, so an existing book cannot
- * silently change when an admin curates the picker.
+ * Each upload is immutable: its id identifies one exact SVG forever. Renaming,
+ * archiving, or taking a shape out of the automatic pool only changes catalog
+ * presentation, so an existing book cannot silently change when an admin
+ * curates the picker.
  */
 import { z } from "zod";
 
@@ -15,6 +16,11 @@ export interface ImageMaskAsset {
   imageUrl: string;
   storagePath: string;
   archived?: boolean;
+  /**
+   * When false, the editor can still offer this shape, but a new book will
+   * not be assigned it automatically. Missing means it is in that pool.
+   */
+  starter?: boolean;
   createdAt: number;
   updatedAt: number;
 }
@@ -40,8 +46,19 @@ export function normalizeImageMasksConfig(input: unknown): ImageMasksConfig {
       return true;
     })
     .slice(0, 200)
+    .map(withStarterFlag)
     .sort((a, b) => a.createdAt - b.createdAt);
   return { version: 1, assets };
+}
+
+/** Keep an explicit opt-out. Anything else, including a missing flag, stays in the pool. */
+function withStarterFlag(asset: ImageMaskAsset): ImageMaskAsset {
+  const starter = (asset as { starter?: unknown }).starter;
+  if (starter === false) return { ...asset, starter: false };
+  if (starter === undefined) return asset;
+  const { starter: _drop, ...rest } = asset;
+  void _drop;
+  return rest;
 }
 
 export function activeImageMasks(config: ImageMasksConfig): ImageMaskAsset[] {
@@ -55,11 +72,14 @@ export function imageMaskById(
   return id ? config.assets.find((asset) => asset.id === id) : undefined;
 }
 
-/** One active catalog frame, or undefined when none are configured. */
+/**
+ * One shape from the automatic pool, or undefined when that pool is empty.
+ * The editor still offers every non-archived shape; this roll does not.
+ */
 export function pickRandomActiveMaskId(config: ImageMasksConfig): string | undefined {
-  const active = activeImageMasks(config);
-  if (active.length === 0) return undefined;
-  return active[Math.floor(Math.random() * active.length)].id;
+  const pool = activeImageMasks(config).filter((asset) => asset.starter !== false);
+  if (pool.length === 0) return undefined;
+  return pool[Math.floor(Math.random() * pool.length)].id;
 }
 
 const imageMaskAssetSchema = z.object({
@@ -68,6 +88,7 @@ const imageMaskAssetSchema = z.object({
   imageUrl: z.string().url(),
   storagePath: z.string().min(1).max(500),
   archived: z.boolean().optional(),
+  starter: z.boolean().optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
 });

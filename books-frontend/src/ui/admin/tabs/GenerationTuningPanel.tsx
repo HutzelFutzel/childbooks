@@ -4,8 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Gauge, RefreshCw, RotateCcw, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import {
+  clampTuningToModel,
   createDefaultGenerationTuningConfig,
   PROVIDER_DEFAULT,
+  tuningChoicesFor,
   type ActionGenerationTuning,
   type GenerationTuningConfig,
 } from "../../../core/config/generationTuning";
@@ -131,6 +133,33 @@ export function GenerationTuningPanel() {
     () => capabilitiesFor(selectedModel, modelConfig.capabilities),
     [selectedModel, modelConfig.capabilities],
   );
+  const choices = useMemo(
+    () => tuningChoicesFor(selectedModel ? capabilities : null),
+    [selectedModel, capabilities],
+  );
+  const [resetNotes, setResetNotes] = useState<string[]>([]);
+
+  // A setting the model cannot take is put back to the provider default rather
+  // than kept: a saved value from before a model change, or an old default.
+  useEffect(() => {
+    if (loading) return;
+    const notes: string[] = [];
+    const actions = { ...draft.actions };
+    for (const item of IMAGE_ACTIONS) {
+      const model = resolveBoundImageModel(modelConfig, item.id, CUSTOMER_IMAGE_TIER);
+      const { tuning, reset } = clampTuningToModel(
+        actions[item.id],
+        model ? capabilitiesFor(model, modelConfig.capabilities) : null,
+      );
+      if (reset.length > 0) {
+        actions[item.id] = tuning;
+        notes.push(`${ACTION_COPY[item.id].short}: ${reset.join(", ")}`);
+      }
+    }
+    if (notes.length === 0) return;
+    setDraft((value) => ({ ...value, actions }));
+    setResetNotes((value) => [...value, ...notes]);
+  }, [draft, loading, modelConfig]);
   const patchAction = (patch: Partial<ActionGenerationTuning>) => {
     setDraft((value) => ({
       ...value,
@@ -179,53 +208,18 @@ export function GenerationTuningPanel() {
   const modelName = selectedModel?.id ?? "No production model selected";
   const qualityOptions = [
     { value: PROVIDER_DEFAULT, label: "Provider default" },
-    ...(!capabilities.outputs.qualityLevels.includes(
-      current.quality as Exclude<typeof current.quality, typeof PROVIDER_DEFAULT>,
-    ) && current.quality !== PROVIDER_DEFAULT
-      ? [{ value: current.quality, label: `${current.quality} · unsupported`, disabled: true }]
-      : []),
-    ...capabilities.outputs.qualityLevels.map((quality) => ({
+    ...choices.qualities.map((quality) => ({
       value: quality,
       label: quality === "auto" ? "Auto" : quality[0].toUpperCase() + quality.slice(1),
     })),
   ];
-  const repairQualityOptions = [
-    ...(!capabilities.outputs.qualityLevels.includes(qc.repairQuality)
-      ? [{ value: qc.repairQuality, label: `${qc.repairQuality} · ignored by model` }]
-      : []),
-    ...capabilities.outputs.qualityLevels.map((quality) => ({
-      value: quality,
-      label: quality[0].toUpperCase() + quality.slice(1),
-    })),
-  ];
-  const fidelityOptions = [
-    { value: PROVIDER_DEFAULT, label: "Provider default" },
-    ...(!capabilities.inputs.inputFidelityLevels.includes(
-      current.inputFidelity as "low" | "high",
-    ) && current.inputFidelity !== PROVIDER_DEFAULT
-      ? [{
-          value: current.inputFidelity,
-          label: `${current.inputFidelity} · unsupported`,
-          disabled: true,
-        }]
-      : []),
-    ...capabilities.inputs.inputFidelityLevels.map((level) => ({
-      value: level,
-      label: level === "low" ? "Low · faster" : "High · closer match",
-    })),
-  ];
+  const repairQualityOptions = choices.qualities.map((quality) => ({
+    value: quality,
+    label: quality[0].toUpperCase() + quality.slice(1),
+  }));
   const formatOptions = [
     { value: PROVIDER_DEFAULT, label: "Provider default" },
-    ...(!capabilities.outputs.formats.includes(
-      current.outputFormat as Exclude<typeof current.outputFormat, typeof PROVIDER_DEFAULT>,
-    ) && current.outputFormat !== PROVIDER_DEFAULT
-      ? [{
-          value: current.outputFormat,
-          label: `${current.outputFormat.toUpperCase()} · unsupported`,
-          disabled: true,
-        }]
-      : []),
-    ...capabilities.outputs.formats.map((format) => ({
+    ...choices.formats.map((format) => ({
       value: format,
       label: format.toUpperCase(),
     })),
@@ -289,6 +283,28 @@ export function GenerationTuningPanel() {
             </Button>
           </div>
         )}
+        {resetNotes.length > 0 && (
+          <div
+            role="status"
+            className="flex items-start justify-between gap-3 rounded-xl bg-amber-50 px-3 py-2.5 text-xs text-amber-900 ring-1 ring-inset ring-amber-200"
+          >
+            <span className="flex items-start gap-2">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-600" />
+              <span>
+                The production model does not accept these, so they went back to the provider
+                default. Save to keep the change.
+                <span className="mt-1 block">{resetNotes.join(" · ")}</span>
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setResetNotes([])}
+              className="shrink-0 font-medium underline underline-offset-2"
+            >
+              Dismiss
+            </button>
+          </div>
+        )}
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <p className="text-sm font-medium text-ink-800">
@@ -310,10 +326,10 @@ export function GenerationTuningPanel() {
               Render
             </h3>
             <p className="mt-1 text-xs text-ink-500">
-              Provider defaults are safest when models change. Unsupported choices are skipped.
+              Provider defaults are safest when models change. Only choices the production model accepts are offered.
             </p>
           </div>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-4 md:grid-cols-3">
             <Field label="Image quality" hint="Lower is faster; higher preserves fine detail.">
               <Select
                 value={current.quality}
@@ -322,19 +338,6 @@ export function GenerationTuningPanel() {
                 onChange={(event) =>
                   patchAction({
                     quality: event.target.value as ActionGenerationTuning["quality"],
-                  })
-                }
-              />
-            </Field>
-            <Field label="Reference fidelity" hint="Controls how closely edits preserve references.">
-              <Select
-                value={current.inputFidelity}
-                options={fidelityOptions}
-                disabled={loading || saving}
-                onChange={(event) =>
-                  patchAction({
-                    inputFidelity:
-                      event.target.value as ActionGenerationTuning["inputFidelity"],
                   })
                 }
               />
@@ -385,7 +388,7 @@ export function GenerationTuningPanel() {
               disabled={
                 loading ||
                 saving ||
-                !capabilities.outputs.compression ||
+                !choices.compression ||
                 (current.outputFormat !== "jpeg" && current.outputFormat !== "webp")
               }
               onChange={(event) =>

@@ -90,5 +90,5 @@ export function planPageLayout(project: Project, input: PageLayoutInput): Layout
     mode,
     textLength: input.textLength,
   });
-  return applySlotTreatmentOverrides(plan, input.layoutsConfig);
+  return { ...applySlotTreatmentOverrides(plan, input.layoutsConfig), safe };
 }

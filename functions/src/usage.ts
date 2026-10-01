@@ -26,7 +26,8 @@ import {
 } from "../../books-frontend/src/core/config/modelCosts";
 import type { ProviderId } from "../../books-frontend/src/core/config/options";
 import { ALL_IMAGE_ACTION_IDS, type ImageActionId } from "../../books-frontend/src/core/ai/actions";
-import type { ImageTier } from "../../books-frontend/src/core/config/modelConfig";
+import type { ImageTier, TextCallParams } from "../../books-frontend/src/core/config/modelConfig";
+import { applyTextParams } from "../../books-frontend/src/core/providers/textParams";
 
 function isImageAction(action: string): action is ImageActionId {
   return (ALL_IMAGE_ACTION_IDS as string[]).includes(action);
@@ -108,15 +109,28 @@ const stepStorage = new AsyncLocalStorage<StepScope>();
 /** Monotonic source of {@link StepScope} ids; only ever compared for equality. */
 let nextStepId = 0;
 
-/** Run `fn` with a fresh usage collector; provider calls inside are recorded. */
+/**
+ * The admin's per-action text parameters (reasoning, temperature, output cap,
+ * timeout) for provider calls made inside the scope. Applied to the request
+ * body in {@link meteredFetch}, so no pipeline function has to thread them.
+ */
+const paramsStorage = new AsyncLocalStorage<TextCallParams>();
+
+/**
+ * Run `fn` with a fresh usage collector; provider calls inside are recorded.
+ * `params` are the bound text action's call parameters, when there are any.
+ */
 export function withUsage<T>(
   fn: () => Promise<T>,
+  params?: TextCallParams,
 ): Promise<{ value: T; events: UsageEvent[]; stats: CallStats }> {
   const collector: Collector = { events: [], stats: { calls: 0, failures: 0 } };
-  return storage.run(collector, async () => {
-    const value = await fn();
-    return { value, events: collector.events, stats: collector.stats };
-  });
+  const run = () =>
+    storage.run(collector, async () => {
+      const value = await fn();
+      return { value, events: collector.events, stats: collector.stats };
+    });
+  return params && Object.keys(params).length > 0 ? paramsStorage.run(params, run) : run();
 }
 
 /**
@@ -369,10 +383,14 @@ export async function meteredFetch(url: string, init?: RequestInit): Promise<Res
     provider && imageGeneration ? await acquireImageSlot() : null;
   // Start the timeout clock only once the request actually goes out (time
   // spent queued in the semaphore must not eat into the request budget).
+  const params = provider && !imageGeneration ? paramsStorage.getStore() : undefined;
+  if (provider && params && typeof init?.body === "string") {
+    init = { ...init, body: applyTextParams(provider, url, init.body, params) };
+  }
   const timeoutMs = provider
     ? imageGeneration
       ? IMAGE_PROVIDER_TIMEOUT_MS[provider]
-      : TEXT_PROVIDER_TIMEOUT_MS[provider]
+      : params?.timeoutMs ?? TEXT_PROVIDER_TIMEOUT_MS[provider]
     : DEFAULT_TIMEOUT_MS;
   const timeout = AbortSignal.timeout(
     timeoutMs,

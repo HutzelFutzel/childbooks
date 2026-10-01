@@ -17,13 +17,30 @@ import { withRetry } from "./retry";
 import type { PromptContext } from "../prompts/context";
 import { buildStoryDraftPrompt } from "../prompts/story";
 import { inspectDraft, issueScore } from "./storyValidate";
+import { restoreModelLineBreaks } from "../story/lineBreaks";
 
 const storyDraftSchema = z.object({
   title: z.string(),
   story: z.string(),
+  subtitles: z.array(z.string()).optional(),
 });
 
 export type StoryDraft = z.infer<typeof storyDraftSchema>;
+
+/** At most three distinct, short subtitle ideas, none repeating the title. */
+export function cleanSubtitleIdeas(ideas: readonly string[] | undefined, title: string): string[] {
+  const key = (text: string) => text.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  const seen = new Set([key(title)]);
+  const out: string[] = [];
+  for (const raw of ideas ?? []) {
+    const idea = raw.trim().replace(/^["'“”„«»]+|["'“”„«»]+$/g, "").trim();
+    if (!idea || idea.length > 80 || seen.has(key(idea))) continue;
+    seen.add(key(idea));
+    out.push(idea);
+    if (out.length === 3) break;
+  }
+  return out;
+}
 
 export interface GenerateStoryDraftInput {
   brief: StoryBrief;
@@ -56,7 +73,12 @@ export async function generateStoryDraft(input: GenerateStoryDraftInput): Promis
         }),
       { signal },
     );
-    return { title: result.title.trim(), story: result.story.trim() };
+    const title = result.title.trim();
+    return {
+      title,
+      story: restoreModelLineBreaks(result.story).trim(),
+      subtitles: cleanSubtitleIdeas(result.subtitles, title),
+    };
   };
 
   const { craft } = buildStoryDraftPrompt(config, brief, prompts);

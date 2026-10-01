@@ -1,4 +1,5 @@
 import { wordCount } from "./brief";
+import { restoreModelLineBreaks } from "./lineBreaks";
 
 export interface StoryBeatItem {
   id: string;
@@ -50,7 +51,7 @@ export function parseStoryBeats(
   storyText: string,
   existingBeats?: StoryBeatItem[],
 ): StoryBeatItem[] {
-  const raw = storyText.trim();
+  const raw = restoreModelLineBreaks(storyText).trim();
   if (!raw) {
     return [{ id: existingBeats?.[0]?.id ?? uid(), title: "", text: "" }];
   }

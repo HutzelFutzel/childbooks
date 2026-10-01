@@ -8,7 +8,7 @@
  * admin override from Guided studio → Wording applies to the labels it covers.
  * The UI language is the browser's, limited to published locales.
  */
-import { NextIntlClientProvider, useTranslations } from "next-intl";
+import { NextIntlClientProvider, useLocale, useTranslations } from "next-intl";
 import { useCallback, useMemo } from "react";
 import en from "../../../messages/en.json";
 import de from "../../../messages/de.json";
@@ -57,6 +57,17 @@ export function useGuideLabel(): (key: GuideLabelKey, vars?: GuideCopyVars) => s
   );
 }
 
-export function useGuideT(namespace: "chrome" | "views" | "plate" | "sheet" | "conflict" | "storyTools") {
+/** Join names the way the UI language lists them ("Mia and Leo", "Mia und Leo"). */
+export function useGuideList(): (names: readonly string[]) => string {
+  const locale = useLocale();
+  return useCallback(
+    (names) => new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(names),
+    [locale],
+  );
+}
+
+export function useGuideT(
+  namespace: "chrome" | "views" | "plate" | "sheet" | "conflict" | "storyTools" | "agent" | "ideas" | "brief" | "looks",
+) {
   return useTranslations(`guide.${namespace}`);
 }

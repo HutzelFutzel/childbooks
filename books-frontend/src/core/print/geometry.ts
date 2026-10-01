@@ -17,20 +17,6 @@ import type { BookProduct } from "../fulfillment/types";
 /** PDF user-space units per inch. */
 export const PT_PER_IN = 72;
 
-/**
- * Distance from the TRIM edge that must stay clear of anything the reader is
- * meant to see. Lulu's own guidance for a book interior; the cut tolerance is
- * smaller than this, so it's a comfort margin rather than a hard cliff.
- */
-export const SAFETY_MARGIN_IN = 0.25;
-
-/**
- * Extra clearance on the BINDING edge, on top of the safety margin. Pages
- * curve into the spine, so text set flush to the inner margin is physically
- * hard to read even though it printed correctly.
- */
-export const GUTTER_MARGIN_IN = 0.375;
-
 /** Which physical leaf a rendered surface represents. */
 export type LeafSide = "left" | "right";
 
@@ -161,27 +147,10 @@ export interface SafeArea {
 }
 
 /**
- * The region of a page that is safe to put text in, normalized to the trim box.
- *
- * The binding edge gets the extra gutter allowance: on a right-hand (recto)
- * page the binding is on the LEFT, and vice versa. A spread is bound in the
- * middle, so both of its inner halves lose the gutter — callers checking a
- * spread should test each leaf separately rather than asking for one rectangle.
+ * True when `rect` (normalized to the trim box) fits inside `area`. The area
+ * itself comes from `computePageGuides` (core/book/format), the one margin
+ * rule both the layouts and the print check use.
  */
-export function safeArea(
-  product: Pick<BookProduct, "trim">,
-  side: LeafSide,
-): SafeArea {
-  const { widthIn, heightIn } = product.trim;
-  const outer = SAFETY_MARGIN_IN / widthIn;
-  const inner = (SAFETY_MARGIN_IN + GUTTER_MARGIN_IN) / widthIn;
-  const vertical = SAFETY_MARGIN_IN / heightIn;
-  const left = side === "right" ? inner : outer;
-  const right = side === "right" ? outer : inner;
-  return { x: left, y: vertical, w: 1 - left - right, h: 1 - vertical * 2 };
-}
-
-/** True when `rect` (normalized to the trim box) fits inside `area`. */
 export function withinSafeArea(
   rect: { x: number; y: number; w: number; h: number },
   area: SafeArea,

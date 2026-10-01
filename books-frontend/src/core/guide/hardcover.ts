@@ -17,6 +17,7 @@ import { BOOK_PRODUCTS, type BookProduct } from "../fulfillment";
 import { bookProductForConfig } from "../book";
 import type { AudienceDensity } from "../config/audienceCatalog";
 import { wordCount } from "../story/brief";
+import { restoreModelLineBreaks } from "../story/lineBreaks";
 import type { BookConfig, HardcoverDecision } from "../types";
 
 const HARD_BINDINGS = new Set(["casewrap", "linen-wrap"]);
@@ -49,7 +50,7 @@ export function shapeProducts(config: Pick<BookConfig, "productSku" | "bookSize"
 
 /** The separate moments in a draft: its paragraphs. */
 export function storyMoments(text: string): number {
-  return text
+  return restoreModelLineBreaks(text)
     .split(/\n\s*\n/)
     .map((block) => block.trim())
     .filter((block) => wordCount(block) > 0).length;

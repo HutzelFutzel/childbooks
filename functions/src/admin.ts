@@ -885,8 +885,8 @@ export function registerAdminRoutes(app: Express): void {
   app.patch("/admin/image-masks/:maskId", json, async (req: Request, res: Response) => {
     try {
       const id = String(req.params.maskId);
-      const body = (req.body ?? {}) as { name?: unknown; archived?: unknown };
-      const patch: { name?: string; archived?: boolean } = {};
+      const body = (req.body ?? {}) as { name?: unknown; archived?: unknown; starter?: unknown };
+      const patch: { name?: string; archived?: boolean; starter?: boolean } = {};
       if (body.name !== undefined) {
         if (typeof body.name !== "string" || !body.name.trim()) {
           res.status(400).json({ error: { message: "Image shapes need a name." } });
@@ -901,7 +901,14 @@ export function registerAdminRoutes(app: Express): void {
         }
         patch.archived = body.archived;
       }
-      if (patch.name === undefined && patch.archived === undefined) {
+      if (body.starter !== undefined) {
+        if (typeof body.starter !== "boolean") {
+          res.status(400).json({ error: { message: "starter must be true or false." } });
+          return;
+        }
+        patch.starter = body.starter;
+      }
+      if (patch.name === undefined && patch.archived === undefined && patch.starter === undefined) {
         res.status(400).json({ error: { message: "Nothing to update." } });
         return;
       }

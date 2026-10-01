@@ -367,7 +367,7 @@ export default function StudioApp() {
       gift === "cancel" ||
       subscription === "cancel"
     ) {
-      notify.info("Checkout cancelled", "No charge was made. You can try again anytime.");
+      notify.info("Checkout canceled", "No charge was made. You can try again anytime.");
     }
 
     // The confirmation screen owns its own params (it needs them to survive a

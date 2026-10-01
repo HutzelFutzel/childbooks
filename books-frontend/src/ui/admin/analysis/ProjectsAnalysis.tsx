@@ -37,7 +37,7 @@ type View = "books" | "users" | "behaviour";
 const VIEWS: { id: View; label: string }[] = [
   { id: "books", label: "Books" },
   { id: "users", label: "By user" },
-  { id: "behaviour", label: "Behaviour" },
+  { id: "behaviour", label: "Behavior" },
 ];
 
 const SORTS: { value: ProjectSort; label: string }[] = [

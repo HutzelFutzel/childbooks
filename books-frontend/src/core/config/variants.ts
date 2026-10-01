@@ -57,26 +57,26 @@ export interface VariantOptionDef {
 export const PRINT_TIERS: VariantOptionDef[] = [
   {
     value: "premium-colour",
-    label: "Premium colour",
-    hint: "Richest colour and the sharpest registration. What illustrated pages are worth, and the provider's own pick for children's books.",
+    label: "Premium color",
+    hint: "Richest color and the sharpest registration. What illustrated pages are worth, and the provider's own pick for children's books.",
     costRank: 3,
   },
   {
     value: "standard-colour",
-    label: "Standard colour",
-    hint: "Colour on every page at about a third of the premium price per page. Colours read a little flatter.",
+    label: "Standard color",
+    hint: "Color on every page at about a third of the premium price per page. Colors read a little flatter.",
     costRank: 2,
   },
   {
     value: "premium-bw",
     label: "Premium black & white",
-    hint: "Deep blacks and fine greys for pencil and ink work. Illustrations print as monochrome.",
+    hint: "Deep blacks and fine grays for pencil and ink work. Illustrations print as monochrome.",
     costRank: 1,
   },
   {
     value: "standard-bw",
     label: "Standard black & white",
-    hint: "The cheapest way to print a long book. Right for text-led chapter books, wrong for colour art.",
+    hint: "The cheapest way to print a long book. Right for text-led chapter books, wrong for color art.",
     costRank: 0,
   },
 ];
@@ -85,19 +85,19 @@ export const PAPER_STOCKS: VariantOptionDef[] = [
   {
     value: "80-coated-white",
     label: "80# coated white",
-    hint: "Heavy and smooth with a slight sheen, so colours pop. The provider's recommendation for picture books.",
+    hint: "Heavy and smooth with a slight sheen, so colors pop. The provider's recommendation for picture books.",
     costRank: 2,
   },
   {
     value: "60-uncoated-white",
     label: "60# uncoated white",
-    hint: "Lighter and matte, more like a novel. Softer colour, thinner and cheaper book.",
+    hint: "Lighter and matte, more like a novel. Softer color, thinner and cheaper book.",
     costRank: 1,
   },
   {
     value: "60-uncoated-cream",
     label: "60# uncoated cream",
-    hint: "Warm off-white that is gentler to read against. Black & white interiors only — the provider prints no colour on cream.",
+    hint: "Warm off-white that is gentler to read against. Black & white interiors only — the provider prints no color on cream.",
     costRank: 0,
   },
 ];

@@ -63,6 +63,12 @@ export interface GuideMessage {
    * for why getting the old pictures back would be the wrong answer.
    */
   before?: Record<string, unknown>;
+  /**
+   * Chat studio: top-level book fields as they were before this message's skills
+   * wrote them (`title`, `config`, `anchors`, `authoringState`), as JSON — the
+   * book holds nested arrays the transcript store cannot. Undo puts them back.
+   */
+  restore?: string;
   /** Chat studio: the configured lines this message said (confirm-once bookkeeping). */
   keys?: string[];
   /**
@@ -70,20 +76,59 @@ export interface GuideMessage {
    * after the patch — never from what the model claimed.
    */
   receipt?: GuideReceipt;
+  /**
+   * Chat studio: the age-fit read of the reader's story, shown as a card under
+   * the guide's line. Trusted structure from the story checker, not phrasing.
+   */
+  fit?: StoryFitCard;
+  /**
+   * Chat studio: on a reader line, the passage of the story they had marked
+   * when they sent it, so "make this nicer" still says what "this" was. A
+   * record only; what a request acted on was decided when it was sent.
+   */
+  quote?: string;
   /** Chat studio: the line phrased in the chat language, once it arrived. */
   localized?: { locale: string; text: string };
+  /**
+   * Chat studio: the well this line introduces (see `core/guide/conversation.ts`).
+   * Its buttons show under it while it is still the guide's latest line.
+   */
+  well?: string;
+  /** Chat studio: still being phrased. Held back, with everything after it, until revealed. Never stored. */
+  pending?: boolean;
+}
+
+/**
+ * The story check's answer as the thread shows it. `textHash` names the story
+ * it read, so the card can say when the story has changed since.
+ */
+export interface StoryFitCard {
+  verdict: "good" | "minor" | "mismatch";
+  headline: string;
+  notes: string[];
+  /** Qualities notably lighter or richer than usual for the age group. */
+  dimensions: { label: string; fit: "lighter" | "richer" }[];
+  /** The age group the read was about, as the reader knows it. */
+  band: string;
+  textHash: string;
+}
+
+/** A thumbnail that scrolls the book pane to its unit. */
+export interface ReceiptThumb {
+  blobId: string;
+  unitId: string;
+  view: "pages" | "cast" | "cover" | "style";
 }
 
 export interface GuideReceipt {
   /** Short parts; values are shown dark. An inference is named once. */
   parts: { label?: string; value: string; inferred?: boolean }[];
-  /** A thumbnail that scrolls the book pane to its unit. */
-  thumb?: {
-    blobId: string;
-    unitId: string;
-    view: "pages" | "cast" | "cover" | "style";
-  };
+  /** Thumbnails, in the order the line names them. */
+  thumbs?: ReceiptThumb[];
 }
+
+/** Receipts show a handful of thumbnails at most. */
+const MAX_THUMBS = 8;
 
 export interface GuideSession {
   version: 1;
@@ -178,10 +223,16 @@ function normalizeMessage(input: unknown): GuideMessage | null {
     ...(raw.failed === true ? { failed: true as const } : {}),
     ...(isGuideComponentId(raw.about) ? { about: raw.about } : {}),
     ...(normalizeBefore(raw.before) ?? {}),
+    ...(normalizeRestore(raw.restore) ?? {}),
     ...(Array.isArray(raw.keys) && raw.keys.every((k) => typeof k === "string")
       ? { keys: raw.keys.slice(0, 8) }
       : {}),
     ...(normalizeReceipt(raw.receipt) ?? {}),
+    ...(normalizeFit(raw.fit) ?? {}),
+    ...(raw.role === "reader" && typeof raw.quote === "string" && raw.quote.trim()
+      ? { quote: raw.quote.trim().slice(0, 240) }
+      : {}),
+    ...(typeof raw.well === "string" && raw.well && raw.well.length <= 160 ? { well: raw.well } : {}),
     ...(raw.localized &&
     typeof raw.localized.locale === "string" &&
     typeof raw.localized.text === "string" &&
@@ -191,9 +242,39 @@ function normalizeMessage(input: unknown): GuideMessage | null {
   };
 }
 
+function normalizeFit(input: unknown): { fit: StoryFitCard } | null {
+  if (!input || typeof input !== "object") return null;
+  const raw = input as Partial<StoryFitCard>;
+  if (raw.verdict !== "good" && raw.verdict !== "minor" && raw.verdict !== "mismatch") return null;
+  if (typeof raw.textHash !== "string" || !raw.textHash) return null;
+  const notes = Array.isArray(raw.notes)
+    ? raw.notes.filter((note): note is string => typeof note === "string" && note.trim() !== "").slice(0, 3)
+    : [];
+  const dimensions = Array.isArray(raw.dimensions)
+    ? raw.dimensions
+        .filter(
+          (d): d is StoryFitCard["dimensions"][number] =>
+            Boolean(d) && typeof d.label === "string" && (d.fit === "lighter" || d.fit === "richer"),
+        )
+        .slice(0, 8)
+        .map((d) => ({ label: d.label.slice(0, 80), fit: d.fit }))
+    : [];
+  return {
+    fit: {
+      verdict: raw.verdict,
+      headline: typeof raw.headline === "string" ? raw.headline.slice(0, 400) : "",
+      notes: notes.map((note) => note.slice(0, 400)),
+      dimensions,
+      band: typeof raw.band === "string" ? raw.band.slice(0, 80) : "",
+      textHash: raw.textHash.slice(0, 80),
+    },
+  };
+}
+
 function normalizeReceipt(input: unknown): { receipt: GuideReceipt } | null {
   if (!input || typeof input !== "object") return null;
-  const raw = input as Partial<GuideReceipt>;
+  // `thumb` is the single thumbnail stored before receipts held several.
+  const raw = input as Partial<GuideReceipt> & { thumb?: unknown };
   const parts = Array.isArray(raw.parts)
     ? raw.parts
         .filter((part) => part && typeof part.value === "string" && part.value.trim())
@@ -204,15 +285,21 @@ function normalizeReceipt(input: unknown): { receipt: GuideReceipt } | null {
           ...(part.inferred === true ? { inferred: true } : {}),
         }))
     : [];
-  const thumb =
-    raw.thumb &&
-    typeof raw.thumb.blobId === "string" &&
-    typeof raw.thumb.unitId === "string" &&
-    ["pages", "cast", "cover", "style"].includes(raw.thumb.view)
-      ? { blobId: raw.thumb.blobId, unitId: raw.thumb.unitId, view: raw.thumb.view }
-      : undefined;
-  if (parts.length === 0 && !thumb) return null;
-  return { receipt: { parts, ...(thumb ? { thumb } : {}) } };
+  const listed = Array.isArray(raw.thumbs) ? raw.thumbs : raw.thumb ? [raw.thumb] : [];
+  const thumbs = listed.flatMap(normalizeThumb).slice(0, MAX_THUMBS);
+  if (parts.length === 0 && thumbs.length === 0) return null;
+  return { receipt: { parts, ...(thumbs.length > 0 ? { thumbs } : {}) } };
+}
+
+function normalizeThumb(input: unknown): ReceiptThumb[] {
+  const raw = input as Partial<ReceiptThumb> | null;
+  return raw &&
+    typeof raw.blobId === "string" &&
+    typeof raw.unitId === "string" &&
+    typeof raw.view === "string" &&
+    ["pages", "cast", "cover", "style"].includes(raw.view)
+    ? [{ blobId: raw.blobId, unitId: raw.unitId, view: raw.view }]
+    : [];
 }
 
 /**
@@ -224,6 +311,14 @@ function normalizeReceipt(input: unknown): { receipt: GuideReceipt } | null {
  * shapes that could not be a patch at all, and drops the key entirely when empty so a
  * restore point with nothing in it does not offer a button that would do nothing.
  */
+/** Undo snapshots larger than this are not kept; that message simply has no undo. */
+export const GUIDE_RESTORE_MAX_CHARS = 150_000;
+
+function normalizeRestore(input: unknown): { restore: string } | null {
+  if (typeof input !== "string" || !input.startsWith("{") || input.length > GUIDE_RESTORE_MAX_CHARS) return null;
+  return { restore: input };
+}
+
 function normalizeBefore(input: unknown): { before: Record<string, unknown> } | null {
   if (!input || typeof input !== "object" || Array.isArray(input)) return null;
   const before = input as Record<string, unknown>;
@@ -289,7 +384,7 @@ export function guideRestorePoints(session: GuideSession): GuideMessage[] {
  */
 export function rewoundGuideSession(session: GuideSession, messageId: string): GuideSession {
   const index = session.messages.findIndex(
-    (message) => message.id === messageId && message.before,
+    (message) => message.id === messageId && (message.before || message.restore),
   );
   if (index < 0) return session;
   return { ...session, messages: session.messages.slice(0, index) };

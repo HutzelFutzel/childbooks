@@ -113,7 +113,6 @@ export interface ImageModelCapabilities {
     roleLimits?: Partial<Record<"subject" | "object" | "style", number>>;
     formats: ImageFormat[];
     referenceBinding: "ordered" | "labeled";
-    inputFidelityLevels: Array<"low" | "high">;
   };
   /** The only description of what shapes and sizes this model can return. */
   sizing: ImageSizing;
@@ -247,7 +246,6 @@ const PROVIDER_DEFAULTS: Record<ProviderId, ImageModelCapabilities> = {
       maxReferenceImages: 16,
       formats: ["png", "webp", "jpeg"],
       referenceBinding: "ordered",
-      inputFidelityLevels: [],
     },
     // Conservative: the fixed trio is what every GPT image model takes, and
     // `gpt-image-2` widens it below.
@@ -285,7 +283,6 @@ const PROVIDER_DEFAULTS: Record<ProviderId, ImageModelCapabilities> = {
       maxReferenceImages: 8,
       formats: ["png", "webp", "jpeg"],
       referenceBinding: "labeled",
-      inputFidelityLevels: [],
     },
     sizing: { mode: "ratioBuckets", ratios: GEMINI_RATIOS, shortEdge: 1024 },
     outputs: {
@@ -352,7 +349,6 @@ const MODEL_PROFILES: {
     caps: {
       profile: "openai-images-v2",
       sizing: OPENAI_ARBITRARY,
-      inputs: { inputFidelityLevels: ["low", "high"] },
       outputs: { backgrounds: ["opaque", "transparent", "auto"] },
     },
   },
@@ -945,7 +941,6 @@ export const imageCapabilitiesSchema = z
           .partial(),
         formats: z.array(z.enum(IMAGE_FORMATS)).min(1),
         referenceBinding: z.enum(["ordered", "labeled"]),
-        inputFidelityLevels: z.array(z.enum(["low", "high"])),
       })
       .partial(),
     outputs: z

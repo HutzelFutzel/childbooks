@@ -229,7 +229,7 @@ function Offer({ overview }: { overview: ReferralOverview }) {
   if (!overview.enabled) {
     return (
       <div className="rounded-2xl bg-ink-50 p-4 text-sm text-ink-600">
-        Our invite programme is paused at the moment. Invitations you've already sent still count.
+        Our invite program is paused at the moment. Invitations you've already sent still count.
       </div>
     );
   }

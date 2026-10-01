@@ -607,7 +607,7 @@ function CampaignEditor({
             value={campaign.holdoutPct}
             step="5"
             suffix="%"
-            hint="Held back deliberately so their behaviour is the control. Without one, you can't tell a purchase this caused from one that would have happened anyway."
+            hint="Held back deliberately so their behavior is the control. Without one, you can't tell a purchase this caused from one that would have happened anyway."
             onChange={(n) => onChange({ holdoutPct: Math.min(100, Math.max(0, Math.round(n))) })}
           />
           <NumberField

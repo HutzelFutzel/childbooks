@@ -383,7 +383,7 @@ function CalibrateCard({
           title={
             dirty
               ? "Save your changes first — this runs against the saved product."
-              : `Price this book against the ${runtime?.env ?? "active"} print catalogue and fill in the costs below`
+              : `Price this book against the ${runtime?.env ?? "active"} print catalog and fill in the costs below`
           }
           onClick={run}
         >

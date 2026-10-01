@@ -159,6 +159,8 @@ export interface LayoutPlan {
   artRect: NormRect;
   /** Page fill visible where the artwork doesn't reach (inset modes). */
   background?: PageBackground;
+  /** The safe rectangle the plan was fitted into (set by `planPageLayout`). */
+  safe?: NormRect;
 }
 
 export interface BookLayout {
@@ -331,7 +333,7 @@ const SPLIT_SIDE_SPEC: LayoutSpec = {
   id: "split-side",
   label: "Picture beside the words",
   description:
-    "The illustration fills the inner part of the page; the story sits in a column on the outer edge, on the page colour.",
+    "The illustration fills the inner part of the page; the story sits in a column on the outer edge, on the page color.",
   defaultMode: "inset-art",
   supportedModes: ["inset-art"],
   order: 30,
@@ -347,7 +349,7 @@ const SPLIT_STACK_SPEC: LayoutSpec = {
   id: "split-stack",
   label: "Picture above the words",
   description:
-    "The illustration fills the top of the page; the story sits in a strip along the bottom, on the page colour.",
+    "The illustration fills the top of the page; the story sits in a strip along the bottom, on the page color.",
   defaultMode: "inset-art",
   supportedModes: ["inset-art"],
   order: 40,

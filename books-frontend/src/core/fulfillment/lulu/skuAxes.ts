@@ -153,7 +153,7 @@ export const SKU_AXES: SkuAxis[] = [
     label: "Interior ink",
     width: 2,
     options: [
-      { code: "FC", label: "Full colour" },
+      { code: "FC", label: "Full color" },
       { code: "BW", label: "Black & white" },
     ],
   },

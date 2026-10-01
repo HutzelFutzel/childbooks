@@ -264,7 +264,7 @@ export function AlignPad({ onAlign }: { onAlign: (edge: AlignEdge) => void }) {
   return (
     <div className="inline-flex flex-wrap gap-1">
       <IconButton title="Left edge" onClick={() => onAlign("left")}><AlignLeft className="size-4" /></IconButton>
-      <IconButton title="Centre horizontally" onClick={() => onAlign("hcenter")}><AlignCenter className="size-4" /></IconButton>
+      <IconButton title="Center horizontally" onClick={() => onAlign("hcenter")}><AlignCenter className="size-4" /></IconButton>
       <IconButton title="Right edge" onClick={() => onAlign("right")}><AlignRight className="size-4" /></IconButton>
       <IconButton title="Top" onClick={() => onAlign("top")}><ArrowUpToLine className="size-4" /></IconButton>
       <IconButton title="Middle" onClick={() => onAlign("vcenter")}><MoveVertical className="size-4" /></IconButton>

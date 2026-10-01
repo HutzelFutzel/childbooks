@@ -219,6 +219,7 @@ export function EbookCheckout({
             <div className="flex min-h-64 items-center justify-center rounded-2xl bg-ink-50 p-5">
               <BookMockup
                 blobId={cover?.blobId}
+                title={project.title}
                 pageDesign={design.pages[COVER_FRONT_ID]}
                 aspect={cover?.aspect ?? trim.widthIn / trim.heightIn}
                 width={150}

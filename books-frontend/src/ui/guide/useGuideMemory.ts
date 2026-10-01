@@ -6,8 +6,8 @@
  * from the book and its jobs.
  */
 import { useCallback, useEffect, useState } from "react";
-import type { BookViewId } from "../../core/guide/journey";
-import type { GuideTarget } from "../../core/guide/target";
+import { bookViewOf } from "../../core/guide/journey";
+import { chipForView, type GuideTarget } from "../../core/guide/target";
 import { useChatStudio } from "../../state/chatStudio";
 
 function read(key: string): string | null {
@@ -48,10 +48,13 @@ export function useGuideMemory(projectId: string): { draft: string; setDraft: (v
       const saved = read(uiKey);
       if (!saved) return;
       try {
-        const { view, chip } = JSON.parse(saved) as { view?: BookViewId | null; chip?: GuideTarget | null };
+        const { view: stored, chip } = JSON.parse(saved) as { view?: unknown; chip?: GuideTarget | null };
         const store = useChatStudio.getState();
+        const view = bookViewOf(stored);
         if (view) store.setView(view);
-        if (chip) store.setChip(chip);
+        // A chip only comes back on the tab it belongs to.
+        const kept = chipForView(chip ?? null, useChatStudio.getState().view);
+        if (kept) store.setChip(kept);
       } catch {
         write(uiKey, null);
       }

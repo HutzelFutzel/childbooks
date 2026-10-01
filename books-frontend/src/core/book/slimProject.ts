@@ -54,6 +54,12 @@ export interface SlimOptions {
   keepAnalysis?: boolean;
   /** Keep only the staged guide drawing used to derive an art style before cast exists. */
   keepStyleSourceArt?: boolean;
+  /**
+   * Keep the cast's photo receipts (timestamps only, never the photo or its
+   * storage id). A portrait job needs them to know it draws from photos, and
+   * how many; the worker still loads the photos from the backend-only lane.
+   */
+  keepCastPhotoReceipts?: boolean;
 }
 
 /**
@@ -96,19 +102,21 @@ export function slimProjectForRender(project: Project, opts: SlimOptions): Proje
       ? keepLineages(project.screenplay, [])
       : undefined;
 
-  const config = project.config.storyBrief?.cast?.some((member) => member.likenessPhoto)
-    ? {
-        ...project.config,
-        storyBrief: {
-          ...project.config.storyBrief,
-          cast: project.config.storyBrief.cast.map((member) => {
-            const { likenessPhoto: _drop, ...rest } = member;
-            void _drop;
-            return rest;
-          }),
-        },
-      }
-    : project.config;
+  const config =
+    !opts.keepCastPhotoReceipts && project.config.storyBrief?.cast?.some((member) => member.likenessPhoto)
+      ? {
+          ...project.config,
+          storyBrief: {
+            ...project.config.storyBrief,
+            cast: project.config.storyBrief.cast.map((member) => {
+              const { likenessPhoto: _drop, moreLikenessPhotos: _more, ...rest } = member;
+              void _drop;
+              void _more;
+              return rest;
+            }),
+          },
+        }
+      : project.config;
 
   const analysis =
     opts.keepAnalysis && project.analysis
@@ -118,12 +126,20 @@ export function slimProjectForRender(project: Project, opts: SlimOptions): Proje
           return rest;
         })()
       : undefined;
+  const keepStyle = Boolean(opts.keepStyleSourceArt && project.authoringState?.styleSourceArt?.length);
+  // The cover's words as the reader chose them: a front-cover render paints them.
+  const cover = opts.keepScreenplay ? project.authoringState?.cover : undefined;
   const styleAuthoring =
-    opts.keepStyleSourceArt && project.authoringState?.styleSourceArt?.length
+    keepStyle || cover
       ? {
           version: 1 as const,
-          styleSourceArt: project.authoringState.styleSourceArt,
-          ...(project.authoringState.styleSourceOnly ? { styleSourceOnly: true } : {}),
+          ...(keepStyle
+            ? {
+                styleSourceArt: project.authoringState!.styleSourceArt,
+                ...(project.authoringState!.styleSourceOnly ? { styleSourceOnly: true } : {}),
+              }
+            : {}),
+          ...(cover ? { cover } : {}),
         }
       : undefined;
 

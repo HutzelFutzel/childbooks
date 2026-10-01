@@ -24,6 +24,7 @@ import {
 import { effectiveAnchorIds } from "../core/book/anchorRefs";
 import { staleAnchorIds as staleAnchorIdsForProject } from "../core/book/anchorFreshness";
 import { spreadsById } from "../core/book/units";
+import { bakedTextOf, coverLinesOf, sameCoverText } from "../core/book/coverLines";
 import { reconcileScreenplaySpreadIds } from "../core/book/screenplayReconcile";
 import { ProviderError } from "../core/errors";
 import type { ResolvedModels } from "../core/models/registry";
@@ -385,19 +386,13 @@ export function coverTextDrift(project: Project, coverId: string): CoverTextDrif
   const content = getCursor(tree).content;
   if (content.textMode !== "in-image" || !content.bakedText) return null;
   const doc = project.screenplay ? getCursor(project.screenplay).content : null;
-  const cover = coverId === COVER_FRONT_ID ? doc?.frontCover : doc?.backCover;
-  // The front cover's title is always the project title (single source of truth).
-  const current: BakedCoverText = {
-    title: coverId === COVER_FRONT_ID ? project.title : cover?.title,
-    subtitle: cover?.subtitle,
-    author: cover?.author,
-  };
-  const norm = (s?: string) => (s ?? "").trim();
+  const back = doc?.backCover;
+  const current: BakedCoverText =
+    coverId === COVER_FRONT_ID
+      ? bakedTextOf(coverLinesOf(project))
+      : { title: back?.title, subtitle: back?.subtitle, author: back?.author };
   const baked = content.bakedText;
-  const drifted =
-    norm(baked.title) !== norm(current.title) ||
-    norm(baked.subtitle) !== norm(current.subtitle) ||
-    norm(baked.author) !== norm(current.author);
+  const drifted = !sameCoverText(baked, current);
   return drifted ? { baked, current } : null;
 }
 
@@ -420,15 +415,6 @@ export async function generateIllustrationVersion(
     resolvedTier,
   );
   if (!render) return;
-  // Record the exact text baked into a typographic cover, so the studio can
-  // warn when the book's title/subtitle/author later drift from the artwork.
-  if (spread.bakeText && (spread.coverTitle ?? "").trim()) {
-    render.bakedText = {
-      title: spread.coverTitle,
-      subtitle: spread.coverSubtitle,
-      author: spread.coverAuthor,
-    };
-  }
   const versions = applyIllustrationRender(project.illustrations?.[spread.id], render);
   await useProjectsStore.getState().setIllustration(spread.id, versions);
 }
@@ -468,7 +454,7 @@ export async function generateCoverWrap(options: {
 
   // FRONT — an ordinary front-cover generation, folded into its version tree
   // (and shown on canvas) as soon as it's ready, before the back even starts.
-  await generateIllustrationVersion(coverSpread(COVER_FRONT_ID, frontSpec));
+  await generateIllustrationVersion(coverSpread(COVER_FRONT_ID, frontSpec, project));
   options.onFrontSettled?.();
 
   // BACK — references the front's freshly-saved image (by blob id, since the

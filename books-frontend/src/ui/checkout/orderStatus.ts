@@ -20,7 +20,7 @@ export const STAGE_STATUS: Record<OrderStage, StatusDescriptor> = {
   onHold: { label: "Needs attention", badge: "bg-amber-100 text-amber-700" },
   inProgress: { label: "In production", badge: "bg-sky-100 text-sky-700" },
   complete: { label: "Shipped", badge: "bg-emerald-100 text-emerald-700" },
-  cancelled: { label: "Cancelled", badge: "bg-ink-100 text-ink-500" },
+  cancelled: { label: "Canceled", badge: "bg-ink-100 text-ink-500" },
   error: { label: "Issue", badge: "bg-rose-100 text-rose-700" },
 };
 

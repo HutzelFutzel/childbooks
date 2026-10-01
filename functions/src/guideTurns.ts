@@ -115,6 +115,21 @@ export async function recordGuideTurn(args: RecordGuideTurnArgs): Promise<string
       })),
       repairs: args.result.repairs,
       skipped: args.result.skip,
+      /** Chat skills the turn asked for, and the ones screening refused with why. */
+      commands: (args.result.commands ?? []).slice(0, 12).map((call) => ({
+        id: call.id,
+        args: Object.fromEntries(Object.entries(call.args).map(([k, v]) => [k, String(v).slice(0, 200)])),
+        evidence: call.evidence.slice(0, 400),
+        confidence: call.confidence,
+      })),
+      overflowCommands: (args.result.overflowCommands ?? []).map((call) => call.id).slice(0, 12),
+      refusedCommands: (args.result.refusedCommands ?? []).slice(0, 12).map((entry) => ({
+        id: entry.id,
+        reason: entry.reason.slice(0, 200),
+        evidence: entry.evidence.slice(0, 400),
+      })),
+      language: args.result.language ?? null,
+      languageConfidence: args.result.languageConfidence ?? 0,
       model: { provider: args.model.provider, id: args.model.id },
       latencyMs: args.latencyMs,
     });

@@ -12,8 +12,8 @@ import {
   namedHeroes,
   newCastMember,
   splitHeroNames,
-  hasCharacterAge,
 } from "../../../core/story/brief";
+import { missingDetails } from "../../../core/story/castKinds";
 import { Button } from "../../components/Button";
 import { Input } from "../../components/Input";
 import { useResolvedModels } from "../../hooks/useResolvedModels";
@@ -58,7 +58,7 @@ export function GuidedComposer({
   const prefilled = useRef(false);
   const people = brief.cast ?? [];
   const heroes = namedCast(brief);
-  const missingAgeHeroes = heroes.filter((hero) => !hasCharacterAge(hero));
+  const missingAgeHeroes = heroes.filter((hero) => missingDetails(hero).includes("age"));
   const hasAdvancedPreferences = Boolean(
     brief.themeId ||
       brief.settingId ||

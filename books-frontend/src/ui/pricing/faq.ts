@@ -59,7 +59,7 @@ export function pricingFaq(
     faq.push({
       question: "How do the membership plans work?",
       answer:
-        "Memberships provide a recurring monthly allowance of Sparks to write, illustrate, and revise stories, plus exclusive discounts on all physical printed books. Memberships are optional, can be cancelled anytime with one click in your account, and never automatically ship books.",
+        "Memberships provide a recurring monthly allowance of Sparks to write, illustrate, and revise stories, plus exclusive discounts on all physical printed books. Memberships are optional, can be canceled anytime with one click in your account, and never automatically ship books.",
     });
     faq.push({
       question: "What are Sparks and do they roll over?",

@@ -28,6 +28,8 @@
 import { z } from "zod";
 import { captureGuideFacts, isGuidePatchableSlot } from "./patch";
 import { GUIDE_SLOTS, type GuideSlotId } from "./slots";
+import { STORY_DETAILS, isStoryDetailId, withStoryDetail, type DetailPatch } from "./storyDetails";
+import { briefOf } from "../story/brief";
 import type { Project } from "../types";
 
 /** One fact the reader stated, as the model reports it. */
@@ -256,7 +258,35 @@ export function screenGuideClaims(args: {
 export function claimOverwritesSettledFact(project: Project, claim: GuideClaim): boolean {
   const settled = captureGuideFacts(project);
   if (!(claim.slot in settled)) return false;
+  if (claim.slot === "storyIdea" && claim.value && typeof claim.value === "object" && !Array.isArray(claim.value)) {
+    return storyIdeaOverwrites(project, settled.storyIdea as Record<string, unknown>, claim.value as Record<string, unknown>);
+  }
   return JSON.stringify(settled[claim.slot]) !== JSON.stringify(claim.value);
+}
+
+/**
+ * The story idea is many small details, and adding one is not changing another:
+ * only a detail that already has a different value counts as an overwrite.
+ */
+function storyIdeaOverwrites(
+  project: Project,
+  settled: Record<string, unknown>,
+  proposed: Record<string, unknown>,
+): boolean {
+  const brief = briefOf(project.config);
+  return Object.entries(proposed).some(([key, value]) => {
+    if (isStoryDetailId(key)) {
+      const before = STORY_DETAILS[key].read(brief);
+      if (!before) return false;
+      // Words added next to the parent's own keep everything that was there.
+      const patch = value === null ? null : { ...(value as DetailPatch), add: undefined };
+      const after = STORY_DETAILS[key].read(withStoryDetail(brief, key, patch));
+      return JSON.stringify(before) !== JSON.stringify(after);
+    }
+    const before = settled[key];
+    if (before === null || before === undefined || (Array.isArray(before) && before.length === 0)) return false;
+    return JSON.stringify(before) !== JSON.stringify(value);
+  });
 }
 
 export interface DisposedGuideClaim {

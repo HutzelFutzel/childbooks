@@ -445,3 +445,86 @@ export async function locateSubject(input: LocateSubjectInput): Promise<SubjectB
 
   return sanitizeBox(res);
 }
+
+const partSchema = z.object({
+  found: z.boolean(),
+  part: z.string().optional(),
+  x: z.number().optional(),
+  y: z.number().optional(),
+  width: z.number().optional(),
+  height: z.number().optional(),
+});
+
+export interface LocateEditPartInput {
+  pageBase64: string;
+  pageMime: string;
+  name: string;
+  description?: string;
+  /** The change asked for, in the reader's words. */
+  instruction: string;
+  creds: ProviderCredentials;
+  model: string;
+  providerId: ProviderId;
+  signal?: AbortSignal;
+  prompts?: PromptContext;
+}
+
+/**
+ * Find the part of a subject a change affects ("make Arthur's hair yellow" →
+ * the hair), so only that part is redrawn and the rest of the subject, and the
+ * page, stay as they are. Returns null when the part can't be told or the
+ * vision call fails; the caller then falls back to the subject's whole box.
+ */
+export async function locateEditPart(
+  input: LocateEditPartInput,
+): Promise<{ box: SubjectBox; part: string } | null> {
+  const provider = getTextProvider(input.providerId);
+  const { system, user } = renderTextPrompt(resolvePromptsConfig(input.prompts), "localize/part", {
+    vars: {
+      name: input.name,
+      descriptionSuffix: input.description ? ` — ${input.description}` : "",
+      instruction: input.instruction,
+    },
+  });
+  let res: z.infer<typeof partSchema>;
+  try {
+    res = await withRetry(
+      () =>
+        provider.generateStructured(input.creds, {
+          model: input.model,
+          messages: [
+            { role: "system" as const, content: system },
+            { role: "user" as const, content: user },
+          ],
+          schema: partSchema,
+          temperature: 0,
+          images: [{ base64: input.pageBase64, mimeType: input.pageMime }],
+          signal: input.signal,
+        }),
+      { signal: input.signal, retries: 1 },
+    );
+  } catch {
+    return null;
+  }
+  const box = sanitizeBox(res);
+  return box ? { box, part: (res.part ?? "").trim().slice(0, 40) } : null;
+}
+
+/**
+ * A located part is believed only when it sits on the subject: its centre lies
+ * inside the subject's box (grown a little for hair and hats that stick out)
+ * and it is not bigger than that box grown the same way. Otherwise the whole
+ * subject box is used, which is wider but never somewhere else.
+ */
+export function partOnSubject(subject: SubjectBox, part: SubjectBox): boolean {
+  const grow = 0.15;
+  const left = subject.x - subject.width * grow;
+  const right = subject.x + subject.width * (1 + grow);
+  const top = subject.y - subject.height * grow;
+  const bottom = subject.y + subject.height * (1 + grow);
+  const cx = part.x + part.width / 2;
+  const cy = part.y + part.height / 2;
+  const inside = cx >= left && cx <= right && cy >= top && cy <= bottom;
+  const fits = part.width <= right - left && part.height <= bottom - top;
+  return inside && fits;
+}

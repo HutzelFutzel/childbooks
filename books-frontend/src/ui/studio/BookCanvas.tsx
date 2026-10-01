@@ -41,7 +41,7 @@ import { Popover } from "../components/Popover";
 import { Tooltip } from "../components/Tooltip";
 import { ArtworkOrbit } from "../design/ArtworkOrbit";
 import { ShapeKindPicker } from "../design/ShapeKindPicker";
-import { SparkEstimateCost, useImageBatchRange } from "../layout/SparkCost";
+import { batchItemsOf, SparkEstimateCost, useImageBatchRange } from "../layout/SparkCost";
 import { PipelineStepper, type PipelinePhase } from "../generation/PipelineStepper";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { useResolvedModels } from "../hooks/useResolvedModels";
@@ -56,7 +56,7 @@ import { PageStagePanel } from "./PageEditorCard";
 import { PairPageStagePanel } from "./PairPageStage";
 import { useStudio } from "./StudioContext";
 import { useStudioPanelStore } from "./studioPanelStore";
-import { refreshSpread, updateAnchorsThenSpread } from "./studioGen";
+import { plannedIllustrationBatch, refreshSpread, updateAnchorsThenSpread } from "./studioGen";
 import { useBookGeneration } from "./useBookGeneration";
 import { BookPreview } from "./BookPreview";
 import { PagePacingNote } from "./PagePacingNote";
@@ -970,12 +970,15 @@ function SurfacePrimaryAction({
   });
   const staleEntries = artworkEntries.filter(({ entry }) => stale(entry.page.id));
   const targets = status === "stale" ? staleEntries : missingEntries;
-  const coverCount = targets.filter(({ entry }) => entry.subject.kind === "cover").length;
-  const pageCount = targets.length - coverCount;
-  const actionRange = useImageBatchRange([
-    { action: "coverIllustration", count: coverCount },
-    { action: "pageIllustration", count: pageCount },
-  ]);
+  const actionRange = useImageBatchRange(
+    batchItemsOf(
+      plannedIllustrationBatch(
+        project,
+        targets.map(({ entry }) => entry.page.id),
+        status === "stale" ? { useReference: true } : {},
+      ),
+    ),
+  );
 
   async function createArtwork() {
     for (const { entry } of targets) {

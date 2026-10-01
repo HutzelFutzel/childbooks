@@ -15,6 +15,7 @@ import { fontStack, loadFont } from "../../typography/fonts";
 import { cn } from "../../lib/cn";
 import { BeatNavigator } from "./BeatNavigator";
 import { BeatCard } from "./BeatCard";
+import { storyMarkFromSelection, type StoryMark } from "../../../core/story/storyMark";
 import { useStudio } from "../StudioContext";
 import type { StoryHistoryOptions } from "./storyUndo";
 
@@ -36,6 +37,18 @@ export interface StoryManuscriptProps {
   reviewFooter?: React.ReactNode;
   writing?: boolean;
   translating?: boolean;
+  /**
+   * The page already has its own title, language and review controls above this
+   * surface (the guide's story view). Drawing a second "Book title" bar here
+   * would be a second editor for the same field, with different side effects.
+   */
+  hideHeader?: boolean;
+  /**
+   * Called with the passage the reader marks inside a section, and with null
+   * when the mark no longer holds (the selection collapsed or the text changed).
+   * Omit it and selections mean nothing here.
+   */
+  onMark?: (mark: StoryMark | null) => void;
 }
 
 /**
@@ -57,6 +70,8 @@ export function StoryManuscript({
   reviewFooter,
   writing = false,
   translating = false,
+  hideHeader = false,
+  onMark,
 }: StoryManuscriptProps) {
   const current = useProjectsStore((s) => s.current());
   const { updateStory, endStoryHistoryGesture } = useStudio();
@@ -112,10 +127,30 @@ export function StoryManuscript({
       setBeats(nextBeats);
       const nextSerialized = serializeStoryBeats(nextBeats);
       lastSerializedRef.current = nextSerialized;
+      // Any edit changes the text a mark was taken from.
+      onMark?.(null);
       onChange(nextSerialized, options);
     },
-    [onChange],
+    [onChange, onMark],
   );
+
+  /** The reader selected text in a section: a passage worth marking, or nothing. */
+  const handleSelectRange = (index: number, range: { start: number; end: number }) => {
+    if (!onMark) return;
+    if (reviewing || busy || range.end <= range.start) {
+      onMark(null);
+      return;
+    }
+    onMark(
+      storyMarkFromSelection({
+        beats,
+        beatIndex: index,
+        selectionStart: range.start,
+        selectionEnd: range.end,
+        storyText,
+      }),
+    );
+  };
 
   const handleTitleChange = (index: number, nextTitle: string) => {
     const next = beats.map((b, i) => (i === index ? { ...b, title: nextTitle } : b));
@@ -313,6 +348,7 @@ export function StoryManuscript({
       )}
     >
       {/* Title & Language Bar */}
+      {!hideHeader && (
       <div className="shrink-0 border-b border-ink-100 bg-white px-5 py-3 sm:px-7 sm:py-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <label className="block min-w-0 flex-1">
@@ -361,6 +397,7 @@ export function StoryManuscript({
           </div>
         </div>
       </div>
+      )}
 
       {/* Top Beat Navigator - Zero waste: only appears when >= 2 beats and not in review mode */}
       <AnimatePresence initial={false}>
@@ -446,6 +483,7 @@ export function StoryManuscript({
                   onRemove={() => handleRemoveBeat(index)}
                   onInsertAfter={() => handleAddBeat(index + 1)}
                   onSplitAtCursor={(pos) => handleSplitBeat(index, pos)}
+                  onSelectRange={onMark ? (range) => handleSelectRange(index, range) : undefined}
                   onMergeWithNext={
                     index < beats.length - 1
                       ? () => handleMergeWithNextBeat(index)

@@ -40,12 +40,52 @@ import {
   usePriceOverridesStore,
 } from "../../state/priceOverridesStore";
 import { tierSparkRange } from "../hooks/useTierEstimate";
+import { clientReferenceLimits } from "../../state/referenceLimits";
+import {
+  plannedAnchorReferences,
+  plannedIllustrationReferences,
+  type AnchorPlanOptions,
+  type IllustrationPlanOptions,
+} from "../../core/billing/referencePlan";
 import { CUSTOMER_IMAGE_TIER, type ImageTier } from "../../core/config/modelConfig";
 
 /** One unit of a batch, priced the way the server will settle it. */
-interface BatchUnit {
+export interface BatchUnit {
   action: ImageActionId;
   kind?: CostSampleKind;
+  /** Reference images it plans to send, priced in that group as the server will. */
+  refs?: number;
+}
+
+/** Sheets as a batch would draw them, for price labels (`batchItemsOf`). */
+export function plannedAnchorBatch(project: Project, ids: readonly string[], options: AnchorPlanOptions = {}): BatchUnit[] {
+  return ids.map((id) => anchorUnit(project, id, options));
+}
+
+/** Pages and covers as a batch would draw them, for price labels (`batchItemsOf`). */
+export function plannedIllustrationBatch(
+  project: Project,
+  ids: readonly string[],
+  options: IllustrationPlanOptions = {},
+): BatchUnit[] {
+  return ids.map((id) => illustrationUnit(project, id, options));
+}
+
+function anchorUnit(project: Project, anchorId: string, options: AnchorPlanOptions = {}): BatchUnit {
+  return {
+    action: "anchorImage",
+    kind: generationRenderKindOf(options),
+    refs: plannedAnchorReferences(project, anchorId, options, clientReferenceLimits("anchorImage")),
+  };
+}
+
+function illustrationUnit(project: Project, spreadId: string, options: IllustrationPlanOptions = {}): BatchUnit {
+  const action = illustrationActionForId(spreadId);
+  return {
+    action,
+    kind: generationRenderKindOf(options),
+    refs: plannedIllustrationReferences(project, spreadId, options, clientReferenceLimits(action)),
+  };
 }
 
 /**
@@ -95,8 +135,8 @@ function ensureBatchAffordable(units: BatchUnit[], tier: ImageTier): boolean {
 
   const overrides = usePriceOverridesStore.getState().actions;
   const priced = new Map<string, number>();
-  const priceOf = ({ action, kind = "fresh" }: BatchUnit): number => {
-    const key = `${action}:${kind}`;
+  const priceOf = ({ action, kind = "fresh", refs }: BatchUnit): number => {
+    const key = `${action}:${kind}:${refs ?? ""}`;
     const hit = priced.get(key);
     if (hit !== undefined) return hit;
     const multiplier =
@@ -110,6 +150,7 @@ function ensureBatchAffordable(units: BatchUnit[], tier: ImageTier): boolean {
       tier,
       multiplier,
       kind,
+      refs,
     );
     // No range means the economy can't price it here; fall back to the flat
     // configured estimate rather than quoting free.
@@ -302,7 +343,7 @@ export async function generateAllAnchors(
   // Paint every card as busy before affordability checks or network work.
   pending.forEach((a) => setGen(a.id, true));
   const tier = CUSTOMER_IMAGE_TIER;
-  if (!ensureBatchAffordable(pending.map(() => ({ action: "anchorImage" })), tier)) {
+  if (!ensureBatchAffordable(pending.map((a) => anchorUnit(project, a.id)), tier)) {
     pending.forEach((a) => setGen(a.id, false));
     return { started: false, failed: 0 };
   }
@@ -364,7 +405,7 @@ export async function generateAllPages(
   );
   if (pending.length === 0) return { started: true, failed: 0 };
   const tier = CUSTOMER_IMAGE_TIER;
-  if (!ensureBatchAffordable(pending.map((s) => ({ action: illustrationActionForId(s.id) })), tier))
+  if (!ensureBatchAffordable(pending.map((s) => illustrationUnit(project, s.id)), tier))
     return { started: false, failed: 0 };
   const queueKeys = pending.map((s) => illustrationQueueKey(project.id, s.id));
   queueKeys.forEach((key) => locallyQueuedIllustrations.add(key));
@@ -423,11 +464,7 @@ export async function refreshSpread(
 ): Promise<void> {
   if (illustrationIsQueued(project.id, spreadId)) return;
   const tier = CUSTOMER_IMAGE_TIER;
-  const refreshUnit: BatchUnit = {
-    action: illustrationActionForId(spreadId),
-    kind: generationRenderKindOf(options),
-  };
-  if (!ensureBatchAffordable([refreshUnit], tier)) return;
+  if (!ensureBatchAffordable([illustrationUnit(project, spreadId, options)], tier)) return;
 
   const queueKey = illustrationQueueKey(project.id, spreadId);
   locallyQueuedIllustrations.add(queueKey);
@@ -485,8 +522,8 @@ export async function generateAnchorViaJob(
     (c) => !currentAnchorImage(c),
   );
   const anchorUnits: BatchUnit[] = [
-    ...missingChildren.map<BatchUnit>(() => ({ action: "anchorImage" })),
-    { action: "anchorImage", kind: generationRenderKindOf(options) },
+    ...missingChildren.map((c) => anchorUnit(project, c.id)),
+    anchorUnit(project, anchorId, options),
   ];
   if (!ensureBatchAffordable(anchorUnits, tier)) return false;
 
@@ -540,7 +577,7 @@ export async function updateStaleAnchors(
   const tier = CUSTOMER_IMAGE_TIER;
   if (
     !ensureBatchAffordable(
-      stale.map(() => ({ action: "anchorImage", kind: "variation" })),
+      stale.map((id) => anchorUnit(project, id, { useReference: true })),
       tier,
     )
   ) return 0;
@@ -588,7 +625,7 @@ export async function updateAnchorsThenSpread(
     const tier = CUSTOMER_IMAGE_TIER;
     if (
       !ensureBatchAffordable(
-        ids.map(() => ({ action: "anchorImage", kind: "variation" })),
+        ids.map((id) => anchorUnit(project, id, { useReference: true })),
         tier,
       )
     ) return;
@@ -647,7 +684,7 @@ export async function refreshIllustrationsForPrint(
   const tier = CUSTOMER_IMAGE_TIER;
   if (
     !ensureBatchAffordable(
-      unique.map((id) => ({ action: illustrationActionForId(id), kind: "variation" })),
+      unique.map((id) => illustrationUnit(project, id, { useReference: true })),
       tier,
     )
   ) {

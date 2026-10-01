@@ -21,6 +21,8 @@ import { useChatStudio } from "../../state/chatStudio";
 import { useJobsStore } from "../../state/jobsStore";
 import { useProjectsStore } from "../../state/projectsStore";
 import { describeError } from "../../core/errors";
+import type { ReceiptThumb } from "../../core/guide/session";
+import type { GuideLineCandidate } from "../../core/guide/speech";
 import type { ChatJourney } from "./useChatJourney";
 
 export function useChatDrivers(project: Project, journey: ChatJourney): void {
@@ -53,7 +55,9 @@ export function useChatDrivers(project: Project, journey: ChatJourney): void {
   }, [loaded, stagedStyleSource, castKey]);
 
   // A burst of typing is one pause, then one run: extraction (own words), then
-  // who is in the story, then the page plan.
+  // who is in the story, then the page plan. Own words wait for "My story is
+  // ready"; the tap itself starts the run, and this picks it up after a reload.
+  const readyAt = authoringOf(project).manuscriptReadyAt;
   const runId = useRef(0);
   useEffect(() => {
     if (!loaded || locked || !storyText.trim()) return;
@@ -66,7 +70,7 @@ export function useChatDrivers(project: Project, journey: ChatJourney): void {
       await advanceStoryPipeline(projectId);
     }, STORY_SETTLE_MS);
     return () => clearTimeout(timer);
-  }, [loaded, locked, storyText, projectId, setExtractionError]);
+  }, [loaded, locked, storyText, readyAt, projectId, setExtractionError]);
 
   // Extraction results and cast corrections do not change storyText. Resume
   // analysis immediately when either one clears the own-words gate.
@@ -115,59 +119,71 @@ export function useChatDrivers(project: Project, journey: ChatJourney): void {
     void continueDrawBook().catch((err) => useChatStudio.setState({ error: describeError(err) }));
   }, [loaded, drawPhase, drawJob, project, journey.activeUnitIds, setView]);
 
-  // Unprompted lines: each is said once, and only when it is news.
+  // News the book reports on its own: each is said once. The lines that ask
+  // for a well's buttons are said with the well (`useWellConversation`).
+  const floor = useChatStudio((s) => s.floor);
+  // Portraits finished before this visit are the away summary's news.
+  const openedAt = useRef(Date.now());
   useEffect(() => {
-    if (!loaded) return;
-    const cast = namedCast(briefOf(project.config));
-    const firstDrawn = cast.find((m) => currentPortrait(project, m.id));
-    if (firstDrawn && !said("firstPortrait")) {
-      const portrait = currentPortrait(project, firstDrawn.id)!;
-      say(
-        [{ key: "firstPortrait", priority: "result", vars: { names: firstDrawn.name.trim() } }],
-        {
-          receipt: {
-            parts: [],
-            thumb: { blobId: portrait.blobId, unitId: firstDrawn.id, view: "cast" },
-          },
-        },
-      );
-      return;
-    }
-    const well = journey.chatWell;
-    if (well?.kind === "portraits" && !said("drawThem")) {
-      say([{ key: "drawThem", priority: "result" }]);
-      return;
-    }
-    if (well?.kind === "account" && !said("accountFirst")) {
-      say([{ key: "accountFirst", priority: "blocking" }]);
+    if (!loaded || floor > 0) return;
+    const announced = portraitAnnouncement(project, journey, openedAt.current, said);
+    if (announced) {
+      say(announced.lines, { unprompted: true, marks: announced.marks, receipt: { parts: [], thumbs: announced.thumbs } });
       return;
     }
     const hc = journey.hardcover;
-    if (journey.phase === "story" && hc && (hc.case === "spread" || hc.case === "short")) {
+    if (journey.phase === "story" && hc?.case === "spread") {
       const mark = `hc:${hc.case}:${hc.pages}`;
       if (!said(mark)) {
-        say(
-          [
-            hc.case === "spread"
-              ? { key: "hardcoverSpread", priority: "result", vars: { count: hc.pages } }
-              : { key: "hardcoverShort", priority: "result", vars: { min: hc.hardcoverMin, count: hc.softcoverPages ?? hc.pages } },
-          ],
-          { marks: [mark] },
-        );
-        return;
+        say([{ key: "hardcoverSpread", priority: "result", vars: { count: hc.pages } }], { marks: [mark], unprompted: true });
       }
     }
-    if (well?.kind === "pageFix" && !said(`fix:${well.unitId}`)) {
-      say([{ key: "pageAttention", priority: "blocking", vars: { n: well.page } }], { marks: [`fix:${well.unitId}`] });
-      return;
-    }
-    if (journey.phase === "order" && !said("printReady")) {
-      say([
-        { key: "pagesDone", priority: "result" },
-        { key: "printReady", priority: "question" },
-      ]);
-    }
-  }, [loaded, project, journey.chatWell, journey.phase, journey.hardcover, say, said]);
+  }, [loaded, floor, project, journey, say, said]);
+}
+
+/** More than this many, and "everyone" reads better than a list of names. */
+const NAMED_AT_MOST = 3;
+
+/**
+ * One line per batch, once none of the characters is still drawing: every
+ * portrait that arrived, named together with its thumbnail, and any that
+ * didn't come out. Each portrait version is announced once.
+ */
+function portraitAnnouncement(
+  project: Project,
+  journey: ChatJourney,
+  since: number,
+  said: (mark: string) => boolean,
+): { lines: GuideLineCandidate[]; marks: string[]; thumbs: ReceiptThumb[] } | null {
+  const cast = namedCast(briefOf(project.config));
+  if (cast.some((m) => journey.activeUnitIds.has(m.id))) return null;
+  const fresh = cast.flatMap((member) => {
+    const portrait = currentPortrait(project, member.id);
+    return portrait && portrait.createdAt >= since && !said(`portrait:${portrait.blobId}`)
+      ? [{ member, portrait }]
+      : [];
+  });
+  if (fresh.length === 0) return null;
+  const names = fresh.map(({ member }) => member.name.trim());
+  const everyone = fresh.length === cast.length && fresh.length > NAMED_AT_MOST;
+  const failed = cast
+    .filter((m) => journey.failedUnits[m.id] && !currentPortrait(project, m.id))
+    .map((m) => m.name.trim());
+  const lines: GuideLineCandidate[] = [
+    {
+      key: everyone ? "portraitsAllReady" : fresh.length === 1 ? "firstPortrait" : "portraitsReady",
+      priority: "result",
+      vars: { names },
+    },
+    ...(failed.length > 0
+      ? [{ key: "portraitsFailed" as const, priority: "result" as const, vars: { names: failed } }]
+      : []),
+  ];
+  return {
+    lines,
+    marks: fresh.map(({ portrait }) => `portrait:${portrait.blobId}`),
+    thumbs: fresh.map(({ member, portrait }) => ({ blobId: portrait.blobId, unitId: member.id, view: "cast" as const })),
+  };
 }
 
 function liveProject(projectId: string): Project | null {

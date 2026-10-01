@@ -22,7 +22,6 @@ import { estimateForAction } from "../../core/config/sparks";
 import type { AnchorTask, RefreshTask } from "../../core/jobs/types";
 import { artStyleKey } from "../../core/prompts/style";
 import type { Project, StyleRenewPlan } from "../../core/types";
-import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { clampDerivedStylePrompt, derivedArtStyle, hasSourceArt } from "../../core/book/sourceArt";
 import { createAnchorsJob, createRefreshJob } from "../../platform/jobs";
 import { currentAnchorImage, currentIllustration, getResolvedModels } from "../../state/ai";
@@ -33,8 +32,7 @@ import { useProjectsStore } from "../../state/projectsStore";
 import { useSparksStore } from "../../state/sparksStore";
 import { warnBatchShortfall } from "../../state/sparksShortfallPrompt";
 import { currentActionMultiplier, currentFeatureAllowed } from "../../state/subscriptionStore";
-
-const isCoverUnit = (id: string) => id === COVER_FRONT_ID || id === COVER_BACK_ID;
+import { plannedAnchorBatch, plannedIllustrationBatch, type BatchUnit } from "./studioGen";
 
 /**
  * The style stamp the finished artwork will actually carry. Job snapshots have
@@ -217,15 +215,10 @@ export async function clearStyleRenew(): Promise<void> {
   await savePlan(undefined);
 }
 
-/** Per-action counts for a Sparks estimate of what's left (covers priced apart). */
-export function styleRenewEstimateParts(
-  castCount: number,
-  pageIds: string[],
-): { action: ImageActionId; count: number }[] {
-  const covers = pageIds.filter(isCoverUnit).length;
+/** What's left, planned unit by unit, for a Sparks estimate (covers priced apart). */
+export function styleRenewEstimateUnits(project: Project, castIds: string[], pageIds: string[]): BatchUnit[] {
   return [
-    { action: "anchorImage", count: castCount },
-    { action: "pageIllustration", count: pageIds.length - covers },
-    { action: "coverIllustration", count: covers },
-  ].filter((p) => p.count > 0) as { action: ImageActionId; count: number }[];
+    ...plannedAnchorBatch(project, castIds, { restyle: true }),
+    ...plannedIllustrationBatch(project, pageIds, { restyle: true, useReference: true }),
+  ];
 }

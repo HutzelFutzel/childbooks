@@ -34,11 +34,24 @@ import { resolveArtStyles, type ArtStylesConfig } from "../config/artStyles";
 import { resolveStoryCraft, type StoryCraftConfig } from "../config/storyCraft";
 import { BOOK_PRODUCTS } from "../fulfillment";
 import { bookSizeFromAspect } from "../config/options";
-import { briefOf, newCastMember } from "../story/brief";
+import { briefOf, namedCast, newCastMember } from "../story/brief";
+import { CAST_KINDS } from "../story/castKinds";
+import { CAST_RELATION_TYPES, relationsOf, twinGroups, withRelation } from "../story/relations";
 import type { BookConfig, Project, StoryBrief, StoryCastMember } from "../types";
+import { noteStyleChange } from "./portrait";
 import { authoringOf, withAuthoring } from "./projectState";
 import { copySharedAges, linkSameAge } from "./sameAge";
 import { GUIDE_SLOT_IDS, GUIDE_SLOTS, type GuideSlotId } from "./slots";
+import {
+  STORY_DETAIL_IDS,
+  STORY_DETAILS,
+  detailPatchSchema,
+  detailShapeLines,
+  detailTextMax,
+  unknownDetailIds,
+  withStoryDetail,
+  type StoryDetailId,
+} from "./storyDetails";
 
 /**
  * The worlds this patch is allowed to name. Supplied by the caller from the live
@@ -182,9 +195,15 @@ const personSchema = z.object({
  * Free text on purpose. There is no useful closed set for "the new baby" and
  * "Mum's oldest friend", and it is never read as data: nothing branches on it,
  * so an odd value is a slightly odd sentence in one prompt.
+ *
+ * `kind` and `species` ride along for the same reason: "her dog Bello" says
+ * what Bello is in the same breath as his name, and a child's toy drawn as a
+ * child is the failure a missing kind produces.
  */
 const castMemberSchema = personSchema.extend({
   role: z.string().trim().max(200).optional(),
+  kind: z.enum(CAST_KINDS).optional(),
+  species: z.string().trim().min(1).max(80).optional(),
 });
 
 /**
@@ -240,7 +259,7 @@ interface SlotWriter {
    * drift from the schema that rejects it — the alternative is a shape list in the
    * prompt that quietly describes last month's validator.
    */
-  shape: (context: GuidePatchContext) => string;
+  shape: (context: GuidePatchContext, project?: Project) => string;
   /** Worked examples for the prompt. Checked against this slot's own schema. */
   examples: SlotExample[];
   /** This slot's schema, exposed so the example check can run offline. */
@@ -264,7 +283,7 @@ interface SlotWriter {
 }
 
 function writer<T>(
-  shape: string | ((context: GuidePatchContext) => string),
+  shape: string | ((context: GuidePatchContext, project?: Project) => string),
   schema: z.ZodType<T>,
   /** Applies the value, or reports that it changed nothing / was refused. */
   write: (project: Project, value: T, context: GuidePatchContext) => SlotWrite,
@@ -303,6 +322,14 @@ function withConfig(project: Project, patch: Partial<BookConfig>): Project {
 
 function withBrief(project: Project, next: StoryBrief): Project {
   return withConfig(project, { storyBrief: next });
+}
+
+/** A stated kind and species onto a member, in place. A person has no species. */
+function withKind(member: StoryCastMember, stated: { kind?: StoryCastMember["kind"]; species?: string }): void {
+  if (stated.kind) member.kind = stated.kind;
+  const species = stated.species?.trim();
+  if (species && member.kind !== "person") member.species = species;
+  if (member.kind === "person") delete member.species;
 }
 
 /** Cast members keyed for name matching, so "leo" patches "Leo". */
@@ -384,6 +411,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         // than an instruction to forget, so it also leaves the role alone.
         const role = typeof person === "string" ? undefined : person.role?.trim();
         if (role) member.role = role;
+        if (typeof person !== "string") withKind(member, person);
         cast.push(member);
       }
       if (sameCast(existing, cast)) return UNCHANGED;
@@ -398,10 +426,12 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       // stays the simplest shape to read in a log. Objects once a relationship
       // exists, because a jump-back that restored the names and lost "big
       // sister" would quietly rewrite the story it restores.
-      return cast.some((member) => member.role?.trim())
+      return cast.some((member) => member.role?.trim() || member.kind || member.species?.trim())
         ? cast.map((member) => ({
             name: member.name,
             ...(member.role?.trim() ? { role: member.role.trim() } : {}),
+            ...(member.kind ? { kind: member.kind } : {}),
+            ...(member.species?.trim() ? { species: member.species.trim() } : {}),
           }))
         : cast.map((member) => member.name);
     },
@@ -420,6 +450,14 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
           { name: "Leo", age: 3, role: "Maya's little brother" },
         ],
         note: "Include a relationship only when it was actually said. Never guess one from names or ages.",
+      },
+      {
+        said: "it's for Maya, 5, and her dog Bello",
+        value: [
+          { name: "Maya", age: 5 },
+          { name: "Bello", role: "Maya's dog", kind: "animal", species: "dog" },
+        ],
+        note: "Everyone in the story, not only children. A pet, toy or creature gets its kind; a person needs none.",
       },
     ],
   ),
@@ -532,6 +570,73 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
   ),
 
   /**
+   * What characters already in the cast are: a person, an animal, a toy or a
+   * creature, and which one. Same stranger rule as `heroAges`.
+   */
+  castKinds: writer(
+    `[{"name": "Bello", "kind": ${CAST_KINDS.map((kind) => `"${kind}"`).join(" | ")}, "species"?: "golden retriever"}] — only for names already in the cast; species for anything that isn't a person`,
+    z
+      .array(
+        z.object({
+          name: nameSchema,
+          kind: z.enum(CAST_KINDS),
+          species: z.string().trim().min(1).max(80).optional(),
+        }),
+      )
+      .min(1)
+      .max(12),
+    (project, kinds) => {
+      const brief = briefOf(project.config);
+      const existing = brief.cast ?? [];
+      const strangers = kinds.filter((item) => !findByName(existing, item.name));
+      if (strangers.length === kinds.length) {
+        const names = strangers.map((item) => item.name.trim()).join(" and ");
+        return refused(`no cast member named ${names}`, { speak: `I don't have ${names} in the story yet.` });
+      }
+      let changed = false;
+      const cast = existing.map((member) => {
+        const update = kinds.find((item) => item.name.trim().toLowerCase() === member.name.trim().toLowerCase());
+        if (!update) return member;
+        const next: StoryCastMember = { ...member };
+        withKind(next, update);
+        if (next.kind !== member.kind || next.species !== member.species) changed = true;
+        return next;
+      });
+      const refusedPart =
+        strangers.length > 0
+          ? {
+              reason: `no cast member named ${strangers.map((item) => item.name.trim()).join(", ")}`,
+              speak: `I don't have ${strangers.map((item) => item.name.trim()).join(" or ")} in the story yet.`,
+            }
+          : undefined;
+      if (!changed) return refusedPart ? refused(refusedPart.reason, refusedPart) : UNCHANGED;
+      return wrote(withBrief(project, { ...brief, cast }), refusedPart);
+    },
+    (project) => {
+      const kinds = (briefOf(project.config).cast ?? [])
+        .filter((member) => member.kind)
+        .map((member) => ({
+          name: member.name,
+          kind: member.kind!,
+          ...(member.species?.trim() ? { species: member.species.trim() } : {}),
+        }));
+      return kinds.length > 0 ? kinds : undefined;
+    },
+    [
+      {
+        said: "Bello is our golden retriever",
+        value: [{ name: "Bello", kind: "animal", species: "golden retriever" }],
+      },
+      {
+        said: "Fluffy is her teddy bear",
+        value: [{ name: "Fluffy", kind: "toy", species: "teddy bear" }],
+        note: "A toy stays a toy. Never make it a person or a real animal.",
+      },
+      { said: "Grandpa Joe", value: [{ name: "Grandpa Joe", kind: "person" }], note: "Only when it isn't obvious from the rest." },
+    ],
+  ),
+
+  /**
    * People who share an age. Free-text `role` still carries "twin" for the
    * story prompt; this is the part the conversation can act on. A later age
    * for one of them is copied to the others, and a disagreeing age leaves the group.
@@ -559,6 +664,85 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         said: "Amira and Aaron are twins",
         value: [["Amira", "Aaron"]],
         note: "Only when they share an age. Quote the words. Never infer it from the names.",
+      },
+    ],
+  ),
+
+  /**
+   * How characters belong together. Twins also share an age, so a twins
+   * relation links `sameAge` too: one said fact, both consequences.
+   */
+  relations: writer(
+    `[{"names": ["Myla", "Shilo"], "type": ${CAST_RELATION_TYPES.map((type) => `"${type}"`).join(" | ")}, "label"?: their words, "lookAlike"?: "identical" | "different"}] — only names already in the cast; for "owner" the owner comes first`,
+    z
+      .array(
+        z.object({
+          names: z.array(nameSchema).min(2).max(8),
+          type: z.enum(CAST_RELATION_TYPES),
+          label: z.string().trim().max(120).optional(),
+          lookAlike: z.enum(["identical", "different"]).optional(),
+        }),
+      )
+      .min(1)
+      .max(12),
+    (project, relations) => {
+      let brief = briefOf(project.config);
+      const cast = namedCast(brief);
+      const unknown: string[] = [];
+      for (const relation of relations) {
+        const ids: string[] = [];
+        for (const name of relation.names) {
+          const member = findByName(cast, name);
+          if (!member) {
+            if (!unknown.includes(name.trim())) unknown.push(name.trim());
+          } else if (!ids.includes(member.id)) ids.push(member.id);
+        }
+        if (ids.length < 2) continue;
+        brief = withRelation(brief, {
+          ids,
+          type: relation.type,
+          ...(relation.label?.trim() ? { label: relation.label.trim() } : {}),
+          ...(relation.type === "twins" && relation.lookAlike ? { lookAlike: relation.lookAlike } : {}),
+        });
+      }
+      const refusedPart =
+        unknown.length > 0
+          ? { reason: `no cast member named ${unknown.join(", ")}`, speak: `I don't have ${unknown.join(" or ")} in the story yet.` }
+          : undefined;
+      if (JSON.stringify(brief.relations ?? []) === JSON.stringify(briefOf(project.config).relations ?? [])) {
+        return refusedPart ? refused(refusedPart.reason, refusedPart) : UNCHANGED;
+      }
+      const withRelations = withBrief(project, brief);
+      return wrote(linkSameAge(withRelations, twinGroups(brief)).project, refusedPart);
+    },
+    (project) => {
+      const brief = briefOf(project.config);
+      const byId = new Map((brief.cast ?? []).map((member) => [member.id, member.name]));
+      const relations = relationsOf(brief).map((relation) => ({
+        names: relation.ids.map((id) => byId.get(id) ?? id),
+        type: relation.type,
+        ...(relation.label ? { label: relation.label } : {}),
+        ...(relation.lookAlike ? { lookAlike: relation.lookAlike } : {}),
+      }));
+      return relations.length > 0 ? relations : undefined;
+    },
+    [
+      {
+        said: "Myla and Shilo are twins",
+        value: [{ names: ["Myla", "Shilo"], type: "twins" }],
+        note: "Only lookAlike when they said whether the twins look the same.",
+      },
+      {
+        said: "they're identical twins",
+        value: [{ names: ["Myla", "Shilo"], type: "twins", lookAlike: "identical" }],
+      },
+      {
+        said: "Bello is Maya's dog",
+        value: [{ names: ["Maya", "Bello"], type: "owner" }],
+      },
+      {
+        said: "Tom is her best friend from kindergarten",
+        value: [{ names: ["Maya", "Tom"], type: "friends", label: "best friends from kindergarten" }],
       },
     ],
   ),
@@ -623,6 +807,18 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
             readingModeId: project.config.readingModeId ?? null,
           }
         : undefined,
+    [
+      {
+        said: "Now the target audience is 4-year-old kids",
+        value: { ageRangeId: "4-5" },
+        note: "The band whose range contains the age said. Only who the book is written for; a child's own age is heroAges.",
+      },
+      {
+        said: "yes, agree",
+        value: { ageRangeId: "3y" },
+        note: "Only as the answer to the guide's reading-age question: a yes restates the band it suggested.",
+      },
+    ],
   ),
 
   language: writer(
@@ -648,8 +844,13 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
   ),
 
   storyIdea: writer(
-    '{"customTheme"?, "occasion"?, "customSetting"?, "when"?, "where"?, "mustInclude"? } — free text, the reader\'s own words',
+    (context, project) =>
+      `{"<detail>": {…} | null, …} — only the story details the reader stated, as listed ids or in their own words: "add" puts their words next to what the detail already holds, "text" replaces it (only when they correct or replace it); null clears one. Details:\n${detailShapeLines(
+        project ? resolveStoryCraft(project.config.ageRangeId, context.storyCraft ?? null) : null,
+      )}`,
     z.object({
+      // The brief's own fields: what checkpoints and older turns carry. The
+      // interpreter is shown only the detail keys below.
       themeId: z.string().max(60).nullable().optional(),
       // Prose fields take null for the same reason the id fields do: it means "clear
       // this". They previously did not, which made the slot un-restorable — a
@@ -662,10 +863,16 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       when: proseSchema.nullable().optional(),
       where: proseSchema.nullable().optional(),
       mustInclude: proseSchema.nullable().optional(),
+      deviceIds: z.array(z.string().min(1).max(60)).max(2).nullable().optional(),
+      customDevice: proseSchema.nullable().optional(),
+      ...(Object.fromEntries(STORY_DETAIL_IDS.map((id) => [id, detailPatchSchema.nullable().optional()])) as Record<
+        StoryDetailId,
+        z.ZodOptional<z.ZodNullable<typeof detailPatchSchema>>
+      >),
     }),
     (project, value, context) => {
       const brief = briefOf(project.config);
-      const next: StoryBrief = { ...brief };
+      let next: StoryBrief = { ...brief };
       let changed = false;
       // Field by field and typed, rather than a spread: `undefined` has to mean
       // "not mentioned in this turn" while `null` means "clear it", and a merge
@@ -722,6 +929,27 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         });
       }
 
+      const currentDevices = brief.deviceIds && brief.deviceIds.length > 0 ? brief.deviceIds : brief.deviceId ? [brief.deviceId] : [];
+      const badDevice =
+        value.deviceIds && JSON.stringify(value.deviceIds) !== JSON.stringify(currentDevices)
+          ? value.deviceIds.find((id) => !craft.devices.some((device) => device.id === id))
+          : undefined;
+      if (badDevice) {
+        return refused(`unknown stylistic device "${badDevice}" for this age band`, {
+          allowed: craft.devices.map((device) => device.id),
+        });
+      }
+      for (const id of STORY_DETAIL_IDS) {
+        const ids = value[id]?.ids;
+        const current = STORY_DETAILS[id].read(brief)?.ids ?? [];
+        const unknown = ids ? unknownDetailIds(id, ids, craft).filter((optionId) => !current.includes(optionId)) : [];
+        if (unknown.length > 0) {
+          return refused(`unknown ${id} option "${unknown[0]}" for this age band`, {
+            allowed: STORY_DETAILS[id].options(craft).map((option) => option.id),
+          });
+        }
+      }
+
       assign("themeId", value.themeId);
       assignProse("customTheme", value.customTheme);
       assign("settingId", value.settingId);
@@ -730,6 +958,34 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       assignProse("when", value.when);
       assignProse("where", value.where);
       assignProse("mustInclude", value.mustInclude);
+      assignProse("customDevice", value.customDevice);
+      if (value.deviceIds !== undefined) {
+        const ids = value.deviceIds ?? [];
+        if (JSON.stringify(ids) !== JSON.stringify(currentDevices)) {
+          next.deviceIds = ids;
+          next.deviceId = ids[0] ?? null;
+          changed = true;
+        }
+      }
+      // The story details, each merged onto what the brief holds now. A write
+      // that leaves a detail reading the same is not a change.
+      for (const id of STORY_DETAIL_IDS) {
+        const patch = value[id];
+        if (patch === undefined) continue;
+        const def = STORY_DETAILS[id];
+        const before = def.read(next);
+        if (patch === null && before === null) continue;
+        const written = withStoryDetail(next, id, patch);
+        const after = def.read(written);
+        if (JSON.stringify(after) === JSON.stringify(before)) continue;
+        if ((after?.text?.length ?? 0) > detailTextMax(id)) {
+          return refused(`"${id}" would hold more than ${detailTextMax(id)} characters`, {
+            speak: `That's more than I can keep under "${def.label}". Could you say it a little shorter?`,
+          });
+        }
+        next = written;
+        changed = true;
+      }
       return changed ? wrote(withBrief(project, next)) : UNCHANGED;
     },
     (project) => {
@@ -737,7 +993,8 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
       // Every field, every time — an explicit null where there is nothing. A partial
       // capture cannot undo an ADDITION: the writer merges, so a field the reader set
       // after the checkpoint would survive a restore that simply didn't mention it.
-      const idea = {
+      const devices = brief.deviceIds && brief.deviceIds.length > 0 ? brief.deviceIds : brief.deviceId ? [brief.deviceId] : [];
+      const idea: Record<string, unknown> = {
         themeId: brief.themeId ?? null,
         customTheme: brief.customTheme ?? null,
         settingId: brief.settingId ?? null,
@@ -746,18 +1003,45 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         when: brief.when ?? null,
         where: brief.where ?? null,
         mustInclude: brief.mustInclude ?? null,
+        deviceIds: devices.length > 0 ? devices : null,
+        customDevice: brief.customDevice ?? null,
       };
+      // Details without a brief field of their own, each complete so a restore
+      // replaces rather than merges.
+      for (const id of STORY_DETAIL_IDS) {
+        if (!STORY_DETAILS[id].inDetails) continue;
+        const detail = STORY_DETAILS[id].read(brief);
+        idea[id] = detail ? { ids: detail.ids ?? null, text: detail.text ?? null, on: detail.on ?? null } : null;
+      }
       return Object.values(idea).some((value) => value !== null) ? idea : undefined;
     },
     [
       {
         said: "a birthday trip to the sea, and it has to have their dog Rex in it",
-        value: { occasion: "a birthday trip to the sea", mustInclude: "their dog Rex" },
+        value: { moment: { text: "a birthday trip to the sea" }, include: { add: "their dog Rex" } },
+      },
+      {
+        said: "oh, and Grandpa always whistles when he cooks",
+        value: { include: { add: "Grandpa always whistles when he cooks" } },
+        note: "A wish or family detail that fits no other detail goes in include, in their words. \"add\" keeps what include already holds.",
+      },
+      {
+        said: "not the red balloon, a blue one",
+        value: { include: { text: "their dog Rex and a blue balloon" } },
+        note: "A correction replaces with \"text\": the complete new wording, keeping the parts they didn't change.",
       },
       {
         said: "something about starting school",
-        value: { customTheme: "starting school" },
-        note: "Free text when no catalog id obviously fits. Never invent an id.",
+        value: { about: { text: "starting school" } },
+        note: "Their own words when no listed id obviously fits. Never invent an id.",
+      },
+      {
+        said: "a calm bedtime story please, and no monsters",
+        value: { bedtime: { on: true }, mood: { ids: ["calm"] }, avoid: { add: "monsters" } },
+      },
+      {
+        said: "she loves dinosaurs, and it should be for her birthday",
+        value: { interests: { add: "dinosaurs" }, moment: { ids: ["birthday"] } },
       },
     ],
   ),
@@ -797,7 +1081,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
           speak: "Tell me a bit more about the look you want and I'll use that.",
         });
       }
-      return wrote(withConfig(project, {
+      return wrote(noteStyleChange(project, withConfig(project, {
         artStyle: {
           presetId: value.presetId,
           ...(value.presetId !== null ? { origin: "preset" as const } : {}),
@@ -808,7 +1092,7 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
         // Naming a style IS confirming it; the gate exists to stop the book
         // continuing without one, not to demand a second click.
         styleReady: true,
-      }));
+      })));
     },
     (project) =>
       // Only a confirmed style: the writer sets `styleReady`, so capturing an
@@ -907,7 +1191,9 @@ function sameCast(a: StoryCastMember[], b: StoryCastMember[]): boolean {
       // "Leo is her little brother" has to count as a write, or the writer
       // reports nothing changed and the relationship is dropped while the reply
       // says the book already knew it.
-      (member.role?.trim() ?? "") === (other.role?.trim() ?? "")
+      (member.role?.trim() ?? "") === (other.role?.trim() ?? "") &&
+      member.kind === other.kind &&
+      (member.species?.trim() ?? "") === (other.species?.trim() ?? "")
     );
   });
 }
@@ -947,9 +1233,9 @@ export const GUIDE_PATCHABLE_SLOT_IDS: GuideSlotId[] =
  * id lists — an age band an admin adds this morning is offered this afternoon,
  * with no prompt edit and no deploy.
  */
-export function guidePatchShapeLines(context: GuidePatchContext): string {
+export function guidePatchShapeLines(context: GuidePatchContext, project?: Project): string {
   return GUIDE_PATCHABLE_SLOT_IDS.map(
-    (id) => `- ${id}: ${WRITERS[id]!.shape(context)}`,
+    (id) => `- ${id}: ${WRITERS[id]!.shape(context, project)}`,
   ).join("\n");
 }
 

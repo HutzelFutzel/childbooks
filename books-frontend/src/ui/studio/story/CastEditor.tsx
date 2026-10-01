@@ -89,7 +89,7 @@ export function CastEditor({
     if (!nextArt) {
       setPictureKind((current) => ({ ...current, [member.id]: "artwork" }));
     }
-    patch(member.id, { sourceArt: nextArt, likenessPhoto: undefined }, { skipHistory: true });
+    patch(member.id, { sourceArt: nextArt, likenessPhoto: undefined, moreLikenessPhotos: undefined }, { skipHistory: true });
     const name = member.name.trim();
     void useProjectsStore
       .getState()

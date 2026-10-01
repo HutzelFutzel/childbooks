@@ -1,9 +1,12 @@
 /**
  * The Chat studio's paid actions, each one quote and one tap.
  *
- * Selecting a source, a style, a subject or an instruction never spends
- * Sparks. The scoped button names what will be drawn and shows the estimate;
- * the tap confirms exactly that stored quote. The worker holds every unit to
+ * Selecting a subject or an instruction never spends Sparks. The scoped button
+ * names what will be drawn and shows the estimate; the tap confirms exactly
+ * that stored quote. The one exception is the portraits: the style tap, or a
+ * look tap once the book has a style, shows their price first and starts them
+ * if the quote is within it (`portraitAutoStart.ts`); otherwise the portraits
+ * button stays. The worker holds every unit to
  * the quote's number and consumes each unit once, and every job id here is
  * derived from the quote, so a reload, a double tap or a return URL lands on
  * the job that already exists instead of charging twice.
@@ -19,10 +22,14 @@ import {
   SPINE_ID,
   type Project,
 } from "../core/types";
+import { estimateJobRange, formatDurationRange, type LatencyStats } from "../core/config/latencyStats";
 import { CUSTOMER_IMAGE_TIER } from "../core/config/modelConfig";
+import { JOB_TASK_CONCURRENCY } from "../core/jobs/types";
 import { unitIsDone } from "../core/book/pageCompletion";
 import { briefOf, namedCast } from "../core/story/brief";
+import { type RedrawMode } from "../core/guide/redrawMode";
 import {
+  currentPortrait,
   portraitInputs,
   portraitsToDraw,
   withPortraitAnchorReferences,
@@ -44,8 +51,16 @@ import { spreadsById } from "../core/book/units";
 import { requestGenerationQuoteRemote } from "../platform/aiClient";
 import { getResolvedModels } from "./ai";
 import { useProjectsStore } from "./projectsStore";
+import { useAppConfigStore } from "./appConfigStore";
+import { coverLetteringAllowed, coverLinesOf } from "../core/book/coverLines";
 import { useJobsStore } from "./jobsStore";
 import { staleIllustrationSpreadIds } from "./ai";
+import { clientReferenceLimits } from "./referenceLimits";
+import {
+  plannedAnchorReferences,
+  plannedIllustrationReferences,
+  plannedPortraitReferences,
+} from "../core/billing/referencePlan";
 
 export function illustrationActionFor(id: string): ImageActionId {
   return id === COVER_FRONT_ID || id === COVER_BACK_ID || id === SPINE_ID
@@ -55,8 +70,17 @@ export function illustrationActionFor(id: string): ImageActionId {
 
 // --- What each action would draw -------------------------------------------
 
-export function portraitUnits(castIds: readonly string[]): GenerationQuoteUnit[] {
-  return castIds.map((id) => ({ id, action: "portrait", kind: "fresh" }));
+// Every unit carries the reference images it plans to send, so it is priced
+// from renders that sent about as many (`referencePlan`).
+
+export function portraitUnits(project: Project, castIds: readonly string[]): GenerationQuoteUnit[] {
+  const limits = clientReferenceLimits("portrait");
+  return castIds.map((id) => ({
+    id,
+    action: "portrait",
+    kind: "fresh",
+    refs: plannedPortraitReferences(project, id, limits),
+  }));
 }
 
 /**
@@ -67,8 +91,13 @@ export function portraitUnits(castIds: readonly string[]): GenerationQuoteUnit[]
 export function drawBookUnits(project: Project): GenerationQuoteUnit[] {
   const prepared = withPortraitAnchorReferences(project);
   const toPrepare = anchorsToPrepare(prepared);
-  const anchors = toPrepare
-    .map<GenerationQuoteUnit>((anchor) => ({ id: anchor.id, action: "anchorImage", kind: "fresh" }));
+  const anchorLimits = clientReferenceLimits("anchorImage");
+  const anchors = toPrepare.map<GenerationQuoteUnit>((anchor) => ({
+    id: anchor.id,
+    action: "anchorImage",
+    kind: "fresh",
+    refs: plannedAnchorReferences(prepared, anchor.id, {}, anchorLimits),
+  }));
   const redrawn = new Set(toPrepare.map((anchor) => anchor.id));
   const stalePages = new Set(staleIllustrationSpreadIds(prepared));
   const spreads = spreadsById(prepared);
@@ -80,8 +109,43 @@ export function drawBookUnits(project: Project): GenerationQuoteUnit[] {
   };
   const pages = illustrationUnits(project)
     .filter((unit) => !unitIsDone(project, unit) || stalePages.has(unit.id) || drawsRedrawn(unit.id))
-    .map<GenerationQuoteUnit>((unit) => ({ id: unit.id, action: illustrationActionFor(unit.id), kind: "fresh" }));
+    .map<GenerationQuoteUnit>((unit) => {
+      const action = illustrationActionFor(unit.id);
+      return {
+        id: unit.id,
+        action,
+        kind: "fresh",
+        refs: plannedIllustrationReferences(prepared, unit.id, { sheetsComing: redrawn }, clientReferenceLimits(action)),
+      };
+    });
   return [...anchors, ...pages];
+}
+
+/**
+ * How long drawing these units usually takes, for the line said when it
+ * starts. Sheets and pages run one after the other; each wave is the worker's
+ * own batch size. "a few minutes" when there is nothing to time.
+ */
+export function bookDrawDuration(units: readonly { action: string }[], stats: LatencyStats): string {
+  const sheets = units.filter((unit) => unit.action === "anchorImage").length;
+  const pictures = units.length - sheets;
+  if (sheets + pictures === 0) return "a few minutes";
+  const parts = [
+    sheets > 0 ? estimateJobRange(stats, "anchorImage", CUSTOMER_IMAGE_TIER, sheets, JOB_TASK_CONCURRENCY) : null,
+    pictures > 0 ? estimateJobRange(stats, "pageIllustration", CUSTOMER_IMAGE_TIER, pictures, JOB_TASK_CONCURRENCY) : null,
+  ].filter((range): range is NonNullable<typeof range> => range != null);
+  return formatDurationRange({
+    minMs: parts.reduce((sum, range) => sum + range.minMs, 0),
+    maxMs: parts.reduce((sum, range) => sum + range.maxMs, 0),
+  }).replace(/^~/, "");
+}
+
+/** One failed page or cover drawn again as it was asked for. */
+export function pageRetryUnits(project: Project, unitId: string): GenerationQuoteUnit[] {
+  const action = illustrationActionFor(unitId);
+  return [
+    { id: unitId, action, kind: "fresh", refs: plannedIllustrationReferences(project, unitId, {}, clientReferenceLimits(action)) },
+  ];
 }
 
 /** The book job's tasks for exactly the units a quote covers. */
@@ -93,8 +157,36 @@ export function bookTasksFor(quote: GenerationQuote): BookTask[] {
   );
 }
 
-export function redrawUnits(unitId: string, action: ImageActionId): GenerationQuoteUnit[] {
-  return [{ id: unitId, action, kind: action === "portrait" ? "fresh" : "edit" }];
+/**
+ * What one picture change draws. A portrait or page that is already drawn is
+ * edited ("edit": the current picture goes in and only the change is made); a
+ * new picture ("new") is drawn from scratch. A portrait that can't be edited
+ * (the model can't take a picture in) is drawn anew from the description.
+ */
+export function redrawUnits(
+  project: Project,
+  unitId: string,
+  action: ImageActionId,
+  mode: RedrawMode = "edit",
+): GenerationQuoteUnit[] {
+  const limits = clientReferenceLimits(action);
+  if (action === "portrait") {
+    if (mode === "edit" && limits.referenceEditing) {
+      return [{ id: unitId, action, kind: "edit", refs: plannedPortraitReferences(project, unitId, limits, { edit: true }) }];
+    }
+    return [{ id: unitId, action, kind: "fresh", refs: plannedPortraitReferences(project, unitId, limits) }];
+  }
+  if (mode === "new") {
+    return [{ id: unitId, action, kind: "fresh", refs: plannedIllustrationReferences(project, unitId, {}, limits) }];
+  }
+  return [
+    {
+      id: unitId,
+      action,
+      kind: "edit",
+      refs: plannedIllustrationReferences(project, unitId, { useReference: true }, limits),
+    },
+  ];
 }
 
 // --- Quotes -----------------------------------------------------------------
@@ -159,18 +251,23 @@ export async function startDrawBook(quote: GenerationQuote): Promise<boolean> {
   // A stale tab or quote must not bypass the journey's portrait checkpoint.
   // Every later character sheet is seeded from a portrait the reader could see.
   if (portraitsToDraw(before).length > 0) return false;
-  const cover = authoringOf(before).cover;
+  const languages = useAppConfigStore.getState().bookLanguages;
   await store.patchCurrent((live) => {
     const seeded = withPortraitAnchorReferences(live);
+    const cover = authoringOf(live).cover;
+    // Decided once, when the book is drawn, so a later redraw paints the same way.
+    const painted =
+      cover?.painted ??
+      (coverLetteringAllowed(live.config.contentLocale, languages) && Boolean(coverLinesOf(live).title));
     return withAuthoring(
       { ...seeded, stage: "studio", furthestStage: "studio" },
       {
         lockedAt: authoringOf(live).lockedAt ?? Date.now(),
         drawBook: bookRun(quote),
+        cover: { ...cover, ...(painted ? { painted: true } : {}) },
       },
     );
   });
-  if (cover?.subtitle) await store.setCoverSubtitle(before.id, cover.subtitle);
   await launchBookJob(quote);
   return true;
 }
@@ -315,7 +412,11 @@ function assertNotDrawing(project: Project): void {
 
 // --- Scoped redraws ---------------------------------------------------------
 
-/** Redraw one page or cover with the reader's sentence, against its own quote. */
+/**
+ * Change one picture as the reader asked, against its own quote. The quote says
+ * how: an "edit" unit changes the picture that is there (the current portrait,
+ * page or cover goes in with the sentence); a "fresh" unit draws it anew.
+ */
 export async function startRedraw(quote: GenerationQuote, edit: string): Promise<boolean> {
   const project = useProjectsStore.getState().current();
   const unit = quote.units[0];
@@ -324,9 +425,14 @@ export async function startRedraw(quote: GenerationQuote, edit: string): Promise
   if (unit.action === "portrait") {
     const member = namedCast(briefOf(project.config)).find((m) => m.id === unit.id);
     if (!member) return false;
+    const current = currentPortrait(project, member.id);
+    const instruction = edit.trim();
+    const change = unit.kind === "edit" && instruction && current
+      ? { edit: { instruction, blobId: current.blobId, mimeType: current.mimeType } }
+      : {};
     await createPortraitJob(
       project,
-      [{ id: member.id, status: "pending", inputs: portraitInputs(project, member) }],
+      [{ id: member.id, status: "pending", inputs: portraitInputs(project, member), ...change }],
       quote.tier,
       { quoteId: quote.id, idempotencyKey: `redraw-${quote.id}` },
     );
@@ -335,7 +441,13 @@ export async function startRedraw(quote: GenerationQuote, edit: string): Promise
   await createRefreshJob(
     project,
     getResolvedModels(quote.tier),
-    [{ id: unit.id, status: "pending", options: { edit: edit.trim(), useReference: true } }],
+    [
+      {
+        id: unit.id,
+        status: "pending",
+        options: unit.kind === "edit" ? { edit: edit.trim(), useReference: true, inPlaceOnly: true } : {},
+      },
+    ],
     quote.tier,
     { quoteId: quote.id, idempotencyKey: `redraw-${quote.id}` },
   );
@@ -358,12 +470,16 @@ export async function startPageRetry(quote: GenerationQuote): Promise<boolean> {
 }
 
 export function anchorRetryUnits(
+  project: Project,
   unitIds: readonly string[],
 ): GenerationQuoteUnit[] {
+  const prepared = withPortraitAnchorReferences(project);
+  const limits = clientReferenceLimits("anchorImage");
   return unitIds.map((id) => ({
     id,
     action: "anchorImage" as const,
     kind: "fresh" as const,
+    refs: plannedAnchorReferences(prepared, id, {}, limits),
   }));
 }
 

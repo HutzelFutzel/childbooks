@@ -11,7 +11,8 @@ import type { AgeBandStoryCraft } from "../config/storyCraftCatalog";
 import { ageBandLabel } from "../config/storyCraftCatalog";
 import { optionGuidance, optionsGuidance, resolveStoryCraft, type StoryCraftConfig } from "../config/storyCraft";
 import { getBookLanguage } from "../config/bookLanguages";
-import { castPromptLines, heroesLine } from "../story/brief";
+import { castHasDetails, castPromptLines, heroesLine } from "../story/brief";
+import { detailPromptLines, type StoryDetailId } from "../guide/storyDetails";
 import {
   resolveAudienceProfile,
   resolveAvoidList,
@@ -91,6 +92,12 @@ export interface StoryPromptParts {
  * Build the draft prompt for a brief. `repairInstruction` turns on the retry
  * block, which explains what the rejected attempt got wrong.
  */
+/** Story details each draft template renders with a block of its own; the rest go in `{{briefDetails}}`. */
+const TEMPLATE_DETAILS: Record<string, readonly StoryDetailId[]> = {
+  "storyDraft/guided": ["about", "place", "telling"],
+  "storyDraft/coWrite": ["about", "place", "telling", "moment", "time", "include"],
+};
+
 export function buildStoryDraftPrompt(
   config: Pick<BookConfig, "ageRangeId" | "readingModeId" | "contentLocale">,
   brief: StoryBrief,
@@ -119,6 +126,7 @@ export function buildStoryDraftPrompt(
   );
 
   const key = brief.mode === "co-write" ? "storyDraft/coWrite" : "storyDraft/guided";
+  const briefDetails = detailPromptLines(brief, craft, TEMPLATE_DETAILS[key] ?? []);
   const { system, user } = renderTextPrompt(resolvePromptsConfig(ctx), key, {
     vars: {
       age: ageBandLabel(config.ageRangeId),
@@ -143,10 +151,13 @@ export function buildStoryDraftPrompt(
       safetyList: craft.safety.avoid.join("; "),
       safetyNote: craft.safety.note,
       repairInstruction: repairInstruction ?? "",
+      briefDetails,
     },
     flags: {
       hasTheme: Boolean(themeGuidance),
       hasDevice: Boolean(deviceGuidance),
+      hasRoles: castHasDetails(brief),
+      hasDetails: Boolean(briefDetails),
       hasSetting: Boolean(settingGuidance),
       hasSentenceLimit: craft.structure.maxSentenceWords > 0,
       hasWhen: Boolean(brief.when?.trim()),

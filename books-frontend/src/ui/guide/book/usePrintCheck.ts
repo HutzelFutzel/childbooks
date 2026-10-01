@@ -6,7 +6,7 @@
  * puts that page and its smallest fix in the well.
  */
 import { useEffect, useMemo } from "react";
-import { bookProductForConfig } from "../../../core/book";
+import { formatCapabilitiesForProject } from "../../../core/book";
 import { unitIsDone } from "../../../core/book/pageCompletion";
 import { illustrationUnits } from "../../../core/book/units";
 import { interiorLeafPlan } from "../../../core/print/pagePlan";
@@ -31,7 +31,7 @@ export function usePrintCheck(project: Project, active: boolean): void {
     const found = preflightInterior({
       plan: interiorLeafPlan(doc),
       design,
-      product: bookProductForConfig(project.config),
+      caps: formatCapabilitiesForProject(project),
       hasArtwork: (pageId) => {
         if (pages.find((p) => p.id === pageId)?.blobId) return true;
         const unit = units.find((u) => u.id === pageId);
@@ -39,10 +39,17 @@ export function usePrintCheck(project: Project, active: boolean): void {
       },
       labelFor: (pageId) => pages.find((p) => p.id === pageId)?.label ?? "A page",
     }).find((i) => BLOCKING.has(i.code));
-    return found ? { unitId: found.pageId, page: pageNumberOf(project, found.pageId), message: found.message } : null;
+    return found
+      ? {
+          unitId: found.pageId,
+          page: pageNumberOf(project, found.pageId),
+          code: found.code,
+          message: found.message,
+        }
+      : null;
   }, [active, project, design, pages]);
 
-  const key = issue ? `${issue.unitId}:${issue.message}` : "";
+  const key = issue ? `${issue.unitId}:${issue.code}` : "";
   useEffect(() => {
     setPrintIssue(issue);
     // Keyed on the problem, so an unchanged result doesn't re-render the journey.

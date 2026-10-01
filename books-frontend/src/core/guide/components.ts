@@ -168,9 +168,9 @@ const CATALOG: GuideComponent[] = [
   },
   {
     id: "story-cast",
-    title: "Who it's for",
-    purpose: "The children the book is about, and how old they are.",
-    slots: ["heroes", "heroAges", "sameAge"],
+    title: "Characters",
+    purpose: "Everyone the book is about: the children and how old they are, and any pets, toys or creatures and what they are.",
+    slots: ["heroes", "heroAges", "castKinds", "sameAge", "relations"],
     requires: ["story-mode"],
     canvas: "none",
     skippable: false,

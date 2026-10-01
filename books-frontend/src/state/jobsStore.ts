@@ -37,6 +37,7 @@ import { spreadsById } from "./bookUnits";
 import {
   withPortrait,
   withPortraitAnchorReferences,
+  withoutUsedPhotos,
 } from "../core/guide/portrait";
 import type { ModelSelection, PortraitInputs } from "../core/types";
 import { useProjectsStore } from "./projectsStore";
@@ -77,7 +78,7 @@ interface JobsState {
    * soon as a newer attempt at it exists. Lets the book show "failed" on the
    * object itself and the well offer the retry.
    */
-  failedUnits: Record<string, { error: string; at: number; kind: TaskDoc["kind"] }>;
+  failedUnits: Record<string, { error: string; at: number; kind: TaskDoc["kind"]; errorKind?: TaskDoc["errorKind"] }>;
   /** Jobs refused before any task ran (an expired price, too few Sparks). */
   refusedJobs: { id: string; kind: JobWithId["kind"]; error: string; at: number }[];
   /** Every job of the open project by id, for flows that follow one job to its end. */
@@ -323,7 +324,7 @@ async function reconcileTasks(tasks: TaskDoc[], projectId: string): Promise<void
         // dropped here rather than shown: `withPortrait` refuses it.
         if (withPortrait(project, image).committed) {
           await useProjectsStore.getState().patchCurrent((current) =>
-            withPortraitAnchorReferences(withPortrait(current, image).project),
+            withoutUsedPhotos(withPortraitAnchorReferences(withPortrait(current, image).project), task.id, image.inputs),
           );
         }
         await markTaskApplied(task.jobId, task.id);
@@ -501,7 +502,12 @@ export const useJobsStore = create<JobsState>((set, get) => ({
       const failedUnits: JobsState["failedUnits"] = {};
       for (const t of latest.values()) {
         if (t.status === "error") {
-          failedUnits[t.id] = { error: t.error ?? "This picture could not be drawn.", at: t.updatedAt, kind: t.kind };
+          failedUnits[t.id] = {
+            error: t.error ?? "This picture could not be drawn.",
+            at: t.updatedAt,
+            kind: t.kind,
+            ...(t.errorKind ? { errorKind: t.errorKind } : {}),
+          };
         }
       }
       const failedScreenplay = tasks

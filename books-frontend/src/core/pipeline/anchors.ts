@@ -247,7 +247,6 @@ export interface GenerateAnchorImageInput {
    */
   size?: string;
   quality?: ImageRequest["quality"];
-  inputFidelity?: ImageRequest["inputFidelity"];
   output?: ImageRequest["output"];
   retries?: number;
   beforeAttempt?: RetryOptions["beforeAttempt"];
@@ -266,7 +265,6 @@ export async function generateAnchorImage(
     providerId,
     size,
     quality,
-    inputFidelity,
     output,
     retries,
     beforeAttempt,
@@ -281,7 +279,6 @@ export async function generateAnchorImage(
         size: size ?? ANCHOR_SHEET_SIZE,
         references,
         quality,
-        inputFidelity,
         output,
         signal,
       }),

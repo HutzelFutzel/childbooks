@@ -27,6 +27,7 @@ import { interpretGuideTurnRemote } from "../platform/aiClient";
 import { useAppConfigStore } from "./appConfigStore";
 import { useProjectsStore } from "./projectsStore";
 import { useGuidePreference } from "../ui/guide/guidePreference";
+import type { CommandCall } from "../core/guide/agent/types";
 
 export interface GuideTurnOutcome {
   intent: GuideTurnIntent;
@@ -62,6 +63,13 @@ export interface GuideTurnOutcome {
    * happened to hold by the time the caller looked.
    */
   before: Record<string, unknown>;
+  /** Skill calls that passed screening, in the order asked. */
+  commands: CommandCall[];
+  /** Skill calls past the per-message limit. */
+  overflowCommands: CommandCall[];
+  /** The message's language, when detected. */
+  language: string | null;
+  languageConfidence: number;
 }
 
 /**
@@ -75,6 +83,8 @@ export async function sendGuideTurn(
   message: string,
   transcript: GuideTurn[] = [],
   signal?: AbortSignal,
+  pending?: string,
+  marked?: string,
 ): Promise<GuideTurnOutcome> {
   const project = useProjectsStore.getState().current();
   if (!project) throw new Error("No book is open.");
@@ -103,6 +113,8 @@ export async function sendGuideTurn(
     {
       transcript,
       guidePreference: useGuidePreference.getState().preference,
+      ...(pending ? { pending } : {}),
+      ...(marked ? { marked } : {}),
     },
     signal,
   );
@@ -117,6 +129,10 @@ export async function sendGuideTurn(
     confidence: result.confidence,
     turnId: result.turnId,
     context,
+    commands: result.commands ?? [],
+    overflowCommands: result.overflowCommands ?? [],
+    language: result.language ?? null,
+    languageConfidence: result.languageConfidence ?? 0,
   });
 }
 
@@ -132,6 +148,10 @@ async function applyTurnPatch(
     confidence: number;
     turnId: string | null;
     context: ReturnType<typeof guidePatchContext>;
+    commands: CommandCall[];
+    overflowCommands: CommandCall[];
+    language: string | null;
+    languageConfidence: number;
   },
 ): Promise<GuideTurnOutcome> {
   let applied: GuideSlotId[] = [];
@@ -165,5 +185,9 @@ async function applyTurnPatch(
     confidence: meta.confidence,
     turnId: meta.turnId,
     before,
+    commands: meta.commands,
+    overflowCommands: meta.overflowCommands,
+    language: meta.language,
+    languageConfidence: meta.languageConfidence,
   };
 }

@@ -29,6 +29,7 @@ import {
   getImageCostStats,
   getModelCostTable,
   getSparksConfig,
+  loadModelCapabilities,
 } from "./appConfig";
 import { resolveImageModels } from "./modelResolve";
 import { actionMultiplier } from "./plans";
@@ -51,9 +52,12 @@ import {
 import type { CostSampleKind } from "../../books-frontend/src/core/config/imageCostStats";
 import { derivedUnitPrice } from "../../books-frontend/src/core/billing/priceEstimation";
 import {
+  countBucket,
   estimateProfileForAction,
 } from "../../books-frontend/src/core/config/generationEstimateProfile";
 import { generationTuningFor } from "../../books-frontend/src/core/config/generationTuning";
+import { capabilitiesFor } from "../../books-frontend/src/core/config/modelCapabilities";
+import { referenceLimitsFor, type ReferenceLimits } from "../../books-frontend/src/core/billing/referencePlan";
 import { ALL_IMAGE_ACTION_IDS, type ImageActionId } from "../../books-frontend/src/core/ai/actions";
 import { type ImageTier } from "../../books-frontend/src/core/config/modelConfig";
 import { splitBillable, type UsageEvent } from "./usage";
@@ -1003,6 +1007,8 @@ export async function estimateForUser(
   action: string,
   tier: ImageTier,
   kind: CostSampleKind = "fresh",
+  /** Reference images this render plans to send (`referencePlan`); absent prices from every count. */
+  referenceCount?: number,
 ): Promise<number> {
   const config = await getSparksConfig();
   if (!config.enabled) return 0;
@@ -1021,17 +1027,38 @@ export async function estimateForUser(
       resolveImageModels(action, tier),
       getGenerationTuningConfig(),
     ]);
+    const tuning = generationTuningFor(generationTuning, action);
     const profile = estimateProfileForAction({
       action,
       tier,
       model: models.imageModel,
-      tuning: generationTuningFor(generationTuning, action),
+      tuning,
       kind,
+      referenceCount:
+        referenceCount === undefined
+          ? undefined
+          : Math.min(referenceCount, (await referenceLimitsForAction(action, tier)).maxReferenceImages),
     });
     const rateUsd = await nominalRateCostUsd(models.imageModel);
     return derivedUnitPrice({ stats, sparks: config, action, tier, profile, rateUsd }, multiplier).sparks;
   }
   return estimateForAction(config, action, multiplier);
+}
+
+/** What the priced model and the action's tuning let a render send. */
+export async function referenceLimitsForAction(action: ImageActionId, tier: ImageTier): Promise<ReferenceLimits> {
+  const [models, generationTuning, overrides] = await Promise.all([
+    resolveImageModels(action, tier),
+    getGenerationTuningConfig(),
+    loadModelCapabilities(),
+  ]);
+  return referenceLimitsFor(capabilitiesFor(models.imageModel, overrides), generationTuningFor(generationTuning, action));
+}
+
+/** The reference group a planned count is priced in, for quote keys. */
+export async function referenceGroupFor(action: ImageActionId, tier: ImageTier, referenceCount: number): Promise<string> {
+  const limits = await referenceLimitsForAction(action, tier);
+  return countBucket(Math.min(referenceCount, limits.maxReferenceImages));
 }
 
 export interface AffordActionOptions extends AffordOptions {
@@ -1041,6 +1068,8 @@ export interface AffordActionOptions extends AffordOptions {
    * render's estimate for one systematically under-quoted the charge.
    */
   kind?: CostSampleKind;
+  /** Reference images the render plans to send, planned by the server from the request. */
+  referenceCount?: number;
 }
 
 /**
@@ -1056,7 +1085,7 @@ export async function ensureAffordAction(
   tier: ImageTier,
   opts: AffordActionOptions = {},
 ): Promise<number> {
-  const estimate = await estimateForUser(uid, action, tier, opts.kind ?? "fresh");
+  const estimate = await estimateForUser(uid, action, tier, opts.kind ?? "fresh", opts.referenceCount);
   await ensureAfford(uid, estimate, opts);
   return estimate;
 }

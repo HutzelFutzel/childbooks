@@ -20,7 +20,6 @@ export interface ImageGenerationHints {
   background?: ImageBackgroundIntent;
   quality?: ImageQuality;
   format?: ImageFormat;
-  inputFidelity?: "low" | "high";
   outputCompression?: number;
 }
 
@@ -30,7 +29,6 @@ export const imageGenerationHintsSchema = z.object({
     .optional(),
   quality: z.enum(["low", "medium", "high", "xhigh", "max", "auto"]).optional(),
   format: z.enum(["png", "webp", "jpeg"]).optional(),
-  inputFidelity: z.enum(["low", "high"]).optional(),
   outputCompression: z.number().int().min(0).max(100).optional(),
 });
 
@@ -42,14 +40,12 @@ export interface ResolvedImageGenerationOptions {
     background?: "transparent";
     format?: ImageFormat;
     quality?: ImageQuality;
-    inputFidelity?: "low" | "high";
     outputCompression?: number;
   };
   skipped: Array<
     "transparent-background" |
     "output-format" |
     "quality" |
-    "input-fidelity" |
     "output-compression"
   >;
 }
@@ -112,14 +108,6 @@ export function resolveImageGenerationOptions(
       applied.quality = intent.quality;
     } else {
       skipped.push("quality");
-    }
-  }
-
-  if (intent.inputFidelity) {
-    if (capabilities.inputs.inputFidelityLevels.includes(intent.inputFidelity)) {
-      applied.inputFidelity = intent.inputFidelity;
-    } else {
-      skipped.push("input-fidelity");
     }
   }
 

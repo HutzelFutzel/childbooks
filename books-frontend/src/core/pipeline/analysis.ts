@@ -16,7 +16,10 @@ import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import type { Anchor, AnchorImportance, AnchorType, BodyPlan, BookConfig } from "../types";
 import { withRetry } from "./retry";
+import { cleanSubtitleIdeas } from "./storyDraft";
+import { withoutHeading } from "../story/manuscriptShape";
 import { briefOf, castPromptLines, namedCast } from "../story/brief";
+import { castKindPhrase } from "../story/castKinds";
 import { resolveAgeLlmGuidance } from "../prompts/age";
 import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderTextPrompt } from "../prompts/render";
@@ -27,7 +30,7 @@ const anchorItemSchema = z.object({
   description: z
     .string()
     .describe(
-      "Visible appearance only: face, hair, clothing, colors, and distinguishing features. Never include numeric age; age belongs only in ageYears.",
+      "Visible appearance only. For a character, start with the kind of being (a frog, a human child, a toy elephant), then body, colors, and markings. Add clothing only for a human or a clothed animal. A name does not decide the species. Never include a numeric age; age belongs only in ageYears.",
     ),
   importance: z.enum(["high", "medium", "low"]),
   /** Characters only; ignored for places/objects. */
@@ -73,6 +76,8 @@ const analysisSchema = z.object({
   summary: z.string(),
   /** A short book title in the story's language. Empty when the model omits it. */
   title: z.string().max(120).nullish(),
+  /** Up to three subtitle ideas in the story's language. */
+  subtitles: z.array(z.string()).nullish(),
   anchors: z.array(anchorItemSchema),
   embeddings: z.array(embeddingItemSchema).nullish(),
 });
@@ -155,7 +160,13 @@ function validateEmbeddings(
 /** Run the story analysis and return editable anchors + a short summary. */
 export async function analyzeStory(
   input: AnalyzeStoryInput,
-): Promise<{ summary: string; title: string; anchors: Anchor[]; embeddings: AnalyzedEmbedding[] }> {
+): Promise<{
+  summary: string;
+  title: string;
+  subtitles: string[];
+  anchors: Anchor[];
+  embeddings: AnalyzedEmbedding[];
+}> {
   const { story, config, creds, model, signal, prompts, artworkLooks } = input;
   const provider = getTextProvider(config.textModel!.provider);
   const age = ageBandLabel(config.ageRangeId);
@@ -179,7 +190,7 @@ export async function analyzeStory(
       age,
       ageGuidance: ageTextPrompt,
       languageName: language.englishName,
-      story: story.trim(),
+      story: (config.storyBrief?.mode === "own" ? withoutHeading(story) : story).trim(),
       castHints,
       artLooks,
       artworkNames,
@@ -277,9 +288,11 @@ export async function analyzeStory(
     looks,
   );
 
+  const title = (result.title ?? "").replace(/^["“”']+|["“”']+$/g, "").replace(/\s+/g, " ").trim();
   return {
     summary: result.summary,
-    title: (result.title ?? "").replace(/^["“”']+|["“”']+$/g, "").replace(/\s+/g, " ").trim(),
+    title,
+    subtitles: cleanSubtitleIdeas(result.subtitles ?? [], title),
     anchors: withCast,
     embeddings: validateEmbeddings(result.embeddings ?? [], withCast),
   };
@@ -355,7 +368,7 @@ function injectNamedCastAnchors(anchors: Anchor[], config: BookConfig): Anchor[]
     const key = normalizeAnchorName(name);
     if (!key || existing.has(key)) continue;
     const look = member.lookFromArt?.trim();
-    const note = [member.role?.trim(), member.note?.trim()].filter(Boolean).join(". ");
+    const note = [castKindPhrase(member), member.role?.trim(), member.note?.trim()].filter(Boolean).join(". ");
     const description = look || note || `${name}, as named by the author.`;
     const ageYears =
       typeof member.age === "number" ? member.age : defaultCharacterAge({ name, description }, config.ageRangeId);

@@ -1,29 +1,27 @@
 "use client";
 
 /**
- * The people, as plates. Each plate is the person's portrait (or their
- * initial until it is drawn), their name and age, and where their look comes
- * from: a photo, a drawing, a few words, or invented from the story. Editing a
- * plate never draws anything; the well offers the portrait when it is out of
- * date.
+ * The people, as plates. Each plate is the portrait (or an initial until one
+ * is drawn), the name, and the age, both read-only (renaming and changing an
+ * age go through the chat, which carries them through the book; only a plate
+ * nobody has named yet takes a name here). A photo, a drawing, or a description is
+ * chosen in the chat: selecting the plate opens that person's section there.
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ImagePlus, Loader2, Plus, X } from "lucide-react";
-import { lookSourceOf, currentPortrait, portraitStatus } from "../../../core/guide/portrait";
+import { Plus, X } from "lucide-react";
+import { currentPortrait, portraitStatus } from "../../../core/guide/portrait";
 import { briefOf } from "../../../core/story/brief";
-import type { LookSource, Project, StoryCastMember } from "../../../core/types";
-import { canAddSourceArt, uploadSourceArt } from "../../../platform/sourceArt";
+import { isPerson } from "../../../core/story/castKinds";
+import type { Project, StoryCastMember } from "../../../core/types";
 import { useChatStudio } from "../../../state/chatStudio";
-import { LikenessPhotoField } from "../../components/LikenessPhotoField";
 import { useBlobUrl } from "../../hooks/useBlobUrl";
 import { cn } from "../../lib/cn";
-import { addCastMember, removeCastMember, updateCastMember } from "../bookActions";
+import { addCastMember, removeCastMember, renameCastMember, updateCastMember } from "../bookActions";
 import { useGuideT } from "../intl";
 import { crossfade, lineRise } from "../motion";
 import { UnitStatus } from "./UnitStatus";
-
-const SOURCES: LookSource[] = ["photo", "drawing", "describe", "invent"];
+import { VersionPager } from "./VersionPager";
 
 export function CastView({ project, locked }: { project: Project; locked: boolean }) {
   const t = useGuideT("plate");
@@ -95,19 +93,24 @@ function Plate({
   const portrait = currentPortrait(project, member.id);
   const status = portraitStatus(project, member.id);
   const url = useBlobUrl(portrait?.blobId);
-  const source = member.lookSource ?? lookSourceOf(member);
   const name = member.name.trim();
   const selected = chip?.kind === "person" && chip.castId === member.id;
+  const [nameProblem, setNameProblem] = useState<"taken" | "busy" | "unknown" | null>(null);
 
   return (
-    <article className="group/plate relative flex flex-col gap-3 rounded-2xl bg-white p-3 shadow-soft ring-1 ring-ink-900/5">
+    <article
+      className={cn(
+        "group/plate relative flex flex-col gap-3 rounded-2xl bg-white p-3 shadow-soft ring-1",
+        selected ? "ring-ink-900" : "ring-ink-900/5",
+      )}
+    >
       <button
         type="button"
-        disabled={!portrait || !name}
+        disabled={!name}
+        aria-pressed={selected}
         onClick={() => setChip(selected ? null : { kind: "person", castId: member.id, name })}
         className={cn(
           "relative block aspect-4/5 w-full overflow-hidden rounded-xl bg-ink-50 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ink-500",
-          selected && "ring-2 ring-inset ring-ink-900",
         )}
         aria-label={name}
       >
@@ -135,159 +138,89 @@ function Plate({
         </AnimatePresence>
         <UnitStatus unitId={member.id} stale={status === "stale"} />
       </button>
+      <VersionPager
+        project={project}
+        target={{ kind: "person", castId: member.id, name }}
+        className="absolute top-5 left-5"
+      />
 
       <div className="flex items-baseline gap-2 px-1">
-        <PlateInput
-          value={member.name}
-          placeholder={t("name")}
-          disabled={locked}
-          autoFocus={autoFocus}
-          onCommit={(value) => void updateCastMember(member.id, { name: value })}
-          className="min-w-0 flex-1 font-display text-lg font-medium text-ink-900"
-        />
-        <PlateInput
-          value={member.age != null ? String(member.age) : ""}
-          placeholder={
-            member.visualAge
-              ? t("estimatedAge", { age: member.visualAge.years })
-              : t("age")
-          }
-          disabled={locked}
-          inputMode="numeric"
-          onCommit={(value) => {
-            const age = Number.parseInt(value, 10);
-            void updateCastMember(member.id, { age: Number.isFinite(age) && age >= 0 && age < 120 ? age : undefined });
-          }}
-          className="w-12 text-right text-sm text-ink-500"
-        />
+        {name ? (
+          // A name is read, not edited here: renaming goes through the chat, which carries it through the whole book.
+          <h3 className="min-w-0 flex-1 truncate font-display text-lg font-medium text-ink-900">{name}</h3>
+        ) : (
+          // Only a plate nobody has named yet takes a name here; there is nothing to carry through the book.
+          <PlateInput
+            value=""
+            placeholder={t("name")}
+            disabled={locked}
+            autoFocus={autoFocus}
+            onCommit={async (value) => {
+              setNameProblem(null);
+              if (!value) return;
+              const outcome = await renameCastMember(member.id, value);
+              if (outcome.ok) return true;
+              if (outcome.reason === "taken" || outcome.reason === "busy" || outcome.reason === "unknown") {
+                setNameProblem(outcome.reason);
+              }
+              return false;
+            }}
+            className="min-w-0 flex-1 font-display text-lg font-medium text-ink-900"
+          />
+        )}
+        {isPerson(member) ? (
+          <AgeTag member={member} />
+        ) : (
+          <PlateInput
+            value={member.species ?? ""}
+            placeholder={t("species")}
+            disabled={locked}
+            onCommit={(value) => void updateCastMember(member.id, { species: value.trim().slice(0, 80) || undefined })}
+            className="w-28 text-right text-sm text-ink-500"
+          />
+        )}
       </div>
+      {nameProblem && (
+        <p role="alert" className="px-1 text-xs text-amber-700">
+          {t(nameProblem === "busy" ? "nameBusy" : "nameTaken")}
+        </p>
+      )}
 
       {!locked && (
-        <>
-          <div className="flex rounded-full bg-ink-50 p-0.5" role="radiogroup">
-            {SOURCES.map((option) => (
-              <button
-                key={option}
-                type="button"
-                role="radio"
-                aria-checked={source === option}
-                onClick={() => void updateCastMember(member.id, { lookSource: option })}
-                className={cn(
-                  "relative flex-1 rounded-full px-2 py-1 text-xs font-medium transition-colors",
-                  source === option ? "text-ink-900" : "text-ink-500 hover:text-ink-800",
-                )}
-              >
-                {source === option && (
-                  <motion.span
-                    layoutId={`plate-source-${member.id}`}
-                    className="absolute inset-0 rounded-full bg-white shadow-soft ring-1 ring-ink-900/5"
-                    transition={{ duration: 0.2 }}
-                  />
-                )}
-                <span className="relative">{t(option)}</span>
-              </button>
-            ))}
-          </div>
-          <SourceBody project={project} member={member} source={source} />
-          <button
-            type="button"
-            onClick={() => void removeCastMember(member.id)}
-            aria-label={`${t("remove")} ${name}`}
-            className="absolute top-5 right-5 flex size-7 items-center justify-center rounded-full bg-white/90 text-ink-500 opacity-0 shadow-soft transition group-hover/plate:opacity-100 hover:text-ink-900 focus-visible:opacity-100 pointer-coarse:opacity-100"
-          >
-            <X className="size-3.5" />
-          </button>
-        </>
+        <button
+          type="button"
+          onClick={() => void removeCastMember(member.id)}
+          aria-label={`${t("remove")} ${name}`}
+          className="absolute top-5 right-5 flex size-7 items-center justify-center rounded-full bg-white/90 text-ink-500 opacity-0 shadow-soft transition group-hover/plate:opacity-100 hover:text-ink-900 focus-visible:opacity-100 pointer-coarse:opacity-100"
+        >
+          <X className="size-3.5" />
+        </button>
       )}
     </article>
   );
 }
 
-function SourceBody({ project, member, source }: { project: Project; member: StoryCastMember; source: LookSource }) {
+/**
+ * The age, read-only, with its unit: a quiet "5 yrs" (a number alone could be
+ * anything). An age the story or the picture suggested, rather than one the
+ * author gave, reads "About 5 yrs". No age, nothing: the chat asks for it.
+ */
+function AgeTag({ member }: { member: StoryCastMember }) {
   const t = useGuideT("plate");
-  const name = member.name.trim() || "this person";
-  if (source === "photo") {
-    return (
-      <div className="flex flex-col gap-2">
-        <LikenessPhotoField
-          photo={member.likenessPhoto}
-          projectId={project.id}
-          subjectId={member.id}
-          subjectName={name}
-          onChange={(photo) =>
-            updateCastMember(member.id, { likenessPhoto: photo, sourceArt: photo ? undefined : member.sourceArt })
-          }
-          className="border-0 bg-ink-50/70"
-        />
-        <p className="px-1 text-[11px] leading-snug text-ink-400">
-          {member.likenessPhoto ? t("consentAfter", { name }) : t("consent", { name })}
-        </p>
-      </div>
-    );
-  }
-  if (source === "drawing") return <DrawingField member={member} />;
-  if (source === "describe") {
-    return (
-      <PlateInput
-        multiline
-        value={member.appearance ?? ""}
-        placeholder={t("describePlaceholder")}
-        onCommit={(value) => void updateCastMember(member.id, { appearance: value || undefined })}
-        className="min-h-16 rounded-xl bg-ink-50/70 px-3 py-2 text-sm text-ink-800"
-      />
-    );
-  }
-  return <p className="px-1 text-xs text-ink-400">{t("inventNote")}</p>;
-}
-
-function DrawingField({ member }: { member: StoryCastMember }) {
-  const t = useGuideT("plate");
-  const input = useRef<HTMLInputElement>(null);
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
-  const first = member.sourceArt?.[0];
-  const url = useBlobUrl(first?.blobId);
-  const pick = async (file: File | undefined) => {
-    if (!file) return;
-    setBusy(true);
-    setFailed(false);
-    try {
-      const { ref } = await uploadSourceArt(file);
-      const art = canAddSourceArt(member.sourceArt) ? [...(member.sourceArt ?? []), ref] : [ref];
-      await updateCastMember(member.id, { sourceArt: art, likenessPhoto: undefined, lookSource: "drawing" });
-    } catch {
-      setFailed(true);
-    } finally {
-      setBusy(false);
-      if (input.current) input.current.value = "";
-    }
-  };
+  const chrome = useGuideT("chrome");
+  const given = member.age != null || member.ageMonths != null;
+  const months = member.age == null && member.ageMonths != null;
+  const n = member.age ?? member.ageMonths ?? member.visualAge?.years;
+  if (n == null) return null;
+  const short = months ? t("ageMonthsShort", { n }) : t(given ? "ageYearsShort" : "ageYearsAbout", { n });
+  const full = months ? chrome("ageMonthsValue", { n }) : chrome("ageYearsValue", { n });
   return (
-    <div className="flex items-center gap-3 rounded-xl bg-ink-50/70 p-2">
-      <input
-        ref={input}
-        type="file"
-        accept="image/*"
-        className="sr-only"
-        onChange={(event) => void pick(event.target.files?.[0])}
-      />
-      <button
-        type="button"
-        onClick={() => input.current?.click()}
-        className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-white text-ink-500 ring-1 ring-ink-200 transition hover:ring-ink-400"
-        aria-label={t("drawing")}
-      >
-        {busy ? (
-          <Loader2 className="size-4 animate-spin" />
-        ) : url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={url} alt="" className="size-full object-contain" />
-        ) : (
-          <ImagePlus className="size-4" />
-        )}
-      </button>
-      <p className="text-xs leading-snug text-ink-500">{failed ? t("uploadFailed") : t("drawingWins")}</p>
-    </div>
+    <span
+      className="shrink-0 text-sm tabular-nums text-ink-500"
+      title={given ? full : t("ageEstimatedHint", { age: full })}
+    >
+      {short}
+    </span>
   );
 }
 
@@ -302,7 +235,8 @@ function PlateInput({
   className,
 }: {
   value: string;
-  onCommit: (value: string) => void;
+  /** Resolve to false when the change was refused: the field then shows what the book still says. */
+  onCommit: (value: string) => void | boolean | Promise<boolean | void>;
   placeholder: string;
   disabled?: boolean;
   autoFocus?: boolean;
@@ -312,8 +246,9 @@ function PlateInput({
 }) {
   const [draft, setDraft] = useState(value);
   useEffect(() => setDraft(value), [value]);
-  const commit = () => {
-    if (draft.trim() !== value.trim()) onCommit(draft.trim());
+  const commit = async () => {
+    if (draft.trim() === value.trim()) return;
+    if ((await onCommit(draft.trim())) === false) setDraft(value);
   };
   const shared = {
     value: draft,
@@ -321,7 +256,7 @@ function PlateInput({
     autoFocus,
     placeholder,
     "aria-label": placeholder,
-    onBlur: commit,
+    onBlur: () => void commit(),
     className: cn(
       "bg-transparent transition placeholder:text-ink-300 focus:outline-none disabled:opacity-100",
       className,

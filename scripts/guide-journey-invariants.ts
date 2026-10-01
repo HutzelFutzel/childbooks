@@ -16,12 +16,12 @@
  */
 import { createDefaultGuideFactPolicies } from "../books-frontend/src/core/guide/factPolicy";
 import { classifyOpeningText } from "../books-frontend/src/core/guide/manuscript";
-import { guideActivity } from "../books-frontend/src/core/guide/activity";
-import { deriveJourney, type Journey } from "../books-frontend/src/core/guide/journey";
+import { composerForChoice, ENTER_NEVER_ACCEPTS, guideActivity } from "../books-frontend/src/core/guide/activity";
+import { availableViews, bookViewOf, deriveJourney, type Journey } from "../books-frontend/src/core/guide/journey";
 import { guideLayout, GUIDE_MOBILE_MAX, GUIDE_CHAT_COLUMN_PX, GUIDE_FOCUS_MIN_PANE } from "../books-frontend/src/core/guide/layout";
 import { hardcoverCheck, roundPages, shapeProducts } from "../books-frontend/src/core/guide/hardcover";
-import { resolveGuideTarget } from "../books-frontend/src/core/guide/target";
-import { withAuthoring } from "../books-frontend/src/core/guide/projectState";
+import { chipForView, resolveGuideTarget, targetHomeView } from "../books-frontend/src/core/guide/target";
+import { authoringOf, withAuthoring } from "../books-frontend/src/core/guide/projectState";
 import { mergeBooks, resolveBookConflict } from "../books-frontend/src/core/guide/merge";
 import { illustrationUnits } from "../books-frontend/src/core/book/units";
 import { collectProjectImageBlobIds } from "../books-frontend/src/core/book/blobRefs";
@@ -40,9 +40,15 @@ import {
   withCastResolved,
 } from "../books-frontend/src/core/guide/ownWords";
 import {
+  noteStyleChange,
   portraitInputs,
+  portraitPrompt,
+  styleRevert,
+  withLooksDecided,
   withPortraitAnchorReferences,
+  withStyleReverted,
 } from "../books-frontend/src/core/guide/portrait";
+import { createDefaultPromptsConfig } from "../books-frontend/src/core/prompts/registry";
 import {
   anchorImageIsCurrent,
   anchorsToPrepare,
@@ -115,6 +121,63 @@ function journeyOf(project: Project, signals: Parameters<typeof deriveJourney>[2
   if (guidedEmpty.hasBook || guidedEmpty.views.includes("style")) {
     fail("Choosing Guide me opened the book pane before there was a name, a story or a saved style.");
   }
+
+  const namedUnchosen = withAuthoring(
+    {
+      ...bare,
+      title: "Maya",
+      illustrations: {},
+      config: {
+        ...bare.config,
+        storyText: "",
+        styleReady: false,
+        storyBrief: {
+          ...bare.config.storyBrief,
+          mode: "guided",
+          cast: [{ id: "maya", name: "Maya" }],
+          heroNames: ["Maya"],
+        },
+      },
+    },
+    { entry: "guided" },
+  );
+  const choosing = journeyOf(namedUnchosen);
+  cases += 1;
+  if (choosing.views.includes("style")) {
+    fail("The style tab opened while the look was still being chosen in the chat.");
+  }
+  cases += 1;
+  if (choosing.hasBook) {
+    fail("A name alone opened the book pane. There is nothing to show but placeholders yet.");
+  }
+  const styled = journeyOf({
+    ...namedUnchosen,
+    config: { ...namedUnchosen.config, styleReady: true },
+  });
+  cases += 1;
+  if (!styled.views.includes("style")) fail("Choosing a look should open the style tab.");
+  const designed = journeyOf(
+    withAuthoring(
+      { ...namedUnchosen, config: { ...namedUnchosen.config, styleReady: true } },
+      { bookSetup: { formatConfirmedAt: 1, layoutConfirmedAt: 1 } },
+    ),
+  );
+  cases += 1;
+  if ((designed.views as string[]).some((view) => view === "design" || view === "cover")) {
+    fail("The shape and layout are chosen in the chat and the title is typed with the story: no Design or Cover tab.");
+  }
+  cases += 1;
+  if (designed.views.includes("pages")) {
+    fail("The Book tab opened before the pages started.");
+  }
+}
+
+// Views stored or named before the Cover and Design tabs were folded in.
+{
+  cases += 1;
+  if (bookViewOf("cover") !== "pages" || bookViewOf("design") !== "story" || bookViewOf("nope") !== null) {
+    fail("Old view ids should open the Book (cover) and Story (design) tabs, and unknown ids nothing.");
+  }
 }
 
 // --- Every synthesized book, guided and own words ---------------------------
@@ -179,12 +242,13 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
       if (!running.working) fail(`"${name}" (${entry}) is drawing a page but shows no work running.`);
     }
 
-    // Portraits are not offered while any of them is running.
+    // Portraits are never offered for someone already being drawn.
     if (journey.well?.kind === "portraits") {
-      const busy = journeyOf(book, { activeUnitIds: new Set([journey.well.castIds[0]!]) });
+      const drawing = journey.well.castIds[0]!;
+      const busy = journeyOf(book, { activeUnitIds: new Set([drawing]) });
       cases += 1;
-      if (busy.well?.kind === "portraits") {
-        fail(`"${name}" (${entry}) offers portraits again while one is being drawn.`);
+      if (busy.well?.kind === "portraits" && busy.well.castIds.includes(drawing)) {
+        fail(`"${name}" (${entry}) offers a portrait again while it is being drawn.`);
       }
     }
 
@@ -212,6 +276,48 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
   cases += 1;
   const busy = guideActivity({ sending: true, extractionRunning: true });
   if (busy?.id !== "understanding") fail("A message in flight should say it is being understood.");
+  // The message field stays beside every card that spends Sparks, and Enter never accepts one.
+  for (const kind of ["portraits", "drawBook", "order", "redraw", "bookUpdate", "formatChoice", "layoutChoice", "hardcoverChoice", "pageFix", "printFix", "account"]) {
+    cases += 1;
+    if (!composerForChoice({ entry: "guided", wellKind: kind })) fail(`The message field is hidden beside the "${kind}" card.`);
+    cases += 1;
+    if (!ENTER_NEVER_ACCEPTS.has(kind)) fail(`Enter on an empty field can accept the "${kind}" card.`);
+  }
+  for (const kind of ["whichName", "manuscriptChoice", "pictureNotes"]) {
+    cases += 1;
+    if (composerForChoice({ entry: "guided", wellKind: kind })) fail(`The message field shows beside "${kind}", which holds the next words itself.`);
+  }
+  cases += 1;
+  if (!composerForChoice({ entry: "guided", wellKind: null })) fail("The message field is hidden while the book draws.");
+  // A card opened on a tab belongs to that tab.
+  {
+    const person = { kind: "person" as const, castId: "p1", name: "Maya" };
+    const page = { kind: "page" as const, unitId: "u1", page: 2 };
+    cases += 1;
+    if (targetHomeView(person) !== "cast") fail("A person's card should belong to the Characters tab.");
+    cases += 1;
+    if (chipForView(person, "cast") !== person) fail("A person's card closed while still on the Characters tab.");
+    for (const view of ["story", "style", "pages", null] as const) {
+      cases += 1;
+      if (chipForView(person, view) !== null) fail(`A person's card stayed open on the ${view ?? "empty"} view.`);
+    }
+    cases += 1;
+    if (chipForView(page, "cast") !== null) fail("A page's card stayed open on the Characters tab.");
+    cases += 1;
+    if (chipForView(null, "cast") !== null) fail("No card should stay no card.");
+  }
+  cases += 1;
+  if (guideActivity({ revisionRunning: true })?.id !== "revisingStory") {
+    fail("A story change being prepared should show a named status, not silence.");
+  }
+  cases += 1;
+  if (guideActivity({ revisionRunning: false }) !== null) {
+    fail("No revision running and nothing else happening should show no status.");
+  }
+  cases += 1;
+  if (guideActivity({ revisionRunning: true, sending: true })?.id !== "understanding") {
+    fail("A message in flight is understood before a background revision is reported.");
+  }
   cases += 1;
   const reading = guideActivity({ extractionRunning: true });
   if (reading?.id !== "readingStory") fail("Reading a pasted story should be a named status.");
@@ -298,6 +404,68 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
     }
   }
 
+  const frogBook = withAnalysisCharacters(ageBase, [
+    {
+      name: "Maya",
+      type: "character",
+      description: "A small green frog with golden eyes.",
+      bodyPlan: "aquatic",
+      ageYears: 4,
+      ageSource: "suggested",
+    },
+  ]);
+  const frog = frogBook.config.storyBrief?.cast?.[0];
+  cases += 1;
+  if (
+    frog?.appearance !== "A small green frog with golden eyes." ||
+    frog.bodyPlan !== "aquatic" ||
+    frog.appearanceFromStory !== true
+  ) {
+    fail("Story analysis should copy the character's kind of being onto the plate.");
+  } else {
+    cases += 1;
+    const prompt = portraitPrompt(frogBook, frog, createDefaultPromptsConfig());
+    if (!prompt.includes("small green frog") || !prompt.includes("aquatic") || !prompt.includes("species")) {
+      fail("The portrait prompt should draw the being the story described.");
+    }
+    cases += 1;
+    if (prompt.includes("Nothing else is known")) {
+      fail("A described character should not be invented from the name.");
+    }
+    const revised = withAnalysisCharacters(frogBook, [
+      {
+        name: "Maya",
+        type: "character",
+        description: "A brown toad with warty skin.",
+        bodyPlan: "quadruped",
+      },
+    ]);
+    const toad = revised.config.storyBrief?.cast?.[0];
+    cases += 1;
+    if (toad?.appearance !== "A brown toad with warty skin." || toad.bodyPlan !== "quadruped") {
+      fail("A story-copied look should update when analysis runs again.");
+    }
+  }
+
+  const kept = withAnalysisCharacters(
+    {
+      ...ageBase,
+      config: {
+        ...ageBase.config,
+        storyBrief: {
+          mode: "own",
+          cast: [{ id: "maya", name: "Maya", appearance: "curly red hair" }],
+        },
+      },
+    },
+    [{ name: "Maya", type: "character", description: "A small green frog.", bodyPlan: "aquatic" }],
+  );
+  const keptMaya = kept.config.storyBrief?.cast?.[0];
+  cases += 1;
+  if (keptMaya?.appearance !== "curly red hair" || keptMaya.bodyPlan !== undefined) {
+    fail("A look the family wrote should stay, and analysis should not replace it.");
+  }
+
   const bookCandidate = GUIDE_BOOK_STATES.map(({ project }) => project).find(
     (project) =>
       Boolean(project.screenplay) &&
@@ -315,6 +483,9 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
         entry: "own",
         lockedAt: undefined,
         portraits: {},
+        // Asked once after the reading; settled here so the looks come next.
+        answeredFacts: ["readingAge"],
+        skippedFacts: ["pictureNotes"],
         extraction: {
           storyHash: manuscriptHash(bookCandidate.config.storyText),
           at: 1,
@@ -323,8 +494,19 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
         },
       },
     );
+    const castIds = namedCast(briefOf(portraitFirst.config)).map((member) => member.id);
     cases += 1;
-    if (journeyOf(portraitFirst).well?.kind !== "portraits") {
+    const looksFirst = journeyOf(portraitFirst).well;
+    if (looksFirst?.kind !== "castLooks" || looksFirst.castId !== castIds[0]) {
+      fail("Where each person's look comes from must be asked before their portraits, first person first.");
+    }
+    cases += 1;
+    if (availableViews(portraitFirst).includes("cast")) {
+      fail("The People tab showed before anyone had a portrait.");
+    }
+    const looksSettled = withLooksDecided(portraitFirst, castIds);
+    cases += 1;
+    if (journeyOf(looksSettled).well?.kind !== "portraits") {
       fail("Current portraits must be offered before Create illustrated book.");
     }
 
@@ -342,6 +524,10 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
     const needsSetup = withAuthoring(portraitFirst, {
       portraits: currentPortraits,
     });
+    cases += 1;
+    if (!availableViews(needsSetup).includes("cast")) {
+      fail("The People tab didn't arrive with the first portraits.");
+    }
     cases += 1;
     if (journeyOf(needsSetup, { planReady: false }).well?.kind !== "formatChoice") {
       fail("After portraits, Chat should ask for an explicit book format.");
@@ -361,12 +547,149 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
     if (journeyOf(formatChosen, { planReady: false }).well?.kind !== "layoutChoice") {
       fail("Page layout should be asked after book format.");
     }
-    const setupChosen = withAuthoring(formatChosen, {
+    const layoutChosen = withAuthoring(formatChosen, {
       bookSetup: { formatConfirmedAt: 1, layoutConfirmedAt: 2 },
     });
     cases += 1;
+    if (journeyOf(layoutChosen, { planReady: false }).well?.kind !== "coverWords") {
+      fail("The cover's words should be asked right after the page layout, while the plan is made.");
+    }
+    cases += 1;
+    if (journeyOf(layoutChosen, { planReady: true }).well?.kind !== "coverWords") {
+      fail("Draw the book must wait for the cover's words.");
+    }
+    const setupChosen = withAuthoring(layoutChosen, { cover: { confirmedAt: 3 } });
+    cases += 1;
+    if (journeyOf(setupChosen, { planReady: true }).well?.kind !== "drawBook") {
+      fail("Settling the cover's words should lead straight to Draw the book.");
+    }
+    cases += 1;
+    if (journeyOf(withAuthoring(layoutChosen, { cover: { subtitle: "A Blanket Fort Adventure" } }), { planReady: true }).well?.kind !== "coverWords") {
+      fail("Picking a subtitle is not saying the cover is done: the card should stay until Looks good.");
+    }
+    cases += 1;
     if (journeyOf(setupChosen, { planReady: false }).well?.kind === "drawBook") {
       fail("Create illustrated book must wait for a page plan matching the reviewed setup.");
+    }
+
+    // A new look after portraits were drawn: redraw them (priced for portraits
+    // only) or keep the old look for free. The book's button waits behind it.
+    {
+      const other: Project = {
+        ...setupChosen,
+        config: { ...setupChosen.config, artStyle: { presetId: "__another-look__", origin: "preset" } },
+      };
+      const restyled = noteStyleChange(setupChosen, other);
+      const card = journeyOf(restyled, { planReady: true }).well;
+      cases += 1;
+      if (card?.kind !== "portraits" || !card.stale || !card.canKeepLook || card.castIds.length !== castIds.length) {
+        fail(`A new look should ask to redraw the portraits, with the old look as the way back (got ${JSON.stringify(card)}).`);
+      }
+      cases += 1;
+      if (journeyOf(restyled, { planReady: true }).well?.kind === "drawBook") {
+        fail("Create illustrated book must not share a card with redrawing the portraits.");
+      }
+      const unnoted = journeyOf(other, { planReady: true }).well;
+      cases += 1;
+      if (unnoted?.kind !== "portraits" || !unnoted.stale || unnoted.canKeepLook) {
+        fail("With no remembered look the card should only offer to redraw, never a way back that doesn't exist.");
+      }
+      const redrawing = journeyOf(restyled, { planReady: true, activeUnitIds: new Set(castIds) }).well;
+      cases += 1;
+      if (redrawing?.kind === "drawBook" || redrawing?.kind === "portraits") {
+        fail("While the portraits redraw, neither the redraw card nor the book's button should show.");
+      }
+      const back = withStyleReverted(restyled);
+      cases += 1;
+      if (
+        styleRevert(restyled) === null ||
+        back.config.artStyle.presetId !== setupChosen.config.artStyle.presetId ||
+        journeyOf(back, { planReady: true }).well?.kind !== "drawBook" ||
+        styleRevert(back) !== null
+      ) {
+        fail("Keeping the old look should bring the portraits back as current, with Create illustrated book next.");
+      }
+      const member = namedCast(briefOf(restyled.config))[0]!;
+      const oneRedrawn = withAuthoring(restyled, {
+        portraits: {
+          ...restyled.authoringState?.portraits,
+          [member.id]: createVersionTree({
+            blobId: "portrait-new-look",
+            mimeType: "image/png",
+            createdAt: 99,
+            inputs: portraitInputs(restyled, member),
+          }),
+        },
+      });
+      cases += 1;
+      if (styleRevert(oneRedrawn) !== null) {
+        fail("Once a portrait is redrawn in the new look, going back would waste it, so it must not be offered.");
+      }
+      const allRedrawn = withAuthoring(restyled, {
+        portraits: Object.fromEntries(
+          namedCast(briefOf(restyled.config)).map((person, index) => [
+            person.id,
+            createVersionTree({
+              blobId: `portrait-new-${person.id}`,
+              mimeType: "image/png",
+              createdAt: 100 + index,
+              inputs: portraitInputs(restyled, person),
+            }),
+          ]),
+        ),
+      });
+      cases += 1;
+      if (journeyOf(allRedrawn, { planReady: true }).well?.kind !== "drawBook") {
+        fail("After the portraits are redrawn, the book's button should come back as its own step.");
+      }
+      // Two changes in a row still go back to the look the pictures are in.
+      const twice = noteStyleChange(restyled, {
+        ...restyled,
+        config: { ...restyled.config, artStyle: { presetId: "__a-third-look__", origin: "preset" } },
+      });
+      cases += 1;
+      if (styleRevert(twice)?.presetId !== setupChosen.config.artStyle.presetId) {
+        fail("A second style change must keep the look the portraits were drawn in, not the one in between.");
+      }
+      // Changing nothing, or changing before anything is drawn, remembers nothing.
+      cases += 1;
+      if (
+        noteStyleChange(setupChosen, setupChosen) !== setupChosen ||
+        authoringOf(noteStyleChange(portraitFirst, { ...portraitFirst, config: { ...portraitFirst.config, artStyle: other.config.artStyle } })).styleBefore !== undefined
+      ) {
+        fail("A style change with no drawn portrait must not remember anything.");
+      }
+      // A stored look that isn't one reads as absent.
+      cases += 1;
+      if (
+        authoringOf({ authoringState: { version: 1, styleBefore: { presetId: 7 } } as never }).styleBefore !== undefined ||
+        authoringOf({ authoringState: { version: 1, styleBefore: "watercolor" } as never }).styleBefore !== undefined
+      ) {
+        fail("A stored previous look that isn't a style should read as absent.");
+      }
+    }
+
+    // Too short for a hardcover: the question stands alone, with only its two answers.
+    const short = {
+      case: "short" as const,
+      pages: 20,
+      naturalPages: 18,
+      wordsPerPage: 30,
+      hardcoverMin: 24,
+      softcoverPages: 20,
+      printable: true,
+    };
+    const asked = journeyOf(setupChosen, { planReady: true, hardcover: short }).well;
+    cases += 1;
+    if (asked?.kind !== "hardcoverChoice" || asked.min !== 24 || asked.pages !== 20) {
+      fail(`A short story should ask "spread it or keep it short?" on its own (got ${asked?.kind}).`);
+    }
+    for (const decision of ["thin", "keep"] as const) {
+      const decided = journeyOf(withAuthoring(setupChosen, { hardcover: decision }), { planReady: true, hardcover: short });
+      cases += 1;
+      if (decided.well?.kind !== "drawBook") {
+        fail(`After "${decision}" the hardcover question should give way to Draw the book (got ${decided.well?.kind}).`);
+      }
     }
   }
 }

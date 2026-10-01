@@ -17,7 +17,8 @@ import { useSparksStore } from "../../state/sparksStore";
 import { useSparksUiStore } from "../../state/sparksUiStore";
 import { Button } from "../components/Button";
 import { Modal } from "../components/Modal";
-import { SparkEstimateCost, useImageBatchRange } from "../layout/SparkCost";
+import { batchItemsOf, SparkEstimateCost, useImageBatchRange } from "../layout/SparkCost";
+import type { BatchUnit } from "./studioGen";
 import { notify } from "../lib/notify";
 import { isArtStyleChosen } from "../wizard/schema";
 import { artStylesEqual, StyleStep } from "../wizard/steps/StyleStep";
@@ -26,7 +27,7 @@ import { preferredDesignStep } from "./studioSteps";
 import {
   startStyleRenew,
   styleRenewCounts,
-  styleRenewEstimateParts,
+  styleRenewEstimateUnits,
   styleRenewTargets,
 } from "./styleRenew";
 import { ArtworkLookGate } from "./ArtworkLookGate";
@@ -308,6 +309,7 @@ export function StyleSetup() {
         draftLabel={draftLabel}
         castCount={renew.cast}
         pageIds={styleRenewTargets(project).pageIds}
+        units={styleRenewEstimateUnits(project, styleRenewTargets(project).castIds, styleRenewTargets(project).pageIds)}
         onClose={() => !busy && setConfirmOpen(false)}
         onConfirm={() => void confirmAndRenew()}
       />
@@ -322,6 +324,7 @@ function StyleRenewConfirm({
   draftLabel,
   castCount,
   pageIds,
+  units,
   onClose,
   onConfirm,
 }: {
@@ -331,12 +334,13 @@ function StyleRenewConfirm({
   draftLabel: string;
   castCount: number;
   pageIds: string[];
+  units: BatchUnit[];
   onClose: () => void;
   onConfirm: () => void;
 }) {
   const pageCount = pageIds.length;
-  // Covers are priced as covers, so the quote matches what actually gets spent.
-  const range = useImageBatchRange(styleRenewEstimateParts(castCount, pageIds));
+  // Each unit is priced as it will be drawn (covers as covers), so the quote matches the charge.
+  const range = useImageBatchRange(batchItemsOf(units));
   const sparks = useAppConfigStore((s) => s.sparks);
   const balance = useSparksStore((s) => s.balance);
   const openWallet = useSparksUiStore((s) => s.openWallet);

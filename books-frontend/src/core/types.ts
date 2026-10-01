@@ -46,6 +46,8 @@ export interface ModelInfo {
 export interface ModelSelection {
   provider: ProviderId;
   id: string;
+  /** Text only: the bound action's reasoning, temperature, output cap and timeout. */
+  params?: import("./config/modelConfig").TextCallParams;
 }
 
 export interface ArtStyleSelection {
@@ -97,6 +99,9 @@ export const SOURCE_ART_MAX = 3;
 /** Bump whenever the just-in-time likeness permission copy materially changes. */
 export const LIKENESS_CONSENT_VERSION = "2026-09-06";
 
+/** Photos of one person a portrait may draw from. */
+export const LIKENESS_PHOTOS_MAX = 3;
+
 /**
  * Short-lived pointer to a privately stored likeness photo.
  *
@@ -111,10 +116,17 @@ export interface LikenessPhotoRef {
   consentVersion: string;
 }
 
+/** What a character is. Decides what the chat asks and how they are drawn (`core/story/castKinds.ts`). */
+export type CastKind = "person" | "animal" | "toy" | "creature";
+
 /** One named person or creature the story is about (co-write mode). */
 export interface StoryCastMember {
   id: string;
   name: string;
+  /** Absent on older books: read through `castKindOf`, which infers it. */
+  kind?: CastKind;
+  /** What kind of animal, toy or creature: "golden retriever", "teddy bear", "dragon". */
+  species?: string;
   /** Who they are: "the hero", "her twin brother", "the neighbour's dog". */
   role?: string;
   /** Age in years, when the author knows it — keeps the cast believable. */
@@ -138,6 +150,12 @@ export interface StoryCastMember {
   /** Optional one-use photo for carrying this person's likeness into Cast. */
   likenessPhoto?: LikenessPhotoRef;
   /**
+   * More one-use photos of the same person for the Chat studio portrait, up to
+   * `LIKENESS_PHOTOS_MAX - 1`. Only meaningful beside `likenessPhoto`, and
+   * cleared with it.
+   */
+  moreLikenessPhotos?: LikenessPhotoRef[];
+  /**
    * Existing character drawings. First image is the canonical design; extras
    * help identity and style. Mutually exclusive with `likenessPhoto`.
    */
@@ -148,12 +166,26 @@ export interface StoryCastMember {
    */
   lookFromArt?: string;
   /**
-   * Chat studio: where this person's look comes from. Absent means invent from
-   * the stated story facts and safe defaults.
+   * Chat studio: where this person's look comes from. Absent means use the
+   * story's visual description when analysis has one, and otherwise invent
+   * from the name.
    */
   lookSource?: LookSource;
-  /** Chat studio: the reader's own description, used when `lookSource` is `describe`. */
+  /**
+   * How they look. The family's own words, or the visual description copied
+   * from story analysis when they have not described this person themselves.
+   */
   appearance?: string;
+  /**
+   * The current `appearance` was copied from story analysis and may be
+   * replaced when analysis runs again. Cleared once the family edits it.
+   */
+  appearanceFromStory?: boolean;
+  /**
+   * Gross body layout from story analysis. A frog or other non-human body
+   * keeps the portrait from being drawn as a person.
+   */
+  bodyPlan?: BodyPlan;
   /** Chat studio: a change asked for on the portrait itself ("make the hair darker"). */
   portraitNote?: string;
 }
@@ -161,13 +193,30 @@ export interface StoryCastMember {
 /** Where a person's portrait takes its likeness from. */
 export type LookSource = "photo" | "drawing" | "describe" | "invent";
 
+export type CastRelationType = "twins" | "siblings" | "friends" | "family" | "owner" | "other";
+
+/**
+ * Something the family said about how characters belong together. Reaches the
+ * story, the portraits and the reference sheets, so it is never lost between
+ * the chat and the book.
+ */
+export interface CastRelation {
+  /** Cast member ids, two or more. For `owner`, the owner comes first. */
+  ids: string[];
+  type: CastRelationType;
+  /** Their words, when the type alone doesn't say it: "best friends from kindergarten". */
+  label?: string;
+  /** Twins only: whether they are drawn alike. Absent until the family says. */
+  lookAlike?: "identical" | "different";
+}
+
 /**
  * What a portrait was drawn from. A result commits only while every field still
  * matches the live book, so a late render cannot flash an outdated face.
  */
 export interface PortraitInputs {
   subjectId: string;
-  /** Name, age and description of the person when the job was queued. */
+  /** Age, role and kind of the person when the job was queued. Not the name: a rename changes no look. */
   subjectSignature: string;
   /** `artStyleKey` of the saved style. */
   styleKey: string;
@@ -179,6 +228,12 @@ export interface PortraitImage {
   blobId: string;
   mimeType: string;
   inputs: PortraitInputs;
+  /**
+   * How the person was described when this picture was drawn, so choosing it
+   * again from the history puts that description back with it. Empty text means
+   * "nothing". Absent on pictures drawn before history could be restored.
+   */
+  look?: { portraitNote: string; appearance: string };
   createdAt: number;
   imageTier?: ImageTier;
   imageModel?: ModelSelection;
@@ -222,10 +277,45 @@ export interface StudioAuthoringState {
   askedFacts?: string[];
   /** Asked facts the reader replied to (any reply answers an optional fact). */
   answeredFacts?: string[];
+  /** Story details the guide asked about before writing. Never asked twice. */
+  briefAsked?: string[];
+  /** The story detail the guide just asked about, until the next reply. */
+  briefOpen?: string;
+  /** When the reader said to write the story (the button, "go ahead", "surprise me"). */
+  briefStartAt?: number;
+  /**
+   * Chat skills: per-person follow-ups the guide asked or the reader skipped,
+   * as `<personId>:<field>` (`p1:role`, `p1:role:skipped`). Asked once, never again.
+   */
+  personAsks?: string[];
+  /**
+   * Chat studio: people (cast ids) whose look source the reader settled in the
+   * chat, including "let the story decide". Asked once per person.
+   */
+  looksDecided?: string[];
+  /** The person and option the looks card opens on, as `<castId>:<source>`, after the parent asked in words. */
+  lookFocus?: string;
+  /**
+   * The look the book's portraits were drawn in, kept when the reader changed
+   * the style so "keep the old look" can take it back for free. Only ever read
+   * through `styleRevert`, which checks that it still applies.
+   */
+  styleBefore?: ArtStyleSelection;
+  /**
+   * Chat skills: names the reader removed from the book. Story analysis and
+   * manuscript extraction never add these back; adding the person again clears it.
+   */
+  removedNames?: string[];
   /** The chat language, as a book-language code. Changing it never restarts the book. */
   chatLocale?: string;
   /** Own words: the reader asked the guide for something, so the composer shows. */
   ownComposer?: boolean;
+  /**
+   * Own words: when the reader said the story is done ("My story is ready", or
+   * pasting a finished story). Nothing is read, asked or drawn before it, so
+   * the guide never interrupts someone still writing. Later edits keep it.
+   */
+  manuscriptReadyAt?: number;
   /** Page-plan rerun job whose result replaces the current plan when it lands. */
   planRequestedFor?: string;
   /** The analysis and page target the current page plan was asked for. */
@@ -249,8 +339,24 @@ export interface StudioAuthoringState {
     error?: string;
   };
   hardcover?: HardcoverDecision;
-  /** Cover lines typed on the book. Text only: typing never redraws a picture. */
-  cover?: { subtitle?: string; author?: string; titleEdited?: boolean };
+  /**
+   * The cover's words as the reader chose them. An empty subtitle or author
+   * means "none". Typing never redraws a picture; the words are painted into
+   * the cover when the book is drawn.
+   */
+  cover?: {
+    subtitle?: string;
+    author?: string;
+    titleEdited?: boolean;
+    /** When the reader settled the cover's words on the cover card. */
+    confirmedAt?: number;
+    /** Set when the book is drawn: the front cover is painted with its words. */
+    painted?: boolean;
+    /** Subtitles written with the story, offered on the cover card. */
+    subtitleIdeas?: string[];
+    /** The title lines were read off the top of the reader's own manuscript. */
+    fromStory?: boolean;
+  };
   /** Own-words extraction, keyed to the manuscript it read. */
   extraction?: {
     storyHash: string;
@@ -313,6 +419,8 @@ export interface StoryBrief {
   heroNames?: string[];
   /** Co-write mode: everyone who appears, with their relationships. */
   cast?: StoryCastMember[];
+  /** How characters belong together ("Myla and Shilo are twins"). By cast id. */
+  relations?: CastRelation[];
   /** Co-write mode: what's happening — a birthday, a first day, a move. */
   occasion?: string;
   /** Co-write mode: when it happens ("the morning of her 6th birthday"). */
@@ -321,6 +429,16 @@ export interface StoryBrief {
   where?: string;
   /** Co-write mode: anything else the author insists must be in the story. */
   mustInclude?: string;
+  /**
+   * Own words: what the pictures should show that the text doesn't say ("Maya
+   * has red curls", "it's winter"). Read by the page plan; never printed.
+   */
+  pictureNotes?: string;
+  /**
+   * Chat story details without a field of their own (bedtime, mood, things to
+   * leave out, …), by detail id. See `core/guide/storyDetails.ts`.
+   */
+  details?: Record<string, StoryDetailValue>;
   /** When the current `storyText` was generated from this brief. */
   generatedAt?: number;
   /**
@@ -333,6 +451,13 @@ export interface StoryBrief {
   generatedForAge?: string;
   /** Content locale the current draft was written for. */
   generatedForLocale?: BookLanguageId;
+}
+
+/** One story detail: catalog ids, the reader's own words, or a yes. */
+export interface StoryDetailValue {
+  ids?: string[];
+  text?: string;
+  on?: boolean;
 }
 
 /** Everything captured by the setup wizard. */
@@ -638,6 +763,18 @@ export interface IllustrationImage extends AnchorImage {
    * title/subtitle/author later drift from what the artwork shows.
    */
   bakedText?: BakedCoverText;
+  /**
+   * Cover-only: what the lettering check read. `passed`: every word spelled
+   * right, inside the safe area. `fellBack`: no attempt passed, so this image
+   * was drawn without words and the text layer carries them. `failed`: no
+   * attempt passed and there was no time to draw it plain. `unchecked`: the
+   * check could not run.
+   */
+  lettering?: {
+    outcome: "passed" | "fellBack" | "failed" | "unchecked";
+    attempts: number;
+    problems?: string[];
+  };
   /** The prompt used (for inspection / reuse). */
   prompt?: string;
   /**

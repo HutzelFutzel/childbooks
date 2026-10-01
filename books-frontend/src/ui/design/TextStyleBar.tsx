@@ -362,7 +362,7 @@ function AlignMenu({
   const rootRef = useRef<HTMLDivElement>(null);
   const hOpts: { id: HAlign; icon: React.ReactNode; title: string }[] = [
     { id: "left", icon: <AlignLeft className="size-4" />, title: "Align left" },
-    { id: "center", icon: <AlignCenter className="size-4" />, title: "Align centre" },
+    { id: "center", icon: <AlignCenter className="size-4" />, title: "Align center" },
     { id: "right", icon: <AlignRight className="size-4" />, title: "Align right" },
     { id: "justify", icon: <AlignJustify className="size-4" />, title: "Justify" },
   ];

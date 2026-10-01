@@ -52,7 +52,9 @@ import {
   migrateGeneratedTextBoxHeights,
   newImageId,
   newTextBoxId,
+  insetPageText,
   pagesNeedingRelayout,
+  pagesWithUnsafeText,
   relayoutPageDesign,
   seedPageDesign,
   type DesignPage,
@@ -138,6 +140,8 @@ function textStyleScopeLabel(key: SharedTextStyleKey): string {
       return "all book titles";
     case "book-subtitle":
       return "all cover subtitles";
+    case "book-author":
+      return "all author lines";
     case "custom-cover":
       return "all custom cover text";
     case "custom-page":
@@ -174,6 +178,7 @@ function syncCoverLinkedField(
   const store = useProjectsStore.getState();
   if (role === "book-title") void store.setBookTitle(projectId, text);
   else if (role === "book-subtitle") void store.setCoverSubtitle(projectId, text);
+  else if (role === "book-author") void store.setCoverAuthor(projectId, text);
 }
 
 /** Options for design mutations that participate in undo/redo. */
@@ -580,16 +585,25 @@ type ClipboardEntry = {
  * The subset of `TextBox` that makes up its *style* rather than its content,
  * position or identity — what "copy style / paste style" carries over.
  * Deliberately excludes: id, rect, z (geometry/identity), paragraphs
- * (content), locked/hidden (per-box state), name/role/slotId (identity /
- * data bindings that shouldn't jump to another box).
+ * (content), locked/hidden/placedByReader (per-box state), name/role/slotId
+ * (identity / data bindings that shouldn't jump to another box).
  */
 type TextBoxStyle = Omit<
   TextBox,
-  "id" | "rect" | "z" | "paragraphs" | "locked" | "name" | "role" | "slotId" | "hidden"
+  | "id"
+  | "rect"
+  | "z"
+  | "paragraphs"
+  | "locked"
+  | "name"
+  | "role"
+  | "slotId"
+  | "hidden"
+  | "placedByReader"
 >;
 
 function styleOf(box: TextBox): TextBoxStyle {
-  const { id, rect, z, paragraphs, locked, name, role, slotId, hidden, ...style } =
+  const { id, rect, z, paragraphs, locked, name, role, slotId, hidden, placedByReader, ...style } =
     structuredClone(box);
   return style;
 }
@@ -795,13 +809,18 @@ export function StudioProvider({
     if (measureFontFamily !== design.defaultFontFamily) return;
     const missing = pages.filter((p) => !design.pages[p.id]);
     const stale = pagesNeedingRelayout(design, pages);
-    if (missing.length === 0 && stale.length === 0) return;
+    const unsafe = pagesWithUnsafeText(design, pages);
+    if (missing.length === 0 && stale.length === 0 && unsafe.length === 0) return;
 
     const nextPages = { ...design.pages };
     for (const p of missing) nextPages[p.id] = seedPageDesign(design, p);
     for (const p of stale) {
       const current = nextPages[p.id];
       if (current) nextPages[p.id] = relayoutPageDesign(design, p, current);
+    }
+    for (const p of pages) {
+      const current = nextPages[p.id];
+      if (current) nextPages[p.id] = insetPageText(p, current);
     }
     void setDesign({ ...design, version: DESIGN_VERSION, pages: nextPages });
   }, [bookLanguages, design, measureFontFamily, pages, project, setDesign, typography]);
@@ -2208,7 +2227,9 @@ export function StudioProvider({
       const opts = { coalesce: `nudge-${id}` };
       if (selection.kind === "box") {
         const b = design?.pages[selection.pageId]?.textBoxes.find((x) => x.id === id);
-        if (b) patchBox(selection.pageId, id, { rect: nudgeRect(b.rect, dx, dy) }, opts);
+        if (b) {
+          patchBox(selection.pageId, id, { rect: nudgeRect(b.rect, dx, dy), placedByReader: true }, opts);
+        }
       } else if (selection.kind === "shape") {
         const s = design?.pages[selection.pageId]?.shapes?.find((x) => x.id === id);
         if (s) patchShape(selection.pageId, id, { rect: nudgeRect(s.rect, dx, dy) }, opts);

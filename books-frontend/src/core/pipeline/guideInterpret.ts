@@ -55,6 +55,12 @@ import {
   type RefusedGuideClaim,
 } from "../guide/claims";
 import { nextGuideStep } from "../guide/engine";
+import type { GuideCommandId } from "../guide/agent/ids";
+import { commandPromptLines } from "../guide/agent/registry";
+import { screenCommandCalls, type RawCommandCall, type RefusedCommand } from "../guide/agent/screen";
+import type { CommandCall } from "../guide/agent/types";
+import { castOf } from "../guide/agent/resolve";
+import { portraitStatus } from "../guide/portrait";
 
 /**
  * What kind of turn this was. The distinction that earns its keep is `revise`
@@ -110,6 +116,24 @@ export interface GuideTurnResult {
   reply: string;
   /** How sure the model is about the INTENT. Per-fact certainty is on the claims. */
   confidence: number;
+  /** Skill calls that passed screening, in the order the reader asked. Empty when skills are off. */
+  commands: CommandCall[];
+  /** Calls past the per-message limit. */
+  overflowCommands: CommandCall[];
+  /** Skill calls refused by screening, with the reason. For the turn log. */
+  refusedCommands: RefusedCommand[];
+  /** The language the message is written in (BCP-47 primary tag), when detected. */
+  language: string | null;
+  languageConfidence: number;
+}
+
+/** What the interpreter may do with skills this turn. Absent: skills are off. */
+export interface GuideTurnSkills {
+  enabled: readonly GuideCommandId[];
+  floor: number;
+  max: number;
+  /** The open follow-up the guide just asked, for short replies ("5", "skip"). */
+  pending?: string;
 }
 
 export interface InterpretGuideTurnInput {
@@ -132,7 +156,25 @@ export interface InterpretGuideTurnInput {
   repairAttempts?: number;
   /** Sampling temperature. Zero unless an admin has a reason. */
   temperature?: number;
+  skills?: GuideTurnSkills;
+  /**
+   * The story passage the reader has marked, already checked against the saved
+   * story. It lets "make this nicer" find its skill; it is never a source of
+   * evidence, which still has to be quoted from the message.
+   */
+  marked?: string;
   signal?: AbortSignal;
+}
+
+/** How much of a marked passage the interpreter reads. */
+const MARKED_PROMPT_CHARS = 600;
+
+/** The marked passage as the prompt shows it: quoted, capped, and clearly not an instruction. */
+export function describeMarkedPassage(marked: string | undefined): string {
+  const text = marked?.replace(/"""/g, '"').trim();
+  if (!text) return "(nothing marked)";
+  const capped = text.length > MARKED_PROMPT_CHARS ? `${text.slice(0, MARKED_PROMPT_CHARS)}…` : text;
+  return `"""\n${capped}\n"""`;
 }
 
 /**
@@ -150,6 +192,19 @@ const turnSchema = z.object({
   skip: z.array(z.string()).max(20).optional(),
   reply: z.string().max(1200),
   confidence: z.number().min(0).max(1),
+  commands: z
+    .array(
+      z.object({
+        id: z.string().max(40),
+        args: z.array(z.object({ name: z.string().max(40), value: z.string().max(800) })).max(8).optional(),
+        evidence: z.string().max(600),
+        confidence: z.number().min(0).max(1),
+      }),
+    )
+    .max(12)
+    .optional(),
+  language: z.string().max(16).optional(),
+  languageConfidence: z.number().min(0).max(1).optional(),
 });
 
 /** A repair returns corrected claims and nothing else; the turn is already read. */
@@ -161,6 +216,56 @@ const repairSchema = z.object({
 type SanitizableGuideTurn = Omit<z.infer<typeof turnSchema>, "route"> & {
   route?: GuideEntryRoute;
 };
+
+/** The people in the book, as the interpreter needs them to resolve "her" and "the baby". */
+export function describeGuidePeople(project: Project): string {
+  const cast = castOf(project);
+  if (cast.length === 0) return "(nobody yet)";
+  return cast
+    .map((member) => {
+      const age =
+        member.age !== undefined ? `${member.age}` : member.ageMonths !== undefined ? `${member.ageMonths} months` : "age not set";
+      const role = member.role?.trim() ? `, ${member.role.trim()}` : "";
+      const portrait = portraitStatus(project, member.id);
+      const drawn = portrait === "current" ? "portrait drawn" : portrait === "stale" ? "portrait out of date" : "no portrait";
+      return `- ${member.name.trim()} (${age}${role}; ${drawn}${member.likenessPhoto ? "; has a photo" : ""})`;
+    })
+    .join("\n");
+}
+
+function describePlaces(project: Project): string {
+  const anchors = (project.anchors ?? []).filter((anchor) => anchor.type !== "character");
+  if (anchors.length === 0) return "(none)";
+  return anchors.map((anchor) => `- ${anchor.name}${anchor.include ? "" : " (not drawn)"}`).join("\n");
+}
+
+function screenTurnCommands(
+  raw: SanitizableGuideTurn,
+  message: string,
+  skills: GuideTurnSkills | undefined,
+): Pick<GuideTurnResult, "commands" | "overflowCommands" | "refusedCommands" | "language" | "languageConfidence"> {
+  const language = typeof raw.language === "string" && /^[a-z]{2,3}(-[A-Za-z]{2,4})?$/.test(raw.language.trim())
+    ? raw.language.trim().slice(0, 2).toLowerCase()
+    : null;
+  const languageConfidence = language ? (raw.languageConfidence ?? 0) : 0;
+  if (!skills || skills.enabled.length === 0) {
+    return { commands: [], overflowCommands: [], refusedCommands: [], language, languageConfidence };
+  }
+  const screened = screenCommandCalls({
+    raw: (raw.commands ?? []) as RawCommandCall[],
+    message,
+    enabled: skills.enabled,
+    floor: skills.floor,
+    max: skills.max,
+  });
+  return {
+    commands: screened.kept,
+    overflowCommands: screened.overflow,
+    refusedCommands: screened.refused,
+    language,
+    languageConfidence,
+  };
+}
 
 /** How many turns of history to send. Enough for "yes"; not enough to drift. */
 const TRANSCRIPT_WINDOW = 8;
@@ -191,7 +296,7 @@ function describeTranscript(turns: GuideTurn[]): string {
 export function buildGuideTurnVars(
   input: Pick<
     InterpretGuideTurnInput,
-    "project" | "message" | "playlist" | "transcript" | "patchContext"
+    "project" | "message" | "playlist" | "transcript" | "patchContext" | "skills" | "marked"
   >,
 ): Record<string, string> {
   const cursor = nextGuideStep(input.playlist, input.project);
@@ -209,11 +314,19 @@ export function buildGuideTurnVars(
     blockers:
       cursor.blockers.length > 0 ? cursor.blockers.map((b) => `- ${b}`).join("\n") : "(nothing)",
     facts: describeGuideFacts(input.project),
-    writable: guidePatchShapeLines(input.patchContext),
+    writable: guidePatchShapeLines(input.patchContext, input.project),
     examples: guidePatchExampleLines(),
     skippable: optional || "(none)",
     transcript: describeTranscript(input.transcript ?? []),
     message: input.message.trim(),
+    people: describeGuidePeople(input.project),
+    places: describePlaces(input.project),
+    skills:
+      input.skills && input.skills.enabled.length > 0
+        ? commandPromptLines(input.skills.enabled)
+        : "(none — never return commands)",
+    pending: input.skills?.pending?.trim() || "(nothing)",
+    marked: describeMarkedPassage(input.marked),
   };
 }
 
@@ -254,12 +367,14 @@ export interface SanitizeGuideTurnOptions {
   /** The worlds a claim may name, for the dry run. */
   patchContext: GuidePatchContext;
   thresholds?: Partial<GuideClaimThresholds>;
+  skills?: GuideTurnSkills;
 }
 
 export function sanitizeGuideTurn(
   raw: SanitizableGuideTurn,
   options: SanitizeGuideTurnOptions,
 ): GuideTurnResult {
+  const agent = screenTurnCommands(raw, options.message, options.skills);
   const optional = new Map(options.playlist.map((c) => [c.id, c.skippable]));
   const skip: GuideComponentId[] = [];
   for (const id of raw.skip ?? []) {
@@ -306,6 +421,7 @@ export function sanitizeGuideTurn(
       skip,
       reply: raw.reply.trim(),
       confidence: raw.confidence,
+      ...agent,
     };
   }
 
@@ -367,6 +483,7 @@ export function sanitizeGuideTurn(
         skip,
         reply: raw.reply.trim(),
         confidence: raw.confidence,
+        ...agent,
       };
     }
     keptClaims = substantial;
@@ -424,6 +541,7 @@ export function sanitizeGuideTurn(
     skip,
     reply: raw.reply.trim(),
     confidence: raw.confidence,
+    ...agent,
   };
 }
 
@@ -441,6 +559,11 @@ function emptyTurn(reply: string): GuideTurnResult {
     skip: [],
     reply,
     confidence: 0,
+    commands: [],
+    overflowCommands: [],
+    refusedCommands: [],
+    language: null,
+    languageConfidence: 0,
   };
 }
 
@@ -465,6 +588,7 @@ export async function interpretGuideTurn(
     project: input.project,
     patchContext: input.patchContext,
     thresholds: input.thresholds,
+    skills: input.skills,
   };
 
   let raw: z.infer<typeof turnSchema>;

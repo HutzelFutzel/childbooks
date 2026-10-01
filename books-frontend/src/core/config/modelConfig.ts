@@ -132,11 +132,67 @@ export interface ImageSlotRef {
 /** Per-tier image slot references for one image action. */
 export type ImageTierBindings = Record<ImageTier, ImageSlotRef>;
 
+/**
+ * How hard a text model thinks before answering. Providers name the levels
+ * differently; `core/providers/textParams.ts` maps these onto each API.
+ */
+export type ReasoningEffort = "none" | "minimal" | "low" | "medium" | "high";
+export const REASONING_EFFORTS: ReasoningEffort[] = ["none", "minimal", "low", "medium", "high"];
+
+/** Per-action call parameters. Absent fields keep the call site's own value. */
+export interface TextCallParams {
+  reasoning?: ReasoningEffort;
+  temperature?: number;
+  maxOutputTokens?: number;
+  /** Abort the provider call after this long. */
+  timeoutMs?: number;
+}
+
+/**
+ * What happens when the bound provider has no key or its slot is empty.
+ * `crossProvider` quietly uses the other provider; `strict` fails the call so a
+ * task whose quality was measured on one model never runs on another.
+ */
+export type TextFallback = "crossProvider" | "strict";
+
+export const TEXT_PARAM_LIMITS = {
+  temperature: { min: 0, max: 2 },
+  maxOutputTokens: { min: 64, max: 65_536 },
+  timeoutMs: { min: 1_000, max: 600_000 },
+} as const;
+
+/** Shipped parameters: quick for the chat, careful for the story. */
+export const DEFAULT_TEXT_PARAMS: Partial<Record<TextActionId, TextCallParams>> = {
+  storyDraft: { reasoning: "high" },
+  storyEdit: { reasoning: "high" },
+  screenplay: { reasoning: "medium" },
+  storyAnalysis: { reasoning: "medium" },
+  storyCheck: { reasoning: "medium" },
+  anchorDescription: { reasoning: "medium" },
+  guideExtractCast: { reasoning: "medium" },
+  releaseNotes: { reasoning: "medium" },
+  guideInterpret: { reasoning: "low" },
+  editIntent: { reasoning: "low" },
+  localize: { reasoning: "low" },
+  bindingPass: { reasoning: "low" },
+  guideSpeak: { reasoning: "none", timeoutMs: 6_000 },
+  guideCompose: { reasoning: "none", temperature: 0.7, maxOutputTokens: 400, timeoutMs: 4_000 },
+  guideAnswer: { reasoning: "none", temperature: 0.3, maxOutputTokens: 700, timeoutMs: 8_000 },
+};
+
+export const DEFAULT_TEXT_FALLBACK: Partial<Record<TextActionId, TextFallback>> = {
+  guideInterpret: "strict",
+};
+
 /** The full configuration document. `version` allows future migrations. */
 export interface ModelConfig {
   version: 1;
   slots: ModelSlots;
   textBindings: Record<TextActionId, TextSlotRef>;
+  /** Per-action reasoning, temperature, output cap and timeout. */
+  textParams?: Partial<Record<TextActionId, TextCallParams>>;
+  /** Per-action fallback policy; absent means `crossProvider`. */
+  textFallback?: Partial<Record<TextActionId, TextFallback>>;
   /** Each image action binds one slot per internal model tier. */
   imageBindings: Record<ImageActionId, ImageTierBindings>;
   /** Legacy/admin display labels for internal tiers. */
@@ -156,6 +212,15 @@ function fallbackId(provider: ProviderId, modality: "text" | "image", economy: b
   return m?.id ?? "";
 }
 
+/**
+ * Shipped text slots. One strong model per provider, with thinking set per
+ * action, and a lite model for short validated lines.
+ */
+const DEFAULT_TEXT_SLOTS: Record<ProviderId, Record<TextSpeed, string>> = {
+  google: { ultrafast: "gemini-3.5-flash-lite", fast: "gemini-3.8-flash", slow: "gemini-3.8-flash" },
+  openai: { ultrafast: "gpt-6-luna", fast: "gpt-6-sol", slow: "gpt-6-sol" },
+};
+
 /** Default slots seeded from the catalog fallbacks (admin overrides via the UI). */
 export function createDefaultSlots(): ModelSlots {
   const text = {} as ModelSlots["text"];
@@ -163,10 +228,60 @@ export function createDefaultSlots(): ModelSlots {
   for (const p of ALL_PROVIDERS) {
     const premiumText = fallbackId(p, "text", false);
     const economyText = fallbackId(p, "text", true);
-    text[p] = { ultrafast: economyText, fast: economyText, slow: premiumText };
+    text[p] = DEFAULT_TEXT_SLOTS[p]
+      ? { ...DEFAULT_TEXT_SLOTS[p] }
+      : { ultrafast: economyText, fast: economyText, slow: premiumText };
     image[p] = { fast: fallbackId(p, "image", true), slow: fallbackId(p, "image", false) };
   }
   return { text, image };
+}
+
+function clampNumber(value: unknown, min: number, max: number): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  return Math.min(max, Math.max(min, value));
+}
+
+/** A stored parameter block, repaired: unknown levels and out-of-range numbers drop. */
+export function normalizeTextCallParams(input: unknown): TextCallParams | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const raw = input as Record<string, unknown>;
+  const out: TextCallParams = {};
+  if (REASONING_EFFORTS.includes(raw.reasoning as ReasoningEffort)) out.reasoning = raw.reasoning as ReasoningEffort;
+  const t = clampNumber(raw.temperature, TEXT_PARAM_LIMITS.temperature.min, TEXT_PARAM_LIMITS.temperature.max);
+  if (t !== undefined) out.temperature = Math.round(t * 100) / 100;
+  const m = clampNumber(raw.maxOutputTokens, TEXT_PARAM_LIMITS.maxOutputTokens.min, TEXT_PARAM_LIMITS.maxOutputTokens.max);
+  if (m !== undefined) out.maxOutputTokens = Math.round(m);
+  const ms = clampNumber(raw.timeoutMs, TEXT_PARAM_LIMITS.timeoutMs.min, TEXT_PARAM_LIMITS.timeoutMs.max);
+  if (ms !== undefined) out.timeoutMs = Math.round(ms);
+  return out;
+}
+
+/** The parameters a call for this action runs with. An empty block keeps the call site's own values. */
+export function textParamsFor(cfg: ModelConfig, action: TextActionId): TextCallParams {
+  return { ...(cfg.textParams?.[action] ?? DEFAULT_TEXT_PARAMS[action] ?? {}) };
+}
+
+function normalizeTextParamsMap(input: unknown): Partial<Record<TextActionId, TextCallParams>> {
+  const out: Partial<Record<TextActionId, TextCallParams>> = { ...DEFAULT_TEXT_PARAMS };
+  if (!input || typeof input !== "object") return out;
+  for (const [action, raw] of Object.entries(input as Record<string, unknown>)) {
+    const params = normalizeTextCallParams(raw);
+    if (params) out[action as TextActionId] = params;
+  }
+  return out;
+}
+
+function normalizeTextFallbackMap(input: unknown): Partial<Record<TextActionId, TextFallback>> {
+  const out: Partial<Record<TextActionId, TextFallback>> = { ...DEFAULT_TEXT_FALLBACK };
+  if (!input || typeof input !== "object") return out;
+  for (const [action, raw] of Object.entries(input as Record<string, unknown>)) {
+    if (raw === "strict" || raw === "crossProvider") out[action as TextActionId] = raw;
+  }
+  return out;
+}
+
+export function textFallbackFor(cfg: ModelConfig, action: TextActionId): TextFallback {
+  return cfg.textFallback?.[action] ?? DEFAULT_TEXT_FALLBACK[action] ?? "crossProvider";
 }
 
 /**
@@ -197,7 +312,10 @@ export function createDefaultModelConfig(): ModelConfig {
       // The reader is waiting mid-conversation, and the job is extraction rather
       // than writing, so this defaults to the fast slot.
       guideInterpret: { provider: "google", speed: "fast" },
-      guideSpeak: { provider: "google", speed: "fast" },
+      // Short lines and help answers that code validates: the lite slot.
+      guideSpeak: { provider: "google", speed: "ultrafast" },
+      guideCompose: { provider: "google", speed: "ultrafast" },
+      guideAnswer: { provider: "google", speed: "ultrafast" },
       guideExtractCast: { provider: "google", speed: "fast" },
       extractArtStyle: { provider: "google", speed: "fast" },
       extractArtLook: { provider: "google", speed: "fast" },
@@ -217,6 +335,8 @@ export function createDefaultModelConfig(): ModelConfig {
       premium: { ...DEFAULT_IMAGE_TIER_UI.premium },
     },
     capabilities: {},
+    textParams: { ...DEFAULT_TEXT_PARAMS },
+    textFallback: { ...DEFAULT_TEXT_FALLBACK },
   };
 }
 
@@ -236,19 +356,25 @@ export function resolveTextModel(
   isAvailable?: (p: ProviderId) => boolean,
 ): ModelSelection | null {
   const ref = cfg.textBindings[action];
+  if (!ref) return null;
   const ok = (p: ProviderId) => (isAvailable ? isAvailable(p) : true);
-  const ordered: ProviderId[] = [ref.provider, ...ALL_PROVIDERS.filter((p) => p !== ref.provider)];
+  const params = textParamsFor(cfg, action);
+  const strict = textFallbackFor(cfg, action) === "strict";
+  const ordered: ProviderId[] = strict
+    ? [ref.provider]
+    : [ref.provider, ...ALL_PROVIDERS.filter((p) => p !== ref.provider)];
   // First pass: honor the bound speed across providers.
   for (const p of ordered) {
     if (ok(p) && slotFilled(cfg.slots.text[p]?.[ref.speed])) {
-      return { provider: p, id: cfg.slots.text[p][ref.speed] };
+      return { provider: p, id: cfg.slots.text[p][ref.speed], params };
     }
   }
+  if (strict) return null;
   // Second pass: any filled text slot on an available provider.
   for (const p of ordered) {
     if (!ok(p)) continue;
     for (const s of TEXT_SPEEDS) {
-      if (slotFilled(cfg.slots.text[p]?.[s])) return { provider: p, id: cfg.slots.text[p][s] };
+      if (slotFilled(cfg.slots.text[p]?.[s])) return { provider: p, id: cfg.slots.text[p][s], params };
     }
   }
   return null;
@@ -455,6 +581,8 @@ export function normalizeModelConfig(input: unknown): ModelConfig {
       },
     },
     capabilities: stored.capabilities ?? {},
+    textParams: normalizeTextParamsMap(stored.textParams),
+    textFallback: normalizeTextFallbackMap(stored.textFallback),
   };
 }
 
@@ -505,4 +633,21 @@ export const modelConfigSchema = z.object({
     )
     .optional(),
   capabilities: capabilityOverridesSchema.optional(),
+  textParams: z
+    .record(
+      z.string(),
+      z.object({
+        reasoning: z.enum(["none", "minimal", "low", "medium", "high"]).optional(),
+        temperature: z.number().min(TEXT_PARAM_LIMITS.temperature.min).max(TEXT_PARAM_LIMITS.temperature.max).optional(),
+        maxOutputTokens: z
+          .number()
+          .int()
+          .min(TEXT_PARAM_LIMITS.maxOutputTokens.min)
+          .max(TEXT_PARAM_LIMITS.maxOutputTokens.max)
+          .optional(),
+        timeoutMs: z.number().int().min(TEXT_PARAM_LIMITS.timeoutMs.min).max(TEXT_PARAM_LIMITS.timeoutMs.max).optional(),
+      }),
+    )
+    .optional(),
+  textFallback: z.record(z.string(), z.enum(["crossProvider", "strict"])).optional(),
 });

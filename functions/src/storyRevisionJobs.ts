@@ -267,6 +267,7 @@ async function runRevision(uid: string, jobId: string): Promise<void> {
         creds: { apiKey: apiKeyFor(model.provider) },
         prompts,
       }),
+      model.params,
     );
     await meterAndSettle({
       uid,

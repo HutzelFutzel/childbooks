@@ -17,7 +17,8 @@ import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import { withRetry } from "../pipeline/retry";
 import { briefOf, namedCast, newCastMember } from "../story/brief";
-import type { Project, StoryCastMember } from "../types";
+import { CAST_KINDS } from "../story/castKinds";
+import { BODY_PLANS, type BodyPlan, type Project, type StoryCastMember } from "../types";
 import { authoringOf, withAuthoring } from "./projectState";
 
 export const OWN_WORDS_MAX_CHARS = 40_000;
@@ -26,6 +27,12 @@ const personSchema = z.object({
   name: z.string().min(1).max(80),
   age: z.number().int().min(0).max(120).nullable().optional(),
   ageMonths: z.number().int().min(0).max(36).nullable().optional(),
+  /** What they are. A dog in the story is drawn as a dog, not asked for an age. */
+  kind: z.enum(CAST_KINDS).nullable().optional(),
+  /** For anything not a person, as the text names it: "dog", "teddy bear". */
+  species: z.string().max(60).nullable().optional(),
+  /** Who they are to the others, as the text says it: "her little brother". */
+  role: z.string().max(80).nullable().optional(),
   confidence: z.number().min(0).max(1),
 });
 
@@ -72,7 +79,7 @@ export function sanitizeManuscriptCast(raw: ManuscriptCast, story: string): Manu
       continue;
     }
     seen.set(key, name);
-    people.push({ ...person, name });
+    people.push({ ...person, name, ...groundedDetails(person, text) });
     if (person.confidence < OWN_WORDS_CONFIDENCE) unclear.add(name);
     else settled.add(key);
   }
@@ -86,6 +93,33 @@ export function sanitizeManuscriptCast(raw: ManuscriptCast, story: string): Manu
 }
 
 /**
+ * The text says it: the phrase itself ("Mom"), or one of its longer words
+ * ("her little brother" needs "brother" or "little"; "the" doesn't count).
+ */
+function stated(phrase: string, text: string): boolean {
+  const lower = phrase.toLowerCase();
+  if (text.includes(lower)) return true;
+  return lower.split(/[^\p{L}\p{N}]+/u).some((word) => word.length >= 4 && text.includes(word));
+}
+
+/**
+ * What the extraction says someone is, kept only where the text says it too.
+ * A kind without a stated species still counts: "Rex barked" makes a dog.
+ */
+function groundedDetails(
+  person: ManuscriptCast["people"][number],
+  text: string,
+): Pick<ManuscriptCast["people"][number], "kind" | "species" | "role"> {
+  const species = person.kind && person.kind !== "person" ? person.species?.trim() : "";
+  const role = person.role?.trim();
+  return {
+    kind: person.kind ?? null,
+    species: species && stated(species, text) ? species : null,
+    role: role && stated(role, text) ? role : null,
+  };
+}
+
+/**
  * Fold an extraction into the book's cast.
  *
  * People already on the book keep their plate — photo, drawing, description
@@ -95,7 +129,9 @@ export function sanitizeManuscriptCast(raw: ManuscriptCast, story: string): Manu
 export function withManuscriptCast(project: Project, found: ManuscriptCast, story: string): Project {
   const brief = briefOf(project.config);
   const cast = (brief.cast ?? []).map((member) => ({ ...member }));
+  const removed = new Set((authoringOf(project).removedNames ?? []).map((name) => name.trim().toLowerCase()));
   for (const person of found.people) {
+    if (removed.has(person.name.trim().toLowerCase())) continue;
     const existing = cast.find((m) => m.name.trim().toLowerCase() === person.name.toLowerCase());
     if (existing) {
       if (existing.age === undefined && person.age != null) {
@@ -106,6 +142,9 @@ export function withManuscriptCast(project: Project, found: ManuscriptCast, stor
         existing.ageMonths = person.ageMonths;
         existing.visualAge = undefined;
       }
+      if (existing.kind === undefined && person.kind) existing.kind = person.kind;
+      if (!existing.species?.trim() && person.species && existing.kind === person.kind) existing.species = person.species;
+      if (!existing.role?.trim() && person.role) existing.role = person.role;
       continue;
     }
     const member: StoryCastMember = {
@@ -113,6 +152,9 @@ export function withManuscriptCast(project: Project, found: ManuscriptCast, stor
       name: person.name,
       ...(person.age != null ? { age: person.age } : {}),
       ...(person.ageMonths != null ? { ageMonths: person.ageMonths } : {}),
+      ...(person.kind ? { kind: person.kind } : {}),
+      ...(person.species ? { species: person.species } : {}),
+      ...(person.role ? { role: person.role } : {}),
     };
     cast.push(member);
   }
@@ -128,6 +170,20 @@ export function withManuscriptCast(project: Project, found: ManuscriptCast, stor
       unresolved: found.unclear,
     },
   });
+}
+
+/**
+ * Whether the story has been handed over: always for a story the guide wrote;
+ * for the reader's own words, once they said it is done. Books read before
+ * this was asked (an extraction, a page plan or started pages) count as
+ * handed over, so none of them waits on a button it never showed.
+ */
+export function storyHandedOver(project: Project): boolean {
+  const state = authoringOf(project);
+  const own = state.entry ? state.entry === "own" : briefOf(project.config).mode === "own";
+  if (!own) return true;
+  if (!project.config.storyText.trim()) return false;
+  return Boolean(state.manuscriptReadyAt || state.extraction || state.lockedAt || project.screenplay);
 }
 
 /** Whether the current manuscript has been read, and what still needs fixing. */
@@ -148,20 +204,65 @@ export function ownWordsStatus(project: Project): {
   };
 }
 
+/** A plate the family has already given a look to. Story analysis must not replace it. */
+function familyOwnsLook(member: StoryCastMember): boolean {
+  if (member.likenessPhoto || member.sourceArt?.length || member.lookFromArt?.trim()) return true;
+  if (member.lookSource === "photo" || member.lookSource === "drawing" || member.lookSource === "invent") return true;
+  return Boolean(member.appearance?.trim()) && !member.appearanceFromStory;
+}
+
+function asBodyPlan(value: unknown): BodyPlan | undefined {
+  return typeof value === "string" && (BODY_PLANS as readonly string[]).includes(value)
+    ? (value as BodyPlan)
+    : undefined;
+}
+
+/**
+ * The story's visual characterization, when this plate is still open for it.
+ * A description the family wrote, a photo, or a drawing stays as they left it.
+ */
+function storyLookPatch(
+  member: StoryCastMember,
+  anchor: { description?: string; bodyPlan?: string },
+): Partial<StoryCastMember> | null {
+  if (familyOwnsLook(member)) return null;
+  const appearance = anchor.description?.trim().slice(0, 600);
+  const bodyPlan = asBodyPlan(anchor.bodyPlan);
+  const patch: Partial<StoryCastMember> = {};
+  if (appearance && appearance !== member.appearance?.trim()) {
+    patch.appearance = appearance;
+    patch.appearanceFromStory = true;
+  }
+  if (bodyPlan && bodyPlan !== member.bodyPlan) patch.bodyPlan = bodyPlan;
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
 /**
  * Add people the story analysis found who are not already on the plates.
  *
  * Proper names come from the manuscript reader. Roles such as Mom, Dad and
  * the surgeon come from the same analysis the steps cast uses. Analysis ages
  * are copied as transparent visual estimates, never as author-supplied facts.
+ * The visual description and body plan are copied too, so a portrait draws
+ * the being the story named — a frog stays a frog — until the family supplies
+ * their own look.
  */
 export function withAnalysisCharacters(
   project: Project,
-  anchors: readonly { name: string; type: string; ageYears?: number; ageSource?: string; aliasNames?: string[] }[],
+  anchors: readonly {
+    name: string;
+    type: string;
+    ageYears?: number;
+    ageSource?: string;
+    aliasNames?: string[];
+    description?: string;
+    bodyPlan?: string;
+  }[],
 ): Project {
   const brief = briefOf(project.config);
   const cast = [...(brief.cast ?? [])];
   const seen = new Set(cast.map((member) => member.name.trim().toLowerCase()).filter(Boolean));
+  for (const name of authoringOf(project).removedNames ?? []) seen.add(name.trim().toLowerCase());
   let changed = false;
   for (const anchor of anchors) {
     if (anchor.type !== "character") continue;
@@ -179,7 +280,7 @@ export function withAnalysisCharacters(
       keys.includes(member.name.trim().toLowerCase()),
     );
     if (existingIndex >= 0) {
-      const existing = cast[existingIndex]!;
+      let existing = cast[existingIndex]!;
       if (
         existing.age === undefined &&
         existing.ageMonths === undefined &&
@@ -187,18 +288,25 @@ export function withAnalysisCharacters(
         (existing.visualAge?.years !== visualAge.years ||
           existing.visualAge?.source !== visualAge.source)
       ) {
-        cast[existingIndex] = { ...existing, visualAge };
+        existing = { ...existing, visualAge };
+        cast[existingIndex] = existing;
+        changed = true;
+      }
+      const look = storyLookPatch(existing, anchor);
+      if (look) {
+        cast[existingIndex] = { ...existing, ...look };
         changed = true;
       }
       for (const key of keys) seen.add(key);
       continue;
     }
     if (keys.some((key) => seen.has(key))) continue;
-    cast.push({
+    const member: StoryCastMember = {
       ...newCastMember(),
       name,
       ...(visualAge ? { visualAge } : {}),
-    });
+    };
+    cast.push({ ...member, ...(storyLookPatch(member, anchor) ?? {}) });
     for (const key of keys) seen.add(key);
     changed = true;
   }

@@ -1154,8 +1154,8 @@ function BandList({
             {draft.profiles.some((x) => x.id === p.id) && (
               <span
                 className="size-1.5 shrink-0 rounded-full bg-brand-500"
-                title="Customised"
-                aria-label="Customised"
+                title="Customized"
+                aria-label="Customized"
               />
             )}
           </button>

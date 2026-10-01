@@ -938,7 +938,7 @@ function SkuBuilder({ product, update }: { product: ProductDefinition; update: U
       {open && (
         <div className="space-y-3 border-t border-ink-100 p-3">
           <p className="text-xs text-ink-500">
-            The provider has no catalogue to browse, so these options are a starting point rather than a
+            The provider has no catalog to browse, so these options are a starting point rather than a
             guarantee. Check the combination to find out whether it really exists.
           </p>
           <TrimPicker code={parts.trim} onChange={(c) => setPart("trim", c)} />
@@ -1259,7 +1259,7 @@ function VerificationPanel({
           or the range is. Nothing is ordered and nothing is charged.
         </p>
         <p className="mt-1 text-xs text-ink-400">
-          Sandbox and live are <span className="font-medium">separate catalogues</span> behind separate
+          Sandbox and live are <span className="font-medium">separate catalogs</span> behind separate
           credentials, so a pass in one says nothing about the other — verify whichever you&apos;re
           serving. An unverified SKU fails at print time, which is after the customer has paid, so
           nothing is offered for sale until this passes.
@@ -1299,7 +1299,7 @@ function VerificationPanel({
                 title={
                   dirty
                     ? "Save your changes first — verification runs against the saved product."
-                    : `Ask the ${env} print catalogue to price this SKU at ${product.conditions.pages.min} and ${product.conditions.pages.max} pages, and record the verdict`
+                    : `Ask the ${env} print catalog to price this SKU at ${product.conditions.pages.min} and ${product.conditions.pages.max} pages, and record the verdict`
                 }
                 onClick={() => run(env)}
               >

@@ -313,3 +313,36 @@ export async function resolveMentionedAnchors(
     return [];
   }
 }
+
+function mentionsByName(text: string, name: string): boolean {
+  const full = name.trim().toLowerCase();
+  if (!full) return false;
+  const lower = text.toLowerCase();
+  const has = (word: string) =>
+    new RegExp(`(^|[^\\p{L}])${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:'s|’s|s)?([^\\p{L}]|$)`, "iu").test(lower);
+  if (has(full)) return true;
+  const first = full.split(/\s+/)[0];
+  return first.length >= 3 && has(first);
+}
+
+/**
+ * When the resolver could not decide (it failed, or was unsure) but the
+ * sentence names exactly one subject on the page, the reader asked for a
+ * change to that subject ("make Arthur's hair yellow"): treat it as a
+ * `modify` of that subject so it can be done in place, instead of letting the
+ * uncertainty redraw the whole page. A confident `freeform` ("make it night")
+ * is left alone: that really is a whole-picture change.
+ */
+export function singleSubjectEdit(
+  text: string,
+  ops: ResolvedEditOp[] | null,
+  pageAnchors: Anchor[],
+): ResolvedEditOp[] | null {
+  const edit = text.trim();
+  if (!edit) return null;
+  if (ops && ops.some((o) => o.op !== "freeform")) return null;
+  if (ops && ops.some((o) => o.op === "freeform" && o.confidence >= CONFIDENCE_AUTO)) return null;
+  const named = pageAnchors.filter((a) => mentionsByName(edit, a.name));
+  if (named.length !== 1) return null;
+  return [{ op: "modify", targetAnchorId: named[0].id, instruction: edit, confidence: CONFIDENCE_AUTO }];
+}

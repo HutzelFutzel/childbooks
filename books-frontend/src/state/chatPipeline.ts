@@ -12,11 +12,19 @@ import { resolveAudienceProfile } from "../core/config/audience";
 import { describeError } from "../core/errors";
 import { hardcoverCheck, pageTargetFor, type HardcoverCheck } from "../core/guide/hardcover";
 import { journeyEntry } from "../core/guide/journey";
-import { manuscriptHash, ownWordsStatus, sanitizeManuscriptCast, withAnalysisCharacters, withManuscriptCast } from "../core/guide/ownWords";
+import {
+  manuscriptHash,
+  ownWordsStatus,
+  sanitizeManuscriptCast,
+  storyHandedOver,
+  withAnalysisCharacters,
+  withManuscriptCast,
+} from "../core/guide/ownWords";
 import { authoringOf, withAuthoring } from "../core/guide/projectState";
 import { isRealStoryChange } from "../core/guide/storyChange";
 import { guideCopy } from "../core/guide/copy";
-import { withInventedTitle } from "../ui/guide/bookTitle";
+import { withInventedTitle, withManuscriptHeading } from "../ui/guide/bookTitle";
+import { readManuscript, withoutHeading } from "../core/story/manuscriptShape";
 import type { Project } from "../core/types";
 import { analyzeStoryRemote, guideExtractCastRemote } from "../platform/aiClient";
 import { createScreenplayJob } from "../platform/jobs";
@@ -31,8 +39,14 @@ function live(projectId: string): Project | null {
   return project?.id === projectId ? project : null;
 }
 
+/** A story to read: written, not locked, and (for own words) handed over. */
 function storyOpen(project: Project): boolean {
-  return !authoringOf(project).lockedAt && Boolean(project.config.storyText.trim()) && journeyEntry(project) !== null;
+  return (
+    !authoringOf(project).lockedAt &&
+    Boolean(project.config.storyText.trim()) &&
+    journeyEntry(project) !== null &&
+    storyHandedOver(project)
+  );
 }
 
 // --- Own words ----------------------------------------------------------------
@@ -59,7 +73,7 @@ export async function runExtraction(projectId: string): Promise<void> {
   try {
     const raw = await guideExtractCastRemote({
       projectId,
-      story,
+      story: withoutHeading(story),
       guidePreference: useGuidePreference.getState().preference,
     });
     if (token !== extractionToken) return;
@@ -72,7 +86,7 @@ export async function runExtraction(projectId: string): Promise<void> {
       .getState()
       .patchCurrent((p) => (p.id === projectId ? withManuscriptCast(p, found, p.config.storyText) : p));
     if (firstRead && found.unclear.length > 0) {
-      useChatStudio.getState().say([{ key: "castFix", priority: "blocking" }]);
+      useChatStudio.getState().say([{ key: "castFix", priority: "blocking" }], { unprompted: true });
     }
   } catch (err) {
     // Extraction is advisory, but an invisible failure strands the own-words
@@ -115,9 +129,16 @@ export async function runAnalysis(projectId: string): Promise<boolean> {
     result.anchors,
     result.embeddings,
   );
+  // A reader's own story may open with its title lines; they go on the cover
+  // as written, and the analysis only adds subtitle ideas to choose from.
+  const own = journeyEntry(project) === "own";
+  const heading = own ? readManuscript(story).heading : null;
   await useProjectsStore.getState().patchCurrent((project) => {
     if (project.id !== projectId) return project;
-    return withInventedTitle(withAnalysisCharacters(project, result.anchors), result.title ?? "");
+    const cast = withAnalysisCharacters(project, result.anchors);
+    const titled = heading ? withManuscriptHeading(cast, heading) : withInventedTitle(cast, result.title ?? "");
+    if (!own || !result.subtitles?.length) return titled;
+    return withAuthoring(titled, { cover: { ...authoringOf(titled).cover, subtitleIdeas: result.subtitles.slice(0, 3) } });
   });
   const mark = `cast:${manuscriptHash(story)}`;
   const chat = useChatStudio.getState();
@@ -130,7 +151,7 @@ export async function runAnalysis(projectId: string): Promise<boolean> {
       places.length > 0 ? { value: guideCopy(wording, "foundPlaces", { names: places }) } : null,
     ].filter((part): part is { value: string } => Boolean(part));
     if (parts.length > 0) {
-      chat.say([], { marks: [mark, "foundCast"], receipt: { parts } });
+      chat.say([], { marks: [mark, "foundCast"], receipt: { parts }, unprompted: true });
     }
   }
   return true;

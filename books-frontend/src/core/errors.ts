@@ -104,7 +104,7 @@ export function describeError(err: unknown): string {
       case "timeout":
         return "The AI service took too long to respond. Please try again.";
       case "aborted":
-        return "The request was cancelled.";
+        return "The request was canceled.";
       default:
         return err.message || "Something went wrong.";
     }

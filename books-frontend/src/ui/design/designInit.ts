@@ -28,6 +28,7 @@ import {
   type TextBox,
 } from "../../core/types";
 import { withSharedTextStyle, wordParagraphs } from "../../core/design";
+import { artCarriesLettering, coverLinesOf, frontCoverArt } from "../../core/book/coverLines";
 import type { BookLanguagesConfig } from "../../core/config/bookLanguages";
 import { getBookLanguage } from "../../core/config/bookLanguages";
 import type { LayoutsConfig } from "../../core/config/layouts";
@@ -50,9 +51,10 @@ export interface DesignPage {
   seedText: string;
   seedTitle?: string;
   seedSubtitle?: string;
+  seedAuthor?: string;
   layoutNote: string;
   isCover: boolean;
-  /** Cover-only: the title/subtitle are baked into the art, so no overlay boxes. */
+  /** Cover-only: the art carries the cover's words, so the text layer stands aside. */
   bakeText?: boolean;
   /** Physical side this page sits on (which side's layout slots apply). */
   outerSide: PageSide;
@@ -93,15 +95,7 @@ export function buildDesignPages(
     return nums && nums[0] % 2 === 1 ? "right" : "left";
   };
 
-  if (doc?.frontCover) {
-    // The project title is the single source of truth for the front-cover title.
-    pages.push(
-      coverPage(project, COVER_FRONT_ID, "Front cover", aspect, {
-        ...doc.frontCover,
-        title: project.title,
-      }, layoutsConfig),
-    );
-  }
+  if (doc?.frontCover) pages.push(frontCoverPage(project, doc.frontCover, aspect, layoutsConfig));
   if (doc) {
     doc.spreads.forEach((s) => {
       if (s.placeholder) return;
@@ -127,6 +121,35 @@ export function buildDesignPages(
     pages.push(coverPage(project, COVER_BACK_ID, "Back cover", aspect, doc.backCover, layoutsConfig));
   }
   return pages;
+}
+
+/**
+ * The front cover's words come from {@link coverLinesOf}, and whether the text
+ * layer stands aside follows the artwork actually there — so a cover that fell
+ * back to a plain drawing shows its words as text.
+ */
+function frontCoverPage(
+  project: Project,
+  spec: CoverSpec,
+  aspect: number,
+  layoutsConfig?: LayoutsConfig | null,
+): DesignPage {
+  const lines = coverLinesOf(project);
+  const page = coverPage(project, COVER_FRONT_ID, "Front cover", aspect, spec, layoutsConfig);
+  return {
+    ...page,
+    seedTitle: lines.title,
+    seedSubtitle: lines.subtitle,
+    seedAuthor: lines.author,
+    bakeText: frontArtCarriesWords(project, spec),
+  };
+}
+
+function frontArtCarriesWords(project: Project, spec?: CoverSpec): boolean {
+  const art = frontCoverArt(project);
+  if (!art?.blobId) return false;
+  // Covers drawn before the words were recorded carry them when the spec asked.
+  return artCarriesLettering(art) || (art.textMode === "in-image" && !art.bakedText && Boolean(spec?.bakeText));
 }
 
 function coverPage(
@@ -301,6 +324,22 @@ function textForSlot(slot: ResolvedSlot, page: DesignPage): string {
   }
 }
 
+const COVER_ROLES = new Set<TextBox["role"]>(["book-title", "book-subtitle", "book-author"]);
+
+function authorBox(design: BookDesign, text: string, z: number): TextBox {
+  const box = makeTextBox({
+    rect: { x: 0.15, y: 0.84, w: 0.7, h: 0.08 },
+    text,
+    family: design.defaultFontFamily,
+    sizePct: design.defaultFontSizePct * 0.8,
+    presetId: "shadowed",
+    z,
+    sharedStyle: sharedStyle(design, "book-author"),
+  });
+  box.role = "book-author";
+  return box;
+}
+
 /**
  * Toggle baked cover text on an existing page design. Role-owned overlays are
  * hidden rather than deleted so typography, color, placement, and current text
@@ -315,19 +354,11 @@ export function applyCoverBakeText(
   if (bakeText) {
     return {
       ...pageDesign,
-      textBoxes: pageDesign.textBoxes.map((b) =>
-        b.role === "book-title" || b.role === "book-subtitle"
-          ? { ...b, hidden: true }
-          : b,
-      ),
+      textBoxes: pageDesign.textBoxes.map((b) => (COVER_ROLES.has(b.role) ? { ...b, hidden: true } : b)),
     };
   }
 
-  const boxes = pageDesign.textBoxes.map((b) =>
-    b.role === "book-title" || b.role === "book-subtitle"
-      ? { ...b, hidden: false }
-      : b,
-  );
+  const boxes = pageDesign.textBoxes.map((b) => (COVER_ROLES.has(b.role) ? { ...b, hidden: false } : b));
   let nextZ = Math.max(0, ...boxes.map((b) => b.z)) + 1;
 
   if (!boxes.some((b) => b.role === "book-title") && page.seedTitle?.trim()) {
@@ -361,7 +392,33 @@ export function applyCoverBakeText(
     boxes.push(subtitleBox);
   }
 
+  if (page.id === COVER_FRONT_ID && !boxes.some((b) => b.role === "book-author") && page.seedAuthor?.trim()) {
+    boxes.push(authorBox(design, page.seedAuthor, nextZ++));
+  }
+
   return { ...pageDesign, textBoxes: boxes };
+}
+
+/**
+ * Match the front cover's text layer to its current artwork, once per new
+ * artwork: hidden when the art carries the words, shown (and filled in) when
+ * it does not. Pages seeded before this was tracked are only stamped, so a
+ * layer someone arranged by hand is never rearranged for them.
+ */
+export function reconcileCoverLettering(project: Project): Project {
+  const design = project.design;
+  const pageDesign = design?.pages[COVER_FRONT_ID];
+  if (!design || !pageDesign) return project;
+  const art = frontCoverArt(project)?.blobId ?? "";
+  if (pageDesign.letteringFor === art) return project;
+  const spec = project.screenplay ? getCursor(project.screenplay).content.frontCover : undefined;
+  let next: PageDesign = { ...pageDesign, letteringFor: art };
+  if (pageDesign.letteringFor !== undefined && spec) {
+    const aspect = bookProductForConfig(project.config).aspect;
+    const page = frontCoverPage(project, spec, aspect);
+    next = { ...applyCoverBakeText(design, page, pageDesign, Boolean(page.bakeText)), letteringFor: art };
+  }
+  return { ...project, design: { ...design, pages: { ...design.pages, [COVER_FRONT_ID]: next } } };
 }
 
 /**
@@ -408,6 +465,7 @@ export function seedPageDesign(design: BookDesign, page: DesignPage): PageDesign
       subtitleBox.role = "book-subtitle";
       boxes.push(subtitleBox);
     }
+    if (page.id === COVER_FRONT_ID && page.seedAuthor?.trim()) boxes.push(authorBox(design, page.seedAuthor, 3));
   } else if (!page.isCover) {
     // One box per text slot in the active layout's plan for this page.
     page.plan.slots
@@ -437,6 +495,7 @@ export function seedPageDesign(design: BookDesign, page: DesignPage): PageDesign
     : insetIllustration(page.plan, 0);
   return {
     textBoxes: boxes,
+    ...(page.id === COVER_FRONT_ID ? { letteringFor: page.blobId ?? "" } : {}),
     layoutId: page.plan.layoutId,
     compositionMode: page.plan.mode,
     ...(art ? { images: [art] } : {}),
@@ -696,6 +755,54 @@ export function migrateGeneratedTextBoxHeights(
     return { ...fitted, rect: { ...fitted.rect, y } };
   });
   return changed ? { ...pageDesign, textBoxes } : pageDesign;
+}
+
+function insideRect(rect: NormRect, area: NormRect): boolean {
+  const e = 1e-6;
+  return (
+    rect.x >= area.x - e &&
+    rect.y >= area.y - e &&
+    rect.x + rect.w <= area.x + area.w + e &&
+    rect.y + rect.h <= area.y + area.h + e
+  );
+}
+
+function clampInto(rect: NormRect, area: NormRect): NormRect {
+  const w = Math.min(rect.w, area.w);
+  const h = Math.min(rect.h, area.h);
+  return {
+    x: Math.min(Math.max(rect.x, area.x), area.x + area.w - w),
+    y: Math.min(Math.max(rect.y, area.y), area.y + area.h - h),
+    w,
+    h,
+  };
+}
+
+/**
+ * Move text back inside the page's safe area. By default only boxes the app
+ * placed (a `slotId`, never dragged by the reader): the app keeps them
+ * printable when the trim, page count or gutter changes under them. The
+ * reader's own placements move only when `all` is set — a fix they asked for.
+ */
+export function insetPageText(page: DesignPage, pageDesign: PageDesign, all = false): PageDesign {
+  const safe = page.plan.safe;
+  if (!safe || page.isCover) return pageDesign;
+  let changed = false;
+  const textBoxes = pageDesign.textBoxes.map((box) => {
+    const appPlaced = Boolean(box.slotId) && !box.placedByReader;
+    if ((!all && !appPlaced) || insideRect(box.rect, safe)) return box;
+    changed = true;
+    return { ...box, rect: clampInto(box.rect, safe) };
+  });
+  return changed ? { ...pageDesign, textBoxes } : pageDesign;
+}
+
+/** Pages with layout-owned text outside the safe area. */
+export function pagesWithUnsafeText(design: BookDesign, pages: DesignPage[]): DesignPage[] {
+  return pages.filter((page) => {
+    const stored = design.pages[page.id];
+    return stored ? insetPageText(page, stored) !== stored : false;
+  });
 }
 
 /** Pages whose stored layout no longer matches the project's active one. */

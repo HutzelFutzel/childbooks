@@ -51,13 +51,13 @@ export const REGION_TREATMENTS: RegionTreatment[] = [
   },
   {
     id: "flat-field",
-    label: "Flat colour field",
+    label: "Flat color field",
     description:
-      "A genuinely flat, poster-like area of one colour behind the words.",
+      "A genuinely flat, poster-like area of one color behind the words.",
     mechanism: "prompt",
     fallback: "scrim",
     promptFragment:
-      "is a flat, unbroken field of a single soft colour drawn from the scene's palette, with no texture, gradient or detail",
+      "is a flat, unbroken field of a single soft color drawn from the scene's palette, with no texture, gradient or detail",
   },
   {
     id: "gradient-fade",
@@ -122,14 +122,14 @@ export const REGION_TREATMENTS: RegionTreatment[] = [
   {
     id: "desaturate",
     label: "Muted backdrop",
-    description: "The artwork under the text keeps its shapes but loses most of its colour.",
+    description: "The artwork under the text keeps its shapes but loses most of its color.",
     mechanism: "post",
     params: { saturation: 0.25, lighten: 0.18, feather: 0.04 },
   },
   {
     id: "hard-edge",
     label: "Hard edge",
-    description: "The artwork stops at a crisp line; the text sits on flat page colour.",
+    description: "The artwork stops at a crisp line; the text sits on flat page color.",
     mechanism: "geometry",
     params: { feather: 0 },
   },

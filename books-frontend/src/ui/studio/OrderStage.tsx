@@ -24,7 +24,7 @@ import { useAppConfigStore } from "../../state/appConfigStore";
 import { useAuthStore } from "../../state/authStore";
 import { useSubscriptionStore } from "../../state/subscriptionStore";
 import { notify } from "../lib/notify";
-import { refreshIllustrationsForPrint } from "./studioGen";
+import { plannedIllustrationBatch, refreshIllustrationsForPrint } from "./studioGen";
 import { Button } from "../components/Button";
 import { BookMockup } from "../components/BookMockup";
 import { Callout } from "../components/Callout";
@@ -38,9 +38,9 @@ import { useStudio } from "./StudioContext";
 import { buildDisplaySpreads, type Entry } from "./SpreadEditor";
 import { getCursor } from "../../core/versioning";
 import { physicalPageCount } from "../../core/print/pagePlan";
-import { COVER_BACK_ID, COVER_FRONT_ID, SPINE_ID } from "../../core/types";
+import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { BookPreview } from "./BookPreview";
-import { SparkEstimateCost, useImageBatchRange } from "../layout/SparkCost";
+import { batchItemsOf, SparkEstimateCost, useImageBatchRange } from "../layout/SparkCost";
 
 /**
  * The finish line: flip through the book, order a professionally
@@ -130,16 +130,9 @@ export function OrderStage() {
         .map((unit) => unit.id),
     [project, units],
   );
-  const legacyCoverCount = legacyDraftIds.filter(
-    (id) => id === COVER_FRONT_ID || id === COVER_BACK_ID || id === SPINE_ID,
-  ).length;
-  const legacyArtRange = useImageBatchRange([
-    { action: "coverIllustration", count: legacyCoverCount },
-    {
-      action: "pageIllustration",
-      count: legacyDraftIds.length - legacyCoverCount,
-    },
-  ]);
+  const legacyArtRange = useImageBatchRange(
+    batchItemsOf(plannedIllustrationBatch(project, legacyDraftIds, { useReference: true })),
+  );
 
   async function improveLegacyArtwork() {
     if (legacyDraftIds.length === 0) return;
@@ -357,6 +350,7 @@ export function OrderStage() {
           <div className="flex min-h-72 items-center justify-center bg-ink-50 p-8">
             <BookMockup
               blobId={cover?.blobId}
+              title={project.title}
               pageDesign={project.design?.pages[COVER_FRONT_ID]}
               aspect={cover?.aspect ?? 1}
               width={180}

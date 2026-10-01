@@ -11,6 +11,7 @@ import { anchorNameKeys, effectiveAnchorIds, normalizeAnchorName } from "../book
 import { getBookLayout } from "../book/layouts";
 import { getBookLanguage } from "../config/bookLanguages";
 import { fixPagination } from "./pagination";
+import { readManuscript, splitGuidance, storyForPages } from "../story/manuscriptShape";
 import { withRetry } from "./retry";
 import { resolveAudienceOverlays, type AudienceOverlays } from "../prompts/audience";
 import { readingModeLabel } from "../config/readingModes";
@@ -69,6 +70,11 @@ function describeConfig(config: BookConfig, overlays: AudienceOverlays): string 
     `Text handling: ${label(TEXT_HANDLING, config.textHandling)}.`,
     `Text placement: ${label(TEXT_PLACEMENT, config.textPlacement)}.`,
     `Layout: ${layout}.`,
+    ...(config.storyBrief?.pictureNotes?.trim()
+      ? [
+          `Author's notes for the illustrations (show these in the pictures; never print them): ${config.storyBrief.pictureNotes.trim()}`,
+        ]
+      : []),
   ].join("\n");
 }
 
@@ -84,6 +90,19 @@ function describeAnchors(anchors: Anchor[]): string {
       return `- ${a.name} [${a.type}]: ${description}${fromArt}`;
     })
     .join("\n");
+}
+
+/**
+ * What the page plan reads. The parent's own words are laid out as written:
+ * only split across pages, never reworded, whatever the book's text-handling
+ * default says. Their title lines go on the cover, not on page 1, and the
+ * pages or sections they marked stay theirs.
+ */
+export function pagePlanInput(input: BookConfig): { config: BookConfig; story: string; splitNote: string } {
+  const own = input.storyBrief?.mode === "own";
+  const config: BookConfig = own ? { ...input, textHandling: "exact" } : input;
+  const manuscript = readManuscript(config.storyText, { heading: own });
+  return { config, story: storyForPages(manuscript), splitNote: splitGuidance(manuscript) };
 }
 
 export interface GenerateScreenplayInput {
@@ -102,7 +121,8 @@ export interface GenerateScreenplayInput {
 export async function generateScreenplay(
   input: GenerateScreenplayInput,
 ): Promise<ScreenplayDoc> {
-  const { config, anchors, creds, model, edit, previous, signal, prompts } = input;
+  const { anchors, creds, model, edit, previous, signal, prompts } = input;
+  const { config, story, splitNote } = pagePlanInput(input.config);
   const provider = getTextProvider(config.textModel!.provider);
   const included = anchors.filter((a) => a.include);
   const language = getBookLanguage(config.contentLocale);
@@ -114,10 +134,14 @@ export async function generateScreenplay(
         ? "Use double-page spreads (kind = 'spread') for the illustrations."
         : "Mix single pages and double-page spreads for good pacing.";
 
-  const textGuidance =
+  const textGuidance = [
     config.textHandling === "exact"
       ? "Keep the author's wording EXACTLY as written; only split it across pages. Do not rewrite."
-      : "You may adapt and tighten the wording to suit the age range and reading rhythm.";
+      : "You may adapt and tighten the wording to suit the age range and reading rhythm.",
+    splitNote,
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   const placementGuidance = getBookLayout(config.layoutId).screenplayGuidance;
 
@@ -161,7 +185,7 @@ export async function generateScreenplay(
       placementGuidance,
       configDescription: describeConfig(config, overlays),
       anchorsList: describeAnchors(included),
-      story: config.storyText.trim(),
+      story,
       previousJson,
       edit: edit?.trim() ?? "",
       targetPages: config.pageTarget?.pages ?? "",

@@ -167,7 +167,7 @@ export interface RefreshTask {
   status: JobStatus;
   error?: string;
   /** A subset of `IllustrationRunOptions` that is JSON-serializable. */
-  options?: { useReference?: boolean; edit?: string; fromNodeId?: string; restyle?: boolean };
+  options?: { useReference?: boolean; edit?: string; fromNodeId?: string; restyle?: boolean; inPlaceOnly?: boolean };
   /** Render output for the client to fold into the version tree. */
   result?: IllustrationRender;
   stats?: TaskStats;
@@ -205,7 +205,7 @@ export interface AnchorTask {
   status: JobStatus;
   error?: string;
   /** A subset of `AnchorRunOptions` that is JSON-serializable. */
-  options?: { useReference?: boolean; edit?: string; fromNodeId?: string; restyle?: boolean };
+  options?: { useReference?: boolean; edit?: string; fromNodeId?: string; restyle?: boolean; inPlaceOnly?: boolean };
   result?: AnchorRender;
   stats?: TaskStats;
 }
@@ -264,11 +264,24 @@ export interface ScreenplayJob extends JobLease {
  * pins the person, their likeness source and the saved style the portrait was
  * quoted for, so a result drawn from an older version of any of them is dropped.
  */
+/**
+ * A change to a portrait that is already drawn: the picture to change and what
+ * to change in it. The worker sends that picture and only the change, so the
+ * person stays the same. Absent means a portrait drawn from scratch.
+ */
+export interface PortraitEdit {
+  instruction: string;
+  /** The portrait being changed, as the book held it when this started. */
+  blobId: string;
+  mimeType: string;
+}
+
 export interface PortraitTask {
   id: string;
   status: JobStatus;
   error?: string;
   inputs: PortraitInputs;
+  edit?: PortraitEdit;
   result?: { blobId: string; mimeType: string; imageTier?: ImageTier; imageModel?: ModelSelection };
   stats?: TaskStats;
 }
@@ -387,11 +400,15 @@ export interface TaskDoc {
   /** image-kind payload (pre-assembled request). */
   request?: ImageRenderRequest;
   /** refresh/anchor-kind payload (pipeline options). */
-  options?: { useReference?: boolean; edit?: string; fromNodeId?: string; restyle?: boolean };
+  options?: { useReference?: boolean; edit?: string; fromNodeId?: string; restyle?: boolean; inPlaceOnly?: boolean };
   /** image-kind provenance, stamped onto the version on reconcile. */
   referenceUses?: ReferenceUse[];
   /** portrait-kind payload: what the portrait was quoted for. */
   inputs?: PortraitInputs;
+  /** portrait-kind payload: a change to the drawn portrait rather than a new one. */
+  edit?: PortraitEdit;
+  /** The job's `quotedByAction` entry this task settles against (action, edit, reference group). */
+  quoteKey?: string;
   /** kind-specific render output (present when `status === "done"`). */
   result?: TaskResult;
   /**

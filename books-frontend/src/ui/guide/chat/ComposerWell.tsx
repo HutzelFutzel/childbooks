@@ -13,18 +13,25 @@ import {
   ArrowRight,
   CheckCircle2,
   ImagePlus,
-  Loader2,
   MousePointer2,
+  Search,
   Sparkles,
 } from "lucide-react";
 import { resolveArtStyles } from "../../../core/config/artStyles";
+import { enabledAudienceProfiles, resolveAudienceProfile } from "../../../core/config/audience";
+import type { AudienceProfile } from "../../../core/config/audienceCatalog";
+import { ART_STYLE_PRESETS } from "../../../core/config/options";
+import type { GenerationQuote, GenerationQuoteUnit } from "../../../core/billing/generationQuote";
+import type { GuideLineCandidate } from "../../../core/guide/speech";
 import type { Project } from "../../../core/types";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useAuthStore } from "../../../state/authStore";
 import {
+  bookDrawDuration,
   drawBookUnits,
   anchorRetryUnits,
   illustrationActionFor,
+  pageRetryUnits,
   portraitUnits,
   redrawUnits,
   startDrawBook,
@@ -34,23 +41,25 @@ import {
   startPortraits,
   startRedraw,
 } from "../../../state/chatGeneration";
-import { useChatStudio } from "../../../state/chatStudio";
+import { quoteKey, useChatStudio, type RedrawRequest } from "../../../state/chatStudio";
+import { redrawQuoteParts } from "../../../state/typedPictures";
+import { chooseAndStartPortraits, styleChoiceStartUnits } from "../../../state/portraitAutoStart";
 import { cn } from "../../lib/cn";
 import {
   addCastMemberManually,
   assignStagedDrawing,
-  chooseDerivedStyle,
   chooseStyle,
   confirmCastMembers,
   decideHardcover,
+  decideTwinsLook,
+  keepOldLook,
   keepStagedDrawingForStyleOnly,
   makeStagedDrawingNewCast,
-  stageDrawingForStyle,
-  updateCastMember,
 } from "../bookActions";
-import { useGuideLabel, useGuideT } from "../intl";
+import { useGuideLabel, useGuideList, useGuideT } from "../intl";
 import { bookProductForConfig } from "../../../core/book";
-import { briefOf, namedCast } from "../../../core/story/brief";
+import { briefOf, namedCast, PICTURE_NOTES_MAX } from "../../../core/story/brief";
+import { isPerson } from "../../../core/story/castKinds";
 import { formatMoney } from "../../../core/i18n/format";
 import { useProjectsStore } from "../../../state/projectsStore";
 import {
@@ -59,13 +68,22 @@ import {
 } from "../../hooks/useOfferableFormats";
 import { useBlobUrl } from "../../hooks/useBlobUrl";
 import { wellIn } from "../motion";
+import { lookDecided } from "../../../core/guide/portrait";
 import type { BookViewId } from "../../../core/guide/journey";
 import type { ChatWell } from "../useChatJourney";
 import type { GuideTarget } from "../../../core/guide/target";
-import { decideArtworkLook } from "../../../core/guide/artworkLook";
-import { uploadSourceArt } from "../../../platform/sourceArt";
+import type { PreflightCode } from "../../../core/print/preflight";
+import { insetPageText } from "../../design/designInit";
+import { useStudio } from "../../studio/StudioContext";
 import { CharacterAvatar } from "../book/CharacterAvatar";
+import { CastAgesWell } from "./CastAgesWell";
 import { PaidAction } from "./PaidAction";
+import { AgentWellBody, agentWellTitle, isAgentWellItem } from "./AgentWells";
+import { StoryBriefWell } from "./StoryBriefWell";
+import { CastLooksWell } from "./CastLooksWell";
+import { CoverWordsWell } from "./CoverWordsWell";
+import { useHandOverStory } from "../useHandOverStory";
+import { PortraitAgeRow } from "./PortraitAgeRow";
 import {
   BookFormatChoice,
   BookSetupSummary,
@@ -87,19 +105,77 @@ export function ComposerWell({
   onOrder: () => void;
   onDefault: (run: (() => void) | null) => void;
 }) {
-  if (!well) return null;
+  const chip = useChatStudio((s) => s.chip);
+  const selected = selectedPerson(project, chip);
+  const shown = well?.kind === "castLooks" && selected
+    ? { ...well, castId: selected.id, name: selected.name.trim() }
+    : well;
+  if (!shown && !selected) return null;
+  const closePerson = () => useChatStudio.getState().setChip(null);
+  // The face they clicked. Beside another step it only edits; it does not replace that step.
+  const personEditor = selected && shown?.kind !== "castLooks" ? (
+    <CastLooksWell
+      key={selected.id}
+      project={project}
+      castId={selected.id}
+      name={selected.name.trim()}
+      quiet={Boolean(shown) || personLookDecided(project, selected.id)}
+      showTitle
+      onClose={closePerson}
+      onDefault={onDefault}
+    />
+  ) : null;
+  if (!shown) {
+    return (
+      <motion.section
+        key={`person:${selected!.id}`}
+        variants={wellIn}
+        initial="hidden"
+        animate="show"
+        exit="exit"
+        className="w-full rounded-2xl bg-white p-3.5 shadow-soft ring-1 ring-ink-900/8 sm:p-4"
+      >
+        {personEditor}
+      </motion.section>
+    );
+  }
   return (
     <motion.section
-      key={wellKey(well)}
+      key={wellKey(shown)}
       variants={wellIn}
       initial="hidden"
       animate="show"
       exit="exit"
       className="w-full rounded-2xl bg-white p-3.5 shadow-soft ring-1 ring-ink-900/8 sm:p-4"
     >
-      <TaskHeader well={well} />
-      <div className="mt-3 flex flex-wrap items-end gap-2">
-        <WellBody well={well} project={project} onView={onView} onOpenUnit={onOpenUnit} onOrder={onOrder} onDefault={onDefault} />
+      <TaskHeader well={shown} />
+      <div className="mt-3 flex flex-col gap-3">
+        {personEditor}
+        {shown.kind === "storyBrief" ? (
+          <StoryBriefWell project={project} focus={shown.focus} onDefault={onDefault} />
+        ) : shown.kind === "castLooks" ? (
+          <CastLooksWell
+            key={shown.castId}
+            project={project}
+            castId={shown.castId}
+            name={shown.name}
+            quiet={personLookDecided(project, shown.castId)}
+            onClose={selected ? closePerson : undefined}
+            onDefault={onDefault}
+          />
+        ) : shown.kind === "coverWords" ? (
+          <CoverWordsWell project={project} onDefault={onDefault} />
+        ) : (
+          <WellBody
+            well={shown}
+            project={project}
+            selected={selected}
+            onView={onView}
+            onOpenUnit={onOpenUnit}
+            onOrder={onOrder}
+            onDefault={onDefault}
+          />
+        )}
       </div>
     </motion.section>
   );
@@ -107,7 +183,20 @@ export function ComposerWell({
 
 function TaskHeader({ well }: { well: ChatWell }) {
   const t = useGuideT("chrome");
+  const tAgent = useGuideT("agent");
+  const tBrief = useGuideT("brief");
+  const tLooks = useGuideT("looks");
+  const agentTitle = isAgentWellItem(well)
+    ? agentWellTitle(well, tAgent)
+    : well.kind === "storyBrief"
+      ? tBrief("title")
+      : well.kind === "castLooks"
+        ? tLooks("title", { name: well.name })
+        : "";
+  const optional = well.kind === "storyBrief" || well.kind === "coverWords" || well.kind === "pictureNotes";
   const attention = [
+    "agentBlocked",
+    "agentConfirm",
     "extractionRetry",
     "storyRetry",
     "bookPrepFix",
@@ -122,15 +211,30 @@ function TaskHeader({ well }: { well: ChatWell }) {
     "account",
     "order",
   ].includes(well.kind);
-  const title =
-    well.kind === "styleChoice"
+  const title = agentTitle
+    ? agentTitle
+    : well.kind === "styleChoice"
       ? t("taskBookLook")
       : well.kind === "formatChoice"
         ? t("taskBookFormat")
         : well.kind === "layoutChoice"
           ? t("taskPageLayout")
+          : well.kind === "coverWords"
+            ? t("taskCoverWords")
+          : well.kind === "storyDone"
+            ? t("taskYourStory")
+          : well.kind === "pictureNotes"
+            ? t("taskPictureNotes")
+          : well.kind === "hardcoverChoice"
+            ? t("taskHardcover")
+          : well.kind === "lookAlike"
+            ? t("taskLookAlike")
+          : well.kind === "audienceConfirm"
+            ? t("taskAudience")
+          : well.kind === "castAges"
+            ? t("taskAges")
           : well.kind === "portraits"
-            ? t("taskPortraits")
+            ? t(well.stale ? "taskRedrawPortraits" : "taskPortraits")
             : well.kind === "castFix" || well.kind === "drawingAssign"
               ? t("taskPeople")
               : well.kind === "drawBook"
@@ -146,7 +250,11 @@ function TaskHeader({ well }: { well: ChatWell }) {
       ? CheckCircle2
       : well.kind === "styleChoice" ||
           well.kind === "formatChoice" ||
-          well.kind === "layoutChoice"
+          well.kind === "layoutChoice" ||
+          well.kind === "hardcoverChoice" ||
+          well.kind === "lookAlike" ||
+          well.kind === "audienceConfirm" ||
+          well.kind === "castAges"
         ? MousePointer2
         : Sparkles;
   return (
@@ -169,7 +277,13 @@ function TaskHeader({ well }: { well: ChatWell }) {
           ? t("statusNeedsAttention")
           : ready
             ? t("statusReady")
-            : t("statusChooseOne")}
+            : well.kind === "coverWords" || well.kind === "pictureNotes" || (well.kind === "audienceConfirm" && well.optional)
+              ? t("statusOptional")
+              : well.kind === "storyDone"
+                ? t("statusWhenReady")
+              : optional
+                ? tBrief("status")
+                : t("statusChooseOne")}
       </span>
     </header>
   );
@@ -178,7 +292,7 @@ function TaskHeader({ well }: { well: ChatWell }) {
 function wellKey(well: ChatWell): string {
   switch (well.kind) {
     case "portraits":
-      return `portraits:${well.castIds.join(",")}`;
+      return `portraits:${well.stale ? "redraw:" : ""}${well.castIds.join(",")}`;
     case "bookPrepFix":
       return `book-prep:${well.unitIds.join(",")}`;
     case "pageFix":
@@ -186,18 +300,45 @@ function wellKey(well: ChatWell): string {
       return `${well.kind}:${well.unitId}`;
     case "skipFact":
       return `skip:${well.fact}`;
+    case "storyBrief":
+      return "story-brief";
+    case "castLooks":
+      return `looks:${well.castId}`;
+    case "lookAlike":
+      return `look-alike:${well.ids.join(",")}`;
+    case "audienceConfirm":
+      return `audience:${well.bandId}:${well.differ ? "differ" : well.optional ? "optional" : "ask"}`;
+    case "castAges":
+      return `ages:${well.people.map((person) => person.id).join(",")}`;
     case "redraw":
       return `redraw:${JSON.stringify(well.request.target)}`;
     case "manuscriptChoice":
       return well.kind;
+    case "agentConfirm":
+      return `confirm:${well.confirm.hash}`;
+    case "agentAsk":
+      return `ask:${well.call.id}:${well.arg}`;
+    case "agentBlocked":
+      return `blocked:${well.remedy.requirement}`;
     default:
       return well.kind;
   }
 }
 
+function selectedPerson(project: Project, chip: GuideTarget | null) {
+  if (chip?.kind !== "person") return null;
+  return namedCast(briefOf(project.config)).find((member) => member.id === chip.castId) ?? null;
+}
+
+function personLookDecided(project: Project, castId: string): boolean {
+  const member = namedCast(briefOf(project.config)).find((item) => item.id === castId);
+  return Boolean(member && lookDecided(project, member));
+}
+
 function WellBody({
   well,
   project,
+  selected,
   onView,
   onOpenUnit,
   onOrder,
@@ -205,6 +346,7 @@ function WellBody({
 }: {
   well: ChatWell;
   project: Project;
+  selected: ReturnType<typeof selectedPerson>;
   onView: (view: BookViewId) => void;
   onOpenUnit: (unitId: string) => void;
   onOrder: () => void;
@@ -216,19 +358,24 @@ function WellBody({
   const retryStory = useChatStudio((s) => s.retryStory);
   const retryExtraction = useChatStudio((s) => s.retryExtraction);
   const chooseTargetPerson = useChatStudio((s) => s.chooseTargetPerson);
+  const tap = useChatStudio((s) => s.tap);
   const openAuthDialog = useAuthStore((s) => s.openAuthDialog);
+  const choose = (text: string, apply: () => Promise<unknown>) => void tap(text, apply, { undoable: true });
 
   switch (well.kind) {
+    case "storyDone":
+      return <StoryDoneWell onDefault={onDefault} />;
+    case "pictureNotes":
+      return <PictureNotesWell onDefault={onDefault} />;
     case "styleChoice":
-      return <StyleChoiceWell project={project} onView={onView} />;
+      return <StyleChoiceWell project={project} />;
     case "drawingAssign":
       return <DrawingAssignWell project={project} people={well.people} onView={onView} />;
     case "extractionRetry":
       return (
         <div className="flex w-full flex-col items-start gap-2">
-          <p className="px-1 text-sm leading-snug text-ink-600">{t("storyReadFailed")}</p>
           <div className="flex flex-wrap gap-2">
-            <Quiet onClick={() => void retryExtraction()} onDefault={onDefault}>
+            <Quiet onClick={() => void tap(t("tryReadingStory"), retryExtraction)} onDefault={onDefault}>
               {t("tryReadingStory")}
             </Quiet>
             <Quiet
@@ -252,54 +399,124 @@ function WellBody({
           <Quiet onClick={() => onView("cast")} onDefault={onDefault}>
             {label("editPeople")}
           </Quiet>
-          <Quiet subtle onClick={() => void confirmCastMembers()}>
+          <Quiet
+            subtle
+            onClick={() =>
+              void tap(t("peopleAreRight"), confirmCastMembers, {
+                undoable: true,
+                reply: [{ key: "castConfirmed", priority: "result" }],
+              })
+            }
+          >
             {t("peopleAreRight")}
           </Quiet>
         </div>
       );
     case "storyRetry":
-      return <Quiet onClick={() => void retryStory()} onDefault={onDefault}>{label("tryStoryAgain")}</Quiet>;
+      return (
+        <Quiet onClick={() => void tap(label("tryStoryAgain"), retryStory)} onDefault={onDefault}>
+          {label("tryStoryAgain")}
+        </Quiet>
+      );
     case "skipFact":
-      return <Quiet onClick={() => void skipFact(well.fact)} onDefault={onDefault}>{label("skip")}</Quiet>;
+      return (
+        <Quiet onClick={() => void tap(label("skip"), () => skipFact(well.fact))} onDefault={onDefault}>
+          {label("skip")}
+        </Quiet>
+      );
     case "account":
       return <Quiet onClick={() => openAuthDialog("drawBook")} onDefault={onDefault}>{label("createAccount")}</Quiet>;
     case "portraits":
       return (
-        <PortraitsAction
-          project={project}
-          castIds={well.castIds}
-          label={label("drawPortraits", { names: well.names })}
-          onDefault={onDefault}
-        />
+        <div className="flex w-full flex-col gap-3">
+          <PortraitsAction
+            project={project}
+            castIds={well.castIds}
+            label={label(well.stale ? "redrawTarget" : "drawPortraits", { names: well.names })}
+            onDefault={onDefault}
+          />
+          {well.canKeepLook && (
+            <Quiet
+              subtle
+              onClick={() =>
+                void tap(t("keepOldLook"), keepOldLook, {
+                  undoable: true,
+                  reply: [{ key: "oldLookKept", priority: "result", vars: { names: well.names } }],
+                })
+              }
+            >
+              {t("keepOldLook")}
+            </Quiet>
+          )}
+        </div>
       );
     case "manuscriptChoice":
       return <ManuscriptChoice onDefault={onDefault} />;
     case "formatChoice":
-      return <BookFormatChoice project={project} />;
+      return <BookFormatChoice project={project} showPrompt={false} onChoose={choose} />;
     case "layoutChoice":
-      return <PageLayoutChoice project={project} />;
-    case "drawBook":
+      return <PageLayoutChoice project={project} showPrompt={false} onChoose={choose} />;
+    case "audienceConfirm":
+      return (
+        <AudienceConfirm
+          bandId={well.bandId}
+          optional={well.optional}
+          differ={well.differ}
+          onDefault={onDefault}
+        />
+      );
+    case "castAges":
+      return <CastAgesWell people={well.people} />;
+    case "hardcoverChoice":
+      return <HardcoverChoice pages={well.pages} min={well.min} onChoose={choose} onDefault={onDefault} />;
+    case "lookAlike":
+      return (
+        <div className="flex flex-wrap gap-2">
+          {(["identical", "different"] as const).map((choice) => {
+            const text = label(choice === "identical" ? "lookAlikeYes" : "lookAlikeNo");
+            return (
+              <Quiet
+                key={choice}
+                subtle={choice === "different"}
+                onClick={() =>
+                  void tap(text, () => decideTwinsLook(well.ids, choice), {
+                    undoable: true,
+                    reply: [{ key: "lookNoted", priority: "result", vars: { names: well.names } }],
+                  })
+                }
+              >
+                {text}
+              </Quiet>
+            );
+          })}
+        </div>
+      );
+    case "drawBook": {
       return (
         <div className="flex w-full flex-col items-start gap-3">
           <BookLookRow project={project} onChange={() => onView("style")} />
-          <PeopleRow project={project} onReview={() => onView("cast")} />
+          <PeopleRow
+            project={project}
+            selectedId={selected?.id ?? null}
+            onSelect={(member) => {
+              const store = useChatStudio.getState();
+              const name = member.name.trim();
+              store.setChip(selected?.id === member.id ? null : { kind: "person", castId: member.id, name });
+              store.setView("cast");
+            }}
+            onReview={() => onView("cast")}
+          />
           <BookSetupSummary project={project} />
-          {well.spreadOffer ? (
-            <div className="flex flex-wrap gap-2">
-              <Quiet onClick={() => void decideHardcover("thin")} onDefault={onDefault}>{label("spreadIt")}</Quiet>
-              <Quiet onClick={() => void decideHardcover("keep")} subtle>{label("keepShort")}</Quiet>
-            </div>
-          ) : (
-            <div className="w-full border-t border-ink-100 pt-3">
-              <DrawBookAction
-                project={project}
-                label={label("createIllustratedBook")}
-                onDefault={onDefault}
-              />
-            </div>
-          )}
+          <div className="w-full border-t border-ink-100 pt-3">
+            <DrawBookAction
+              project={project}
+              label={label("createIllustratedBook")}
+              onDefault={onDefault}
+            />
+          </div>
         </div>
       );
+    }
     case "bookUpdate":
       return (
         <div className="flex w-full flex-col items-start gap-2">
@@ -345,9 +562,13 @@ function WellBody({
       );
     case "printFix":
       return (
-        <Quiet onClick={() => onOpenUnit(well.unitId)} onDefault={onDefault}>
-          {well.page ? `${label("redrawPage")}` : label("tryAgain")}
-        </Quiet>
+        <PrintFixAction
+          unitId={well.unitId}
+          page={well.page}
+          code={well.code}
+          onOpenUnit={onOpenUnit}
+          onDefault={onDefault}
+        />
       );
     case "order":
       return <OrderAction onOrder={onOrder} onDefault={onDefault} />;
@@ -355,7 +576,7 @@ function WellBody({
       return (
         <div className="flex flex-wrap gap-2">
           {well.pending.people.map((person) => (
-            <Quiet key={person.id} onClick={() => void chooseTargetPerson(person)}>
+            <Quiet key={person.id} onClick={() => void tap(person.name, () => chooseTargetPerson(person))}>
               <CharacterAvatar
                 project={project}
                 characterId={person.id}
@@ -369,118 +590,111 @@ function WellBody({
       );
     case "redraw":
       return <RedrawAction request={well.request} onDefault={onDefault} />;
+    case "agentConfirm":
+    case "agentAsk":
+    case "agentBlocked":
+    case "sparksOffer":
+      return <AgentWellBody well={well} onView={onView} onDefault={onDefault} />;
   }
 }
 
-function StyleChoiceWell({
-  project,
-  onView,
-}: {
-  project: Project;
-  onView: (view: BookViewId) => void;
-}) {
-  const t = useGuideT("chrome");
-  const artStyles = useAppConfigStore((s) => s.artStyles);
-  const styles = useMemo(
-    () => resolveArtStyles(artStyles).slice(0, 4),
-    [artStyles],
-  );
-  const input = useRef<HTMLInputElement>(null);
-  const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState(false);
+const STYLE_SWATCH = new Map(ART_STYLE_PRESETS.map((preset) => [preset.id, preset.swatch]));
 
-  const pickDrawing = async (file: File | undefined) => {
-    if (!file || busy) return;
-    setBusy(true);
-    setFailed(false);
-    try {
-      const { ref } = await uploadSourceArt(file);
-      await stageDrawingForStyle(ref);
-      const current = useProjectsStore.getState().current();
-      if (!current) throw new Error("Book unavailable");
-      const decision = await decideArtworkLook(current);
-      if (decision.status !== "resolved") throw new Error(decision.status === "failed" ? decision.message : "Choose one art style.");
-      await chooseDerivedStyle(decision.style);
-      useChatStudio.getState().say(
-        [{ key: "lookReady", priority: "result" }],
-        {
-          receipt: {
-            parts: [],
-            thumb: { blobId: ref.blobId, unitId: "style", view: "style" },
-          },
-        },
-      );
-    } catch {
-      setFailed(true);
-    } finally {
-      setBusy(false);
-      if (input.current) input.current.value = "";
-    }
-  };
+function StyleChoiceWell({ project }: { project: Project }) {
+  const t = useGuideT("chrome");
+  const list = useGuideList();
+  const artStyles = useAppConfigStore((s) => s.artStyles);
+  const styles = useMemo(() => resolveArtStyles(artStyles), [artStyles]);
+  const [query, setQuery] = useState("");
+  const shown = useMemo(() => {
+    const needle = query.trim().toLocaleLowerCase();
+    if (!needle) return styles;
+    return styles.filter((style) =>
+      `${style.label} ${style.description}`.toLocaleLowerCase().includes(needle),
+    );
+  }, [query, styles]);
+  // The style tap starts the portraits at this quote, so it is shown before the tap.
+  const start = useMemo(() => styleChoiceStartUnits(project), [project]);
+  const units = useStableUnits(start.units);
+  const key = units.length > 0 ? quoteKey("portraits", units) : null;
+  const ensureQuote = useChatStudio((s) => s.ensureQuote);
+  const slot = useChatStudio((s) => (key ? s.quotes[key] : undefined));
+  useEffect(() => {
+    if (key) void ensureQuote(key, "portraits", units);
+    // `units` is folded into `key`.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, ensureQuote]);
+  const quote = slot?.status === "ready" ? slot.quote : null;
+  const pick = (id: string, name: string) =>
+    void useChatStudio.getState().tap(
+      name,
+      () => chooseAndStartPortraits(() => chooseStyle(id), quote ? quote.maximumSparks : null),
+      {
+        undoable: true,
+        reply: [{ key: "styleChanged", priority: "result", vars: { what: name } }],
+      },
+    );
 
   return (
-    <section className="flex w-full flex-col gap-2.5">
-      <p className="px-1 text-sm leading-snug text-ink-600">{t("chooseBookLook")}</p>
-      <div className="grid grid-cols-2 gap-2.5 p-0.5">
-        {styles.map((style) => {
-          const image = style.examples[0]?.imageUrl;
-          return (
-            <button
-              key={style.id}
-              type="button"
-              disabled={busy}
-              onClick={() => void chooseStyle(style.id)}
-              className="group min-w-0 text-left focus-visible:outline-none disabled:opacity-50"
-            >
-              <span
-                className={cn(
-                  "block aspect-4/5 overflow-hidden rounded-xl bg-linear-to-br shadow-soft ring-1 ring-ink-900/10 transition group-hover:-translate-y-0.5 group-hover:shadow-lifted group-hover:ring-ink-400 group-focus-visible:ring-2 group-focus-visible:ring-ink-500",
-                  !image && style.id === "watercolor" && "from-sky-200 via-rose-100 to-amber-100",
-                  !image && style.id === "papercut" && "from-emerald-200 via-teal-100 to-cyan-200",
-                  !image && style.id === "crayon" && "from-orange-200 via-yellow-100 to-lime-200",
-                  !image && !["watercolor", "papercut", "crayon"].includes(style.id) && "from-violet-200 via-fuchsia-100 to-pink-200",
-                )}
-              >
-                {image && (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={image} alt="" className="size-full object-cover" />
-                )}
-              </span>
-              <span className="mt-1.5 block truncate px-0.5 text-xs font-medium text-ink-800">{style.label}</span>
-            </button>
-          );
-        })}
-        <input
-          ref={input}
-          type="file"
-          accept="image/*"
-          className="sr-only"
-          onChange={(event) => void pickDrawing(event.target.files?.[0])}
-        />
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => input.current?.click()}
-          className="group min-w-0 text-left focus-visible:outline-none disabled:opacity-60"
-        >
-          <span className="flex aspect-4/5 flex-col items-center justify-center gap-2 rounded-xl bg-ink-50 text-ink-500 shadow-soft ring-1 ring-ink-200 transition group-hover:-translate-y-0.5 group-hover:bg-white group-hover:shadow-lifted group-hover:ring-ink-400 group-focus-visible:ring-2 group-focus-visible:ring-ink-500">
-            {busy ? <Loader2 className="size-7 animate-spin" /> : <ImagePlus className="size-7" />}
-            <span className="max-w-28 text-center text-xs font-medium leading-snug">
-              {t("useCharacterDrawing")}
-            </span>
+    <section className="flex w-full min-w-0 basis-full flex-col gap-3">
+      {start.names.length > 0 && (
+        <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-ink-600">
+          <Sparkles className="size-3 text-ink-400" aria-hidden />
+          <span>{t("styleStartsPortraits", { names: list(start.names) })}</span>
+          <span className="font-medium text-ink-800">
+            {quote ? t("sparks", { sparks: quote.maximumSparks }) : t("estimating")}
           </span>
-        </button>
-      </div>
-      <div className="flex items-center gap-3 px-1">
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() => onView("style")}
-          className="text-xs font-medium text-ink-600 underline decoration-ink-300 underline-offset-2 hover:text-ink-900 disabled:opacity-50"
-        >
-          {t("seeAllStyles")}
-        </button>
-        {failed && <span className="text-xs text-red-600">{t("styleDrawingFailed")}</span>}
+        </p>
+      )}
+      {styles.length > 8 && (
+        <label className="relative block">
+          <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-ink-400" />
+          <span className="sr-only">{t("searchStyles")}</span>
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={t("searchStyles")}
+            className="h-10 w-full rounded-xl bg-ink-50 pr-3 pl-10 text-sm text-ink-900 ring-1 ring-ink-200 outline-none placeholder:text-ink-400 focus:bg-white focus:ring-2 focus:ring-ink-400"
+          />
+        </label>
+      )}
+      <div className="max-h-[min(34rem,62vh)] overflow-y-auto overscroll-contain pr-0.5">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+          {shown.map((style) => {
+            const image = style.examples[0]?.imageUrl;
+            const swatch = STYLE_SWATCH.get(style.id) ?? "from-violet-200 via-fuchsia-100 to-pink-200";
+            return (
+              <button
+                key={style.id}
+                type="button"
+                onClick={() => pick(style.id, style.label)}
+                className="group min-w-0 text-left focus-visible:outline-none"
+              >
+                <span
+                  className={cn(
+                    "block aspect-4/5 overflow-hidden rounded-xl bg-linear-to-br shadow-soft ring-1 ring-ink-900/10 transition group-hover:-translate-y-0.5 group-hover:shadow-lifted group-hover:ring-ink-400 group-focus-visible:ring-2 group-focus-visible:ring-ink-500",
+                    !image && swatch,
+                  )}
+                >
+                  {image && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={image} alt="" className="size-full object-cover" />
+                  )}
+                </span>
+                <span className="mt-1.5 block truncate px-0.5 font-display text-[13px] font-medium text-ink-900">
+                  {style.label}
+                </span>
+                <span className="line-clamp-2 px-0.5 text-[11px] leading-snug text-ink-500">
+                  {style.description}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        {shown.length === 0 && (
+          <p className="px-0.5 py-6 text-center text-sm text-ink-500">{t("noStyleMatches")}</p>
+        )}
       </div>
     </section>
   );
@@ -496,12 +710,13 @@ function DrawingAssignWell({
   onView: (view: BookViewId) => void;
 }) {
   const t = useGuideT("chrome");
+  const tap = useChatStudio((s) => s.tap);
+  const choose = (text: string, apply: () => Promise<unknown>) => void tap(text, apply, { undoable: true });
   return (
     <div className="flex w-full flex-col items-start gap-2">
-      <p className="px-1 text-sm leading-snug text-ink-600">{t("whoseDrawing")}</p>
       <div className="flex flex-wrap gap-2">
         {people.map((person) => (
-          <Quiet key={person.id} onClick={() => void assignStagedDrawing(person.id)}>
+          <Quiet key={person.id} onClick={() => choose(person.name, () => assignStagedDrawing(person.id))}>
             <CharacterAvatar
               project={project}
               characterId={person.id}
@@ -511,14 +726,10 @@ function DrawingAssignWell({
             {person.name}
           </Quiet>
         ))}
-        <Quiet
-          onClick={() => {
-            void makeStagedDrawingNewCast().then(() => onView("cast"));
-          }}
-        >
+        <Quiet onClick={() => choose(t("someoneElse"), () => makeStagedDrawingNewCast().then(() => onView("cast")))}>
           {t("someoneElse")}
         </Quiet>
-        <Quiet subtle onClick={() => void keepStagedDrawingForStyleOnly()}>
+        <Quiet subtle onClick={() => choose(t("styleOnly"), keepStagedDrawingForStyleOnly)}>
           {t("styleOnly")}
         </Quiet>
       </div>
@@ -555,6 +766,230 @@ function Quiet({
   );
 }
 
+/** Own words: the one button while the parent writes, and what happens after it. */
+function StoryDoneWell({ onDefault }: { onDefault: (run: (() => void) | null) => void }) {
+  const label = useGuideLabel();
+  const t = useGuideT("chrome");
+  const handOver = useHandOverStory();
+  return (
+    <div className="flex w-full flex-col items-start gap-2">
+      <Quiet onClick={handOver} onDefault={onDefault}>
+        {label("storyIsReady")}
+        <ArrowRight className="size-4" aria-hidden />
+      </Quiet>
+      <span className="text-xs leading-snug text-ink-500">{t("storyDoneHint")}</span>
+    </div>
+  );
+}
+
+/** Own words, once: a note for the pictures in the parent's words, or Skip (the default). */
+function PictureNotesWell({ onDefault }: { onDefault: (run: (() => void) | null) => void }) {
+  const label = useGuideLabel();
+  const t = useGuideT("chrome");
+  const tap = useChatStudio((s) => s.tap);
+  const savePictureNotes = useChatStudio((s) => s.savePictureNotes);
+  const [text, setText] = useState("");
+  const skip = () => void tap(label("skip"), () => savePictureNotes(""));
+  useDefault(onDefault, skip);
+  const keep = () => {
+    const notes = text.trim();
+    if (!notes) return;
+    void tap(notes, () => savePictureNotes(notes), {
+      undoable: true,
+      reply: [{ key: "pictureNotesSaved", priority: "result" }],
+    });
+  };
+  return (
+    <form
+      className="flex w-full flex-col gap-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        keep();
+      }}
+    >
+      <textarea
+        value={text}
+        rows={2}
+        maxLength={PICTURE_NOTES_MAX}
+        aria-label={t("taskPictureNotes")}
+        placeholder={t("pictureNotesPlaceholder")}
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            keep();
+          }
+        }}
+        className="w-full resize-none rounded-xl bg-white px-3 py-2 text-sm leading-snug text-ink-900 ring-1 ring-ink-200 outline-none placeholder:text-ink-400 focus:ring-2 focus:ring-ink-400"
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="submit"
+          disabled={!text.trim()}
+          className="inline-flex min-h-10 items-center gap-1.5 rounded-full bg-ink-900 px-4 text-sm font-semibold text-white shadow-soft transition hover:bg-ink-800 active:scale-[0.98] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400 focus-visible:ring-offset-2 disabled:opacity-40"
+        >
+          {label("keepPictureNotes")}
+        </button>
+        <Quiet subtle onClick={skip}>
+          {label("skip")}
+        </Quiet>
+      </div>
+    </form>
+  );
+}
+
+/** The two answers to "spread it or keep it short?", and nothing else. */
+function HardcoverChoice({
+  pages,
+  min,
+  onChoose,
+  onDefault,
+}: {
+  pages: number;
+  min: number;
+  onChoose: (text: string, apply: () => Promise<unknown>) => void;
+  onDefault: (run: (() => void) | null) => void;
+}) {
+  const t = useGuideT("chrome");
+  const label = useGuideLabel();
+  const spread = () => onChoose(label("spreadIt"), () => decideHardcover("thin"));
+  useDefault(onDefault, spread);
+  const options = [
+    { id: "thin", title: label("spreadIt"), hint: t("spreadItHint", { pages: min }), run: spread },
+    {
+      id: "keep",
+      title: label("keepShort"),
+      hint: t("keepShortHint", { pages }),
+      run: () => onChoose(label("keepShort"), () => decideHardcover("keep")),
+    },
+  ];
+  return (
+    <div className="grid w-full grid-cols-1 gap-2 sm:grid-cols-2">
+      {options.map((option) => (
+        <button
+          key={option.id}
+          type="button"
+          onClick={option.run}
+          className="flex flex-col items-start rounded-xl border border-ink-200 bg-ink-50/40 px-3 py-2.5 text-left transition hover:-translate-y-0.5 hover:border-ink-400 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400 focus-visible:ring-offset-2"
+        >
+          <span className="font-display text-sm font-semibold text-ink-900">{option.title}</span>
+          <span className="mt-0.5 text-xs leading-snug text-ink-500">{option.hint}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** "Is it for 3-year-olds?": yes, or another age group. Typing an age answers it too. */
+function AudienceConfirm({
+  bandId,
+  optional,
+  differ,
+  onDefault,
+}: {
+  bandId: string;
+  optional?: boolean;
+  differ?: boolean;
+  onDefault: (run: (() => void) | null) => void;
+}) {
+  const t = useGuideT("chrome");
+  const label = useGuideLabel();
+  const tap = useChatStudio((s) => s.tap);
+  const chooseAudience = useChatStudio((s) => s.chooseAudience);
+  const skipOwnAudience = useChatStudio((s) => s.skipOwnAudience);
+  const keepOwnAudience = useChatStudio((s) => s.keepOwnAudience);
+  const currentId = useProjectsStore((s) => s.current()?.config.ageRangeId);
+  const audience = useAppConfigStore((s) => s.audience);
+  const bands = useMemo(() => enabledAudienceProfiles(audience), [audience]);
+  const suggested = resolveAudienceProfile(bandId, audience);
+  const bandText = (band: AudienceProfile): string => {
+    if (band.maxMonths < 24) return t("bandMonths", { min: band.minMonths, max: band.maxMonths });
+    const min = Math.floor(band.minMonths / 12);
+    const max = Math.floor(band.maxMonths / 12);
+    return min === max ? t("bandYear", { n: min }) : t("bandYears", { min, max });
+  };
+  const pick = (band: AudienceProfile, text: string) =>
+    void tap(text, () => chooseAudience(band.id), { undoable: true });
+  const yes = () => pick(suggested, t("audienceYes", { band: bandText(suggested) }));
+  useDefault(onDefault, yes);
+  const current = resolveAudienceProfile(currentId, audience);
+  const others = bands.filter((band) => band.id !== suggested.id);
+  return (
+    <div className="flex w-full flex-col items-start gap-3">
+      <div className="flex flex-wrap gap-2">
+        <Quiet onClick={yes}>{t("audienceYes", { band: bandText(suggested) })}</Quiet>
+        {differ ? (
+          <Quiet subtle onClick={() => void tap(t("audienceKeep", { band: bandText(current) }), keepOwnAudience, { undoable: true })}>
+            {t("audienceKeep", { band: bandText(current) })}
+          </Quiet>
+        ) : null}
+        {optional ? (
+          <Quiet subtle onClick={() => void tap(label("skip"), skipOwnAudience, { undoable: true })}>
+            {label("skip")}
+          </Quiet>
+        ) : null}
+      </div>
+      {others.length > 0 ? (
+        <div className="flex w-full flex-col items-start gap-1.5">
+          <span className="px-1 text-xs text-ink-500">{t("audienceOther")}</span>
+          <div className="flex flex-wrap gap-1.5">
+            {others.map((band) => (
+              <button
+                key={band.id}
+                type="button"
+                onClick={() => pick(band, bandText(band))}
+                className="inline-flex min-h-9 items-center rounded-full border border-ink-200 bg-white px-3 text-[13px] font-medium text-ink-700 transition hover:border-ink-400 hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400 focus-visible:ring-offset-2"
+              >
+                {bandText(band)}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** A started job answers the skill's well; the journey's own well takes over from here. */
+async function startedFromWell(started: Promise<boolean>): Promise<boolean> {
+  const ok = await started;
+  if (ok) useChatStudio.getState().clearAgentWell();
+  return ok;
+}
+
+/** A paid button that started its job is the reader's answer, so it joins the conversation. */
+function echoWhenStarted(
+  label: string,
+  start: (quote: GenerationQuote) => Promise<boolean | void>,
+  reply?: (quote: GenerationQuote) => GuideLineCandidate[],
+): (quote: GenerationQuote) => Promise<boolean | void> {
+  return async (quote) => {
+    const started = await start(quote);
+    if (started !== false) {
+      void useChatStudio.getState().tap(label, async () => {}, reply ? { reply: reply(quote) } : undefined);
+    }
+    return started;
+  };
+}
+
+/** Said once drawing starts: how long, and that the email goes out on its own. */
+function drawingStarted(): (quote: GenerationQuote) => GuideLineCandidate[] {
+  return (quote) => [
+    {
+      key: "pagesStarted",
+      priority: "result",
+      vars: { what: bookDrawDuration(quote.units, useAppConfigStore.getState().latencyStats) },
+    },
+  ];
+}
+
+/** The same units keep the same array, so a book edit that doesn't change them doesn't re-quote. */
+function useStableUnits(units: GenerationQuoteUnit[]): GenerationQuoteUnit[] {
+  const key = units.map((unit) => `${unit.id}:${unit.action}:${unit.kind}:${unit.refs ?? ""}`).join(",");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  return useMemo(() => units, [key]);
+}
+
 function useDefault(onDefault: ((run: (() => void) | null) => void) | undefined, run: () => void) {
   const latest = useRef(run);
   latest.current = run;
@@ -577,13 +1012,13 @@ function PortraitsAction({
   onDefault: (run: (() => void) | null) => void;
 }) {
   const t = useGuideT("chrome");
-  const units = useMemo(() => portraitUnits(castIds), [castIds]);
-  const cast = namedCast(briefOf(project.config)).filter((member) =>
-    castIds.includes(member.id),
+  const units = useStableUnits(portraitUnits(project, castIds));
+  const cast = namedCast(briefOf(project.config)).filter(
+    (member) => castIds.includes(member.id) && isPerson(member),
   );
   return (
     <div className="flex w-full flex-col gap-3">
-      <div className="rounded-xl border border-ink-100 bg-white/80 p-3 shadow-xs">
+      {cast.length > 0 && <div className="rounded-xl border border-ink-100 bg-white/80 p-3 shadow-xs">
         <p className="mb-2.5 text-[10px] font-semibold tracking-[0.12em] text-ink-400 uppercase">
           {t("ageForPortrait")}
         </p>
@@ -592,88 +1027,14 @@ function PortraitsAction({
             <PortraitAgeRow key={member.id} project={project} member={member} />
           ))}
         </div>
-      </div>
+      </div>}
       <PaidAction
         purpose="portraits"
         units={units}
         label={label}
-        start={startPortraits}
+        start={echoWhenStarted(label, (quote) => startedFromWell(startPortraits(quote)))}
         onDefault={onDefault}
       />
-    </div>
-  );
-}
-
-function PortraitAgeRow({
-  project,
-  member,
-}: {
-  project: Project;
-  member: ReturnType<typeof namedCast>[number];
-}) {
-  const t = useGuideT("chrome");
-  const months =
-    member.ageMonths !== undefined &&
-    member.ageMonths < 24 &&
-    member.age === undefined;
-  const value = months
-    ? member.ageMonths
-    : member.age ?? member.visualAge?.years;
-  const [draft, setDraft] = useState(value === undefined ? "" : String(value));
-
-  useEffect(() => {
-    setDraft(value === undefined ? "" : String(value));
-  }, [value]);
-
-  const commit = () => {
-    const parsed = Number.parseInt(draft, 10);
-    if (!Number.isFinite(parsed) || parsed < 0 || parsed > (months ? 36 : 120)) {
-      setDraft(value === undefined ? "" : String(value));
-      return;
-    }
-    void updateCastMember(
-      member.id,
-      months
-        ? { ageMonths: parsed, age: undefined, visualAge: undefined }
-        : { age: parsed, ageMonths: undefined, visualAge: undefined },
-    );
-  };
-
-  return (
-    <div className="flex items-center gap-2.5">
-      <CharacterAvatar
-        project={project}
-        characterId={member.id}
-        name={member.name}
-        className="size-9 text-xs"
-      />
-      <span className="min-w-0 flex-1 truncate text-sm font-medium text-ink-800">
-        {member.name}
-      </span>
-      {member.visualAge && member.age === undefined && member.ageMonths === undefined && (
-        <span className="rounded-full bg-magic-50 px-2 py-1 text-[10px] font-medium text-magic-700">
-          {t("estimated")}
-        </span>
-      )}
-      <label className="flex items-center rounded-lg border border-ink-200 bg-white px-2 py-1 shadow-xs focus-within:border-ink-400 focus-within:ring-2 focus-within:ring-ink-200">
-        <span className="sr-only">{t("ageFor", { name: member.name })}</span>
-        <input
-          type="number"
-          min={0}
-          max={months ? 36 : 120}
-          inputMode="numeric"
-          value={draft}
-          onChange={(event) => setDraft(event.target.value)}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") event.currentTarget.blur();
-          }}
-          className="w-8 bg-transparent text-right text-sm font-semibold tabular-nums text-ink-900 outline-none"
-        />
-        <span className="ml-1 text-[10px] text-ink-400">
-          {months ? t("monthsShort") : t("yearsShort")}
-        </span>
-      </label>
     </div>
   );
 }
@@ -685,18 +1046,15 @@ function DrawBookAction({
 }: {
   project: Project;
   label: string;
-  onDefault: (run: (() => void) | null) => void;
+  onDefault?: (run: (() => void) | null) => void;
 }) {
-  const units = useMemo(() => drawBookUnits(project), [project]);
-  const key = units.map((u) => u.id).join(",");
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const stable = useMemo(() => units, [key]);
+  const stable = useStableUnits(useMemo(() => drawBookUnits(project), [project]));
   return (
     <PaidAction
       purpose="book"
       units={stable}
       label={label}
-      start={startDrawBook}
+      start={echoWhenStarted(label, (quote) => startedFromWell(startDrawBook(quote)), drawingStarted())}
       onDefault={onDefault}
     />
   );
@@ -711,17 +1069,14 @@ function BookUpdateAction({
   label: string;
   onDefault: (run: (() => void) | null) => void;
 }) {
-  const units = useMemo(() => drawBookUnits(project), [project]);
-  const key = units.map((unit) => `${unit.id}:${unit.action}`).join(",");
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const stable = useMemo(() => units, [key]);
+  const stable = useStableUnits(useMemo(() => drawBookUnits(project), [project]));
   return (
     <PaidAction
       purpose="book"
       units={stable}
       extraKey="book-update"
       label={label}
-      start={startBookUpdate}
+      start={echoWhenStarted(label, startBookUpdate, drawingStarted())}
       onDefault={onDefault}
     />
   );
@@ -732,19 +1087,30 @@ function ManuscriptChoice({ onDefault }: { onDefault: (run: (() => void) | null)
   const keep = useChatStudio((s) => s.keepManuscript);
   const asIdea = useChatStudio((s) => s.useManuscriptAsIdea);
   const pending = useChatStudio((s) => s.pendingManuscript);
+  const tap = useChatStudio((s) => s.tap);
   return (
     <div className="flex flex-wrap gap-2">
-      <Quiet onClick={() => void keep(pending ?? "")} onDefault={onDefault}>
+      <Quiet onClick={() => void tap(label("useMyStory"), () => keep(pending ?? ""), { undoable: true })} onDefault={onDefault}>
         {label("useMyStory")}
       </Quiet>
-      <Quiet onClick={() => void asIdea()} subtle>
+      <Quiet onClick={() => void tap(label("useAsIdea"), asIdea, { undoable: true })} subtle>
         {label("useAsIdea")}
       </Quiet>
     </div>
   );
 }
 
-function PeopleRow({ project, onReview }: { project: Project; onReview: () => void }) {
+function PeopleRow({
+  project,
+  selectedId,
+  onSelect,
+  onReview,
+}: {
+  project: Project;
+  selectedId: string | null;
+  onSelect: (member: { id: string; name: string }) => void;
+  onReview: () => void;
+}) {
   const t = useGuideT("chrome");
   const label = useGuideLabel();
   const cast = namedCast(briefOf(project.config)).filter((member) => member.name.trim());
@@ -763,17 +1129,29 @@ function PeopleRow({ project, onReview }: { project: Project; onReview: () => vo
         </button>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        {cast.map((member) => (
-          <span key={member.id} className="flex items-center gap-1.5 pr-1 text-xs font-medium text-ink-800">
-            <CharacterAvatar
-              project={project}
-              characterId={member.id}
-              name={member.name}
-              className="size-9 text-xs"
-            />
-            <span className="max-w-24 truncate">{member.name}</span>
-          </span>
-        ))}
+        {cast.map((member) => {
+          const picked = selectedId === member.id;
+          return (
+            <button
+              key={member.id}
+              type="button"
+              aria-pressed={picked}
+              onClick={() => onSelect(member)}
+              className={cn(
+                "flex items-center gap-1.5 rounded-full py-0.5 pr-2 pl-0.5 text-xs font-medium text-ink-800 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
+                picked ? "bg-ink-900/5 ring-1 ring-ink-900" : "hover:bg-ink-50",
+              )}
+            >
+              <CharacterAvatar
+                project={project}
+                characterId={member.id}
+                name={member.name}
+                className="size-9 text-xs"
+              />
+              <span className="max-w-24 truncate">{member.name}</span>
+            </button>
+          );
+        })}
       </div>
       {places.length > 0 && (
         <span className="truncate text-ink-500">
@@ -828,11 +1206,75 @@ function PageRetryAction({
   label: string;
   onDefault: (run: (() => void) | null) => void;
 }) {
-  const units = useMemo(
-    () => [{ id: unitId, action: illustrationActionFor(unitId), kind: "fresh" as const }],
-    [unitId],
+  const project = useProjectsStore((s) => s.current());
+  const units = useStableUnits(project ? pageRetryUnits(project, unitId) : []);
+  return (
+    <PaidAction
+      purpose="redraw"
+      units={units}
+      extraKey="retry"
+      label={label}
+      start={echoWhenStarted(label, startPageRetry)}
+      onDefault={onDefault}
+    />
   );
-  return <PaidAction purpose="redraw" units={units} extraKey="retry" label={label} start={startPageRetry} onDefault={onDefault} />;
+}
+
+/**
+ * A page that would print wrong, with its one fix: text near the edge moves
+ * inward in place (free, nothing is redrawn); a page with nothing on it is drawn.
+ */
+function PrintFixAction({
+  unitId,
+  page,
+  code,
+  onOpenUnit,
+  onDefault,
+}: {
+  unitId: string;
+  page: number | null;
+  code: PreflightCode;
+  onOpenUnit: (unitId: string) => void;
+  onDefault: (run: (() => void) | null) => void;
+}) {
+  const t = useGuideT("chrome");
+  const label = useGuideLabel();
+  const tap = useChatStudio((s) => s.tap);
+  const { pages, design } = useStudio();
+  const setDesign = useProjectsStore((s) => s.setDesign);
+  const where = page ? t("printPage", { n: page }) : t("printThisPage");
+
+  if (code === "page-has-no-artwork") {
+    return (
+      <div className="flex w-full flex-col items-start gap-2">
+        <p className="px-1 text-sm leading-snug text-ink-600">{t("printBlank", { where })}</p>
+        <PageRetryAction unitId={unitId} label={t("drawThisPage")} onDefault={onDefault} />
+      </div>
+    );
+  }
+
+  const moveInward = async () => {
+    const target = pages.find((p) => p.id === unitId);
+    const current = design.pages[unitId];
+    if (!target || !current) return;
+    await setDesign({ ...design, pages: { ...design.pages, [unitId]: insetPageText(target, current, true) } });
+  };
+  return (
+    <div className="flex w-full flex-col items-start gap-2">
+      <p className="px-1 text-sm leading-snug text-ink-600">{t("printTextEdge", { where })}</p>
+      <div className="flex flex-wrap gap-2">
+        <Quiet
+          onClick={() => void tap(t("moveTextInward"), moveInward, { undoable: true })}
+          onDefault={onDefault}
+        >
+          {t("moveTextInward")}
+        </Quiet>
+        <Quiet subtle onClick={() => onOpenUnit(unitId)}>
+          {label("showMe")}
+        </Quiet>
+      </div>
+    </div>
+  );
 }
 
 function BookPrepRetryAction({
@@ -844,16 +1286,15 @@ function BookPrepRetryAction({
   label: string;
   onDefault: (run: (() => void) | null) => void;
 }) {
-  const key = unitIds.join(",");
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  const units = useMemo(() => anchorRetryUnits(unitIds), [key]);
+  const project = useProjectsStore((s) => s.current());
+  const units = useStableUnits(project ? anchorRetryUnits(project, unitIds) : []);
   return (
     <PaidAction
       purpose="book"
       units={units}
       extraKey="preparation-retry"
       label={label}
-      start={startAnchorRetry}
+      start={echoWhenStarted(label, startAnchorRetry)}
       onDefault={onDefault}
     />
   );
@@ -863,27 +1304,23 @@ function RedrawAction({
   request,
   onDefault,
 }: {
-  request: { target: GuideTarget; instruction: string };
+  request: RedrawRequest;
   onDefault: (run: (() => void) | null) => void;
 }) {
   const label = useGuideLabel();
   const { target, instruction } = request;
-  const units = useMemo(
-    () =>
-      target.kind === "person"
-        ? redrawUnits(target.castId, "portrait")
-        : redrawUnits(target.unitId, illustrationActionFor(target.unitId)),
-    [target],
-  );
+  const project = useProjectsStore((s) => s.current());
+  const parts = project ? redrawQuoteParts(project, request) : null;
+  const units = useStableUnits(parts?.units ?? []);
   const text =
     target.kind === "person" ? label("redrawTarget", { names: [target.name] }) : label("redrawPage");
   return (
     <PaidAction
       purpose="redraw"
       units={units}
-      extraKey={instruction.slice(0, 40)}
+      extraKey={parts?.extraKey ?? ""}
       label={text}
-      start={(quote) => startRedraw(quote, instruction)}
+      start={echoWhenStarted(text, (quote) => startRedraw(quote, instruction))}
       onDefault={onDefault}
     />
   );

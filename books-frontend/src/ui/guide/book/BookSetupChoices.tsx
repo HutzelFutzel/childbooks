@@ -9,20 +9,29 @@ import {
 } from "../../../core/book/layoutCatalog";
 import { bookSizeFromAspect } from "../../../core/config/options";
 import { authoringOf } from "../../../core/guide/projectState";
+import { coverCardLines, coverWordsSettled } from "../../../core/guide/coverWords";
 import type { Project } from "../../../core/types";
 import { useAppConfigStore } from "../../../state/appConfigStore";
+import { useChatStudio } from "../../../state/chatStudio";
 import { useOfferableFormats, trimKey } from "../../hooks/useOfferableFormats";
 import { LayoutSchematic } from "../../design/LayoutSchematic";
 import { cn } from "../../lib/cn";
 import { chooseBookFormat, chooseBookLayout } from "../bookActions";
 import { useGuideT } from "../intl";
 
+/** How a pick is carried out. The chat records it as the reader's answer; the book pane applies it. */
+type ChooseHandler = (label: string, apply: () => Promise<void>) => void;
+
+const applyNow: ChooseHandler = (_label, apply) => void apply();
+
 export function BookFormatChoice({
   project,
   showPrompt = true,
+  onChoose = applyNow,
 }: {
   project: Project;
   showPrompt?: boolean;
+  onChoose?: ChooseHandler;
 }) {
   const t = useGuideT("chrome");
   const { sizes } = useOfferableFormats();
@@ -48,12 +57,14 @@ export function BookFormatChoice({
           const height =
             size.rep.aspect >= 1 ? 54 / size.rep.aspect : 54;
           const shape = bookSizeFromAspect(size.rep.aspect);
+          const shapeName = shape === "square" ? t("square") : shape === "landscape" ? t("landscape") : t("portrait");
+          const dimensions = `${Math.round(size.rep.trim.widthIn * 10) / 10} × ${Math.round(size.rep.trim.heightIn * 10) / 10}″`;
           return (
             <button
               key={size.key}
               type="button"
               aria-pressed={active}
-              onClick={() => void chooseBookFormat(keep.sku, keep.aspect)}
+              onClick={() => onChoose(`${shapeName}, ${dimensions}`, () => chooseBookFormat(keep.sku, keep.aspect))}
               className={cn(
                 "flex min-h-24 items-center gap-3 rounded-xl border px-3 py-3 text-left text-xs transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400 focus-visible:ring-offset-2",
                 active
@@ -75,15 +86,10 @@ export function BookFormatChoice({
               </span>
               <span>
                 <span className="block font-display text-sm font-semibold text-ink-900">
-                  {shape === "square"
-                    ? t("square")
-                    : shape === "landscape"
-                      ? t("landscape")
-                      : t("portrait")}
+                  {shapeName}
                 </span>
                 <span className="mt-1 block whitespace-nowrap text-xs text-ink-500">
-                  {Math.round(size.rep.trim.widthIn * 10) / 10} ×{" "}
-                  {Math.round(size.rep.trim.heightIn * 10) / 10}″
+                  {dimensions}
                 </span>
               </span>
             </button>
@@ -97,9 +103,11 @@ export function BookFormatChoice({
 export function PageLayoutChoice({
   project,
   showPrompt = true,
+  onChoose = applyNow,
 }: {
   project: Project;
   showPrompt?: boolean;
+  onChoose?: ChooseHandler;
 }) {
   const t = useGuideT("chrome");
   const layoutsConfig = useAppConfigStore((state) => state.layouts);
@@ -133,7 +141,7 @@ export function PageLayoutChoice({
               disabled={!availability.ok}
               aria-pressed={selected}
               onClick={() =>
-                void chooseBookLayout(option.id, option.defaultMode)
+                onChoose(option.label, () => chooseBookLayout(option.id, option.defaultMode))
               }
               className={cn(
                 "overflow-hidden rounded-xl border text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-45",
@@ -177,30 +185,74 @@ export function PageLayoutChoice({
   );
 }
 
+/** The chosen shape and layout. Each can be asked again until the pages start. */
 export function BookSetupSummary({ project }: { project: Project }) {
   const t = useGuideT("chrome");
   const layoutsConfig = useAppConfigStore((state) => state.layouts);
+  const tap = useChatStudio((s) => s.tap);
+  const runSkill = useChatStudio((s) => s.runSkill);
   const product = bookProductForConfig(project.config);
   const layout = resolveLayoutById(project.config.layoutId, layoutsConfig);
+  const editable = !project.authoringState?.lockedAt;
+  const change = (part: "format" | "layout", text: string) =>
+    void tap(text, () => runSkill({ id: "changeBookSetup", args: { part } }));
+  const words = coverCardLines(project);
+  const settled = coverWordsSettled(project);
   return (
     <div className="grid w-full grid-cols-2 gap-2">
-      <div className="rounded-xl bg-ink-50 px-3 py-2.5 ring-1 ring-ink-100">
-        <span className="block text-[10px] font-semibold tracking-wide text-ink-400 uppercase">
-          {t("bookFormat")}
-        </span>
-        <span className="mt-0.5 block text-sm font-medium text-ink-900">
-          {Math.round(product.trim.widthIn * 10) / 10} ×{" "}
-          {Math.round(product.trim.heightIn * 10) / 10}″
-        </span>
-      </div>
-      <div className="rounded-xl bg-ink-50 px-3 py-2.5 ring-1 ring-ink-100">
-        <span className="block text-[10px] font-semibold tracking-wide text-ink-400 uppercase">
-          {t("pageLayout")}
-        </span>
-        <span className="mt-0.5 block truncate text-sm font-medium text-ink-900">
-          {layout.label}
-        </span>
-      </div>
+      <SetupRow
+        label={t("bookFormat")}
+        value={`${Math.round(product.trim.widthIn * 10) / 10} × ${Math.round(product.trim.heightIn * 10) / 10}″`}
+        change={editable ? t("changeFormat") : null}
+        onChange={() => change("format", t("changeBookFormat"))}
+      />
+      <SetupRow
+        label={t("pageLayout")}
+        value={layout.label}
+        change={editable ? t("changeFormat") : null}
+        onChange={() => change("layout", t("changePageLayout"))}
+      />
+      {settled && words.title && (
+        <SetupRow
+          className="col-span-2"
+          label={t("coverWords")}
+          value={[words.title, words.subtitle, words.author].filter(Boolean).join(" · ")}
+          change={editable ? t("changeFormat") : null}
+          onChange={() => void tap(t("changeCoverWords"), () => runSkill({ id: "changeCoverWords", args: {} }))}
+        />
+      )}
+    </div>
+  );
+}
+
+function SetupRow({
+  label,
+  value,
+  change,
+  onChange,
+  className,
+}: {
+  label: string;
+  value: string;
+  change: string | null;
+  onChange: () => void;
+  className?: string;
+}) {
+  return (
+    <div className={cn("flex min-w-0 items-start justify-between gap-2 rounded-xl bg-ink-50 px-3 py-2.5 ring-1 ring-ink-100", className)}>
+      <span className="min-w-0">
+        <span className="block text-[10px] font-semibold tracking-wide text-ink-400 uppercase">{label}</span>
+        <span className="mt-0.5 block truncate text-sm font-medium text-ink-900">{value}</span>
+      </span>
+      {change && (
+        <button
+          type="button"
+          onClick={onChange}
+          className="shrink-0 rounded-md px-1.5 py-1 text-xs font-medium text-ink-600 underline decoration-ink-300 underline-offset-2 transition hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
+        >
+          {change}
+        </button>
+      )}
     </div>
   );
 }

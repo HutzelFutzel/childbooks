@@ -135,18 +135,15 @@ export function ProjectCard({ project, onOpen, onDelete }: ProjectCardProps) {
           className="pointer-events-none absolute inset-x-8 top-6 bottom-4 rounded-full bg-brand-200/0 blur-2xl transition-all duration-300 group-hover:bg-brand-200/40"
         />
 
-        {/* Book Cover Preview */}
-        <div className="relative transition-transform duration-300 group-hover:scale-[1.03]">
-          <BookMockup
-            blobId={coverBlobId}
-            fallbackUrl={fallbackUrl}
-            title={coverBlobId ? undefined : project.title}
-            pageDesign={project.design?.pages[COVER_FRONT_ID]}
-            aspect={aspect}
-            width={136}
-            variant="flat"
-          />
-        </div>
+        <BookMockup
+          blobId={coverBlobId}
+          fallbackUrl={fallbackUrl}
+          title={coverBlobId ? undefined : project.title}
+          pageDesign={project.design?.pages[COVER_FRONT_ID]}
+          aspect={aspect}
+          width={136}
+          variant="flat"
+        />
 
         {/* Hover quick-open pill */}
         <div

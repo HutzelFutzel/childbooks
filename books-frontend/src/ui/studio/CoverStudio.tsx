@@ -17,6 +17,8 @@ import { getCursor, updateNodeContent } from "../../core/versioning";
 import { coverTextDrift, generateCoverWrap, generateIllustrationVersion } from "../../state/ai";
 import { coverSpread } from "../../state/bookUnits";
 import { useProjectsStore } from "../../state/projectsStore";
+import { useAppConfigStore } from "../../state/appConfigStore";
+import { coverLetteringAllowed, coverLinesOf } from "../../core/book/coverLines";
 import { Button } from "../components/Button";
 import { Field, Input, Textarea } from "../components/Input";
 import { Toggle } from "../components/Toggle";
@@ -24,17 +26,13 @@ import { CastPicker } from "../design/CastPicker";
 import { applyCoverBakeText, buildDesignPages } from "../design/designInit";
 import { useBufferedText } from "../hooks/useBufferedText";
 import { useTierSparkEstimate } from "../hooks/useTierEstimate";
+import { clientReferenceLimits } from "../../state/referenceLimits";
+import { plannedIllustrationReferences } from "../../core/billing/referencePlan";
 import { SparkEstimateCost } from "../layout/SparkCost";
 import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
 import { useStudio } from "./StudioContext";
 import { usePageIllustration } from "./usePageIllustration";
-
-/** Scale a spark range by a render count (null-safe). */
-function scaleRange(r: SparkEstimateRange | null, n: number): SparkEstimateRange | null {
-  if (!r) return null;
-  return { minSparks: r.minSparks * n, maxSparks: r.maxSparks * n };
-}
 
 function addRanges(
   a: SparkEstimateRange | null,
@@ -71,6 +69,8 @@ export function CoverToolsPanel({
   const setScreenplay = useProjectsStore((s) => s.setScreenplay);
   const setBookTitle = useProjectsStore((s) => s.setBookTitle);
   const setCoverSubtitle = useProjectsStore((s) => s.setCoverSubtitle);
+  const setCoverAuthor = useProjectsStore((s) => s.setCoverAuthor);
+  const bookLanguages = useAppConfigStore((s) => s.bookLanguages);
   const setDesign = useProjectsStore((s) => s.setDesign);
 
   const [wrap, setWrap] = useState(true);
@@ -83,29 +83,37 @@ export function CoverToolsPanel({
     return !hasArt(COVER_FRONT_ID) && !hasArt(COVER_BACK_ID);
   });
   const [customizingFirstCover, setCustomizingFirstCover] = useState(false);
-  const productionRange = useTierSparkEstimate(
+  const coverLimits = clientReferenceLimits("coverIllustration");
+  const frontRange = useTierSparkEstimate(
     "coverIllustration",
     CUSTOMER_IMAGE_TIER,
     "fresh",
+    plannedIllustrationReferences(project, COVER_FRONT_ID, {}, coverLimits),
+  );
+  const backRange = useTierSparkEstimate(
+    "coverIllustration",
+    CUSTOMER_IMAGE_TIER,
+    "fresh",
+    plannedIllustrationReferences(project, COVER_BACK_ID, {}, coverLimits),
   );
   const continuationRange = useTierSparkEstimate(
     "coverIllustration",
     CUSTOMER_IMAGE_TIER,
     "continuation",
+    plannedIllustrationReferences(project, COVER_BACK_ID, { continuation: true }, coverLimits),
   );
 
   const doc = project.screenplay ? getCursor(project.screenplay).content : null;
   const front = doc?.frontCover;
   const back = doc?.backCover;
   const frontBake = Boolean(front?.bakeText);
-  const canBakeText = (project.config.contentLocale ?? "en-US").startsWith("en-");
+  const canBakeText = coverLetteringAllowed(project.config.contentLocale, bookLanguages);
+  const lines = coverLinesOf(project);
   const frontDrift = coverTextDrift(project, COVER_FRONT_ID);
 
-  const frontCostRange = productionRange;
-  const backCostRange = productionRange;
-  const setCostRange = wrap
-    ? addRanges(productionRange, continuationRange)
-    : scaleRange(productionRange, 2);
+  const frontCostRange = frontRange;
+  const backCostRange = backRange;
+  const setCostRange = wrap ? addRanges(frontRange, continuationRange) : addRanges(frontRange, backRange);
 
   async function patchCover(coverId: string, patch: Partial<CoverSpec>) {
     const tree = project.screenplay;
@@ -144,7 +152,7 @@ export function CoverToolsPanel({
   async function revertCoverText(baked: { title?: string; subtitle?: string; author?: string }) {
     await setBookTitle(project.id, baked.title ?? "");
     await setCoverSubtitle(project.id, baked.subtitle ?? "");
-    await patchCover(COVER_FRONT_ID, { author: baked.author ?? "" });
+    await setCoverAuthor(project.id, baked.author ?? "");
   }
 
   /** Scene brief for the cover currently open in the studio (front or back). */
@@ -162,11 +170,11 @@ export function CoverToolsPanel({
   const titleField = useBufferedText(project.title, (v) => {
     void setBookTitle(project.id, v);
   });
-  const subtitleField = useBufferedText(front?.subtitle ?? "", (v) => {
+  const subtitleField = useBufferedText(lines.subtitle, (v) => {
     void setCoverSubtitle(project.id, v);
   });
-  const authorField = useBufferedText(front?.author ?? "", (v) => {
-    void patchCover(COVER_FRONT_ID, { author: v });
+  const authorField = useBufferedText(lines.author, (v) => {
+    void setCoverAuthor(project.id, v);
   });
   const blurbField = useBufferedText(back?.title ?? "", (v) => {
     void patchCover(COVER_BACK_ID, { title: v });
@@ -190,7 +198,7 @@ export function CoverToolsPanel({
     const liveDoc = live?.screenplay ? getCursor(live.screenplay).content : null;
     const spec = coverId === COVER_FRONT_ID ? liveDoc?.frontCover : liveDoc?.backCover;
     if (!spec) return;
-    await generateIllustrationVersion(coverSpread(coverId, spec));
+    await generateIllustrationVersion(coverSpread(coverId, spec, live ?? undefined));
   }
 
   async function genCover(coverId: string) {
@@ -432,7 +440,7 @@ export function CoverToolsPanel({
             onChange={(e) => sceneField.onChange(e.target.value)}
             onFocus={sceneField.onFocus}
             onBlur={sceneField.onBlur}
-            placeholder="Ava under a glowing moon; warm night colours; curious, not scared"
+            placeholder="Ava under a glowing moon; warm night colors; curious, not scared"
           />
         </Field>
         <p className="text-[11px] leading-snug text-ink-400">

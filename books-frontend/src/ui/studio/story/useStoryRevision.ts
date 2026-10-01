@@ -21,7 +21,13 @@ import { useStudio } from "../StudioContext";
 
 const OPEN_STATUSES = new Set(["pending", "running", "ready", "error"]);
 
-export function useStoryRevision() {
+export function useStoryRevision(
+  options: {
+    /** Said once a review settles: something was kept, or nothing changed. */
+    onOutcome?: (outcome: "kept" | "discarded") => void;
+  } = {},
+) {
+  const { onOutcome } = options;
   const project = useProjectsStore((state) => state.current());
   const { updateStory, endStoryHistoryGesture } = useStudio();
   const [revisions, setRevisions] = useState<StoryRevisionWithId[]>([]);
@@ -185,6 +191,7 @@ export function useStoryRevision() {
         if (mode === "discard") {
           await finishStoryRevision(revision.id, "discarded");
           notify.info("Revision discarded", "Your manuscript was left unchanged.");
+          onOutcome?.("discarded");
           return;
         }
 
@@ -203,13 +210,14 @@ export function useStoryRevision() {
           mode === "all" ? "All changes kept" : "Selected changes kept",
           "The manuscript has been updated.",
         );
+        onOutcome?.(currentStory !== nextStory ? "kept" : "discarded");
       } catch (err) {
         notify.errorWithDescription("Revision wasn’t applied", (err as Error).message);
       } finally {
         setSaving(false);
       }
     },
-    [endStoryHistoryGesture, project, revision, updateStory],
+    [endStoryHistoryGesture, onOutcome, project, revision, updateStory],
   );
   const keepAll = useCallback(() => finish("all"), [finish]);
   const keepSelected = useCallback(() => finish("selected"), [finish]);

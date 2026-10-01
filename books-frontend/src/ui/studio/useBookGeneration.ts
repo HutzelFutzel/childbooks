@@ -14,13 +14,15 @@ import {
 } from "../../state/ai";
 import { useProjectsStore } from "../../state/projectsStore";
 import { useResolvedModels } from "../hooks/useResolvedModels";
-import { useImageBatchRange } from "../layout/SparkCost";
+import { batchItemsOf, useImageBatchRange } from "../layout/SparkCost";
 import { notify } from "../lib/notify";
 import { useStudio } from "./StudioContext";
 import {
   generateAllAnchors,
   generateAllPages,
   illustrationUnits,
+  plannedAnchorBatch,
+  plannedIllustrationBatch,
   refreshStalePages,
   updateStaleAnchors,
 } from "./studioGen";
@@ -60,10 +62,17 @@ export function useBookGeneration() {
     units.length > 0 &&
     pagesReady === units.length;
 
-  const batchRange = useImageBatchRange([
-    { action: "anchorImage", count: pendingAnchors },
-    { action: "pageIllustration", count: pendingPages },
-  ]);
+  const pendingAnchorIds = anchors.filter((a) => !currentAnchorImage(a)).map((a) => a.id);
+  const batchRange = useImageBatchRange(
+    batchItemsOf([
+      ...plannedAnchorBatch(project, pendingAnchorIds),
+      ...plannedIllustrationBatch(
+        project,
+        units.filter((s) => !unitIsDone(project, s)).map((s) => s.id),
+        { sheetsComing: new Set(pendingAnchorIds) },
+      ),
+    ]),
+  );
 
   async function generateEverything() {
     if (!models) {
@@ -101,7 +110,7 @@ export function useBookGeneration() {
       }
 
       if (signal.aborted) {
-        notify.info("Generation cancelled", "Anything already finished was kept.");
+        notify.info("Generation canceled", "Anything already finished was kept.");
       } else if (!anchors.started || !pagesStarted) {
         // The gate already explained itself on screen.
       } else if (failures === 0) {

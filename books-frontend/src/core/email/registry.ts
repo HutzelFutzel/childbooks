@@ -72,7 +72,7 @@ export const EMAIL_TEMPLATE_REGISTRY: Registry = {
   },
   subscription_cancelled: {
     id: "subscription_cancelled",
-    label: "Subscription cancelled",
+    label: "Subscription canceled",
     description: "Sent when a subscription is set to cancel.",
     category: "transactional",
     defaultSenderKey: "default",

@@ -6,10 +6,19 @@
 import type { CoverSpec, Project, ScreenplaySpread } from "../types";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../types";
 import { getCursor } from "../versioning";
+import { coverLinesOf, paintsCoverLettering } from "./coverLines";
 
-/** Build a generatable pseudo-spread for a cover spec. */
-export function coverSpread(id: string, spec: CoverSpec): ScreenplaySpread {
-  const bake = Boolean(spec.bakeText && (spec.title ?? "").trim());
+/**
+ * Build a generatable pseudo-spread for a cover spec. Given the book, the front
+ * cover's words come from {@link coverLinesOf}, the one reading every surface shares.
+ */
+export function coverSpread(id: string, spec: CoverSpec, project?: Project): ScreenplaySpread {
+  const lines =
+    project && id === COVER_FRONT_ID
+      ? coverLinesOf(project)
+      : { title: (spec.title ?? "").trim(), subtitle: (spec.subtitle ?? "").trim(), author: (spec.author ?? "").trim() };
+  const wanted = project && id === COVER_FRONT_ID ? paintsCoverLettering(project, spec) : Boolean(spec.bakeText);
+  const bake = wanted && Boolean(lines.title);
   return {
     id,
     kind: "single",
@@ -24,9 +33,9 @@ export function coverSpread(id: string, spec: CoverSpec): ScreenplaySpread {
     ...(bake
       ? {
           bakeText: true,
-          coverTitle: spec.title,
-          coverSubtitle: spec.subtitle,
-          coverAuthor: spec.author,
+          coverTitle: lines.title,
+          ...(lines.subtitle ? { coverSubtitle: lines.subtitle } : {}),
+          ...(lines.author ? { coverAuthor: lines.author } : {}),
         }
       : {}),
   };
@@ -38,8 +47,8 @@ export function illustrationUnits(project: Project): ScreenplaySpread[] {
   const doc = tree ? getCursor(tree).content : null;
   if (!doc) return [];
   const covers: ScreenplaySpread[] = [
-    ...(doc.frontCover ? [coverSpread(COVER_FRONT_ID, doc.frontCover)] : []),
-    ...(doc.backCover ? [coverSpread(COVER_BACK_ID, doc.backCover)] : []),
+    ...(doc.frontCover ? [coverSpread(COVER_FRONT_ID, doc.frontCover, project)] : []),
+    ...(doc.backCover ? [coverSpread(COVER_BACK_ID, doc.backCover, project)] : []),
   ];
   return [...covers, ...doc.spreads.filter((s) => !s.placeholder)];
 }

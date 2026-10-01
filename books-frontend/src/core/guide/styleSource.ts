@@ -35,6 +35,7 @@ export function assignStyleSource(project: Project, castId: string): Project {
       ...member,
       sourceArt,
       likenessPhoto: undefined,
+      moreLikenessPhotos: undefined,
       lookSource: "drawing" as const,
     };
   });

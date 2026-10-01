@@ -308,6 +308,10 @@ function levelLabel(level: keyof typeof ESTIMATE_LEVEL_INFO): string {
   switch (level) {
     case "exact":
       return "measured";
+    case "nearest":
+      return "closest reference count";
+    case "pooled":
+      return "any reference count";
     case "model":
       return "same model";
     case "scaled":

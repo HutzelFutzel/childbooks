@@ -113,16 +113,19 @@ export function classifyModel(
 /** Minimal, current last-resort defaults (only used with no discovery + no cache). */
 export const FALLBACK_MODELS: Record<ProviderId, ModelInfo[]> = {
   openai: [
-    { provider: "openai", id: "gpt-5.5", displayName: "GPT-5.5", modality: "text", tier: "premium", discovered: false },
-    { provider: "openai", id: "gpt-5.4-mini", displayName: "GPT-5.4 Mini", modality: "text", tier: "economy", discovered: false },
+    { provider: "openai", id: "gpt-6-astra", displayName: "GPT-6 Astra", modality: "text", tier: "premium", discovered: false },
+    { provider: "openai", id: "gpt-6-sol", displayName: "GPT-6 Sol", modality: "text", tier: "premium", discovered: false },
+    { provider: "openai", id: "gpt-6-luna", displayName: "GPT-6 Luna", modality: "text", tier: "economy", discovered: false },
     { provider: "openai", id: "gpt-image-2.5-sunburst", displayName: "GPT Image 2.5 Sunburst", modality: "image", tier: "premium", supportsReferenceImages: true, discovered: false },
     { provider: "openai", id: "gpt-image-2.5-flare", displayName: "GPT Image 2.5 Flare", modality: "image", tier: "economy", supportsReferenceImages: true, discovered: false },
   ],
   google: [
-    { provider: "google", id: "gemini-3.1-pro", displayName: "Gemini 3.1 Pro", modality: "text", tier: "premium", discovered: false },
-    { provider: "google", id: "gemini-3.5-flash", displayName: "Gemini 3.5 Flash", modality: "text", tier: "economy", discovered: false },
+    { provider: "google", id: "gemini-3.1-pro-preview", displayName: "Gemini 3.1 Pro (preview)", modality: "text", tier: "premium", discovered: false },
+    { provider: "google", id: "gemini-3.8-flash", displayName: "Gemini 3.8 Flash", modality: "text", tier: "economy", discovered: false },
+    { provider: "google", id: "gemini-3.5-flash-lite", displayName: "Gemini 3.5 Flash-Lite", modality: "text", tier: "economy", discovered: false },
     { provider: "google", id: "gemini-3-pro-image", displayName: "Nano Banana Pro", modality: "image", tier: "premium", supportsReferenceImages: true, discovered: false },
-    { provider: "google", id: "gemini-3.1-flash-image", displayName: "Nano Banana (Flash Image)", modality: "image", tier: "economy", supportsReferenceImages: true, discovered: false },
+    { provider: "google", id: "gemini-3.1-flash-image", displayName: "Nano Banana 2", modality: "image", tier: "economy", supportsReferenceImages: true, discovered: false },
+    { provider: "google", id: "gemini-3.1-flash-lite-image", displayName: "Nano Banana 2 Lite", modality: "image", tier: "economy", supportsReferenceImages: true, discovered: false },
   ],
 };
 

@@ -58,6 +58,15 @@ import { checkGuideAdmin } from "./guide-admin-invariants";
 import { checkGuideFlow } from "./guide-flow-invariants";
 import { checkGuideDualFlow } from "./guide-dual-flow-invariants";
 import { checkGuideJourney } from "./guide-journey-invariants";
+import { checkGuideAgent } from "./guide-agent-invariants";
+import { checkGuideMark } from "./guide-mark-invariants";
+import { checkGuideStory } from "./guide-story-invariants";
+import { checkGuideConversation } from "./guide-conversation-invariants";
+import { checkGuideCover } from "./guide-cover-invariants";
+import { checkGuideOwnWords } from "./guide-own-words-invariants";
+import { checkGuideLooks } from "./guide-looks-invariants";
+import { checkGuideCast } from "./guide-cast-invariants";
+import { checkEnUsCopy } from "./en-us-copy-lint";
 
 /**
  * The repository root, found by walking up from the working directory. Not
@@ -668,6 +677,51 @@ failures.push(...journey.failures);
 notes.push(...journey.notes);
 cases += journey.cases;
 
+const agent = checkGuideAgent();
+failures.push(...agent.failures);
+notes.push(...agent.notes);
+cases += agent.cases;
+
+const mark = checkGuideMark();
+failures.push(...mark.failures);
+notes.push(...mark.notes);
+cases += mark.cases;
+
+const story = checkGuideStory();
+failures.push(...story.failures);
+notes.push(...story.notes);
+cases += story.cases;
+
+const conversation = checkGuideConversation();
+failures.push(...conversation.failures);
+notes.push(...conversation.notes);
+cases += conversation.cases;
+
+const looks = checkGuideLooks();
+failures.push(...looks.failures);
+notes.push(...looks.notes);
+cases += looks.cases;
+
+const castChecks = checkGuideCast();
+failures.push(...castChecks.failures);
+notes.push(...castChecks.notes);
+cases += castChecks.cases;
+
+const coverChecks = await checkGuideCover();
+failures.push(...coverChecks.failures);
+notes.push(...coverChecks.notes);
+cases += coverChecks.cases;
+
+const ownWordsChecks = checkGuideOwnWords();
+failures.push(...ownWordsChecks.failures);
+notes.push(...ownWordsChecks.notes);
+cases += ownWordsChecks.cases;
+
+const enUs = checkEnUsCopy();
+failures.push(...enUs.failures);
+notes.push(...enUs.notes);
+cases += enUs.cases;
+
 // --- Report ---------------------------------------------------------------
 
 console.log("Guide rollout");
@@ -710,6 +764,21 @@ for (const line of dualFlow.report) console.log(line);
 
 console.log();
 for (const line of journey.report) console.log(line);
+
+console.log();
+for (const line of agent.report) console.log(line);
+
+console.log();
+for (const line of story.report) console.log(line);
+
+console.log();
+for (const line of conversation.report) console.log(line);
+
+console.log();
+for (const line of looks.report) console.log(line);
+
+console.log();
+for (const line of castChecks.report) console.log(line);
 
 console.log(`\nLegacy ledger (${MANIFEST})`);
 if (marked.length === 0) {

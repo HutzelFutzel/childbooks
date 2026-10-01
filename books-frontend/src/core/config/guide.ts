@@ -34,6 +34,18 @@ import {
   type GuideFactPolicies,
 } from "../guide/factPolicy";
 import { normalizeGuideCopy, type GuideCopyOverrides } from "../guide/copy";
+import {
+  createDefaultGuideBriefConfig,
+  guideBriefConfigSchema,
+  normalizeGuideBriefConfig,
+  type GuideBriefConfig,
+} from "../guide/briefPolicy";
+import {
+  createDefaultGuideAgentConfig,
+  guideAgentConfigSchema,
+  normalizeGuideAgentConfig,
+  type GuideAgentConfig,
+} from "./guideAgent";
 
 /**
  * How wide the new flow is open:
@@ -112,8 +124,15 @@ export interface GuideConfig {
    * Code owns the order of the look, the plates and the story.
    */
   facts: GuideFactPolicies;
+  /**
+   * Chat studio: which story details the story card offers or the guide asks,
+   * and whether the draft waits for "Write the story" (see `core/guide/briefPolicy.ts`).
+   */
+  brief: GuideBriefConfig;
   /** Chat studio: admin overrides of the configured wording (see `core/guide/copy.ts`). */
   wording: GuideCopyOverrides;
+  /** Chat studio: skills, persona, answer style, help and suggestions (see `./guideAgent.ts`). */
+  agent: GuideAgentConfig;
   updatedAt?: number;
 }
 
@@ -145,7 +164,9 @@ export const guideConfigSchema = z.object({
   playlist: guidePlaylistSchema,
   extraction: guideExtractionSchema,
   facts: guideFactPoliciesSchema,
+  brief: guideBriefConfigSchema,
   wording: z.record(z.string(), z.string().max(400)),
+  agent: guideAgentConfigSchema,
   updatedAt: z.number().optional(),
 });
 
@@ -169,7 +190,9 @@ export function createDefaultGuideConfig(): GuideConfig {
     playlist: createDefaultGuidePlaylist(),
     extraction: createDefaultGuideExtraction(),
     facts: createDefaultGuideFactPolicies(),
+    brief: createDefaultGuideBriefConfig(),
     wording: {},
+    agent: createDefaultGuideAgentConfig(),
   };
 }
 
@@ -204,7 +227,9 @@ export function normalizeGuideConfig(input: unknown): GuideConfig {
     playlist: normalizeGuidePlaylist(stored.playlist),
     extraction: normalizeGuideExtraction(stored.extraction),
     facts: normalizeGuideFactPolicies(stored.facts),
+    brief: normalizeGuideBriefConfig(stored.brief),
     wording: normalizeGuideCopy(stored.wording),
+    agent: normalizeGuideAgentConfig(stored.agent),
     ...(typeof stored.updatedAt === "number" ? { updatedAt: stored.updatedAt } : {}),
   };
 }

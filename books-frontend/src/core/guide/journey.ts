@@ -13,47 +13,121 @@
  *
  * Pure and total, so `scripts/guide-journey-invariants.ts` can walk it.
  */
+import { coverWordsSettled } from "./coverWords";
 import { illustrationUnits } from "../book/units";
 import { unitIsDone } from "../book/pageCompletion";
 import { anchorsToPrepare } from "../book/anchorFreshness";
 import { briefOf, namedCast } from "../story/brief";
 import type { GuideEntry, Project, StoryCastMember } from "../types";
-import { GUIDE_FACT_IDS, GUIDE_FACTS, missingGuideFacts, type GuideFactId, type GuideFactPolicies } from "./factPolicy";
+import type { AudienceConfig } from "../config/audience";
+import {
+  GUIDE_FACT_IDS,
+  GUIDE_FACTS,
+  factsToAsk,
+  missingGuideFacts,
+  type GuideFactId,
+  type GuideFactPolicies,
+} from "./factPolicy";
+import { peopleNeedingStatedAge } from "./agent/requirements";
+import { ownAudienceQuestion, readingAgeOf, readingAgeSource, suggestedAudience } from "./readingAge";
 import type { HardcoverCheck } from "./hardcover";
-import { ownWordsStatus } from "./ownWords";
-import { portraitsToDraw } from "./portrait";
+import { ownWordsStatus, storyHandedOver } from "./ownWords";
+import { hasAnyPortrait, looksToDecide, portraitStatus, portraitsToDraw, styleRevert } from "./portrait";
+import { twinsToAsk } from "../story/relations";
 import { composerForChoice } from "./activity";
 import { authoringOf } from "./projectState";
+import { briefStage, type GuideBriefConfig } from "./briefPolicy";
+import type { StoryDetailId } from "./storyDetails";
+import type { PreflightCode } from "../print/preflight";
 
+/**
+ * The book pane's tabs. "pages" is the Book tab: the finished book, front
+ * cover first. The title fields live with the story, and the shape and layout
+ * are chosen in the chat, so neither has a tab of its own.
+ */
 export const BOOK_VIEWS = [
-  "cover",
   "style",
-  "design",
   "story",
   "cast",
   "pages",
 ] as const;
 export type BookViewId = (typeof BOOK_VIEWS)[number];
 
+/** A view id stored or typed before the Cover and Design tabs were folded in. */
+export function bookViewOf(value: unknown): BookViewId | null {
+  if (value === "cover") return "pages";
+  if (value === "design") return "story";
+  return (BOOK_VIEWS as readonly unknown[]).includes(value) ? (value as BookViewId) : null;
+}
+
 export type JourneyPhase = "opening" | "intake" | "story" | "pages" | "order";
 
 /** What the composer well holds. One live item at a time. */
 export type WellItem =
+  /** Own words, while the reader writes: the one button that says the story is done. */
+  | { kind: "storyDone" }
   | { kind: "castFix"; names: string[] }
   | { kind: "storyRetry"; error?: string }
-  | { kind: "portraits"; castIds: string[]; names: string[]; foundCast: boolean }
+  /** Where one person's look comes from, asked before the art style. `remaining` counts them too. */
+  | { kind: "castLooks"; castId: string; name: string; remaining: number }
+  /** Twins the family hasn't said are alike or not. Asked before their looks. */
+  | { kind: "lookAlike"; ids: string[]; names: string[] }
+  | {
+      kind: "portraits";
+      castIds: string[];
+      names: string[];
+      foundCast: boolean;
+      /** Drawn already, but no longer matching the book (a new look, a changed age). Redrawn, not drawn. */
+      stale?: boolean;
+      /** The look changed and the old one can come back for free. */
+      canKeepLook?: boolean;
+    }
   | { kind: "skipFact"; fact: GuideFactId }
+  /** Who the story is written for, suggested from the first child's age. `age` is in months when `months`. */
+  | {
+      kind: "audienceConfirm";
+      castId: string;
+      name: string;
+      age: number;
+      months: boolean;
+      bandId: string;
+      bandLabel: string;
+      /** Own words: about the pages, not the writing. */
+      own?: boolean;
+      /** No stated age to suggest from. Skip keeps the book's current group. */
+      optional?: boolean;
+      /** A stated age points at a different group than the one already chosen. */
+      differ?: boolean;
+    }
+  /** People whose age the story never stated. Asked before any portrait. */
+  | { kind: "castAges"; people: { id: string; name: string }[] }
+  /** Before the draft: optional story details and "Write the story". `focus` is the detail just asked. */
+  | { kind: "storyBrief"; focus: StoryDetailId | null }
   | { kind: "account"; for: "drawBook" }
   | { kind: "formatChoice" }
   | { kind: "layoutChoice" }
-  | { kind: "drawBook"; pages: number; spreadOffer: boolean }
+  /** What the front cover says: the story's title, and a subtitle and author if the reader wants them. */
+  | { kind: "coverWords"; own?: boolean; fromStory?: boolean }
+  /** Own words, once, optional: what the pictures should know that the text doesn't say. */
+  | { kind: "pictureNotes" }
+  /** Too short for a hardcover: spread it over `min` pages, or keep `pages` as a softcover. Asked alone, before Draw the book. */
+  | { kind: "hardcoverChoice"; pages: number; min: number }
+  | { kind: "drawBook"; pages: number }
   | { kind: "bookUpdate"; names: string[] }
   /** A finished or refused run left pictures undrawn: one action draws all of them. */
   | { kind: "bookFinish"; missing: number; error?: string }
   | { kind: "bookPrepFix"; unitIds: string[]; names: string[]; error: string }
   | { kind: "pageFix"; unitId: string; page: number; error: string }
-  | { kind: "printFix"; unitId: string; page: number | null; message: string }
+  | ({ kind: "printFix" } & PrintIssue)
   | { kind: "order" };
+
+/** A page that would print wrong. `message` is the preflight's English detail, for logs. */
+export interface PrintIssue {
+  unitId: string;
+  page: number | null;
+  code: PreflightCode;
+  message: string;
+}
 
 export type StoryStatus = "none" | "running" | "failed" | "ready";
 
@@ -76,9 +150,16 @@ export interface JourneySignals {
   guest?: boolean;
   hardcover?: HardcoverCheck | null;
   /** First blocking print problem, when the book would otherwise be orderable. */
-  printIssue?: { unitId: string; page: number | null; message: string } | null;
+  printIssue?: PrintIssue | null;
   /** Draw the book is in this phase. Cast and pages point the pane there. */
   drawPhase?: "cast" | "pages" | "done" | null;
+  /**
+   * The story-detail policy. Absent: the story starts as soon as the facts are
+   * settled, as it did before story details existed.
+   */
+  brief?: GuideBriefConfig;
+  /** The admin's age groups, for the reading-age suggestion. Absent: the shipped ones. */
+  audience?: AudienceConfig | null;
 }
 
 export interface Journey {
@@ -87,6 +168,8 @@ export interface Journey {
   storyStatus: StoryStatus;
   /** The pages have started: the look, cast, story, cover text, shape and count are locked. */
   locked: boolean;
+  /** The story is the reader's to go on with: always for a draft, once they said so for their own words. */
+  handedOver: boolean;
   views: BookViewId[];
   hasBook: boolean;
   /** Where the guide would point the book pane right now. */
@@ -141,7 +224,17 @@ export function openAskedFacts(project: Project): GuideFactId[] {
 export function readyToDraft(
   project: Project,
   policies: GuideFactPolicies,
-  signals: Pick<JourneySignals, "clarificationOpen"> = {},
+  signals: Pick<JourneySignals, "clarificationOpen" | "brief"> = {},
+): boolean {
+  if (!factsSettled(project, policies, signals)) return false;
+  return !signals.brief || briefStage(project, signals.brief).kind === "go";
+}
+
+/** Everything the story needs is known, though a suggested value may still wait for its answer. */
+function factsKnown(
+  project: Project,
+  policies: GuideFactPolicies,
+  signals: Pick<JourneySignals, "clarificationOpen">,
 ): boolean {
   if (journeyEntry(project) !== "guided") return false;
   if (project.config.storyText.trim()) return false;
@@ -150,6 +243,70 @@ export function readyToDraft(
   if (!authoringOf(project).askedFacts?.length && namedCast(briefOf(project.config)).length === 0) return false;
   if (missingGuideFacts(project, policies).length > 0) return false;
   return openAskedFacts(project).length === 0;
+}
+
+/** Everything the story needs is known; only the story details and the go-ahead may remain. */
+export function factsSettled(
+  project: Project,
+  policies: GuideFactPolicies,
+  signals: Pick<JourneySignals, "clarificationOpen"> = {},
+): boolean {
+  return factsKnown(project, policies, signals) && factsToAsk(project, policies).length === 0;
+}
+
+/**
+ * "Mila is 3, so I'll write for 3-year-olds. Right?" — asked once every other
+ * fact is known, before the story details. A yes or another age answers it.
+ */
+export function audienceQuestion(
+  project: Project,
+  policies: GuideFactPolicies,
+  signals: Pick<JourneySignals, "clarificationOpen" | "audience"> = {},
+): Extract<WellItem, { kind: "audienceConfirm" }> | null {
+  if (!factsKnown(project, policies, signals)) return null;
+  if (!factsToAsk(project, policies).includes("readingAge")) return null;
+  const hero = readingAgeSource(project);
+  const age = hero ? readingAgeOf(hero) : null;
+  if (!hero || !age) return null;
+  const band = suggestedAudience(project, signals.audience);
+  return {
+    kind: "audienceConfirm",
+    castId: hero.id,
+    name: hero.name.trim(),
+    age: age.n,
+    months: age.months,
+    bandId: band.id,
+    bandLabel: band.label,
+  };
+}
+
+/** The story card's state, when the book is between its facts and its draft. */
+export function storyBriefWell(
+  project: Project,
+  policies: GuideFactPolicies,
+  signals: Pick<JourneySignals, "clarificationOpen" | "brief">,
+): Extract<WellItem, { kind: "storyBrief" }> | null {
+  if (!signals.brief || storyStatus(project) !== "none") return null;
+  if (!factsSettled(project, policies, signals)) return null;
+  const stage = briefStage(project, signals.brief);
+  if (stage.kind === "go") return null;
+  return { kind: "storyBrief", focus: stage.kind === "review" ? null : stage.detail };
+}
+
+/**
+ * Whether the chat asks for the book's style now: once the story is written
+ * (or read) and everyone's look is settled. A drawing of someone can set the
+ * style on its own, so the picker never asks what a drawing is about to answer.
+ */
+export function styleChoiceOpen(project: Project, journey: Pick<Journey, "locked" | "storyStatus" | "entry">): boolean {
+  return (
+    project.config.styleReady === false &&
+    !journey.locked &&
+    journey.storyStatus === "ready" &&
+    (journey.entry !== "own" || ownWordsStatus(project).read) &&
+    twinsToAsk(briefOf(project.config)).length === 0 &&
+    looksToDecide(project).length === 0
+  );
 }
 
 /** Whether the book pane has something to show. */
@@ -177,18 +334,17 @@ function castNames(cast: readonly StoryCastMember[]): string[] {
 export function availableViews(project: Project): BookViewId[] {
   if (!bookVisible(project)) return [];
   const entry = journeyEntry(project);
-  const brief = briefOf(project.config);
-  const cast = namedCast(brief);
-  const hasCastPlates = (brief.cast ?? []).length > 0;
+  const locked = pagesStarted(project);
+  const own = entry === "own" ? ownWordsStatus(project) : null;
   const out: BookViewId[] = [];
-  if (cast.length > 0 || project.title?.trim()) out.push("cover");
-  // A chosen style, a name, a manuscript or started pages. "Guide me" alone is
-  // not a book: the chat stays centered and the look stays in the composer well.
-  if (bookVisible(project)) out.push("style");
-  if (bookVisible(project)) out.push("design");
+  // A tab is the result of a choice, not a second copy of the question.
+  // The chat asks; the tab arrives once that part of the book exists.
+  if (project.config.styleReady !== false) out.push("style");
   if (project.config.storyText.trim() || entry === "own" || storyStatus(project) === "running") out.push("story");
-  if (hasCastPlates) out.push("cast");
-  if (project.screenplay && pagesStarted(project)) out.push("pages");
+  // The people arrive with their first picture; plates of initials are not a result.
+  // Names the guide couldn't sort out are fixed there, so they open it early.
+  if (locked || hasAnyPortrait(project) || Boolean(own?.read && own.unresolved.length > 0)) out.push("cast");
+  if (project.screenplay && locked) out.push("pages");
   return out;
 }
 
@@ -206,11 +362,14 @@ export function deriveJourney(
   const failed = signals.failedUnits ?? {};
   const missing = entry === "guided" && story === "none" ? missingGuideFacts(project, policies) : [];
   const draftable = readyToDraft(project, policies, signals);
+  const handedOver = storyHandedOver(project);
 
   const units = locked ? illustrationUnits(project) : [];
   const pendingAnchors = locked ? anchorsToPrepare(project) : [];
   const stale = new Set(signals.stalePages ?? []);
-  const done = units.filter((u) => unitIsDone(project, u) && !stale.has(u.id)).length;
+  // A picture that exists counts as done even when it is out of date. Stale is a
+  // separate mark on the page; it does not hide Order.
+  const done = units.filter((u) => unitIsDone(project, u)).length;
   const failedPages = units.filter((u) => failed[u.id] && !active.has(u.id)).map((u) => u.id);
   const pagesComplete = locked && units.length > 0 && done === units.length && failedPages.length === 0;
 
@@ -231,7 +390,7 @@ export function deriveJourney(
         ? "order"
         : "pages";
   }
-  else if (story === "ready") phase = "story";
+  else if (story === "ready" && handedOver) phase = "story";
   else phase = "intake";
 
   const own = entry === "own" ? ownWordsStatus(project) : null;
@@ -239,26 +398,77 @@ export function deriveJourney(
   const setup = authoringOf(project).bookSetup;
   const formatReady = locked || Boolean(setup?.formatConfirmedAt);
   const layoutReady = locked || Boolean(setup?.layoutConfirmedAt);
+  const coverReady = locked || coverWordsSettled(project);
   const styleSaved = project.config.styleReady !== false && Boolean(project.config.artStyle);
   const toDraw = !locked && styleSaved && !needsCastFix && (entry === "guided" || own?.read) ? portraitsToDraw(project) : [];
+  // A portrait that was never drawn is the step before the book. One that is
+  // only out of date stays on its plate; it does not take the create button.
+  const missingPortraits = toDraw.filter((member) => portraitStatus(project, member.id) === "none");
+  // Asked before the look: a drawing can become the whole book's style.
+  const undecided = !locked && !needsCastFix && (entry === "guided" || own?.read) ? looksToDecide(project) : [];
+  const twins = !locked && !needsCastFix && (entry === "guided" || own?.read) ? twinsToAsk(briefOf(project.config)) : [];
+  const byId = new Map(cast.map((member) => [member.id, member.name.trim()]));
+  const lookAlikeWell: WellItem | null = twins[0]
+    ? { kind: "lookAlike", ids: twins[0].ids, names: twins[0].ids.map((id) => byId.get(id) ?? "") }
+    : null;
+  // The next look is asked while earlier portraits draw: choosing it starts
+  // that person's portrait too.
+  const looksWell: WellItem | null =
+    undecided.length > 0
+      ? { kind: "castLooks", castId: undecided[0]!.id, name: undecided[0]!.name.trim(), remaining: undecided.length }
+      : null;
+  // The fallback when a choice didn't start them (price, balance, age, an
+  // unpriced or typed choice): only the people not already drawing.
+  const idle = missingPortraits.filter((m) => !active.has(m.id));
   const portraitAction: WellItem | null =
-    toDraw.length > 0 && !portraitsRunning
+    idle.length > 0
       ? {
           kind: "portraits",
-          castIds: toDraw.map((m) => m.id),
-          names: castNames(toDraw),
+          castIds: idle.map((m) => m.id),
+          names: castNames(idle),
           foundCast: entry === "own",
         }
       : null;
+
+  // Out of date is its own step, before the book: redrawing is what the reader
+  // is deciding, and the book's button only comes once it's settled. While
+  // they redraw, nothing is offered.
+  const outOfDate = toDraw.filter((member) => portraitStatus(project, member.id) === "stale");
+  const redrawIdle = outOfDate.filter((m) => !active.has(m.id));
+  const redrawAction: WellItem | null =
+    redrawIdle.length > 0
+      ? {
+          kind: "portraits",
+          castIds: redrawIdle.map((m) => m.id),
+          names: castNames(redrawIdle),
+          foundCast: false,
+          stale: true,
+          ...(styleRevert(project) ? { canKeepLook: true } : {}),
+        }
+      : null;
+
+  const castAges: WellItem | null = (() => {
+    if (locked || needsCastFix || (entry !== "guided" && !own?.read)) return null;
+    const people = peopleNeedingStatedAge(project).map((member) => ({
+      id: member.id,
+      name: member.name.trim(),
+    }));
+    return people.length > 0 ? { kind: "castAges" as const, people } : null;
+  })();
 
   let well: WellItem | null = null;
   if (phase === "intake") {
     const openOptional = openAskedFacts(project).find((id) => !policies[id].required);
     const readyForPortraitAction = missing.length === 0 && !openOptional;
+    const earlyAudience = entry === "own" && !handedOver ? ownAudienceQuestion(project, signals.audience) : null;
     well =
+      earlyAudience ??
+      (entry === "own" && story === "ready" && !handedOver ? { kind: "storyDone" } : null) ??
       (needsCastFix ? { kind: "castFix", names: own!.unresolved } : null) ??
       (story === "failed" ? { kind: "storyRetry", error: authoringOf(project).storyRun?.error } : null) ??
       (openOptional ? { kind: "skipFact", fact: openOptional } : null) ??
+      audienceQuestion(project, policies, signals) ??
+      storyBriefWell(project, policies, signals) ??
       (readyForPortraitAction ? portraitAction : null);
   } else if (phase === "story") {
     const planReady =
@@ -267,22 +477,49 @@ export function deriveJourney(
       (signals.planReady ?? Boolean(project.screenplay)) &&
       !signals.planRunning &&
       !signals.analysisRunning;
-    const portraitsReady = toDraw.length === 0 && !portraitsRunning;
+    const portraitsReady =
+      missingPortraits.length === 0 &&
+      outOfDate.length === 0 &&
+      !missingPortraits.some((member) => active.has(member.id));
     const hc = signals.hardcover;
-    const drawBook: WellItem | null =
-      planReady &&
-      portraitsReady &&
-      !needsCastFix &&
-      (!hc || hc.printable || hc.case === "short")
-        ? signals.guest
+    const bookReady = planReady && portraitsReady && !needsCastFix && (!hc || hc.printable || hc.case === "short");
+    // The question stands alone: its two answers sit directly under it, and the
+    // book's summary only follows once it is answered.
+    const hardcoverOpen = bookReady && hc?.case === "short" && !authoringOf(project).hardcover;
+    const drawBook: WellItem | null = !bookReady
+      ? null
+      : hardcoverOpen
+        ? { kind: "hardcoverChoice", pages: hc!.softcoverPages ?? hc!.pages, min: hc!.hardcoverMin ?? hc!.pages }
+        : signals.guest
           ? { kind: "account", for: "drawBook" }
-          : { kind: "drawBook", pages: hc?.pages ?? 0, spreadOffer: hc?.case === "short" && !authoringOf(project).hardcover }
+          : { kind: "drawBook", pages: hc?.pages ?? 0 };
+    // Own words: who the pages are for. Asked up front, and again only when a stated age disagrees.
+    const ownAudience = own?.read && !needsCastFix ? ownAudienceQuestion(project, signals.audience) : null;
+    const notesAsked = ["answeredFacts", "skippedFacts"].some((key) =>
+      (authoringOf(project)[key as "answeredFacts" | "skippedFacts"] ?? []).includes("pictureNotes"),
+    );
+    const pictureNotes: WellItem | null =
+      own?.read && !needsCastFix && !notesAsked && !project.screenplay && !briefOf(project.config).pictureNotes?.trim()
+        ? { kind: "pictureNotes" }
         : null;
     well =
       (needsCastFix ? { kind: "castFix", names: own!.unresolved } : null) ??
+      castAges ??
+      ownAudience ??
+      pictureNotes ??
+      lookAlikeWell ??
+      looksWell ??
       portraitAction ??
+      redrawAction ??
       (!formatReady ? { kind: "formatChoice" } : null) ??
       (!layoutReady ? { kind: "layoutChoice" } : null) ??
+      (!coverReady
+        ? {
+            kind: "coverWords",
+            ...(entry === "own" ? { own: true } : {}),
+            ...(entry === "own" && authoringOf(project).cover?.fromStory ? { fromStory: true } : {}),
+          }
+        : null) ??
       drawBook;
   } else if (phase === "pages") {
     const failedAnchors = pendingAnchors.filter(
@@ -336,18 +573,15 @@ export function deriveJourney(
   else if (signals.drawPhase === "pages" || phase === "pages") suggestedView = "pages";
   else if (phase === "intake") {
     if (entry === "own" || story === "running") suggestedView = "story";
-    else suggestedView = cast.length > 0 ? "cast" : null;
   } else if (phase === "story") suggestedView = "story";
-  else if (phase === "order") suggestedView = "cover";
+  else if (phase === "order") suggestedView = "pages";
   if (suggestedView && !views.includes(suggestedView)) suggestedView = views[0] ?? null;
 
-  const drawing = signals.drawPhase === "cast" || signals.drawPhase === "pages";
   const composer = composerForChoice({
     entry,
     ownComposer: authoringOf(project).ownComposer === true,
+    handedOver,
     wellKind: well?.kind,
-    storyRunning: story === "running",
-    drawing,
   });
 
   return {
@@ -355,6 +589,7 @@ export function deriveJourney(
     phase,
     storyStatus: story,
     locked,
+    handedOver,
     views,
     hasBook: views.length > 0,
     suggestedView,

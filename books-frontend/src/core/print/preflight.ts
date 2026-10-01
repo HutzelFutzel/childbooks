@@ -6,13 +6,13 @@
  * a page that turns out blank. None of them are visible in the editor, which
  * shows a page as a rectangle with no notion of where the knife lands.
  *
- * Advisory by design. The geometry is a comfort margin, not a hard limit, and
- * a designer who deliberately runs a word to the edge shouldn't be blocked —
- * so callers surface these as warnings and let the customer decide.
+ * The safe area is the one the layouts are fitted into
+ * (`computePageGuides`), so text the app placed can never fail it: a check
+ * with its own, stricter margins flagged every freshly drawn page.
  */
+import { computePageGuides, type BindingSide, type FormatCapabilities } from "../book/format";
 import type { BookDesign, TextBox } from "../design";
-import type { BookProduct } from "../fulfillment/types";
-import { safeArea, withinSafeArea, type LeafSide } from "./geometry";
+import { withinSafeArea } from "./geometry";
 import type { LeafPlan } from "./pagePlan";
 
 export type PreflightCode =
@@ -37,30 +37,20 @@ function visibleTextBoxes(design: BookDesign, pageId: string): TextBox[] {
   );
 }
 
-/**
- * Re-express a rect that is normalized to a SPREAD in terms of one of its
- * leaves. Returns null when the rect doesn't reach this leaf at all.
- */
-function rectOnLeaf(
-  rect: { x: number; y: number; w: number; h: number },
-  half: LeafSide,
-): { x: number; y: number; w: number; h: number } | null {
-  const start = half === "left" ? 0 : 0.5;
-  const end = start + 0.5;
-  if (rect.x + rect.w <= start || rect.x >= end) return null;
-  const x = (Math.max(rect.x, start) - start) * 2;
-  const w = (Math.min(rect.x + rect.w, end) - Math.max(rect.x, start)) * 2;
-  return { x, y: rect.y, w, h: rect.h };
-}
-
 export interface PreflightInput {
   plan: LeafPlan[];
   design: BookDesign;
-  product: Pick<BookProduct, "trim">;
+  /** The book's print capabilities (`formatCapabilitiesForProject`). */
+  caps: FormatCapabilities;
   /** Design page id -> whether that page has an illustration to print. */
   hasArtwork: (pageId: string) => boolean;
   /** Design page id -> the label the editor shows for it. */
   labelFor: (pageId: string) => string;
+}
+
+/** A recto binds on its left edge, a verso on its right. */
+function bindingOf(side: LeafPlan["side"]): BindingSide {
+  return side === "right" ? "left" : "right";
 }
 
 export function preflightInterior(input: PreflightInput): PreflightIssue[] {
@@ -71,35 +61,34 @@ export function preflightInterior(input: PreflightInput): PreflightIssue[] {
     const pageId = leaf.sourcePageId;
     if (!pageId) continue;
     const label = input.labelFor(pageId);
-    const area = safeArea(input.product, leaf.side);
 
-    for (const box of visibleTextBoxes(input.design, pageId)) {
-      // On a spread, a box is placed against the full double-width surface, so
-      // it has to be mapped onto this leaf before it can be judged against a
-      // single page's margins.
-      const rect = leaf.half ? rectOnLeaf(box.rect, leaf.half) : box.rect;
-      if (!rect) continue;
-
-      if (leaf.half && box.rect.x < 0.5 && box.rect.x + box.rect.w > 0.5) {
-        // Only report the crossing once, not once per leaf.
-        if (leaf.half === "left") {
+    // A spread is laid out on its double-width surface, so it is judged there,
+    // once, rather than leaf by leaf.
+    if (leaf.half !== "right") {
+      const spread = Boolean(leaf.half);
+      const { safe } = computePageGuides({
+        caps: input.caps,
+        spread,
+        bindingSide: spread ? "center" : bindingOf(leaf.side),
+      });
+      for (const box of visibleTextBoxes(input.design, pageId)) {
+        if (spread && box.rect.x < 0.5 && box.rect.x + box.rect.w > 0.5) {
           issues.push({
             code: "text-crosses-gutter",
             pageId,
             pageLabel: label,
             message: `Text on ${label} runs across the middle of the spread, where the pages meet at the binding. Part of it will curve into the fold.`,
           });
+          continue;
         }
-        continue;
-      }
-
-      if (!withinSafeArea(rect, area)) {
-        issues.push({
-          code: "text-outside-safe-area",
-          pageId,
-          pageLabel: label,
-          message: `Text on ${label} sits close to the edge or the binding. Move it inward so nothing is trimmed off or lost in the fold.`,
-        });
+        if (!withinSafeArea(box.rect, safe)) {
+          issues.push({
+            code: "text-outside-safe-area",
+            pageId,
+            pageLabel: label,
+            message: `Text on ${label} sits close to the edge or the binding. Move it inward so nothing is trimmed off or lost in the fold.`,
+          });
+        }
       }
     }
 

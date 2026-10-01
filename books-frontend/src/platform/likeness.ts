@@ -103,6 +103,8 @@ export async function uploadLikenessPhoto(args: {
   projectId: string;
   subjectId: string;
   file: File;
+  /** Keep the person's earlier photos (up to `LIKENESS_PHOTOS_MAX`) instead of replacing them. */
+  add?: boolean;
 }): Promise<{ ref: LikenessPhotoRef; preview: Blob }> {
   const preview = await prepareLikenessPhoto(args.file);
   const res = await backendFetch("/likeness", {
@@ -114,6 +116,7 @@ export async function uploadLikenessPhoto(args: {
       projectId: args.projectId,
       subjectId: args.subjectId,
       consentVersion: LIKENESS_CONSENT_VERSION,
+      ...(args.add ? { add: true } : {}),
     }),
   });
   if (!res.ok) {

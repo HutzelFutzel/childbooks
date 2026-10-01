@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { diffChars } from "diff";
 import type { BookConfig } from "../types";
+import { restoreModelLineBreaks } from "./lineBreaks";
 
 export type StoryRevisionStatus =
   | "pending"
@@ -125,6 +126,37 @@ function occurrences(haystack: string, needle: string): number[] {
   return out;
 }
 
+/** The model's `before`, written so it matches the text it was copied from. */
+function spanInManuscript(haystack: string, before: string): string {
+  if (occurrences(haystack, before).length === 1) return before;
+  const restored = restoreModelLineBreaks(before);
+  if (restored !== before && occurrences(haystack, restored).length === 1) return restored;
+  return before;
+}
+
+/**
+ * What the reader is told when a marked passage cannot carry the request they
+ * made ("make the whole story shorter" with one sentence marked). Shown as the
+ * revision's error, so it is written for them.
+ */
+export const STORY_EDIT_SCOPE_ERROR =
+  "That change needs text outside the part you marked. Unmark it, or ask again without the mark.";
+
+/** The editor could not do the request inside the marked passage. Retrying cannot fix it. */
+export class StoryRevisionScopeError extends Error {
+  constructor() {
+    super(STORY_EDIT_SCOPE_ERROR);
+    this.name = "StoryRevisionScopeError";
+  }
+}
+
+const OUTSIDE_SELECTION = "A proposed change reached outside the selected passage.";
+
+/** Whether a validation failure was the model leaving the marked passage. */
+export function isOutsideSelectionFailure(message: string): boolean {
+  return message === OUTSIDE_SELECTION;
+}
+
 function formatExpandedPassage(before: string, after: string): string {
   const trimmed = after.trim();
   if (/\n\s*\n/u.test(trimmed)) return after;
@@ -162,33 +194,38 @@ export function validateStoryRevision(
   }
   const occupied: Array<{ start: number; end: number }> = [];
   const changes: StoryRevisionChange[] = [];
+  // With a marked passage, a span only has to be unique inside it: a phrase that
+  // repeats elsewhere in the story is not ambiguous about which one was marked.
+  const scope = selection ? baseStory.slice(selection.start, selection.end) : baseStory;
+  const scopeAt = selection?.start ?? 0;
 
   for (const [index, raw] of result.changes.entries()) {
-    const after = formatExpandedPassage(raw.before, raw.after);
-    if (raw.before === after) continue;
-    if (!raw.before) {
+    const before = spanInManuscript(scope, raw.before);
+    const after = formatExpandedPassage(before, restoreModelLineBreaks(raw.after));
+    if (before === after) continue;
+    if (!before) {
       throw new Error("An insertion did not include an exact manuscript anchor.");
     }
-    const hits = occurrences(baseStory, raw.before);
+    const hits = occurrences(scope, before);
     if (hits.length !== 1) {
+      if (selection && hits.length === 0 && occurrences(baseStory, before).length > 0) {
+        throw new Error(OUTSIDE_SELECTION);
+      }
       throw new Error(
         hits.length === 0
           ? "A proposed change no longer matches the manuscript."
           : "A proposed change was ambiguous in the manuscript.",
       );
     }
-    const start = hits[0];
-    const end = start + raw.before.length;
-    if (selection && (start < selection.start || end > selection.end)) {
-      throw new Error("A proposed change reached outside the selected passage.");
-    }
+    const start = scopeAt + hits[0];
+    const end = start + before.length;
     if (occupied.some((span) => start < span.end && end > span.start)) {
       throw new Error("The proposed changes overlap each other.");
     }
     occupied.push({ start, end });
     changes.push({
       id: `change-${index + 1}`,
-      before: raw.before,
+      before,
       after,
       reason: raw.reason.trim().slice(0, 180) || "Requested story change",
       baseStart: start,
@@ -197,6 +234,9 @@ export function validateStoryRevision(
   }
 
   if (changes.length === 0) {
+    // With a marked passage the editor is told to answer "cannot be done in
+    // here" with a change that changes nothing; say that, not "no change".
+    if (selection) throw new StoryRevisionScopeError();
     throw new Error("The editor did not propose a meaningful change.");
   }
   return {
@@ -357,8 +397,8 @@ export function buildStoryMergePlan(
         baseEnd: end,
         currentStart,
         currentEnd,
-        currentText,
-        suggestedText,
+        currentText: restoreModelLineBreaks(currentText),
+        suggestedText: restoreModelLineBreaks(suggestedText),
         conflict,
       };
     })
@@ -373,13 +413,13 @@ export function buildStoryMergePlan(
       const end = Math.min(to, edit.currentEnd);
       if (end <= start) continue;
       if (start > at) {
-        segments.push({ type: "unchanged", text: currentStory.slice(at, start) });
+        segments.push({ type: "unchanged", text: restoreModelLineBreaks(currentStory.slice(at, start)) });
       }
-      segments.push({ type: "author", text: currentStory.slice(start, end) });
+      segments.push({ type: "author", text: restoreModelLineBreaks(currentStory.slice(start, end)) });
       at = Math.max(at, end);
     }
     if (at < to) {
-      segments.push({ type: "unchanged", text: currentStory.slice(at, to) });
+      segments.push({ type: "unchanged", text: restoreModelLineBreaks(currentStory.slice(at, to)) });
     }
   };
   for (const change of changes) {
@@ -433,7 +473,7 @@ export function applyStoryRevisionToCurrent(
       change.suggestedText +
       next.slice(change.currentEnd);
   }
-  return next;
+  return restoreModelLineBreaks(next);
 }
 
 export function applyStoryRevision(

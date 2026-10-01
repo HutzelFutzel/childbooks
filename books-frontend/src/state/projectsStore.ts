@@ -42,8 +42,12 @@ import {
   STAGE_ORDER,
 } from "../core/types";
 import { detectDefaultBookLanguage } from "../core/config/bookLanguages";
+import { coverLinesOf } from "../core/book/coverLines";
+import { authoringOf, withAuthoring } from "../core/guide/projectState";
+import { reconcileCoverLettering } from "../ui/design/designInit";
 import { ProjectConflictError } from "../core/storage/repositories";
 import { resolveBookConflict } from "../core/guide/merge";
+import { likenessPhotosOf } from "../core/guide/portrait";
 import { getRepos } from "./repos";
 import { touchProjectRemote } from "../platform/aiClient";
 import { copyBlob, removeBlob } from "./blobs";
@@ -73,13 +77,10 @@ function collectLikenessPhotoSubjects(project: Project): {
     { projectId: string; subjectId: string; createdAt: number }
   >();
   for (const member of project.config.storyBrief?.cast ?? []) {
-    if (!member.likenessPhoto) continue;
-    const target = {
-      projectId: project.id,
-      subjectId: member.id,
-      createdAt: member.likenessPhoto.createdAt,
-    };
-    targets.set(`${target.subjectId}:${target.createdAt}`, target);
+    for (const photo of likenessPhotosOf(member)) {
+      const target = { projectId: project.id, subjectId: member.id, createdAt: photo.createdAt };
+      targets.set(`${target.subjectId}:${target.createdAt}`, target);
+    }
   }
   for (const anchor of project.anchors ?? []) {
     if (!anchor.likenessPhoto) continue;
@@ -167,8 +168,9 @@ function stripLikenessPhotos(project: Project): Project {
         ? {
             storyBrief: {
               ...storyBrief,
-              cast: storyBrief.cast.map(({ likenessPhoto: _drop, ...member }) => {
+              cast: storyBrief.cast.map(({ likenessPhoto: _drop, moreLikenessPhotos: _more, ...member }) => {
                 void _drop;
+                void _more;
                 return member;
               }),
             },
@@ -240,6 +242,10 @@ interface ProjectsState {
    * text box. Keeps `frontCover.subtitle` and the `book-subtitle` overlay in sync.
    */
   setCoverSubtitle: (id: string, subtitle: string) => Promise<void>;
+  /** The front cover's author line: kept in the cover spec, the Chat's choice and the text layer. */
+  setCoverAuthor: (id: string, author: string) => Promise<void>;
+  /** Settle the cover's words in one write: title (when changed), subtitle, author, confirmed. */
+  settleCoverWords: (id: string, lines: { title?: string; subtitle: string; author: string }) => Promise<void>;
   goToStage: (stage: ProjectStage) => Promise<void>;
   advanceStage: (stage: ProjectStage) => Promise<void>;
 
@@ -469,7 +475,25 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
   },
 
   async setCoverSubtitle(id, subtitle) {
-    await mutateProject(get, set, id, (p) => applyCoverSubtitle(p, subtitle));
+    await mutateProject(get, set, id, (p) => applyCoverLine(p, "subtitle", subtitle));
+  },
+
+  async setCoverAuthor(id, author) {
+    await mutateProject(get, set, id, (p) => applyCoverLine(p, "author", author));
+  },
+
+  async settleCoverWords(id, lines) {
+    await mutateProject(get, set, id, (p) => {
+      let next = p;
+      const title = lines.title?.trim();
+      if (title && title !== coverLinesOf(p).title) {
+        next = applyBookTitle(next, title);
+        next = withAuthoring(next, { cover: { ...authoringOf(next).cover, titleEdited: true } });
+      }
+      next = applyCoverLine(next, "subtitle", lines.subtitle.trim());
+      next = applyCoverLine(next, "author", lines.author.trim());
+      return withAuthoring(next, { cover: { ...authoringOf(next).cover, confirmedAt: Date.now() } });
+    });
   },
 
   async goToStage(stage) {
@@ -895,23 +919,23 @@ export function applyBookTitle(p: Project, rawTitle: string): Project {
   return next;
 }
 
-/** Apply a new front-cover subtitle and mirror it into the linked canvas box. */
-function applyCoverSubtitle(p: Project, rawSubtitle: string): Project {
-  if (!p.screenplay) return p;
-  const tree = p.screenplay;
-  const doc = getCursor(tree).content;
-  const prevSubtitle = doc.frontCover?.subtitle ?? "";
-  const base: CoverSpec =
-    doc.frontCover ?? { title: "", subtitle: "", illustration: "", anchorIds: [] };
-  const nextDoc: ScreenplayDoc = {
-    ...doc,
-    frontCover: { ...base, subtitle: rawSubtitle },
-  };
-  let next: Project = {
-    ...p,
-    screenplay: updateNodeContent(tree, tree.cursorId, nextDoc),
-  };
-  return syncCoverRoleBox(next, "book-subtitle", prevSubtitle, rawSubtitle);
+/**
+ * Apply a front-cover subtitle or author line everywhere it is kept — the cover
+ * spec, the reader's choice in the Chat, and the linked canvas box — so
+ * {@link coverLinesOf} reads the same words whichever studio wrote them.
+ */
+export function applyCoverLine(p: Project, line: "subtitle" | "author", raw: string): Project {
+  const prev = coverLinesOf(p)[line];
+  let next = withAuthoring(p, { cover: { ...authoringOf(p).cover, [line]: raw } });
+  if (next.screenplay) {
+    const tree = next.screenplay;
+    const doc = getCursor(tree).content;
+    const base: CoverSpec =
+      doc.frontCover ?? { title: "", subtitle: "", illustration: "", anchorIds: [] };
+    const nextDoc: ScreenplayDoc = { ...doc, frontCover: { ...base, [line]: raw } };
+    next = { ...next, screenplay: updateNodeContent(tree, tree.cursorId, nextDoc) };
+  }
+  return syncCoverRoleBox(next, line === "subtitle" ? "book-subtitle" : "book-author", prev, raw);
 }
 
 /**
@@ -922,7 +946,7 @@ function applyCoverSubtitle(p: Project, rawSubtitle: string): Project {
  */
 function syncCoverRoleBox(
   p: Project,
-  role: "book-title" | "book-subtitle",
+  role: "book-title" | "book-subtitle" | "book-author",
   prevValue: string,
   nextValue: string,
 ): Project {
@@ -1175,7 +1199,7 @@ function mutateProject(
     const target = state.projects.find((p) => p.id === id);
     if (!target) return {};
     found = true;
-    const updated: Project = { ...mutator(target), updatedAt: Date.now() };
+    const updated: Project = { ...reconcileCoverLettering(mutator(target)), updatedAt: Date.now() };
     return {
       projects: state.projects.map((p) => (p.id === id ? updated : p)),
     };

@@ -78,7 +78,7 @@ export const DEFAULT_STORY_CRAFT: Record<AgeBandId, AgeBandStoryCraft> = {
   "0-11m": {
     themes: [
       opt("closeness", "You and me", "Being held, rocked and adored.", "Build the book on physical closeness: being held, rocked, carried, kissed and adored. The feeling is safety, not story."),
-      opt("faces", "Faces", "Looking at people looking back.", "Centre the book on faces looking out at the baby — smiling, surprised, sleepy, laughing. One clear face per page."),
+      opt("faces", "Faces", "Looking at people looking back.", "Center the book on faces looking out at the baby — smiling, surprised, sleepy, laughing. One clear face per page."),
       opt("body", "My body", "Toes, nose, hands, tummy.", "Name body parts one at a time — toes, nose, hands, tummy — in a rhythm the adult can touch along with."),
       opt("animals", "Animal sounds", "Friendly animals and the noises they make.", "Introduce one friendly animal per page with its sound, so the adult can perform it and the baby can watch."),
       opt("bedtime", "Goodnight", "A soft, slow wind-down to sleep.", "Move gently towards sleep: lights lowering, everything saying goodnight, the last page calm and still."),
@@ -144,14 +144,14 @@ export const DEFAULT_STORY_CRAFT: Record<AgeBandId, AgeBandStoryCraft> = {
       opt("zoo", "The zoo", "Amazing animals behind glass.", "Set it at a zoo, moving from one clearly-named animal to the next."),
       opt("street", "Out on the street", "Buses, dogs, puddles, shops.", "Set it on an ordinary street walk: buses, dogs, puddles, shop windows, a lot to point at."),
       opt("bath", "Bath time", "Warm water and splashing.", "Set it at bath time: water, bubbles, toys, a warm towel at the end."),
-      opt("bedroom", "The bedroom", "Pyjamas, teddy, curtains, dark.", "Set it in the bedroom at the end of the day, moving steadily towards sleep."),
+      opt("bedroom", "The bedroom", "Pajamas, teddy, curtains, dark.", "Set it in the bedroom at the end of the day, moving steadily towards sleep."),
     ],
     structure: { minWords: 35, maxWords: 180, beats: 3, maxSentenceWords: 12 },
     protagonist: {
       minAge: 1,
       maxAge: 3,
       guidance:
-        "The main character should read as roughly {{min}}–{{max}} years old so the toddler recognises themselves. When the customer supplies a real child's age, keep it.",
+        "The main character should read as roughly {{min}}–{{max}} years old so the toddler recognizes themselves. When the customer supplies a real child's age, keep it.",
     },
     safety: {
       avoid: [
@@ -173,7 +173,7 @@ export const DEFAULT_STORY_CRAFT: Record<AgeBandId, AgeBandStoryCraft> = {
       opt("animal-adventure", "An animal adventure", "Off into the world with an animal.", "Send the child and one animal companion on a small journey with recurring encounters along the way."),
       opt("small-fears", "A bit scary", "Something big, dark or loud.", "Face one manageable fear — the dark, a loud noise, a big animal — stylised clearly and resolved securely."),
       opt("new-experiences", "The first time", "Somewhere never been before.", "Take the child somewhere new for the first time: the nerves beforehand, the discovery, the pride afterwards."),
-      opt("bedtime", "Getting sleepy", "Winding down to a cosy goodnight.", "A wind-down towards sleep: the day ending, soft lights, a familiar bed, everyone safe."),
+      opt("bedtime", "Getting sleepy", "Winding down to a cozy goodnight.", "A wind-down towards sleep: the day ending, soft lights, a familiar bed, everyone safe."),
     ],
     devices: [
       opt("refrain", "Repeating refrain", "One line the child will chant.", "Give the story one memorable refrain that returns at each turning point so the child can join in."),
@@ -190,7 +190,7 @@ export const DEFAULT_STORY_CRAFT: Record<AgeBandId, AgeBandStoryCraft> = {
       opt("woods", "The woods", "Trees, animals, dappled light.", "Set it in a friendly wood full of animals and dappled light."),
       opt("farm", "The farm", "Big friendly animals.", "Set it on a gentle farm full of big friendly animals with jobs of their own."),
       opt("seaside", "The seaside", "Sand, waves and rock pools.", "Set it at the seaside among sand, waves and rock pools."),
-      opt("neighbourhood", "Our street", "Shops, neighbours, the bus.", "Set it on a familiar street of shops, neighbours and short journeys."),
+      opt("neighbourhood", "Our street", "Shops, neighbors, the bus.", "Set it on a familiar street of shops, neighbors and short journeys."),
       opt("one-rule-magic", "A magical place", "Impossible, with one clear rule.", "Set it somewhere gently impossible that obeys exactly one magical rule, stated plainly and never broken."),
     ],
     structure: { minWords: 90, maxWords: 750, beats: 5, maxSentenceWords: 22 },
@@ -276,7 +276,7 @@ export const DEFAULT_STORY_CRAFT: Record<AgeBandId, AgeBandStoryCraft> = {
     ],
     settings: [
       opt("kindergarten", "School or kindergarten", "The first big social world.", "Set it at kindergarten or the first year of school, with a class, a routine and one kind grown-up."),
-      opt("neighbourhood", "The neighbourhood", "Streets, gardens and corner shops.", "Set it in a walkable neighbourhood of streets, gardens and small shops."),
+      opt("neighbourhood", "The neighborhood", "Streets, gardens and corner shops.", "Set it in a walkable neighborhood of streets, gardens and small shops."),
       opt("museum", "A museum", "Big halls full of astonishing things.", "Set it in a museum where one exhibit matters more than all the others."),
       opt("woods", "The woods", "Trees, animals, dappled light.", "Set it in a friendly wood full of animals and dappled light."),
       opt("transport", "On the move", "Trains, boats, buses, bikes.", "Set it in transit — a train, a boat, a long bus ride — where the journey shapes the story."),
@@ -322,7 +322,7 @@ export const DEFAULT_STORY_CRAFT: Record<AgeBandId, AgeBandStoryCraft> = {
     ],
     settings: [
       opt("school", "School", "Classroom, corridor and playground.", "Set it across a school's classroom, corridors and playground."),
-      opt("neighbourhood", "The neighbourhood", "Streets, gardens and corner shops.", "Set it in a walkable neighbourhood of streets, gardens and small shops."),
+      opt("neighbourhood", "The neighborhood", "Streets, gardens and corner shops.", "Set it in a walkable neighborhood of streets, gardens and small shops."),
       opt("library", "The library", "Quiet rooms full of possibility.", "Set it in a library, where the building itself and what is in it both matter to the plot."),
       opt("camp", "Camp", "Away from home with other children.", "Set it at a camp or on a school trip: away from home, new rules, unfamiliar company."),
       opt("forest", "The forest", "Deep woods with their own logic.", "Set it in deep forest, big enough to get properly lost in."),
@@ -439,7 +439,7 @@ export const DEFAULT_STORY_CRAFT: Record<AgeBandId, AgeBandStoryCraft> = {
 
   "0-2": {
     themes: [
-      opt("bedtime", "Getting sleepy", "Winding down towards a cosy goodnight.", "A gentle wind-down towards sleep: the day ending, soft lights, a familiar bed, everyone safe."),
+      opt("bedtime", "Getting sleepy", "Winding down towards a cozy goodnight.", "A gentle wind-down towards sleep: the day ending, soft lights, a familiar bed, everyone safe."),
       opt("animals", "Animal friends", "Meeting friendly animals and their sounds.", "Friendly animals the child can name and imitate, each with a clear sound or movement."),
       opt("first-words", "Naming the world", "Pointing at everyday things and naming them.", "Naming everyday objects the toddler already knows — cup, shoe, ball, moon — one clear thing at a time."),
       opt("peekaboo", "Hide and find", "Something disappears and comes happily back.", "A simple hide-and-find rhythm: something vanishes, the toddler wonders, it returns happily."),
@@ -462,7 +462,7 @@ export const DEFAULT_STORY_CRAFT: Record<AgeBandId, AgeBandStoryCraft> = {
       minAge: 2,
       maxAge: 4,
       guidance:
-        "The main character should read as roughly {{min}}–{{max}} years old (or a small animal of that emotional age) so the listener recognises themselves.",
+        "The main character should read as roughly {{min}}–{{max}} years old (or a small animal of that emotional age) so the listener recognizes themselves.",
     },
     safety: {
       avoid: [...UNIVERSAL_AVOID, "separation from a caregiver that is not resolved immediately", "loud or frightening surprises"],
@@ -530,7 +530,7 @@ export const DEFAULT_STORY_CRAFT: Record<AgeBandId, AgeBandStoryCraft> = {
       opt("twist", "A twist", "The truth turns out to be different.", "Plant a fair clue early, then reveal a twist that recontextualises the story without cheating the reader."),
     ],
     settings: [
-      opt("neighbourhood", "The neighbourhood", "Streets, gardens and corner shops.", "Set it in a walkable neighbourhood of streets, gardens and small shops."),
+      opt("neighbourhood", "The neighborhood", "Streets, gardens and corner shops.", "Set it in a walkable neighborhood of streets, gardens and small shops."),
       opt("school", "School", "Classroom, corridor and playground.", "Set it across a school's classroom, corridors and playground."),
       opt("countryside", "The countryside", "Fields, woods, rivers and barns.", "Set it in open countryside — fields, woods, a river, an old barn."),
       opt("city", "The city", "Buses, markets and tall buildings.", "Set it in a busy city of buses, markets and tall buildings."),
@@ -566,7 +566,7 @@ export const DEFAULT_STORY_CRAFT: Record<AgeBandId, AgeBandStoryCraft> = {
       opt("first-person", "First person voice", "A narrator with real personality.", "Write in a distinctive first-person voice with wit, blind spots and opinions the reader can see past."),
       opt("dual-timeline", "Two timelines", "Now and then, braided together.", "Braid two timelines — present and past — so each reveals something the other was hiding."),
       opt("foreshadowing", "Foreshadowing", "Small clues that pay off later.", "Plant three small details early and pay every one of them off before the end."),
-      opt("humour", "Dry humour", "Funny in a way tweens respect.", "Keep the humour dry and character-driven; never talk down or explain the joke."),
+      opt("humour", "Dry humor", "Funny in a way tweens respect.", "Keep the humor dry and character-driven; never talk down or explain the joke."),
       opt("epistolary", "Letters and logs", "Diaries, messages, found documents.", "Tell it through diary entries, messages or found documents, with a clear through-line."),
       opt("unreliable", "An unreliable narrator", "The teller isn't quite right.", "Let the narrator misread events in a way the reader can catch, then correct honestly at the end."),
       opt("twist", "A real twist", "Fairly planted, properly earned.", "Build to a genuine twist that is fairly clued and changes the meaning of what came before."),

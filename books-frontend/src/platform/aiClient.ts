@@ -132,6 +132,8 @@ export interface AnalyzeResult {
   summary: string;
   /** A short title in the book's language, when the analysis invented one. */
   title?: string;
+  /** Subtitle ideas in the book's language; older servers send none. */
+  subtitles?: string[];
   anchors: Anchor[];
   model: string;
   /** Private contained-subject dependencies, keyed by name until reconciliation. */
@@ -141,6 +143,8 @@ export interface AnalyzeResult {
 export interface StoryDraftResult {
   title: string;
   story: string;
+  /** Front-cover subtitle ideas written with the story (drafts only). */
+  subtitles?: string[];
 }
 
 export interface StoryFitResult {
@@ -231,6 +235,10 @@ export function interpretGuideTurnRemote(
     transcript?: GuideTurn[];
     /** The admin's saved flow toggle; honoured server-side for admins only. */
     guidePreference?: "guide" | "legacy" | null;
+    /** The follow-up the guide just asked, so a short reply finds its skill. */
+    pending?: string;
+    /** The story passage the reader marked, so "make this nicer" finds its skill. */
+    marked?: string;
   } = {},
   signal?: AbortSignal,
 ): Promise<GuideTurnResult & { turnId: string | null }> {
@@ -246,6 +254,8 @@ export function interpretGuideTurnRemote(
       message,
       transcript: args.transcript ?? [],
       guidePreference: args.guidePreference ?? null,
+      ...(args.pending ? { pending: args.pending } : {}),
+      ...(args.marked ? { marked: args.marked } : {}),
     },
     signal,
   );
@@ -408,6 +418,31 @@ export function guideSpeakRemote(args: {
   guidePreference?: string | null;
 }): Promise<{ lines: Record<string, string> }> {
   return postAi("/ai/guide/speak", args);
+}
+
+/** Phrase one guide message in the persona. The caller validates the text. */
+export function guideComposeRemote(
+  args: {
+    projectId: string;
+    language: string;
+    locale: string;
+    names: string[];
+    meanings: string[];
+    transcript: string;
+    guidePreference?: string | null;
+  },
+  signal?: AbortSignal,
+): Promise<{ text: string }> {
+  return postAi("/ai/guide/compose", args, signal);
+}
+
+/** Answer a how-to question from the help articles and this book. */
+export function guideAnswerRemote(
+  project: Project,
+  args: { question: string; language: string; locale: string; transcript: string; guidePreference?: string | null },
+  signal?: AbortSignal,
+): Promise<{ text: string; grounded: boolean }> {
+  return postAi("/ai/guide/answer", { project: slimProjectForRender(project, {}), ...args }, signal);
 }
 
 /** Read the names and stated ages in a manuscript, without rewriting it. */

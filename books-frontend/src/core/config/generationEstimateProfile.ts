@@ -20,7 +20,11 @@ export interface GenerationEstimateProfile {
   modelKey: string;
   renderKind: GenerationRenderKind;
   quality: ActionGenerationTuning["quality"];
-  inputFidelity: ActionGenerationTuning["inputFidelity"];
+  /**
+   * Retired setting, always the provider default. It stays in the profile so
+   * the cost and latency keys of samples already recorded keep matching.
+   */
+  inputFidelity: "provider-default";
   outputFormat: ActionGenerationTuning["outputFormat"];
   outputCompression: number | null;
   outputSize: string;
@@ -48,7 +52,8 @@ export function generationRenderKindOf(
   return "fresh";
 }
 
-function countBucket(value: number | undefined): string {
+/** The group a count is priced and measured in ("0", "1", "2", "3-4", "5+"). */
+export function countBucket(value: number | undefined): string {
   if (value === undefined) return "unknown";
   if (value <= 0) return "0";
   if (value <= 2) return value === 1 ? "1" : "2";
@@ -71,7 +76,7 @@ export function createGenerationEstimateProfile(args: {
     modelKey: `${model.provider}:${model.id}`,
     renderKind: kind,
     quality: tuning.quality,
-    inputFidelity: tuning.inputFidelity,
+    inputFidelity: "provider-default",
     outputFormat: tuning.outputFormat,
     outputCompression: tuning.outputCompression,
     outputSize: args.outputSize ?? "unknown",

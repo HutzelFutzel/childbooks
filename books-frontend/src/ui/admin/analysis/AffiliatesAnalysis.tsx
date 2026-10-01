@@ -35,7 +35,7 @@ const STATES: { id: string; label: string; hint: string }[] = [
   { id: "pending", label: "Pending", hint: "Inside the refund window — not owed yet." },
   { id: "due", label: "Due", hint: "Survived the refund window; owed at the next payout." },
   { id: "paid", label: "Paid", hint: "Already paid out to the affiliate." },
-  { id: "voided", label: "Voided", hint: "Cancelled (usually a refund) — costs nothing." },
+  { id: "voided", label: "Voided", hint: "Canceled (usually a refund) — costs nothing." },
 ];
 
 function Kpi({

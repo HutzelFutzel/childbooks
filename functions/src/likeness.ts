@@ -2,8 +2,10 @@
  * Privacy-first, one-use likeness photo intake.
  *
  * Sources are server-normalized into a private JPEG, kept outside the durable
- * blob namespace, and deleted after the first successful character render. A
- * scheduled hard expiry catches abandoned stories and failed generations.
+ * blob namespace, and deleted after the first successful render drawn from
+ * them (a portrait or a character sheet). One person may have up to
+ * `LIKENESS_PHOTOS_MAX` at once. A scheduled hard expiry catches abandoned
+ * stories and failed generations.
  */
 import { randomUUID } from "node:crypto";
 import express, { type Express, type Response } from "express";
@@ -13,6 +15,7 @@ import { onSchedule } from "firebase-functions/v2/scheduler";
 import sharp from "sharp";
 import {
   LIKENESS_CONSENT_VERSION,
+  LIKENESS_PHOTOS_MAX,
   type LikenessPhotoRef,
 } from "../../books-frontend/src/core/types";
 import { appCheckRejects } from "./appCheck";
@@ -22,7 +25,7 @@ import { blobBucket, ensureAdmin } from "./storage";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_SOURCE_BYTES = 12 * 1024 * 1024;
 const MAX_BASE64_CHARS = Math.ceil((MAX_SOURCE_BYTES * 4) / 3) + 16;
-const MAX_ACTIVE_PHOTOS = 12;
+const MAX_ACTIVE_PHOTOS = 36;
 const MAX_DIMENSION = 1280;
 const MAX_EXPIRED_PER_RUN = 500;
 const PHOTO_ID_RE = /^[a-f0-9-]{36}$/;
@@ -84,38 +87,73 @@ async function photoForSubject(
   );
 }
 
-/** Load an unexpired source for the character pipeline without exposing its id. */
-export async function loadLikenessPhotoForSubject(
-  uid: string,
-  projectId: string,
-  subjectId: string,
-): Promise<{ base64: string; mimeType: string; createdAt: number } | null> {
-  const record = await photoForSubject(uid, projectId, subjectId);
-  if (!record) return null;
-  const { data } = record;
-  if (data.expiresAt <= Date.now()) {
+function boundTo(photo: { data: LikenessPhotoDoc }, subjectId: string): boolean {
+  return [photo.data.subjectId, ...(photo.data.subjectIds ?? [])].includes(subjectId);
+}
+
+type LoadedPhoto = { base64: string; mimeType: string; createdAt: number };
+
+async function loadRecord(uid: string, record: { id: string; data: LikenessPhotoDoc }): Promise<LoadedPhoto | null> {
+  if (record.data.expiresAt <= Date.now()) {
     await deleteLikenessPhotoById(uid, record.id).catch(() => {});
     return null;
   }
   try {
     const [buf] = await blobBucket().file(likenessPath(uid, record.id)).download();
-    return {
-      base64: buf.toString("base64"),
-      mimeType: "image/jpeg",
-      createdAt: data.createdAt,
-    };
+    return { base64: buf.toString("base64"), mimeType: "image/jpeg", createdAt: record.data.createdAt };
   } catch {
     return null;
   }
 }
 
-/** Delete the exact source bound to a UI subject or consumed render. */
+/** Load an unexpired source for the character pipeline without exposing its id. */
+export async function loadLikenessPhotoForSubject(
+  uid: string,
+  projectId: string,
+  subjectId: string,
+  createdAt?: number,
+): Promise<LoadedPhoto | null> {
+  const record = await photoForSubject(uid, projectId, subjectId, createdAt);
+  return record ? loadRecord(uid, record) : null;
+}
+
+/** Whether an unexpired photo waits for this subject, without loading it. */
+export async function hasLikenessPhotoForSubject(uid: string, projectId: string, subjectId: string): Promise<boolean> {
+  const record = await photoForSubject(uid, projectId, subjectId);
+  return Boolean(record && record.data.expiresAt > Date.now());
+}
+
+/** Every unexpired photo of one person, oldest first (the first one added leads). */
+export async function loadLikenessPhotosForSubject(
+  uid: string,
+  projectId: string,
+  subjectId: string,
+  max = LIKENESS_PHOTOS_MAX,
+): Promise<LoadedPhoto[]> {
+  const records = (await projectPhotos(uid, projectId))
+    .filter((photo) => boundTo(photo, subjectId))
+    .sort((a, b) => b.data.createdAt - a.data.createdAt)
+    .slice(0, Math.max(0, max))
+    .reverse();
+  const loaded = await Promise.all(records.map((record) => loadRecord(uid, record)));
+  return loaded.filter((photo): photo is LoadedPhoto => photo !== null);
+}
+
+/**
+ * Delete the exact source bound to a UI subject or consumed render. Without a
+ * timestamp, every photo of that person goes.
+ */
 export async function deleteLikenessPhotoForSubject(
   uid: string,
   projectId: string,
   subjectId: string,
   createdAt?: number,
 ): Promise<void> {
+  if (createdAt === undefined) {
+    const all = (await projectPhotos(uid, projectId)).filter((photo) => boundTo(photo, subjectId));
+    for (const photo of all) await deleteLikenessPhotoById(uid, photo.id);
+    return;
+  }
   const record = await photoForSubject(uid, projectId, subjectId, createdAt);
   if (record) await deleteLikenessPhotoById(uid, record.id);
 }
@@ -157,10 +195,15 @@ async function projectExists(uid: string, projectId: string): Promise<boolean> {
   return (await getFirestore().doc(`users/${uid}/store/${key}`).get()).exists;
 }
 
+/**
+ * Which of this person's photos a new upload replaces: all of them, or with
+ * `add` only the oldest beyond {@link LIKENESS_PHOTOS_MAX}.
+ */
 async function enforceActiveLimit(
   uid: string,
   projectId: string,
   subjectId: string,
+  add: boolean,
 ): Promise<string[]> {
   const photos = await projectPhotos(uid, projectId);
   const now = Date.now();
@@ -173,10 +216,11 @@ async function enforceActiveLimit(
       active.push(photo);
     }
   }
-  const replacing = active.filter((item) =>
-    [item.data.subjectId, ...(item.data.subjectIds ?? [])].includes(subjectId),
-  );
-  if (active.length >= MAX_ACTIVE_PHOTOS && replacing.length === 0) {
+  const mine = active
+    .filter((item) => boundTo(item, subjectId))
+    .sort((a, b) => a.data.createdAt - b.data.createdAt);
+  const replacing = add ? mine.slice(0, Math.max(0, mine.length - (LIKENESS_PHOTOS_MAX - 1))) : mine;
+  if (active.length - replacing.length >= MAX_ACTIVE_PHOTOS) {
     throw new Error(
       "This book already has the maximum number of pending photos. Remove one or create the character first.",
     );
@@ -193,12 +237,14 @@ export function registerLikenessRoutes(app: Express): void {
         res.status(403).json({ error: { message: "This upload could not be verified." } });
         return;
       }
-      const { base64, mimeType, projectId, subjectId, consentVersion } = (req.body ?? {}) as {
+      const { base64, mimeType, projectId, subjectId, consentVersion, add } = (req.body ?? {}) as {
         base64?: string;
         mimeType?: string;
         projectId?: string;
         subjectId?: string;
         consentVersion?: string;
+        /** Keep this person's earlier photos (up to three in all) instead of replacing them. */
+        add?: boolean;
       };
       if (
         !base64 ||
@@ -224,7 +270,7 @@ export function registerLikenessRoutes(app: Express): void {
         res.status(404).json({ error: { message: "This book could not be found." } });
         return;
       }
-      const replacedPhotoIds = await enforceActiveLimit(uid, projectId, subjectId);
+      const replacedPhotoIds = await enforceActiveLimit(uid, projectId, subjectId, add === true);
 
       const source = Buffer.from(base64, "base64");
       if (source.length === 0 || source.length > MAX_SOURCE_BYTES) {
@@ -298,8 +344,8 @@ export function registerLikenessRoutes(app: Express): void {
         res.status(400).json({ error: { message: "The photo reference is invalid." } });
         return;
       }
-      const photo = await loadLikenessPhotoForSubject(req.uid!, projectId, subjectId);
-      if (!photo || photo.createdAt !== createdAt) {
+      const photo = await loadLikenessPhotoForSubject(req.uid!, projectId, subjectId, createdAt);
+      if (!photo) {
         res.status(404).json({ error: { message: "This photo is no longer available." } });
         return;
       }

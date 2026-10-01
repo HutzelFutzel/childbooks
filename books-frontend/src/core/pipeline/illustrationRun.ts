@@ -16,9 +16,10 @@
 import type { ProviderId } from "../config/options";
 import type { ImageActionId } from "../ai/actions";
 import type { ResolvedModels } from "../models/registry";
-import type { ReferenceImage } from "../providers/types";
+import type { ImageResult, ReferenceImage } from "../providers/types";
 import type {
   Anchor,
+  BakedCoverText,
   DepictedSubject,
   IllustrationImage,
   Project,
@@ -72,15 +73,27 @@ import {
   isFullyStructured,
   mentionedAnchorIds,
   resolveEditIntent,
+  singleSubjectEdit,
   type ResolvedEditOp,
 } from "./intentResolve";
 import {
   locateAndCountSubjects,
+  locateEditPart,
   locateEmbeddedObsolete,
   locateSubjects,
+  partOnSubject,
   type SubjectBox,
 } from "./localize";
+import { IN_PLACE_EDIT_FAILED } from "./inPlaceMessage";
 import { effectiveAnchorIds } from "../book/anchorRefs";
+import { bakedTextOf } from "../book/coverLines";
+import {
+  coverLetteringSafeArea,
+  judgeLettering,
+  readCoverLettering,
+  type LetteringBox,
+  type LetteringReading,
+} from "./coverLettering";
 import { heightFractions } from "../book/anchorScale";
 import { cellBox } from "./anchorLayout";
 import { anchorSignature, currentAnchorImage, currentReferenceUses } from "./provenance";
@@ -221,7 +234,22 @@ export interface IllustrationRunOptions {
    * those keep the untouched pixels, which would leave the page half-restyled.
    */
   restyle?: boolean;
+  /**
+   * The edit is a small change to what is already drawn (a typed "make Arthur's
+   * hair yellow"). When it names a subject and the model can change one spot,
+   * it is done there or not at all: it never quietly turns into a redraw of the
+   * whole picture. Fails with {@link InPlaceEditError} instead.
+   */
+  inPlaceOnly?: boolean;
   signal?: AbortSignal;
+}
+
+/** An edit that had to stay in place could not be done there. */
+export class InPlaceEditError extends Error {
+  readonly name = "InPlaceEditError";
+  constructor(message = IN_PLACE_EDIT_FAILED) {
+    super(message);
+  }
 }
 
 /**
@@ -239,6 +267,8 @@ export interface IllustrationRender {
   textMode: IllustrationImage["textMode"];
   /** Cover-only: the exact text baked into the artwork (typographic covers). */
   bakedText?: IllustrationImage["bakedText"];
+  /** Cover-only: what the lettering check read (see {@link drawCoverLettering}). */
+  lettering?: IllustrationImage["lettering"];
   /** Subjects bound to regions in the rendered image (post-render binding pass). */
   depicted?: DepictedSubject[];
   /** Parent version to branch from (the source node), if any. */
@@ -278,6 +308,7 @@ export function applyIllustrationRender(
     textMode: render.textMode,
     prompt: render.prompt,
     ...(render.bakedText ? { bakedText: render.bakedText } : {}),
+    ...(render.lettering ? { lettering: render.lettering } : {}),
     ...(render.depicted ? { depicted: render.depicted } : {}),
     ...(render.layoutId ? { layoutId: render.layoutId } : {}),
     ...(render.compositionMode ? { compositionMode: render.compositionMode } : {}),
@@ -393,17 +424,6 @@ export function signalUntil(
   return parent ? AbortSignal.any([parent, timeout]) : timeout;
 }
 
-function tunedInputFidelity(
-  env: PipelineEnv,
-  imageModel: ResolvedModels["imageModel"],
-): "low" | "high" | undefined {
-  const tuning = generationTuningFor(env.generationTuning, env.imageAction);
-  return resolveImageGenerationOptions(
-    capabilitiesFor(imageModel, env.modelCapabilities),
-    generationIntentFor(tuning),
-  ).applied.inputFidelity;
-}
-
 function tunedReferenceLimit(
   env: PipelineEnv,
   imageModel: ResolvedModels["imageModel"],
@@ -435,7 +455,6 @@ export async function removeRegionsInPlace(args: {
   maxRemovals?: number;
   deadlineAt?: number;
   quality?: Parameters<typeof generateIllustrationImage>[0]["quality"];
-  inputFidelity?: Parameters<typeof generateIllustrationImage>[0]["inputFidelity"];
   retries?: number;
   beforeAttempt?: Parameters<typeof generateIllustrationImage>[0]["beforeAttempt"];
 }): Promise<{ base64: string; mimeType: string } | null> {
@@ -453,7 +472,6 @@ export async function removeRegionsInPlace(args: {
     maxRemovals = removals.length,
     deadlineAt,
     quality = "low",
-    inputFidelity,
     retries,
     beforeAttempt,
   } = args;
@@ -496,7 +514,6 @@ export async function removeRegionsInPlace(args: {
           // Small masked region, composited back — low quality is visually
           // equivalent here and roughly halves the per-edit latency.
           quality,
-          inputFidelity,
           retries,
           beforeAttempt,
           signal: operationSignal,
@@ -640,7 +657,6 @@ async function bindAndRepairPage(args: {
       maxRemovals: repairLimit,
       deadlineAt,
       quality: qc.repairQuality,
-      inputFidelity: tunedInputFidelity(env, imageModel),
       retries: actionTuning.retries,
       beforeAttempt: claimRepairAttempt,
     });
@@ -712,7 +728,6 @@ async function bindAndRepairPage(args: {
         maxRemovals: repairLimit,
         deadlineAt,
         quality: qc.repairQuality,
-        inputFidelity: tunedInputFidelity(env, imageModel),
         retries: actionTuning.retries,
         beforeAttempt: claimRepairAttempt,
       });
@@ -771,7 +786,6 @@ async function trySurgicalRemoval(args: {
     strict: true,
     quality: generationTuningFor(args.env.generationTuning, args.env.imageAction)
       .qualityControl.repairQuality,
-    inputFidelity: tunedInputFidelity(args.env, args.imageModel),
     retries: generationTuningFor(args.env.generationTuning, args.env.imageAction).retries,
   });
 }
@@ -826,7 +840,6 @@ async function trySurgicalReplaceOne(args: {
         mask: supportsMask ? mask : undefined,
         quality: generationTuningFor(env.generationTuning, env.imageAction)
           .qualityControl.repairQuality,
-        inputFidelity: tunedInputFidelity(env, imageModel),
         retries: generationTuningFor(env.generationTuning, env.imageAction).retries,
         signal,
       }),
@@ -855,6 +868,8 @@ async function trySurgicalModifyOne(args: {
   targetAnchor: Anchor;
   instruction: string;
   targetBox: SubjectBox;
+  /** Set when `targetBox` covers only that part of the subject ("hair"). */
+  part?: string;
   /** The subject's reference sheet (identity guard); optional. */
   sheetRef: { base64: string; mimeType: string } | null;
   page: { base64: string; mimeType: string };
@@ -864,8 +879,11 @@ async function trySurgicalModifyOne(args: {
   env: PipelineEnv;
   signal?: AbortSignal;
 }): Promise<{ base64: string; mimeType: string } | null> {
-  const { config, targetAnchor, instruction, targetBox, sheetRef, page, imageModel, imageKey, size, env, signal } =
+  const { config, targetAnchor, instruction, targetBox, part, sheetRef, page, imageModel, imageKey, size, env, signal } =
     args;
+  // A named part gets a hole only a little bigger than itself; a whole subject
+  // keeps the wider margin its edges need.
+  const paddingFrac = part ? 0.1 : 0.12;
   const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
   const supportsMask = capabilitiesFor(
     imageModel,
@@ -881,7 +899,7 @@ async function trySurgicalModifyOne(args: {
       pageBase64: page.base64,
       pageMime: page.mimeType,
       box: targetBox,
-      paddingFrac: 0.12,
+      paddingFrac,
     });
     const references: ReferenceImage[] = [
       { base64: page.base64, mimeType: page.mimeType, role: "composition" },
@@ -902,6 +920,7 @@ async function trySurgicalModifyOne(args: {
           config,
           maskMode: supportsMask,
           hasSheetRef: Boolean(sheetPayload),
+          part,
           prompts: env.prompts,
         }),
         size,
@@ -912,7 +931,6 @@ async function trySurgicalModifyOne(args: {
         mask: supportsMask ? mask : undefined,
         quality: generationTuningFor(env.generationTuning, env.imageAction)
           .qualityControl.repairQuality,
-        inputFidelity: tunedInputFidelity(env, imageModel),
         retries: generationTuningFor(env.generationTuning, env.imageAction).retries,
         signal,
       }),
@@ -1044,7 +1062,6 @@ async function trySurgicalAnchorUpdate(args: {
           mask: supportsMask ? mask : undefined,
           quality: generationTuningFor(env.generationTuning, env.imageAction)
             .qualityControl.repairQuality,
-          inputFidelity: tunedInputFidelity(env, imageModel),
           retries: generationTuningFor(env.generationTuning, env.imageAction).retries,
           signal,
         }),
@@ -1081,6 +1098,99 @@ async function trySurgicalAnchorUpdate(args: {
   }
 
   return appliedIds.length > 0 ? { ...current, appliedIds } : null;
+}
+
+/** Where subjects stand in `page`, asked of the vision model right now. */
+async function locateSubjectsNow(args: {
+  anchors: Anchor[];
+  page: { base64: string; mimeType: string };
+  env: PipelineEnv;
+  signal?: AbortSignal;
+}): Promise<DepictedSubject[]> {
+  const { anchors, page, env, signal } = args;
+  if (anchors.length === 0) return [];
+  const model = env.models.bindingModel ?? env.models.textModel;
+  let key: string;
+  try {
+    key = env.apiKeyFor(model.provider);
+  } catch {
+    return [];
+  }
+  const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
+  try {
+    const vision = await asRefPayload(env, page);
+    const found = await runStep("binding", () =>
+      locateAndCountSubjects({
+        pageBase64: vision.base64,
+        pageMime: vision.mimeType,
+        subjects: anchors.map((a) => ({ id: a.id, name: a.name, description: a.description })),
+        creds: { apiKey: key },
+        model: model.id,
+        providerId: model.provider,
+        prompts: env.prompts,
+        signal,
+      }),
+    );
+    return anchors.flatMap((a) => {
+      const b = found.get(a.id);
+      return b ? [{ anchorId: a.id, box: b.box, brief: a.description, confidence: 1 }] : [];
+    });
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return [];
+  }
+}
+
+const area = (b: SubjectBox) => b.width * b.height;
+
+/**
+ * Narrow a change to the part it is about. "Make Arthur's hair yellow" repaints
+ * the hair's box, not Arthur's: everything the box does not cover is left
+ * exactly as drawn. When the part can't be told, or it is nearly all of the
+ * subject, the subject's own box is used.
+ */
+async function narrowToPart(args: {
+  anchor: Anchor;
+  subjectBox: SubjectBox;
+  instruction: string;
+  page: { base64: string; mimeType: string };
+  env: PipelineEnv;
+  signal?: AbortSignal;
+}): Promise<{ box: SubjectBox; part?: string }> {
+  const { anchor, subjectBox, instruction, page, env, signal } = args;
+  const whole = { box: subjectBox };
+  const model = env.models.bindingModel ?? env.models.textModel;
+  let key: string;
+  try {
+    key = env.apiKeyFor(model.provider);
+  } catch {
+    return whole;
+  }
+  const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
+  try {
+    const vision = await asRefPayload(env, page);
+    const found = await runStep("binding", () =>
+      locateEditPart({
+        pageBase64: vision.base64,
+        pageMime: vision.mimeType,
+        name: anchor.name,
+        description: anchor.description,
+        instruction,
+        creds: { apiKey: key },
+        model: model.id,
+        providerId: model.provider,
+        prompts: env.prompts,
+        signal,
+      }),
+    );
+    if (!found || !found.part) return whole;
+    if (!partOnSubject(subjectBox, found.box)) return whole;
+    if (area(found.box) >= area(subjectBox) * 0.85) return whole;
+    return { box: found.box, part: found.part };
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    return whole;
+  }
 }
 
 /**
@@ -1206,19 +1316,33 @@ async function tryStructuredEdit(args: {
       const raw = img ? await env.loadBlob(img.blobId) : null;
       const sheetRef = raw ? await asRefPayload(env, raw) : null;
       const instruction = op.instruction?.trim() || edit;
-      const modified = await trySurgicalModifyOne({
-        config: project.config,
-        targetAnchor: a,
+      const region = await narrowToPart({
+        anchor: a,
+        subjectBox: d.box,
         instruction,
-        targetBox: d.box,
-        sheetRef,
         page: current,
-        imageModel,
-        imageKey,
-        size,
         env,
         signal,
       });
+      // One more try: a masked edit that came back empty or unusable is often
+      // fine the second time, and the alternative is a redraw of the picture.
+      let modified: { base64: string; mimeType: string } | null = null;
+      for (let attempt = 0; attempt < 2 && !modified; attempt++) {
+        modified = await trySurgicalModifyOne({
+          config: project.config,
+          targetAnchor: a,
+          instruction,
+          targetBox: region.box,
+          part: region.part,
+          sheetRef,
+          page: current,
+          imageModel,
+          imageKey,
+          size,
+          env,
+          signal,
+        });
+      }
       if (!modified) return null;
       current = modified;
       opLabels.push(instruction);
@@ -1267,9 +1391,31 @@ export async function renderIllustration(
   options: IllustrationRunOptions,
   env: PipelineEnv,
 ): Promise<IllustrationRender | null> {
+  const render = await renderPage(project, spread, options, env);
+  if (!render || render.bakedText || render.textMode !== "in-image") return render;
+  // In-place edits keep the painted words as they were, so the record carries over.
+  const title = (spread.coverTitle ?? "").trim();
+  if (!spread.bakeText || !title) return render;
+  return {
+    ...render,
+    bakedText: bakedTextOf({
+      title,
+      subtitle: (spread.coverSubtitle ?? "").trim(),
+      author: (spread.coverAuthor ?? "").trim(),
+    }),
+  };
+}
+
+async function renderPage(
+  project: Project,
+  spread: ScreenplaySpread,
+  options: IllustrationRunOptions,
+  env: PipelineEnv,
+): Promise<IllustrationRender | null> {
   if (spread.placeholder || spread.blankCanvas || spread.completion === "text" || spread.completion === "blank") {
     return null;
   }
+  const startedAt = Date.now();
 
   const imageModel = env.models.imageModel;
   const key = env.apiKeyFor(imageModel.provider);
@@ -1414,6 +1560,11 @@ export async function renderIllustration(
       );
       editOps = null;
     }
+  }
+  // The resolver could not decide, but the sentence names one subject on the
+  // page: that is a change to that subject, not to the whole picture.
+  if (editText && hasCompositionRef && !inpaint && options.inPlaceOnly) {
+    editOps = singleSubjectEdit(editText, editOps, anchors) ?? editOps;
   }
   const editMentions = editOps ? mentionedAnchorIds(editOps) : null;
   const editFullyStructured = editOps ? isFullyStructured(editOps) : false;
@@ -1725,9 +1876,26 @@ export async function renderIllustration(
     options.useReference &&
     !options.mask &&
     hasCompositionRef &&
-    compositionData &&
-    prevDepicted.length > 0
+    compositionData
   ) {
+    // The previous version may not record where its subjects stand (the binding
+    // pass is optional). Ask now, for just the subjects this edit touches, so
+    // the lack of a record never forces a whole-page redraw.
+    let depictedForEdit = prevDepicted;
+    const wanted = new Set(
+      editOps.filter((o) => o.op !== "refresh" && o.targetAnchorId).map((o) => o.targetAnchorId!),
+    );
+    const known = new Set(prevDepicted.map((d) => d.anchorId));
+    const missing = anchors.filter((a) => wanted.has(a.id) && !known.has(a.id));
+    if (missing.length > 0) {
+      const located = await locateSubjectsNow({
+        anchors: missing,
+        page: compositionData,
+        env,
+        signal: options.signal,
+      });
+      depictedForEdit = [...prevDepicted, ...located];
+    }
     const structured = await tryStructuredEdit({
       project,
       spread,
@@ -1737,7 +1905,7 @@ export async function renderIllustration(
       effectiveIds,
       byId,
       compositionData,
-      prevDepicted,
+      prevDepicted: depictedForEdit,
       embeddedPairs,
       ops: editOps,
       sourceNodeId,
@@ -1746,6 +1914,10 @@ export async function renderIllustration(
       signal: options.signal,
     });
     if (structured) return structured;
+    // The model can change one spot and the edit names a subject, yet the spot
+    // could not be changed. Redrawing the whole picture would alter what the
+    // reader never asked to touch, so say so instead.
+    if (options.inPlaceOnly) throw new InPlaceEditError();
   }
 
   const configuredReferenceLimit = Math.min(
@@ -1820,7 +1992,7 @@ export async function renderIllustration(
     ),
   );
 
-  const prompt = buildIllustrationPrompt({
+  const promptFor = (bake: boolean) => buildIllustrationPrompt({
     spread,
     config: project.config,
     referencedAnchors,
@@ -1838,7 +2010,7 @@ export async function renderIllustration(
     maskMode: submittedMaskMode,
     restyle,
     // Cover-only: bake the title/subtitle/author typography into the artwork.
-    bakeText: spread.bakeText,
+    bakeText: bake,
     coverTitle: spread.coverTitle,
     coverSubtitle: spread.coverSubtitle,
     coverAuthor: spread.coverAuthor,
@@ -1859,7 +2031,7 @@ export async function renderIllustration(
   const submittedReferences =
     caps.operations.referenceEditing && references.length ? references : undefined;
   const outputSize = chooseImageSize(spread.kind, project.config, layoutPlan, caps);
-  const result = await runStep("image", () =>
+  const draw = (prompt: string, bake: boolean) => runStep("image", () =>
     generateIllustrationImage({
       prompt,
       size: outputSize,
@@ -1869,7 +2041,6 @@ export async function renderIllustration(
       references: submittedReferences,
       mask: submittedMaskMode ? options.mask : undefined,
       quality: generation.applied.quality,
-      inputFidelity: generation.applied.inputFidelity,
       output:
         generation.applied.background ||
         generation.applied.format ||
@@ -1881,10 +2052,23 @@ export async function renderIllustration(
             }
           : undefined,
       retries: actionTuning.retries,
-      allowText: Boolean(spread.bakeText),
+      allowText: bake,
       signal: options.signal,
     }),
   );
+  const lettered = await drawCoverLettering({
+    spread,
+    safe: coverLetteringSafeArea(project.config),
+    startedAt,
+    // A masked touch-up keeps the painted words outside the mask as they were.
+    check: !maskMode,
+    draw: async (bake) => {
+      const prompt = promptFor(bake);
+      return { prompt, image: await draw(prompt, bake) };
+    },
+    read: spread.bakeText ? letteringReader(env, options.signal) : null,
+  });
+  const { prompt, image: result } = lettered;
 
   // For masked touch-ups, paste the edited output back over the original only
   // inside the painted region so everything outside it stays pixel-identical.
@@ -1929,7 +2113,9 @@ export async function renderIllustration(
     references: currentReferenceUses(project.anchors, effectiveIds),
     prompt,
     label,
-    textMode: spread.textMode,
+    textMode: lettered.textMode,
+    ...(lettered.bakedText ? { bakedText: lettered.bakedText } : {}),
+    ...(lettered.lettering ? { lettering: lettered.lettering } : {}),
     depicted,
     parentId: sourceNodeId,
     ...(layoutPlan
@@ -1941,6 +2127,117 @@ export async function renderIllustration(
     generation,
     inputReferenceCount: submittedReferences?.length ?? 0,
     outputSize,
+  };
+}
+
+/**
+ * Everything a lettered cover render may take, image calls included: the task
+ * runs under a four-minute limit, and binding and upload still follow.
+ */
+const LETTERING_DEADLINE_MS = 170_000;
+
+export interface LetteredDraw {
+  prompt: string;
+  image: ImageResult;
+  textMode: IllustrationImage["textMode"];
+  bakedText?: BakedCoverText;
+  lettering?: IllustrationImage["lettering"];
+}
+
+/**
+ * Draw a page; for a front cover with its words painted in, read them back
+ * before accepting it. A wrong letter, a line outside the safe area or stray
+ * writing redraws once; if that fails too, the cover is drawn without words
+ * and the design's text layer carries them. Another draw is only started when
+ * it fits the deadline, judged by how long the last one took. A check that
+ * cannot run (`read` returns null, or there is none) accepts the lettered cover
+ * rather than cost the reader one.
+ */
+export async function drawCoverLettering(args: {
+  spread: ScreenplaySpread;
+  safe: LetteringBox;
+  startedAt: number;
+  check: boolean;
+  draw: (bake: boolean) => Promise<{ prompt: string; image: ImageResult }>;
+  read: ((image: ImageResult, expected: BakedCoverText) => Promise<LetteringReading | null>) | null;
+  deadlineMs?: number;
+}): Promise<LetteredDraw> {
+  const { spread, safe, startedAt, check, draw, read, deadlineMs = LETTERING_DEADLINE_MS } = args;
+  const expected: BakedCoverText | undefined =
+    spread.bakeText && (spread.coverTitle ?? "").trim()
+      ? bakedTextOf({
+          title: spread.coverTitle!.trim(),
+          subtitle: (spread.coverSubtitle ?? "").trim(),
+          author: (spread.coverAuthor ?? "").trim(),
+        })
+      : undefined;
+  if (!expected) {
+    return { ...(await draw(false)), textMode: spread.textMode };
+  }
+  const accept = (drawn: { prompt: string; image: ImageResult }, lettering?: LetteredDraw["lettering"]) => ({
+    ...drawn,
+    textMode: "in-image" as const,
+    bakedText: expected,
+    ...(lettering ? { lettering } : {}),
+  });
+
+  let drawStarted = Date.now();
+  let drawn = await draw(true);
+  let drawMs = Date.now() - drawStarted;
+  if (!check || spread.id !== COVER_FRONT_ID) return accept(drawn);
+  if (!read) return accept(drawn, { outcome: "unchecked", attempts: 1 });
+  const anotherDrawFits = () => Date.now() - startedAt + drawMs * 1.15 <= deadlineMs;
+
+  let attempts = 1;
+  let problems: string[] = [];
+  for (;;) {
+    const reading = await read(drawn.image, expected);
+    if (!reading) return accept(drawn, { outcome: "unchecked", attempts });
+    const verdict = judgeLettering(expected, reading, safe);
+    if (verdict.ok) return accept(drawn, { outcome: "passed", attempts });
+    problems = verdict.problems;
+    if (attempts >= 2 || !anotherDrawFits()) break;
+    attempts += 1;
+    drawStarted = Date.now();
+    drawn = await draw(true);
+    drawMs = Date.now() - drawStarted;
+  }
+  if (!anotherDrawFits()) return accept(drawn, { outcome: "failed", attempts, problems });
+  const plain = await draw(false);
+  return {
+    ...plain,
+    textMode: "overlay",
+    lettering: { outcome: "fellBack", attempts, problems },
+  };
+}
+
+/** The lettering check's reader for this host: the binding vision model, metered as "lettering". */
+function letteringReader(
+  env: PipelineEnv,
+  signal?: AbortSignal,
+): ((image: ImageResult, expected: BakedCoverText) => Promise<LetteringReading | null>) | null {
+  const model = env.models.bindingModel ?? env.models.textModel;
+  let apiKey: string;
+  try {
+    apiKey = env.apiKeyFor(model.provider);
+  } catch {
+    return null;
+  }
+  const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
+  return async (image, expected) => {
+    const vision = await asRefPayload(env, image);
+    return runStep("lettering", () =>
+      readCoverLettering({
+        imageBase64: vision.base64,
+        imageMime: vision.mimeType,
+        expected,
+        creds: { apiKey },
+        model: model.id,
+        providerId: model.provider,
+        prompts: env.prompts,
+        signal,
+      }),
+    );
   };
 }
 
@@ -2039,7 +2336,6 @@ export async function renderCoverContinuation(
       ],
       mask: { base64: seedResult.maskBase64, mimeType: seedResult.maskMime },
       quality: generation.applied.quality,
-      inputFidelity: generation.applied.inputFidelity,
       output:
         generation.applied.format || generation.applied.outputCompression !== undefined
           ? {

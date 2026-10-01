@@ -128,13 +128,18 @@ export interface TextBox {
    * boxes are the ones auto-seeded from the cover spec, so toggling "bake text
    * into the art" can remove exactly them (and leave any user-added boxes).
    */
-  role?: "book-title" | "book-subtitle" | "story-body";
+  role?: "book-title" | "book-subtitle" | "book-author" | "story-body";
   /**
    * The layout slot this box was seeded from (`LayoutSlot.id`). Boxes carrying
    * one are layout-owned: switching layout moves them to the new slot's
    * rectangle. Boxes without one were added by the user and are never moved.
    */
   slotId?: string;
+  /**
+   * The reader dragged or resized this box. The app then leaves its position
+   * alone — it no longer nudges it back inside the print-safe area.
+   */
+  placedByReader?: boolean;
   /** Hidden from the page (still listed in Layers). */
   hidden?: boolean;
   /**
@@ -180,6 +185,7 @@ export type SharedTextStyleKey =
   | "story-body"
   | "book-title"
   | "book-subtitle"
+  | "book-author"
   | "custom-page"
   | "custom-cover";
 
@@ -416,6 +422,12 @@ export interface PageDesign {
    */
   layoutId?: string;
   compositionMode?: "full-bleed" | "inset-art";
+  /**
+   * Front cover only: the artwork blob the cover's text layer was last matched
+   * to ("" before any artwork). The layer hides when the art carries the words
+   * and shows when it does not, once per new artwork, so later edits stay put.
+   */
+  letteringFor?: string;
 }
 
 /** How illustrations that touch a trim edge supply the printer's bleed. */

@@ -8,11 +8,26 @@
  * spends Sparks — the scoped redraw button does, with its estimate.
  */
 import { COVER_FRONT_ID } from "../types";
+import type { BookViewId } from "./journey";
 
 export type GuideTarget =
   | { kind: "person"; castId: string; name: string }
   | { kind: "cover"; unitId: string }
   | { kind: "page"; unitId: string; page: number };
+
+/**
+ * The tab a chip belongs to. The card it opens is the reader's own doing, with
+ * no line from the guide to explain it, so it closes when they leave that tab
+ * rather than turning up on a tab where nothing points to it.
+ */
+export function targetHomeView(target: GuideTarget): BookViewId {
+  return target.kind === "person" ? "cast" : "pages";
+}
+
+/** Keep the chip only while the tab it belongs to is the open one. */
+export function chipForView(chip: GuideTarget | null, view: BookViewId | null): GuideTarget | null {
+  return chip && view === targetHomeView(chip) ? chip : null;
+}
 
 export function sameTarget(a: GuideTarget | null, b: GuideTarget | null): boolean {
   if (!a || !b) return a === b;

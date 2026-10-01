@@ -122,11 +122,13 @@ export const STATISTIC_INFO: Record<EstimationStatistic, { label: string; pro: s
 };
 
 /** Where an estimate came from, broadest last. */
-export const ESTIMATE_LEVELS = ["exact", "model", "scaled", "rate", "fallback"] as const;
+export const ESTIMATE_LEVELS = ["exact", "nearest", "pooled", "model", "scaled", "rate", "fallback"] as const;
 export type EstimateLevel = (typeof ESTIMATE_LEVELS)[number];
 
 export const ESTIMATE_LEVEL_INFO: Record<EstimateLevel, string> = {
   exact: "Measured renders with these exact settings.",
+  nearest: "Measured renders with these settings and the closest number of reference images (the two closest averaged on a tie).",
+  pooled: "Measured renders with these settings, any number of reference images.",
   model: "Measured renders of this model and quality, any size or reference count.",
   scaled: "Measured renders at another quality, scaled by the quality factor.",
   rate: "The model's price in the cost table (no measured renders yet).",

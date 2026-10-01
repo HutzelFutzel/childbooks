@@ -2,7 +2,9 @@
  * Where the chat and the book sit, as a pure function of the book and the window.
  *
  * - `centered`: the book has nothing to show; the chat sits in the middle.
- * - `split`: the chat column on the left (26–30rem), the book pane takes the rest.
+ * - `split`: the chat on the left, the book on the right. While the reader is
+ *   still choosing, the studio gives the chat the wider share. Once the pages
+ *   are the work, the chat returns to 26–30rem and the book takes the rest.
  * - `focus`: page focus. Only when the pane would drop under ~960px; the spread
  *   grows, the transcript becomes an overlay, the composer docks on the book.
  * - `mobile`: the centered choice before the book exists, then the book with

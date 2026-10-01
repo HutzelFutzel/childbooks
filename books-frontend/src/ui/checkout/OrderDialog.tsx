@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Loader2, Package, ShieldCheck, TriangleAlert, Truck } from "lucide-react";
-import { bookProductForConfig } from "../../core/book";
+import { bookProductForConfig, formatCapabilitiesForProject } from "../../core/book";
 import { findPublicPlanByPriceId } from "../../core/config/plans";
 import {
   findPublicProductForSku,
@@ -232,7 +232,7 @@ export function OrderCheckout({
       preflightInterior({
         plan: interiorLeafPlan(doc),
         design,
-        product,
+        caps: formatCapabilitiesForProject(project),
         hasArtwork: (pageId) => {
           if (pages.find((p) => p.id === pageId)?.blobId) return true;
           const unit = illustrationUnits(project).find((item) => item.id === pageId);
@@ -240,7 +240,7 @@ export function OrderCheckout({
         },
         labelFor: (pageId) => pages.find((p) => p.id === pageId)?.label ?? "A page",
       }),
-    [doc, design, product, pages],
+    [doc, design, project, pages],
   );
 
   // Order limits for this format. The admin catalog is authoritative when set;
@@ -403,7 +403,7 @@ export function OrderCheckout({
     return [
       { value: "", label: "Select a state / province" },
       ...subs.map((s) => ({ value: s.code, label: `${s.name} (${s.code})` })),
-      ...(region && !known ? [{ value: region, label: `${region} — not recognised`, disabled: true }] : []),
+      ...(region && !known ? [{ value: region, label: `${region} — not recognized`, disabled: true }] : []),
     ];
   }, [destination, region]);
   const regionUnrecognised =
@@ -706,7 +706,7 @@ export function OrderCheckout({
         : unserviced
           ? `Choose a destination we currently ship to.`
           : regionUnrecognised
-            ? "Choose a recognised state or province."
+            ? "Choose a recognized state or province."
             : !addressComplete
               ? "Complete the required delivery address fields."
               : shippingChoices.length === 0
@@ -952,7 +952,7 @@ export function OrderCheckout({
                 <p className="mt-1.5 pl-6 text-xs">…and {preflight.length - 4} more.</p>
               )}
               <p className="mt-2 pl-6 text-xs">
-                You can order anyway — these are judgement calls, not errors.
+                You can order anyway — these are judgment calls, not errors.
               </p>
             </div>
           )}

@@ -71,6 +71,17 @@ function ShapeCard({ asset }: { asset: ImageMaskAsset }) {
     }
   };
 
+  const setStarter = async (starter: boolean) => {
+    setBusy(true);
+    try {
+      await patch(asset.id, { starter });
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not update image shape.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <article className="rounded-xl border border-ink-200 bg-white p-3">
       <div className="grid h-24 grid-cols-[1fr_1.28fr_.72fr] items-center gap-2 rounded-lg bg-ink-50 p-2">
@@ -110,6 +121,19 @@ function ShapeCard({ asset }: { asset: ImageMaskAsset }) {
           {asset.archived ? <RotateCcw className="size-3.5" /> : <Archive className="size-3.5" />}
         </button>
       </div>
+      <label
+        className={`mt-1.5 flex items-center gap-1.5 px-1.5 text-xs text-ink-600 ${busy ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}
+      >
+        <input
+          type="checkbox"
+          className="size-3.5 rounded border-ink-300 text-brand-600 focus:ring-brand-400"
+          checked={asset.starter !== false}
+          disabled={busy}
+          aria-label={`Use ${asset.name} for new books`}
+          onChange={(event) => void setStarter(event.target.checked)}
+        />
+        Use for new books
+      </label>
     </article>
   );
 }
@@ -146,7 +170,7 @@ export function ImageMasksPanel() {
   return (
     <Section
       title="Image shapes"
-      hint="Upload one square black-and-white SVG. White shows the picture; black cuts it away. Every upload is previewed automatically across common frame shapes."
+      hint="Upload one square black-and-white SVG. White shows the picture; black cuts it away. A new book picks one checked shape for every page. Unchecked shapes stay available in the editor."
     >
       <div className="space-y-3">
         <div>

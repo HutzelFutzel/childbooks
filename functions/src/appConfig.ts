@@ -1083,7 +1083,9 @@ export async function saveGuideConfig(input: unknown): Promise<GuideConfig> {
     .extend({
       extraction: guideExtractionSchema.optional(),
       facts: guideConfigSchema.shape.facts.optional(),
+      brief: guideConfigSchema.shape.brief.optional(),
       wording: guideConfigSchema.shape.wording.optional(),
+      agent: guideConfigSchema.shape.agent.optional(),
     })
     .parse(input);
   const normalized = normalizeGuideConfig({ ...parsed, updatedAt: Date.now() });
@@ -1834,10 +1836,10 @@ export async function addImageMask(asset: ImageMaskAsset): Promise<ImageMasksCon
   return next;
 }
 
-/** Rename or archive a shape without changing the immutable SVG revision. */
+/** Rename, archive, or move a shape in or out of the automatic pool. */
 export async function patchImageMask(
   id: string,
-  patch: { name?: string; archived?: boolean },
+  patch: { name?: string; archived?: boolean; starter?: boolean },
 ): Promise<ImageMasksConfig> {
   ensureAdmin();
   const ref = getFirestore().doc(IMAGE_MASKS_DOC);
@@ -1857,6 +1859,8 @@ export async function patchImageMask(
       };
       if (patch.archived === true) updated.archived = true;
       else if (patch.archived === false) delete updated.archived;
+      if (patch.starter === false) updated.starter = false;
+      else if (patch.starter === true) delete updated.starter;
       return updated;
     });
     if (assets.some((asset) => !asset.name)) throw new Error("Image shapes need a name.");

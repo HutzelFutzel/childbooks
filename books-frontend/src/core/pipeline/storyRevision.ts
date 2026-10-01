@@ -6,7 +6,9 @@ import { ProviderError } from "../errors";
 import type { PromptContext } from "../prompts/context";
 import { buildStoryRevisionPrompt } from "../prompts/story";
 import {
+  isOutsideSelectionFailure,
   storyRevisionModelSchema,
+  StoryRevisionScopeError,
   validateStoryRevision,
   type StoryRevisionProposal,
   type StoryRevisionSelection,
@@ -57,7 +59,7 @@ export async function reviseStory(input: ReviseStoryInput): Promise<StoryRevisio
         content: [
           "Your previous patch could not be applied.",
           `Reason: ${repair.slice(0, 500)}`,
-          "Return a corrected patch now. Copy every `before` value exactly from the manuscript, include a non-empty unique anchor for insertions, keep replacements independent and non-overlapping, and include `summary`, `before`, `after`, and `reason` using exactly those field names.",
+          "Return a corrected patch now. Copy every `before` value exactly from the manuscript (from inside the selected passage, when one was given), include a non-empty unique anchor for insertions, keep replacements independent and non-overlapping, and include `summary`, `before`, `after`, and `reason` using exactly those field names.",
           "For new or substantially expanded prose, use short semantic paragraphs separated by blank lines. Do not hard-wrap lines.",
         ].join("\n"),
       });
@@ -90,11 +92,15 @@ export async function reviseStory(input: ReviseStoryInput): Promise<StoryRevisio
     try {
       return validateStoryRevision(story, result, selection);
     } catch (err) {
+      // The editor said the request cannot be done inside the marked passage.
+      // A second try would only ask it again; the reader can fix this.
+      if (err instanceof StoryRevisionScopeError) throw err;
       const details = (err as Error)?.message ?? "The patch was not applicable.";
       if (attempt === 0) {
         repair = details;
         continue;
       }
+      if (selection && isOutsideSelectionFailure(details)) throw new StoryRevisionScopeError();
       throw new StoryRevisionFormatError(details);
     }
   }

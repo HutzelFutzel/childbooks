@@ -623,7 +623,10 @@ interface AppConfigState {
     meta?: { shape?: string; side?: string; alt?: string },
   ) => Promise<void>;
   uploadImageMask: (name: string, base64: string, mimeType: string) => Promise<void>;
-  patchImageMask: (id: string, patch: { name?: string; archived?: boolean }) => Promise<void>;
+  patchImageMask: (
+    id: string,
+    patch: { name?: string; archived?: boolean; starter?: boolean },
+  ) => Promise<void>;
   saveAgeWriting: (config: AgeWritingConfig) => Promise<void>;
   saveAudience: (config: AudienceConfig) => Promise<void>;
   saveStoryCraft: (config: StoryCraftConfig) => Promise<void>;

@@ -234,7 +234,6 @@ export const openaiImageProvider: ImageProvider = {
       form.append("prompt", req.prompt);
       if (req.size) form.append("size", req.size);
       if (req.quality) form.append("quality", req.quality);
-      if (req.inputFidelity) form.append("input_fidelity", req.inputFidelity);
       if (req.output?.format) form.append("output_format", req.output.format);
       if (req.output?.background) form.append("background", req.output.background);
       if (req.output?.compression !== undefined) {

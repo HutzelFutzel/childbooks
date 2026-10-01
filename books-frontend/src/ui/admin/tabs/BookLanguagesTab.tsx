@@ -25,6 +25,7 @@ import { useAppConfigStore } from "../../../state/appConfigStore";
 import { Button } from "../../components/Button";
 import { Field } from "../../components/Input";
 import { Select } from "../../components/Select";
+import { coverLetteringAllowed } from "../../../core/book/coverLines";
 import { Toggle } from "../../components/Toggle";
 import {
   CATEGORY_LABEL,
@@ -500,6 +501,24 @@ function LanguageCard({
                     ]}
                   />
                 </Field>
+              </div>
+
+              <div className="rounded-2xl bg-white p-4 ring-1 ring-ink-100">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h4 className="font-display text-sm font-bold text-ink-900">Paint cover lettering</h4>
+                    <p className="mt-1 text-xs leading-relaxed text-ink-500">
+                      Chat books paint the title, subtitle and author into the front-cover picture. Each cover is
+                      read back; a misspelling is redrawn, and if that fails too the cover is drawn without words and
+                      set as text. Off: the words are always set as text. Unset, English is on and the rest are off.
+                    </p>
+                  </div>
+                  <Toggle
+                    checked={coverLetteringAllowed(language.id, config)}
+                    onChange={(checked) => onChange({ coverLettering: checked })}
+                    label={`Paint cover lettering in ${language.englishName}`}
+                  />
+                </div>
               </div>
 
               {/* Prompt instruction snippet */}

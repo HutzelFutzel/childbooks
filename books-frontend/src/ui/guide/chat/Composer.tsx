@@ -11,9 +11,9 @@
  * Send is never blocked. Enter on an empty field accepts the well's
  * recommended choice, so the cheapest path is one key.
  */
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ArrowUp, X } from "lucide-react";
+import { ArrowUp, PenLine, X } from "lucide-react";
 import { enabledBookLanguages } from "../../../core/config/bookLanguages";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { Popover } from "../../components/Popover";
@@ -29,6 +29,11 @@ export function Composer({
   placeholder,
   chip,
   onClearChip,
+  context = null,
+  quote = null,
+  onClearQuote,
+  tools,
+  focusSignal = 0,
   locale,
   onLocale,
   working,
@@ -43,6 +48,22 @@ export function Composer({
   placeholder: string;
   chip: string | null;
   onClearChip: () => void;
+  /**
+   * What the open tab is about ("Story"), when the reader has not aimed at
+   * something else. Shown as a quiet outline chip that cannot be cleared: it
+   * is where the words go, not a choice.
+   */
+  context?: string | null;
+  /**
+   * The passage the reader marked in the story. It replaces the context chip
+   * and, unlike it, can be cleared: the message is about exactly this text.
+   */
+  quote?: string | null;
+  onClearQuote?: () => void;
+  /** Small buttons beside send, such as the ideas menu. */
+  tools?: ReactNode;
+  /** Bumped by the book pane to move the cursor here. */
+  focusSignal?: number;
   locale: string;
   onLocale: (locale: string) => void;
   working: boolean;
@@ -51,6 +72,10 @@ export function Composer({
 }) {
   const t = useGuideT("chrome");
   const field = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (focusSignal > 0) field.current?.focus({ preventScroll: true });
+  }, [focusSignal]);
 
   useLayoutEffect(() => {
     const el = field.current;
@@ -100,6 +125,43 @@ export function Composer({
                   </button>
                 </motion.span>
               )}
+              {!chip && quote && (
+                <motion.span
+                  key={`quote:${quote}`}
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.9 }}
+                  transition={{ duration: 0.15 }}
+                  title={quote}
+                  className="inline-flex max-w-[11rem] items-center gap-1 rounded-full bg-magic-50 py-0.5 pr-1 pl-2.5 text-xs font-medium text-magic-700 ring-1 ring-magic-300"
+                >
+                  <PenLine className="size-3 shrink-0" aria-hidden />
+                  <span className="truncate font-serif">“{quote}”</span>
+                  {onClearQuote && (
+                    <button
+                      type="button"
+                      onClick={onClearQuote}
+                      aria-label={t("clearMark")}
+                      className="flex size-4 shrink-0 items-center justify-center rounded-full text-magic-600 transition hover:bg-magic-100 hover:text-magic-800"
+                    >
+                      <X className="size-3" />
+                    </button>
+                  )}
+                </motion.span>
+              )}
+              {!chip && !quote && context && (
+                <motion.span
+                  key={`context:${context}`}
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.9 }}
+                  transition={{ duration: 0.15 }}
+                  className="inline-flex max-w-[9rem] items-center gap-1 rounded-full bg-magic-50 px-2.5 py-0.5 text-xs font-medium text-magic-700 ring-1 ring-magic-200"
+                >
+                  <PenLine className="size-3 shrink-0" aria-hidden />
+                  <span className="truncate">{context}</span>
+                </motion.span>
+              )}
             </AnimatePresence>
           </div>
           <textarea
@@ -117,6 +179,7 @@ export function Composer({
             aria-label={placeholder}
             className="min-h-9 flex-1 resize-none bg-transparent py-1.5 text-[15px] leading-6 text-ink-900 placeholder:text-ink-400 focus:outline-none"
           />
+          {tools && <div className="flex shrink-0 items-center self-end">{tools}</div>}
           <button
             type="button"
             onClick={submit}

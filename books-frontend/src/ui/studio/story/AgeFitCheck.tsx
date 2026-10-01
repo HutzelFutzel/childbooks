@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { CheckCircle2, Feather, Lightbulb, Loader2, SearchCheck, X } from "lucide-react";
 import { storyFitRemote, type StoryFitResult } from "../../../platform/aiClient";
+import { useChatStudio } from "../../../state/chatStudio";
 import { useProjectsStore } from "../../../state/projectsStore";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { dimensionDef } from "../../../core/config/audienceCatalog";
-import { resolveAudienceProfile } from "../../../core/config/audience";
+import { enabledAudienceProfiles, resolveAudienceProfile } from "../../../core/config/audience";
+import type { AudienceProfile } from "../../../core/config/audienceCatalog";
 import type { AgeBandStoryCraft } from "../../../core/config/storyCraftCatalog";
 import { wordCount } from "../../../core/story/brief";
 import { Button } from "../../components/Button";
@@ -197,6 +199,7 @@ export function AgeFitCheck({
         )}
       </AnimatePresence>
 
+      <AudienceOnStory ageRangeId={ageRangeId} />
       <div className="flex flex-wrap items-center gap-2 px-1">
         <Button
           variant="secondary"
@@ -218,6 +221,63 @@ export function AgeFitCheck({
           )}
         </span>
       </div>
+    </div>
+  );
+}
+
+/** The same age groups the chat offers, on the story, so the fit check isn't stuck on a default. */
+function AudienceOnStory({ ageRangeId }: { ageRangeId: string }) {
+  const t = useGuideT("chrome");
+  const audience = useAppConfigStore((s) => s.audience);
+  const [open, setOpen] = useState(false);
+  const bands = useMemo(() => enabledAudienceProfiles(audience), [audience]);
+  const current = resolveAudienceProfile(ageRangeId, audience);
+  const bandText = (band: AudienceProfile): string => {
+    if (band.maxMonths < 24) return t("bandMonths", { min: band.minMonths, max: band.maxMonths });
+    const min = Math.floor(band.minMonths / 12);
+    const max = Math.floor(band.maxMonths / 12);
+    return min === max ? t("bandYear", { n: min }) : t("bandYears", { min, max });
+  };
+  const pick = (band: AudienceProfile) => {
+    setOpen(false);
+    if (band.id === current.id) return;
+    const text = bandText(band);
+    void useChatStudio.getState().tap(text, () => useChatStudio.getState().chooseAudience(band.id), { undoable: true });
+  };
+
+  return (
+    <div className="flex flex-col gap-2 px-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="self-start text-xs font-medium text-ink-500 underline decoration-ink-300 underline-offset-2 transition hover:text-ink-900"
+      >
+        {t("changeAudience", { band: current.label })}
+      </button>
+      {open ? (
+        <div className="flex flex-wrap gap-1.5">
+          {bands.map((band) => {
+            const selected = band.id === current.id;
+            return (
+              <button
+                key={band.id}
+                type="button"
+                aria-pressed={selected}
+                onClick={() => pick(band)}
+                className={cn(
+                  "inline-flex min-h-8 items-center rounded-full border px-3 text-[13px] font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
+                  selected
+                    ? "border-ink-900 bg-ink-900 text-white"
+                    : "border-ink-200 bg-white text-ink-700 hover:border-ink-400 hover:text-ink-900",
+                )}
+              >
+                {bandText(band)}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
     </div>
   );
 }

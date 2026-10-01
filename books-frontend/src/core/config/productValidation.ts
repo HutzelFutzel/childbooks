@@ -214,7 +214,7 @@ export function validateProduct(
   if (p.provider.sku.trim() && !baseVariant) {
     warn(
       "variants",
-      "This SKU's print/paper/finish aren't recognised as a variant — customers won't be able to choose alternatives.",
+      "This SKU's print/paper/finish aren't recognized as a variant — customers won't be able to choose alternatives.",
     );
   } else if (baseVariant) {
     if (!variantAllowed(p.variants, baseVariant)) {
@@ -477,7 +477,7 @@ export function validateProduct(
     if (opts.env && measurement && measurement.env !== opts.env) {
       warn(
         "cost.table",
-        `Costs were measured against ${measurement.env}, but this catalog serves ${opts.env}. Re-measure to price against the right catalogue.`,
+        `Costs were measured against ${measurement.env}, but this catalog serves ${opts.env}. Re-measure to price against the right catalog.`,
       );
     }
     if (measurement && Date.now() - measurement.at > STALE_COST_MS) {

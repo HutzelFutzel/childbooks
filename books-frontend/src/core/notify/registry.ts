@@ -72,8 +72,8 @@ export const SLACK_MESSAGE_REGISTRY: Record<SlackMessageKey, SlackMessageMeta> =
   },
   subscription_cancelled: {
     id: "subscription_cancelled",
-    label: "Subscription cancelled",
-    description: "Posted to #growth when a subscription is cancelled.",
+    label: "Subscription canceled",
+    description: "Posted to #growth when a subscription is canceled.",
     channel: "growth",
   },
   referral_accepted: {

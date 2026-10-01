@@ -1497,6 +1497,7 @@ export function PageStage({
                           x: node.x() / W - rect.w / 2,
                           y: node.y() / H - rect.h / 2,
                         },
+                        ...(el.kind === "text" ? { placedByReader: true } : {}),
                       });
                     }}
                     onTransform={(e: KonvaEventObject<Event>) => {
@@ -1572,6 +1573,7 @@ export function PageStage({
                         ...(el.kind === "text" && resized
                           ? { autoHeight: false, autoFit: true }
                           : {}),
+                        ...(el.kind === "text" ? { placedByReader: true } : {}),
                       });
                     }}
                   >

@@ -114,7 +114,7 @@ export function VariantsSection({ product, update }: { product: ProductDefinitio
           </p>
         ) : (
           <p className="rounded-md bg-amber-50 px-3 py-2 text-[12px] text-amber-800">
-            Set a recognised provider SKU first — until then there is no base variant to offer.
+            Set a recognized provider SKU first — until then there is no base variant to offer.
           </p>
         )}
 

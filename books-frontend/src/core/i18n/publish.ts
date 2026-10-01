@@ -61,7 +61,7 @@ export function publishBlockers(
   const blockers: string[] = [];
 
   if (!LOCALES_WITH_CATALOGUE.includes(locale.id)) {
-    blockers.push(`no message catalogue (messages/${locale.id}.json)`);
+    blockers.push(`no message catalog (messages/${locale.id}.json)`);
   }
 
   // A locale with no market is a language we can greet someone in and then

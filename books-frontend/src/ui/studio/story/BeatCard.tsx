@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type ChangeEvent } from "react";
+import { useEffect, useRef, type ChangeEvent, type SyntheticEvent } from "react";
 import { Merge, Plus, Scissors, Trash2 } from "lucide-react";
 import type { StoryBeatItem } from "../../../core/story/beats";
 import {
@@ -25,6 +25,8 @@ export interface BeatCardProps {
   onInsertAfter: () => void;
   onSplitAtCursor: (cursorPosition: number) => void;
   onMergeWithNext?: () => void;
+  /** The text selection inside this section's text changed (collapsed when `start === end`). */
+  onSelectRange?: (range: { start: number; end: number }) => void;
 }
 
 export function BeatCard({
@@ -40,6 +42,7 @@ export function BeatCard({
   onInsertAfter,
   onSplitAtCursor,
   onMergeWithNext,
+  onSelectRange,
 }: BeatCardProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -58,6 +61,11 @@ export function BeatCard({
 
   const handleTextChange = (e: ChangeEvent<HTMLTextAreaElement>) => {
     onChangeText(e.target.value);
+  };
+
+  const handleSelect = (e: SyntheticEvent<HTMLTextAreaElement>) => {
+    const { selectionStart, selectionEnd } = e.currentTarget;
+    onSelectRange?.({ start: selectionStart, end: selectionEnd });
   };
 
   const handleSplit = () => {
@@ -86,6 +94,7 @@ export function BeatCard({
           style={{ fontFamily: fontStack("Lora"), hyphens: "auto" }}
           value={beat.text}
           onChange={handleTextChange}
+          onSelect={handleSelect}
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "Enter") {
               e.preventDefault();
@@ -199,6 +208,7 @@ export function BeatCard({
           style={{ fontFamily: fontStack("Lora"), hyphens: "auto" }}
           value={beat.text}
           onChange={handleTextChange}
+          onSelect={handleSelect}
           onKeyDown={(e) => {
             if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "Enter") {
               e.preventDefault();

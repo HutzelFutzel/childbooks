@@ -37,12 +37,12 @@ export function PaidAction({
   onDefault?: (run: (() => void) | null) => void;
 }) {
   const t = useGuideT("chrome");
-  const guideLabel = useGuideLabel();
   const key = useMemo(() => quoteKey(purpose, units, extraKey), [purpose, units, extraKey]);
   const slot = useChatStudio((s) => s.quotes[key]);
   const starting = useChatStudio((s) => s.starting === key);
   const ensureQuote = useChatStudio((s) => s.ensureQuote);
   const confirm = useChatStudio((s) => s.confirm);
+  const error = useChatStudio((s) => s.error);
   const balance = useSparksStore((s) => s.balance);
   const balanceLoading = useSparksStore((s) => s.loading);
 
@@ -94,20 +94,18 @@ export function PaidAction({
             {t("estimateFailed")}
           </button>
         ) : quote ? (
-          <span>
-            <span className="font-medium text-ink-800">{t("sparks", { sparks: quote.maximumSparks })}</span>
-            <span className="text-ink-400"> · {guideLabel("estimateLine")}</span>
-          </span>
+          <span className="font-medium text-ink-800">{t("sparks", { sparks: quote.maximumSparks })}</span>
         ) : (
           <span>{t("estimating")}</span>
         )}
       </p>
+      {error && <p className="text-xs text-red-600">{error}</p>}
     </div>
   );
 }
 
 /** Not enough Sparks: the smallest pack that covers this, bought in place. */
-function TopUp({ needed, quote, quoteSlot }: { needed: number; quote: GenerationQuote; quoteSlot: string }) {
+export function TopUp({ needed, quote, quoteSlot }: { needed: number; quote: GenerationQuote; quoteSlot: string }) {
   const label = useGuideLabel();
   const packs = useAppConfigStore((s) => s.sparks.packs);
   const currency = useAppConfigStore((s) => s.pricingSettings.baseCurrency);

@@ -9,18 +9,22 @@
  */
 import { z } from "zod";
 import { ALL_IMAGE_ACTION_IDS, type ImageActionId } from "../ai/actions";
-import { IMAGE_FORMATS, IMAGE_QUALITIES, type ImageFormat, type ImageQuality } from "./modelCapabilities";
+import {
+  IMAGE_FORMATS,
+  IMAGE_QUALITIES,
+  type ImageFormat,
+  type ImageModelCapabilities,
+  type ImageQuality,
+} from "./modelCapabilities";
 import type { ImageGenerationIntent } from "./imageGeneration";
 
 export const PROVIDER_DEFAULT = "provider-default" as const;
 
 export type ImageQualitySetting = ImageQuality | typeof PROVIDER_DEFAULT;
 export type ImageFormatSetting = ImageFormat | typeof PROVIDER_DEFAULT;
-export type InputFidelitySetting = "low" | "high" | typeof PROVIDER_DEFAULT;
 
 export interface ActionGenerationTuning {
   quality: ImageQualitySetting;
-  inputFidelity: InputFidelitySetting;
   outputFormat: ImageFormatSetting;
   /** JPEG/WebP output compression. Null leaves the provider default untouched. */
   outputCompression: number | null;
@@ -73,7 +77,6 @@ const qualityControlSchema = z.object({
 
 export const actionGenerationTuningSchema = z.object({
   quality: z.enum([PROVIDER_DEFAULT, ...IMAGE_QUALITIES]),
-  inputFidelity: z.enum([PROVIDER_DEFAULT, "low", "high"]),
   outputFormat: z.enum([PROVIDER_DEFAULT, ...IMAGE_FORMATS]),
   outputCompression: z.number().int().min(0).max(100).nullable(),
   retries: z.number().int().min(0).max(2),
@@ -125,7 +128,6 @@ function actionDefaults(
   const portrait = action === "portrait";
   return {
     quality: PROVIDER_DEFAULT,
-    inputFidelity: PROVIDER_DEFAULT,
     outputFormat: PROVIDER_DEFAULT,
     outputCompression: null,
     retries: 1,
@@ -216,21 +218,69 @@ export function configuredFormat(
   return value === PROVIDER_DEFAULT ? undefined : value;
 }
 
-export function configuredInputFidelity(
-  value: InputFidelitySetting,
-): "low" | "high" | undefined {
-  return value === PROVIDER_DEFAULT ? undefined : value;
-}
-
 export function generationIntentFor(
   tuning: ActionGenerationTuning,
 ): ImageGenerationIntent {
   return {
     quality: configuredQuality(tuning.quality),
     format: configuredFormat(tuning.outputFormat),
-    inputFidelity: configuredInputFidelity(tuning.inputFidelity),
     ...(tuning.outputCompression === null
       ? {}
       : { outputCompression: tuning.outputCompression }),
   };
+}
+
+/**
+ * What the admin may pick for an action: only what the model it draws with
+ * accepts. `null` means no model is bound yet, so nothing can be ruled out.
+ */
+export function tuningChoicesFor(capabilities: ImageModelCapabilities | null): {
+  qualities: ImageQuality[];
+  formats: ImageFormat[];
+  compression: boolean;
+} {
+  return capabilities
+    ? {
+        qualities: [...capabilities.outputs.qualityLevels],
+        formats: [...capabilities.outputs.formats],
+        compression: capabilities.outputs.compression,
+      }
+    : { qualities: [...IMAGE_QUALITIES], formats: [...IMAGE_FORMATS], compression: true };
+}
+
+/**
+ * Put back to the provider default anything the model cannot take, so a model
+ * change or an old saved value never leaves an invalid setting in place.
+ * `reset` names each setting that changed, for the admin to see.
+ */
+export function clampTuningToModel(
+  tuning: ActionGenerationTuning,
+  capabilities: ImageModelCapabilities | null,
+): { tuning: ActionGenerationTuning; reset: string[] } {
+  if (!capabilities) return { tuning, reset: [] };
+  const choices = tuningChoicesFor(capabilities);
+  const reset: string[] = [];
+  const next: ActionGenerationTuning = {
+    ...tuning,
+    qualityControl: { ...tuning.qualityControl },
+  };
+  if (next.quality !== PROVIDER_DEFAULT && !choices.qualities.includes(next.quality)) {
+    reset.push(`Image quality (${next.quality})`);
+    next.quality = PROVIDER_DEFAULT;
+  }
+  if (next.outputFormat !== PROVIDER_DEFAULT && !choices.formats.includes(next.outputFormat)) {
+    reset.push(`Output format (${next.outputFormat})`);
+    next.outputFormat = PROVIDER_DEFAULT;
+    next.outputCompression = null;
+  }
+  if (next.outputCompression !== null && !choices.compression) {
+    reset.push("Lossy compression");
+    next.outputCompression = null;
+  }
+  const repair = next.qualityControl.repairQuality;
+  if (choices.qualities.length > 0 && !choices.qualities.includes(repair)) {
+    reset.push(`Repair quality (${repair})`);
+    next.qualityControl.repairQuality = choices.qualities.includes("low") ? "low" : choices.qualities[0];
+  }
+  return { tuning: reset.length > 0 ? next : tuning, reset };
 }

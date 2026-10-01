@@ -139,7 +139,7 @@ export function ArtworkLookGate({
             ))}
           </div>
           <p className="text-xs leading-relaxed text-ink-400">
-            Every character keeps their design, clothing and colours. Only the drawing style will
+            Every character keeps their design, clothing and colors. Only the drawing style will
             be matched.
           </p>
         </div>

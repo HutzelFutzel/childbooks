@@ -4,6 +4,8 @@ import {
   generationIntentFor,
   generationTuningConfigSchema,
   normalizeGenerationTuningConfig,
+  clampTuningToModel,
+  tuningChoicesFor,
 } from "../books-frontend/src/core/config/generationTuning";
 import {
   capabilitiesFor,
@@ -25,6 +27,7 @@ import { withRetry } from "../books-frontend/src/core/pipeline/retry";
 import { createDefaultSparksConfig, type SparksConfig } from "../books-frontend/src/core/config/sparks";
 import { estimateUnitCost, unitPriceSparks } from "../books-frontend/src/core/billing/priceEstimation";
 import { BACKTEST_ON_TARGET, backtestEstimation, costGroupHealth } from "../books-frontend/src/core/billing/priceBacktest";
+import { cappedReferenceCount } from "../books-frontend/src/core/billing/referencePlan";
 
 const defaults = createDefaultGenerationTuningConfig();
 assert.equal(generationTuningConfigSchema.safeParse(defaults).success, true);
@@ -61,19 +64,34 @@ const openAi = capabilitiesFor({
 const requested = {
   ...defaults.actions.pageIllustration,
   quality: "low" as const,
-  inputFidelity: "high" as const,
   outputFormat: "webp" as const,
   outputCompression: 75,
 };
 const resolved = resolveImageGenerationOptions(openAi, generationIntentFor(requested));
 assert.equal(resolved.applied.quality, "low");
-assert.equal(resolved.applied.inputFidelity, "high");
+// Reference fidelity is not a setting: no model takes it from us, and a stored
+// value from before is dropped rather than carried.
+const legacy = normalizeGenerationTuningConfig({
+  actions: { portrait: { inputFidelity: "high" } },
+});
+assert.equal("inputFidelity" in legacy.actions.portrait, false);
+assert.equal("inputFidelity" in generationIntentFor(requested), false);
 assert.equal(resolved.applied.format, "webp");
 assert.equal(resolved.applied.outputCompression, 75);
 
 const providerDefault = generationIntentFor(defaults.actions.pageIllustration);
 assert.equal(providerDefault.quality, undefined);
-assert.equal(providerDefault.inputFidelity, undefined);
+
+// A setting the model cannot take goes back to the provider default.
+const gemini = capabilitiesFor({ provider: "google", id: "gemini-3.1-flash-image" });
+const clamped = clampTuningToModel({ ...requested, quality: "xhigh" as const }, gemini);
+assert.equal(clamped.tuning.quality, "provider-default");
+assert.equal(clamped.tuning.outputFormat, "provider-default");
+assert.equal(clamped.tuning.outputCompression, null);
+assert.ok(clamped.reset.length >= 2);
+assert.deepEqual(clampTuningToModel(defaults.actions.portrait, openAi).reset, []);
+assert.deepEqual(clampTuningToModel(requested, null).reset, []);
+assert.equal(tuningChoicesFor(openAi).qualities.includes("max"), true);
 
 const invalidCompression = structuredClone(defaults);
 invalidCompression.actions.pageIllustration.outputFormat = "png";
@@ -266,6 +284,79 @@ const migrated = estimateUnitCost({
   now,
 });
 assert.equal(migrated.level, "exact");
+
+// ---- Reference groups --------------------------------------------------------
+// A quote that knows its reference count prices from renders that sent about
+// as many: its own group, else the closest, with a tie averaged.
+
+const withRefs = (n: number) =>
+  completeGenerationEstimateProfile(quoteLow, { outputSize: "1536x1024", referenceCount: n, billableImages: 1 });
+const quoteRefs = (n: number) =>
+  estimateProfileForAction({ action: "pageIllustration", tier: "premium", model, tuning: requested, kind: "fresh", referenceCount: n });
+const fill = (stats: ReturnType<typeof createDefaultImageCostStats>, n: number, usd: number, count: number, tag: string) => {
+  let out = stats;
+  for (let i = 0; i < count; i++) {
+    out = appendCostSample(out, "pageIllustration", "premium", usd, withRefs(n), { at: now - i * 1000, project: `${tag}-${i}` });
+  }
+  return out;
+};
+const minSamples = sparks.estimation.defaults.minSamples;
+const priceAt = (stats: ReturnType<typeof createDefaultImageCostStats>, n: number) =>
+  estimateUnitCost({ stats, sparks, action: "pageIllustration", tier: "premium", profile: quoteRefs(n), rateUsd: 0.5, now });
+
+let grouped = fill(createDefaultImageCostStats(), 1, 0.04, minSamples, "one");
+const ownGroup = priceAt(grouped, 1);
+assert.equal(ownGroup.level, "exact");
+assert.ok(Math.abs(ownGroup.usd - 0.04) < 1e-9);
+
+const nearest = priceAt(grouped, 2);
+assert.equal(nearest.level, "nearest", "a missing group borrows the closest");
+assert.ok(Math.abs(nearest.usd - 0.04) < 1e-9);
+
+grouped = fill(grouped, 3, 0.08, minSamples, "three");
+const tie = priceAt(grouped, 2);
+assert.equal(tie.level, "nearest");
+assert.ok(Math.abs(tie.usd - 0.06) < 1e-9, "two groups the same distance away are averaged");
+
+// 5+ is two steps from 2 and one from 3-4: the closer group wins alone.
+const farther = priceAt(grouped, 6);
+assert.equal(farther.level, "nearest");
+assert.ok(Math.abs(farther.usd - 0.08) < 1e-9);
+
+// Without a count, the quote pools every group.
+const unknownRefs = estimateUnitCost({ stats: grouped, sparks, action: "pageIllustration", tier: "premium", profile: quoteLow, rateUsd: 0.5, now });
+assert.equal(unknownRefs.level, "exact");
+assert.ok(Math.abs(unknownRefs.usd - 0.06) < 1e-9);
+
+// A few renders of the group itself blend with the nearest estimate.
+if (minSamples > 1 && sparks.estimation.defaults.blend) {
+  const few = fill(grouped, 2, 0.1, 1, "two");
+  const blended = priceAt(few, 2);
+  assert.equal(blended.level, "exact");
+  assert.equal(blended.exactSamples, 1);
+  assert.ok(Math.abs(blended.usd - (0.1 + minSamples * 0.06) / (1 + minSamples)) < 1e-9);
+}
+
+// Reference limits: required images survive `maxImages = 0`; the model's
+// ceiling always holds; no editing means no edit references.
+const limits = { maxReferenceImages: 4, maxImages: 2, referenceEditing: true };
+assert.equal(cappedReferenceCount(3, limits), 2);
+assert.equal(cappedReferenceCount(3, { ...limits, maxImages: 0 }, { required: true }), 1);
+assert.equal(cappedReferenceCount(6, { ...limits, maxImages: 9 }), 4);
+assert.equal(cappedReferenceCount(2, { ...limits, referenceEditing: false }, { needsEditing: true }), 0);
+assert.equal(cappedReferenceCount(0, limits, { required: true }), 0);
+
+// Backtest per group: a group priced from its own history stays on target.
+let perGroup = createDefaultImageCostStats();
+for (let i = 0; i < 12; i++) {
+  perGroup = appendCostSample(perGroup, "pageIllustration", "premium", 0.2, withRefs(1), { at: now + i, project: `g1-${i}` });
+  perGroup = appendCostSample(perGroup, "pageIllustration", "premium", 0.6, withRefs(4), { at: now + i, project: `g4-${i}` });
+}
+for (const result of backtestEstimation(perGroup, sparks)) {
+  assert.ok(Math.abs(result.bias) <= BACKTEST_ON_TARGET, "each reference group is priced from its own renders");
+}
+const groupHealth = costGroupHealth(perGroup, sparks, now + 12);
+assert.ok(groupHealth.length >= 2, "health lists each reference group");
 
 // The unit price honors the floor and the ceiling.
 assert.equal(unitPriceSparks(sparks, "pageIllustration", 0.0001), 1);

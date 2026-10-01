@@ -247,9 +247,11 @@ The number is already collected and already ignored.
 | Medium | Apply, then read back explicitly for a yes/no |
 | Low | Do not write; ask a targeted question, with chips where the list is closed |
 
-Independent of confidence: anything destructive — overwriting `storyText`,
-removing a cast member — always confirms first. Being confident and wrong about a
-deletion is the expensive case.
+Independent of confidence: anything Undo cannot bring back — overwriting
+`storyText`, deleting a photo — always confirms first. Removing a cast member is
+restored whole by Undo, so it runs at once and Undo is the safety; it only asks
+(rewrite the story or keep it) when the story mentions the person. Being confident
+and wrong about a deletion is the expensive case.
 
 ---
 

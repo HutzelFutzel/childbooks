@@ -42,6 +42,7 @@ import { Drawer } from "../components/Drawer";
 import { GenerationOverlay } from "../generation/GenerationOverlay";
 import { Modal } from "../components/Modal";
 import {
+  batchItemsOf,
   SparkEstimateCost,
   useImageBatchRange,
 } from "../layout/SparkCost";
@@ -50,7 +51,7 @@ import { useResolvedModels } from "../hooks/useResolvedModels";
 import { cn } from "../lib/cn";
 import { notify } from "../lib/notify";
 import { useStudio } from "./StudioContext";
-import { generateAllAnchors } from "./studioGen";
+import { generateAllAnchors, plannedAnchorBatch } from "./studioGen";
 import { likenessPhotoExpired } from "../../platform/likeness";
 
 function uid(): string {
@@ -109,15 +110,16 @@ export function CastWorkspace({
   const analysisPending = !project.analysis;
   const generatingIds = new Set<string>([...generatingAnchors, ...activeJobUnitIds]);
   const activeGeneratingCount = anchors.filter((anchor) => generatingIds.has(anchor.id)).length;
-  const remaining = anchors.filter(
-    (anchor) => !currentAnchorImage(anchor) && !generatingIds.has(anchor.id),
-  ).length;
+  const remainingIds = anchors
+    .filter((anchor) => !currentAnchorImage(anchor) && !generatingIds.has(anchor.id))
+    .map((anchor) => anchor.id);
+  const remaining = remainingIds.length;
   const activeAnchor =
     allAnchors.find((anchor) => anchor.id === editingAnchorId) ?? null;
   const deletingAnchor =
     allAnchors.find((anchor) => anchor.id === deletingAnchorId) ?? null;
 
-  const batchRange = useImageBatchRange([{ action: "anchorImage", count: remaining }]);
+  const batchRange = useImageBatchRange(batchItemsOf(plannedAnchorBatch(project, remainingIds)));
 
   // Keep age in its dedicated field. Old projects may have a numeric age baked
   // into the description or no age field at all, so normalize both before the

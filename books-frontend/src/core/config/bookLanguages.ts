@@ -96,7 +96,7 @@ export const BOOK_LANGUAGES = [
     fontProfile: "western-latin",
     familyGroup: "english",
     storyGreeting: "Once upon a time…",
-    samplePhrase: "The little badger wandered through the autumn colour.",
+    samplePhrase: "The little badger wandered through the autumn color.",
     tagline: "British spelling & cadence",
     promptInstruction:
       "Write all reader-facing prose in natural British English. Use British spelling, vocabulary, punctuation and idiom.",
@@ -386,6 +386,8 @@ export interface BookLanguageOverride {
   fontIds?: string[];
   defaultBodyFontId?: string;
   defaultTitleFontId?: string;
+  /** Paint the cover's title, subtitle and author into the artwork. Unset: English only. */
+  coverLettering?: boolean;
 }
 
 export interface BookLanguagesConfig {
@@ -415,6 +417,7 @@ export function normalizeBookLanguagesConfig(input: unknown): BookLanguagesConfi
       ...(typeof override.defaultTitleFontId === "string"
         ? { defaultTitleFontId: override.defaultTitleFontId }
         : {}),
+      ...(typeof override.coverLettering === "boolean" ? { coverLettering: override.coverLettering } : {}),
     };
   }
   return { version: 1, overrides };
@@ -591,6 +594,7 @@ const bookLanguageOverrideSchema = z.object({
   fontIds: z.array(z.string().min(1)).optional(),
   defaultBodyFontId: z.string().min(1).optional(),
   defaultTitleFontId: z.string().min(1).optional(),
+  coverLettering: z.boolean().optional(),
 });
 
 export const bookLanguagesConfigSchema = z.object({

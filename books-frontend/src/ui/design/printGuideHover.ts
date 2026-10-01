@@ -43,7 +43,7 @@ export function printGuideTooltip(kind: PrintGuideKind): { title: string; body: 
     case "fold":
       return {
         title: "Page fold",
-        body: "The two pages meet here. Keep faces and titles clear of the centre line.",
+        body: "The two pages meet here. Keep faces and titles clear of the center line.",
       };
   }
 }

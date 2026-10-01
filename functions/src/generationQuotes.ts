@@ -10,7 +10,7 @@ import express, { type Express, type Response } from "express";
 import { getFirestore } from "firebase-admin/firestore";
 import type { AuthedRequest } from "./auth";
 import { ensureAdmin } from "./storage";
-import { estimateForUser, getBalance } from "./sparks";
+import { estimateForUser, getBalance, referenceGroupFor } from "./sparks";
 import { resolveImageModels } from "./modelResolve";
 import { getGenerationTuningConfig } from "./appConfig";
 import { normalizeImageTier, type ImageTier } from "../../books-frontend/src/core/config/modelConfig";
@@ -38,12 +38,13 @@ function parseUnits(raw: unknown): GenerationQuoteUnit[] | null {
   const out: GenerationQuoteUnit[] = [];
   for (const entry of raw) {
     if (!entry || typeof entry !== "object") return null;
-    const { id, action, kind } = entry as Record<string, unknown>;
+    const { id, action, kind, refs } = entry as Record<string, unknown>;
     if (typeof id !== "string" || !UNIT_RE.test(id) || seen.has(id)) return null;
     if (typeof action !== "string" || !isImageAction(action)) return null;
+    if (refs !== undefined && (typeof refs !== "number" || !Number.isInteger(refs) || refs < 0 || refs > 64)) return null;
     const k = kind === "edit" ? "edit" : "fresh";
     seen.add(id);
-    out.push({ id, action: action as ImageActionId, kind: k });
+    out.push({ id, action: action as ImageActionId, kind: k, ...(typeof refs === "number" ? { refs } : {}) });
   }
   return out;
 }
@@ -65,15 +66,29 @@ export function registerGenerationQuoteRoutes(app: Express): void {
         }
         const tier: ImageTier = normalizeImageTier(body.tier);
         const uid = req.uid!;
-        const keys = [...new Set(units.map((u) => quoteUnitKey(u.action, u.kind)))];
+        // A unit that names its reference count is priced in that count's group,
+        // so two portraits of one batch can cost differently (three photos vs none).
+        const unitKeys: Record<string, string> = Object.fromEntries(
+          await Promise.all(
+            units.map(async (u) => [
+              u.id,
+              quoteUnitKey(
+                u.action,
+                u.kind,
+                u.refs === undefined ? undefined : await referenceGroupFor(u.action, tier, u.refs),
+              ),
+            ]),
+          ),
+        );
+        const keys = [...new Set(Object.values(unitKeys))];
         const [balanceBefore, tuning, priced] = await Promise.all([
           getBalance(uid),
           getGenerationTuningConfig(),
           Promise.all(
             keys.map(async (key) => {
-              const unit = units.find((u) => quoteUnitKey(u.action, u.kind) === key)!;
+              const unit = units.find((u) => unitKeys[u.id] === key)!;
               const [sparks, models] = await Promise.all([
-                estimateForUser(uid, unit.action, tier, unit.kind),
+                estimateForUser(uid, unit.action, tier, unit.kind, unit.refs),
                 resolveImageModels(unit.action, tier),
               ]);
               return { key, action: unit.action, sparks, model: models.imageModel };
@@ -81,10 +96,7 @@ export function registerGenerationQuoteRoutes(app: Express): void {
           ),
         ]);
         const byKey = Object.fromEntries(priced.map((p) => [p.key, p.sparks]));
-        const maximumSparks = units.reduce(
-          (sum, u) => sum + (byKey[quoteUnitKey(u.action, u.kind)] ?? 0),
-          0,
-        );
+        const maximumSparks = units.reduce((sum, u) => sum + (byKey[unitKeys[u.id]!] ?? 0), 0);
         const configRevision = createHash("sha256")
           .update(
             JSON.stringify(
@@ -107,6 +119,7 @@ export function registerGenerationQuoteRoutes(app: Express): void {
           configRevision,
           units,
           byKey,
+          unitKeys,
           maximumSparks,
           balanceBefore,
           balanceAfter: balanceBefore - maximumSparks,
@@ -151,7 +164,8 @@ export async function holdQuoteForCheckout(uid: string, quoteId: string): Promis
 /**
  * Consume the units of a quote that one job runs, atomically.
  *
- * Returns the settlement caps to persist on the job. Throws a reader-facing
+ * Returns the settlement caps to persist on the job, and which cap each unit
+ * settles against. Throws a reader-facing
  * message when the quote is missing, expired, for another book, does not cover
  * a task, or a unit was already consumed by a different job. Re-expanding the
  * same job (reaper) is idempotent: its own units read as already consumed by it.
@@ -162,7 +176,7 @@ export async function consumeQuote(
   jobId: string,
   projectId: string | undefined,
   taskIds: readonly string[],
-): Promise<Record<string, number>> {
+): Promise<{ byKey: Record<string, number>; unitKeys: Record<string, string>; units: GenerationQuoteUnit[] }> {
   ensureAdmin();
   const ref = quoteRef(uid, quoteId);
   return getFirestore().runTransaction(async (tx) => {
@@ -186,6 +200,6 @@ export async function consumeQuote(
       consumed[id] = jobId;
     }
     tx.update(ref, { consumed });
-    return quote.byKey;
+    return { byKey: quote.byKey, unitKeys: quote.unitKeys ?? {}, units: quote.units };
   });
 }

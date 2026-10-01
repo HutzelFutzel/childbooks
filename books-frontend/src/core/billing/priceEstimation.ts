@@ -5,14 +5,17 @@
  * (`useTierEstimate`), so both show the same number, and that number is what the
  * wallet charges on success.
  *
- * A quote knows the model and render settings but not the outcome of the
- * render: the output size, how many references were sent and how many image
- * calls were billed are only known afterwards. Those fields match anything when
- * the quote leaves them "unknown", so the window pools every render of the same
- * setup and the statistic prices the mix that actually happens.
+ * A quote knows the model and render settings but not the whole outcome of the
+ * render: the output size and how many image calls were billed are only known
+ * afterwards. Those fields match anything when the quote leaves them "unknown",
+ * so the window pools every render of the same setup and the statistic prices
+ * the mix that actually happens. The number of reference images is planned
+ * before the render (`core/billing/referencePlan`); a quote that names it
+ * prices from renders that sent about as many.
  *
  * When a group has too few samples the estimate borrows from a broader one:
- *   exact → same model+quality → another quality scaled by `qualityFactors`
+ *   exact → the closest reference group → the setup with any reference count
+ *   → same model+quality → another quality scaled by `qualityFactors`
  *   → the cost table's per-image rate → the action's configured fallback price.
  */
 import type { ImageActionId } from "../ai/actions";
@@ -155,6 +158,14 @@ export interface UnitEstimate {
   samples: number;
 }
 
+/**
+ * Reference-count groups in order, as `countBucket` writes them. A quote that
+ * knows its count prices from its own group, else from the closest one.
+ */
+export const REFERENCE_GROUPS = ["0", "1", "2", "3-4", "5+"] as const;
+
+const MEASURED_LEVELS: readonly EstimateLevel[] = ["nearest", "pooled", "model", "scaled"];
+
 /** Estimate one unit's provider cost from the window, with the fallback chain. */
 export function estimateUnitCost(input: UnitEstimateInput): UnitEstimate {
   const { stats, sparks, action, tier, profile, rateUsd } = input;
@@ -164,26 +175,28 @@ export function estimateUnitCost(input: UnitEstimateInput): UnitEstimate {
   const q = profileKeyFields(profile);
   const same = (f: Record<CostKeyField, string>) => f.modelKey === q.modelKey && f.renderKind === q.renderKind;
   const rate = rateUsd && rateUsd > 0 ? rateUsd : null;
+  /** This setup's samples, with the reference group replaced (or pooled when "unknown"). */
+  const setup = (referenceCount: string) =>
+    selectSamples(
+      gather(
+        stats,
+        action,
+        tier,
+        (f) =>
+          same(f) &&
+          (Object.keys(q) as CostKeyField[]).every((k) => {
+            if (k === "billableImages") return true;
+            const want = k === "referenceCount" ? referenceCount : q[k];
+            return ((OUTCOME_FIELDS as readonly string[]).includes(k) && want === "unknown") || f[k] === want;
+          }),
+        () => 1,
+        rate,
+      ),
+      rule,
+      now,
+    );
 
-  const exact = selectSamples(
-    gather(
-      stats,
-      action,
-      tier,
-      (f) =>
-        same(f) &&
-        (Object.keys(q) as CostKeyField[]).every(
-          (k) =>
-            k === "billableImages" ||
-            ((OUTCOME_FIELDS as readonly string[]).includes(k) && q[k] === "unknown") ||
-            f[k] === q[k],
-        ),
-      () => 1,
-      rate,
-    ),
-    rule,
-    now,
-  );
+  const exact = setup(q.referenceCount);
   if (exact.length >= rule.minSamples) {
     return {
       usd: applyStatistic(exact.map((s) => s.value), rule),
@@ -193,7 +206,9 @@ export function estimateUnitCost(input: UnitEstimateInput): UnitEstimate {
     };
   }
 
-  const prior = broaderEstimate(input, rule, q, same, rate, now);
+  const prior =
+    (q.referenceCount !== "unknown" ? nearestGroup(q.referenceCount, setup, rule) : null) ??
+    broaderEstimate(input, rule, q, same, rate, now, setup);
   if (exact.length > 0 && rule.blend) {
     const k = rule.minSamples;
     const n = exact.length;
@@ -205,7 +220,7 @@ export function estimateUnitCost(input: UnitEstimateInput): UnitEstimate {
       samples: n,
     };
   }
-  if (exact.length > 0 && prior.level !== "model" && prior.level !== "scaled") {
+  if (exact.length > 0 && !MEASURED_LEVELS.includes(prior.level)) {
     // No broader measured group: a few real samples beat a rate-table guess.
     return {
       usd: applyStatistic(exact.map((s) => s.value), rule),
@@ -217,6 +232,35 @@ export function estimateUnitCost(input: UnitEstimateInput): UnitEstimate {
   return { ...prior, exactSamples: exact.length };
 }
 
+/**
+ * The closest reference group with enough renders of this setup. Two groups
+ * the same distance away are averaged: asked for 2 with only 1 and 3–4
+ * measured, the price sits between them rather than on either side.
+ */
+function nearestGroup(
+  group: string,
+  setup: (referenceCount: string) => WeightedSample[],
+  rule: EstimationRule,
+): UnitEstimate | null {
+  const at = (REFERENCE_GROUPS as readonly string[]).indexOf(group);
+  if (at < 0) return null;
+  for (let d = 1; d < REFERENCE_GROUPS.length; d++) {
+    const found = [REFERENCE_GROUPS[at - d], REFERENCE_GROUPS[at + d]]
+      .filter((g): g is (typeof REFERENCE_GROUPS)[number] => g !== undefined)
+      .map((g) => setup(g))
+      .filter((samples) => samples.length >= rule.minSamples);
+    if (found.length === 0) continue;
+    const values = found.map((samples) => applyStatistic(samples.map((s) => s.value), rule));
+    return {
+      usd: values.reduce((sum, v) => sum + v, 0) / values.length,
+      level: "nearest",
+      exactSamples: 0,
+      samples: found.reduce((sum, samples) => sum + samples.length, 0),
+    };
+  }
+  return null;
+}
+
 function broaderEstimate(
   input: UnitEstimateInput,
   rule: EstimationRule,
@@ -224,9 +268,17 @@ function broaderEstimate(
   same: (f: Record<CostKeyField, string>) => boolean,
   rate: number | null,
   now: number,
+  setup: (referenceCount: string) => WeightedSample[],
 ): UnitEstimate {
   const { stats, sparks, action, tier } = input;
   const config = sparks.estimation;
+
+  if (q.referenceCount !== "unknown") {
+    const pooled = setup("unknown");
+    if (pooled.length >= rule.minSamples) {
+      return { usd: applyStatistic(pooled.map((s) => s.value), rule), level: "pooled", exactSamples: 0, samples: pooled.length };
+    }
+  }
 
   const model = selectSamples(
     gather(stats, action, tier, (f) => same(f) && f.quality === q.quality, () => 1, rate),

@@ -11,12 +11,15 @@ import { AnimatePresence, motion } from "framer-motion";
 import { ChevronLeft, ChevronRight, Maximize2 } from "lucide-react";
 import { sameTarget } from "../../../core/guide/target";
 import type { Project } from "../../../core/types";
+import { illustrationActionFor, redrawUnits, startRedraw } from "../../../state/chatGeneration";
 import { useChatStudio } from "../../../state/chatStudio";
 import { PreviewSpread } from "../../studio/BookPreview";
 import { useStudio } from "../../studio/StudioContext";
 import { cn } from "../../lib/cn";
-import { useGuideT } from "../intl";
+import { useGuideLabel, useGuideT } from "../intl";
+import { PaidAction } from "../chat/PaidAction";
 import { UnitStatus } from "./UnitStatus";
+import { VersionPager } from "./VersionPager";
 import { dispUnitIds, unitTarget } from "./units";
 
 export function PagesView({
@@ -103,6 +106,30 @@ export function PagesView({
                   );
                 })}
               </div>
+              <div className={cn("pointer-events-none absolute inset-0 grid", units.length > 1 ? "grid-cols-2" : "grid-cols-1")}>
+                {units.map((unitId) => (
+                  <div key={`versions-${unitId}`} className="relative">
+                    <VersionPager
+                      project={project}
+                      target={unitTarget(project, unitId)}
+                      className="pointer-events-auto absolute top-2 left-2"
+                    />
+                  </div>
+                ))}
+              </div>
+              {units.map((unitId, index) =>
+                stale.has(unitId) ? (
+                  <div
+                    key={`redraw-${unitId}`}
+                    className={cn(
+                      "absolute bottom-4 z-10 -translate-x-1/2",
+                      units.length > 1 ? (index === 0 ? "left-1/4" : "left-3/4") : "left-1/2",
+                    )}
+                  >
+                    <PageRedraw project={project} unitId={unitId} />
+                  </div>
+                ) : null,
+              )}
             </motion.div>
           </AnimatePresence>
         </div>
@@ -110,6 +137,21 @@ export function PagesView({
       </div>
       <Strip count={total} at={at} onIndex={onIndex} label={disp.label} />
     </div>
+  );
+}
+
+function PageRedraw({ project, unitId }: { project: Project; unitId: string }) {
+  const label = useGuideLabel();
+  return (
+    <span className="rounded-2xl bg-white/95 p-2 shadow-lifted ring-1 ring-ink-900/10">
+      <PaidAction
+        purpose="redraw"
+        units={redrawUnits(project, unitId, illustrationActionFor(unitId))}
+        extraKey="page"
+        label={label("redrawPage")}
+        start={(quote) => startRedraw(quote, "")}
+      />
+    </span>
   );
 }
 

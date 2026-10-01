@@ -30,6 +30,8 @@ function customerPreviewTiers(): ImageTier[] {
 export function useImageActionRange(
   action: ImageActionId,
   kind: CostSampleKind = "fresh",
+  /** Reference images the render plans to send (`referencePlan`), so the chip matches the charge. */
+  referenceCount?: number,
 ): SparkEstimateRange | null {
   const tiers = customerPreviewTiers();
   const sparks = useAppConfigStore((s) => s.sparks);
@@ -52,14 +54,38 @@ export function useImageActionRange(
         t,
         multiplier * campaignMultiplierFor(overrides, action, t),
         kind,
+        referenceCount,
       ),
     ),
   );
 }
 
+/** One line of a batch estimate: `count` renders of one action, kind and planned reference count. */
+export interface ImageBatchItem {
+  action: ImageActionId;
+  count: number;
+  kind?: CostSampleKind;
+  refs?: number;
+}
+
+/**
+ * Group planned units into batch lines, so renders sending different numbers
+ * of reference images are each priced in their own group.
+ */
+export function batchItemsOf(units: { action: ImageActionId; kind?: CostSampleKind; refs?: number }[]): ImageBatchItem[] {
+  const lines = new Map<string, ImageBatchItem>();
+  for (const unit of units) {
+    const key = `${unit.action}:${unit.kind ?? "fresh"}:${unit.refs ?? ""}`;
+    const line = lines.get(key);
+    if (line) line.count += 1;
+    else lines.set(key, { action: unit.action, count: 1, kind: unit.kind, refs: unit.refs });
+  }
+  return [...lines.values()];
+}
+
 /** Tier-aware Spark estimate RANGE for a batch of image actions (summed). */
 export function useImageBatchRange(
-  items: { action: ImageActionId; count: number }[],
+  items: ImageBatchItem[],
 ): SparkEstimateRange | null {
   const tiers = customerPreviewTiers();
   const sparks = useAppConfigStore((s) => s.sparks);
@@ -88,6 +114,8 @@ export function useImageBatchRange(
             it.action,
             t,
             m * campaignMultiplierFor(overrides, it.action, t),
+            it.kind,
+            it.refs,
           ),
         ),
       );

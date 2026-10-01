@@ -3,7 +3,7 @@
 /**
  * Configuration → Creative defaults → Guided studio.
  *
- * Four decisions, each on its own panel:
+ * Each decision on its own panel:
  *
  * - **Rollout**: who gets the Chat studio. A release decision with a blast
  *   radius, so each mode is described by its effect on customers, and `off`
@@ -13,6 +13,10 @@
  * - **Wording**: what the guide says and what its controls are called, with a
  *   live preview of each line.
  * - **Confidence**: how sure the interpreter has to be before it writes a fact.
+ * - **Skills, People, Persona & style, Help articles, Language & composer,
+ *   Suggestions**: what the chat can do and how it sounds
+ *   (`core/config/guideAgent.ts`); every field shows its effect from
+ *   `GUIDE_AGENT_META`.
  *
  * The step flow's question playlist is kept on a fifth panel until the step
  * flow is deleted.
@@ -37,7 +41,16 @@ import { Button } from "../../components/Button";
 import { Field, Input } from "../../components/Input";
 import { useReadOnly } from "../../components/ReadOnlyContext";
 import { cn } from "../../lib/cn";
+import {
+  GuideHelpPanel,
+  GuideIdeasPanel,
+  GuideLanguagePanel,
+  GuidePeoplePanel,
+  GuidePersonaPanel,
+  GuideSkillsPanel,
+} from "./guide/GuideAgentPanels";
 import { GuideFactsPanel } from "./guide/GuideFactsPanel";
+import { GuideStoryPanel } from "./guide/GuideStoryPanel";
 import { GuideStepFlowPanel } from "./guide/GuideStepFlowPanel";
 import { GuideWordingPanel } from "./guide/GuideWordingPanel";
 import { Section, TabIntro } from "./products/parts";
@@ -160,6 +173,13 @@ const EXTRACTION_FIELDS: {
 
 const PANELS = [
   { id: "rollout", label: "Rollout" },
+  { id: "story", label: "Story options" },
+  { id: "skills", label: "Skills" },
+  { id: "people", label: "People" },
+  { id: "persona", label: "Persona & style" },
+  { id: "help", label: "Help articles" },
+  { id: "language", label: "Language & composer" },
+  { id: "ideas", label: "Suggestions" },
   { id: "facts", label: "Facts" },
   { id: "wording", label: "Wording" },
   { id: "confidence", label: "Confidence" },
@@ -266,6 +286,27 @@ export function GuideTab() {
               onChange={(rollout) => edit({ rollout })}
               readOnly={readOnly}
             />
+          )}
+          {panel === "story" && (
+            <GuideStoryPanel brief={draft.brief} onChange={(brief) => edit({ brief })} readOnly={readOnly} />
+          )}
+          {panel === "skills" && (
+            <GuideSkillsPanel agent={draft.agent} onChange={(agent) => edit({ agent })} readOnly={readOnly} />
+          )}
+          {panel === "people" && (
+            <GuidePeoplePanel agent={draft.agent} onChange={(agent) => edit({ agent })} readOnly={readOnly} />
+          )}
+          {panel === "persona" && (
+            <GuidePersonaPanel agent={draft.agent} onChange={(agent) => edit({ agent })} readOnly={readOnly} />
+          )}
+          {panel === "help" && (
+            <GuideHelpPanel agent={draft.agent} onChange={(agent) => edit({ agent })} readOnly={readOnly} />
+          )}
+          {panel === "language" && (
+            <GuideLanguagePanel agent={draft.agent} onChange={(agent) => edit({ agent })} readOnly={readOnly} />
+          )}
+          {panel === "ideas" && (
+            <GuideIdeasPanel agent={draft.agent} onChange={(agent) => edit({ agent })} readOnly={readOnly} />
           )}
           {panel === "facts" && (
             <Section

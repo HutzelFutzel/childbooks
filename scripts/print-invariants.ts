@@ -20,12 +20,10 @@ import {
 import {
   coverPanelWindow,
   pageGeometry,
-  safeArea,
   splitBleedPixels,
   spreadLeaves,
   withinSafeArea,
   PT_PER_IN,
-  SAFETY_MARGIN_IN,
 } from "../books-frontend/src/core/print/geometry";
 import { interiorLeafPlan, physicalPageCount } from "../books-frontend/src/core/print/pagePlan";
 import { preflightInterior } from "../books-frontend/src/core/print/preflight";
@@ -52,7 +50,11 @@ import {
 } from "../books-frontend/src/core/book/layouts";
 import { validateTreatments } from "../books-frontend/src/core/book/treatments";
 import { bindingSideFor } from "../books-frontend/src/core/book/pageLayout";
-import { computePageGuides, resolveFormatCapabilities } from "../books-frontend/src/core/book/format";
+import {
+  computePageGuides,
+  resolveFormatCapabilities,
+  SAFETY_MARGIN_IN,
+} from "../books-frontend/src/core/book/format";
 import { chooseImageSize, renderAspect } from "../books-frontend/src/core/pipeline/illustration";
 import {
   complementGridArea,
@@ -343,8 +345,11 @@ const saddle = LULU_BOOK_PRODUCTS.find((p) => p.binding === "saddle-stitch") as 
 // ---- Safe area -------------------------------------------------------------
 
 {
-  const recto = safeArea(square, "right");
-  const verso = safeArea(square, "left");
+  // A long casewrap book: the case with a gutter on the binding edge.
+  const bound = square;
+  const caps = resolveFormatCapabilities(bound, 200);
+  const recto = computePageGuides({ caps, spread: false, bindingSide: bindingSideFor("right") }).safe;
+  const verso = computePageGuides({ caps, spread: false, bindingSide: bindingSideFor("left") }).safe;
 
   check(
     "the binding edge gets more clearance than the outer edge",
@@ -364,7 +369,7 @@ const saddle = LULU_BOOK_PRODUCTS.find((p) => p.binding === "saddle-stitch") as 
 
   check(
     "the margin is the documented physical distance",
-    near(recto.y * square.trim.heightIn, SAFETY_MARGIN_IN),
+    near(recto.y * bound.trim.heightIn, SAFETY_MARGIN_IN),
   );
 }
 
@@ -798,10 +803,11 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
     },
   };
 
+  const squareCaps = resolveFormatCapabilities(square, square.minPages);
   const issues = preflightInterior({
     plan: interiorLeafPlan(doc([spreadEntry("a", "single"), spreadEntry("b", "single")])),
     design,
-    product: square,
+    caps: squareCaps,
     hasArtwork: () => true,
     labelFor: (id) => `Page ${id}`,
   });
@@ -820,7 +826,7 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
   const blank = preflightInterior({
     plan: interiorLeafPlan(doc([spreadEntry("c", "single")])),
     design: { ...design, pages: { ...design.pages, c: { textBoxes: [] } } },
-    product: square,
+    caps: squareCaps,
     hasArtwork: () => false,
     labelFor: () => "Page 1",
   });
@@ -832,7 +838,7 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
   const textOnly = preflightInterior({
     plan: interiorLeafPlan(doc([spreadEntry("b", "single")])),
     design,
-    product: square,
+    caps: squareCaps,
     hasArtwork: () => false,
     labelFor: () => "Page 1",
   });
@@ -840,6 +846,71 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
     "a page with text and no illustration is not reported as blank",
     !textOnly.some((i) => i.code === "page-has-no-artwork"),
   );
+}
+
+// The print check and the layouts must agree on the margins. When they didn't,
+// every freshly drawn book opened on "Needs attention" for text the app itself
+// had placed. Every layout, product, page count and side: a box filling its
+// slot passes.
+{
+  const box = (id: string, rect: { x: number; y: number; w: number; h: number }) => ({
+    id,
+    rect,
+    z: 1,
+    presetId: "plain",
+    fontFamily: "Itim",
+    fontSizePct: 0.05,
+    color: "#000",
+    align: "left" as const,
+    vAlign: "top" as const,
+    lineHeight: 1.2,
+    paragraphs: [{ spans: [{ text: "Once upon a time." }] }],
+  });
+  const book = doc([
+    spreadEntry("p1", "single"),
+    spreadEntry("p2", "single"),
+    spreadEntry("p3", "spread"),
+    spreadEntry("p4", "single"),
+  ]);
+  const plan = interiorLeafPlan(book);
+  const sideOf = (id: string) => {
+    const leaves = plan.filter((leaf) => leaf.sourcePageId === id);
+    return leaves.some((leaf) => leaf.half) ? ("spread" as const) : leaves[0]!.side;
+  };
+  for (const layout of allBookLayouts()) {
+    for (const product of LULU_BOOK_PRODUCTS) {
+      for (const pageCount of [product.minPages, 120, 480]) {
+        const caps = resolveFormatCapabilities(product, pageCount);
+        const pages: BookDesign["pages"] = {};
+        for (const spread of book.spreads) {
+          const side = sideOf(spread.id);
+          const isSpread = side === "spread";
+          const { safe } = computePageGuides({ caps, spread: isSpread, bindingSide: bindingSideFor(side) });
+          const slots = layout.plan({
+            side,
+            safe,
+            aspect: isSpread ? product.aspect * 2 : product.aspect,
+            trim: product.trim,
+            isCover: false,
+            mode: layout.defaultMode,
+          }).slots.filter((slot) => slot.role === "text");
+          pages[spread.id] = { textBoxes: slots.map((slot) => box(slot.id, slot.pageRect)) };
+        }
+        const found = preflightInterior({
+          plan,
+          design: { defaultFontFamily: "Itim", defaultFontSizePct: 0.05, pages },
+          caps,
+          hasArtwork: () => true,
+          labelFor: (id) => id,
+        }).filter((issue) => issue.code === "text-outside-safe-area");
+        check(
+          `${layout.id} · ${product.sku} · ${pageCount} pages: laid-out text passes the print check`,
+          found.length === 0,
+          found.map((issue) => issue.pageId).join(", "),
+        );
+      }
+    }
+  }
 }
 
 // ---- Render fingerprint ----------------------------------------------------

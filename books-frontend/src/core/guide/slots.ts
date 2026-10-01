@@ -29,13 +29,19 @@ import { illustrationUnits } from "../book/units";
 import { unitIsDone } from "../book/pageCompletion";
 import { getCursor } from "../versioning";
 import { briefOf, namedCast, namedHeroes, wordCount } from "../story/brief";
+import { CAST_KIND_SPECS, castKindOf, isPerson } from "../story/castKinds";
+import { relationChip, relationsOf } from "../story/relations";
+import { resolveStoryCraft } from "../config/storyCraft";
+import { STORY_DETAILS, detailLabels, filledDetails } from "./storyDetails";
 import type { Project } from "../types";
 
 export const GUIDE_SLOT_IDS = [
   "storyMode",
   "heroes",
   "heroAges",
+  "castKinds",
   "sameAge",
+  "relations",
   "audience",
   "language",
   "storyIdea",
@@ -79,7 +85,7 @@ export const GUIDE_SLOTS: Record<GuideSlotId, GuideSlot> = {
   },
   heroes: {
     id: "heroes",
-    label: "Who it's for",
+    label: "Characters",
     kind: "fact",
     describe: (p) => {
       const names = namedHeroes(briefOf(p.config));
@@ -102,6 +108,16 @@ export const GUIDE_SLOTS: Record<GuideSlotId, GuideSlot> = {
       return `${joinNames(parts)}${known.length < cast.length ? " (some missing)" : ""}`;
     },
   },
+  castKinds: {
+    id: "castKinds",
+    label: "What they are",
+    kind: "fact",
+    describe: (p) => {
+      const others = namedCast(briefOf(p.config)).filter((member) => !isPerson(member));
+      if (others.length === 0) return null;
+      return joinNames(others.map((member) => `${member.name.trim()}: ${member.species?.trim() || CAST_KIND_SPECS[castKindOf(member)].noun}`));
+    },
+  },
   sameAge: {
     id: "sameAge",
     label: "Same age",
@@ -110,6 +126,17 @@ export const GUIDE_SLOTS: Record<GuideSlotId, GuideSlot> = {
       const groups = p.authoringState?.sameAge ?? [];
       if (groups.length === 0) return null;
       return groups.map((group) => joinNames(group)).join("; ");
+    },
+  },
+  relations: {
+    id: "relations",
+    label: "Together",
+    kind: "fact",
+    describe: (p) => {
+      const brief = briefOf(p.config);
+      const relations = relationsOf(brief);
+      if (relations.length === 0) return null;
+      return relations.map((relation) => relationChip(brief, relation)).join("; ");
     },
   },
   audience: {
@@ -134,14 +161,11 @@ export const GUIDE_SLOTS: Record<GuideSlotId, GuideSlot> = {
     kind: "fact",
     describe: (p) => {
       const brief = briefOf(p.config);
-      const bits = [
-        brief.customTheme?.trim(),
-        brief.occasion?.trim(),
-        brief.customSetting?.trim(),
-        brief.themeId ?? undefined,
-        brief.settingId ?? undefined,
-      ].filter((bit): bit is string => Boolean(bit));
-      return bits[0] ?? null;
+      const craft = resolveStoryCraft(p.config.ageRangeId, null);
+      const labels = filledDetails(brief).flatMap((id) => detailLabels(id, STORY_DETAILS[id].read(brief), craft));
+      if (labels.length === 0) return null;
+      const shown = labels.slice(0, 3).map((label) => (label.length > 40 ? `${label.slice(0, 39)}…` : label));
+      return `${shown.join(" · ")}${labels.length > 3 ? ` +${labels.length - 3}` : ""}`;
     },
   },
   storyText: {

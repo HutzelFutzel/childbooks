@@ -13,9 +13,9 @@ import {
   type CostSample,
   type ImageCostStats,
 } from "../config/imageCostStats";
-import { estimationRuleFor } from "../config/priceEstimation";
+import { estimationRuleFor, type EstimationRule } from "../config/priceEstimation";
 import type { SparksConfig } from "../config/sparks";
-import { applyStatistic, OUTCOME_FIELDS, selectSamples, unitPriceSparks } from "./priceEstimation";
+import { applyStatistic, OUTCOME_FIELDS, REFERENCE_GROUPS, selectSamples, unitPriceSparks } from "./priceEstimation";
 
 /** Relative bias under which a configuration counts as on target. */
 export const BACKTEST_ON_TARGET = 0.05;
@@ -55,35 +55,97 @@ export interface CostGroupHealth {
   latestAt: number;
 }
 
+/** A sample with the reference group it was drawn in. */
+interface GroupedSample extends CostSample {
+  group: string;
+}
+
 interface Setup {
   action: ImageActionId;
   tier: string;
   label: string;
-  samples: CostSample[];
+  samples: GroupedSample[];
 }
 
-/** Samples grouped the way a quote pools them: outcome fields ignored. */
-function setups(stats: ImageCostStats): Setup[] {
+/**
+ * Samples grouped the way a quote pools them: outcome fields ignored, each
+ * sample keeping its reference group so a replay can price from it first.
+ * With `byGroup`, every reference group is its own setup.
+ */
+function setups(stats: ImageCostStats, byGroup = false): Setup[] {
   const byKey = new Map<string, Setup>();
   const imageIds = new Set<string>(IMAGE_ACTIONS.map((a) => a.id));
   for (const [key, entry] of Object.entries(stats.stats)) {
     const parsed = parseCostStatsKey(key);
     if (!parsed || !imageIds.has(parsed.action)) continue;
+    const group = parsed.fields.referenceCount ?? "unknown";
     const setupFields = COST_KEY_FIELDS.filter((f) => !OUTCOME_FIELDS.includes(f)).map((f) => parsed.fields[f]);
-    const id = `${parsed.action}|${parsed.tier}|${setupFields.join("~")}`;
+    const id = `${parsed.action}|${parsed.tier}|${setupFields.join("~")}${byGroup ? `|${group}` : ""}`;
     const setup =
       byKey.get(id) ??
       ({
         action: parsed.action as ImageActionId,
         tier: parsed.tier,
-        label: [parsed.fields.modelKey, parsed.fields.quality, parsed.fields.renderKind].join(" · "),
+        label: [
+          parsed.fields.modelKey,
+          parsed.fields.quality,
+          parsed.fields.renderKind,
+          ...(byGroup ? [referenceGroupLabel(group)] : []),
+        ].join(" · "),
         samples: [],
       } satisfies Setup);
-    setup.samples.push(...entry.samples);
+    setup.samples.push(...entry.samples.map((sample) => ({ ...sample, group })));
     byKey.set(id, setup);
   }
   for (const s of byKey.values()) s.samples.sort((a, b) => a.at - b.at);
   return [...byKey.values()];
+}
+
+function referenceGroupLabel(group: string): string {
+  if (group === "unknown") return "refs unknown";
+  return `${group} ref${group === "1" ? "" : "s"}`;
+}
+
+/**
+ * Price one render from the renders before it, the way a live quote would:
+ * its own reference group, else the closest measured group (two equally close
+ * averaged), else every group pooled; a few own samples blend with that prior.
+ * Null when not even the pool has enough history.
+ */
+function priceFromHistory(
+  before: GroupedSample[],
+  group: string,
+  rule: EstimationRule,
+  at: number,
+  valueOf: (sample: GroupedSample) => number,
+): number | null {
+  const within = (g: string) => selectSamples(g === "unknown" ? before : before.filter((s) => s.group === g), rule, at);
+  const price = (samples: GroupedSample[]) => applyStatistic(samples.map(valueOf), rule);
+  const own = within(group);
+  if (own.length >= rule.minSamples) return price(own);
+
+  let prior: number | null = null;
+  const index = (REFERENCE_GROUPS as readonly string[]).indexOf(group);
+  if (index >= 0) {
+    for (let d = 1; d < REFERENCE_GROUPS.length && prior === null; d++) {
+      const found = [REFERENCE_GROUPS[index - d], REFERENCE_GROUPS[index + d]]
+        .filter((g): g is (typeof REFERENCE_GROUPS)[number] => g !== undefined)
+        .map(within)
+        .filter((samples) => samples.length >= rule.minSamples);
+      if (found.length > 0) prior = found.reduce((sum, samples) => sum + price(samples), 0) / found.length;
+    }
+  }
+  if (prior === null) {
+    const pooled = within("unknown");
+    if (pooled.length >= rule.minSamples) prior = price(pooled);
+  }
+  if (prior === null) return null;
+  if (own.length > 0 && rule.blend) {
+    const n = own.length;
+    const k = rule.minSamples;
+    return (n * price(own) + k * prior) / (n + k);
+  }
+  return prior;
 }
 
 /** Replay the cost window under `sparks.estimation` and report bias per action. */
@@ -95,14 +157,19 @@ export function backtestEstimation(stats: ImageCostStats, sparks: SparksConfig):
     const rule = estimationRuleFor(sparks.estimation, setup.action);
     const a = acc.get(setup.action) ?? { scored: 0, unscored: 0, charged: 0, target: 0, absErr: 0, over: 0 };
     setup.samples.forEach((sample, i) => {
-      const history = selectSamples(setup.samples.slice(0, i), rule, sample.at || Date.now());
-      if (history.length < rule.minSamples) {
+      // Price each past render at today's model rate, as a live quote would.
+      const usd = priceFromHistory(
+        setup.samples.slice(0, i),
+        sample.group,
+        rule,
+        sample.at || Date.now(),
+        (h) => (sample.rate && h.rate ? h.usd * (sample.rate / h.rate) : h.usd),
+      );
+      if (usd === null) {
         a.unscored += 1;
         return;
       }
-      // Price each past render at today's model rate, as a live quote would.
-      const values = history.map((h) => (sample.rate && h.rate ? h.usd * (sample.rate / h.rate) : h.usd));
-      const charged = unitPriceSparks(enabled, setup.action, applyStatistic(values, rule));
+      const charged = unitPriceSparks(enabled, setup.action, usd);
       const target = sample.usd * perUnitTarget;
       a.scored += 1;
       a.charged += charged;
@@ -125,9 +192,13 @@ export function backtestEstimation(stats: ImageCostStats, sparks: SparksConfig):
   }));
 }
 
-/** Every cost group and whether it has enough usable samples under the draft settings. */
+/**
+ * Every cost group, one row per reference group, and whether it has enough
+ * usable samples under the draft settings (otherwise it prices from the
+ * closest group).
+ */
 export function costGroupHealth(stats: ImageCostStats, sparks: SparksConfig, now = Date.now()): CostGroupHealth[] {
-  return setups(stats)
+  return setups(stats, true)
     .map((setup) => {
       const rule = estimationRuleFor(sparks.estimation, setup.action);
       const usable = selectSamples(setup.samples, rule, now).length;

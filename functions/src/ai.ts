@@ -19,7 +19,12 @@ import { withUsage } from "./usage";
 import { meterAndSettle, runKindOf } from "./actionRun";
 import { touchProject } from "./projects";
 import { isStudioFlow } from "../../books-frontend/src/core/guide/flow";
-import { ensureAffordAction, InsufficientSparks } from "./sparks";
+import { ensureAffordAction, InsufficientSparks, referenceLimitsForAction } from "./sparks";
+import { hasLikenessPhotoForSubject } from "./likeness";
+import {
+  plannedAnchorReferences,
+  plannedIllustrationReferences,
+} from "../../books-frontend/src/core/billing/referencePlan";
 import { standingPriceOverrides } from "./campaigns/pricing";
 import { ensureWithinQuota, incrementQuota, QuotaExceeded } from "./quotas";
 import { ALL_IMAGE_ACTION_IDS } from "../../books-frontend/src/core/ai/actions";
@@ -35,6 +40,7 @@ import { analyzeStory, generateAnchorDescription } from "../../books-frontend/sr
 import { extractArtStyleFromImages, type SourceArtCharacterInput } from "../../books-frontend/src/core/pipeline/styleExtract";
 import { extractArtLookFromImages } from "../../books-frontend/src/core/pipeline/lookExtract";
 import { collectSourceArtGroups } from "../../books-frontend/src/core/book/sourceArt";
+import { coverSpread } from "../../books-frontend/src/core/book/units";
 import { generateStoryDraft } from "../../books-frontend/src/core/pipeline/storyDraft";
 import { translateStory } from "../../books-frontend/src/core/pipeline/storyTranslate";
 import { checkStoryFit } from "../../books-frontend/src/core/pipeline/storyFit";
@@ -63,6 +69,14 @@ import {
 import { guidePatchContext } from "../../books-frontend/src/core/guide/patch";
 import { resolveGuidePlaylist } from "../../books-frontend/src/core/guide/playlist";
 import { askGuideNext, speakGuideLines } from "../../books-frontend/src/core/guide/speech";
+import { answerGuideQuestion, composeGuideMessage } from "../../books-frontend/src/core/guide/agent/compose";
+import {
+  bookFactsText,
+  enabledSkills,
+  helpSheetText,
+  resolveHelpArticles,
+  skillsHelpText,
+} from "../../books-frontend/src/core/guide/agent/help";
 import { extractManuscriptCast, OWN_WORDS_MAX_CHARS } from "../../books-frontend/src/core/guide/ownWords";
 import { resolveGuideMode } from "../../books-frontend/src/core/guide/mode";
 import { recordGuideTurn, recordGuideTurnOutcome } from "./guideTurns";
@@ -100,7 +114,7 @@ import {
 const resolveText = resolveTextAction;
 
 function withTextModel(config: BookConfig, model: ModelSelection): BookConfig {
-  return { ...config, textModel: model };
+  return { ...config, textModel: { provider: model.provider, id: model.id } };
 }
 
 /**
@@ -297,6 +311,7 @@ export function registerAiRoutes(app: Express): void {
           prompts,
           signal: requestDeadline(),
         }),
+        model.params,
       );
       await meterAndSettle({
         uid: req.uid!,
@@ -349,6 +364,7 @@ export function registerAiRoutes(app: Express): void {
           prompts,
           signal: requestDeadline(),
         }),
+        model.params,
       );
       await meterAndSettle({
         uid: req.uid!,
@@ -387,6 +403,7 @@ export function registerAiRoutes(app: Express): void {
           prompts,
           signal: requestDeadline(),
         }),
+        model.params,
       );
       await meterAndSettle({
         uid: req.uid!,
@@ -425,6 +442,7 @@ export function registerAiRoutes(app: Express): void {
               prompts,
               signal: requestDeadline(),
             }),
+            lookModel.params,
           );
           await meterAndSettle({
             uid: req.uid!,
@@ -504,6 +522,7 @@ export function registerAiRoutes(app: Express): void {
           prompts,
           signal: requestDeadline(),
         }),
+        model.params,
       );
       await meterAndSettle({
         uid: req.uid!,
@@ -554,6 +573,7 @@ export function registerAiRoutes(app: Express): void {
           prompts,
           signal: requestDeadline(),
         }),
+        model.params,
       );
       await meterAndSettle({
         uid: req.uid!,
@@ -598,6 +618,7 @@ export function registerAiRoutes(app: Express): void {
           prompts,
           signal: requestDeadline(),
         }),
+        model.params,
       );
       await meterAndSettle({
         uid: req.uid!,
@@ -638,6 +659,7 @@ export function registerAiRoutes(app: Express): void {
           prompts,
           signal: requestDeadline(),
         }),
+        model.params,
       );
       await meterAndSettle({
         uid: req.uid!,
@@ -674,13 +696,21 @@ export function registerAiRoutes(app: Express): void {
    */
   app.post("/ai/guide/interpret", json, async (req: AuthedRequest, res: Response) => {
     try {
-      const { project, message: rawMessage, transcript: rawTranscript, guidePreference } =
+      const { project, message: rawMessage, transcript: rawTranscript, guidePreference, pending, marked: rawMarked } =
         req.body as {
           project: Project;
           message?: unknown;
           transcript?: unknown;
           guidePreference?: unknown;
+          pending?: unknown;
+          marked?: unknown;
         };
+      // A marked passage is only believed when it is really in the story; the
+      // model reads it to resolve "make this nicer", never to decide anything else.
+      const marked =
+        typeof rawMarked === "string" && rawMarked.trim() && project?.config?.storyText?.includes(rawMarked.trim())
+          ? rawMarked.trim().slice(0, 1500)
+          : undefined;
       const message = typeof rawMessage === "string" ? rawMessage.trim() : "";
       if (!message) {
         res.status(400).json({ error: { message: "There's no message to read." } });
@@ -746,8 +776,20 @@ export function registerAiRoutes(app: Express): void {
           thresholds: guide.extraction.thresholds,
           repairAttempts: guide.extraction.repairAttempts,
           temperature: guide.extraction.temperature,
+          ...(marked ? { marked } : {}),
+          ...(guide.agent.enabled
+            ? {
+                skills: {
+                  enabled: enabledSkills(guide.agent),
+                  floor: guide.agent.turn.commandFloor,
+                  max: guide.agent.turn.maxCommands,
+                  pending: typeof pending === "string" ? pending.slice(0, 300) : undefined,
+                },
+              }
+            : {}),
           signal: requestDeadline(),
         }),
+        model.params,
       );
       await meterAndSettle({
         uid: req.uid!,
@@ -888,6 +930,7 @@ export function registerAiRoutes(app: Express): void {
             prompts,
             signal: requestDeadline(),
           }),
+          model.params,
         );
         await meterAndSettle({
           uid: req.uid!,
@@ -937,6 +980,7 @@ export function registerAiRoutes(app: Express): void {
           prompts,
           signal: requestDeadline(),
         }),
+        model.params,
       );
       await meterAndSettle({
         uid: req.uid!,
@@ -950,6 +994,149 @@ export function registerAiRoutes(app: Express): void {
         models: { text: model },
       });
       res.json({ lines: value });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  /**
+   * Phrase one guide message in the persona and the chat language.
+   *
+   * The meanings are decided on the client from trusted beats; the persona and
+   * style are read from the admin config here, so a client cannot restyle the
+   * guide. The client validates the result (`validateComposed`) and shows the
+   * configured wording when it fails.
+   */
+  app.post("/ai/guide/compose", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const body = (req.body ?? {}) as {
+        projectId?: unknown;
+        language?: unknown;
+        locale?: unknown;
+        names?: unknown;
+        meanings?: unknown;
+        transcript?: unknown;
+        guidePreference?: unknown;
+      };
+      const meanings = Array.isArray(body.meanings)
+        ? body.meanings.filter((m): m is string => typeof m === "string" && Boolean(m.trim())).slice(0, 6).map((m) => m.slice(0, 600))
+        : [];
+      if (typeof body.language !== "string" || !body.language.trim() || meanings.length === 0) {
+        res.status(400).json({ error: { message: "Nothing to say." } });
+        return;
+      }
+      if (!(await guideAllowed(req.uid!, body.guidePreference, String(body.projectId ?? "")))) {
+        res.status(403).json({ error: { message: "This isn't available yet." } });
+        return;
+      }
+      const guide = await getGuideConfig();
+      if (!guide.agent.composer.enabled || !guide.agent.persona.enabled) {
+        res.status(409).json({ error: { message: "The composer is off." } });
+        return;
+      }
+      const [model, prompts] = await Promise.all([resolveText("guideCompose"), loadPromptContext()]);
+      const startedAt = Date.now();
+      const { value, events, stats } = await withUsage(
+        () =>
+          composeGuideMessage({
+            language: String(body.language).slice(0, 80),
+            locale: typeof body.locale === "string" ? body.locale.slice(0, 16) : "en-US",
+            names: Array.isArray(body.names)
+              ? body.names.filter((n): n is string => typeof n === "string").slice(0, 24)
+              : [],
+            meanings,
+            transcript: typeof body.transcript === "string" ? body.transcript.slice(0, 3000) : "",
+            persona: guide.agent.persona,
+            style: guide.agent.style.lines,
+            creds: { apiKey: apiKeyFor(model.provider) },
+            model: model.id,
+            providerId: model.provider,
+            prompts,
+            signal: requestDeadline(),
+          }),
+        model.params,
+      );
+      await meterAndSettle({
+        uid: req.uid!,
+        action: "guideCompose",
+        events,
+        stats,
+        ...(typeof body.projectId === "string" && body.projectId ? { projectId: body.projectId } : {}),
+        kind: "fresh",
+        source: "sync",
+        startedAt,
+        models: { text: model },
+      });
+      res.json({ text: value });
+    } catch (err) {
+      sendError(res, err);
+    }
+  });
+
+  /**
+   * Answer a how-to question from the help articles and the book's state.
+   * Never states prices; says it isn't sure when the sheet doesn't cover it.
+   */
+  app.post("/ai/guide/answer", json, async (req: AuthedRequest, res: Response) => {
+    try {
+      const body = (req.body ?? {}) as {
+        project?: Project;
+        question?: unknown;
+        language?: unknown;
+        locale?: unknown;
+        transcript?: unknown;
+        guidePreference?: unknown;
+      };
+      const question = typeof body.question === "string" ? body.question.trim().slice(0, 800) : "";
+      const project = body.project;
+      if (!question || !project || typeof project !== "object") {
+        res.status(400).json({ error: { message: "There's no question to answer." } });
+        return;
+      }
+      if (!(await guideAllowed(req.uid!, body.guidePreference, String(project.id ?? "")))) {
+        res.status(403).json({ error: { message: "This isn't available yet." } });
+        return;
+      }
+      const guide = await getGuideConfig();
+      if (!guide.agent.enabled || !guide.agent.answers.enabled) {
+        res.status(409).json({ error: { message: "Answers are off." } });
+        return;
+      }
+      const [model, prompts] = await Promise.all([resolveText("guideAnswer"), loadPromptContext()]);
+      const startedAt = Date.now();
+      const guest = isAnonymousToken(req.authToken);
+      const { value, events, stats } = await withUsage(
+        () =>
+          answerGuideQuestion({
+            language: typeof body.language === "string" ? body.language.slice(0, 80) : "English (en-US)",
+            locale: typeof body.locale === "string" ? body.locale.slice(0, 16) : "en-US",
+            question,
+            help: helpSheetText(resolveHelpArticles(guide.agent.help.articles)),
+            skills: skillsHelpText(guide.agent),
+            book: bookFactsText(project, guest),
+            transcript: typeof body.transcript === "string" ? body.transcript.slice(0, 3000) : "",
+            persona: guide.agent.persona,
+            style: guide.agent.style.answers,
+            creds: { apiKey: apiKeyFor(model.provider) },
+            model: model.id,
+            providerId: model.provider,
+            prompts,
+            signal: requestDeadline(),
+          }),
+        model.params,
+      );
+      await meterAndSettle({
+        uid: req.uid!,
+        action: "guideAnswer",
+        events,
+        stats,
+        projectId: project.id,
+        kind: "fresh",
+        source: "sync",
+        startedAt,
+        models: { text: model },
+      });
+      res.json(value);
     } catch (err) {
       sendError(res, err);
     }
@@ -982,6 +1169,7 @@ export function registerAiRoutes(app: Express): void {
           prompts,
           signal: requestDeadline(),
         }),
+        model.params,
       );
       await meterAndSettle({
         uid: req.uid!,
@@ -1020,9 +1208,20 @@ export function registerAiRoutes(app: Express): void {
       const tier = requireTier(rawTier, guest);
       const anchorIsEdit = typeof options?.edit === "string" && options.edit.trim().length > 0;
       const renderKind = runKindOf(options, anchorIsEdit);
+      const hasPhoto =
+        anchor.type === "character" && !anchor.versions
+          ? await hasLikenessPhotoForSubject(req.uid!, project.id, anchorId).catch(() => false)
+          : false;
+      const referenceCount = plannedAnchorReferences(
+        project,
+        anchorId,
+        { ...(options ?? {}), hasPhoto },
+        await referenceLimitsForAction("anchorImage", tier),
+      );
       const quotedSparks = await ensureAffordAction(req.uid!, "anchorImage", tier, {
         noNegativeBuffer: guest,
         kind: renderKind,
+        referenceCount,
       });
       const [models, prompts, layouts, capabilities, generationTuning] = await Promise.all([
         resolveImageModels("anchorImage", tier),
@@ -1122,9 +1321,16 @@ export function registerAiRoutes(app: Express): void {
         ...options,
         continuation: Boolean(coverContinuationBlobId),
       });
+      const referenceCount = plannedIllustrationReferences(
+        project,
+        spreadId,
+        { ...(options ?? {}), masked: Boolean(options?.mask), continuation: Boolean(coverContinuationBlobId) },
+        await referenceLimitsForAction(action, tier),
+      );
       const quotedSparks = await ensureAffordAction(req.uid!, action, tier, {
         noNegativeBuffer: guest,
         kind: renderKind,
+        referenceCount,
       });
       const [models, prompts, layouts, capabilities, generationTuning] = await Promise.all([
         resolveImageModels(cover ? "coverIllustration" : "pageIllustration", tier),
@@ -1276,43 +1482,12 @@ function findSpread(project: Project, spreadId: string): ScreenplaySpread | unde
   if (direct) return direct;
   // Covers/spine are rendered through the same pipeline as a synthetic spread.
   if (spreadId === COVER_FRONT_ID && doc.frontCover) {
-    // The project title is the single source of truth for the front-cover title.
-    return coverSpread(spreadId, doc.frontCover, project.title);
+    return coverSpread(spreadId, doc.frontCover, project);
   }
   if (spreadId === COVER_BACK_ID && doc.backCover) {
-    return coverSpread(spreadId, doc.backCover);
+    return coverSpread(spreadId, doc.backCover, project);
   }
   return undefined;
-}
-
-function coverSpread(
-  id: string,
-  cover: NonNullable<ScreenplayDoc["frontCover"]>,
-  frontTitleOverride?: string,
-): ScreenplaySpread {
-  // Front covers show the book's real title; back covers use their blurb.
-  const title = (frontTitleOverride ?? cover.title ?? "").trim();
-  const bake = Boolean(cover.bakeText && title);
-  return {
-    id,
-    kind: "single",
-    text: cover.title ?? "",
-    illustration: cover.illustration,
-    layoutNote: bake
-      ? "Cover art with the title typography integrated into the artwork."
-      : "",
-    anchorIds: cover.anchorIds,
-    anchorNames: cover.anchorNames,
-    textMode: bake ? "in-image" : undefined,
-    ...(bake
-      ? {
-          bakeText: true,
-          coverTitle: title,
-          coverSubtitle: cover.subtitle,
-          coverAuthor: cover.author,
-        }
-      : {}),
-  };
 }
 
 function currentScreenplay(project: Project): ScreenplayDoc | undefined {

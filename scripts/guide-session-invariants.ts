@@ -434,6 +434,47 @@ for (const input of junk) {
   }
 }
 
+// The story check's card is kept whole across a reload, and a malformed one is
+// dropped rather than shown half-drawn.
+{
+  const card = {
+    verdict: "minor",
+    headline: "A good fit, with a thought or two.",
+    notes: ["A few long sentences.", "Nice repetition."],
+    dimensions: [{ label: "Sentence length", fit: "richer" }],
+    band: "4–5",
+    textHash: "0123abcd0123abcd",
+  };
+  const stored = normalizeGuideSession(
+    JSON.parse(JSON.stringify({ messages: [{ role: "guide", text: card.headline, fit: card }] })),
+  );
+  cases += 1;
+  if (JSON.stringify(stored.messages[0]?.fit) !== JSON.stringify(card)) fail("A story check card did not survive a storage round-trip.");
+  for (const broken of [
+    { ...card, verdict: "great" },
+    { ...card, textHash: "" },
+    { ...card, textHash: 7 },
+    "good",
+  ]) {
+    cases += 1;
+    const read = normalizeGuideSession({ messages: [{ role: "guide", text: "x", fit: broken }] });
+    if (read.messages[0]?.fit) fail(`A malformed story check card was kept: ${JSON.stringify(broken).slice(0, 60)}.`);
+  }
+  cases += 1;
+  const cleaned = normalizeGuideSession({
+    messages: [
+      {
+        role: "guide",
+        text: "x",
+        fit: { ...card, notes: ["a", "b", "c", "d", 5], dimensions: [{ label: "Tone", fit: "heavier" }, { label: "Pace", fit: "lighter" }] },
+      },
+    ],
+  }).messages[0]?.fit;
+  if (!cleaned || cleaned.notes.length > 3 || cleaned.dimensions.length !== 1) {
+    fail("A story check card kept more notes than allowed or a dimension it cannot show.");
+  }
+}
+
 // The window handed to the interpreter is bounded and excludes failed turns — a
 // message that never reached the backend is not part of the conversation.
 {

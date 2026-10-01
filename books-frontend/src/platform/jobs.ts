@@ -139,7 +139,7 @@ export async function createPortraitJob(
     updatedAt: now,
     leaseExpiresAt: 0,
     runCount: 0,
-    project: slimProjectForRender(project, {}),
+    project: slimProjectForRender(project, { keepCastPhotoReceipts: true }),
     tasks,
     progress: { total: tasks.length, completed: 0, failed: 0 },
     quoteId: options.quoteId,
@@ -303,11 +303,6 @@ export async function createBookJob(
     notify: options.notify,
   };
   return createOnce(options.idempotencyKey, job);
-}
-
-/** Switch a running book job's "email me when it's done". */
-export async function setBookJobNotify(jobId: string, notify: boolean): Promise<void> {
-  await updateDoc(doc(getFirebaseDb(), `users/${uid()}/jobs`, jobId), { notify });
 }
 
 /**

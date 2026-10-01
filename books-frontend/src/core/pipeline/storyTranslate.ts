@@ -10,6 +10,7 @@ import type { BookConfig } from "../types";
 import { withRetry } from "./retry";
 import type { PromptContext } from "../prompts/context";
 import { buildStoryTranslatePrompt } from "../prompts/story";
+import { restoreModelLineBreaks } from "../story/lineBreaks";
 
 const storyTranslateSchema = z.object({
   title: z.string(),
@@ -58,5 +59,5 @@ export async function translateStory(input: TranslateStoryInput): Promise<StoryT
     { signal },
   );
 
-  return { title: result.title.trim(), story: result.story.trim() };
+  return { title: result.title.trim(), story: restoreModelLineBreaks(result.story).trim() };
 }

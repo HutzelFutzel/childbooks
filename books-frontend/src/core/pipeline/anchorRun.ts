@@ -399,7 +399,6 @@ export async function renderAnchor(
       providerId: imageModel.provider,
       references: submittedReferences.length ? submittedReferences : undefined,
       quality: generation.applied.quality,
-      inputFidelity: generation.applied.inputFidelity,
       output:
         generation.applied.format || generation.applied.outputCompression !== undefined
           ? {
@@ -498,7 +497,6 @@ export async function renderAnchor(
             providerId: imageModel.provider,
             references: submittedReferences.length ? submittedReferences : undefined,
             quality: generation.applied.quality,
-            inputFidelity: generation.applied.inputFidelity,
             output:
               generation.applied.format ||
               generation.applied.outputCompression !== undefined
@@ -584,7 +582,6 @@ export async function renderAnchor(
           maxRemovals: repairLimit,
           deadlineAt: qcDeadlineAt,
           quality: qc.repairQuality,
-          inputFidelity: generation.applied.inputFidelity,
           retries: actionTuning.retries,
           beforeAttempt: claimQcAttempt,
         });

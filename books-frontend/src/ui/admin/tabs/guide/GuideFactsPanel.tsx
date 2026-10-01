@@ -19,6 +19,7 @@ import { cn } from "../../../lib/cn";
 const UNSAID: { value: GuideFactUnsaid; label: string; detail: string }[] = [
   { value: "use", label: "Use it", detail: "Save the derived value and move on." },
   { value: "confirmOnce", label: "Say it once", detail: "Name the derived value once; continuing accepts it." },
+  { value: "ask", label: "Ask first", detail: "Suggest the derived value as a question; the story waits for a yes or another value." },
   { value: "never", label: "Leave empty", detail: "Only what the reader said." },
 ];
 
@@ -99,8 +100,8 @@ export function GuideFactsPanel({
       </div>
       <p className="rounded-lg bg-ink-50 px-3 py-2.5 text-xs leading-relaxed text-ink-600">
         As set: the first question asks about{" "}
-        <strong>{broad.length > 0 ? broad.join(", ") : "nothing in particular"}</strong>. The story starts on the
-        answer that settles the last required fact, never on a timer.
+        <strong>{broad.length > 0 ? broad.join(", ") : "nothing in particular"}</strong>. Once the last required fact
+        is settled, Story options decides whether the story starts or waits for the parent. Never on a timer.
       </p>
     </div>
   );

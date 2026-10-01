@@ -4,7 +4,7 @@ import {
   Users,
   Wand2,
 } from "lucide-react";
-import type { Anchor, CoverSpec, ScreenplaySpread } from "../../core/types";
+import type { Anchor, CoverSpec, Project, ScreenplaySpread } from "../../core/types";
 import { COVER_BACK_ID, COVER_FRONT_ID } from "../../core/types";
 import { wordParagraphs } from "../../core/design";
 import { lastTextPaintFor, patchedShapeText, shapeTextForNew } from "../design/lastPaint";
@@ -36,10 +36,10 @@ export type PageSubject =
   | { kind: "cover"; coverId: string; cover: CoverSpec };
 
 /** Derived per-page values shared by the stage and the controls. */
-function genSpreadFor(subject: PageSubject): ScreenplaySpread {
+function genSpreadFor(subject: PageSubject, project: Project): ScreenplaySpread {
   return subject.kind === "spread"
     ? subject.spread
-    : coverSpread(subject.coverId, subject.cover);
+    : coverSpread(subject.coverId, subject.cover, project);
 }
 
 /**
@@ -103,7 +103,7 @@ export function PageStagePanel({
 
   const coverMode = subject.kind === "cover";
   const blank = subject.kind === "spread" && !!subject.spread.blankCanvas;
-  const genSpread = genSpreadFor(subject);
+  const genSpread = genSpreadFor(subject, project);
   const isSpread = !coverMode && genSpread.kind === "spread";
 
   // Mirror the generation state used by the controls so the page surface itself

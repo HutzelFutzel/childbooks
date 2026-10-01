@@ -3389,7 +3389,7 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
           message:
             `Print order payment ${paymentId} was ${fullyRefunded ? "fully" : "partially"} refunded ` +
             `(${refunded} ${(charge.currency ?? "usd").toUpperCase()}). ` +
-            "Check the print job — it is NOT cancelled automatically and may still ship.",
+            "Check the print job — it is NOT canceled automatically and may still ship.",
           meta: {
             paymentId,
             uid: payment.ownerUid,
@@ -3426,7 +3426,7 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
               channel: "growth",
               messageKey: "subscription_cancelled",
               ref: `sub_cancelled_${sub.id}`,
-              text: `👋 Subscription cancelled — ${planName}`,
+              text: `👋 Subscription canceled — ${planName}`,
             });
           } else if (sub.status === "active" || sub.status === "trialing") {
             await sendSubscriptionStartedEmail({

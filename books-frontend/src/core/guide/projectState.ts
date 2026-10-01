@@ -11,6 +11,7 @@
  * reads as absent, never as a crash.
  */
 import type {
+  ArtStyleSelection,
   GuideEntry,
   HardcoverDecision,
   Project,
@@ -61,6 +62,21 @@ function compact<T extends object>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
 }
 
+/** A stored art style, repaired field by field. Anything that isn't one reads as absent. */
+function artStyleSelection(value: unknown): ArtStyleSelection | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.presetId !== "string" && raw.presetId !== null) return undefined;
+  return compact({
+    presetId: raw.presetId,
+    customDescription: typeof raw.customDescription === "string" ? raw.customDescription.slice(0, 2000) : undefined,
+    origin: raw.origin === "preset" ? ("preset" as const) : raw.origin === "derived" ? ("derived" as const) : undefined,
+    derivedFromName: typeof raw.derivedFromName === "string" ? raw.derivedFromName.slice(0, 120) : undefined,
+    derivedFromNames: strings(raw.derivedFromNames)?.slice(0, 8),
+    referenceArt: sourceArtRefs(raw.referenceArt),
+  });
+}
+
 /** A repaired copy of the stored state. Never throws, never returns undefined. */
 export function normalizeStudioAuthoringState(input: unknown): StudioAuthoringState {
   if (!input || typeof input !== "object" || Array.isArray(input)) return { version: 1 };
@@ -86,6 +102,10 @@ export function normalizeStudioAuthoringState(input: unknown): StudioAuthoringSt
           subtitle: typeof raw.cover.subtitle === "string" ? raw.cover.subtitle : undefined,
           author: typeof raw.cover.author === "string" ? raw.cover.author : undefined,
           titleEdited: raw.cover.titleEdited === true ? true : undefined,
+          confirmedAt: time(raw.cover.confirmedAt),
+          painted: raw.cover.painted === true ? true : undefined,
+          subtitleIdeas: strings(raw.cover.subtitleIdeas)?.slice(0, 3),
+          fromStory: raw.cover.fromStory === true ? true : undefined,
         })
       : undefined;
 
@@ -157,8 +177,17 @@ export function normalizeStudioAuthoringState(input: unknown): StudioAuthoringSt
     skippedFacts: strings(raw.skippedFacts),
     askedFacts: strings(raw.askedFacts),
     answeredFacts: strings(raw.answeredFacts),
+    briefAsked: strings(raw.briefAsked)?.slice(0, 40),
+    briefOpen: typeof raw.briefOpen === "string" && raw.briefOpen ? raw.briefOpen.slice(0, 40) : undefined,
+    briefStartAt: time(raw.briefStartAt),
+    personAsks: strings(raw.personAsks)?.slice(-200),
+    looksDecided: strings(raw.looksDecided)?.slice(-100),
+    lookFocus: typeof raw.lookFocus === "string" && raw.lookFocus ? raw.lookFocus.slice(0, 120) : undefined,
+    styleBefore: artStyleSelection(raw.styleBefore),
+    removedNames: strings(raw.removedNames)?.slice(-50),
     chatLocale: typeof raw.chatLocale === "string" && /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(raw.chatLocale) ? raw.chatLocale : undefined,
     ownComposer: raw.ownComposer === true ? true : undefined,
+    manuscriptReadyAt: time(raw.manuscriptReadyAt),
     planRequestedFor: typeof raw.planRequestedFor === "string" && raw.planRequestedFor ? raw.planRequestedFor : undefined,
     planBasis: typeof raw.planBasis === "string" && raw.planBasis ? raw.planBasis.slice(0, 200) : undefined,
     bookSetup:
