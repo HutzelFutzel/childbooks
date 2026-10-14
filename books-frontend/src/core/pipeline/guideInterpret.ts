@@ -163,6 +163,11 @@ export interface InterpretGuideTurnInput {
    * evidence, which still has to be quoted from the message.
    */
   marked?: string;
+  /**
+   * The picture the reader has selected on the book ("Amanda's portrait"). It
+   * says who "her" and "this" are; it never decides what the message asks.
+   */
+  selected?: string;
   signal?: AbortSignal;
 }
 
@@ -296,7 +301,7 @@ function describeTranscript(turns: GuideTurn[]): string {
 export function buildGuideTurnVars(
   input: Pick<
     InterpretGuideTurnInput,
-    "project" | "message" | "playlist" | "transcript" | "patchContext" | "skills" | "marked"
+    "project" | "message" | "playlist" | "transcript" | "patchContext" | "skills" | "marked" | "selected"
   >,
 ): Record<string, string> {
   const cursor = nextGuideStep(input.playlist, input.project);
@@ -327,6 +332,7 @@ export function buildGuideTurnVars(
         : "(none — never return commands)",
     pending: input.skills?.pending?.trim() || "(nothing)",
     marked: describeMarkedPassage(input.marked),
+    selected: input.selected?.trim() || "(nothing selected)",
   };
 }
 
@@ -503,11 +509,26 @@ export function sanitizeGuideTurn(
     options.patchContext,
   );
   const rejectedSlots = new Map(dry.rejected.map((rejection) => [rejection.key, rejection]));
+  const rerouting: { claim: GuideClaim; reason: string; command: NonNullable<SanitizableGuideTurn["commands"]>[number] }[] = [];
   const survived = keptClaims.filter((claim) => {
     const rejection = rejectedSlots.get(claim.slot);
     // A partial refusal still applied something, so the claim survives; the part
     // that did not stick is reported by the real write, in the reader's words.
     if (!rejection || dry.applied.includes(claim.slot)) return true;
+    if (rejection.reroute) {
+      // Settled below, once the skill calls have been screened.
+      rerouting.push({
+        claim,
+        reason: rejection.reason,
+        command: {
+          id: rejection.reroute.command,
+          args: Object.entries(rejection.reroute.args).map(([name, value]) => ({ name, value })),
+          evidence: claim.evidence,
+          confidence: claim.confidence,
+        },
+      });
+      return false;
+    }
     refused.push({
       slot: claim.slot,
       value: claim.value,
@@ -518,6 +539,37 @@ export function sanitizeGuideTurn(
     });
     return false;
   });
+
+  /**
+   * Facts that only a skill may change, filed as that skill's call.
+   *
+   * "Change the art style to watercolor" can reach here as a fact, and for a
+   * book whose look is the reader's drawing a fact write would drop the drawing
+   * without asking. The writer refuses it and names the skill that asks first;
+   * the same words go through the usual screening as that skill's call, so the
+   * planner's confirmation applies unchanged. A call the model made itself is
+   * not doubled, and a request no skill took is a plain refusal.
+   */
+  let turnAgent = agent;
+  if (rerouting.length > 0) {
+    const asked = new Set([...agent.commands, ...agent.overflowCommands].map((call) => call.id as string));
+    const added = rerouting.filter((entry) => !asked.has(String(entry.command.id))).map((entry) => entry.command);
+    if (added.length > 0) {
+      turnAgent = screenTurnCommands({ ...raw, commands: [...(raw.commands ?? []), ...added] }, options.message, options.skills);
+    }
+    const filedIds = new Set([...turnAgent.commands, ...turnAgent.overflowCommands].map((call) => call.id as string));
+    for (const entry of rerouting) {
+      const filed = filedIds.has(String(entry.command.id));
+      refused.push({
+        slot: entry.claim.slot,
+        value: entry.claim.value,
+        evidence: entry.claim.evidence,
+        confidence: entry.claim.confidence,
+        refusal: filed ? "rerouted" : "rejected",
+        reason: filed ? `${entry.reason}; asked as the ${entry.command.id} skill` : entry.reason,
+      });
+    }
+  }
 
   const disposed = disposeGuideClaims({
     project: options.project,
@@ -541,7 +593,7 @@ export function sanitizeGuideTurn(
     skip,
     reply: raw.reply.trim(),
     confidence: raw.confidence,
-    ...agent,
+    ...turnAgent,
   };
 }
 
@@ -662,7 +714,21 @@ export async function interpretGuideTurn(
     // re-proposes the same refused claim would otherwise loop, and a model that
     // drops a good claim while fixing a bad one would make the turn worse.
     if (merged.claims.length <= result.claims.length) break;
-    result = { ...merged, repairs: attempt + 1 };
+    // A fact filed as a skill's call lives in the commands, not the claims, and
+    // the merged read only holds the claims: keep the first read's calls.
+    const rerouted = result.refused.filter((claim) => claim.refusal === "rerouted");
+    result = {
+      ...merged,
+      repairs: attempt + 1,
+      ...(rerouted.length > 0
+        ? {
+            commands: result.commands,
+            overflowCommands: result.overflowCommands,
+            refusedCommands: result.refusedCommands,
+            refused: [...merged.refused, ...rerouted],
+          }
+        : {}),
+    };
   }
 
   return result;

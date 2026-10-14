@@ -3,10 +3,37 @@
 import { useMemo } from "react";
 import { Loader2 } from "lucide-react";
 import { Modal } from "../../components/Modal";
-import { useAdminProjects, type ActionRunRow } from "../../../state/adminProjectsStore";
+import {
+  useAdminProjects,
+  type ActionRunRow,
+  type ProjectPnl,
+} from "../../../state/adminProjectsStore";
 import { IMAGE_ACTIONS, TEXT_ACTIONS } from "../../../core/ai/actions";
 import { MILESTONES } from "./milestones";
 import { fmtDateTime, fmtDuration, fmtNumber, fmtSparks, fmtUsd } from "./format";
+
+const NO_PNL: ProjectPnl = {
+  recognizedUsd: 0,
+  printRevenueUsd: 0,
+  ebookRevenueUsd: 0,
+  directUsd: 0,
+  subscriptionAllocUsd: 0,
+  revenueUsd: 0,
+  imageUsd: 0,
+  textUsd: 0,
+  providerUsd: 0,
+  absorbedUsd: 0,
+  printCostUsd: 0,
+  stripeFeeUsd: 0,
+  taxUsd: 0,
+  feesUsd: 0,
+  refundUsd: 0,
+  subsidyUsd: 0,
+  freeSparks: 0,
+  paidSparks: 0,
+  freeBySource: {},
+  netUsd: 0,
+};
 
 const ACTION_LABELS: Record<string, string> = Object.fromEntries(
   [...TEXT_ACTIONS, ...IMAGE_ACTIONS].map((a) => [a.id, a.label]),
@@ -27,6 +54,8 @@ export function ProjectHistoryModal() {
   const close = useAdminProjects((s) => s.closeDetail);
 
   const p = detail?.project;
+  // The book's whole life, so these are lifetime figures (unlike the books table).
+  const pnl = detail?.pnl ?? NO_PNL;
 
   return (
     <Modal
@@ -43,20 +72,18 @@ export function ProjectHistoryModal() {
         <p className="py-10 text-center text-sm text-ink-400">Nothing to show for this book.</p>
       ) : (
         <div className="space-y-5">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             <Tile label="Actions" value={fmtNumber(p.counters.runs)} />
             <Tile label="Images" value={fmtNumber(p.counters.imagesGenerated)} />
-            <Tile label="Provider cost" value={fmtUsd(p.cost.providerUsd)} tone="cost" />
-            <Tile
-              label="Net"
-              value={fmtUsd(detail.pnl?.netUsd ?? -p.cost.providerUsd)}
-              tone={(detail.pnl?.netUsd ?? -p.cost.providerUsd) >= 0 ? "revenue" : "cost"}
-            />
+            <Tile label="Image cost" value={fmtUsd(pnl.imageUsd)} tone="cost" />
+            <Tile label="Text cost" value={fmtUsd(pnl.textUsd)} tone="cost" />
+            <Tile label="Order cost" value={fmtUsd(pnl.feesUsd)} tone="cost" />
+            <Tile label="Net" value={fmtUsd(pnl.netUsd)} tone={pnl.netUsd >= 0 ? "revenue" : "cost"} />
           </div>
 
           <Timeline milestones={p.milestones} />
 
-          <div className="grid gap-4 sm:grid-cols-3">
+          <div className="grid gap-4 sm:grid-cols-4">
             <Facts
               title="Structure"
               rows={[
@@ -87,10 +114,21 @@ export function ProjectHistoryModal() {
                 ["Sparks charged", fmtSparks(p.sparks.charged)],
                 ["…from purchases", fmtSparks(p.sparks.paid)],
                 ["…from grants", fmtSparks(p.sparks.free)],
-                ["Absorbed cost", fmtUsd(p.cost.unbilledUsd)],
-                ["Pack revenue", fmtUsd(detail.pnl?.recognizedUsd ?? 0)],
-                ["Print / ebook", fmtUsd(detail.pnl?.directUsd ?? 0)],
-                ["Grant subsidy", fmtUsd(detail.pnl?.subsidyUsd ?? 0)],
+                ["Absorbed repairs", fmtUsd(pnl.absorbedUsd)],
+                ["Grant subsidy", fmtUsd(pnl.subsidyUsd)],
+                ["Pack revenue", fmtUsd(pnl.recognizedUsd)],
+                ["Print sales", fmtUsd(pnl.printRevenueUsd)],
+                ["Ebook sales", fmtUsd(pnl.ebookRevenueUsd)],
+                ["Refunded", fmtUsd(pnl.refundUsd)],
+              ]}
+            />
+            <Facts
+              title="Order cost"
+              rows={[
+                ["Print provider", fmtUsd(pnl.printCostUsd)],
+                ["Stripe fee", fmtUsd(pnl.stripeFeeUsd)],
+                ["Tax on the sale", fmtUsd(pnl.taxUsd)],
+                ["Total", fmtUsd(pnl.feesUsd)],
               ]}
             />
           </div>
@@ -164,8 +202,18 @@ function RunTimeline({ runs }: { runs: ActionRunRow[] }) {
                 <td className="px-3 py-1.5 text-right tabular-nums text-ink-500">
                   {fmtNumber(r.calls.total)} calls
                 </td>
-                <td className="px-3 py-1.5 text-right tabular-nums text-ink-600">
+                <td
+                  className="px-3 py-1.5 text-right tabular-nums text-ink-600"
+                  title={
+                    r.costUsd.imageCalls != null && r.costUsd.textCalls != null
+                      ? `Image calls ${fmtUsd(r.costUsd.imageCalls)} · text calls ${fmtUsd(r.costUsd.textCalls)}`
+                      : undefined
+                  }
+                >
                   {fmtUsd(r.costUsd.total)}
+                  {r.group && (
+                    <span className="ml-1.5 text-[10px] uppercase text-ink-300">{r.group}</span>
+                  )}
                 </td>
                 <td className="px-3 py-1.5 text-right tabular-nums text-ink-800">
                   {fmtSparks(r.sparks.charged)} ✦

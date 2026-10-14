@@ -21,7 +21,7 @@ import {
   type GenerationRenderKind,
 } from "./generationEstimateProfile";
 import type { ImageTier } from "./modelConfig";
-import { COST_SAMPLE_CAPACITY } from "./priceEstimation";
+import { COST_BASES, COST_SAMPLE_CAPACITY, type CostBasis } from "./priceEstimation";
 
 export { COST_SAMPLE_CAPACITY };
 
@@ -37,6 +37,11 @@ export interface CostSample {
   project?: string;
   /** The model's nominal per-image rate (USD) when it was measured. */
   rate?: number;
+  /**
+   * What `usd` covers (see `CostBasis`). Absent on samples recorded before the
+   * basis existed; those count under either basis until they age out.
+   */
+  basis?: CostBasis;
 }
 
 /** One group's recent measured call costs, oldest first. */
@@ -138,7 +143,13 @@ function normalizeSample(raw: unknown, legacyAt: number): CostSample | null {
     at: typeof s.at === "number" && Number.isFinite(s.at) ? s.at : legacyAt,
     ...(typeof s.project === "string" && s.project ? { project: s.project } : {}),
     ...(typeof s.rate === "number" && s.rate > 0 ? { rate: s.rate } : {}),
+    ...((COST_BASES as readonly string[]).includes(s.basis as string) ? { basis: s.basis } : {}),
   };
+}
+
+/** Whether a sample measures what a quote under `basis` prices. */
+export function sampleMatchesBasis(sample: CostSample, basis: CostBasis): boolean {
+  return !sample.basis || sample.basis === basis;
 }
 
 /**
@@ -186,7 +197,7 @@ export function appendCostSample(
   tier: ImageTier,
   costUsd: number,
   profile: GenerationEstimateProfile,
-  meta: { at?: number; project?: string; rate?: number | null } = {},
+  meta: { at?: number; project?: string; rate?: number | null; basis?: CostBasis } = {},
 ): ImageCostStats {
   const key = costStatsKey(action, tier, profile);
   const at = meta.at ?? Date.now();
@@ -195,6 +206,7 @@ export function appendCostSample(
     at,
     ...(meta.project ? { project: meta.project } : {}),
     ...(typeof meta.rate === "number" && meta.rate > 0 ? { rate: meta.rate } : {}),
+    ...(meta.basis ? { basis: meta.basis } : {}),
   };
   const prev = stats.stats[key]?.samples ?? [];
   const next: Record<string, CostSamples> = {

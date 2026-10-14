@@ -29,7 +29,7 @@ import express, { type Express, type Response } from "express";
 import { serverConfig } from "../config";
 import { getStripe } from "../stripeClient";
 import { getAffiliateConfig } from "../appConfig";
-import { type AuthedRequest } from "../auth";
+import { unauthenticated, type AuthedRequest } from "../auth";
 import {
   isCommissionable,
   isRewardfulId,
@@ -196,7 +196,7 @@ export function registerAffiliateRoutes(app: Express): void {
     try {
       const uid = req.uid;
       if (!uid) {
-        res.status(401).json({ error: { message: "Authentication required." } });
+        unauthenticated(req, res);
         return;
       }
       const body = (req.body ?? {}) as AttributionInput;

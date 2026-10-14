@@ -9,7 +9,7 @@ import { Tabs } from "../../components/Tabs";
 import { CardHeader, CardTitle } from "../../components/Card";
 import { CostIntelligenceTab } from "../tabs/CostIntelligenceTab";
 import { useAdminProjects, type ActionRunRow } from "../../../state/adminProjectsStore";
-import { IMAGE_ACTIONS, TEXT_ACTIONS } from "../../../core/ai/actions";
+import { IMAGE_ACTIONS, TEXT_ACTIONS, isImageAction } from "../../../core/ai/actions";
 import { DEFAULT_IMAGE_TIER_LABELS } from "../../../core/config/modelConfig";
 import { downloadCsv } from "./csv";
 import { fmtDateTime, fmtNumber, fmtSparks, fmtUsd } from "./format";
@@ -25,6 +25,11 @@ const VIEWS: { id: View; label: string }[] = [
 const ACTION_LABELS: Record<string, string> = Object.fromEntries(
   [...TEXT_ACTIONS, ...IMAGE_ACTIONS].map((a) => [a.id, a.label]),
 );
+
+/** Which side a run's spend belongs to; runs older than the split derive it from the action. */
+function runGroup(r: ActionRunRow): "image" | "text" {
+  return r.group ?? (isImageAction(r.action) ? "image" : "text");
+}
 
 /**
  * Everything cost-related, at both levels that matter:
@@ -80,12 +85,14 @@ function RunLog() {
       runs.reduce(
         (acc, r) => ({
           cost: acc.cost + r.costUsd.total,
+          image: acc.image + (runGroup(r) === "image" ? r.costUsd.total : 0),
+          text: acc.text + (runGroup(r) === "text" ? r.costUsd.total : 0),
           unbilled: acc.unbilled + r.costUsd.unbilled,
           sparks: acc.sparks + r.sparks.charged,
           margin: acc.margin + r.marginUsd,
           calls: acc.calls + r.calls.total,
         }),
-        { cost: 0, unbilled: 0, sparks: 0, margin: 0, calls: 0 },
+        { cost: 0, image: 0, text: 0, unbilled: 0, sparks: 0, margin: 0, calls: 0 },
       ),
     [runs],
   );
@@ -194,7 +201,7 @@ function RunLog() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-7">
         <Stat label="User calls" value={fmtNumber(runs.length)} />
         <Stat
           label="Provider calls"
@@ -202,6 +209,18 @@ function RunLog() {
           hint="One user call can fan out into several provider calls — this is why a per-call average understates what a render costs."
         />
         <Stat label="Provider cost" value={fmtUsd(totals.cost)} tone="cost" />
+        <Stat
+          label="Image"
+          value={fmtUsd(totals.image)}
+          tone="cost"
+          hint="Image actions: portraits, anchors, page and cover illustrations, with their helper calls."
+        />
+        <Stat
+          label="Text"
+          value={fmtUsd(totals.text)}
+          tone="cost"
+          hint="Everything else: story, screenplay, story edits, guide chat."
+        />
         <Stat
           label="Absorbed"
           value={fmtUsd(totals.unbilled)}
@@ -240,7 +259,10 @@ function RunLog() {
                   tier: r.tier ?? "",
                   kind: r.kind,
                   providerCalls: r.calls.total,
+                  group: runGroup(r),
                   costUsd: r.costUsd.total,
+                  imageCallsUsd: r.costUsd.imageCalls ?? "",
+                  textCallsUsd: r.costUsd.textCalls ?? "",
                   billableUsd: r.costUsd.billable,
                   unbilledUsd: r.costUsd.unbilled,
                   sparksQuoted: r.sparks.quoted ?? "",

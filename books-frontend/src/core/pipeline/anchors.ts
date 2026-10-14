@@ -15,6 +15,7 @@ import { resolveArtStyleText } from "../prompts/style";
 import { resolveAudienceOverlays } from "../prompts/audience";
 import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderSinglePrompt } from "../prompts/render";
+import { visualDescription } from "../book/anchorDescription";
 import type { Anchor, AnchorSheetLayout, ArtStyleSelection } from "../types";
 import {
   ANCHOR_SHEET_SIZE,
@@ -141,7 +142,13 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
       flags: { hasStyleRef },
     });
   }
-  const listOf = (arr: Anchor[]) => arr.map((r) => `${r.name} (${r.description})`).join("; ");
+  const listOf = (arr: Anchor[]) =>
+    arr
+      .map((r) => {
+        const look = visualDescription(r.name, r.description);
+        return look ? `${r.name} (${look})` : r.name;
+      })
+      .join("; ");
   // Edit-from-image: keep the current image as the source of truth and apply
   // ONLY the requested change. We deliberately omit the full description and
   // style text (both are already baked into the provided image) so they can't
@@ -205,7 +212,7 @@ export function buildAnchorPrompt(input: BuildAnchorPromptInput): string {
       cellCount: String(spec.views.length),
       gridShape: gridShapeText(spec),
       viewList: viewListText(spec),
-      description: anchor.description.trim(),
+      description: visualDescription(anchor.name, anchor.description),
       ageVisualGuidance,
       age: anchor.ageYears !== undefined ? `${anchor.ageYears} years old` : "",
       userGuidance: anchor.userGuidance?.trim() ?? "",

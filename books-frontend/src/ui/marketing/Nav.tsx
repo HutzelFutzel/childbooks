@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
-import { Menu, Shield, LogOut, Settings, Sparkles, X } from "lucide-react";
+import { Loader2, Menu, Shield, LogOut, Settings, Sparkles, X } from "lucide-react";
 import { cn } from "../lib/cn";
 import { isDev } from "../../platform/runtime";
 import { useAuthStore } from "../../state/authStore";
@@ -32,6 +33,8 @@ const LINKS = [
 
 /** Sticky top navigation that gains a solid, blurred background once scrolled. */
 export function Nav({ siteName, logoUrl }: { siteName: string; logoUrl?: string | null }) {
+  const router = useRouter();
+  const [openingStudio, startStudioTransition] = useTransition();
   const [scrolled, setScrolled] = useState(false);
   const [pastDevBanner, setPastDevBanner] = useState(false);
   // Below `md` the link row (and below `sm`, `AccountMenu` too) hides into
@@ -113,9 +116,18 @@ export function Nav({ siteName, logoUrl }: { siteName: string; logoUrl?: string 
             <AccountMenu />
             <Link
               href="/studio"
-              className="inline-flex items-center rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-(--color-brand-foreground) shadow-soft transition hover:bg-brand-700"
+              onClick={(e) => {
+                if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                e.preventDefault();
+                startStudioTransition(() => {
+                  router.push("/studio");
+                });
+              }}
+              aria-busy={openingStudio}
+              className="inline-flex items-center gap-2 rounded-xl bg-brand-600 px-4 py-2 text-sm font-semibold text-(--color-brand-foreground) shadow-soft transition hover:bg-brand-700"
             >
-              Open the Studio
+              {openingStudio && <Loader2 className="size-4 animate-spin" />}
+              <span>{openingStudio ? "Opening Studio…" : "Open the Studio"}</span>
             </Link>
             <button
               type="button"

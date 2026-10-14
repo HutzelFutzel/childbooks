@@ -12,6 +12,7 @@ import {
   imageGenerationHintsSchema,
   type ImageGenerationHints,
 } from "./imageGeneration";
+import type { GenerationStyleReference } from "../types";
 
 export interface ArtStyleExample {
   /** Public customer-facing preview. It is never sent to an image model. */
@@ -34,6 +35,8 @@ export interface ArtStyleDefinition {
   enabled: boolean;
   order: number;
   examples: ArtStyleExample[];
+  /** Dedicated generation-only exemplar; customer previews are never model inputs. */
+  generationReference?: GenerationStyleReference;
   /** Best-effort provider-neutral output preferences for this style. */
   generationHints: ImageGenerationHints;
   createdAt: number;
@@ -132,6 +135,20 @@ export function normalizeArtStylesConfig(input: unknown): ArtStylesConfig {
           }))
           .sort((a, b) => a.order - b.order)
       : [];
+    const generationReference =
+      raw.generationReference &&
+      typeof raw.generationReference.imageUrl === "string" &&
+      typeof raw.generationReference.storagePath === "string" &&
+      typeof raw.generationReference.mimeType === "string"
+        ? {
+            imageUrl: raw.generationReference.imageUrl,
+            storagePath: raw.generationReference.storagePath,
+            mimeType: raw.generationReference.mimeType,
+            updatedAt: Number.isFinite(raw.generationReference.updatedAt)
+              ? raw.generationReference.updatedAt
+              : 0,
+          }
+        : undefined;
     return [{
       id,
       label: String(raw.label ?? fallback?.label ?? id),
@@ -145,6 +162,7 @@ export function normalizeArtStylesConfig(input: unknown): ArtStylesConfig {
       enabled: raw.enabled !== false,
       order: Number.isFinite(raw.order) ? raw.order : index,
       examples,
+      ...(generationReference ? { generationReference } : {}),
       generationHints: raw.generationHints ?? {},
       createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : 0,
       updatedAt: Number.isFinite(raw.updatedAt) ? raw.updatedAt : 0,
@@ -196,6 +214,13 @@ const exampleSchema = z.object({
   updatedAt: z.number(),
 });
 
+const generationReferenceSchema = z.object({
+  imageUrl: z.string().url(),
+  storagePath: z.string().min(1),
+  mimeType: z.string().regex(/^image\//),
+  updatedAt: z.number(),
+});
+
 export const artStylesConfigSchema = z.object({
   version: z.literal(2),
   styles: z.array(
@@ -207,6 +232,7 @@ export const artStylesConfigSchema = z.object({
       enabled: z.boolean(),
       order: z.number().int().min(0),
       examples: z.array(exampleSchema).max(12),
+      generationReference: generationReferenceSchema.optional(),
       generationHints: imageGenerationHintsSchema,
       createdAt: z.number(),
       updatedAt: z.number(),

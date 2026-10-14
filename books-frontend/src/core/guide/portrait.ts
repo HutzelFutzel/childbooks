@@ -19,6 +19,7 @@ import { CAST_KIND_SPECS, castKindOf } from "../story/castKinds";
 import { portraitRelationNote } from "../story/relations";
 import type {
   ArtStyleSelection,
+  GenerationStyleReference,
   LikenessPhotoRef,
   LookSource,
   PortraitImage,
@@ -28,9 +29,14 @@ import type {
   StoryCastMember,
 } from "../types";
 import { LIKENESS_PHOTOS_MAX, SOURCE_ART_MAX } from "../types";
+import { describesSomeoneElse } from "../book/anchorDescription";
 import { normalizeAnchorName } from "../book/anchorRefs";
+import { identityChanged, isBareRestart, visualChange } from "./redrawMode";
+import { ageOfSignature, ageShiftMatters } from "./visualAge";
 import { addVersion, createVersionTree, getCursor } from "../versioning";
 import { authoringOf, withAuthoring } from "./projectState";
+import { restoreArtwork, retireArtwork, styleIsFromArtwork } from "./artworkStyle";
+import { derivedArtStyle, hasSourceArt } from "../book/sourceArt";
 
 /** The person's likeness source, with the implicit default made explicit. */
 export function lookSourceOf(member: StoryCastMember): LookSource {
@@ -58,7 +64,11 @@ export function likenessPhotosOf(member: StoryCastMember): LikenessPhotoRef[] {
 export interface PortraitReferencePlan {
   photos: number;
   subject: SourceArtRef[];
+  /** Approved portrait used as identity after a one-use photo is gone. */
+  existing: SourceArtRef[];
   style: SourceArtRef[];
+  /** Immutable admin exemplar captured when a preset was selected. */
+  catalogStyle: GenerationStyleReference[];
   /** The book has a style reference at all. */
   hasStyle: boolean;
   /** The person's drawing is also the book's style reference. */
@@ -68,20 +78,38 @@ export interface PortraitReferencePlan {
 export function portraitReferencePlan(project: Project, member: StoryCastMember): PortraitReferencePlan {
   const source = lookSourceOf(member);
   const subject = source === "drawing" ? (member.sourceArt ?? []).slice(0, 1) : [];
+  const portrait = currentPortrait(project, member.id);
+  const existing =
+    source !== "photo" &&
+    subject.length === 0 &&
+    portrait &&
+    !portraitIsCurrent(project, portrait) &&
+    !identityChanged(project, member.id)
+      ? [{
+          blobId: portrait.blobId,
+          mimeType: portrait.mimeType,
+          createdAt: portrait.createdAt,
+          origin: "portrait" as const,
+        }]
+      : [];
   const subjectIds = new Set(subject.map((art) => art.blobId));
   const all = project.config.artStyle?.referenceArt ?? [];
   return {
     photos: source === "photo" ? likenessPhotosOf(member).length : 0,
     subject,
+    existing,
     style: all.filter((art) => !subjectIds.has(art.blobId)).slice(0, 1),
-    hasStyle: all.length > 0,
+    catalogStyle: project.config.artStyle?.generationReference
+      ? [project.config.artStyle.generationReference]
+      : [],
+    hasStyle: all.length > 0 || Boolean(project.config.artStyle?.generationReference),
     sharesStyle: all.some((art) => subjectIds.has(art.blobId)),
   };
 }
 
 export function portraitReferenceCount(project: Project, member: StoryCastMember): number {
   const plan = portraitReferencePlan(project, member);
-  return plan.photos + plan.subject.length + plan.style.length;
+  return plan.photos + plan.subject.length + plan.existing.length + plan.style.length + plan.catalogStyle.length;
 }
 
 /** Everyone who gets a plate: the named cast, in story order. */
@@ -89,10 +117,28 @@ export function portraitSubjects(project: Project): StoryCastMember[] {
   return namedCast(briefOf(project.config));
 }
 
+/**
+ * What a portrait is actually drawn from. A description of someone else
+ * ("Arthur's twin sister" on Arthur) is dropped, and so is a bare "redraw",
+ * which is a request for a new picture rather than a change to keep.
+ */
+function portraitLook(member: StoryCastMember): { source: LookSource; appearance: string; note: string } {
+  let source = lookSourceOf(member);
+  let appearance = member.lookFromArt?.trim() || member.appearance?.trim() || "";
+  if (appearance && describesSomeoneElse(member.name, appearance) && source !== "photo" && source !== "drawing") {
+    appearance = "";
+    if (source === "describe") source = "invent";
+  }
+  const note = (member.portraitNote ?? "")
+    .split(";")
+    .map((part) => (isBareRestart(part) ? "" : visualChange(part)))
+    .filter(Boolean)
+    .join("; ");
+  return { source, appearance, note };
+}
+
 export function portraitInputs(project: Project, member: StoryCastMember): PortraitInputs {
-  const source = lookSourceOf(member);
-  const appearance =
-    member.lookFromArt?.trim() || member.appearance?.trim() || "";
+  const { source, appearance, note } = portraitLook(member);
   const together = portraitRelationNote(briefOf(project.config), member.id);
   return {
     subjectId: member.id,
@@ -117,7 +163,7 @@ export function portraitInputs(project: Project, member: StoryCastMember): Portr
             ? ["describe"]
             : ["invent"]),
       ...(source !== "photo" && appearance ? [{ appearance }] : []),
-      ...(member.portraitNote?.trim() ? [{ note: member.portraitNote.trim() }] : []),
+      ...(note ? [{ note }] : []),
     ]),
   };
 }
@@ -165,16 +211,25 @@ export function currentPortrait(project: Project, subjectId: string): PortraitIm
  */
 function sameSubject(a: string, b: string): boolean {
   if (a === b) return true;
-  const withoutName = (signature: string): string => {
+  const read = (signature: string): Record<string, unknown> | null => {
     try {
       const { name: _name, ...rest } = JSON.parse(signature) as Record<string, unknown>;
       void _name;
-      return JSON.stringify(rest);
+      return rest;
     } catch {
-      return signature;
+      return null;
     }
   };
-  return withoutName(a) === withoutName(b);
+  const drawn = read(a);
+  const now = read(b);
+  if (!drawn || !now) return false;
+  // Age is judged by what it does to the picture (see `visualAge`): a year on
+  // an adult is the same person, two to three is not. Everything else is exact.
+  const { age: _drawnAge, months: _drawnMonths, visualAge: _drawnVisual, ...drawnRest } = drawn;
+  const { age: _nowAge, months: _nowMonths, visualAge: _nowVisual, ...nowRest } = now;
+  void [_drawnAge, _drawnMonths, _drawnVisual, _nowAge, _nowMonths, _nowVisual];
+  if (JSON.stringify(drawnRest) !== JSON.stringify(nowRest)) return false;
+  return !ageShiftMatters(ageOfSignature(drawn), ageOfSignature(now));
 }
 
 /**
@@ -263,13 +318,35 @@ export function noteStyleChange(before: Project, after: Project): Project {
 }
 
 /**
+ * The book in a preset style. When the look came from a drawing, the drawing
+ * stops being the source with it (see `retireArtwork`), so the preset really is
+ * the look and nothing is left drawing from the old one. Portraits drawn before
+ * can be taken back with the old look, drawings included.
+ */
+export function withPresetStyle(project: Project, artStyle: ArtStyleSelection): Project {
+  const base = styleIsFromArtwork(project) ? retireArtwork(project) : project;
+  const noted = noteStyleChange(project, {
+    ...base,
+    config: { ...base.config, artStyle, styleReady: true },
+  });
+  const before = authoringOf(noted).styleBefore;
+  // With nothing drawn there is nothing to take back, and the snapshot would only pin the drawings.
+  return before && artStyleKey(before) === artStyleKey(project.config.artStyle)
+    ? noted
+    : withAuthoring(noted, { retiredArtwork: undefined });
+}
+
+/**
  * The look the reader can take back, when taking it back is free: the book's
  * style changed after portraits were drawn, those portraits would be current
  * again under the old look, and none has been redrawn in the new one yet.
  */
 export function styleRevert(project: Project): ArtStyleSelection | null {
-  const before = authoringOf(project).styleBefore;
+  const state = authoringOf(project);
+  const before = state.styleBefore;
   if (!before) return null;
+  // Drawings added since would have to be merged with the retired ones: not free.
+  if (derivedArtStyle(before) && state.retiredArtwork && hasSourceArt(project)) return null;
   const oldKey = artStyleKey(before);
   const nowKey = artStyleKey(project.config.artStyle);
   if (oldKey === nowKey) return null;
@@ -284,10 +361,11 @@ export function styleRevert(project: Project): ArtStyleSelection | null {
 export function withStyleReverted(project: Project): Project {
   const before = styleRevert(project);
   if (!before) return project;
-  return withAuthoring(
+  const back = withAuthoring(
     { ...project, config: { ...project.config, artStyle: before, styleReady: true } },
     { styleBefore: undefined },
   );
+  return withAuthoring(derivedArtStyle(before) ? restoreArtwork(back) : back, { retiredArtwork: undefined });
 }
 
 /**
@@ -371,10 +449,10 @@ export function portraitPrompt(
   member: StoryCastMember,
   prompts: PromptsConfig,
   artStyles?: ArtStylesConfig | null,
+  options: { currentPortraitIdentity?: boolean } = {},
 ): string {
-  const source = lookSourceOf(member);
+  const { source, appearance, note } = portraitLook(member);
   const age = ageText(member);
-  const appearance = member.lookFromArt?.trim() || member.appearance?.trim() || "";
   const bodyPlan = member.bodyPlan && member.bodyPlan !== "bipedal" ? member.bodyPlan : "";
   const kind = castKindOf(member);
   const together = portraitRelationNote(briefOf(project.config), member.id);
@@ -388,21 +466,22 @@ export function portraitPrompt(
       species: member.species?.trim() || CAST_KIND_SPECS[kind].noun,
       together,
       artStyle: resolveArtStyleText(project.config.artStyle, artStyles ?? null),
-      note: member.portraitNote?.trim() ?? "",
+      note,
     },
     flags: {
       isAnimal: kind === "animal",
       isToy: kind === "toy",
       isCreature: kind === "creature",
       hasTogether: Boolean(together),
-      hasNote: Boolean(member.portraitNote?.trim()),
+      hasNote: Boolean(note),
       hasAge: Boolean(age),
       hasRole: Boolean(member.role?.trim()),
       hasAppearance: Boolean(appearance) && source !== "photo",
       hasBodyPlan: Boolean(bodyPlan) && source !== "photo",
       fromPhoto: source === "photo",
       fromDrawing: source === "drawing",
-      invent: source === "invent" && !appearance,
+      fromCurrentPortrait: options.currentPortraitIdentity === true,
+      invent: source === "invent" && !appearance && !options.currentPortraitIdentity,
     },
   });
 }

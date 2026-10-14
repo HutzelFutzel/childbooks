@@ -40,17 +40,43 @@ export interface ProjectCounters {
   imagesByAction: Record<string, number>;
 }
 
+/**
+ * One book's money picture for the selected window. Mirrors the backend's
+ * `ProjectPnl`; every total is the sum of the parts listed under it, so the
+ * columns always add up:
+ *
+ *   net = revenueUsd − providerUsd − feesUsd − refundUsd
+ */
 export interface ProjectPnl {
+  // Revenue
   recognizedUsd: number;
+  printRevenueUsd: number;
+  ebookRevenueUsd: number;
+  /** print + ebook sales */
   directUsd: number;
-  refundUsd: number;
-  feesUsd: number;
+  subscriptionAllocUsd: number;
+  /** recognized + direct + subscription share */
+  revenueUsd: number;
+  // AI generation cost
+  /** Image actions, helper calls included. */
+  imageUsd: number;
+  /** Story, screenplay, edits, guide chat. */
+  textUsd: number;
+  /** image + text */
   providerUsd: number;
+  /** Part of `providerUsd` spent on repairs the reader wasn't charged for. */
+  absorbedUsd: number;
+  // Order cost
+  printCostUsd: number;
+  stripeFeeUsd: number;
+  taxUsd: number;
+  /** print cost + Stripe fee + tax */
+  feesUsd: number;
+  refundUsd: number;
   subsidyUsd: number;
   freeSparks: number;
   paidSparks: number;
   freeBySource: Record<string, number>;
-  subscriptionAllocUsd: number;
   netUsd: number;
 }
 
@@ -75,9 +101,20 @@ export interface ProjectRow {
   milestones: Partial<Record<ProjectMilestone, number>>;
   counters: ProjectCounters;
   models: { imageModels: string[] };
-  cost: { providerUsd: number; billedUsd: number; unbilledUsd: number };
+  /**
+   * LIFETIME AI spend counters. Use `pnl` for anything shown next to revenue or
+   * net — it is windowed and split; this is only the whole-life total.
+   */
+  cost: {
+    providerUsd: number;
+    billedUsd: number;
+    unbilledUsd: number;
+    imageUsd?: number;
+    textUsd?: number;
+  };
   sparks: { charged: number; paid: number; free: number; byLotSource: Record<string, number> };
   timing: { timeToFirstImageMs?: number; timeToOrderMs?: number };
+  /** Always present on the books list; null only on an older cached response. */
   pnl: ProjectPnl | null;
 }
 
@@ -95,7 +132,17 @@ export interface ActionRunRow {
   source: "sync" | "worker";
   models: Record<string, string>;
   calls: { total: number; failures: number; byStep: Record<string, number> };
-  costUsd: { total: number; billable: number; unbilled: number; byStep: Record<string, number> };
+  costUsd: {
+    total: number;
+    billable: number;
+    unbilled: number;
+    byStep: Record<string, number>;
+    /** Image-generation calls versus text/vision calls (absent on older runs). */
+    imageCalls?: number;
+    textCalls?: number;
+  };
+  /** Whether the run's spend is image work or text work (absent on older runs). */
+  group?: "image" | "text";
   sparks: {
     quoted: number | null;
     charged: number;

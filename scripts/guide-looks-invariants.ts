@@ -16,28 +16,45 @@
  *
  * Offline and deterministic: pure functions over synthesized books.
  */
-import { derivedStyleSelection } from "../books-frontend/src/core/book/sourceArt";
+import { collectSourceArtGroups, derivedStyleSelection, hasSourceArt } from "../books-frontend/src/core/book/sourceArt";
+import { artworkStyleRole, settleOnFirstArtwork, styleArtworkName, styleIsFromArtwork } from "../books-frontend/src/core/guide/artworkStyle";
+import { plannedPortraitReferences } from "../books-frontend/src/core/billing/referencePlan";
 import { GUIDE_COMMANDS } from "../books-frontend/src/core/guide/agent/registry";
+import { planTurn } from "../books-frontend/src/core/guide/agent/plan";
 import type { CommandContext } from "../books-frontend/src/core/guide/agent/types";
+import { createDefaultGuideAgentConfig } from "../books-frontend/src/core/config/guideAgent";
+import { applyGuidePatch, captureGuideFacts, guidePatchContext } from "../books-frontend/src/core/guide/patch";
+import { createDefaultGuidePlaylist, resolveGuidePlaylist } from "../books-frontend/src/core/guide/playlist";
+import { describeClaimProblems, sanitizeGuideTurn, type SanitizeGuideTurnOptions } from "../books-frontend/src/core/pipeline/guideInterpret";
 import { createDefaultGuideFactPolicies } from "../books-frontend/src/core/guide/factPolicy";
-import { availableViews, deriveJourney, styleChoiceOpen } from "../books-frontend/src/core/guide/journey";
+import { availableViews, BOOK_CHOICE_KINDS, deriveJourney, styleChoiceOpen, type Journey } from "../books-frontend/src/core/guide/journey";
 import { manuscriptHash } from "../books-frontend/src/core/guide/ownWords";
 import {
   likenessPhotosOf,
   lookDecided,
   lookFocusOf,
+  lookSourceOf,
   looksToDecide,
   portraitInputs,
   portraitIsCurrent,
   portraitReferencePlan,
+  portraitStatus,
+  styleRevert,
   withLooksDecided,
   withoutUsedPhotos,
+  withPresetStyle,
+  withStyleReverted,
 } from "../books-frontend/src/core/guide/portrait";
 import { authoringOf, withAuthoring } from "../books-frontend/src/core/guide/projectState";
 import { createDefaultStoryBrief } from "../books-frontend/src/core/story/brief";
 import { createVersionTree } from "../books-frontend/src/core/versioning";
 import { createDefaultConfig, LIKENESS_PHOTOS_MAX, type Project, type StoryCastMember } from "../books-frontend/src/core/types";
 import type { CheckResult } from "./guide-agent-invariants";
+
+/** The first open card about the people, past the book's own choices (format, layout, cover words). */
+const askedAboutPeople = (journey: Pick<Journey, "open">) =>
+  journey.open.find((item) => !BOOK_CHOICE_KINDS.has(item.kind));
+
 
 const failures: string[] = [];
 const notes: string[] = [];
@@ -113,7 +130,40 @@ const withPortraits = (project: Project): Project =>
   check(journey(named).suggestedView !== "cast", "The book pane points at an empty People tab.");
   const written = book([maya, leo]);
   check(!availableViews(written).includes("cast"), "The People tab shows before any portrait exists.");
+  // A settled look is something to look at again: the plate, and with it the
+  // editor, is reachable for any person before a single portrait is drawn
+  // (otherwise a photo given for the first person could never be changed once
+  // the second was asked).
+  const oneSettled = withLooksDecided(written, ["c1"]);
+  check(
+    availableViews(oneSettled).includes("cast"),
+    "A person whose look is settled has no plate to change it from before portraits exist.",
+  );
+  check(journey(oneSettled).suggestedView !== "cast", "A settled look pulls the book pane onto the People tab.");
+  check(
+    availableViews(
+      withMember(written, "c2", { appearance: "Curly red hair", lookSource: "describe", appearanceFromStory: false }),
+    ).includes("cast"),
+    "A description given for someone does not open the People tab.",
+  );
+  check(
+    !availableViews(withMember(written, "c2", { appearance: "Curly red hair", appearanceFromStory: true })).includes("cast"),
+    "A description the story analysis wrote (not the reader) opens the People tab.",
+  );
+  const drawingPortraits = deriveJourney(withLooksDecided(written, ["c1", "c2"]), policies, {
+    activeUnitIds: new Set(["c1"]),
+  });
+  check(
+    drawingPortraits.views.includes("cast") && drawingPortraits.suggestedView === "cast",
+    "The People tab doesn't open while the portraits are being drawn.",
+  );
   check(availableViews(withPortraits(withLooksDecided(written, ["c1", "c2"]))).includes("cast"), "The People tab doesn't arrive with the portraits.");
+  // Once the portraits are there they are what the book shows, not the story.
+  const drawn = journey(withPortraits(withLooksDecided(written, ["c1", "c2"])));
+  check(
+    drawn.suggestedView === "cast",
+    `The book points at the ${drawn.suggestedView ?? "no"} tab after the portraits arrive, not the people.`,
+  );
   const unsure = withAuthoring(book([maya, leo], STORY, "own"), {
     extraction: { storyHash: manuscriptHash(STORY), at: 1, names: ["Maya", "Leo"], unresolved: ["Leo"] },
   });
@@ -144,6 +194,14 @@ const withPortraits = (project: Project): Project =>
   const settled = withLooksDecided(written, ["c1", "c2"]);
   check(looksToDecide(settled).length === 0, "Settled looks are asked again.");
   check(styleChoiceOpen(settled, journey(settled)), "The style picker doesn't follow once everyone's look is settled.");
+  const styledViews = availableViews({
+    ...settled,
+    config: { ...settled.config, styleReady: true },
+  });
+  check(
+    styledViews.indexOf("story") < styledViews.indexOf("style"),
+    "The Style tab jumps in before the Story tab even though the story arrived first.",
+  );
 
   const drawn = withMember(settled, "c1", { sourceArt: [{ blobId: "art-1", mimeType: "image/png", createdAt: 1 }], lookSource: "drawing" });
   const derived: Project = {
@@ -154,7 +212,7 @@ const withPortraits = (project: Project): Project =>
   check(journey(derived).well?.kind === "portraits", "After the drawing set the style, the portraits aren't next.");
 
   const own = book([maya, leo], STORY, "own");
-  check(journey(own).well?.kind === "castLooks", "An own-words book isn't asked about looks once the story is read.");
+  check(askedAboutPeople(journey(own))?.kind === "castLooks", "An own-words book isn't asked about looks once the story is read.");
   const unread = withAuthoring(own, { extraction: undefined });
   check(!styleChoiceOpen(unread, journey(unread)), "The style picker shows while the own-words story is still being read.");
 }
@@ -227,6 +285,219 @@ const withPortraits = (project: Project): Project =>
   );
   const image = { blobId: "p-c1", mimeType: "image/png", createdAt: 1, inputs };
   check(portraitIsCurrent(used, image), "Dropping the used photos makes the portrait look outdated.");
+
+  const withOldPortrait = withAuthoring(used, {
+    portraits: {
+      c1: createVersionTree(image),
+    },
+  });
+  const restyled: Project = {
+    ...withOldPortrait,
+    config: {
+      ...withOldPortrait.config,
+      artStyle: {
+        presetId: "ink",
+        generationReference: {
+          imageUrl: "https://example.com/ink.webp",
+          storagePath: "public/artStyles/ink/generation-1.webp",
+          mimeType: "image/webp",
+          updatedAt: 2,
+        },
+      },
+    },
+  };
+  const restylePlan = portraitReferencePlan(restyled, briefCast(restyled)[0]!);
+  check(restylePlan.existing.length === 1, "A style redraw loses identity after its one-use photo was deleted.");
+  check(restylePlan.catalogStyle.length === 1, "A preset's generation reference is missing from a portrait redraw.");
+  const oneSlot = { maxReferenceImages: 1, maxImages: 1, referenceEditing: true };
+  check(
+    plannedPortraitReferences(restyled, "c1", oneSlot) === 1,
+    "A one-reference model doesn't reserve its only portrait reference for identity.",
+  );
+  check(
+    plannedPortraitReferences(restyled, "c1", { ...oneSlot, maxReferenceImages: 2, maxImages: 2 }) === 2,
+    "A two-reference model doesn't plan both identity and style.",
+  );
+  const changedIdentity = withMember(restyled, "c1", { kind: "animal", species: "fox", bodyPlan: "quadruped" });
+  check(
+    portraitReferencePlan(changedIdentity, briefCast(changedIdentity)[0]!).existing.length === 0,
+    "A portrait from the person's old species is reused after their identity changes.",
+  );
+}
+
+// --- A drawing is the book's look, for whoever has the first one ----------------------------------------
+// The first drawing on the book sets its look whichever person it is on; the
+// others are drawn in it. Taking a preset instead takes the drawings off the
+// book in the same change, and "keep the old look" puts both back.
+
+{
+  const art = (blobId: string, createdAt: number) => ({ blobId, mimeType: "image/png", createdAt });
+  const leoArt = art("leo-art", 10);
+  const mayaArt = art("maya-art", 20);
+  const fromLeo = (project: Project): Project => {
+    const withArt = withMember(project, "c2", { sourceArt: [leoArt], lookSource: "drawing", lookFromArt: "a small fox in a red scarf" });
+    return {
+      ...withArt,
+      anchors: [{ id: "a-leo", type: "character", name: "Leo", sourceArt: [leoArt], lookFromArt: "a small fox in a red scarf" } as never],
+      config: {
+        ...withArt.config,
+        styleReady: true,
+        artStyle: derivedStyleSelection({ stylePrompt: "soft pencil", derivedFromNames: ["Leo"], referenceArt: [leoArt] }),
+      },
+    };
+  };
+  const styled = fromLeo(withLooksDecided(book([maya, leo]), ["c1", "c2"]));
+  const [mayaMember, leoMember] = briefCast(styled) as [StoryCastMember, StoryCastMember];
+
+  const mayaRole = artworkStyleRole(styled, mayaMember);
+  check(mayaRole.kind === "follows" && mayaRole.name === "Leo", "A person without a drawing does not follow the drawing that set the look.");
+  check(artworkStyleRole(styled, leoMember).kind === "sets", "The person whose drawing set the look can't replace it.");
+  check(styleArtworkName(styled) === "Leo", "The Style tab can't name whose drawing the look comes from.");
+  const noStyleYet = withMember(book([maya, leo]), "c2", { sourceArt: [leoArt], lookSource: "drawing" });
+  check(artworkStyleRole(noStyleYet, mayaMember).kind === "sets", "The first drawing doesn't set the look while the book has none.");
+  const presetBook: Project = { ...book([maya, leo]), config: { ...book([maya, leo]).config, styleReady: true, artStyle: { presetId: "ink", origin: "preset" } } };
+  const presetRole = artworkStyleRole(presetBook, mayaMember);
+  check(presetRole.kind === "sets" && presetRole.replaces === "ink", "A drawing on a preset book doesn't say it replaces the preset.");
+
+  // Drawings that do not share a look still give one: the earliest drawing's.
+  const both = withMember(withMember(book([maya, leo]), "c1", { sourceArt: [mayaArt], lookSource: "drawing" }), "c2", { sourceArt: [leoArt], lookSource: "drawing" });
+  const clash = settleOnFirstArtwork(both, {
+    status: "conflict",
+    options: [
+      { id: "c1", name: "Maya", stylePrompt: "bold ink" },
+      { id: "c2", name: "Leo", stylePrompt: "soft pencil" },
+    ],
+  });
+  check(
+    clash.status === "resolved" && clash.style.customDescription === "soft pencil" && clash.style.referenceArt?.[0]?.blobId === "leo-art",
+    "A clash of drawings is not settled by the earliest one.",
+  );
+  check(
+    clash.status === "resolved" && clash.style.derivedFromNames?.join() === "Leo",
+    "The look from a clash doesn't name the earliest drawing's person.",
+  );
+
+  // Taking a preset takes the drawings off the book, together with the look.
+  const drawn = withPortraits(styled);
+  check(portraitStatus(drawn, "c2") === "current", "The test book's portrait isn't current to begin with.");
+  const preset = { presetId: "ink", origin: "preset" as const };
+  const switched = withPresetStyle(drawn, preset);
+  check(switched.config.artStyle.origin === "preset" && switched.config.artStyle.presetId === "ink", "The preset isn't the look after switching.");
+  check(collectSourceArtGroups(switched).length === 0 && !hasSourceArt(switched), "A drawing is left on the book after the look moved to a preset.");
+  const leoAfter = briefCast(switched)[1]!;
+  check(lookSourceOf(leoAfter) !== "drawing" && !leoAfter.sourceArt, "A person is still drawn from a drawing the book no longer uses.");
+  check(leoAfter.lookSource === "describe" && Boolean(leoAfter.appearance?.includes("fox")), "A retired drawing's description is lost.");
+  check(portraitStatus(switched, "c2") !== "current", "A portrait drawn from the retired drawing still counts as current.");
+  check((switched.anchors?.[0] as { sourceArt?: unknown } | undefined)?.sourceArt === undefined, "A character sheet still carries the retired drawing.");
+
+  // ...and "keep the old look" puts them back.
+  check(styleRevert(switched) !== null, "Taking back the drawing's look isn't offered after switching.");
+  const back = withStyleReverted(switched);
+  check(back.config.artStyle.origin === "derived" && styleIsFromArtwork(back), "Keeping the old look doesn't bring the drawing's style back.");
+  check(briefCast(back)[1]?.sourceArt?.[0]?.blobId === "leo-art" && briefCast(back)[1]?.lookSource === "drawing", "Keeping the old look doesn't bring the drawing back.");
+  check((back.anchors?.[0] as { sourceArt?: { blobId: string }[] } | undefined)?.sourceArt?.[0]?.blobId === "leo-art", "Keeping the old look leaves the character sheet without its drawing.");
+  check(portraitStatus(back, "c2") === "current", "Keeping the old look doesn't make the portrait current again.");
+  check(authoringOf(back).retiredArtwork === undefined, "A restored drawing is kept as retired too.");
+
+  // With nothing drawn there is nothing to take back, so nothing is kept.
+  const undrawn = withPresetStyle(styled, preset);
+  check(authoringOf(undrawn).retiredArtwork === undefined, "Retired drawings are kept although no portrait could use them again.");
+  check(!hasSourceArt(undrawn), "A drawing is left on an undrawn book after switching to a preset.");
+
+  // A preset to a preset leaves the plates alone.
+  const presetToPreset = withPresetStyle(presetBook, { presetId: "paper", origin: "preset" });
+  check(presetToPreset.config.artStyle.presetId === "paper", "A preset can't replace a preset.");
+
+  // The chat's skill asks first when the look is a drawing's, and not otherwise.
+  const impact = GUIDE_COMMANDS.setStyle!.impact!(
+    drawn,
+    { style: "ink" },
+    { ...ctx, styles: [{ id: "ink", label: "Ink" }] },
+  );
+  check(
+    impact.level === "destructive" && impact.effects.some((effect) => effect.kind === "retiresArtwork"),
+    "Switching away from a drawing's look in the chat doesn't ask first.",
+  );
+  const plain = GUIDE_COMMANDS.setStyle!.impact!(presetBook, { style: "paper" }, { ...ctx, styles: [{ id: "paper", label: "Paper" }] });
+  check(plain.level === "none" || plain.level === "reversible", "Switching between presets asks as if a drawing were lost.");
+
+  // The same change typed as a fact must not skip that question: the fact
+  // writer would take the drawing off the book without asking.
+  const patchContext = guidePatchContext({ audience: null, artStyles: null });
+  const [firstPreset, secondPreset] = patchContext.artStylePresetIds as [string, string];
+  const typed = applyGuidePatch(drawn, { artStyle: { presetId: firstPreset } }, patchContext);
+  check(!typed.applied.includes("artStyle"), "A typed style change was written over a drawing's look.");
+  check(
+    typed.project.config.artStyle.origin === "derived" && hasSourceArt(typed.project) && portraitStatus(typed.project, "c2") === "current",
+    "A typed style change took the drawing off the book without asking.",
+  );
+  const rerouted = typed.rejected.find((rejection) => rejection.key === "artStyle");
+  check(
+    rerouted?.reroute?.command === "setStyle" && rerouted.reroute.args.style === firstPreset,
+    "A refused typed style change isn't handed to the skill that asks.",
+  );
+  const typedCustom = applyGuidePatch(drawn, { artStyle: { presetId: null, customDescription: "a vintage postcard" } }, patchContext);
+  check(
+    !typedCustom.applied.includes("artStyle") && typedCustom.project.config.artStyle.origin === "derived",
+    "A typed custom style was written over a drawing's look.",
+  );
+  check(
+    typedCustom.rejected.find((rejection) => rejection.key === "artStyle")?.reroute?.args.style === "a vintage postcard",
+    "A typed custom style isn't handed to the skill that asks.",
+  );
+  const restated = applyGuidePatch(drawn, { artStyle: captureGuideFacts(drawn).artStyle }, patchContext);
+  check(restated.unchanged.includes("artStyle") && restated.rejected.length === 0, "Restating the drawing's own look is refused.");
+  const presetTyped = applyGuidePatch(
+    { ...presetBook, config: { ...presetBook.config, artStyle: { presetId: firstPreset, origin: "preset" } } },
+    { artStyle: { presetId: secondPreset } },
+    patchContext,
+  );
+  check(presetTyped.applied.includes("artStyle") && presetTyped.project.config.artStyle.presetId === secondPreset, "A typed style change on a preset book was refused.");
+
+  // From a message, the interpreter files the words as that skill's call, once.
+  const said = `Change the art style to ${firstPreset}`;
+  const turn = { intent: "revise" as const, reply: "Sure.", confidence: 0.9 };
+  const stated = { slot: "artStyle", value: { presetId: firstPreset }, evidence: said, confidence: 0.95 };
+  const reading = (skills: SanitizeGuideTurnOptions["skills"]): SanitizeGuideTurnOptions => ({
+    playlist: resolveGuidePlaylist(createDefaultGuidePlaylist()),
+    message: said,
+    project: drawn,
+    patchContext,
+    ...(skills ? { skills } : {}),
+  });
+  const skills = { enabled: ["setStyle" as const], floor: 0.5, max: 4 };
+  const filed = sanitizeGuideTurn({ ...turn, claims: [stated] }, reading(skills));
+  check(!("artStyle" in filed.patch), "A style claim over a drawing's look still reaches the patch.");
+  check(
+    filed.commands.length === 1 && filed.commands[0]!.id === "setStyle" && filed.commands[0]!.args.style === firstPreset,
+    "A style claim over a drawing's look isn't filed as the setStyle skill.",
+  );
+  check(filed.refused.some((claim) => claim.refusal === "rerouted"), "A rerouted style claim isn't accounted for in the turn log.");
+  check(describeClaimProblems(filed.refused) === "", "A rerouted style claim is sent back to the model for repair.");
+
+  const doubled = sanitizeGuideTurn(
+    { ...turn, claims: [stated], commands: [{ id: "setStyle", args: [{ name: "style", value: firstPreset }], evidence: said, confidence: 0.9 }] },
+    reading(skills),
+  );
+  check(doubled.commands.length === 1, "A style the model also asked for as a skill is asked twice.");
+
+  const withoutSkills = sanitizeGuideTurn({ ...turn, claims: [stated] }, reading(undefined));
+  check(
+    !("artStyle" in withoutSkills.patch) && withoutSkills.commands.length === 0 && withoutSkills.refused.some((claim) => claim.refusal === "rejected"),
+    "With skills off, a style claim over a drawing's look is written or lost without a record.",
+  );
+
+  // The skill it is filed as asks before it takes the drawing off.
+  const planned = planTurn({
+    project: drawn,
+    calls: filed.commands,
+    ctx: { ...ctx, styles: patchContext.artStylePresetIds.map((id) => ({ id, label: id })) },
+    config: createDefaultGuideAgentConfig(),
+  });
+  check(
+    planned.confirm !== null && planned.steps.length === 0 && planned.confirm.impact.effects.some((effect) => effect.kind === "retiresArtwork"),
+    "A filed style change doesn't ask before it takes the drawing off.",
+  );
 }
 
 function briefCast(project: Project): StoryCastMember[] {
@@ -236,6 +507,7 @@ function briefCast(project: Project): StoryCastMember[] {
 report.push("People and looks");
 report.push("  People tab with the first portrait; looks asked one person at a time, before the style");
 report.push("  a look tap starts that portrait; up to three photos, dropped once drawn");
+report.push("  the first drawing sets the look; a preset retires it, and keeping the old look restores it");
 notes.push("People and looks: tab timing, looks order, style gate, choosePersonLook, auto-start fallback and photos checked");
 
 export function checkGuideLooks(): CheckResult {

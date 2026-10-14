@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { describesSomeoneElse } from "../books-frontend/src/core/book/anchorDescription";
 import {
   dropLowImportance,
   foldWornItemsIntoOwners,
@@ -252,8 +253,36 @@ const { system } = renderTextPrompt(createDefaultPromptsConfig(), "storyAnalysis
   flags: { hasCastHints: false, hasArtLooks: false, hasArtworkNames: false },
 });
 assert.match(system, /ONE IDENTITY PER SUBJECT/);
+assert.match(system, /THE ROW IS THAT PERSON/);
 assert.match(system, /Do not extract clothing/);
+assert.equal(
+  describesSomeoneElse(
+    "Arthur",
+    "A young human girl, Arthur's twin sister, with bright eyes and a colorful dress.",
+  ),
+  true,
+);
+assert.equal(describesSomeoneElse("Amanda", "Arthur's twin sister, with a ponytail."), false);
+assert.equal(describesSomeoneElse("Arthur", "The twin sister of Arthur, in a dress."), true);
+const swapped = refineAnalyzedAnchors([
+  anchor({
+    name: "Arthur",
+    type: "character",
+    description: "A young human girl, Arthur's twin sister, in a dress.",
+  }),
+  anchor({ name: "Amanda", type: "character", description: "A girl with a ponytail." }),
+]);
+assert.equal(swapped.find((row) => row.name === "Arthur")?.description, "");
+assert.match(swapped.find((row) => row.name === "Amanda")?.description ?? "", /ponytail/);
 assert.doesNotMatch(system, /low = minor but still needs consistency/);
+
+// Twins stay two people, though one description names the other.
+const twins = refineAnalyzedAnchors([
+  anchor({ name: "Arthur", type: "character", description: "A small boy in a green shirt." }),
+  anchor({ name: "Amanda", type: "character", description: "Arthur's twin sister, with a ponytail." }),
+]);
+assert.deepEqual(twins.map((row) => row.name).sort(), ["Amanda", "Arthur"]);
+assert.match(twins.find((row) => row.name === "Arthur")?.description ?? "", /green shirt/);
 
 const previous = [
   anchor({

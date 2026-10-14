@@ -33,6 +33,7 @@ import { importInfraCosts } from "./infraCosts";
 import { deleteCustomCost, listCustomCosts, sweepCustomCosts, upsertCustomCost } from "./customCosts";
 import { getProductsConfig } from "./products";
 import {
+  blankPnl,
   getProjectMirror,
   listProjectMirrors,
   projectDocKey,
@@ -150,7 +151,7 @@ interface ScanResult {
   capped: boolean;
 }
 
-let scanCache: { key: string; at: number; value: ScanResult } | null = null;
+let scanCache: { key: string; at: number; value: Promise<ScanResult> } | null = null;
 
 /**
  * Briefly memoize a whole-collection scan.
@@ -211,45 +212,50 @@ async function scanUsers(settings: AdminSettings): Promise<ScanResult> {
   if (scanCache && scanCache.key === key && Date.now() - scanCache.at < SCAN_CACHE_TTL_MS) {
     return scanCache.value;
   }
-  ensureAdmin();
-  const isExcluded = makeExcluder(settings);
-  const users: ScannedUser[] = [];
-  let excludedCount = 0;
-  let scanned = 0;
-  let capped = false;
-  let pageToken: string | undefined;
-  do {
-    const page = await getAuth().listUsers(1000, pageToken);
-    for (const u of page.users) {
-      scanned += 1;
-      if (isExcluded(u.email ?? null)) {
-        excludedCount += 1;
-        continue;
+  const value = (async (): Promise<ScanResult> => {
+    ensureAdmin();
+    const isExcluded = makeExcluder(settings);
+    const users: ScannedUser[] = [];
+    let excludedCount = 0;
+    let scanned = 0;
+    let capped = false;
+    let pageToken: string | undefined;
+    do {
+      const page = await getAuth().listUsers(1000, pageToken);
+      for (const u of page.users) {
+        scanned += 1;
+        if (isExcluded(u.email ?? null)) {
+          excludedCount += 1;
+          continue;
+        }
+        const created = parseTime(u.metadata.creationTime);
+        const lastActive =
+          parseTime(u.metadata.lastRefreshTime ?? undefined) ??
+          parseTime(u.metadata.lastSignInTime) ??
+          created;
+        users.push({
+          uid: u.uid,
+          email: u.email ?? null,
+          displayName: u.displayName ?? null,
+          source: sourceOf(u),
+          createdAt: created,
+          lastActiveAt: lastActive,
+          emailVerified: u.emailVerified,
+          isAnonymous: u.providerData.length === 0,
+        });
       }
-      const created = parseTime(u.metadata.creationTime);
-      const lastActive =
-        parseTime(u.metadata.lastRefreshTime ?? undefined) ??
-        parseTime(u.metadata.lastSignInTime) ??
-        created;
-      users.push({
-        uid: u.uid,
-        email: u.email ?? null,
-        displayName: u.displayName ?? null,
-        source: sourceOf(u),
-        createdAt: created,
-        lastActiveAt: lastActive,
-        emailVerified: u.emailVerified,
-        isAnonymous: u.providerData.length === 0,
-      });
-    }
-    pageToken = page.pageToken;
-    if (scanned >= MAX_USERS_SCAN) {
-      capped = Boolean(pageToken);
-      break;
-    }
-  } while (pageToken);
+      pageToken = page.pageToken;
+      if (scanned >= MAX_USERS_SCAN) {
+        capped = Boolean(pageToken);
+        break;
+      }
+    } while (pageToken);
 
-  const value: ScanResult = { users, excludedCount, capped };
+    return { users, excludedCount, capped };
+  })().catch((err) => {
+    scanCache = null;
+    throw err;
+  });
   scanCache = { key, at: Date.now(), value };
   return value;
 }
@@ -2456,7 +2462,10 @@ export function registerAnalyticsRoutes(app: Express): void {
       const rows = mirrors.map((m) => ({
         ...m,
         key: projectDocKey(m.uid, m.projectId),
-        pnl: finance.byProject.get(projectDocKey(m.uid, m.projectId)) ?? null,
+        // Never null: a book with no money events in the window is a zero P&L,
+        // not an unknown one — otherwise the UI had to invent its own fallback
+        // (AI-cost-only) and the Cost and Net columns disagreed.
+        pnl: finance.byProject.get(projectDocKey(m.uid, m.projectId)) ?? blankPnl(),
       }));
       res.json({
         projects: rows,
@@ -2504,7 +2513,7 @@ export function registerAnalyticsRoutes(app: Express): void {
           limit: 500,
         }),
       ]);
-      res.json({ project: mirror, pnl: finance.byProject.get(key) ?? null, runs });
+      res.json({ project: mirror, pnl: finance.byProject.get(key) ?? blankPnl(), runs });
     } catch (err) {
       handleError(res, err);
     }

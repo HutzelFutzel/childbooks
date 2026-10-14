@@ -16,9 +16,12 @@ import { renderTextPrompt } from "../prompts/render";
 import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import { withRetry } from "../pipeline/retry";
+import { describesSomeoneElse } from "../book/anchorDescription";
 import { briefOf, namedCast, newCastMember } from "../story/brief";
 import { CAST_KINDS } from "../story/castKinds";
-import { BODY_PLANS, type BodyPlan, type Project, type StoryCastMember } from "../types";
+import { relationsOf, twinGroups, withRelation } from "../story/relations";
+import { BODY_PLANS, type BodyPlan, type Project, type StoryBrief, type StoryCastMember } from "../types";
+import { linkSameAge } from "./sameAge";
 import { authoringOf, withAuthoring } from "./projectState";
 
 export const OWN_WORDS_MAX_CHARS = 40_000;
@@ -36,9 +39,19 @@ const personSchema = z.object({
   confidence: z.number().min(0).max(1),
 });
 
+const relationSchema = z.object({
+  /** Two or more names from `people`. */
+  names: z.array(z.string().min(1).max(80)).min(2).max(6),
+  type: z.enum(["twins", "siblings"]),
+  /** The story's own words that say it, copied exactly. */
+  evidence: z.string().max(300),
+});
+
 export const manuscriptCastSchema = z.object({
   people: z.array(personSchema).max(24),
   unclear: z.array(z.string().max(80)).max(24),
+  /** How people belong together, when the text says so. */
+  relations: z.array(relationSchema).max(12).nullable().optional(),
 });
 
 export type ManuscriptCast = z.infer<typeof manuscriptCastSchema>;
@@ -89,7 +102,34 @@ export function sanitizeManuscriptCast(raw: ManuscriptCast, story: string): Manu
       const key = name.toLowerCase();
       return text.includes(key) && !settled.has(key);
     }),
+    relations: groundedRelations(raw.relations ?? [], people, text),
   };
+}
+
+function squeezed(text: string): string {
+  return text.toLowerCase().replace(/[\s’'"“”‘.,!?;:…–—-]+/gu, " ").trim();
+}
+
+/**
+ * Relations the text itself shows: every name is a person found above, and
+ * the quoted words are really in the story. Twins are often only implied
+ * ("two babies at the same time"), so the quote is what makes it a fact.
+ */
+function groundedRelations(
+  raw: NonNullable<ManuscriptCast["relations"]>,
+  people: ManuscriptCast["people"],
+  text: string,
+): NonNullable<ManuscriptCast["relations"]> {
+  const story = squeezed(text);
+  const known = new Map(people.map((person) => [person.name.toLowerCase(), person.name]));
+  const kept: NonNullable<ManuscriptCast["relations"]> = [];
+  for (const relation of raw) {
+    const names = [...new Set(relation.names.map((name) => known.get(name.trim().toLowerCase())).filter((name): name is string => Boolean(name)))];
+    const quote = squeezed(relation.evidence);
+    if (names.length < 2 || quote.length < 8 || !story.includes(quote)) continue;
+    kept.push({ names, type: relation.type, evidence: relation.evidence.trim() });
+  }
+  return kept;
 }
 
 /**
@@ -158,10 +198,22 @@ export function withManuscriptCast(project: Project, found: ManuscriptCast, stor
     };
     cast.push(member);
   }
-  const next: Project = {
+  let nextBrief: StoryBrief = { ...brief, mode: "own", cast };
+  for (const relation of found.relations ?? []) {
+    const ids = relation.names
+      .map((name) => cast.find((member) => member.name.trim().toLowerCase() === name.toLowerCase())?.id)
+      .filter((id): id is string => Boolean(id));
+    if (ids.length < 2) continue;
+    // A relation the family set themselves is theirs; the reading only adds.
+    if (relationsOf(nextBrief).some((existing) => ids.every((id) => existing.ids.includes(id)))) continue;
+    nextBrief = withRelation(nextBrief, { ids, type: relation.type });
+  }
+  let next: Project = {
     ...project,
-    config: { ...project.config, storyBrief: { ...brief, mode: "own", cast } },
+    config: { ...project.config, storyBrief: nextBrief },
   };
+  // Twins share an age: one the story states is carried to the other.
+  next = linkSameAge(next, twinGroups(nextBrief)).project;
   return withAuthoring(next, {
     extraction: {
       storyHash: manuscriptHash(story),
@@ -226,11 +278,19 @@ function storyLookPatch(
   anchor: { description?: string; bodyPlan?: string },
 ): Partial<StoryCastMember> | null {
   if (familyOwnsLook(member)) return null;
-  const appearance = anchor.description?.trim().slice(0, 600);
+  const incoming = anchor.description?.trim().slice(0, 600) ?? "";
+  const incomingStolen = describesSomeoneElse(member.name, incoming);
+  const heldStolen =
+    Boolean(member.appearanceFromStory) && describesSomeoneElse(member.name, member.appearance ?? "");
   const bodyPlan = asBodyPlan(anchor.bodyPlan);
   const patch: Partial<StoryCastMember> = {};
-  if (appearance && appearance !== member.appearance?.trim()) {
-    patch.appearance = appearance;
+  // A reading that described the sister on the brother's row is not a look.
+  // Drop it, including one already copied onto the plate.
+  if (heldStolen && (incomingStolen || !incoming)) {
+    patch.appearance = "";
+    patch.appearanceFromStory = false;
+  } else if (incoming && !incomingStolen && incoming !== member.appearance?.trim()) {
+    patch.appearance = incoming;
     patch.appearanceFromStory = true;
   }
   if (bodyPlan && bodyPlan !== member.bodyPlan) patch.bodyPlan = bodyPlan;
@@ -309,6 +369,25 @@ export function withAnalysisCharacters(
     cast.push({ ...member, ...(storyLookPatch(member, anchor) ?? {}) });
     for (const key of keys) seen.add(key);
     changed = true;
+  }
+  // Twins are drawn the same age: a stated age wins, else one estimate for both.
+  for (const relation of relationsOf({ ...brief, cast })) {
+    if (relation.type !== "twins") continue;
+    const twins = relation.ids
+      .map((id) => cast.findIndex((member) => member.id === id))
+      .filter((index) => index >= 0);
+    const stated = twins.map((index) => cast[index]!).find((member) => member.age !== undefined || member.ageMonths !== undefined);
+    const years = stated
+      ? (stated.age ?? Math.floor((stated.ageMonths ?? 0) / 12))
+      : (twins.map((index) => cast[index]!.visualAge).find((age) => age?.source === "story") ??
+          cast[twins[0] ?? -1]?.visualAge)?.years;
+    if (years === undefined) continue;
+    for (const index of twins) {
+      const member = cast[index]!;
+      if (member.age !== undefined || member.ageMonths !== undefined || member.visualAge?.years === years) continue;
+      cast[index] = { ...member, visualAge: { years, source: member.visualAge?.source ?? "suggested" } };
+      changed = true;
+    }
   }
   if (!changed) return project;
   return { ...project, config: { ...project.config, storyBrief: { ...brief, cast } } };

@@ -5,7 +5,14 @@
  * message. The planner reads the same numbers to know whether a change is
  * safe to run without asking: if Undo will bring it back, a confirmation card
  * only gets in the way.
+ *
+ * The page design is not in that snapshot: it is large, and a typed change
+ * touches a page or two. A turn that changed it keeps the earlier version of
+ * just the pages it changed (`designPages`, `null` for a page that did not
+ * exist) and of the book-wide type settings (`designBase`), so Undo is as small
+ * as the change was.
  */
+import type { BookDesign } from "../../design";
 import type { Project } from "../../types";
 import { GUIDE_RESTORE_MAX_CHARS } from "../session";
 
@@ -22,4 +29,48 @@ export function snapshotJson(project: Project): string {
 /** Whether a snapshot of this book fits on the message, so Undo will be there. */
 export function canUndo(project: Project): boolean {
   return snapshotJson(project).length <= GUIDE_RESTORE_MAX_CHARS;
+}
+
+type DesignBase = Omit<BookDesign, "pages">;
+
+function designBaseOf(design: BookDesign): DesignBase {
+  const { pages: _pages, ...base } = design;
+  return base;
+}
+
+const sameJson = (a: unknown, b: unknown): boolean => a === b || JSON.stringify(a) === JSON.stringify(b);
+
+/**
+ * The snapshot for a turn that went from `before` to `after`: the usual fields,
+ * plus the earlier version of whatever part of the design the turn changed.
+ */
+export function snapshotForChange(before: Project, after: Project): string {
+  const out = JSON.parse(snapshotJson(before)) as Record<string, unknown>;
+  const was = before.design;
+  const now = after.design;
+  if (was && now && was !== now) {
+    const pages: Record<string, unknown> = {};
+    for (const id of new Set([...Object.keys(was.pages ?? {}), ...Object.keys(now.pages ?? {})])) {
+      if (!sameJson(was.pages?.[id], now.pages?.[id])) pages[id] = was.pages?.[id] ?? null;
+    }
+    if (Object.keys(pages).length > 0) out.designPages = pages;
+    if (!sameJson(designBaseOf(was), designBaseOf(now))) out.designBase = designBaseOf(was);
+  }
+  return JSON.stringify(out);
+}
+
+/** Put the earlier design pages and book-wide type settings of a snapshot back. */
+export function restoreDesign(project: Project, saved: Record<string, unknown>): Project {
+  const design = project.design;
+  if (!design) return project;
+  const pageBack = saved.designPages as Record<string, unknown> | undefined;
+  const baseBack = saved.designBase as DesignBase | undefined;
+  if (!pageBack && !baseBack) return project;
+  const pages = { ...(design.pages ?? {}) } as Record<string, unknown>;
+  for (const [id, page] of Object.entries(pageBack ?? {})) {
+    if (page === null) delete pages[id];
+    else pages[id] = page;
+  }
+  // The book-wide settings come back whole, so one that did not exist yet goes away too.
+  return { ...project, design: { ...(baseBack ?? designBaseOf(design)), pages } as BookDesign };
 }

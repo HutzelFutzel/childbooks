@@ -66,6 +66,8 @@ import { checkGuideCover } from "./guide-cover-invariants";
 import { checkGuideOwnWords } from "./guide-own-words-invariants";
 import { checkGuideLooks } from "./guide-looks-invariants";
 import { checkGuideCast } from "./guide-cast-invariants";
+import { checkGuideRedraw } from "./guide-redraw-invariants";
+import { checkGuideCards } from "./guide-card-invariants";
 import { checkEnUsCopy } from "./en-us-copy-lint";
 
 /**
@@ -717,6 +719,15 @@ failures.push(...ownWordsChecks.failures);
 notes.push(...ownWordsChecks.notes);
 cases += ownWordsChecks.cases;
 
+const redrawChecks = checkGuideRedraw();
+failures.push(...redrawChecks.failures);
+notes.push(...redrawChecks.notes);
+cases += redrawChecks.cases;
+const cardChecks = checkGuideCards();
+failures.push(...cardChecks.failures);
+notes.push(...cardChecks.notes);
+cases += cardChecks.cases;
+
 const enUs = checkEnUsCopy();
 failures.push(...enUs.failures);
 notes.push(...enUs.notes);
@@ -779,6 +790,10 @@ for (const line of looks.report) console.log(line);
 
 console.log();
 for (const line of castChecks.report) console.log(line);
+
+console.log();
+for (const line of redrawChecks.report) console.log(line);
+for (const line of cardChecks.report) console.log(line);
 
 console.log(`\nLegacy ledger (${MANIFEST})`);
 if (marked.length === 0) {

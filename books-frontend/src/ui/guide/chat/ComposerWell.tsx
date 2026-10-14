@@ -17,7 +17,7 @@ import {
   Search,
   Sparkles,
 } from "lucide-react";
-import { resolveArtStyles } from "../../../core/config/artStyles";
+import { resolveArtStyles, type ArtStyleDefinition } from "../../../core/config/artStyles";
 import { enabledAudienceProfiles, resolveAudienceProfile } from "../../../core/config/audience";
 import type { AudienceProfile } from "../../../core/config/audienceCatalog";
 import { ART_STYLE_PRESETS } from "../../../core/config/options";
@@ -42,7 +42,7 @@ import {
   startRedraw,
 } from "../../../state/chatGeneration";
 import { quoteKey, useChatStudio, type RedrawRequest } from "../../../state/chatStudio";
-import { redrawQuoteParts } from "../../../state/typedPictures";
+import { redrawInstructions, redrawNames, redrawQuoteParts } from "../../../state/typedPictures";
 import { chooseAndStartPortraits, styleChoiceStartUnits } from "../../../state/portraitAutoStart";
 import { cn } from "../../lib/cn";
 import {
@@ -67,9 +67,11 @@ import {
   useOfferableFormats,
 } from "../../hooks/useOfferableFormats";
 import { useBlobUrl } from "../../hooks/useBlobUrl";
+import { useStylePreviewUrls, useStyleStrip } from "../../hooks/useStylePreviews";
 import { wellIn } from "../motion";
 import { lookDecided } from "../../../core/guide/portrait";
 import type { BookViewId } from "../../../core/guide/journey";
+import { cardId } from "../../../core/guide/cardDeck";
 import type { ChatWell } from "../useChatJourney";
 import type { GuideTarget } from "../../../core/guide/target";
 import type { PreflightCode } from "../../../core/print/preflight";
@@ -81,6 +83,7 @@ import { PaidAction } from "./PaidAction";
 import { AgentWellBody, agentWellTitle, isAgentWellItem } from "./AgentWells";
 import { StoryBriefWell } from "./StoryBriefWell";
 import { CastLooksWell } from "./CastLooksWell";
+import { CastSwitcher } from "./CastSwitcher";
 import { CoverWordsWell } from "./CoverWordsWell";
 import { useHandOverStory } from "../useHandOverStory";
 import { PortraitAgeRow } from "./PortraitAgeRow";
@@ -92,6 +95,8 @@ import {
 
 export function ComposerWell({
   well,
+  cardKey,
+  person = true,
   project,
   onView,
   onOpenUnit,
@@ -99,6 +104,10 @@ export function ComposerWell({
   onDefault,
 }: {
   well: ChatWell | null;
+  /** Who the card is (`cardId`): the same card keeps its place whatever it shows. */
+  cardKey?: string | null;
+  /** This card carries the face the reader selected. */
+  person?: boolean;
   project: Project;
   onView: (view: BookViewId) => void;
   onOpenUnit: (unitId: string) => void;
@@ -106,10 +115,12 @@ export function ComposerWell({
   onDefault: (run: (() => void) | null) => void;
 }) {
   const chip = useChatStudio((s) => s.chip);
-  const selected = selectedPerson(project, chip);
+  const selected = person ? selectedPerson(project, chip) : null;
   const shown = well?.kind === "castLooks" && selected
     ? { ...well, castId: selected.id, name: selected.name.trim() }
     : well;
+  const id = shown ? cardKey ?? cardId(shown) : selected ? `person:${selected.id}` : null;
+  const initial = useArrival(project.id, id);
   if (!shown && !selected) return null;
   const closePerson = () => useChatStudio.getState().setChip(null);
   // The face they clicked. Beside another step it only edits; it does not replace that step.
@@ -130,7 +141,7 @@ export function ComposerWell({
       <motion.section
         key={`person:${selected!.id}`}
         variants={wellIn}
-        initial="hidden"
+        initial={initial}
         animate="show"
         exit="exit"
         className="w-full rounded-2xl bg-white p-3.5 shadow-soft ring-1 ring-ink-900/8 sm:p-4"
@@ -141,9 +152,9 @@ export function ComposerWell({
   }
   return (
     <motion.section
-      key={wellKey(shown)}
+      key={id ?? undefined}
       variants={wellIn}
-      initial="hidden"
+      initial={initial}
       animate="show"
       exit="exit"
       className="w-full rounded-2xl bg-white p-3.5 shadow-soft ring-1 ring-ink-900/8 sm:p-4"
@@ -154,15 +165,22 @@ export function ComposerWell({
         {shown.kind === "storyBrief" ? (
           <StoryBriefWell project={project} focus={shown.focus} onDefault={onDefault} />
         ) : shown.kind === "castLooks" ? (
-          <CastLooksWell
-            key={shown.castId}
-            project={project}
-            castId={shown.castId}
-            name={shown.name}
-            quiet={personLookDecided(project, shown.castId)}
-            onClose={selected ? closePerson : undefined}
-            onDefault={onDefault}
-          />
+          <>
+            <CastSwitcher
+              project={project}
+              currentId={shown.castId}
+              offeredId={well?.kind === "castLooks" ? well.castId : shown.castId}
+            />
+            <CastLooksWell
+              key={shown.castId}
+              project={project}
+              castId={shown.castId}
+              name={shown.name}
+              quiet={personLookDecided(project, shown.castId)}
+              onClose={selected ? closePerson : undefined}
+              onDefault={onDefault}
+            />
+          </>
         ) : shown.kind === "coverWords" ? (
           <CoverWordsWell project={project} onDefault={onDefault} />
         ) : (
@@ -179,6 +197,20 @@ export function ComposerWell({
       </div>
     </motion.section>
   );
+}
+
+/**
+ * Cards already seen on this book don't slide in again when the layout around
+ * them changes: the same card is still there, not a new one.
+ */
+const seenCards = new Set<string>();
+function useArrival(projectId: string, id: string | null): "hidden" | false {
+  const key = id ? `${projectId}:${id}` : null;
+  const seen = key !== null && seenCards.has(key);
+  useEffect(() => {
+    if (key) seenCards.add(key);
+  }, [key]);
+  return seen ? false : "hidden";
 }
 
 function TaskHeader({ well }: { well: ChatWell }) {
@@ -287,42 +319,6 @@ function TaskHeader({ well }: { well: ChatWell }) {
       </span>
     </header>
   );
-}
-
-function wellKey(well: ChatWell): string {
-  switch (well.kind) {
-    case "portraits":
-      return `portraits:${well.stale ? "redraw:" : ""}${well.castIds.join(",")}`;
-    case "bookPrepFix":
-      return `book-prep:${well.unitIds.join(",")}`;
-    case "pageFix":
-    case "printFix":
-      return `${well.kind}:${well.unitId}`;
-    case "skipFact":
-      return `skip:${well.fact}`;
-    case "storyBrief":
-      return "story-brief";
-    case "castLooks":
-      return `looks:${well.castId}`;
-    case "lookAlike":
-      return `look-alike:${well.ids.join(",")}`;
-    case "audienceConfirm":
-      return `audience:${well.bandId}:${well.differ ? "differ" : well.optional ? "optional" : "ask"}`;
-    case "castAges":
-      return `ages:${well.people.map((person) => person.id).join(",")}`;
-    case "redraw":
-      return `redraw:${JSON.stringify(well.request.target)}`;
-    case "manuscriptChoice":
-      return well.kind;
-    case "agentConfirm":
-      return `confirm:${well.confirm.hash}`;
-    case "agentAsk":
-      return `ask:${well.call.id}:${well.arg}`;
-    case "agentBlocked":
-      return `blocked:${well.remedy.requirement}`;
-    default:
-      return well.kind;
-  }
 }
 
 function selectedPerson(project: Project, chip: GuideTarget | null) {
@@ -540,6 +536,9 @@ function WellBody({
               ? t("bookRefused", { error: well.error })
               : t("bookMissing", { count: well.missing })}
           </p>
+          {/* Always a way forward. A run the server gave up on (`settled`) still
+              leaves pictures undrawn, and the reader must be able to ask again;
+              only what comes out is ever charged. */}
           <BookUpdateAction project={project} label={t("finishBook")} onDefault={onDefault} />
         </div>
       );
@@ -614,7 +613,11 @@ function StyleChoiceWell({ project }: { project: Project }) {
     );
   }, [query, styles]);
   // The style tap starts the portraits at this quote, so it is shown before the tap.
-  const start = useMemo(() => styleChoiceStartUnits(project), [project]);
+  const mayUseGenerationReference = styles.some((style) => style.generationReference);
+  const start = useMemo(
+    () => styleChoiceStartUnits(project, { mayUseGenerationReference }),
+    [mayUseGenerationReference, project],
+  );
   const units = useStableUnits(start.units);
   const key = units.length > 0 ? quoteKey("portraits", units) : null;
   const ensureQuote = useChatStudio((s) => s.ensureQuote);
@@ -662,7 +665,6 @@ function StyleChoiceWell({ project }: { project: Project }) {
       <div className="max-h-[min(34rem,62vh)] overflow-y-auto overscroll-contain pr-0.5">
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {shown.map((style) => {
-            const image = style.examples[0]?.imageUrl;
             const swatch = STYLE_SWATCH.get(style.id) ?? "from-violet-200 via-fuchsia-100 to-pink-200";
             return (
               <button
@@ -671,17 +673,7 @@ function StyleChoiceWell({ project }: { project: Project }) {
                 onClick={() => pick(style.id, style.label)}
                 className="group min-w-0 text-left focus-visible:outline-none"
               >
-                <span
-                  className={cn(
-                    "block aspect-4/5 overflow-hidden rounded-xl bg-linear-to-br shadow-soft ring-1 ring-ink-900/10 transition group-hover:-translate-y-0.5 group-hover:shadow-lifted group-hover:ring-ink-400 group-focus-visible:ring-2 group-focus-visible:ring-ink-500",
-                    !image && swatch,
-                  )}
-                >
-                  {image && (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={image} alt="" className="size-full object-cover" />
-                  )}
-                </span>
+                <StylePlate style={style} swatch={swatch} />
                 <span className="mt-1.5 block truncate px-0.5 font-display text-[13px] font-medium text-ink-900">
                   {style.label}
                 </span>
@@ -697,6 +689,25 @@ function StyleChoiceWell({ project }: { project: Project }) {
         )}
       </div>
     </section>
+  );
+}
+
+/** A look's plate: the admin's picture, else the reader's own first cover in that look, else a swatch. */
+function StylePlate({ style, swatch }: { style: ArtStyleDefinition; swatch: string }) {
+  const strip = useStyleStrip({ key: style.id, adminExamples: style.examples, limit: 1 });
+  const [image] = useStylePreviewUrls(strip);
+  return (
+    <span
+      className={cn(
+        "block aspect-4/5 overflow-hidden rounded-xl bg-linear-to-br shadow-soft ring-1 ring-ink-900/10 transition group-hover:-translate-y-0.5 group-hover:shadow-lifted group-hover:ring-ink-400 group-focus-visible:ring-2 group-focus-visible:ring-ink-500",
+        !image && swatch,
+      )}
+    >
+      {image && (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={image} alt="" className="size-full object-cover" />
+      )}
+    </span>
   );
 }
 
@@ -1168,7 +1179,15 @@ function BookLookRow({ project, onChange }: { project: Project; onChange: () => 
   const styles = useMemo(() => resolveArtStyles(artStyles), [artStyles]);
   const current = styles.find((style) => style.id === project.config.artStyle.presetId);
   const referenceUrl = useBlobUrl(project.config.artStyle.referenceArt?.[0]?.blobId);
-  const imageUrl = referenceUrl ?? current?.examples[0]?.imageUrl;
+  // Without a drawing to show, the look's own picture: the admin's, or the first
+  // cover this reader drew in it.
+  const lookStrip = useStyleStrip({
+    key: project.config.artStyle.customStyle?.id ?? project.config.artStyle.presetId,
+    adminExamples: current?.examples,
+    limit: 1,
+  });
+  const [lookUrl] = useStylePreviewUrls(lookStrip);
+  const imageUrl = referenceUrl ?? lookUrl;
   return (
     <div className="flex w-full items-center justify-between gap-3 rounded-xl border border-ink-100 bg-white/80 p-2 shadow-xs">
       <span className="relative flex h-14 w-20 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[#eee8de] p-1.5">
@@ -1308,19 +1327,20 @@ function RedrawAction({
   onDefault: (run: (() => void) | null) => void;
 }) {
   const label = useGuideLabel();
-  const { target, instruction } = request;
+  const { target } = request;
   const project = useProjectsStore((s) => s.current());
   const parts = project ? redrawQuoteParts(project, request) : null;
   const units = useStableUnits(parts?.units ?? []);
+  // One button for everyone the sentence named: one price, one tap.
   const text =
-    target.kind === "person" ? label("redrawTarget", { names: [target.name] }) : label("redrawPage");
+    target.kind === "person" ? label("redrawTarget", { names: redrawNames(request) }) : label("redrawPage");
   return (
     <PaidAction
       purpose="redraw"
       units={units}
       extraKey={parts?.extraKey ?? ""}
       label={text}
-      start={echoWhenStarted(text, (quote) => startRedraw(quote, instruction))}
+      start={echoWhenStarted(text, (quote) => startRedraw(quote, redrawInstructions(request)))}
       onDefault={onDefault}
     />
   );

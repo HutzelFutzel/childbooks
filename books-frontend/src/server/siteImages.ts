@@ -5,6 +5,7 @@
  * the public doc (public read rules), mirroring {@link getBrandingConfig}. Used
  * so the landing page can render admin-uploaded art during SSR (good LCP + SEO).
  */
+import { cache } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import { getFirebaseDb } from "../lib/firebase";
 import {
@@ -13,11 +14,11 @@ import {
   type SiteImagesConfig,
 } from "../core/config/siteImages";
 
-export async function getSiteImagesConfig(): Promise<SiteImagesConfig> {
+export const getSiteImagesConfig = cache(async (): Promise<SiteImagesConfig> => {
   try {
     const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "siteImages"));
     return normalizeSiteImagesConfig(snap.exists() ? snap.data() : undefined);
   } catch {
     return createDefaultSiteImagesConfig();
   }
-}
+});

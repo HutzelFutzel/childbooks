@@ -196,6 +196,7 @@ function parseList(text: string): string[] {
 const AREA_LABELS: Record<CommandArea, string> = {
   path: "How the book starts",
   book: "Book details",
+  design: "Finished pages",
   story: "Story",
   people: "People",
   places: "Places and things",

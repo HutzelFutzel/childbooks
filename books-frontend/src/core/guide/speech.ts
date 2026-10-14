@@ -127,11 +127,22 @@ export const guideAskSchema = z.object({
 });
 
 /**
+ * "The other child" / "another kid": a person the reader did not name.
+ * A number beside a name is an age, not a second child, so this is never inferred.
+ */
+const UNNAMED_OTHER_CHILD = /\b(?:another|other|second|third)\s+(?:child|children|kid|kids)\b/iu;
+
+export function assumesAnotherChild(text: string): boolean {
+  return UNNAMED_OTHER_CHILD.test(text);
+}
+
+/**
  * Whether a model-written follow-up may replace the fallback question.
  *
  * The model chooses the sentence. It may not ask for a fact that is not still
  * missing, and it may not stay silent while a required fact is empty. People
- * who share an age have to be named together.
+ * who share an age have to be named together. It may not invent a child the
+ * reader did not name.
  */
 export function acceptGuideQuestion(args: {
   text: string;
@@ -142,9 +153,12 @@ export function acceptGuideQuestion(args: {
   ageNames: readonly string[];
   /** Groups the reader said share an age, by name. */
   sameAgeGroups: readonly (readonly string[])[];
+  /** People already in the book. Fewer than two: there is no "other child". */
+  knownNames?: readonly string[];
 }): boolean {
   const text = args.text.trim();
   if (!text) return false;
+  if (assumesAnotherChild(text) && (args.knownNames?.length ?? 0) < 2) return false;
   const missing = new Set(args.missing);
   if (args.asks.some((id) => !missing.has(id))) return false;
   if (args.requiredMissing.length > 0 && args.asks.length === 0) return false;

@@ -266,6 +266,7 @@ export const openaiImageProvider: ImageProvider = {
         throw new ProviderError("No image returned", {
           kind: "parse",
           provider: "openai",
+          retryable: true,
         });
       }
       return { base64: b64, mimeType: outputMime(req), model: req.model };
@@ -295,6 +296,7 @@ export const openaiImageProvider: ImageProvider = {
       throw new ProviderError("No image returned", {
         kind: "parse",
         provider: "openai",
+        retryable: true,
       });
     }
     return { base64: b64, mimeType: outputMime(req), model: req.model };

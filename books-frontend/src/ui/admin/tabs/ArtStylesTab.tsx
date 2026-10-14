@@ -10,6 +10,7 @@ import {
   EyeOff,
   ImagePlus,
   Plus,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -146,7 +147,10 @@ function StyleEditor({
 }) {
   const upload = useAppConfigStore((state) => state.uploadArtStyleImage);
   const removeImage = useAppConfigStore((state) => state.removeArtStyleImage);
+  const uploadReference = useAppConfigStore((state) => state.uploadArtStyleReference);
+  const clearReference = useAppConfigStore((state) => state.clearArtStyleReference);
   const inputRef = useRef<HTMLInputElement>(null);
+  const referenceInputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
 
   const patch = (next: Partial<ArtStyleDefinition>) =>
@@ -229,6 +233,58 @@ function StyleEditor({
     }
   };
 
+  const pickReference = async (file: File | undefined) => {
+    if (referenceInputRef.current) referenceInputRef.current.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast.error(`${file.name} is not an image.`);
+      return;
+    }
+    setBusy(true);
+    try {
+      const payload = await readBase64(file);
+      const generationReference = await uploadReference(
+        style.id,
+        payload.base64,
+        payload.mimeType,
+      );
+      const persisted = useAppConfigStore
+        .getState()
+        .artStyles.styles.find((item) => item.id === style.id);
+      onChange({
+        ...style,
+        generationReference,
+        updatedAt: persisted?.updatedAt ?? style.updatedAt,
+      });
+      toast.success("Generation reference updated for new books.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Reference upload failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeReference = async () => {
+    setBusy(true);
+    try {
+      await clearReference(style.id);
+      const persisted = useAppConfigStore
+        .getState()
+        .artStyles.styles.find((item) => item.id === style.id);
+      const { generationReference: _removed, ...withoutReference } = style;
+      void _removed;
+      onChange({
+        ...withoutReference,
+        updatedAt: persisted?.updatedAt ?? style.updatedAt,
+      });
+      toast.success("New books will use the text style when no reference is available.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not clear the reference.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div className="min-w-0 space-y-5">
       <section className="rounded-2xl border border-ink-200 bg-white p-4 sm:p-5">
@@ -290,6 +346,83 @@ function StyleEditor({
             </span>
             <span className="mt-0.5 text-xs text-ink-500">
               Use a 4:3 image, ideally 1200 × 900 px or larger.
+            </span>
+          </button>
+        )}
+      </section>
+
+      <section className="rounded-2xl border border-ink-200 bg-white p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="max-w-2xl">
+            <div className="flex items-center gap-2">
+              <Sparkles className="size-4 text-magic-600" aria-hidden />
+              <h2 className="font-display text-lg font-bold text-ink-900">
+                Generation reference
+              </h2>
+            </div>
+            <p className="mt-1 text-xs leading-relaxed text-ink-500">
+              Sent to the image model to keep photo-based and invented faces in
+              the same rendering style. Use a textless multi-character style
+              study, not a customer preview or a single reusable character.
+              Existing books keep the exact version they selected.
+            </p>
+          </div>
+          <input
+            ref={referenceInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(event) => void pickReference(event.target.files?.[0])}
+          />
+          <Button
+            variant="secondary"
+            size="sm"
+            loading={busy}
+            leftIcon={<ImagePlus className="size-4" />}
+            onClick={() => referenceInputRef.current?.click()}
+          >
+            {style.generationReference ? "Replace reference" : "Add reference"}
+          </Button>
+        </div>
+        {style.generationReference ? (
+          <div className="mt-4 flex flex-col gap-3 rounded-xl bg-ink-50/70 p-3 sm:flex-row sm:items-center">
+            <div className="size-28 shrink-0 overflow-hidden rounded-lg bg-white ring-1 ring-ink-200">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={style.generationReference.imageUrl}
+                alt=""
+                className="size-full object-contain"
+              />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-ink-800">Active for new books</p>
+              <p className="mt-1 text-xs leading-relaxed text-ink-500">
+                Style transfer uses facial simplification, linework, shading,
+                palette and texture only. Identity and composition are excluded.
+              </p>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void removeReference()}
+                className="mt-2 text-xs font-medium text-red-600 underline decoration-red-200 underline-offset-2 hover:text-red-700 disabled:opacity-40"
+              >
+                Stop using this reference for new books
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => referenceInputRef.current?.click()}
+            className="mt-4 flex min-h-32 w-full flex-col items-center justify-center rounded-xl border border-dashed border-magic-200 bg-magic-50/40 px-4 text-center transition hover:border-magic-400 hover:bg-magic-50"
+          >
+            <Sparkles className="size-5 text-magic-500" />
+            <span className="mt-2 text-sm font-medium text-ink-700">
+              Add the generation-only style sheet
+            </span>
+            <span className="mt-0.5 max-w-xl text-xs text-ink-500">
+              Without one, generation falls back to the drawing prompt.
             </span>
           </button>
         )}

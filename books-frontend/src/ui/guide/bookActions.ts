@@ -6,10 +6,8 @@
 import { authoringOf, withAuthoring } from "../../core/guide/projectState";
 import type { CoverLines } from "../../core/book/coverLines";
 import { coverCardLines } from "../../core/guide/coverWords";
-import { effectiveCharacterAgeYears } from "../../core/book/characterAge";
-import { normalizeAnchorName } from "../../core/book/anchorRefs";
 import { manuscriptHash, withCastResolved } from "../../core/guide/ownWords";
-import { noteStyleChange, withLooksDecided, withStyleReverted } from "../../core/guide/portrait";
+import { noteStyleChange, withLooksDecided, withPresetStyle, withStyleReverted } from "../../core/guide/portrait";
 import {
   assignStyleSource,
   keepStyleSourceOnly,
@@ -28,9 +26,11 @@ import type {
 import { illustrationWithVersion, neighbourVersion, pictureHistory, withPortraitVersion } from "../../core/guide/history";
 import type { GuideTarget } from "../../core/guide/target";
 import { applyBookTitle, applyCoverLine, useProjectsStore } from "../../state/projectsStore";
+import { useAppConfigStore } from "../../state/appConfigStore";
 import { startStoryRevision } from "../../platform/storyRevisions";
 import { notify } from "../lib/notify";
-import { changePersonAge, type AgeValue } from "../../core/guide/ageSync";
+import { changePersonAge, withAgeMates, type AgeValue } from "../../core/guide/ageSync";
+import { withMemberChanges } from "../../core/guide/agent/commands/shared";
 import { cleanName, renamePersonEverywhere, type RenameRefusal } from "../../core/guide/rename";
 import { foldName } from "../../core/guide/agent/resolve";
 import { bookSizeFromAspect } from "../../core/config/options";
@@ -40,21 +40,34 @@ function patch(mutator: (project: Project) => Project): Promise<void> {
   return useProjectsStore.getState().patchCurrent(mutator);
 }
 
+/**
+ * Take a preset as the book's look. When the look was a drawing's, the drawing
+ * stops being the book's style with it (one change, never half of it); the
+ * reader was asked first, here and in the chat.
+ */
 export function chooseStyle(presetId: string): Promise<void> {
+  const generationReference = useAppConfigStore
+    .getState()
+    .artStyles.styles.find((style) => style.id === presetId)
+    ?.generationReference;
   return patch((p) =>
-    noteStyleChange(p, {
-      ...p,
-      config: { ...p.config, artStyle: { presetId, origin: "preset" }, styleReady: true },
+    withPresetStyle(p, {
+      presetId,
+      origin: "preset",
+      ...(generationReference ? { generationReference } : {}),
     }),
   );
 }
 
 export function chooseDerivedStyle(style: ArtStyleSelection): Promise<void> {
   return patch((p) =>
-    noteStyleChange(p, {
-      ...p,
-      config: { ...p.config, artStyle: style, styleReady: true },
-    }),
+    withAuthoring(
+      noteStyleChange(p, {
+        ...p,
+        config: { ...p.config, artStyle: style, styleReady: true },
+      }),
+      { retiredArtwork: undefined },
+    ),
   );
 }
 
@@ -202,50 +215,22 @@ function withCast(p: Project, map: (cast: StoryCastMember[]) => StoryCastMember[
   return { ...p, config: { ...p.config, storyBrief: { ...brief, cast: map(brief.cast ?? []) } } };
 }
 
-export function updateCastMember(id: string, changes: Partial<StoryCastMember>): Promise<void> {
+export function updateCastMember(
+  id: string,
+  changes: Partial<StoryCastMember>,
+  options: { mates?: boolean } = {},
+): Promise<void> {
   return patch((p) => {
-    const clearsEstimate =
-      typeof changes.age === "number" || typeof changes.ageMonths === "number";
-    const nextChanges = clearsEstimate
-      ? { ...changes, visualAge: undefined }
-      : changes;
     const previous = briefOf(p.config).cast?.find((member) => member.id === id);
-    let next = withCastResolved(
-      withCast(p, (cast) =>
-        cast.map((member) =>
-          member.id === id ? { ...member, ...nextChanges } : member,
-        ),
-      ),
-    );
-    const ageChanged =
-      "age" in changes || "ageMonths" in changes || "visualAge" in changes;
-    if (!ageChanged || !previous || !next.anchors) return next;
-    const member = briefOf(next.config).cast?.find((candidate) => candidate.id === id);
-    if (!member) return next;
-    const years = effectiveCharacterAgeYears(member);
-    const names = new Set(
-      [previous.name, member.name].map(normalizeAnchorName).filter(Boolean),
-    );
-    next = {
-      ...next,
-      anchors: next.anchors.map((anchor) =>
-        anchor.type === "character" &&
-        [normalizeAnchorName(anchor.name), ...(anchor.aliasNames ?? []).map(normalizeAnchorName)]
-          .some((name) => names.has(name))
-          ? {
-              ...anchor,
-              ageYears: years,
-              ageSource:
-                member.age !== undefined || member.ageMonths !== undefined
-                  ? "author"
-                  : member.visualAge?.source === "story"
-                    ? "story"
-                    : "suggested",
-            }
-          : anchor,
-      ),
-    };
-    return next;
+    const next = withMemberChanges(p, id, changes);
+    const setsAge = typeof changes.age === "number" || typeof changes.ageMonths === "number";
+    if (!setsAge || !previous || options.mates === false) return next;
+    return withAgeMates(
+      next,
+      id,
+      { age: previous.age, ageMonths: previous.ageMonths },
+      { age: changes.age, ageMonths: changes.ageMonths },
+    ).project;
   });
 }
 

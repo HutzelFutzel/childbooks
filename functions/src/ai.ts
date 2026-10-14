@@ -37,9 +37,24 @@ import {
   ServiceUnavailable,
 } from "./modelResolve";
 import { analyzeStory, generateAnchorDescription } from "../../books-frontend/src/core/pipeline/analysis";
-import { extractArtStyleFromImages, type SourceArtCharacterInput } from "../../books-frontend/src/core/pipeline/styleExtract";
+import {
+  extractArtStyleFromImages,
+  type ExtractArtStyleResult,
+  type SourceArtCharacterInput,
+} from "../../books-frontend/src/core/pipeline/styleExtract";
 import { extractArtLookFromImages } from "../../books-frontend/src/core/pipeline/lookExtract";
-import { collectSourceArtGroups } from "../../books-frontend/src/core/book/sourceArt";
+import { collectSourceArtGroups, firstStyleArtwork } from "../../books-frontend/src/core/book/sourceArt";
+import type { CustomStyleRef } from "../../books-frontend/src/core/config/customArtStyles";
+import { captureStyleCover } from "./styleShowcase";
+import {
+  applyCustomStyleToProject,
+  findCustomStyle,
+  hashDrawing,
+  orderDrawings,
+  refOf,
+  saveCustomStyle,
+  type LoadedDrawing,
+} from "./customStyles";
 import { coverSpread } from "../../books-frontend/src/core/book/units";
 import { generateStoryDraft } from "../../books-frontend/src/core/pipeline/storyDraft";
 import { translateStory } from "../../books-frontend/src/core/pipeline/storyTranslate";
@@ -175,29 +190,71 @@ function parseGuideTranscript(raw: unknown): GuideTurn[] {
   return turns;
 }
 
+/** Source drawings as the vision model reads them, plus what a saved style needs to know about each. */
+type LoadedSourceArtCharacter = SourceArtCharacterInput & { drawings: LoadedDrawing[] };
+
 async function loadSourceArtCharacters(
   uid: string,
   project: Project,
-): Promise<SourceArtCharacterInput[]> {
+): Promise<LoadedSourceArtCharacter[]> {
   const groups = collectSourceArtGroups(project);
   return (
     await Promise.all(
       groups.map(async (group) => {
-        const images = (
+        const drawings = (
           await Promise.all(
-            group.images.map(async (image) => {
+            group.images.map(async (image): Promise<LoadedDrawing | null> => {
               try {
-                return await downloadBlobBase64(uid, image.blobId);
+                const loaded = await downloadBlobBase64(uid, image.blobId);
+                return {
+                  blobId: image.blobId,
+                  mimeType: loaded.mimeType,
+                  base64: loaded.base64,
+                  sha256: hashDrawing(loaded.base64),
+                  createdAt: image.createdAt,
+                };
               } catch {
                 return null;
               }
             }),
           )
-        ).filter((row): row is { base64: string; mimeType: string } => Boolean(row));
-        return { id: group.id, name: group.name, images };
+        ).filter((row): row is LoadedDrawing => Boolean(row));
+        const images = drawings.map(({ base64, mimeType }) => ({ base64, mimeType }));
+        return { id: group.id, name: group.name, images, drawings };
       }),
     )
   ).filter((group) => group.images.length > 0);
+}
+
+/**
+ * Save the look just read as a custom style, one per set of drawings. A failure
+ * here never fails the extraction the reader has already paid for: the book
+ * simply keeps its own copy of the wording and the drawing.
+ */
+async function saveReadLook(args: {
+  uid: string;
+  project: Project;
+  hashes: string[];
+  drawings: LoadedDrawing[];
+  stylePrompt: string;
+  names: string[];
+  model: ModelSelection;
+}): Promise<CustomStyleRef | undefined> {
+  try {
+    const saved = await saveCustomStyle({
+      uid: args.uid,
+      hashes: args.hashes,
+      drawings: args.drawings,
+      promptDescription: args.stylePrompt,
+      derivedFromNames: args.names,
+      projectId: args.project.id,
+      extraction: { model: { provider: args.model.provider, id: args.model.id } },
+    });
+    return refOf(saved);
+  } catch (error) {
+    console.warn("[ai] could not save the custom art style", { error: String(error) });
+    return undefined;
+  }
 }
 
 function sendError(res: Response, err: unknown): void {
@@ -500,14 +557,33 @@ export function registerAiRoutes(app: Express): void {
         return;
       }
       const guest = isAnonymousToken(req.authToken);
-      await ensureAffordAction(req.uid!, "extractArtStyle", requireTier(undefined, guest), {
-        noNegativeBuffer: guest,
-      });
       const characters = await loadSourceArtCharacters(req.uid!, project);
       if (characters.length === 0) {
         res.status(400).json({ error: { message: "The artwork could not be loaded." } });
         return;
       }
+      // The same drawings are the same look. When they were read before, hand
+      // back the saved style: no model call, no charge, the same wording.
+      const allDrawings = characters.flatMap((character) => character.drawings);
+      const allHashes = allDrawings.map((drawing) => drawing.sha256);
+      const saved = await findCustomStyle(req.uid!, allHashes).catch(() => null);
+      if (saved) {
+        res.json({
+          compatible: true,
+          stylePrompt: saved.revision.promptDescription,
+          characters: characters.map((character) => ({
+            id: character.id,
+            name: character.name,
+            stylePrompt: saved.revision.promptDescription,
+          })),
+          customStyle: refOf(saved),
+          cached: true,
+        });
+        return;
+      }
+      await ensureAffordAction(req.uid!, "extractArtStyle", requireTier(undefined, guest), {
+        noNegativeBuffer: guest,
+      });
       const [model, prompts] = await Promise.all([
         resolveText("extractArtStyle"),
         loadPromptContext(),
@@ -536,7 +612,43 @@ export function registerAiRoutes(app: Express): void {
         startedAt,
         models: { text: model },
       });
-      res.json(value);
+
+      // Save what was read. A shared look is one style for all the drawings;
+      // a clash saves one candidate per character, and the book points at
+      // whichever the reader picks (it becomes active when a render uses it).
+      const first = firstStyleArtwork(project, collectSourceArtGroups(project));
+      let out: ExtractArtStyleResult = value;
+      if (value.compatible && value.stylePrompt.trim()) {
+        const customStyle = await saveReadLook({
+          uid: req.uid!,
+          project,
+          hashes: allHashes,
+          drawings: orderDrawings(allDrawings, first?.ref.blobId),
+          stylePrompt: value.stylePrompt,
+          names: first?.name ? [first.name] : characters.slice(0, 1).map((character) => character.name),
+          model,
+        });
+        if (customStyle) out = { ...value, customStyle };
+      } else {
+        const options = await Promise.all(
+          value.characters.map(async (option) => {
+            const character = characters.find((candidate) => candidate.id === option.id);
+            if (!character || character.drawings.length === 0) return option;
+            const customStyle = await saveReadLook({
+              uid: req.uid!,
+              project,
+              hashes: character.drawings.map((drawing) => drawing.sha256),
+              drawings: orderDrawings(character.drawings),
+              stylePrompt: option.stylePrompt,
+              names: [option.name],
+              model,
+            });
+            return customStyle ? { ...option, customStyle } : option;
+          }),
+        );
+        out = { ...value, characters: options };
+      }
+      res.json(out);
     } catch (err) {
       sendError(res, err);
     }
@@ -696,15 +808,27 @@ export function registerAiRoutes(app: Express): void {
    */
   app.post("/ai/guide/interpret", json, async (req: AuthedRequest, res: Response) => {
     try {
-      const { project, message: rawMessage, transcript: rawTranscript, guidePreference, pending, marked: rawMarked } =
-        req.body as {
-          project: Project;
-          message?: unknown;
-          transcript?: unknown;
-          guidePreference?: unknown;
-          pending?: unknown;
-          marked?: unknown;
-        };
+      const {
+        project,
+        message: rawMessage,
+        transcript: rawTranscript,
+        guidePreference,
+        pending,
+        marked: rawMarked,
+        selected: rawSelected,
+      } = req.body as {
+        project: Project;
+        message?: unknown;
+        transcript?: unknown;
+        guidePreference?: unknown;
+        pending?: unknown;
+        marked?: unknown;
+        selected?: unknown;
+      };
+      // What the reader has selected on the book ("Amanda's portrait"). Context
+      // for "her" and "this" only, like the marked passage.
+      const selected =
+        typeof rawSelected === "string" && rawSelected.trim() ? rawSelected.trim().slice(0, 120) : undefined;
       // A marked passage is only believed when it is really in the story; the
       // model reads it to resolve "make this nicer", never to decide anything else.
       const marked =
@@ -777,6 +901,7 @@ export function registerAiRoutes(app: Express): void {
           repairAttempts: guide.extraction.repairAttempts,
           temperature: guide.extraction.temperature,
           ...(marked ? { marked } : {}),
+          ...(selected ? { selected } : {}),
           ...(guide.agent.enabled
             ? {
                 skills: {
@@ -1203,6 +1328,9 @@ export function registerAiRoutes(app: Express): void {
         res.status(400).json({ error: { message: "Anchor not found." } });
         return;
       }
+      // A saved custom style speaks for itself: the wording and drawing come
+      // from the record, not from whatever the client sent next to the pointer.
+      await applyCustomStyleToProject(req.uid!, project);
       // Guests receive the same production quality, with no negative buffer.
       const guest = isAnonymousToken(req.authToken);
       const tier = requireTier(rawTier, guest);
@@ -1306,6 +1434,7 @@ export function registerAiRoutes(app: Express): void {
       }
       const cover = isCoverId(spreadId);
       const action = cover ? "coverIllustration" : "pageIllustration";
+      await applyCustomStyleToProject(req.uid!, project);
       // Guests receive the same production quality, with no negative buffer.
       const guest = isAnonymousToken(req.authToken);
       // A continuous back cover uses the same production-quality binding as
@@ -1397,6 +1526,13 @@ export function registerAiRoutes(app: Express): void {
       });
       if (isEdit) await incrementQuota(req.uid!, "editsPerBook", project.id);
       if (value) {
+        if (spreadId === COVER_FRONT_ID && value.artStyleKey && !coverContinuationBlobId) {
+          await captureStyleCover(req.uid!, {
+            style: project.config.artStyle,
+            projectId: project.id,
+            blobId: value.blobId,
+          });
+        }
         res.json(stampImageProvenance(value, tier, models.imageModel));
         return;
       }

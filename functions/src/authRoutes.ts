@@ -26,7 +26,7 @@ import express, { type Express, type Response } from "express";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
-import { type AuthedRequest } from "./auth";
+import { unauthenticated, type AuthedRequest } from "./auth";
 import { getSeoConfig } from "./appConfig";
 import { sendWelcomeEmail } from "./email/triggers";
 import { notifySlack, formatSignupSlackMessage, getSparksSpent } from "./notify";
@@ -87,7 +87,7 @@ export function registerAuthRoutes(app: Express): void {
       ensureAdmin();
       const uid = req.uid;
       if (!uid) {
-        res.status(401).json({ error: { message: "Authentication required." } });
+        unauthenticated(req, res);
         return;
       }
 

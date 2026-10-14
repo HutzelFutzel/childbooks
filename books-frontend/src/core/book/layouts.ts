@@ -417,6 +417,25 @@ export interface LayoutPromptFacts {
   artAspectLabel: string;
   hasCalmBand: boolean;
   isInsetArt: boolean;
+  /**
+   * The text rectangles the calm area must cover, in page space and without
+   * any overshoot — what a post-generation check measures.
+   */
+  calmRects: NormRect[];
+}
+
+/**
+ * Grow a calm rect by `by` (share of the page) on every side, clamped to the
+ * page. Growing toward an edge the rect already touches is a no-op, so a
+ * bottom band simply becomes a taller bottom band.
+ */
+export function overshootRect(rect: NormRect, by: number): NormRect {
+  if (by <= 0) return rect;
+  const x0 = Math.max(0, rect.x - by);
+  const y0 = Math.max(0, rect.y - by);
+  const x1 = Math.min(1, rect.x + rect.w + by);
+  const y1 = Math.min(1, rect.y + rect.h + by);
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
 /** Human-readable aspect for a rect on a surface of the given aspect ratio. */
@@ -433,7 +452,7 @@ export function artAspectLabel(artRect: NormRect, surfaceAspect: number): string
  * Overlay text that the image model should keep clear. Split/inset art and
  * "untouched" / geometric treatments do not reserve a painted band.
  */
-function slotWantsCalmBand(slot: ResolvedSlot): boolean {
+export function slotWantsCalmBand(slot: ResolvedSlot): boolean {
   if (slot.role !== "text" && slot.role !== "decor") return false;
   const treatment = slot.treatment;
   if (treatment.id === "none" || treatment.mechanism === "geometry") return false;
@@ -443,14 +462,26 @@ function slotWantsCalmBand(slot: ResolvedSlot): boolean {
 export function layoutPromptFacts(
   plan: LayoutPlan,
   surfaceAspect: number,
-  opts?: { negativeSpaceControl?: "weak" | "strong" },
+  opts?: {
+    negativeSpaceControl?: "weak" | "strong";
+    /**
+     * Ask for a calm area this much larger than the text box (share of the
+     * page). The words stay where the slot puts them; the margin absorbs a
+     * model that crowds the band. Overshoot is described by coordinates, so
+     * it replaces the grid naming.
+     */
+    calmOvershoot?: number;
+  },
 ): LayoutPromptFacts {
   const isInsetArt = plan.mode === "inset-art";
   const calmSlots = isInsetArt ? [] : plan.slots.filter(slotWantsCalmBand);
-  const rects = calmSlots.map((s) => s.pageRect);
+  const calmRects = calmSlots.map((s) => s.pageRect);
+  const overshoot = Math.max(0, opts?.calmOvershoot ?? 0);
+  const rects = calmRects.map((r) => overshootRect(r, overshoot));
   const hasCalmBand = calmSlots.length > 0;
   const grids = calmSlots.map((s) => s.grid).filter((g): g is GridArea => Boolean(g));
-  const namedFromGrid = hasCalmBand && grids.length === calmSlots.length && grids.length > 0;
+  const namedFromGrid =
+    hasCalmBand && overshoot === 0 && grids.length === calmSlots.length && grids.length > 0;
   // One grid's complement is itself a grid fraction. Several slots (or a
   // floating tile) have no single complementary cell — fall back to the
   // largest remaining rectangle so a new multi-slot overlay still names a
@@ -487,6 +518,7 @@ export function layoutPromptFacts(
     artAspectLabel: isInsetArt ? artAspectLabel(plan.artRect, surfaceAspect) : "",
     hasCalmBand,
     isInsetArt,
+    calmRects,
   };
 }
 

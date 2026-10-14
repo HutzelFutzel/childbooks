@@ -139,6 +139,7 @@ export async function claimPendingArrival(): Promise<{ couponId: string; summary
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(proposal),
+      background: true,
     });
     if (!res.ok) return [];
     const json = (await res.json()) as {

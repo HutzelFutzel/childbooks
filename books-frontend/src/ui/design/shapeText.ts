@@ -10,6 +10,13 @@ import type {
   TextBox,
 } from "../../core/types";
 import { parseColor } from "./color";
+import {
+  contrastRatio,
+  DARK_INK,
+  hexLuminance,
+  LARGE_CONTRAST,
+  relativeLuminance,
+} from "../../core/book/regionAnalysis";
 
 export const SHAPE_TEXT_PADDING = 0.12;
 
@@ -29,25 +36,30 @@ export function shapeTextPadFrac(shape: Pick<ShapeElement, "kind" | "text">): nu
 
 /** Dark ink on light fills, white on dark — so a first double-click is readable. */
 export function contrastInk(fill: string): string {
-  return luminanceOnWhite(fill) > 0.55 ? "#1f2430" : "#ffffff";
+  const bg = luminanceOnWhite(fill);
+  return contrastRatio(bg, DARK_INK_LUM) >= contrastRatio(bg, 1) ? DARK_INK : "#ffffff";
 }
 
+/** WCAG relative luminance of a color composited over white paper. */
 function luminanceOnWhite(color: string): number {
   const { r, g, b, a } = parseColor(color);
-  const lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
-  return lum * a + (1 - a);
+  const over = (c: number) => Math.round(c * a + 255 * (1 - a));
+  return relativeLuminance(over(r), over(g), over(b));
 }
 
+const DARK_INK_LUM = hexLuminance(DARK_INK) ?? 0;
+
 /**
- * Keep a preferred ink when it still reads on `fill`; otherwise the same
- * light/dark pick {@link contrastInk} would make for a first double-click.
+ * Keep a preferred ink when it still reads on `fill` (WCAG 3:1, the large-text
+ * floor); otherwise the pick {@link contrastInk} would make for a first
+ * double-click.
  */
 export function readableShapeInk(fill: string, preferred?: string): string {
   const fallback = contrastInk(fill);
   if (!preferred) return fallback;
-  const fillIsLight = luminanceOnWhite(fill) > 0.55;
-  const preferredIsLight = luminanceOnWhite(preferred) > 0.55;
-  return fillIsLight === preferredIsLight ? fallback : preferred;
+  return contrastRatio(luminanceOnWhite(fill), luminanceOnWhite(preferred)) >= LARGE_CONTRAST
+    ? preferred
+    : fallback;
 }
 
 export function shapeTextDefaults(

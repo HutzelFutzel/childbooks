@@ -510,6 +510,13 @@ export default function StudioApp() {
     });
   }, [router]);
 
+  const resolvingLabel =
+    accessLevel === "loading"
+      ? "Preparing your workspace…"
+      : enteringProject || route.kind === "project"
+        ? "Opening your storybook…"
+        : "Loading your library…";
+
   return (
     <MotionConfig reducedMotion="user">
     <div
@@ -563,9 +570,7 @@ export default function StudioApp() {
             aria-live="polite"
           >
             <Loader2 className="size-7 animate-spin text-brand-400" />
-            {enteringProject && (
-              <p className="text-sm font-medium text-ink-500">Opening your storybook…</p>
-            )}
+            <p className="text-sm font-medium text-ink-500">{resolvingLabel}</p>
           </div>
         ) : inProject ? (
           <ProjectWorkspace

@@ -3,7 +3,8 @@ import {
   resolveArtStyle,
   type ArtStylesConfig,
 } from "../config/artStyles";
-import type { ArtStyleSelection } from "../types";
+import type { ArtStyleSelection, ImageRenderRecord } from "../types";
+import { customStyleKeyOf } from "../config/customArtStyles";
 import type { PromptContext } from "./context";
 
 export function resolveArtStyleText(
@@ -39,15 +40,36 @@ export function resolveArtStyleDisplayName(
 /**
  * Stable identity of an art-style selection, stamped onto every rendered image
  * so the studio can tell which artwork is still in an older look. Compares
- * preset + custom direction only — admin wording changes don't invalidate art.
+ * Admin wording changes do not invalidate art, but replacing the snapshotted
+ * generation exemplar does.
  */
 export function artStyleKey(style: ArtStyleSelection | undefined): string {
+  // A saved custom style IS its record: one revision is one look, whatever
+  // wording a client holds next to the pointer.
+  if (style?.customStyle) return customStyleKeyOf(style.customStyle);
   const preset = style?.presetId ?? "custom";
   const custom = (style?.customDescription ?? "").trim();
   const references = (style?.referenceArt ?? [])
     .map((image) => image.blobId)
     .join(",");
-  return [preset, custom, references].filter(Boolean).join("|");
+  const generationReference = style?.generationReference
+    ? `${style.generationReference.storagePath}@${style.generationReference.updatedAt}`
+    : "";
+  return [preset, custom, references, generationReference].filter(Boolean).join("|");
+}
+
+/** The look a picture is being drawn in, as it is recorded on the picture. */
+export function styleStampOf(
+  style: ArtStyleSelection | undefined,
+): NonNullable<ImageRenderRecord["style"]> {
+  return {
+    presetId: style?.presetId ?? null,
+    ...(style?.customStyle
+      ? { customStyleId: style.customStyle.id, customStyleRevision: style.customStyle.revision }
+      : {}),
+    ...(style?.origin ? { origin: style.origin } : {}),
+    key: artStyleKey(style),
+  };
 }
 
 /** Resolve the display title for a configured or legacy preset. */

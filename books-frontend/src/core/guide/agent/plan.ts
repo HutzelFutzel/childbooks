@@ -123,6 +123,7 @@ export function planTurn(input: PlanInput): Plan {
   /** Why a request could not be done, in words for the reader. */
   const sayable: string[] = [];
   let paidUsed = false;
+  let paidSkill: string | null = null;
   let confirmImpact: Impact = NO_IMPACT;
   const confirmCalls: CommandCall[] = [];
   let confirmChoices: ConfirmChoice[] | null = null;
@@ -169,11 +170,13 @@ export function planTurn(input: PlanInput): Plan {
       continue;
     }
     if (def.paid) {
-      if (paidUsed) {
+      // The same batchable skill again is more of the same work, not a second purchase.
+      if (paidUsed && !(def.batchable && paidSkill === call.id)) {
         plan.deferred.push(call);
         continue;
       }
       paidUsed = true;
+      paidSkill = call.id;
     }
     consume(call, def.run(working, call.args, ctx));
   }
@@ -241,8 +244,30 @@ export function planTurn(input: PlanInput): Plan {
   if (plan.deferred.length > 0 && plan.steps.length > 0) {
     plan.beats.push(beat("tooMany", { count: plan.steps.length }, { priority: "answer" }));
   }
+  plan.beats = mergeBeats(plan.beats);
   plan.project = working;
   return plan;
+}
+
+/** Lines that say the same thing about different people, said once about all of them. */
+const MERGED_BEATS: ReadonlySet<string> = new Set(["lookNoted"]);
+
+function mergeBeats(beats: Beat[]): Beat[] {
+  const out: Beat[] = [];
+  for (const next of beats) {
+    const same = MERGED_BEATS.has(next.key) ? out.find((b) => b.key === next.key && b.priority === next.priority) : undefined;
+    if (!same) {
+      out.push({ ...next });
+      continue;
+    }
+    const names = (beat: Beat): string[] => {
+      const raw = beat.vars?.names;
+      return Array.isArray(raw) ? raw.map(String) : raw ? [String(raw)] : [];
+    };
+    same.vars = { ...same.vars, names: [...names(same), ...names(next)] };
+    same.mustSay = [...(same.mustSay ?? []), ...(next.mustSay ?? [])];
+  }
+  return out;
 }
 
 /** Whether a stored confirmation still means the same thing on the book as it is now. */

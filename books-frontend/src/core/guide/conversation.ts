@@ -62,6 +62,7 @@ export const WELL_INTRO_LINES: Partial<Record<GuideLineKey, string>> = {
   readFailed: "extractionRetry",
   askBookUpdate: "bookUpdate",
   askBookFinish: "bookFinish",
+  bookUnfinished: "bookFinish",
   askBookPrepFix: "bookPrepFix",
   askPrintFix: "printFix",
   printReady: "order",
@@ -131,7 +132,14 @@ export function wellStage(input: {
   /** The message field is available, so a question in words can be answered. */
   canAnswer: boolean;
   locale: string;
+  /**
+   * This card is already on screen. It stays until it is answered or its
+   * question goes away: a turn running, a line being phrased, a reply or news
+   * never takes it off and puts it back.
+   */
+  onScreen?: boolean;
 }): WellStage {
+  if (input.onScreen) return "show";
   if (!input.hasIntro) return "show";
   const last = latestTurn(input.messages);
   if (!last) return input.busy ? "wait" : "announce";

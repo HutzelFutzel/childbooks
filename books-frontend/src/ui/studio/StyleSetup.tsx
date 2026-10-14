@@ -132,6 +132,13 @@ export function StyleSetup() {
     if (derived && next.referenceArt?.length) {
       artStyle.referenceArt = next.referenceArt;
     }
+    if (derived && next.customStyle) {
+      artStyle.customStyle = next.customStyle;
+    }
+    if (!derived && next.presetId) {
+      const reference = availableStyles.find((style) => style.id === next.presetId)?.generationReference;
+      if (reference) artStyle.generationReference = reference;
+    }
     const patch: Partial<BookConfig> = { artStyle };
     if (firstTime) patch.styleReady = true;
     if (firstTime || !artStylesEqual(next, committed)) patch.castReady = false;

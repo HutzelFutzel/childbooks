@@ -91,6 +91,14 @@ function ImpactLine({ effect }: { effect: ImpactEffect }) {
       return <li>{t("impactRenamesInStory", { from: effect.from, to: effect.to, count: effect.count })}</li>;
     case "outdatesPortraits":
       return <li>{t("impactOutdatesPortraits", { names: effect.names.join(", ") })}</li>;
+    case "retiresArtwork":
+      return (
+        <li>
+          {effect.names.length > 0
+            ? t("impactRetiresArtwork", { names: effect.names.join(", "), preset: effect.preset })
+            : t("impactRetiresArtworkAny", { preset: effect.preset })}
+        </li>
+      );
     case "removesPlace":
       return <li>{t("impactRemovesPlace", { name: effect.name })}</li>;
   }

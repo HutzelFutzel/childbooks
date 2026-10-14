@@ -25,7 +25,7 @@ import { addedPeople, personFollowUp } from "../core/guide/agent/followUps";
 import { presentBeats, type Utterance } from "../core/guide/agent/present";
 import { confirmStillValid, planTurn, type PendingConfirm, type Plan } from "../core/guide/agent/plan";
 import { GUIDE_COMMANDS } from "../core/guide/agent/registry";
-import { RESTORE_FIELDS, snapshotJson } from "../core/guide/agent/restore";
+import { RESTORE_FIELDS, restoreDesign, snapshotForChange } from "../core/guide/agent/restore";
 import { beat, withPersonAsk } from "../core/guide/agent/commands/shared";
 import type {
   AskOption,
@@ -40,14 +40,17 @@ import type { BookViewId } from "../core/guide/journey";
 import type { GuideTarget } from "../core/guide/target";
 import type { RedrawMode } from "../core/guide/redrawMode";
 import { castOf } from "../core/guide/agent/resolve";
+import { PICTURE_CHOICE_COMMANDS } from "../core/guide/pictureSettling";
 import type { GuideEntry, Project } from "../core/types";
 import { deleteLikenessPhoto } from "../platform/likeness";
 import { guideComposeRemote, storyFitRemote } from "../platform/aiClient";
 import { startStoryRevision } from "../platform/storyRevisions";
 import { confirmCoverWords, setAuthor, setSubtitle, setTitle, stepPicture, updateCastMember } from "../ui/guide/bookActions";
 import { useGuidePreference } from "../ui/guide/guidePreference";
+import { fontsForBookLanguage } from "../ui/typography/fonts";
 import { useAppConfigStore } from "./appConfigStore";
 import { useAuthStore } from "./authStore";
+import { useJobsStore } from "./jobsStore";
 import { useProjectsStore } from "./projectsStore";
 
 /** What the composer well shows because the reader asked for it. */
@@ -74,13 +77,18 @@ export interface AgentTurn {
   /** JSON of the top-level book fields before this turn's writes; null when nothing was written. */
   restore: string | null;
   pending: AgentPending | null;
-  redraw: { castId: string; name: string; instruction: string; mode?: RedrawMode } | null;
+  /** People whose portrait is to be redrawn, in the order asked: one batch. */
+  redraws: { castId: string; name: string; instruction: string; mode?: RedrawMode }[];
   entry: GuideEntry | null;
   undo: boolean;
   skip: boolean;
   /** The turn asked, confirmed or blocked: the journey's own next question waits. */
   holdsFloor: boolean;
   wrote: boolean;
+  /** The book as the message found it, for starting the pictures the message made necessary. */
+  startedFrom: Project | null;
+  /** The turn chose a look or a style, which is what lets portraits be drawn. */
+  chose: boolean;
 }
 
 function live(): Project | null {
@@ -96,11 +104,27 @@ function wording(): GuideCopyOverrides {
 }
 
 export function agentContext(): CommandContext {
-  const { artStyles } = useAppConfigStore.getState();
+  const { artStyles, bookLanguages } = useAppConfigStore.getState();
+  const fonts = fontsForBookLanguage(live()?.config.contentLocale, bookLanguages).map((font) => ({
+    id: font.family,
+    label: font.label,
+    category: font.category,
+  }));
+  const active = useJobsStore.getState().activeUnitIds;
+  const open = live();
+  const portraitsRunning = open ? castOf(open).some((m) => active.has(m.id)) : false;
   return {
     now: Date.now(),
+    fonts,
+    ...(portraitsRunning ? { portraitsRunning } : {}),
     guest: useAuthStore.getState().accessLevel === "guest",
-    styles: resolveArtStyles(artStyles).map((style) => ({ id: style.id, label: style.label })),
+    styles: resolveArtStyles(artStyles).map((style) => ({
+      id: style.id,
+      label: style.label,
+      ...(style.generationReference
+        ? { generationReference: style.generationReference }
+        : {}),
+    })),
     languages: BOOK_LANGUAGES.flatMap((language) => [
       { id: language.id, label: language.englishName },
       { id: language.id, label: language.endonym },
@@ -108,9 +132,15 @@ export function agentContext(): CommandContext {
   };
 }
 
-/** The top-level book fields undo puts back, as JSON. */
-export function snapshot(project: Project): string {
-  return snapshotJson(project);
+/** "This page": the page or cover the reader selected, else what is open in front of them. */
+function pagesMeant(chip?: GuideTarget | null, looking?: readonly string[]): readonly string[] | undefined {
+  if (chip && chip.kind !== "person") return [chip.unitId];
+  return looking && looking.length > 0 ? looking : undefined;
+}
+
+/** What undo puts back for a turn that took the book from `before` to `after`, as JSON. */
+export function snapshot(before: Project, after: Project = before): string {
+  return snapshotForChange(before, after);
 }
 
 /** The well id a skill's well shows under (`GuideMessage.well`); paid steps share the journey's own. */
@@ -147,7 +177,7 @@ export function applyRestore(project: Project, restore: string): Project {
     if (saved[key] === null) delete next[key];
     else next[key] = saved[key];
   }
-  return next as unknown as Project;
+  return restoreDesign(next as unknown as Project, saved);
 }
 
 function writeCalls(plan: Plan): CommandCall[] {
@@ -267,12 +297,12 @@ async function runEffect(effect: CommandEffect, turn: AgentTurn, mark: StoryMark
       return;
     }
     case "redraw":
-      turn.redraw = {
+      turn.redraws.push({
         castId: effect.castId,
         name: effect.name,
         instruction: effect.instruction,
         ...(effect.mode ? { mode: effect.mode } : {}),
-      };
+      });
       return;
     case "drawBook":
       turn.well = { kind: "agentDrawBook" };
@@ -332,6 +362,13 @@ export async function executeAgentCalls(
     mark?: StoryMark | null;
     /** The picture the reader had selected when they sent the message. */
     chip?: GuideTarget | null;
+    /** The pages the reader is looking at when they send it: what "this page" means for the finished pages. */
+    looking?: readonly string[];
+    /**
+     * The book as the message found it, before its facts were written. Without
+     * it the turn is measured from the book as its skills found it.
+     */
+    since?: Project;
   },
 ): Promise<AgentTurn> {
   const turn: AgentTurn = {
@@ -340,23 +377,28 @@ export async function executeAgentCalls(
     view: null,
     restore: null,
     pending: null,
-    redraw: null,
+    redraws: [],
     entry: null,
     undo: false,
     skip: false,
     holdsFloor: false,
     wrote: false,
+    startedFrom: null,
+    chose: false,
   };
   const project = live();
   if (!project) return turn;
+  turn.startedFrom = options.since ?? project;
   const config = agentConfig();
   const mark = options.mark ?? null;
   const ctx: CommandContext = {
     ...agentContext(),
     ...(mark ? { marked: true } : {}),
     ...(options.chip ? { chip: options.chip } : {}),
+    ...(pagesMeant(options.chip, options.looking) ? { pages: pagesMeant(options.chip, options.looking) } : {}),
   };
   const plan = planTurn({ project, calls, ctx, config, overflow: options.overflow, confirmed: options.confirmed });
+  turn.chose = plan.steps.some((step) => PICTURE_CHOICE_COMMANDS.has(step.call.id));
   turn.beats.push(...plan.beats);
   turn.view = plan.views[plan.views.length - 1] ?? null;
 
@@ -364,13 +406,13 @@ export async function executeAgentCalls(
   if (writes.length > 0) {
     let before: string | null = null;
     await useProjectsStore.getState().patchCurrent((latest) => {
-      before = snapshot(latest);
       const writeCtx = { ...ctx, now: Date.now() };
       let next = latest;
       for (const call of writes) {
         const result = GUIDE_COMMANDS[call.id].run(next, call.args, writeCtx);
         if (result.kind === "write") next = result.project;
       }
+      before = snapshot(latest, next);
       return next;
     });
     turn.restore = before;
@@ -380,8 +422,9 @@ export async function executeAgentCalls(
   for (const effect of plan.effects) await runEffect(effect, turn, mark);
 
   if (plan.confirm) turn.well = { kind: "agentConfirm", confirm: plan.confirm };
-  else if (plan.ask) turn.well = { kind: "agentAsk", call: plan.ask.call, arg: plan.ask.arg, options: plan.ask.options };
-  else if (plan.blocked.length > 0 && !turn.well) turn.well = { kind: "agentBlocked", remedy: plan.blocked[0]!.remedy };
+  else if (plan.ask && plan.ask.options.length > 0) {
+    turn.well = { kind: "agentAsk", call: plan.ask.call, arg: plan.ask.arg, options: plan.ask.options };
+  } else if (plan.blocked.length > 0 && !turn.well) turn.well = { kind: "agentBlocked", remedy: plan.blocked[0]!.remedy };
 
   if (plan.ask) {
     turn.pending = { expects: `${plan.ask.call.id} (${plan.ask.arg}) with ${JSON.stringify(plan.ask.call.args)}` };

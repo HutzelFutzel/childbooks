@@ -143,6 +143,13 @@ export interface TextBox {
   /** Hidden from the page (still listed in Layers). */
   hidden?: boolean;
   /**
+   * Who chose the text color (and plate). `auto`: measured from the artwork
+   * under the box, and re-measured when that artwork changes. `user`: the
+   * reader picked it; never changed for them. Missing on older boxes, which
+   * count as `auto` only while they still wear their preset's default color.
+   */
+  colorSource?: "auto" | "user";
+  /**
    * Frosted-glass blur of content *behind* this box (illustration, page bg,
    * lower elements), as a fraction of page height. Does not blur the text or
    * chrome. Legacy books may still have the old content blur on
@@ -428,6 +435,11 @@ export interface PageDesign {
    * and shows when it does not, once per new artwork, so later edits stay put.
    */
   letteringFor?: string;
+  /**
+   * The artwork blob whose measured ink was last applied to this page's text
+   * (see `IllustrationImage.textInk`), so each new picture re-inks once.
+   */
+  inkFor?: string;
 }
 
 /** How illustrations that touch a trim edge supply the printer's bleed. */
@@ -594,11 +606,98 @@ function newIllustrationElementId(): string {
   return `im_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** Covers and the spine stay plain. These ids match the screenplay keys. */
+const PLAIN_FRAME_PAGE_IDS = new Set(["cover-front", "cover-back", "spine"]);
+
+/**
+ * Shrink a rectangle evenly about its own centre. Width and height scale by the
+ * same factor, so a picture keeps its aspect ratio and is never cropped by the
+ * smaller frame; what is left over shows the page color.
+ */
+export function scaleRectAboutCenter(rect: NormRect, scale: number): NormRect {
+  const s = Number.isFinite(scale) ? Math.min(1, Math.max(0.01, scale)) : 1;
+  if (s === 1) return rect;
+  const w = rect.w * s;
+  const h = rect.h * s;
+  return { x: rect.x + (rect.w - w) / 2, y: rect.y + (rect.h - h) / 2, w, h };
+}
+
+/**
+ * Where a page's picture sits when it is laid out: the page (or the rectangle
+ * its layout reserved for it) at the admin's picture size. Covers are always
+ * full size — they bleed to the trim.
+ */
+export function pictureRectFor(
+  pageId: string,
+  area: NormRect,
+  pictureScale: number,
+): NormRect {
+  return PLAIN_FRAME_PAGE_IDS.has(pageId) ? area : scaleRectAboutCenter(area, pictureScale);
+}
+
+/**
+ * The one shape a new book uses, chosen from the shapes checked for new books.
+ *
+ * Opaque story pages receive it. A page the reader framed, rounded, or set
+ * back to the original picture is left alone. Transparent cutout art stays
+ * unframed: the cutout is already its outline, and a second mask would clip
+ * it. Covers stay plain. Returns the same design when nothing changes.
+ */
+export function applyAutomaticBookFrame(
+  design: BookDesign,
+  maskId: string,
+  opts?: { transparentPageIds?: ReadonlySet<string> },
+): BookDesign {
+  const chosen = design.defaultImageMaskId ?? maskId;
+  if (!chosen) return design;
+  const transparent = opts?.transparentPageIds ?? new Set<string>();
+  let changed = design.defaultImageMaskId !== chosen;
+  const nextPages: BookDesign["pages"] = { ...design.pages };
+  for (const [pageId, page] of Object.entries(design.pages)) {
+    if (PLAIN_FRAME_PAGE_IDS.has(pageId) || !page.images?.length) continue;
+    let pageChanged = false;
+    const images = page.images.map((image) => {
+      if (image.kind !== "illustration") return image;
+      const legacyAutomatic =
+        !image.frameSource &&
+        Boolean(image.imageMaskId) &&
+        image.imageMaskId === design.defaultImageMaskId;
+      if (transparent.has(pageId)) {
+        if (image.frameSource !== "auto" && !legacyAutomatic) return image;
+        if (!image.imageMaskId && image.frameSource !== "auto") return image;
+        const { imageMaskId: _mask, frameSource: _source, ...plain } = image;
+        void _mask;
+        void _source;
+        pageChanged = true;
+        return plain;
+      }
+      if (
+        image.imageMaskId ||
+        (image.corner ?? 0) > 0 ||
+        image.frameSource === "user" ||
+        image.frameSource === "none"
+      ) {
+        return image;
+      }
+      pageChanged = true;
+      return { ...image, imageMaskId: chosen, frameSource: "auto" as const };
+    });
+    if (pageChanged) {
+      changed = true;
+      nextPages[pageId] = { ...page, images };
+    }
+  }
+  if (!changed) return design;
+  return { ...design, defaultImageMaskId: chosen, pages: nextPages };
+}
+
 /**
  * Ensure the page has a selectable illustration ImageElement so new art paints
  * on the live canvas (editable stages only draw AI art through that element,
- * not as a passive full-bleed). No-op when a frame already exists — clearing
- * art removes the frame on purpose and must not recreate it here.
+ * not as a passive full-bleed). An element that already exists is kept — a
+ * second one is never added — and an automatic shape is stamped onto it when
+ * the page has not chosen its own. Clearing art removes the element on
+ * purpose; this does not invent one unless the page has none.
  */
 export function withIllustrationFrame(
   design: BookDesign,
@@ -611,7 +710,33 @@ export function withIllustrationFrame(
   },
 ): BookDesign {
   const pd = design.pages[pageId] ?? { textBoxes: [] };
-  if ((pd.images ?? []).some((im) => im.kind === "illustration")) return design;
+  const illustrations = (pd.images ?? []).filter((im) => im.kind === "illustration");
+  if (illustrations.length > 0) {
+    if (!opts?.imageMaskId) return design;
+    let stamped = false;
+    const images = (pd.images ?? []).map((im) => {
+      if (im.kind !== "illustration") return im;
+      if (
+        im.imageMaskId ||
+        (im.corner ?? 0) > 0 ||
+        im.frameSource === "user" ||
+        im.frameSource === "none"
+      ) {
+        return im;
+      }
+      stamped = true;
+      return {
+        ...im,
+        imageMaskId: opts.imageMaskId,
+        frameSource: opts.frameSource ?? ("auto" as const),
+      };
+    });
+    if (!stamped) return design;
+    return {
+      ...design,
+      pages: { ...design.pages, [pageId]: { ...pd, images } },
+    };
+  }
 
   const zs = [
     ...pd.textBoxes.map((b) => b.z),

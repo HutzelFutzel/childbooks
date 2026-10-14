@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useTransition } from "react";
 import Link from "next/link";
-import { ChevronRight } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ChevronRight, Loader2 } from "lucide-react";
 import { cn } from "../lib/cn";
 import {
   filterNavTree,
@@ -67,20 +68,31 @@ function SidebarLeaf({
   nested?: boolean;
 }) {
   const active = hrefIsActive(leaf.href, pathname, catalogSegment);
+  const router = useRouter();
+  const [isPending, startTransition] = useTransition();
   return (
     <Link
       href={leaf.href}
       aria-current={active ? "page" : undefined}
-      onClick={onNavigate}
+      aria-busy={isPending}
+      onClick={(e) => {
+        onNavigate?.();
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0 || active) return;
+        e.preventDefault();
+        startTransition(() => {
+          router.push(leaf.href);
+        });
+      }}
       className={cn(
-        "block rounded-md px-2 py-1.5 text-sm transition-colors",
+        "flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
         nested ? "font-normal" : "font-medium",
-        active
+        active || isPending
           ? "bg-ink-100 text-ink-900"
           : "text-ink-600 hover:bg-ink-50 hover:text-ink-900",
       )}
     >
-      {leaf.label}
+      <span className="truncate">{leaf.label}</span>
+      {isPending && <Loader2 className="size-3.5 shrink-0 animate-spin text-ink-400" />}
     </Link>
   );
 }

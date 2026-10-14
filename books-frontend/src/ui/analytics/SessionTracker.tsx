@@ -78,6 +78,11 @@ export function SessionTracker() {
           ...(consentRef.current ? { viewport: window.innerWidth } : {}),
         }),
         keepalive: true,
+        // This ping doubles as the page-load / tab-focus session check: a stale
+        // token is refreshed quietly, and a real account whose session is dead
+        // is asked to sign in (the request then resumes). `background` only
+        // stops it from replacing a guest's session over a heartbeat.
+        background: true,
       }).catch(() => {
         // Analytics must never surface as an error to the person using the app.
       });

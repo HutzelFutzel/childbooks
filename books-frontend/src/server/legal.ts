@@ -5,6 +5,7 @@
  * the public doc, mirroring `server/siteContent.ts`. Returns the normalized
  * config so the landing page (footer) renders the final links during SSR.
  */
+import { cache } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import { getFirebaseDb } from "../lib/firebase";
 import {
@@ -13,11 +14,11 @@ import {
   type LegalConfig,
 } from "../core/config/legal";
 
-export async function getLegalConfig(): Promise<LegalConfig> {
+export const getLegalConfig = cache(async (): Promise<LegalConfig> => {
   try {
     const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "legal"));
     return normalizeLegalConfig(snap.exists() ? snap.data() : undefined);
   } catch {
     return createDefaultLegalConfig();
   }
-}
+});

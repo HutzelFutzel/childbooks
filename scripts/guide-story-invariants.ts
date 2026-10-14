@@ -64,7 +64,14 @@ import { storyMoments } from "../books-frontend/src/core/guide/hardcover";
 import { buildStoryDraftPrompt, buildStoryRevisionPrompt } from "../books-frontend/src/core/prompts/story";
 import { parseStoryBeats, serializeStoryBeats } from "../books-frontend/src/core/story/beats";
 import { restoreModelLineBreaks } from "../books-frontend/src/core/story/lineBreaks";
-import { applyStoryRevision, validateStoryRevision } from "../books-frontend/src/core/story/revision";
+import {
+  applyStoryRevision,
+  assessStoryRevision,
+  isEagerStoryEdit,
+  proposalFromRewrite,
+  rewritesWholeStory,
+  validateStoryRevision,
+} from "../books-frontend/src/core/story/revision";
 import { briefOf, createDefaultStoryBrief, storyBriefSchema, storyBriefSignature } from "../books-frontend/src/core/story/brief";
 import { createDefaultConfig, type Project } from "../books-frontend/src/core/types";
 import type { CheckResult } from "./guide-agent-invariants";
@@ -458,6 +465,50 @@ function sampleFor(id: StoryDetailId, project: Project): DetailPatch {
 
   const revisionPrompt = buildStoryRevisionPrompt(createDefaultConfig(), prose, "Make the ending warmer.");
   check(!revisionPrompt.system.includes("\\n"), "The revision prompt tells the model to write \\n.");
+
+  check(rewritesWholeStory("make the text rhymy"), "A rhyme request was treated as a small edit.");
+  check(rewritesWholeStory("Make the story a bit shorter"), "Shortening the story was treated as a small edit.");
+  check(!rewritesWholeStory("Make the ending warmer"), "A warmer ending rewrote the whole story.");
+  check(!isEagerStoryEdit("make Maya 5"), "Setting an age was queued as a story edit.");
+  check(isEagerStoryEdit("Add a scene at the beach"), "Adding a scene was not recognized as a story edit.");
+  check(isEagerStoryEdit("Make this nicer", true), "A marked 'make this nicer' waited for the interpreter.");
+
+  const mixed = assessStoryRevision(prose, {
+    summary: "Two tries",
+    changes: [
+      { before: "Maya woke up.", after: "Maya sprang up.", reason: "energy" },
+      { before: "not in the story", after: "nope", reason: "miss" },
+    ],
+  });
+  check(
+    mixed.changes.length === 1 && mixed.problems.length === 1 && mixed.changes[0]?.before === "Maya woke up.",
+    "One bad replacement threw away the replacement that matched.",
+  );
+  let rejected = "";
+  try {
+    validateStoryRevision(prose, {
+      summary: "Two tries",
+      changes: [
+        { before: "Maya woke up.", after: "Maya sprang up.", reason: "energy" },
+        { before: "not in the story", after: "nope", reason: "miss" },
+      ],
+    });
+  } catch (error) {
+    rejected = (error as Error).message;
+  }
+  check(rejected.includes("no longer matches"), "A patch with a bad replacement was accepted whole.");
+
+  const rewritten = proposalFromRewrite(prose, "Maya woke up.\n\nThe garden sparkled.", "Warmer.");
+  check(
+    applyStoryRevision(prose, rewritten, { [rewritten.changes[0]!.id]: "accepted" }).includes("garden"),
+    "A rewritten manuscript did not become a reviewable change.",
+  );
+  const rhymed = proposalFromRewrite(
+    "Maya found a red ball.",
+    "Sing a song, the day is long.",
+    "Rhymed.",
+  );
+  check(rhymed.changes.length === 1, "A near-total rewrite was split into many hunks.");
 }
 
 report.push("Story options");

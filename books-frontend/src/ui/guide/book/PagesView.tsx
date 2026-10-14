@@ -13,7 +13,9 @@ import { sameTarget } from "../../../core/guide/target";
 import type { Project } from "../../../core/types";
 import { illustrationActionFor, redrawUnits, startRedraw } from "../../../state/chatGeneration";
 import { useChatStudio } from "../../../state/chatStudio";
+import { useJobsStore } from "../../../state/jobsStore";
 import { PreviewSpread } from "../../studio/BookPreview";
+import type { DisplaySpread } from "../../studio/spreadModel";
 import { useStudio } from "../../studio/StudioContext";
 import { cn } from "../../lib/cn";
 import { useGuideLabel, useGuideT } from "../intl";
@@ -21,6 +23,11 @@ import { PaidAction } from "../chat/PaidAction";
 import { UnitStatus } from "./UnitStatus";
 import { VersionPager } from "./VersionPager";
 import { dispUnitIds, unitTarget } from "./units";
+
+function unitHasArt(project: Project, unitId: string): boolean {
+  const tree = project.illustrations?.[unitId];
+  return Boolean(tree && Object.keys(tree.nodes ?? {}).length > 0);
+}
 
 export function PagesView({
   project,
@@ -57,6 +64,8 @@ export function PagesView({
 
   if (!disp) return null;
   const units = dispUnitIds(disp);
+  const isCover = Boolean(disp.cover);
+  const overlayBounds = isCover ? "inset-y-0 left-1/4 w-1/2" : "inset-0";
 
   return (
     <div className="flex h-full flex-col">
@@ -73,10 +82,15 @@ export function PagesView({
               className="relative"
             >
               <PreviewSpread disp={disp} />
-              <div className={cn("absolute inset-0 grid", units.length > 1 ? "grid-cols-2" : "grid-cols-1")}>
+              <div className={cn("absolute grid", overlayBounds, units.length > 1 ? "grid-cols-2" : "grid-cols-1")}>
                 {units.map((unitId) => {
                   const target = unitTarget(project, unitId);
                   const selected = sameTarget(chip, target);
+                  const hasArt = unitHasArt(project, unitId);
+                  const drawingTitle =
+                    target.kind === "page"
+                      ? t("drawingPage", { n: target.page })
+                      : t("drawingCover");
                   return (
                     <button
                       key={unitId}
@@ -86,11 +100,17 @@ export function PagesView({
                       aria-label={target.kind === "page" ? t("page", { n: target.page }) : t("cover")}
                       aria-pressed={selected}
                       className={cn(
-                        "group/half relative transition focus-visible:outline-none",
+                        "group/half relative overflow-hidden transition focus-visible:outline-none",
                         selected ? "ring-2 ring-inset ring-ink-900" : "hover:bg-ink-900/[0.03] focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ink-500",
                       )}
                     >
-                      <UnitStatus unitId={unitId} stale={stale.has(unitId)} />
+                      <UnitStatus
+                        unitId={unitId}
+                        stale={stale.has(unitId)}
+                        bookPage
+                        hasArt={hasArt}
+                        title={drawingTitle}
+                      />
                       <span
                         role="button"
                         tabIndex={-1}
@@ -106,7 +126,7 @@ export function PagesView({
                   );
                 })}
               </div>
-              <div className={cn("pointer-events-none absolute inset-0 grid", units.length > 1 ? "grid-cols-2" : "grid-cols-1")}>
+              <div className={cn("pointer-events-none absolute grid", overlayBounds, units.length > 1 ? "grid-cols-2" : "grid-cols-1")}>
                 {units.map((unitId) => (
                   <div key={`versions-${unitId}`} className="relative">
                     <VersionPager
@@ -135,7 +155,14 @@ export function PagesView({
         </div>
         <Arrow side="right" disabled={at >= total - 1} label={t("nextPage")} onClick={() => onIndex(at + 1)} />
       </div>
-      <Strip count={total} at={at} onIndex={onIndex} label={disp.label} />
+      <Strip
+        displays={displays}
+        project={project}
+        stale={stale}
+        at={at}
+        onIndex={onIndex}
+        label={disp.label}
+      />
     </div>
   );
 }
@@ -183,28 +210,69 @@ function Arrow({
   );
 }
 
-/** Where you are in the book: a quiet row of ticks and the spread's name. */
-function Strip({ count, at, onIndex, label }: { count: number; at: number; onIndex: (i: number) => void; label: string }) {
+/** Where you are in the book: a row of ticks showing each spread's live state and the spread's name. */
+function Strip({
+  displays,
+  project,
+  stale,
+  at,
+  onIndex,
+  label,
+}: {
+  displays: readonly DisplaySpread[];
+  project: Project;
+  stale: ReadonlySet<string>;
+  at: number;
+  onIndex: (i: number) => void;
+  label: string;
+}) {
+  const activeUnitIds = useJobsStore((s) => s.activeUnitIds);
+  const failedUnits = useJobsStore((s) => s.failedUnits);
+  const drawingBook =
+    project.authoringState?.drawBook?.phase === "cast" ||
+    project.authoringState?.drawBook?.phase === "pages";
+
   return (
     <div className="flex shrink-0 flex-col items-center gap-2 pb-5">
       <div className="flex max-w-full items-center gap-1 overflow-x-auto px-4 [scrollbar-width:none]">
-        {Array.from({ length: count }, (_, i) => (
-          <button
-            key={i}
-            type="button"
-            onClick={() => onIndex(i)}
-            aria-label={`${i + 1}`}
-            aria-current={i === at ? "page" : undefined}
-            className="flex h-4 items-center px-0.5"
-          >
-            <span
-              className={cn(
-                "block h-1 rounded-full transition-all duration-200",
-                i === at ? "w-5 bg-ink-900" : "w-2 bg-ink-200 hover:bg-ink-400",
-              )}
-            />
-          </button>
-        ))}
+        {displays.map((d, i) => {
+          const ids = dispUnitIds(d);
+          const isCurrent = i === at;
+          const isDrawing = ids.some(
+            (id) => activeUnitIds.has(id) || (drawingBook && !unitHasArt(project, id)),
+          );
+          const isDone = ids.length > 0 && ids.every((id) => unitHasArt(project, id));
+          const hasIssue =
+            !drawingBook && ids.some((id) => Boolean(failedUnits[id]) || stale.has(id));
+          return (
+            <button
+              key={d.id}
+              type="button"
+              onClick={() => onIndex(i)}
+              aria-label={d.label || `${i + 1}`}
+              title={d.label}
+              aria-current={isCurrent ? "page" : undefined}
+              className="flex h-4 items-center px-0.5"
+            >
+              <span
+                className={cn(
+                  "block h-1.5 rounded-full transition-all duration-200",
+                  isCurrent
+                    ? isDrawing
+                      ? "w-6 bg-magic-500"
+                      : "w-6 bg-ink-900"
+                    : hasIssue
+                      ? "w-2.5 bg-amber-400 hover:bg-amber-500"
+                      : isDrawing
+                        ? "w-2.5 animate-pulse bg-magic-300 hover:bg-magic-500 motion-reduce:animate-none"
+                        : isDone
+                          ? "w-2 bg-ink-400 hover:bg-ink-600"
+                          : "w-2 bg-ink-200 hover:bg-ink-400",
+                )}
+              />
+            </button>
+          );
+        })}
       </div>
       <span className="text-xs text-ink-500">{label}</span>
     </div>

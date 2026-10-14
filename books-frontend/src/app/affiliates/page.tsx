@@ -20,7 +20,7 @@ import { AFFILIATE_FAQ } from "../../ui/affiliates/faq";
  * Applications go to Firestore + Slack; partners are created in Rewardful only
  * after manual approval.
  */
-export const dynamic = "force-dynamic";
+export const revalidate = 60;
 
 const PATH = "/affiliates" as const;
 

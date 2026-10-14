@@ -14,12 +14,16 @@ import type {
   ArtStyleSelection,
   GuideEntry,
   HardcoverDecision,
+  LookSource,
   Project,
+  RetiredArtwork,
   SourceArtRef,
   StudioAuthoringState,
 } from "../types";
+import { parseCustomStyleRef } from "../config/customArtStyles";
 
 const ENTRIES: readonly GuideEntry[] = ["guided", "own"];
+const LOOK_SOURCES: readonly LookSource[] = ["photo", "drawing", "describe", "invent"];
 const HARDCOVER: readonly HardcoverDecision[] = ["spread", "keep", "thin"];
 
 function strings(value: unknown): string[] | undefined {
@@ -62,6 +66,23 @@ function compact<T extends object>(value: T): T {
   return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T;
 }
 
+function generationReference(value: unknown): ArtStyleSelection["generationReference"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  if (
+    typeof raw.imageUrl !== "string" ||
+    typeof raw.storagePath !== "string" ||
+    typeof raw.mimeType !== "string" ||
+    typeof raw.updatedAt !== "number"
+  ) return undefined;
+  return {
+    imageUrl: raw.imageUrl,
+    storagePath: raw.storagePath,
+    mimeType: raw.mimeType,
+    updatedAt: raw.updatedAt,
+  };
+}
+
 /** A stored art style, repaired field by field. Anything that isn't one reads as absent. */
 function artStyleSelection(value: unknown): ArtStyleSelection | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
@@ -74,7 +95,46 @@ function artStyleSelection(value: unknown): ArtStyleSelection | undefined {
     derivedFromName: typeof raw.derivedFromName === "string" ? raw.derivedFromName.slice(0, 120) : undefined,
     derivedFromNames: strings(raw.derivedFromNames)?.slice(0, 8),
     referenceArt: sourceArtRefs(raw.referenceArt),
+    generationReference: generationReference(raw.generationReference),
+    customStyle: parseCustomStyleRef(raw.customStyle),
   });
+}
+
+function retiredArtwork(value: unknown): RetiredArtwork | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  const rows = (list: unknown) => (Array.isArray(list) ? list.slice(0, 40) : []);
+  const cast = rows(raw.cast).flatMap((row): RetiredArtwork["cast"] => {
+    if (!row || typeof row !== "object" || typeof (row as { id?: unknown }).id !== "string") return [];
+    const item = row as Record<string, unknown>;
+    const sourceArt = sourceArtRefs(item.sourceArt);
+    if (!sourceArt) return [];
+    const lookSource = LOOK_SOURCES.includes(item.lookSource as LookSource) ? (item.lookSource as LookSource) : undefined;
+    return [
+      compact({
+        id: item.id as string,
+        sourceArt,
+        lookSource,
+        lookFromArt: typeof item.lookFromArt === "string" ? item.lookFromArt.slice(0, 500) : undefined,
+      }),
+    ];
+  });
+  const anchors = rows(raw.anchors).flatMap((row): RetiredArtwork["anchors"] => {
+    if (!row || typeof row !== "object" || typeof (row as { id?: unknown }).id !== "string") return [];
+    const item = row as Record<string, unknown>;
+    const sourceArt = sourceArtRefs(item.sourceArt);
+    if (!sourceArt) return [];
+    return [
+      compact({
+        id: item.id as string,
+        sourceArt,
+        lookFromArt: typeof item.lookFromArt === "string" ? item.lookFromArt.slice(0, 500) : undefined,
+      }),
+    ];
+  });
+  const staged = sourceArtRefs(raw.staged);
+  if (cast.length === 0 && anchors.length === 0 && !staged) return undefined;
+  return compact({ cast, anchors, staged });
 }
 
 /** A repaired copy of the stored state. Never throws, never returns undefined. */
@@ -184,12 +244,14 @@ export function normalizeStudioAuthoringState(input: unknown): StudioAuthoringSt
     looksDecided: strings(raw.looksDecided)?.slice(-100),
     lookFocus: typeof raw.lookFocus === "string" && raw.lookFocus ? raw.lookFocus.slice(0, 120) : undefined,
     styleBefore: artStyleSelection(raw.styleBefore),
+    retiredArtwork: retiredArtwork(raw.retiredArtwork),
     removedNames: strings(raw.removedNames)?.slice(-50),
     chatLocale: typeof raw.chatLocale === "string" && /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})*$/.test(raw.chatLocale) ? raw.chatLocale : undefined,
     ownComposer: raw.ownComposer === true ? true : undefined,
     manuscriptReadyAt: time(raw.manuscriptReadyAt),
     planRequestedFor: typeof raw.planRequestedFor === "string" && raw.planRequestedFor ? raw.planRequestedFor : undefined,
     planBasis: typeof raw.planBasis === "string" && raw.planBasis ? raw.planBasis.slice(0, 200) : undefined,
+    planNotesAt: time(raw.planNotesAt),
     bookSetup:
       bookSetup && Object.keys(bookSetup).length > 0 ? bookSetup : undefined,
     sameAge: sameAgeGroups(raw.sameAge),

@@ -25,7 +25,8 @@ import { composerForChoice } from "../books-frontend/src/core/guide/activity";
 import { GUIDE_COMMANDS } from "../books-frontend/src/core/guide/agent/registry";
 import { firstUnmet } from "../books-frontend/src/core/guide/agent/requirements";
 import type { CommandContext } from "../books-frontend/src/core/guide/agent/types";
-import { deriveJourney } from "../books-frontend/src/core/guide/journey";
+import { BOOK_CHOICE_KINDS, deriveJourney, type Journey } from "../books-frontend/src/core/guide/journey";
+import { cardId, deckStep, EMPTY_DECK, placeCard } from "../books-frontend/src/core/guide/cardDeck";
 import {
   manuscriptHash,
   sanitizeManuscriptCast,
@@ -49,6 +50,11 @@ import { createDefaultConfig, type Project, type StoryCastMember } from "../book
 import { createVersionTree } from "../books-frontend/src/core/versioning";
 import { withManuscriptHeading } from "../books-frontend/src/ui/guide/bookTitle";
 import type { CheckResult } from "./guide-agent-invariants";
+
+/** The first open card about the people, past the book's own choices (format, layout, cover words). */
+const askedAboutPeople = (journey: Pick<Journey, "open">) =>
+  journey.open.find((item) => !BOOK_CHOICE_KINDS.has(item.kind));
+
 
 const failures: string[] = [];
 const notes: string[] = [];
@@ -154,9 +160,10 @@ function ownBook(storyText: string, options: { handedOver?: boolean; read?: bool
   check(question?.own === true && question.optional !== true, "The reading age isn't asked from the child's stated age.");
   check(question !== null && readingAgeAskLine(question).key === "readingAgeAskOwnFromAge", "A stated age doesn't name the child in the reading-age question.");
   const journey = deriveJourney(read, policies, {});
+  const afterRead = askedAboutPeople(journey);
   check(
-    journey.well?.kind === "audienceConfirm" && journey.well.own === true,
-    `After reading the story, the guide asks ${journey.well?.kind ?? "nothing"} before the reading age.`,
+    afterRead?.kind === "audienceConfirm" && afterRead.own === true,
+    `After reading the story, the guide asks ${afterRead?.kind ?? "nothing"} before the reading age.`,
   );
   const answered = withFactMarks(read, "answeredFacts", ["readingAge"]);
   check(ownAudienceQuestion(answered) === null, "The reading age is asked again after the parent answered.");
@@ -181,7 +188,7 @@ function ownBook(storyText: string, options: { handedOver?: boolean; read?: bool
   const silent = ownBook(BODY, { handedOver: true, read: true, cast: [{ ...maya(), age: undefined }] });
   check(statedReaderMonths(silent) === undefined, "A missing age is treated as stated.");
   check(ownAudienceQuestion(silent)?.optional === true, "A story that states no age isn't allowed to skip the age group.");
-  check(deriveJourney(silent, policies, {}).well?.kind === "castAges", "Portraits are offered before a missing age is asked.");
+  check(askedAboutPeople(deriveJourney(silent, policies, {}))?.kind === "castAges", "Portraits are offered before a missing age is asked.");
   check(peopleNeedingStatedAge(silent).length === 1, "A person with no age and no estimate isn't waiting on one.");
   const guessed = {
     ...silent,
@@ -196,9 +203,25 @@ function ownBook(storyText: string, options: { handedOver?: boolean; read?: bool
   check(peopleNeedingStatedAge(guessed).length === 0, "A person with a drawing estimate is still waiting for an age.");
   check(deriveJourney(guessed, policies, {}).well?.kind !== "castAges", "An estimated age is asked about anyway.");
 
+  // The ages card lists everyone: estimates filled in, the one without any blank.
+  const mixed = ownBook(BODY, {
+    handedOver: true,
+    read: true,
+    cast: [
+      { ...maya(), name: "Arthur", age: undefined, visualAge: { years: 5, source: "suggested" as const } },
+      { ...maya(), name: "Amanda", age: undefined },
+    ],
+  });
+  const agesWell = deriveJourney(mixed, policies, {}).open.find((item) => item.kind === "castAges") as
+    | { kind: "castAges"; people: { name: string; years?: number }[] }
+    | undefined;
+  check(agesWell?.people.length === 2, "The ages card leaves out someone in the cast.");
+  check(agesWell?.people.find((p) => p.name === "Arthur")?.years === 5, "An estimated age isn't filled in on the ages card.");
+  check(agesWell?.people.find((p) => p.name === "Amanda")?.years === undefined, "A person without any age is given one on the ages card.");
+
   // Then, once: anything the pictures should know.
   const notesWell = deriveJourney(answered, policies, {});
-  check(notesWell.well?.kind === "pictureNotes", `After the reading age, the guide offers ${notesWell.well?.kind ?? "nothing"} instead of a note for the pictures.`);
+  check(askedAboutPeople(notesWell)?.kind === "pictureNotes", `After the reading age, the guide offers ${askedAboutPeople(notesWell)?.kind ?? "nothing"} instead of a note for the pictures.`);
   check(!composerForChoice({ entry: "own", handedOver: true, wellKind: "pictureNotes" }), "The note for the pictures competes with the message field.");
   const skipped = withFactMarks(answered, "skippedFacts", ["pictureNotes"]);
   check(deriveJourney(skipped, policies, {}).well?.kind !== "pictureNotes", "Skip doesn't dismiss the note for the pictures.");
@@ -208,9 +231,51 @@ function ownBook(storyText: string, options: { handedOver?: boolean; read?: bool
   };
   check(deriveJourney(given, policies, {}).well?.kind !== "pictureNotes", "The note for the pictures is asked again after the parent gave one.");
   const planned = { ...answered, screenplay: createVersionTree({ notes: "", spreads: [] }) };
-  check(deriveJourney(planned, policies, {}).well?.kind !== "pictureNotes", "A book with pages planned is asked about notes the plan can no longer use.");
+  // The plan often lands while the notes are being typed: the question stays, and a note plans the pages again.
+  check(
+    deriveJourney(planned, policies, {}).open.some((item) => item.kind === "pictureNotes"),
+    "The note for the pictures disappears once the pages are planned.",
+  );
   const plan = pagePlanInput(given.config);
   check(!plan.story.includes("red curls"), "The note for the pictures is printed as story text.");
+}
+
+// --- Nothing is replaced until the reader decides ---------------------------------------------------------
+
+{
+  // Own words: the format and layout don't wait for the reading, so they come
+  // first. The people the reading finds follow behind them, never in front.
+  const unread = ownBook(BODY, { handedOver: true, read: false });
+  const read = ownBook(BODY, { handedOver: true, read: true });
+  const before = deriveJourney(unread, policies, {});
+  const after = deriveJourney(read, policies, {});
+  check(before.well?.kind === "formatChoice", `While the story is read, the guide asks ${before.well?.kind ?? "nothing"} instead of the format.`);
+  check(after.well?.kind === "formatChoice", `Once the story is read, ${after.well?.kind ?? "nothing"} replaces the format question.`);
+  const order = after.open.map((item) => item.kind);
+  check(
+    order.indexOf("layoutChoice") !== -1 && order.indexOf("layoutChoice") < order.findIndex((kind) => !BOOK_CHOICE_KINDS.has(kind)),
+    `The layout is asked after the people (${order.join(", ")}).`,
+  );
+
+  // The card on screen holds while its question is open.
+  const castAges = cardId({ kind: "castAges" });
+  const format = cardId({ kind: "formatChoice" });
+  const castFix = cardId({ kind: "castFix" });
+  const at = (open: string[], shown: string | null) =>
+    deckStep(shown ? placeCard(EMPTY_DECK, shown, 1) : EMPTY_DECK, { open, now: 2, acted: true, holding: false, drawable: true }).current;
+  check(at([castAges, format], null) === castAges, "With nothing on screen, the first question isn't asked first.");
+  check(at([castAges, format], format) === format, "A question on screen is replaced by one that opened meanwhile.");
+  check(at([castAges], format) === castAges, "An answered question is held on screen.");
+  check(at([castFix, format], format) === format, "A blocker replaced the question on screen instead of showing beside it.");
+  check(at([], format) === null, "A question is shown with nothing to ask.");
+
+  // Everything answered, the book still being prepared: the chat keeps working.
+  const settled = (project: Project) =>
+    withAuthoring(project, { bookSetup: { formatConfirmedAt: 1, layoutConfirmedAt: 1 }, cover: { confirmedAt: 1, subtitle: "", author: "" } });
+  check(deriveJourney(settled(unread), policies, {}).waiting === "reading", "Nothing is shown as coming while the story is read.");
+  check(deriveJourney(settled(unread), policies, {}).well === null, "A question is open although everything was answered.");
+  check(deriveJourney(unread, policies, {}).waiting === null, "Waiting is shown while a question is still open.");
+  check(deriveJourney(settled(read), policies, { analysisRunning: true }).waiting !== "planning", "The reading is shown as planning.");
 }
 
 // --- The heading atop the story -----------------------------------------------------------------------------

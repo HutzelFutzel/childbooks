@@ -72,6 +72,36 @@ export const storyRevisionModelSchema = z.object({
 
 export type StoryRevisionModelResult = z.infer<typeof storyRevisionModelSchema>;
 
+/**
+ * A voice or shape change that has to touch the manuscript as a whole: rhyme,
+ * simpler words, shorter. A warmer ending stays a small patch.
+ */
+const LOCAL_STORY_TARGET =
+  /\b(ending|beginning|opening|scene|paragraph|sentence|page|line|moment|title|name|character)\b/iu;
+const WHOLE_STORY_STYLE =
+  /\b(rhyme|rhym\w*|verses?|poems?|simpler words|simpler language|easier words|easier to read|read[- ]aloud|whole story|entire story|throughout|every (?:sentence|line|page|paragraph))\b/iu;
+const BROAD_STORY_EDIT = /\b(shorter|longer|simpler|funnier|sillier|gentler|calmer)\b/iu;
+const STORY_WORD = /\b(story|text|it|book|manuscript)\b/iu;
+const EDIT_VERB = /\b(make|change|rewrite|rework|shorten|lengthen|add|remove|take|cut|expand|simplify|warm|fix)\b/iu;
+const STORY_EDIT_TOPIC =
+  /\b(story|text|manuscript|ending|scene|rhyme|rhym\w*|verse|simpler|shorter|longer|read[- ]aloud|paragraph)\b/iu;
+
+export function rewritesWholeStory(instruction: string): boolean {
+  const text = instruction.trim();
+  if (!text || text.length > 280 || LOCAL_STORY_TARGET.test(text)) return false;
+  if (WHOLE_STORY_STYLE.test(text)) return true;
+  return BROAD_STORY_EDIT.test(text) && STORY_WORD.test(text);
+}
+
+/** A sentence that is already the edit, so the revision can start before the interpreter answers. */
+export function isEagerStoryEdit(instruction: string, marked = false): boolean {
+  const text = instruction.trim();
+  if (!text || text.length > 400 || /[?？]\s*$/u.test(text)) return false;
+  if (rewritesWholeStory(text)) return !marked;
+  if (marked && EDIT_VERB.test(text)) return true;
+  return EDIT_VERB.test(text) && STORY_EDIT_TOPIC.test(text);
+}
+
 export type StoryRevisionChangeKind = "add" | "delete" | "update";
 
 export interface StoryReviewChange extends StoryRevisionChange {
@@ -184,47 +214,85 @@ function formatExpandedPassage(before: string, after: string): string {
  * Every `before` must identify one unique, non-overlapping span. That makes it
  * mechanically impossible for the model to alter text it did not name.
  */
-export function validateStoryRevision(
+export interface AssessedStoryRevision {
+  summary: string;
+  /** Replacements that match the manuscript and do not overlap. */
+  changes: StoryRevisionChange[];
+  /** Why the rest were refused, in the order the model sent them. */
+  problems: string[];
+  /** Every change was a no-op inside a marked passage. */
+  scopeError: boolean;
+}
+
+/**
+ * Keep every replacement that lands, and name the ones that do not.
+ *
+ * One bad `before` used to throw away the rest and force a second full
+ * generation. The caller can ask again for only the failures.
+ */
+export function assessStoryRevision(
   baseStory: string,
   result: StoryRevisionModelResult,
   selection?: StoryRevisionSelection,
-): StoryRevisionProposal {
+  already: readonly StoryRevisionChange[] = [],
+): AssessedStoryRevision {
+  const summary = result.summary.trim().slice(0, 240) || "Prepared the requested story changes.";
   if (result.changes.length > 40) {
-    throw new Error("The editor proposed too many separate changes.");
+    return {
+      summary,
+      changes: [],
+      problems: ["The editor proposed too many separate changes."],
+      scopeError: false,
+    };
   }
-  const occupied: Array<{ start: number; end: number }> = [];
+  const occupied: Array<{ start: number; end: number }> = already.map((change) => ({
+    start: change.baseStart ?? 0,
+    end: change.baseEnd ?? (change.baseStart ?? 0) + change.before.length,
+  }));
   const changes: StoryRevisionChange[] = [];
+  const problems: string[] = [];
   // With a marked passage, a span only has to be unique inside it: a phrase that
   // repeats elsewhere in the story is not ambiguous about which one was marked.
   const scope = selection ? baseStory.slice(selection.start, selection.end) : baseStory;
   const scopeAt = selection?.start ?? 0;
+  let sawNoop = false;
 
-  for (const [index, raw] of result.changes.entries()) {
+  for (const raw of result.changes) {
     const before = spanInManuscript(scope, raw.before);
     const after = formatExpandedPassage(before, restoreModelLineBreaks(raw.after));
-    if (before === after) continue;
+    if (before === after) {
+      sawNoop = true;
+      continue;
+    }
     if (!before) {
-      throw new Error("An insertion did not include an exact manuscript anchor.");
+      problems.push("An insertion did not include an exact manuscript anchor.");
+      continue;
+    }
+    if (already.some((change) => change.before === before) || changes.some((change) => change.before === before)) {
+      continue;
     }
     const hits = occurrences(scope, before);
     if (hits.length !== 1) {
       if (selection && hits.length === 0 && occurrences(baseStory, before).length > 0) {
-        throw new Error(OUTSIDE_SELECTION);
+        problems.push(OUTSIDE_SELECTION);
+      } else {
+        problems.push(
+          hits.length === 0
+            ? "A proposed change no longer matches the manuscript."
+            : "A proposed change was ambiguous in the manuscript.",
+        );
       }
-      throw new Error(
-        hits.length === 0
-          ? "A proposed change no longer matches the manuscript."
-          : "A proposed change was ambiguous in the manuscript.",
-      );
+      continue;
     }
     const start = scopeAt + hits[0];
     const end = start + before.length;
     if (occupied.some((span) => start < span.end && end > span.start)) {
-      throw new Error("The proposed changes overlap each other.");
+      problems.push("The proposed changes overlap each other.");
+      continue;
     }
     occupied.push({ start, end });
     changes.push({
-      id: `change-${index + 1}`,
+      id: `change-${already.length + changes.length + 1}`,
       before,
       after,
       reason: raw.reason.trim().slice(0, 180) || "Requested story change",
@@ -233,18 +301,121 @@ export function validateStoryRevision(
     });
   }
 
-  if (changes.length === 0) {
-    // With a marked passage the editor is told to answer "cannot be done in
-    // here" with a change that changes nothing; say that, not "no change".
-    if (selection) throw new StoryRevisionScopeError();
+  return {
+    summary,
+    changes,
+    problems,
+    scopeError: Boolean(selection) && changes.length === 0 && problems.length === 0 && sawNoop,
+  };
+}
+
+export function validateStoryRevision(
+  baseStory: string,
+  result: StoryRevisionModelResult,
+  selection?: StoryRevisionSelection,
+): StoryRevisionProposal {
+  const assessed = assessStoryRevision(baseStory, result, selection);
+  if (assessed.scopeError) throw new StoryRevisionScopeError();
+  if (assessed.problems.length > 0) throw new Error(assessed.problems[0]);
+  if (assessed.changes.length === 0) {
     throw new Error("The editor did not propose a meaningful change.");
   }
+  return { summary: assessed.summary, changes: assessed.changes };
+}
+
+interface SpanEdit {
+  baseStart: number;
+  baseEnd: number;
+  nextStart: number;
+  nextEnd: number;
+}
+
+/** The rewritten manuscript as reviewable hunks. A near-total rewrite is one change. */
+export function proposalFromRewrite(baseStory: string, rewritten: string, summary: string): StoryRevisionProposal {
+  const next = restoreModelLineBreaks(rewritten).trim();
+  const base = baseStory;
+  if (!next || next === base.trim()) {
+    throw new Error("The editor did not propose a meaningful change.");
+  }
+  const edits = spanEdits(base, next);
+  const changed = edits.reduce(
+    (sum, edit) => sum + (edit.baseEnd - edit.baseStart) + (edit.nextEnd - edit.nextStart),
+    0,
+  );
+  const heading = summary.trim().slice(0, 240) || "Prepared the requested story changes.";
+  if (changed >= (base.length + next.length) * 0.55) {
+    return {
+      summary: heading,
+      changes: [
+        {
+          id: "change-1",
+          before: base,
+          after: next,
+          reason: heading,
+          baseStart: 0,
+          baseEnd: base.length,
+        },
+      ],
+    };
+  }
+  const merged = coalesceSpans(base, edits, 80).slice(0, 40);
+  if (merged.length === 0) throw new Error("The editor did not propose a meaningful change.");
   return {
-    summary:
-      result.summary.trim().slice(0, 240) ||
-      "Prepared the requested story changes.",
-    changes,
+    summary: heading,
+    changes: merged.map((edit, index) => ({
+      id: `change-${index + 1}`,
+      before: base.slice(edit.baseStart, edit.baseEnd),
+      after: next.slice(edit.nextStart, edit.nextEnd),
+      reason: heading,
+      baseStart: edit.baseStart,
+      baseEnd: edit.baseEnd,
+    })),
   };
+}
+
+function spanEdits(base: string, next: string): SpanEdit[] {
+  const edits: SpanEdit[] = [];
+  let baseAt = 0;
+  let nextAt = 0;
+  let active: SpanEdit | null = null;
+  const flush = () => {
+    if (!active) return;
+    if (active.baseEnd > active.baseStart || active.nextEnd > active.nextStart) edits.push(active);
+    active = null;
+  };
+  for (const part of diffChars(base, next)) {
+    if (!part.added && !part.removed) {
+      flush();
+      baseAt += part.value.length;
+      nextAt += part.value.length;
+      continue;
+    }
+    active ??= { baseStart: baseAt, baseEnd: baseAt, nextStart: nextAt, nextEnd: nextAt };
+    if (part.removed) {
+      baseAt += part.value.length;
+      active.baseEnd = baseAt;
+    } else {
+      nextAt += part.value.length;
+      active.nextEnd = nextAt;
+    }
+  }
+  flush();
+  return edits;
+}
+
+function coalesceSpans(base: string, edits: SpanEdit[], gap: number): SpanEdit[] {
+  const merged: SpanEdit[] = [];
+  for (const edit of edits) {
+    const prev = merged[merged.length - 1];
+    const between = prev ? base.slice(prev.baseEnd, edit.baseStart) : "";
+    if (prev && between.length <= gap) {
+      prev.baseEnd = edit.baseEnd;
+      prev.nextEnd = edit.nextEnd;
+      continue;
+    }
+    merged.push({ ...edit });
+  }
+  return merged;
 }
 
 interface LocalEdit {

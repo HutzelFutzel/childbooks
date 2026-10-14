@@ -207,11 +207,13 @@ export function hardcoverFor(project: Project): HardcoverCheck | null {
 function planBasis(project: Project, check: HardcoverCheck): string {
   // Physical trim does not affect pagination or the screenplay prompt. Keeping
   // it out means choosing a format remains an instant, non-generative decision.
+  const notesAt = authoringOf(project).planNotesAt;
   return [
     project.analysis?.generatedAt ?? 0,
     check.pages,
     check.case,
     project.config.layoutId,
+    ...(notesAt ? [`notes${notesAt}`] : []),
   ].join("|");
 }
 

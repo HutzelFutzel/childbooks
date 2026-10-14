@@ -52,6 +52,7 @@ export interface ArgSpec {
 export type CommandArea =
   | "path"
   | "book"
+  | "design"
   | "story"
   | "people"
   | "places"
@@ -82,6 +83,7 @@ export type ImpactEffect =
   | { kind: "replacesStory"; words: number }
   | { kind: "renamesInStory"; from: string; to: string; count: number }
   | { kind: "outdatesPortraits"; names: string[] }
+  | { kind: "retiresArtwork"; names: string[]; preset: string }
   | { kind: "removesPlace"; name: string };
 
 export interface Impact {
@@ -95,6 +97,7 @@ export const NO_IMPACT: Impact = { level: "none", effects: [] };
 
 export type RequirementId =
   | "notLocked"
+  | "pagesStarted"
   | "hasStory"
   | "hasCast"
   | "castAges"
@@ -193,7 +196,11 @@ export interface CommandContext {
   now: number;
   guest: boolean;
   /** The art styles on offer, for resolving "watercolor" to an id. */
-  styles: readonly { id: string; label: string }[];
+  styles: readonly {
+    id: string;
+    label: string;
+    generationReference?: import("../../types").GenerationStyleReference;
+  }[];
   /** Book languages on offer. */
   languages: readonly { id: string; label: string }[];
   /**
@@ -203,6 +210,16 @@ export interface CommandContext {
   marked?: boolean;
   /** The picture the reader has selected, for a skill that is about "this one". */
   chip?: GuideTarget | null;
+  /**
+   * The pages the reader means by "this page": the one they selected, else the
+   * spread open in front of them. Set by the app from what is on screen, never
+   * by the interpreter. Empty when no page is in view.
+   */
+  pages?: readonly string[];
+  /** A portrait is being drawn, which opens the Cast tab before any portrait is done. Set by the app from the running jobs. */
+  portraitsRunning?: boolean;
+  /** The fonts on offer for this book's language, for resolving "a serif font" to one. */
+  fonts?: readonly { id: string; label: string; category?: string }[];
 }
 
 /**
@@ -243,6 +260,11 @@ export interface CommandIdea {
   lead?: boolean;
   /** Still worth suggesting once the pages have started, when little else can change. */
   duringDrawing?: boolean;
+  /**
+   * Makes sense before there is a book to act on. Every other idea is about the
+   * book (its size, look, story, people) and stays hidden until one exists.
+   */
+  beforeBook?: boolean;
   /** Null hides the idea; an object shows it with these vars. Default: always. */
   relevant?: (project: Project) => { name?: string } | null;
   /**
@@ -272,6 +294,12 @@ export interface CommandDef {
   suggest: readonly CommandIdea[] | false;
   /** Spends Sparks. At most one paid skill runs per message, and never without a tap. */
   paid?: boolean;
+  /**
+   * Several calls of this paid skill in one message are one piece of work
+   * ("make Aren and Amira blonde"): they run together and are priced and
+   * started as one batch, still behind the same single price and tap.
+   */
+  batchable?: boolean;
   /** The code's floor: this always confirms, whatever the admin saved. */
   alwaysConfirm?: boolean;
   /**

@@ -34,6 +34,9 @@ import {
   portraitsToDraw,
   withPortraitAnchorReferences,
 } from "../core/guide/portrait";
+import { applyAutomaticBookFrame } from "../core/design";
+import { pickRandomActiveMaskId, type ImageMasksConfig } from "../core/config/imageMasks";
+import { getCursor } from "../core/versioning";
 import { authoringOf, withAuthoring } from "../core/guide/projectState";
 import { anchorsToPrepare } from "../core/book/anchorFreshness";
 import { illustrationUnits } from "../core/book/units";
@@ -43,6 +46,7 @@ import {
   createBookJob,
   createPortraitJob,
   createRefreshJob,
+  fetchJob,
   fetchJobTasks,
 } from "../platform/jobs";
 import type { BookTask } from "../core/jobs/types";
@@ -233,6 +237,26 @@ export async function startPortraits(quote: GenerationQuote): Promise<boolean> {
 
 // --- Draw the book ----------------------------------------------------------
 
+/**
+ * Lock in one checked shape before the first picture, so the choice survives
+ * a closed tab. Pages already framed by the reader are left as they are.
+ * Transparent cutouts stay unframed.
+ */
+function withChosenBookFrame(project: Project, masks: ImageMasksConfig): Project {
+  const design = project.design;
+  if (!design) return project;
+  const maskId = design.defaultImageMaskId ?? pickRandomActiveMaskId(masks);
+  if (!maskId) return project;
+  const transparent = new Set<string>();
+  for (const [id, tree] of Object.entries(project.illustrations ?? {})) {
+    const art = getCursor(tree).content;
+    if (art.generation?.applied.background === "transparent") transparent.add(id);
+  }
+  const next = applyAutomaticBookFrame(design, maskId, { transparentPageIds: transparent });
+  if (next === design) return project;
+  return { ...project, design: next };
+}
+
 /** The book job's id for a quote: a reload or double tap lands on the same job. */
 export function bookJobId(quoteId: string): string {
   return `book-${quoteId}`;
@@ -252,8 +276,9 @@ export async function startDrawBook(quote: GenerationQuote): Promise<boolean> {
   // Every later character sheet is seeded from a portrait the reader could see.
   if (portraitsToDraw(before).length > 0) return false;
   const languages = useAppConfigStore.getState().bookLanguages;
+  const masks = useAppConfigStore.getState().imageMasks;
   await store.patchCurrent((live) => {
-    const seeded = withPortraitAnchorReferences(live);
+    const seeded = withChosenBookFrame(withPortraitAnchorReferences(live), masks);
     const cover = authoringOf(live).cover;
     // Decided once, when the book is drawn, so a later redraw paints the same way.
     const painted =
@@ -298,12 +323,33 @@ function bookRun(quote: GenerationQuote): NonNullable<ReturnType<typeof authorin
 async function launchBookJob(quote: GenerationQuote): Promise<void> {
   const project = useProjectsStore.getState().current();
   if (!project || project.id !== quote.projectId) return;
-  await createBookJob(project, getResolvedModels(quote.tier), bookTasksFor(quote), quote.tier, {
-    quoteId: quote.id,
-    idempotencyKey: bookJobId(quote.id),
-    notify: true,
-  });
+  try {
+    await createBookJob(project, getResolvedModels(quote.tier), bookTasksFor(quote), quote.tier, {
+      quoteId: quote.id,
+      idempotencyKey: bookJobId(quote.id),
+      notify: true,
+    });
+  } catch (err) {
+    // The run was already recorded; without a job it would wait for one forever.
+    // End it with the reason, so the well offers a fresh price right away.
+    const jobId = bookJobId(quote.id);
+    await useProjectsStore
+      .getState()
+      .patchCurrent((live) => {
+        const current = authoringOf(live).drawBook;
+        if (!current || current.jobId !== jobId) return live;
+        return withAuthoring(live, { drawBook: { ...current, phase: "done", error: NEVER_STARTED_ERROR } });
+      })
+      .catch(() => undefined);
+    throw err;
+  }
 }
+
+/** How long a started run waits for its job document before it is declared lost. */
+const JOB_APPEAR_MS = 2 * 60_000;
+
+const NEVER_STARTED_ERROR = "Drawing didn't start. Nothing was charged, so you can simply try again.";
+const STALLED_BOOK_ERROR = "Drawing stopped responding. Nothing was charged for what is missing, so you can try again.";
 
 /**
  * Follow the book job: the pane moves from the sheets to the pages once no
@@ -317,8 +363,15 @@ export async function continueDrawBook(): Promise<void> {
   if (!run?.quoteId || run.phase === "done") return;
   if (!run.jobId) return continueLegacyDrawBook();
   const jobs = useJobsStore.getState();
-  const job = jobs.jobStatus[run.jobId];
-  if (!job) return;
+  let job = jobs.jobStatus[run.jobId];
+  // The listener can miss the terminal write. A quiet book (nothing still
+  // drawing) is exactly when that miss leaves the run looking unfinished.
+  const idle = jobs.activeUnitIds.size === 0;
+  const stalled = Boolean(job?.stalled);
+  if (!job || (idle && job.status !== "done" && job.status !== "error")) {
+    const fresh = await fetchJob(run.jobId).catch(() => null);
+    if (fresh) job = { ...fresh, ...(stalled ? { stalled: true } : {}) };
+  }
   const jobId = run.jobId;
   const patch = (next: { phase: "cast" | "pages" | "done"; error?: string }) =>
     useProjectsStore.getState().patchCurrent((live) => {
@@ -326,9 +379,24 @@ export async function continueDrawBook(): Promise<void> {
       if (!current || current.jobId !== jobId) return live;
       return withAuthoring(live, { drawBook: { ...current, ...next } });
     });
+  if (!job) {
+    // The job document never appeared (the request that creates it failed or
+    // was lost). Waiting longer will not conjure it: end the run so the reader
+    // is offered a fresh price instead of an endless spinner.
+    if (Date.now() - run.startedAt > JOB_APPEAR_MS) await patch({ phase: "done", error: NEVER_STARTED_ERROR });
+    return;
+  }
   if (job.status === "done" || job.status === "error") {
     const refused = jobs.refusedJobs.find((r) => r.id === run.jobId);
-    await patch({ phase: "done", ...(refused ? { error: refused.error } : {}) });
+    const error = refused?.error ?? (job.status === "error" ? job.error : undefined);
+    await patch({ phase: "done", ...(error ? { error } : {}) });
+    return;
+  }
+  // Open, but the server has gone quiet past every bound it keeps: it is not
+  // going to deliver the rest. End the run; what is missing can be asked for
+  // again, and nothing missing was charged.
+  if (job.stalled) {
+    await patch({ phase: "done", error: STALLED_BOOK_ERROR });
     return;
   }
   if (run.phase === "cast") {
@@ -417,25 +485,27 @@ function assertNotDrawing(project: Project): void {
  * how: an "edit" unit changes the picture that is there (the current portrait,
  * page or cover goes in with the sentence); a "fresh" unit draws it anew.
  */
-export async function startRedraw(quote: GenerationQuote, edit: string): Promise<boolean> {
+export async function startRedraw(quote: GenerationQuote, edit: string | Record<string, string>): Promise<boolean> {
   const project = useProjectsStore.getState().current();
   const unit = quote.units[0];
   if (!project || !unit || project.id !== quote.projectId) return false;
   assertNotDrawing(project);
+  // One sentence for one picture; a map when several people were changed together.
+  const instructionFor = (id: string): string => (typeof edit === "string" ? edit : edit[id] ?? "").trim();
   if (unit.action === "portrait") {
-    const member = namedCast(briefOf(project.config)).find((m) => m.id === unit.id);
-    if (!member) return false;
-    const current = currentPortrait(project, member.id);
-    const instruction = edit.trim();
-    const change = unit.kind === "edit" && instruction && current
-      ? { edit: { instruction, blobId: current.blobId, mimeType: current.mimeType } }
-      : {};
-    await createPortraitJob(
-      project,
-      [{ id: member.id, status: "pending", inputs: portraitInputs(project, member), ...change }],
-      quote.tier,
-      { quoteId: quote.id, idempotencyKey: `redraw-${quote.id}` },
-    );
+    const cast = namedCast(briefOf(project.config));
+    const items = quote.units.flatMap((each) => {
+      const member = each.action === "portrait" ? cast.find((m) => m.id === each.id) : undefined;
+      if (!member) return [];
+      const current = currentPortrait(project, member.id);
+      const instruction = instructionFor(member.id);
+      const change = each.kind === "edit" && instruction && current
+        ? { edit: { instruction, blobId: current.blobId, mimeType: current.mimeType } }
+        : {};
+      return [{ id: member.id, status: "pending" as const, inputs: portraitInputs(project, member), ...change }];
+    });
+    if (items.length === 0) return false;
+    await createPortraitJob(project, items, quote.tier, { quoteId: quote.id, idempotencyKey: `redraw-${quote.id}` });
     return true;
   }
   await createRefreshJob(
@@ -445,7 +515,7 @@ export async function startRedraw(quote: GenerationQuote, edit: string): Promise
       {
         id: unit.id,
         status: "pending",
-        options: unit.kind === "edit" ? { edit: edit.trim(), useReference: true, inPlaceOnly: true } : {},
+        options: unit.kind === "edit" ? { edit: instructionFor(unit.id), useReference: true, inPlaceOnly: true } : {},
       },
     ],
     quote.tier,

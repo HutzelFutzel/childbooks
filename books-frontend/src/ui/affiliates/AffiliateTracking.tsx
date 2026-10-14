@@ -125,6 +125,7 @@ async function reportReferral(): Promise<void> {
         campaignId: campaign?.id ?? null,
         campaignName: campaign?.name ?? null,
       }),
+      background: true,
     });
     const body = (await res.json().catch(() => ({}))) as {
       stored?: boolean;

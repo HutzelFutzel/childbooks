@@ -11,7 +11,7 @@
  * that did not mark it as edited, so the cover could overwrite what the reader
  * had typed.
  */
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { coverLinesOf, PLACEHOLDER_TITLE } from "../../../core/book/coverLines";
 import { getBookLanguage } from "../../../core/config/bookLanguages";
 import type { Project } from "../../../core/types";
@@ -112,8 +112,18 @@ function TitleField({
   dir?: string;
 }) {
   const [draft, setDraft] = useState(value);
-  useEffect(() => setDraft(value), [value]);
+  // A line saved elsewhere (the cover card, the chat) shows here, but never
+  // over what the reader is typing in this field right now.
+  const focused = useRef(false);
+  const cancelled = useRef(false);
+  useEffect(() => {
+    if (!focused.current) setDraft(value);
+  }, [value]);
   const commit = () => {
+    if (cancelled.current) {
+      cancelled.current = false;
+      return;
+    }
     const next = draft.trim();
     if (next !== value.trim()) onCommit(next);
   };
@@ -124,10 +134,17 @@ function TitleField({
       lang={lang}
       dir={dir}
       onChange={(event) => setDraft(event.target.value)}
-      onBlur={commit}
+      onFocus={() => {
+        focused.current = true;
+      }}
+      onBlur={() => {
+        focused.current = false;
+        commit();
+      }}
       onKeyDown={(event) => {
         if (event.key === "Enter") event.currentTarget.blur();
         if (event.key === "Escape") {
+          cancelled.current = true;
           setDraft(value);
           event.currentTarget.blur();
         }

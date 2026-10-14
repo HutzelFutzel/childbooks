@@ -20,6 +20,28 @@ async function rawRGBA(
 }
 
 /**
+ * A small opaque RGB copy (longest side `size`, flattened on white) for the
+ * calm-area and ink measurements. Null when the image can't be decoded.
+ */
+export async function samplePixels(
+  buf: Buffer,
+  size: number,
+): Promise<{ data: Uint8Array; width: number; height: number } | null> {
+  try {
+    const { data, info } = await sharp(buf)
+      .flatten({ background: "#ffffff" })
+      .resize(size, size, { fit: "inside" })
+      .removeAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    if (info.channels !== 3) return null;
+    return { data: new Uint8Array(data.buffer, data.byteOffset, data.length), width: info.width, height: info.height };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Shrink a reference exemplar (e.g. the art-style image) that is sent on EVERY
  * generation. Resizes so the longest side is at most `maxDim` and re-encodes as
  * JPEG — a multi-megabyte lossless source otherwise inflates every request

@@ -108,6 +108,7 @@ export function dismissSurvey(surveyId: string, paymentId?: string | null): void
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ surveyId, paymentId: paymentId ?? undefined }),
+    background: true,
   }).catch(() => {});
 }
 

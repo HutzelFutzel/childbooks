@@ -8,7 +8,10 @@ import type { ArtStyleSelection, Project, SourceArtRef } from "../types";
 import {
   collectSourceArtGroups,
   derivedStyleSelection,
+  firstStyleArtwork,
 } from "../book/sourceArt";
+import { settleOnFirstArtwork } from "./artworkStyle";
+import type { CustomStyleRef } from "../config/customArtStyles";
 import type { ExtractArtStyleResult } from "../pipeline/styleExtract";
 import { extractArtStyleRemote } from "../../platform/aiClient";
 
@@ -18,6 +21,8 @@ export interface ArtworkLookOption {
   stylePrompt: string;
   thumbBlobId?: string;
   referenceArt?: SourceArtRef[];
+  /** The saved custom style the backend made for this character's drawings. */
+  customStyle?: CustomStyleRef;
 }
 
 export type ArtworkLookDecision =
@@ -35,14 +40,15 @@ export function decideFromExtract(
   const extractedNames = result.characters
     .map((character) => character.name)
     .filter(Boolean);
-  const fallbackNames =
-    extractedNames.length > 0
-      ? extractedNames
-      : groups.map((group) => group.name);
-  const stagedStyleArt = project.authoringState?.styleSourceArt ?? [];
-  const referenceArt = (
-    stagedStyleArt.length > 0 ? stagedStyleArt : groups[0]?.images ?? []
-  ).slice(0, 1);
+  const first = firstStyleArtwork(project, groups);
+  const fallbackNames = first?.name
+    ? [first.name]
+    : extractedNames.length > 0
+      ? [extractedNames[0]!]
+      : groups[0]
+        ? [groups[0].name]
+        : [];
+  const referenceArt = first ? [first.ref] : [];
 
   if (result.compatible && result.stylePrompt.trim()) {
     return {
@@ -51,6 +57,7 @@ export function decideFromExtract(
         stylePrompt: result.stylePrompt,
         derivedFromNames: fallbackNames,
         referenceArt,
+        customStyle: result.customStyle,
       }),
     };
   }
@@ -58,7 +65,12 @@ export function decideFromExtract(
   const thumbs = new Map(
     groups.map((group) => [group.id, group.images[0]?.blobId] as const),
   );
-  const refs = new Map(groups.map((group) => [group.id, group.images] as const));
+  const refs = new Map(
+    groups.map((group) => [
+      group.id,
+      group.images.slice().sort((a, b) => a.createdAt - b.createdAt),
+    ] as const),
+  );
   const options = result.characters.map((character) => ({
     ...character,
     thumbBlobId: thumbs.get(character.id),
@@ -73,6 +85,7 @@ export function decideFromExtract(
         stylePrompt: prompt,
         derivedFromNames: fallbackNames,
         referenceArt,
+        customStyle: options[0]?.customStyle ?? result.customStyle,
       }),
     };
   }
@@ -93,4 +106,11 @@ export async function decideArtworkLook(
         !signal?.aborted && err instanceof Error ? err.message : FAILED_MESSAGE,
     };
   }
+}
+
+export async function decideArtworkLookFirstWins(
+  project: Project,
+  signal?: AbortSignal,
+): Promise<ArtworkLookDecision> {
+  return settleOnFirstArtwork(project, await decideArtworkLook(project, signal));
 }

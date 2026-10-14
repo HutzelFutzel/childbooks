@@ -23,7 +23,14 @@ import { randomUUID } from "node:crypto";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
 import { getSparksConfig } from "./appConfig";
-import { recordUsage, splitBillable, type CallStats, type UsageEvent } from "./usage";
+import {
+  costGroupOf,
+  recordUsage,
+  splitBillable,
+  type CallStats,
+  type CostGroup,
+  type UsageEvent,
+} from "./usage";
 import { estimateForUser, settleActionCost } from "./sparks";
 import { ensureProjectMirror, recordProjectRun } from "./projects";
 import { recordTaskLatency } from "./latency";
@@ -84,7 +91,12 @@ export interface ActionRunDoc {
     billable: number;
     unbilled: number;
     byStep: Record<string, number>;
+    /** Image-generation calls versus text/vision calls (absent on older runs). */
+    imageCalls?: number;
+    textCalls?: number;
   };
+  /** Which side of the books this run's whole cost belongs to. */
+  group?: CostGroup;
   sparks: {
     quoted: number | null;
     charged: number;
@@ -278,7 +290,10 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
         billable: totals.billableUsd,
         unbilled: totals.unbilledUsd,
         byStep: totals.costByStep,
+        imageCalls: totals.imageCallsUsd,
+        textCalls: totals.textCallsUsd,
       },
+      group: costGroupOf(args.action),
       sparks: {
         quoted: quoted ?? null,
         charged: settled.sparks,
@@ -321,6 +336,7 @@ export async function meterAndSettle(args: MeterAndSettleArgs): Promise<MeterAnd
           billed: totals.billableUsd,
           unbilled: totals.unbilledUsd,
         },
+        group: costGroupOf(args.action),
         sparks: {
           charged: settled.sparks,
           paid: breakdown?.paidSparks ?? 0,

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
-import { BookOpen, Copy, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { BookOpen, Copy, Loader2, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
 import type { Project } from "../../core/types";
 import { COVER_FRONT_ID } from "../../core/types";
 import { bookProductForConfig } from "../../core/book";
@@ -47,11 +47,12 @@ function timeAgo(ts: number): string {
 
 export interface ProjectCardProps {
   project: Project;
+  opening?: boolean;
   onOpen: () => void;
   onDelete: () => void;
 }
 
-export function ProjectCard({ project, onOpen, onDelete }: ProjectCardProps) {
+export function ProjectCard({ project, opening = false, onOpen, onDelete }: ProjectCardProps) {
   const branding = useAppConfigStore((s) => s.branding);
   const renameProject = useProjectsStore((s) => s.renameProject);
   const duplicateProject = useProjectsStore((s) => s.duplicateProject);
@@ -145,14 +146,25 @@ export function ProjectCard({ project, onOpen, onDelete }: ProjectCardProps) {
           variant="flat"
         />
 
-        {/* Hover quick-open pill */}
+        {/* Hover / opening quick-open pill */}
         <div
           aria-hidden
-          className="pointer-events-none absolute inset-x-0 bottom-3 flex justify-center opacity-0 transition-opacity duration-200 group-hover:opacity-100"
+          className={`pointer-events-none absolute inset-x-0 bottom-3 flex justify-center transition-opacity duration-200 ${
+            opening ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+          }`}
         >
           <span className="inline-flex items-center gap-1.5 rounded-full bg-ink-900/80 px-3 py-1 text-xs font-semibold text-white shadow-lifted backdrop-blur-sm">
-            <BookOpen className="size-3.5" />
-            Open storybook
+            {opening ? (
+              <>
+                <Loader2 className="size-3.5 animate-spin" />
+                Opening…
+              </>
+            ) : (
+              <>
+                <BookOpen className="size-3.5" />
+                Open storybook
+              </>
+            )}
           </span>
         </div>
 

@@ -7,7 +7,7 @@
  * every render is safe: a reload, a second tab or a job finishing elsewhere
  * converges on the same state instead of starting anything twice.
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { authoringOf } from "../../core/guide/projectState";
 import { STORY_SETTLE_MS } from "../../core/guide/storyChange";
 import { autoAssignStyleSource } from "../../core/guide/styleSource";
@@ -89,6 +89,7 @@ export function useChatDrivers(project: Project, journey: ChatJourney): void {
   const hardcover = authoringOf(project).hardcover;
   const bookSetup = authoringOf(project).bookSetup;
   const analysisAt = project.analysis?.generatedAt;
+  const planNotesAt = authoringOf(project).planNotesAt;
   useEffect(() => {
     if (!loaded || locked) return;
     void ensurePlan(projectId).catch(() => {});
@@ -98,6 +99,7 @@ export function useChatDrivers(project: Project, journey: ChatJourney): void {
     projectId,
     hardcover,
     analysisAt,
+    planNotesAt,
     project.config.layoutId,
     bookSetup?.formatConfirmedAt,
     bookSetup?.layoutConfirmedAt,
@@ -110,6 +112,16 @@ export function useChatDrivers(project: Project, journey: ChatJourney): void {
   const drawJob = useJobsStore((s) => (drawJobId ? s.jobStatus[drawJobId] : undefined));
   const setView = useChatStudio((s) => s.setView);
   const followed = useRef<string | null>(null);
+  // While a run is open, look again on a clock, not only when something changes.
+  // A server that goes silent changes nothing, and silence is exactly what the
+  // run has to notice (a job that never appeared, one that stopped responding).
+  const drawing = loaded && Boolean(drawPhase) && drawPhase !== "done";
+  const [pulse, setPulse] = useState(0);
+  useEffect(() => {
+    if (!drawing) return;
+    const timer = setInterval(() => setPulse((n) => n + 1), 15_000);
+    return () => clearInterval(timer);
+  }, [drawing]);
   useEffect(() => {
     if (!loaded || !drawPhase || drawPhase === "done") return;
     if (followed.current !== drawPhase) {
@@ -117,7 +129,7 @@ export function useChatDrivers(project: Project, journey: ChatJourney): void {
       setView(drawPhase === "cast" ? "cast" : "pages");
     }
     void continueDrawBook().catch((err) => useChatStudio.setState({ error: describeError(err) }));
-  }, [loaded, drawPhase, drawJob, project, journey.activeUnitIds, setView]);
+  }, [loaded, drawPhase, drawJob, project, journey.activeUnitIds, setView, pulse]);
 
   // News the book reports on its own: each is said once. The lines that ask
   // for a well's buttons are said with the well (`useWellConversation`).
@@ -129,6 +141,11 @@ export function useChatDrivers(project: Project, journey: ChatJourney): void {
     const announced = portraitAnnouncement(project, journey, openedAt.current, said);
     if (announced) {
       say(announced.lines, { unprompted: true, marks: announced.marks, receipt: { parts: [], thumbs: announced.thumbs } });
+      // The pictures that just arrived are what the book shows: the line above
+      // points at them, so the pane is on the people, not wherever it was.
+      // Never away from a story the reader is writing or reviewing.
+      const chat = useChatStudio.getState();
+      if (!chat.storyFocus && chat.view !== "cast") chat.setView("cast");
       return;
     }
     const hc = journey.hardcover;

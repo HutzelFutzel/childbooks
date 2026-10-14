@@ -228,6 +228,11 @@ export async function analyzeStory(
           : Math.floor((member.ageMonths ?? 0) / 12),
       ]),
   );
+  const otherPeople = new Set(
+    namedCast(briefOf(config))
+      .map((member) => normalizeAnchorName(member.name))
+      .filter(Boolean),
+  );
   const anchors: Anchor[] = result.anchors.map((a) => {
     const isCharacter = a.type === "character";
     // Body plan and height only mean anything for characters; a model that
@@ -254,7 +259,17 @@ export async function analyzeStory(
         : typeof a.ageYears === "number" && a.ageBasis === "stated"
           ? "story"
           : "suggested";
-    const aliasNames = mergeAliasNames(a.name, a.aliasNames ?? undefined);
+    // Another named person is never an alias: "Amanda" on Arthur's row would
+    // fold his twin sister into him.
+    const aliasNames = mergeAliasNames(
+      a.name,
+      isCharacter
+        ? (a.aliasNames ?? []).filter((alias) => {
+            const key = normalizeAnchorName(alias);
+            return key === normalizeAnchorName(a.name) || !otherPeople.has(key);
+          })
+        : (a.aliasNames ?? undefined),
+    );
     return {
       id: uid(),
       name: a.name,

@@ -13,6 +13,7 @@ import {
   hasCapability,
   isOwner,
 } from "../../books-frontend/src/core/config/permissions";
+import { unauthenticated } from "./auth";
 import {
   getAdminRecord,
   inviteAdmin,
@@ -45,7 +46,7 @@ export function registerPermissionsRoutes(app: Express): void {
   app.get("/admin/permissions/me", async (req: PermissionedRequest, res: Response) => {
     try {
       if (!req.uid) {
-        res.status(401).json({ error: { message: "Authentication required." } });
+        unauthenticated(req, res);
         return;
       }
       const record = await getAdminRecord(req.uid);

@@ -13,12 +13,22 @@ import {
 import { ART_STYLE_PRESETS } from "../../../core/config/options";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { cn } from "../../lib/cn";
+import { useStylePreviewUrls, useStyleStrip } from "../../hooks/useStylePreviews";
+import type { StylePreview } from "../../../core/config/customArtStyles";
 
-/** Compare preset + custom direction (trim-normalized). */
+const NO_PREVIEWS: readonly StylePreview[] = [];
+
+/** Compare the visible direction and the exact generation exemplar snapshot. */
 export function artStylesEqual(a: ArtStyleSelection, b: ArtStyleSelection): boolean {
   return (
     a.presetId === b.presetId &&
-    (a.customDescription ?? "").trim() === (b.customDescription ?? "").trim()
+    (a.customStyle?.id ?? "") === (b.customStyle?.id ?? "") &&
+    (a.customStyle?.revision ?? 0) === (b.customStyle?.revision ?? 0) &&
+    (a.customDescription ?? "").trim() === (b.customDescription ?? "").trim() &&
+    (a.generationReference?.storagePath ?? "") ===
+      (b.generationReference?.storagePath ?? "") &&
+    (a.generationReference?.updatedAt ?? 0) ===
+      (b.generationReference?.updatedAt ?? 0)
   );
 }
 
@@ -37,7 +47,16 @@ function StyleCard({
   const [failedImages, setFailedImages] = useState<Set<string>>(() => new Set());
   const pointerStart = useRef<number | null>(null);
   const suppressClick = useRef(false);
-  const examples = style.examples;
+  // A look without admin pictures shows the reader's own first covers in it.
+  const ownStrip = useStyleStrip({ key: style.id, adminExamples: style.examples });
+  const ownUrls = useStylePreviewUrls(style.examples.length > 0 ? NO_PREVIEWS : ownStrip);
+  const examples = useMemo(
+    () =>
+      style.examples.length > 0
+        ? style.examples
+        : ownUrls.map((imageUrl, order) => ({ imageUrl, storagePath: imageUrl, order, updatedAt: 0 })),
+    [style.examples, ownUrls],
+  );
   const example = examples[exampleIndex];
   const exampleKey = example?.storagePath ?? example?.imageUrl;
   const fallback = ART_STYLE_PRESETS.find((preset) => preset.id === style.id)?.swatch;
@@ -243,8 +262,19 @@ export function StyleStep({
           onSelect={() =>
             onChange(
               artStyle.origin === "derived"
-                ? { presetId: style.id, origin: "preset" }
-                : { ...artStyle, presetId: style.id, origin: "preset" },
+                ? {
+                    presetId: style.id,
+                    origin: "preset",
+                    ...(style.generationReference
+                      ? { generationReference: style.generationReference }
+                      : {}),
+                  }
+                : {
+                    ...artStyle,
+                    presetId: style.id,
+                    origin: "preset",
+                    generationReference: style.generationReference,
+                  },
             )
           }
         />

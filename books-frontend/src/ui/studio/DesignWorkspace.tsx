@@ -1,13 +1,31 @@
 /** @legacy guide-v2 L1 — deleted with the Steps shell. See docs/LEGACY-GUIDE.md. */
 /** The focused design stage. Workflow navigation lives in StudioNavigator. */
 import { useEffect } from "react";
+import dynamic from "next/dynamic";
+import { Loader2 } from "lucide-react";
 import { useProjectsStore } from "../../state/projectsStore";
 import { AnchorsStage } from "./AnchorsStage";
-import { BookCanvas } from "./BookCanvas";
 import { DesignSetup } from "./DesignSetup";
 import { StyleSetup } from "./StyleSetup";
 import { useStudio } from "./StudioContext";
 import { designChapterOf } from "./studioSteps";
+
+const BookCanvas = dynamic(
+  () => import("./BookCanvas").then((m) => m.BookCanvas),
+  {
+    ssr: false,
+    loading: () => (
+      <div
+        className="flex h-full flex-1 flex-col items-center justify-center gap-3 text-ink-500"
+        role="status"
+        aria-live="polite"
+      >
+        <Loader2 className="size-6 animate-spin text-brand-400" />
+        <p className="text-sm font-medium">Loading page canvas…</p>
+      </div>
+    ),
+  },
+);
 
 export function DesignWorkspace({
   analysisRun,

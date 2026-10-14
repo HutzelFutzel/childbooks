@@ -14,7 +14,6 @@
  * (not `Authorization`) so it never collides with the provider key the proxy
  * injects for upstream calls.
  */
-import { signInAnonymously } from "firebase/auth";
 import { appCheckToken, getFirebaseAuth } from "../lib/firebase";
 
 const PROJECT_ID = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || "childbook-60f89";
@@ -64,36 +63,207 @@ async function currentIdToken(forceRefresh = false): Promise<string | null> {
 }
 
 /**
- * Recover a usable session after the backend rejects a request with 401. The two
- * common causes in practice are:
- *   - the cached ID token expired and simply needs a refresh, or
- *   - the local Auth emulator was restarted (e.g. `--import`), which revokes the
- *     previously-issued tokens and strands the already-open tab.
+ * Session recovery after a 401
+ * ----------------------------
+ * The backend says WHY it rejected a token (`error.code`, see
+ * `functions/src/auth.ts`), and `backendFetch` climbs a ladder, stopping at the
+ * first rung that gets the request through:
  *
- * Force-refreshing fixes the first; for the second we re-establish a guest
- * session (the studio is guest-first, so a fresh anonymous user is acceptable).
- * A signed-in *real* account whose session is dead is NOT silently downgraded to
- * a guest — we return false so the 401 surfaces and the user can re-authenticate.
+ *   1. Stale credentials   — another request already refreshed the session, or
+ *                            we sent no token because sign-in was still in
+ *                            flight. Just retry with the current token.
+ *   2. Refresh the token   — fixes `session_expired`.
+ *   3. Re-establish        — the session is dead (`session_revoked`, a refresh
+ *                            that throws, ...) and a refresh can't help:
+ *                              · guest → quietly mint a new guest session
+ *                              · real account → open the sign-in dialog, WAIT
+ *                                for the user, then replay the request with
+ *                                their fresh token. Nothing they were doing
+ *                                unmounts; the call simply resumes.
  *
- * Returns true if a fresh token should now be available for a retry.
+ * Why the ladder instead of "refresh, then retry once": the Auth emulator
+ * (restarted with `--import`) revokes every session but still happily
+ * REFRESHES them — to a token the backend rejects again. A refresh that
+ * "succeeds" proves nothing; only the backend's verdict on the retry does.
+ *
+ * Each rung is single-flight, so a burst of parallel 401s shares one refresh /
+ * one guest re-mint / one dialog instead of racing each other.
+ *
+ * Replaying is safe, including POSTs: every `requireAuth` / `requireVerified`
+ * rejection happens before the route handler runs, so the rejected attempt had
+ * no side effects.
  */
-async function recoverSession(): Promise<boolean> {
+
+/** `error.code` values from `functions/src/auth.ts` that mean "this session is dead". */
+const DEAD_SESSION_CODES = new Set(["session_revoked", "account_disabled", "session_invalid"]);
+
+const SESSION_ENDED_REASON = "Your session ended. Sign in again to pick up right where you left off.";
+
+const inFlight = new Map<string, Promise<unknown>>();
+
+/** Share one run of `fn` among every caller that arrives while it's pending. */
+function singleFlight<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const existing = inFlight.get(key) as Promise<T> | undefined;
+  if (existing) return existing;
+  const run = fn().finally(() => inFlight.delete(key));
+  inFlight.set(key, run);
+  return run;
+}
+
+/** Reject as soon as `signal` aborts, so a cancelled request never hangs on a dialog. */
+function abortable<T>(promise: Promise<T>, signal?: AbortSignal | null): Promise<T> {
+  if (!signal) return promise;
+  const abort = () => new DOMException("The operation was aborted.", "AbortError");
+  if (signal.aborted) return Promise.reject(abort());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abort());
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (err) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(err);
+      },
+    );
+  });
+}
+
+/** The backend's machine-readable reason for a 401, or null if it gave none. */
+async function authFailureCode(res: Response): Promise<string | null> {
   try {
-    const auth = getFirebaseAuth();
-    const user = auth.currentUser;
-    if (user) {
-      try {
-        await user.getIdToken(true); // force refresh
-        return true;
-      } catch {
-        if (!user.isAnonymous) return false; // real account → require re-login
-      }
-    }
-    await signInAnonymously(auth);
-    return Boolean(auth.currentUser);
+    const body = (await res.clone().json()) as { error?: { code?: unknown } };
+    return typeof body?.error?.code === "string" ? body.error.code : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+type RefreshOutcome = "ok" | "dead" | "offline";
+
+/** Force a token refresh. `offline` is deliberately NOT treated as a dead session. */
+function refreshToken(): Promise<RefreshOutcome> {
+  return singleFlight("refresh", async () => {
+    const user = getFirebaseAuth().currentUser;
+    if (!user) return "dead";
+    try {
+      await user.getIdToken(true);
+      return "ok";
+    } catch (err) {
+      const code = (err as { code?: string })?.code;
+      return code === "auth/network-request-failed" ? "offline" : "dead";
+    }
+  });
+}
+
+/**
+ * Get a session at all. Covers a request that raced the initial guest sign-in
+ * and went out with no token: wait for auth to settle, mint a guest only if
+ * nobody is signed in by then.
+ */
+function ensureSession(): Promise<boolean> {
+  return singleFlight("ensure", async () => {
+    try {
+      const { ensureGuestSession } = await import("../state/authStore");
+      return await ensureGuestSession();
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * The current session is dead and can't be refreshed. A guest has nothing to
+ * type, so they get a new guest session; a real account is asked to sign in and
+ * we resolve once they have (false if they dismiss the dialog).
+ *
+ * Dynamically imported to avoid a static cycle with `state/authStore.ts`, which
+ * imports `backendFetch` from this module.
+ */
+function reestablishSession(wasRealAccount: boolean): Promise<boolean> {
+  return singleFlight("reestablish", async () => {
+    try {
+      const store = await import("../state/authStore");
+      if (wasRealAccount) return await store.requestReauth(SESSION_ENDED_REASON);
+      console.warn(
+        "[auth] The guest session was rejected by the backend (revoked or unrefreshable); " +
+          "starting a new guest session. Drafts saved under the old guest account stay under that uid.",
+      );
+      return await store.resetGuestSession();
+    } catch (err) {
+      console.error("[auth] Could not re-establish the session", err);
+      return false;
+    }
+  });
+}
+
+/**
+ * Walk the ladder for a request that just came back 401. Returns the response
+ * to hand the caller — the retried one if recovery worked, otherwise the
+ * original rejection so existing error handling still sees the 401.
+ */
+async function recoverFromUnauthorized(
+  first: Attempt,
+  send: () => Promise<Attempt>,
+  opts: { background: boolean; signal?: AbortSignal | null },
+): Promise<Response> {
+  let last = first;
+  /** Resend; the response if it got through, null if the backend still refused. */
+  const retry = async (): Promise<Response | null> => {
+    last = await send();
+    return last.res.status === 401 ? null : last.res;
+  };
+
+  // Who sent the rejected token — read before any rung below can swap the user.
+  const user = getFirebaseAuth().currentUser;
+  const wasRealAccount = Boolean(user && !user.isAnonymous);
+  let code = await authFailureCode(first.res);
+
+  // Rung 1 — stale credentials.
+  if (!first.token || code === "auth_required") {
+    if (await ensureSession()) {
+      const ok = await retry();
+      if (ok) return ok;
+      code = await authFailureCode(last.res);
+    }
+  } else if ((await currentIdToken()) !== first.token) {
+    const ok = await retry();
+    if (ok) return ok;
+    code = await authFailureCode(last.res);
+  }
+
+  // Rung 2 — refresh. Skipped when the backend already told us a refresh can't help.
+  let refreshDead = false;
+  if (!code || !DEAD_SESSION_CODES.has(code)) {
+    const outcome = await refreshToken();
+    if (outcome === "offline") return last.res;
+    if (outcome === "ok") {
+      const ok = await retry();
+      if (ok) return ok;
+      code = await authFailureCode(last.res);
+    } else {
+      refreshDead = true;
+    }
+  }
+
+  // Rung 3 — re-establish. Only on positive evidence the session is dead: an
+  // unrecognised 401 (no code) must not log anyone out or open a dialog.
+  const sessionIsDead = refreshDead || (code !== null && DEAD_SESSION_CODES.has(code));
+  if (!sessionIsDead) return last.res;
+  // A background beacon may tell a real account its session ended (that's the
+  // page-load check doing its job) but must not replace a guest session: that
+  // abandons the guest's uid, and analytics isn't worth that. The guest's next
+  // real action re-mints it.
+  if (opts.background && !wasRealAccount) return last.res;
+
+  const recovered = await abortable(reestablishSession(wasRealAccount), opts.signal);
+  if (recovered) {
+    const ok = await retry();
+    if (ok) return ok;
+  }
+  return last.res;
 }
 
 /**
@@ -113,49 +283,38 @@ export async function withAuthHeaders(headers?: HeadersInit): Promise<Headers> {
   return merged;
 }
 
-/**
- * When `recoverSession()` gives up, it's specifically because a real
- * (non-anonymous) account's token truly can't be refreshed — the one case
- * where the user actually needs to type credentials again. Rather than let
- * that surface as a bare failed request, pop the global sign-in dialog right
- * where the user already is: it's a modal, so whatever they were doing (an
- * open project, a half-filled form) never unmounts, and once they sign back in
- * they can just retry. Dynamically imported to avoid a static import cycle
- * with `state/authStore.ts` (which imports `backendFetch` from this module).
- * Best-effort: must never throw and mask the real 401.
- */
-async function promptReauth(): Promise<void> {
-  try {
-    const { useAuthStore } = await import("../state/authStore");
-    const { user, dialogOpen } = useAuthStore.getState();
-    if (user && !user.isAnonymous && !dialogOpen) {
-      useAuthStore
-        .getState()
-        .openAuthDialog("Your session ended. Sign in again to pick up right where you left off.");
-    }
-  } catch {
-    // Best-effort UX nudge only — the caller still gets the failed response.
-  }
+export interface BackendFetchInit extends RequestInit {
+  /**
+   * Mark a telemetry / beacon call (session ping, attribution, "seen" flags).
+   * On a 401 it gets the same cheap, invisible recovery (retry, token refresh)
+   * and, for a real account whose session is dead, the same sign-in prompt — but
+   * it never REPLACES a guest session, since that abandons the guest's uid and
+   * analytics isn't worth that.
+   */
+  background?: boolean;
 }
 
-export async function backendFetch(path: string, init?: RequestInit): Promise<Response> {
-  const res = await fetch(backendUrl(path), {
-    ...init,
-    headers: await withAuthHeaders(init?.headers),
-  });
-  // A 401 in dev usually means the cached token expired or the Auth emulator was
-  // restarted out from under the tab. Recover the session once and retry so a
-  // backend restart doesn't strand the user mid-action. This is safe even for
-  // POSTs: `requireVerified` rejects before the route handler runs, so the first
-  // (rejected) attempt has no side effects.
-  if (res.status === 401) {
-    if (await recoverSession()) {
-      return fetch(backendUrl(path), {
-        ...init,
-        headers: await withAuthHeaders(init?.headers),
-      });
-    }
-    void promptReauth();
-  }
-  return res;
+/** One send of a request: the response plus the ID token it carried. */
+interface Attempt {
+  res: Response;
+  token: string | null;
+}
+
+/**
+ * `fetch` against the backend with the caller's identity attached. A 401 is
+ * recovered transparently where possible (see "Session recovery" above); if the
+ * user has to sign in again, this call waits for them and then resumes — the
+ * caller just sees the eventual response.
+ */
+export async function backendFetch(path: string, init?: BackendFetchInit): Promise<Response> {
+  const { background = false, ...rest } = init ?? {};
+  const send = async (): Promise<Attempt> => {
+    const headers = await withAuthHeaders(rest.headers);
+    const res = await fetch(backendUrl(path), { ...rest, headers });
+    return { res, token: headers.get(AUTH_TOKEN_HEADER) };
+  };
+
+  const first = await send();
+  if (first.res.status !== 401) return first.res;
+  return recoverFromUnauthorized(first, send, { background, signal: rest.signal });
 }

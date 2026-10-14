@@ -18,7 +18,7 @@ import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 import type { NextFunction, Request, Response } from "express";
 import { ensureAdmin } from "./storage";
-import type { AuthedRequest } from "./auth";
+import { unauthenticated, type AuthedRequest } from "./auth";
 import {
   ALL_PERMISSION_KEYS,
   hasCapability,
@@ -366,8 +366,8 @@ export interface PermissionedRequest extends AuthedRequest {
   admin?: AdminRecord;
 }
 
-function unauthorized(res: Response): void {
-  res.status(401).json({ error: { message: "Authentication required." } });
+function unauthorized(req: PermissionedRequest, res: Response): void {
+  unauthenticated(req, res);
 }
 
 async function loadCaller(req: PermissionedRequest): Promise<AdminRecord | null> {
@@ -382,7 +382,7 @@ async function loadCaller(req: PermissionedRequest): Promise<AdminRecord | null>
 export function requirePermission(key: PermissionKey, level: PermissionLevel) {
   return async (req: PermissionedRequest, res: Response, next: NextFunction): Promise<void> => {
     ensureAdmin();
-    if (!req.uid) return unauthorized(res);
+    if (!req.uid) return unauthorized(req, res);
     try {
       const record = await loadCaller(req);
       if (!record) {
@@ -404,7 +404,7 @@ export function requirePermission(key: PermissionKey, level: PermissionLevel) {
 export function requireCapability(capability: Capability) {
   return async (req: PermissionedRequest, res: Response, next: NextFunction): Promise<void> => {
     ensureAdmin();
-    if (!req.uid) return unauthorized(res);
+    if (!req.uid) return unauthorized(req, res);
     try {
       const record = await loadCaller(req);
       if (!record) {
@@ -426,7 +426,7 @@ export function requireCapability(capability: Capability) {
 export function requireOwner() {
   return async (req: PermissionedRequest, res: Response, next: NextFunction): Promise<void> => {
     ensureAdmin();
-    if (!req.uid) return unauthorized(res);
+    if (!req.uid) return unauthorized(req, res);
     try {
       const record = await loadCaller(req);
       if (!record || !isOwner(record.role)) {
@@ -514,6 +514,7 @@ const ROUTE_RULES: RouteRule[] = [
   // Configuration → Creative.
   { test: /^\/admin\/config\/art-styles$/, gate: key("configuration.artStyles") },
   { test: /^\/admin\/art-styles\/[^/]+\/image$/, gate: key("configuration.artStyles", "write") },
+  { test: /^\/admin\/art-styles\/[^/]+\/reference$/, gate: key("configuration.artStyles", "write") },
   { test: /^\/admin\/config\/layouts$/, gate: key("configuration.layouts") },
   { test: /^\/admin\/layouts\/[^/]+\/image$/, gate: key("configuration.layouts", "write") },
   { test: /^\/admin\/image-masks(\/[^/]+)?$/, gate: key("configuration.layouts", "write") },

@@ -21,6 +21,12 @@ export interface ImageMaskAsset {
    * not be assigned it automatically. Missing means it is in that pool.
    */
   starter?: boolean;
+  /**
+   * How far in from the nearest edge (0..0.5 of the picture) the frame hides
+   * the art. Measured when the SVG is compiled; generation keeps faces out of
+   * that margin.
+   */
+  safeInset?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -89,6 +95,7 @@ const imageMaskAssetSchema = z.object({
   storagePath: z.string().min(1).max(500),
   archived: z.boolean().optional(),
   starter: z.boolean().optional(),
+  safeInset: z.number().min(0).max(0.5).optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
 });

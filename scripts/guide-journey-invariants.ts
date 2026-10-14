@@ -16,13 +16,16 @@
  */
 import { createDefaultGuideFactPolicies } from "../books-frontend/src/core/guide/factPolicy";
 import { classifyOpeningText } from "../books-frontend/src/core/guide/manuscript";
-import { composerForChoice, ENTER_NEVER_ACCEPTS, guideActivity } from "../books-frontend/src/core/guide/activity";
-import { availableViews, bookViewOf, deriveJourney, type Journey } from "../books-frontend/src/core/guide/journey";
+import en from "../books-frontend/messages/en.json";
+import de from "../books-frontend/messages/de.json";
+import { cardPlaceholderKind, composerForChoice, ENTER_NEVER_ACCEPTS, guideActivity } from "../books-frontend/src/core/guide/activity";
+import { availableViews, bookViewOf, BOOK_CHOICE_KINDS, deriveJourney, type Journey } from "../books-frontend/src/core/guide/journey";
 import { guideLayout, GUIDE_MOBILE_MAX, GUIDE_CHAT_COLUMN_PX, GUIDE_FOCUS_MIN_PANE } from "../books-frontend/src/core/guide/layout";
 import { hardcoverCheck, roundPages, shapeProducts } from "../books-frontend/src/core/guide/hardcover";
 import { chipForView, resolveGuideTarget, targetHomeView } from "../books-frontend/src/core/guide/target";
 import { authoringOf, withAuthoring } from "../books-frontend/src/core/guide/projectState";
 import { mergeBooks, resolveBookConflict } from "../books-frontend/src/core/guide/merge";
+import { restoreDesign, snapshotForChange } from "../books-frontend/src/core/guide/agent/restore";
 import { illustrationUnits } from "../books-frontend/src/core/book/units";
 import { collectProjectImageBlobIds } from "../books-frontend/src/core/book/blobRefs";
 import { collectSourceArtGroups } from "../books-frontend/src/core/book/sourceArt";
@@ -60,8 +63,15 @@ import {
   briefOf,
   namedCast,
 } from "../books-frontend/src/core/story/brief";
+import { applyAutomaticBookFrame, withIllustrationFrame } from "../books-frontend/src/core/design";
+import type { BookDesign } from "../books-frontend/src/core/design";
 import type { Project } from "../books-frontend/src/core/types";
 import { GUIDE_BOOK_STATES } from "./guide-engine-invariants";
+
+/** The first open card about the people, past the book's own choices (format, layout, cover words). */
+const askedAboutPeople = (journey: Pick<Journey, "open">) =>
+  journey.open.find((item) => !BOOK_CHOICE_KINDS.has(item.kind));
+
 
 export interface CheckResult {
   failures: string[];
@@ -289,6 +299,40 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
   }
   cases += 1;
   if (!composerForChoice({ entry: "guided", wellKind: null })) fail("The message field is hidden while the book draws.");
+
+  // The field never invites an answer the card would not take: a typed line
+  // answers only the cards that ask in words; beside every other card it says
+  // to pick, and no card that spends Sparks or changes the book invites typing.
+  for (const kind of ["audienceConfirm", "castAges", "castLooks", "storyBrief", "skipFact", "coverWords", "lookAlike"]) {
+    cases += 1;
+    if (cardPlaceholderKind(kind) !== "type") fail(`The field does not invite a typed answer beside "${kind}", which takes one.`);
+  }
+  for (const kind of ENTER_NEVER_ACCEPTS) {
+    if (kind === "pictureNotes" || kind === "whichName" || kind === "manuscriptChoice") continue;
+    cases += 1;
+    if (cardPlaceholderKind(kind) !== "pick") fail(`The field invites a typed answer beside "${kind}", which runs on a tap.`);
+  }
+  // Every line the field can show exists in both languages.
+  const chromeEn = (en as unknown as { guide: { chrome: Record<string, string> } }).guide.chrome;
+  const chromeDe = (de as unknown as { guide: { chrome: Record<string, string> } }).guide.chrome;
+  for (const key of [
+    "sendingPlaceholder",
+    "cardTypePlaceholder",
+    "cardPickPlaceholder",
+    "drawingPeoplePlaceholder",
+    "drawingBookPlaceholder",
+  ]) {
+    cases += 2;
+    if (!chromeEn[key]?.trim()) fail(`The English message "${key}" is missing.`);
+    if (!chromeDe[key]?.trim()) fail(`The German message "${key}" is missing.`);
+  }
+  const looksEn = (en as unknown as { guide: { looks: Record<string, string> } }).guide.looks;
+  const looksDe = (de as unknown as { guide: { looks: Record<string, string> } }).guide.looks;
+  for (const key of ["switchLabel", "switchDone", "switchOpen"]) {
+    cases += 2;
+    if (!looksEn[key]?.trim()) fail(`The English looks message "${key}" is missing.`);
+    if (!looksDe[key]?.trim()) fail(`The German looks message "${key}" is missing.`);
+  }
   // A card opened on a tab belongs to that tab.
   {
     const person = { kind: "person" as const, castId: "p1", name: "Maya" };
@@ -496,7 +540,7 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
     );
     const castIds = namedCast(briefOf(portraitFirst.config)).map((member) => member.id);
     cases += 1;
-    const looksFirst = journeyOf(portraitFirst).well;
+    const looksFirst = askedAboutPeople(journeyOf(portraitFirst));
     if (looksFirst?.kind !== "castLooks" || looksFirst.castId !== castIds[0]) {
       fail("Where each person's look comes from must be asked before their portraits, first person first.");
     }
@@ -506,7 +550,7 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
     }
     const looksSettled = withLooksDecided(portraitFirst, castIds);
     cases += 1;
-    if (journeyOf(looksSettled).well?.kind !== "portraits") {
+    if (askedAboutPeople(journeyOf(looksSettled))?.kind !== "portraits") {
       fail("Current portraits must be offered before Create illustrated book.");
     }
 
@@ -844,8 +888,9 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
     }
   }
 
-  // The server book job: nothing to fix while it runs; one action for all
-  // that's left once it's over, and the refusal reason when it never ran.
+  // The server book job: nothing to fix while it runs. Once it is over, undrawn
+  // pictures are explained without another charge, and a refusal still offers
+  // a fresh price because nothing was drawn.
   const planned = GUIDE_BOOK_STATES.map((state) => state.project).find((p) => p.screenplay);
   if (planned) {
     const serverRun = withAuthoring(planned, {
@@ -857,20 +902,35 @@ for (const { name, project } of GUIDE_BOOK_STATES) {
     if (running.well?.kind === "bookFinish" || running.well?.kind === "pageFix") {
       fail("A running book job should not offer a retry: the server retries on its own.");
     }
+    const pageId = illustrationUnits(planned)[0]?.id;
+    if (pageId) {
+      const midFailure = journeyOf(serverRun, {
+        drawPhase: "pages",
+        failedUnits: { [pageId]: { error: "No image returned" } },
+      });
+      cases += 1;
+      if (
+        midFailure.well?.kind === "bookFinish" ||
+        midFailure.well?.kind === "pageFix" ||
+        midFailure.well?.kind === "bookPrepFix"
+      ) {
+        fail("A running book job keeps a failed page instead of asking for another payment.");
+      }
+    }
     const over = withAuthoring(serverRun, {
       drawBook: { quoteId: "quote", startedAt: 1, phase: "done", jobId: "book-quote" },
     });
     const finished = journeyOf(over, { drawPhase: "done" });
     cases += 1;
-    if (finished.well?.kind !== "bookFinish" || finished.well.missing < 1) {
-      fail("A finished book job with undrawn pictures should offer to draw the rest.");
+    if (finished.well?.kind !== "bookFinish" || finished.well.missing < 1 || !finished.well.settled) {
+      fail("A finished book job with undrawn pictures should say so (the well then offers the retry; nothing missing was charged).");
     }
     const refusedRun = withAuthoring(serverRun, {
       drawBook: { quoteId: "quote", startedAt: 1, phase: "done", jobId: "book-quote", error: "Not enough Sparks." },
     });
     const refused = journeyOf(refusedRun, { drawPhase: "done" });
     cases += 1;
-    if (refused.well?.kind !== "bookFinish" || refused.well.error !== "Not enough Sparks.") {
+    if (refused.well?.kind !== "bookFinish" || refused.well.error !== "Not enough Sparks." || refused.well.settled) {
       fail("A refused book job should say why and offer a fresh price.");
     }
   } else {
@@ -1016,7 +1076,24 @@ for (const width of [320, GUIDE_MOBILE_MAX, GUIDE_MOBILE_MAX + 1, 1024, 1280, GU
   }
   const both = resolveGuideTarget({ sentence: "Maya and Leo should wear hats", chip: null, cast });
   cases += 1;
-  if (both.kind !== "ask") fail("A sentence naming two people with no chip should ask which.");
+  if (both.kind !== "targets" || both.people.map((person) => person.id).join() !== "a,b") {
+    fail("A sentence naming two people with no chip is about both of them, not a question of which.");
+  }
+  const bothWithFace = resolveGuideTarget({
+    sentence: "Make Maya and Leo blonde",
+    chip: { kind: "person", castId: "a", name: "Maya" },
+    cast,
+  });
+  cases += 1;
+  if (bothWithFace.kind !== "targets") fail("A selected face hides the second person the sentence names.");
+  const inView = resolveGuideTarget({
+    sentence: "make the hair blonde",
+    chip: null,
+    cast,
+    inView: cast,
+  });
+  cases += 1;
+  if (inView.kind !== "ask") fail("A sentence naming nobody, with several people in view, should ask which.");
   const page = resolveGuideTarget({
     sentence: "Maya and Leo should wear hats",
     chip: { kind: "page", unitId: "spread-1", page: 2 },
@@ -1079,6 +1156,113 @@ for (const width of [320, GUIDE_MOBILE_MAX, GUIDE_MOBILE_MAX + 1, 1024, 1280, GU
     cases += 1;
     const lost = settled.authoringState?.replaced?.[0]?.fields.title;
     if (lost !== (keep === "mine" ? "Theirs" : "Mine")) fail(`Keeping ${keep} lost the other device's title.`);
+  }
+}
+
+// --- Page design on two devices, and in Undo ---------------------------------------
+
+{
+  const box = (id: string, size: number) =>
+    ({ id, rect: { x: 0.1, y: 0.1, w: 0.8, h: 0.3 }, z: 1, presetId: "plain", fontFamily: "Fredoka", fontSizePct: size, color: "#111", align: "left", vAlign: "top", lineHeight: 1.3, paragraphs: [] }) as unknown as import("../books-frontend/src/core/design").TextBox;
+  const page = (size: number) => ({ textBoxes: [box("b", size)] });
+  const design = (pages: Record<string, ReturnType<typeof page>>) =>
+    ({ defaultFontFamily: "Fredoka", defaultFontSizePct: 0.04, pages }) as unknown as NonNullable<Project["design"]>;
+  const seed = GUIDE_BOOK_STATES[GUIDE_BOOK_STATES.length - 1]!.project;
+  const base: Project = { ...seed, design: design({ p1: page(0.04), p2: page(0.04) }) };
+
+  // Two devices restyled different pages: both survive and nobody is asked.
+  const mine: Project = { ...base, design: design({ p1: page(0.06), p2: page(0.04) }), rev: 1 };
+  const theirs: Project = { ...base, design: design({ p1: page(0.04), p2: page(0.07) }), rev: 2 };
+  const apart = mergeBooks(base, mine, theirs);
+  cases += 1;
+  if (apart.conflicts.length > 0) fail(`Restyling different pages should merge (got ${apart.conflicts.join(", ")}).`);
+  cases += 1;
+  const pages = apart.project.design?.pages ?? {};
+  if (pages.p1?.textBoxes[0]?.fontSizePct !== 0.06 || pages.p2?.textBoxes[0]?.fontSizePct !== 0.07) {
+    fail("A merge of two pages' design lost one device's change.");
+  }
+
+  // The same page restyled differently on both: that page is the question.
+  const clashing: Project = { ...theirs, design: design({ p1: page(0.09), p2: page(0.07) }) };
+  const same = mergeBooks(base, mine, clashing);
+  cases += 1;
+  if (same.conflicts.join() !== "design.pages.p1") {
+    fail(`Only the page both devices changed should conflict (got ${same.conflicts.join(", ")}).`);
+  }
+  for (const keep of ["mine", "theirs"] as const) {
+    const settled = resolveBookConflict(same.project, mine, clashing, same.conflicts, keep, 1);
+    cases += 1;
+    if (settled.design?.pages.p1?.textBoxes[0]?.fontSizePct !== (keep === "mine" ? 0.06 : 0.09)) {
+      fail(`Keeping ${keep} on a page conflict did not keep ${keep}.`);
+    }
+  }
+
+  // Undo puts back only the pages a turn changed.
+  const after: Project = { ...base, design: design({ p1: page(0.08), p2: page(0.04), p3: page(0.05) }) };
+  const saved = JSON.parse(snapshotForChange(base, after)) as Record<string, unknown>;
+  cases += 1;
+  if (Object.keys((saved.designPages as object) ?? {}).sort().join() !== "p1,p3") {
+    fail("The undo snapshot should hold exactly the changed pages.");
+  }
+  const back = restoreDesign(after, saved);
+  cases += 1;
+  if (
+    back.design?.pages.p1?.textBoxes[0]?.fontSizePct !== 0.04 ||
+    back.design?.pages.p3 !== undefined ||
+    back.design?.pages.p2 === undefined
+  ) {
+    fail("Undo did not put the changed pages back and leave the others alone.");
+  }
+  cases += 1;
+  if ("designPages" in JSON.parse(snapshotForChange(base, base))) fail("A turn that left the design alone should not snapshot it.");
+}
+
+{
+  const picture = {
+    id: "im",
+    kind: "illustration" as const,
+    rect: { x: 0, y: 0, w: 1, h: 1 },
+    z: 0,
+    fit: "cover" as const,
+  };
+  const bare = {
+    version: 1,
+    defaultFontFamily: "Itim",
+    defaultFontSizePct: 0.04,
+    pages: {
+      "cover-front": { textBoxes: [], images: [{ ...picture, id: "cover" }] },
+      p1: { textBoxes: [], images: [{ ...picture }] },
+    },
+  } as BookDesign;
+  const framed = applyAutomaticBookFrame(bare, "mask-1");
+  cases += 1;
+  if (framed.defaultImageMaskId !== "mask-1" || framed.pages.p1?.images?.[0]?.imageMaskId !== "mask-1") {
+    fail("A new book should keep one checked frame on its story pages.");
+  }
+  cases += 1;
+  if (framed.pages["cover-front"]?.images?.[0]?.imageMaskId) fail("Covers stay unframed.");
+  cases += 1;
+  if (applyAutomaticBookFrame(framed, "mask-2") !== framed) fail("A frame already chosen is not rolled again.");
+  const cutout = applyAutomaticBookFrame(framed, "mask-1", { transparentPageIds: new Set(["p1"]) });
+  cases += 1;
+  if (cutout.pages.p1?.images?.[0]?.imageMaskId || cutout.defaultImageMaskId !== "mask-1") {
+    fail("Transparent cutout art stays unframed without forgetting the book's frame.");
+  }
+  const original = withIllustrationFrame(
+    {
+      ...bare,
+      defaultImageMaskId: "mask-1",
+      pages: {
+        ...bare.pages,
+        p1: { textBoxes: [], images: [{ ...picture, frameSource: "none" }] },
+      },
+    },
+    "p1",
+    { imageMaskId: "mask-1", frameSource: "auto" },
+  );
+  cases += 1;
+  if (original.pages.p1?.images?.[0]?.frameSource !== "none") {
+    fail("An explicit original picture is not framed again.");
   }
 }
 

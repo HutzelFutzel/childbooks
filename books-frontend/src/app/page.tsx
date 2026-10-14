@@ -27,7 +27,7 @@ import { AdminEditBar } from "../ui/marketing/AdminEditBar";
  * memberships from the public plans projection.
  * Rendered per request so admin edits appear without a redeploy.
  */
-export const dynamic = "force-dynamic";
+export const revalidate = 60;
 
 function safeUrl(url: string): URL | undefined {
   try {

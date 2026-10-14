@@ -21,6 +21,7 @@ import {
   type ArtStyleExample,
   type ArtStylesConfig,
 } from "../core/config/artStyles";
+import type { GenerationStyleReference } from "../core/types";
 import {
   createDefaultLayoutsConfig,
   normalizeLayoutsConfig,
@@ -809,6 +810,12 @@ interface AppConfigState {
     mimeType: string,
   ) => Promise<ArtStyleExample>;
   removeArtStyleImage: (styleId: string, storagePath: string) => Promise<void>;
+  uploadArtStyleReference: (
+    styleId: string,
+    base64: string,
+    mimeType: string,
+  ) => Promise<GenerationStyleReference>;
+  clearArtStyleReference: (styleId: string) => Promise<void>;
 
   // Landing-page inline editing (admin, gated in the UI; enforced server-side).
   uploadSiteImage: (slot: SiteImageSlot, base64: string, mimeType: string, alt?: string) => Promise<void>;
@@ -1902,6 +1909,34 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
       body: JSON.stringify({ storagePath }),
     });
     if (!res.ok) throw new Error((await safeError(res)) ?? "Could not remove preview.");
+    set({ artStyles: normalizeArtStylesConfig(await res.json()) });
+  },
+
+  async uploadArtStyleReference(styleId, base64, mimeType) {
+    const res = await backendFetch(`/admin/art-styles/${encodeURIComponent(styleId)}/reference`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ base64, mimeType }),
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Reference upload failed.");
+    const result = (await res.json()) as {
+      config: ArtStylesConfig;
+      reference?: GenerationStyleReference;
+    };
+    const config = normalizeArtStylesConfig(result.config);
+    set({ artStyles: config });
+    const reference =
+      result.reference ??
+      config.styles.find((style) => style.id === styleId)?.generationReference;
+    if (!reference) throw new Error("The reference uploaded but could not be read back.");
+    return reference;
+  },
+
+  async clearArtStyleReference(styleId) {
+    const res = await backendFetch(`/admin/art-styles/${encodeURIComponent(styleId)}/reference`, {
+      method: "DELETE",
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not clear generation reference.");
     set({ artStyles: normalizeArtStylesConfig(await res.json()) });
   },
 

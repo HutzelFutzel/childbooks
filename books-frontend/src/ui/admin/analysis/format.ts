@@ -8,7 +8,10 @@ export function fmtNumber(n: number): string {
 
 export function fmtUsd(n: number | null): string {
   if (n == null) return "—";
-  return `$${n.toFixed(n < 1 ? 4 : 2)}`;
+  // Sub-dollar amounts keep four decimals (an AI call costs fractions of a cent);
+  // the sign goes in front of the symbol so a loss reads "-$5.00", not "$-5.00".
+  const abs = Math.abs(n);
+  return `${n < 0 ? "-" : ""}$${abs.toFixed(abs < 1 ? 4 : 2)}`;
 }
 
 /** Money in a given currency (e.g. "$24.99", "€99.00"), or em-dash when null. */

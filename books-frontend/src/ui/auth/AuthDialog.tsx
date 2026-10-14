@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
 import { AlertCircle, BookHeart, LogIn, Sparkles, UserPlus } from "lucide-react";
-import { authErrorMessage, useAuthStore, type SignupConsent } from "../../state/authStore";
+import {
+  authErrorMessage,
+  hasPendingReauth,
+  useAuthStore,
+  type AuthDialogOutcome,
+  type SignupConsent,
+} from "../../state/authStore";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { Button } from "../components/Button";
 import { Field, Input } from "../components/Input";
@@ -38,6 +44,7 @@ function GoogleIcon({ className }: { className?: string }) {
 export function AuthDialog() {
   const open = useAuthStore((s) => s.dialogOpen);
   const reason = useAuthStore((s) => s.authDialogReason);
+  const forcedMode = useAuthStore((s) => s.authDialogMode);
   const closeAuthDialog = useAuthStore((s) => s.closeAuthDialog);
   const signInEmail = useAuthStore((s) => s.signInEmail);
   const signUpEmail = useAuthStore((s) => s.signUpEmail);
@@ -65,7 +72,10 @@ export function AuthDialog() {
   // so open on "create account"; everyone else most likely wants to sign in.
   useEffect(() => {
     if (open) {
-      setMode(isGuest ? "signup" : "signin");
+      // A session-ended re-auth forces "sign in": by the time it opens, a dead
+      // account may already have been swapped for a fresh guest, which would
+      // otherwise default to the signup pitch.
+      setMode(forcedMode ?? (isGuest ? "signup" : "signin"));
       setError(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -74,9 +84,9 @@ export function AuthDialog() {
   const signupBonus = sparks.enabled ? sparks.grants.signupBonusSparks : 0;
   const verifyBonus = sparks.enabled ? sparks.grants.verifyBonusSparks : 0;
 
-  const close = () => {
+  const close = (outcome: AuthDialogOutcome = "dismissed") => {
     setError(null);
-    closeAuthDialog();
+    closeAuthDialog(outcome);
   };
 
   const switchMode = (next: Mode) => {
@@ -93,8 +103,12 @@ export function AuthDialog() {
       // a distinct "you can pick up where you left off" confirmation instead of
       // silently vanishing like a normal sign-in.
       const resumed = Boolean(reason);
-      close();
-      if (resumed) notify.success("You're signed in again", "Go ahead and retry what you were doing.");
+      // A request may be parked waiting on this sign-in; it resumes by itself,
+      // so the user has nothing to retry.
+      const autoResume = hasPendingReauth();
+      close("signedIn");
+      if (autoResume) notify.success("You're signed in again", "Picking up where you left off.");
+      else if (resumed) notify.success("You're signed in again", "Go ahead and retry what you were doing.");
     } catch (err) {
       const code = (err as { code?: string })?.code ?? "";
       // Trying to sign up with an existing email → guide them to sign in.
@@ -129,7 +143,7 @@ export function AuthDialog() {
   return (
     <Modal
       open={open}
-      onClose={close}
+      onClose={() => close()}
       title={mode === "signin" ? "Sign in" : isGuest ? "Keep your storybook" : "Create account"}
       size="max-w-md"
     >

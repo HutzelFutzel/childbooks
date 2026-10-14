@@ -10,6 +10,11 @@ export interface KeyValueStore {
   remove(key: string): Promise<void>;
   keys(): Promise<string[]>;
   /**
+   * Fetch all stored values whose key starts with `prefix` in a single query.
+   * Optional — backends without range queries fall back to `keys()` + `get()`.
+   */
+  listByPrefix?<T>(prefix: string): Promise<T[]>;
+  /**
    * Atomically read-modify-write a key inside a backend transaction. The mutator
    * receives the currently-stored value (or null) and returns the value to
    * persist; returning the previous value unchanged is a no-op. Guarantees the

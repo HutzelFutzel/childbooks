@@ -7,6 +7,7 @@
  * into their owner, and drop low-importance extras before they become sheets.
  */
 import type { Anchor, AnchorImportance } from "../types";
+import { describesSomeoneElse } from "./anchorDescription";
 import { mergeAliasNames, normalizeAnchorName } from "./anchorRefs";
 
 const IMPORTANCE_RANK: Record<AnchorImportance, number> = {
@@ -204,6 +205,16 @@ function nameOverlap(a: Anchor, b: Anchor): boolean {
 export function sameSubject(a: Anchor, b: Anchor): boolean {
   if (a.id && b.id && a.id === b.id) return true;
   if (nameOverlap(a, b)) return true;
+  // Two people with their own proper names are two people, however much one's
+  // description mentions the other ("Arthur's twin sister").
+  if (
+    a.type === "character" &&
+    b.type === "character" &&
+    isProperName(a.name) &&
+    isProperName(b.name)
+  ) {
+    return false;
+  }
 
   for (const label of labels(a)) {
     if (isProperName(label) && containsTokenSequence(bagOf(b), label)) return true;
@@ -397,8 +408,21 @@ export function dropLowImportance(anchors: Anchor[]): Anchor[] {
  * Merge splits, fold worn items, drop low-importance extras. Remaining rows
  * are the ones that should get reference sheets.
  */
+/**
+ * Drop a description that is really about someone else. "Arthur's twin sister"
+ * on Arthur's row is the sister's look, and drawing it makes Arthur a girl.
+ * An empty description is filled in later for Arthur alone, not copied across.
+ */
+function dropSwappedDescriptions(anchors: Anchor[]): Anchor[] {
+  return anchors.map((anchor) => {
+    if (anchor.type !== "character" || anchor.descriptionUserEdited) return anchor;
+    if (!describesSomeoneElse(anchor.name, anchor.description)) return anchor;
+    return { ...anchor, description: "" };
+  });
+}
+
 export function refineAnalyzedAnchors(anchors: Anchor[]): Anchor[] {
-  return dropLowImportance(foldWornItemsIntoOwners(mergeDuplicateAnchors(anchors))).map(
-    (anchor) => ({ ...anchor, include: true }),
-  );
+  return dropSwappedDescriptions(
+    dropLowImportance(foldWornItemsIntoOwners(mergeDuplicateAnchors(anchors))),
+  ).map((anchor) => ({ ...anchor, include: true }));
 }

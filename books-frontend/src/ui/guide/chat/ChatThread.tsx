@@ -61,6 +61,25 @@ export function ChatThread({
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  // Only the reader scrolling lets go of the bottom: a smooth scroll on its way
+  // down, or a card still growing in, must not.
+  const readerScrolledAt = useRef(0);
+  const markReaderScroll = () => {
+    readerScrolledAt.current = Date.now();
+  };
+
+  // The bottom stays in view while what is under it grows (a card sliding in,
+  // a line typing out) or the pane above the composer shrinks (a progress note).
+  useEffect(() => {
+    const el = scroller.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (pinned.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(el);
+    if (el.firstElementChild) observer.observe(el.firstElementChild);
+    return () => observer.disconnect();
+  }, []);
 
   useLayoutEffect(() => {
     const el = scroller.current;
@@ -89,15 +108,26 @@ export function ChatThread({
     }
     if (seenTask.current === next) return;
     seenTask.current = next;
+    pinned.current = true;
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
   }, [taskKey]);
 
   return (
     <div
       ref={scroller}
+      onWheel={markReaderScroll}
+      onTouchMove={markReaderScroll}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget) markReaderScroll();
+      }}
+      onPointerDown={(event) => {
+        if (event.target === event.currentTarget) markReaderScroll();
+      }}
       onScroll={(event) => {
         const el = event.currentTarget;
-        pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+        const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+        if (atBottom) pinned.current = true;
+        else if (Date.now() - readerScrolledAt.current < 800) pinned.current = false;
         scrollMemory.set(scrollKey, el.scrollTop);
       }}
       className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pt-6 pb-4", className)}
@@ -149,11 +179,10 @@ export function ChatThread({
           </AnimatePresence>
           {typing && <TypingDots />}
         </div>
-        {task && !typing && (
-          <div className={cn("w-full", wideTask ? "max-w-none" : "mx-auto max-w-[65ch]")} key={`task:${taskKey ?? "current"}`}>
-            {task}
-          </div>
-        )}
+        {/* A card on screen stays while the guide phrases a line above it; a
+            new one waits for that line (`wellStage`). Each card keeps its own
+            key, so nothing here remounts it. */}
+        {task && <div className={cn("w-full", wideTask ? "max-w-none" : "mx-auto max-w-[65ch]")}>{task}</div>}
       </div>
     </div>
   );

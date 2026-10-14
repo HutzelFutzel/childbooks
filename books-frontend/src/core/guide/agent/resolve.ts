@@ -71,10 +71,10 @@ export function resolveAnchor(project: Project, name: string): Resolution<Anchor
   return matchByName(name, anchors, (anchor) => [anchor.name, ...(anchor.aliasNames ?? [])]);
 }
 
-export function resolveOption(
+export function resolveOption<T extends { id: string; label: string }>(
   name: string,
-  options: readonly { id: string; label: string }[],
-): Resolution<{ id: string; label: string }> {
+  options: readonly T[],
+): Resolution<T> {
   return matchByName(name, options, (option) => [option.id, option.label]);
 }
 

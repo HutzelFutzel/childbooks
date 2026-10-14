@@ -16,6 +16,8 @@ import {
   useState,
 } from "react";
 import {
+  applyAutomaticBookFrame,
+  pictureRectFor,
   sharedTextStyleOf,
   sharedTextStylesEqual,
   textFromParagraphs,
@@ -60,6 +62,7 @@ import {
   type DesignPage,
 } from "../design/designInit";
 import { getPreset } from "../design/presets";
+import { applyMeasuredInk } from "../design/autoInk";
 import {
   applyLastCustomText,
   customTextScope,
@@ -791,98 +794,109 @@ export function StudioProvider({
   // anything the reader added themselves is left exactly where they put it.
   useEffect(() => {
     if (!design) {
-      void setDesign(defaultDesign(project, bookLanguages, typography));
+      void useProjectsStore.getState().patchCurrent((live) => {
+        if (live.id !== project.id || live.design) return live;
+        return { ...live, design: defaultDesign(project, bookLanguages, typography) };
+      });
       return;
     }
 
     const needsVersion = design.version !== DESIGN_VERSION;
     const needsFontUpgrade =
       LEGACY_DEFAULT_FONTS.has(design.defaultFontFamily) || !design.defaultFontFamily;
-
-    // Run full schema/font migration if the design carries an older version or legacy font default
-    if (needsVersion || needsFontUpgrade) {
-      const migrated = migrateDesignToCurrentVersion(design, pages);
-      void setDesign(migrated);
-      return;
+    if (!needsVersion && !needsFontUpgrade) {
+      if (measureFontFamily !== design.defaultFontFamily) return;
+      const missing = pages.filter((p) => !design.pages[p.id]);
+      const stale = pagesNeedingRelayout(design, pages);
+      const unsafe = pagesWithUnsafeText(design, pages);
+      if (missing.length === 0 && stale.length === 0 && unsafe.length === 0) return;
     }
 
-    if (measureFontFamily !== design.defaultFontFamily) return;
-    const missing = pages.filter((p) => !design.pages[p.id]);
-    const stale = pagesNeedingRelayout(design, pages);
-    const unsafe = pagesWithUnsafeText(design, pages);
-    if (missing.length === 0 && stale.length === 0 && unsafe.length === 0) return;
+    // Recompute from the live design. A snapshot from this render would
+    // overwrite a frame chosen while the seed was in flight.
+    void useProjectsStore.getState().patchCurrent((live) => {
+      if (live.id !== project.id) return live;
+      const current = live.design;
+      if (!current) return live;
+      const liveNeedsVersion = current.version !== DESIGN_VERSION;
+      const liveNeedsFont =
+        LEGACY_DEFAULT_FONTS.has(current.defaultFontFamily) || !current.defaultFontFamily;
+      if (liveNeedsVersion || liveNeedsFont) {
+        return { ...live, design: migrateDesignToCurrentVersion(current, pages) };
+      }
+      if (measureFontFamily !== current.defaultFontFamily) return live;
+      const missing = pages.filter((p) => !current.pages[p.id]);
+      const stale = pagesNeedingRelayout(current, pages);
+      const unsafe = pagesWithUnsafeText(current, pages);
+      if (missing.length === 0 && stale.length === 0 && unsafe.length === 0) return live;
+      const nextPages = { ...current.pages };
+      for (const p of missing) nextPages[p.id] = seedPageDesign(current, p);
+      for (const p of stale) {
+        const page = nextPages[p.id];
+        if (page) nextPages[p.id] = relayoutPageDesign(current, p, page);
+      }
+      for (const p of pages) {
+        const page = nextPages[p.id];
+        if (page) nextPages[p.id] = insetPageText(p, page);
+      }
+      return { ...live, design: { ...current, version: DESIGN_VERSION, pages: nextPages } };
+    });
+  }, [bookLanguages, design, measureFontFamily, pages, project, typography]);
 
-    const nextPages = { ...design.pages };
-    for (const p of missing) nextPages[p.id] = seedPageDesign(design, p);
-    for (const p of stale) {
-      const current = nextPages[p.id];
-      if (current) nextPages[p.id] = relayoutPageDesign(design, p, current);
-    }
-    for (const p of pages) {
-      const current = nextPages[p.id];
-      if (current) nextPages[p.id] = insetPageText(p, current);
-    }
-    void setDesign({ ...design, version: DESIGN_VERSION, pages: nextPages });
-  }, [bookLanguages, design, measureFontFamily, pages, project, setDesign, typography]);
-
-  // One book-level frame, chosen the first time Pages opens if the catalog has
-  // any. Opaque story art gets that frame by default; native-alpha artwork
-  // stays unframed unless the author explicitly chooses one. Covers stay plain.
+  // One book-level frame, from the shapes checked for new books. Chosen once
+  // and kept. Opaque story art gets it; transparent cutouts stay unframed
+  // (the cutout is their outline). Covers stay plain. The write reads the
+  // live design so it cannot wipe a picture that landed while it ran.
   const imageMasks = useAppConfigStore((s) => s.imageMasks);
   const designChapter = designChapterOf(step, project.config.styleReady, styleSetupOpen);
   useEffect(() => {
-    if (designChapter !== "pages" || !design) return;
-    const maskId = design.defaultImageMaskId ?? pickRandomActiveMaskId(imageMasks);
-    if (!maskId) return;
-    const nextPages = { ...design.pages };
-    let designChanged = design.defaultImageMaskId !== maskId;
-    for (const page of pages) {
-      if (page.isCover) continue;
-      const pd = nextPages[page.id];
-      if (!pd?.images?.length) continue;
-      const tree = project.illustrations?.[page.id];
-      const art = tree ? getCursor(tree).content : null;
-      if (!art?.blobId) continue;
-      const transparent = art.generation?.applied.background === "transparent";
-      let pageChanged = false;
-      const images = pd.images.map((im) => {
-        if (im.kind !== "illustration") return im;
-        const legacyAutomaticMask =
-          !im.frameSource &&
-          Boolean(im.imageMaskId) &&
-          im.imageMaskId === design.defaultImageMaskId;
-        if (transparent) {
-          if (im.frameSource !== "auto" && !legacyAutomaticMask) return im;
-          const {
-            imageMaskId: _imageMaskId,
-            frameSource: _frameSource,
-            ...plain
-          } = im;
-          void _imageMaskId;
-          void _frameSource;
-          pageChanged = true;
-          return plain;
-        }
-        if (
-          im.imageMaskId ||
-          (im.corner ?? 0) > 0 ||
-          im.frameSource === "user" ||
-          im.frameSource === "none"
-        ) {
-          return im;
-        }
-        pageChanged = true;
-        return { ...im, imageMaskId: maskId, frameSource: "auto" as const };
-      });
-      if (pageChanged) {
-        designChanged = true;
-        nextPages[page.id] = { ...pd, images };
+    if (designChapter !== "pages") return;
+    const masks = imageMasks;
+    void useProjectsStore.getState().patchCurrent((live) => {
+      if (live.id !== project.id || !live.design) return live;
+      const maskId = live.design.defaultImageMaskId ?? pickRandomActiveMaskId(masks);
+      if (!maskId) return live;
+      const transparent = new Set<string>();
+      for (const [id, tree] of Object.entries(live.illustrations ?? {})) {
+        const art = getCursor(tree).content;
+        if (art.blobId && art.generation?.applied.background === "transparent") transparent.add(id);
       }
-    }
-    if (designChanged) {
-      void setDesign({ ...design, defaultImageMaskId: maskId, pages: nextPages });
-    }
-  }, [design, designChapter, imageMasks, pages, project.illustrations, setDesign]);
+      const next = applyAutomaticBookFrame(live.design, maskId, { transparentPageIds: transparent });
+      if (next === live.design) return live;
+      return { ...live, design: next };
+    });
+  }, [design, designChapter, imageMasks, project.id, project.illustrations]);
+
+  // Each new picture re-inks the story text laid over it, from the contrast
+  // measured when it was rendered — unless the reader chose the color.
+  useEffect(() => {
+    if (!design) return;
+    const pending = pages.filter((p) => {
+      const stored = design.pages[p.id];
+      const art = project.illustrations?.[p.id];
+      if (!stored || !art || p.isCover) return false;
+      const content = getCursor(art).content;
+      return Boolean(content.textInk) && content.blobId !== stored.inkFor;
+    });
+    if (pending.length === 0) return;
+    void useProjectsStore.getState().patchCurrent((live) => {
+      if (live.id !== project.id || !live.design) return live;
+      let changed = false;
+      const nextPages = { ...live.design.pages };
+      for (const page of pending) {
+        const stored = nextPages[page.id];
+        const tree = live.illustrations?.[page.id];
+        if (!stored || !tree) continue;
+        const slotPresets = Object.fromEntries(page.plan.slots.map((s) => [s.id, s.presetId]));
+        const next = applyMeasuredInk(stored, getCursor(tree).content, slotPresets);
+        if (next !== stored) {
+          nextPages[page.id] = next;
+          changed = true;
+        }
+      }
+      return changed ? { ...live, design: { ...live.design, pages: nextPages } } : live;
+    });
+  }, [design, pages, project.id, project.illustrations]);
 
   // Guarded route navigation: every workflow affordance goes through one gate.
   // A blocked jump explains what's still missing instead of changing history.
@@ -1288,6 +1302,14 @@ export function StudioProvider({
           textBoxes: pd.textBoxes.map((b) => {
             if (b.id !== boxId) return b;
             let next = { ...b, ...patch };
+            // A color, plate or preset the reader picks is theirs: new artwork
+            // no longer re-inks this box.
+            if (
+              !("colorSource" in patch) &&
+              ("color" in patch || "presetId" in patch || "fill" in patch)
+            ) {
+              next.colorSource = "user";
+            }
             // Auto-height boxes render at max(target floor, content height): they
             // grow as text is added and can never be shorter than the text, but a
             // larger user-set target (minHeightPct) leaves room to breathe.
@@ -1922,7 +1944,9 @@ export function StudioProvider({
         kind: "illustration",
         // Primary slot == page/spread id (job task + illustrations tree key).
         illustrationId: pageId,
-        rect: { x: 0, y: 0, w: 1, h: 1 },
+        // Interior art sits a little smaller than the page so the page color
+        // frames it (admin "picture size"); covers bleed to the trim.
+        rect: pictureRectFor(pageId, { x: 0, y: 0, w: 1, h: 1 }, page?.pictureScale ?? 1),
         z: bottomZ(latest) - 1,
         fit: "cover",
         ...(focus ? { focus } : {}),

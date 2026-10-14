@@ -19,6 +19,7 @@ import { Tabs } from "../../components/Tabs";
 import { CardHeader, CardTitle } from "../../components/Card";
 import {
   useAdminProjects,
+  type ProjectPnl,
   type ProjectRow,
   type ProjectSort,
 } from "../../../state/adminProjectsStore";
@@ -50,8 +51,52 @@ const SORTS: { value: ProjectSort; label: string }[] = [
   { value: "seq", label: "First books" },
 ];
 
+const NO_MONEY: ProjectPnl = {
+  recognizedUsd: 0,
+  printRevenueUsd: 0,
+  ebookRevenueUsd: 0,
+  directUsd: 0,
+  subscriptionAllocUsd: 0,
+  revenueUsd: 0,
+  imageUsd: 0,
+  textUsd: 0,
+  providerUsd: 0,
+  absorbedUsd: 0,
+  printCostUsd: 0,
+  stripeFeeUsd: 0,
+  taxUsd: 0,
+  feesUsd: 0,
+  refundUsd: 0,
+  subsidyUsd: 0,
+  freeSparks: 0,
+  paidSparks: 0,
+  freeBySource: {},
+  netUsd: 0,
+};
+
+/**
+ * Every money column on this page reads the book's WINDOWED P&L, so cost,
+ * revenue and net are on one basis and add up. (The mirror's `cost` is a
+ * lifetime counter; mixing it in is what used to make Cost and Net disagree.)
+ */
+function money(p: ProjectRow): ProjectPnl {
+  return p.pnl ?? NO_MONEY;
+}
+
 function net(p: ProjectRow): number {
-  return p.pnl?.netUsd ?? -p.cost.providerUsd;
+  return money(p).netUsd;
+}
+
+/** What the book cost us in total: AI generation plus the cost of selling it. */
+function totalCost(p: ProjectRow): number {
+  const m = money(p);
+  return m.providerUsd + m.feesUsd;
+}
+
+/** Revenue after refunds — so Revenue − Image − Text − Orders = Net. */
+function revenueAfterRefunds(p: ProjectRow): number {
+  const m = money(p);
+  return m.revenueUsd - m.refundUsd;
 }
 
 /** Share of a book's actions that re-did something instead of making it. */
@@ -64,7 +109,7 @@ function sortProjects(rows: ProjectRow[], sort: ProjectSort): ProjectRow[] {
   const copy = [...rows];
   switch (sort) {
     case "cost":
-      return copy.sort((a, b) => b.cost.providerUsd - a.cost.providerUsd);
+      return copy.sort((a, b) => totalCost(b) - totalCost(a));
     case "net":
       return copy.sort((a, b) => net(a) - net(b));
     case "runs":
@@ -223,14 +268,19 @@ function BooksView() {
   const totals = useMemo(
     () =>
       rows.reduce(
-        (acc, p) => ({
-          cost: acc.cost + p.cost.providerUsd,
-          qc: acc.qc + p.cost.unbilledUsd,
-          subsidy: acc.subsidy + (p.pnl?.subsidyUsd ?? 0),
-          revenue: acc.revenue + (p.pnl?.recognizedUsd ?? 0) + (p.pnl?.directUsd ?? 0),
-          net: acc.net + net(p),
-        }),
-        { cost: 0, qc: 0, subsidy: 0, revenue: 0, net: 0 },
+        (acc, p) => {
+          const m = money(p);
+          return {
+            image: acc.image + m.imageUsd,
+            text: acc.text + m.textUsd,
+            orders: acc.orders + m.feesUsd,
+            qc: acc.qc + m.absorbedUsd,
+            subsidy: acc.subsidy + m.subsidyUsd,
+            revenue: acc.revenue + revenueAfterRefunds(p),
+            net: acc.net + m.netUsd,
+          };
+        },
+        { image: 0, text: 0, orders: 0, qc: 0, subsidy: 0, revenue: 0, net: 0 },
       ),
     [rows],
   );
@@ -246,23 +296,50 @@ function BooksView() {
 
   return (
     <div className="space-y-5">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-8">
         <Stat label="Books" value={fmtNumber(rows.length)} />
-        <Stat label="Provider cost" value={fmtUsd(totals.cost)} tone="cost" />
+        <Stat
+          label="Image cost"
+          value={fmtUsd(totals.image)}
+          tone="cost"
+          hint="Spent drawing: portraits, anchors, pages and covers, including the checks and helper calls that exist to produce a picture."
+        />
+        <Stat
+          label="Text cost"
+          value={fmtUsd(totals.text)}
+          tone="cost"
+          hint="Spent writing: story, screenplay, story edits and the guide chat."
+        />
+        <Stat
+          label="Order cost"
+          value={fmtUsd(totals.orders)}
+          tone="cost"
+          hint="What it took to sell and ship: the print provider's charge, Stripe's fee, and tax collected on the sale."
+        />
         <Stat
           label="Quality-control tax"
           value={fmtUsd(totals.qc)}
           tone="cost"
-          hint="Repair passes (grid re-renders, duplicate erases) we absorbed rather than charged."
+          hint="Part of Image and Text cost: repair passes (grid re-renders, duplicate erases) we absorbed rather than charged."
         />
         <Stat
           label="Free-Spark subsidy"
           value={fmtUsd(totals.subsidy)}
           tone="cost"
-          hint="Provider cost of work funded by granted Sparks — your acquisition spend."
+          hint="Provider cost of work funded by granted Sparks — your acquisition spend. Part of Image and Text cost."
         />
-        <Stat label="Revenue" value={fmtUsd(totals.revenue)} tone="revenue" />
-        <Stat label="Net" value={fmtUsd(totals.net)} tone={totals.net >= 0 ? "revenue" : "cost"} />
+        <Stat
+          label="Revenue"
+          value={fmtUsd(totals.revenue)}
+          tone="revenue"
+          hint="Recognized pack revenue + print and ebook sales + any allocated subscription share, minus refunds."
+        />
+        <Stat
+          label="Net"
+          value={fmtUsd(totals.net)}
+          tone={totals.net >= 0 ? "revenue" : "cost"}
+          hint="Revenue − Image − Text − Order cost."
+        />
       </div>
 
       {/* Where books die. Each bar is the share of books that ever reached that
@@ -344,15 +421,28 @@ function BooksView() {
                     qcCalls: p.counters.qcCalls,
                     reworkRate: rework(p),
                     imageModels: Object.keys(p.counters.imagesByModel).join(" "),
-                    providerUsd: p.cost.providerUsd,
-                    unbilledUsd: p.cost.unbilledUsd,
+                    // Windowed money, in the order it adds up: revenue, then the
+                    // three cost groups, then net.
+                    imageUsd: money(p).imageUsd,
+                    textUsd: money(p).textUsd,
+                    providerUsd: money(p).providerUsd,
+                    absorbedUsd: money(p).absorbedUsd,
+                    printCostUsd: money(p).printCostUsd,
+                    stripeFeeUsd: money(p).stripeFeeUsd,
+                    taxUsd: money(p).taxUsd,
+                    orderCostUsd: money(p).feesUsd,
                     sparksCharged: p.sparks.charged,
                     sparksPaid: p.sparks.paid,
                     sparksFree: p.sparks.free,
-                    recognizedUsd: p.pnl?.recognizedUsd ?? 0,
-                    directUsd: p.pnl?.directUsd ?? 0,
-                    subsidyUsd: p.pnl?.subsidyUsd ?? 0,
+                    recognizedUsd: money(p).recognizedUsd,
+                    printRevenueUsd: money(p).printRevenueUsd,
+                    ebookRevenueUsd: money(p).ebookRevenueUsd,
+                    subscriptionAllocUsd: money(p).subscriptionAllocUsd,
+                    refundUsd: money(p).refundUsd,
+                    revenueAfterRefundsUsd: revenueAfterRefunds(p),
+                    subsidyUsd: money(p).subsidyUsd,
                     netUsd: net(p),
+                    lifetimeProviderUsd: p.cost.providerUsd,
                     timeToFirstImageMs: p.timing.timeToFirstImageMs ?? "",
                     timeToOrderMs: p.timing.timeToOrderMs ?? "",
                   })),
@@ -377,9 +467,33 @@ function BooksView() {
                 >
                   Rework
                 </th>
-                <th className="px-4 py-2.5 text-right">Cost</th>
-                <th className="px-4 py-2.5 text-right">Charged</th>
-                <th className="px-4 py-2.5 text-right">Net</th>
+                <th
+                  className="px-4 py-2.5 text-right"
+                  title="Spent drawing, helper calls included."
+                >
+                  Image
+                </th>
+                <th className="px-4 py-2.5 text-right" title="Spent writing: story, screenplay, chat.">
+                  Text
+                </th>
+                <th
+                  className="px-4 py-2.5 text-right"
+                  title="Print provider charge + Stripe fee + tax on the sale."
+                >
+                  Orders
+                </th>
+                <th className="px-4 py-2.5 text-right" title="Sparks the reader was charged.">
+                  Charged
+                </th>
+                <th
+                  className="px-4 py-2.5 text-right"
+                  title="Recognized pack revenue + print and ebook sales, minus refunds."
+                >
+                  Revenue
+                </th>
+                <th className="px-4 py-2.5 text-right" title="Revenue − Image − Text − Orders.">
+                  Net
+                </th>
                 <th className="px-4 py-2.5">Last active</th>
                 <th className="px-4 py-2.5" />
               </tr>
@@ -429,10 +543,19 @@ function BooksView() {
                         {p.counters.runs > 0 ? fmtPct(rw) : "—"}
                       </td>
                       <td className="px-4 py-2.5 text-right tabular-nums text-ink-700">
-                        {fmtUsd(p.cost.providerUsd)}
+                        {fmtUsd(money(p).imageUsd)}
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-ink-700">
+                        {fmtUsd(money(p).textUsd)}
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-ink-700">
+                        {fmtUsd(money(p).feesUsd)}
                       </td>
                       <td className="px-4 py-2.5 text-right tabular-nums text-ink-700">
                         {fmtSparks(p.sparks.charged)}
+                      </td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-ink-700">
+                        {fmtUsd(revenueAfterRefunds(p))}
                       </td>
                       <td
                         className={`px-4 py-2.5 text-right tabular-nums font-medium ${n >= 0 ? "text-emerald-600" : "text-red-600"}`}
@@ -448,7 +571,7 @@ function BooksView() {
                     </tr>
                     {open && (
                       <tr className="border-b border-ink-50 bg-ink-50/30">
-                        <td colSpan={9} className="px-4 py-4">
+                        <td colSpan={12} className="px-4 py-4">
                           <BookDetail project={p} onOpenHistory={() => void openDetail(p.key)} />
                         </td>
                       </tr>
@@ -458,7 +581,7 @@ function BooksView() {
               })}
               {rows.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={9} className="px-4 py-10 text-center text-sm text-ink-400">
+                  <td colSpan={12} className="px-4 py-10 text-center text-sm text-ink-400">
                     No books match this selection.
                   </td>
                 </tr>
@@ -484,7 +607,7 @@ function BookDetail({
   project: ProjectRow;
   onOpenHistory: () => void;
 }) {
-  const pnl = p.pnl;
+  const m = money(p);
   const actions = Object.entries(p.counters.byAction).sort((a, b) => b[1] - a[1]);
   const models = Object.entries(p.counters.imagesByModel).sort((a, b) => b[1] - a[1]);
   const lots = Object.entries(p.sparks.byLotSource).sort((a, b) => b[1] - a[1]);
@@ -498,16 +621,33 @@ function BookDetail({
       <div className="grid gap-4 lg:grid-cols-3">
         <div>
           <DetailTitle>Money</DetailTitle>
-          <DetailRow label="Provider cost" value={fmtUsd(p.cost.providerUsd)} />
-          <DetailRow label="…of which absorbed" value={fmtUsd(p.cost.unbilledUsd)} />
-          <DetailRow label="Recognized (packs)" value={fmtUsd(pnl?.recognizedUsd ?? 0)} />
-          <DetailRow label="Print / ebook" value={fmtUsd(pnl?.directUsd ?? 0)} />
-          {pnl && pnl.subscriptionAllocUsd > 0 && (
-            <DetailRow label="Subscription share" value={fmtUsd(pnl.subscriptionAllocUsd)} />
+          <DetailGroup>Image generation</DetailGroup>
+          <DetailRow label="Pictures drawn" value={fmtUsd(m.imageUsd)} bold />
+          <DetailGroup>Text generation</DetailGroup>
+          <DetailRow label="Story, screenplay, chat" value={fmtUsd(m.textUsd)} bold />
+          <DetailRow label="AI cost, total" value={fmtUsd(m.providerUsd)} />
+          <DetailRow label="…of which repairs we absorbed" value={fmtUsd(m.absorbedUsd)} />
+          <DetailRow label="…of which free-Spark subsidy" value={fmtUsd(m.subsidyUsd)} />
+          <DetailGroup>Order</DetailGroup>
+          <DetailRow label="Print provider (production + shipping)" value={fmtUsd(m.printCostUsd)} />
+          <DetailRow label="Stripe fee" value={fmtUsd(m.stripeFeeUsd)} />
+          <DetailRow label="Tax on the sale" value={fmtUsd(m.taxUsd)} />
+          <DetailRow label="Order cost, total" value={fmtUsd(m.feesUsd)} bold />
+          <DetailGroup>Revenue</DetailGroup>
+          <DetailRow label="Recognized (packs)" value={fmtUsd(m.recognizedUsd)} />
+          <DetailRow label="Print sales" value={fmtUsd(m.printRevenueUsd)} />
+          <DetailRow label="Ebook sales" value={fmtUsd(m.ebookRevenueUsd)} />
+          {m.subscriptionAllocUsd > 0 && (
+            <DetailRow label="Subscription share" value={fmtUsd(m.subscriptionAllocUsd)} />
           )}
-          <DetailRow label="Free-Spark subsidy" value={fmtUsd(pnl?.subsidyUsd ?? 0)} />
-          {pnl && pnl.feesUsd > 0 && (
-            <DetailRow label="Fees & print cost" value={fmtUsd(pnl.feesUsd)} />
+          {m.refundUsd > 0 && <DetailRow label="Refunded" value={`−${fmtUsd(m.refundUsd)}`} />}
+          <DetailRow label="Revenue after refunds" value={fmtUsd(revenueAfterRefunds(p))} bold />
+          <DetailRow label="Net" value={fmtUsd(m.netUsd)} bold />
+          {p.cost.providerUsd - m.providerUsd > 0.0001 && (
+            <div className="mt-1.5 text-[10px] leading-snug text-ink-400">
+              Lifetime AI spend on this book is {fmtUsd(p.cost.providerUsd)}; the rest was outside
+              the selected window.
+            </div>
           )}
         </div>
         <div>
@@ -588,13 +728,25 @@ function DetailTitle({ children }: { children: React.ReactNode }) {
   return <div className="mb-1.5 text-xs font-semibold text-ink-700">{children}</div>;
 }
 
-function DetailRow({ label, value }: { label: string; value: string }) {
+function DetailGroup({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mt-2 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
+      {children}
+    </div>
+  );
+}
+
+function DetailRow({ label, value, bold }: { label: string; value: string; bold?: boolean }) {
   return (
     <div className="flex items-baseline justify-between gap-3 py-0.5 text-xs">
       <span className="truncate text-ink-500" title={label}>
         {label}
       </span>
-      <span className="shrink-0 tabular-nums text-ink-800">{value}</span>
+      <span
+        className={`shrink-0 tabular-nums text-ink-800 ${bold ? "font-semibold" : ""}`}
+      >
+        {value}
+      </span>
     </div>
   );
 }

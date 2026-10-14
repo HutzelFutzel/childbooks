@@ -37,6 +37,7 @@ import { artStyleKey } from "../../books-frontend/src/core/prompts/style";
 import type { Project } from "../../books-frontend/src/core/types";
 import type { ImageTier } from "../../books-frontend/src/core/config/modelConfig";
 import type { RunKind } from "./actionRun";
+import { costGroupOf, type CostGroup } from "./usage";
 import {
   emptyStat,
   mergeTally,
@@ -182,7 +183,19 @@ export interface ProjectMirror {
   milestones: Partial<Record<ProjectMilestone, number>>;
   counters: ProjectCounters;
   models: { imageModels: string[] };
-  cost: { providerUsd: number; billedUsd: number; unbilledUsd: number };
+  /**
+   * Lifetime AI spend. `imageUsd` + `textUsd` = `providerUsd` for books metered
+   * after the split shipped; older books only carry `providerUsd`. The admin
+   * money columns read the windowed finance stream instead (see
+   * {@link ProjectPnl}), so this is the whole-life counter, not a report figure.
+   */
+  cost: {
+    providerUsd: number;
+    billedUsd: number;
+    unbilledUsd: number;
+    imageUsd?: number;
+    textUsd?: number;
+  };
   sparks: { charged: number; paid: number; free: number; byLotSource: Record<string, number> };
   timing: { timeToFirstImageMs?: number; timeToOrderMs?: number };
 }
@@ -337,6 +350,8 @@ export interface ProjectRunUpdate {
   kind: RunKind;
   failed: boolean;
   costUsd: { total: number; billed: number; unbilled: number };
+  /** Whether this action's spend is image work or text work. */
+  group: CostGroup;
   sparks: { charged: number; paid: number; free: number; byLotSource: Record<string, number> };
   at: number;
 }
@@ -383,6 +398,9 @@ export async function recordProjectRun(u: ProjectRunUpdate): Promise<void> {
           providerUsd: inc(u.costUsd.total),
           billedUsd: inc(u.costUsd.billed),
           unbilledUsd: inc(u.costUsd.unbilled),
+          ...(u.group === "image"
+            ? { imageUsd: inc(u.costUsd.total) }
+            : { textUsd: inc(u.costUsd.total) }),
         },
         sparks: {
           charged: inc(u.sparks.charged),
@@ -523,38 +541,77 @@ export async function stampFlow(
 
 /** One project's money picture, derived from the finance stream. */
 export interface ProjectPnl {
+  // ---- Revenue ----
   /** Deferred pack/gift revenue recognized as this project consumed Sparks. */
   recognizedUsd: number;
-  /** Print + ebook charged directly against this project. */
+  /** Print book sales charged directly against this project. */
+  printRevenueUsd: number;
+  /** Ebook sales charged directly against this project. */
+  ebookRevenueUsd: number;
+  /** `printRevenueUsd + ebookRevenueUsd`. */
   directUsd: number;
-  refundUsd: number;
-  feesUsd: number;
-  /** Provider spend attributed to this project. */
+  /** Modelled share of subscription revenue (only when allocation is on). */
+  subscriptionAllocUsd: number;
+  /** Everything above, before any cost: what the book brought in. */
+  revenueUsd: number;
+
+  // ---- AI generation cost (what we paid the model providers) ----
+  /** Image actions: the pictures AND the helper calls made to produce them. */
+  imageUsd: number;
+  /** Text actions: story, screenplay, story edits, guide chat. */
+  textUsd: number;
+  /** `imageUsd + textUsd`. */
   providerUsd: number;
+  /** Part of `providerUsd` spent on repair passes the reader was not charged for. */
+  absorbedUsd: number;
+
+  // ---- Order cost (what it took to sell and ship it) ----
+  /** What the print provider charged us: production plus shipping. */
+  printCostUsd: number;
+  stripeFeeUsd: number;
+  /** Sales tax / VAT collected on the sale — owed on, not kept. */
+  taxUsd: number;
+  /** `printCostUsd + stripeFeeUsd + taxUsd`. */
+  feesUsd: number;
+  refundUsd: number;
+
   /** Free Sparks consumed, valued at provider cost — the acquisition subsidy. */
   subsidyUsd: number;
   freeSparks: number;
   paidSparks: number;
   freeBySource: Record<string, number>;
-  /** Modelled share of subscription revenue (only when allocation is on). */
-  subscriptionAllocUsd: number;
+  /** `revenueUsd − providerUsd − feesUsd − refundUsd`. */
   netUsd: number;
 }
 
 function emptyPnl(): ProjectPnl {
   return {
     recognizedUsd: 0,
+    printRevenueUsd: 0,
+    ebookRevenueUsd: 0,
     directUsd: 0,
-    refundUsd: 0,
-    feesUsd: 0,
+    subscriptionAllocUsd: 0,
+    revenueUsd: 0,
+    imageUsd: 0,
+    textUsd: 0,
     providerUsd: 0,
+    absorbedUsd: 0,
+    printCostUsd: 0,
+    stripeFeeUsd: 0,
+    taxUsd: 0,
+    feesUsd: 0,
+    refundUsd: 0,
     subsidyUsd: 0,
     freeSparks: 0,
     paidSparks: 0,
     freeBySource: {},
-    subscriptionAllocUsd: 0,
     netUsd: 0,
   };
+}
+
+/** A project with no money events in the window — zero everywhere, not absent. */
+export function blankPnl(): ProjectPnl {
+  return emptyPnl();
 }
 
 const MAX_SCAN = 50_000;
@@ -644,8 +701,21 @@ export async function projectFinanceIndex(args: {
       const p = get(key);
 
       switch (kind) {
-        case "providerCost":
-          p.providerUsd += -amountUsd;
+        case "providerCost": {
+          const cost = -amountUsd;
+          // New events carry their group; older ones are classified by the
+          // action they recorded, which is the same rule applied later.
+          const group =
+            meta.group === "image" || meta.group === "text"
+              ? meta.group
+              : costGroupOf(typeof meta.action === "string" ? meta.action : "");
+          if (group === "image") p.imageUsd += cost;
+          else p.textUsd += cost;
+          break;
+        }
+        case "qcCost":
+          // A zero-dollar marker; its dollars are inside the providerCost above.
+          p.absorbedUsd += typeof meta.unbilledUsd === "number" ? meta.unbilledUsd : 0;
           break;
         case "sparkSpend": {
           const paidUsd = typeof meta.paidUsd === "number" ? meta.paidUsd : 0;
@@ -670,16 +740,22 @@ export async function projectFinanceIndex(args: {
           break;
         }
         case "printRevenue":
+          p.printRevenueUsd += amountUsd;
+          break;
         case "ebookRevenue":
-          p.directUsd += amountUsd;
+          p.ebookRevenueUsd += amountUsd;
           break;
         case "refund":
           p.refundUsd += -amountUsd;
           break;
         case "stripeFee":
+          p.stripeFeeUsd += -amountUsd;
+          break;
         case "taxRemitted":
+          p.taxUsd += -amountUsd;
+          break;
         case "printCost":
-          p.feesUsd += -amountUsd;
+          p.printCostUsd += -amountUsd;
           break;
         default:
           break;
@@ -714,22 +790,28 @@ export async function projectFinanceIndex(args: {
   }
 
   const r2 = (n: number) => Math.round(n * 100) / 100;
+  // AI calls are fractions of a cent each, so a book's image/text split keeps
+  // four decimals; money that moved through Stripe is whole cents.
+  const r4 = (n: number) => Math.round(n * 10_000) / 10_000;
   for (const p of byProject.values()) {
     p.recognizedUsd = r2(p.recognizedUsd);
-    p.directUsd = r2(p.directUsd);
-    p.refundUsd = r2(p.refundUsd);
-    p.feesUsd = r2(p.feesUsd);
-    p.providerUsd = r2(p.providerUsd);
-    p.subsidyUsd = r2(p.subsidyUsd);
+    p.printRevenueUsd = r2(p.printRevenueUsd);
+    p.ebookRevenueUsd = r2(p.ebookRevenueUsd);
     p.subscriptionAllocUsd = r2(p.subscriptionAllocUsd);
-    p.netUsd = r2(
-      p.recognizedUsd +
-        p.directUsd +
-        p.subscriptionAllocUsd -
-        p.refundUsd -
-        p.feesUsd -
-        p.providerUsd,
-    );
+    p.refundUsd = r2(p.refundUsd);
+    p.printCostUsd = r2(p.printCostUsd);
+    p.stripeFeeUsd = r2(p.stripeFeeUsd);
+    p.taxUsd = r2(p.taxUsd);
+    p.imageUsd = r4(p.imageUsd);
+    p.textUsd = r4(p.textUsd);
+    p.absorbedUsd = r4(p.absorbedUsd);
+    p.subsidyUsd = r2(p.subsidyUsd);
+    // Totals are built from the rounded parts, so the columns always add up.
+    p.directUsd = r2(p.printRevenueUsd + p.ebookRevenueUsd);
+    p.revenueUsd = r2(p.recognizedUsd + p.directUsd + p.subscriptionAllocUsd);
+    p.providerUsd = r4(p.imageUsd + p.textUsd);
+    p.feesUsd = r2(p.printCostUsd + p.stripeFeeUsd + p.taxUsd);
+    p.netUsd = r2(p.revenueUsd - p.refundUsd - p.feesUsd - p.providerUsd);
   }
 
   return { byProject, unallocatedSubscriptionUsd: r2(unallocatedSubscriptionUsd), capped };
@@ -916,7 +998,14 @@ export function summarizeProjects(
     failures: num((m) => m.counters.failures),
     qcCalls: num((m) => m.counters.qcCalls),
     attemptsPerPage: attempts.length > 0 ? summarize(attempts) : emptyStat(),
-    costUsd: num((m) => m.cost?.providerUsd ?? 0),
+    // With a P&L, cost is the WINDOWED provider spend so it sits on the same
+    // basis as net (a book's lifetime counter would include spend outside the
+    // window that its revenue doesn't). Without one, the lifetime counter.
+    costUsd: num((m) =>
+      pnl
+        ? (pnl.get(projectDocKey(m.uid, m.projectId))?.providerUsd ?? 0)
+        : (m.cost?.providerUsd ?? 0),
+    ),
     sparksCharged: num((m) => m.sparks?.charged ?? 0),
     netUsd: pnl
       ? summarize(
@@ -1053,7 +1142,13 @@ export function summarizeUsers(
       restyles: sum((m) => m.counters.restyles),
       failures: sum((m) => m.counters.failures),
       qcCalls: sum((m) => m.counters.qcCalls),
-      costUsd: r2(sum((m) => m.cost?.providerUsd ?? 0)),
+      costUsd: r2(
+        sum((m) =>
+          pnl
+            ? (pnl.get(projectDocKey(m.uid, m.projectId))?.providerUsd ?? 0)
+            : (m.cost?.providerUsd ?? 0),
+        ),
+      ),
       netUsd: pnl
         ? r2(sum((m) => pnl.get(projectDocKey(m.uid, m.projectId))?.netUsd ?? 0))
         : 0,

@@ -125,7 +125,7 @@ export interface EmailTemplateVarsMap {
   sparks_purchased: { name?: string; sparks: number; balance?: number };
   /**
    * Draw the book finished while the reader was away. `bookUrl` opens exactly
-   * that project; `missing` counts the pictures that still need another go
+   * that project; `missing` counts the pictures that could not be drawn
    * (0 when every page, cover and sheet was drawn).
    */
   book_drawn: { name?: string; bookTitle: string; bookUrl: string; drawn: number; missing: number };

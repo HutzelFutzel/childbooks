@@ -29,6 +29,12 @@ setGlobalOptions({ region: "us-central1", maxInstances: 40 });
 // wait behind a batch of multi-minute image renders on the fan-out queue.
 export { onGenerationJob, runFanTask, runTextTask, reapStuckJobs } from "./jobs";
 
+// Saved custom art styles: the neutral sample portrait drawn for a style once a
+// book uses it (its own queue, never billed), and the daily removal of candidate
+// styles no book ever drew with.
+export { runStyleReference } from "./styleReference";
+export { cleanupStyleCandidates } from "./styleJobs";
+
 // Scheduled cleanup of stale anonymous (guest) accounts + their data.
 export { cleanupAnonymousUsers } from "./cleanup";
 // One-use character photos: hard-delete abandoned sources after 24 hours.
@@ -87,8 +93,13 @@ export { sweepCampaigns } from "./campaigns/job";
 export const api = onRequest(
   {
     // Image generation can take a while; allow generous time + memory.
+    // `cpu: 1` + `concurrency: 40` lets one warm instance serve parallel
+    // requests (e.g. admin analytics fan-out) and share in-memory scan caches
+    // instead of cold-starting a fresh container per concurrent request.
     timeoutSeconds: 300,
     memory: "1GiB",
+    cpu: 1,
+    concurrency: 40,
     // Bind every secret unconditionally (same as the job/scheduled functions
     // below) rather than gating on a LIVE_ENABLED flag. Firebase's deploy
     // "discovery" step loads this file and evaluates the `secrets: [...]`

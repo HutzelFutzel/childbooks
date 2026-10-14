@@ -89,6 +89,11 @@ export const REQUIREMENTS: Record<RequirementId, RequirementSpec> = {
       view: "pages",
     }),
   },
+  pagesStarted: {
+    label: "The pages have been drawn",
+    met: (p) => authoringOf(p).lockedAt !== undefined,
+    remedy: () => ({ what: "the pages of the book. They come after the book is drawn.", view: "pages" }),
+  },
   storyIdle: {
     label: "The story is not being written right now",
     met: (p) => authoringOf(p).storyRun?.status !== "running",

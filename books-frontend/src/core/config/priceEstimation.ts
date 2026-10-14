@@ -43,10 +43,29 @@ export interface EstimationRule {
   maxSparks: number;
 }
 
+/**
+ * What one sample in the cost window measures:
+ *   - `full`      — everything the render cost us: the requested image plus
+ *                   every retry and repair pass the pipeline made to deliver it.
+ *                   The quote then forwards that overhead as an average, so
+ *                   no reader pays for their own retry and none is lost.
+ *   - `requested` — only the requested calls; retries and repairs are absorbed.
+ */
+export const COST_BASES = ["full", "requested"] as const;
+export type CostBasis = (typeof COST_BASES)[number];
+
 export interface EstimationConfig {
   defaults: EstimationRule;
   /** Per-action overrides; a missing field inherits from `defaults`. */
   byAction: Partial<Record<ImageActionId, Partial<EstimationRule>>>;
+  costBasis: CostBasis;
+  /**
+   * Average provider calls per delivered render, applied to the cost-table rate
+   * when a group has no measured renders yet. The rate is one image; a `full`
+   * window also carries retries and repairs, so a bare rate would underprice
+   * until enough renders are measured. Ignored for the `requested` basis.
+   */
+  expectedAttempts: number;
   /**
    * Relative cost of each image quality setting, used only to scale a measured
    * group into a quality that has no samples yet (low → high after a settings
@@ -84,12 +103,25 @@ export const DEFAULT_QUALITY_FACTORS: Record<string, number> = {
   "provider-default": 4,
 };
 
+export const DEFAULT_EXPECTED_ATTEMPTS = 1.1;
+
 export function createDefaultEstimationConfig(): EstimationConfig {
   return {
     defaults: { ...DEFAULT_ESTIMATION_RULE },
     byAction: {},
+    costBasis: "full",
+    expectedAttempts: DEFAULT_EXPECTED_ATTEMPTS,
     qualityFactors: { ...DEFAULT_QUALITY_FACTORS },
   };
+}
+
+/**
+ * Statistics that drop the expensive tail. Under the `full` basis that tail is
+ * exactly the renders that needed a retry, so these leave retry cost unpriced.
+ */
+export function statisticDropsRetries(rule: Pick<EstimationRule, "statistic" | "percentile">): boolean {
+  if (rule.statistic === "median" || rule.statistic === "trimmedMean") return true;
+  return rule.statistic === "percentile" && rule.percentile <= 50;
 }
 
 /** Short pros and cons shown next to each statistic in the admin. */
@@ -192,7 +224,11 @@ export function normalizeEstimationConfig(input: unknown): EstimationConfig {
   for (const [k, v] of Object.entries(raw.qualityFactors ?? {})) {
     if (typeof v === "number" && Number.isFinite(v) && v > 0) qualityFactors[k] = v;
   }
-  return { defaults, byAction, qualityFactors };
+  const costBasis: CostBasis = (COST_BASES as readonly string[]).includes(raw.costBasis as string)
+    ? (raw.costBasis as CostBasis)
+    : def.costBasis;
+  const expectedAttempts = clampNumber(raw.expectedAttempts, 1, 5, def.expectedAttempts);
+  return { defaults, byAction, costBasis, expectedAttempts, qualityFactors };
 }
 
 const ruleShape = {
@@ -212,5 +248,7 @@ const ruleShape = {
 export const estimationConfigSchema = z.object({
   defaults: z.object(ruleShape),
   byAction: z.record(z.string(), z.object(ruleShape).partial()),
+  costBasis: z.enum(COST_BASES).optional(),
+  expectedAttempts: z.number().min(1).max(5).optional(),
   qualityFactors: z.record(z.string(), z.number().positive()),
 });

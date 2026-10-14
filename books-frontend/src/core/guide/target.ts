@@ -47,6 +47,8 @@ export interface TargetPerson {
 
 export type TargetResolution =
   | { kind: "target"; target: GuideTarget }
+  /** The sentence names several people: the change is for all of them, not a question of which. */
+  | { kind: "targets"; people: TargetPerson[] }
   | { kind: "ask"; people: TargetPerson[] }
   | { kind: "none" };
 
@@ -68,12 +70,14 @@ export function resolveGuideTarget(args: {
   inView?: readonly TargetPerson[];
 }): TargetResolution {
   const named = args.cast.filter((person) => mentions(args.sentence, person.name));
+  // "Make Aren and Amira blonde" names who it is for: both. (A page or cover
+  // that is selected stays the one picture.)
+  if (named.length > 1 && (!args.chip || args.chip.kind === "person")) return { kind: "targets", people: named };
   if (named.length === 1 && (!args.chip || args.chip.kind === "person")) {
     return { kind: "target", target: { kind: "person", castId: named[0]!.id, name: named[0]!.name } };
   }
   // A page or cover is one target however many people are on it: the picture.
   if (args.chip) return { kind: "target", target: args.chip };
-  if (named.length > 1) return { kind: "ask", people: named };
   if ((args.inView?.length ?? 0) > 1) return { kind: "ask", people: [...args.inView!] };
   if (args.inView?.length === 1) {
     const only = args.inView[0]!;

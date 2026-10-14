@@ -29,7 +29,9 @@ import {
   renameDerivedStyleNames,
   setSourceArtOnNamedCharacters,
 } from "../core/book/sourceArt";
+import { resolveLayoutComposition } from "../core/config/layouts";
 import {
+  pictureRectFor,
   textFromParagraphs,
   withIllustrationFrame,
   withoutAutomaticIllustrationFrame,
@@ -345,7 +347,11 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
     const settled = resolveBookConflict(pending.merged, pending.mine, pending.theirs, pending.conflicts, keep, Date.now());
     set((state) => ({
       bookConflict: null,
-      projects: state.projects.map((p) => (p.id === pending.projectId ? { ...settled, rev: pending.theirs.rev } : p)),
+      projects: state.projects.map((p) =>
+        p.id === pending.projectId
+          ? { ...withEditsSince({ ...pending.merged, rev: pending.theirs.rev }, p, settled), rev: pending.theirs.rev }
+          : p,
+      ),
     }));
     await persistLatest(get, set, pending.projectId);
   },
@@ -770,6 +776,13 @@ export const useProjectsStore = create<ProjectsState>((set, get) => ({
           ...next,
           design: withIllustrationFrame(design, spreadId, {
             focus,
+            // Interior art sits a little smaller than the page, centred, so
+            // the page color frames it. Covers keep bleeding to the trim.
+            rect: pictureRectFor(
+              spreadId,
+              { x: 0, y: 0, w: 1, h: 1 },
+              resolveLayoutComposition(useAppConfigStore.getState().layouts).pictureScale,
+            ),
             ...(!transparent && !isCover && design.defaultImageMaskId
               ? {
                   imageMaskId: design.defaultImageMaskId,
@@ -1055,7 +1068,10 @@ async function resolveConflict(get: ProjectsGet, set: ProjectsSet, id: string, m
   const { projects } = await getRepos();
   const theirs = await projects.get(id);
   if (!theirs) return false;
-  const outcome = conflictResolver({ base, mine, theirs });
+  // What was typed while the stored copy was fetched is part of "mine": the
+  // failed save's snapshot alone would drop it.
+  const latest = get().projects.find((p) => p.id === id) ?? mine;
+  const outcome = conflictResolver({ base, mine: latest, theirs });
   if (!outcome) return false;
   savedBase.set(id, theirs);
   if (outcome.kind === "merged") {
@@ -1064,10 +1080,22 @@ async function resolveConflict(get: ProjectsGet, set: ProjectsSet, id: string, m
     return true;
   }
   set(() => ({
-    bookConflict: { projectId: id, conflicts: outcome.conflicts, merged: outcome.merged, mine, theirs },
+    bookConflict: { projectId: id, conflicts: outcome.conflicts, merged: outcome.merged, mine: latest, theirs },
     projects: get().projects.map((p) => (p.id === id ? { ...outcome.merged, rev: theirs.rev } : p)),
   }));
   return true;
+}
+
+/**
+ * The settled book, with what the reader changed while the choice was open
+ * laid on top: those edits are the newest, so they win.
+ */
+function withEditsSince(shown: Project, now: Project, settled: Project): Project {
+  if (!conflictResolver || now === shown) return settled;
+  const outcome = conflictResolver({ base: shown, mine: now, theirs: settled });
+  if (!outcome) return settled;
+  if (outcome.kind === "merged") return outcome.project;
+  return resolveBookConflict(outcome.merged, now, settled, outcome.conflicts, "mine", Date.now());
 }
 let saveRetryTimer: ReturnType<typeof setTimeout> | null = null;
 const SAVE_RETRY_MS = 10_000;

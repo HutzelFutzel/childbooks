@@ -28,7 +28,7 @@ import { useAppConfigStore } from "./appConfigStore";
 import { useProjectsStore } from "./projectsStore";
 import { useGuidePreference } from "../ui/guide/guidePreference";
 import type { CommandCall } from "../core/guide/agent/types";
-
+import { authoringOf } from "../core/guide/projectState";
 export interface GuideTurnOutcome {
   intent: GuideTurnIntent;
   /** Suggested entry for a book that has not chosen how its story is written. */
@@ -85,6 +85,7 @@ export async function sendGuideTurn(
   signal?: AbortSignal,
   pending?: string,
   marked?: string,
+  selected?: string,
 ): Promise<GuideTurnOutcome> {
   const project = useProjectsStore.getState().current();
   if (!project) throw new Error("No book is open.");
@@ -115,6 +116,7 @@ export async function sendGuideTurn(
       guidePreference: useGuidePreference.getState().preference,
       ...(pending ? { pending } : {}),
       ...(marked ? { marked } : {}),
+      ...(selected ? { selected } : {}),
     },
     signal,
   );
@@ -161,7 +163,11 @@ async function applyTurnPatch(
   // Applied inside the mutator, against the project as it is at write time rather
   // than the snapshot we sent. A render that finished mid-conversation must not be
   // rolled back by a patch computed before it landed.
-  if (Object.keys(patch).length > 0) {
+  // A finished book's setup is settled: the pictures are drawn from it, so what a
+  // reader says about their book now is a request for a skill, never a new fact.
+  const current = useProjectsStore.getState().current();
+  const settled = current ? Boolean(authoringOf(current).lockedAt) : false;
+  if (!settled && Object.keys(patch).length > 0) {
     await useProjectsStore.getState().patchCurrent((live) => {
       before = captureGuideFacts(live);
       const outcome = applyGuidePatch(live, patch, meta.context);

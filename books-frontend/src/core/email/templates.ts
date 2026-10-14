@@ -196,7 +196,7 @@ export const RENDERERS: { [Id in keyof EmailTemplateVarsMap]: TemplateRenderer<I
       ? `Every page and both covers are drawn — ${vars.drawn.toLocaleString("en-US")} pictures in all.`
       : `${vars.drawn.toLocaleString("en-US")} pictures are drawn. ${vars.missing.toLocaleString(
           "en-US",
-        )} still need another go — open the book to try them again. Nothing was charged for them.`;
+        )} couldn't be finished. Nothing was charged for them.`;
     const body = [
       heading(complete ? "Your book is ready" : "Your book is nearly ready", ctx.brand),
       paragraph(`${greeting(vars.name)} <strong>${escapeHtml(title)}</strong> has finished drawing.`),

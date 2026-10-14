@@ -12,6 +12,7 @@ import {
   type SourceArtRef,
 } from "../types";
 import { normalizeAnchorName } from "./anchorRefs";
+import type { CustomStyleRef } from "../config/customArtStyles";
 
 export { SOURCE_ART_MAX };
 
@@ -148,6 +149,14 @@ export function collectSourceArtBlobIds(project: Project): string[] {
   const ids: string[] = [];
   for (const image of project.config.artStyle.referenceArt ?? []) ids.push(image.blobId);
   for (const image of project.authoringState?.styleSourceArt ?? []) ids.push(image.blobId);
+  const retired = project.authoringState?.retiredArtwork;
+  for (const image of [
+    ...(retired?.staged ?? []),
+    ...(retired?.cast ?? []).flatMap((row) => row.sourceArt),
+    ...(retired?.anchors ?? []).flatMap((row) => row.sourceArt),
+  ]) {
+    ids.push(image.blobId);
+  }
   for (const member of project.config.storyBrief?.cast ?? []) {
     for (const image of member.sourceArt ?? []) ids.push(image.blobId);
   }
@@ -219,6 +228,8 @@ export function derivedStyleSelection(args: {
   derivedFromName?: string;
   derivedFromNames?: string[];
   referenceArt?: SourceArtRef[];
+  /** The saved custom style (id + revision) the backend created for this look. */
+  customStyle?: CustomStyleRef;
 }): ArtStyleSelection {
   const names = [...new Set((args.derivedFromNames ?? []).map((name) => name.trim()).filter(Boolean))];
   const winner = args.derivedFromName?.trim();
@@ -231,7 +242,31 @@ export function derivedStyleSelection(args: {
       : {}),
     ...(winner ? { derivedFromName: winner } : {}),
     ...(names.length > 0 ? { derivedFromNames: names } : winner ? { derivedFromNames: [winner] } : {}),
+    ...(args.customStyle ? { customStyle: { id: args.customStyle.id, revision: args.customStyle.revision } } : {}),
   };
+}
+
+/**
+ * The first uploaded drawing establishes the book look. Persisting that exact
+ * image makes the choice independent of cast order and of later uploads. The
+ * backend picks the same image when it saves the look as a custom style.
+ */
+export function firstStyleArtwork(
+  project: Project,
+  groups: SourceArtGroup[] = collectSourceArtGroups(project),
+): { ref: SourceArtRef; name?: string } | null {
+  const candidates: { ref: SourceArtRef; name?: string; order: number }[] = [];
+  let order = 0;
+  for (const ref of project.authoringState?.styleSourceArt ?? []) {
+    candidates.push({ ref, order: order++ });
+  }
+  for (const group of groups) {
+    for (const ref of group.images) {
+      candidates.push({ ref, name: group.name, order: order++ });
+    }
+  }
+  candidates.sort((a, b) => a.ref.createdAt - b.ref.createdAt || a.order - b.order);
+  return candidates[0] ?? null;
 }
 
 /** Dropped blob ids when replacing one artwork list with another. */

@@ -90,7 +90,17 @@ const SCREENPLAY_PHASES: PipelinePhase[] = [
   { id: "pages", label: "Laying out the pages", icon: LayoutGrid },
 ];
 
-export function BookCanvas({ autoPreview = true }: { autoPreview?: boolean } = {}) {
+/**
+ * `guided`: the Chat studio owns this canvas. Its Preview/Edit switch is the way
+ * in and out, its composer is the only place to ask for something, and a paid
+ * picture goes through its priced button. So the toolbar keeps only what edits
+ * the page in front of you: no Preview button, no Add menu, no book setup, no
+ * per-page "create artwork" button, no pacing note.
+ */
+export function BookCanvas({
+  autoPreview = true,
+  guided = false,
+}: { autoPreview?: boolean; guided?: boolean } = {}) {
   const {
     project,
     pages,
@@ -281,7 +291,7 @@ export function BookCanvas({ autoPreview = true }: { autoPreview?: boolean } = {
         <div className="flex min-w-0 items-center gap-1">
           {activeDisp && <SurfaceIdentity disp={activeDisp} />}
           <span className="mx-1 hidden h-5 w-px bg-ink-200 sm:block" />
-          <PageAddMenu pageId={activePageId} pageLabel={activePageLabel} />
+          {!guided && <PageAddMenu pageId={activePageId} pageLabel={activePageLabel} />}
           <ToolbarIconButton
             icon={<LayersIcon className="size-4" />}
             label="Arrange"
@@ -333,25 +343,27 @@ export function BookCanvas({ autoPreview = true }: { autoPreview?: boolean } = {
             </button>
             <span className="mx-0.5 h-5 w-px bg-ink-200" />
           </div>
-          <div className="hidden sm:block">
-            <Button
-              size="sm"
-              variant="secondary"
-              leftIcon={<Eye className="size-4" />}
-              onClick={openPreview}
-            >
-              Preview
-            </Button>
-          </div>
+          {!guided && (
+            <div className="hidden sm:block">
+              <Button
+                size="sm"
+                variant="secondary"
+                leftIcon={<Eye className="size-4" />}
+                onClick={openPreview}
+              >
+                Preview
+              </Button>
+            </div>
+          )}
           <PagesToolbarMore
             onUndo={undo}
             onRedo={redo}
             canUndo={canUndo}
             canRedo={canRedo}
-            onPreview={openPreview}
-            onOpenSetup={openDesignSetup}
+            onPreview={guided ? undefined : openPreview}
+            onOpenSetup={guided ? undefined : openDesignSetup}
           />
-          {activeDisp && (
+          {!guided && activeDisp && (
             <SurfacePrimaryAction
               disp={activeDisp}
               stale={isStale}
@@ -361,7 +373,7 @@ export function BookCanvas({ autoPreview = true }: { autoPreview?: boolean } = {
         </div>
       </div>
 
-      <PagePacingNote screenplay={doc} ageRangeId={project.config.ageRangeId} />
+      {!guided && <PagePacingNote screenplay={doc} ageRangeId={project.config.ageRangeId} />}
 
       {/* Body: book navigation + focused editing stage. */}
       <div className="flex min-h-0 flex-1 flex-col md:flex-row">
@@ -425,7 +437,7 @@ export function BookCanvas({ autoPreview = true }: { autoPreview?: boolean } = {
       </div>
 
       <AnimatePresence>
-        {previewing && displays.length > 0 && (
+        {!guided && previewing && displays.length > 0 && (
           <BookPreview
             displays={displays}
             startId={activeDisp?.id}
@@ -594,8 +606,10 @@ function PagesToolbarMore({
   onRedo: () => void;
   canUndo: boolean;
   canRedo: boolean;
-  onPreview: () => void;
-  onOpenSetup: () => void;
+  /** Absent when something else owns previewing (the Chat studio's switch). */
+  onPreview?: () => void;
+  /** Absent when the book's size and layout are not this menu's to change. */
+  onOpenSetup?: () => void;
 }) {
   const {
     snap,
@@ -650,17 +664,19 @@ function PagesToolbarMore({
               }}
             />
           </div>
-          <div className="sm:hidden">
-            <PagesToolbarMenuItem
-              icon={<Eye className="size-4" />}
-              label="Preview"
-              onClick={() => {
-                onPreview();
-                close();
-              }}
-            />
-            <div className="my-1 border-t border-ink-100" />
-          </div>
+          {onPreview && (
+            <div className="sm:hidden">
+              <PagesToolbarMenuItem
+                icon={<Eye className="size-4" />}
+                label="Preview"
+                onClick={() => {
+                  onPreview();
+                  close();
+                }}
+              />
+              <div className="my-1 border-t border-ink-100" />
+            </div>
+          )}
           <p className="px-2.5 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-ink-400">
             Canvas
           </p>
@@ -714,16 +730,20 @@ function PagesToolbarMore({
               />
             </div>
           </div>
-          <div className="my-1 border-t border-ink-100" />
-          <PagesToolbarMenuItem
-            icon={<LayoutTemplate className="size-4" />}
-            label="Book setup"
-            description="Size, layout and page defaults"
-            onClick={() => {
-              onOpenSetup();
-              close();
-            }}
-          />
+          {onOpenSetup && (
+            <>
+              <div className="my-1 border-t border-ink-100" />
+              <PagesToolbarMenuItem
+                icon={<LayoutTemplate className="size-4" />}
+                label="Book setup"
+                description="Size, layout and page defaults"
+                onClick={() => {
+                  onOpenSetup();
+                  close();
+                }}
+              />
+            </>
+          )}
         </div>
       )}
     </Popover>

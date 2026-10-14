@@ -531,7 +531,7 @@ export function GenerationTuningPanel() {
           </div>
 
           <div className="mt-4 grid gap-2 md:grid-cols-2">
-            {!["anchorImage"].includes(action) && (
+            {action !== "anchorImage" && action !== "portrait" && (
               <>
                 <Toggle
                   checked={qc.bindingPass}
@@ -581,20 +581,31 @@ export function GenerationTuningPanel() {
                 />
               </>
             )}
-            <Toggle
-              checked={qc.embeddedRepairLimit > 0}
-              label="Clean embedded-object conflicts"
-              description="Removes generic objects that conflict with a specific anchored design."
-              disabled={
-                loading ||
-                saving ||
-                readOnly ||
-                (action !== "anchorImage" && !qc.bindingPass)
-              }
-              onChange={(enabled) =>
-                patchQualityControl({ embeddedRepairLimit: enabled ? 1 : 0 })
-              }
-            />
+            {action === "portrait" && (
+              <Toggle
+                checked={qc.portraitCheck}
+                label="Verify finished portraits"
+                description="Checks identity, requested traits, composition and art style, then redraws once on a clear miss."
+                disabled={loading || saving || readOnly}
+                onChange={(portraitCheck) => patchQualityControl({ portraitCheck })}
+              />
+            )}
+            {action !== "portrait" && (
+              <Toggle
+                checked={qc.embeddedRepairLimit > 0}
+                label="Clean embedded-object conflicts"
+                description="Removes generic objects that conflict with a specific anchored design."
+                disabled={
+                  loading ||
+                  saving ||
+                  readOnly ||
+                  (action !== "anchorImage" && !qc.bindingPass)
+                }
+                onChange={(enabled) =>
+                  patchQualityControl({ embeddedRepairLimit: enabled ? 1 : 0 })
+                }
+              />
+            )}
           </div>
 
           <details className="mt-4 rounded-xl bg-ink-50/60 ring-1 ring-inset ring-ink-100">

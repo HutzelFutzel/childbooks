@@ -18,6 +18,7 @@ import { illustrationUnits } from "../book/units";
 import { unitIsDone } from "../book/pageCompletion";
 import { anchorsToPrepare } from "../book/anchorFreshness";
 import { briefOf, namedCast } from "../story/brief";
+import { isPerson } from "../story/castKinds";
 import type { GuideEntry, Project, StoryCastMember } from "../types";
 import type { AudienceConfig } from "../config/audience";
 import {
@@ -32,8 +33,16 @@ import { peopleNeedingStatedAge } from "./agent/requirements";
 import { ownAudienceQuestion, readingAgeOf, readingAgeSource, suggestedAudience } from "./readingAge";
 import type { HardcoverCheck } from "./hardcover";
 import { ownWordsStatus, storyHandedOver } from "./ownWords";
-import { hasAnyPortrait, looksToDecide, portraitStatus, portraitsToDraw, styleRevert } from "./portrait";
-import { twinsToAsk } from "../story/relations";
+import {
+  hasAnyPortrait,
+  lookDecided,
+  looksToDecide,
+  portraitStatus,
+  portraitSubjects,
+  portraitsToDraw,
+  styleRevert,
+} from "./portrait";
+import { twinGroups, twinsToAsk } from "../story/relations";
 import { composerForChoice } from "./activity";
 import { authoringOf } from "./projectState";
 import { briefStage, type GuideBriefConfig } from "./briefPolicy";
@@ -46,8 +55,8 @@ import type { PreflightCode } from "../print/preflight";
  * are chosen in the chat, so neither has a tab of its own.
  */
 export const BOOK_VIEWS = [
-  "style",
   "story",
+  "style",
   "cast",
   "pages",
 ] as const;
@@ -100,7 +109,11 @@ export type WellItem =
       differ?: boolean;
     }
   /** People whose age the story never stated. Asked before any portrait. */
-  | { kind: "castAges"; people: { id: string; name: string }[] }
+  /**
+   * Everyone drawn as a person, in cast order. `years` is the age already known
+   * or estimated; a person without one is who the guide asks about.
+   */
+  | { kind: "castAges"; people: { id: string; name: string; years?: number; mates?: string[] }[] }
   /** Before the draft: optional story details and "Write the story". `focus` is the detail just asked. */
   | { kind: "storyBrief"; focus: StoryDetailId | null }
   | { kind: "account"; for: "drawBook" }
@@ -114,8 +127,14 @@ export type WellItem =
   | { kind: "hardcoverChoice"; pages: number; min: number }
   | { kind: "drawBook"; pages: number }
   | { kind: "bookUpdate"; names: string[] }
-  /** A finished or refused run left pictures undrawn: one action draws all of them. */
-  | { kind: "bookFinish"; missing: number; error?: string }
+  /**
+   * A run left pictures undrawn. `settled` means the server already finished
+   * trying: say so, and make clear nothing was charged for what is missing.
+   * Either way the well offers a way to ask again (a refusal, `error`, because
+   * nothing was drawn): a run must never end with pictures missing and no
+   * button, and only what comes out is ever charged.
+   */
+  | { kind: "bookFinish"; missing: number; error?: string; settled?: boolean }
   | { kind: "bookPrepFix"; unitIds: string[]; names: string[]; error: string }
   | { kind: "pageFix"; unitId: string; page: number; error: string }
   | ({ kind: "printFix" } & PrintIssue)
@@ -175,6 +194,13 @@ export interface Journey {
   /** Where the guide would point the book pane right now. */
   suggestedView: BookViewId | null;
   well: WellItem | null;
+  /** Every choice open now, in the order they are asked. `well` is the first. */
+  open: WellItem[];
+  /**
+   * The reader has answered everything they can and the book is still being
+   * prepared: reading the story, or planning the pages. Something is coming.
+   */
+  waiting: "reading" | "planning" | null;
   /** Whether the composer is shown. Absent while a whole-task choice is live. */
   composer: boolean;
   /** Something is running: the violet trace. */
@@ -186,6 +212,9 @@ export interface Journey {
   /** Pages done / total, once the pages have started. */
   pages: { done: number; total: number; failed: string[] };
 }
+
+/** Answerable before the story is read: the book's shape and its cover words. */
+export const BOOK_CHOICE_KINDS: ReadonlySet<string> = new Set(["formatChoice", "layoutChoice", "coverWords"]);
 
 /** The entry the reader chose, or the one a book begun elsewhere implies. */
 export function journeyEntry(project: Project): GuideEntry | null {
@@ -331,7 +360,10 @@ function castNames(cast: readonly StoryCastMember[]): string[] {
   return cast.map((m) => m.name.trim()).filter(Boolean);
 }
 
-export function availableViews(project: Project): BookViewId[] {
+export function availableViews(
+  project: Project,
+  options: { portraitsRunning?: boolean } = {},
+): BookViewId[] {
   if (!bookVisible(project)) return [];
   const entry = journeyEntry(project);
   const locked = pagesStarted(project);
@@ -339,11 +371,23 @@ export function availableViews(project: Project): BookViewId[] {
   const out: BookViewId[] = [];
   // A tab is the result of a choice, not a second copy of the question.
   // The chat asks; the tab arrives once that part of the book exists.
-  if (project.config.styleReady !== false) out.push("style");
   if (project.config.storyText.trim() || entry === "own" || storyStatus(project) === "running") out.push("story");
-  // The people arrive with their first picture; plates of initials are not a result.
+  if (project.config.styleReady !== false) out.push("style");
+  // The people arrive with their first picture (or while it is being drawn);
+  // plates of bare initials before any portrait starts are not a result.
   // Names the guide couldn't sort out are fixed there, so they open it early.
-  if (locked || hasAnyPortrait(project) || Boolean(own?.read && own.unresolved.length > 0)) out.push("cast");
+  // So does a settled look (a photo, a drawing, a description, "from the
+  // story"): the plate is where it is looked at again and changed, for any
+  // person, before anyone is drawn.
+  if (
+    locked ||
+    options.portraitsRunning ||
+    hasAnyPortrait(project) ||
+    portraitSubjects(project).some((member) => lookDecided(project, member)) ||
+    Boolean(own?.read && own.unresolved.length > 0)
+  ) {
+    out.push("cast");
+  }
   if (project.screenplay && locked) out.push("pages");
   return out;
 }
@@ -356,9 +400,10 @@ export function deriveJourney(
   const entry = journeyEntry(project);
   const locked = pagesStarted(project);
   const story = storyStatus(project);
-  const views = availableViews(project);
   const cast = namedCast(briefOf(project.config));
   const active = signals.activeUnitIds ?? new Set<string>();
+  const portraitsRunning = cast.some((m) => active.has(m.id));
+  const views = availableViews(project, { portraitsRunning });
   const failed = signals.failedUnits ?? {};
   const missing = entry === "guided" && story === "none" ? missingGuideFacts(project, policies) : [];
   const draftable = readyToDraft(project, policies, signals);
@@ -373,7 +418,6 @@ export function deriveJourney(
   const failedPages = units.filter((u) => failed[u.id] && !active.has(u.id)).map((u) => u.id);
   const pagesComplete = locked && units.length > 0 && done === units.length && failedPages.length === 0;
 
-  const portraitsRunning = cast.some((m) => active.has(m.id));
   const working =
     story === "running" ||
     portraitsRunning ||
@@ -449,14 +493,41 @@ export function deriveJourney(
 
   const castAges: WellItem | null = (() => {
     if (locked || needsCastFix || (entry !== "guided" && !own?.read)) return null;
-    const people = peopleNeedingStatedAge(project).map((member) => ({
-      id: member.id,
-      name: member.name.trim(),
-    }));
-    return people.length > 0 ? { kind: "castAges" as const, people } : null;
+    if (peopleNeedingStatedAge(project).length === 0) return null;
+    // The whole cast is shown, so nobody looks forgotten: estimates are filled
+    // in and can be changed, and the one without any is who is asked.
+    const persons = cast.filter(isPerson);
+    const stated = (member: StoryCastMember): number | undefined =>
+      member.age ?? (member.ageMonths !== undefined ? Math.floor(member.ageMonths / 12) : undefined);
+    const groups = [...twinGroups(briefOf(project.config)), ...(authoringOf(project).sameAge ?? [])].map(
+      (group) => new Set(group.map((name) => name.trim().toLowerCase())),
+    );
+    const matesOf = (member: StoryCastMember): StoryCastMember[] => {
+      const key = member.name.trim().toLowerCase();
+      return persons.filter(
+        (other) => other.id !== member.id && groups.some((group) => group.has(key) && group.has(other.name.trim().toLowerCase())),
+      );
+    };
+    // Twins share an age: one with only an estimate shows the other's stated age.
+    const people = persons.map((member) => {
+      const mates = matesOf(member);
+      const years =
+        stated(member) ??
+        mates.map(stated).find((value) => value !== undefined) ??
+        member.visualAge?.years;
+      return {
+        id: member.id,
+        name: member.name.trim(),
+        ...(years !== undefined ? { years } : {}),
+        ...(mates.length > 0 ? { mates: mates.map((mate) => mate.id) } : {}),
+      };
+    });
+    return { kind: "castAges" as const, people };
   })();
 
   let well: WellItem | null = null;
+  // Every choice open right now, in the order they are asked.
+  let queue: WellItem[] | null = null;
   if (phase === "intake") {
     const openOptional = openAskedFacts(project).find((id) => !policies[id].required);
     const readyForPortraitAction = missing.length === 0 && !openOptional;
@@ -498,34 +569,50 @@ export function deriveJourney(
     const notesAsked = ["answeredFacts", "skippedFacts"].some((key) =>
       (authoringOf(project)[key as "answeredFacts" | "skippedFacts"] ?? []).includes("pictureNotes"),
     );
+    // Still asked once the pages are planned: a note then plans them again.
     const pictureNotes: WellItem | null =
-      own?.read && !needsCastFix && !notesAsked && !project.screenplay && !briefOf(project.config).pictureNotes?.trim()
+      own?.read && !needsCastFix && !notesAsked && !briefOf(project.config).pictureNotes?.trim()
         ? { kind: "pictureNotes" }
         : null;
-    well =
-      (needsCastFix ? { kind: "castFix", names: own!.unresolved } : null) ??
-      castAges ??
-      ownAudience ??
-      pictureNotes ??
-      lookAlikeWell ??
-      looksWell ??
-      portraitAction ??
-      redrawAction ??
-      (!formatReady ? { kind: "formatChoice" } : null) ??
-      (!layoutReady ? { kind: "layoutChoice" } : null) ??
-      (!coverReady
+    const bookChoices: (WellItem | null)[] = [
+      !formatReady ? { kind: "formatChoice" } : null,
+      !layoutReady ? { kind: "layoutChoice" } : null,
+      !coverReady
         ? {
             kind: "coverWords",
             ...(entry === "own" ? { own: true } : {}),
             ...(entry === "own" && authoringOf(project).cover?.fromStory ? { fromStory: true } : {}),
           }
-        : null) ??
-      drawBook;
+        : null,
+    ];
+    const castChoices: (WellItem | null)[] = [
+      castAges,
+      ownAudience,
+      pictureNotes,
+      lookAlikeWell,
+      looksWell,
+      portraitAction,
+      redrawAction,
+    ];
+    // Own words: the people are found by reading the story, which is still
+    // running when the format and layout are asked. What the reader can answer
+    // now comes first, so a reading that finishes mid-answer adds to the end
+    // of the list instead of cutting in. A story the guide wrote already knows
+    // its people, so they keep their place.
+    queue = [
+      needsCastFix ? { kind: "castFix" as const, names: own!.unresolved } : null,
+      ...(entry === "own" ? [...bookChoices, ...castChoices] : [...castChoices, ...bookChoices]),
+      drawBook,
+    ].filter((item): item is WellItem => item !== null);
+    well = queue[0] ?? null;
   } else if (phase === "pages") {
     const failedAnchors = pendingAnchors.filter(
       (anchor) => failed[anchor.id] && !active.has(anchor.id),
     );
     const drawingNow = signals.drawPhase === "cast" || signals.drawPhase === "pages";
+    // The server book job retries its own failures. Don't ask the reader to
+    // pay for another go while that job is still the one drawing.
+    const serverDrawing = Boolean(authoringOf(project).drawBook?.jobId) && drawingNow;
     const undrawn = units.filter((u) => !unitIsDone(project, u) && !active.has(u.id));
     // A failed redraw of a page that was already drawn keeps its own retry.
     const firstFailed = failedPages.find((id) => {
@@ -538,9 +625,9 @@ export function deriveJourney(
       well = {
         kind: "bookFinish",
         missing: failedAnchors.length + undrawn.length,
-        ...(runError ? { error: runError } : {}),
+        ...(runError ? { error: runError } : { settled: true }),
       };
-    } else if (signals.drawPhase === "cast" && failedAnchors.length > 0) {
+    } else if (!serverDrawing && signals.drawPhase === "cast" && failedAnchors.length > 0) {
       well = {
         kind: "bookPrepFix",
         unitIds: failedAnchors.map((anchor) => anchor.id),
@@ -548,7 +635,7 @@ export function deriveJourney(
         error: failed[failedAnchors[0]!.id]!.error,
       };
     } else {
-      well = firstFailed
+      well = !serverDrawing && firstFailed
         ? { kind: "pageFix", unitId: firstFailed, page, error: failed[firstFailed]!.error }
         : signals.drawPhase !== "cast" &&
             signals.drawPhase !== "pages" &&
@@ -567,14 +654,28 @@ export function deriveJourney(
   } else if (phase === "order") {
     well = { kind: "order" };
   }
+  const open: WellItem[] = queue ?? (well ? [well] : []);
+  // Nothing left to ask, yet the book isn't ready: the story is being read or
+  // the pages planned. The chat shows that as working, with no gap in between.
+  const waiting: Journey["waiting"] =
+    phase !== "story" || open.length > 0
+      ? null
+      : signals.analysisRunning || (entry === "own" && !own?.read)
+        ? "reading"
+        : signals.planRunning || (formatReady && layoutReady && !(signals.planReady ?? Boolean(project.screenplay)))
+          ? "planning"
+          : null;
 
   let suggestedView: BookViewId | null = null;
-  if (signals.drawPhase === "cast" && views.includes("cast")) suggestedView = "cast";
+  if ((signals.drawPhase === "cast" || portraitsRunning) && views.includes("cast")) suggestedView = "cast";
   else if (signals.drawPhase === "pages" || phase === "pages") suggestedView = "pages";
   else if (phase === "intake") {
     if (entry === "own" || story === "running") suggestedView = "story";
-  } else if (phase === "story") suggestedView = "story";
-  else if (phase === "order") suggestedView = "pages";
+  } else if (phase === "story") {
+    // Once someone is drawn, the people are the book's newest result; the
+    // story tab is where it was, not where it is.
+    suggestedView = views.includes("cast") && hasAnyPortrait(project) ? "cast" : "story";
+  } else if (phase === "order") suggestedView = "pages";
   if (suggestedView && !views.includes(suggestedView)) suggestedView = views[0] ?? null;
 
   const composer = composerForChoice({
@@ -594,6 +695,8 @@ export function deriveJourney(
     hasBook: views.length > 0,
     suggestedView,
     well,
+    open,
+    waiting,
     composer,
     working,
     missing,

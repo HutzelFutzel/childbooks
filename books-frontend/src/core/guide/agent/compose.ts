@@ -19,6 +19,7 @@ import { renderTextPrompt } from "../../prompts/render";
 import { getTextProvider } from "../../providers";
 import type { ProviderCredentials } from "../../providers/types";
 import { withRetry } from "../../pipeline/retry";
+import { assumesAnotherChild } from "../speech";
 
 // --- Prompt vars -------------------------------------------------------------------
 
@@ -113,7 +114,8 @@ export type ComposeProblem =
   | "address"
   | "avoided"
   | "britishSpelling"
-  | "markup";
+  | "markup"
+  | "inventedChild";
 
 function sentences(text: string): number {
   return text.split(/(?<=[.!?。！？])\s+/).filter((part) => part.trim().length > 1).length;
@@ -215,6 +217,7 @@ export function validateComposed(text: string, expect: ComposeExpectations): Com
   if (!clean) return ["empty"];
   const lang = expect.locale.slice(0, 2).toLowerCase();
   if (/[*_#`]|^\s*[-•]\s/m.test(clean)) problems.push("markup");
+  if (assumesAnotherChild(clean) && !assumesAnotherChild(expect.meaning)) problems.push("inventedChild");
   for (const name of expect.mustSay) {
     if (name.trim() && !clean.toLocaleLowerCase().includes(name.trim().toLocaleLowerCase())) {
       problems.push("missingName");

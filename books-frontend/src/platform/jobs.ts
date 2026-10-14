@@ -15,6 +15,7 @@ import {
   collection,
   collectionGroup,
   doc,
+  getDoc,
   getDocs,
   onSnapshot,
   query,
@@ -417,6 +418,16 @@ export function subscribeJobTasks(jobId: string, cb: (tasks: TaskDoc[]) => void)
     (snap) => cb(snap.docs.map((d) => d.data() as TaskDoc)),
     (err) => listenerFailed(`tasks for job ${jobId}`, err),
   );
+}
+
+/** One-shot read of a job, so a missed listener cannot leave a finished book looking unfinished. */
+export async function fetchJob(
+  jobId: string,
+): Promise<{ status: AnyJob["status"]; error?: string } | null> {
+  const snap = await getDoc(doc(getFirebaseDb(), `users/${uid()}/jobs`, jobId));
+  if (!snap.exists()) return null;
+  const data = snap.data() as AnyJob;
+  return { status: data.status, ...(data.error ? { error: data.error } : {}) };
 }
 
 /** One-shot read of a job's tasks (for eager reconcile before continuing). */

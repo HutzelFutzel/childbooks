@@ -13,6 +13,7 @@
  */
 import type { GenerationQuote, GenerationQuoteUnit } from "../core/billing/generationQuote";
 import { pictureSubject } from "../core/guide/history";
+import { agedPortraits } from "../core/guide/pictureSettling";
 import { redrawModeFor, type RedrawMode } from "../core/guide/redrawMode";
 import type { GuideTarget } from "../core/guide/target";
 import type { Project } from "../core/types";
@@ -21,7 +22,7 @@ import { illustrationActionFor, portraitUnits, redrawUnits, startPortraits, star
 import { quoteKey, useChatStudio, type RedrawRequest } from "./chatStudio";
 import { useJobsStore } from "./jobsStore";
 import { clientReferenceLimits } from "./referenceLimits";
-import { markStarted, usePortraitStartStore } from "./portraitAutoStart";
+import { markStarted, portraitsToAutoStart, usePortraitStartStore } from "./portraitAutoStart";
 import { useProjectsStore } from "./projectsStore";
 import { useSparksStore } from "./sparksStore";
 
@@ -35,20 +36,57 @@ export function redrawModeOf(project: Project, request: RedrawRequest): RedrawMo
   return redrawModeFor(project, request.target, { canEdit: request.target.kind === "person" ? canEdit : true });
 }
 
+/** A request split into one per picture: the target, then each person changed with it. */
+export function redrawEach(request: RedrawRequest): RedrawRequest[] {
+  const { more, ...first } = request;
+  return [
+    first,
+    ...(more ?? []).map(
+      (person): RedrawRequest => ({
+        target: { kind: "person", castId: person.castId, name: person.name },
+        instruction: person.instruction,
+        ...(person.mode ? { mode: person.mode } : {}),
+      }),
+    ),
+  ];
+}
+
+/** The names a request is about, in the order asked. */
+export function redrawNames(request: RedrawRequest): string[] {
+  return redrawEach(request).map((each) => (each.target.kind === "person" ? each.target.name : redrawSubject(each.target)));
+}
+
+/** What each picture changes by: one sentence for one picture, else one per person. */
+export function redrawInstructions(request: RedrawRequest): string | Record<string, string> {
+  if (!request.more?.length) return request.instruction;
+  const out: Record<string, string> = {};
+  for (const each of redrawEach(request)) {
+    if (each.target.kind === "person") out[each.target.castId] = each.instruction;
+  }
+  return out;
+}
+
 /** What a redraw is quoted as, so the button and the automatic start share one quote. */
 export function redrawQuoteParts(
   project: Project,
   request: RedrawRequest,
 ): { units: GenerationQuoteUnit[]; extraKey: string; mode: RedrawMode } {
-  const { target, instruction } = request;
-  const mode = redrawModeOf(project, request);
+  const parts = redrawEach(request).map((each) => {
+    const { target, instruction } = each;
+    const mode = redrawModeOf(project, each);
+    return {
+      units:
+        target.kind === "person"
+          ? redrawUnits(project, target.castId, "portrait", mode)
+          : redrawUnits(project, target.unitId, illustrationActionFor(target.unitId), mode),
+      extraKey: `${mode}:${instruction.slice(0, 40)}`,
+      mode,
+    };
+  });
   return {
-    units:
-      target.kind === "person"
-        ? redrawUnits(project, target.castId, "portrait", mode)
-        : redrawUnits(project, target.unitId, illustrationActionFor(target.unitId), mode),
-    extraKey: `${mode}:${instruction.slice(0, 40)}`,
-    mode,
+    units: parts.flatMap((part) => part.units),
+    extraKey: parts.map((part) => part.extraKey).join("|"),
+    mode: parts[0]!.mode,
   };
 }
 
@@ -103,10 +141,74 @@ export async function autoStartRedraw(request: RedrawRequest): Promise<TypedStar
   if (!project) return "declined";
   const { units, extraKey } = redrawQuoteParts(project, request);
   return whileDeciding(async () => {
-    const outcome = await autoStart("redraw", units, extraKey, (quote) => startRedraw(quote, request.instruction));
-    if (outcome === "started" && request.target.kind === "person") markStarted([request.target.castId]);
+    const outcome = await autoStart("redraw", units, extraKey, (quote) => startRedraw(quote, redrawInstructions(request)));
+    if (outcome === "started") {
+      markStarted(
+        redrawEach(request).flatMap((each) => (each.target.kind === "person" ? [each.target.castId] : [])),
+      );
+    }
     return outcome;
   });
+}
+
+/** What a message started without being asked to, for the line that says so. */
+export interface SettledPictures {
+  line: "redrawStarting" | "portraitsStarting";
+  names: string[];
+}
+
+/**
+ * Start the pictures a typed message made necessary, if they are cheap and
+ * affordable: the portrait of somebody whose age or kind now looks different
+ * (`agedPortraits`), else the portraits a look or a style choice made possible
+ * (`chose`), which is what tapping the same choice does.
+ *
+ * At most one start per message, and only through the gate every typed picture
+ * change goes through (`autoStart`): the admin's `autoSpendSparks`, the
+ * balance, nothing already drawing. Anything else leaves the button the chat
+ * already shows for those pictures, so the worst case is today's behavior.
+ *
+ * `before` is the book as the message found it: a picture counts only when it
+ * was fine then and is not now, so a book that was already waiting for a
+ * portrait is never started by a message about something else.
+ */
+export async function autoStartAfterTurn(args: {
+  before: Project;
+  /** People a skill of this message already draws. */
+  skip?: readonly string[];
+  /** The message chose a look or a style. */
+  chose: boolean;
+}): Promise<SettledPictures | null> {
+  try {
+    const project = useProjectsStore.getState().current();
+    if (!project) return null;
+    const skip = new Set(args.skip ?? []);
+    const active = useJobsStore.getState().activeUnitIds;
+    const aged = agedPortraits(args.before, project).filter((person) => !skip.has(person.castId) && !active.has(person.castId));
+    if (aged.length > 0) {
+      const [first, ...more] = aged as [(typeof aged)[number], ...(typeof aged)[number][]];
+      const request: RedrawRequest = {
+        target: { kind: "person", castId: first.castId, name: first.name },
+        instruction: "",
+        mode: "new",
+        ...(more.length > 0
+          ? { more: more.map((person) => ({ castId: person.castId, name: person.name, instruction: "", mode: "new" as const })) }
+          : {}),
+      };
+      return (await autoStartRedraw(request)) === "started"
+        ? { line: "redrawStarting", names: aged.map((person) => person.name) }
+        : null;
+    }
+    if (!args.chose) return null;
+    const waiting = new Set(portraitsToAutoStart(args.before).map((member) => member.id));
+    const ready = portraitsToAutoStart(project).filter((member) => !waiting.has(member.id) && !skip.has(member.id));
+    if (ready.length === 0) return null;
+    return (await autoStartNamedPortraits(ready.map((member) => member.id))) === "started"
+      ? { line: "portraitsStarting", names: ready.map((member) => member.name.trim()) }
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Start the portraits the reader named ("draw Amanda"), if they are cheap and affordable. */

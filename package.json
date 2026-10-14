@@ -34,6 +34,7 @@
     "check:audience": "node scripts/check-audience.mjs",
     "check:book-fonts": "node scripts/check-book-fonts.mjs",
     "check:generation": "node scripts/check-generation-tuning.mjs",
+    "check:custom-styles": "node scripts/check-custom-styles.mjs",
     "check:story-analysis": "node scripts/check-story-analysis.mjs",
     "check:guide": "node scripts/check-guide.mjs",
     "deploy": "node scripts/deploy.mjs",

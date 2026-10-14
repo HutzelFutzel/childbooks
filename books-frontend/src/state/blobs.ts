@@ -3,6 +3,7 @@
  * into object URLs for display. Bridges core image results <-> the blob store.
  */
 import { getStorage } from "../platform/storage";
+import { isStyleAssetBlobId } from "../core/config/customArtStyles";
 
 function genId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
@@ -147,6 +148,8 @@ export async function copyBlob(id: string): Promise<string | null> {
 }
 
 export async function removeBlob(id: string): Promise<void> {
+  // A picture a saved custom art style owns outlives every book that uses it.
+  if (isStyleAssetBlobId(id)) return;
   base64Cache.delete(id);
   blobCache.delete(id);
   const backend = await getStorage();

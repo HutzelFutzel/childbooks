@@ -63,6 +63,8 @@ export function countBucket(value: number | undefined): string {
 
 export function createGenerationEstimateProfile(args: {
   model: ModelSelection;
+  /** Vision model used by portrait QC; part of the cost bucket when enabled. */
+  qualityModel?: ModelSelection;
   tuning: ActionGenerationTuning;
   kind: GenerationRenderKind;
   outputSize?: string;
@@ -82,7 +84,12 @@ export function createGenerationEstimateProfile(args: {
     outputSize: args.outputSize ?? "unknown",
     referenceCount: countBucket(args.referenceCount),
     billableImages: countBucket(args.billableImages),
-    referenceEncoding: `n${tuning.references.maxImages}-d${tuning.references.maxDimension}-e${tuning.references.encodingQuality}`,
+    referenceEncoding: [
+      `n${tuning.references.maxImages}-d${tuning.references.maxDimension}-e${tuning.references.encodingQuality}`,
+      qc.portraitCheck
+        ? `portrait-qc1-${args.qualityModel ? `${args.qualityModel.provider}:${args.qualityModel.id}` : "auto"}`
+        : "",
+    ].filter(Boolean).join("-"),
     latencyPolicy: [
       `retry${tuning.retries}`,
       `budget${qc.budgetMs}`,
@@ -91,6 +98,7 @@ export function createGenerationEstimateProfile(args: {
       `dup${qc.duplicateRepairLimit}`,
       `embed${qc.embeddedRepairLimit}`,
       `grid${Number(qc.gridCheck)}`,
+      `portrait${Number(qc.portraitCheck)}`,
       `flat${Number(qc.flattenBackground)}`,
       `repair-${qc.repairQuality}`,
     ].join("-"),
@@ -128,7 +136,11 @@ function baseProfileValue(profile: GenerationEstimateProfile): string {
   ].map((part) => encodeURIComponent(String(part))).join("~");
 }
 
-/** Cost excludes QC policy because repair calls are explicitly non-billable. */
+/**
+ * The portrait-QC version/model is folded into `referenceEncoding`, so a
+ * full-cost window never mixes checked portraits with the old unchecked path.
+ * Other repair policy keeps the existing pooled-cost behavior.
+ */
 export function costProfileKey(profile: GenerationEstimateProfile): string {
   return `p1-${baseProfileValue(profile)}`;
 }
@@ -142,6 +154,7 @@ export function estimateProfileForAction(args: {
   action: ImageActionId;
   tier: ImageTier;
   model: ModelSelection;
+  qualityModel?: ModelSelection;
   tuning: ActionGenerationTuning;
   kind: GenerationRenderKind;
   outputSize?: string;

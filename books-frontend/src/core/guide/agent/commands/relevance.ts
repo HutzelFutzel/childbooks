@@ -8,6 +8,8 @@
 import { storyTextHash } from "../../../story/revision";
 import type { Project } from "../../../types";
 import { hasEarlier } from "../../history";
+import { journeyEntry } from "../../journey";
+import { authoringOf } from "../../projectState";
 import { portraitStatus } from "../../portrait";
 import type { GuideMessage } from "../../session";
 import { castOf } from "../resolve";
@@ -80,3 +82,16 @@ export function whenEarlierPage(p: Project): Vars {
   const found = Object.keys(p.illustrations ?? {}).some((unitId) => hasEarlier(p, { kind: "cover", unitId }));
   return found ? {} : null;
 }
+
+/** The look is still to be chosen, and there is a story to draw in it: before that the chat asks in its own order. */
+export const whenLookToChoose = (p: Project): Vars => (whenStory(p) && whenNoLook(p) ? {} : null);
+
+/** The book's shape or layout was chosen, so there is something to change. */
+export function whenBookSetUp(p: Project): Vars {
+  const setup = authoringOf(p).bookSetup;
+  return setup?.formatConfirmedAt || setup?.layoutConfirmedAt ? {} : null;
+}
+
+/** The guide is writing the story with the reader and none exists yet, so writing it themselves is still open. */
+export const whenCanWriteMyself = (p: Project): Vars =>
+  journeyEntry(p) === "guided" && p.config.storyText.trim().length === 0 ? {} : null;

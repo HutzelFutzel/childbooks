@@ -7,7 +7,7 @@
  */
 import { useMemo } from "react";
 import { authoringOf } from "../../core/guide/projectState";
-import { deriveJourney, styleChoiceOpen, type Journey, type WellItem } from "../../core/guide/journey";
+import { BOOK_CHOICE_KINDS, deriveJourney, styleChoiceOpen, type Journey, type WellItem } from "../../core/guide/journey";
 import { composerForChoice } from "../../core/guide/activity";
 import type { HardcoverCheck } from "../../core/guide/hardcover";
 import type { Project } from "../../core/types";
@@ -37,9 +37,37 @@ export type ChatWell =
   | { kind: "manuscriptChoice" }
   | AgentWellItem;
 
+/** The story's own questions: asked before how anyone looks, and before the book's style. */
+const STORY_FIRST: ReadonlySet<string> = new Set([
+  "storyDone",
+  "castFix",
+  "storyRetry",
+  "audienceConfirm",
+  "castAges",
+  "pictureNotes",
+  "storyBrief",
+  "lookAlike",
+  "castLooks",
+]);
+
+/** The questions about the people. With the reader's own words they wait for the book's shape and cover words. */
+const PEOPLE_QUESTIONS: ReadonlySet<string> = new Set([
+  "castAges",
+  "audienceConfirm",
+  "pictureNotes",
+  "lookAlike",
+  "castLooks",
+  "portraits",
+]);
+
 export interface ChatJourney extends Journey {
   hardcover: HardcoverCheck | null;
+  /** Every question open now, in the order they are asked (`cardDeck.ts` picks the one on screen). */
+  pool: ChatWell[];
+  /** A card answering what the reader just did, or a failed reading: shown beside the one on screen. */
+  reply: ChatWell | null;
   planRunning: boolean;
+  /** The reply, else the first question in line. */
   chatWell: ChatWell | null;
   /** Whether the message field shows while this well (or none) is on screen. */
   composerFor: (wellKind: string | null) => boolean;
@@ -74,7 +102,7 @@ export function useChatJourney(project: Project): ChatJourney {
   const starting = useChatStudio((s) => s.starting);
   const agentWell = useChatStudio((s) => s.agentWell);
 
-  return useMemo(() => {
+  const result = useMemo(() => {
     const hardcover = hardcoverFor(project);
     const running = planRunning(project);
     const locked = Boolean(project.authoringState?.lockedAt);
@@ -120,31 +148,47 @@ export function useChatJourney(project: Project): ChatJourney {
     const agent = agentWellItem(agentWell, journey.well, hardcover, accessLevel === "guest");
     // The story's own questions come first, then how each person looks, and
     // only then the book's style (see `styleChoiceOpen`).
-    const storyFirst =
-      journey.well && ["storyDone", "castFix", "storyRetry", "audienceConfirm", "castAges", "pictureNotes", "storyBrief", "lookAlike", "castLooks"].includes(journey.well.kind)
-        ? journey.well
-        : null;
     const lookOpen = styleChoiceOpen(project, journey);
     // "Skip" only ever sat under the broad opening question, where any reply answers it.
     // The portraits button waits while a choice decides whether it starts them itself.
-    const journeyWell =
-      journey.well?.kind === "skipFact" || (portraitsDeciding && journey.well?.kind === "portraits")
-        ? null
-        : journey.well;
-    const chatWell: ChatWell | null = pendingManuscript
+    const bookChoicesOpen = journey.open.some((item) => BOOK_CHOICE_KINDS.has(item.kind));
+    const open = journey.open.filter(
+      (item) =>
+        item.kind !== "skipFact" &&
+        !(portraitsDeciding && item.kind === "portraits") &&
+        // The people wait behind the book's shape and cover words, whatever
+        // else moves: a question about them never takes a card's place.
+        !(journey.entry === "own" && bookChoicesOpen && PEOPLE_QUESTIONS.has(item.kind)),
+    );
+    // The choices open now, in the order they are asked. The story's own
+    // questions come first, then how each person looks, and only then the
+    // book's style (see `styleChoiceOpen`). With the reader's own words, the
+    // format, layout and cover words come before the people: they don't wait
+    // for the reading.
+    const leading = (item: ChatWell): boolean =>
+      STORY_FIRST.has(item.kind) || (journey.entry === "own" && BOOK_CHOICE_KINDS.has(item.kind));
+    const split = open.findIndex((item) => !leading(item));
+    const at = split === -1 ? open.length : split;
+    const pool: ChatWell[] = [
+      ...open.slice(0, at),
+      ...(drawingAssign ? [drawingAssign] : []),
+      ...(lookOpen ? [{ kind: "styleChoice" as const }] : []),
+      ...open.slice(at),
+    ];
+    // Cards that answer what the reader just did, or a reading that failed.
+    // They show beside the card on screen, never in its place.
+    const reply: ChatWell | null = pendingManuscript
       ? { kind: "manuscriptChoice" }
       : pendingTarget
         ? { kind: "whichName", pending: pendingTarget }
         : agent
           ? agent
           : redraw
-          ? { kind: "redraw", request: redraw }
-          : pipelineError && !journey.locked
-            ? { kind: "extractionRetry", error: pipelineError }
-            : storyFirst ??
-              drawingAssign ??
-              (lookOpen ? { kind: "styleChoice" } : null) ??
-              journeyWell;
+            ? { kind: "redraw", request: redraw }
+            : pipelineError && !journey.locked
+              ? { kind: "extractionRetry", error: pipelineError }
+              : null;
+    const chatWell: ChatWell | null = reply ?? pool[0] ?? null;
     const composerFor = (wellKind: string | null): boolean =>
       !starting &&
       wellKind !== "extractionRetry" &&
@@ -159,6 +203,8 @@ export function useChatJourney(project: Project): ChatJourney {
       composer: composerFor(chatWell?.kind ?? null),
       composerFor,
       hardcover,
+      pool,
+      reply,
       planRunning: running,
       chatWell,
       activeUnitIds,
@@ -168,6 +214,7 @@ export function useChatJourney(project: Project): ChatJourney {
     // screenplayJob is read inside planRunning.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project, policies, brief, audience, activeUnitIds, portraitsDeciding, failedUnits, screenplayJob, accessLevel, pendingTarget, redraw, printIssue, extractionRunning, analysisRunning, extractionError, pendingManuscript, starting, agentWell]);
+  return result;
 }
 
 /** A well the chat's skills asked for; paid steps reuse the journey's own wells and their quotes. */

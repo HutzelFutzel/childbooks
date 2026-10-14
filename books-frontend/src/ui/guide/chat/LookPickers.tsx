@@ -10,7 +10,9 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, ImageOff, Loader2, Plus, ShieldCheck, X } from "lucide-react";
 import { legalUrlByRole } from "../../../core/config/legal";
-import { decideArtworkLook } from "../../../core/guide/artworkLook";
+import { decideArtworkLookFirstWins } from "../../../core/guide/artworkLook";
+import { artworkStyleRole } from "../../../core/guide/artworkStyle";
+import { setSourceArtOnNamedCharacters } from "../../../core/book/sourceArt";
 import { currentPortrait, likenessPhotosOf, lookSourceOf } from "../../../core/guide/portrait";
 import { briefOf } from "../../../core/story/brief";
 import {
@@ -395,16 +397,23 @@ export function PhotoPanel({
 
 type Held = { ref: SourceArtRef; preview: Blob; style: ArtStyleSelection | null };
 
+/**
+ * One picture of a person, kept as their design. The first drawing on the book
+ * is also its whole look (whoever it is on), so a picture that would set the
+ * look is read first and only saved with the look it gave; a picture that
+ * could not be read is not saved at all, so a drawing is never left on a book
+ * whose look it does not define.
+ */
 export function DrawingPanel({
+  project,
   member,
   name,
-  styled,
   estimate,
   quiet,
 }: {
+  project: Project;
   member: StoryCastMember;
   name: string;
-  styled: boolean;
   estimate: StartEstimate;
   quiet: boolean;
 }) {
@@ -414,7 +423,11 @@ export function DrawingPanel({
   const [busy, setBusy] = useState<"upload" | "style" | "confirm" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [held, setHeld] = useState<Held | null>(null);
-  const [styleUnread, setStyleUnread] = useState(false);
+  /** Why the picture's look could not be read; "" when there is no reason to give. */
+  const [unread, setUnread] = useState<string | null>(null);
+
+  const role = artworkStyleRole(project, member);
+  const sets = role.kind === "sets";
 
   const savedRef = lookSourceOf(member) === "drawing" ? member.sourceArt?.[0] : undefined;
   const savedUrl = useBlobUrl(held ? undefined : savedRef?.blobId);
@@ -429,42 +442,75 @@ export function DrawingPanel({
     lookSource: "drawing" as const,
   });
 
+  /** Whether this picture would set the book's look, on the book as it is right now. */
+  const wouldSetLook = () => {
+    const current = useProjectsStore.getState().current();
+    return (current ? artworkStyleRole(current, member) : role).kind === "sets";
+  };
+
+  /** The look of the book with this picture on this person: the earliest drawing on the book decides it. */
+  const readLook = async (ref: SourceArtRef): Promise<{ style: ArtStyleSelection | null; reason: string }> => {
+    const current = useProjectsStore.getState().current();
+    if (!current) return { style: null, reason: "" };
+    const brief = briefOf(current.config);
+    let withDrawing: Project = {
+      ...current,
+      config: {
+        ...current.config,
+        storyBrief: {
+          ...brief,
+          cast: (brief.cast ?? []).map((m) => (m.id === castId ? { ...m, ...drawing(ref) } : m)),
+        },
+      },
+    };
+    // Cast and sheets of the same name carry the same drawings: a replaced picture must not linger on the sheet.
+    if (member.name.trim()) withDrawing = setSourceArtOnNamedCharacters(withDrawing, member.name, [ref]);
+    const decision = await decideArtworkLookFirstWins(withDrawing);
+    return decision.status === "resolved"
+      ? { style: decision.style, reason: "" }
+      : { style: null, reason: decision.status === "failed" ? decision.message : "" };
+  };
+
+  const save = async (ref: SourceArtRef, style: ArtStyleSelection | null) => {
+    await updateCastMember(castId, drawing(ref));
+    if (style) await chooseDerivedStyle(style);
+  };
+
   const pick = async (file: File | undefined) => {
     if (input.current) input.current.value = "";
     if (!file || busy) return;
     setBusy("upload");
     setError(null);
-    setStyleUnread(false);
+    setUnread(null);
     try {
       const { ref, preview } = await uploadSourceArt(file);
-      // The first picture can set the whole book's look. Read it now, while the
-      // card still shows progress; saving only writes what was read.
-      const current = useProjectsStore.getState().current();
       let style: ArtStyleSelection | null = null;
-      if (current && current.config.styleReady === false) {
+      const reads = wouldSetLook();
+      if (reads) {
+        // Read it now, while the card still shows progress; saving only writes what was read.
         setBusy("style");
-        const brief = briefOf(current.config);
-        const withDrawing: Project = {
-          ...current,
-          config: {
-            ...current.config,
-            storyBrief: {
-              ...brief,
-              cast: (brief.cast ?? []).map((m) => (m.id === castId ? { ...m, ...drawing(ref) } : m)),
-            },
-          },
-        };
-        const decision = await decideArtworkLook(withDrawing);
-        if (decision.status === "resolved") style = decision.style;
-        else setStyleUnread(true);
+        const read = await readLook(ref);
+        style = read.style;
+        if (!style) setUnread(read.reason);
       }
-      if (quiet) {
-        await updateCastMember(castId, drawing(ref));
-        if (style) await chooseDerivedStyle(style);
-        setHeld({ ref, preview, style });
-      } else {
-        setHeld({ ref, preview, style });
-      }
+      setHeld({ ref, preview, style });
+      if (quiet && (style || !reads)) await save(ref, style);
+    } catch (err) {
+      setError(uploadError(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const retry = async () => {
+    if (!held || busy) return;
+    setBusy("style");
+    setError(null);
+    try {
+      const read = await readLook(held.ref);
+      setUnread(read.style ? null : read.reason);
+      setHeld({ ...held, style: read.style });
+      if (quiet && read.style) await save(held.ref, read.style);
     } catch (err) {
       setError(uploadError(err));
     } finally {
@@ -474,23 +520,22 @@ export function DrawingPanel({
 
   const remove = () => {
     setHeld(null);
-    setStyleUnread(false);
+    setUnread(null);
     setError(null);
     if (quiet && savedRef) void updateCastMember(castId, { sourceArt: undefined });
   };
 
   const confirm = async () => {
     if (!held || busy) return;
+    if (sets && !held.style) return;
     setBusy("confirm");
     try {
       const { ref, preview, style } = held;
-      const save = async () => {
-        await updateCastMember(castId, drawing(ref));
-        if (style) await chooseDerivedStyle(style);
-      };
+      // Only a picture drawn in a look the book already has starts the portrait: a new look changes the price.
+      const cap = sets ? null : (estimate?.maxSparks ?? null);
       await useChatStudio.getState().tap(
         t("drawingAdded", { name }),
-        () => chooseAndStartPortraits(save, estimate?.maxSparks ?? null),
+        () => chooseAndStartPortraits(() => save(ref, style), cap),
         {
           undoable: true,
           reply: [{ key: style ? "lookDrawingStyle" : "lookDrawingAdded", priority: "result", vars: { names: name } }],
@@ -504,9 +549,19 @@ export function DrawingPanel({
     }
   };
 
+  const needsRead = sets && held !== null && held.style === null;
+  const note =
+    role.kind === "follows"
+      ? role.name
+        ? t("drawingNoteFollows", { name, first: role.name })
+        : t("drawingNoteFollowsAny", { name })
+      : role.replaces
+        ? t("drawingNoteReplaces", { name })
+        : t("drawingNote", { name });
+
   return (
     <PanelShell>
-      <p className="text-xs leading-relaxed text-ink-600">{t(styled ? "drawingNoteStyled" : "drawingNote", { name })}</p>
+      <p className="text-xs leading-relaxed text-ink-600">{note}</p>
       <input
         ref={input}
         type="file"
@@ -557,14 +612,22 @@ export function DrawingPanel({
           )}
         </div>
       </div>
-      {styleUnread && <p className="text-xs leading-snug text-ink-600">{t("styleNotRead")}</p>}
+      {needsRead && busy === null && (
+        <div className="flex flex-col items-start gap-1.5">
+          <p role="status" className="text-xs leading-snug text-ink-600">
+            {t("styleNotRead")}
+            {unread && <span className="mt-0.5 block text-[11px] text-ink-500">{unread}</span>}
+          </p>
+          <PrimaryButton onClick={() => void retry()}>{t("styleRetry")}</PrimaryButton>
+        </div>
+      )}
       {error !== null && <UploadFailed reason={error} />}
-      {!quiet && held && (
+      {!quiet && held && !needsRead && (
         <div className="flex flex-col items-start gap-1">
           <PrimaryButton busy={busy === "confirm"} disabled={busy !== null} onClick={() => void confirm()}>
-            {styled ? t("drawFromPicture", { name }) : t("usePicture")}
+            {sets ? t("usePicture") : t("drawFromPicture", { name })}
           </PrimaryButton>
-          {styled && <StartNote estimate={estimate} />}
+          {!sets && <StartNote estimate={estimate} />}
         </div>
       )}
     </PanelShell>

@@ -7,7 +7,7 @@
  * what the card shows. Every line can be written in the parent's own words
  * right here, and typing in the message field works too.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { Check, Pencil, X } from "lucide-react";
 import { coverLetteringAllowed } from "../../../core/book/coverLines";
 import { authorIdeas, coverCardLines, subtitleIdeas } from "../../../core/guide/coverWords";
@@ -15,6 +15,7 @@ import type { Project } from "../../../core/types";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useAuthStore } from "../../../state/authStore";
 import { useChatStudio } from "../../../state/chatStudio";
+import { useWellDraft } from "../../../state/wellDrafts";
 import { cn } from "../../lib/cn";
 import { confirmCoverWords, setAuthor, setSubtitle, setTitle } from "../bookActions";
 import { useGuideLabel, useGuideT } from "../intl";
@@ -33,14 +34,35 @@ export function CoverWordsWell({
   const label = useGuideLabel();
   const tap = useChatStudio((s) => s.tap);
   const languages = useAppConfigStore((s) => s.bookLanguages);
-  const [writing, setWriting] = useState<Line | null>(null);
+  // What is being typed lives outside the card, so a remount keeps it.
+  const [writing, setWriting] = useWellDraft<Line | null>("cover:writing", null);
+  const [typed, setTyped] = useWellDraft<Partial<Record<Line, string>>>("cover:typed", {});
   const lines = coverCardLines(project);
   const subtitles = useMemo(() => subtitleIdeas(project), [project]);
   const writer = useAuthStore((s) => (s.user?.isAnonymous ? "" : (s.user?.displayName ?? "")));
   const authors = useMemo(() => authorIdeas(project, writer), [project, writer]);
   const painted = coverLetteringAllowed(project.config.contentLocale, languages);
 
-  const confirm = () => void tap(label("coverLooksGood"), () => confirmCoverWords(), { undoable: true });
+  const write = async (line: Line, text: string): Promise<void> => {
+    const value = text.trim().slice(0, MAX[line]);
+    if (line === "title") {
+      if (value && value !== lines.title) await setTitle(value);
+    } else if (value !== lines[line]) {
+      await (line === "subtitle" ? setSubtitle(value) : setAuthor(value));
+    }
+  };
+  // "Looks good" keeps what the card shows, including a line still being typed.
+  const confirm = () =>
+    void tap(
+      label("coverLooksGood"),
+      async () => {
+        for (const [line, text] of Object.entries(typed) as [Line, string][]) if (text.trim()) await write(line, text);
+        setTyped({});
+        setWriting(null);
+        await confirmCoverWords();
+      },
+      { undoable: true },
+    );
   const latest = useRef(confirm);
   latest.current = confirm;
   useEffect(() => {
@@ -48,28 +70,39 @@ export function CoverWordsWell({
     return () => onDefault(null);
   }, [onDefault]);
 
-  const save = (line: Line, text: string) => {
+  const close = (line: Line) => {
     setWriting(null);
-    const value = text.trim().slice(0, MAX[line]);
-    if (line === "title") {
-      if (value && value !== lines.title) void setTitle(value);
-    } else if (value !== lines[line]) {
-      void (line === "subtitle" ? setSubtitle(value) : setAuthor(value));
-    }
+    const { [line]: _closed, ...rest } = typed;
+    void _closed;
+    setTyped(rest);
+  };
+  const save = (line: Line, text: string) => {
+    close(line);
+    void write(line, text);
+  };
+  const field = (line: Line) => ({
+    text: typed[line] ?? lines[line],
+    onText: (text: string) => setTyped({ ...typed, [line]: text }),
+    onSave: (text: string) => save(line, text),
+    onCancel: () => close(line),
+  });
+
+  const preview = {
+    title: typed.title?.trim() || lines.title,
+    subtitle: typed.subtitle?.trim() || lines.subtitle,
+    author: typed.author?.trim() || lines.author,
   };
 
   return (
     <div className="flex w-full flex-col gap-3">
-      <CoverPreview lines={lines} onEditTitle={() => setWriting("title")} editTitle={t("editTitle")} />
+      <CoverPreview lines={preview} onEditTitle={() => setWriting("title")} editTitle={t("editTitle")} />
       {writing === "title" && (
         <LineField
           key="title"
           label={t("titlePlaceholder")}
-          initial={lines.title}
+          {...field("title")}
           placeholder={t("titlePlaceholder")}
           maxLength={MAX.title}
-          onSave={(text) => save("title", text)}
-          onCancel={() => setWriting(null)}
         />
       )}
 
@@ -86,11 +119,9 @@ export function CoverWordsWell({
         <LineField
           key="subtitle"
           label={t("subtitle")}
-          initial={lines.subtitle}
+          {...field("subtitle")}
           placeholder={t("coverSubtitlePlaceholder")}
           maxLength={MAX.subtitle}
-          onSave={(text) => save("subtitle", text)}
-          onCancel={() => setWriting(null)}
         />
       )}
 
@@ -107,11 +138,9 @@ export function CoverWordsWell({
         <LineField
           key="author"
           label={t("author")}
-          initial={lines.author}
+          {...field("author")}
           placeholder={t("coverAuthorPlaceholder")}
           maxLength={MAX.author}
-          onSave={(text) => save("author", text)}
-          onCancel={() => setWriting(null)}
         />
       )}
 
@@ -214,21 +243,22 @@ function IdeaRow({
 /** One line in the parent's own words. Enter keeps it; Escape closes. */
 function LineField({
   label,
-  initial,
+  text,
+  onText,
   placeholder,
   maxLength,
   onSave,
   onCancel,
 }: {
   label: string;
-  initial: string;
+  text: string;
+  onText: (text: string) => void;
   placeholder: string;
   maxLength: number;
   onSave: (text: string) => void;
   onCancel: () => void;
 }) {
   const t = useGuideT("brief");
-  const [text, setText] = useState(initial);
   const field = useRef<HTMLInputElement>(null);
   useEffect(() => field.current?.focus({ preventScroll: true }), []);
   return (
@@ -246,7 +276,7 @@ function LineField({
         maxLength={maxLength}
         aria-label={label}
         placeholder={placeholder}
-        onChange={(event) => setText(event.target.value)}
+        onChange={(event) => onText(event.target.value)}
         onKeyDown={(event) => {
           if (event.key === "Escape") {
             event.preventDefault();

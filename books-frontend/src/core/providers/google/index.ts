@@ -244,7 +244,7 @@ export const googleImageProvider: ImageProvider = {
           "BASE IMAGE to re-render — reproduce its CONTENT exactly: the same subjects, identities, outfits, poses, expressions, composition, layout, cell order, framing and scale. Change ONLY the rendering style, as described in the instruction. Do NOT add, remove, rearrange or re-pose anything:";
       } else if (ref.role === "style") {
         label =
-          "ART-STYLE reference — copy ONLY its visual style: medium, rendering technique, linework, shading, color palette, texture and finish. Do NOT copy its subjects, characters, objects, composition or layout:";
+          "ART-STYLE reference — copy ONLY its facial-feature simplification, eye and nose treatment, medium, rendering technique, linework, shading, color palette, texture and finish. Do NOT copy any character identity, face shape, age, hair, skin tone, clothing, pose, expression, body proportions, subject, object, composition or layout:";
       } else if (ref.role === "scale") {
         label =
           "SIZE CHART — these characters are drawn side by side on one ground line at their correct heights relative to each other. Copy ONLY those proportions; ignore its poses, spacing, blank background and flat arrangement:";
@@ -297,9 +297,12 @@ export const googleImageProvider: ImageProvider = {
     const out = json.candidates?.[0]?.content?.parts ?? [];
     const img = out.find((p) => p.inlineData)?.inlineData;
     if (!img) {
+      // An empty response says nothing about the prompt. It is usually a
+      // safety flicker or a dropped candidate, and a later attempt lands.
       throw new ProviderError("No image returned", {
         kind: "parse",
         provider: "google",
+        retryable: true,
       });
     }
     return { base64: img.data, mimeType: img.mimeType, model: req.model };

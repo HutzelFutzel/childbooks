@@ -14,8 +14,18 @@ import { layoutAvailability, layoutFindings, resolveLayout } from "../../../core
 import { REGION_TREATMENTS, getTreatment } from "../../../core/book/treatments";
 import { BOOK_PRODUCTS } from "../../../core/fulfillment";
 import { bookSizeFromAspect, type BookSize } from "../../../core/config/options";
-import type { LayoutExample, LayoutOverride, LayoutsConfig } from "../../../core/config/layouts";
-import { DEFAULT_LAYOUT_QUALITY } from "../../../core/config/layouts";
+import type {
+  LayoutCompositionConfig,
+  LayoutExample,
+  LayoutOverride,
+  LayoutsConfig,
+} from "../../../core/config/layouts";
+import {
+  DEFAULT_LAYOUT_QUALITY,
+  PICTURE_SCALE_RANGE,
+  resolveLayoutComposition,
+  TEXT_WIDTH_RANGE,
+} from "../../../core/config/layouts";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { Button } from "../../components/Button";
 import { Field, Input, Textarea } from "../../components/Input";
@@ -201,6 +211,44 @@ function ExampleGallery({ layoutId }: { layoutId: string }) {
   );
 }
 
+/** Whole-number percent from a 0..1 share; empty string when unset. */
+const pctText = (v: number | undefined) => (typeof v === "number" ? String(Math.round(v * 100)) : "");
+
+const clampShare = (v: number, range: { min: number; max: number }) =>
+  Math.min(range.max, Math.max(range.min, v));
+
+/**
+ * What the two page-shape settings do, drawn to scale: the page, the picture
+ * at its chosen size, and the story text box inside its reserved area.
+ */
+function PageShapePreview({ pictureScale, textWidth }: { pictureScale: number; textWidth: number }) {
+  const inset = ((1 - pictureScale) / 2) * 100;
+  // The default layout reserves the outer third of the page for the words.
+  const column = { left: 5.9, width: 29.5 };
+  const boxW = column.width * textWidth;
+  const boxLeft = column.left + (column.width - boxW) / 2;
+  return (
+    <div
+      className="relative aspect-square w-40 shrink-0 border border-ink-200 bg-[#f4ecd8]"
+      role="img"
+      aria-label={`Page preview: picture at ${Math.round(pictureScale * 100)}% of the page, text box at ${Math.round(textWidth * 100)}% of its area`}
+    >
+      <div
+        className="absolute bg-sky-200/80"
+        style={{ left: `${inset}%`, top: `${inset}%`, right: `${inset}%`, bottom: `${inset}%` }}
+      />
+      <div
+        className="absolute border border-dashed border-ink-400"
+        style={{ left: `${column.left}%`, width: `${column.width}%`, top: "30%", height: "40%" }}
+      />
+      <div
+        className="absolute border border-ink-700 bg-white/85"
+        style={{ left: `${boxLeft}%`, width: `${boxW}%`, top: "38%", height: "24%" }}
+      />
+    </div>
+  );
+}
+
 function LayoutEditor({
   layout,
   config,
@@ -340,6 +388,27 @@ function LayoutEditor({
         </Field>
 
         <Field
+          label="Story text width (% of its text area)"
+          hint={`Leave empty to use the book-wide setting (${Math.round(resolveLayoutComposition(config).textWidth * 100)}%). 100 fills the reserved area; less leaves even room on both sides. Only affects text boxes created from now on.`}
+        >
+          <Input
+            type="number"
+            step="1"
+            min={Math.round(TEXT_WIDTH_RANGE.min * 100)}
+            max={Math.round(TEXT_WIDTH_RANGE.max * 100)}
+            className="max-w-[10rem]"
+            placeholder={String(Math.round(resolveLayoutComposition(config).textWidth * 100))}
+            value={pctText(override.textWidth)}
+            onChange={(e) => {
+              const next = { ...override };
+              if (e.target.value === "") delete next.textWidth;
+              else next.textWidth = Number(e.target.value) / 100;
+              onChange(next);
+            }}
+          />
+        </Field>
+
+        <Field
           label="Inset artwork background"
           hint="Used only when this layout places art beside the text. Full-bleed pages and covers remain opaque."
         >
@@ -463,7 +532,19 @@ export function LayoutsTab() {
           { ...o, examples: stored.overrides[id]?.examples },
         ]),
       );
-      await save({ ...draft, overrides });
+      // Number fields hold whatever was typed so editing isn't fought; bring
+      // the two page-shape settings inside their limits before saving.
+      const composition = draft.composition ? { ...draft.composition } : undefined;
+      if (composition?.pictureScale != null) {
+        composition.pictureScale = clampShare(composition.pictureScale, PICTURE_SCALE_RANGE);
+      }
+      if (composition?.textWidth != null) {
+        composition.textWidth = clampShare(composition.textWidth, TEXT_WIDTH_RANGE);
+      }
+      for (const o of Object.values(overrides)) {
+        if (o.textWidth != null) o.textWidth = clampShare(o.textWidth, TEXT_WIDTH_RANGE);
+      }
+      await save({ ...draft, overrides, ...(composition ? { composition } : {}) });
       setDirty(false);
       toast.success("Layout settings saved.");
     } catch (err) {
@@ -474,6 +555,11 @@ export function LayoutsTab() {
   };
 
   const quality = { ...DEFAULT_LAYOUT_QUALITY, ...(draft.quality ?? {}) };
+  const compositionSettings = resolveLayoutComposition(draft);
+  const setComposition = (patch: LayoutCompositionConfig) => {
+    setDraft((prev) => ({ ...prev, composition: { ...prev.composition, ...patch } }));
+    setDirty(true);
+  };
   const findings = useMemo(() => layoutFindings(draft, BOOK_PRODUCTS), [draft]);
 
   return (
@@ -552,10 +638,154 @@ export function LayoutsTab() {
               }}
               options={[
                 { value: "ignore", label: "Do nothing" },
-                { value: "warn", label: "Flag the page for the reader" },
-                { value: "scrim", label: "Apply the fallback treatment automatically" },
-                { value: "retry-once", label: "Re-generate once, then flag" },
+                { value: "warn", label: "Record it on the page only" },
+                { value: "scrim", label: "Put a soft plate under the words" },
+                { value: "retry-once", label: "Redraw once with a larger calm area, then plate" },
               ]}
+            />
+          </Field>
+        </div>
+        <p className="mt-2 max-w-2xl text-[11px] leading-relaxed text-ink-400">
+          A redraw is never charged to the reader who triggered it. Its cost is part of the page's
+          full cost, so with the &ldquo;full cost&rdquo; basis in Sparks pricing it reaches the price
+          as part of the window&rsquo;s average.
+        </p>
+      </Section>
+
+      <Section
+        title="Page shape"
+        hint="How big the picture is on each inside page and how wide the story text starts out. Covers always fill the page."
+      >
+        <div className="flex flex-wrap items-start gap-6">
+          <PageShapePreview
+            pictureScale={compositionSettings.pictureScale}
+            textWidth={compositionSettings.textWidth}
+          />
+          <div className="min-w-0 flex-1 space-y-4">
+            <Field
+              label="Picture size on the page (%)"
+              hint="100 fills the page edge to edge. 95 shrinks the picture evenly toward the middle, so a thin strip of the page color shows on all four sides. The picture is never cropped."
+            >
+              <Input
+                type="number"
+                step="1"
+                min={Math.round(PICTURE_SCALE_RANGE.min * 100)}
+                max={Math.round(PICTURE_SCALE_RANGE.max * 100)}
+                className="max-w-[10rem]"
+                value={pctText(draft.composition?.pictureScale ?? compositionSettings.pictureScale)}
+                onChange={(e) =>
+                  setComposition({ pictureScale: e.target.value === "" ? undefined : Number(e.target.value) / 100 })
+                }
+                onBlur={() => {
+                  const raw = draft.composition?.pictureScale;
+                  if (raw != null && raw !== compositionSettings.pictureScale) {
+                    setComposition({ pictureScale: compositionSettings.pictureScale });
+                  }
+                }}
+              />
+            </Field>
+            <p className="max-w-2xl text-[11px] leading-relaxed text-ink-500">
+              {compositionSettings.pictureScale >= 1
+                ? "The picture fills the whole page."
+                : `The picture covers ${Math.round(compositionSettings.pictureScale * 100)}% of the page width and height. ` +
+                  representativeProducts()
+                    .map(([, p]) => {
+                      const sideIn = ((1 - compositionSettings.pictureScale) / 2) * p.trim.widthIn;
+                      const topIn = ((1 - compositionSettings.pictureScale) / 2) * p.trim.heightIn;
+                      return `On ${p.trim.widthIn} × ${p.trim.heightIn} in, the page color shows ${sideIn.toFixed(2)} in at the sides and ${topIn.toFixed(2)} in top and bottom.`;
+                    })
+                    .join(" ")}{" "}
+              Set the page color in the book&rsquo;s design. Only pictures placed from now on use this;
+              pages already in a book keep their size.
+            </p>
+            <Field
+              label="Story text width (% of its text area)"
+              hint="100 makes the text box as wide as the area its layout reserves; 80 leaves a tenth of that area free on each side. A layout can override this in its own settings below."
+            >
+              <Input
+                type="number"
+                step="1"
+                min={Math.round(TEXT_WIDTH_RANGE.min * 100)}
+                max={Math.round(TEXT_WIDTH_RANGE.max * 100)}
+                className="max-w-[10rem]"
+                value={pctText(draft.composition?.textWidth ?? compositionSettings.textWidth)}
+                onChange={(e) =>
+                  setComposition({ textWidth: e.target.value === "" ? undefined : Number(e.target.value) / 100 })
+                }
+                onBlur={() => {
+                  const raw = draft.composition?.textWidth;
+                  if (raw != null && raw !== compositionSettings.textWidth) {
+                    setComposition({ textWidth: compositionSettings.textWidth });
+                  }
+                }}
+              />
+            </Field>
+          </div>
+        </div>
+      </Section>
+
+      <Section
+        title="Composition margins"
+        hint="Keeps faces out of the edges that frames and print trimming cut, and gives the words room."
+      >
+        <div className="flex flex-wrap items-end gap-3">
+          <Field
+            label="Subject-free edge (%)"
+            hint="Share of each side kept free of faces and important subjects. Background still runs to the edge."
+          >
+            <Input
+              type="number"
+              step="1"
+              min="0"
+              max="25"
+              value={Math.round(compositionSettings.subjectSafeInset * 100)}
+              onChange={(e) => setComposition({ subjectSafeInset: Number(e.target.value) / 100 })}
+            />
+          </Field>
+          <Field
+            label="Widen for frames"
+            hint="Use the book's frame, or the deepest starter frame before one is chosen, when it cuts further in."
+          >
+            <Select
+              value={compositionSettings.frameAware ? "on" : "off"}
+              onChange={(e) => setComposition({ frameAware: e.target.value === "on" })}
+              options={[
+                { value: "on", label: "Yes" },
+                { value: "off", label: "No" },
+              ]}
+            />
+          </Field>
+          <Field label="Frame margin cap (%)" hint="An ornate frame never pushes the margin past this.">
+            <Input
+              type="number"
+              step="1"
+              min="0"
+              max="30"
+              value={Math.round(compositionSettings.maxSafeInset * 100)}
+              onChange={(e) => setComposition({ maxSafeInset: Number(e.target.value) / 100 })}
+            />
+          </Field>
+          <Field
+            label="Calm-area overshoot (%)"
+            hint="How much larger than the text box the calm area is asked to be."
+          >
+            <Input
+              type="number"
+              step="1"
+              min="0"
+              max="20"
+              value={Math.round(compositionSettings.calmOvershoot * 100)}
+              onChange={(e) => setComposition({ calmOvershoot: Number(e.target.value) / 100 })}
+            />
+          </Field>
+          <Field label="Overshoot on redraw (%)" hint="Used for the one redraw after a failed check.">
+            <Input
+              type="number"
+              step="1"
+              min="0"
+              max="30"
+              value={Math.round(compositionSettings.retryCalmOvershoot * 100)}
+              onChange={(e) => setComposition({ retryCalmOvershoot: Number(e.target.value) / 100 })}
             />
           </Field>
         </div>

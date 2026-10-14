@@ -13,7 +13,14 @@ import type { ImageTier } from "../config/modelConfig";
 import type { ResolvedModels } from "../models/registry";
 import type { AnchorRender } from "../pipeline/anchorRun";
 import type { IllustrationRender } from "../pipeline/illustrationRun";
-import type { ModelSelection, PortraitInputs, Project, ReferenceUse, ScreenplayDoc } from "../types";
+import type {
+  ImageRenderRecord,
+  ModelSelection,
+  PortraitInputs,
+  Project,
+  ReferenceUse,
+  ScreenplayDoc,
+} from "../types";
 import type { ImageQuality } from "../config/modelCapabilities";
 import type {
   ImageGenerationHints,
@@ -282,7 +289,13 @@ export interface PortraitTask {
   error?: string;
   inputs: PortraitInputs;
   edit?: PortraitEdit;
-  result?: { blobId: string; mimeType: string; imageTier?: ImageTier; imageModel?: ModelSelection };
+  result?: {
+    blobId: string;
+    mimeType: string;
+    imageTier?: ImageTier;
+    imageModel?: ModelSelection;
+    render?: ImageRenderRecord;
+  };
   stats?: TaskStats;
 }
 
@@ -351,10 +364,29 @@ export type AnyJob = (
   | PortraitJob
   | BookJob
 ) & {
-  /** Server-written: failed tasks already given their one free second pass. */
+  /**
+   * Server-written: failed tasks already given their one free second pass.
+   * Kept so a job started before `recoveryPasses` still counts that wave.
+   */
   secondPass?: boolean;
+  /**
+   * How many free recovery waves this job has already taken after the first
+   * attempt. A book may take more than one; the bound lives with the worker.
+   */
+  recoveryPasses?: number;
+  /**
+   * Set while a recovery wave is being queued, so a second task finishing in
+   * the same moment cannot start another wave or close the job early.
+   */
+  recovering?: boolean;
   /** Server-written: finished-task count at the reaper's last re-drive. */
   reapMark?: number;
+  /**
+   * Server-written at expansion: the latest moment this job may still be
+   * running. Past it, a job that has stopped making progress is closed with
+   * whatever it has, so a book can never sit "drawing" without end.
+   */
+  deadlineAt?: number;
   frozen?: JobFrozenSettings;
 };
 
@@ -367,7 +399,8 @@ export type TaskResult =
       imageTier?: ImageTier;
       imageModel?: ModelSelection;
       generation?: ResolvedImageGenerationOptions;
-    } // image
+      render?: ImageRenderRecord;
+    } // image / portrait
   | IllustrationRender // refresh
   | AnchorRender // anchors
   | ScreenplayDoc; // screenplay
@@ -443,6 +476,28 @@ export interface TaskDoc {
    * lease.
    */
   claimToken?: string | null;
+  /**
+   * Server-written: how many times a worker has claimed this task in the
+   * current wave. Lives on the task, not on the queue message, because the
+   * reaper's re-enqueue starts a new queue message with a fresh retry count.
+   */
+  attempts?: number;
+  /** Server-written: when the current wave first claimed this task. */
+  firstClaimedAt?: number;
+  /** Server-written: last time the owning worker proved it was alive. */
+  heartbeatAt?: number;
+  /**
+   * Server-written: provider spend (USD) and image calls of attempts that
+   * produced nothing. Carried into the price window when the task delivers, so
+   * the cost of a retry is paid for by the average instead of disappearing.
+   */
+  wasteUsd?: number;
+  wasteImageCalls?: number;
+  /** Server-written: the unit's wasted spend was banked for its next delivered render. */
+  wasteCarried?: boolean;
+  /** Server-written: what the last attempt that was handed back to the queue died of. */
+  lastError?: string;
+  lastErrorKind?: ProviderErrorKind;
   updatedAt: number;
 }
 

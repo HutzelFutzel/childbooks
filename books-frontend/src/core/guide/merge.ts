@@ -10,7 +10,9 @@
  *
  * Fields are the book's top-level parts, its settings one level down, and the
  * Chat's own state one level down, which is as fine as a person would name them
- * ("the story", "the style", "the title").
+ * ("the story", "the style", "the title"). The page design goes one level
+ * further, to a single page: two devices that restyled different pages merge,
+ * and only a page both of them changed is a question.
  */
 import type { Project } from "../types";
 import { authoringOf, withAuthoring } from "./projectState";
@@ -21,7 +23,7 @@ export interface BookMerge {
   conflicts: string[];
 }
 
-const NESTED = new Set(["config", "authoringState"]);
+const NESTED = new Set(["config", "authoringState", "design", "design.pages"]);
 /** Bookkeeping that is expected to differ and never counts as a change. */
 const IGNORED = new Set(["rev", "updatedAt", "authoringState.seenAt"]);
 
@@ -47,8 +49,8 @@ function mergeLevel(
     const b = base[key];
     const m = mine[key];
     const t = theirs[key];
-    if (!prefix && NESTED.has(key) && isObject(m) && isObject(t)) {
-      out[key] = mergeLevel(key, isObject(b) ? b : {}, m, t, conflicts);
+    if (NESTED.has(path) && isObject(m) && isObject(t)) {
+      out[key] = mergeLevel(path, isObject(b) ? b : {}, m, t, conflicts);
       continue;
     }
     if (same(m, t) || same(m, b)) {
@@ -82,14 +84,20 @@ function getPath(project: Project, path: string): unknown {
   return path.split(".").reduce<unknown>((value, key) => (isObject(value) ? value[key] : undefined), project);
 }
 
+function setLoose(root: Loose, keys: readonly string[], value: unknown): Loose {
+  const [head, ...rest] = keys as [string, ...string[]];
+  if (rest.length === 0) {
+    const next = { ...root };
+    if (value === undefined) delete next[head];
+    else next[head] = value;
+    return next;
+  }
+  const inner = isObject(root[head]) ? (root[head] as Loose) : {};
+  return { ...root, [head]: setLoose(inner, rest, value) };
+}
+
 function setPath(project: Project, path: string, value: unknown): Project {
-  const [head, tail] = path.split(".", 2) as [string, string | undefined];
-  const root = project as unknown as Loose;
-  if (!tail) return { ...root, [head]: value } as unknown as Project;
-  const inner = isObject(root[head]) ? { ...(root[head] as Loose) } : {};
-  if (value === undefined) delete inner[tail];
-  else inner[tail] = value;
-  return { ...root, [head]: inner } as unknown as Project;
+  return setLoose(project as unknown as Loose, path.split("."), value) as unknown as Project;
 }
 
 const REPLACED_KEEP = 5;

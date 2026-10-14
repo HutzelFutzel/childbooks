@@ -26,6 +26,7 @@ import {
   type GuideAgentConfig,
 } from "../books-frontend/src/core/config/guideAgent";
 import { britishSpellingsIn, validateComposed } from "../books-frontend/src/core/guide/agent/compose";
+import { acceptGuideQuestion } from "../books-frontend/src/core/guide/speech";
 import { addedPeople, personFollowUp } from "../books-frontend/src/core/guide/agent/followUps";
 import { DEFAULT_HELP_ARTICLES, resolveHelpArticles } from "../books-frontend/src/core/guide/agent/help";
 import {
@@ -45,6 +46,8 @@ import { personNeedsStatedAge, REQUIREMENTS } from "../books-frontend/src/core/g
 import { screenCommandCalls } from "../books-frontend/src/core/guide/agent/screen";
 import type { Beat, CommandCall, CommandContext } from "../books-frontend/src/core/guide/agent/types";
 import { withMemberChanges, withPersonAsk } from "../books-frontend/src/core/guide/agent/commands/shared";
+import { resolveTextColor } from "../books-frontend/src/core/guide/agent/commands/design";
+import { restoreDesign, snapshotForChange } from "../books-frontend/src/core/guide/agent/restore";
 import {
   asksForEarlierPicture,
   pictureHistory,
@@ -64,6 +67,7 @@ import type { Anchor } from "../books-frontend/src/core/types";
 import { updateNodeContent } from "../books-frontend/src/core/versioning";
 import { DEFAULT_GUIDE_COPY } from "../books-frontend/src/core/guide/copy";
 import { authoringOf, withAuthoring } from "../books-frontend/src/core/guide/projectState";
+import { availableViews, BOOK_VIEWS } from "../books-frontend/src/core/guide/journey";
 import { briefOf, createDefaultStoryBrief } from "../books-frontend/src/core/story/brief";
 import { createDefaultConfig, type Project, type StoryCastMember } from "../books-frontend/src/core/types";
 
@@ -379,6 +383,34 @@ for (const path of guideAgentSettingPaths()) {
 }
 
 {
+  // "It's open on the right" is only said about a tab that exists. A tab that is not there yet is
+  // explained, in words that never say it opened.
+  const blank = { ...book([]), title: "" } as Project;
+  const states: Record<string, Project> = {
+    "no book yet": withAuthoring(blank, { entry: "guided" }),
+    "story and people": twins,
+    "no look chosen": { ...twins, config: { ...twins.config, styleReady: false } } as Project,
+  };
+  for (const [name, project] of Object.entries(states)) {
+    const open = availableViews(project);
+    for (const view of BOOK_VIEWS) {
+      const result = GUIDE_COMMANDS.openView.run(project, { view }, ctx);
+      check(
+        (result.kind === "effect") === open.includes(view),
+        `Showing the ${view} tab (${name}): ${result.kind}, but the tab is ${open.includes(view) ? "there" : "not there"}.`,
+      );
+      if (!open.includes(view)) {
+        check(result.kind === "invalid" && result.say === true && !/open/i.test(result.reason), `The missing ${view} tab (${name}) is not explained.`);
+        const plan = planTurn({ project, calls: [call("openView", { view })], ctx, config: defaults });
+        check(!plan.beats.some((b) => b.key === "openedView") && plan.views.length === 0, `The missing ${view} tab (${name}) was reported open.`);
+      }
+    }
+  }
+  const drawn = GUIDE_COMMANDS.openView.run(states["no book yet"]!, { view: "cast" }, { ...ctx, portraitsRunning: true });
+  check(drawn.kind === "invalid", "A running portrait opened the Characters tab with no book.");
+}
+
+{
   // One paid step per message.
   const plan = planTurn({
     project: twins,
@@ -390,6 +422,44 @@ for (const path of guideAgentSettingPaths()) {
   check(paid <= 1, `One message ran ${paid} paid skills.`);
   check(plan.deferred.some((c) => c.id === "drawPortraits"), "A second paid skill was not deferred.");
   check(plan.beats.some((b) => b.key === "tooMany"), "The guide doesn't say it did the first part only.");
+}
+
+{
+  // "Make Amanda and Arthur blonde": the same look change for two people is one batch, not a second purchase.
+  const plan = planTurn({
+    project: twins,
+    calls: [
+      call("editPersonLook", { person: "Amanda", change: "blonde hair" }),
+      call("editPersonLook", { person: "Arthur", change: "blonde hair" }),
+    ],
+    ctx,
+    config: defaults,
+  });
+  check(GUIDE_COMMANDS.editPersonLook.batchable === true, "editPersonLook doesn't batch several people.");
+  check(
+    plan.steps.filter((s) => s.call.id === "editPersonLook").length === 2,
+    "The second person's look change was held back instead of run with the first.",
+  );
+  check(!plan.beats.some((b) => b.key === "tooMany"), "The guide says it only did part of a change that was done whole.");
+  const noted = plan.beats.filter((b) => b.key === "lookNoted");
+  check(noted.length <= 1, "Two people's look notes are said as two lines.");
+  const named = noted.flatMap((b) => (Array.isArray(b.vars?.names) ? b.vars.names : [b.vars?.names]));
+  check(
+    noted.length === 0 || (named.includes("Amanda") && named.includes("Arthur")),
+    "The look note names only one of the people it was about.",
+  );
+  // A different paid skill is still the second purchase.
+  const mixed = planTurn({
+    project: twins,
+    calls: [
+      call("editPersonLook", { person: "Amanda", change: "blonde hair" }),
+      call("editPersonLook", { person: "Arthur", change: "blonde hair" }),
+      call("drawPortraits"),
+    ],
+    ctx,
+    config: defaults,
+  });
+  check(mixed.deferred.some((c) => c.id === "drawPortraits"), "A different paid skill ran in the same batch.");
 }
 
 {
@@ -527,6 +597,48 @@ for (const path of guideAgentSettingPaths()) {
     "A word on the avoid list passed.",
   );
   check(has("**Done.**", expect("en-US", "Done."), "markup"), "Markdown passed.");
+  check(
+    has("What is the name of the other child?", expect("en-US", "What's their name?"), "inventedChild"),
+    "A rephrasing that invented another child passed.",
+  );
+  check(
+    ok("How old is the other child?", expect("en-US", "How old is the other child?")),
+    "Asking about the other child was rejected when the meaning already said it.",
+  );
+}
+
+{
+  const open = {
+    asks: ["names"],
+    missing: ["names"],
+    requiredMissing: ["names"],
+    ageNames: [] as string[],
+    sameAgeGroups: [] as string[][],
+  };
+  check(
+    !acceptGuideQuestion({ ...open, text: "What is the name of the other child?", knownNames: [] }),
+    "A follow-up invented another child when nobody is in the book.",
+  );
+  check(
+    !acceptGuideQuestion({ ...open, text: "What is the name of the other child?", knownNames: ["Shiloh"] }),
+    "A follow-up invented another child after one name.",
+  );
+  check(
+    acceptGuideQuestion({ ...open, text: "Who should be in the story?", knownNames: [] }),
+    "The plain names question was rejected.",
+  );
+  check(
+    acceptGuideQuestion({
+      text: "How old is Leo, the other child?",
+      asks: ["ages"],
+      missing: ["ages"],
+      requiredMissing: ["ages"],
+      ageNames: ["Leo"],
+      sameAgeGroups: [],
+      knownNames: ["Maya", "Leo"],
+    }),
+    "Asking the other child's age was rejected when two children are in the book.",
+  );
 }
 
 // --- Language follow ---------------------------------------------------------------------
@@ -553,6 +665,9 @@ for (const path of guideAgentSettingPaths()) {
 
 // --- Suggestion chips ------------------------------------------------------------------------
 
+/** What the finished pages offer: how the words look, nothing about the story or the people. */
+const FINISHED = ["largerText", "smallerText", "centerText", "textColor", "changeFont", "moveText"];
+
 {
   const ideas = suggestionsFor(twins, defaults, { guest: false });
   check(ideas.length > 0 && ideas.length <= defaults.ideas.max, `Suggestions for a drafted book: ${ideas.length}.`);
@@ -565,8 +680,20 @@ for (const path of guideAgentSettingPaths()) {
   }
   const locked = withAuthoring(twins, { lockedAt: 1 });
   check(
-    suggestionsFor(locked, defaults, { guest: false }).every((i) => ["showCover", "whatHappensNext"].includes(i.id)),
+    suggestionsFor(locked, defaults, { guest: false }).every((i) => ["showCover", "whatHappensNext", ...FINISHED].includes(i.id)),
     "Suggestions for a change show after the pages started.",
+  );
+  check(
+    suggestionsFor(locked, { ...defaults, ideas: { ...defaults.ideas, max: 20 } }, { guest: false, view: "pages" }).some((i) =>
+      FINISHED.includes(i.id),
+    ),
+    "A finished book offers nothing to try on its pages.",
+  );
+  check(
+    !suggestionsFor(twins, { ...defaults, ideas: { ...defaults.ideas, max: 50 } }, { guest: false, view: "pages" }).some((i) =>
+      FINISHED.includes(i.id),
+    ),
+    "The finished pages' ideas show before the pages are drawn.",
   );
   const hidden = suggestionsFor(twins, { ...defaults, ideas: { ...defaults.ideas, disabled: ideas.map((i) => i.id) } }, { guest: false });
   check(!hidden.some((i) => ideas.some((j) => j.id === i.id)), "A hidden suggestion still shows.");
@@ -652,9 +779,29 @@ for (const path of guideAgentSettingPaths()) {
   }
   check(lookup(unstyled, "style").some((i) => i.id === "chooseLook"), "The Look tab does not offer to pick a look.");
   check(lookup(styled, "style").some((i) => i.id === "changeLook") && !lookup(styled, "style").some((i) => i.id === "chooseLook"), "The Look tab offers to pick a look that is already picked.");
-  for (const id of ["changeSubtitle", "changeAuthor", "changeCoverWords", "changeSize"]) {
+  for (const id of ["changeSubtitle", "changeAuthor", "changeCoverWords"]) {
     check(lookup(styled, "pages").some((i) => i.id === id), `The Pages tab misses "${id}".`);
   }
+
+  // Nothing is offered that the book is not ready for: a size or layout can be changed once it was chosen,
+  // a look is offered once there is a story to draw in it.
+  const sizeChosen = withAuthoring(styled, { bookSetup: { formatConfirmedAt: 1 } });
+  check(lookup(sizeChosen, "pages").some((i) => i.id === "changeSize"), 'The Pages tab misses "changeSize" once the size was chosen.');
+  check(!lookup(styled, "pages").some((i) => i.id === "changeSize"), "A size nobody chose yet is offered for change.");
+  const noStoryYet = { ...unstyled, config: { ...unstyled.config, storyText: "" } } as Project;
+  check(!lookup(noStoryYet, "style").some((i) => i.id === "chooseLook"), "A look is offered before there is a story to draw in it.");
+
+  // Before there is a book there is nothing to change: no chips and no menu entries about the book, only
+  // the way back from the guided start. Nothing at all before the reader has chosen how to begin.
+  const blank = { ...book([]), title: "" } as Project;
+  const fresh = withAuthoring(blank, { entry: "guided" });
+  const freshIds = suggestionsFor(fresh, wide, { guest: false, view: null }).map((i) => i.id);
+  check(freshIds.join() === "writeMyself", `An empty book suggests something about a book that is not there: ${freshIds.join(", ")}.`);
+  const freshMenu = ideaMenuFor(fresh, defaults, { guest: false, view: null }).flatMap((g) => g.ideas.map((i) => i.id));
+  check(freshMenu.join() === "writeMyself", `An empty book's ideas menu lists the book's skills: ${freshMenu.join(", ")}.`);
+  check(suggestionsFor(blank, wide, { guest: false, view: null }).length === 0, "Chips show before the reader has chosen how to begin.");
+  check(!suggestionsFor(withAuthoring(blank, { entry: "own" }), wide, { guest: false, view: null }).some((i) => i.id === "writeMyself"), "Writing it yourself is offered to someone who already does.");
+  check(!suggestionsFor(twins, wide, { guest: false, view: "story" }).some((i) => i.id === "writeMyself"), "Writing it yourself is offered once a story exists.");
 
   // The next step follows what the book is waiting on, and only leads on its own tab.
   const lead = (project: Project, view: "story" | "cast" | "style" | "pages", extra: Record<string, unknown> = {}) =>
@@ -732,7 +879,7 @@ for (const path of guideAgentSettingPaths()) {
     "A story idea is listed as this tab's on the Characters tab.",
   );
   check(
-    ideaMenuFor(drawing, defaults, { guest: false, view: "story" }).every((g) => g.ideas.every((i) => ["showCover", "whatHappensNext"].includes(i.id))),
+    ideaMenuFor(drawing, defaults, { guest: false, view: "story" }).every((g) => g.ideas.every((i) => ["showCover", "whatHappensNext", ...FINISHED].includes(i.id))),
     "The menu offers a change after the pages started.",
   );
   check(ideaMenuFor(long, { ...defaults, ideas: { ...defaults.ideas, enabled: false } }, { guest: false }).length === 0, "The menu ignores the admin's switch for ideas.");
@@ -953,6 +1100,139 @@ for (const path of guideAgentSettingPaths()) {
     normalizeGuideAgentConfig({ turn: { autoSpendSparks: value } }).turn.autoSpendSparks;
   check(cap(undefined) === defaults.turn.autoSpendSparks && defaults.turn.autoSpendSparks > 0, "The default cap for starting a typed picture is missing.");
   check(cap(5000) === 200 && cap(-3) === 0, "The cap for starting a typed picture is not bounded.");
+}
+
+// --- The finished pages: size, color, alignment, font and position by words ----------------------
+
+{
+  type DBox = import("../books-frontend/src/core/design").TextBox;
+  const box = (id: string, role: DBox["role"], size = 0.04, extra: Partial<DBox> = {}): DBox =>
+    ({
+      id,
+      role,
+      rect: { x: 0.1, y: 0.3, w: 0.8, h: 0.3 },
+      z: 1,
+      presetId: "plain",
+      fontFamily: "Fredoka",
+      fontSizePct: size,
+      color: "#111111",
+      align: "left",
+      vAlign: "top",
+      lineHeight: 1.3,
+      paragraphs: [{ align: "right", spans: [{ text: "Once", color: "#ff0000", fontFamily: "Lora" }] }],
+      ...extra,
+    }) as DBox;
+  const design = (pages: Record<string, DBox[]>) =>
+    ({
+      defaultFontFamily: "Fredoka",
+      defaultFontSizePct: 0.04,
+      pages: Object.fromEntries(Object.entries(pages).map(([id, textBoxes]) => [id, { textBoxes }])),
+    }) as unknown as NonNullable<Project["design"]>;
+  const finished = withAuthoring(
+    {
+      ...twins,
+      design: design({
+        "cover-front": [box("t", "book-title", 0.08), box("a", "book-author", 0.03)],
+        p1: [box("p1b", "story-body")],
+        p2: [box("p2b", "story-body")],
+      }),
+    },
+    { lockedAt: 1 },
+  );
+  const fonts = [
+    { id: "Lora", label: "Lora", category: "serif" },
+    { id: "Merriweather", label: "Merriweather", category: "serif" },
+    { id: "Fredoka", label: "Fredoka", category: "rounded" },
+  ];
+  const dctx: CommandContext = { ...ctx, fonts, pages: ["p1"] };
+  const run = (id: CommandCall["id"], args: Record<string, string>, pages: string[] = ["p1"]) =>
+    GUIDE_COMMANDS[id].run(finished, args, { ...dctx, pages });
+  const sizeOf = (project: Project, page: string) => project.design?.pages[page]?.textBoxes[0]?.fontSizePct;
+  const written = (result: ReturnType<typeof run>): Project | null => (result.kind === "write" ? result.project : null);
+
+  // Larger: the whole book by default, so the type matches from page to page.
+  const larger = written(run("setTextSize", { size: "larger" }));
+  check(
+    !!larger && sizeOf(larger, "p1")! > 0.04 && sizeOf(larger, "p1") === sizeOf(larger, "p2") && sizeOf(larger, "cover-front") === 0.08,
+    "\"Larger\" did not grow every story page and only the story text.",
+  );
+  check(larger?.design?.sharedTextStyles?.["story-body"]?.fontSizePct === sizeOf(larger!, "p1"), "The book-wide text style did not follow a size change.");
+  // "This page" is only that page.
+  const onePage = written(run("setTextSize", { size: "smaller", scope: "page" }));
+  check(!!onePage && sizeOf(onePage, "p1")! < 0.04 && sizeOf(onePage, "p2") === 0.04, "\"This page\" changed more than the page.");
+  // Never past the floor or the ceiling.
+  let size = finished;
+  for (let i = 0; i < 40; i++) size = written(GUIDE_COMMANDS.setTextSize.run(size, { size: "larger" }, dctx)) ?? size;
+  check(sizeOf(size, "p1")! <= 0.12 && sizeOf(size, "p1")! > 0.04, "Repeated \"larger\" went past the ceiling.");
+  check(GUIDE_COMMANDS.setTextSize.run(size, { size: "larger" }, dctx).kind === "noop", "A size at its ceiling did not say so.");
+  size = finished;
+  for (let i = 0; i < 40; i++) size = written(GUIDE_COMMANDS.setTextSize.run(size, { size: "smaller" }, dctx)) ?? size;
+  check(sizeOf(size, "p1")! >= 0.02, "Repeated \"smaller\" went below what prints legibly.");
+  // The words on the cover.
+  const title = written(run("setTextSize", { size: "smaller", part: "title" }));
+  check(!!title && sizeOf(title, "cover-front")! < 0.08 && sizeOf(title, "p1") === 0.04, "\"Smaller title\" did not touch only the title.");
+  // A title painted into the cover picture is explained, not edited.
+  const baked: Project = {
+    ...finished,
+    design: design({ "cover-front": [box("t", "book-title", 0.08, { hidden: true })], p1: [box("p1b", "story-body")] }),
+  };
+  const bakedTitle = GUIDE_COMMANDS.setTextSize.run(baked, { size: "larger", part: "title" }, dctx);
+  check(bakedTitle.kind === "invalid" && bakedTitle.say === true && /picture/i.test(bakedTitle.reason), "A painted-in title was edited or refused without a reason.");
+  // A locked box is left alone.
+  const pinned: Project = { ...finished, design: design({ p1: [box("p1b", "story-body", 0.04, { locked: true })] }) };
+  check(GUIDE_COMMANDS.setTextSize.run(pinned, { size: "larger" }, dctx).kind === "invalid", "A locked box was resized.");
+
+  // Color: a name or hex, never an invention; the words' own colours give way to it.
+  const blue = written(run("setTextColor", { color: "dark blue" }));
+  const spanColor = blue?.design?.pages.p1?.textBoxes[0]?.paragraphs[0]?.spans[0]?.color;
+  check(blue?.design?.pages.p1?.textBoxes[0]?.color === "#1e3a8a" && spanColor === undefined, "A named color did not replace the box's and the words' colors.");
+  check(written(run("setTextColor", { color: "#abc" }))?.design?.pages.p1?.textBoxes[0]?.color === "#aabbcc", "A short hex color was not widened.");
+  check(["", "banana", "#12", "ffff"].every((c) => resolveTextColor(c) === null), "A made-up color was accepted.");
+  check(resolveTextColor("Dunkelblau") === "#1e3a8a", "Color names in German are not understood.");
+  check(run("setTextColor", { color: "banana" }).kind === "invalid", "An unknown color was applied.");
+
+  // Alignment.
+  const centered = written(run("setTextAlign", { align: "center" }));
+  check(
+    centered?.design?.pages.p1?.textBoxes[0]?.align === "center" && centered.design.pages.p1.textBoxes[0].paragraphs[0]?.align === undefined,
+    "Centering did not override a paragraph's own alignment.",
+  );
+  check(run("setTextAlign", { align: "diagonal" }).kind === "invalid", "An alignment that doesn't exist was applied.");
+  check(GUIDE_COMMANDS.setTextAlign.run(centered!, { align: "center" }, dctx).kind === "noop", "Centering centered text did not say it already was.");
+
+  // Font: a name from the book's own list, a kind asks which, anything else is said no to.
+  const lora = written(run("setTextFont", { font: "lora" }));
+  check(lora?.design?.pages.p1?.textBoxes[0]?.fontFamily === "Lora" && lora.design.pages.p1.textBoxes[0].paragraphs[0]?.spans[0]?.fontFamily === undefined, "A named font was not applied cleanly.");
+  const kind = run("setTextFont", { font: "a serif font" });
+  check(kind.kind === "ask" && kind.options.length === 2, "A kind of font did not ask which.");
+  const nope = run("setTextFont", { font: "Comic Sans" });
+  check(nope.kind === "invalid" && nope.say === true, "A font the book does not offer was applied.");
+
+  // Position: a small step, on the page in view, inside the page, kept where it is put.
+  const up = written(run("moveText", { direction: "up" }));
+  const moved = up?.design?.pages.p1?.textBoxes[0];
+  check(!!moved && moved.rect.y < 0.3 && moved.placedByReader === true && up?.design?.pages.p2?.textBoxes[0]?.rect.y === 0.3, "Moving the text up moved the wrong thing.");
+  let edge = finished;
+  for (let i = 0; i < 30; i++) edge = written(GUIDE_COMMANDS.moveText.run(edge, { direction: "down" }, dctx)) ?? edge;
+  const bottom = edge.design?.pages.p1?.textBoxes[0]?.rect;
+  check(!!bottom && bottom.y + bottom.h <= 1.0001, "Repeated moves took the text off the page.");
+
+  // They need pages, change no one's story, and one Undo takes them back.
+  for (const id of ["setTextSize", "setTextColor", "setTextAlign", "setTextFont", "moveText"] as const) {
+    const def = GUIDE_COMMANDS[id];
+    check(def.requires.includes("pagesStarted") && def.undoable === true && !def.paid, `${id} is not a free, undoable change that waits for the pages.`);
+    const early = planTurn({ project: twins, calls: [call(id, { size: "larger", align: "left", color: "red", font: "Lora", direction: "up" })], ctx: dctx, config: defaults });
+    check(early.blocked.length === 1 && early.blocked[0]!.remedy.requirement === "pagesStarted", `${id} ran before the pages started.`);
+  }
+  const planned = planTurn({ project: finished, calls: [call("setTextSize", { size: "larger" })], ctx: dctx, config: defaults });
+  check(planned.blocked.length === 0 && !planned.confirm && planned.steps.length === 1, "A text size change asked for confirmation instead of just happening.");
+  const wrote = written(run("setTextSize", { size: "larger" }))!;
+  check(JSON.stringify(wrote.config) === JSON.stringify(finished.config), "A text change touched the story's settings.");
+  const back = restoreDesign(
+    { ...wrote } as Project,
+    JSON.parse(snapshotForChange(finished, wrote)) as Record<string, unknown>,
+  );
+  check(JSON.stringify(back.design) === JSON.stringify(finished.design), "Undo did not restore the pages' design.");
 }
 
 report.push("Chat skills");

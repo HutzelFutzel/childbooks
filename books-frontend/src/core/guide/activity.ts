@@ -26,6 +26,12 @@ export interface ActivityInput {
   /** A change to the story is being prepared on the server. */
   revisionRunning?: boolean;
   estimating?: boolean;
+  /**
+   * Everything the reader can answer is answered and the book is still being
+   * prepared. Bridges the moments between one job ending and the next one
+   * starting, so the chat never looks idle while something is coming.
+   */
+  waiting?: "reading" | "planning" | null;
   startingBook?: boolean;
   drawPhase?: "cast" | "pages" | "done" | null;
   preparingBook?: boolean;
@@ -56,6 +62,7 @@ export function guideActivity(input: ActivityInput): GuideActivity | null {
   if (input.extractionRunning || input.analysisRunning) return { id: "readingStory" };
   if (input.planRunning) return { id: "planningPages" };
   if (input.estimating) return { id: "estimating" };
+  if (input.waiting) return { id: input.waiting === "reading" ? "readingStory" : "planningPages" };
   return null;
 }
 
@@ -91,6 +98,26 @@ export const ENTER_NEVER_ACCEPTS: ReadonlySet<string> = new Set([
   "manuscriptChoice",
   "pictureNotes",
 ]);
+
+/**
+ * Cards whose question a typed sentence answers (the guide reads it as the
+ * answer). Beside any other card a typed line is a question or a request, so
+ * the field says "pick above" instead of inviting an answer it would not take.
+ */
+const TYPED_ANSWER_WELLS = new Set([
+  "audienceConfirm",
+  "castAges",
+  "castLooks",
+  "storyBrief",
+  "skipFact",
+  "coverWords",
+  "lookAlike",
+]);
+
+/** What the message field should invite while this card is on screen. */
+export function cardPlaceholderKind(wellKind: string): "type" | "pick" {
+  return TYPED_ANSWER_WELLS.has(wellKind) ? "type" : "pick";
+}
 
 export function composerForChoice(input: {
   entry: "guided" | "own" | null;

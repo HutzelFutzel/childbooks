@@ -170,6 +170,8 @@ A guest can reach this cover plan. The generated cover and inside pages start to
 
 Starting the pages removes the row and locks the look, the cast, the story, the cover text, the shape, where the words sit, and the page count. Opening those views still shows them. A story change no longer reruns the cast or the layout.
 
+**Typed changes that make a portrait necessary.** When a typed message changes who someone is (a child's age, or a different kind of being), the chat draws the new portrait without a tap, because the old one is no longer them. A change of age counts when it is as large as what a person of that age visibly changes in: two months for a baby, half a year for a toddler, a year for a child, two years for a teenager, a decade for an adult. So 2 to 3 redraws, and 35 to 36 does not, and an adult's portrait is not marked out of date. Typing a look, a description, or a style that lets portraits be drawn starts them, as tapping the same choice does. Both go through the same gate as every automatic start: the admin `autoSpendSparks` cap, the Sparks balance, and no unit already drawing. One message starts at most one batch, and Undo is dropped once Sparks are spent. A person drawn from a photo that is gone is left for the reader to decide. A typed art style over a look taken from the reader's own drawing asks first, the same as the button does.
+
 **Pages.** Editable only while the pages are the current step, and only the page they are looking at. The person in an edit is the one already named on that page. The sentence is typed in the composer, and typing it does not spend Sparks. Successful sibling pages remain visible when another page fails. A failed, moderated, stale, or mismatched page is selected on the book and the well offers **Redraw this page · about N Sparks** with a new quote. A partial batch receipt separates successful charged units from failed or released units. Order stays absent until the cover and every page are current.
 
 **Print preflight.** Preflight runs continuously and says nothing when the book passes. It checks story and page text, title and cover, current illustrations, overflow, image quality, page count, trim and binding compatibility, and supported fulfillment region. A real problem selects the exact cover or page and puts its smallest useful fix in the well. Unsupported shape, language, product, or region is found before Draw the book whenever the inputs make that possible.
@@ -177,6 +179,24 @@ Starting the pages removes the row and locks the look, the cast, the story, the 
 **Order.** When preflight passes, the well is **Order the book · from [money price]** until checkout knows the binding and other price-bearing options. If the exact product is already known, the exact price replaces "from." That action locks the pages and opens checkout. Payment, address, shipping, copies, and final order confirmation are outside this flow.
 
 The reading age follows the first child's age until they confirm or replace it. If that age changes before they answer, the line updates. After they have replaced it, it stays at their choice. It locks with the story.
+
+### After the book is drawn
+
+The book is finished when the pages start. From then on, one switch at the top of the book pane, **Preview | Edit**, moves between reading the book and working on a page. It is always in the same place, in both states, and it exists only once there is a page to work on. Edit is the page canvas for the page in view. Preview is the flip-through. Leaving Edit by the switch, the Escape key, or finishing the book returns to the same spread.
+
+The chat does everything the canvas does to the words, so nobody has to find a tool to change how their book reads. A sentence is read the same way as before the pages were drawn, and the same ideas are always under the composer on the Pages tab (**Make the text a bit larger**, **Center the text**, **Make the text …**, **Change the font to …**, **Move the text up a little**). They stay in view while a picture draws, while a card is open, and in Edit. They hide only while the field has words in it, because a tap replaces them.
+
+What it can do, all free and each undone by one Undo:
+
+- **Size.** Larger or smaller, one step at a time, never below what prints legibly or above what fits. The reading text by default, or the title, subtitle or author on the cover when named. The whole book unless the sentence says this page, so the type matches from page to page.
+- **Color, alignment, font.** A color is a name (English or German) or a hex code the app knows. A font is one the book's language offers. "A serif font" asks which of a few. Anything the app does not know is said no to with the reason. These replace a word's own color or font, because "make the text blue" means all of it.
+- **Position.** A small step up, down, left or right on the page in view, or every page when asked. The words stay on the page. If they end too close to the edge for print, the print check says so.
+
+**This page.** The page or cover they selected, else the spread open in front of them, else the page in Edit. It is never taken from the model. A person's picture still needs the chip: a typed change to a drawing starts nothing until it is one target, and a selected page redraws only for a sentence that is a change to the picture.
+
+**The book's facts are settled.** What a reader says about their finished book is a request, never a new fact. The story, the cast and the setup are not rewritten by a sentence, and a skill that needs them says what it needs.
+
+**If a title is painted into the cover picture**, the guide says so instead of changing a text box that is not there. Two devices editing different pages both keep their changes; the same page edited on both asks which to keep.
 
 ### Resume and recovery
 

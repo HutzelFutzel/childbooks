@@ -90,11 +90,26 @@ export function luminance({ r, g, b }: Rgb): number {
   return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
 }
 
-/** A readable foreground (dark ink or white) for text on the given background. */
+const DARK_FOREGROUND = "#14163a";
+
+/** WCAG contrast ratio between two colors, 1..21. */
+export function contrastBetween(a: Rgb, b: Rgb): number {
+  const la = luminance(a);
+  const lb = luminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
+
+/**
+ * A readable foreground (dark ink or white) for text on the given background:
+ * whichever has the higher WCAG contrast. A fixed luminance cut-off picks
+ * white on mid-tones where dark ink reads far better (the true crossover sits
+ * near 0.18, not 0.5).
+ */
 export function readableOn(bgHex: string, fallback = "#ffffff"): string {
   const rgb = parseHex(bgHex);
   if (!rgb) return fallback;
-  return luminance(rgb) > 0.45 ? "#14163a" : "#ffffff";
+  const dark = parseHex(DARK_FOREGROUND)!;
+  return contrastBetween(rgb, dark) > contrastBetween(rgb, WHITE) ? DARK_FOREGROUND : "#ffffff";
 }
 
 /**

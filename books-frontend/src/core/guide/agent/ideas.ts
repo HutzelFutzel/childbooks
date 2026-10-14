@@ -24,7 +24,7 @@
 import type { GuideAgentConfig } from "../../config/guideAgent";
 import { isSkillEnabled } from "../../config/guideAgent";
 import type { Project } from "../../types";
-import type { BookViewId } from "../journey";
+import { bookVisible, type BookViewId } from "../journey";
 import { authoringOf } from "../projectState";
 import { portraitStatus } from "../portrait";
 import type { GuideMessage } from "../session";
@@ -63,6 +63,7 @@ export interface GuideIdea {
 const AREA_VIEWS: Record<CommandArea, readonly BookViewId[]> = {
   path: [],
   book: ["pages"],
+  design: ["pages"],
   story: ["story"],
   people: ["cast"],
   places: ["cast"],
@@ -75,6 +76,7 @@ const AREA_VIEWS: Record<CommandArea, readonly BookViewId[]> = {
 const AREA_GROUPS: Record<CommandArea, GuideIdeaGroup> = {
   path: "help",
   book: "book",
+  design: "book",
   story: "story",
   people: "people",
   places: "people",
@@ -158,8 +160,15 @@ function eligibleIdeas(
   const marked = ctx.marked === true && view === "story";
   // A marked passage narrows the suggestions to what can be done to it; without
   // one, suggestions about a marked passage have nothing to act on and stay hidden.
+  // Before there is a book (the reader has only just chosen how to begin) there is
+  // nothing to change: the one open thing is the question the guide asked, and what
+  // helps is how to answer it. Only ideas that make sense with no book are offered.
+  const started = bookVisible(project);
   const pool = SOURCES.filter(
-    (source) => Boolean(source.marked) === marked && (!locked || source.duringDrawing === true),
+    (source) =>
+      Boolean(source.marked) === marked &&
+      (!locked || source.duringDrawing === true) &&
+      (started || source.beforeBook === true),
   );
   const named = (source: IdeaSource) => view !== null && source.views.includes(view);
   const native = (source: IdeaSource) => view !== null && source.home.includes(view);

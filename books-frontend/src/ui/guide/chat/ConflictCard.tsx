@@ -18,6 +18,7 @@ const FIELD_NAMES: [prefix: string, name: string][] = [
   ["config.storyBrief", "people"],
   ["title", "title"],
   ["screenplay", "pages"],
+  ["design", "pages"],
   ["illustrations", "pictures"],
   ["anchors", "pictures"],
   ["authoringState.cover", "cover"],

@@ -38,6 +38,9 @@ import { briefOf, namedCast, newCastMember } from "../story/brief";
 import { CAST_KINDS } from "../story/castKinds";
 import { CAST_RELATION_TYPES, relationsOf, twinGroups, withRelation } from "../story/relations";
 import type { BookConfig, Project, StoryBrief, StoryCastMember } from "../types";
+import type { GuideCommandId } from "./agent/ids";
+import type { CommandArgs } from "./agent/types";
+import { styleIsFromArtwork } from "./artworkStyle";
 import { noteStyleChange } from "./portrait";
 import { authoringOf, withAuthoring } from "./projectState";
 import { copySharedAges, linkSameAge } from "./sameAge";
@@ -102,10 +105,25 @@ export function guidePatchContext(sources: {
   };
 }
 
+/**
+ * A refused fact that a skill is the right door for.
+ *
+ * Some changes cannot be a plain write because they ask a question first (a new
+ * look takes the reader's drawings off the book). The fact is not applied; the
+ * skill that asks is named here so the interpreter can file the same words as
+ * that skill's call instead of dropping them.
+ */
+export interface GuideReroute {
+  command: GuideCommandId;
+  args: CommandArgs;
+}
+
 export interface GuidePatchRejection {
   key: string;
   /** Why the write was refused, for the turn log. May be technical. */
   reason: string;
+  /** The skill that takes this request, when one does. */
+  reroute?: GuideReroute;
   /**
    * The same refusal in the reader's words, when there is a useful thing to say.
    *
@@ -142,7 +160,7 @@ export type SlotWrite =
       refusedPart?: Omit<GuidePatchRejection, "key">;
     }
   | { status: "unchanged" }
-  | { status: "rejected"; reason: string; speak?: string; allowed?: readonly string[] };
+  | { status: "rejected"; reason: string; speak?: string; allowed?: readonly string[]; reroute?: GuideReroute };
 
 const UNCHANGED: SlotWrite = { status: "unchanged" };
 
@@ -152,7 +170,7 @@ function wrote(project: Project, refusedPart?: Omit<GuidePatchRejection, "key">)
 
 function refused(
   reason: string,
-  extra: { speak?: string; allowed?: readonly string[] } = {},
+  extra: { speak?: string; allowed?: readonly string[]; reroute?: GuideReroute } = {},
 ): SlotWrite {
   return { status: "rejected", reason, ...extra };
 }
@@ -1081,6 +1099,16 @@ const WRITERS: { [K in GuideSlotId]?: SlotWriter } = {
           speak: "Tell me a bit more about the look you want and I'll use that.",
         });
       }
+      // The book's look is the reader's own drawing. Another look takes the
+      // drawing off the book, and that is a question to ask, not a fact to
+      // write: the `setStyle` skill asks it, so the same words go there.
+      if (styleIsFromArtwork(project)) {
+        const wanted = value.presetId ?? value.customDescription?.trim() ?? "";
+        return refused("the book's look comes from the reader's drawing; changing it asks first", {
+          speak: "That look comes from your own drawing, so I'll check with you before I swap it for another style.",
+          reroute: { command: "setStyle", args: { style: wanted } },
+        });
+      }
       return wrote(noteStyleChange(project, withConfig(project, {
         artStyle: {
           presetId: value.presetId,
@@ -1340,6 +1368,7 @@ export function applyGuidePatch(
           reason: outcome.reason,
           ...(outcome.speak ? { speak: outcome.speak } : {}),
           ...(outcome.allowed ? { allowed: outcome.allowed } : {}),
+          ...(outcome.reroute ? { reroute: outcome.reroute } : {}),
         });
         break;
     }

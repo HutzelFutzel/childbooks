@@ -11,6 +11,7 @@ import {
   signInWithEmailAndPassword,
   signInWithPopup,
   signOut as firebaseSignOut,
+  type Auth,
   type AuthError,
   type User,
 } from "firebase/auth";
@@ -18,7 +19,6 @@ import { doc, getDoc } from "firebase/firestore";
 import { getFirebaseAuth, getFirebaseDb, useEmulators } from "../lib/firebase";
 import { backendFetch } from "../platform/backend";
 import { browserGeoHints } from "../core/analytics/geoHints";
-import { useProjectsStore } from "./projectsStore";
 
 /**
  * Kick off the branded welcome + email-verification email (Option B): the
@@ -68,6 +68,85 @@ async function requestWelcomeEmail(consent?: SignupConsent): Promise<void> {
 const GUEST_FIRST = true;
 
 /**
+ * Create the anonymous session — single-flight. Two places want one at the same
+ * moment (the auth listener, the instant it sees "nobody signed in", and the
+ * backend's session recovery, right after it signs a dead guest out); without
+ * sharing, both would create a user and one would be orphaned.
+ */
+let guestMint: Promise<void> | null = null;
+function mintGuest(auth: Auth): Promise<void> {
+  if (!guestMint) {
+    guestMint = signInAnonymously(auth)
+      .then(() => undefined)
+      .finally(() => {
+        guestMint = null;
+      });
+  }
+  return guestMint;
+}
+
+/**
+ * Replace a dead guest session with a fresh one. `signInAnonymously` alone
+ * would hand back the SAME (dead) user, so the old one has to be signed out
+ * first. The old guest's uid is abandoned — an anonymous account has no
+ * credential to come back to — which is why callers only do this once the
+ * backend has positively rejected the session.
+ */
+export async function resetGuestSession(): Promise<boolean> {
+  const auth = getFirebaseAuth();
+  useAuthStore.setState({ pendingMigration: null });
+  await firebaseSignOut(auth);
+  await mintGuest(auth);
+  return Boolean(auth.currentUser);
+}
+
+/**
+ * Make sure SOME session exists: wait for the initial auth state to settle, and
+ * only create a guest if nobody is signed in by then. For requests that raced
+ * the first guest sign-in and went out without a token.
+ */
+export async function ensureGuestSession(): Promise<boolean> {
+  // Without the listener (e.g. /internal pages) nothing would ever flip
+  // `accessLevel` out of "loading", so don't sit out the timeout for it.
+  if (useAuthStore.getState().initialized) await whenAuthReady();
+  const auth = getFirebaseAuth();
+  if (!auth.currentUser) await mintGuest(auth);
+  return Boolean(auth.currentUser);
+}
+
+/** How the sign-in dialog ended — decides whether a pending re-auth resumes. */
+export type AuthDialogOutcome = "signedIn" | "dismissed";
+
+let reauthWaiters: Array<(signedIn: boolean) => void> = [];
+
+function settleReauth(signedIn: boolean): void {
+  const waiters = reauthWaiters;
+  reauthWaiters = [];
+  for (const resolve of waiters) resolve(signedIn);
+}
+
+/** True while a backend call is parked waiting for the user to sign in again. */
+export function hasPendingReauth(): boolean {
+  return reauthWaiters.length > 0;
+}
+
+/**
+ * Ask a real (non-guest) user to sign in again, and resolve once they have —
+ * `true` on sign-in, `false` if they dismiss the dialog. This is what lets a
+ * request that hit a dead session pause, then continue exactly where it was:
+ * the modal sits over the app, nothing unmounts, and the caller just awaits.
+ * Concurrent callers share the one dialog.
+ */
+export function requestReauth(reason: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    reauthWaiters.push(resolve);
+    const { dialogOpen, openAuthDialog } = useAuthStore.getState();
+    // If it's already open the user is mid-sign-in; just wait on that.
+    if (!dialogOpen) openAuthDialog(reason, { mode: "signin" });
+  });
+}
+
+/**
  * Coarse capability gate derived from the auth state:
  *   - loading:    auth state not resolved yet (or the guest session is forming)
  *   - guest:      anonymous user — full studio, production art, no purchases
@@ -103,6 +182,8 @@ interface AuthState {
    * UI gate only — every admin write is independently enforced by the backend.
    */
   isAdmin: boolean;
+  /** True once the `admins/{uid}` check has completed for the current user. */
+  adminReady: boolean;
   /** Set when a guest signs into a pre-existing account with unsaved drafts. */
   pendingMigration: GuestMigration | null;
   /** Whether the global sign-in dialog is open. */
@@ -114,6 +195,8 @@ interface AuthState {
    * they're suddenly looking at a sign-in form instead of just retrying blindly.
    */
   authDialogReason: string | null;
+  /** Forces the dialog's initial tab; null lets it pick (guests → sign up). */
+  authDialogMode: "signin" | "signup" | null;
 
   /** Attach the auth-state listener (idempotent). Call once on app mount. */
   init: () => void;
@@ -128,8 +211,9 @@ interface AuthState {
   refreshUser: () => Promise<void>;
 
   /** Open the sign-in dialog, optionally with a reason shown to the user. */
-  openAuthDialog: (reason?: string) => void;
-  closeAuthDialog: () => void;
+  openAuthDialog: (reason?: string, opts?: { mode?: "signin" | "signup" }) => void;
+  /** Close it. `signedIn` resumes any request parked in {@link requestReauth}. */
+  closeAuthDialog: (outcome?: AuthDialogOutcome) => void;
   clearMigration: () => void;
 }
 
@@ -151,6 +235,7 @@ function isIdentityCollision(err: unknown): boolean {
 
 /** Capture the guest's drafts + a proof-of-ownership token before switching accounts. */
 async function snapshotGuestDrafts(user: User): Promise<GuestMigration> {
+  const { useProjectsStore } = await import("./projectsStore");
   const projects = useProjectsStore
     .getState()
     .projects.map((p) => ({ id: p.id, title: p.title }));
@@ -164,22 +249,31 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   initialized: false,
   accessLevel: "loading",
   isAdmin: false,
+  adminReady: false,
   pendingMigration: null,
   dialogOpen: false,
   authDialogReason: null,
+  authDialogMode: null,
 
   init() {
     if (get().initialized) return;
     set({ initialized: true });
     const auth = getFirebaseAuth();
     onAuthStateChanged(auth, (user) => {
-      set({ user, ready: true, accessLevel: levelFor(user, true) });
+      const checkAdmin = Boolean(user && !user.isAnonymous);
+      set({
+        user,
+        ready: true,
+        accessLevel: levelFor(user, true),
+        adminReady: !checkAdmin,
+        ...(checkAdmin ? {} : { isAdmin: false }),
+      });
       if (!user && GUEST_FIRST) {
         // The listener won't re-fire on failure, so this can't loop — but a
         // failure (e.g. anonymous auth disabled in the Firebase console) must
         // not be silent: without a session the studio can never save or
         // generate, so log it loudly for diagnosis.
-        void signInAnonymously(auth).catch((err) => {
+        void mintGuest(auth).catch((err) => {
           console.error(
             "[auth] Guest sign-in failed — is Anonymous auth enabled in the Firebase console?",
             err,
@@ -188,11 +282,18 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
       // Resolve admin status from Firestore for non-guest accounts (cosmetic).
       if (user && !user.isAnonymous) {
-        void getDoc(doc(getFirebaseDb(), "admins", user.uid))
-          .then((snap) => set({ isAdmin: snap.exists() }))
-          .catch(() => set({ isAdmin: false }));
-      } else {
-        set({ isAdmin: false });
+        const targetUid = user.uid;
+        void getDoc(doc(getFirebaseDb(), "admins", targetUid))
+          .then((snap) => {
+            if (get().user?.uid === targetUid) {
+              set({ isAdmin: snap.exists(), adminReady: true });
+            }
+          })
+          .catch(() => {
+            if (get().user?.uid === targetUid) {
+              set({ isAdmin: false, adminReady: true });
+            }
+          });
       }
     });
   },
@@ -266,7 +367,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   async signInGuest() {
-    await signInAnonymously(getFirebaseAuth());
+    await mintGuest(getFirebaseAuth());
   },
 
   async signOutUser() {
@@ -304,12 +405,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     set({ user: fresh, accessLevel: levelFor(fresh, true) });
   },
 
-  openAuthDialog(reason) {
-    set({ dialogOpen: true, authDialogReason: reason ?? null });
+  openAuthDialog(reason, opts) {
+    set({ dialogOpen: true, authDialogReason: reason ?? null, authDialogMode: opts?.mode ?? null });
   },
 
-  closeAuthDialog() {
-    set({ dialogOpen: false, authDialogReason: null });
+  closeAuthDialog(outcome = "dismissed") {
+    set({ dialogOpen: false, authDialogReason: null, authDialogMode: null });
+    // Anything parked waiting on this dialog resumes (signed in) or gives up
+    // (dismissed) — either way it must not stay pending forever.
+    settleReauth(outcome === "signedIn");
   },
 
   clearMigration() {

@@ -18,6 +18,10 @@ export type ProviderErrorKind =
   // and distinct from `aborted` because nobody cancelled it, so it is a real
   // failure the user must be told about rather than a silent no-op.
   | "timeout"
+  // The picture came back, but the words painted on it never came out right
+  // within the attempts a cover is given. Not the provider's fault and not a
+  // reason to ship a cover without words.
+  | "lettering"
   | "unknown";
 
 export interface ProviderErrorOptions {
@@ -103,6 +107,8 @@ export function describeError(err: unknown): string {
         return "The model returned an unexpected response. Try again.";
       case "timeout":
         return "The AI service took too long to respond. Please try again.";
+      case "lettering":
+        return "The cover's title didn't come out cleanly. Nothing was charged, so you can simply draw it again.";
       case "aborted":
         return "The request was canceled.";
       default:

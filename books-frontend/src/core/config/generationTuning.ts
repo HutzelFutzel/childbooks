@@ -44,6 +44,8 @@ export interface ActionGenerationTuning {
     duplicateRepairLimit: number;
     embeddedRepairLimit: number;
     gridCheck: boolean;
+    /** Inspect a finished portrait and redraw once when identity, style or composition clearly misses. */
+    portraitCheck: boolean;
     flattenBackground: boolean;
     repairQuality: ImageQuality;
   };
@@ -71,6 +73,7 @@ const qualityControlSchema = z.object({
   duplicateRepairLimit: z.number().int().min(0).max(8),
   embeddedRepairLimit: z.number().int().min(0).max(8),
   gridCheck: z.boolean(),
+  portraitCheck: z.boolean(),
   flattenBackground: z.boolean(),
   repairQuality: z.enum(IMAGE_QUALITIES),
 });
@@ -145,6 +148,7 @@ function actionDefaults(
       duplicateRepairLimit: anchor || portrait ? 0 : cover ? 1 : 2,
       embeddedRepairLimit: portrait ? 0 : 1,
       gridCheck: anchor,
+      portraitCheck: portrait,
       flattenBackground: anchor,
       repairQuality: "low",
     },

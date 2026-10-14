@@ -21,6 +21,7 @@ import { normalizeImageTier, type ImageTier } from "../core/config/modelConfig";
 import { applyAnchorRender, type AnchorRender } from "../core/pipeline/anchorRun";
 import { applyIllustrationRender, type IllustrationRender } from "../core/pipeline/illustrationRun";
 import type { TaskDoc } from "../core/jobs/types";
+import { jobStalled, taskStalled, type LiveJob } from "../core/jobs/liveness";
 import type { Project, ScreenplayDoc, ScreenplaySpread } from "../core/types";
 import { addVersion, allVersions, createVersionTree } from "../core/versioning";
 import { authoringOf, withAuthoring } from "../core/guide/projectState";
@@ -39,7 +40,7 @@ import {
   withPortraitAnchorReferences,
   withoutUsedPhotos,
 } from "../core/guide/portrait";
-import type { ModelSelection, PortraitInputs } from "../core/types";
+import type { ImageRenderRecord, ModelSelection, PortraitInputs } from "../core/types";
 import { useProjectsStore } from "./projectsStore";
 
 /** A compact view of an in-flight job for the progress UI. */
@@ -82,7 +83,20 @@ interface JobsState {
   /** Jobs refused before any task ran (an expired price, too few Sparks). */
   refusedJobs: { id: string; kind: JobWithId["kind"]; error: string; at: number }[];
   /** Every job of the open project by id, for flows that follow one job to its end. */
-  jobStatus: Record<string, { status: JobWithId["status"]; error?: string; notify?: boolean }>;
+  jobStatus: Record<
+    string,
+    {
+      status: JobWithId["status"];
+      error?: string;
+      notify?: boolean;
+      /**
+       * Still open, but the server has gone quiet past every bound it keeps
+       * (see `core/jobs/liveness`): it is not going to deliver the rest. Flows
+       * that follow a job treat this as the end, so nothing waits forever.
+       */
+      stalled?: boolean;
+    }
+  >;
   /** Latest durable screenplay attempt for the open project. */
   screenplayJob: ScreenplayJobSummary | null;
   /** Automatic recoveries spent on this project (see MAX_AUTO_SCREENPLAY_RETRIES). */
@@ -112,6 +126,117 @@ const inFlight = new Set<string>();
  * explicit "Try again" in Cast and Pages takes over.
  */
 const MAX_AUTO_SCREENPLAY_RETRIES = 1;
+
+/** How long a finished task still counts as drawing while its result is applied. */
+const APPLYING_MS = 2 * 60_000;
+
+/**
+ * Done but not yet in the book: still drawing. Otherwise the unit reads as
+ * neither drawing nor drawn until it is applied, and the guide offers to draw
+ * it again. Bounded, so a result that never applies can't keep it drawing.
+ */
+function isApplying(task: TaskDoc, now: number): boolean {
+  return task.status === "done" && Boolean(task.result) && !task.appliedAt && now - task.updatedAt < APPLYING_MS;
+}
+
+/**
+ * Units a job is genuinely still drawing. A task the server has stopped
+ * working on (see `core/jobs/liveness`) is not: it would otherwise read as
+ * "drawing" until the end of time.
+ */
+function activeUnitsOf(
+  tasks: readonly TaskDoc[],
+  now: number,
+  jobs: ReadonlyMap<string, LiveJob> = new Map(),
+): Set<string> {
+  const active = new Set<string>();
+  for (const task of tasks) {
+    if (task.kind === "screenplay" || task.status === "error") continue;
+    if (task.status !== "done" && taskStalled(task, jobs.get(task.jobId), now, tasks)) continue;
+    if (task.status !== "done" || isApplying(task, now)) active.add(task.id);
+  }
+  return active;
+}
+
+/** The reason shown for a unit whose task the server stopped working on. */
+const STALLED_ERROR = "Drawing stopped responding. Nothing was charged for this picture.";
+
+/**
+ * Units whose latest attempt failed — including one that never will finish
+ * because the server went quiet — so the book shows it and the reader can try
+ * again, rather than watching it "draw".
+ */
+function failedUnitsOf(
+  tasks: readonly TaskDoc[],
+  now: number,
+  jobs: ReadonlyMap<string, LiveJob>,
+): JobsState["failedUnits"] {
+  const latest = new Map<string, TaskDoc>();
+  for (const t of tasks) {
+    if (t.kind === "screenplay") continue;
+    const seen = latest.get(t.id);
+    if (!seen || t.updatedAt > seen.updatedAt) latest.set(t.id, t);
+  }
+  const failedUnits: JobsState["failedUnits"] = {};
+  for (const t of latest.values()) {
+    if (t.status === "error") {
+      failedUnits[t.id] = {
+        error: t.error ?? "This picture could not be drawn.",
+        at: t.updatedAt,
+        kind: t.kind,
+        ...(t.errorKind ? { errorKind: t.errorKind } : {}),
+      };
+    } else if (t.status !== "done" && taskStalled(t, jobs.get(t.jobId), now, tasks)) {
+      failedUnits[t.id] = { error: STALLED_ERROR, at: t.updatedAt, kind: t.kind, errorKind: "timeout" };
+    }
+  }
+  return failedUnits;
+}
+
+/** The reason shown when the page-by-page draft stopped responding. */
+const STALLED_SCREENPLAY_ERROR = "The page-by-page draft stopped responding. Nothing was charged; you can try again.";
+
+/** The same set of ids, whatever the order. */
+function sameIds(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false;
+  for (const id of a) if (!b.has(id)) return false;
+  return true;
+}
+
+/**
+ * Every job by id, each marked `stalled` when the server has gone quiet on it.
+ * Returns `previous` itself when nothing changed, so a periodic re-read doesn't
+ * re-render the studio.
+ */
+function jobStatusOf(
+  jobs: readonly JobWithId[],
+  tasks: readonly TaskDoc[],
+  now: number,
+  previous?: JobsState["jobStatus"],
+): JobsState["jobStatus"] {
+  const next: JobsState["jobStatus"] = {};
+  for (const j of jobs) {
+    next[j.id] = {
+      status: j.status,
+      ...(j.error ? { error: j.error } : {}),
+      ...(j.kind === "book" ? { notify: j.notify !== false } : {}),
+      ...(jobStalled(j, tasks, now) ? { stalled: true } : {}),
+    };
+  }
+  if (!previous) return next;
+  const ids = Object.keys(next);
+  const unchanged =
+    ids.length === Object.keys(previous).length &&
+    ids.every((id) => {
+      const a = previous[id];
+      const b = next[id];
+      return Boolean(a) && a.status === b.status && a.error === b.error && a.notify === b.notify && a.stalled === b.stalled;
+    });
+  return unchanged ? previous : next;
+}
+
+/** How often the open project re-reads the clock against what the server last said. */
+const LIVENESS_TICK_MS = 30_000;
 
 /** True if the spread's tree already contains a version backed by `blobId`. */
 function hasBlob(project: Project, spreadId: string, blobId: string): boolean {
@@ -309,6 +434,7 @@ async function reconcileTasks(tasks: TaskDoc[], projectId: string): Promise<void
         mimeType: string;
         imageTier?: ImageTier;
         imageModel?: ModelSelection;
+        render?: ImageRenderRecord;
       };
       const image = {
         blobId: result.blobId,
@@ -317,6 +443,7 @@ async function reconcileTasks(tasks: TaskDoc[], projectId: string): Promise<void
         createdAt: task.updatedAt,
         ...(result.imageTier ? { imageTier: result.imageTier } : {}),
         ...(result.imageModel ? { imageModel: result.imageModel } : {}),
+        ...(result.render ? { render: result.render } : {}),
       };
       inFlight.add(key);
       try {
@@ -395,8 +522,15 @@ export const useJobsStore = create<JobsState>((set, get) => ({
       unsub: null,
     });
 
+    // What the server last said. Silence produces no snapshots, so the clock is
+    // re-read against these on a timer (below) as well as on every snapshot.
+    let jobsSnap: JobWithId[] = [];
+    let tasksSnap: TaskDoc[] = [];
+    const liveJobs = () => new Map<string, LiveJob>(jobsSnap.map((j) => [j.id, j]));
+
     // Job docs drive the aggregate progress indicator.
     const unsubJobs = subscribeProjectJobs(projectId, (jobs) => {
+      jobsSnap = jobs;
       const active = jobs
         .filter(
           (j) =>
@@ -421,29 +555,25 @@ export const useJobsStore = create<JobsState>((set, get) => ({
       const latestScreenplay = jobs
         .filter((j) => j.kind === "screenplay")
         .sort((a, b) => b.createdAt - a.createdAt)[0];
-      const jobStatus: JobsState["jobStatus"] = {};
-      for (const j of jobs) {
-        jobStatus[j.id] = {
-          status: j.status,
-          ...(j.error ? { error: j.error } : {}),
-          ...(j.kind === "book" ? { notify: j.notify !== false } : {}),
-        };
-      }
+      const jobStatus = jobStatusOf(jobs, tasksSnap, Date.now());
+      // A job the server stopped working on is over for the reader, so it
+      // leaves the progress indicator.
+      const live = active.filter((j) => !jobStatus[j.id]?.stalled);
+      const screenplayStalled = Boolean(latestScreenplay && jobStatus[latestScreenplay.id]?.stalled);
       set((state) => ({
-        active,
+        active: live,
         refusedJobs,
         jobStatus,
         jobsLoaded: true,
         screenplayJob: latestScreenplay
           ? {
               id: latestScreenplay.id,
-              status: latestScreenplay.status,
+              status: screenplayStalled ? "error" : latestScreenplay.status,
               createdAt: latestScreenplay.createdAt,
-              error:
-                latestScreenplay.error ??
-                (state.screenplayJob?.id === latestScreenplay.id
-                  ? state.screenplayJob.error
-                  : undefined),
+              error: screenplayStalled
+                ? STALLED_SCREENPLAY_ERROR
+                : (latestScreenplay.error ??
+                  (state.screenplayJob?.id === latestScreenplay.id ? state.screenplayJob.error : undefined)),
             }
           : state.screenplayJob?.id.startsWith("starting-")
             ? state.screenplayJob
@@ -482,40 +612,26 @@ export const useJobsStore = create<JobsState>((set, get) => ({
     // Task docs drive per-unit "updating" state and result reconciliation. Live
     // generation paths also apply their own results; this covers tasks that
     // finished while the studio was closed (idempotent either way).
+    let applyingTimer: ReturnType<typeof setTimeout> | null = null;
     const unsubTasks = subscribeProjectTasks(projectId, (tasks) => {
-      const activeUnitIds = new Set<string>();
-      for (const t of tasks) {
-        if (
-          t.kind !== "screenplay" &&
-          t.status !== "done" &&
-          t.status !== "error"
-        ) {
-          activeUnitIds.add(t.id);
-        }
-      }
-      const latest = new Map<string, TaskDoc>();
-      for (const t of tasks) {
-        if (t.kind === "screenplay") continue;
-        const seen = latest.get(t.id);
-        if (!seen || t.updatedAt > seen.updatedAt) latest.set(t.id, t);
-      }
-      const failedUnits: JobsState["failedUnits"] = {};
-      for (const t of latest.values()) {
-        if (t.status === "error") {
-          failedUnits[t.id] = {
-            error: t.error ?? "This picture could not be drawn.",
-            at: t.updatedAt,
-            kind: t.kind,
-            ...(t.errorKind ? { errorKind: t.errorKind } : {}),
-          };
-        }
-      }
+      tasksSnap = tasks;
+      const now = Date.now();
+      const jobsById = liveJobs();
+      const activeUnitIds = activeUnitsOf(tasks, now, jobsById);
+      if (applyingTimer) clearTimeout(applyingTimer);
+      applyingTimer = tasks.some((t) => isApplying(t, Date.now()))
+        ? setTimeout(() => {
+            if (get().projectId === projectId) set({ activeUnitIds: activeUnitsOf(tasks, Date.now(), liveJobs()) });
+          }, APPLYING_MS + 1_000)
+        : null;
+      const failedUnits = failedUnitsOf(tasks, now, jobsById);
       const failedScreenplay = tasks
         .filter((t) => t.kind === "screenplay" && t.status === "error")
         .sort((a, b) => b.updatedAt - a.updatedAt)[0];
       set((state) => ({
         activeUnitIds,
         failedUnits,
+        jobStatus: jobStatusOf(jobsSnap, tasks, now, state.jobStatus),
         screenplayJob:
           failedScreenplay && state.screenplayJob?.id === failedScreenplay.jobId
             ? { ...state.screenplayJob, status: "error", error: failedScreenplay.error }
@@ -528,9 +644,42 @@ export const useJobsStore = create<JobsState>((set, get) => ({
       }
     });
 
+    // The clock moves even when the server says nothing, and a job that went
+    // quiet produces no snapshots to notice it by. Re-derive what is still
+    // "drawing", what failed and which jobs stalled; change nothing if nothing moved.
+    const liveness = setInterval(() => {
+      if (get().projectId !== projectId) return;
+      const now = Date.now();
+      const jobsById = liveJobs();
+      const activeUnitIds = activeUnitsOf(tasksSnap, now, jobsById);
+      const failedUnits = failedUnitsOf(tasksSnap, now, jobsById);
+      const jobStatus = jobStatusOf(jobsSnap, tasksSnap, now, get().jobStatus);
+      const state = get();
+      const active = state.active.filter((j) => !jobStatus[j.id]?.stalled);
+      const sp = state.screenplayJob;
+      const screenplayStalled =
+        Boolean(sp) && (sp?.status === "pending" || sp?.status === "running") && Boolean(jobStatus[sp!.id]?.stalled);
+      const same =
+        sameIds(state.activeUnitIds, activeUnitIds) &&
+        Object.keys(state.failedUnits).sort().join() === Object.keys(failedUnits).sort().join() &&
+        state.jobStatus === jobStatus &&
+        active.length === state.active.length &&
+        !screenplayStalled;
+      if (same) return;
+      set({
+        activeUnitIds,
+        failedUnits,
+        jobStatus,
+        active,
+        ...(screenplayStalled && sp ? { screenplayJob: { ...sp, status: "error", error: STALLED_SCREENPLAY_ERROR } } : {}),
+      });
+    }, LIVENESS_TICK_MS);
+
     const unsub = () => {
       unsubJobs();
       unsubTasks();
+      clearInterval(liveness);
+      if (applyingTimer) clearTimeout(applyingTimer);
     };
     set({ unsub });
   },

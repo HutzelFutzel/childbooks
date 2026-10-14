@@ -19,8 +19,10 @@ import {
   doc,
   getDoc,
   getDocs,
+  query,
   runTransaction,
   setDoc,
+  where,
 } from "firebase/firestore";
 import {
   deleteObject,
@@ -106,6 +108,29 @@ const firestoreKv: KeyValueStore = {
     if (!uid) return [];
     const snap = await getDocs(collection(getFirebaseDb(), `users/${uid}/store`));
     return snap.docs.map((d) => (d.data() as KvDoc).key);
+  },
+
+  async listByPrefix<T>(prefix: string): Promise<T[]> {
+    const uid = currentUid();
+    if (!uid) return [];
+    const q = query(
+      collection(getFirebaseDb(), `users/${uid}/store`),
+      where("key", ">=", prefix),
+      where("key", "<", `${prefix}\uf8ff`),
+    );
+    const snap = await getDocs(q);
+    const out: T[] = [];
+    for (const d of snap.docs) {
+      const data = d.data() as KvDoc;
+      if (typeof data.key === "string" && data.key.startsWith(prefix)) {
+        try {
+          out.push(JSON.parse(data.json) as T);
+        } catch {
+          // skip malformed doc
+        }
+      }
+    }
+    return out;
   },
 };
 

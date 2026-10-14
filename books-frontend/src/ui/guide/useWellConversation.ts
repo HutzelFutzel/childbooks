@@ -2,13 +2,16 @@
 
 /**
  * The well as part of the conversation: the guide asks, then the buttons show
- * under its line. When the book moves to a new well, or the conversation moved
- * on from the one on screen, the guide says the well's line first. The rules
- * are in `core/guide/conversation.ts`; this carries them out.
+ * under its line. The card on screen stays until it is answered
+ * (`core/guide/cardDeck.ts`); what opens meanwhile comes next, and a reply to
+ * the reader or a failure shows beside it, never in its place. When the book
+ * moves to a new card, the guide says its line first
+ * (`core/guide/conversation.ts`).
  */
-import { useEffect, useRef, useState } from "react";
-import { holdsWell } from "../../core/guide/attention";
-import { wellStage, type WellStage } from "../../core/guide/conversation";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, type FocusEvent } from "react";
+import { CARD_GRACE_MS, pickCards, placeCard } from "../../core/guide/cardDeck";
+import { briefOf, namedCast } from "../../core/story/brief";
+import { ATTENTION_WELLS, wellStage, type WellStage } from "../../core/guide/conversation";
 import type { GuideLineCandidate } from "../../core/guide/speech";
 import type { Project } from "../../core/types";
 import { agentWellTopic } from "../../state/guideAgent";
@@ -63,7 +66,7 @@ export function wellIntro(
       // The card is the question. A line here would ask how they look twice.
       return null;
     case "castAges":
-      return [castAgesAskLine(well.people)];
+      return [castAgesAskLine(well.people.filter((person) => person.years === undefined))];
     case "portraits":
       return [
         {
@@ -99,7 +102,7 @@ export function wellIntro(
     case "bookUpdate":
       return [{ key: "askBookUpdate", priority: "question" }];
     case "bookFinish":
-      return [{ key: "askBookFinish", priority: "blocking" }];
+      return [{ key: well.settled ? "bookUnfinished" : "askBookFinish", priority: "blocking" }];
     case "bookPrepFix":
       return [{ key: "askBookPrepFix", priority: "blocking" }];
     case "pageFix":
@@ -132,59 +135,140 @@ export function wellIntro(
   }
 }
 
+/** Whether the people a card is about are still in the book. */
+function aboutPresent(well: ChatWell, project: Project): boolean {
+  const ids =
+    well.kind === "castLooks" ? [well.castId] : well.kind === "lookAlike" ? well.ids : null;
+  if (!ids) return true;
+  const cast = new Set(namedCast(briefOf(project.config)).map((member) => member.id));
+  return ids.every((id) => cast.has(id));
+}
+
 /** Settle time before the guide speaks up, so a turn's own writes land first. */
 const ANNOUNCE_DELAY_MS = 350;
 
-export function useWellConversation(
-  project: Project,
-  journey: ChatJourney,
-): {
+export interface WellConversation {
+  /** The step card on screen. */
   well: ChatWell | null;
-  stage: WellStage | null;
+  wellId: string | null;
+  /** A reply to the reader, or a failure, shown beside the step card. */
+  beside: ChatWell | null;
+  besideId: string | null;
   composer: boolean;
-  /** A choice that is waiting while the reader writes or reviews in the story. */
-  held: ChatWell | null;
-  /** The reader asked for the held choice now. */
-  release: () => void;
-} {
+}
+
+/** Handlers for the step card's wrapper. */
+export interface CardHold {
+  onFocusCapture: () => void;
+  onBlurCapture: (event: FocusEvent<HTMLElement>) => void;
+  onPointerEnter: () => void;
+  onPointerLeave: () => void;
+}
+
+/**
+ * Whether the reader is on the step card: focus or the pointer inside it. A
+ * card whose question went stays while they are.
+ */
+export function useCardHold(): { holding: boolean; hold: CardHold } {
+  const [focus, setFocus] = useState(false);
+  const [pointer, setPointer] = useState(false);
+  const onFocusCapture = useCallback(() => setFocus(true), []);
+  const onBlurCapture = useCallback((event: FocusEvent<HTMLElement>) => {
+    if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocus(false);
+  }, []);
+  const onPointerEnter = useCallback(() => setPointer(true), []);
+  const onPointerLeave = useCallback(() => setPointer(false), []);
+  const hold = useMemo(
+    () => ({ onFocusCapture, onBlurCapture, onPointerEnter, onPointerLeave }),
+    [onFocusCapture, onBlurCapture, onPointerEnter, onPointerLeave],
+  );
+  return { holding: focus || pointer, hold };
+}
+
+export function useWellConversation(project: Project, journey: ChatJourney, holding: boolean): WellConversation {
   const messages = useChatStudio((s) => s.session.messages);
   const floor = useChatStudio((s) => s.floor);
   const sending = useChatStudio((s) => s.sending);
   const loaded = useChatStudio((s) => s.loaded);
   const said = useChatStudio((s) => s.said);
-  const storyFocus = useChatStudio((s) => s.storyFocus);
-  const asked = useChatStudio((s) => s.agentWell !== null);
+  const deck = useChatStudio((s) => s.cardDeck);
   const locale = chatLocaleOf(project);
-  const open = journey.phase === "opening" ? null : journey.chatWell;
-  // One place for attention: while the reader writes or reviews in the story,
-  // a choice that can wait does (`core/guide/attention.ts`).
-  const [released, setReleased] = useState<string | null>(null);
-  const openTopic = open ? wellTopic(open) : null;
-  const held =
-    open !== null &&
-    released !== openTopic &&
-    holdsWell({ storyFocus, wellKind: open.kind, asked });
-  const well = held ? null : open;
-  const topic = well ? wellTopic(well) : null;
-  const intro = well ? wellIntro(well, { said, hardcover: journey.hardcover }) : null;
+  const opening = journey.phase === "opening";
+  const pool = opening ? [] : journey.pool;
+  const reply = opening ? null : journey.reply;
   const busy = floor > 0 || sending;
-  const stage: WellStage | null =
-    well && topic
-      ? wellStage({
-          topic,
-          kind: well.kind,
-          messages,
-          busy,
-          hasIntro: Boolean(intro),
-          canAnswer: journey.composerFor(null),
-          locale,
-        })
-      : null;
+  const canAnswer = journey.composerFor(null);
+  const [, recheck] = useReducer((n: number) => n + 1, 0);
 
+  // How the card on screen last looked, so it can stay through a moment where
+  // its question is gone.
+  const lastLook = useRef<{ id: string; well: ChatWell } | null>(null);
+  const acted =
+    deck.shown !== null && messages.some((message) => message.role === "reader" && message.at > deck.since);
+  const { step, main, mainId, live, beside, besideId } = pickCards({
+    deck,
+    pool,
+    reply,
+    now: Date.now(),
+    acted,
+    holding,
+    lastLook: lastLook.current,
+    present: (well) => aboutPresent(well, project),
+    urgent: ATTENTION_WELLS,
+  });
+
+  const context = { said, hardcover: journey.hardcover };
+  const stageOf = (well: ChatWell, onScreen: boolean): { stage: WellStage; topic: string; intro: GuideLineCandidate[] | null } => {
+    const topic = wellTopic(well);
+    const intro = wellIntro(well, context);
+    const stage = wellStage({
+      topic,
+      kind: well.kind,
+      messages,
+      busy,
+      hasIntro: Boolean(intro),
+      canAnswer,
+      locale,
+      onScreen,
+    });
+    return { stage, topic, intro };
+  };
+  const besideTalk = beside ? stageOf(beside, deck.beside === besideId) : null;
+  // A new step waits while a reply is open beside nothing: one new card at a time.
+  const mainTalk = main
+    ? beside && !step.onScreen
+      ? { stage: "wait" as const, topic: wellTopic(main), intro: null }
+      : stageOf(main, step.onScreen)
+    : null;
+  const shownMain = mainTalk?.stage === "show" ? main : null;
+  const shownBeside = besideTalk?.stage === "show" ? beside : null;
+  if (shownMain && live && mainId) lastLook.current = { id: mainId, well: shownMain };
+
+  useEffect(() => {
+    let next = step.deck;
+    if (shownMain && mainId && !step.onScreen) next = placeCard(next, mainId, Date.now());
+    const besideShown = shownBeside ? besideId : null;
+    if (next.beside !== besideShown) next = { ...next, beside: besideShown };
+    useChatStudio.getState().setCardDeck(next);
+  });
+
+  // A card whose question went stays through the grace; look again when it ends.
+  const inGrace = step.recheckIn !== null;
+  const missingSince = step.deck.missingSince;
+  useEffect(() => {
+    if (!inGrace || missingSince === null) return;
+    const timer = setTimeout(recheck, Math.max(0, CARD_GRACE_MS - (Date.now() - missingSince)) + 20);
+    return () => clearTimeout(timer);
+  }, [inGrace, missingSince]);
+
+  const announcing =
+    besideTalk?.stage === "announce" ? besideTalk : mainTalk?.stage === "announce" ? mainTalk : null;
+  const topic = announcing?.topic ?? null;
+  const intro = announcing?.intro ?? null;
   const tried = useRef<string | null>(null);
   const lastId = messages[messages.length - 1]?.id ?? "";
   useEffect(() => {
-    if (!loaded || stage !== "announce" || !topic || !intro) return;
+    if (!loaded || !topic || !intro) return;
     const attempt = `${topic}@${lastId}`;
     if (tried.current === attempt) return;
     const timer = setTimeout(() => {
@@ -197,14 +281,13 @@ export function useWellConversation(
     return () => clearTimeout(timer);
     // `intro` is rebuilt every render; the topic and the last message decide.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, stage, topic, lastId]);
+  }, [loaded, topic, lastId]);
 
-  const shown = stage === "show" ? well : null;
   return {
-    well: shown,
-    stage,
-    composer: journey.composerFor(shown?.kind ?? null),
-    held: held ? open : null,
-    release: () => setReleased(openTopic),
+    well: shownMain,
+    wellId: shownMain ? mainId : null,
+    beside: shownBeside,
+    besideId: shownBeside ? besideId : null,
+    composer: journey.composerFor((shownBeside ?? shownMain)?.kind ?? null),
   };
 }

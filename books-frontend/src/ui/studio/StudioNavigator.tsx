@@ -1,5 +1,6 @@
 /** @legacy guide-v2 L1 — deleted with the Steps shell. See docs/LEGACY-GUIDE.md. */
-import { Check, ChevronDown } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Check, ChevronDown, Loader2 } from "lucide-react";
 import { cn } from "../lib/cn";
 import { useStudio } from "./StudioContext";
 import { computeProgress } from "./studioSteps";
@@ -23,6 +24,17 @@ export function StudioNavigator() {
   const { project, destination: active, navigate } = useStudio();
   const progress = computeProgress(project);
   const activeDestination = active === "style" ? "cast" : active;
+  const [pendingDestination, setPendingDestination] = useState<StudioDestination | null>(null);
+
+  useEffect(() => {
+    setPendingDestination(null);
+  }, [activeDestination]);
+
+  const handleSelect = (id: StudioDestination) => {
+    if (id !== activeDestination) setPendingDestination(id);
+    navigate(id);
+  };
+
   const destinations = progress.order.unlocked
     ? DESTINATIONS
     : DESTINATIONS.filter(({ id }) => id !== "order");
@@ -49,7 +61,7 @@ export function StudioNavigator() {
         <select
           aria-label="Current book section"
           value={activeDestination}
-          onChange={(event) => navigate(event.target.value as StudioDestination)}
+          onChange={(event) => handleSelect(event.target.value as StudioDestination)}
           className="h-9 w-full appearance-none rounded-lg border border-ink-200 bg-white py-0 pl-3 pr-9 text-sm font-semibold text-ink-800 outline-none transition focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
         >
           {destinations.map(({ id, label }) => (
@@ -67,6 +79,7 @@ export function StudioNavigator() {
       <div className="hidden min-w-0 flex-1 items-center gap-1 sm:flex">
         {destinations.map(({ id, label }) => {
           const current = activeDestination === id;
+          const pending = pendingDestination === id && !current;
           const done = isDone(id);
           const progressDetail = detail(id);
 
@@ -75,15 +88,20 @@ export function StudioNavigator() {
               key={id}
               type="button"
               aria-current={current ? "step" : undefined}
-              onClick={() => navigate(id)}
+              aria-busy={pending}
+              onClick={() => handleSelect(id)}
               className={cn(
                 "flex h-9 min-w-0 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-400",
-                current
+                current || pending
                   ? "bg-brand-50 text-brand-800"
                   : "text-ink-500 hover:bg-ink-50 hover:text-ink-800",
               )}
             >
-              {done && !current && <Check className="size-3.5 shrink-0 text-emerald-600" />}
+              {pending ? (
+                <Loader2 className="size-3.5 shrink-0 animate-spin text-brand-600" />
+              ) : (
+                done && !current && <Check className="size-3.5 shrink-0 text-emerald-600" />
+              )}
               <span className="truncate">{label}</span>
               {progressDetail && (
                 <span className="hidden text-[11px] tabular-nums text-ink-400 lg:inline">

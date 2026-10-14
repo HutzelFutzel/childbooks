@@ -239,6 +239,8 @@ export function interpretGuideTurnRemote(
     pending?: string;
     /** The story passage the reader marked, so "make this nicer" finds its skill. */
     marked?: string;
+    /** The picture the reader has selected, so "redraw her" finds who. */
+    selected?: string;
   } = {},
   signal?: AbortSignal,
 ): Promise<GuideTurnResult & { turnId: string | null }> {
@@ -256,6 +258,7 @@ export function interpretGuideTurnRemote(
       guidePreference: args.guidePreference ?? null,
       ...(args.pending ? { pending: args.pending } : {}),
       ...(args.marked ? { marked: args.marked } : {}),
+      ...(args.selected ? { selected: args.selected } : {}),
     },
     signal,
   );

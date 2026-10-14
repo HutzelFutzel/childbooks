@@ -24,16 +24,27 @@ import {
   recentCostSamples,
 } from "../books-frontend/src/core/config/imageCostStats";
 import { withRetry } from "../books-frontend/src/core/pipeline/retry";
+import {
+  portraitQualityCorrections,
+  portraitQualityPassed,
+  type PortraitQualityAssessment,
+} from "../books-frontend/src/core/pipeline/portraitQuality";
 import { createDefaultSparksConfig, type SparksConfig } from "../books-frontend/src/core/config/sparks";
+import { normalizeEstimationConfig, statisticDropsRetries } from "../books-frontend/src/core/config/priceEstimation";
 import { estimateUnitCost, unitPriceSparks } from "../books-frontend/src/core/billing/priceEstimation";
 import { BACKTEST_ON_TARGET, backtestEstimation, costGroupHealth } from "../books-frontend/src/core/billing/priceBacktest";
 import { cappedReferenceCount } from "../books-frontend/src/core/billing/referencePlan";
+import {
+  splitBillableUsage,
+  type BillableUsageEvent,
+} from "../books-frontend/src/core/billing/usageBilling";
 
 const defaults = createDefaultGenerationTuningConfig();
 assert.equal(generationTuningConfigSchema.safeParse(defaults).success, true);
 assert.equal(defaults.actions.pageIllustration.qualityControl.maxImageCalls, 2);
 assert.equal(defaults.actions.pageIllustration.qualityControl.embeddedRepairLimit, 1);
 assert.equal(defaults.actions.anchorImage.qualityControl.gridCheck, true);
+assert.equal(defaults.actions.portrait.qualityControl.portraitCheck, true);
 
 const partial = normalizeGenerationTuningConfig({
   actions: {
@@ -93,6 +104,45 @@ assert.deepEqual(clampTuningToModel(defaults.actions.portrait, openAi).reset, []
 assert.deepEqual(clampTuningToModel(requested, null).reset, []);
 assert.equal(tuningChoicesFor(openAi).qualities.includes("max"), true);
 
+const passingPortrait: PortraitQualityAssessment = {
+  singleCharacter: true,
+  portraitComposition: true,
+  requestedAttributes: true,
+  ageAndLifeStage: true,
+  noTextOrWatermark: true,
+  identityMatch: true,
+  styleMatch: true,
+  childSafe: true,
+  notes: [],
+};
+assert.equal(portraitQualityPassed(passingPortrait), true);
+const failedPortrait = {
+  ...passingPortrait,
+  singleCharacter: false,
+  styleMatch: false,
+  notes: ["contact sheet", "wrong rendering"],
+};
+assert.equal(portraitQualityPassed(failedPortrait), false);
+assert.deepEqual(portraitQualityCorrections(failedPortrait), [
+  "Draw exactly one character; never produce a group, grid, contact sheet or collage.",
+  "Match the supplied art reference's rendering technique and feature simplification without copying its subjects or layout.",
+]);
+
+const usageEvent = (
+  modality: BillableUsageEvent["modality"],
+  step?: string,
+): BillableUsageEvent => ({
+  modality,
+  ...(step ? { step } : {}),
+});
+const portraitBilling = splitBillableUsage([
+  usageEvent("image"),
+  usageEvent("text", "portraitCheck"),
+  usageEvent("image", "portraitRepair"),
+]);
+assert.equal(portraitBilling.billable.length, 1);
+assert.equal(portraitBilling.unbilled.length, 2);
+
 const invalidCompression = structuredClone(defaults);
 invalidCompression.actions.pageIllustration.outputFormat = "png";
 invalidCompression.actions.pageIllustration.outputCompression = 75;
@@ -134,6 +184,40 @@ await assert.rejects(() =>
 assert.equal(providerAttempts, 2);
 
 const model = { provider: "openai" as const, id: "gpt-image-2.5-flare" };
+const portraitProfileWithQc = estimateProfileForAction({
+  action: "portrait",
+  tier: "premium",
+  model,
+  qualityModel: { provider: "google", id: "gemini-3.5-flash" },
+  tuning: defaults.actions.portrait,
+  kind: "fresh",
+});
+const portraitProfileWithoutQc = estimateProfileForAction({
+  action: "portrait",
+  tier: "premium",
+  model,
+  tuning: {
+    ...defaults.actions.portrait,
+    qualityControl: {
+      ...defaults.actions.portrait.qualityControl,
+      portraitCheck: false,
+    },
+  },
+  kind: "fresh",
+});
+assert.notEqual(
+  portraitProfileWithQc.latencyPolicy,
+  portraitProfileWithoutQc.latencyPolicy,
+);
+assert.notEqual(
+  portraitProfileWithQc.referenceEncoding,
+  portraitProfileWithoutQc.referenceEncoding,
+);
+assert.match(portraitProfileWithQc.referenceEncoding, /google:gemini-3\.5-flash/);
+assert.notEqual(
+  costStatsKey("portrait", "premium", portraitProfileWithQc),
+  costStatsKey("portrait", "premium", portraitProfileWithoutQc),
+);
 const lowProfile = completeGenerationEstimateProfile(
   estimateProfileForAction({
     action: "pageIllustration",
@@ -284,6 +368,67 @@ const migrated = estimateUnitCost({
   now,
 });
 assert.equal(migrated.level, "exact");
+
+// ---- Cost basis ----------------------------------------------------------------
+// Readers pay the quote they confirmed; under the `full` basis the quote is the
+// mean of what delivered renders actually cost, retries included.
+
+assert.equal(sparks.estimation.costBasis, "full", "retries reach the price by default");
+const priceUnder = (stats: ReturnType<typeof createDefaultImageCostStats>, basis: "full" | "requested") =>
+  estimateUnitCost({
+    stats,
+    sparks: { ...sparks, estimation: { ...sparks.estimation, costBasis: basis } },
+    action: "pageIllustration",
+    tier: "premium",
+    profile: quoteLow,
+    rateUsd: 0.04,
+    now,
+  });
+
+// 50 renders, 8 of which needed one retry: the mean carries the 8 retries.
+let withRetries = createDefaultImageCostStats();
+const unlimited = { ...sparks.estimation.defaults, perProjectCap: 0, window: 50 };
+for (let i = 0; i < 50; i++) {
+  withRetries = appendCostSample(withRetries, "pageIllustration", "premium", i < 8 ? 0.08 : 0.04, lowProfile, {
+    at: now - (50 - i) * 1000,
+    project: `retry-${i}`,
+    basis: "full",
+  });
+}
+const retryMean = estimateUnitCost({
+  stats: withRetries,
+  sparks: { ...sparks, estimation: { ...sparks.estimation, defaults: unlimited } },
+  action: "pageIllustration",
+  tier: "premium",
+  profile: quoteLow,
+  rateUsd: 0.04,
+  now,
+});
+assert.equal(retryMean.samples, 50);
+assert.ok(Math.abs(retryMean.usd - (58 * 0.04) / 50) < 1e-9, "the mean spreads every retry across the window");
+assert.equal(unitPriceSparks(sparks, "pageIllustration", retryMean.usd), 6, "0.0464 × 2.5 / 0.02 → 6 ✦");
+
+// A sample measured on the other basis never prices this one; legacy untagged
+// samples count under either until they age out.
+let mixed = createDefaultImageCostStats();
+for (let i = 0; i < 5; i++) {
+  mixed = appendCostSample(mixed, "pageIllustration", "premium", 0.04, lowProfile, { at: now - i, project: `req-${i}`, basis: "requested" });
+}
+assert.equal(priceUnder(mixed, "full").level, "rate", "requested-only samples don't price a full quote");
+assert.equal(priceUnder(mixed, "requested").level, "exact");
+assert.equal(priceUnder(window, "full").level, "exact", "untagged samples still count");
+
+// Unmeasured: the rate is one image, so a full quote scales it by the expected calls.
+const empty = createDefaultImageCostStats();
+assert.ok(Math.abs(priceUnder(empty, "full").usd - 0.04 * sparks.estimation.expectedAttempts) < 1e-9);
+assert.ok(Math.abs(priceUnder(empty, "requested").usd - 0.04) < 1e-9);
+
+assert.equal(statisticDropsRetries({ statistic: "mean", percentile: 50 }), false);
+assert.equal(statisticDropsRetries({ statistic: "median", percentile: 50 }), true);
+assert.equal(statisticDropsRetries({ statistic: "percentile", percentile: 75 }), false);
+assert.equal(normalizeEstimationConfig({ costBasis: "bogus", expectedAttempts: 99 }).costBasis, "full");
+assert.equal(normalizeEstimationConfig({ expectedAttempts: 99 }).expectedAttempts, 5);
+assert.equal(normalizeImageCostStats({ version: 3, updatedAt: now, stats: { k: { samples: [{ usd: 1, at: 1, basis: "full" }] } } }).stats.k.samples[0].basis, "full");
 
 // ---- Reference groups --------------------------------------------------------
 // A quote that knows its reference count prices from renders that sent about

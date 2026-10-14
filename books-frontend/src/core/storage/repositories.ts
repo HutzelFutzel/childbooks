@@ -108,6 +108,12 @@ export class ProjectRepository {
 
   async list(): Promise<Project[]> {
     await this.migrateLegacy();
+    if (this.backend.kv.listByPrefix) {
+      const list = await this.backend.kv.listByPrefix<Project>(PROJECT_KEY_PREFIX);
+      return list
+        .filter((p): p is Project => Boolean(p))
+        .sort((a, b) => b.updatedAt - a.updatedAt);
+    }
     const keys = (await this.backend.kv.keys()).filter(isProjectKey);
     const projects = await Promise.all(
       keys.map((k) => this.backend.kv.get<Project>(k)),

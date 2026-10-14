@@ -21,8 +21,10 @@ import { resolveArtStyleText } from "../prompts/style";
 import { resolveAudienceOverlays } from "../prompts/audience";
 import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderSinglePrompt } from "../prompts/render";
+import { visualDescription } from "../book/anchorDescription";
 import type { Anchor, BookConfig, ScreenplaySpread } from "../types";
 import { layoutPromptFacts, type LayoutPlan } from "../book/layouts";
+import { describeSubjectInset } from "../book/subjectInset";
 import { relativeHeightsText } from "../book/anchorScale";
 import { withRetry, type RetryOptions } from "./retry";
 
@@ -159,6 +161,15 @@ export interface BuildIllustrationPromptInput {
   capabilities?: ImageModelCapabilities | null;
   /** Native alpha was resolved for this inset-art request. */
   transparentBackground?: boolean;
+  /**
+   * Share of each edge (0..0.5) to keep free of faces and important subjects —
+   * frames and trimming cut there. 0 or missing leaves the instruction out.
+   */
+  subjectInset?: number;
+  /** Ask for a calm area this much larger than the text box (share of the page). */
+  calmOvershoot?: number;
+  /** This is the redraw after the calm area came back too busy. */
+  calmRetry?: boolean;
 }
 
 export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): string {
@@ -187,6 +198,9 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
     layoutPlan,
     capabilities,
     transparentBackground = false,
+    subjectInset = 0,
+    calmOvershoot = 0,
+    calmRetry = false,
   } = input;
   const styleText = resolveArtStyleText(config.artStyle, prompts);
 
@@ -232,15 +246,21 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
   const facts = layoutPlan
     ? layoutPromptFacts(layoutPlan, renderAspect(spread.kind, config), {
         negativeSpaceControl: capabilities?.traits.negativeSpaceControl,
+        calmOvershoot,
       })
     : null;
   const pageNote = spread.layoutNote.trim();
+  // A preserved composition or a cutout has nothing to re-compose, and a
+  // lettered cover places its own words.
+  const subjectInsetActive =
+    subjectInset > 0 && !hasCompositionRef && !maskMode && !bakeText && !transparentBackground;
+  const insetWords = describeSubjectInset(subjectInset);
   const listOf = (arr: Anchor[], withDescription = true) =>
     arr
       .map((a) => {
         const bits = [
           a.ageYears !== undefined ? `${a.ageYears} years old` : "",
-          withDescription ? a.description : "",
+          withDescription ? visualDescription(a.name, a.description) : "",
         ].filter(Boolean);
         return bits.length > 0 ? `${a.name} (${bits.join("; ")})` : a.name;
       })
@@ -326,6 +346,8 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
       focalRegion: facts?.focalRegion ?? "",
       regionTreatment: facts?.treatmentInstruction ?? "",
       artAspect: facts?.artAspectLabel ?? "",
+      subjectInsetPercent: insetWords.percent,
+      subjectInsetFraction: insetWords.fraction,
       artStyle: styleText,
       bakeTextInstruction,
       edit: edit?.trim() ?? "",
@@ -372,6 +394,8 @@ export function buildIllustrationPrompt(input: BuildIllustrationPromptInput): st
         transparentBackground,
       bleedSpread: spread.kind === "spread" && !facts?.isInsetArt,
       bleedSingle: spread.kind !== "spread" && !facts?.isInsetArt,
+      hasSubjectInset: subjectInsetActive,
+      layoutCalmRetry: calmRetry && Boolean(facts?.hasCalmBand) && !bakeTextActive,
       bakeText: bakeTextActive,
       isCover,
       tailMaskEdit,
@@ -406,7 +430,7 @@ export function buildAnchorSwapPrompt(input: {
   return renderSinglePrompt(resolvePromptsConfig(prompts), "pageIllustration/anchorSwap", {
     vars: {
       anchorName: anchor.name,
-      description: anchor.description,
+      description: visualDescription(anchor.name, anchor.description),
       region,
       identity,
       artStyle: styleText,
@@ -440,7 +464,7 @@ export function buildModifySubjectPrompt(input: {
   return renderSinglePrompt(resolvePromptsConfig(prompts), "pageIllustration/modifySubject", {
     vars: {
       anchorName: anchor.name,
-      description: anchor.description,
+      description: visualDescription(anchor.name, anchor.description),
       region,
       instruction,
       part: part ?? "",

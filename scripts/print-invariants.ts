@@ -104,7 +104,33 @@ import {
   toCombinedRect,
   withFacingOverflow,
 } from "../books-frontend/src/core/book/pairSurface";
-import type { PageDesign } from "../books-frontend/src/core/types";
+import type { PageDesign, TextBox } from "../books-frontend/src/core/types";
+import { overshootRect } from "../books-frontend/src/core/book/layouts";
+import {
+  describeSubjectInset,
+  effectiveSubjectInset,
+  frameInsetFor,
+  measureFrameSafeInset,
+} from "../books-frontend/src/core/book/subjectInset";
+import {
+  BODY_CONTRAST,
+  chooseInk,
+  DARK_INK,
+  regionBusyness,
+  textRectOnPicture,
+  type PixelGrid,
+} from "../books-frontend/src/core/book/regionAnalysis";
+import { pictureRectFor, scaleRectAboutCenter } from "../books-frontend/src/core/design";
+import {
+  DEFAULT_LAYOUT_QUALITY,
+  resolveLayoutComposition,
+  resolveTextWidth,
+} from "../books-frontend/src/core/config/layouts";
+import { normalizeImageMasksConfig } from "../books-frontend/src/core/config/imageMasks";
+import { buildIllustrationPrompt } from "../books-frontend/src/core/pipeline/illustration";
+import { holdCalmArea } from "../books-frontend/src/core/pipeline/illustrationRun";
+import { applyMeasuredInk } from "../books-frontend/src/ui/design/autoInk";
+import { getPreset } from "../books-frontend/src/ui/design/presets";
 
 const failures: string[] = [];
 const checks: string[] = [];
@@ -1599,6 +1625,292 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
       }
     }
   }
+}
+
+// ---- Composition margins, calm area and ink --------------------------------
+
+// The edge margin, the calm-area check and the text ink are what let a
+// generated book go to print without a design pass. None of them throws when
+// it is wrong — a head under the frame or white text on a pale sky is still a
+// valid PDF.
+{
+  const solid = (w: number, h: number, rgb: [number, number, number]): PixelGrid => {
+    const data = new Uint8Array(w * h * 3);
+    for (let i = 0; i < w * h; i++) data.set(rgb, i * 3);
+    return { data, width: w, height: h };
+  };
+  const paint = (
+    grid: PixelGrid,
+    rect: { x: number; y: number; w: number; h: number },
+    fn: (x: number, y: number) => [number, number, number],
+  ) => {
+    for (let y = Math.floor(rect.y * grid.height); y < Math.ceil((rect.y + rect.h) * grid.height); y++) {
+      for (let x = Math.floor(rect.x * grid.width); x < Math.ceil((rect.x + rect.w) * grid.width); x++) {
+        grid.data.set(fn(x, y), (y * grid.width + x) * 3);
+      }
+    }
+  };
+  const band = { x: 0, y: 0.7, w: 1, h: 0.3 };
+
+  // Frame depth from the mask's own alpha.
+  const alphaSquare = (size: number, opaque: (nx: number, ny: number) => boolean) => {
+    const data = new Uint8Array(size * size * 4);
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        data[(y * size + x) * 4 + 3] = opaque((x + 0.5) / size, (y + 0.5) / size) ? 255 : 0;
+      }
+    }
+    return data;
+  };
+  const insetBorder = measureFrameSafeInset(
+    alphaSquare(200, (x, y) => Math.min(x, 1 - x, y, 1 - y) >= 0.08),
+    200,
+    200,
+    4,
+  );
+  check("a frame that cuts 8% from every edge measures ~8%", Math.abs(insetBorder - 0.08) < 0.01, String(insetBorder));
+  const oval = measureFrameSafeInset(
+    alphaSquare(200, (x, y) => (x - 0.5) ** 2 + (y - 0.5) ** 2 <= 0.25),
+    200,
+    200,
+    4,
+  );
+  check("an oval frame measures to its diagonal, not its edge", oval > 0.13 && oval < 0.16, String(oval));
+  check(
+    "a frame with no cut measures zero",
+    measureFrameSafeInset(alphaSquare(64, () => true), 64, 64, 4) === 0,
+  );
+
+  // The effective margin: admin floor, widened by the frame, capped.
+  const comp = resolveLayoutComposition(null);
+  check("the default subject-free edge is 5%", comp.subjectSafeInset === 0.05);
+  check("a shallow frame keeps the admin floor", effectiveSubjectInset(comp, 0.02) === 0.05);
+  check("a deeper frame widens the margin", effectiveSubjectInset(comp, 0.1) === 0.1);
+  check("an ornate frame is capped", effectiveSubjectInset(comp, 0.4) === comp.maxSafeInset);
+  check(
+    "frame-awareness off ignores the frame",
+    effectiveSubjectInset({ ...comp, frameAware: false }, 0.1) === 0.05,
+  );
+  check(
+    "the margin is clamped to a sane range",
+    resolveLayoutComposition({ version: 1, overrides: {}, composition: { subjectSafeInset: 0.9 } })
+      .subjectSafeInset === 0.25,
+  );
+  // Picture size and text width: admin policy, applied evenly and never cropping.
+  check("the default picture size is 95%", comp.pictureScale === 0.95);
+  check("the default story text width is 80%", comp.textWidth === 0.8);
+  check(
+    "picture size is clamped to a sane range",
+    resolveLayoutComposition({ version: 1, overrides: {}, composition: { pictureScale: 0.2 } }).pictureScale === 0.7 &&
+      resolveLayoutComposition({ version: 1, overrides: {}, composition: { pictureScale: 3 } }).pictureScale === 1,
+  );
+  check(
+    "a layout's own text width beats the book-wide one",
+    resolveTextWidth({ version: 1, overrides: { x: { textWidth: 0.6 } }, composition: { textWidth: 0.9 } }, "x") === 0.6 &&
+      resolveTextWidth({ version: 1, overrides: { x: { textWidth: 0.6 } }, composition: { textWidth: 0.9 } }, "y") === 0.9,
+  );
+  const shrunk = scaleRectAboutCenter({ x: 0, y: 0, w: 1, h: 1 }, 0.95);
+  check(
+    "the picture shrinks evenly about the page centre",
+    Math.abs(shrunk.x - 0.025) < 1e-9 && Math.abs(shrunk.y - 0.025) < 1e-9 && Math.abs(shrunk.w - 0.95) < 1e-9 && Math.abs(shrunk.h - 0.95) < 1e-9,
+  );
+  const landscapeArt = scaleRectAboutCenter({ x: 0.1, y: 0.2, w: 0.6, h: 0.3 }, 0.9);
+  check("shrinking keeps the picture's aspect", Math.abs(landscapeArt.w / landscapeArt.h - 0.6 / 0.3) < 1e-9);
+  check(
+    "covers keep bleeding to the trim",
+    pictureRectFor("cover-front", { x: 0, y: 0, w: 1, h: 1 }, 0.9).w === 1 &&
+      pictureRectFor("spread-1", { x: 0, y: 0, w: 1, h: 1 }, 0.9).w < 1,
+  );
+  const col = { x: 0.06, y: 0.3, w: 0.3, h: 0.4 };
+  const onArt = textRectOnPicture(col, { pictureScale: 1, widthShare: 1 });
+  check("full size and full width reads the slot as-is", onArt !== null && Math.abs(onArt.x - 0.06) < 1e-9 && Math.abs(onArt.w - 0.3) < 1e-9);
+  const narrowed = textRectOnPicture(col, { pictureScale: 1, widthShare: 0.8 });
+  check(
+    "a narrower text box is read centred in its slot",
+    narrowed !== null && Math.abs(narrowed.x - 0.09) < 1e-9 && Math.abs(narrowed.w - 0.24) < 1e-9,
+  );
+  const edge = textRectOnPicture({ x: 0, y: 0.3, w: 0.2, h: 0.4 }, { pictureScale: 0.9, widthShare: 1 });
+  check(
+    "the page-color strip is never read as picture pixels",
+    edge !== null && edge.x === 0 && Math.abs(edge.w - (0.2 - 0.05) / 0.9) < 1e-9,
+  );
+  check(
+    "a box wholly outside the picture has nothing to read",
+    textRectOnPicture({ x: 0, y: 0, w: 0.04, h: 0.2 }, { pictureScale: 0.9, widthShare: 1 }) === null,
+  );
+  const masks = normalizeImageMasksConfig({
+    version: 1,
+    assets: [
+      { id: "a", name: "A", imageUrl: "https://x/a.png", storagePath: "a", createdAt: 1, updatedAt: 1, safeInset: 0.03 },
+      { id: "b", name: "B", imageUrl: "https://x/b.png", storagePath: "b", createdAt: 2, updatedAt: 2 },
+      { id: "c", name: "C", imageUrl: "https://x/c.png", storagePath: "c", createdAt: 3, updatedAt: 3, starter: false, safeInset: 0.2 },
+    ],
+  });
+  check("a book's own frame decides its margin", frameInsetFor(masks, { b: 0.09 }, "a") === 0.03);
+  check(
+    "before a frame is rolled, the deepest starter frame decides",
+    frameInsetFor(masks, { b: 0.09 }, undefined) === 0.09,
+  );
+  check("frames outside the starter pool don't widen unframed books", frameInsetFor(masks, {}, undefined) === 0.03);
+
+  // The prompt states the margin, and drops it where nothing is re-composed.
+  const baseInput = {
+    spread: spreadEntry("inset-page", "single"),
+    config: { productSku: square.sku, bookSize: "square", artStyle: {} } as unknown as Project["config"],
+    referencedAnchors: [],
+    subjectInset: 0.08,
+  };
+  const withInset = buildIllustrationPrompt(baseInput);
+  check("the page prompt states the subject-free margin", /at least 8% of the width/.test(withInset), withInset.slice(0, 200));
+  check(
+    "a composition-preserving edit doesn't re-compose for the margin",
+    !/at least 8% of the width/.test(buildIllustrationPrompt({ ...baseInput, hasCompositionRef: true })),
+  );
+  check("no margin, no margin instruction", !/of the width and of the height in from every edge/.test(buildIllustrationPrompt({ ...baseInput, subjectInset: 0 })));
+  check("describeSubjectInset names a fraction", describeSubjectInset(0.1).fraction === "tenth");
+
+  // Overshoot: the calm area asked for is larger than the text box, and the
+  // measured rect stays the text box itself.
+  const overlay = allBookLayouts().find((l) => l.defaultMode === "full-bleed")!;
+  const caps = resolveFormatCapabilities(square, square.minPages);
+  const { safe } = computePageGuides({ caps, spread: false, bindingSide: bindingSideFor("right") });
+  const plan = overlay.plan({
+    side: "right",
+    safe,
+    aspect: square.aspect,
+    trim: square.trim,
+    isCover: false,
+    mode: "full-bleed",
+  });
+  const plain = layoutPromptFacts(plan, square.aspect);
+  const wide = layoutPromptFacts(plan, square.aspect, { calmOvershoot: 0.1 });
+  check("overshoot keeps the measured rects at the text box", JSON.stringify(plain.calmRects) === JSON.stringify(wide.calmRects));
+  check("overshoot changes the calm region described", plain.calmRegions !== wide.calmRegions, wide.calmRegions);
+  check("overshoot still names a focal region", wide.focalRegion.length > 0, wide.focalRegion);
+  const grown = overshootRect({ x: 0.06, y: 0.7, w: 0.88, h: 0.24 }, 0.1);
+  check("overshoot is clamped to the page", grown.x === 0 && Math.abs(grown.y + grown.h - 1) < 1e-9 && grown.w === 1);
+
+  // Busyness.
+  const flat = solid(120, 160, [200, 220, 240]);
+  const flatBusy = regionBusyness(flat, band)?.busyness ?? 1;
+  check("a flat sky reads as calm", flatBusy < DEFAULT_LAYOUT_QUALITY.maxTextRegionBusyness, String(flatBusy));
+  const busy = solid(120, 160, [200, 220, 240]);
+  paint(busy, band, (x, y) => ((x >> 1) + (y >> 1)) % 2 ? [20, 20, 20] : [240, 240, 240]);
+  const busyBusy = regionBusyness(busy, band)?.busyness ?? 0;
+  check("a high-detail band reads as busy", busyBusy > DEFAULT_LAYOUT_QUALITY.maxTextRegionBusyness, String(busyBusy));
+  const corner = solid(120, 160, [200, 220, 240]);
+  paint(corner, { x: 0.8, y: 0.75, w: 0.15, h: 0.2 }, (x, y) => ((x + y) % 2 ? [10, 10, 10] : [250, 250, 250]));
+  const cornerBusy = regionBusyness(corner, band)?.busyness ?? 0;
+  check("one busy figure in a corner of a wide band is not averaged away", cornerBusy > DEFAULT_LAYOUT_QUALITY.maxTextRegionBusyness, String(cornerBusy));
+
+  // Ink.
+  const pale = chooseInk(solid(60, 80, [235, 240, 245]), band);
+  check("pale art gets dark ink", pale?.tone === "dark" && pale.treatment === "none", JSON.stringify(pale));
+  const night = chooseInk(solid(60, 80, [20, 24, 60]), band);
+  check("night art gets light ink", night?.tone === "light" && night.treatment === "none", JSON.stringify(night));
+  check("chosen ink meets WCAG AA", (pale?.contrast ?? 0) >= BODY_CONTRAST && (night?.contrast ?? 0) >= BODY_CONTRAST);
+  const mixed = solid(60, 80, [128, 128, 128]);
+  paint(mixed, band, (x) => (x % 2 ? [0, 0, 0] : [255, 255, 255]));
+  const split = chooseInk(mixed, band);
+  check("half-black, half-white art asks for a plate", split?.treatment === "scrim", JSON.stringify(split));
+  const brightPatch = solid(60, 80, [30, 30, 40]);
+  paint(brightPatch, { x: 0, y: 0.7, w: 0.3, h: 0.3 }, () => [250, 250, 250]);
+  const patched = chooseInk(brightPatch, band);
+  check(
+    "a bright patch under light ink is caught by the percentile, not hidden by the mean",
+    patched?.treatment !== "none",
+    JSON.stringify(patched),
+  );
+
+  // The redraw ladder.
+  const drawn = (tag: string) => ({ prompt: tag, image: { base64: tag, mimeType: "image/png" } });
+  const grids: Record<string, PixelGrid> = { busy, flat };
+  const calmArgs = {
+    calmRects: [band],
+    threshold: DEFAULT_LAYOUT_QUALITY.maxTextRegionBusyness,
+    sample: async (img: { base64: string }) => grids[img.base64] ?? null,
+    fitsDeadline: () => true,
+  };
+  let redraws = 0;
+  const calmFirst = await holdCalmArea({
+    ...calmArgs,
+    first: drawn("flat"),
+    onFail: "retry-once",
+    redraw: async () => {
+      redraws++;
+      return drawn("flat");
+    },
+  });
+  check("a calm page is accepted without a redraw", redraws === 0 && calmFirst.check?.passed === true);
+  const fixed = await holdCalmArea({
+    ...calmArgs,
+    first: drawn("busy"),
+    onFail: "retry-once",
+    redraw: async () => drawn("flat"),
+  });
+  check("a busy page is redrawn once and the calmer art kept", fixed.prompt === "flat" && fixed.check?.attempts === 2 && fixed.check.passed);
+  const stuck = await holdCalmArea({
+    ...calmArgs,
+    first: drawn("busy"),
+    onFail: "retry-once",
+    redraw: async () => drawn("busy"),
+  });
+  check("a page still busy after the redraw gets the plate", stuck.check?.fallback === "scrim" && !stuck.check.passed);
+  const late = await holdCalmArea({
+    ...calmArgs,
+    first: drawn("busy"),
+    onFail: "retry-once",
+    fitsDeadline: () => false,
+    redraw: async () => {
+      throw new Error("must not redraw past the deadline");
+    },
+  });
+  check("no redraw past the deadline; the plate covers it", late.check?.attempts === 1 && late.check.fallback === "scrim");
+  const warned = await holdCalmArea({ ...calmArgs, first: drawn("busy"), onFail: "warn", redraw: async () => drawn("flat") });
+  check("warn only records the reading", warned.prompt === "busy" && !warned.check?.fallback);
+  const unreadable = await holdCalmArea({ ...calmArgs, first: drawn("none"), onFail: "retry-once", redraw: async () => drawn("flat") });
+  check("a check that can't read pixels accepts the page", unreadable.prompt === "none" && !unreadable.check);
+
+  // Applying the ink to the design.
+  const box: TextBox = {
+    id: "t1",
+    rect: band,
+    z: 1,
+    presetId: "plain",
+    fontFamily: "Itim",
+    fontSizePct: 0.04,
+    color: getPreset("plain").defaults.text,
+    align: "center",
+    vAlign: "center",
+    lineHeight: 1.25,
+    paragraphs: [{ spans: [{ text: "Hello" }] }],
+    slotId: "s1",
+    role: "story-body",
+  };
+  const page: PageDesign = { textBoxes: [box] };
+  const lightInk = { color: "#ffffff", tone: "light" as const, contrast: 12, treatment: "none" as const };
+  const inked = applyMeasuredInk(page, { blobId: "b1", textInk: { s1: lightInk } });
+  check("new art re-inks untouched story text", inked.textBoxes[0].color === "#ffffff" && inked.textBoxes[0].colorSource === "auto");
+  check("each artwork is applied once", applyMeasuredInk(inked, { blobId: "b1", textInk: { s1: { ...lightInk, color: "#000000" } } }) === inked);
+  const chosen = applyMeasuredInk(
+    { textBoxes: [{ ...box, color: "#ff0000", colorSource: "user" }] },
+    { blobId: "b2", textInk: { s1: lightInk } },
+  );
+  check("a color the reader chose is never replaced", chosen.textBoxes[0].color === "#ff0000");
+  const legacyCustom = applyMeasuredInk({ textBoxes: [{ ...box, color: "#ff0000" }] }, { blobId: "b2", textInk: { s1: lightInk } });
+  check("an older box with a custom color counts as chosen", legacyCustom.textBoxes[0].color === "#ff0000");
+  const plated = applyMeasuredInk(page, {
+    blobId: "b3",
+    textInk: { s1: lightInk },
+    layoutCheck: { busyness: 0.6, threshold: 0.38, passed: false, attempts: 2, fallback: "scrim" },
+  });
+  check("a failed calm check puts the words on a plate", plated.textBoxes[0].presetId === "solid" && plated.textBoxes[0].color === DARK_INK);
+  const unplated = applyMeasuredInk(plated, { blobId: "b4", textInk: { s1: lightInk } }, { s1: "plain" });
+  check("calm new art takes the automatic plate off again", unplated.textBoxes[0].presetId === "plain" && unplated.textBoxes[0].color === "#ffffff");
+  check(
+    "an automatic ink never writes undefined into the design",
+    !JSON.stringify(plated).includes("undefined") && Object.values(plated.textBoxes[0]).every((v) => v !== undefined),
+  );
 }
 
 // ---- Report ----------------------------------------------------------------

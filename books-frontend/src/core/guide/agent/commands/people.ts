@@ -23,6 +23,7 @@ import {
   withLooksDecided,
 } from "../../portrait";
 import { hasEarlier, pictureSubject } from "../../history";
+import { asksForNewPicture, visualChange } from "../../redrawMode";
 import { authoringOf, withAuthoring } from "../../projectState";
 import type { GuideTarget } from "../../target";
 import { peopleWithoutPortrait } from "../requirements";
@@ -94,16 +95,24 @@ function withLookNote(project: Project, member: StoryCastMember, look: string): 
 
 function lookChange(project: Project, member: StoryCastMember, change: string, restart = false): CommandResult {
   const name = member.name.trim();
+  // Only how they should look is kept on the person: "Redraw Arthur" and "she
+  // is 3" describe nothing to draw, and a request with no look left in it is
+  // a request for a new picture.
+  const noted = visualChange(change);
+  const fresh = restart || asksForNewPicture(change) || !noted;
   if (!currentPortrait(project, member.id)) {
+    if (!noted) return { kind: "noop", beat: beat("alreadyThat") };
     return {
       kind: "write",
-      project: withLookNote(project, member, change),
+      project: withLookNote(project, member, noted),
       beat: beat("lookNoted", { names: name }, { mustSay: [name] }),
       view: "cast",
     };
   }
   const next = withPersonAsk(
-    withMemberChanges(project, member.id, { portraitNote: joinNote(member.portraitNote, change) }),
+    noted
+      ? withMemberChanges(project, member.id, { portraitNote: joinNote(member.portraitNote, noted) })
+      : project,
     member.id,
     "look",
   );
@@ -112,7 +121,7 @@ function lookChange(project: Project, member: StoryCastMember, change: string, r
     project: next,
     beat: beat("redrawReady", undefined, { priority: "result" }),
     // The picture that is there is changed; a new one only when the reader asked for it.
-    then: { kind: "redraw", castId: member.id, name, instruction: change, ...(restart ? { mode: "new" as const } : {}) },
+    then: { kind: "redraw", castId: member.id, name, instruction: noted, ...(fresh ? { mode: "new" as const } : {}) },
     view: "cast",
   };
 }
@@ -343,10 +352,11 @@ export const PEOPLE_COMMANDS: CommandDef[] = [
       const changed = changePersonAge(project, member.id, age);
       if (!changed) return { kind: "invalid", reason: "That person is not in the book.", say: true };
       const shown = formatAge(age);
+      const receipt = [name, ...changed.alongside].map((who) => `${who}: ${shown}`).join(" · ");
       return {
         kind: "write",
         project: changed.project,
-        beat: beat(changed.revise ? "ageSetStory" : "ageSet", { names: name, n: shown }, { mustSay: [name], receipt: `${name}: ${shown}` }),
+        beat: beat(changed.revise ? "ageSetStory" : "ageSet", { names: name, n: shown }, { mustSay: [name], receipt }),
         ...(changed.revise ? { then: { kind: "reviseStory" as const, instruction: changed.revise } } : {}),
         view: "cast",
       };
@@ -570,7 +580,7 @@ export const PEOPLE_COMMANDS: CommandDef[] = [
     area: "people",
     suggest: [{ id: "editPortrait", relevant: whenPortraitDrawn }],
     summary:
-      "Change someone's drawn portrait ('make Amanda's hair darker', 'give Leo glasses'). Changes the portrait that is drawn (only the change; the person stays the same) and keeps the old one in the history. Set mode 'new' only to start over.",
+      "Change someone's drawn portrait ('make Amanda's hair darker', 'give Leo glasses'). Changes the portrait that is drawn (only the change; the person stays the same) and keeps the old one in the history. Set mode 'new' to start over, when the reader only says to redraw or retry, and after their age or what they are changed. 'change' holds only how they should look: an age goes to setPersonAge first, never in here. When the same change is asked for several people ('make Aren and Amira blonde'), call this once per person; they are drawn together.",
     args: [
       { name: "person", kind: "person", required: true, hint: "whose portrait" },
       { name: "change", kind: "text", required: true, hint: "the change, in the reader's words" },
@@ -578,7 +588,7 @@ export const PEOPLE_COMMANDS: CommandDef[] = [
         name: "mode",
         kind: "choice",
         required: false,
-        hint: "'new' only when the reader asks to start over or wants a completely different picture; otherwise leave empty so the drawn portrait is changed",
+        hint: "'new' when the reader asks to start over, redraw or retry with no other change, or wants a completely different picture; otherwise leave empty so the drawn portrait is changed",
         options: ["edit", "new"],
       },
     ],
@@ -586,6 +596,8 @@ export const PEOPLE_COMMANDS: CommandDef[] = [
     help: "Changes someone's portrait. I change the portrait that is there, so the person stays the same and only your change is made. You see the price first unless it's small, and the old version stays in the history.",
     requires: ["notLocked"],
     paid: true,
+    // "Make Aren and Amira blonde" is two calls and one batch of portraits.
+    batchable: true,
     run: (project, args) => {
       const picked = personFrom(project, args);
       if ("result" in picked) return picked.result;

@@ -14,7 +14,7 @@ import type { Anchor, Project } from "../types";
 import type { ImageModelCapabilities } from "../config/modelCapabilities";
 import type { ActionGenerationTuning } from "../config/generationTuning";
 import { briefOf } from "../story/brief";
-import { portraitReferenceCount } from "../guide/portrait";
+import { portraitReferencePlan } from "../guide/portrait";
 import { containedAnchorsFor } from "../book/anchorGraph";
 import { effectiveAnchorIds } from "../book/anchorRefs";
 import { heightFractions } from "../book/anchorScale";
@@ -69,8 +69,16 @@ export function plannedPortraitReferences(
   const member = (briefOf(project.config).cast ?? []).find((m) => m.id === castId);
   if (!member) return 0;
   if (options.edit) return cappedReferenceCount(1, limits, { required: true, needsEditing: true });
-  const planned = portraitReferenceCount(project, member);
-  return cappedReferenceCount(planned, limits, { required: planned > 0 });
+  const plan = portraitReferencePlan(project, member);
+  const identity = plan.photos + plan.subject.length + plan.existing.length;
+  const style = plan.style.length + plan.catalogStyle.length;
+  if (identity > 0) {
+    if (!limits.referenceEditing) return 0;
+    const slots = Math.min(limits.maxReferenceImages, Math.max(1, limits.maxImages));
+    const styleSlots = style > 0 && slots >= 2 ? 1 : 0;
+    return Math.min(identity, Math.max(0, slots - styleSlots)) + styleSlots;
+  }
+  return cappedReferenceCount(style, limits, { needsEditing: true });
 }
 
 export interface AnchorPlanOptions {

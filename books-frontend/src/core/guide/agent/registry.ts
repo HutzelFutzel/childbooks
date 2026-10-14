@@ -4,6 +4,7 @@
  * definitions, so the prompt cannot describe a skill the code does not have.
  */
 import { BOOK_COMMANDS } from "./commands/book";
+import { DESIGN_COMMANDS } from "./commands/design";
 import { FLOW_COMMANDS } from "./commands/flow";
 import { PEOPLE_COMMANDS } from "./commands/people";
 import { STORY_COMMANDS } from "./commands/story";
@@ -11,7 +12,13 @@ import { GUIDE_COMMAND_IDS, type GuideCommandId } from "./ids";
 import { REQUIREMENTS } from "./requirements";
 import type { CommandDef } from "./types";
 
-const ALL: CommandDef[] = [...BOOK_COMMANDS, ...STORY_COMMANDS, ...PEOPLE_COMMANDS, ...FLOW_COMMANDS];
+const ALL: CommandDef[] = [
+  ...BOOK_COMMANDS,
+  ...STORY_COMMANDS,
+  ...PEOPLE_COMMANDS,
+  ...DESIGN_COMMANDS,
+  ...FLOW_COMMANDS,
+];
 
 export const GUIDE_COMMANDS: Record<GuideCommandId, CommandDef> = Object.fromEntries(
   ALL.map((def) => [def.id, def]),

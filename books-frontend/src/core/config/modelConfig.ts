@@ -161,10 +161,10 @@ export const TEXT_PARAM_LIMITS = {
   timeoutMs: { min: 1_000, max: 600_000 },
 } as const;
 
-/** Shipped parameters: quick for the chat, careful for the story. */
+/** Shipped parameters: quick for the chat, medium for a story edit. */
 export const DEFAULT_TEXT_PARAMS: Partial<Record<TextActionId, TextCallParams>> = {
   storyDraft: { reasoning: "high" },
-  storyEdit: { reasoning: "high" },
+  storyEdit: { reasoning: "medium" },
   screenplay: { reasoning: "medium" },
   storyAnalysis: { reasoning: "medium" },
   storyCheck: { reasoning: "medium" },

@@ -9,18 +9,21 @@
  */
 import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Plus, X } from "lucide-react";
-import { currentPortrait, portraitStatus } from "../../../core/guide/portrait";
+import { ChevronLeft, ChevronRight, MessageCircle, Plus, X, ZoomIn } from "lucide-react";
+import { normalizeAnchorName } from "../../../core/book/anchorRefs";
+import { currentPortrait, lookSourceOf, portraitStatus } from "../../../core/guide/portrait";
 import { briefOf } from "../../../core/story/brief";
 import { isPerson } from "../../../core/story/castKinds";
-import type { Project, StoryCastMember } from "../../../core/types";
+import type { Anchor, Project, StoryCastMember } from "../../../core/types";
 import { useChatStudio } from "../../../state/chatStudio";
+import { useJobsStore } from "../../../state/jobsStore";
 import { useBlobUrl } from "../../hooks/useBlobUrl";
+import { Modal } from "../../components/Modal";
 import { cn } from "../../lib/cn";
 import { addCastMember, removeCastMember, renameCastMember, updateCastMember } from "../bookActions";
 import { useGuideT } from "../intl";
 import { crossfade, lineRise } from "../motion";
-import { UnitStatus } from "./UnitStatus";
+import { UnitStatus, useUnitWorking } from "./UnitStatus";
 import { VersionPager } from "./VersionPager";
 
 export function CastView({ project, locked }: { project: Project; locked: boolean }) {
@@ -29,50 +32,116 @@ export function CastView({ project, locked }: { project: Project; locked: boolea
   const cast = (briefOf(project.config).cast ?? []).filter((m) => m.name.trim() || !locked);
   const places = (project.anchors ?? []).filter((anchor) => anchor.include && anchor.type === "place");
   const [fresh, setFresh] = useState<string | null>(null);
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const portraits = cast.filter((member) => currentPortrait(project, member.id));
+  const previewAt = previewId ? portraits.findIndex((member) => member.id === previewId) : -1;
+  const preview = previewAt >= 0 ? portraits[previewAt] : null;
+
+  useEffect(() => {
+    if (previewId && previewAt < 0) setPreviewId(null);
+  }, [previewAt, previewId]);
+
+  const stepPreview = (delta: -1 | 1) => {
+    if (previewAt < 0 || portraits.length < 2) return;
+    const next = (previewAt + delta + portraits.length) % portraits.length;
+    setPreviewId(portraits[next]!.id);
+  };
 
   return (
-    <div className="h-full overflow-y-auto px-5 py-6 sm:px-8">
-      <div className="mx-auto grid max-w-4xl grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
-        <AnimatePresence initial={false}>
-          {cast.map((member) => (
-            <motion.div
-              key={member.id}
+    <>
+      <div className="h-full overflow-y-auto px-5 py-6 sm:px-8">
+        {!locked && portraits.length > 0 && (
+          <p className="mx-auto mb-4 flex max-w-4xl items-start gap-2 px-1 text-sm leading-snug text-ink-500">
+            <MessageCircle className="mt-0.5 size-4 shrink-0 text-ink-400" aria-hidden />
+            {t("hint")}
+          </p>
+        )}
+        <div className="mx-auto grid max-w-4xl grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">
+          <AnimatePresence initial={false}>
+            {cast.map((member) => (
+              <motion.div
+                key={member.id}
+                layout
+                variants={lineRise}
+                initial="hidden"
+                animate="show"
+                exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.15 } }}
+              >
+                <Plate
+                  project={project}
+                  member={member}
+                  locked={locked}
+                  autoFocus={fresh === member.id}
+                  onPreview={() => setPreviewId(member.id)}
+                />
+              </motion.div>
+            ))}
+          </AnimatePresence>
+          {!locked && (
+            <motion.button
               layout
-              variants={lineRise}
-              initial="hidden"
-              animate="show"
-              exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.15 } }}
+              type="button"
+              onClick={() => void addCastMember().then(setFresh)}
+              className="flex min-h-40 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-ink-200 text-sm font-medium text-ink-500 transition hover:border-ink-400 hover:bg-white hover:text-ink-800"
             >
-              <Plate project={project} member={member} locked={locked} autoFocus={fresh === member.id} />
-            </motion.div>
-          ))}
-        </AnimatePresence>
-        {!locked && (
-          <motion.button
-            layout
-            type="button"
-            onClick={() => void addCastMember().then(setFresh)}
-            className="flex min-h-40 flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-ink-200 text-sm font-medium text-ink-500 transition hover:border-ink-400 hover:bg-white hover:text-ink-800"
-          >
-            <Plus className="size-5" />
-            {t("addPerson")}
-          </motion.button>
+              <Plus className="size-5" />
+              {t("addPerson")}
+            </motion.button>
+          )}
+        </div>
+        {places.length > 0 && (
+          <section className="mx-auto mt-8 max-w-4xl">
+            <h2 className="px-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-400">{chrome("places")}</h2>
+            <ul className="mt-2 flex flex-col gap-2">
+              {places.map((place) => (
+                <PlaceItem key={place.id} place={place} />
+              ))}
+            </ul>
+          </section>
         )}
       </div>
-      {places.length > 0 && (
-        <section className="mx-auto mt-8 max-w-4xl">
-          <h2 className="px-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-ink-400">{chrome("places")}</h2>
-          <ul className="mt-2 flex flex-col gap-2">
-            {places.map((place) => (
-              <li key={place.id} className="rounded-2xl bg-white px-4 py-3 shadow-soft ring-1 ring-ink-900/5">
-                <p className="text-sm font-medium text-ink-900">{place.name}</p>
-                {place.description && <p className="mt-1 text-sm leading-relaxed text-ink-500">{place.description}</p>}
-              </li>
-            ))}
-          </ul>
-        </section>
+      {preview && (
+        <PortraitPreview
+          project={project}
+          member={preview}
+          position={previewAt + 1}
+          total={portraits.length}
+          onClose={() => setPreviewId(null)}
+          onPrevious={() => stepPreview(-1)}
+          onNext={() => stepPreview(1)}
+        />
       )}
-    </div>
+    </>
+  );
+}
+
+function PlaceItem({ place }: { place: Anchor }) {
+  const chrome = useGuideT("chrome");
+  const active = useJobsStore((s) => s.activeUnitIds.has(place.id));
+  return (
+    <li
+      className={cn(
+        "relative overflow-hidden rounded-2xl bg-white px-4 py-3 shadow-soft ring-1 transition",
+        active ? "ring-magic-300" : "ring-ink-900/5",
+      )}
+    >
+      {active && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute inset-y-0 -left-1/2 w-1/2 animate-[guide-sheen_2.4s_ease-in-out_infinite] bg-gradient-to-r from-transparent via-magic-100/40 to-transparent motion-reduce:hidden"
+        />
+      )}
+      <div className="relative flex items-center justify-between gap-3">
+        <p className="text-sm font-medium text-ink-900">{place.name}</p>
+        {active && (
+          <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full bg-magic-100/80 px-2.5 py-0.5 text-[11px] font-medium text-magic-700">
+            <span className="size-1.5 animate-ping rounded-full bg-magic-500 motion-reduce:animate-none" aria-hidden />
+            {chrome("preparingUnit")}
+          </span>
+        )}
+      </div>
+      {place.description && <p className="relative mt-1 text-sm leading-relaxed text-ink-500">{place.description}</p>}
+    </li>
   );
 }
 
@@ -81,11 +150,13 @@ function Plate({
   member,
   locked,
   autoFocus,
+  onPreview,
 }: {
   project: Project;
   member: StoryCastMember;
   locked: boolean;
   autoFocus: boolean;
+  onPreview: () => void;
 }) {
   const t = useGuideT("plate");
   const chip = useChatStudio((s) => s.chip);
@@ -94,21 +165,60 @@ function Plate({
   const status = portraitStatus(project, member.id);
   const url = useBlobUrl(portrait?.blobId);
   const name = member.name.trim();
+  const characterAnchor = (project.anchors ?? []).find(
+    (anchor) =>
+      anchor.type === "character" &&
+      normalizeAnchorName(anchor.name) === normalizeAnchorName(name),
+  );
+  const { working, preparing } = useUnitWorking(
+    member.id,
+    characterAnchor?.id,
+    false,
+    Boolean(url),
+  );
+  const source = lookSourceOf(member);
+  const drawingTitle = preparing
+    ? t("preparingPerson", { name: name || t("name") })
+    : t("drawingPerson", { name: name || t("name") });
+  const drawingSubtitle =
+    source === "photo"
+      ? t("drawingFromPhoto")
+      : source === "drawing"
+        ? t("drawingFromDrawing")
+        : source === "describe"
+          ? t("drawingFromDescription")
+          : t("drawingFromStory");
   const selected = chip?.kind === "person" && chip.castId === member.id;
   const [nameProblem, setNameProblem] = useState<"taken" | "busy" | "unknown" | null>(null);
+  // Selecting a face aims the chat at them: the cursor goes to the field too,
+  // except on a touch screen where that would raise the keyboard over the card.
+  const select = () => {
+    if (selected) {
+      setChip(null);
+      return;
+    }
+    setChip({ kind: "person", castId: member.id, name });
+    if (typeof window !== "undefined" && !window.matchMedia("(pointer: coarse)").matches) {
+      useChatStudio.setState((state) => ({ composerFocus: state.composerFocus + 1 }));
+    }
+  };
 
   return (
     <article
       className={cn(
-        "group/plate relative flex flex-col gap-3 rounded-2xl bg-white p-3 shadow-soft ring-1",
-        selected ? "ring-ink-900" : "ring-ink-900/5",
+        "group/plate relative flex flex-col gap-3 rounded-2xl bg-white p-3 shadow-soft ring-1 transition",
+        selected
+          ? "ring-ink-900"
+          : working
+            ? "ring-magic-300 shadow-lifted"
+            : "ring-ink-900/5",
       )}
     >
       <button
         type="button"
         disabled={!name}
         aria-pressed={selected}
-        onClick={() => setChip(selected ? null : { kind: "person", castId: member.id, name })}
+        onClick={select}
         className={cn(
           "relative block aspect-4/5 w-full overflow-hidden rounded-xl bg-ink-50 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ink-500",
         )}
@@ -136,13 +246,33 @@ function Plate({
             </motion.span>
           )}
         </AnimatePresence>
-        <UnitStatus unitId={member.id} stale={status === "stale"} />
+        <UnitStatus
+          unitId={member.id}
+          extraUnitId={characterAnchor?.id}
+          stale={status === "stale"}
+          hasArt={Boolean(url)}
+          title={drawingTitle}
+          subtitle={drawingSubtitle}
+        />
       </button>
       <VersionPager
         project={project}
         target={{ kind: "person", castId: member.id, name }}
         className="absolute top-5 left-5"
       />
+      {url && (
+        <button
+          type="button"
+          onClick={onPreview}
+          aria-label={t("enlarge", { name })}
+          className={cn(
+            "absolute right-5 flex size-8 items-center justify-center rounded-full bg-white/90 text-ink-700 opacity-0 shadow-soft ring-1 ring-ink-900/5 transition hover:bg-white hover:text-ink-900 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-500 group-hover/plate:opacity-100 pointer-coarse:opacity-100",
+            locked ? "top-5" : "top-14",
+          )}
+        >
+          <ZoomIn className="size-4" aria-hidden />
+        </button>
+      )}
 
       <div className="flex items-baseline gap-2 px-1">
         {name ? (
@@ -186,6 +316,24 @@ function Plate({
         </p>
       )}
 
+      {/* Changes are made in the chat; this says so, and is the way there. */}
+      {!locked && name && (
+        <button
+          type="button"
+          onClick={select}
+          aria-pressed={selected}
+          className={cn(
+            "inline-flex min-h-8 items-center gap-1.5 self-start rounded-full px-2.5 text-xs font-medium ring-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400",
+            selected
+              ? "bg-ink-900 text-white ring-ink-900"
+              : "bg-white text-ink-700 ring-ink-200 hover:ring-ink-400 hover:text-ink-900",
+          )}
+        >
+          <MessageCircle className="size-3.5" aria-hidden />
+          {selected ? t("changeLookActive", { name }) : t("changeLook")}
+        </button>
+      )}
+
       {!locked && (
         <button
           type="button"
@@ -197,6 +345,90 @@ function Plate({
         </button>
       )}
     </article>
+  );
+}
+
+function PortraitPreview({
+  project,
+  member,
+  position,
+  total,
+  onClose,
+  onPrevious,
+  onNext,
+}: {
+  project: Project;
+  member: StoryCastMember;
+  position: number;
+  total: number;
+  onClose: () => void;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
+  const t = useGuideT("plate");
+  const portrait = currentPortrait(project, member.id);
+  const url = useBlobUrl(portrait?.blobId);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "ArrowLeft") onPrevious();
+      if (event.key === "ArrowRight") onNext();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onNext, onPrevious]);
+
+  return (
+    <Modal open onClose={onClose} title={member.name.trim()} size="max-w-4xl">
+      <div className="flex flex-col gap-3">
+        <div className="relative flex min-h-72 items-center justify-center overflow-hidden rounded-2xl bg-ink-50">
+          {url && (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={url} alt={t("portraitAlt", { name: member.name.trim() })} className="max-h-[72vh] w-auto object-contain" />
+          )}
+          {total > 1 && (
+            <>
+              <PreviewStep label={t("previousPortrait")} side="left" onClick={onPrevious}>
+                <ChevronLeft className="size-5" />
+              </PreviewStep>
+              <PreviewStep label={t("nextPortrait")} side="right" onClick={onNext}>
+                <ChevronRight className="size-5" />
+              </PreviewStep>
+            </>
+          )}
+        </div>
+        <div className="flex items-center justify-between gap-3 px-1">
+          <AgeTag member={member} />
+          {total > 1 && <span className="text-xs tabular-nums text-ink-400">{position} / {total}</span>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function PreviewStep({
+  label,
+  side,
+  onClick,
+  children,
+}: {
+  label: string;
+  side: "left" | "right";
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      className={cn(
+        "absolute top-1/2 flex size-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/90 text-ink-700 shadow-soft ring-1 ring-ink-900/5 transition hover:bg-white hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-500",
+        side === "left" ? "left-3" : "right-3",
+      )}
+    >
+      {children}
+    </button>
   );
 }
 

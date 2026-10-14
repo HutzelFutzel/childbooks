@@ -135,6 +135,30 @@ export async function uploadBlob(
   return id;
 }
 
+/**
+ * Upload bytes under a caller-chosen blob id. Used for pictures a custom art
+ * style owns: the id is derived from the style, so storing the same picture
+ * twice (a retry, two requests racing) lands on the same object.
+ */
+export async function uploadBlobAs(
+  uid: string,
+  id: string,
+  buf: Buffer,
+  contentType: string,
+): Promise<string> {
+  await blobBucket().file(blobPath(uid, id)).save(buf, { contentType, resumable: false });
+  return id;
+}
+
+/** Delete a user blob (best-effort). */
+export async function deleteBlobById(uid: string, id: string): Promise<void> {
+  try {
+    await blobBucket().file(blobPath(uid, id)).delete();
+  } catch {
+    // already gone / not found
+  }
+}
+
 /** Public download URL for an object, honoring Storage rules (read: true). */
 function publicMediaUrl(path: string): string {
   const b = blobBucket();
@@ -160,6 +184,21 @@ export async function uploadArtStyleImage(
 ): Promise<{ storagePath: string; publicUrl: string }> {
   const ext = (contentType.split("/")[1] || "png").replace(/[^a-z0-9]/gi, "") || "png";
   const storagePath = `public/artStyles/${encodeURIComponent(styleId)}/example-${randomUUID()}.${ext}`;
+  await blobBucket().file(storagePath).save(buf, { contentType, resumable: false });
+  return { storagePath, publicUrl: publicMediaUrl(storagePath) };
+}
+
+/**
+ * Upload an immutable generation-only exemplar. Replacements get a new path;
+ * old objects remain because existing books snapshot their selected version.
+ */
+export async function uploadArtStyleReference(
+  styleId: string,
+  buf: Buffer,
+  contentType: string,
+): Promise<{ storagePath: string; publicUrl: string }> {
+  const ext = (contentType.split("/")[1] || "png").replace(/[^a-z0-9]/gi, "") || "png";
+  const storagePath = `public/artStyles/${encodeURIComponent(styleId)}/generation-${randomUUID()}.${ext}`;
   await blobBucket().file(storagePath).save(buf, { contentType, resumable: false });
   return { storagePath, publicUrl: publicMediaUrl(storagePath) };
 }

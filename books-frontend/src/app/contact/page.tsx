@@ -13,7 +13,7 @@ import { BreadcrumbJsonLd } from "../../ui/marketing/BreadcrumbJsonLd";
 import { ContactForm } from "../../ui/contact/ContactForm";
 
 /** Rendered per request so brand + legal links reflect admin edits without a redeploy. */
-export const dynamic = "force-dynamic";
+export const revalidate = 60;
 
 const PATH = "/contact" as const;
 

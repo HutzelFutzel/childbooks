@@ -3,8 +3,15 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     // Durable user-owned blobs (generated images and uploaded design assets).
+    //
+    // `styleasset-*` blobs belong to a saved custom art style (its drawings,
+    // cover previews and sample portrait). The owner reads them like any blob,
+    // but only the backend writes or deletes them, so a book's clean-up or a
+    // tampered client can never take a style's pictures away.
     match /users/{uid}/blobs/{blobId} {
-      allow read, write: if request.auth != null && request.auth.uid == uid;
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if request.auth != null && request.auth.uid == uid
+        && !blobId.matches('styleasset-.*');
     }
 
     // One-use likeness sources are written/deleted only by the validated

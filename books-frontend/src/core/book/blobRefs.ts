@@ -32,6 +32,14 @@ export function collectProjectImageBlobIds(project: Project): Set<string> {
   for (const image of project.authoringState?.styleSourceArt ?? []) {
     ids.add(image.blobId);
   }
+  const retired = project.authoringState?.retiredArtwork;
+  for (const image of [
+    ...(retired?.staged ?? []),
+    ...(retired?.cast ?? []).flatMap((row) => row.sourceArt),
+    ...(retired?.anchors ?? []).flatMap((row) => row.sourceArt),
+  ]) {
+    ids.add(image.blobId);
+  }
   for (const tree of Object.values(project.authoringState?.portraits ?? {})) {
     for (const node of allVersions(tree)) {
       if (node.content.blobId) ids.add(node.content.blobId);

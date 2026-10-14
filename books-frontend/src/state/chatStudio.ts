@@ -52,7 +52,9 @@ import { briefStage, detailQuestion } from "../core/guide/briefPolicy";
 import type { DetailPatch, StoryDetailId } from "../core/guide/storyDetails";
 import { classifyOpeningText } from "../core/guide/manuscript";
 import { storyHandedOver } from "../core/guide/ownWords";
-import { applyGuidePatch, guidePatchContext } from "../core/guide/patch";
+import { statedCast } from "../core/guide/castList";
+import { EMPTY_DECK, type CardDeck } from "../core/guide/cardDeck";
+import { applyGuidePatch, captureGuideFacts, guidePatchContext } from "../core/guide/patch";
 import { authoringOf, withAuthoring, withFactMarks } from "../core/guide/projectState";
 import type { StoryFocus } from "../core/guide/attention";
 import {
@@ -67,11 +69,12 @@ import {
   type GuideSession,
 } from "../core/guide/session";
 import { GUIDE_SLOTS, type GuideSlotId } from "../core/guide/slots";
-import { acceptGuideQuestion, arbitrateGuideLines, needsGuideSpeech, type GuideLineCandidate } from "../core/guide/speech";
+import { acceptGuideQuestion, assumesAnotherChild, arbitrateGuideLines, needsGuideSpeech, type GuideLineCandidate } from "../core/guide/speech";
 import { asksForEarlierPicture, pictureSubject } from "../core/guide/history";
 import { asksForNewPicture, isBareRestart, type RedrawMode } from "../core/guide/redrawMode";
 import { chipForView, resolveGuideTarget, targetHomeView, type GuideTarget, type TargetPerson } from "../core/guide/target";
 import { currentPortrait } from "../core/guide/portrait";
+import { statedAgeCalls } from "../core/guide/statedAges";
 import { CAST_KIND_SPECS, castKindOf, missingDetails } from "../core/story/castKinds";
 import {
   briefOf,
@@ -91,10 +94,11 @@ import { useAppConfigStore } from "./appConfigStore";
 import { quoteFor } from "./chatGeneration";
 import { sendGuideTurn } from "./guideTurn";
 import { rememberThumbs } from "./messageThumbs";
-import { markExcerpt, type StoryMark } from "../core/story/storyMark";
+import { isEagerStoryEdit } from "../core/story/revision";
+import { markExcerpt, selectionForMark, type StoryMark } from "../core/story/storyMark";
 import { takeMark } from "./storyMark";
 import { useProjectsStore } from "./projectsStore";
-import { startStoryRevision } from "../platform/storyRevisions";
+import { beginEagerStoryRevision, cancelEagerStoryRevision, startStoryRevision } from "../platform/storyRevisions";
 import { getRepos } from "./repos";
 import {
   agentConfig,
@@ -150,6 +154,8 @@ export interface RedrawRequest {
   instruction: string;
   /** "new" when the reader asked for a new picture; absent edits the picture that is there. */
   mode?: RedrawMode;
+  /** More people changed by the same message ("Aren and Amira"): drawn together with `target`, quoted and started as one. */
+  more?: { castId: string; name: string; instruction: string; mode?: RedrawMode }[];
 }
 
 export interface SayExtra {
@@ -172,6 +178,13 @@ interface ChatStudioState {
   /** The view the reader chose. Null follows the guide. */
   view: BookViewId | null;
   chip: GuideTarget | null;
+  /**
+   * The pages open in front of the reader (page ids). Not saved: it is what "this
+   * page" means when they ask for a change to the finished pages without a chip.
+   */
+  looking: string[];
+  /** Which step card is on screen and what may show beside it (`core/guide/cardDeck.ts`). */
+  cardDeck: CardDeck;
   focus: boolean;
   /**
    * What the reader is doing on the Story tab. While they type in the
@@ -234,7 +247,12 @@ interface ChatStudioState {
    */
   send: (text: string, options?: { mark?: StoryMark | null }) => Promise<void>;
   retry: () => Promise<void>;
-  undo: (messageId: string) => Promise<void>;
+  /**
+   * Rewinds the book and the thread to before this message. A reader taking a
+   * message back to edit it (`quiet`) gets no "Undone." line; any other rewind
+   * says so, so the thread never just carries on as if nothing happened.
+   */
+  undo: (messageId: string, options?: { quiet?: boolean }) => Promise<void>;
   skipFact: (fact: GuideFactId) => Promise<void>;
   retryStory: () => Promise<void>;
   /** "Write the story": the reader is done shaping it. */
@@ -278,6 +296,8 @@ interface ChatStudioState {
   said: (mark: string) => boolean;
   setView: (view: BookViewId | null) => void;
   setChip: (target: GuideTarget | null) => void;
+  setLooking: (pageIds: readonly string[]) => void;
+  setCardDeck: (deck: CardDeck) => void;
   setFocus: (focus: boolean) => void;
   setStoryFocus: (focus: StoryFocus | null) => void;
   /** Put the cursor in the message field, showing it first when an own-words book keeps it away. */
@@ -735,6 +755,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
           requiredMissing: stillMissing.filter((id) => policies()[id].required),
           ageNames: [...ageQuestionNames(current), ...(kindQuestion(current) ? [kindQuestion(current)!.name] : [])],
           sameAgeGroups: authoringOf(current).sameAge ?? [],
+          knownNames: castNames(current),
         });
         if (accepted && isPending(messageId)) refined.add(messageId);
         releaseLine(messageId, accepted ? { text: result.text, localized: undefined } : undefined);
@@ -750,6 +771,8 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     error: null,
     view: null,
     chip: null,
+    looking: [],
+    cardDeck: EMPTY_DECK,
     focus: false,
     storyFocus: null,
     composerFocus: 0,
@@ -781,6 +804,23 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         if (options.thumbs?.length) rememberThumbs(message.id, options.thumbs);
         if (restore) trimRestores();
         const outcome = tapOutcomeOf(await run());
+        // A tap that changed the page design (move the text inward) keeps the
+        // earlier version of just those pages, so Undo puts them back too.
+        if (before && restore) {
+          const after = live();
+          if (after && after.design !== before.design) {
+            const withDesign = snapshot(before, after);
+            if (withDesign.length <= GUIDE_RESTORE_MAX_CHARS) {
+              set((state) => ({
+                session: {
+                  ...state.session,
+                  messages: state.session.messages.map((m) => (m.id === message.id ? { ...m, restore: withDesign } : m)),
+                },
+              }));
+              persist();
+            }
+          }
+        }
         // Work already paid for can't be taken back by putting the book back.
         if (outcome.spent && restore) dropRestore(message.id);
         const reply = [...(options.reply ?? []), ...(outcome.reply ?? [])];
@@ -922,11 +962,13 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         error: null,
         view: null,
         chip: null,
+        looking: [],
+        cardDeck: EMPTY_DECK,
         focus: false,
         storyFocus: null,
         pendingTarget: null,
         redraw: null,
-            quotes: {},
+        quotes: {},
         starting: null,
         away: null,
         pendingManuscript: null,
@@ -978,10 +1020,12 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
         projectId: null,
         session: createGuideSession(),
         loaded: false,
+        looking: [],
+        cardDeck: EMPTY_DECK,
         storyFocus: null,
         pendingTarget: null,
         redraw: null,
-            quotes: {},
+        quotes: {},
         extractionError: null,
         agentWell: null,
         agentPending: null,
@@ -1095,12 +1139,26 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       // once there is something drawn to change.
       const chip = get().chip;
       const cast = namedCast(briefOf(project.config)).map((m) => ({ id: m.id, name: m.name.trim() }));
-      if (chip || locked) {
+      // Before the pages are drawn, a selected picture means "change this one".
+      // Once the book is finished a sentence can be about the words as much as
+      // the picture, so the interpreter reads it first; a picture change that
+      // no skill covers still reaches the redraw below (`interpretMessage`).
+      if (chip && !locked) {
         await routePictureChange(message, project, cast);
         set({ sending: false });
         return;
       }
 
+      // A clear edit starts while the interpreter is still reading the message.
+      // If that reading says it was not an edit, the queued revision is dropped.
+      const selection = mark ? selectionForMark(mark, project.config.storyText) : null;
+      const eager =
+        !locked &&
+        !openWell &&
+        project.config.storyText.trim().length >= 20 &&
+        (!mark || selection) &&
+        isEagerStoryEdit(message, Boolean(mark));
+      if (eager) void beginEagerStoryRevision(project, message, selection ?? undefined).catch(() => {});
       try {
         await interpretMessage(message, history, project, { cast, mark });
       } catch (err) {
@@ -1115,6 +1173,8 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
           },
         }));
         persist();
+      } finally {
+        if (eager) await cancelEagerStoryRevision();
       }
     }),
 
@@ -1134,7 +1194,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       await get().send(last.text, { mark: mark ?? null });
     },
 
-    undo: async (messageId) => {
+    undo: async (messageId, options) => {
       const { session, sending } = get();
       if (sending) return;
       const target = session.messages.find((m) => m.id === messageId);
@@ -1146,7 +1206,19 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
           const restored = target.restore ? applyRestore(b, target.restore) : b;
           return target.before ? applyGuidePatch(restored, target.before, context).project : restored;
         });
-        set({ session: rewoundGuideSession(get().session, messageId), agentWell: null, agentPending: null });
+        // Everything that was about the rewound turn goes with it: the card that
+        // was on screen, the picture it was aimed at, a clarification or redraw
+        // waiting on an answer. The cards are then drawn again from the book.
+        set({
+          session: rewoundGuideSession(get().session, messageId),
+          agentWell: null,
+          agentPending: null,
+          cardDeck: EMPTY_DECK,
+          chip: null,
+          pendingTarget: null,
+          redraw: null,
+        });
+        if (!options?.quiet) get().say([{ key: "undone", priority: "result" }]);
       } else {
         const index = session.messages.findIndex((m) => m.id === messageId);
         set({ session: { ...session, messages: session.messages.slice(0, Math.max(0, index)) } });
@@ -1310,6 +1382,24 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     setChip: (target) =>
       set({ chip: target, pendingTarget: null, ...(target ? { view: targetHomeView(target) } : {}) }),
 
+    setLooking: (pageIds) =>
+      set((state) =>
+        state.looking.length === pageIds.length && state.looking.every((id, index) => id === pageIds[index])
+          ? state
+          : { looking: [...pageIds] },
+      ),
+
+    setCardDeck: (cardDeck) =>
+      set((state) =>
+        state.cardDeck === cardDeck ||
+        (state.cardDeck.shown === cardDeck.shown &&
+          state.cardDeck.since === cardDeck.since &&
+          state.cardDeck.missingSince === cardDeck.missingSince &&
+          state.cardDeck.beside === cardDeck.beside)
+          ? state
+          : { cardDeck },
+      ),
+
     setFocus: (focus) => set({ focus }),
 
     setStoryFocus: (storyFocus) => {
@@ -1330,7 +1420,7 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       const target: GuideTarget = { kind: "person", castId: person.id, name: person.name };
       set({ pendingTarget: null, chip: target });
       const project = live();
-      if (project) await commitRedraw(project, target, pending.instruction);
+      if (project) await commitRedraw(project, [target], pending.instruction);
     },
 
     clearRedraw: () => set({ redraw: null }),
@@ -1486,6 +1576,45 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       });
       after = live() ?? after;
     }
+    // "shiloh, 2" is one child aged 2. The interpreter often reads the number as
+    // a second, unnamed child and then asks for them. A message that is only a
+    // list is written here, and any skill call from that misreading is dropped.
+    const listed =
+      namedCast(briefOf(after.config)).length === 0 && !after.config.storyText.trim() && !authoringOf(after).lockedAt
+        ? statedCast(message)
+        : null;
+    if (listed) {
+      const beforeFacts = Object.keys(outcome.before).length > 0 ? outcome.before : captureGuideFacts(after);
+      let wrote = false;
+      await patchBook((book) => {
+        const result = applyGuidePatch(
+          book,
+          {
+            heroes: listed.map((person) => ({
+              name: person.name,
+              ...(person.age !== undefined ? { age: person.age } : {}),
+              ...(person.ageMonths !== undefined ? { ageMonths: person.ageMonths } : {}),
+            })),
+          },
+          patchContext(),
+        );
+        wrote = result.applied.includes("heroes");
+        return wrote ? result.project : book;
+      });
+      if (wrote) {
+        if (!outcome.applied.includes("heroes")) outcome.applied = [...outcome.applied, "heroes"];
+        if (
+          listed.some((person) => person.age !== undefined || person.ageMonths !== undefined) &&
+          !outcome.applied.includes("heroAges")
+        ) {
+          outcome.applied = [...outcome.applied, "heroAges"];
+        }
+        if (Object.keys(outcome.before).length === 0) outcome.before = beforeFacts;
+        outcome.commands = [];
+        outcome.overflowCommands = [];
+        after = live() ?? after;
+      }
+    }
     const answered = factsOf([...outcome.applied, ...outcome.unchanged]);
     const openOptional = openAskedFacts(after);
     const skipped = outcome.skip.map((id) => SKIP_FACT[id]).filter((f): f is GuideFactId => Boolean(f));
@@ -1523,11 +1652,24 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       });
     };
 
+    // An age stated plainly is never lost, whatever the reading made of the
+    // rest of the message: the one fact a picture cannot recover from.
+    if (agent.enabled) {
+      const chip = get().chip;
+      const backstop = statedAgeCalls(
+        message,
+        live() ?? after,
+        chip?.kind === "person" ? { castId: chip.castId, name: chip.name } : null,
+        [...outcome.commands, ...outcome.overflowCommands],
+      );
+      if (backstop.length > 0) outcome.commands = [...backstop, ...outcome.commands];
+    }
+
     // Skills the reader asked for. The facts above are already saved; the
     // skills run after them, so "add Brian, he's 6" finds Brian's age written.
     if (agent.enabled && (outcome.commands.length > 0 || outcome.overflowCommands.length > 0)) {
       const receipt = receiptFor(live() ?? after, outcome.applied);
-      await runAgentCalls(outcome.commands, outcome.overflowCommands, receipt, pendingBefore, options.mark ?? null);
+      await runAgentCalls(outcome.commands, outcome.overflowCommands, receipt, pendingBefore, options.mark ?? null, project);
       set({ sending: false });
       report([...outcome.applied, ...outcome.commands.map((call) => `skill:${call.id}`)]);
       return;
@@ -1547,10 +1689,13 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     }
 
     const drawn = cast.filter((m) => currentPortrait(after, m.id));
+    // A selected picture is the target of a change no skill took ("make the sky
+    // darker"); chatter ("thanks") never redraws it.
+    const selected = get().chip;
     if (
       outcome.applied.length === 0 &&
-      (outcome.intent === "revise" || outcome.intent === "other") &&
-      resolveGuideTarget({ sentence: message, chip: null, cast: drawn }).kind === "target"
+      (selected ? outcome.intent === "revise" : outcome.intent === "revise" || outcome.intent === "other") &&
+      ["target", "targets"].includes(resolveGuideTarget({ sentence: message, chip: selected, cast: drawn }).kind)
     ) {
       await routePictureChange(message, after, drawn);
       set({ sending: false });
@@ -1580,8 +1725,14 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       return;
     }
 
+    // Facts the message wrote can make a picture necessary (a new age, a style
+    // typed as a fact): draw it when that is cheap, and say so.
+    const settled = agent.enabled && outcome.applied.length > 0
+      ? await settlePictures(project, outcome.applied.includes("artStyle"))
+      : null;
     const receipt = receiptFor(live() ?? after, outcome.applied);
     if (agent.enabled && outcome.applied.includes("storyIdea") && (await offerRewrite(receipt))) {
+      if (settled) get().say([settled]);
       set({ sending: false });
       report(outcome.applied);
       return;
@@ -1592,12 +1743,14 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       outcome.intent === "question" ||
       outcome.intent === "other" ||
       (outcome.applied.length === 0 && outcome.unchanged.length === 0);
+    const reply = outcome.reply.trim();
     const answer: GuideLineCandidate | null = outcome.confirm
       ? { key: "reply", priority: "blocking", text: outcome.confirm }
-      : needsAnswer && outcome.reply.trim()
-        ? { key: "reply", priority: "answer", text: outcome.reply }
+      : needsAnswer && reply && !assumesAnotherChild(reply)
+        ? { key: "reply", priority: "answer", text: reply }
         : null;
-    await afterTurn(answer, receipt);
+    await afterTurn(answer ?? settled, receipt);
+    if (answer && settled) get().say([settled]);
     set({ sending: false });
 
     if (outcome.turnId) {
@@ -1707,9 +1860,51 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
     receipt: GuideReceipt | undefined,
     pendingBefore: AgentPending | null = null,
     mark: StoryMark | null = null,
+    since: Project | null = null,
   ): Promise<void> {
-    const turn = await executeAgentCalls(calls, { overflow, later: speakLater, mark, chip: get().chip });
+    const turn = await executeAgentCalls(calls, {
+      overflow,
+      later: speakLater,
+      mark,
+      chip: get().chip,
+      looking: get().looking,
+      ...(since ? { since } : {}),
+    });
     await finishAgentTurn(turn, receipt, pendingBefore);
+  }
+
+  /** Take back the undo of the newest reader message: work it started was paid for. */
+  function dropUndo(): void {
+    const last = get().session.messages.findLast((m) => m.role === "reader");
+    if (!last || (!last.restore && !last.before)) return;
+    set((state) => ({
+      session: {
+        ...state.session,
+        messages: state.session.messages.map((m) => (m.id === last.id ? { ...m, restore: undefined, before: undefined } : m)),
+      },
+    }));
+    persist();
+  }
+
+  /**
+   * Draw what the message just said makes necessary, when it is cheap and
+   * affordable (`autoStartAfterTurn`), and give the line that says so. Null
+   * when nothing started; the book's own button covers those pictures then.
+   */
+  async function settlePictures(
+    before: Project | null,
+    chose: boolean,
+    skip: readonly string[] = [],
+  ): Promise<Beat | null> {
+    if (!before || !agentConfig().enabled) return null;
+    // Nothing drawn and no choice made: there is nothing this message could have made necessary.
+    if (!chose && Object.keys(authoringOf(before).portraits ?? {}).length === 0) return null;
+    const { autoStartAfterTurn } = await import("./typedPictures");
+    const settled = await autoStartAfterTurn({ before, chose, skip });
+    if (!settled) return null;
+    // Work already paid for can't be taken back by putting the book back.
+    dropUndo();
+    return { key: settled.line, priority: "result", vars: { names: settled.names }, mustSay: settled.names };
   }
 
   async function finishAgentTurn(
@@ -1728,14 +1923,20 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       const open = current ? openAskedFacts(current) : [];
       if (open[0]) await patchBook((b) => withFactMarks(b, "skippedFacts", [open[0]!]));
     }
-    if (turn.redraw) {
-      const target: GuideTarget = { kind: "person", castId: turn.redraw.castId, name: turn.redraw.name };
-      const key = await offerRedraw(target, turn.redraw.instruction, turn.redraw.mode);
+    if (turn.redraws.length > 0) {
+      const [first, ...others] = turn.redraws as [(typeof turn.redraws)[number], ...(typeof turn.redraws)[number][]];
+      const targets: GuideTarget[] = turn.redraws.map((item) => ({ kind: "person", castId: item.castId, name: item.name }));
+      const key = await offerRedraw(targets[0]!, first.instruction, first.mode, others);
       // The skill said "tap redraw when you're ready"; say what actually happened instead.
       const rest = beats.filter((b) => b.key !== "redrawReady");
       beats.length = 0;
-      beats.push(...rest, redrawBeat(key, target, "result"));
+      beats.push(...rest, redrawBeat(key, targets, "result"));
       set({ chip: null });
+    } else if (!turn.holdsFloor && !turn.well && !turn.undo) {
+      // What the message changed about somebody's look or age may make a
+      // picture necessary: draw it when that is cheap, as the buttons would.
+      const settled = await settlePictures(turn.startedFrom, turn.chose);
+      if (settled) beats.push(settled);
     }
     set((state) => ({
       agentWell: turn.well,
@@ -1822,27 +2023,43 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
       get().say([{ key: "whichName", priority: "blocking" }]);
       return;
     }
-    await commitRedraw(project, resolution.target, message);
+    if (resolution.kind === "targets") {
+      await commitRedraw(
+        project,
+        resolution.people.map((person): GuideTarget => ({ kind: "person", castId: person.id, name: person.name })),
+        message,
+      );
+      return;
+    }
+    await commitRedraw(project, [resolution.target], message);
   }
 
-  async function commitRedraw(project: Project, target: GuideTarget, instruction: string): Promise<void> {
+  /** The same change for one picture or for several people, drawn and priced together. */
+  async function commitRedraw(project: Project, targets: GuideTarget[], instruction: string): Promise<void> {
     // "Start over" asks for a new picture; anything else changes the one that is there.
     const mode: RedrawMode | undefined = asksForNewPicture(instruction) ? "new" : undefined;
     // A bare "start over" describes nothing, so nothing is kept on the person.
     const change = isBareRestart(instruction) ? "" : instruction;
-    if (target.kind === "person" && change) {
-      // The change belongs to that person's plate, so the portrait redraws
+    const people = targets.flatMap((target) => (target.kind === "person" ? [target.castId] : []));
+    if (people.length > 0 && change) {
+      // The change belongs to each person's plate, so their portrait redraws
       // from it and every later picture of them follows.
       await patchBook((b) => {
         const brief = briefOf(b.config);
         const cast = (brief.cast ?? []).map((m) =>
-          m.id === target.castId ? { ...m, portraitNote: [m.portraitNote, change].filter(Boolean).join("; ").slice(0, 400) } : m,
+          people.includes(m.id) ? { ...m, portraitNote: [m.portraitNote, change].filter(Boolean).join("; ").slice(0, 400) } : m,
         );
         return { ...b, config: { ...b.config, storyBrief: { ...brief, cast } } };
       });
     }
-    const key = await offerRedraw(target, change, mode);
-    get().say([redrawBeat(key, target, "answer")]);
+    const [first, ...rest] = targets as [GuideTarget, ...GuideTarget[]];
+    const more = rest.flatMap((target) =>
+      target.kind === "person"
+        ? [{ castId: target.castId, name: target.name, instruction: change, ...(mode ? { mode } : {}) }]
+        : [],
+    );
+    const key = await offerRedraw(first, change, mode, more);
+    get().say([redrawBeat(key, targets, "answer")]);
     void project;
   }
 
@@ -1851,18 +2068,33 @@ export const useChatStudio = create<ChatStudioState>((set, get) => {
    * (`typedPictures`), otherwise leave the priced button. Returns the line that
    * says which happened.
    */
-  async function offerRedraw(target: GuideTarget, instruction: string, mode?: RedrawMode): Promise<GuideLineKey> {
+  async function offerRedraw(
+    target: GuideTarget,
+    instruction: string,
+    mode?: RedrawMode,
+    more: NonNullable<RedrawRequest["more"]> = [],
+  ): Promise<GuideLineKey> {
     const { autoStartRedraw } = await import("./typedPictures");
-    const request: RedrawRequest = { target, instruction, ...(mode ? { mode } : {}) };
+    const request: RedrawRequest = {
+      target,
+      instruction,
+      ...(mode ? { mode } : {}),
+      ...(more.length > 0 ? { more } : {}),
+    };
     const outcome = await autoStartRedraw(request).catch(() => "declined" as const);
     if (outcome === "started") return "redrawStarting";
     set({ redraw: request });
     return outcome === "needsSparks" ? "redrawNeedSparks" : "redrawReady";
   }
 
-  function redrawBeat(key: GuideLineKey, target: GuideTarget, priority: Beat["priority"]): Beat {
-    const subject = pictureSubject(target);
-    return { key, priority, vars: { names: subject }, ...(target.kind === "person" ? { mustSay: [target.name] } : {}) };
+  function redrawBeat(key: GuideLineKey, target: GuideTarget | GuideTarget[], priority: Beat["priority"]): Beat {
+    const all = Array.isArray(target) ? target : [target];
+    if (all.length > 1) {
+      const names = all.map(pictureSubject);
+      return { key, priority, vars: { names }, mustSay: all.flatMap((each) => (each.kind === "person" ? [each.name] : [])) };
+    }
+    const only = all[0]!;
+    return { key, priority, vars: { names: pictureSubject(only) }, ...(only.kind === "person" ? { mustSay: [only.name] } : {}) };
   }
 });
 

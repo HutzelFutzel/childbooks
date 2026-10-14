@@ -7,6 +7,7 @@ import { GRAPHICS_DENSITY, SPREAD_USAGE, TEXT_HANDLING, TEXT_PLACEMENT } from ".
 import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
 import type { Anchor, BookConfig, ScreenplayDoc, ScreenplaySpread } from "../types";
+import { visualDescription } from "../book/anchorDescription";
 import { anchorNameKeys, effectiveAnchorIds, normalizeAnchorName } from "../book/anchorRefs";
 import { getBookLayout } from "../book/layouts";
 import { getBookLanguage } from "../config/bookLanguages";
@@ -83,7 +84,7 @@ function describeAnchors(anchors: Anchor[]): string {
   return anchors
     .map((a) => {
       const look = a.lookFromArt?.trim();
-      const description = look || a.description;
+      const description = visualDescription(a.name, look || a.description);
       const fromArt = a.sourceArt?.length
         ? " Match the author's drawing; the name is a label only."
         : "";

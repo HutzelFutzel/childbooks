@@ -17,9 +17,9 @@
  * project store the rest of the studio uses.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { AnimatePresence, LayoutGroup, motion } from "framer-motion";
-import { Loader2, MessageCircle, X } from "lucide-react";
-import { ENTER_NEVER_ACCEPTS, guideActivity, type GuideActivity } from "../../core/guide/activity";
+import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from "framer-motion";
+import { ArrowRight, Loader2, MessageCircle, Sparkles, X } from "lucide-react";
+import { cardPlaceholderKind, ENTER_NEVER_ACCEPTS, guideActivity, type GuideActivity } from "../../core/guide/activity";
 import { currentPortrait } from "../../core/guide/portrait";
 import { authoringOf } from "../../core/guide/projectState";
 import type { BookViewId } from "../../core/guide/journey";
@@ -48,8 +48,9 @@ import { PageFocus } from "./book/PageFocus";
 import { PagesView } from "./book/PagesView";
 import { StoryView } from "./book/StoryView";
 import { StyleView } from "./book/StyleView";
-import { dispIndexOf } from "./book/units";
+import { dispIndexOf, dispUnitIds } from "./book/units";
 import { usePrintCheck } from "./book/usePrintCheck";
+import { ModeSwitch, type BookMode } from "./book/ModeSwitch";
 import { ViewSwitch } from "./book/ViewSwitch";
 import { ChatThread } from "./chat/ChatThread";
 import { Composer } from "./chat/Composer";
@@ -58,12 +59,13 @@ import { IdeaChips, useIdeaPlaceholder } from "./chat/IdeaChips";
 import { IdeaMenu } from "./chat/IdeaMenu";
 import { ConflictCard } from "./chat/ConflictCard";
 import { OpeningScene } from "./chat/OpeningScene";
-import { GuideIntl, useGuideLabel, useGuideT } from "./intl";
+import { GuideIntl, useGuideLabel, useGuideList, useGuideT } from "./intl";
+import { useHandOverStory } from "./useHandOverStory";
 import { layoutMove, paneIn } from "./motion";
 import { useChatDrivers } from "./useChatDrivers";
 import { useChatJourney, type ChatJourney, type ChatWell } from "./useChatJourney";
 import { useGuideMemory } from "./useGuideMemory";
-import { useWellConversation } from "./useWellConversation";
+import { useCardHold, useWellConversation } from "./useWellConversation";
 import { isQuietMessage, latestTurn } from "../../core/guide/conversation";
 
 export function GuideStudio({ onNavigate }: { onNavigate: (destination: StudioDestination) => void }) {
@@ -115,6 +117,9 @@ function StudioShell({ project, onNavigate }: { project: Project; onNavigate: (d
   );
 }
 
+/** The step card's Enter default while a reply beside it takes Enter. */
+function ignoreDefault(): void {}
+
 function useWindowWidth(): number {
   const [width, setWidth] = useState(() => (typeof window === "undefined" ? 1280 : window.innerWidth));
   useEffect(() => {
@@ -138,8 +143,10 @@ function ChatShell({
 }) {
   useChatDrivers(project, journey);
   usePrintCheck(project, journey.locked && journey.pages.total > 0 && journey.pages.done === journey.pages.total);
-  const talk = useWellConversation(project, journey);
-  const liveWell = talk.well;
+  const { holding, hold } = useCardHold();
+  const talk = useWellConversation(project, journey, holding);
+  // The latest card: a reply beside the step card, else the step card.
+  const liveWell = talk.beside ?? talk.well;
 
   const t = useGuideT("chrome");
   const label = useGuideLabel();
@@ -147,6 +154,7 @@ function ChatShell({
   const session = useChatStudio((s) => s.session);
   const loaded = useChatStudio((s) => s.loaded);
   const sending = useChatStudio((s) => s.sending);
+  const storyFocus = useChatStudio((s) => s.storyFocus);
   const chosenView = useChatStudio((s) => s.view);
   const chip = useChatStudio((s) => s.chip);
   const away = useChatStudio((s) => s.away);
@@ -174,9 +182,9 @@ function ChatShell({
   }, [finished]);
   const selectionOnStage =
     layout === "mobile" &&
-    (liveWell?.kind === "styleChoice" ||
-      liveWell?.kind === "formatChoice" ||
-      liveWell?.kind === "layoutChoice");
+    (talk.well?.kind === "styleChoice" ||
+      talk.well?.kind === "formatChoice" ||
+      talk.well?.kind === "layoutChoice");
 
   const defaultRun = useRef<(() => void) | null>(null);
   const registerDefault = useCallback((run: (() => void) | null) => {
@@ -195,19 +203,30 @@ function ChatShell({
   );
 
   const send = (text: string) => {
+    // A turn is still being answered: `send` would drop this message, so keep
+    // it in the field (the composer holds its send button for the same reason).
+    if (store().sending) return;
     memory.setDraft("");
     void store().send(text);
   };
   const edit = (message: GuideMessage) => {
     void store()
-      .undo(message.id)
+      .undo(message.id, { quiet: true })
       .then(() => memory.setDraft(message.text));
   };
 
   const opening = journey.phase === "opening";
+  const cast = namedCast(briefOf(project.config));
+  const activePortraitNames = cast
+    .filter((member) => journey.activeUnitIds.has(member.id))
+    .map((member) => member.name.trim())
+    .filter(Boolean);
+  const portraitActive = activePortraitNames.length > 0;
   // While the pictures draw the field stays open for questions, and says so.
   const drawingNow =
-    authoringOf(project).drawBook?.phase === "cast" || authoringOf(project).drawBook?.phase === "pages";
+    authoringOf(project).drawBook?.phase === "cast" ||
+    authoringOf(project).drawBook?.phase === "pages" ||
+    portraitActive;
   const chipLabel = chip ? targetLabel(chip, t) : null;
   const ideaPlaceholder = useIdeaPlaceholder(project, view);
   // On the Story tab the composer says where its words go: the story. The
@@ -219,11 +238,27 @@ function ChatShell({
   // and on the chips, and goes away with the message.
   const storyMark = useStoryMark((s) => s.mark);
   const markedPassage = storyContext && !chip ? storyMark : null;
+  const bookDrawing =
+    authoringOf(project).drawBook?.phase === "cast" || authoringOf(project).drawBook?.phase === "pages";
+  // With a card open, the card asks; the field never repeats its question. It
+  // says what a typed line would do beside this card instead.
+  const cardOpen = !opening && liveWell !== null;
+  // Nobody is in the book yet and the guide asked who: the field shows what an answer looks like.
+  const answeringWho =
+    !opening && journey.entry === "guided" && !journey.hasBook && journey.missing[0] === "names";
   const placeholder = opening
     ? t("startAnywhere")
-    : livePlaceholder(session.messages, locale) ??
-      (drawingNow ? t("drawingPlaceholder") : null) ??
-      (markedPassage ? t("markedPlaceholder") : null) ??
+    : sending
+      ? t("sendingPlaceholder")
+      : (drawingNow ? t(bookDrawing ? "drawingBookPlaceholder" : "drawingPeoplePlaceholder") : null) ??
+        (markedPassage ? t("markedPlaceholder") : null) ??
+        // A face is selected: what is typed is about them, and the field says so.
+        (chip?.kind === "person" ? t("personPlaceholder", { name: chip.name }) : null) ??
+        (cardOpen
+          ? t(cardPlaceholderKind(liveWell.kind) === "type" ? "cardTypePlaceholder" : "cardPickPlaceholder")
+          : null) ??
+        (answeringWho ? t("namesPlaceholder") : null) ??
+        livePlaceholder(session.messages, locale) ??
       (storyContext ? t("storyPlaceholder") : null) ??
       ideaPlaceholder ??
       t("askGuide");
@@ -233,8 +268,6 @@ function ChatShell({
   const analysisRunning = useChatStudio((s) => s.analysisRunning);
   const starting = useChatStudio((s) => s.starting);
   const quotes = useChatStudio((s) => s.quotes);
-  const cast = namedCast(briefOf(project.config));
-  const portraitActive = cast.some((member) => journey.activeUnitIds.has(member.id));
   const portraitProgress = {
     done: cast.filter((member) => Boolean(currentPortrait(project, member.id))).length,
     total: cast.length,
@@ -252,6 +285,7 @@ function ChatShell({
     extractionRunning,
     analysisRunning,
     planRunning: journey.planRunning,
+    waiting: journey.chatWell ? null : journey.waiting,
     storyRunning: journey.storyStatus === "running",
     revisionRunning,
     estimating: Object.values(quotes).some((quote) => quote.status === "loading"),
@@ -271,12 +305,15 @@ function ChatShell({
   const lastMessageId = session.messages[session.messages.length - 1]?.id ?? "";
   const followedTurn = useRef<string | null>(null);
   useEffect(() => {
-    if (!focusContext || followedTurn.current === lastMessageId) return;
-    followedTurn.current = lastMessageId;
+    const token = focusContext ? `${lastMessageId}:${focusContext.key}` : null;
+    if (!focusContext || !token || followedTurn.current === token) return;
+    followedTurn.current = token;
+    // Never pull the book away from the story the reader is typing or reviewing.
+    if (storyFocus) return;
     if (journey.views.includes(focusContext.view) && chosenView !== focusContext.view) {
       store().setView(focusContext.view);
     }
-  }, [chosenView, focusContext, journey.views, lastMessageId, store]);
+  }, [chosenView, focusContext, journey.views, lastMessageId, store, storyFocus]);
 
   // On a phone the conversation is a sheet. Selecting a face opens it, because
   // that is where their photo, drawing, and description choices are.
@@ -285,9 +322,9 @@ function ChatShell({
   }, [chip, layout]);
 
   const conflict = useProjectsStore((s) => s.bookConflict?.projectId === project.id);
-  const well = conflict ? (
-    <ConflictCard key="conflict" />
-  ) : opening ? (
+  // A save conflict is asked above the card, never in its place: the card and
+  // what was typed into it stay where they are.
+  const well = opening ? (
     <EntryShortcuts
       guideLabel={label("guideMe")}
       ownLabel={label("ownWords")}
@@ -296,15 +333,35 @@ function ChatShell({
       }
     />
   ) : (
-    <ComposerWell
-      key="well"
-      well={liveWell}
-      project={project}
-      onView={(v) => store().setView(v)}
-      onOpenUnit={(unitId) => openUnit(unitId)}
-      onOrder={() => onOrdering(true)}
-      onDefault={registerDefault}
-    />
+    <div className="flex flex-col gap-3">
+      {conflict && <ConflictCard key="conflict" />}
+      {/* A reply to the reader, or a failure, comes in above the step card; the
+          step card stays where it is until it is answered. */}
+      {talk.beside && (
+        <ComposerWell
+          key="beside"
+          well={talk.beside}
+          cardKey={talk.besideId}
+          person={false}
+          project={project}
+          onView={(v) => store().setView(v)}
+          onOpenUnit={(unitId) => openUnit(unitId)}
+          onOrder={() => onOrdering(true)}
+          onDefault={registerDefault}
+        />
+      )}
+      <div key="well" {...hold}>
+        <ComposerWell
+          well={talk.well}
+          cardKey={talk.wellId}
+          project={project}
+          onView={(v) => store().setView(v)}
+          onOpenUnit={(unitId) => openUnit(unitId)}
+          onOrder={() => onOrdering(true)}
+          onDefault={talk.beside ? ignoreDefault : registerDefault}
+        />
+      </div>
+    </div>
   );
 
   // A suggestion that runs is the reader's own line, like any tap: the thread
@@ -327,16 +384,19 @@ function ChatShell({
 
   const composer = (
     <div className="flex flex-col gap-2">
-      <ActivityStatus activity={activity} />
-      {talk.held && !working && (
-        <WaitingNotice label={t("waitingOne")} action={t("waitingShow")} onShow={talk.release} />
-      )}
+      <ActivityStatus activity={activity} activePortraitNames={activePortraitNames} />
+      {/* Once the pages exist, what can be typed stays in view whatever else is
+          open: there is no next step to protect, and it is how a reader finds the
+          chat can change the text, not only the picture. */}
       {talk.composer &&
         !opening &&
-        (!journey.chatWell || talk.held) &&
         !conflict &&
-        !working &&
-        !memory.draft.trim() && (
+        !memory.draft.trim() &&
+        (journey.locked ||
+          (!working && !journey.chatWell) ||
+          // Looking at drawn people: what the chat can change about them is
+          // worth showing even while a card asks its own question.
+          (!working && view === "cast" && portraitProgress.done > 0)) && (
           <IdeaChips
             project={project}
             view={view}
@@ -346,6 +406,12 @@ function ChatShell({
             onRun={runIdea}
           />
         )}
+      {!opening &&
+        journey.entry === "own" &&
+        !journey.handedOver &&
+        project.config.storyText.trim() &&
+        talk.well?.kind !== "storyDone" &&
+        talk.beside?.kind !== "storyDone" && <StoryReadyBar waiting={sending || storyFocus === "reviewing"} />}
       {talk.composer ? (
         <Composer
             value={memory.draft}
@@ -378,6 +444,8 @@ function ChatShell({
             locale={locale}
             onLocale={(next) => void store().setChatLocale(next)}
             working={working}
+            sending={sending}
+            quiet={cardOpen}
             autoFocus={layout !== "mobile"}
           />
       ) : journey.entry === "own" && !activity ? (
@@ -415,40 +483,80 @@ function ChatShell({
       away={awayRow}
       scrollKey={project.id}
       task={selectionOnStage ? null : well}
-      taskKey={opening ? "entry" : `${chatTaskKey(liveWell)}:${chip?.kind === "person" ? chip.castId : ""}`}
+      taskKey={opening ? "entry" : `${talk.wellId ?? "none"}|${talk.besideId ?? ""}:${chip?.kind === "person" ? chip.castId : ""}`}
       className={opening ? "flex-none overflow-visible px-5 pt-2 pb-1" : undefined}
       wideTask={
-        liveWell?.kind === "styleChoice" ||
-        liveWell?.kind === "formatChoice" ||
-        liveWell?.kind === "layoutChoice"
+        talk.well?.kind === "styleChoice" ||
+        talk.well?.kind === "formatChoice" ||
+        talk.well?.kind === "layoutChoice"
       }
     />
   );
 
   const center = composer;
 
+  const enterFocus = (unitId: string) => {
+    setFocusUnit(unitId);
+    store().setFocus(true);
+  };
+
+  const leaveFocus = useCallback(() => {
+    setFocusUnit(null);
+    setOverlay(false);
+    store().setFocus(false);
+  }, [store]);
+
+  // Preview | Edit. Edit is page focus on the spread that is open; the switch
+  // is the way in and the way out. It exists once there is a page to work on.
+  const canEdit = journey.locked && displays.length > 0;
+  const changeMode = (next: BookMode) => {
+    if (next === "preview") {
+      leaveFocus();
+      return;
+    }
+    const disp = displays[Math.min(Math.max(0, spread), displays.length - 1)];
+    const unitId = disp ? dispUnitIds(disp)[0] : undefined;
+    if (!unitId) return;
+    store().setView("pages");
+    enterFocus(unitId);
+  };
+  useEffect(() => {
+    if (!canEdit && focusUnit) leaveFocus();
+  }, [canEdit, focusUnit, leaveFocus]);
+
+  // What "this page" means for a sentence about the finished pages: the page in
+  // Edit, else the spread that is open.
+  const openDisp = displays[Math.min(Math.max(0, spread), Math.max(0, displays.length - 1))];
+  const lookingAt = focusUnit ? [focusUnit] : openDisp && journey.locked ? dispUnitIds(openDisp) : [];
+  const lookingKey = lookingAt.join("|");
+  useEffect(() => {
+    store().setLooking(lookingKey ? lookingKey.split("|") : []);
+  }, [lookingKey, store]);
+
   const bookPane = (
     <BookPane
       project={project}
       journey={journey}
-      activity={activity}
       view={view}
       spread={spread}
       onSpread={setSpread}
-      onFocus={(unitId) => {
-        setFocusUnit(unitId);
-        store().setFocus(true);
-      }}
+      onFocus={enterFocus}
+      onMode={canEdit ? changeMode : null}
     />
   );
 
-  const leaveFocus = () => {
-    setFocusUnit(null);
-    setOverlay(false);
-    store().setFocus(false);
-  };
-
-  if (!loaded) return <div className="flex-1" />;
+  if (!loaded) {
+    return (
+      <div
+        className="flex flex-1 flex-col items-center justify-center gap-3 bg-canvas text-ink-500"
+        role="status"
+        aria-live="polite"
+      >
+        <Loader2 className="size-6 animate-spin text-brand-400" />
+        <p className="text-sm font-medium">Opening your conversation…</p>
+      </div>
+    );
+  }
 
   return (
     <LayoutGroup>
@@ -487,7 +595,7 @@ function ChatShell({
             }
             composer={center}
             lastLine={lastGuideLine(session.messages, locale)}
-            hasTask={Boolean(liveWell) || opening || conflict}
+            hasTask={Boolean(talk.well || talk.beside) || opening || conflict}
             onOpenSheet={() => setSheet(true)}
           />
         ) : layout === "focus" ? (
@@ -567,23 +675,6 @@ function ChatShell({
   );
 }
 
-/** A choice is waiting while the reader writes; it comes back when they are done, or when they ask. */
-function WaitingNotice({ label, action, onShow }: { label: string; action: string; onShow: () => void }) {
-  return (
-    <div className="flex items-center gap-2 px-1 text-xs text-ink-500" role="status">
-      <span aria-hidden className="size-1.5 rounded-full bg-magic-400" />
-      <span>{label}</span>
-      <button
-        type="button"
-        onClick={onShow}
-        className="rounded-full px-2 py-0.5 font-medium text-ink-700 underline-offset-2 transition hover:bg-white hover:text-ink-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
-      >
-        {action}
-      </button>
-    </div>
-  );
-}
-
 function EntryShortcuts({
   guideLabel,
   ownLabel,
@@ -642,13 +733,11 @@ function contextualBookFocus(
   if (well === "pageFix" || well === "printFix" || well === "order") {
     return { key: `pages-${well}`, view: "pages" };
   }
-  if (
-    well === "storyRetry" ||
-    well === "manuscriptChoice" ||
-    well === "drawBook"
-  ) {
+  if (well === "storyRetry" || well === "manuscriptChoice") {
     return { key: `story-${well}`, view: "story" };
   }
+  // The people are what just arrived, so the book opens on them.
+  if (well === "drawBook") return { key: "draw-book", view: "cast" };
   if (activity?.id === "drawingPeople") {
     return { key: "drawing-people", view: "cast" };
   }
@@ -658,52 +747,55 @@ function contextualBookFocus(
   if (activity?.id === "drawingPages") {
     return { key: "drawing-pages", view: "pages" };
   }
+  // Planning the pages is silent work with nothing to show on the story: it
+  // must not take the book away from the people who were just drawn.
   if (
     activity?.id === "readingStory" ||
     activity?.id === "writingStory" ||
-    activity?.id === "revisingStory" ||
-    activity?.id === "planningPages"
+    activity?.id === "revisingStory"
   ) {
     return { key: activity.id, view: "story" };
   }
   return null;
 }
 
-function chatTaskKey(well: ChatWell | null): string {
-  if (!well) return "none";
-  switch (well.kind) {
-    case "portraits":
-      return `${well.kind}:${well.castIds.join(",")}`;
-    case "bookPrepFix":
-      return `${well.kind}:${well.unitIds.join(",")}`;
-    case "pageFix":
-    case "printFix":
-      return `${well.kind}:${well.unitId}`;
-    case "agentConfirm":
-      return `${well.kind}:${well.confirm.hash}`;
-    case "castLooks":
-      return `${well.kind}:${well.castId}`;
-    default:
-      return well.kind;
-  }
+/**
+ * Own words: the way on, always beside the message field until the story is
+ * handed over. Asking a question or a change in between never removes it.
+ */
+function StoryReadyBar({ waiting }: { waiting: boolean }) {
+  const label = useGuideLabel();
+  const handOver = useHandOverStory();
+  return (
+    <button
+      type="button"
+      onClick={handOver}
+      disabled={waiting}
+      className="inline-flex min-h-10 items-center gap-2 self-start rounded-full bg-ink-900 px-4 text-sm font-semibold text-white shadow-soft transition hover:bg-ink-800 disabled:cursor-not-allowed disabled:bg-ink-200 disabled:text-ink-500"
+    >
+      {label("storyIsReady")}
+      <ArrowRight className="size-4" aria-hidden />
+    </button>
+  );
 }
 
 function BookPane({
   project,
   journey,
-  activity,
   view,
   spread,
   onSpread,
   onFocus,
+  onMode,
 }: {
   project: Project;
   journey: ChatJourney;
-  activity: GuideActivity | null;
   view: BookViewId | null;
   spread: number;
   onSpread: (index: number) => void;
   onFocus: (unitId: string) => void;
+  /** The Preview | Edit switch, once there is a page to edit. */
+  onMode: ((mode: BookMode) => void) | null;
 }) {
   const setView = useChatStudio((s) => s.setView);
   const viewKey = journey.views.join("\0");
@@ -755,6 +847,7 @@ function BookPane({
           {journey.locked && journey.pages.total > 0 && journey.pages.done < journey.pages.total && (
             <PagesProgress done={journey.pages.done} total={journey.pages.total} />
           )}
+          {onMode && <ModeSwitch mode="preview" onChange={onMode} />}
         </div>
       </div>
       <div className="relative min-h-0 flex-1">
@@ -781,11 +874,6 @@ function BookPane({
             )}
           </motion.div>
         </AnimatePresence>
-        {activity && activity.id !== "understanding" && activity.id !== "estimating" && (
-          <div className="pointer-events-none absolute top-4 left-1/2 z-20 w-[min(22rem,calc(100%-2rem))] -translate-x-1/2">
-            <ActivityStatus activity={activity} compact />
-          </div>
-        )}
       </div>
     </div>
   );
@@ -821,12 +909,19 @@ function StorySourceSwitch({
 
 function PagesProgress({ done, total }: { done: number; total: number }) {
   return (
-    <div className="flex shrink-0 items-center gap-2 text-xs text-ink-500" aria-live="polite">
-      <span className="relative block h-1 w-20 overflow-hidden rounded-full bg-ink-100">
+    <div
+      className="flex shrink-0 items-center gap-2 rounded-full bg-magic-50/80 px-2.5 py-1 text-xs font-medium text-magic-700 ring-1 ring-magic-200/70"
+      aria-live="polite"
+    >
+      <span className="relative flex size-1.5 shrink-0" aria-hidden>
+        <span className="absolute inline-flex size-full animate-ping rounded-full bg-magic-400/70 motion-reduce:hidden" />
+        <span className="relative size-1.5 rounded-full bg-magic-500" />
+      </span>
+      <span className="relative block h-1.5 w-16 overflow-hidden rounded-full bg-magic-200/70">
         <motion.span
           className="absolute inset-y-0 left-0 rounded-full bg-magic-500"
           initial={false}
-          animate={{ width: `${Math.round((done / Math.max(1, total)) * 100)}%` }}
+          animate={{ width: `${Math.max(8, Math.round((done / Math.max(1, total)) * 100))}%` }}
           transition={{ duration: 0.5, ease: "easeOut" }}
         />
       </span>
@@ -910,12 +1005,14 @@ const SLOW_ACTIVITY_MS = 15_000;
 
 function ActivityStatus({
   activity,
-  compact = false,
+  activePortraitNames = [],
 }: {
   activity: GuideActivity | null;
-  compact?: boolean;
+  activePortraitNames?: readonly string[];
 }) {
   const t = useGuideT("chrome");
+  const list = useGuideList();
+  const reduce = useReducedMotion();
   const id = activity?.id ?? null;
   // A wait that runs long says so, so a quiet minute doesn't read as a failure.
   const [slow, setSlow] = useState(false);
@@ -930,7 +1027,19 @@ function ActivityStatus({
   const text =
     activity.id === "drawingPages" && activity.total > 0
       ? t("drawingPages", { n: Math.min(activity.done + 1, activity.total), total: activity.total })
-      : t(activity.id);
+      : activity.id === "drawingPeople" && activePortraitNames.length > 0
+        ? t("drawingPeopleNamed", { names: list(activePortraitNames) })
+        : t(activity.id);
+  const hint =
+    activity.id === "drawingPeople"
+      ? t("drawingPeopleHint")
+      : activity.id === "preparingBook"
+        ? t("preparingBookHint")
+        : activity.id === "drawingPages"
+          ? t("drawingPagesHint")
+          : slow
+            ? t("stillWorking")
+            : null;
   const determinate =
     activity.id === "drawingPages" ||
     activity.id === "drawingPeople" ||
@@ -939,50 +1048,61 @@ function ActivityStatus({
       : null;
   const progress =
     determinate && determinate.total > 0
-      ? Math.max(0, Math.min(100, (determinate.done / determinate.total) * 100))
+      ? Math.max(6, Math.min(100, (determinate.done / determinate.total) * 100))
       : null;
   return (
-    <div
-      role={compact ? undefined : "status"}
-      aria-live={compact ? undefined : "polite"}
-      aria-hidden={compact || undefined}
-      className={cn(
-        "overflow-hidden rounded-xl border border-magic-200/70 bg-white/95 shadow-soft backdrop-blur-sm",
-        compact ? "px-3 py-2" : "px-3.5 py-3",
-      )}
+    <motion.div
+      role="status"
+      aria-live="polite"
+      initial={{ opacity: 0, y: 4 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="flex items-start gap-3 rounded-2xl bg-white/95 px-3.5 py-2.5 shadow-soft ring-1 ring-magic-200/80"
     >
-      <div className="flex items-center gap-2.5 text-sm font-medium text-ink-800">
-        <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-magic-50 text-magic-600">
-          <Loader2 className="size-4 animate-spin" aria-hidden />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate">{text}</span>
-          {slow && (
-            <span className="block truncate text-xs font-normal text-ink-500">{t("stillWorking")}</span>
+      <span
+        className="relative mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-magic-50 ring-1 ring-magic-200/70"
+        aria-hidden
+      >
+        {!reduce && (
+          <span className="absolute -inset-0.5 animate-spin rounded-full border-2 border-magic-200 border-t-magic-500 [animation-duration:2.2s]" />
+        )}
+        <Sparkles className="size-3.5 text-magic-700" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline justify-between gap-3">
+          <span className="truncate font-display text-[13.5px] font-medium tracking-tight text-ink-900">
+            {text}
+          </span>
+          {progress !== null && (
+            <span className="shrink-0 rounded-full bg-magic-50 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-magic-700">
+              {determinate!.done}/{determinate!.total}
+            </span>
           )}
         </span>
-        {progress !== null && (
-          <span className="text-xs tabular-nums text-ink-400">
-            {determinate!.done}/{determinate!.total}
-          </span>
+        {hint && (
+          <span className="mt-0.5 block text-xs leading-snug font-normal text-ink-500">{hint}</span>
         )}
-      </div>
-      <div className="mt-2 h-1 overflow-hidden rounded-full bg-magic-100">
-        {progress === null ? (
-          <motion.span
-            className="block h-full w-1/3 rounded-full bg-magic-500"
-            animate={{ x: ["-100%", "300%"] }}
-            transition={{ duration: 1.4, repeat: Infinity, ease: "easeInOut" }}
-          />
-        ) : (
-          <motion.span
-            className="block h-full rounded-full bg-magic-500"
-            initial={false}
-            animate={{ width: `${progress}%` }}
-          />
-        )}
-      </div>
-    </div>
+        <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-magic-100">
+          {progress === null ? (
+            reduce ? (
+              <span className="block h-full w-1/3 rounded-full bg-magic-400" />
+            ) : (
+              <motion.span
+                className="block h-full w-1/3 rounded-full bg-magic-500"
+                animate={{ x: ["-120%", "320%"] }}
+                transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+              />
+            )
+          ) : (
+            <motion.span
+              className="block h-full rounded-full bg-magic-500"
+              initial={false}
+              animate={{ width: `${progress}%` }}
+              transition={{ duration: 0.4, ease: "easeOut" }}
+            />
+          )}
+        </span>
+      </span>
+    </motion.div>
   );
 }
 

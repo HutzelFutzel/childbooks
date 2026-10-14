@@ -27,11 +27,12 @@ import {
   type SharedTextStyleKey,
   type TextBox,
 } from "../../core/types";
-import { withSharedTextStyle, wordParagraphs } from "../../core/design";
+import { pictureRectFor, withSharedTextStyle, wordParagraphs } from "../../core/design";
 import { artCarriesLettering, coverLinesOf, frontCoverArt } from "../../core/book/coverLines";
 import type { BookLanguagesConfig } from "../../core/config/bookLanguages";
 import { getBookLanguage } from "../../core/config/bookLanguages";
 import type { LayoutsConfig } from "../../core/config/layouts";
+import { resolveLayoutComposition, resolveTextWidth } from "../../core/config/layouts";
 import {
   defaultBodyFontSeedPt,
   type TypographyConfig,
@@ -60,6 +61,13 @@ export interface DesignPage {
   outerSide: PageSide;
   /** The active layout's resolved plan for this page. */
   plan: LayoutPlan;
+  /**
+   * Picture size on this page, as a share of the page (the admin's "picture
+   * size"). Unset means full size — covers, and callers with no config.
+   */
+  pictureScale?: number;
+  /** Width of a new story text box as a share of its slot (admin setting). */
+  textWidth?: number;
 }
 
 function uid(prefix = "tb"): string {
@@ -100,6 +108,7 @@ export function buildDesignPages(
     doc.spreads.forEach((s) => {
       if (s.placeholder) return;
       const side = sideOf(s);
+      const plan = planPageLayout(project, { side, textLength: s.text.length, layoutsConfig });
       pages.push({
         id: s.id,
         // The PHYSICAL page number, not the position in the spread list. They
@@ -113,7 +122,10 @@ export function buildDesignPages(
         layoutNote: s.layoutNote,
         isCover: false,
         outerSide: side,
-        plan: planPageLayout(project, { side, textLength: s.text.length, layoutsConfig }),
+        plan,
+        // Admin policy for interior pages; covers keep full-size art.
+        pictureScale: resolveLayoutComposition(layoutsConfig).pictureScale,
+        textWidth: resolveTextWidth(layoutsConfig, plan.layoutId),
       });
     });
   }
@@ -275,8 +287,18 @@ function sharedStyle(
  * full-height for illustration prompting; only the editor's interactive box
  * hugs the words.
  */
-function hugTextInRect(box: TextBox, container: NormRect, pageAspect: number): TextBox {
-  const h = Math.min(container.h, fitBoxHeightPct(box, pageAspect));
+function hugTextInRect(
+  box: TextBox,
+  container: NormRect,
+  pageAspect: number,
+  /** Share of the container's width the box takes, centred in it. */
+  widthShare = 1,
+): TextBox {
+  const share = Number.isFinite(widthShare) ? Math.min(1, Math.max(0.1, widthShare)) : 1;
+  const w = container.w * share;
+  const x = container.x + (container.w - w) / 2;
+  const narrowed: TextBox = { ...box, rect: { ...box.rect, x, w } };
+  const h = Math.min(container.h, fitBoxHeightPct(narrowed, pageAspect));
   const y =
     box.vAlign === "top"
       ? container.y
@@ -285,7 +307,7 @@ function hugTextInRect(box: TextBox, container: NormRect, pageAspect: number): T
         : container.y + (container.h - h) / 2;
   return {
     ...box,
-    rect: { ...container, y, h },
+    rect: { x, y, w, h },
     autoHeight: true,
     autoFit: false,
   };
@@ -299,12 +321,12 @@ function hugTextInRect(box: TextBox, container: NormRect, pageAspect: number): T
  * occupies exactly the rectangle the image was generated for, leaving the page
  * background visible where the text sits.
  */
-function insetIllustration(plan: LayoutPlan, z: number): ImageElement | null {
+function insetIllustration(plan: LayoutPlan, z: number, pictureScale = 1): ImageElement | null {
   if (plan.mode !== "inset-art") return null;
   return {
     id: uid("im"),
     kind: "illustration",
-    rect: plan.artRect,
+    rect: pictureRectFor("", plan.artRect, pictureScale),
     z,
     fit: "cover",
     name: "Illustration",
@@ -487,12 +509,12 @@ export function seedPageDesign(design: BookDesign, page: DesignPage): PageDesign
           name: slot.label,
           sharedStyle: sharedStyle(design, "story-body"),
         });
-        boxes.push(hugTextInRect(box, slot.pageRect, page.aspect));
+        boxes.push(hugTextInRect(box, slot.pageRect, page.aspect, page.textWidth));
       });
   }
   const art = page.isCover
     ? null
-    : insetIllustration(page.plan, 0);
+    : insetIllustration(page.plan, 0, page.pictureScale);
   return {
     textBoxes: boxes,
     ...(page.id === COVER_FRONT_ID ? { letteringFor: page.blobId ?? "" } : {}),
@@ -549,7 +571,7 @@ export function relayoutPageDesign(
       : laidOut;
     return box.autoHeight === false
       ? styled
-      : hugTextInRect(styled, slot.pageRect, page.aspect);
+      : hugTextInRect(styled, slot.pageRect, page.aspect, page.textWidth);
   });
 
   let z = textBoxes.reduce((max, b) => Math.max(max, b.z), 0);
@@ -572,7 +594,7 @@ export function relayoutPageDesign(
       name: slot.label,
       sharedStyle: sharedStyle(design, "story-body"),
     });
-    textBoxes.push(hugTextInRect(box, slot.pageRect, page.aspect));
+    textBoxes.push(hugTextInRect(box, slot.pageRect, page.aspect, page.textWidth));
   }
 
   // The artwork's own placement is layout-owned too: inset art moves to the new
@@ -585,11 +607,11 @@ export function relayoutPageDesign(
   let nextImages = images;
   if (page.plan.mode === "inset-art") {
     const art = existingArt
-      ? { ...existingArt, rect: page.plan.artRect }
-      : insetIllustration(page.plan, Math.min(0, ...images.map((im) => im.z)) - 1);
+      ? { ...existingArt, rect: pictureRectFor(page.id, page.plan.artRect, page.pictureScale ?? 1) }
+      : insetIllustration(page.plan, Math.min(0, ...images.map((im) => im.z)) - 1, page.pictureScale);
     nextImages = art ? [...others, art] : others;
   } else if (existingArt) {
-    nextImages = [...others, { ...existingArt, rect: { x: 0, y: 0, w: 1, h: 1 } }];
+    nextImages = [...others, { ...existingArt, rect: pictureRectFor(page.id, { x: 0, y: 0, w: 1, h: 1 }, page.pictureScale ?? 1) }];
   }
 
   // Built by omission rather than by assigning `undefined`: the design is
@@ -602,6 +624,9 @@ export function relayoutPageDesign(
   };
   if (nextImages.length > 0) next.images = nextImages;
   else delete next.images;
+  // The boxes just took their new slots' preset colors; let the artwork's
+  // measured ink apply to them again.
+  delete next.inkFor;
   return next;
 }
 

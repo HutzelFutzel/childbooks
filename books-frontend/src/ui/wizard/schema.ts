@@ -34,6 +34,20 @@ const artStyleSchema = z
       )
       .max(3)
       .optional(),
+    generationReference: z
+      .object({
+        imageUrl: z.string().url(),
+        storagePath: z.string().min(1),
+        mimeType: z.string().regex(/^image\//),
+        updatedAt: z.number(),
+      })
+      .optional(),
+    customStyle: z
+      .object({
+        id: z.string().min(1).max(80),
+        revision: z.number().int().min(1),
+      })
+      .optional(),
   })
   .refine(
     (v) => v.presetId !== null || Boolean(v.customDescription?.trim()),

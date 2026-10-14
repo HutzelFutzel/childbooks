@@ -15,12 +15,16 @@ import { ALL_SECRETS } from "./secrets";
 import { withUsage } from "./usage";
 import {
   reviseStory,
+  rewriteStory,
   StoryRevisionFormatError,
 } from "../../books-frontend/src/core/pipeline/storyRevision";
+import type { TextCallParams } from "../../books-frontend/src/core/config/modelConfig";
 import {
+  rewritesWholeStory,
   storyTextHash,
   type StoryRevisionDecision,
   type StoryRevisionJob,
+  type StoryRevisionProposal,
   type StoryRevisionSelection,
 } from "../../books-frontend/src/core/story/revision";
 import type { Project } from "../../books-frontend/src/core/types";
@@ -225,6 +229,28 @@ export function registerStoryRevisionRoutes(app: Express): void {
   });
 }
 
+/** Whole-story voice changes think less. A saved "high" on a small edit drops to medium. */
+function editParams(params: TextCallParams | undefined, restyle: boolean): TextCallParams {
+  const reasoning = restyle ? "low" : params?.reasoning === "high" ? "medium" : params?.reasoning;
+  return { ...(params ?? {}), ...(reasoning ? { reasoning } : {}) };
+}
+
+/** Write the review unless the reader already discarded this run. */
+async function publishReady(ref: DocumentReference, proposal: StoryRevisionProposal): Promise<boolean> {
+  return getFirestore().runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (snap.data()?.status === "discarded") return false;
+    tx.update(ref, {
+      status: "ready",
+      proposal,
+      decisions: {},
+      claimedUntil: 0,
+      updatedAt: Date.now(),
+    });
+    return true;
+  });
+}
+
 class RevisionBusy extends Error {}
 
 async function claim(ref: DocumentReference): Promise<StoryRevisionJob | null> {
@@ -256,44 +282,47 @@ async function runRevision(uid: string, jobId: string): Promise<void> {
   const startedAt = Date.now();
   try {
     const [model, prompts] = await Promise.all([resolveTextAction("storyEdit"), loadPromptContext()]);
-    const { value: proposal, events, stats } = await withUsage(() =>
-      reviseStory({
-        config: { ...job!.config, textModel: model },
-        story: job!.baseStory,
-        instruction: job!.instruction,
-        selection: job!.selection,
-        provider: model.provider,
-        model: model.id,
-        creds: { apiKey: apiKeyFor(model.provider) },
-        prompts,
-      }),
-      model.params,
+    const restyle = !job.selection && rewritesWholeStory(job.instruction);
+    const params = editParams(model.params, restyle);
+    const editInput = {
+      config: { ...job.config, textModel: { ...model, params } },
+      story: job.baseStory,
+      instruction: job.instruction,
+      selection: job.selection,
+      provider: model.provider,
+      model: model.id,
+      creds: { apiKey: apiKeyFor(model.provider) },
+      prompts,
+    };
+    const { value: proposal, events, stats } = await withUsage(
+      () => (restyle ? rewriteStory(editInput) : reviseStory(editInput)),
+      params,
     );
-    await meterAndSettle({
-      uid,
-      action: "storyEdit",
-      events,
-      stats,
-      projectId: job.projectId,
-      kind: "edit",
-      jobId,
-      targetId: "story",
-      source: "worker",
-      quotedSparks: job.quotedSparks,
-      // Leased work: a worker that dies after settling but before writing the
-      // proposal is re-claimed once the lease expires. Key the charge to the
-      // job so the retry re-drafts without billing the reader twice.
-      settleKey: `storyRevision:${jobId}`,
-      startedAt,
-      models: { text: model },
-    });
-    await ref.update({
-      status: "ready",
-      proposal,
-      decisions: {},
-      claimedUntil: 0,
-      updatedAt: Date.now(),
-    });
+    const published = await publishReady(ref, proposal);
+    if (!published) return;
+    // The reader already has the review. Settling Sparks must not hold it back,
+    // and a billing failure must not turn a finished revision into an error.
+    try {
+      await meterAndSettle({
+        uid,
+        action: "storyEdit",
+        events,
+        stats,
+        projectId: job.projectId,
+        kind: "edit",
+        jobId,
+        targetId: "story",
+        source: "worker",
+        quotedSparks: job.quotedSparks,
+        // The review is already visible. Key the charge to the job so a retry
+        // of this settle does not bill the reader twice.
+        settleKey: `storyRevision:${jobId}`,
+        startedAt,
+        models: { text: model },
+      });
+    } catch (err) {
+      logger.error("[story-revision] settle failed", { uid, jobId, err: String(err) });
+    }
   } catch (err) {
     const message = (err as Error)?.message ?? "The story could not be revised.";
     logger.error("[story-revision] generation failed", {
@@ -304,6 +333,8 @@ async function runRevision(uid: string, jobId: string): Promise<void> {
         ? { details: err.details }
         : {}),
     });
+    const latest = await ref.get();
+    if (latest.data()?.status === "discarded") return;
     await ref.update({
       status: "error",
       error: message,

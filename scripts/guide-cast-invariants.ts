@@ -21,6 +21,7 @@ import { personFollowUp } from "../books-frontend/src/core/guide/agent/followUps
 import { createDefaultGuideAgentConfig } from "../books-frontend/src/core/config/guideAgent";
 import { createDefaultGuideFactPolicies, missingGuideFacts } from "../books-frontend/src/core/guide/factPolicy";
 import { deriveJourney, styleChoiceOpen } from "../books-frontend/src/core/guide/journey";
+import { statedCast } from "../books-frontend/src/core/guide/castList";
 import { applyGuidePatch, guidePatchContext } from "../books-frontend/src/core/guide/patch";
 import { authoringOf, withAuthoring } from "../books-frontend/src/core/guide/projectState";
 import { resolvePromptsConfig } from "../books-frontend/src/core/prompts/context";
@@ -301,6 +302,29 @@ function pagesOutOfDate(project: Project): string[] {
     "setRelation doesn't record identical twins.",
   );
   check(relation.kind === "write" && castOf(relation.project).find((m) => m.id === "s")?.age === 4, "setRelation's twins don't share an age.");
+}
+
+// --- "shiloh, 2" is one child, aged 2 ------------------------------------------------
+
+{
+  const one = statedCast("shiloh, 2");
+  check(one?.length === 1 && one[0]?.name === "Shiloh" && one[0]?.age === 2, '"shiloh, 2" is not Shiloh, age 2.');
+  check(statedCast("shiloh 2")?.[0]?.age === 2, '"shiloh 2" is not an age.');
+  const two = statedCast("Maya 5, Leo 3");
+  check(two?.length === 2 && two[0]?.name === "Maya" && two[1]?.age === 3, "A list of two children with ages was dropped.");
+  check(statedCast("shiloh, 18 months")?.[0]?.ageMonths === 18, "Months were stored as years.");
+  check(statedCast("Micah and Neil, both 5 years old") === null, '"both 5" was read as a cast list.');
+  check(statedCast("What about a dog?") === null, "A question was read as a cast list.");
+  check(statedCast("2") === null, "A bare number became a person.");
+  const written = applyGuidePatch(
+    book([]),
+    { heroes: (one ?? []).map((person) => ({ name: person.name, age: person.age })) },
+    patchContext,
+  );
+  const shiloh = castOf(written.project).find((member) => member.name === "Shiloh");
+  check(shiloh?.age === 2 && castOf(written.project).length === 1, "Writing shiloh, 2 did not leave one child aged 2.");
+  check(!missingGuideFacts(written.project, policies).includes("names"), "Shiloh was written and the guide still asks who is in the book.");
+  check(!missingGuideFacts(written.project, policies).includes("ages"), "Shiloh's age was written and the guide still asks for an age.");
 }
 
 report.push("Characters and how they belong together");

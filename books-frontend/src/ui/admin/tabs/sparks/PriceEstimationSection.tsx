@@ -18,6 +18,8 @@ import {
   ESTIMATION_STATISTICS,
   STATISTIC_INFO,
   estimationRuleFor,
+  statisticDropsRetries,
+  type CostBasis,
   type EstimationRule,
   type EstimationStatistic,
 } from "../../../../core/config/priceEstimation";
@@ -94,6 +96,12 @@ export function PriceEstimationSection({
     [draft, stats, modelConfig, modelCosts, generationTuning],
   );
 
+  const retryDroppingScopes = [
+    ...(statisticDropsRetries(est.defaults) ? ["The default"] : []),
+    ...IMAGE_ACTIONS.filter((a) => est.byAction[a.id] && statisticDropsRetries(estimationRuleFor(est, a.id))).map(
+      (a) => a.label,
+    ),
+  ];
   const info = STATISTIC_INFO[rule.statistic];
   const scopes: { value: Scope; label: string }[] = [
     { value: "defaults", label: "All image actions (default)" },
@@ -122,6 +130,44 @@ export function PriceEstimationSection({
             )}
           </div>
         ))}
+      </div>
+
+      <div className="space-y-2">
+        <Grid cols={4}>
+          <div className="space-y-1 sm:col-span-2">
+            <div className="text-xs font-medium text-ink-600">What a render costs</div>
+            <Select
+              value={est.costBasis}
+              options={[
+                { value: "full", label: "Everything it took (retries and repairs included)" },
+                { value: "requested", label: "Only the requested image (retries absorbed)" },
+              ]}
+              onChange={(e) => onChange({ estimation: { ...est, costBasis: e.target.value as CostBasis } })}
+            />
+          </div>
+          {est.costBasis === "full" && (
+            <NumberField
+              label="Expected calls per render"
+              value={est.expectedAttempts}
+              step="0.05"
+              suffix="×"
+              hint="Applied to the cost-table rate until renders are measured."
+              onChange={(n) => onChange({ estimation: { ...est, expectedAttempts: n >= 1 ? n : est.expectedAttempts } })}
+            />
+          )}
+        </Grid>
+        <p className="text-[11px] text-ink-400">
+          {est.costBasis === "full"
+            ? "Readers always pay the price they confirmed. Retries and repair passes are spread across the window's average instead of being charged to whoever hit them."
+            : "Readers always pay the price they confirmed. Retries and repair passes are not in the price; their cost comes out of the markup."}
+        </p>
+        {est.costBasis === "full" && retryDroppingScopes.length > 0 && (
+          <p className="rounded-md bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-800">
+            {retryDroppingScopes.join(", ")} {retryDroppingScopes.length === 1 ? "uses" : "use"} a statistic that
+            ignores the most expensive renders — which are the ones that needed a retry — so their cost won’t reach
+            the price. Use the mean or a percentile above 50.
+          </p>
+        )}
       </div>
 
       <div className="flex flex-wrap items-end gap-3">

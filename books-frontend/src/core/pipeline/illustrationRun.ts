@@ -13,6 +13,7 @@
  * state: it reads the passed-in `Project` and returns the new version tree for
  * the caller to persist.
  */
+import { ProviderError } from "../errors";
 import type { ProviderId } from "../config/options";
 import type { ImageActionId } from "../ai/actions";
 import type { ResolvedModels } from "../models/registry";
@@ -22,6 +23,7 @@ import type {
   BakedCoverText,
   DepictedSubject,
   IllustrationImage,
+  ImageRenderRecord,
   Project,
   ReferenceUse,
   ScreenplaySpread,
@@ -52,6 +54,7 @@ import {
 } from "./illustration";
 import { embeddedPairsAmong } from "../book/anchorGraph";
 import { artStyleKey } from "../prompts/style";
+import { buildRenderRecord } from "./imageProvenance";
 import { paginate } from "./pagination";
 import type { CompositionMode, LayoutPlan, PageSide } from "../book/layouts";
 import { planPageLayout } from "../book/pageLayout";
@@ -98,7 +101,28 @@ import { heightFractions } from "../book/anchorScale";
 import { cellBox } from "./anchorLayout";
 import { anchorSignature, currentAnchorImage, currentReferenceUses } from "./provenance";
 import type { PromptContext } from "../prompts/context";
-import type { LayoutsConfig } from "../config/layouts";
+import {
+  resolveLayoutComposition,
+  resolveTextWidth,
+  resolveLayoutQuality,
+  type LayoutsConfig,
+} from "../config/layouts";
+import type { ImageMasksConfig } from "../config/imageMasks";
+import {
+  effectiveSubjectInset,
+  frameInsetFor,
+  type FrameInsets,
+} from "../book/subjectInset";
+import {
+  chooseInk,
+  PIXEL_GRID_SIZE,
+  regionBusyness,
+  textRectOnPicture,
+  type InkChoice,
+  type PixelGrid,
+} from "../book/regionAnalysis";
+import { slotWantsCalmBand } from "../book/layouts";
+import type { NormRect } from "../design";
 
 /** Compositing operations, in base64 terms so core stays Buffer-free. */
 export interface CompositeOps {
@@ -163,6 +187,12 @@ export interface CompositeOps {
     height: number;
     seamFrac?: number;
   }): Promise<{ seedBase64: string; seedMime: string; maskBase64: string; maskMime: string } | null>;
+  /**
+   * A small opaque RGB copy of an image (longest side `size`), flattened on
+   * white — what the calm-area and ink measurements read. Optional; without it
+   * those checks are skipped.
+   */
+  samplePixels?(input: { base64: string; mimeType: string; size: number }): Promise<PixelGrid | null>;
 }
 
 /** Injected capabilities the orchestration needs from its host platform. */
@@ -209,6 +239,11 @@ export interface PipelineEnv {
   generationTuning?: GenerationTuningConfig;
   /** Admin overlay for layouts (slot treatments, allowed composition modes). */
   layoutsConfig?: LayoutsConfig;
+  /**
+   * The frame catalog plus how deep each frame cuts into a picture, so pages
+   * keep faces clear of it. Optional; without it only the admin margin applies.
+   */
+  loadFrames?(): Promise<{ masks: ImageMasksConfig; insets: FrameInsets } | null>;
   /**
    * Optional step tagger for cost attribution: wraps an internal pipeline step
    * (e.g. "image", "binding", "localize") so its provider calls are metered
@@ -288,6 +323,10 @@ export interface IllustrationRender {
   inputReferenceCount?: number;
   /** Provider canvas requested for the primary render. */
   outputSize?: string;
+  layoutCheck?: IllustrationImage["layoutCheck"];
+  textInk?: IllustrationImage["textInk"];
+  /** Look, canvas, options and inputs this picture was drawn from. */
+  render?: ImageRenderRecord;
 }
 
 /** Wrap a render into a (new or extended) version tree. Pure. */
@@ -316,6 +355,9 @@ export function applyIllustrationRender(
     ...(render.imageTier ? { imageTier: render.imageTier } : {}),
     ...(render.imageModel ? { imageModel: render.imageModel } : {}),
     ...(render.generation ? { generation: render.generation } : {}),
+    ...(render.render ? { render: render.render } : {}),
+    ...(render.layoutCheck ? { layoutCheck: render.layoutCheck } : {}),
+    ...(render.textInk ? { textInk: render.textInk } : {}),
   };
   const next = tree
     ? addVersion(tree, content, {
@@ -1992,7 +2034,40 @@ async function renderPage(
     ),
   );
 
-  const promptFor = (bake: boolean) => buildIllustrationPrompt({
+  const isCover = isCoverSpread(spread);
+  const composition = resolveLayoutComposition(env.layoutsConfig);
+  const quality = resolveLayoutQuality(env.layoutsConfig);
+  // Covers stay unframed, so only trimming eats into them.
+  const frames = isCover ? null : await (env.loadFrames?.() ?? Promise.resolve(null)).catch(() => null);
+  const subjectInset = effectiveSubjectInset(
+    composition,
+    frames ? frameInsetFor(frames.masks, frames.insets, project.design?.defaultImageMaskId) : 0,
+  );
+  // Only a freshly composed full-bleed page can be held to its calm area: a
+  // preserved composition keeps whatever it had, and covers place their own words.
+  const calmSlots =
+    layoutPlan?.mode === "full-bleed" && !isCover && !maskMode && !restyle && !hasSubmittedComposition
+      ? layoutPlan.slots.filter(slotWantsCalmBand)
+      : [];
+  // Ink is read where the words will sit on the picture: the text box is a
+  // share of its slot, and the picture is drawn a little smaller than the page.
+  const inkSlots: { id: string; pageRect: NormRect }[] =
+    layoutPlan?.mode === "full-bleed" && !isCover
+      ? layoutPlan.slots.flatMap((s) => {
+          if (s.role !== "text") return [];
+          const rect = textRectOnPicture(s.pageRect, {
+            pictureScale: composition.pictureScale,
+            widthShare: resolveTextWidth(env.layoutsConfig, layoutPlan.layoutId),
+          });
+          return rect ? [{ id: s.id, pageRect: rect }] : [];
+        })
+      : [];
+
+  const promptFor = (
+    bake: boolean,
+    calm?: { overshoot: number; retry: boolean },
+    letteringProblems?: string[],
+  ) => withLetteringNote(buildIllustrationPrompt({
     spread,
     config: project.config,
     referencedAnchors,
@@ -2025,13 +2100,16 @@ async function renderPage(
     capabilities: caps,
     transparentBackground:
       generation.applied.background === "transparent",
-  });
+    subjectInset,
+    calmOvershoot: calm?.overshoot ?? composition.calmOvershoot,
+    calmRetry: calm?.retry ?? false,
+  }), letteringProblems);
 
   const runStep = env.runStep ?? (<T>(_s: string, fn: () => Promise<T>) => fn());
   const submittedReferences =
     caps.operations.referenceEditing && references.length ? references : undefined;
   const outputSize = chooseImageSize(spread.kind, project.config, layoutPlan, caps);
-  const draw = (prompt: string, bake: boolean) => runStep("image", () =>
+  const callImageModel = (prompt: string, bake: boolean) =>
     generateIllustrationImage({
       prompt,
       size: outputSize,
@@ -2054,21 +2132,67 @@ async function renderPage(
       retries: actionTuning.retries,
       allowText: bake,
       signal: options.signal,
-    }),
-  );
+    });
+  let lastDrawMs = 0;
+  const timedImage = async (prompt: string, bake: boolean) => {
+    const drawStarted = Date.now();
+    try {
+      return await callImageModel(prompt, bake);
+    } finally {
+      lastDrawMs = Date.now() - drawStarted;
+    }
+  };
+  const draw = (prompt: string, bake: boolean, step = "image") =>
+    runStep(step, () => timedImage(prompt, bake));
   const lettered = await drawCoverLettering({
     spread,
     safe: coverLetteringSafeArea(project.config),
     startedAt,
+    deadlineMs: COVER_LETTERING_DEADLINE_MS,
     // A masked touch-up keeps the painted words outside the mask as they were.
     check: !maskMode,
-    draw: async (bake) => {
-      const prompt = promptFor(bake);
-      return { prompt, image: await draw(prompt, bake) };
+    draw: async (bake, attempt) => {
+      const prompt = promptFor(bake, undefined, attempt.problems);
+      // The first drawing is the work the reader asked for; every redraw after
+      // a failed reading is ours (see NON_BILLABLE_GENERATION_STEPS).
+      return { prompt, image: await draw(prompt, bake, attempt.number > 1 ? "letteringRetry" : "image") };
     },
     read: spread.bakeText ? letteringReader(env, options.signal) : null,
   });
-  const { prompt, image: result } = lettered;
+  let { prompt, image: result } = lettered;
+
+  const sample = (image: { base64: string; mimeType: string }) =>
+    env.composite.samplePixels
+      ? env.composite
+          .samplePixels({ ...image, size: PIXEL_GRID_SIZE })
+          .catch(() => null)
+      : Promise.resolve(null);
+  let layoutCheck: IllustrationImage["layoutCheck"];
+  if (calmSlots.length > 0 && quality.onFail !== "ignore" && env.composite.samplePixels) {
+    const calm = await holdCalmArea({
+      first: { prompt, image: result },
+      calmRects: calmSlots.map((s) => s.pageRect),
+      threshold: quality.maxTextRegionBusyness,
+      onFail: quality.onFail,
+      sample,
+      // The redraw is the pipeline correcting its own output: metered under
+      // its own step, never charged to the reader, and part of the full cost
+      // the price window averages.
+      redraw: async () => {
+        const retryPrompt = promptFor(false, {
+          overshoot: composition.retryCalmOvershoot,
+          retry: true,
+        });
+        return { prompt: retryPrompt, image: await runStep("layoutRetry", () => timedImage(retryPrompt, false)) };
+      },
+      fitsDeadline: () =>
+        !options.signal?.aborted &&
+        Date.now() - startedAt + lastDrawMs * 1.2 < LETTERING_DEADLINE_MS,
+    });
+    prompt = calm.prompt;
+    result = calm.image;
+    layoutCheck = calm.check;
+  }
 
   // For masked touch-ups, paste the edited output back over the original only
   // inside the painted region so everything outside it stays pixel-identical.
@@ -2095,17 +2219,29 @@ async function renderPage(
   // Version label shows the canonical form so the user can see how their edit
   // was understood (e.g. "make Arthur's hair blue" for "make athrurs hair blue").
   const label = restyle ? "New style" : promptEdit?.trim() || (tree ? "Variation" : "Initial");
-  const { image: bound, depicted } = await bindAndRepairPage({
-    anchors,
-    embeddedPairs,
-    image: { base64: finalBase64, mimeType: finalMime },
-    config: project.config,
-    imageModel,
-    imageKey: key,
-    size: outputSize,
-    env,
-    signal: options.signal,
-  });
+  // Binding and repair only polish a picture that is already drawn. When the
+  // task runs out of time (or the check itself falls over) inside them, the
+  // drawn page is kept — a finished, paid-for render must never be thrown away
+  // by an optional step that came after it.
+  const drawnPage = { base64: finalBase64, mimeType: finalMime };
+  let bound: { base64: string; mimeType: string } = drawnPage;
+  let depicted: DepictedSubject[] = [];
+  try {
+    ({ image: bound, depicted } = await bindAndRepairPage({
+      anchors,
+      embeddedPairs,
+      image: drawnPage,
+      config: project.config,
+      imageModel,
+      imageKey: key,
+      size: outputSize,
+      env,
+      signal: options.signal,
+    }));
+  } catch (error) {
+    console.warn("[illustration] binding pass failed; keeping the drawn page", String(error));
+  }
+  const textInk = inkSlots.length > 0 ? measureTextInk(await sample(bound), inkSlots) : undefined;
   const blobId = await env.saveImage(bound.base64, bound.mimeType);
   return {
     blobId,
@@ -2114,6 +2250,8 @@ async function renderPage(
     prompt,
     label,
     textMode: lettered.textMode,
+    ...(layoutCheck ? { layoutCheck } : {}),
+    ...(textInk ? { textInk } : {}),
     ...(lettered.bakedText ? { bakedText: lettered.bakedText } : {}),
     ...(lettered.lettering ? { lettering: lettered.lettering } : {}),
     depicted,
@@ -2127,14 +2265,119 @@ async function renderPage(
     generation,
     inputReferenceCount: submittedReferences?.length ?? 0,
     outputSize,
+    render: buildRenderRecord({
+      artStyle: project.config.artStyle,
+      action: env.imageAction,
+      outputSize,
+      generation,
+      inputReferences: (submittedReferences ?? []).map((reference) => ({
+        role: reference.role ?? "subject",
+        ...(reference.label ? { label: reference.label } : {}),
+      })),
+    }),
   };
 }
 
 /**
- * Everything a lettered cover render may take, image calls included: the task
- * runs under a four-minute limit, and binding and upload still follow.
+ * Everything a lettered cover render (or a page and its calm-area redraw) may
+ * take, image calls included: the task runs under a four-minute limit, and
+ * binding and upload still follow.
  */
 const LETTERING_DEADLINE_MS = 170_000;
+
+/**
+ * What a front cover may spend drawing its words. The cover is the one picture
+ * that may not ship without them, so it gets its own, longer budget (the worker
+ * gives a cover task eight minutes, and binding and upload still follow) and up
+ * to {@link COVER_LETTERING_DRAWS} paintings inside it.
+ */
+const COVER_LETTERING_DEADLINE_MS = 330_000;
+export const COVER_LETTERING_DRAWS = 4;
+
+/**
+ * After a painting whose words were read back wrong, say what was wrong, so the
+ * next one corrects it rather than rolling the same dice.
+ */
+function withLetteringNote(prompt: string, problems?: string[]): string {
+  if (!problems?.length) return prompt;
+  return (
+    `${prompt}\n\nThe previous painting's lettering was rejected for these reasons: ${problems.join("; ")}. ` +
+    "Paint the cover again and fix exactly that: spell every word exactly as written, keep all writing inside the safe area, and write nothing else."
+  );
+}
+
+type Drawn = { prompt: string; image: ImageResult };
+
+/** The busiest of the page's text regions, or null when the pixels can't be read. */
+function busiestRegion(grid: PixelGrid | null, rects: NormRect[]): number | null {
+  if (!grid) return null;
+  let worst: number | null = null;
+  for (const rect of rects) {
+    const reading = regionBusyness(grid, rect);
+    if (reading) worst = Math.max(worst ?? 0, reading.busyness);
+  }
+  return worst;
+}
+
+/**
+ * Hold a full-bleed page to the calm area its words need. A page that comes
+ * back busier than the tolerance is redrawn once, with a larger calm area and
+ * an explicit note about what went wrong, when that fits the deadline; the
+ * calmer of the two is kept. If neither is calm enough, the words get the
+ * treatment's deterministic plate (`fallback: "scrim"`) instead of sitting on
+ * a busy picture. A check that cannot measure accepts the page as drawn.
+ */
+export async function holdCalmArea(args: {
+  first: Drawn;
+  calmRects: NormRect[];
+  threshold: number;
+  onFail: "warn" | "scrim" | "retry-once";
+  sample(image: ImageResult): Promise<PixelGrid | null>;
+  redraw(): Promise<Drawn>;
+  fitsDeadline(): boolean;
+}): Promise<Drawn & { check?: IllustrationImage["layoutCheck"] }> {
+  const firstBusy = busiestRegion(await args.sample(args.first.image), args.calmRects);
+  if (firstBusy === null) return args.first;
+  const round = (v: number) => Math.round(v * 1000) / 1000;
+  const verdict = (busy: number, attempts: number) => {
+    const passed = busy <= args.threshold;
+    return {
+      busyness: round(busy),
+      threshold: args.threshold,
+      passed,
+      attempts,
+      ...(!passed && args.onFail !== "warn" ? { fallback: "scrim" as const } : {}),
+    };
+  };
+  if (firstBusy <= args.threshold || args.onFail !== "retry-once" || !args.fitsDeadline()) {
+    return { ...args.first, check: verdict(firstBusy, 1) };
+  }
+  let second: Drawn;
+  try {
+    second = await args.redraw();
+  } catch {
+    return { ...args.first, check: verdict(firstBusy, 2) };
+  }
+  const secondBusy = busiestRegion(await args.sample(second.image), args.calmRects);
+  if (secondBusy === null || secondBusy >= firstBusy) {
+    return { ...args.first, check: verdict(firstBusy, 2) };
+  }
+  return { ...second, check: verdict(secondBusy, 2) };
+}
+
+/** The best ink for each text slot over the final pixels, keyed by slot id. */
+function measureTextInk(
+  grid: PixelGrid | null,
+  slots: { id: string; pageRect: NormRect }[],
+): Record<string, InkChoice> | undefined {
+  if (!grid) return undefined;
+  const out: Record<string, InkChoice> = {};
+  for (const slot of slots) {
+    const ink = chooseInk(grid, slot.pageRect);
+    if (ink) out[slot.id] = ink;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
 
 export interface LetteredDraw {
   prompt: string;
@@ -2144,25 +2387,48 @@ export interface LetteredDraw {
   lettering?: IllustrationImage["lettering"];
 }
 
+/** Which painting of the cover this is, and what the last one got wrong. */
+export interface LetteringAttempt {
+  /** 1 for the first painting. */
+  number: number;
+  /** What the last reading found wrong (empty on the first painting). */
+  problems: string[];
+}
+
 /**
  * Draw a page; for a front cover with its words painted in, read them back
  * before accepting it. A wrong letter, a line outside the safe area or stray
- * writing redraws once; if that fails too, the cover is drawn without words
- * and the design's text layer carries them. Another draw is only started when
- * it fits the deadline, judged by how long the last one took. A check that
- * cannot run (`read` returns null, or there is none) accepts the lettered cover
- * rather than cost the reader one.
+ * writing paints the cover again — up to `maxDraws` times, each told what was
+ * wrong with the last — for as long as another painting fits the deadline,
+ * judged by how long the last one took. A check that cannot run (`read` returns
+ * null, or there is none) accepts the lettered cover rather than cost the
+ * reader one.
+ *
+ * A cover without its words is not an acceptable result, and neither is one
+ * that failed its reading: when no painting passes this throws, so the task
+ * fails (uncharged, retryable) instead of delivering a cover the reader would
+ * have to catch.
  */
 export async function drawCoverLettering(args: {
   spread: ScreenplaySpread;
   safe: LetteringBox;
   startedAt: number;
   check: boolean;
-  draw: (bake: boolean) => Promise<{ prompt: string; image: ImageResult }>;
+  draw: (bake: boolean, attempt: LetteringAttempt) => Promise<{ prompt: string; image: ImageResult }>;
   read: ((image: ImageResult, expected: BakedCoverText) => Promise<LetteringReading | null>) | null;
   deadlineMs?: number;
+  maxDraws?: number;
 }): Promise<LetteredDraw> {
-  const { spread, safe, startedAt, check, draw, read, deadlineMs = LETTERING_DEADLINE_MS } = args;
+  const {
+    spread,
+    safe,
+    startedAt,
+    check,
+    draw,
+    read,
+    deadlineMs = LETTERING_DEADLINE_MS,
+    maxDraws = COVER_LETTERING_DRAWS,
+  } = args;
   const expected: BakedCoverText | undefined =
     spread.bakeText && (spread.coverTitle ?? "").trim()
       ? bakedTextOf({
@@ -2172,7 +2438,7 @@ export async function drawCoverLettering(args: {
         })
       : undefined;
   if (!expected) {
-    return { ...(await draw(false)), textMode: spread.textMode };
+    return { ...(await draw(false, { number: 1, problems: [] })), textMode: spread.textMode };
   }
   const accept = (drawn: { prompt: string; image: ImageResult }, lettering?: LetteredDraw["lettering"]) => ({
     ...drawn,
@@ -2182,7 +2448,7 @@ export async function drawCoverLettering(args: {
   });
 
   let drawStarted = Date.now();
-  let drawn = await draw(true);
+  let drawn = await draw(true, { number: 1, problems: [] });
   let drawMs = Date.now() - drawStarted;
   if (!check || spread.id !== COVER_FRONT_ID) return accept(drawn);
   if (!read) return accept(drawn, { outcome: "unchecked", attempts: 1 });
@@ -2196,19 +2462,16 @@ export async function drawCoverLettering(args: {
     const verdict = judgeLettering(expected, reading, safe);
     if (verdict.ok) return accept(drawn, { outcome: "passed", attempts });
     problems = verdict.problems;
-    if (attempts >= 2 || !anotherDrawFits()) break;
+    if (attempts >= maxDraws || !anotherDrawFits()) break;
     attempts += 1;
     drawStarted = Date.now();
-    drawn = await draw(true);
+    drawn = await draw(true, { number: attempts, problems });
     drawMs = Date.now() - drawStarted;
   }
-  if (!anotherDrawFits()) return accept(drawn, { outcome: "failed", attempts, problems });
-  const plain = await draw(false);
-  return {
-    ...plain,
-    textMode: "overlay",
-    lettering: { outcome: "fellBack", attempts, problems },
-  };
+  throw new ProviderError(
+    `The cover's words never came out right after ${attempts} painting${attempts === 1 ? "" : "s"}: ${problems.join("; ")}.`,
+    { kind: "lettering", retryable: false, details: problems.join("; ") },
+  );
 }
 
 /** The lettering check's reader for this host: the binding vision model, metered as "lettering". */

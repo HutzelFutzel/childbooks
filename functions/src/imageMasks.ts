@@ -8,6 +8,7 @@
  */
 import { JSDOM } from "jsdom";
 import sharp from "sharp";
+import { measureFrameSafeInset } from "../../books-frontend/src/core/book/subjectInset";
 
 const MAX_BYTES = 512 * 1024;
 const MAX_ELEMENTS = 2_000;
@@ -72,10 +73,23 @@ function safeCss(value: string): boolean {
   );
 }
 
+/** How deep an already-compiled frame PNG cuts into the picture (0..0.5). */
+export async function measureImageMaskPng(png: Buffer): Promise<number> {
+  const { data, info } = await sharp(png)
+    .ensureAlpha()
+    .resize(512, 512, { fit: "fill" })
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  return measureFrameSafeInset(data, info.width, info.height, info.channels);
+}
+
 /**
- * Return a canonical alpha PNG, or throw a plain-language upload error.
+ * Return a canonical alpha PNG plus how deep it cuts into the picture, or
+ * throw a plain-language upload error.
  */
-export async function compileImageMaskSvg(input: Buffer): Promise<Buffer> {
+export async function compileImageMaskSvg(
+  input: Buffer,
+): Promise<{ png: Buffer; safeInset: number }> {
   if (input.length === 0) invalid("The SVG file is empty.");
   if (input.length > MAX_BYTES) invalid("Image-shape SVGs must be 512 KB or smaller.");
 
@@ -168,11 +182,13 @@ export async function compileImageMaskSvg(input: Buffer): Promise<Buffer> {
     if (coverage > 0.995) {
       invalid("The mask is fully opaque. Use white for the image and black outside it.");
     }
-    return await sharp(data, {
+    const safeInset = measureFrameSafeInset(data, info.width, info.height, info.channels, 3);
+    const png = await sharp(data, {
       raw: { width: info.width, height: info.height, channels: 4 },
     })
       .png({ compressionLevel: 9, adaptiveFiltering: true })
       .toBuffer();
+    return { png, safeInset };
   } catch (error) {
     if (error instanceof ImageMaskValidationError) throw error;
     invalid("The SVG uses artwork that the image renderer cannot safely reproduce.");

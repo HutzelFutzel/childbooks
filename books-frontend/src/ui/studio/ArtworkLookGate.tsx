@@ -101,6 +101,7 @@ export function ArtworkLookGate({
           derivedFromName: picked.name,
           derivedFromNames: [picked.name],
           referenceArt: picked.referenceArt,
+          customStyle: picked.customStyle,
         }),
       );
     } finally {

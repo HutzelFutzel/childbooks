@@ -1,21 +1,39 @@
 "use client";
 
 /**
- * Page focus: the page grows and becomes directly editable (text, crop,
+ * Edit mode: the page grows and becomes directly editable (text, crop,
  * layout). A picture change is still typed in the composer, which docks on
  * the book, so the Studio's own instruction field is switched off here. On a
  * wide window the conversation stays beside it; otherwise it is one tap away
- * as an overlay.
+ * as an overlay. The Preview | Edit switch is the way out, as it is the way in.
  */
 import { useEffect } from "react";
+import dynamic from "next/dynamic";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, MessageCircle, X } from "lucide-react";
+import { Loader2, MessageCircle, X } from "lucide-react";
 import type { Project } from "../../../core/types";
-import { BookCanvas } from "../../studio/BookCanvas";
 import { useStudio } from "../../studio/StudioContext";
 import { useStudioPanelStore } from "../../studio/studioPanelStore";
 import { useGuideT } from "../intl";
+import { ModeSwitch } from "./ModeSwitch";
 import { dispIndexOf } from "./units";
+
+const BookCanvas = dynamic(
+  () => import("../../studio/BookCanvas").then((m) => m.BookCanvas),
+  {
+    ssr: false,
+    loading: () => (
+      <div
+        className="flex h-full flex-1 flex-col items-center justify-center gap-3 text-ink-500"
+        role="status"
+        aria-live="polite"
+      >
+        <Loader2 className="size-6 animate-spin text-brand-400" />
+        <p className="text-sm font-medium">Loading page editor…</p>
+      </div>
+    ),
+  },
+);
 
 export function PageFocus({
   project,
@@ -67,21 +85,14 @@ export function PageFocus({
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col" data-project={project.id}>
-      <div className="flex shrink-0 items-center gap-2 px-3 py-2">
-        <button
-          type="button"
-          onClick={onLeave}
-          className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium text-ink-600 transition hover:bg-white hover:text-ink-900 hover:shadow-soft"
-        >
-          <ArrowLeft className="size-4" />
-          {t("leaveFocus")}
-        </button>
+      <div className="relative flex shrink-0 items-center justify-center gap-2 px-3 py-2">
+        <ModeSwitch mode="edit" onChange={(next) => next === "preview" && onLeave()} />
         {showConversationToggle && (
           <button
             type="button"
             onClick={() => onOverlay(!overlayOpen)}
             aria-expanded={overlayOpen}
-            className="ml-auto inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium text-ink-600 transition hover:bg-white hover:text-ink-900 hover:shadow-soft"
+            className="absolute right-3 inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-medium text-ink-600 transition hover:bg-white hover:text-ink-900 hover:shadow-soft"
           >
             <MessageCircle className="size-4" />
             {t("conversation")}
@@ -89,7 +100,7 @@ export function PageFocus({
         )}
       </div>
       <div className="relative min-h-0 flex-1 overflow-hidden">
-        <BookCanvas autoPreview={false} />
+        <BookCanvas autoPreview={false} guided />
         <AnimatePresence>
           {overlayOpen && (
             <motion.aside

@@ -16,9 +16,58 @@ import type { NextFunction, Request, Response } from "express";
 import { ensureAdmin } from "./storage";
 import { refreshRuntimeEnv } from "./runtimeConfig";
 
+/**
+ * Why a request has no authenticated user. Lets the client pick the right
+ * recovery (refresh vs. re-establish a session vs. ask the user to sign in)
+ * instead of guessing from a bare 401.
+ *   - missing:  no token was sent
+ *   - expired:  the ID token is past its lifetime — a refresh fixes it
+ *   - revoked:  the user's sessions were invalidated (password change, sign-out
+ *               everywhere, or the Auth emulator being restarted with `--import`)
+ *               — a refresh will NOT help, the user has to sign in again
+ *   - disabled: the account was disabled
+ *   - invalid:  malformed / wrong project / bad signature
+ */
+export type AuthFailure = "missing" | "expired" | "revoked" | "disabled" | "invalid";
+
 export interface AuthedRequest extends Request {
   uid?: string;
   authToken?: DecodedIdToken;
+  /** Set (instead of `uid`) when a token was missing or rejected. */
+  authFailure?: AuthFailure;
+}
+
+/** Stable `error.code` values the browser switches on (see `platform/backend.ts`). */
+const AUTH_FAILURE_CODES: Record<AuthFailure, string> = {
+  missing: "auth_required",
+  expired: "session_expired",
+  revoked: "session_revoked",
+  disabled: "account_disabled",
+  invalid: "session_invalid",
+};
+
+function classifyAuthError(err: unknown): AuthFailure {
+  switch ((err as { code?: string } | null)?.code) {
+    case "auth/id-token-expired":
+      return "expired";
+    case "auth/id-token-revoked":
+      return "revoked";
+    case "auth/user-disabled":
+      return "disabled";
+    default:
+      return "invalid";
+  }
+}
+
+/**
+ * Send the standard 401. The `code` tells the client WHY (see {@link AuthFailure});
+ * the message stays human-readable for any caller that just shows it.
+ */
+export function unauthenticated(req: AuthedRequest, res: Response): void {
+  const failure = req.authFailure ?? "missing";
+  res.status(401).json({
+    error: { message: "Authentication required.", code: AUTH_FAILURE_CODES[failure] },
+  });
 }
 
 const AUTH_HEADER = "x-auth-token";
@@ -48,9 +97,21 @@ export async function attachUser(
       const decoded = await getAuth().verifyIdToken(token);
       req.uid = decoded.uid;
       req.authToken = decoded;
-    } catch {
-      // Invalid/expired token → treated as unauthenticated.
+    } catch (err) {
+      // Invalid/expired token → treated as unauthenticated, but remember WHY so
+      // the 401 can say so. Expiry is routine (the client refreshes); anything
+      // else is worth a log line, since this used to fail silently.
+      const failure = classifyAuthError(err);
+      req.authFailure = failure;
+      if (failure !== "expired") {
+        console.warn(
+          `[auth] rejected ID token (${failure}) on ${req.method} ${req.path}:`,
+          (err as { code?: string; message?: string })?.code ?? (err as Error)?.message,
+        );
+      }
     }
+  } else {
+    req.authFailure = "missing";
   }
   next();
 }
@@ -58,7 +119,7 @@ export async function attachUser(
 /** Reject the request unless a user is attached. */
 export function requireAuth(req: AuthedRequest, res: Response, next: NextFunction): void {
   if (!req.uid) {
-    res.status(401).json({ error: { message: "Authentication required." } });
+    unauthenticated(req, res);
     return;
   }
   next();
@@ -72,7 +133,7 @@ export function requireAuth(req: AuthedRequest, res: Response, next: NextFunctio
 export function requireVerified(req: AuthedRequest, res: Response, next: NextFunction): void {
   const token = req.authToken;
   if (!req.uid || !token) {
-    res.status(401).json({ error: { message: "Authentication required." } });
+    unauthenticated(req, res);
     return;
   }
   // Dev convenience: the emulator can't send verification emails, so don't block
@@ -134,7 +195,7 @@ export async function requireAdmin(
 ): Promise<void> {
   ensureAdmin();
   if (!req.uid) {
-    res.status(401).json({ error: { message: "Authentication required." } });
+    unauthenticated(req, res);
     return;
   }
   try {

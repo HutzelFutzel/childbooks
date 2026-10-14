@@ -36,8 +36,13 @@ export function AccessLoadState({
 }) {
   if (!error) {
     return (
-      <div className="flex flex-1 items-center justify-center">
+      <div
+        className="flex flex-1 flex-col items-center justify-center gap-3 text-ink-500"
+        role="status"
+        aria-live="polite"
+      >
         <Loader2 className="size-7 animate-spin text-brand-400" />
+        <p className="text-sm font-medium">Checking admin permissions…</p>
       </div>
     );
   }

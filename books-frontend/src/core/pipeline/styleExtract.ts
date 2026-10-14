@@ -12,6 +12,7 @@ import { resolvePromptsConfig, type PromptContext } from "../prompts/context";
 import { renderTextPrompt } from "../prompts/render";
 import { withRetry } from "./retry";
 import { normalizeAnchorName } from "../book/anchorRefs";
+import type { CustomStyleRef } from "../config/customArtStyles";
 
 const extractSchema = z.object({
   compatible: z.boolean(),
@@ -36,12 +37,21 @@ export interface ExtractedCharacterStyle {
   id: string;
   name: string;
   stylePrompt: string;
+  /** Set by the backend for a clash: the saved custom style this character's drawings stand for. */
+  customStyle?: CustomStyleRef;
 }
 
 export interface ExtractArtStyleResult {
   compatible: boolean;
   stylePrompt: string;
   characters: ExtractedCharacterStyle[];
+  /**
+   * Set by the backend for a shared look: the saved custom style (id + revision)
+   * the book should point at. `cached` when the same drawings were read before
+   * and no model was called.
+   */
+  customStyle?: CustomStyleRef;
+  cached?: boolean;
 }
 
 export interface ExtractArtStyleInput {

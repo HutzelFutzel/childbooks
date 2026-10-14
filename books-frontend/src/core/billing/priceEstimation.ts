@@ -13,6 +13,11 @@
  * before the render (`core/billing/referencePlan`); a quote that names it
  * prices from renders that sent about as many.
  *
+ * Under the `full` cost basis each sample is everything one delivered render
+ * cost, retries and repairs included, so the statistic forwards that overhead
+ * as an average: every reader pays the same quote, and the renders that needed
+ * a retry are paid for by the window rather than by whoever hit them.
+ *
  * When a group has too few samples the estimate borrows from a broader one:
  *   exact → the closest reference group → the setup with any reference count
  *   → same model+quality → another quality scaled by `qualityFactors`
@@ -23,6 +28,7 @@ import type { GenerationEstimateProfile } from "../config/generationEstimateProf
 import {
   parseCostStatsKey,
   profileKeyFields,
+  sampleMatchesBasis,
   type CostKeyField,
   type CostSample,
   type ImageCostStats,
@@ -30,6 +36,7 @@ import {
 import type { ImageTier } from "../config/modelConfig";
 import {
   estimationRuleFor,
+  type CostBasis,
   type EstimateLevel,
   type EstimationConfig,
   type EstimationRule,
@@ -117,6 +124,7 @@ function gather(
   stats: ImageCostStats,
   action: string,
   tier: string,
+  basis: CostBasis,
   match: Matcher,
   scale: (fields: Record<CostKeyField, string>) => number,
   rateNow: number | null,
@@ -127,6 +135,7 @@ function gather(
     if (!parsed || parsed.action !== action || parsed.tier !== tier || !match(parsed.fields)) continue;
     const factor = scale(parsed.fields);
     for (const s of entry.samples) {
+      if (!sampleMatchesBasis(s, basis)) continue;
       const rateAdj = rateNow && s.rate ? rateNow / s.rate : 1;
       out.push({ ...s, value: s.usd * rateAdj * factor });
     }
@@ -182,6 +191,7 @@ export function estimateUnitCost(input: UnitEstimateInput): UnitEstimate {
         stats,
         action,
         tier,
+        config.costBasis,
         (f) =>
           same(f) &&
           (Object.keys(q) as CostKeyField[]).every((k) => {
@@ -281,7 +291,7 @@ function broaderEstimate(
   }
 
   const model = selectSamples(
-    gather(stats, action, tier, (f) => same(f) && f.quality === q.quality, () => 1, rate),
+    gather(stats, action, tier, config.costBasis, (f) => same(f) && f.quality === q.quality, () => 1, rate),
     rule,
     now,
   );
@@ -295,6 +305,7 @@ function broaderEstimate(
       stats,
       action,
       tier,
+      config.costBasis,
       (f) => same(f) && f.quality !== q.quality,
       (f) => target / qualityFactor(config, f.quality),
       rate,
@@ -311,7 +322,10 @@ function broaderEstimate(
     };
   }
 
-  if (rate) return { usd: rate, level: "rate", exactSamples: 0, samples: 0 };
+  if (rate) {
+    const attempts = config.costBasis === "full" ? config.expectedAttempts : 1;
+    return { usd: rate * attempts, level: "rate", exactSamples: 0, samples: 0 };
+  }
 
   const fallbackSparks = sparks.actions[action]?.estimatedSparks ?? 0;
   const usd =

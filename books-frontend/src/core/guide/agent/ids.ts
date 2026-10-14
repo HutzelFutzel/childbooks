@@ -43,6 +43,12 @@ export const GUIDE_COMMAND_IDS = [
   "excludeAnchor",
   // Look
   "setStyle",
+  // The finished pages: type and where it sits (free, and Undo puts it back)
+  "setTextSize",
+  "setTextColor",
+  "setTextAlign",
+  "setTextFont",
+  "moveText",
   // Making the book
   "drawBook",
   // Account and Sparks

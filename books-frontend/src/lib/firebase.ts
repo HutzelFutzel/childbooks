@@ -17,6 +17,8 @@ import { connectAuthEmulator, getAuth, type Auth } from "firebase/auth";
 import {
   connectFirestoreEmulator,
   initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   type Firestore,
 } from "firebase/firestore";
 import {
@@ -104,7 +106,16 @@ export function getFirebaseDb(): Firestore {
   // whose optional fields are frequently `undefined`. Firestore rejects
   // `undefined` by default ("Unsupported field value: undefined"), so configure
   // the client to drop those keys instead of throwing on `addDoc`/`setDoc`.
-  db = initializeFirestore(getFirebaseApp(), { ignoreUndefinedProperties: true });
+  db = initializeFirestore(getFirebaseApp(), {
+    ignoreUndefinedProperties: true,
+    ...(typeof window !== "undefined" && !useEmulators()
+      ? {
+          localCache: persistentLocalCache({
+            tabManager: persistentMultipleTabManager(),
+          }),
+        }
+      : {}),
+  });
   if (useEmulators()) {
     connectFirestoreEmulator(db, EMULATOR_HOST, FIRESTORE_EMULATOR_PORT);
   }

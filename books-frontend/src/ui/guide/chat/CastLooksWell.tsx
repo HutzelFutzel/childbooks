@@ -58,12 +58,17 @@ function useStartEstimates(project: Project, castId: string, storyIds: readonly 
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [project, castId, stats, sparks, active],
   );
-  const story = useMemo(
+  const current = useMemo(
+    () => storyLooksStartEstimate(project, [castId]),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [project, castId, stats, sparks, active],
+  );
+  const everyone = useMemo(
     () => storyLooksStartEstimate(project, storyIds),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [project, storyKey, stats, sparks, active],
   );
-  return { own, story };
+  return { own, current, everyone };
 }
 
 export function CastLooksWell({
@@ -101,6 +106,8 @@ export function CastLooksWell({
   const styled = project.config.styleReady !== false;
   const open = looksToDecide(project);
   const many = open.length > 1;
+  const firstOpen = open[0]?.id === castId;
+  const canSurpriseAll = many && firstOpen && !quiet;
   const storyIds = useMemo(() => (many ? open.map((m) => m.id) : [castId]), [many, open, castId]);
   const estimates = useStartEstimates(project, castId, storyIds);
   const member = (briefOf(project.config).cast ?? []).find((m) => m.id === castId);
@@ -110,10 +117,10 @@ export function CastLooksWell({
       void decideLooksFromStory([...ids]);
       return;
     }
-    const cap = estimates.story?.maxSparks ?? null;
     const all = ids.length > 1;
+    const cap = (all ? estimates.everyone : estimates.current)?.maxSparks ?? null;
     void tap(
-      all ? t("surpriseAll") : t("surprise"),
+      all ? t("surpriseAll", { count: ids.length }) : t("surprise", { name }),
       () => chooseAndStartPortraits(() => decideLooksFromStory([...ids]), cap),
       {
         undoable: true,
@@ -123,8 +130,8 @@ export function CastLooksWell({
       },
     );
   };
-  const surpriseDefault = useRef(() => surprise(storyIds));
-  surpriseDefault.current = () => surprise(storyIds);
+  const surpriseDefault = useRef(() => surprise([castId]));
+  surpriseDefault.current = () => surprise([castId]);
   useEffect(() => {
     if (quiet) return;
     onDefault(() => surpriseDefault.current());
@@ -167,31 +174,34 @@ export function CastLooksWell({
       <div className="flex flex-col gap-1.5">
         <button
           type="button"
-          onClick={() => surprise(quiet ? [castId] : storyIds)}
+          onClick={() => surprise([castId])}
           className="group flex w-full items-start gap-3 rounded-xl bg-magic-50 px-3.5 py-3 text-left ring-1 ring-magic-200 transition hover:ring-magic-400 active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-magic-500"
         >
           <Sparkles className="mt-0.5 size-4 shrink-0 text-magic-600" aria-hidden />
           <span className="min-w-0 flex-1">
             <span className="flex flex-wrap items-center gap-2">
-              <span className="text-sm font-semibold text-ink-900">{many && !quiet ? t("surpriseAll") : t("surprise")}</span>
+              <span className="text-sm font-semibold text-ink-900">{t("surprise", { name })}</span>
               <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-magic-700 ring-1 ring-magic-200">
                 {t("recommended")}
               </span>
             </span>
             <span className="mt-0.5 block text-xs leading-snug text-ink-600">
-              {many && !quiet ? t("surpriseAllHint") : t("surpriseHint", { name })}
+              {t("surpriseHint", { name })}
             </span>
-            {!quiet && <StartNote estimate={estimates.story} className="mt-1" />}
+            {!quiet && <StartNote estimate={estimates.current} className="mt-1" />}
           </span>
         </button>
-        {many && !quiet && (
-          <button
-            type="button"
-            onClick={() => surprise([castId])}
-            className="self-start rounded-full px-2 py-1 text-xs font-medium text-ink-500 underline decoration-ink-300 underline-offset-2 transition hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
-          >
-            {t("surpriseOnly", { name })}
-          </button>
+        {canSurpriseAll && (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2">
+            <button
+              type="button"
+              onClick={() => surprise(storyIds)}
+              className="rounded-full px-1 py-1 text-xs font-medium text-ink-600 underline decoration-ink-300 underline-offset-2 transition hover:text-ink-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400"
+            >
+              {t("surpriseAll", { count: storyIds.length })}
+            </button>
+            <StartNote estimate={estimates.everyone} />
+          </div>
         )}
       </div>
 
@@ -243,7 +253,7 @@ export function CastLooksWell({
               />
             )}
             {panel === "drawing" && (
-              <DrawingPanel member={member} name={name} styled={styled} estimate={estimates.own} quiet={quiet} />
+              <DrawingPanel project={project} member={member} name={name} estimate={estimates.own} quiet={quiet} />
             )}
             {panel === "describe" && (
               <DescribePanel

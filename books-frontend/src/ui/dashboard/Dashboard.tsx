@@ -126,6 +126,7 @@ export function Dashboard() {
   const [sortBy, setSortBy] = useState<SortOption>("recent");
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [openingId, setOpeningId] = useState<string | null>(null);
 
   const handleCreate = async (title?: string) => {
     if (creating) return;
@@ -143,8 +144,10 @@ export function Dashboard() {
   };
 
   const handleOpen = (id: string) => {
+    if (openingId) return;
     const project = projects.find((candidate) => candidate.id === id);
     if (!project) return;
+    setOpeningId(id);
     // On the guide, open the book without naming a destination and let the studio
     // shell ask the engine. Baking one here would be the wizard's answer, and the
     // shell honours an explicit destination — so the engine would never be asked.
@@ -374,6 +377,7 @@ export function Dashboard() {
               <ProjectCard
                 key={p.id}
                 project={p}
+                opening={openingId === p.id}
                 onOpen={() => handleOpen(p.id)}
                 onDelete={() => setPendingDelete(p.id)}
               />

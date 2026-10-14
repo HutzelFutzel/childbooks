@@ -142,7 +142,7 @@ export async function fetchDownloadEvents(id: string): Promise<DownloadEvent[]> 
 /** Mark all downloads seen (clears the unseen badge). Best-effort. */
 export async function markDownloadsSeen(): Promise<void> {
   try {
-    await backendFetch("/account/downloads/seen", { method: "POST" });
+    await backendFetch("/account/downloads/seen", { method: "POST", background: true });
   } catch {
     // Non-fatal — the badge just lingers until the next successful call.
   }

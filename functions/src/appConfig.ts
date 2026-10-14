@@ -80,6 +80,7 @@ import {
   type ImageCostStats,
 } from "../../books-frontend/src/core/config/imageCostStats";
 import type { GenerationEstimateProfile } from "../../books-frontend/src/core/config/generationEstimateProfile";
+import type { CostBasis } from "../../books-frontend/src/core/config/priceEstimation";
 import {
   appendLatencySample,
   normalizeLatencyStats,
@@ -487,7 +488,7 @@ export async function recordImageCostSample(
   tier: ImageTier,
   costUsd: number,
   profile: GenerationEstimateProfile,
-  meta: { projectId?: string; rate?: number | null } = {},
+  meta: { projectId?: string; rate?: number | null; basis?: CostBasis } = {},
 ): Promise<void> {
   ensureAdmin();
   const db = getFirestore();
@@ -500,7 +501,7 @@ export async function recordImageCostSample(
   await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const current = normalizeImageCostStats(snap.exists ? snap.data() : undefined);
-    tx.set(ref, appendCostSample(current, action, tier, costUsd, profile, { project, rate: meta.rate }), {
+    tx.set(ref, appendCostSample(current, action, tier, costUsd, profile, { project, rate: meta.rate, basis: meta.basis }), {
       merge: false,
     });
   });
@@ -1766,6 +1767,44 @@ export async function removeArtStyleExample(
       .map((example, order) => ({ ...example, order })),
     updatedAt: Date.now(),
   };
+  const next = normalizeArtStylesConfig({ ...current, styles });
+  await writeDoc(ART_STYLES_DOC, next);
+  return next;
+}
+
+/** Point a preset at a new immutable generation-only exemplar. */
+export async function setArtStyleGenerationReference(
+  styleId: string,
+  reference: NonNullable<ArtStylesConfig["styles"][number]["generationReference"]>,
+): Promise<ArtStylesConfig> {
+  const current = await getArtStylesConfig();
+  const styleIndex = current.styles.findIndex((style) => style.id === styleId);
+  if (styleIndex < 0) throw new Error(`Unknown art style "${styleId}".`);
+  const styles = current.styles.slice();
+  styles[styleIndex] = {
+    ...styles[styleIndex],
+    generationReference: reference,
+    updatedAt: Date.now(),
+  };
+  const next = normalizeArtStylesConfig({ ...current, styles });
+  await writeDoc(ART_STYLES_DOC, next);
+  return next;
+}
+
+/**
+ * Stop offering the current exemplar to new books. Its immutable object stays
+ * available to books that already snapshotted it.
+ */
+export async function clearArtStyleGenerationReference(
+  styleId: string,
+): Promise<ArtStylesConfig> {
+  const current = await getArtStylesConfig();
+  const styleIndex = current.styles.findIndex((style) => style.id === styleId);
+  if (styleIndex < 0) throw new Error(`Unknown art style "${styleId}".`);
+  const { generationReference: _removed, ...style } = current.styles[styleIndex];
+  void _removed;
+  const styles = current.styles.slice();
+  styles[styleIndex] = { ...style, updatedAt: Date.now() };
   const next = normalizeArtStylesConfig({ ...current, styles });
   await writeDoc(ART_STYLES_DOC, next);
   return next;

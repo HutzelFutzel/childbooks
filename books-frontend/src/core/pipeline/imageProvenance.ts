@@ -5,7 +5,14 @@
  * each surgical render branch.
  */
 import type { ImageTier } from "../config/modelConfig";
-import type { ModelSelection } from "../types";
+import type { ResolvedImageGenerationOptions } from "../config/imageGeneration";
+import { styleStampOf } from "../prompts/style";
+import type {
+  ArtStyleSelection,
+  ImageInputReference,
+  ImageRenderRecord,
+  ModelSelection,
+} from "../types";
 
 export type ImageProvenance = {
   imageTier: ImageTier;
@@ -22,5 +29,32 @@ export function stampImageProvenance<T extends object>(
     ...render,
     imageTier: tier,
     imageModel: { provider: model.provider, id: model.id },
+  };
+}
+
+/**
+ * The record kept on a picture: the look, canvas, applied options and the
+ * pictures sent along with the prompt. Only what was actually used goes in, so
+ * a reader can trace a picture and a later feature can repeat it.
+ */
+export function buildRenderRecord(args: {
+  artStyle: ArtStyleSelection | undefined;
+  action: string;
+  outputSize?: string;
+  generation?: ResolvedImageGenerationOptions;
+  inputReferences?: readonly ImageInputReference[];
+  prompt?: string;
+  renderedAt?: number;
+}): ImageRenderRecord {
+  return {
+    style: styleStampOf(args.artStyle),
+    action: args.action,
+    ...(args.outputSize ? { outputSize: args.outputSize } : {}),
+    ...(args.generation ? { generation: args.generation } : {}),
+    ...(args.inputReferences && args.inputReferences.length > 0
+      ? { inputReferences: args.inputReferences.map((reference) => ({ ...reference })) }
+      : {}),
+    ...(args.prompt ? { prompt: args.prompt } : {}),
+    renderedAt: args.renderedAt ?? Date.now(),
   };
 }

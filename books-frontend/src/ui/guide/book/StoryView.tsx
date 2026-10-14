@@ -9,11 +9,11 @@
  * is read, typed and reviewed; a quiet line above it says where to ask for a
  * change, and the composer's own "Story" chip says that is where the words go.
  * Reviewing a proposed change stays on the text it is about, and the guide
- * narrates each step in the thread. While the reader types or reviews, the
- * chat holds back choices that can wait (`core/guide/attention.ts`).
+ * narrates each step in the thread. Typing here never hides the card in the
+ * chat (`core/guide/cardDeck.ts`).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MessageCircle, PenLine, Sparkles, TriangleAlert, X } from "lucide-react";
+import { ArrowRight, MessageCircle, PenLine, Sparkles, TriangleAlert, X } from "lucide-react";
 import { resolveAudienceProfile } from "../../../core/config/audience";
 import { resolveStoryCraft } from "../../../core/config/storyCraft";
 import type { Project } from "../../../core/types";
@@ -25,7 +25,10 @@ import { StoryManuscript } from "../../studio/story/StoryManuscript";
 import { useStoryRevision } from "../../studio/story/useStoryRevision";
 import { useStudio } from "../../studio/StudioContext";
 import { useChatStudio } from "../../../state/chatStudio";
-import { useGuideT } from "../intl";
+import { useGuideLabel, useGuideT } from "../intl";
+import { useHandOverStory } from "../useHandOverStory";
+import { journeyEntry } from "../../../core/guide/journey";
+import { storyHandedOver } from "../../../core/guide/ownWords";
 import { restoreModelLineBreaks } from "../../../core/story/lineBreaks";
 import { StoryFacts } from "./StoryFacts";
 import { TitleFields } from "./TitleFields";
@@ -94,7 +97,7 @@ export function StoryView({ project, locked }: { project: Project; locked: boole
   }, [markable, storyText, setMark]);
   useEffect(() => () => useStoryMark.getState().setMark(null), []);
 
-  // What the reader is doing here decides what the chat may put in front of them.
+  // Whether the story can be handed over right now.
   const setStoryFocus = useChatStudio((s) => s.setStoryFocus);
   const [typing, setTyping] = useState(false);
   const leaveTimer = useRef<number | undefined>(undefined);
@@ -195,9 +198,34 @@ export function StoryView({ project, locked }: { project: Project; locked: boole
               }
               className="h-full min-h-0 flex-1 rounded-none shadow-none ring-0"
             />
+            {storyText.trim() && journeyEntry(project) === "own" && !storyHandedOver(project) && (
+              <HandOver waiting={writing || reviewing || revisionBusy} />
+            )}
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Own words: the way on is under the story, where the reader just pasted it.
+ * It is the same step as the chat's card, so the thread reads the same.
+ */
+function HandOver({ waiting }: { waiting: boolean }) {
+  const label = useGuideLabel();
+  const t = useGuideT("chrome");
+  const handOver = useHandOverStory();
+  // Always there while the story is the reader's to hand over: while a change
+  // is written or reviewed it waits, it never goes away.
+  return (
+    <div className="flex shrink-0 flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-ink-100 bg-ink-50/50 px-4 py-3 sm:px-5">
+      <span className="min-w-0 flex-1 text-xs leading-snug text-ink-500">
+        {waiting ? t("storyDoneWaiting") : t("storyDoneHint")}
+      </span>
+      <Button size="md" onClick={handOver} disabled={waiting} rightIcon={<ArrowRight className="size-4" aria-hidden />}>
+        {label("storyIsReady")}
+      </Button>
     </div>
   );
 }

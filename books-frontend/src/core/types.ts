@@ -50,6 +50,14 @@ export interface ModelSelection {
   params?: import("./config/modelConfig").TextCallParams;
 }
 
+/** Immutable admin asset used only to carry a preset's rendering style into generation. */
+export interface GenerationStyleReference {
+  imageUrl: string;
+  storagePath: string;
+  mimeType: string;
+  updatedAt: number;
+}
+
 export interface ArtStyleSelection {
   /** Stable id from the admin-managed art-style catalog, or null when custom. */
   presetId: string | null;
@@ -79,6 +87,57 @@ export interface ArtStyleSelection {
    * image generation as a style-only reference for every character.
    */
   referenceArt?: SourceArtRef[];
+  /**
+   * The exact catalog exemplar selected with a preset. It is snapshotted onto
+   * the book so later admin changes cannot mix two style versions in one book.
+   */
+  generationReference?: GenerationStyleReference;
+  /**
+   * Pointer to the backend-owned custom style this look was saved as (see
+   * `core/config/customArtStyles.ts`). When present the backend, not the
+   * browser, supplies the wording and pictures, and `customDescription` is only
+   * a readable copy of the revision's text.
+   */
+  customStyle?: import("./config/customArtStyles").CustomStyleRef;
+}
+
+/**
+ * Everything one generated picture was made from, kept on the picture itself
+ * so a look, a model or a prompt can be traced and reused later. Optional
+ * throughout: pictures drawn before this existed carry none of it.
+ */
+export interface ImageRenderRecord {
+  /** The look it was drawn in, as a stable id plus the full key used for staleness. */
+  style?: {
+    presetId: string | null;
+    /** Custom style id, when the look is a saved custom style. */
+    customStyleId?: string;
+    customStyleRevision?: number;
+    origin?: "preset" | "derived";
+    /** `artStyleKey` of the selection at the time. */
+    key: string;
+  };
+  /** The Spark action it was drawn as (portrait, anchorImage, pageIllustration, ...). */
+  action?: string;
+  /** The canvas requested from the model, "WxH". */
+  outputSize?: string;
+  /** What the surface asked for and what the model applied. */
+  generation?: import("./config/imageGeneration").ResolvedImageGenerationOptions;
+  /** The pictures sent along with the prompt, in order. Never includes private photos' ids. */
+  inputReferences?: ImageInputReference[];
+  /** The exact prompt, for pictures whose version node has no prompt of its own. */
+  prompt?: string;
+  /** Server clock when the render finished. */
+  renderedAt?: number;
+}
+
+export interface ImageInputReference {
+  role: string;
+  label?: string;
+  /** A user blob. Absent for one-use likeness photos and for pictures that were not stored. */
+  blobId?: string;
+  /** An admin asset path (the catalog style exemplar). */
+  storagePath?: string;
 }
 
 /** Existing illustrated character art kept as identity (and often style) source. */
@@ -237,6 +296,15 @@ export interface PortraitImage {
   createdAt: number;
   imageTier?: ImageTier;
   imageModel?: ModelSelection;
+  /** Everything this portrait was drawn from, for tracing and reuse. */
+  render?: ImageRenderRecord;
+}
+
+/** What switching from an artwork-derived style to a preset took off the book, so it can be put back. */
+export interface RetiredArtwork {
+  cast: { id: string; sourceArt: SourceArtRef[]; lookSource?: LookSource; lookFromArt?: string }[];
+  anchors: { id: string; sourceArt: SourceArtRef[]; lookFromArt?: string }[];
+  staged?: SourceArtRef[];
 }
 
 /** How a Chat studio book was started. Switchable until the pages start. */
@@ -302,6 +370,12 @@ export interface StudioAuthoringState {
    */
   styleBefore?: ArtStyleSelection;
   /**
+   * The artwork that was the book's style when the reader switched to a preset,
+   * kept with `styleBefore` so "keep the old look" puts the drawings back too.
+   * Only restored together with a derived `styleBefore`; see `withStyleReverted`.
+   */
+  retiredArtwork?: RetiredArtwork;
+  /**
    * Chat skills: names the reader removed from the book. Story analysis and
    * manuscript extraction never add these back; adding the person again clears it.
    */
@@ -320,6 +394,11 @@ export interface StudioAuthoringState {
   planRequestedFor?: string;
   /** The analysis and page target the current page plan was asked for. */
   planBasis?: string;
+  /**
+   * When notes for the pictures arrived after the page plan was asked for. Part
+   * of the plan's basis, so the plan is made again with them.
+   */
+  planNotesAt?: number;
   /**
    * Decisions the reader explicitly reviewed in Chat. BookConfig always has
    * defaults, so these receipts distinguish a real choice from an untouched
@@ -674,6 +753,8 @@ export interface AnchorImage {
    * debugging — the tier is the stable UX signal when admin rebinds slots.
    */
   imageModel?: ModelSelection;
+  /** Everything this picture was drawn from, for tracing and reuse. */
+  render?: ImageRenderRecord;
 }
 
 /**
@@ -765,10 +846,10 @@ export interface IllustrationImage extends AnchorImage {
   bakedText?: BakedCoverText;
   /**
    * Cover-only: what the lettering check read. `passed`: every word spelled
-   * right, inside the safe area. `fellBack`: no attempt passed, so this image
-   * was drawn without words and the text layer carries them. `failed`: no
-   * attempt passed and there was no time to draw it plain. `unchecked`: the
-   * check could not run.
+   * right, inside the safe area. `unchecked`: the check could not run.
+   * `fellBack` and `failed` are only found on covers drawn before a cover that
+   * never passed its reading stopped being delivered at all: a cover without
+   * its painted words, or with wrong ones, is no longer an outcome.
    */
   lettering?: {
     outcome: "passed" | "fellBack" | "failed" | "unchecked";
@@ -790,6 +871,27 @@ export interface IllustrationImage extends AnchorImage {
    */
   layoutId?: string;
   compositionMode?: CompositionMode;
+  /**
+   * Full-bleed pages: how calm the picture came out where the words go, and
+   * what was done about it. `scrim` means the area stayed too busy after the
+   * redraw, so the words get a translucent plate.
+   */
+  layoutCheck?: {
+    /** Busiest text region, 0..1 (see `regionBusyness`). */
+    busyness: number;
+    /** The tolerance it was held to. */
+    threshold: number;
+    passed: boolean;
+    /** Image calls spent, including the one redraw. */
+    attempts: number;
+    fallback?: "scrim";
+  };
+  /**
+   * The ink measured for each text slot of the layout this art was drawn for,
+   * keyed by slot id. Seeding and new artwork apply it to text whose color the
+   * reader has not chosen.
+   */
+  textInk?: Record<string, import("./book/regionAnalysis").InkChoice>;
 }
 
 export interface Anchor {

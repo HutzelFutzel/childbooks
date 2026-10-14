@@ -14,7 +14,6 @@
  *
  * Offline and deterministic: pure functions over synthesized transcripts.
  */
-import { holdsWell } from "../books-frontend/src/core/guide/attention";
 import { ATTENTION_WELLS, WELL_INTRO_LINES, floorIsOpen, isQuietMessage, latestTurn, wellForKeys, wellStage } from "../books-frontend/src/core/guide/conversation";
 import { DEFAULT_GUIDE_COPY, GUIDE_COPY_HELP, type GuideLineKey } from "../books-frontend/src/core/guide/copy";
 import type { GuideMessage } from "../books-frontend/src/core/guide/session";
@@ -143,25 +142,7 @@ const stage = (messages: GuideMessage[], over: Partial<Parameters<typeof wellSta
   check(blocked.length === 1 && blocked[0] === "storyFailed", "A blocking line isn't said alone.");
 }
 
-// --- One place for attention ---------------------------------------------------------------------------
-
-{
-  const held = (wellKind: string, over: Partial<Parameters<typeof holdsWell>[0]> = {}) =>
-    holdsWell({ storyFocus: "editing", wellKind, asked: false, ...over });
-  for (const kind of ["storyDone", "audienceConfirm", "castAges", "storyBrief", "styleChoice", "coverWords", "drawBook", "portraits", "order"]) {
-    check(held(kind), `The ${kind} card is put in front of the reader while they type in the story.`);
-    check(held(kind, { storyFocus: "reviewing" }), `The ${kind} card is put in front of the reader while they review a change.`);
-    check(!held(kind, { storyFocus: null }), `The ${kind} card is held when the reader is not in the story.`);
-    check(!held(kind, { asked: true }), `The ${kind} card is held although the reader asked for it.`);
-  }
-  for (const kind of [...ATTENTION_WELLS, "extractionRetry", "whichName", "redraw", "manuscriptChoice", "agentConfirm", "agentAsk", "agentBlocked", "sparksOffer"]) {
-    check(!held(kind), `The ${kind} card is held back, but it is a failure or something the reader just asked for.`);
-  }
-  check(!holdsWell({ storyFocus: "editing", wellKind: null, asked: false }), "Nothing is held when no card is open.");
-  report.push(`  attention: held while typing or reviewing, never failures or what the reader asked for`);
-}
-
-notes.push("Conversation: cards shown, announced and held against synthesized transcripts");
+notes.push("Conversation: cards shown and announced against synthesized transcripts");
 
 export function checkGuideConversation(): CheckResult {
   return { failures, notes, report, cases };

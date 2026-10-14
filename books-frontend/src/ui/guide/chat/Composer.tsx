@@ -8,7 +8,9 @@
  * Violet is only the moment work is running: a 1px violet edge traces the ring
  * once, then rests there until the work is done. There is no typing-dot row.
  *
- * Send is never blocked. Enter on an empty field accepts the well's
+ * Typing is never blocked, but a message is held while a turn is being
+ * answered (`sending`): the store would drop it, so the draft stays in the
+ * field and the send button says so. Enter on an empty field accepts the well's
  * recommended choice, so the cheapest path is one key.
  */
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
@@ -37,6 +39,8 @@ export function Composer({
   locale,
   onLocale,
   working,
+  sending = false,
+  quiet = false,
   autoFocus = false,
   className,
 }: {
@@ -67,6 +71,13 @@ export function Composer({
   locale: string;
   onLocale: (locale: string) => void;
   working: boolean;
+  /**
+   * A turn is being answered. The field stays editable, so the next message
+   * can be written, but it is held rather than sent into a turn that would drop it.
+   */
+  sending?: boolean;
+  /** A card is open above: the field steps back until it is focused. */
+  quiet?: boolean;
   autoFocus?: boolean;
   className?: string;
 }) {
@@ -94,6 +105,7 @@ export function Composer({
       onAcceptDefault?.();
       return;
     }
+    if (sending) return;
     onSend(text);
   };
 
@@ -101,7 +113,12 @@ export function Composer({
     <div className={cn("flex flex-col gap-2", className)}>
       <div className="relative">
         <Trace active={working} />
-        <div className="relative flex items-end gap-2 rounded-[1.1rem] bg-white py-2 pr-2 pl-3 ring-1 ring-ink-900/85 shadow-soft transition-shadow focus-within:shadow-lifted">
+        <div
+          className={cn(
+            "relative flex items-end gap-2 rounded-[1.1rem] bg-white py-2 pr-2 pl-3 ring-1 shadow-soft transition-shadow focus-within:shadow-lifted",
+            quiet ? "ring-ink-900/40 focus-within:ring-ink-900/85" : "ring-ink-900/85",
+          )}
+        >
           <div className="flex shrink-0 items-center gap-1 self-center">
             <LanguageCode locale={locale} onLocale={onLocale} />
             <AnimatePresence initial={false}>
@@ -184,10 +201,12 @@ export function Composer({
             type="button"
             onClick={submit}
             aria-label={t("send")}
+            aria-disabled={sending && value.trim() ? true : undefined}
             className={cn(
               "flex size-9 shrink-0 items-center justify-center rounded-full bg-ink-900 text-white transition",
               "hover:bg-ink-800 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ink-400 focus-visible:ring-offset-2",
               !value.trim() && "bg-ink-900/80",
+              sending && value.trim() && "cursor-wait opacity-50",
             )}
           >
             <ArrowUp className="size-4" strokeWidth={2.5} />

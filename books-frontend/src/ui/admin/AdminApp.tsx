@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { usePathname, useRouter } from "next/navigation";
 import { ArrowLeft, Eye, FlaskConical, Loader2, Menu, Rocket, Search, ShieldAlert } from "lucide-react";
 import { Button } from "@/ui/components/Button";
@@ -31,42 +32,56 @@ import { NAV_INDEX, NAV_TREE, resolveAdminPage, type NavLeaf } from "./adminNav"
 import { AdminSidebarNav } from "./AdminSidebarNav";
 import { AdminPageHeader } from "./AdminPageHeader";
 import { CommandPalette } from "./CommandPalette";
-import { ModelConfigTab } from "./tabs/ModelConfigTab";
-import { ArtStylesTab } from "./tabs/ArtStylesTab";
-import { LayoutsTab } from "./tabs/LayoutsTab";
-import { AudienceTab } from "./tabs/AudienceTab";
-import { StoryCraftTab } from "./tabs/StoryCraftTab";
-import { BookLanguagesTab } from "./tabs/BookLanguagesTab";
-import { TypographyTab } from "./tabs/TypographyTab";
-import { GuideTab } from "./tabs/GuideTab";
-import { PromptsTab } from "./tabs/PromptsTab";
-import { ModelCostsTab } from "./tabs/ModelCostsTab";
-import { BusinessOverviewTab } from "./tabs/BusinessOverviewTab";
-import { CatalogTab } from "./tabs/CatalogTab";
-import { MarketsTab } from "./tabs/MarketsTab";
-import { FinancialTab } from "./tabs/FinancialTab";
-import { DiscountPlannerTab } from "./tabs/DiscountPlannerTab";
-import { PlansTab } from "./tabs/PlansTab";
-import { SparksTab } from "./tabs/SparksTab";
-import { ReferralsTab } from "./tabs/ReferralsTab";
-import { AffiliatesTab } from "./tabs/AffiliatesTab";
-import { CampaignsTab } from "./tabs/CampaignsTab";
-import { CouponsTab } from "./tabs/CouponsTab";
-import { SurveysTab } from "./tabs/SurveysTab";
-import { SystemHealthTab } from "./tabs/SystemHealthTab";
-import { SeoTab } from "./tabs/marketing/SeoTab";
-import { BlogTab } from "./tabs/marketing/BlogTab";
-import { BrandingTab } from "./tabs/marketing/BrandingTab";
-import { QrCodesTab } from "./tabs/marketing/QrCodesTab";
-import { AnnouncementsTab } from "./tabs/marketing/AnnouncementsTab";
-import { ContactInboxTab } from "./tabs/communication/ContactInboxTab";
-import { EmailTab } from "./tabs/communication/EmailTab";
-import { SlackTab } from "./tabs/communication/SlackTab";
-import { LegalDocsTab } from "./tabs/legal/LegalDocsTab";
-import { CookieConsentTab } from "./tabs/legal/CookieConsentTab";
-import { GdprTab } from "./tabs/legal/GdprTab";
-import { AnalysisTab } from "./analysis/AnalysisTab";
-import { PermissionsTab } from "./tabs/PermissionsTab";
+
+function TabLoader() {
+  return (
+    <div
+      className="flex min-h-64 flex-col items-center justify-center gap-3 py-16 text-ink-500"
+      role="status"
+      aria-live="polite"
+    >
+      <Loader2 className="size-6 animate-spin text-brand-400" />
+      <p className="text-sm font-medium">Loading section…</p>
+    </div>
+  );
+}
+
+const ModelConfigTab = dynamic(() => import("./tabs/ModelConfigTab").then((m) => m.ModelConfigTab), { loading: TabLoader });
+const ArtStylesTab = dynamic(() => import("./tabs/ArtStylesTab").then((m) => m.ArtStylesTab), { loading: TabLoader });
+const LayoutsTab = dynamic(() => import("./tabs/LayoutsTab").then((m) => m.LayoutsTab), { loading: TabLoader });
+const AudienceTab = dynamic(() => import("./tabs/AudienceTab").then((m) => m.AudienceTab), { loading: TabLoader });
+const StoryCraftTab = dynamic(() => import("./tabs/StoryCraftTab").then((m) => m.StoryCraftTab), { loading: TabLoader });
+const BookLanguagesTab = dynamic(() => import("./tabs/BookLanguagesTab").then((m) => m.BookLanguagesTab), { loading: TabLoader });
+const TypographyTab = dynamic(() => import("./tabs/TypographyTab").then((m) => m.TypographyTab), { loading: TabLoader });
+const GuideTab = dynamic(() => import("./tabs/GuideTab").then((m) => m.GuideTab), { loading: TabLoader });
+const PromptsTab = dynamic(() => import("./tabs/PromptsTab").then((m) => m.PromptsTab), { loading: TabLoader });
+const ModelCostsTab = dynamic(() => import("./tabs/ModelCostsTab").then((m) => m.ModelCostsTab), { loading: TabLoader });
+const BusinessOverviewTab = dynamic(() => import("./tabs/BusinessOverviewTab").then((m) => m.BusinessOverviewTab), { loading: TabLoader });
+const CatalogTab = dynamic(() => import("./tabs/CatalogTab").then((m) => m.CatalogTab), { loading: TabLoader });
+const MarketsTab = dynamic(() => import("./tabs/MarketsTab").then((m) => m.MarketsTab), { loading: TabLoader });
+const FinancialTab = dynamic(() => import("./tabs/FinancialTab").then((m) => m.FinancialTab), { loading: TabLoader });
+const DiscountPlannerTab = dynamic(() => import("./tabs/DiscountPlannerTab").then((m) => m.DiscountPlannerTab), { loading: TabLoader });
+const PlansTab = dynamic(() => import("./tabs/PlansTab").then((m) => m.PlansTab), { loading: TabLoader });
+const SparksTab = dynamic(() => import("./tabs/SparksTab").then((m) => m.SparksTab), { loading: TabLoader });
+const ReferralsTab = dynamic(() => import("./tabs/ReferralsTab").then((m) => m.ReferralsTab), { loading: TabLoader });
+const AffiliatesTab = dynamic(() => import("./tabs/AffiliatesTab").then((m) => m.AffiliatesTab), { loading: TabLoader });
+const CampaignsTab = dynamic(() => import("./tabs/CampaignsTab").then((m) => m.CampaignsTab), { loading: TabLoader });
+const CouponsTab = dynamic(() => import("./tabs/CouponsTab").then((m) => m.CouponsTab), { loading: TabLoader });
+const SurveysTab = dynamic(() => import("./tabs/SurveysTab").then((m) => m.SurveysTab), { loading: TabLoader });
+const SystemHealthTab = dynamic(() => import("./tabs/SystemHealthTab").then((m) => m.SystemHealthTab), { loading: TabLoader });
+const SeoTab = dynamic(() => import("./tabs/marketing/SeoTab").then((m) => m.SeoTab), { loading: TabLoader });
+const BlogTab = dynamic(() => import("./tabs/marketing/BlogTab").then((m) => m.BlogTab), { loading: TabLoader });
+const BrandingTab = dynamic(() => import("./tabs/marketing/BrandingTab").then((m) => m.BrandingTab), { loading: TabLoader });
+const QrCodesTab = dynamic(() => import("./tabs/marketing/QrCodesTab").then((m) => m.QrCodesTab), { loading: TabLoader });
+const AnnouncementsTab = dynamic(() => import("./tabs/marketing/AnnouncementsTab").then((m) => m.AnnouncementsTab), { loading: TabLoader });
+const ContactInboxTab = dynamic(() => import("./tabs/communication/ContactInboxTab").then((m) => m.ContactInboxTab), { loading: TabLoader });
+const EmailTab = dynamic(() => import("./tabs/communication/EmailTab").then((m) => m.EmailTab), { loading: TabLoader });
+const SlackTab = dynamic(() => import("./tabs/communication/SlackTab").then((m) => m.SlackTab), { loading: TabLoader });
+const LegalDocsTab = dynamic(() => import("./tabs/legal/LegalDocsTab").then((m) => m.LegalDocsTab), { loading: TabLoader });
+const CookieConsentTab = dynamic(() => import("./tabs/legal/CookieConsentTab").then((m) => m.CookieConsentTab), { loading: TabLoader });
+const GdprTab = dynamic(() => import("./tabs/legal/GdprTab").then((m) => m.GdprTab), { loading: TabLoader });
+const AnalysisTab = dynamic(() => import("./analysis/AnalysisTab").then((m) => m.AnalysisTab), { loading: TabLoader });
+const PermissionsTab = dynamic(() => import("./tabs/PermissionsTab").then((m) => m.PermissionsTab), { loading: TabLoader });
 
 function ConfigTabPanel({ tab }: { tab: ConfigTabId }) {
   switch (tab) {
@@ -197,6 +212,7 @@ export default function AdminApp() {
   const pathname = usePathname();
   const initAuth = useAuthStore((s) => s.init);
   const ready = useAuthStore((s) => s.ready);
+  const adminReady = useAuthStore((s) => s.adminReady);
   const isAdmin = useAuthStore((s) => s.isAdmin);
   const subscribeConfig = useAppConfigStore((s) => s.subscribe);
   const subscribeAdminModelCosts = useAppConfigStore((s) => s.subscribeAdminModelCosts);
@@ -302,9 +318,14 @@ export default function AdminApp() {
       />
 
       <main className="flex min-h-0 flex-1 overflow-hidden">
-        {!ready ? (
-          <div className="flex flex-1 items-center justify-center">
+        {!ready || !adminReady ? (
+          <div
+            className="flex flex-1 flex-col items-center justify-center gap-3 text-ink-500"
+            role="status"
+            aria-live="polite"
+          >
             <Loader2 className="size-7 animate-spin text-brand-400" />
+            <p className="text-sm font-medium">Verifying admin access…</p>
           </div>
         ) : !isAdmin ? (
           <AccessDenied onLeave={() => router.push("/studio")} />

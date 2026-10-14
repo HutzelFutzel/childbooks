@@ -3001,9 +3001,21 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         const taxMinor = session.total_details?.amount_tax ?? 0;
         if (taxMinor > 0) {
           const cur = (session.currency ?? "usd").toUpperCase();
+          // Carry the same project and product the charge's revenue and fee
+          // carry. Without them the tax was invisible to per-book and
+          // per-product nets, which then read higher than the cash really was.
+          const taxPayment = await getAdminPayment(paymentId);
+          const taxDims = await paymentDimensions(
+            (kind as PaymentKind) ?? "order",
+            taxPayment,
+            session.metadata,
+          );
           await recordTaxRemitted({
             category: kind === "order" || kind === "ebook" ? "books" : "sparks",
             uid,
+            projectId:
+              taxPayment?.fulfillment?.merchantReference ?? taxPayment?.ebook?.projectId ?? undefined,
+            productId: taxDims.productId,
             tax: toMajor(taxMinor, cur),
             currency: cur,
             // The session is where Stripe Tax resolved the customer's location,

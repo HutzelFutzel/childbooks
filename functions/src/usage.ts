@@ -15,7 +15,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { ensureAdmin } from "./storage";
-import { getModelCostTable, recordImageCostSample } from "./appConfig";
+import { getModelCostTable, getSparksConfig, recordImageCostSample } from "./appConfig";
 import type { GenerationEstimateProfile } from "../../books-frontend/src/core/config/generationEstimateProfile";
 import { recordFinanceEvent } from "./finance";
 import {
@@ -28,6 +28,10 @@ import type { ProviderId } from "../../books-frontend/src/core/config/options";
 import { ALL_IMAGE_ACTION_IDS, type ImageActionId } from "../../books-frontend/src/core/ai/actions";
 import type { ImageTier, TextCallParams } from "../../books-frontend/src/core/config/modelConfig";
 import { applyTextParams } from "../../books-frontend/src/core/providers/textParams";
+import {
+  NON_BILLABLE_GENERATION_STEPS,
+  splitBillableUsage,
+} from "../../books-frontend/src/core/billing/usageBilling";
 
 function isImageAction(action: string): action is ImageActionId {
   return (ALL_IMAGE_ACTION_IDS as string[]).includes(action);
@@ -56,26 +60,25 @@ export interface UsageEvent {
   stepId?: number;
   /** Wall-clock duration of the provider HTTP call, for latency telemetry. */
   durationMs?: number;
+  /**
+   * The provider never answered (timeout / abort), so there was no usage block
+   * to read. The cost is a nominal per-image estimate: such a call may well have
+   * been invoiced, and a cost that is booked as zero is a cost nobody sees.
+   */
+  estimated?: boolean;
 }
 
 /**
  * Steps that exist to fix the model's OWN output rather than to produce what
  * the user asked for: the anchor grid-count re-render, the duplicate-subject
- * erase, the embedded-anchor cleanup, and the panel-count vision check that
- * triggers them. They are metered, attributed and reported like every other
+ * erase, the embedded-anchor cleanup, the panel-count vision check that
+ * triggers them, and the page redraw after the calm area under the words came
+ * back too busy. They are metered, attributed and reported like every other
  * call — they just never reach the user's wallet. A reader shouldn't pay for
- * the model drawing a character twice.
+ * the model drawing a character twice. Under the `full` cost basis their cost
+ * still reaches the price, as part of the window's average.
  */
-export const NON_BILLABLE_STEPS = new Set(["gridCheck", "imageRepair", "dedupe", "embedded"]);
-
-/**
- * Chargeable image calls per pipeline step INVOCATION. Every image call site is
- * wrapped in `withRetry`, so one unit of work can emit a second priced event
- * when the first attempt returns unusable output; capping per invocation means
- * that retry lands on us rather than on the user, while a step that genuinely
- * renders N images (one `subjectEdit` per subject) still bills all N.
- */
-const MAX_BILLABLE_IMAGE_CALLS = 1;
+export const NON_BILLABLE_STEPS = NON_BILLABLE_GENERATION_STEPS;
 
 /** Provider-call counters collected alongside usage events (incl. failures). */
 export interface CallStats {
@@ -127,10 +130,65 @@ export function withUsage<T>(
   const collector: Collector = { events: [], stats: { calls: 0, failures: 0 } };
   const run = () =>
     storage.run(collector, async () => {
-      const value = await fn();
-      return { value, events: collector.events, stats: collector.stats };
+      try {
+        const value = await fn();
+        return { value, events: collector.events, stats: collector.stats };
+      } catch (err) {
+        // The work failed, but the provider calls it made were real. Hand them
+        // to the surrounding spend ledger (if any) instead of dropping them with
+        // the thrown error — see {@link runWithSpendLedger}.
+        const ledger = ledgerStorage.getStore();
+        if (ledger) {
+          ledger.events.push(...collector.events);
+          ledger.stats.calls += collector.stats.calls;
+          ledger.stats.failures += collector.stats.failures;
+        }
+        throw err;
+      }
     });
   return params && Object.keys(params).length > 0 ? paramsStorage.run(params, run) : run();
+}
+
+/**
+ * Provider spend that did not come with a delivered result: the calls behind
+ * every {@link withUsage} scope that threw inside a {@link runWithSpendLedger}.
+ */
+export interface SpendLedger {
+  events: UsageEvent[];
+  stats: CallStats;
+}
+
+const ledgerStorage = new AsyncLocalStorage<SpendLedger>();
+
+export function newSpendLedger(): SpendLedger {
+  return { events: [], stats: { calls: 0, failures: 0 } };
+}
+
+/**
+ * Run one attempt so that the provider calls of any scope that fails inside it
+ * land in `ledger`. Without this a timed-out or rejected attempt left no trace:
+ * `withUsage` threw before `meterAndSettle` could see its events, so the money
+ * was spent and neither the finance stream nor the price window ever knew.
+ */
+export function runWithSpendLedger<T>(ledger: SpendLedger, fn: () => Promise<T>): Promise<T> {
+  return ledgerStorage.run(ledger, fn);
+}
+
+/**
+ * Cost the failed attempts of one unit already left behind. The first
+ * successful sample recorded inside the scope takes it (once), so the price
+ * window sees what the delivered render really cost the business.
+ */
+export interface CarriedCost {
+  usd: number;
+  imageCalls: number;
+  consumed?: boolean;
+}
+
+const carryStorage = new AsyncLocalStorage<CarriedCost>();
+
+export function runWithCarriedCost<T>(carry: CarriedCost, fn: () => Promise<T>): Promise<T> {
+  return carryStorage.run(carry, fn);
 }
 
 /**
@@ -157,30 +215,7 @@ export interface BillableSplit {
  * a render "costs".
  */
 export function splitBillable(events: UsageEvent[]): BillableSplit {
-  const billable: UsageEvent[] = [];
-  const unbilled: UsageEvent[] = [];
-  // Calls made outside any `withStep` scope share a bucket: an unlabelled path
-  // is a single logical render (the direct-render worker), so its retries must
-  // be absorbed too rather than falling through the cap uncounted.
-  const imageCallsByScope = new Map<number | string, number>();
-  for (const e of events) {
-    const step = e.step ?? "";
-    if (NON_BILLABLE_STEPS.has(step)) {
-      unbilled.push(e);
-      continue;
-    }
-    if (e.modality === "image") {
-      const scope = e.stepId ?? `${step}:unscoped`;
-      const seen = (imageCallsByScope.get(scope) ?? 0) + 1;
-      imageCallsByScope.set(scope, seen);
-      if (seen > MAX_BILLABLE_IMAGE_CALLS) {
-        unbilled.push(e);
-        continue;
-      }
-    }
-    billable.push(e);
-  }
-  return { billable, unbilled };
+  return splitBillableUsage(events);
 }
 
 function push(event: UsageEvent): void {
@@ -363,6 +398,12 @@ async function acquireImageSlot(): Promise<() => void> {
   };
 }
 
+/** Did the request end because a deadline or an abort signal gave up on it? */
+function isGivenUp(err: unknown): boolean {
+  const name = (err as { name?: string } | null)?.name;
+  return name === "TimeoutError" || name === "AbortError";
+}
+
 /** Is this an image GENERATION request (the expensive, rate-limited kind)? */
 function isImageGenerationCall(provider: ProviderId, url: string, init?: RequestInit): boolean {
   if (provider === "openai") return url.includes("/images/");
@@ -403,6 +444,18 @@ export async function meteredFetch(url: string, init?: RequestInit): Promise<Res
     res = await fetch(url, { ...init, signal });
   } catch (err) {
     if (provider && collector) collector.stats.failures += 1;
+    // A generation that ran until WE gave up on it was most likely still
+    // invoiced. Book a nominal image so the attempt is not free on paper.
+    if (provider && collector && imageGeneration && isGivenUp(err)) {
+      push({
+        provider,
+        model: modelFromRequestBody(init) ?? modelFromGeminiUrl(url) ?? "unknown",
+        modality: "image",
+        usage: { ...PUBLIC_IMAGE_ESTIMATE_USAGE, size: sizeFromRequest(init) ?? PUBLIC_IMAGE_ESTIMATE_USAGE.size },
+        durationMs: Date.now() - startedAt,
+        estimated: true,
+      });
+    }
     throw err;
   } finally {
     release?.();
@@ -456,10 +509,28 @@ export interface UsageTotals {
   knownCost: boolean;
   costByStep: Record<string, number>;
   callsByStep: Record<string, number>;
+  /**
+   * Cost by the kind of PROVIDER CALL: image generation versus text/vision.
+   * An image action's helper calls (binding, localize, the grid check) are text
+   * calls, so this is how an admin sees what the pictures themselves cost.
+   */
+  imageCallsUsd: number;
+  textCallsUsd: number;
   /** `${provider}:${model}` of the first image call, for the estimate window. */
   imageModelKey: string | null;
   /** Total tokens across every call. */
   tokens: number;
+}
+
+/**
+ * Which side of the books an action's spend belongs to. An image action owns
+ * every call it makes, helper text calls included — they exist only to produce
+ * the picture. Everything else is text work (story, screenplay, guide chat).
+ */
+export type CostGroup = "image" | "text";
+
+export function costGroupOf(action: string): CostGroup {
+  return isImageAction(action) ? "image" : "text";
 }
 
 function emptyTotals(): UsageTotals {
@@ -467,6 +538,8 @@ function emptyTotals(): UsageTotals {
     totalUsd: 0,
     billableUsd: 0,
     unbilledUsd: 0,
+    imageCallsUsd: 0,
+    textCallsUsd: 0,
     knownCost: true,
     costByStep: {},
     callsByStep: {},
@@ -520,6 +593,8 @@ export async function recordUsage(
         totalCost += cost;
         if (billable) totals.billableUsd += cost;
         else totals.unbilledUsd += cost;
+        if (e.modality === "image") totals.imageCallsUsd += cost;
+        else totals.textCallsUsd += cost;
         const step = e.step ?? "unlabeled";
         totals.costByStep[step] = round6((totals.costByStep[step] ?? 0) + cost);
       }
@@ -545,6 +620,7 @@ export async function recordUsage(
         // Per-step attribution so an admin can break one action's combined cost
         // into its steps (e.g. image vs binding vs localize).
         ...(e.step ? { step: e.step } : {}),
+        ...(e.estimated ? { estimated: true } : {}),
         // Call latency, so slow steps/models are visible in cost intelligence.
         ...(typeof e.durationMs === "number" ? { durationMs: e.durationMs } : {}),
         // Stamp the tier on image line items so cost intelligence can facet by it.
@@ -561,6 +637,8 @@ export async function recordUsage(
     totals.totalUsd = round6(totalCost);
     totals.billableUsd = round6(totals.billableUsd);
     totals.unbilledUsd = round6(totals.unbilledUsd);
+    totals.imageCallsUsd = round6(totals.imageCallsUsd);
+    totals.textCallsUsd = round6(totals.textCallsUsd);
     totals.knownCost = knownCost;
     totals.imageModelKey = imageModelKey;
     totals.tokens = totalTokens;
@@ -594,6 +672,12 @@ export async function recordUsage(
         ...(opts.runId ? { ref: `providerCost_${opts.runId}` } : {}),
         meta: {
           action,
+          // Stamped at write time: the stream is immutable, so a cost that
+          // didn't record which side it belongs to can't be split later without
+          // guessing from the action name.
+          group: costGroupOf(action),
+          imageCallsUsd: totals.imageCallsUsd,
+          textCallsUsd: totals.textCallsUsd,
           ...(tier ? { tier } : {}),
           ...(knownCost ? {} : { partial: true }),
           ...(opts.runId ? { runId: opts.runId } : {}),
@@ -601,9 +685,10 @@ export async function recordUsage(
         },
       });
     }
-    // The repair passes we chose to absorb. Booked as waste (not as a Spark
-    // discount) so "what our quality control costs us" is one query away
-    // instead of buried in the difference between two other numbers.
+    const basis = (await getSparksConfig()).estimation.costBasis;
+    // The repair passes no reader is charged for individually. Booked as waste
+    // (not as a Spark discount) so "what our quality control costs us" is one
+    // query away; `forwardedToPrice` says whether the price average recovers it.
     if (totals.unbilledUsd > 0) {
       await recordFinanceEvent({
         category: "waste",
@@ -615,6 +700,7 @@ export async function recordUsage(
           action,
           ...(tier ? { tier } : {}),
           unbilledUsd: totals.unbilledUsd,
+          forwardedToPrice: basis === "full",
           steps: unbilled.map((e) => e.step ?? "unlabeled"),
           ...(opts.runId ? { runId: opts.runId } : {}),
         },
@@ -640,26 +726,39 @@ export async function recordUsage(
     // window. There is no fallback from a sparse high-quality profile to low
     // quality (or from a multi-call edit to a one-call fresh render).
     //
-    // The sample is the BILLABLE total, not the full one: this window drives
-    // both the quoted price and the pre-flight reserve, so feeding it repair
-    // costs we never charge would quote users a price they'll never pay — and
-    // `ensureAfford` would block them at it.
-    if (tier && knownCost && totals.billableUsd > 0 && isImageAction(action)) {
+    // A reader is always charged the quote they confirmed, never the run's own
+    // cost, so this sample only decides the NEXT quotes. Under the `full`
+    // basis it is everything the render cost — retries and repair passes
+    // included — and the window's statistic spreads that overhead across every
+    // reader instead of absorbing it. The `requested` basis keeps the old rule.
+    // What the unit's earlier, failed attempts cost is part of what this
+    // delivered render cost: taken once, by the first sample recorded for it.
+    const carry = carryStorage.getStore();
+    const carried =
+      basis === "full" && opts.estimateProfile && carry && !carry.consumed && carry.usd > 0 ? carry : null;
+    const sampleUsd = (basis === "full" ? totals.totalUsd : totals.billableUsd) + (carried?.usd ?? 0);
+    if (tier && knownCost && sampleUsd > 0 && isImageAction(action)) {
       // Sanity clamp: a sample wildly above the model's nominal per-image rate
       // is a misconfigured cost entry or an outlier batch — don't poison the
-      // window (and with it the pre-flight reserve) for the next 10 calls. An
-      // edit legitimately spends several images, so its ceiling scales with the
-      // number of image calls it actually made.
+      // window (and with it the pre-flight reserve) for the next 10 calls. The
+      // ceiling scales with the image calls the sample actually pays for, so a
+      // render that legitimately needed a retry is never mistaken for one.
       const nominal = imageModelKey
         ? costForUsage(costs.models[imageModelKey], PUBLIC_IMAGE_ESTIMATE_USAGE)
         : null;
-      const imageCalls = Math.max(1, billable.filter((e) => e.modality === "image").length);
+      const counted = basis === "full" ? events : billable;
+      const imageCalls = Math.max(
+        1,
+        counted.filter((e) => e.modality === "image").length + (carried?.imageCalls ?? 0),
+      );
       const ceiling = nominal != null && nominal > 0 ? nominal * 10 * imageCalls : null;
-      const outlier = ceiling != null && totals.billableUsd > ceiling;
+      const outlier = ceiling != null && sampleUsd > ceiling;
+      if (carried) carried.consumed = true;
       if (!outlier && opts.estimateProfile) {
-        await recordImageCostSample(action, tier, totals.billableUsd, opts.estimateProfile, {
+        await recordImageCostSample(action, tier, sampleUsd, opts.estimateProfile, {
           projectId: opts.projectId,
           rate: nominal,
+          basis,
         });
       }
     }

@@ -113,11 +113,29 @@ export function portraitsToAutoStart(
  * What the style tap will start, as quote units: the book as a preset leaves
  * it (no reference drawing), so the quote shown is the one the start reuses.
  */
-export function styleChoiceStartUnits(project: Project): { names: string[]; units: GenerationQuoteUnit[] } {
+export function styleChoiceStartUnits(
+  project: Project,
+  options: { mayUseGenerationReference?: boolean } = {},
+): { names: string[]; units: GenerationQuoteUnit[] } {
   const people = portraitsToAutoStart(project, { assumeStyled: true });
   const styled: Project = {
     ...project,
-    config: { ...project.config, artStyle: { ...project.config.artStyle, referenceArt: undefined }, styleReady: true },
+    config: {
+      ...project.config,
+      artStyle: {
+        ...project.config.artStyle,
+        referenceArt: undefined,
+        generationReference: options.mayUseGenerationReference
+          ? {
+              imageUrl: "https://reference.invalid/style.webp",
+              storagePath: "quote/style-reference.webp",
+              mimeType: "image/webp",
+              updatedAt: 0,
+            }
+          : undefined,
+      },
+      styleReady: true,
+    },
   };
   return {
     names: people.map((m) => m.name.trim()),

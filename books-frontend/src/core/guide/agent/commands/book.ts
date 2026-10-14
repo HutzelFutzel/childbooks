@@ -7,7 +7,7 @@ import { authoringOf, withAuthoring } from "../../projectState";
 import { resolveOption } from "../resolve";
 import type { CommandDef } from "../types";
 import { arg, askFor, beat } from "./shared";
-import { whenNoStory, whenStory } from "./relevance";
+import { whenBookSetUp, whenCanWriteMyself, whenNoStory, whenStory } from "./relevance";
 
 function cover(project: Project) {
   return authoringOf(project).cover ?? {};
@@ -19,7 +19,7 @@ export const BOOK_COMMANDS: CommandDef[] = [
   {
     id: "chooseEntry",
     area: "path",
-    suggest: false, // the opening choice covers it
+    suggest: [{ id: "writeMyself", instant: true, beforeBook: true, relevant: whenCanWriteMyself }],
     summary:
       "The reader chooses how the story gets written: 'guided' (the guide asks and writes it) or 'own' (they write or paste it). Only before a story exists.",
     args: [{ name: "entry", kind: "entry", required: true, hint: "guided or own", options: ["guided", "own"] }],
@@ -196,7 +196,7 @@ export const BOOK_COMMANDS: CommandDef[] = [
   {
     id: "changeBookSetup",
     area: "book",
-    suggest: [{ id: "changeSize" }],
+    suggest: [{ id: "changeSize", relevant: whenBookSetUp }],
     summary:
       "The reader wants a different book shape and size ('format'), a different way the words and pictures share each page ('layout'), or both, after they were chosen. The guide asks the question again with its choices.",
     args: [

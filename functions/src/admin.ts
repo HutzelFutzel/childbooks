@@ -41,7 +41,9 @@ import {
   restoreWatermark,
   saveArtStylesConfig,
   addArtStyleExample,
+  clearArtStyleGenerationReference,
   removeArtStyleExample,
+  setArtStyleGenerationReference,
   getGenerationTuningConfig,
   saveLayoutsConfig,
   saveGenerationTuningConfig,
@@ -111,6 +113,7 @@ import type { BillingEnv } from "../../books-frontend/src/core/config/plans";
 import {
   deletePublicObject,
   uploadArtStyleImage,
+  uploadArtStyleReference,
   uploadLayoutImage,
   uploadImageMask,
   uploadBrandingAsset,
@@ -784,6 +787,55 @@ export function registerAdminRoutes(app: Express): void {
     }
   });
 
+  // Set the immutable generation-only exemplar used by books that choose this preset.
+  app.post("/admin/art-styles/:styleId/reference", json, async (req: Request, res: Response) => {
+    let uploadedPath: string | undefined;
+    try {
+      const styleId = String(req.params.styleId);
+      const { base64, mimeType } = (req.body ?? {}) as { base64?: string; mimeType?: string };
+      if (!base64 || !mimeType) {
+        res.status(400).json({ error: { message: "base64 and mimeType are required." } });
+        return;
+      }
+      const current = await getArtStylesConfig();
+      if (!current.styles.some((style) => style.id === styleId)) {
+        res.status(404).json({ error: { message: `Unknown art style "${styleId}".` } });
+        return;
+      }
+      const buf = await sharp(Buffer.from(base64, "base64"))
+        .rotate()
+        .resize(1024, 1024, { fit: "inside", withoutEnlargement: true })
+        .webp({ quality: 90, alphaQuality: 92 })
+        .toBuffer();
+      const { storagePath, publicUrl } = await uploadArtStyleReference(styleId, buf, "image/webp");
+      uploadedPath = storagePath;
+      const updatedAt = Date.now();
+      const config = await setArtStyleGenerationReference(styleId, {
+        imageUrl: publicUrl,
+        storagePath,
+        mimeType: "image/webp",
+        updatedAt,
+      });
+      res.json({
+        config,
+        reference: config.styles.find((style) => style.id === styleId)?.generationReference,
+      });
+    } catch (err) {
+      if (uploadedPath) await deletePublicObject(uploadedPath).catch(() => undefined);
+      handleError(res, err);
+    }
+  });
+
+  app.delete("/admin/art-styles/:styleId/reference", json, async (req: Request, res: Response) => {
+    try {
+      const styleId = String(req.params.styleId);
+      // Do not delete the immutable object: existing books may still reference it.
+      res.json(await clearArtStyleGenerationReference(styleId));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
   // ---- Page layouts --------------------------------------------------------
 
   // Add a showcase image for a layout. Body: { base64, mimeType, shape?, side?, alt? }.
@@ -857,9 +909,9 @@ export function registerAdminRoutes(app: Express): void {
         res.status(400).json({ error: { message: "Image shapes need a name." } });
         return;
       }
-      const mask = await compileImageMaskSvg(Buffer.from(base64, "base64"));
+      const { png, safeInset } = await compileImageMaskSvg(Buffer.from(base64, "base64"));
       const id = randomUUID();
-      const uploaded = await uploadImageMask(id, mask);
+      const uploaded = await uploadImageMask(id, png);
       uploadedPath = uploaded.storagePath;
       const now = Date.now();
       res.json(
@@ -868,6 +920,7 @@ export function registerAdminRoutes(app: Express): void {
           name: cleanName,
           imageUrl: uploaded.publicUrl,
           storagePath: uploaded.storagePath,
+          safeInset,
           createdAt: now,
           updatedAt: now,
         }),

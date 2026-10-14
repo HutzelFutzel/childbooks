@@ -11,8 +11,9 @@
  *   the book waits for it;
  * - author ideas speak the book's language and name the relatives in the story;
  * - a painted word is accepted only when every word is spelled right, inside
- *   the safe area, with no stray writing, and a cover that fails twice is drawn
- *   plain so the text layer carries its words;
+ *   the safe area, with no stray writing; a wrong cover is painted again, told
+ *   what was wrong, and one that never passes is not delivered — a cover is
+ *   never drawn plain or shipped with wrong words;
  * - the text layer follows the artwork actually there, and a job's slim
  *   snapshot still knows the cover's words.
  *
@@ -28,6 +29,8 @@ import {
 import { slimProjectForRender } from "../books-frontend/src/core/book/slimProject";
 import { coverSpread } from "../books-frontend/src/core/book/units";
 import { createDefaultBookLanguagesConfig } from "../books-frontend/src/core/config/bookLanguages";
+import { ProviderError } from "../books-frontend/src/core/errors";
+import { jobStalled, taskStalled, type LiveJob, type LiveTask } from "../books-frontend/src/core/jobs/liveness";
 import { createDefaultDesign, textFromParagraphs, type BookDesign } from "../books-frontend/src/core/design";
 import { GUIDE_COMMANDS } from "../books-frontend/src/core/guide/agent/registry";
 import { firstUnmet } from "../books-frontend/src/core/guide/agent/requirements";
@@ -227,23 +230,35 @@ const reading = (changes: Partial<LetteringReading["lines"]> = {}, other: string
 
 // --- Redraw, then fall back ----------------------------------------------------------------------------
 
-async function lettering(readings: (LetteringReading | null)[], options: { check?: boolean; deadlineMs?: number } = {}) {
+async function lettering(
+  readings: (LetteringReading | null)[],
+  options: { check?: boolean; deadlineMs?: number; maxDraws?: number } = {},
+) {
   const spread = coverSpread(COVER_FRONT_ID, getCursor(book().screenplay!).content.frontCover!, withCover(book(), EXPECTED_CHOICE));
   const draws: boolean[] = [];
+  const told: string[][] = [];
   let reads = 0;
-  const result = await drawCoverLettering({
-    spread,
-    safe,
-    startedAt: Date.now(),
-    check: options.check ?? true,
-    deadlineMs: options.deadlineMs,
-    draw: async (bake) => {
-      draws.push(bake);
-      return { prompt: bake ? "with words" : "plain", image: { base64: "", mimeType: "image/png", model: "fake" } };
-    },
-    read: async () => readings[reads++] ?? null,
-  });
-  return { result, draws, reads };
+  let error: unknown;
+  let result: Awaited<ReturnType<typeof drawCoverLettering>> | undefined;
+  try {
+    result = await drawCoverLettering({
+      spread,
+      safe,
+      startedAt: Date.now(),
+      check: options.check ?? true,
+      deadlineMs: options.deadlineMs,
+      maxDraws: options.maxDraws,
+      draw: async (bake, attempt) => {
+        draws.push(bake);
+        told.push(attempt.problems);
+        return { prompt: bake ? "with words" : "plain", image: { base64: "", mimeType: "image/png", model: "fake" } };
+      },
+      read: async () => readings[reads++] ?? null,
+    });
+  } catch (err) {
+    error = err;
+  }
+  return { result, error, draws, told, reads };
 }
 const EXPECTED_CHOICE = { subtitle: "A Bedtime Story", author: "Uncle David", painted: true };
 const good = reading();
@@ -251,25 +266,33 @@ const bad = reading({ title: { found: true, text: "The Blanket Frot", box: insid
 
 async function checkLetteringLoop(): Promise<void> {
   const first = await lettering([good]);
-  check(first.draws.length === 1 && first.result.lettering?.outcome === "passed", "A right first cover is redrawn.");
-  check(first.result.textMode === "in-image" && first.result.bakedText?.author === "Uncle David", "A passed cover doesn't record its words.");
+  check(first.draws.length === 1 && first.result?.lettering?.outcome === "passed", "A right first cover is redrawn.");
+  check(first.result?.textMode === "in-image" && first.result.bakedText?.author === "Uncle David", "A passed cover doesn't record its words.");
 
   const second = await lettering([bad, good]);
-  check(second.draws.join() === "true,true" && second.result.lettering?.outcome === "passed" && second.result.lettering.attempts === 2, "A wrong cover isn't redrawn once.");
+  check(second.draws.join() === "true,true" && second.result?.lettering?.outcome === "passed" && second.result.lettering.attempts === 2, "A wrong cover isn't redrawn once.");
+  check(second.told[0]?.length === 0 && (second.told[1]?.length ?? 0) > 0, "A redraw isn't told what was wrong with the last painting.");
 
-  const fallback = await lettering([bad, bad]);
-  check(fallback.draws.join() === "true,true,false", `Two wrong covers don't fall back to a plain drawing (draws: ${fallback.draws.join()}).`);
-  check(fallback.result.textMode === "overlay" && !fallback.result.bakedText, "A plain fallback claims to carry the words.");
-  check(fallback.result.lettering?.outcome === "fellBack" && (fallback.result.lettering.problems?.length ?? 0) > 0, "A fallback doesn't say why.");
+  const third = await lettering([bad, bad, bad, good]);
+  check(third.draws.join() === "true,true,true,true" && third.result?.lettering?.outcome === "passed", `A cover that takes four paintings isn't delivered (draws: ${third.draws.join()}).`);
+
+  // A cover that never comes out right is not delivered: not plain, not wrong.
+  const never = await lettering([bad, bad, bad, bad, bad]);
+  check(never.result === undefined && never.error instanceof ProviderError && never.error.kind === "lettering", "A cover that never passes is delivered anyway.");
+  check(never.draws.length === 4 && never.draws.every((bake) => bake), `A failing cover is drawn without its words (draws: ${never.draws.join()}).`);
+  check(!never.error || !((never.error as ProviderError).retryable), "A lettering failure is retried as if the provider had hiccuped.");
 
   const unchecked = await lettering([null]);
-  check(unchecked.draws.length === 1 && unchecked.result.lettering?.outcome === "unchecked", "A check that can't run costs a redraw.");
+  check(unchecked.draws.length === 1 && unchecked.result?.lettering?.outcome === "unchecked", "A check that can't run costs a redraw.");
 
   const masked = await lettering([bad], { check: false });
-  check(masked.reads === 0 && masked.result.textMode === "in-image", "A masked touch-up is read back.");
+  check(masked.reads === 0 && masked.result?.textMode === "in-image", "A masked touch-up is read back.");
 
   const late = await lettering([bad], { deadlineMs: -1 });
-  check(late.draws.length === 1 && late.result.lettering?.outcome === "failed", "A wrong cover past the deadline is redrawn anyway.");
+  check(late.draws.length === 1 && late.error instanceof ProviderError, "A wrong cover past the deadline is shipped.");
+
+  const capped = await lettering([bad, bad, bad], { maxDraws: 2 });
+  check(capped.draws.length === 2 && capped.error instanceof ProviderError, "The number of paintings isn't capped.");
 
   const render = {
     blobId: "b2",
@@ -331,12 +354,47 @@ const coverBoxes = (project: Project) =>
   check(coverLinesOf(slim).author === "Uncle David" && authoringOf(slim).cover?.painted === true, "The server draws the cover without the reader's words.");
 }
 
+// --- The studio never waits on a server that has gone quiet ----------------------------------------------
+
+{
+  const MIN = 60_000;
+  const now = 100 * MIN;
+  const job = (over: Partial<LiveJob> = {}): LiveJob => ({
+    id: "j", status: "running", createdAt: now - 30 * MIN, updatedAt: now - MIN, expanded: true, deadlineAt: now + 10 * MIN, ...over,
+  });
+  const task = (over: Partial<LiveTask> = {}): LiveTask => ({
+    id: "t", jobId: "j", status: "running", updatedAt: now - MIN, ...over,
+  });
+  check(!taskStalled(task(), job(), now), "A task that just reported is alive.");
+  check(!taskStalled(task({ updatedAt: now - 20 * MIN, heartbeatAt: now - MIN }), job(), now), "A heartbeat keeps a long-running task alive.");
+  check(taskStalled(task({ updatedAt: now - 20 * MIN }), job(), now), "A running task silent past every recovery point is stalled.");
+  check(!taskStalled(task({ status: "done", updatedAt: now - 99 * MIN }), job(), now), "A finished task is never stalled.");
+  check(!taskStalled(task({ status: "error", updatedAt: now - 99 * MIN }), job(), now), "A failed task is never stalled.");
+  check(
+    !taskStalled(task({ status: "pending", updatedAt: now - 20 * MIN }), job(), now, [task({ id: "u", updatedAt: now - MIN }), task({ status: "pending", updatedAt: now - 20 * MIN })]),
+    "A queued task is not stalled while its job is still moving.",
+  );
+  check(
+    taskStalled(task({ status: "pending", updatedAt: now - 20 * MIN }), job(), now, [task({ id: "u", updatedAt: now - 20 * MIN })]),
+    "A queued task in a job that went silent is stalled.",
+  );
+  check(taskStalled(task(), job({ deadlineAt: now - 4 * MIN }), now), "Past the deadline and the reaper's grace, any open task is stalled.");
+  check(!taskStalled(task(), job({ deadlineAt: now - MIN }), now), "Within the reaper's grace of the deadline, the server still gets to close the job.");
+  check(!jobStalled(job({ status: "done" }), [task({ updatedAt: 0 })], now), "A finished job is not stalled.");
+  check(jobStalled(job(), [task({ updatedAt: now - 20 * MIN })], now), "A job whose only open task went quiet is stalled.");
+  check(!jobStalled(job(), [task({ updatedAt: now - 20 * MIN }), task({ id: "u", updatedAt: now - MIN })], now), "A job with one live task is not stalled.");
+  check(!jobStalled(job(), [task({ status: "done", updatedAt: now - 20 * MIN })], now), "A job with nothing left open is the server's to close, not stalled.");
+  check(jobStalled(job({ expanded: false, createdAt: now - 20 * MIN, updatedAt: now - 20 * MIN }), [], now), "A job that never started is stalled.");
+  check(!jobStalled(job({ expanded: false, createdAt: now - MIN, updatedAt: now - MIN }), [], now), "A job that has only just been created is not stalled.");
+}
+
 report.push("Cover words");
 report.push("  one source for title, subtitle and author; Looks good settles the card before Draw the book");
-report.push("  painted words read back: one redraw, then a plain cover with the words as text");
+report.push("  jobs: a server gone quiet past its heartbeat, reaper and deadline is reported as stalled, never waited on");
+report.push("  painted words read back: repainted with the fault named, up to four times; never delivered plain or wrong");
 
 export async function checkGuideCover(): Promise<CheckResult> {
   await checkLetteringLoop();
-  notes.push("Cover words: lines, painting, languages, skills, ideas, lettering check, fallback, text layer and job snapshot checked");
+  notes.push("Cover words: lines, painting, languages, skills, ideas, lettering check and repaint, text layer and job snapshot checked");
   return { failures, notes, report, cases };
 }

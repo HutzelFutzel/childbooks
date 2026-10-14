@@ -18,7 +18,9 @@
  * Statements are read in English and German; another language reads as "no
  * statement" and is left to the story revision.
  */
+import { briefOf } from "../story/brief";
 import { isPerson } from "../story/castKinds";
+import { twinGroups } from "../story/relations";
 import type { Project, StoryCastMember } from "../types";
 import { withMemberChanges } from "./agent/commands/shared";
 import { castOf, foldName } from "./agent/resolve";
@@ -214,8 +216,16 @@ function storyIdle(project: Project): boolean {
 // --- The cast changed ----------------------------------------------------------------
 
 /** What to ask the story revision to do once a person's age has changed. */
-export function ageRevisionInstruction(name: string, age: AgeValue): string {
+export function ageRevisionInstruction(name: string, age: AgeValue, others: readonly string[] = []): string {
   const shown = describeAge(age);
+  if (others.length > 0) {
+    const all = [name, ...others].join(" and ");
+    return (
+      `${all} are now ${shown} old. Wherever the story states or clearly implies their age ` +
+      `(for example "five years old", a birthday, or being the baby), change it so it fits ${shown}. ` +
+      "Change nothing else, and keep everything else as close to the original as possible."
+    );
+  }
   return (
     `${name} is now ${shown} old. Wherever the story states or clearly implies ${name}'s age ` +
     `(for example "five years old", a birthday, or being the baby), change it so it fits ${shown}. ` +
@@ -227,24 +237,79 @@ export interface AgeChange {
   project: Project;
   /** The revision to ask for, when the story states a different age for this person. */
   revise: string | null;
+  /** Twins (or people said to share an age) who moved with them. */
+  alongside: string[];
+}
+
+/** People who share this person's age: their twins, and groups the reader said share one. */
+function ageMates(project: Project, memberId: string): StoryCastMember[] {
+  const cast = castOf(project);
+  const member = cast.find((candidate) => candidate.id === memberId);
+  if (!member) return [];
+  const key = foldName(member.name);
+  const groups = [...twinGroups(briefOf(project.config)), ...(authoringOf(project).sameAge ?? [])];
+  const mates = new Map<string, StoryCastMember>();
+  for (const group of groups) {
+    if (!group.some((name) => foldName(name) === key)) continue;
+    for (const name of group) {
+      const other = cast.find((candidate) => foldName(candidate.name) === foldName(name));
+      if (other && other.id !== memberId && isPerson(other)) mates.set(other.id, other);
+    }
+  }
+  return [...mates.values()];
+}
+
+function sameAge(a: AgeValue, b: AgeValue): boolean {
+  return a.age === b.age && a.ageMonths === b.ageMonths;
+}
+
+/**
+ * Carry a new age to the people who share it. A twin with no stated age, or
+ * one who had the same age until now, moves along; a twin the family gave a
+ * different age keeps it.
+ */
+export function withAgeMates(
+  project: Project,
+  memberId: string,
+  before: AgeValue,
+  age: AgeValue,
+): { project: Project; names: string[] } {
+  if (!hasStatedAge(age)) return { project, names: [] };
+  let next = project;
+  const names: string[] = [];
+  for (const mate of ageMates(project, memberId)) {
+    const own: AgeValue = { age: mate.age, ageMonths: mate.ageMonths };
+    const inStep = !hasStatedAge(own) || (hasStatedAge(before) && sameAge(own, before));
+    if (!inStep || sameAge(own, age)) continue;
+    next = withMemberChanges(next, mate.id, { age: age.age, ageMonths: age.ageMonths });
+    names.push(mate.name.trim());
+  }
+  return { project: next, names };
 }
 
 /**
  * Set a person's age in the cast, and say what the story needs when it states
- * another one. Clearing an age (neither field set) never asks for a rewrite.
+ * another one. Twins move with them (`withAgeMates`). Clearing an age (neither
+ * field set) never asks for a rewrite.
  */
 export function changePersonAge(project: Project, memberId: string, age: AgeValue): AgeChange | null {
   const member = castOf(project).find((candidate) => candidate.id === memberId);
   if (!member) return null;
-  const next = withMemberChanges(project, memberId, { age: age.age, ageMonths: age.ageMonths });
-  const key = foldName(member.name);
+  const set = withMemberChanges(project, memberId, { age: age.age, ageMonths: age.ageMonths });
+  const mates = withAgeMates(set, memberId, { age: member.age, ageMonths: member.ageMonths }, age);
+  const changed = [member, ...castOf(project).filter((other) => mates.names.includes(other.name.trim()))];
+  const keys = new Set(changed.map((person) => foldName(person.name)));
   const differing =
     hasStatedAge(age) && storyIdle(project)
       ? ageStatements(project.config.storyText, castNames(project), "nearby").filter(
-          (statement) => foldName(statement.name) === key && !statementAgrees(statement, age),
+          (statement) => keys.has(foldName(statement.name)) && !statementAgrees(statement, age),
         )
       : [];
-  return { project: next, revise: differing.length > 0 ? ageRevisionInstruction(member.name.trim(), age) : null };
+  return {
+    project: mates.project,
+    revise: differing.length > 0 ? ageRevisionInstruction(member.name.trim(), age, mates.names) : null,
+    alongside: mates.names,
+  };
 }
 
 // --- The story changed ---------------------------------------------------------------

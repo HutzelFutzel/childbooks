@@ -10,10 +10,11 @@ import { IMAGE_ACTIONS, type ImageActionId } from "../ai/actions";
 import {
   COST_KEY_FIELDS,
   parseCostStatsKey,
+  sampleMatchesBasis,
   type CostSample,
   type ImageCostStats,
 } from "../config/imageCostStats";
-import { estimationRuleFor, type EstimationRule } from "../config/priceEstimation";
+import { estimationRuleFor, type CostBasis, type EstimationRule } from "../config/priceEstimation";
 import type { SparksConfig } from "../config/sparks";
 import { applyStatistic, OUTCOME_FIELDS, REFERENCE_GROUPS, selectSamples, unitPriceSparks } from "./priceEstimation";
 
@@ -72,7 +73,7 @@ interface Setup {
  * sample keeping its reference group so a replay can price from it first.
  * With `byGroup`, every reference group is its own setup.
  */
-function setups(stats: ImageCostStats, byGroup = false): Setup[] {
+function setups(stats: ImageCostStats, basis: CostBasis, byGroup = false): Setup[] {
   const byKey = new Map<string, Setup>();
   const imageIds = new Set<string>(IMAGE_ACTIONS.map((a) => a.id));
   for (const [key, entry] of Object.entries(stats.stats)) {
@@ -94,7 +95,9 @@ function setups(stats: ImageCostStats, byGroup = false): Setup[] {
         ].join(" · "),
         samples: [],
       } satisfies Setup);
-    setup.samples.push(...entry.samples.map((sample) => ({ ...sample, group })));
+    setup.samples.push(
+      ...entry.samples.filter((sample) => sampleMatchesBasis(sample, basis)).map((sample) => ({ ...sample, group })),
+    );
     byKey.set(id, setup);
   }
   for (const s of byKey.values()) s.samples.sort((a, b) => a.at - b.at);
@@ -153,7 +156,7 @@ export function backtestEstimation(stats: ImageCostStats, sparks: SparksConfig):
   const perUnitTarget = sparks.sparkValueUsd > 0 ? sparks.markupMultiplier / sparks.sparkValueUsd : 0;
   const acc = new Map<ImageActionId, { scored: number; unscored: number; charged: number; target: number; absErr: number; over: number }>();
   const enabled = { ...sparks, enabled: true };
-  for (const setup of setups(stats)) {
+  for (const setup of setups(stats, sparks.estimation.costBasis)) {
     const rule = estimationRuleFor(sparks.estimation, setup.action);
     const a = acc.get(setup.action) ?? { scored: 0, unscored: 0, charged: 0, target: 0, absErr: 0, over: 0 };
     setup.samples.forEach((sample, i) => {
@@ -198,7 +201,7 @@ export function backtestEstimation(stats: ImageCostStats, sparks: SparksConfig):
  * closest group).
  */
 export function costGroupHealth(stats: ImageCostStats, sparks: SparksConfig, now = Date.now()): CostGroupHealth[] {
-  return setups(stats, true)
+  return setups(stats, sparks.estimation.costBasis, true)
     .map((setup) => {
       const rule = estimationRuleFor(sparks.estimation, setup.action);
       const usable = selectSamples(setup.samples, rule, now).length;

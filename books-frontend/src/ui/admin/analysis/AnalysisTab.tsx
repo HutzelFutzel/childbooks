@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { AlertTriangle, Download, Loader2, RefreshCw } from "lucide-react";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
 import type {
@@ -22,26 +23,40 @@ import { ActivityChart, HourChart, SourcesChart } from "./Charts";
 import { Heatmap } from "./Heatmap";
 import { UsersTable } from "./UsersTable";
 import { SettingsCard } from "./SettingsCard";
-import { PaymentsAnalysis } from "./PaymentsAnalysis";
-import { FinanceAnalysis } from "./FinanceAnalysis";
-import { CostsAnalysis } from "./CostsAnalysis";
-import { ProjectsAnalysis } from "./ProjectsAnalysis";
-import { ProductsAnalysis } from "./ProductsAnalysis";
-import { DevicesAnalysis } from "./DevicesAnalysis";
-import { FlowsAnalysis } from "./FlowsAnalysis";
-import { GuideTurnsAnalysis } from "./GuideTurnsAnalysis";
 import { DevicePicker } from "./DevicePicker";
-import { ReferralsAnalysis } from "./ReferralsAnalysis";
-import { AffiliatesAnalysis } from "./AffiliatesAnalysis";
-import { CampaignsAnalysis } from "./CampaignsAnalysis";
-import { CouponsAnalysis } from "./CouponsAnalysis";
-import { QrCodesAnalysis } from "./QrCodesAnalysis";
-import { SurveysAnalysis } from "./SurveysAnalysis";
 import { MarketPicker } from "./MarketPicker";
 import { MarketsCard } from "./MarketsCard";
 import { FunnelCard } from "./FunnelCard";
 import { downloadCsv } from "./csv";
 import { fmtRelative, toDateInput } from "./format";
+
+function SubTabLoader() {
+  return (
+    <div
+      className="flex min-h-48 flex-col items-center justify-center gap-3 py-16 text-ink-400"
+      role="status"
+      aria-live="polite"
+    >
+      <Loader2 className="size-6 animate-spin text-brand-400" />
+      <p className="text-sm font-medium text-ink-500">Loading analytics…</p>
+    </div>
+  );
+}
+
+const PaymentsAnalysis = dynamic(() => import("./PaymentsAnalysis").then((m) => m.PaymentsAnalysis), { loading: SubTabLoader });
+const FinanceAnalysis = dynamic(() => import("./FinanceAnalysis").then((m) => m.FinanceAnalysis), { loading: SubTabLoader });
+const CostsAnalysis = dynamic(() => import("./CostsAnalysis").then((m) => m.CostsAnalysis), { loading: SubTabLoader });
+const ProjectsAnalysis = dynamic(() => import("./ProjectsAnalysis").then((m) => m.ProjectsAnalysis), { loading: SubTabLoader });
+const ProductsAnalysis = dynamic(() => import("./ProductsAnalysis").then((m) => m.ProductsAnalysis), { loading: SubTabLoader });
+const DevicesAnalysis = dynamic(() => import("./DevicesAnalysis").then((m) => m.DevicesAnalysis), { loading: SubTabLoader });
+const FlowsAnalysis = dynamic(() => import("./FlowsAnalysis").then((m) => m.FlowsAnalysis), { loading: SubTabLoader });
+const GuideTurnsAnalysis = dynamic(() => import("./GuideTurnsAnalysis").then((m) => m.GuideTurnsAnalysis), { loading: SubTabLoader });
+const ReferralsAnalysis = dynamic(() => import("./ReferralsAnalysis").then((m) => m.ReferralsAnalysis), { loading: SubTabLoader });
+const AffiliatesAnalysis = dynamic(() => import("./AffiliatesAnalysis").then((m) => m.AffiliatesAnalysis), { loading: SubTabLoader });
+const CampaignsAnalysis = dynamic(() => import("./CampaignsAnalysis").then((m) => m.CampaignsAnalysis), { loading: SubTabLoader });
+const CouponsAnalysis = dynamic(() => import("./CouponsAnalysis").then((m) => m.CouponsAnalysis), { loading: SubTabLoader });
+const QrCodesAnalysis = dynamic(() => import("./QrCodesAnalysis").then((m) => m.QrCodesAnalysis), { loading: SubTabLoader });
+const SurveysAnalysis = dynamic(() => import("./SurveysAnalysis").then((m) => m.SurveysAnalysis), { loading: SubTabLoader });
 
 type Section = AnalysisTabId;
 
@@ -108,20 +123,21 @@ export function AnalysisTab() {
   const section = useAdminTab((s) => s.analysisTab);
 
   useEffect(() => {
+    if (section !== "users") return;
     void init();
-  }, [init]);
+  }, [init, section]);
 
   // Auto-refresh: poll on the configured interval, but pause while the tab is
   // hidden so a backgrounded dashboard doesn't keep re-scanning every user.
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
   useEffect(() => {
-    if (!autoRefreshSec) return;
+    if (!autoRefreshSec || section !== "users") return;
     const id = window.setInterval(() => {
       if (document.visibilityState === "visible") void refreshRef.current();
     }, autoRefreshSec * 1000);
     return () => window.clearInterval(id);
-  }, [autoRefreshSec]);
+  }, [autoRefreshSec, section]);
 
   // Re-render the "updated Xs ago" label every 30s.
   useEffect(() => {
@@ -270,8 +286,13 @@ export function AnalysisTab() {
           )}
 
           {!overview && loading && (
-            <div className="flex items-center justify-center py-20 text-ink-400">
-              <Loader2 className="size-6 animate-spin" />
+            <div
+              className="flex flex-col items-center justify-center gap-3 py-20 text-ink-400"
+              role="status"
+              aria-live="polite"
+            >
+              <Loader2 className="size-6 animate-spin text-brand-400" />
+              <p className="text-sm font-medium text-ink-500">Scanning user activity &amp; funnel…</p>
             </div>
           )}
 

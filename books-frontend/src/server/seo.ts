@@ -7,16 +7,17 @@
  * falling back to sensible defaults when the doc is missing/unreadable — so
  * `generateMetadata`, `sitemap` and `robots` never throw.
  */
+import { cache } from "react";
 import { doc, getDoc } from "firebase/firestore";
 import { getFirebaseDb } from "../lib/firebase";
 import { createDefaultSeoConfig, normalizeSeoConfig, type SeoConfig } from "../core/config/seo";
 
 /** Fetch the marketing SEO config, or defaults when unset/unreadable. */
-export async function getSeoConfig(): Promise<SeoConfig> {
+export const getSeoConfig = cache(async (): Promise<SeoConfig> => {
   try {
     const snap = await getDoc(doc(getFirebaseDb(), "appConfig", "seo"));
     return normalizeSeoConfig(snap.exists() ? snap.data() : undefined);
   } catch {
     return createDefaultSeoConfig();
   }
-}
+});

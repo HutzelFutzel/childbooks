@@ -13,9 +13,13 @@ import {
   cropSheetThumbnail,
   downscaleReference,
   flattenSheetBackground,
+  samplePixels,
 } from "./imaging";
 import { downloadBlobBase64, uploadBlob } from "./storage";
 import { withStep } from "./usage";
+import { getImageMasksConfig } from "./appConfig";
+import { measureImageMaskPng } from "./imageMasks";
+import type { FrameInsets } from "../../books-frontend/src/core/book/subjectInset";
 import type { PipelineEnv } from "../../books-frontend/src/core/pipeline/illustrationRun";
 import type { ResolvedModels } from "../../books-frontend/src/core/models/registry";
 import type { ProviderId } from "../../books-frontend/src/core/config/options";
@@ -39,6 +43,45 @@ function apiKeyFor(provider: ProviderId): string {
 const b64ToBuf = (b64: string) => Buffer.from(b64, "base64");
 const bufToB64 = (buf: Buffer) => buf.toString("base64");
 
+/**
+ * Frame insets measured on this instance. A frame id names one immutable SVG,
+ * so a measurement never goes stale.
+ */
+const measuredFrameInsets = new Map<string, Promise<number | null>>();
+
+function measureFrame(id: string, url: string): Promise<number | null> {
+  let pending = measuredFrameInsets.get(id);
+  if (!pending) {
+    pending = fetch(url)
+      .then(async (res) => (res.ok ? measureImageMaskPng(Buffer.from(await res.arrayBuffer())) : null))
+      .catch(() => null);
+    measuredFrameInsets.set(id, pending);
+    // A failed fetch is retried by the next render rather than remembered.
+    void pending.then((v) => {
+      if (v === null) measuredFrameInsets.delete(id);
+    });
+  }
+  return pending;
+}
+
+/**
+ * The frame catalog with every active frame's inset. Frames uploaded before
+ * insets were recorded at upload are measured from their stored PNG.
+ */
+async function loadFrames() {
+  const masks = await getImageMasksConfig();
+  const insets: FrameInsets = {};
+  await Promise.all(
+    masks.assets
+      .filter((asset) => !asset.archived)
+      .map(async (asset) => {
+        const inset = asset.safeInset ?? (await measureFrame(asset.id, asset.imageUrl));
+        if (inset !== null) insets[asset.id] = inset;
+      }),
+  );
+  return { masks, insets };
+}
+
 /** Build the worker's pipeline environment for a given user + resolved models. */
 export function backendPipelineEnv(
   uid: string,
@@ -57,6 +100,7 @@ export function backendPipelineEnv(
     modelCapabilities,
     layoutsConfig,
     generationTuning,
+    loadFrames,
     loadBlob: (id) => downloadBlobBase64(uid, id),
     loadLikenessPhotoForSubject: (projectId, subjectId) =>
       loadLikenessPhotoForSubject(uid, projectId, subjectId),
@@ -123,6 +167,7 @@ export function backendPipelineEnv(
           maskMime: "image/png",
         };
       },
+      samplePixels: (input) => samplePixels(b64ToBuf(input.base64), input.size),
     },
     prompts,
   };

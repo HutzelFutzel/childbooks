@@ -56,6 +56,8 @@ export type GuideClaimRefusal =
   | "superseded"
   | "not-a-statement"
   | "rejected"
+  /** Not a fact to write: a skill that asks first takes the same request. */
+  | "rerouted"
   | "needs-confirmation";
 
 /**

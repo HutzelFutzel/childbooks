@@ -298,3 +298,21 @@ export function buildStoryRevisionPrompt(
 
   return { system, user, craft, profile: resolveAudienceProfile(config.ageRangeId, ctx) };
 }
+
+/** One complete revised manuscript. Used when the change is the whole story's voice or shape. */
+export function buildStoryRewritePrompt(
+  config: Pick<BookConfig, "ageRangeId" | "contentLocale">,
+  story: string,
+  instruction: string,
+  ctx?: PromptContext | null,
+): { system: string; user: string } {
+  const language = getBookLanguage(config.contentLocale);
+  return renderTextPrompt(resolvePromptsConfig(ctx), "storyEdit/rewrite", {
+    vars: {
+      age: ageBandLabel(config.ageRangeId),
+      languageInstruction: language.promptInstruction,
+      instruction: instruction.trim(),
+      currentStory: story,
+    },
+  });
+}

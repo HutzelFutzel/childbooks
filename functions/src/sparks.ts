@@ -1032,6 +1032,10 @@ export async function estimateForUser(
       action,
       tier,
       model: models.imageModel,
+      qualityModel:
+        action === "portrait" && tuning.qualityControl.portraitCheck
+          ? (models.bindingModel ?? models.textModel)
+          : undefined,
       tuning,
       kind,
       referenceCount:

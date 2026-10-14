@@ -22,6 +22,7 @@ import {
   containedAnchorsFor,
 } from "../book/anchorGraph";
 import { artStyleKey } from "../prompts/style";
+import { buildRenderRecord } from "./imageProvenance";
 import { sourceArtPreservesRendering } from "../book/sourceArt";
 import { anchorSignature, currentAnchorImage } from "./provenance";
 import {
@@ -84,6 +85,8 @@ export interface AnchorRender {
   outputSize?: string;
   /** Best-effort output preferences and what the selected model applied. */
   generation?: ResolvedImageGenerationOptions;
+  /** Look, canvas, options and inputs this sheet was drawn from. */
+  render?: AnchorImage["render"];
   /**
    * Version id for the node this render becomes. Set by the worker when later
    * tasks draw against the sheet before the studio folds it in, so the page's
@@ -106,6 +109,7 @@ export function applyAnchorRender(
     ...(render.artStyleKey ? { artStyleKey: render.artStyleKey } : {}),
     ...(render.imageTier ? { imageTier: render.imageTier } : {}),
     ...(render.imageModel ? { imageModel: render.imageModel } : {}),
+    ...(render.render ? { render: render.render } : {}),
   };
   const next = tree
     ? addVersion(tree, content, {
@@ -675,6 +679,16 @@ export async function renderAnchor(
     label: restyle ? "New style" : options.edit?.trim() || (isIteration ? "Variation" : "Initial"),
     parentId: sourceNodeId,
     artStyleKey: artStyleKey(project.config.artStyle),
+    render: buildRenderRecord({
+      artStyle: project.config.artStyle,
+      action: "anchorImage",
+      outputSize: spec.size,
+      generation,
+      inputReferences: submittedReferences.map((reference) => ({
+        role: reference.role ?? "subject",
+        ...(reference.label ? { label: reference.label } : {}),
+      })),
+    }),
     ...(submittedLikeness && likenessCreatedAt !== undefined
       ? { consumedLikenessCreatedAt: likenessCreatedAt }
       : {}),
