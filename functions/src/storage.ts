@@ -7,6 +7,16 @@ import { randomUUID } from "node:crypto";
 import { getApps, initializeApp } from "firebase-admin/app";
 import { getFirestore } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
+import { logger } from "firebase-functions/v2";
+import sharp from "sharp";
+import {
+  BLOB_VARIANTS,
+  BLOB_VARIANT_MIME,
+  BLOB_VARIANT_SPECS,
+  IMMUTABLE_BLOB_CACHE_CONTROL,
+  blobObjectName,
+  type BlobVariant,
+} from "../../books-frontend/src/core/storage/blobVariants";
 
 /**
  * The Storage bucket the backend reads/writes. This MUST match the client's
@@ -81,6 +91,99 @@ export function blobPath(uid: string, id: string): string {
   return `users/${uid}/blobs/${id}`;
 }
 
+/** Path of a blob's small display copy (see `core/storage/blobVariants.ts`). */
+export function blobVariantPath(uid: string, id: string, variant: BlobVariant): string {
+  return `users/${uid}/blobs/${blobObjectName(id, variant)}`;
+}
+
+/** Shrink a picture into one of its display copies (WebP, transparency kept). */
+export async function encodeBlobVariant(buf: Buffer, variant: BlobVariant): Promise<Buffer> {
+  const spec = BLOB_VARIANT_SPECS[variant];
+  return sharp(buf)
+    .rotate()
+    .resize({ width: spec.maxEdge, height: spec.maxEdge, fit: "inside", withoutEnlargement: true })
+    .webp({ quality: spec.quality, alphaQuality: spec.alphaQuality })
+    .toBuffer();
+}
+
+async function writeBlobVariant(
+  uid: string,
+  id: string,
+  master: Buffer,
+  variant: BlobVariant,
+): Promise<void> {
+  const bytes = await encodeBlobVariant(master, variant);
+  await blobBucket().file(blobVariantPath(uid, id, variant)).save(bytes, {
+    contentType: BLOB_VARIANT_MIME,
+    resumable: false,
+    metadata: { cacheControl: IMMUTABLE_BLOB_CACHE_CONTROL },
+  });
+}
+
+/**
+ * Write every display copy of a picture, best effort: a copy that fails to
+ * encode or upload just means readers fall back to the master (and a later
+ * backfill fills it in), so it must never fail the render that made the picture.
+ */
+async function writeBlobVariants(
+  uid: string,
+  id: string,
+  master: Buffer,
+  only: readonly BlobVariant[] = BLOB_VARIANTS,
+): Promise<void> {
+  await Promise.all(
+    only.map((variant) =>
+      writeBlobVariant(uid, id, master, variant).catch((err) => {
+        logger.warn("[blobs] could not write a display copy", {
+          id,
+          variant,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }),
+    ),
+  );
+}
+
+/**
+ * Make sure a stored picture has all its display copies: the lazy backfill for
+ * pictures stored before copies existed (and for any whose copy failed).
+ * Idempotent. Returns false when there is no master to copy from, or it is not
+ * a picture.
+ */
+export async function ensureBlobVariants(uid: string, id: string): Promise<boolean> {
+  const bucket = blobBucket();
+  const present = await Promise.all(
+    BLOB_VARIANTS.map(async (variant) => {
+      const [exists] = await bucket.file(blobVariantPath(uid, id, variant)).exists();
+      return exists;
+    }),
+  );
+  const missing = BLOB_VARIANTS.filter((_, index) => !present[index]);
+  if (missing.length === 0) return true;
+
+  let master: Buffer;
+  try {
+    [master] = await bucket.file(blobPath(uid, id)).download();
+  } catch {
+    return false;
+  }
+  try {
+    await sharp(master).metadata();
+  } catch {
+    return false;
+  }
+  await writeBlobVariants(uid, id, master, missing);
+  return true;
+}
+
+export interface UploadBlobOptions {
+  /**
+   * Write the small display copies too. Off for pictures nobody looks at
+   * directly (an inpainting mask), where they would only be clutter.
+   */
+  variants?: boolean;
+}
+
 /** Download a blob's raw bytes. */
 export async function downloadBlob(uid: string, id: string): Promise<Buffer> {
   const [buf] = await blobBucket().file(blobPath(uid, id)).download();
@@ -124,14 +227,28 @@ export async function downloadPublicBase64(
   return { base64: buf.toString("base64"), mimeType };
 }
 
-/** Upload bytes and return a fresh blob id. */
+/**
+ * Upload bytes and return a fresh blob id. A picture is written with its small
+ * display copies, in parallel, so by the time the id is handed out the studio
+ * can already show it without downloading the full-size master.
+ */
 export async function uploadBlob(
   uid: string,
   buf: Buffer,
   contentType: string,
+  options: UploadBlobOptions = {},
 ): Promise<string> {
   const id = randomUUID();
-  await blobBucket().file(blobPath(uid, id)).save(buf, { contentType, resumable: false });
+  const withVariants = (options.variants ?? true) && contentType.startsWith("image/");
+  await Promise.all([
+    blobBucket().file(blobPath(uid, id)).save(buf, {
+      contentType,
+      resumable: false,
+      // An id is minted for exactly one render and never rewritten.
+      metadata: { cacheControl: IMMUTABLE_BLOB_CACHE_CONTROL },
+    }),
+    withVariants ? writeBlobVariants(uid, id, buf) : Promise.resolve(),
+  ]);
   return id;
 }
 
@@ -146,17 +263,30 @@ export async function uploadBlobAs(
   buf: Buffer,
   contentType: string,
 ): Promise<string> {
-  await blobBucket().file(blobPath(uid, id)).save(buf, { contentType, resumable: false });
+  await Promise.all([
+    blobBucket().file(blobPath(uid, id)).save(buf, {
+      contentType,
+      resumable: false,
+      // Unlike a render, this id is derived, so the bytes behind it can change.
+      metadata: { cacheControl: "private, max-age=3600" },
+    }),
+    contentType.startsWith("image/") ? writeBlobVariants(uid, id, buf) : Promise.resolve(),
+  ]);
   return id;
 }
 
-/** Delete a user blob (best-effort). */
+/** Delete a user blob and its display copies (best-effort). */
 export async function deleteBlobById(uid: string, id: string): Promise<void> {
-  try {
-    await blobBucket().file(blobPath(uid, id)).delete();
-  } catch {
-    // already gone / not found
-  }
+  const bucket = blobBucket();
+  const names = [blobPath(uid, id), ...BLOB_VARIANTS.map((variant) => blobVariantPath(uid, id, variant))];
+  await Promise.all(
+    names.map((name) =>
+      bucket
+        .file(name)
+        .delete({ ignoreNotFound: true })
+        .catch(() => undefined),
+    ),
+  );
 }
 
 /** Public download URL for an object, honoring Storage rules (read: true). */

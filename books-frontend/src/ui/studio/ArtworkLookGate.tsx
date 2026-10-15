@@ -160,7 +160,7 @@ function LookChoice({
   selected: boolean;
   onSelect: () => void;
 }) {
-  const { url } = useBlobUrlState(thumbBlobId);
+  const { url } = useBlobUrlState(thumbBlobId, "thumb");
   return (
     <button
       type="button"

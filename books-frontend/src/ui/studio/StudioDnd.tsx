@@ -248,7 +248,7 @@ function DragGhost({ item }: { item: DragItem }) {
 }
 
 function AnchorGhost({ blobId, label }: { blobId?: string; label: string }) {
-  const url = useBlobUrl(blobId);
+  const url = useBlobUrl(blobId, "thumb");
   return (
     <div className="flex items-center gap-2 rounded-xl border border-brand-300 bg-white/95 px-2.5 py-2 shadow-lifted">
       <span className="size-7 overflow-hidden rounded-md bg-ink-100 ring-1 ring-inset ring-ink-200">

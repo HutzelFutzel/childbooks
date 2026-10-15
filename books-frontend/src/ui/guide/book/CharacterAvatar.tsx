@@ -29,7 +29,7 @@ export function CharacterAvatar({
   name: string;
   className?: string;
 }) {
-  const imageUrl = useBlobUrl(characterAvatarBlobId(project, characterId));
+  const imageUrl = useBlobUrl(characterAvatarBlobId(project, characterId), "thumb");
   const initial = name.trim().charAt(0).toLocaleUpperCase();
 
   return (

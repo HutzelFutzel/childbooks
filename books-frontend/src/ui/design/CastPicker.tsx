@@ -180,7 +180,7 @@ function PortraitChip({
   coverMode?: boolean;
   onClick: () => void;
 }) {
-  const url = useBlobUrl(anchorThumbBlobId(anchor));
+  const url = useBlobUrl(anchorThumbBlobId(anchor), "thumb");
   const isPlace = anchor.type === "place";
   const where = coverMode ? "cover" : "picture";
   return (

@@ -146,7 +146,7 @@ function SourceArtThumb({
   disabled: boolean;
   onRemove: () => void;
 }) {
-  const { url, status } = useBlobUrlState(blobId);
+  const { url, status } = useBlobUrlState(blobId, "thumb");
   return (
     <span className="relative size-12 shrink-0 overflow-hidden rounded-xl bg-white shadow-2xs ring-1 ring-ink-200">
       {url ? (

@@ -625,6 +625,7 @@ function CastMemberCard({
           blobId={anchorThumbBlobId(anchor)}
           alt={anchor.name}
           aspect={3 / 2}
+          size="web"
           className="rounded-none"
           fallback={
             <span className="flex max-w-60 flex-col items-center px-4 text-center">

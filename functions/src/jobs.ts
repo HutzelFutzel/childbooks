@@ -1234,7 +1234,7 @@ async function portraitEditMask(args: {
     if (found.box.width * found.box.height >= 0.6) return { region: null, events, stats };
     const mask = await buildHoleMask({ page: original, box: found.box, paddingFrac: 0.1 });
     return {
-      region: { maskBlobId: await uploadBlob(uid, mask, "image/png"), part: found.part },
+      region: { maskBlobId: await uploadBlob(uid, mask, "image/png", { variants: false }), part: found.part },
       events,
       stats,
     };

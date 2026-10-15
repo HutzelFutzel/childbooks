@@ -117,7 +117,7 @@ function AssetTile({
   onRemove: () => void;
   onClick?: () => void;
 }) {
-  const url = useBlobUrl(asset.blobId);
+  const url = useBlobUrl(asset.blobId, "thumb");
   const drag = useDragSource(() => ({ type: "asset", asset, label: asset.name }), onClick);
   return (
     <div

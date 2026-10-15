@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import { motion } from "framer-motion";
 import { ImageIcon, ImageOff } from "lucide-react";
 import { useBlobUrlState } from "../hooks/useBlobUrl";
+import type { BlobSize } from "../../core/storage/blobVariants";
 import { cn } from "../lib/cn";
 import { paintIn } from "../lib/motion";
 
@@ -16,6 +17,11 @@ export interface BlobThumbnailProps {
   fallback?: ReactNode;
   /** Skip the paint-in reveal (for dense strips where it would be noisy). */
   instant?: boolean;
+  /**
+   * How much picture the tile needs. Tiles are small, so the default is the
+   * thumbnail copy; pass `web` for a tile that fills a large card.
+   */
+  size?: BlobSize;
 }
 
 /**
@@ -31,8 +37,9 @@ export function BlobThumbnail({
   className,
   fallback,
   instant = false,
+  size = "thumb",
 }: BlobThumbnailProps) {
-  const { url, status } = useBlobUrlState(blobId);
+  const { url, status } = useBlobUrlState(blobId, size);
   // Only an in-flight fetch shimmers. A blob that is missing or that failed to
   // download resolves to the empty state instead, so a broken bucket reads as
   // "no image" rather than as "still working".

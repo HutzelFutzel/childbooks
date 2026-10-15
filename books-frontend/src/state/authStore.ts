@@ -21,6 +21,16 @@ import { backendFetch } from "../platform/backend";
 import { browserGeoHints } from "../core/analytics/geoHints";
 
 /**
+ * Take the previous account's pictures off this device. They are private (often
+ * a child's), so the copies kept in memory and on disk must not outlive the
+ * session that owned them. Best effort, and loaded lazily so the auth store
+ * doesn't pull the whole blob layer in with it.
+ */
+function forgetCachedPictures(): void {
+  void import("./blobs").then((blobs) => blobs.clearBlobCaches()).catch(() => undefined);
+}
+
+/**
  * Kick off the branded welcome + email-verification email (Option B): the
  * backend generates a Firebase verification action link and sends our own
  * ZeptoMail template carrying it (or a plain welcome for already-verified
@@ -96,6 +106,7 @@ export async function resetGuestSession(): Promise<boolean> {
   const auth = getFirebaseAuth();
   useAuthStore.setState({ pendingMigration: null });
   await firebaseSignOut(auth);
+  forgetCachedPictures();
   await mintGuest(auth);
   return Boolean(auth.currentUser);
 }
@@ -373,6 +384,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   async signOutUser() {
     set({ pendingMigration: null });
     await firebaseSignOut(getFirebaseAuth());
+    forgetCachedPictures();
   },
 
   async resendVerification() {

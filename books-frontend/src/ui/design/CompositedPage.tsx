@@ -10,6 +10,7 @@ import type {
 import { coverPlacement, type FrameInsets } from "../../core/imageGeometry";
 import { illustrationLeaf } from "../../core/book/pairSurface";
 import { useBlobUrl } from "../hooks/useBlobUrl";
+import type { BlobSize } from "../../core/storage/blobVariants";
 import { useAppConfigStore } from "../../state/appConfigStore";
 import { cssFilter } from "./effects";
 import { imageMaskStyle, type ResolvedImageMasks } from "./imageMasks";
@@ -69,6 +70,7 @@ export function CompositedPage({
   bleedSides,
   illustrationBlobId,
   illustrationUrl,
+  illustrationSize,
   artwork,
   imageMasks,
   illustrationFocus,
@@ -85,6 +87,8 @@ export function CompositedPage({
   illustrationBlobId?: string;
   /** Pre-resolved illustration URL. Wins over fetching `illustrationBlobId`. */
   illustrationUrl?: string | null;
+  /** How much picture to fetch when `illustrationBlobId` is fetched here (default: a page on screen). */
+  illustrationSize?: BlobSize;
   artwork?: ResolvedArtwork;
   /** Pre-resolved immutable mask URLs (print); public catalog is the UI fallback. */
   imageMasks?: ResolvedImageMasks;
@@ -97,6 +101,7 @@ export function CompositedPage({
   const configuredMasks = useAppConfigStore((state) => state.imageMasks.assets);
   const fetched = useBlobUrl(
     illustrationUrl || artwork ? undefined : illustrationBlobId,
+    illustrationSize,
   );
   const url =
     illustrationUrl ??

@@ -21,7 +21,7 @@ export function PageNavigator({
 }
 
 function Thumb({ page, active, onClick }: { page: DesignPage; active: boolean; onClick: () => void }) {
-  const url = useBlobUrl(page.blobId);
+  const url = useBlobUrl(page.blobId, "thumb");
   return (
     <button onClick={onClick} className="flex shrink-0 flex-col items-center gap-1">
       <div

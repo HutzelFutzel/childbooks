@@ -32,6 +32,13 @@ import {
 } from "firebase/storage";
 import { getFirebaseAuth, getFirebaseDb, getFirebaseStorage } from "../lib/firebase";
 import type { BlobStore, KeyValueStore, StorageBackend } from "../core/storage/types";
+import {
+  BLOB_VARIANTS,
+  IMMUTABLE_BLOB_CACHE_CONTROL,
+  blobObjectName,
+  type BlobSize,
+} from "../core/storage/blobVariants";
+import { diskCacheDelete, diskCacheGet, diskCachePut } from "./blobDiskCache";
 
 function currentUid(): string | null {
   try {
@@ -134,8 +141,12 @@ const firestoreKv: KeyValueStore = {
   },
 };
 
-function blobRef(uid: string, id: string) {
-  return ref(getFirebaseStorage(), `users/${uid}/blobs/${id}`);
+function blobRef(uid: string, id: string, size: BlobSize = "master") {
+  return ref(getFirebaseStorage(), `users/${uid}/blobs/${blobObjectName(id, size)}`);
+}
+
+function isNotFound(err: unknown): boolean {
+  return (err as { code?: string })?.code === "storage/object-not-found";
 }
 
 const firestoreBlobs: BlobStore = {
@@ -143,27 +154,51 @@ const firestoreBlobs: BlobStore = {
     const uid = requireUid();
     await uploadBytes(blobRef(uid, id), data, {
       contentType: data.type || "application/octet-stream",
+      // An id is minted once per stored picture and never rewritten.
+      cacheControl: IMMUTABLE_BLOB_CACHE_CONTROL,
     });
   },
 
-  async get(id: string): Promise<Blob | null> {
+  async get(id: string, size: BlobSize = "master"): Promise<Blob | null> {
     const uid = currentUid();
     if (!uid) return null;
+    // Only the small copies live on this device's disk; the master is the
+    // thing being avoided, and is never worth the space.
+    if (size !== "master") {
+      const cached = await diskCacheGet(uid, blobObjectName(id, size));
+      if (cached) return cached;
+    }
     try {
-      return await getBlob(blobRef(uid, id));
+      const blob = await getBlob(blobRef(uid, id, size));
+      if (size !== "master") void diskCachePut(uid, blobObjectName(id, size), blob);
+      return blob;
     } catch (err) {
-      if ((err as { code?: string })?.code === "storage/object-not-found") return null;
+      if (isNotFound(err)) return null;
       throw err;
     }
   },
 
   async remove(id: string): Promise<void> {
     const uid = requireUid();
+    // The copies go with the picture, or they would sit in the bucket forever.
+    // A copy that is already gone (or never made) is the normal case.
+    const copies = BLOB_VARIANTS.map(async (variant) => {
+      try {
+        await deleteObject(blobRef(uid, id, variant));
+      } catch {
+        // Best effort; an orphaned copy costs a few KB and nothing reads it.
+      }
+    });
+    void diskCacheDelete(
+      uid,
+      BLOB_VARIANTS.map((variant) => blobObjectName(id, variant)),
+    );
     try {
       await deleteObject(blobRef(uid, id));
     } catch (err) {
-      if ((err as { code?: string })?.code === "storage/object-not-found") return;
-      throw err;
+      if (!isNotFound(err)) throw err;
+    } finally {
+      await Promise.all(copies);
     }
   },
 };

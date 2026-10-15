@@ -68,6 +68,7 @@ import { registerAffiliateAdminRoutes } from "./affiliates/admin";
 import { registerAffiliateApplicationRoutes } from "./affiliates/applications";
 import { registerStoryRevisionRoutes } from "./storyRevisionJobs";
 import { registerLikenessRoutes } from "./likeness";
+import { registerBlobRoutes } from "./blobRoutes";
 
 export function createApp(): Express {
   const app = express();
@@ -161,6 +162,9 @@ export function createApp(): Express {
   app.use("/print", requireVerified);
   app.use("/ai", requireAuth);
   app.use("/likeness", requireAuth);
+  // Display copies of stored pictures: guests draw books too, and the pictures
+  // asked about are always in the caller's own space.
+  app.use("/blobs", requireAuth);
   app.use("/checkout", requireVerified);
   app.use("/account", requireVerified);
   // Guest-draft import: any signed-in (even not-yet-verified) full account may
@@ -190,6 +194,7 @@ export function createApp(): Express {
   registerAiRoutes(app);
   registerGenerationQuoteRoutes(app);
   registerLikenessRoutes(app);
+  registerBlobRoutes(app);
   registerStoryRevisionRoutes(app);
   registerMigrationRoutes(app);
   registerAuthRoutes(app);

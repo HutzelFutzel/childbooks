@@ -3,6 +3,7 @@
  * documents go in a key-value store, large binary assets (generated images)
  * go in a blob store. Platform adapters implement these.
  */
+import type { BlobSize } from "./blobVariants";
 
 export interface KeyValueStore {
   get<T>(key: string): Promise<T | null>;
@@ -27,7 +28,13 @@ export interface KeyValueStore {
 
 export interface BlobStore {
   put(id: string, data: Blob): Promise<void>;
-  get(id: string): Promise<Blob | null>;
+  /**
+   * Read a picture at a size. `master` (the default) is the original bytes; a
+   * smaller size resolves to null when no copy of that size has been made, and
+   * the caller decides what to do instead (see `state/blobs.ts`).
+   */
+  get(id: string, size?: BlobSize): Promise<Blob | null>;
+  /** Remove a picture and every smaller copy made from it. */
   remove(id: string): Promise<void>;
 }
 

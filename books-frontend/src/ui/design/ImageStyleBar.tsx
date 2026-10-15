@@ -561,7 +561,7 @@ function CastToggle({
 }
 
 function MiniAvatar({ anchor, overlap }: { anchor: Anchor; overlap?: boolean }) {
-  const url = useBlobUrl(anchorThumbBlobId(anchor));
+  const url = useBlobUrl(anchorThumbBlobId(anchor), "thumb");
   return (
     <span
       className={cn(

@@ -367,7 +367,7 @@ function ReceiptThumbButton({
   thumb: ReceiptThumb;
   onOpenUnit: (unitId: string, view: BookViewId) => void;
 }) {
-  const url = useBlobUrl(thumb.blobId);
+  const url = useBlobUrl(thumb.blobId, "thumb");
   if (!url) return null;
   return (
     <button

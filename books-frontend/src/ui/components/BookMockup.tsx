@@ -3,6 +3,7 @@
 import { motion, useReducedMotion } from "framer-motion";
 import type { CSSProperties } from "react";
 import type { PageDesign } from "../../core/types";
+import type { BlobSize } from "../../core/storage/blobVariants";
 import { CompositedPage, pageDesignHasContent } from "../design/CompositedPage";
 import { useBlobUrlState } from "../hooks/useBlobUrl";
 import { cn } from "../lib/cn";
@@ -77,7 +78,10 @@ export function BookMockup({
   className,
 }: BookMockupProps) {
   const reduce = useReducedMotion();
-  const { url: blobUrl, status: blobStatus } = useBlobUrlState(blobId);
+  // A cover on a shelf or in a dashboard card needs a few hundred pixels, not
+  // the original; only a big mockup earns the larger copy.
+  const pictureSize: BlobSize = width <= 200 ? "thumb" : "web";
+  const { url: blobUrl, status: blobStatus } = useBlobUrlState(blobId, pictureSize);
   const blobLoading = Boolean(blobId) && blobStatus === "loading";
   const url = blobLoading ? null : blobUrl ?? fallbackUrl ?? null;
   const height = width / aspect;
@@ -176,6 +180,7 @@ export function BookMockup({
               surfaceHeightPx={height}
               illustrationBlobId={blobId}
               illustrationUrl={url}
+              illustrationSize={pictureSize}
               illustrationFocus={{ x: 0.5, y: 0 }}
             />
           ) : blobLoading ? (
