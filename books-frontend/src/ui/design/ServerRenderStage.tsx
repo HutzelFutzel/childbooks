@@ -62,6 +62,12 @@ interface CaptureSpec {
   heightIn: number;
   /** Whether coming out blank means a failed render rather than a blank page. */
   mustHaveInk: boolean;
+  /**
+   * How far from the bottom of a back-cover capture the permanent logo's box
+   * starts (outer extension + safety margin), so the server's blank-page check
+   * can ignore exactly the area the logo occupies.
+   */
+  logoInsetIn?: number;
   /** Bleed strips to synthesize after capture; trim pixels remain untouched. */
   bleedFill?: { top: number; right: number; bottom: number; left: number };
 }
@@ -252,7 +258,9 @@ async function prepare(): Promise<RenderState> {
         captures.push(spec(t, "interior", t.documentIndex ?? index, design)),
       );
     } else {
-      const cover = buildCoverPlan(project, pages, EXPORT_DPI);
+      const cover = buildCoverPlan(project, pages, EXPORT_DPI, {
+        coverHeightIn: doc.cover.heightIn,
+      });
       targets.push(...cover.targets);
       for (const t of cover.targets) {
         captures.push(spec(t, t.id === COVER_BACK_ID ? "cover-back" : "cover-front", 0, design));
@@ -358,6 +366,9 @@ function spec(
     widthIn: target.widthIn,
     heightIn: target.heightIn,
     mustHaveInk,
+    ...(role === "cover-back" && target.safetyMarginIn != null
+      ? { logoInsetIn: target.bleedPx / EXPORT_DPI + target.safetyMarginIn }
+      : {}),
     ...(mustHaveInk && needsBleedFill ? { bleedFill } : {}),
   };
 }

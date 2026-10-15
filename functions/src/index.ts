@@ -49,13 +49,18 @@ export { retryFulfillments } from "./fulfillmentRetry";
 // safety net for status webhooks that were missed or deactivated.
 export { syncPrintOrders } from "./printSyncJob";
 
+// Notices what no event announces: an order waiting too long for a person, a
+// scheduled job that stopped, a dead printer webhook, a payment we never heard of.
+export { orderWatchdog } from "./printOrderWatchdog";
+
 // Weekly re-ask of which countries the print provider actually ships to, so an
 // open market that quietly lost coverage shows up in the admin rather than at a
 // customer's checkout.
-export { sweepMarketCoverage } from "./marketSweepJob";
+export { sweepMarketCoverage, onboardOpenMarkets } from "./marketSweepJob";
 
 // Scheduled eviction of cached book renders nobody has come back to.
 export { cleanupStaleRenders } from "./renders";
+export { cleanupPrintAssetsJob } from "./printAssetRetention";
 
 // Server-side book rendering: the Cloud Tasks worker that drives headless
 // Chrome over a book's pages. Its own function because it needs a browser's

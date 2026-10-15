@@ -18,6 +18,7 @@ import {
 } from "../../../state/adminHealthStore";
 import { Button } from "../../components/Button";
 import { cn } from "../../lib/cn";
+import { PrinterWebhookCard } from "./PrinterWebhookCard";
 
 const ICON = {
   pass: <CheckCircle2 className="size-4 shrink-0 text-emerald-500" />,
@@ -110,6 +111,8 @@ export function SystemHealthTab() {
           </p>
         )}
       </div>
+
+      <PrinterWebhookCard />
 
       {report?.groups.map((group) => <GroupCard key={group.id} group={group} />)}
     </div>

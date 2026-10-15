@@ -771,7 +771,9 @@ export function OrderCheckout({
         // The panels are the book's own trim plus its outer bleed; the spine is
         // whatever the provider's cover width leaves between them. Same split
         // the renderer draws to, so the artwork lands where the fold is cut.
-        const { panelWidthIn } = buildCoverPlan(project, pages);
+        const { panelWidthIn } = buildCoverPlan(project, pages, undefined, {
+          coverHeightIn: dims.heightMm / MM_PER_IN,
+        });
         await renderBook({
           fingerprint,
           projectId: project.id,

@@ -11,7 +11,8 @@ import { onSchedule } from "firebase-functions/v2/scheduler";
 import { logger } from "firebase-functions/v2";
 import { ensureAdmin } from "./storage";
 import { ALL_SECRETS } from "./secrets";
-import { retryFailedFulfillments } from "./stripe";
+import { retryFailedFulfillments, retryStrandedFulfillments } from "./stripe";
+import { recordHeartbeat } from "./printOrders";
 
 export const retryFulfillments = onSchedule(
   {
@@ -24,8 +25,14 @@ export const retryFulfillments = onSchedule(
     try {
       const placed = await retryFailedFulfillments();
       if (placed > 0) logger.info(`[fulfillment-retry] placed ${placed} order(s) on retry`);
+      // Paid orders that never got as far as a failure record at all (the webhook
+      // handler died mid-flight) — nothing else would ever pick these up.
+      const stranded = await retryStrandedFulfillments();
+      if (stranded > 0) logger.warn(`[fulfillment-retry] re-drove ${stranded} stranded paid order(s)`);
+      await recordHeartbeat("retryFulfillments", true, `${placed} retried, ${stranded} stranded re-driven`);
     } catch (err) {
       logger.error("[fulfillment-retry] sweep failed", err);
+      await recordHeartbeat("retryFulfillments", false, err instanceof Error ? err.message : String(err));
     }
   },
 );

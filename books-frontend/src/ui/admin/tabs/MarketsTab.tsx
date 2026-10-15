@@ -34,11 +34,13 @@ import {
   type MarketCapability,
 } from "../../../core/config/marketCapability";
 import type { Market, MarketsConfig } from "../../../core/config/markets";
+import type { MarketOnboardingReport } from "../../../core/config/marketOnboarding";
 import { methodLabel, type ShippingSettings } from "../../../core/config/shipping";
 import type { ShippingMethod } from "../../../core/fulfillment/types";
 import { useAppConfigStore } from "../../../state/appConfigStore";
 import { useAdminTab } from "../adminTabStore";
 import { FormatCoverageSection } from "./markets/FormatCoverageSection";
+import { MarketOnboardingPanel } from "./markets/MarketOnboardingPanel";
 import { ShippingPolicySection } from "./markets/ShippingPolicySection";
 import { EditorTabs, OverflowItem, OverflowMenu, Section, TabIntro } from "./products/parts";
 import { AdminSaveBar } from "../AdminPageHeader";
@@ -78,6 +80,7 @@ export function MarketsTab() {
   const loadMarketsConfig = useAppConfigStore((s) => s.loadMarketsConfig);
   const saveMarketsConfig = useAppConfigStore((s) => s.saveMarketsConfig);
   const sweep = useAppConfigStore((s) => s.sweepMarketCapability);
+  const onboardMarket = useAppConfigStore((s) => s.onboardMarket);
   const stored = useAppConfigStore((s) => s.adminMarkets);
   const capability = useAppConfigStore((s) => s.marketCapability);
   const shipping = useAppConfigStore((s) => s.shippingSettings);
@@ -98,6 +101,11 @@ export function MarketsTab() {
   const [busy, setBusy] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadAttempt, setLoadAttempt] = useState(0);
+  // Setting up newly opened markets: which one is in flight, what came back, and
+  // a counter that tells the status panel to re-read after each change.
+  const [onboardingRunning, setOnboardingRunning] = useState<string | null>(null);
+  const [onboardingReports, setOnboardingReports] = useState<MarketOnboardingReport[]>([]);
+  const [onboardingRefresh, setOnboardingRefresh] = useState(0);
   const seededFilter = useRef(false);
 
   // Both documents, together. They're edited on the same screen — the country
@@ -181,15 +189,52 @@ export function MarketsTab() {
   const save = async () => {
     if (!draft) return;
     setSaving(true);
+    // Countries this save turns on, compared with what was stored — these are
+    // the ones that need setting up, and the only ones worth probing.
+    const wasOn = new Set(stored.markets.filter((m) => m.enabled).map((m) => m.country));
+    const opened = draft.markets.filter((m) => m.enabled && !wasOn.has(m.country)).map((m) => m.country);
     try {
       const saved = await saveMarketsConfig(draft);
       setDraft(saved);
-      toast.success("Markets saved.");
+      toast.success(
+        opened.length > 0 ? "Markets saved. Setting up the new ones…" : "Markets saved.",
+      );
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Could not save markets.");
-    } finally {
       setSaving(false);
+      return;
     }
+    setSaving(false);
+    await setUpMarkets(opened);
+  };
+
+  // Make each newly opened market actually sellable. One request per country so
+  // it can't outrun the request timeout however many were switched on. A failure
+  // here never undoes the save: the scheduled job finishes whatever is left, so
+  // this is the fast path, not the only one.
+  const setUpMarkets = async (countries: string[]) => {
+    for (const country of countries) {
+      setOnboardingRunning(country);
+      try {
+        const report = await onboardMarket(country);
+        setOnboardingReports((prev) => [report, ...prev.filter((r) => r.country !== country)]);
+        if (report.state === "ready") {
+          toast.success(`${countryLabel(country)} is ready to sell.`);
+        } else if (report.state === "pending") {
+          toast.info(`${countryLabel(country)} is opening — the rest finishes in the background.`);
+        } else {
+          toast.warning(`${countryLabel(country)} is open but can't sell anything yet — see details below.`);
+        }
+      } catch (err) {
+        toast.error(
+          err instanceof Error
+            ? `${countryLabel(country)}: ${err.message} It will finish in the background.`
+            : `Could not finish setting up ${countryLabel(country)}.`,
+        );
+      }
+    }
+    setOnboardingRunning(null);
+    setOnboardingRefresh((n) => n + 1);
   };
 
   const runSweep = async (force: boolean) => {
@@ -289,7 +334,7 @@ export function MarketsTab() {
     );
   }
 
-  const toolsBusy = readOnly || loading || sweeping || busy != null;
+  const toolsBusy = readOnly || loading || sweeping || busy != null || onboardingRunning != null;
 
   return (
     <div className="space-y-5">
@@ -397,6 +442,15 @@ export function MarketsTab() {
         </p>
       ) : null}
 
+      <MarketOnboardingPanel
+        running={onboardingRunning}
+        reports={onboardingReports}
+        refreshKey={onboardingRefresh}
+        onDismiss={(country) =>
+          setOnboardingReports((prev) => prev.filter((r) => r.country !== country))
+        }
+      />
+
       <EditorTabs
         items={MARKET_PANELS}
         value={panel}
@@ -479,7 +533,7 @@ export function MarketsTab() {
         dirty={dirty}
         saving={saving}
         saveLabel="Save markets"
-        saveDisabled={readOnly || loading}
+        saveDisabled={readOnly || loading || onboardingRunning != null}
         onSave={() => void save()}
         onDiscard={() => setDraft(stored)}
       />

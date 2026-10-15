@@ -22,11 +22,16 @@ import type Stripe from "stripe";
 import { serverConfig } from "./config";
 import { isAnonymousToken, isVerifiedToken, requireAuth, type AuthedRequest } from "./auth";
 import { createAdminAssetHost, printFileUnreachableReason } from "./assets";
-import { cachedDocumentPath, cachedDocumentUrl, documentKey } from "./renders";
+import { cachedDocumentPath, cachedDocumentUrl, documentKey, invalidateCachedDocument } from "./renders";
+import { preflightPrintFiles } from "./printPreflight";
 import { fulfillmentProvider } from "./lulu";
 import { persistCreatedOrder } from "./orders";
+import { placementKeyFor } from "../../books-frontend/src/core/orders/lifecycle";
+import { recordOrderEmail, syncOrderFromPayment } from "./printOrders";
+import { getAuth } from "firebase-admin/auth";
+import { ensureAdmin } from "./storage";
 import { getProductsConfig } from "./products";
-import { capabilityFor, getMarketRegistry } from "./markets";
+import { capabilityForProduct, getMarketRegistry } from "./markets";
 import { getShippingSettings } from "./shipping";
 import { getPricingSettings } from "./appConfig";
 import {
@@ -90,7 +95,9 @@ import {
   getAdminPayment,
   getStripeCustomerId,
   listFailedFulfillments,
+  listPendingOrderCheckouts,
   listPayments,
+  listStrandedPaidOrders,
   markFulfillmentFailed,
   paymentsAnalytics,
   planRecipient,
@@ -1055,7 +1062,7 @@ async function shippingRefusal(
   const [registry, shippingSettings, capability] = await Promise.all([
     getMarketRegistry(),
     getShippingSettings(),
-    capabilityFor(country),
+    capabilityForProduct(product.provider.sku, country),
   ]);
   const policy = destinationPolicyFor(shippingSettings, product.shipping);
 
@@ -1104,7 +1111,7 @@ async function previewShippingMethod(
 ): Promise<ShippingMethod> {
   const [settings, capability] = await Promise.all([
     getShippingSettings(),
-    capabilityFor(country),
+    capabilityForProduct(product.provider.sku, country),
   ]);
   const offered = offeredMethodsFor(settings, capability, product.shipping, country);
   return offered[0] ?? defaultShippingMethod(settings);
@@ -1405,6 +1412,18 @@ export function registerStripeUserRoutes(app: Express): void {
         clientError(res, `Orders to ${countryLabel(destinationCountry)} require a state or province code.`);
         return;
       }
+      // The print provider needs a contact address for the job (delivery problems
+      // are reported there). The recipient email is optional in the form — a gift
+      // for somebody else — so fall back to the buyer's own, rather than finding
+      // out after payment that the job can't be created.
+      if (!recipient.email) {
+        const accountEmail = (req.authToken as { email?: string } | undefined)?.email?.trim();
+        recipient.email = accountEmail || undefined;
+      }
+      if (!recipient.email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient.email)) {
+        clientError(res, "A valid email address is required so we can reach you about this order.");
+        return;
+      }
 
       // What prints is the saved book: not while one of its pictures is being replaced. (The merchant
       // reference is the book's id.)
@@ -1512,6 +1531,40 @@ export function registerStripeUserRoutes(app: Express): void {
         // Reached when a cached render was expected but has since been evicted
         // (or never finished assembling). Say so: the fix is to render again,
         // which is what re-opening the order dialog does.
+        clientError(
+          res,
+          "Your book needs to be prepared for printing again. Please close this and try ordering once more.",
+        );
+        return;
+      }
+
+      // The files are about to be sold as this order. Check they ARE this order —
+      // page count, sheet size, cover size — while a mismatch is still a
+      // "prepare it again" instead of a rejected job and a refund. A bad cached
+      // render is dropped so the retry assembles a fresh one rather than
+      // hitting the same file forever.
+      const fileProblems = await preflightPrintFiles({
+        interiorUrl: sourceFileUrls.interior,
+        coverUrl: sourceFileUrls.cover,
+        printSku,
+        baseSku: product.provider.sku,
+        pages,
+      });
+      if (fileProblems.length > 0) {
+        console.error(`[stripe] checkout blocked — print files don't match the order (${printSku}, ${pages}p): ${fileProblems.join("; ")}`);
+        if (body.fingerprint) {
+          await Promise.all([
+            invalidateCachedDocument(uid, body.fingerprint, documentKey("interior")),
+            invalidateCachedDocument(uid, body.fingerprint, documentKey("cover", { sku: printSku, pages })),
+          ]);
+        }
+        void raiseAlert({
+          severity: "warning",
+          kind: "print_files_mismatch",
+          ref: `${uid}_${printSku}_${pages}_${Date.now().toString(36)}`,
+          message: `A customer's print files failed pre-payment verification (${printSku}, ${pages} pages): ${fileProblems[0]}`,
+          meta: { uid, printSku, pages, problems: fileProblems },
+        }).catch(() => undefined);
         clientError(
           res,
           "Your book needs to be prepared for printing again. Please close this and try ordering once more.",
@@ -2471,19 +2524,77 @@ export function registerStripeUserRoutes(app: Express): void {
 // ---- Fulfillment after payment ---------------------------------------------
 
 /**
+ * The buyer's account email, for the print job's contact address when the
+ * recipient (often somebody else) left theirs blank. Never throws.
+ */
+async function accountEmailFor(uid: string): Promise<string | null> {
+  if (!uid) return null;
+  try {
+    ensureAdmin();
+    return (await getAuth().getUser(uid)).email?.trim() || null;
+  } catch (err) {
+    console.warn("[stripe] could not read account email", uid, err);
+    return null;
+  }
+}
+
+/**
+ * Make sure the order record exists and knows the order is paid. Idempotent: the
+ * "paid" event is written once, so webhook redeliveries and the safety-net events
+ * all converge on the same record.
+ */
+async function recordPaidOrder(paymentId: string): Promise<void> {
+  const payment = await getAdminPayment(paymentId);
+  await syncOrderFromPayment(
+    payment,
+    { type: "paid", source: "stripe", message: "Payment received" },
+    undefined,
+    { dedupeId: "paid" },
+  );
+}
+
+/**
+ * Tell the customer their order is in — but only once it really is. This used to
+ * go out straight after the placement attempt whether or not it worked, so a
+ * customer whose order had failed was told it was confirmed (and, with the email's
+ * once-only dedupe, never told anything better). Called after every successful
+ * placement: the first try, a retry, a replacement of a rejected job.
+ */
+export async function sendConfirmationIfPlaced(paymentId: string): Promise<void> {
+  const payment = await getAdminPayment(paymentId);
+  if (!payment || payment.kind !== "order") return;
+  if (!payment.orderId || payment.fulfillmentState !== "placed") return;
+  try {
+    const sent = await sendOrderConfirmationEmail({
+      uid: payment.ownerUid,
+      orderRef: payment.orderId,
+      itemLabel: "Your custom picture book",
+      paymentId,
+    });
+    await recordOrderEmail(paymentId, "confirmation", sent);
+  } catch (err) {
+    console.warn("[stripe] order confirmation email failed", paymentId, err);
+    await recordOrderEmail(paymentId, "confirmation", { ok: false, error: (err as Error)?.message ?? "error" });
+  }
+}
+
+/**
  * Place the print order for a PAID payment, exactly once. Builds the order from
  * the stored fulfillment plan (with already-hosted file URLs) and persists the
  * neutral + admin order records, then links the order id onto the payment.
  */
-async function fulfillPaidOrder(paymentId: string): Promise<void> {
+export async function fulfillPaidOrder(paymentId: string): Promise<void> {
   const payment = await getAdminPayment(paymentId);
   if (!payment || !payment.fulfillment) return;
   if (payment.orderId) return;
+  // Money already went back to the customer; never print a refunded order.
+  if (payment.status === "refunded") return;
 
   const claimed = await claimFulfillment(paymentId);
   if (!claimed) return; // a concurrent/retry webhook already took it
 
   const plan = payment.fulfillment;
+  const placementKey = placementKeyFor(paymentId, payment.rejectedOrderIds.length);
   const draft: OrderDraft = {
     productSku: plan.productSku,
     copies: plan.copies,
@@ -2494,10 +2605,33 @@ async function fulfillPaidOrder(paymentId: string): Promise<void> {
     destinationCountry: plan.destinationCountry,
     currency: plan.currency,
     merchantReference: plan.merchantReference ?? undefined,
-    idempotencyKey: paymentId,
+    idempotencyKey: placementKey,
   };
 
+  await syncOrderFromPayment(
+    payment,
+    {
+      type: "placing",
+      source: "fulfillment",
+      message:
+        payment.rejectedOrderIds.length > 0
+          ? `Placing replacement job ${payment.rejectedOrderIds.length}`
+          : `Placing order (attempt ${payment.fulfillmentAttempts + 1})`,
+      data: { placementKey },
+    },
+    // `autoReplacing` is deliberately left as it is: while a replacement for a
+    // rejected job is being placed, the order is "retrying", not "rejected".
+    { fulfillmentState: "placing" },
+    { silent: true },
+  );
+
   try {
+    // The provider needs a contact address. Plans created before the checkout
+    // started defaulting it have none, so fill it from the buyer's account here.
+    if (!draft.recipient.email?.trim()) {
+      draft.recipient.email = (await accountEmailFor(payment.ownerUid)) ?? undefined;
+    }
+
     // A Checkout Session may remain open while an admin closes its market.
     // Re-check at the last pre-press boundary. Because payment has already been
     // captured here, a refusal must be paired with an idempotent full refund.
@@ -2509,7 +2643,7 @@ async function fulfillPaidOrder(paymentId: string): Promise<void> {
       // real print job running with no captured payment.
       const provider = fulfillmentProvider();
       const recovered = provider.findOrderByIdempotencyKey
-        ? await provider.findOrderByIdempotencyKey(paymentId)
+        ? await provider.findOrderByIdempotencyKey(placementKey)
         : null;
       if (recovered) {
         const cfg = serverConfig();
@@ -2546,6 +2680,14 @@ async function fulfillPaidOrder(paymentId: string): Promise<void> {
         event: "fulfillment.market_closed_refund",
         fulfillmentState: "failed",
       });
+      await syncOrderFromPayment(
+        await getAdminPayment(paymentId),
+        {
+          type: "refund",
+          source: "fulfillment",
+          message: `Refunded in full: ${destination} was closed before the order could be placed`,
+        },
+      );
       await raiseAlert({
         severity: "warning",
         kind: "fulfillment.marketClosed",
@@ -2608,12 +2750,27 @@ async function fulfillPaidOrder(paymentId: string): Promise<void> {
       error: message,
       exhausted: attempt >= MAX_FULFILLMENT_ATTEMPTS,
     });
+    // The order record decides whether this needs a person (and pages #ops when it
+    // does). This alert stays as the audit entry: one per ORDER, not one per
+    // attempt, so five failed retries are one line, not five.
+    const afterFailure = await getAdminPayment(paymentId);
+    await syncOrderFromPayment(
+      afterFailure,
+      {
+        type: "placement_failed",
+        source: "fulfillment",
+        message: `Placement failed (attempt ${attempt} of ${MAX_FULFILLMENT_ATTEMPTS}): ${message}`.slice(0, 1000),
+        data: { attempt, placementKey },
+      },
+      // Out of retries: nothing is replacing the dead job any more.
+      afterFailure?.fulfillmentState === "failed" ? { autoReplacing: false } : undefined,
+    );
     await raiseAlert({
-      severity: attempt >= MAX_FULFILLMENT_ATTEMPTS ? "critical" : "warning",
+      severity: "warning",
       kind: "fulfillment.failed",
       message: `Print order for paid payment ${paymentId} failed (attempt ${attempt}): ${message}`,
       meta: { paymentId, uid: payment.ownerUid, attempt },
-      ref: `${paymentId}_${attempt}`,
+      ref: paymentId,
     });
     await recordFinanceEvent({
       category: "waste",
@@ -2628,13 +2785,15 @@ async function fulfillPaidOrder(paymentId: string): Promise<void> {
     // the payment id so it goes out at most once). Best-effort.
     if (attempt >= MAX_FULFILLMENT_ATTEMPTS) {
       try {
-        await sendOrderFailedEmail({
+        const sent = await sendOrderFailedEmail({
           uid: payment.ownerUid,
           orderRef: payment.orderId ?? paymentId,
           paymentId,
         });
+        await recordOrderEmail(paymentId, "failed", sent);
       } catch (mailErr) {
         console.warn("[stripe] order_failed email failed", paymentId, mailErr);
+        await recordOrderEmail(paymentId, "failed", { ok: false, error: (mailErr as Error)?.message ?? "error" });
       }
     }
   }
@@ -2664,9 +2823,88 @@ export async function retryFailedFulfillments(): Promise<number> {
         meta: { paymentId: p.id },
         ref: p.id,
       });
+      // The customer was never told the order was in, because it wasn't.
+      await sendConfirmationIfPlaced(p.id);
     }
   }
   return placed;
+}
+
+/**
+ * Paid orders that never started placing. The payment settled, but the webhook
+ * handler died or timed out before it claimed the order — so there is no failure
+ * record, nothing for the retry sweep to find, and the customer has paid for
+ * nothing until somebody notices. Re-drives them.
+ */
+export async function retryStrandedFulfillments(): Promise<number> {
+  const stranded = (await listStrandedPaidOrders(10 * 60_000)).slice(0, 20);
+  let redriven = 0;
+  for (const p of stranded) {
+    await recordPaidOrder(p.id);
+    await fulfillPaidOrder(p.id);
+    await sendConfirmationIfPlaced(p.id);
+    redriven += 1;
+  }
+  return redriven;
+}
+
+/**
+ * Checkouts that are still "pending" here but may already be paid at Stripe — a
+ * webhook we never received (an outage on our side, a misconfigured endpoint, a
+ * rotated signing secret). Without this, the customer's card is charged and
+ * nothing in our system ever finds out.
+ *
+ * For each one old enough to have settled, ask Stripe. A paid session is replayed
+ * through the very same handler the webhook uses (it is idempotent on the payment
+ * id), and a critical alert is raised, because a missed webhook is a symptom with
+ * a cause that needs fixing.
+ */
+export async function reconcilePendingCheckouts(): Promise<{ checked: number; healed: number }> {
+  if (!stripeConfigured()) return { checked: 0, healed: 0 };
+  const pending = (await listPendingOrderCheckouts(20 * 60_000, 7 * 86_400_000)).slice(0, 50);
+  let healed = 0;
+  for (const p of pending) {
+    try {
+      const session = await getStripe().checkout.sessions.retrieve(p.stripeSessionId);
+      if (session.payment_status === "paid") {
+        await handleEvent({
+          id: `reconcile_${p.id}`,
+          type: "checkout.session.completed",
+          data: { object: session },
+        } as unknown as Stripe.Event);
+        const piId =
+          typeof session.payment_intent === "string" ? session.payment_intent : session.payment_intent?.id;
+        if (piId) {
+          const pi = await getStripe().paymentIntents.retrieve(piId);
+          await handleEvent({
+            id: `reconcile_pi_${p.id}`,
+            type: "payment_intent.succeeded",
+            data: { object: pi },
+          } as unknown as Stripe.Event);
+        }
+        healed += 1;
+        await raiseAlert({
+          severity: "critical",
+          kind: "stripe.webhook_missed",
+          message:
+            `Payment ${p.id} was PAID at Stripe but we never received the webhook. ` +
+            "It has been processed now — but check Stripe → Developers → Webhooks for failing " +
+            "deliveries, and that the signing secret matches.",
+          meta: { paymentId: p.id, uid: p.ownerUid, sessionId: p.stripeSessionId },
+          ref: p.id,
+        });
+      } else if (session.status === "expired") {
+        await handleEvent({
+          id: `reconcile_exp_${p.id}`,
+          type: "checkout.session.expired",
+          data: { object: session },
+        } as unknown as Stripe.Event);
+      }
+    } catch (err) {
+      console.warn("[stripe] pending checkout reconcile failed", p.id, err);
+    }
+  }
+  return { checked: pending.length, healed };
 }
 
 // ---- Webhook ---------------------------------------------------------------
@@ -3081,14 +3319,9 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         } else if (kind === "ebook") {
           await deliverPaidEbook(paymentId);
         } else {
+          await recordPaidOrder(paymentId);
           await fulfillPaidOrder(paymentId);
-          const order = await getAdminPayment(paymentId);
-          await sendOrderConfirmationEmail({
-            uid,
-            orderRef: order?.orderId ?? paymentId,
-            itemLabel: "Your custom picture book",
-            paymentId,
-          });
+          await sendConfirmationIfPlaced(paymentId);
         }
         // Any money at all counts as the referred user's first purchase. Safe to
         // call on every purchase: a reward exists once per invitation, rule and
@@ -3268,7 +3501,9 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
       } else if (kind === "ebook") {
         await deliverPaidEbook(paymentId);
       } else {
+        await recordPaidOrder(paymentId);
         await fulfillPaidOrder(paymentId);
+        await sendConfirmationIfPlaced(paymentId);
       }
       await onReferralEvent(uid, "first_purchase", { ref: paymentId, amount: gross });
       await finalizeDiscountsForPayment(paymentId);
@@ -3316,6 +3551,36 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
       return;
     }
 
+    // A chargeback has a hard deadline (usually ~7–21 days to submit evidence) and
+    // is lost by default if nobody answers. That makes it one of the few Stripe
+    // events that needs a human the same day.
+    case "charge.dispute.created": {
+      const dispute = event.data.object as Stripe.Dispute;
+      const chargeId = typeof dispute.charge === "string" ? dispute.charge : dispute.charge?.id;
+      const paymentId = chargeId ? await findPaymentIdByStripeId("stripeChargeId", chargeId) : null;
+      const due = dispute.evidence_details?.due_by
+        ? new Date(dispute.evidence_details.due_by * 1000).toISOString().slice(0, 10)
+        : null;
+      await raiseAlert({
+        severity: "critical",
+        kind: "stripe.dispute",
+        message:
+          `A customer disputed a payment: ${money(toMajor(dispute.amount, dispute.currency), dispute.currency)} ` +
+          `(${dispute.reason})${paymentId ? ` · payment ${paymentId}` : ""}.` +
+          `${due ? ` Evidence is due ${due}.` : ""} ` +
+          "Do: answer it in Stripe → Disputes before the deadline, and check whether the book shipped.",
+        meta: { disputeId: dispute.id, chargeId, paymentId, reason: dispute.reason },
+        ref: dispute.id,
+      });
+      if (paymentId) {
+        const payment = await getAdminPayment(paymentId);
+        if (payment) {
+          await updatePayment({ paymentId, uid: payment.ownerUid, event: "charge.dispute.created" });
+        }
+      }
+      return;
+    }
+
     case "charge.refunded": {
       const charge = event.data.object as Stripe.Charge;
       const piId = typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id;
@@ -3347,6 +3612,19 @@ async function handleEvent(event: Stripe.Event): Promise<void> {
         refundedAmount: refunded,
         event: "charge.refunded",
       });
+      if (payment.kind === "order") {
+        await syncOrderFromPayment(
+          await getAdminPayment(paymentId),
+          {
+            type: "refund",
+            source: "stripe",
+            message: `${fullyRefunded ? "Fully" : "Partially"} refunded: ${refunded} ${(charge.currency ?? "usd").toUpperCase()}`,
+            data: { refunded, fullyRefunded },
+          },
+          undefined,
+          { dedupeId: `refund_${charge.amount_refunded}` },
+        );
+      }
       // Refunds subtract from the payment kind's category. `amount_refunded`
       // is CUMULATIVE, so record only the DELTA over what was already recorded
       // (keyed on the cumulative level so webhook retries stay idempotent).

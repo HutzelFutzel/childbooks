@@ -27,6 +27,11 @@ export interface PrintTarget {
   surfaceHeightPx: number;
   /** Bleed inset on each edge. The trim box sits inside it. */
   bleedPx: number;
+  /**
+   * Safety margin inside the trim for this surface, when it differs from the
+   * default — a hardcover's cover needs more than a paperback's.
+   */
+  safetyMarginIn?: number;
   /** Horizontal slice of the surface to expose, if not all of it. */
   clip?: { xPx: number; widthPx: number };
   /**
@@ -220,6 +225,7 @@ function PrintTargetView({
           aspect={backCoverLogoAspect}
           sizeCm={backCoverLogoSizeCm}
           bleedPx={target.bleedPx}
+          safetyMarginIn={target.safetyMarginIn ?? SAFETY_MARGIN_IN}
           containerWidthPx={containerWidthPx}
           containerHeightPx={target.surfaceHeightPx}
         />
@@ -244,6 +250,7 @@ function BackCoverLogo({
   aspect,
   sizeCm,
   bleedPx,
+  safetyMarginIn,
   containerWidthPx,
   containerHeightPx,
 }: {
@@ -251,16 +258,17 @@ function BackCoverLogo({
   aspect?: number | null;
   sizeCm?: number | null;
   bleedPx: number;
+  safetyMarginIn: number;
   containerWidthPx: number;
   containerHeightPx: number;
 }) {
-  const marginPx = bleedPx + SAFETY_MARGIN_IN * EXPORT_DPI;
+  const marginPx = bleedPx + safetyMarginIn * EXPORT_DPI;
   const trimWidthIn = Math.max(0.1, (containerWidthPx - bleedPx * 2) / EXPORT_DPI);
   const trimHeightIn = Math.max(0.1, (containerHeightPx - bleedPx * 2) / EXPORT_DPI);
   const { widthIn, heightIn } = backCoverLogoSizeIn(aspect, sizeCm ?? undefined, {
     widthIn: trimWidthIn,
     heightIn: trimHeightIn,
-    safetyMarginIn: SAFETY_MARGIN_IN,
+    safetyMarginIn,
   });
   return (
     // eslint-disable-next-line @next/next/no-img-element

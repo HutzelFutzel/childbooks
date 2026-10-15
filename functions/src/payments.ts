@@ -309,6 +309,14 @@ export interface AdminPaymentRecord {
   /** Retry bookkeeping for paid orders whose print placement failed. */
   fulfillmentAttempts: number;
   fulfillmentFailedAt: number | null;
+  /** The payment's own view of how far placement got. */
+  fulfillmentState: FulfillmentState | null;
+  /** The last placement/rejection error, admin-side only. */
+  lastFulfillmentError: string | null;
+  /** Print jobs the provider accepted and then killed (the replacement trail). */
+  rejectedOrderIds: string[];
+  /** When Stripe first told us the payment settled (epoch ms), if recorded. */
+  paidAt: number | null;
 }
 
 /** Fetch the admin payment record (with the fulfillment plan) by our id. */
@@ -334,7 +342,29 @@ export async function getAdminPayment(paymentId: string): Promise<AdminPaymentRe
     device: typeof d.device === "string" ? d.device : null,
     fulfillmentAttempts: (d.fulfillmentAttempts as number) ?? 0,
     fulfillmentFailedAt: (d.fulfillmentFailedAt as number) ?? null,
+    fulfillmentState: (d.fulfillmentState as FulfillmentState) ?? null,
+    lastFulfillmentError: typeof d.lastFulfillmentError === "string" ? d.lastFulfillmentError : null,
+    rejectedOrderIds: Array.isArray(d.rejectedOrderIds)
+      ? (d.rejectedOrderIds as unknown[]).filter((x): x is string => typeof x === "string")
+      : [],
+    paidAt: paidAtFromEvents(d.events),
   };
+}
+
+/** The first time a settlement event was recorded on the payment's event trail. */
+function paidAtFromEvents(events: unknown): number | null {
+  if (!Array.isArray(events)) return null;
+  let first: number | null = null;
+  for (const e of events as { at?: unknown; type?: unknown }[]) {
+    if (
+      (e?.type === "checkout.session.completed" || e?.type === "payment_intent.succeeded") &&
+      typeof e.at === "number" &&
+      (first === null || e.at < first)
+    ) {
+      first = e.at;
+    }
+  }
+  return first;
 }
 
 /**
@@ -380,6 +410,37 @@ export async function markFulfillmentFailed(args: {
                 : null,
               updatedAt: FieldValue.serverTimestamp(),
             },
+            { merge: true },
+          )
+      : Promise.resolve(),
+  ]);
+}
+
+/**
+ * Give a stuck order a fresh start from the admin: clear the failure bookkeeping
+ * so the next placement attempt is allowed, and the retry sweep sees a normal
+ * order again. Does NOT place anything itself.
+ */
+export async function rearmFulfillment(paymentId: string, uid: string): Promise<void> {
+  const now = Date.now();
+  await Promise.all([
+    db()
+      .doc(`payments/${paymentId}`)
+      .set(
+        {
+          fulfillmentAttempts: 0,
+          fulfillmentFailedAt: FieldValue.delete(),
+          fulfillmentClaimedAt: FieldValue.delete(),
+          fulfillmentState: "retrying",
+          events: FieldValue.arrayUnion({ at: now, type: "fulfillment.rearmed" }),
+        },
+        { merge: true },
+      ),
+    uid
+      ? db()
+          .doc(`users/${uid}/payments/${paymentId}`)
+          .set(
+            { fulfillmentState: "retrying", fulfillmentIssue: null, updatedAt: FieldValue.serverTimestamp() },
             { merge: true },
           )
       : Promise.resolve(),
@@ -467,8 +528,12 @@ export async function listFailedFulfillments(maxAttempts: number): Promise<Admin
   // Include both explicit failures and abandoned claims. `placing` is queried
   // separately so old completed records cannot consume the query limit before
   // the stale active claim we need to recover.
+  // `fulfillmentFailedAt > 0` used to be the filter here, but that field stays set
+  // on payments that failed and were later recovered, so after a hundred of those
+  // the limit was spent on history and a NEW failure was never picked up.
+  // "retrying" is exactly the set still waiting for another attempt.
   const [failed, abandoned] = await Promise.all([
-    db().collection("payments").where("fulfillmentFailedAt", ">", 0).limit(100).get(),
+    db().collection("payments").where("fulfillmentState", "==", "retrying").limit(500).get(),
     db()
       .collection("payments")
       .where("fulfillmentState", "==", "placing")
@@ -492,6 +557,70 @@ export async function listFailedFulfillments(maxAttempts: number): Promise<Admin
     if (attempts >= maxAttempts) continue;
     const rec = await getAdminPayment(doc.id);
     if (rec) out.push(rec);
+  }
+  return out;
+}
+
+/**
+ * Paid print orders that never reached the placement machinery at all: the
+ * payment settled but the webhook handler died (or timed out) before it claimed
+ * the order, so there is no failure record for the retry sweep to find. Equality
+ * filters only, so no composite index is needed.
+ */
+export async function listStrandedPaidOrders(minAgeMs: number): Promise<AdminPaymentRecord[]> {
+  const snap = await db()
+    .collection("payments")
+    .where("status", "==", "paid")
+    .where("fulfillmentState", "==", "pending")
+    .limit(200)
+    .get();
+  const out: AdminPaymentRecord[] = [];
+  const cutoff = Date.now() - minAgeMs;
+  for (const doc of snap.docs) {
+    const d = doc.data() as Record<string, unknown>;
+    if ((d.kind as string) !== "order" || d.orderId || !d.fulfillment) continue;
+    const rec = await getAdminPayment(doc.id);
+    if (!rec) continue;
+    // "How long has it been paid" — fall back to creation time for payments whose
+    // event trail predates the timestamps.
+    const since = rec.paidAt ?? tsToMs(d.updatedAt) ?? tsToMs(d.createdAt) ?? 0;
+    if (since <= cutoff) out.push(rec);
+  }
+  return out;
+}
+
+export interface PendingOrderCheckout {
+  id: string;
+  ownerUid: string;
+  stripeSessionId: string;
+  createdAt: number;
+}
+
+/**
+ * Print-order checkouts still marked pending after `minAgeMs`. Stripe expires an
+ * abandoned session within a day and tells us, so a pending record this old is
+ * either still being paid, or a payment whose webhook we never received.
+ */
+export async function listPendingOrderCheckouts(
+  minAgeMs: number,
+  maxAgeMs: number,
+): Promise<PendingOrderCheckout[]> {
+  const snap = await db()
+    .collection("payments")
+    .where("status", "==", "pending")
+    .where("kind", "==", "order")
+    .limit(300)
+    .get();
+  const now = Date.now();
+  const out: PendingOrderCheckout[] = [];
+  for (const doc of snap.docs) {
+    const d = doc.data() as Record<string, unknown>;
+    const createdAt = tsToMs(d.createdAt) ?? 0;
+    const age = now - createdAt;
+    const sessionId = d.stripeSessionId;
+    if (typeof sessionId !== "string" || !sessionId) continue;
+    if (age < minAgeMs || age > maxAgeMs) continue;
+    out.push({ id: doc.id, ownerUid: (d.ownerUid as string) ?? "", stripeSessionId: sessionId, createdAt });
   }
   return out;
 }

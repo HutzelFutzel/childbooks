@@ -92,6 +92,12 @@ export interface ProductSpec {
   orientation: "portrait" | "landscape" | "square";
   /** Physical trim size of a single interior page. */
   pageTrim: Dimensions;
+  /**
+   * Bleed and the two DPIs below are DOCUMENTATION of what the printer wants.
+   * Rendering does not read them: pages are rasterized at the fixed export
+   * resolution and cover geometry comes from the provider's own cover size, so
+   * editing these changes nothing printed. Kept so stored products stay valid.
+   */
   bleed: { value: number; unit: LengthUnit };
   interiorDpi: number;
   coverDpi: number;

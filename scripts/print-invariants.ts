@@ -18,6 +18,7 @@ import {
   type RasterPage,
 } from "../books-frontend/src/core/print/assemble";
 import {
+  coverExtensionFromHeight,
   coverPanelWindow,
   pageGeometry,
   splitBleedPixels,
@@ -52,9 +53,13 @@ import { validateTreatments } from "../books-frontend/src/core/book/treatments";
 import { bindingSideFor } from "../books-frontend/src/core/book/pageLayout";
 import {
   computePageGuides,
+  coverSafetyMarginIn,
+  nominalCoverExtensionIn,
   resolveFormatCapabilities,
+  CASEWRAP_COVER_EXTENSION_IN,
   SAFETY_MARGIN_IN,
 } from "../books-frontend/src/core/book/format";
+import { checkPrintFiles } from "../books-frontend/src/core/print/fileCheck";
 import { chooseImageSize, renderAspect } from "../books-frontend/src/core/pipeline/illustration";
 import {
   complementGridArea,
@@ -1911,6 +1916,76 @@ function doc(spreads: ScreenplaySpread[]): ScreenplayDoc {
     "an automatic ink never writes undefined into the design",
     !JSON.stringify(plated).includes("undefined") && Object.values(plated.textBoxes[0]).every((v) => v !== undefined),
   );
+}
+
+// ---- Hardcover (casewrap) cover geometry ------------------------------------
+
+{
+  const hard = LULU_BOOK_PRODUCTS.find((p) => p.binding === "casewrap");
+  const soft = LULU_BOOK_PRODUCTS.find((p) => p.binding === "perfect-bound" || p.binding === "saddle-stitch");
+  check("the catalog has a casewrap and a softcover format to compare", Boolean(hard && soft));
+  if (hard && soft) {
+    // Lulu's cover is trim + 2 × (wrap) tall; the panel must extend by exactly
+    // that, not by the paperback's bleed.
+    const providerHeight = hard.trim.heightIn + 2 * CASEWRAP_COVER_EXTENSION_IN;
+    const ext = coverExtensionFromHeight(providerHeight, hard.trim.heightIn);
+    check("a hardcover's cover extension is read off the provider's cover height", near(ext, CASEWRAP_COVER_EXTENSION_IN), `${ext}in`);
+    check("a paperback's extension is its bleed", near(coverExtensionFromHeight(soft.trim.heightIn + 2 * soft.bleedIn, soft.trim.heightIn), soft.bleedIn));
+    check("the nominal extension agrees with that for a hardcover", near(nominalCoverExtensionIn("casewrap", hard.bleedIn), ext));
+    check("the nominal extension is the bleed for a paperback", near(nominalCoverExtensionIn("perfect-bound", soft.bleedIn), soft.bleedIn));
+    check("a cover shorter than its book is refused", (() => {
+      try {
+        coverExtensionFromHeight(hard.trim.heightIn - 0.5, hard.trim.heightIn);
+        return false;
+      } catch {
+        return true;
+      }
+    })());
+
+    const cover = pageGeometry({ trim: hard.trim, bleedIn: ext }, { dpi: DPI, bleed: true });
+    const back = coverPanelWindow(cover, "left");
+    const front = coverPanelWindow(cover, "right");
+    check(
+      "a hardcover panel is the trim plus the WRAP on its outer edge",
+      near(back.widthIn, hard.trim.widthIn + ext) && near(front.widthIn, back.widthIn),
+      `${back.widthIn}in`,
+    );
+    check(
+      "hardcover panels stay pinned to the outer edges",
+      back.xPx === 0 && front.xPx + front.widthPx === cover.widthPx,
+    );
+
+    // The assembled file: panel + spine band + panel must equal the provider's width.
+    const spineIn = 0.5;
+    const hinge = 0.3;
+    const coverWidthIn = 2 * (hard.trim.widthIn + ext) + spineIn + 2 * hinge;
+    const centre = coverWidthIn - 2 * (hard.trim.widthIn + ext);
+    check("the band between the panels is the spine plus both hinges", near(centre, spineIn + 2 * hinge));
+
+    check("a hardcover cover keeps art further from the edge", coverSafetyMarginIn("casewrap") > coverSafetyMarginIn("perfect-bound"));
+    check("a softcover cover keeps the standard margin", coverSafetyMarginIn("perfect-bound") === SAFETY_MARGIN_IN);
+  }
+}
+
+// ---- Print file verification (before payment) -------------------------------
+
+{
+  const sheet = (wIn: number, hIn: number) => ({ widthPt: wIn * PT_PER_IN, heightPt: hIn * PT_PER_IN });
+  const interior = (n: number, w = 8.75, h = 8.75) => ({ pages: Array.from({ length: n }, () => sheet(w, h)) });
+  const exp = {
+    pages: 32,
+    interiorSizeIn: { widthIn: 8.75, heightIn: 8.75 },
+    coverSizeIn: { widthIn: 19.2, heightIn: 10.25 },
+  };
+  const cover = { pages: [sheet(19.2, 10.25)] };
+  check("files that match the order pass", checkPrintFiles({ interior: interior(32), cover }, exp).length === 0);
+  check("a short interior is caught", checkPrintFiles({ interior: interior(28), cover }, exp).some((p) => /28 pages/.test(p)));
+  check("a mixed-size interior is caught", checkPrintFiles({ interior: { pages: [...interior(31).pages, sheet(8.5, 8.5)] }, cover }, exp).some((p) => /page 32/.test(p)));
+  check("an interior at trim size (no bleed) is caught", checkPrintFiles({ interior: interior(32, 8.5, 8.5), cover }, exp).length > 0);
+  check("a cover at the wrong size is caught", checkPrintFiles({ interior: interior(32), cover: { pages: [sheet(17.5, 8.75)] } }, exp).some((p) => /cover is/.test(p)));
+  check("a multi-page cover is caught", checkPrintFiles({ interior: interior(32), cover: { pages: [sheet(19.2, 10.25), sheet(19.2, 10.25)] } }, exp).some((p) => /expected 1/.test(p)));
+  check("sub-tolerance rounding in the PDF is accepted", checkPrintFiles({ interior: interior(32, 8.7505, 8.7495), cover: { pages: [sheet(19.201, 10.249)] } }, exp).length === 0);
+  check("with no provider size, the files are still checked on their own", checkPrintFiles({ interior: interior(28), cover }, { pages: 32 }).length === 1);
 }
 
 // ---- Report ----------------------------------------------------------------

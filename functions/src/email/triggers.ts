@@ -42,8 +42,10 @@ export async function sendOrderShippedEmail(args: {
   orderRef: string;
   carrier?: string | null;
   trackingUrl?: string | null;
-}): Promise<void> {
-  await sendTemplatedEmail({
+  /** Admin resend: bypass the once-per-order dedupe. */
+  resend?: boolean;
+}): Promise<SendTemplateResult> {
+  return sendTemplatedEmail({
     templateId: "order_shipped",
     uid: args.uid,
     vars: {
@@ -52,7 +54,7 @@ export async function sendOrderShippedEmail(args: {
       trackingUrl: args.trackingUrl ?? undefined,
     },
     // One "shipped" email per order (the provider may re-post SHIPPED webhooks).
-    dedupeKey: `shipped_${args.orderRef}`,
+    dedupeKey: args.resend ? `shipped_${args.orderRef}_resend_${Date.now()}` : `shipped_${args.orderRef}`,
   });
 }
 
@@ -60,13 +62,15 @@ export async function sendOrderFailedEmail(args: {
   uid: string;
   orderRef: string;
   paymentId: string;
-}): Promise<void> {
-  await sendTemplatedEmail({
+  /** Admin resend: bypass the once-per-payment dedupe. */
+  resend?: boolean;
+}): Promise<SendTemplateResult> {
+  return sendTemplatedEmail({
     templateId: "order_failed",
     uid: args.uid,
     vars: { orderRef: args.orderRef },
     // One "problem" email per payment, even though retries exhaust over time.
-    dedupeKey: `failed_${args.paymentId}`,
+    dedupeKey: args.resend ? `failed_${args.paymentId}_resend_${Date.now()}` : `failed_${args.paymentId}`,
   });
 }
 
@@ -76,12 +80,17 @@ export async function sendOrderConfirmationEmail(args: {
   itemLabel: string;
   orderUrl?: string;
   paymentId: string;
-}): Promise<void> {
-  await sendTemplatedEmail({
+  /**
+   * Resend a copy that was already delivered. The dedupe key normally makes the
+   * email once-only; an admin resending on a customer's request opts out of it.
+   */
+  resend?: boolean;
+}): Promise<SendTemplateResult> {
+  return sendTemplatedEmail({
     templateId: "order_confirmation",
     uid: args.uid,
     vars: { orderRef: args.orderRef, itemLabel: args.itemLabel, orderUrl: args.orderUrl },
-    dedupeKey: args.paymentId,
+    dedupeKey: args.resend ? `${args.paymentId}_resend_${Date.now()}` : args.paymentId,
   });
 }
 

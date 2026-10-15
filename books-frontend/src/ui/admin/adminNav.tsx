@@ -43,6 +43,7 @@ import {
   Stamp,
   Tablet,
   Ticket,
+  Truck,
   Type,
   UserX,
   Users,
@@ -211,6 +212,11 @@ export const ANALYSIS_TAB_META: Record<AnalysisTabId, TabMeta> = {
     label: "Payments",
     icon: <CreditCard className="size-4" />,
     description: "Charges, refunds, and Stripe health.",
+  },
+  orders: {
+    label: "Orders",
+    icon: <Truck className="size-4" />,
+    description: "Every print order, where it stands, and what needs you.",
   },
   products: {
     label: "Products",

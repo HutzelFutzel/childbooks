@@ -15,6 +15,8 @@ import { logger } from "firebase-functions/v2";
 import { ensureAdmin } from "./storage";
 import { ALL_SECRETS } from "./secrets";
 import { reconcileOpenPrintOrders } from "./printSync";
+import { recordHeartbeat } from "./printOrders";
+import { checkHeartbeats } from "./printOrderWatchdog";
 
 export const syncPrintOrders = onSchedule(
   {
@@ -26,6 +28,14 @@ export const syncPrintOrders = onSchedule(
     ensureAdmin();
     try {
       const result = await reconcileOpenPrintOrders();
+      // Proof of life for the watchdog: a sweep that stopped running looks exactly
+      // like a sweep with nothing to do, until somebody notices a shipped book
+      // never got its email.
+      await recordHeartbeat(
+        "syncPrintOrders",
+        true,
+        `${result.synced}/${result.scanned} synced, ${result.changed.length} changed, ${result.errors.length} errors`,
+      );
       // Only worth a log line when something moved — an idle sweep is the norm.
       if (result.changed.length > 0) {
         logger.info(
@@ -39,8 +49,14 @@ export const syncPrintOrders = onSchedule(
             result.errors.map((e) => `${e.orderId} (${e.message})`).join(", "),
         );
       }
+      // This job is the watchdog's watchdog: if the thing that watches everything
+      // else has itself gone quiet, nothing else would ever say so.
+      await checkHeartbeats(["syncPrintOrders", "retryFulfillments"]).catch((err) =>
+        logger.warn("[print-sync] heartbeat check failed", err),
+      );
     } catch (err) {
       logger.error("[print-sync] sweep failed", err);
+      await recordHeartbeat("syncPrintOrders", false, err instanceof Error ? err.message : String(err));
     }
   },
 );

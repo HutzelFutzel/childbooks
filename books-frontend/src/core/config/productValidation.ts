@@ -447,18 +447,18 @@ export function validateProduct(
   }
 
   // Unmeasured markets. Passthrough bills the provider's cost, so a route with
-  // no measurement and no live quote can't be priced at all — the order is
-  // refused rather than shipped at our expense. That's the safe direction, but
-  // it's invisible until a customer hits it, so it's reported here as work to
-  // do rather than left to be discovered.
+  // no measurement and no live quote can't be priced — the order is refused
+  // rather than shipped at our expense. That's a warning, not a blocker: opening
+  // a market measures its shipping automatically (and a background job retries
+  // anything the provider throttled), and a live quote prices the route in the
+  // meantime. It's surfaced so a gap that outlives that is visible.
   if (shippingSettings.pricing.mode === "passthrough" && !costTableIsEmpty(p.cost)) {
     const measured = new Set(measuredRows.map((r) => r.country));
     const unmeasured = allowedMarketsFor(registry, policy).filter((c) => !measured.has(c));
     if (unmeasured.length > 0) {
-      action(
+      warn(
         "shipping.fallback",
-        `No measured shipping rate for ${unmeasured.join(", ")}. Orders there are priced from a live quote and refused when one can't be fetched — measure the cost to fill them in.`,
-        "measure",
+        `No measured shipping rate yet for ${unmeasured.join(", ")}. Orders there are priced from a live quote; rates are measured automatically when a market opens, or measure the cost now to fill them in.`,
       );
     }
   }

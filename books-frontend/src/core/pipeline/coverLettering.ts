@@ -10,7 +10,7 @@
  */
 import { z } from "zod";
 import { bookProductForConfig } from "../book";
-import { SAFETY_MARGIN_IN } from "../book/format";
+import { coverSafetyMarginIn, nominalCoverExtensionIn } from "../book/format";
 import type { ProviderId } from "../config/options";
 import { getTextProvider } from "../providers";
 import type { ProviderCredentials } from "../providers/types";
@@ -74,12 +74,15 @@ function boxOf(raw: z.infer<typeof lineSchema>): LetteringBox | undefined {
  */
 export function coverLetteringSafeArea(config: Project["config"]): LetteringBox {
   const product = bookProductForConfig(config);
-  const bleed = product.bleedIn ?? 0;
+  // A hardcover's cover extends by the wrap, not a bleed, and needs a wider
+  // safety margin; both come from the binding.
+  const bleed = nominalCoverExtensionIn(product.binding, product.bleedIn ?? 0);
+  const margin = coverSafetyMarginIn(product.binding);
   const width = product.trim.widthIn + bleed * 2;
   const height = product.trim.heightIn + bleed * 2;
   if (!(width > 0) || !(height > 0)) return { x: 0.1, y: 0.1, w: 0.8, h: 0.8 };
-  const mx = (bleed + SAFETY_MARGIN_IN) / width;
-  const my = (bleed + SAFETY_MARGIN_IN) / height;
+  const mx = (bleed + margin) / width;
+  const my = (bleed + margin) / height;
   return { x: mx, y: my, w: 1 - mx * 2, h: 1 - my * 2 };
 }
 

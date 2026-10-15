@@ -138,6 +138,33 @@ export function coverPanelWindow(cover: PageGeometry, side: LeafSide): CaptureWi
     : { xPx: cover.widthPx - widthPx, widthPx, widthIn };
 }
 
+/**
+ * How far a cover's artwork extends past the trim on its outer edges, read off
+ * the provider's own cover height.
+ *
+ * Height is the one dimension with no spine or hinge in it, so
+ * `(coverHeight − trimHeight) / 2` is exactly the extension on the top and
+ * bottom — and the wrap/bleed is the same all the way round the outside, so it
+ * is also the extension on the outer side edges. That makes it right for a
+ * paperback (the 0.125" bleed) and a hardcover (the wrap, which is several
+ * times larger) alike, without a per-binding constant that could be wrong for a
+ * trim or paper we haven't seen. Whatever width is left between the two panels
+ * is the spine plus its hinges, which `buildCoverPdf` centres the spine in.
+ *
+ * Rounded to a thousandth of an inch: the provider reports points, and the
+ * conversion to inches leaves float dust that would otherwise make two renders
+ * of the same cover disagree by a pixel.
+ */
+export function coverExtensionFromHeight(coverHeightIn: number, trimHeightIn: number): number {
+  const ext = (coverHeightIn - trimHeightIn) / 2;
+  if (!Number.isFinite(ext) || ext < 0) {
+    throw new Error(
+      `The printer's cover is ${coverHeightIn.toFixed(3)}″ tall for a ${trimHeightIn.toFixed(3)}″ book, which can't wrap it.`,
+    );
+  }
+  return Math.round(ext * 1000) / 1000;
+}
+
 /** A rectangle normalized to the TRIM box (0..1), for placement checks. */
 export interface SafeArea {
   x: number;

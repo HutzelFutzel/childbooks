@@ -32,6 +32,8 @@ import {
   type MarketCapability,
   type MarketCapabilityConfig,
 } from "../../books-frontend/src/core/config/marketCapability";
+import { capabilityForFormat } from "../../books-frontend/src/core/config/productCapability";
+import { getProductCapability } from "./productCapability";
 import { ensureAdmin } from "./storage";
 import { serverConfig } from "./config";
 
@@ -141,4 +143,24 @@ export async function saveMarketCapability(
     .doc(CAPABILITY_DOC)
     .set(stripUndefined(value) as unknown as Record<string, unknown>, { merge: false });
   return value;
+}
+
+/**
+ * Coverage for one country AS IT APPLIES TO ONE FORMAT: what the provider was
+ * measured to do for that book, else the country-level answer.
+ *
+ * Checkout must judge with this rather than {@link capabilityFor}: a hardcover
+ * and a paperback reach the same country by different carriers on different
+ * service levels, and judging the hardcover by the paperback's speeds either
+ * offers one the provider won't run (refused after payment) or withholds one
+ * it will.
+ */
+export async function capabilityForProduct(
+  sku: string,
+  country: string,
+): Promise<MarketCapability | undefined> {
+  const code = country.trim().toUpperCase();
+  if (!code) return undefined;
+  const [countryLevel, perFormat] = await Promise.all([getMarketCapability(), getProductCapability()]);
+  return capabilityForFormat(countryLevel, perFormat, serverConfig().fulfillment.lulu.env, sku).get(code);
 }

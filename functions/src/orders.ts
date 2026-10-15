@@ -19,6 +19,14 @@ import { ensureAdmin } from "./storage";
 import { sendOrderFailedEmail, sendOrderShippedEmail } from "./email/triggers";
 import { getAdminSettings } from "./adminSettings";
 import { raiseAlert } from "./alerts";
+import {
+  getPrintOrder,
+  printOrderKey,
+  recordOrderEmail,
+  recordOrderEvent,
+  type OrderEventSource,
+} from "./printOrders";
+import { paymentIdFromExternalId, type PrintOrderPatch } from "../../books-frontend/src/core/orders/lifecycle";
 import { markFulfillmentRejected } from "./payments";
 import { productKey, recordFinanceEvent, toUsd } from "./finance";
 import { getProductsConfig } from "./products";
@@ -55,6 +63,73 @@ function statusNameOf(raw: unknown): string | null {
     if (status && typeof status.name === "string") return status.name;
   }
   return null;
+}
+
+/** Provider status to show when the payload carried no explicit status name. */
+const STAGE_STATUS: Record<string, string> = {
+  draft: "CREATED",
+  onHold: "PRODUCTION_DELAYED",
+  inProgress: "IN_PRODUCTION",
+  complete: "SHIPPED",
+  cancelled: "CANCELED",
+  error: "ERROR",
+};
+
+function providerStatusOf(order: FulfillmentOrder): string {
+  return statusNameOf(order.raw) ?? STAGE_STATUS[order.stage] ?? "CREATED";
+}
+
+function hasAddressCorrection(order: FulfillmentOrder): boolean {
+  return (order.addressValidation?.warnings?.length ?? 0) > 0 || Boolean(order.addressValidation?.suggested);
+}
+
+function toRecordShipments(order: FulfillmentOrder) {
+  return order.shipments.map((s) => ({
+    carrier: s.carrier ?? null,
+    trackingUrl: s.trackingUrl ?? null,
+    trackingNumber: s.trackingNumber ?? null,
+  }));
+}
+
+/** What the provider charges for the job so far, in its own currency. */
+function chargeTotal(order: FulfillmentOrder): { amount: number; currency: string } | null {
+  const total = order.charges.reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
+  if (total <= 0) return null;
+  return { amount: round2(total), currency: (order.charges[0]?.currency || "USD").toUpperCase() };
+}
+
+/** The `external_id` we gave the provider (our payment id, plus `:rN` on replacements). */
+function externalIdOf(raw: unknown): string | null {
+  if (raw && typeof raw === "object") {
+    const id = (raw as { external_id?: unknown }).external_id;
+    if (typeof id === "string" && id.trim()) return id.trim();
+  }
+  return null;
+}
+
+/** What the legacy `orders/{jobId}` document knows, as a patch for the canonical record. */
+export function patchFromAdminOrderDoc(d: Record<string, unknown>): PrintOrderPatch {
+  const recipient = (d.recipient ?? (d.createRequest as { recipient?: unknown } | undefined)?.recipient) as
+    | { name?: string; email?: string | null }
+    | undefined;
+  const est = d.estimatedCost as { amount?: number; currency?: string } | null | undefined;
+  const country = normalizeCountry(
+    (d.destinationCountry as string | undefined) ??
+      (d.createRequest as { destinationCountry?: string } | undefined)?.destinationCountry,
+  );
+  return {
+    ...(typeof d.env === "string" ? { env: d.env } : {}),
+    ...(typeof d.projectId === "string" ? { projectId: d.projectId } : {}),
+    ...(typeof d.productSku === "string" ? { sku: d.productSku } : {}),
+    ...(typeof d.copies === "number" ? { copies: d.copies } : {}),
+    ...(typeof d.shippingMethod === "string" ? { shippingMethod: d.shippingMethod } : {}),
+    ...(country ? { destinationCountry: country } : {}),
+    ...(recipient?.name ? { recipientName: recipient.name } : {}),
+    ...(recipient?.email ? { recipientEmail: recipient.email } : {}),
+    ...(est && typeof est.amount === "number" && est.currency
+      ? { estimatedCost: { amount: est.amount, currency: est.currency } }
+      : {}),
+  };
 }
 
 /** The neutral recipient view shared by both records. */
@@ -159,6 +234,47 @@ export async function persistCreatedOrder(args: PersistCreatedOrderArgs): Promis
     db().doc(`users/${uid}/orders/${orderId}`).set(userDoc, { merge: true }),
   ]);
 
+  // The canonical record above both: placed, with the provider's own status.
+  const key = printOrderKey(args.paymentId, orderId);
+  if (key) {
+    await recordOrderEvent({
+      key,
+      type: "placed",
+      source: "fulfillment",
+      message: `Placed with the printer as job ${orderId}`,
+      patch: {
+        paymentId: args.paymentId ?? null,
+        uid,
+        env,
+        projectId: draft.merchantReference ?? null,
+        sku: draft.productSku,
+        copies: draft.copies,
+        shippingMethod: draft.shippingMethod,
+        destinationCountry: normalizeCountry(draft.destinationCountry) ?? null,
+        recipientName: draft.recipient.name,
+        recipientEmail: draft.recipient.email ?? null,
+        jobIds: [orderId],
+        currentJobId: orderId,
+        luluStatus: providerStatusOf(order),
+        stage: order.stage,
+        autoReplacing: false,
+        lastError: null,
+        fulfillmentState: "placed",
+        addressCorrected: hasAddressCorrection(order),
+        shipments: toRecordShipments(order),
+        files: {
+          interior: order.printFiles?.interior ?? null,
+          cover: order.printFiles?.cover ?? null,
+        },
+        actualCost: chargeTotal(order),
+        ...(args.estimatedCost
+          ? { estimatedCost: { amount: args.estimatedCost.amount, currency: args.estimatedCost.currency } }
+          : {}),
+      },
+      data: { jobId: orderId },
+    });
+  }
+
   // Book the provider's placement-time charge as COGS (Lulu may also report
   // costs only later, via status webhooks — the same delta booking covers both).
   await bookPrintCostDelta({
@@ -181,9 +297,15 @@ export async function persistCreatedOrder(args: PersistCreatedOrderArgs): Promis
  * the admin and neutral user records and appends a status-history entry.
  *
  * Returns false when the order isn't one we have on record (so the caller can
- * acknowledge but log it).
+ * decide whether that is a race worth retrying — see
+ * {@link expectedOrderPaymentId} — or a stranger worth ignoring).
+ *
+ * `source` is which channel delivered it: the webhook pushes, the sweep pulls.
  */
-export async function applyOrderStatusUpdate(order: FulfillmentOrder): Promise<boolean> {
+export async function applyOrderStatusUpdate(
+  order: FulfillmentOrder,
+  source: Extract<OrderEventSource, "lulu_webhook" | "lulu_poll"> = "lulu_webhook",
+): Promise<boolean> {
   if (!order.id) return false;
   const adminRef = db().doc(`orders/${order.id}`);
   const snap = await adminRef.get();
@@ -195,20 +317,26 @@ export async function applyOrderStatusUpdate(order: FulfillmentOrder): Promise<b
   // webhooks, and re-arming a replacement order each time would print a book per
   // delivery.
   const previousStage = snap.get("stage") as string | undefined;
+  const previousMessage = (snap.get("statusMessage") as string | null | undefined) ?? null;
+  const message = order.issues[0] ?? null;
   const historyEntry = {
     at: Date.now(),
     stage: order.stage,
-    message: order.issues[0] ?? null,
+    message,
   };
+  // Appended only when something changed. The entry carries a timestamp, so
+  // `arrayUnion` never recognised a repeat — every 15-minute poll added a row to
+  // the customer's timeline for an order that had not moved.
+  const changed = order.stage !== previousStage || message !== previousMessage;
 
   // Fields safe for the neutral, user-facing record.
   const userUpdate = {
     stage: order.stage,
-    statusMessage: order.issues[0] ?? null,
+    statusMessage: message,
     charges: stripUndefined(order.charges),
     shipments: stripUndefined(order.shipments),
     updatedAt: FieldValue.serverTimestamp(),
-    statusHistory: FieldValue.arrayUnion(historyEntry),
+    ...(changed ? { statusHistory: FieldValue.arrayUnion(historyEntry) } : {}),
     // Only written when the provider has something to say: a later webhook
     // carrying no verdict must not erase the one recorded at placement.
     ...(order.addressValidation
@@ -220,7 +348,7 @@ export async function applyOrderStatusUpdate(order: FulfillmentOrder): Promise<b
   const adminUpdate = {
     ...userUpdate,
     statusName: statusNameOf(order.raw),
-    lastWebhookAt: FieldValue.serverTimestamp(),
+    ...(source === "lulu_webhook" ? { lastWebhookAt: FieldValue.serverTimestamp() } : {}),
     lastWebhookRaw: (order.raw as Record<string, unknown> | undefined) ?? null,
   };
 
@@ -254,34 +382,109 @@ export async function applyOrderStatusUpdate(order: FulfillmentOrder): Promise<b
     });
   }
 
+  const paymentId = (snap.get("paymentId") as string | undefined) ?? null;
+  const statusName = statusNameOf(order.raw);
+  const recordKey = printOrderKey(paymentId, order.id);
+
+  // A transition INTO a dead state is recorded by `handleRejectedOrder`, which
+  // knows whether a replacement is on the way. Recording it here first would show
+  // the order as rejected-for-good for a moment — and page somebody for it.
+  const rejectionTransition = order.stage === "error" && previousStage !== "error";
+
+  // The canonical record. A job we have since replaced (an older rejected one)
+  // keeps reporting; it is logged on the timeline but must not drag the order's
+  // state back to that dead job.
+  if (recordKey && !rejectionTransition) {
+    const existing = await getPrintOrder(recordKey);
+    const isCurrent = !existing?.currentJobId || existing.currentJobId === order.id;
+    const stageMoved = order.stage !== previousStage;
+    // A change found by the poll that the webhook should already have delivered is
+    // the signal that the webhook is late or down.
+    const drifted =
+      source === "lulu_poll" && stageMoved && Boolean(existing?.lastWebhookAt) && isCurrent;
+    await recordOrderEvent({
+      key: recordKey,
+      type: drifted ? "drift" : "provider_status",
+      source,
+      message: isCurrent
+        ? message ?? (statusName ? `Printer status ${statusName}` : null)
+        : `Update for superseded job ${order.id}`,
+      onlyIfChanged: true,
+      silent: false,
+      patch: isCurrent
+        ? {
+            paymentId,
+            uid: ownerUid ?? null,
+            jobIds: [order.id],
+            currentJobId: order.id,
+            luluStatus: providerStatusOf(order),
+            stage: order.stage,
+            addressCorrected: hasAddressCorrection(order) || Boolean(existing?.addressCorrected),
+            shipments: toRecordShipments(order),
+            actualCost: chargeTotal(order) ?? existing?.actualCost ?? null,
+            ...(drifted ? { driftAt: Date.now() } : {}),
+            ...(order.stage === "error" ? { lastError: message ?? statusName ?? existing?.lastError ?? null } : {}),
+            // First time we see this order in the new record (it predates it):
+            // carry over what the legacy admin document knows.
+            ...(existing ? {} : patchFromAdminOrderDoc(snap.data() ?? {})),
+          }
+        : {},
+      data: { jobId: order.id, status: statusName, stage: order.stage },
+    });
+  }
+
   // The provider took the job and then killed it. The customer has paid and no
   // book is being made — the one status change that must never pass quietly.
-  if (order.stage === "error" && previousStage !== "error") {
+  if (rejectionTransition) {
     await handleRejectedOrder({
       order,
       ownerUid: ownerUid ?? null,
-      paymentId: (snap.get("paymentId") as string | undefined) ?? null,
-      statusName: statusNameOf(order.raw),
+      paymentId,
+      statusName,
+      source,
     });
   }
 
   // Notify the customer when the provider reports the order shipped. Deduped on
   // the order id (the provider may re-post SHIPPED), best-effort — an email
   // failure must never fail the webhook ack.
-  if (ownerUid && statusNameOf(order.raw) === "SHIPPED") {
+  if (ownerUid && statusName === "SHIPPED") {
     const shipment = order.shipments.find((s) => s.trackingUrl) ?? order.shipments[0];
     try {
-      await sendOrderShippedEmail({
+      const sent = await sendOrderShippedEmail({
         uid: ownerUid,
         orderRef: order.id,
         carrier: shipment?.carrier ?? null,
         trackingUrl: shipment?.trackingUrl ?? null,
       });
+      await recordOrderEmail(recordKey, "shipped", sent, source);
     } catch (err) {
       console.warn("[orders] shipped email failed", order.id, err);
+      await recordOrderEmail(recordKey, "shipped", { ok: false, error: (err as Error)?.message ?? "error" }, source);
     }
   }
   return true;
+}
+
+/**
+ * For an order the provider reports but we have no record of: the payment it
+ * belongs to, when the provider's `external_id` points at a real paid order.
+ *
+ * That combination is a race, not a stranger — the provider answered the create
+ * call and started sending status changes before we finished writing the order
+ * down. Acknowledging it with a 200 would drop the update for good (the provider
+ * does not resend, and a poll only helps once the record exists); the webhook
+ * answers 5xx for these so it is redelivered once the record is there.
+ */
+export async function expectedOrderPaymentId(order: FulfillmentOrder): Promise<string | null> {
+  const paymentId = paymentIdFromExternalId(externalIdOf(order.raw));
+  if (!paymentId) return null;
+  try {
+    const snap = await db().doc(`payments/${paymentId}`).get();
+    return snap.exists && snap.get("kind") === "order" ? paymentId : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -313,6 +516,7 @@ async function handleRejectedOrder(args: {
   ownerUid: string | null;
   paymentId: string | null;
   statusName: string | null;
+  source: "lulu_webhook" | "lulu_poll";
 }): Promise<void> {
   const { order, ownerUid, paymentId, statusName } = args;
   const reason = order.issues[0] ?? statusName ?? "The print provider rejected this order.";
@@ -339,10 +543,38 @@ async function handleRejectedOrder(args: {
   }
 
   const willRetry = replaceable && !exhausted && Boolean(paymentId && ownerUid);
+
+  // The canonical record learns about it first, because it decides whether this
+  // needs a human: while a replacement is queued the order is "retrying" and
+  // nobody is paged; once nothing more will be tried it becomes "rejected" and
+  // the attention rule fires (and pages #ops) from there.
+  const recordKey = printOrderKey(paymentId, order.id);
+  if (recordKey) {
+    await recordOrderEvent({
+      key: recordKey,
+      type: "rejected",
+      source: args.source,
+      message: `Printer rejected job ${order.id}: ${reason}`,
+      patch: {
+        jobIds: [order.id],
+        currentJobId: order.id,
+        stage: order.stage,
+        luluStatus: (statusName ?? "REJECTED").toUpperCase(),
+        autoReplacing: willRetry,
+        lastError: reason.slice(0, 500),
+        fulfillmentState: willRetry ? "retrying" : "failed",
+        attempts: attempt,
+      },
+      data: { jobId: order.id, statusName, willRetry, attempt },
+    });
+  }
+
   try {
     await raiseAlert({
-      // A paid order that is never going to arrive unless somebody acts.
-      severity: willRetry ? "warning" : "critical",
+      // The urgent page comes from the order record's attention rule (it knows
+      // whether a replacement is on the way). This alert is the audit trail, so it
+      // never goes to Slack on its own.
+      severity: "warning",
       kind: "fulfillment.rejected",
       message:
         `Print order ${order.id} was REJECTED by the provider` +
@@ -385,13 +617,15 @@ async function handleRejectedOrder(args: {
   // directly rather than leaving it to whether they revisit the order screen.
   if (ownerUid && !willRetry) {
     try {
-      await sendOrderFailedEmail({
+      const sent = await sendOrderFailedEmail({
         uid: ownerUid,
         orderRef: order.id,
         paymentId: paymentId ?? order.id,
       });
+      await recordOrderEmail(recordKey, "failed", sent);
     } catch (err) {
       console.warn("[orders] order_failed email failed", order.id, err);
+      await recordOrderEmail(recordKey, "failed", { ok: false, error: (err as Error)?.message ?? "error" });
     }
   }
 }

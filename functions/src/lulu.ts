@@ -25,7 +25,8 @@ import { FulfillmentError } from "../../books-frontend/src/core/fulfillment/erro
 import { serverConfig } from "./config";
 import { createAdminAssetHost } from "./assets";
 import type { AuthedRequest } from "./auth";
-import { applyOrderStatusUpdate } from "./orders";
+import { applyOrderStatusUpdate, expectedOrderPaymentId } from "./orders";
+import { patchPrintHealth, readPrintHealth } from "./printOrders";
 
 /**
  * One provider per environment, for the lifetime of the instance.
@@ -218,9 +219,14 @@ export function registerLuluRoutes(app: Express): void {
 
   app.post("/admin/print/webhooks", json, async (req: Request, res: Response) => {
     try {
-      const { url } = (req.body ?? {}) as { url?: string };
-      if (!url?.trim()) {
-        res.status(400).json({ error: { message: "url is required." } });
+      const body = (req.body ?? {}) as { url?: string };
+      // Defaults to this deployment's own receiver, so registering it is one
+      // click rather than a URL somebody has to know and type correctly.
+      const url = body.url?.trim() || defaultWebhookUrl();
+      if (!url) {
+        res.status(400).json({
+          error: { message: "No public app URL is configured, so the webhook URL has to be given." },
+        });
         return;
       }
       const p = provider();
@@ -228,7 +234,13 @@ export function registerLuluRoutes(app: Express): void {
         res.status(501).json({ error: { message: "Provider does not support webhooks." } });
         return;
       }
-      res.json(await p.registerStatusWebhook(url.trim()));
+      const registered = await p.registerStatusWebhook(url);
+      // Remembered so the watchdog can put it back if the provider deactivates it.
+      await patchPrintHealth(serverConfig().fulfillment.lulu.env, {
+        webhookUrl: url,
+        webhookId: (registered as { id?: string })?.id ?? null,
+      });
+      res.json(registered);
     } catch (err) {
       sendAdminError(res, err);
     }
@@ -264,6 +276,15 @@ export function registerLuluRoutes(app: Express): void {
   });
 }
 
+/**
+ * Where the printer should send status updates for THIS deployment, or null when
+ * we don't know our own public address (local dev).
+ */
+export function defaultWebhookUrl(): string | null {
+  const base = (serverConfig().stripe.appUrl || "").replace(/\/$/, "");
+  return base.startsWith("https://") ? `${base}/api/print-webhook` : null;
+}
+
 /** Timing-safe string comparison (returns false on length mismatch). */
 function safeEqual(a: string, b: string): boolean {
   const ba = Buffer.from(a);
@@ -277,12 +298,42 @@ function safeEqual(a: string, b: string): boolean {
  * by the account's API secret in the `Lulu-HMAC-SHA256` header. We accept either
  * hex or base64 encodings to be robust.
  */
-function verifyWebhookSignature(raw: Buffer, signature: string, secret: string): boolean {
+export function verifyWebhookSignature(raw: Buffer, signature: string, secret: string): boolean {
   if (!signature || !secret) return false;
   const sig = signature.trim();
   const hex = createHmac("sha256", secret).update(raw).digest("hex");
   const b64 = createHmac("sha256", secret).update(raw).digest("base64");
   return safeEqual(sig, hex) || safeEqual(sig, b64);
+}
+
+const WEBHOOK_ENVS: FulfillmentEnv[] = ["sandbox", "live"];
+
+/** The environment whose secret signed this delivery, or null when none did. */
+function webhookSignedBy(raw: Buffer, signature: string): FulfillmentEnv | null {
+  for (const env of WEBHOOK_ENVS) {
+    const secret = loadServerConfig(process.env as Record<string, string | undefined>, { envOverride: env })
+      .fulfillment.lulu.clientSecret;
+    if (secret && verifyWebhookSignature(raw, signature, secret)) return env;
+  }
+  return null;
+}
+
+/**
+ * Count a delivery we could not verify against the active environment. A few are
+ * noise (scanners); a run of them after a credential rotation is a webhook that
+ * has silently stopped working, which the watchdog turns into an alert.
+ */
+async function noteWebhookSignatureFailure(): Promise<void> {
+  const env = serverConfig().fulfillment.lulu.env;
+  try {
+    const health = await readPrintHealth(env);
+    await patchPrintHealth(env, {
+      signatureFailures: health.signatureFailures + 1,
+      lastSignatureFailureAt: Date.now(),
+    });
+  } catch (err) {
+    console.warn("[fulfillment] could not note signature failure", err);
+  }
 }
 
 /**
@@ -307,13 +358,19 @@ export function registerPrintWebhookRoute(app: Express): void {
             ? req.body
             : Buffer.from(typeof req.body === "string" ? req.body : "");
         const signature = req.get("Lulu-HMAC-SHA256") ?? "";
-        const secret = serverConfig().fulfillment.lulu.clientSecret;
 
-        if (!verifyWebhookSignature(raw, signature, secret)) {
+        // Verified against BOTH environments' secrets, not just the active one:
+        // sandbox and live sign with different keys, and the day the active
+        // environment is flipped, deliveries for jobs still in flight on the other
+        // side would otherwise all be rejected as forged.
+        const signedBy = webhookSignedBy(raw, signature);
+        if (!signedBy) {
           console.warn("[fulfillment] webhook signature verification failed");
+          await noteWebhookSignatureFailure();
           res.status(401).json({ error: { message: "Invalid signature." } });
           return;
         }
+        await patchPrintHealth(signedBy, { lastWebhookAt: Date.now(), signatureFailures: 0 });
 
         let envelope: LuluWebhookEnvelope;
         try {
@@ -325,8 +382,18 @@ export function registerPrintWebhookRoute(app: Express): void {
 
         if (envelope.topic === "PRINT_JOB_STATUS_CHANGED" && envelope.data) {
           const order = mapOrder(envelope.data);
-          const updated = await applyOrderStatusUpdate(order);
+          const updated = await applyOrderStatusUpdate(order, "lulu_webhook");
           if (!updated) {
+            // The provider answers the create call and can start sending status
+            // changes before we have written the order down. Answer 5xx for an
+            // order that belongs to a real payment, so it is redelivered once the
+            // record exists; a 200 here would lose the update for good.
+            const expected = await expectedOrderPaymentId(order);
+            if (expected) {
+              console.warn("[fulfillment] webhook ahead of order record; asking for redelivery", order.id, expected);
+              res.status(503).json({ error: { message: "Order not recorded yet." } });
+              return;
+            }
             console.warn("[fulfillment] webhook for unknown order", order.id);
           }
         }

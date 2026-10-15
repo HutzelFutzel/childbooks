@@ -30,6 +30,7 @@ import { registerPermissionsRoutes } from "./permissionsRoutes";
 import { registerProviderRoutes } from "./providers";
 import { registerLuluRoutes, registerPrintWebhookRoute } from "./lulu";
 import { registerPrintSyncAdminRoutes, registerPrintSyncDevRoute } from "./printSync";
+import { registerPrintOrderAdminRoutes } from "./printOrderAdmin";
 import { registerAiRoutes } from "./ai";
 import { registerGenerationQuoteRoutes } from "./generationQuotes";
 import { registerGuideAnalysisRoutes } from "./guideAnalysis";
@@ -191,6 +192,7 @@ export function createApp(): Express {
 
   registerLuluRoutes(app);
   registerPrintSyncAdminRoutes(app);
+  registerPrintOrderAdminRoutes(app);
   registerAiRoutes(app);
   registerGenerationQuoteRoutes(app);
   registerLikenessRoutes(app);

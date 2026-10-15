@@ -295,6 +295,8 @@ export async function runMarketSweep(opts: {
   force?: boolean;
   sku?: string;
   maxCountries?: number;
+  /** Restrict to these countries (onboarding a newly opened market). */
+  countries?: string[];
 } = {}): Promise<SweepResult> {
   const env = serverConfig().fulfillment.lulu.env;
   const sku = opts.sku?.trim() || (await referenceSkuForSweep(env));
@@ -304,6 +306,7 @@ export async function runMarketSweep(opts: {
     sku,
     previous,
     force: opts.force,
+    countries: opts.countries,
     maxCountries: opts.maxCountries ?? 180,
   });
   if (result.probed > 0) {

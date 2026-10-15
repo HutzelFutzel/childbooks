@@ -114,6 +114,7 @@ import {
   type MarketCapabilityConfig,
   type MarketSweepSummary,
 } from "../core/config/marketCapability";
+import type { MarketOnboardingReport } from "../core/config/marketOnboarding";
 import {
   createEmptyProductCapability,
   normalizeProductCapability,
@@ -737,6 +738,17 @@ interface AppConfigState {
    * couldn't reach as `unknown` and re-running fills only those.
    */
   sweepMarketCapability: (opts?: { force?: boolean; sku?: string }) => Promise<MarketSweepSummary>;
+  /**
+   * Where each open market stands (sellable products, refusals, gaps), and
+   * which still have work the scheduled onboarding job will finish.
+   */
+  loadMarketOnboarding: () => Promise<{ markets: MarketOnboardingReport[]; pending: string[] }>;
+  /**
+   * Make one open market sellable: probe coverage, measure shipping per format,
+   * republish the catalog. One country per call so it stays inside the request
+   * timeout; the caller loops over the markets it just opened.
+   */
+  onboardMarket: (country: string) => Promise<MarketOnboardingReport>;
   /**
    * Re-ask the printer what it will make for each format in each open market.
    *
@@ -1700,6 +1712,20 @@ export const useAppConfigStore = create<AppConfigState>((set, get) => ({
     const summary = (await res.json()) as MarketSweepSummary;
     set({ marketCapability: normalizeMarketCapability(summary.capability) });
     return summary;
+  },
+
+  async loadMarketOnboarding() {
+    const res = await backendFetch("/admin/markets/onboarding");
+    if (!res.ok) throw new Error((await safeError(res)) ?? "Could not load market status.");
+    return (await res.json()) as { markets: MarketOnboardingReport[]; pending: string[] };
+  },
+
+  async onboardMarket(country) {
+    const res = await backendFetch(`/admin/markets/${encodeURIComponent(country)}/onboard`, {
+      method: "POST",
+    });
+    if (!res.ok) throw new Error((await safeError(res)) ?? `Could not set up ${country}.`);
+    return (await res.json()) as MarketOnboardingReport;
   },
 
   async sweepProductCapability(opts = {}) {

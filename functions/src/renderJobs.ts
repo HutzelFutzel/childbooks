@@ -103,6 +103,8 @@ interface CaptureSpec {
   heightIn: number;
   /** Whether a blank result means a failed render rather than a blank page. */
   mustHaveInk: boolean;
+  /** Distance from the bottom edge to where the back-cover logo's box begins. */
+  logoInsetIn?: number;
   /** Empty outer bleed strips to replace from adjacent composed pixels. */
   bleedFill?: { top: number; right: number; bottom: number; left: number };
 }
@@ -597,7 +599,8 @@ async function cropOutBackCoverLogo(
     // Landscape logos are `sizeCm` tall; portrait logos are `sizeCm` wide and
     // can grow taller — reserve enough for the tallest shape we allow.
     const fixedIn = cmToIn(Number.isFinite(sizeCm) && sizeCm > 0 ? sizeCm : BACK_COVER_LOGO_FIXED_CM);
-    const reservedIn = COVER_SAFETY_MARGIN_IN + fixedIn * BACK_COVER_LOGO_ZONE_MAX_ASPECT;
+    const reservedIn =
+      Math.max(spec.logoInsetIn ?? 0, COVER_SAFETY_MARGIN_IN) + fixedIn * BACK_COVER_LOGO_ZONE_MAX_ASPECT;
     const reservedFraction = Math.min(
       BACK_COVER_LOGO_ZONE_MAX_FRACTION,
       reservedIn / Math.max(spec.heightIn, 0.01),

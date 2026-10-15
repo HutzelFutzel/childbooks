@@ -21,6 +21,26 @@ import type { Binding, BookProduct } from "../fulfillment/types";
 
 /** Safety margin inside the trim edge — keep text / important art within it. */
 export const SAFETY_MARGIN_IN = 0.5;
+/**
+ * Safety margin for COVER art on case-bound hardcovers.
+ *
+ * A casewrap cover is printed on a wrap that folds around the board and the
+ * board's edge is rounded and slightly out of true, so Lulu asks for more room
+ * than on a paperback. Interior pages keep {@link SAFETY_MARGIN_IN}: the
+ * wrap only exists on the cover.
+ */
+export const CASEWRAP_COVER_SAFETY_MARGIN_IN = 0.75;
+/**
+ * How far a hardcover cover's artwork extends past the trim on its outer edges:
+ * the 0.75" wrap plus the board's 0.125" overhang.
+ *
+ * Used only where the provider's real dimensions aren't to hand yet (laying out
+ * generated cover lettering). At render time the extension is derived from
+ * Lulu's cover-dimensions response — see `coverExtensionFromHeight` in
+ * `core/print/geometry` — and this is the figure it is checked against.
+ */
+export const CASEWRAP_COVER_EXTENSION_IN = 0.875;
+
 /** Spine text is not allowed at or below this page count (too thin to place). */
 export const SPINE_TEXT_MIN_PAGES = 80;
 /** Minimum clearance to leave between spine text and each spine edge. */
@@ -118,6 +138,25 @@ export function bindingHasSpine(binding: Binding): boolean {
 /** Whether a binding needs an added gutter margin (same set as spine bindings). */
 export function bindingHasGutter(binding: Binding): boolean {
   return bindingHasSpine(binding);
+}
+
+/** Whether a binding is a wrapped hardcover (its cover is a wrap, not a bleed). */
+export function bindingIsWrapped(binding: Binding): boolean {
+  return binding === "casewrap" || binding === "linen-wrap";
+}
+
+/** Safety margin (inches inside the trim) for artwork on a binding's COVER. */
+export function coverSafetyMarginIn(binding: Binding): number {
+  return bindingIsWrapped(binding) ? CASEWRAP_COVER_SAFETY_MARGIN_IN : SAFETY_MARGIN_IN;
+}
+
+/**
+ * Expected distance the cover artwork extends past the trim on its outer edges
+ * (bleed for a paperback, wrap + overhang for a hardcover). A nominal value —
+ * the provider's cover size is authoritative at render time.
+ */
+export function nominalCoverExtensionIn(binding: Binding, bleedIn: number): number {
+  return bindingIsWrapped(binding) ? CASEWRAP_COVER_EXTENSION_IN : bleedIn;
 }
 
 /** Human label for a binding, for editor hints. */

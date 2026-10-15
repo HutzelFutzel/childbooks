@@ -57,8 +57,13 @@ export async function raiseAlert(args: {
     console.error("[alerts] failed to raise alert", args.kind, err);
   }
 
-  // Mirror every fresh alert to Slack (#ops). Only reached once per alert — the
-  // ALREADY_EXISTS early-return above suppresses duplicates. Best-effort.
+  // Slack (#ops) is the "act now" channel, so ONLY critical alerts are mirrored
+  // there. Warnings and info live in the admin inbox and the daily summary: a
+  // channel that pings for things the system is already fixing teaches people to
+  // mute it, and then the one message that mattered is missed. Only reached once
+  // per alert — the ALREADY_EXISTS early-return above suppresses duplicates.
+  // Best-effort.
+  if (args.severity !== "critical") return;
   await notifySlack({
     channel: "ops",
     messageKey: "admin_alert",

@@ -26,7 +26,7 @@
  *     endpoint that owned ebooks are served through.
  */
 import express, { type Express, type Response } from "express";
-import { getFirestore } from "firebase-admin/firestore";
+import { FieldPath, FieldValue, getFirestore } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import type { AuthedRequest } from "./auth";
@@ -145,6 +145,27 @@ export async function cachedDocumentPath(
   if (!(await publicUrlForPath(path))) return null;
   void touch(uid, fingerprint);
   return path;
+}
+
+/**
+ * Forget one finished document so the next order re-assembles it.
+ *
+ * For a cached file that failed pre-payment verification: without this the
+ * availability check would keep reporting it as ready and every retry would
+ * hit the same bad file. Rasters and panels are kept — re-assembly is cheap,
+ * re-rendering is not.
+ */
+export async function invalidateCachedDocument(
+  uid: string,
+  fingerprint: string,
+  key: string,
+): Promise<void> {
+  if (!validFingerprint(fingerprint)) return;
+  try {
+    await docRef(uid, fingerprint).update(new FieldPath("documents", key), FieldValue.delete());
+  } catch (err) {
+    console.warn("[renders] couldn't invalidate a cached document", err);
+  }
 }
 
 /** Record that a render was used, so cleanup keeps what people come back to. */
@@ -422,7 +443,17 @@ export function registerRenderRoutes(app: Express): void {
       }
       const snap = await docRef(req.uid!, fingerprint).get();
       const data = snap.data() as RenderDoc | undefined;
-      const documents = data?.documents ?? {};
+      const recorded = data?.documents ?? {};
+      // A document counts only while its file still exists. Retention removes
+      // old print files; reporting one as ready would send the client straight
+      // to checkout with nothing to print, and every retry would say the same.
+      const present = await Promise.all(
+        Object.entries(recorded).map(async ([key, path]) =>
+          (await publicUrlForPath(path)) ? key : null,
+        ),
+      );
+      const documents: Record<string, string> = {};
+      for (const key of present) if (key) documents[key] = recorded[key];
       res.json({
         ebook: Boolean(documents[documentKey("ebook")]),
         interior: Boolean(documents[documentKey("interior")]),

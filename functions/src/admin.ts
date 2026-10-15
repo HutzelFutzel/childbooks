@@ -146,6 +146,10 @@ import {
 import { qrScanStats } from "./acquisition";
 import { qrAnalysisReport } from "./qrAnalysis";
 import { getMarketsConfig, getMarketCapability, getMarketRegistry, saveMarketsConfig } from "./markets";
+import { capabilityForFormat } from "../../books-frontend/src/core/config/productCapability";
+import { getProductCapability } from "./productCapability";
+import { describeMarkets, findMarketsNeedingOnboarding, onboardMarket } from "./marketOnboarding";
+import { enabledMarkets } from "../../books-frontend/src/core/config/markets";
 import { getShippingSettings, saveShippingSettings } from "./shipping";
 import { normalizeShippingSettings } from "../../books-frontend/src/core/config/shipping";
 import { previewShippingChange } from "../../books-frontend/src/core/config/shippingPreview";
@@ -1832,6 +1836,34 @@ export function registerAdminRoutes(app: Express): void {
     }
   });
 
+  // Where each open market stands: sellable products, what the provider refused,
+  // and which markets still have gaps the scheduled onboarding job will fill.
+  // Pure reads of stored evidence, so it's cheap enough to poll after a save.
+  app.get("/admin/markets/onboarding", async (_req, res) => {
+    try {
+      const registry = await getMarketRegistry();
+      const [markets, pending] = await Promise.all([
+        describeMarkets(enabledMarkets(registry)),
+        findMarketsNeedingOnboarding(),
+      ]);
+      res.json({ markets, pending });
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
+  // Make one open market actually sellable: probe the provider, measure
+  // per-format shipping, republish the catalog, report per product. One country
+  // per call so the work stays inside the request timeout however many markets
+  // were opened at once; the client calls it for each country it just opened.
+  app.post("/admin/markets/:country/onboard", async (req: Request, res: Response) => {
+    try {
+      res.json(await onboardMarket(String(req.params.country)));
+    } catch (err) {
+      handleError(res, err);
+    }
+  });
+
   // ---- Shipping policy ------------------------------------------------------
 
   // How shipping is sold catalog-wide. Missing data normalizes to the default,
@@ -1864,12 +1896,13 @@ export function registerAdminRoutes(app: Express): void {
   // rather than a model of it.
   app.post("/admin/config/shipping/preview", json, async (req: Request, res: Response) => {
     try {
-      const [products, settings, registry, current, capability] = await Promise.all([
+      const [products, settings, registry, current, capability, productCapability] = await Promise.all([
         getProductsConfig(),
         getPricingSettings(),
         getMarketRegistry(),
         getShippingSettings(),
         getMarketCapability(),
+        getProductCapability(),
       ]);
       res.json(
         previewShippingChange({
@@ -1879,6 +1912,8 @@ export function registerAdminRoutes(app: Express): void {
           current,
           candidate: normalizeShippingSettings(req.body),
           capability: new Map(capability.countries.map((c) => [c.country, c])),
+          capabilityFor: (sku) =>
+            capabilityForFormat(capability, productCapability, activeEnv(), sku),
         }),
       );
     } catch (err) {

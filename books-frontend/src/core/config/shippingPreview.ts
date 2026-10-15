@@ -62,6 +62,8 @@ export interface ShippingPreviewArgs {
   current: ShippingSettings;
   candidate: ShippingSettings;
   capability?: ReadonlyMap<string, MarketCapability>;
+  /** Per-format coverage; wins over `capability` when given. */
+  capabilityFor?: (sku: string) => ReadonlyMap<string, MarketCapability> | undefined;
   /** Rows per list before trimming. */
   limit?: number;
 }
@@ -78,8 +80,9 @@ export function previewShippingChange(args: ShippingPreviewArgs): ShippingPrevie
 
   for (const product of products) {
     if (product.status === "retired") continue;
-    const before = index(projectShippingRates(product, settings, registry, current, capability));
-    const after = index(projectShippingRates(product, settings, registry, candidate, capability));
+    const cap = args.capabilityFor?.(product.provider.sku) ?? capability;
+    const before = index(projectShippingRates(product, settings, registry, current, cap));
+    const after = index(projectShippingRates(product, settings, registry, candidate, cap));
 
     for (const key of new Set([...before.keys(), ...after.keys()])) {
       const [country, method] = key.split("|") as [string, ShippingMethod];

@@ -66,7 +66,9 @@ function illustrationInputs(project: Project): Record<string, string> {
 }
 
 /** Version tag, so a change to the renderer itself invalidates old renders. */
-const RENDERER_VERSION = "5";
+// 6: cover panels are laid out to the provider's cover height, so a hardcover's
+// wrap is no longer drawn as a paperback's bleed.
+const RENDERER_VERSION = "6";
 
 export function renderFingerprint(project: Project, design: BookDesign): string {
   const screenplay = project.screenplay ? getCursor(project.screenplay) : null;

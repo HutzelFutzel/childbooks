@@ -12,7 +12,9 @@
  */
 import { bookProductForConfig } from "../../core/book";
 import { EXPORT_DPI } from "../../core/config/options";
+import { coverSafetyMarginIn, nominalCoverExtensionIn } from "../../core/book/format";
 import {
+  coverExtensionFromHeight,
   coverPanelWindow,
   pageGeometry,
   splitBleedPixels,
@@ -280,9 +282,20 @@ export function buildCoverPlan(
   project: Project,
   pages: DesignPage[],
   dpi = EXPORT_DPI,
+  /**
+   * The provider's cover height for this order. When given, the cover is laid
+   * out to it: a hardcover's panels extend by the wrap (several times a
+   * paperback's bleed), and assuming the bleed there puts the artwork where
+   * the fold is not. Without it the binding's nominal extension is used, which
+   * is only right for on-screen previews.
+   */
+  provider?: { coverHeightIn: number },
 ): CoverPlan {
   const product = bookProductForConfig(project.config);
-  const geometry = pageGeometry(product, { dpi, bleed: true });
+  const extensionIn = provider
+    ? coverExtensionFromHeight(provider.coverHeightIn, product.trim.heightIn)
+    : nominalCoverExtensionIn(product.binding, product.bleedIn);
+  const geometry = pageGeometry({ trim: product.trim, bleedIn: extensionIn }, { dpi, bleed: true });
   const byId = pageById(pages);
   const targets: PlannedTarget[] = [];
   const verticalBleed = splitBleedPixels(
@@ -306,6 +319,7 @@ export function buildCoverPlan(
       surfaceWidthPx: geometry.widthPx,
       surfaceHeightPx: geometry.heightPx,
       bleedPx: geometry.bleedPx,
+      safetyMarginIn: coverSafetyMarginIn(product.binding),
       clip: { xPx: window.xPx, widthPx: window.widthPx },
       widthIn: window.widthIn,
       heightIn: geometry.heightIn,

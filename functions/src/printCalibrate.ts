@@ -455,6 +455,12 @@ async function measureShipping(
   registry: MarketRegistry,
   shippingSettings: ShippingSettings,
   currency: string,
+  /**
+   * Measure only these destinations (onboarding a newly opened market). A
+   * subset run never yields the scalar catch-all: that figure must come from a
+   * sweep that reached every zone.
+   */
+  only?: ReadonlySet<string>,
 ): Promise<{
   rows?: ShippingFallbackRow[];
   fallback?: number;
@@ -469,7 +475,9 @@ async function measureShipping(
     product.conditions.pages.max,
   );
 
-  const zones = shippingZones(registry, product, shippingSettings);
+  const zones = shippingZones(registry, product, shippingSettings).filter(
+    (z) => !only || only.has(z.country),
+  );
   if (zones.length === 0) {
     return {
       message:
@@ -563,7 +571,7 @@ async function measureShipping(
   // a number that stands in for the zones it missed.
   const complete = failures.length === 0 && undetermined.length === 0;
   const singles = rows.filter((r) => r.available).map((r) => r.base + r.perCopy);
-  const fallback = complete && singles.length > 0 ? round(Math.max(...singles), 2) : undefined;
+  const fallback = !only && complete && singles.length > 0 ? round(Math.max(...singles), 2) : undefined;
 
   const measured = [...new Set(rows.map((r) => r.country))].join(", ");
   let note: string | undefined;
@@ -764,4 +772,92 @@ export async function calibrateCatalog(
     failed: runs.filter((r) => !r.ok).length,
     config: saved,
   };
+}
+
+export interface CountryShippingRun {
+  productId: string;
+  name: string;
+  sku: string;
+  /** Countries that now have a measured rate row for this product. */
+  measured: string[];
+  /** Provider rate-limited part of the run — recorded as unknown, re-run later. */
+  throttled: boolean;
+  message?: string;
+}
+
+/**
+ * Measure shipping for just the given countries, for every sellable print
+ * product, and merge the rows into the catalog.
+ *
+ * This is what makes opening a market a one-click action: a passthrough
+ * product can't price a destination it has no measured row for, so without it
+ * the market would open and then refuse every order until somebody ran a full
+ * recalibration. Only those countries' rows are replaced; the cost table and
+ * the scalar catch-all are left alone (the latter must come from a sweep that
+ * reached every zone, which this is not).
+ */
+export async function measureShippingForCountries(
+  env: FulfillmentEnv,
+  countries: readonly string[],
+): Promise<CountryShippingRun[]> {
+  const only = new Set(countries.map((c) => c.trim().toUpperCase()).filter(Boolean));
+  if (only.size === 0) return [];
+  const [config, registry, shippingSettings] = await Promise.all([
+    getProductsConfig(),
+    getMarketRegistry(),
+    getShippingSettings(),
+  ]);
+  const targets = config.products.filter(
+    (p) => p.provider.id === "lulu" && p.provider.sku.trim() && p.status !== "retired",
+  );
+
+  const outcomes = await mapLimit(targets, 2, async (product) => {
+    const result = await measureShipping(
+      env,
+      product.provider.sku.trim(),
+      product,
+      registry,
+      shippingSettings,
+      product.cost.currency,
+      only,
+    );
+    return { product, result };
+  });
+
+  const runs: CountryShippingRun[] = [];
+  const updated = new Map<string, ProductDefinition>();
+  for (const { product, result } of outcomes) {
+    const rows = result.rows ?? [];
+    runs.push({
+      productId: product.id,
+      name: product.presentation.name,
+      sku: product.provider.sku,
+      measured: [...new Set(rows.map((r) => r.country))],
+      throttled: result.throttled === true,
+      ...(result.message ? { message: result.message } : {}),
+    });
+    if (rows.length === 0) continue;
+    const measuredCountries = new Set(rows.map((r) => r.country));
+    const kept = (product.shipping.fallback ?? []).filter(
+      (r) => !measuredCountries.has(r.country.toUpperCase()),
+    );
+    updated.set(
+      product.id,
+      normalizeProduct({
+        ...product,
+        shipping: {
+          ...product.shipping,
+          fallback: [...kept, ...rows],
+          fallbackMeasuredAt: Date.now(),
+        },
+      }),
+    );
+  }
+  if (updated.size > 0) {
+    await saveProductsConfig({
+      version: 1,
+      products: config.products.map((p) => updated.get(p.id) ?? p),
+    });
+  }
+  return runs;
 }

@@ -94,17 +94,20 @@ async function exportSubcollections(
 /** Collect authoritative financial records owned by a uid (admin copies). */
 async function financialRecordsFor(uid: string): Promise<{
   orders: Record<string, unknown>[];
+  printOrders: Record<string, unknown>[];
   payments: Record<string, unknown>[];
   subscriptions: Record<string, unknown>[];
 }> {
   const db = getFirestore();
-  const [orders, payments, subscriptions] = await Promise.all([
+  const [orders, printOrders, payments, subscriptions] = await Promise.all([
     db.collection("orders").where("ownerUid", "==", uid).get(),
+    db.collection("printOrders").where("uid", "==", uid).get(),
     db.collection("payments").where("ownerUid", "==", uid).get(),
     db.collection("subscriptions").where("ownerUid", "==", uid).get(),
   ]);
   return {
     orders: orders.docs.map((d) => ({ id: d.id, ...d.data() })),
+    printOrders: printOrders.docs.map((d) => ({ id: d.id, ...d.data() })),
     payments: payments.docs.map((d) => ({ id: d.id, ...d.data() })),
     subscriptions: subscriptions.docs.map((d) => ({ id: d.id, ...d.data() })),
   };
@@ -236,6 +239,33 @@ export async function eraseUser(uid: string, byUid: string | undefined): Promise
     } catch (err) {
       result.errors.push(`${col}: ${errMsg(err)}`);
     }
+  }
+
+  // 1b) The order record (our own copy of every order's state and history). It
+  // holds the recipient's name and email, tracking links and file URLs, so it is
+  // anonymized like the other retained records — and its event timeline, which is
+  // free text that can quote an address from a provider error, is deleted: the
+  // state and the money are what must be kept, not the narrative.
+  try {
+    const snap = await db.collection("printOrders").where("uid", "==", uid).get();
+    for (const d of snap.docs) {
+      await db.recursiveDelete(d.ref.collection("events"));
+      await d.ref.set(
+        {
+          recipientName: null,
+          recipientEmail: null,
+          shipments: [],
+          files: { interior: null, cover: null },
+          lastError: null,
+          ack: null,
+          anonymizedAt: Date.now(),
+          anonymized: true,
+        },
+        { merge: true },
+      );
+    }
+  } catch (err) {
+    result.errors.push(`printOrders: ${errMsg(err)}`);
   }
 
   // 2) De-identify analytics events for the uid (tombstone, keep counts).

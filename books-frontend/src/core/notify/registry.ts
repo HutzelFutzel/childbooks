@@ -110,9 +110,9 @@ export const SLACK_MESSAGE_REGISTRY: Record<SlackMessageKey, SlackMessageMeta> =
   },
   admin_alert: {
     id: "admin_alert",
-    label: "Admin / ops alerts",
+    label: "Urgent ops alerts",
     description:
-      "Posted to #ops for operational alerts (fulfillment failures, refunds, grant abuse). Turning this off hides operational problems — leave on unless you have another alerting path.",
+      "Posted to #ops ONLY when something needs a person right now: a paid order that isn't reaching the printer, a rejected job, a broken checkout, the printer connection or a scheduled job down. Each message says who is affected and what to do. Warnings and informational alerts stay in the admin inbox and the daily summary. Turning this off hides operational problems — leave on unless you have another alerting path.",
     channel: "ops",
   },
   daily_summary: {

@@ -544,6 +544,10 @@ const ROUTE_RULES: RouteRule[] = [
   // document every product's shipping options are read from — so it needs the
   // write grant, not the read one.
   { test: /^\/admin\/markets\/sweep$/, gate: key("configuration.markets", "write") },
+  // Onboarding a newly opened market probes the provider and rewrites catalog
+  // shipping rows, so running it is a write; reading its status is not.
+  { test: /^\/admin\/markets\/onboarding$/, gate: key("configuration.markets", "read") },
+  { test: /^\/admin\/markets\/[A-Za-z]{2}\/onboard$/, gate: key("configuration.markets", "write") },
   // Same reasoning for the per-format sweep, and gated on markets rather than
   // catalog for the same reason the shipping policy is: it decides where a book
   // can be sold, which is the markets question asked one format at a time.
@@ -626,6 +630,12 @@ const ROUTE_RULES: RouteRule[] = [
   { test: /^\/admin\/alerts$/, gate: key("analysis.finance", "read") },
   { test: /^\/admin\/fulfillment\/retry$/, gate: key("analysis.finance", "write") },
   { test: /^\/admin\/payments\/[^/]+\/refund$/, gate: key("analysis.payments", "write") },
+  // The order overview. Reading and the routine actions (retry placement, resend
+  // an email, acknowledge) ride on the tab's own grant; cancelling a job at the
+  // printer is irreversible and costs money, so it needs the dangerous capability.
+  { test: /^\/admin\/orders\/[^/]+\/cancel$/, gate: capability("dangerous") },
+  { test: /^\/admin\/orders\/(analytics|connection)$/, gate: key("analysis.orders", "read") },
+  { test: /^\/admin\/orders(\/|$)/, gate: key("analysis.orders") },
   { test: /^\/admin\/payments(\/|$)/, gate: key("analysis.payments", "read") },
   { test: /^\/admin\/stripe\/health$/, gate: key("analysis.payments", "read") },
 

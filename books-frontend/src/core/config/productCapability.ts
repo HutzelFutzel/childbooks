@@ -32,6 +32,7 @@
 import {
   normalizeCountryCapability,
   type MarketCapability,
+  type MarketCapabilityConfig,
 } from "./marketCapability";
 import type { ProviderEnv } from "./products";
 
@@ -137,6 +138,29 @@ export function coverageFor(
   const coverage = config.products.find((p) => p.sku === code);
   if (!coverage) return undefined;
   return new Map(coverage.countries.map((c) => [c.country, c]));
+}
+
+/**
+ * The coverage that governs ONE format in the active environment: what was
+ * measured for that format, else the country-level sweep, else nothing.
+ *
+ * The single place that precedence lives. The projection, the checkout
+ * refusal, the admin preview and the product editor all resolve it here, so a
+ * speed can't be offered by one and refused by another. Evidence recorded
+ * against the other environment is ignored — sandbox and live are different
+ * catalogs.
+ */
+export function capabilityForFormat(
+  countryLevel: MarketCapabilityConfig,
+  perFormat: ProductCapabilityConfig,
+  env: ProviderEnv,
+  sku: string,
+): ReadonlyMap<string, MarketCapability> {
+  const country = new Map<string, MarketCapability>(
+    (countryLevel.probe.env === env ? countryLevel.countries : []).map((c) => [c.country, c]),
+  );
+  if (perFormat.probe.env !== env) return country;
+  return coverageFor(perFormat, sku) ?? country;
 }
 
 /** Every format's coverage, indexed for a projection that walks the catalog. */

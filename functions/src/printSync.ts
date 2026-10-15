@@ -18,35 +18,16 @@
  * dead state), so polling the same unchanged order costs a request and changes
  * nothing.
  */
-import { getFirestore, Timestamp } from "firebase-admin/firestore";
 import express, { type Express, type Request, type Response } from "express";
-import { ensureAdmin } from "./storage";
 import { fulfillmentProvider, sendAdminError } from "./lulu";
 import { applyOrderStatusUpdate } from "./orders";
-import type { OrderStage } from "../../books-frontend/src/core/fulfillment/types";
-
-function db() {
-  ensureAdmin();
-  return getFirestore();
-}
-
-/**
- * Stages that will never change again, so their orders are not worth a request.
- * `error` is deliberately NOT terminal: a rejected order can be re-placed (see
- * `handleRejectedOrder`), and the replacement's progress has to be observable.
- */
-const TERMINAL_STAGES: ReadonlySet<string> = new Set<OrderStage>(["complete", "cancelled"]);
-
-/**
- * How far back to look for orders worth polling. Lulu jobs reach a terminal
- * state in days, not weeks; anything older and still open is stuck in a way a
- * status fetch won't resolve, and shouldn't cost a provider request on every
- * sweep forever.
- */
-const DEFAULT_MAX_AGE_DAYS = 45;
+import { listOpenOrders } from "./printOrders";
+import { ensurePrintOrdersBackfilled } from "./printOrderBackfill";
+import { serverConfig } from "./config";
+import { providerJobIsLive } from "../../books-frontend/src/core/orders/lifecycle";
 
 /** Bounded so one sweep can't spend minutes hammering the provider's API. */
-const DEFAULT_LIMIT = 100;
+const DEFAULT_LIMIT = 300;
 
 export interface PrintSyncResult {
   /** Open orders considered. */
@@ -61,6 +42,7 @@ export interface PrintSyncResult {
 
 export interface PrintSyncOptions {
   limit?: number;
+  /** Accepted for compatibility; the open-order set no longer depends on age. */
   maxAgeDays?: number;
 }
 
@@ -74,40 +56,36 @@ export interface PrintSyncOptions {
 export async function reconcileOpenPrintOrders(
   options: PrintSyncOptions = {},
 ): Promise<PrintSyncResult> {
-  const limit = Math.min(Math.max(Math.floor(options.limit ?? DEFAULT_LIMIT), 1), 500);
-  const maxAgeDays = Math.min(Math.max(Math.floor(options.maxAgeDays ?? DEFAULT_MAX_AGE_DAYS), 1), 365);
-  const since = Timestamp.fromMillis(Date.now() - maxAgeDays * 24 * 60 * 60 * 1000);
-
+  const limit = Math.min(Math.max(Math.floor(options.limit ?? DEFAULT_LIMIT), 1), 1000);
   const result: PrintSyncResult = { scanned: 0, synced: 0, changed: [], errors: [] };
 
-  // Filtered on `createdAt` alone (a single-field index every collection has) and
-  // narrowed in memory: `stage not-in [...]` plus an inequality on another field
-  // would need a composite index, which is a lot of deploy ceremony for a sweep
-  // that reads at most a few hundred docs.
-  const snap = await db()
-    .collection("orders")
-    .where("createdAt", ">=", since)
-    .orderBy("createdAt", "desc")
-    .limit(limit)
-    .get();
-
-  const open = snap.docs.filter((doc) => {
-    const stage = doc.get("stage") as string | undefined;
-    return !stage || !TERMINAL_STAGES.has(stage);
-  });
+  // The set of orders worth asking about comes from the order record, which knows
+  // exactly which are still open and which job is current. The previous version
+  // read the newest 100 job documents and filtered them afterwards: one busy week
+  // and an order in production fell off the end of that window and silently
+  // stopped updating — the exact failure this sweep exists to prevent. Orders
+  // that predate the record are brought in by the backfill below.
+  await ensurePrintOrdersBackfilled();
+  const activeEnv = serverConfig().fulfillment.lulu.env;
+  const open = (await listOpenOrders())
+    // A sandbox job doesn't exist on the live account (and the reverse): asking
+    // would just fail for every one of them, every sweep.
+    .filter((r) => !r.env || r.env === activeEnv)
+    .filter((r) => r.currentJobId && (!r.luluStatus || providerJobIsLive(r.luluStatus)))
+    // Least recently checked first, so a cap never starves the same orders.
+    .sort((a, b) => (a.lastSyncAt ?? 0) - (b.lastSyncAt ?? 0))
+    .slice(0, limit);
   if (open.length === 0) return result;
 
   const provider = fulfillmentProvider();
 
-  for (const doc of open) {
-    // The provider's own id, which is what `getOrder` takes. Older records may
-    // only have the doc id (they're the same value today, but don't rely on it).
-    const providerOrderId = (doc.get("providerOrderId") as string | undefined) || doc.id;
+  for (const record of open) {
+    const providerOrderId = record.currentJobId as string;
     result.scanned += 1;
     try {
-      const previousStage = (doc.get("stage") as string | undefined) ?? null;
+      const previousStage = record.stage ?? null;
       const order = await provider.getOrder(providerOrderId);
-      const applied = await applyOrderStatusUpdate(order);
+      const applied = await applyOrderStatusUpdate(order, "lulu_poll");
       if (!applied) {
         result.errors.push({ orderId: providerOrderId, message: "no matching order record" });
         continue;

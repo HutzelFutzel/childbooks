@@ -44,6 +44,7 @@ function SubTabLoader() {
 }
 
 const PaymentsAnalysis = dynamic(() => import("./PaymentsAnalysis").then((m) => m.PaymentsAnalysis), { loading: SubTabLoader });
+const OrdersAnalysis = dynamic(() => import("./OrdersAnalysis").then((m) => m.OrdersAnalysis), { loading: SubTabLoader });
 const FinanceAnalysis = dynamic(() => import("./FinanceAnalysis").then((m) => m.FinanceAnalysis), { loading: SubTabLoader });
 const CostsAnalysis = dynamic(() => import("./CostsAnalysis").then((m) => m.CostsAnalysis), { loading: SubTabLoader });
 const ProjectsAnalysis = dynamic(() => import("./ProjectsAnalysis").then((m) => m.ProjectsAnalysis), { loading: SubTabLoader });
@@ -200,6 +201,7 @@ export function AnalysisTab() {
       {section === "costs" && <CostsAnalysis />}
       {section === "products" && <ProductsAnalysis />}
       {section === "payments" && <PaymentsAnalysis />}
+      {section === "orders" && <OrdersAnalysis />}
       {section === "finance" && <FinanceAnalysis />}
       {section === "referrals" && <ReferralsAnalysis />}
       {section === "affiliates" && <AffiliatesAnalysis />}

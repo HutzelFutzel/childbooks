@@ -446,8 +446,15 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
       `/print-jobs/?search=${encodeURIComponent(stableKey)}&page_size=100`,
       { method: "GET" },
     );
-    const match = (page.results ?? []).find((order) => order.external_id === stableKey);
-    return match ? mapOrder(match) : null;
+    // Only a job that is still alive counts as "already placed". A job the
+    // provider rejected or that was cancelled produced nothing, so handing it
+    // back would tell the caller the order exists when no book is being made —
+    // the recovery path would then re-link the payment to a dead job for good.
+    const matches = (page.results ?? [])
+      .filter((order) => order.external_id === stableKey)
+      .map((order) => mapOrder(order))
+      .filter((order) => order.stage !== "error" && order.stage !== "cancelled");
+    return matches[0] ?? null;
   }
 
   return {
@@ -541,8 +548,19 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
         );
       }
 
+      // Lulu documents `contact_email` as required on job creation. The caller is
+      // expected to have filled it (recipient email, else the buyer's account);
+      // failing here, with a clear message, beats a bare 400 from the provider.
+      const contactEmail = draft.recipient.email?.trim();
+      if (!contactEmail) {
+        throw new FulfillmentError("A contact email is required to create a print job.", {
+          kind: "validation",
+          provider: "lulu",
+        });
+      }
+
       const body: LuluPrintJobRequest = {
-        contact_email: draft.recipient.email,
+        contact_email: contactEmail,
         external_id: idempotencyKey || draft.merchantReference,
         line_items: [
           {
@@ -565,7 +583,7 @@ export function createLuluProvider(deps: LuluProviderDeps): FulfillmentProvider 
           country_code: draft.recipient.address.countryCode,
           postcode: draft.recipient.address.postalOrZipCode,
           phone_number: draft.recipient.phoneNumber,
-          email: draft.recipient.email,
+          email: contactEmail,
           recipient_tax_id: recipientTaxId || undefined,
         },
         shipping_level: SHIPPING_LEVEL[draft.shippingMethod],

@@ -63,6 +63,7 @@ export type AnalysisTabId =
   | "costs"
   | "finance"
   | "payments"
+  | "orders"
   | "products"
   // Where new users come from.
   | "referrals"
@@ -95,7 +96,7 @@ export const ANALYSIS_GROUPS: {
     id: "money",
     label: "Money",
     description: "What it costs to run, what it earns, and how each product line performs.",
-    tabs: ["costs", "finance", "payments", "products"],
+    tabs: ["costs", "finance", "payments", "orders", "products"],
   },
   {
     id: "growth",

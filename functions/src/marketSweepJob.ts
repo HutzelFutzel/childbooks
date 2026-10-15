@@ -23,6 +23,7 @@ import { ALL_SECRETS } from "./secrets";
 import { runMarketSweep } from "./marketDiscovery";
 import { runProductSweep } from "./productDiscovery";
 import { reprojectPublicProducts } from "./products";
+import { auditOpenMarkets, onboardPendingMarkets } from "./marketOnboarding";
 
 export const sweepMarketCoverage = onSchedule(
   {
@@ -74,8 +75,43 @@ export const sweepMarketCoverage = onSchedule(
       }
 
       await reprojectPublicProducts();
+      await auditOpenMarkets();
     } catch (err) {
       logger.error("[market-sweep] sweep failed", err);
+    }
+  },
+);
+
+/**
+ * Finish onboarding any open market whose evidence is incomplete.
+ *
+ * Opening a market in the admin kicks this off immediately from the page, but
+ * that only works while the page stays open and the provider isn't throttling.
+ * This is the backstop that makes "just enable it" true regardless: it probes
+ * country coverage, per-format coverage and shipping rates for whatever is
+ * missing or `unknown`, republishes the catalog, and raises an alert if a market
+ * turns out to be unsellable. Idle (no provider calls) once everything is
+ * settled.
+ */
+export const onboardOpenMarkets = onSchedule(
+  {
+    schedule: "every 30 minutes",
+    timeZone: "UTC",
+    timeoutSeconds: 540,
+    secrets: ALL_SECRETS,
+  },
+  async () => {
+    ensureAdmin();
+    try {
+      const reports = await onboardPendingMarkets(3);
+      if (reports.length > 0) {
+        logger.info(
+          `[market-onboarding] ${reports.map((r) => `${r.country}:${r.state}`).join(", ")}`,
+        );
+      }
+      await auditOpenMarkets();
+    } catch (err) {
+      logger.error("[market-onboarding] failed", err);
     }
   },
 );

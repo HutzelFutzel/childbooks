@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { AlertTriangle, Loader2, Plus, Trash2 } from "lucide-react";
 import { Button } from "../../components/Button";
@@ -28,6 +28,7 @@ import {
   isDestinationAllowed,
 } from "../../../core/config/productMath";
 import { methodLabel, offeredMethods } from "../../../core/config/shipping";
+import { capabilityForFormat } from "../../../core/config/productCapability";
 import { enabledMarkets } from "../../../core/config/markets";
 import type { ShippingMethod } from "../../../core/fulfillment/types";
 import { countryFlag, countryLabel } from "../../../core/analytics/markets";
@@ -108,6 +109,8 @@ export function ProductsTab() {
   // The open markets bound every product's geo policy, so validation can't say
   // whether a product reaches anywhere without them.
   const registry = useAppConfigStore((s) => s.markets);
+  const marketCapability = useAppConfigStore((s) => s.marketCapability);
+  const productCapability = useAppConfigStore((s) => s.productCapability);
   // Plans advertise a print discount that checkout clamps to break-even. Handing
   // them to validation turns a perk this price can't honour into a warning here,
   // instead of a member quietly being charged more than the plan promised.
@@ -357,12 +360,24 @@ export function ProductsTab() {
     [registry, runtime],
   );
 
+  // Coverage differs per format, so the options are per product: validating a
+  // hardcover against the paperback's coverage would clear or flag the wrong one.
+  const optsFor = useCallback(
+    (p: ProductDefinition) => ({
+      ...validateOpts,
+      ...(runtime
+        ? { capability: capabilityForFormat(marketCapability, productCapability, runtime.env, p.provider.sku) }
+        : {}),
+    }),
+    [validateOpts, runtime, marketCapability, productCapability],
+  );
+
   const issues = useMemo(
     () =>
       draft
-        ? validateProduct(draft, settings, { ...validateOpts, media, plans: discountPlans })
+        ? validateProduct(draft, settings, { ...optsFor(draft), media, plans: discountPlans })
         : [],
-    [draft, settings, validateOpts, media, discountPlans],
+    [draft, settings, optsFor, media, discountPlans],
   );
   // Actionable errors (verify / calibrate) don't block saving — you must save a
   // product before you can run those tools against it.
@@ -380,7 +395,7 @@ export function ProductsTab() {
     ? "Save your changes first — this runs against the saved catalog."
     : null;
   const draftStatus = draft
-    ? productStatus(draft.status, isOfferable(draft, settings, validateOpts))
+    ? productStatus(draft.status, isOfferable(draft, settings, optsFor(draft)))
     : null;
 
   return (
@@ -464,8 +479,8 @@ export function ProductsTab() {
           ) : (
             <ul className="space-y-0.5">
               {products.map((p) => {
-                const offerable = isOfferable(p, settings, validateOpts);
-                const errCount = productErrors(p, settings, validateOpts).length;
+                const offerable = isOfferable(p, settings, optsFor(p));
+                const errCount = productErrors(p, settings, optsFor(p)).length;
                 const status = productStatus(p.status, offerable);
                 return (
                   <li key={p.id}>
@@ -1394,9 +1409,9 @@ function SpecFields({ product, update }: { product: ProductDefinition; update: U
       <Disclosure label="Print spec (bleed, DPI, cover)">
         <Grid cols={3}>
           <TextField label="Paper" value={s.paperLabel ?? ""} placeholder="80# coated white" onChange={(v) => setS({ paperLabel: v })} />
-          <NumberField label="Bleed" value={s.bleed.value} step="0.001" suffix={s.bleed.unit} onChange={(n) => setS({ bleed: { ...s.bleed, value: n } })} />
-          <NumberField label="Interior DPI" value={s.interiorDpi} step="1" onChange={(n) => setS({ interiorDpi: n })} />
-          <NumberField label="Cover DPI" value={s.coverDpi} step="1" onChange={(n) => setS({ coverDpi: n })} />
+          <NumberField label="Bleed (reference only)" value={s.bleed.value} step="0.001" suffix={s.bleed.unit} onChange={(n) => setS({ bleed: { ...s.bleed, value: n } })} />
+          <NumberField label="Interior DPI (reference only)" value={s.interiorDpi} step="1" onChange={(n) => setS({ interiorDpi: n })} />
+          <NumberField label="Cover DPI (reference only)" value={s.coverDpi} step="1" onChange={(n) => setS({ coverDpi: n })} />
         </Grid>
         <Grid cols={3}>
           <Field label="Cover differs from page">
